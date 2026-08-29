@@ -1,0 +1,156 @@
+#usda 1.0
+(
+    doc = """Pause-room automatic sliding door for Isaac-Factory-PauseRoom-G129-Dex3-Wholebody.
+
+    GENERATED FILE -- do not edit. Regenerate with:
+        python3 make_pause_room_door_usda.py
+    Every dimension comes from factory_pauseroom_layout.py; verify_factory_scene_offline.py
+    fails if this file and that module disagree.
+
+    Two leaves on prismatic joints, authored SHUT (joint position 0). Each opens by
+    0.700000 m, which together restore the doorway's full
+    1.400000 m clear width. Local frame: origin at the middle of the doorway
+    at floor level, +x along the slide, +y into the pause room."""
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Root"
+{
+    def Xform "PauseRoomDoor" (
+        prepend apiSchemas = ["PhysicsArticulationRootAPI"]
+    )
+    {
+        # Pins the header rail to the world. body0 is empty == the world frame, which is
+        # how cabinet_collider.usd fixes its own base link (/Root/cabinet/rootJoint).
+        def PhysicsFixedJoint "rootJoint"
+        {
+            rel physics:body1 = </Root/PauseRoomDoor/door_frame>
+            bool physics:collisionEnabled = 0
+            bool physics:jointEnabled = 1
+            bool physics:excludeFromArticulation = 0
+            float physics:breakForce = inf
+            float physics:breakTorque = inf
+            point3f physics:localPos0 = (0.000000, 0.000000, 2.240000)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+
+        def Xform "door_frame" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            bool physics:rigidBodyEnabled = 1
+            bool physics:kinematicEnabled = 0
+            float physics:mass = 40.000000
+            double3 xformOp:translate = (0.000000, 0.000000, 2.240000)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cube "collision" (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                double size = 1
+                color3f[] primvars:displayColor = [(0.420000, 0.440000, 0.480000)]
+                double3 xformOp:scale = (2.840000, 0.060000, 0.080000)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
+            }
+
+            def PhysicsPrismaticJoint "door_left_joint" (
+                prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+            )
+            {
+                uniform token physics:axis = "X"
+                rel physics:body0 = </Root/PauseRoomDoor/door_frame>
+                rel physics:body1 = </Root/PauseRoomDoor/door_left_leaf>
+                bool physics:collisionEnabled = 0
+                bool physics:jointEnabled = 1
+                bool physics:excludeFromArticulation = 0
+                float physics:breakForce = inf
+                float physics:breakTorque = inf
+                point3f physics:localPos0 = (-0.360000, 0.000000, -1.140000)
+                point3f physics:localPos1 = (0, 0, 0)
+                quatf physics:localRot0 = (1, 0, 0, 0)
+                quatf physics:localRot1 = (1, 0, 0, 0)
+                float physics:lowerLimit = -0.700000
+                float physics:upperLimit = 0.000000
+                uniform token drive:linear:physics:type = "force"
+                float drive:linear:physics:stiffness = 800.000000
+                float drive:linear:physics:damping = 120.000000
+                float drive:linear:physics:maxForce = 200.000000
+                float drive:linear:physics:targetPosition = 0
+            }
+            def PhysicsPrismaticJoint "door_right_joint" (
+                prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+            )
+            {
+                uniform token physics:axis = "X"
+                rel physics:body0 = </Root/PauseRoomDoor/door_frame>
+                rel physics:body1 = </Root/PauseRoomDoor/door_right_leaf>
+                bool physics:collisionEnabled = 0
+                bool physics:jointEnabled = 1
+                bool physics:excludeFromArticulation = 0
+                float physics:breakForce = inf
+                float physics:breakTorque = inf
+                point3f physics:localPos0 = (0.360000, 0.000000, -1.140000)
+                point3f physics:localPos1 = (0, 0, 0)
+                quatf physics:localRot0 = (1, 0, 0, 0)
+                quatf physics:localRot1 = (1, 0, 0, 0)
+                float physics:lowerLimit = 0.000000
+                float physics:upperLimit = 0.700000
+                uniform token drive:linear:physics:type = "force"
+                float drive:linear:physics:stiffness = 800.000000
+                float drive:linear:physics:damping = 120.000000
+                float drive:linear:physics:maxForce = 200.000000
+                float drive:linear:physics:targetPosition = 0
+            }
+        }
+
+        def Xform "door_left_leaf" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            bool physics:rigidBodyEnabled = 1
+            bool physics:kinematicEnabled = 0
+            float physics:mass = 25.000000
+            double3 xformOp:translate = (-0.360000, 0.000000, 1.100000)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cube "collision" (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                double size = 1
+                color3f[] primvars:displayColor = [(0.720000, 0.780000, 0.820000)]
+                double3 xformOp:scale = (0.720000, 0.060000, 2.160000)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
+            }
+        }
+
+        def Xform "door_right_leaf" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            bool physics:rigidBodyEnabled = 1
+            bool physics:kinematicEnabled = 0
+            float physics:mass = 25.000000
+            double3 xformOp:translate = (0.360000, 0.000000, 1.100000)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cube "collision" (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                double size = 1
+                color3f[] primvars:displayColor = [(0.720000, 0.780000, 0.820000)]
+                double3 xformOp:scale = (0.720000, 0.060000, 2.160000)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
+            }
+        }
+    }
+}

@@ -34,7 +34,9 @@ import {
   G1_NON_LOCOMOTING_FSM_IDS,
   type BlockExecutorDeps,
 } from './block-executor.js';
+import type { SkillRunReport, SkillRunRequest } from './vla-skills.js';
 import { controlOwnerLock, type ControlOwnerLock } from './control-owner.js';
+import type { SkillExecutor } from '../vla/skill-executor.js';
 import {
   HeartbeatMonitor,
   heartbeatJournalRecord,
@@ -117,8 +119,73 @@ import type {
   TourTurn,
   SceneMemory,
   SpokenLanguage,
+  VlaSkillOutcome,
 } from './types.js';
 import { normalizeDeg } from './types.js';
+
+/**
+ * What an external success check is told about a finished rollout (TASK-226).
+ *
+ * Deliberately thin: the probe is expected to look at the WORLD (a camera
+ * frame, an instrumented scene, an operator), not to re-derive an answer from
+ * numbers the policy produced. Steps and duration are here so a probe can
+ * report "ran its whole budget" alongside its own finding, not so it can infer
+ * success from them.
+ */
+export interface SkillVerdictInput {
+  skillId: string;
+  skillName: string;
+  /** The trained prompt the policy was actually given. */
+  instruction: string;
+  steps: number;
+  durationMs: number;
+}
+
+/** An external check's answer. Absent (`null`) means "nothing could tell". */
+export interface SkillVerdict {
+  outcome: VlaSkillOutcome;
+  /**
+   * Where this came from, in a form an operator can read on the block card:
+   * `success-classifier`, `operator`, `sim-world-state`. Never invented, and
+   * never omitted — an unattributed verdict is not evidence.
+   */
+  source: string;
+  /** 0..1 when the source has one. */
+  confidence?: number;
+  /** One short sentence, for a `failed` verdict. */
+  reason?: string;
+}
+
+/**
+ * The hook a real success signal plugs into.
+ *
+ * NOTHING supplies one today, and that is recorded rather than papered over:
+ * `SkillExecutor` returns `completed` when its step loop ends without throwing,
+ * which is "the rollout ran", not "the task succeeded". ReViP (arXiv
+ * 2601.16667) measured pi0 continuing toward the goal in 46 of 50 real-robot
+ * trials with clear visual evidence it had never grasped anything, so a policy
+ * that is asked how it did will say it did fine.
+ *
+ * What a real signal requires, and where it has to come from:
+ *
+ * 1. A learned binary success classifier over the post-rollout camera frame —
+ *    AutoEval (arXiv 2503.24278) fine-tuned PaliGemma from ~1000 images and
+ *    under 10 minutes of teleop to >95% accuracy. It needs a camera the object
+ *    is in, and per-skill training data. This is the cheapest credible option.
+ * 2. Instrumented world state, where there is any: in the MuJoCo/Isaac scenes
+ *    the apple's body pose is knowable, so the sim can answer outright. That is
+ *    ground truth and should outrank a classifier wherever it exists.
+ * 3. An operator, asked. Slow, but the only option that is right by definition,
+ *    and the labelling source option 1 is trained from.
+ *
+ * Scene memory CANNOT serve: it stores `label + bearing + distance` keyed by
+ * lower-cased label, with no 3-D pose and exactly one `apple` ever, so it can
+ * tell you an apple is somewhere ahead and nothing about whether it is on the
+ * plate.
+ */
+export type SkillVerdictProbe = (
+  input: SkillVerdictInput,
+) => Promise<SkillVerdict | null> | SkillVerdict | null;
 
 /** `POST /robots/:id/agent-mode/patrol` body, after validation by the route. */
 /** `POST /robots/:id/agent-mode/tour` body, after validation by the route. */
@@ -293,6 +360,12 @@ export interface AgentModeControllerDeps {
   tourRouteId?: string;
   /** Run one VLA skill for a `demo` block; absent = this agent cannot. */
   runSkill?: BlockExecutorDeps['runSkill'];
+  /**
+   * External check on whether a finished rollout achieved its task (TASK-226).
+   * Absent — the shipped state — means every rollout reports `unknown`, which
+   * is the honest answer. See {@link SkillVerdictProbe}.
+   */
+  skillVerdict?: SkillVerdictProbe;
 }
 
 /**
@@ -321,7 +394,17 @@ const defaultLoco: NonNullable<BlockExecutorDeps['loco']> = {
   odometry: () => hardwareClient.getLocoOdometry(),
 };
 
-/** Blocks during which the base moves — the only time a map sweep learns anything new. */
+/**
+ * Blocks during which the base moves — the only time a map sweep learns
+ * anything new.
+ *
+ * `vla_skill` is deliberately NOT one of them (TASK-226), even though a policy
+ * driving the arms does shift the robot. The sweep integrates LiDAR frames into
+ * the occupancy grid, and during a manipulation rollout the robot's own arms
+ * are between the sensor and the world: every frame would write the arm into
+ * the map as an obstacle a metre in front of the robot, and the grid never
+ * forgets what it has not since seen to be free.
+ */
 function isMotionBlock(kind: AgentBlockKind): boolean {
   return kind === 'walk' || kind === 'turn' || kind === 'goto';
 }
@@ -489,6 +572,22 @@ export class AgentModeController {
   private workspaceWriteError: string | null = null;
 
   private robotStateManager: RobotStateManager | null = null;
+  /** External success check, or null — see {@link SkillVerdictProbe}. */
+  private readonly skillVerdict: SkillVerdictProbe | null;
+  /**
+   * The VLA rollout this controller started and can still reach (TASK-226).
+   * Non-null exactly while one is in flight; `runVlaSkill`'s `finally` clears
+   * it on every path.
+   */
+  private activeSkill: { runKey: string; executor: SkillExecutor } | null = null;
+  /** Monotonic, so two rollouts in the same millisecond get different keys. */
+  private vlaSkillSeq = 0;
+  /**
+   * The block that failed the last plan, waiting to be handed to the planner
+   * once (TASK-226). Cleared as it is consumed: a stale failure steering a
+   * command the operator gave ten minutes later is worse than no context.
+   */
+  private lastBlockFailure: { kind: AgentBlockKind; message: string } | null = null;
   private listeners = new Set<(event: AgentModeEvent) => void>();
   private unsubscribeLock: (() => void) | null = null;
 
@@ -498,6 +597,7 @@ export class AgentModeController {
     this.now = deps.now ?? (() => Date.now());
     this.mirrorRepushIntervalMs = deps.mirrorRepushIntervalMs ?? MIRROR_REPUSH_INTERVAL_MS;
     this.lock = deps.lock ?? controlOwnerLock;
+    this.skillVerdict = deps.skillVerdict ?? null;
     this.planner = deps.planner ?? new Planner();
     this.vision = deps.vision ?? new VisionClient();
     this.range = deps.range ?? new RangeSensor();
@@ -789,7 +889,19 @@ export class AgentModeController {
     // Human teleop outranks Agent Mode: when it takes the lock from us, the
     // running plan is aborted with an explicit takeover note.
     this.unsubscribeLock = this.lock.subscribe((change) => {
-      if (change.preempted && change.previous === 'agent' && change.next === 'teleop') {
+      //
+      // `previous` is not always `'agent'`: while a `vla_skill` block runs, the
+      // plan has lent the lock to its own policy (TASK-226), so a human taking
+      // over mid-rollout is an `agent`→…→`vla`→`teleop` sequence and a check on
+      // `previous === 'agent'` alone would miss it entirely — the plan would
+      // keep running under the operator's hands, which is the exact failure
+      // this hook exists to prevent. `activeSkill` is non-null for precisely
+      // the duration of that lend.
+      if (
+        change.preempted &&
+        change.next === 'teleop' &&
+        (change.previous === 'agent' || this.activeSkill !== null)
+      ) {
         this.abortPlan('Human teleoperation took over control.');
       }
       // Somebody else is driving, so what the robot remembers seeing is no
@@ -804,7 +916,13 @@ export class AgentModeController {
       // over between two commands is `agent → idle → teleop → idle` and a hook
       // on leaving `'agent'` would never once fire on it. The preemption case
       // (`agent → teleop` mid-plan) is caught by the same condition anyway.
-      if (change.next === 'teleop' || change.next === 'vla') {
+      //
+      // `handover` is excluded (TASK-226): Agent Mode lending the lock to its
+      // own `vla_skill` rollout is not "somebody else is driving", it is this
+      // controller's own block. Wiping there would throw away the measured
+      // distances the rest of the plan was built on, halfway through the plan
+      // that measured them.
+      if ((change.next === 'teleop' || change.next === 'vla') && !change.handover) {
         this.scene.clear();
         // `snapshot()` is null here by construction — `clear()` nulls
         // `updatedAt`. Sent as `null` and not `undefined`, because the whole
@@ -1400,7 +1518,12 @@ export class AgentModeController {
    * cannot make up a fix it missed before the command arrived.
    */
   private notePolledOdometry(): void {
-    if (this.lock.isOwnedBy('agent')) return;
+    // `activeSkill` keeps the mute honest across a `vla_skill` block: the lock
+    // reads `vla` while the rollout runs (TASK-226), and the reasoning above —
+    // "while Agent Mode is the one driving, the commanded metres already say
+    // everything this could" — has not stopped applying just because Agent
+    // Mode lent the wheel to its own policy for thirty seconds.
+    if (this.lock.isOwnedBy('agent') || this.activeSkill !== null) return;
     const pose = this.getPose();
     if (!pose) return;
     this.scene.noteOdometryM(pose.x, pose.y);
@@ -1732,6 +1855,10 @@ export class AgentModeController {
     this.abortReason = reason;
     this.estopReason = reason;
     this.estopAt = nowIso();
+    // BEFORE anything that awaits. The safety loop's `abortAll()` would reach
+    // the rollout too, but only on a humanoid with the sidecar attached and
+    // only on its next 50 ms tick; an E-Stop must not wait on either.
+    this.abortActiveSkill(reason);
     // BEFORE the hardware round-trip, not after: a process that dies between
     // the latch and the sidecar's answer must still come back latched. The
     // debounced write in StatePersistence collapses this with the writes the
@@ -1785,7 +1912,25 @@ export class AgentModeController {
     // rest of the fleet reads.
     this.robotStateManager?.triggerEmergencyStop('local', `Agent Mode E-Stop: ${reason}`);
 
-    this.lock.release('agent');
+    // `reset()`, not `release('agent')`. An E-Stop lands at any moment,
+    // including the middle of a `vla_skill` block, and there the lock is lent
+    // out: the owner reads `vla`, so `release('agent')` hit its `if (this.owner
+    // !== who) return;` guard and did NOTHING. What followed was worse than a
+    // missed release. `abortActiveSkill` above only sets a flag — the rollout
+    // returns up to one /predict round trip later — so `runVlaSkill`'s
+    // `finally` then ran `lend.end()` and put the owner back to `agent`, and
+    // `runPlan`'s finally skips its release for a plan `planFinalized` already
+    // closed. The lock stayed on `agent` with one holder for the rest of the
+    // process: `claim('vla')` refused forever (so `/skills/execute` and
+    // `/vla/start` were dead), the idle watcher, greet and heartbeat all gated
+    // off for good on `lock.get() !== 'idle'`, `GET /agent-mode` reporting
+    // `agent` while nothing drove, and every later plan's `claim('agent')`
+    // taking the same-owner path and leaking one more holder.
+    //
+    // An E-Stop is the one event entitled to drop every holder there is. The
+    // late `lend.end()` is harmless: it hands the lock back only while its own
+    // loan is still the live one, and `reset()` cancels it on the way past.
+    this.lock.reset();
     console.warn(`[AgentMode] E-STOP: ${reason}`);
     this.emit('agent:state:changed');
     return {
@@ -1897,6 +2042,10 @@ export class AgentModeController {
     if (!this.plan || !this.isRunning()) return;
     this.abortRequested = true;
     this.abortReason = reason;
+    // A running VLA rollout does not watch `abortRequested` — it is a closed
+    // loop inside `SkillExecutor` — so the abort has to be pushed into it
+    // (TASK-226). This is the path a teleop preemption takes.
+    this.abortActiveSkill(reason);
     console.warn(`[AgentMode] plan aborted: ${reason}`);
   }
 
@@ -1915,6 +2064,7 @@ export class AgentModeController {
           ...this.plannerSceneTargets(),
           ...(plan.language ? { language: plan.language } : {}),
           ...this.plannerVisitorFacts(),
+          ...this.takeLastFailure(),
         });
         // An E-Stop that landed during the LLM round-trip already finalized
         // this plan and emitted its `finished`. Writing fresh pending blocks
@@ -2027,11 +2177,19 @@ export class AgentModeController {
       plan.updatedAt = nowIso();
       this.pendingCommand = null;
       this.notePlanOutcome(plan);
-      // A plan the E-Stop already finalized has had its lock released and its
-      // `agent:plan:finished` emitted. Guarding on `planFinalized` rather than
-      // on `estopActive` is what keeps that true after a latch reset: otherwise
-      // a reset mid-block produced a SECOND finished event carrying `done` for
-      // a plan whose blocks are all `aborted`/`skipped`.
+      // A plan the E-Stop already finalized has had its `agent:plan:finished`
+      // emitted, and its lock RESET — not released, which is the distinction
+      // that matters here. `estop()` drops every holder outright, because the
+      // owner at that moment may be `vla` (a lent `vla_skill` rollout) rather
+      // than `agent`, and a release aimed at `agent` would silently do nothing
+      // and strand the lock. So this branch has nothing left to give back and
+      // must not run: releasing here would decrement a refcount that belongs to
+      // whoever has claimed the lock in the meantime.
+      //
+      // Guarding on `planFinalized` rather than on `estopActive` is what keeps
+      // that true after a latch reset: otherwise a reset mid-block produced a
+      // SECOND finished event carrying `done` for a plan whose blocks are all
+      // `aborted`/`skipped`.
       if (!this.planFinalized) {
         this.lock.release('agent');
         this.emit('agent:plan:finished', { plan: clonePlan(plan) });
@@ -2046,6 +2204,21 @@ export class AgentModeController {
    */
   private abortSignalled(): boolean {
     return this.abortRequested || this.planFinalized;
+  }
+
+  /**
+   * The block that failed the last plan, handed to the planner ONCE (TASK-226).
+   *
+   * Consumed rather than kept: the operator watching a plan fail is the one who
+   * types the next command, so the failure is context for exactly that command.
+   * Steering a command given ten minutes later by a failure nobody mentioned
+   * again would be worse than no context at all.
+   */
+  private takeLastFailure(): { lastFailure: { kind: string; message: string } } | Record<string, never> {
+    const failure = this.lastBlockFailure;
+    if (!failure) return {};
+    this.lastBlockFailure = null;
+    return { lastFailure: { kind: failure.kind, message: failure.message } };
   }
 
   /**
@@ -2210,6 +2383,7 @@ export class AgentModeController {
       remainingPlan: remaining,
       ...(plan.language ? { language: plan.language } : {}),
       ...this.plannerVisitorFacts(),
+      ...this.takeLastFailure(),
     });
 
     // Completed blocks are frozen; only the pending tail is replaced.
@@ -2275,6 +2449,12 @@ export class AgentModeController {
     } else {
       block.status = 'failed';
       block.error = outcome.message;
+      // TASK-226: the reason a plan stopped used to live only in the timeline.
+      // Held here until the NEXT planner call consumes it, so the model that
+      // re-plans is told what did not work instead of cheerfully emitting the
+      // same block again. Only the latest failure is kept — a plan stops at its
+      // first one anyway, and a queue of old failures is noise, not context.
+      this.lastBlockFailure = { kind: block.kind, message: outcome.message };
     }
     plan.updatedAt = block.finishedAt;
     this.emit('agent:block:finished', { plan: clonePlan(plan), block: { ...block } });
@@ -3048,50 +3228,196 @@ export class AgentModeController {
   }
 
   /**
-   * Run one VLA skill for a `demo` block, through the same closed loop
-   * `POST /robots/:id/skills/execute` uses — in process, not over our own HTTP
-   * API: a demo that depends on the agent being able to reach itself has one
-   * more way to fail in front of an audience, for no gain.
+   * Run one VLA skill — for a `demo` block (TASK-213) or a planned `vla_skill`
+   * block (TASK-226) — through the same closed loop
+   * `POST /robots/:id/skills/execute` uses, in process rather than over our own
+   * HTTP API: a rollout that depends on the agent being able to reach itself
+   * has one more way to fail in front of an audience, for no gain.
+   *
+   * ## What TASK-226 fixed here, and why it was a live bug
+   *
+   * This method used to build a `SkillExecutor`, run it, and hand back a
+   * boolean. It registered with nothing and claimed nothing, so:
+   *
+   * - `skillExecutorRegistry.abortAll()` — what `robot/state.ts`'s safety loop
+   *   calls on a protective stop — could not see the rollout. A detected fall
+   *   did not stop the arms.
+   * - No abort hook of any kind existed, so an E-Stop or a teleop takeover
+   *   simply blocked the plan loop for up to the full timeout.
+   * - The `vla` control owner was never claimed, so `GET /agent-mode` reported
+   *   `agent` while a learned policy was driving.
+   *
+   * All three are fixed by registering, lending the lock, and letting
+   * {@link abortActiveSkill} reach the executor. The registry entry, the lend
+   * and the abort hook are torn down in ONE `finally`, so a throw, a timeout
+   * and a normal return all leave the same state behind.
+   *
+   * ## Why `lend` and not `claim('vla')`
+   *
+   * Agent Mode holds `agent` for the life of a plan, so `claim('vla')` from
+   * inside a block is refused, and releasing `agent` first would open a window
+   * for a third party to take control out from under the running plan. See
+   * {@link ControlOwnerLock.lend}.
    */
-  private async runVlaSkill(input: {
-    skillId: string;
-    skillName: string;
-    taskPrompt?: string;
-    timeoutMs?: number;
-  }): Promise<{ ok: boolean; steps?: number; durationMs?: number; message: string }> {
+  private async runVlaSkill(input: SkillRunRequest): Promise<SkillRunReport> {
     const rsm = this.robotStateManager;
-    if (!rsm) return { ok: false, message: 'this agent has no robot to run a skill on' };
-    const { SkillExecutor } = await import('../vla/skill-executor.js');
-    const executor = new SkillExecutor(rsm);
-    const result = await executor.run({
-      skillId: input.skillId,
-      taskPrompt: input.taskPrompt ?? `Execute skill ${input.skillName}`,
-      maxSteps: 200,
-      timeoutMs: input.timeoutMs ?? 60_000,
-      robotId: this.robotId,
-    });
-    // TASK-183: the `message` below is narration — a visitor watching the demo
-    // hears it — so chunk-boundary counters have no business in it. They do
-    // belong somewhere: a `demo` block is a real rollout, on the G1, in front
-    // of people, and it is the run most likely to expose a boundary stall as
-    // something visible. The log line is that somewhere. Present only when RTC
-    // ran, so an RTC-off demo prints nothing new.
-    if (result.rtc) {
-      console.log(
-        `[AgentMode/VLA] "${input.skillName}": ${result.status} after ${result.steps} steps | ` +
-          `rtc=on boundaries=${result.rtc.stalledTransitions}/${result.rtc.chunkTransitions} ` +
-          `stall=${result.rtc.totalStallMs}ms (max ${result.rtc.maxStallMs}ms)`,
-      );
+    if (!rsm) {
+      return {
+        ok: false,
+        outcome: 'failed',
+        verdictSource: 'preflight',
+        message: 'this agent has no robot to run a skill on',
+      };
     }
-    const ok = result.status === 'completed';
-    return {
-      ok,
-      steps: result.steps,
-      durationMs: result.durationMs,
-      message: ok
-        ? `Ran "${input.skillName}": ${result.steps} step(s) in ${(result.durationMs / 1000).toFixed(1)} s.`
-        : `"${input.skillName}" did not finish: ${result.error ?? result.message ?? result.status}`,
-    };
+
+    const lend = this.lock.lend('vla');
+    if (!lend.ok) {
+      // A refused acquisition is a block FAILURE with the lock's own words, not
+      // a silent no-op: "the rollout did not happen because a human is driving"
+      // is exactly what the operator has to be able to read.
+      return {
+        ok: false,
+        outcome: 'failed',
+        verdictSource: 'control-owner',
+        message: `"${input.skillName}" did not run: ${lend.reason ?? 'control is busy.'}`,
+      };
+    }
+
+    const { SkillExecutor, skillExecutorRegistry } = await import('../vla/skill-executor.js');
+    // The sequence number matters for the same reason it does in
+    // `robot/state.ts`: two rollouts started inside the same millisecond would
+    // otherwise share a registry key, and every "is this still my run?" guard
+    // would match the wrong one.
+    const runKey = `agent-vla-${Date.now()}-${++this.vlaSkillSeq}`;
+    const executor = new SkillExecutor(rsm);
+    // THE fix. Same registry as `/skills/execute` and `/vla/start`, so the
+    // safety loop's `abortAll()` halts an Agent-Mode rollout too.
+    skillExecutorRegistry.register(runKey, executor);
+    this.activeSkill = { runKey, executor };
+    // An abort that was requested while we were setting up must not be missed:
+    // `abortActiveSkill` can only reach an executor that is already recorded.
+    if (this.abortSignalled()) executor.abort();
+
+    try {
+      const result = await executor.run({
+        skillId: input.skillId,
+        // No `Execute skill <name>` fallback for a planned block: `coerceParams`
+        // fills `taskPrompt` from the catalogue and the block refuses without
+        // one. The fallback survives only for a host-authored `demo`, which has
+        // no catalogue entry — see TASK-226 defect 2.
+        taskPrompt: input.taskPrompt ?? `Execute skill ${input.skillName}`,
+        maxSteps: input.maxSteps ?? 200,
+        timeoutMs: input.timeoutMs ?? 60_000,
+        robotId: this.robotId,
+      });
+      // TASK-183: the `message` below is narration — a visitor watching the demo
+      // hears it — so chunk-boundary counters have no business in it. They do
+      // belong somewhere: this is a real rollout, on the G1, in front of people,
+      // and it is the run most likely to expose a boundary stall as something
+      // visible. The log line is that somewhere. Present only when RTC ran, so
+      // an RTC-off run prints nothing new.
+      if (result.rtc) {
+        console.log(
+          `[AgentMode/VLA] "${input.skillName}": ${result.status} after ${result.steps} steps | ` +
+            `rtc=on boundaries=${result.rtc.stalledTransitions}/${result.rtc.chunkTransitions} ` +
+            `stall=${result.rtc.totalStallMs}ms (max ${result.rtc.maxStallMs}ms)`,
+        );
+      }
+      const ran = result.status === 'completed';
+      const seconds = (result.durationMs / 1000).toFixed(1);
+      if (!ran) {
+        return {
+          ok: false,
+          outcome: 'failed',
+          verdictSource: `executor:${result.status}`,
+          steps: result.steps,
+          durationMs: result.durationMs,
+          message: `"${input.skillName}" did not finish: ${result.error ?? result.message ?? result.status}`,
+        };
+      }
+
+      // `completed` means "ran its step budget without throwing"
+      // (`vla/skill-executor.ts`, end of `runLoop`). It is NOT a claim about the
+      // world, so it becomes `unknown` unless something outside the policy says
+      // otherwise. See {@link AgentModeDeps.skillVerdict}.
+      const verdict = await this.probeSkillVerdict({
+        skillId: input.skillId,
+        skillName: input.skillName,
+        instruction: input.taskPrompt ?? '',
+        steps: result.steps,
+        durationMs: result.durationMs,
+      });
+      if (verdict) {
+        return {
+          ok: true,
+          outcome: verdict.outcome,
+          verdictSource: verdict.source,
+          steps: result.steps,
+          durationMs: result.durationMs,
+          message:
+            verdict.outcome === 'succeeded'
+              ? `"${input.skillName}" succeeded (${verdict.source}): ${result.steps} step(s) in ${seconds} s.`
+              : verdict.outcome === 'failed'
+                ? `"${input.skillName}" failed (${verdict.source})${verdict.reason ? `: ${verdict.reason}` : ''} — ran ${result.steps} step(s) in ${seconds} s.`
+                : `Ran "${input.skillName}": ${result.steps} step(s) in ${seconds} s. Outcome unknown (${verdict.source}).`,
+        };
+      }
+      return {
+        ok: true,
+        outcome: 'unknown',
+        verdictSource: 'rollout',
+        steps: result.steps,
+        durationMs: result.durationMs,
+        // Deliberately NOT "Ran … — done". The rollout ran; whether the apple
+        // moved is something nobody looked at, and the sentence says so.
+        message:
+          `Ran "${input.skillName}": ${result.steps} step(s) in ${seconds} s. ` +
+          'Outcome unknown — nothing checked whether the task actually succeeded.',
+      };
+    } finally {
+      skillExecutorRegistry.unregister(runKey);
+      if (this.activeSkill?.runKey === runKey) this.activeSkill = null;
+      // Hands `agent` back to the plan — or does nothing at all when a human
+      // took the lock while the policy was driving. See `LendResult.end`.
+      lend.end();
+    }
+  }
+
+  /**
+   * Ask whatever can see the world whether the skill actually worked.
+   *
+   * Returns null when nothing can, which is the shipped state: there is no
+   * success classifier on this robot, and inventing a verdict is the failure
+   * mode this whole three-way outcome exists to prevent. Guarded, because a
+   * probe that throws must leave the rollout reported as `unknown` rather than
+   * turn a finished rollout into a crashed plan.
+   */
+  private async probeSkillVerdict(input: SkillVerdictInput): Promise<SkillVerdict | null> {
+    if (!this.skillVerdict) return null;
+    try {
+      return (await this.skillVerdict(input)) ?? null;
+    } catch (err) {
+      console.warn(
+        `[AgentMode/VLA] success check failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Cut an Agent-Mode rollout short. The counterpart to registering it: E-Stop
+   * and `abortPlan` (which is what a teleop preemption calls) both reach the
+   * policy through here, without waiting for the safety loop's `abortAll()` —
+   * that loop only runs for a humanoid with the sidecar attached.
+   *
+   * Returns whether anything was actually aborted, for the log line.
+   */
+  private abortActiveSkill(reason: string): boolean {
+    const active = this.activeSkill;
+    if (!active) return false;
+    active.executor.abort();
+    console.warn(`[AgentMode/VLA] aborting the running skill: ${reason}`);
+    return true;
   }
 
   /** Abort the running tour (the plan aborts with it). */

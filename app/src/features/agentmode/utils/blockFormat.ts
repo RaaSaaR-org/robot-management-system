@@ -4,7 +4,13 @@
  * @feature agentmode
  */
 
-import type { AgentBlock, AgentBlockKind, AgentBlockStatus, AgentPlanStatus } from '../types';
+import type {
+  AgentBlock,
+  AgentBlockKind,
+  AgentBlockStatus,
+  AgentPlanStatus,
+  VlaSkillOutcome,
+} from '../types';
 
 // ============================================================================
 // LABELS
@@ -31,6 +37,10 @@ const BLOCK_LABELS: Record<AgentBlockKind, string> = {
   tour: 'Tour',
   present: 'Present',
   demo: 'Demo',
+  // TASK-226. "Skill" and not "Pick" or "Manipulate": what the block does is
+  // hand control to a named policy, and what that policy achieves is exactly
+  // the thing the card must not assert.
+  vla_skill: 'Skill',
 };
 
 /** Human label for a block kind. */
@@ -57,6 +67,7 @@ const BLOCK_GLYPHS: Record<AgentBlockKind, string> = {
   tour: '🚩',
   present: '🗣',
   demo: '🤲',
+  vla_skill: '🦾',
 };
 
 /** Glyph for a block kind — a tiny, dependency-free icon. */
@@ -190,6 +201,18 @@ export function formatBlockParams(block: AgentBlock): string {
       const skill = str(p.skillName) ?? str(p.skillId) ?? 'skill';
       return demoMode(block) === 'execute' ? `runs “${skill}”` : `describes “${skill}” (not executed)`;
     }
+    case 'vla_skill': {
+      // TASK-226. The outcome is the load-bearing half of this chip, and it is
+      // spelled out in words rather than left to the status pill: a `done` pill
+      // on a rollout nobody checked reads as "the robot did it", which is the
+      // one claim this block kind exists to avoid making.
+      const skill = str(p.label) ?? str(p.skill) ?? 'skill';
+      const outcome = vlaSkillOutcome(block);
+      if (outcome === 'succeeded') return `“${skill}” · succeeded`;
+      if (outcome === 'failed') return `“${skill}” · failed`;
+      if (outcome === 'unknown') return `“${skill}” · outcome unknown`;
+      return `“${skill}”`;
+    }
     case 'look':
       // `speak: true` is the answering look ("tell me what is on the table"):
       // the robot says what it sees, so the card should say so up front.
@@ -211,6 +234,20 @@ export function presentProgress(block: AgentBlock): { chunk: number; of: number 
   const chunk = num(block.params?.chunk);
   const of = num(block.params?.of);
   return chunk !== null && of !== null ? { chunk, of } : null;
+}
+
+/**
+ * The three-way verdict on a finished `vla_skill` block (TASK-226), or null
+ * when there is none — a block that has not run yet, or any other kind.
+ *
+ * An unrecognised value reads as null and NOT as `succeeded`: the whole point
+ * of the three-way outcome is that success has to be positively established, so
+ * a missing or malformed verdict must never be rendered as one.
+ */
+export function vlaSkillOutcome(block: AgentBlock): VlaSkillOutcome | null {
+  if (block.kind !== 'vla_skill') return null;
+  const outcome = str(block.params?.outcome);
+  return outcome === 'succeeded' || outcome === 'failed' || outcome === 'unknown' ? outcome : null;
 }
 
 /**

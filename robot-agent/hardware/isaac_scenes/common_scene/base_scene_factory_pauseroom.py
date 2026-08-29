@@ -39,7 +39,8 @@ takes as (w, x, y, z) and reorders itself.
 import os
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
+from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.utils import configclass
@@ -49,6 +50,10 @@ from tasks.common_scene.factory_pauseroom_layout import (
     APPLE,
     COLUMNS,
     CRATES,
+    DOOR_DRIVE,
+    DOOR_JOINTS,
+    DOOR_ORIGIN,
+    DOOR_USD_FILENAME,
     GROUND,
     GROUND_PRIM_PATH,
     IDENTITY_XYZW,
@@ -58,11 +63,20 @@ from tasks.common_scene.factory_pauseroom_layout import (
     USD_PROPS,
     WALLS,
     WORLD_CAMERA,
+    door_joint_targets,
     look_at_quat_xyzw_ros,
 )
 
 # `sim_main.py:8-9` sets PROJECT_ROOT to the checkout root before anything imports this.
 project_root = os.environ.get("PROJECT_ROOT")
+
+# The door's USD ships NEXT TO THIS MODULE and is resolved from this module's own
+# directory, NOT from PROJECT_ROOT. Installed, that is `tasks/common_scene/`; in this repo
+# it is `isaac_scenes/common_scene/`. Doing it this way means the door needs no env var, no
+# `assets/` install step and, above all, no nucleus path -- the whole scene still loads
+# with the network unplugged.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+door_usd_path = os.path.join(_HERE, DOOR_USD_FILENAME)
 
 # --- palette -----------------------------------------------------------------------------
 _CONCRETE = (0.62, 0.62, 0.60)   # perimeter walls
@@ -111,8 +125,14 @@ def _usd_prop(prim_path: str, key: str) -> AssetBaseCfg:
     """One of the checkout's own prop USDs, kinematic so the robot cannot shove it.
 
     `kinematic_enabled=True` (rather than the static collider used for the primitives)
-    mirrors `base_scene_pickplace_cylindercfg_wholebody.py:35-53` exactly, because that is
-    the configuration these particular USDs are already known to load correctly under.
+    mirrors `base_scene_pickplace_cylindercfg_wholebody.py:35-53`, which is where the three
+    `PackingTable*` USDs are already known to load correctly under exactly this cfg.
+
+    It is NOT prior art for `table_with_yellowbox.usd`. That asset has one call site in the
+    whole checkout, `base_scene_pickplace_redblock.py:35-43`, and there the `rigid_props`
+    line is COMMENTED OUT -- so the only configuration it is known to load under is the one
+    with no rigid body at all. Applying kinematic rigid-body props to it here is an
+    extrapolation, not a copy, and it is one of the things a launch would settle.
     """
     prop = USD_PROPS[key]
     return AssetBaseCfg(
@@ -180,6 +200,65 @@ class FactoryPauseRoomSceneCfg(InteractiveSceneCfg):
         "/World/envs/env_.*/PauseWallSouthRight", WALLS["pause_wall_south_right"], _PARTITION)
     pause_door_lintel = _static_box(
         "/World/envs/env_.*/PauseDoorLintel", WALLS["pause_door_lintel"], _PARTITION)
+
+    # =====================================================================================
+    # THE DOOR. A powered, automatic, two-leaf sliding door in that 1.40 m gap.
+    #
+    # This is the only ARTICULATION in the scene other than the robot, and the only thing
+    # loaded from a USD that this repo wrote. Both are forced: Isaac Lab cannot build an
+    # articulation out of primitive spawn cfgs, so a door with joints has to come from a
+    # file -- and there is no door USD anywhere on this machine (the checkout ships a
+    # cabinet, a drawer and two warehouses; `{ISAAC_NUCLEUS_DIR}/...` is an HTTPS fetch).
+    # `make_pause_room_door_usda.py` therefore GENERATES the file from the same layout
+    # constants that cut the hole in the wall, and the offline verifier fails if the two
+    # ever disagree.
+    #
+    # It is automatic because the alternative is worse. Making a humanoid work a door
+    # handle is a contact-rich bimanual manipulation problem that nothing in this stack has
+    # a policy for; a real factory pause room solves it with a presence sensor, and so does
+    # this one. The robot walks up, the leaves retract, the robot walks through. It never
+    # touches the door. See `mdp/pause_door.py` for the driver and
+    # `factory_pauseroom_layout.py` for the sensor's radii.
+    #
+    # SHUT, THE LEAVES ARE REAL. They are two 0.72 x 0.06 x 2.16 m rigid bodies with box
+    # colliders spanning x in [9.28, 10.72] -- 20 mm past each jamb -- so a robot that
+    # walks into a shut door hits it. They are NOT hidden, scaled away or teleported.
+    #
+    # The structure (articulation root on the parent Xform, a `rootJoint` fixed joint
+    # pinning the base link, one joint per moving part declared under its parent link)
+    # copies `assets/objects/drawers/cabinet_collider.usd` and the way
+    # `base_scene_pick_redblock_into_drawer.py:87-125` drives it, because that is the one
+    # articulated prop this checkout is known to import successfully.
+    # =====================================================================================
+    pause_room_door = ArticulationCfg(
+        prim_path="/World/envs/env_.*/PauseRoomDoor",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=door_usd_path,
+            activate_contact_sensors=False,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                retain_accelerations=False,
+            ),
+        ),
+        init_state=ArticulationCfg.InitialStateCfg(
+            # rot is (x, y, z, w) -- Isaac Lab 3.0 order. The USD is authored in a frame
+            # already aligned with the world, so the door needs no rotation at all.
+            pos=tuple(DOOR_ORIGIN),
+            rot=IDENTITY_XYZW,
+            # Starts SHUT. An episode that begins with the door already open would never
+            # exercise the thing this door exists to test.
+            joint_pos=door_joint_targets(0.0),
+        ),
+        actuators={
+            "leaves": ImplicitActuatorCfg(
+                joint_names_expr=list(DOOR_JOINTS),
+                effort_limit_sim=DOOR_DRIVE["max_force"],
+                velocity_limit_sim=1.0,
+                stiffness=DOOR_DRIVE["stiffness"],
+                damping=DOOR_DRIVE["damping"],
+            ),
+        },
+    )
 
     # =====================================================================================
     # Structural columns: two rows at y = +/-4 that break the hall into a central lane and

@@ -23,9 +23,24 @@
  */
 
 import { PlannerBlockKinds, type SpokenLanguage } from './types.js';
+import { VLA_SKILL_PROFILES } from './vla-skills.js';
 
 /** How the planner prompt names a language to the model. */
 const LANGUAGE_NAMES: Record<SpokenLanguage, string> = { de: 'German', en: 'English' };
+
+/**
+ * The manipulation skills this robot actually has, rendered from the catalogue
+ * (TASK-226) so the prompt cannot advertise a policy that is not installed —
+ * the same reason the kind list is rendered from `PlannerBlockKinds`.
+ *
+ * Two lines per skill and no more. Prompt length is a measured regression risk
+ * for gemma3:4b in this repo (`planner.test.ts` is the gate), and a catalogue
+ * that grows past a handful of skills needs a retrieval step, not a longer
+ * prompt.
+ */
+const SKILL_REFERENCE = Object.values(VLA_SKILL_PROFILES)
+  .map((p) => `             "${p.id}" — ${p.hint}`)
+  .join('\n');
 
 /** The block vocabulary, rendered once so the planner prompt cannot drift. */
 const BLOCK_REFERENCE = `
@@ -44,6 +59,10 @@ const BLOCK_REFERENCE = `
 - speak      {"text": "<what to say>"}
 - wait       {"seconds": 0.1..30}
 - remember   {"text": "<one short fact>", "scope": "place"|"global"}
+- vla_skill  {"skill": <one of the skills listed below>}
+             (hands the arms to a trained policy; the robot must ALREADY be
+              standing at the object — this block does not walk)
+${SKILL_REFERENCE}
 `.trim();
 
 export interface PlannerPromptInput {
@@ -76,6 +95,14 @@ export interface PlannerPromptInput {
    * "I do not know" from a permitted answer into the required one.
    */
   visitorFacts?: readonly string[];
+  /**
+   * What the LAST plan died on (TASK-226), so this one can be different.
+   *
+   * Rendered near the command rather than up with the rules, because it is a
+   * fact about this moment and not a standing instruction — and kept to two
+   * lines, because everything added to this prompt is paid for on every plan.
+   */
+  lastFailure?: { kind: string; message: string };
 }
 
 export function buildPlannerPrompt(input: PlannerPromptInput): string {
@@ -173,6 +200,13 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
     '- The robot waves with its RIGHT arm only — there is no left-hand wave. If the',
     '  operator asks for the left hand, `wave` anyway and add a `speak` block that',
     '  says the gesture is right-arm only.',
+    // TASK-226. ONE rule, for the same measured reason the `remember` rule is
+    // one line. What it has to prevent is the model treating `vla_skill` as a
+    // way to GET somewhere: the block moves arms, never the base, and a policy
+    // started from across the room reaches for nothing for a whole minute.
+    '- "pick up X", "put X on Y", "grab X" -> `vla_skill` with the matching skill,',
+    '  AFTER a `goto` that puts the robot at the object. If no listed skill matches',
+    '  what was asked for, say so with `speak` — never substitute another skill.',
     '- If the command cannot be carried out with these blocks, answer with a single',
     '  `speak` block that says plainly what is not possible.',
     // TASK-213. Only present when a visitor is being hosted; see visitorFacts.
@@ -232,6 +266,17 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
       '',
       `Your previous answer was rejected: ${input.repairHint}`,
       'Answer again with valid JSON that matches the schema exactly.'
+    );
+  }
+
+  if (input.lastFailure) {
+    sections.push(
+      '',
+      `The last plan stopped: its \`${input.lastFailure.kind}\` block failed — ` +
+        `"${input.lastFailure.message}".`,
+      'Take that into account. Repeating the block that just failed, unchanged, is',
+      'not a plan; either do something that changes the situation first, or say with',
+      'a `speak` block that it cannot be done.',
     );
   }
 

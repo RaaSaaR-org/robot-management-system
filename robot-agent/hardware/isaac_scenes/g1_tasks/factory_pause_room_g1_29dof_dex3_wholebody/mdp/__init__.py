@@ -9,5 +9,6 @@ shared `tasks.common_*` implementations, plus `from isaaclab.envs.mdp import *` 
 from isaaclab.envs.mdp import *  # noqa: F401,F403
 
 from .observations import *  # noqa: F401,F403
+from .pause_door import *  # noqa: F401,F403
 from .rewards import *  # noqa: F401,F403
 from .terminations import *  # noqa: F401,F403

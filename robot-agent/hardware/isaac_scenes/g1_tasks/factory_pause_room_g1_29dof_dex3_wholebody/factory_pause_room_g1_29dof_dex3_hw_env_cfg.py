@@ -2,7 +2,7 @@
 """Env cfg for `Isaac-Factory-PauseRoom-G129-Dex3-Wholebody`.
 
 Structurally a copy of `move_cylinder_g1_29dof_dex3_hw_env_cfg.py`: the same managers, the
-same `__post_init__`, the same event registrations. The differences are exactly three:
+same `__post_init__`, the same event registrations. The differences are exactly four:
 
   1. the scene base class is `FactoryPauseRoomSceneCfg` instead of `TableCylinderSceneCfgWH`;
   2. the robot starts on the factory floor at (4.0, -2.0, 0.8) with a 45 deg yaw, facing
@@ -10,7 +10,11 @@ same `__post_init__`, the same event registrations. The differences are exactly 
   3. `reset_object_self` re-samples the apple over a smaller box (+/-0.03 m, from
      `APPLE_RESET_JITTER`) than the cylinder task used, because the plate is only 0.195 m
      away and the cylinder task's +/-0.05 / +/-0.04 would sometimes spawn the apple already
-     touching it.
+     touching it;
+  4. there is a second observation group, `door`, which drives and reports the pause
+     room's automatic sliding door. The `policy` group -- the wholebody DDS contract -- is
+     untouched; see `DoorCfg` below and `mdp/pause_door.py` for why a door ends up being
+     an observation.
 
 Everything else is held identical on purpose -- the wholebody DDS path, the observation
 shapes and the reward wiring are what the rest of the stack already talks to.
@@ -116,6 +120,31 @@ class ObservationsCfg:
 
     policy: PolicyCfg = PolicyCfg()
 
+    @configclass
+    class DoorCfg(ObsGroup):
+        """The pause room's automatic door: its state, and the thing that drives it.
+
+        A SEPARATE GROUP, not a fourth term in `policy`. The policy group is the wholebody
+        DDS contract that the rest of the stack already reads; appending to it would change
+        what those publishers see. A new group is purely additive -- `ObservationManager`
+        computes every group, and nothing else looks at this one.
+
+        And it is an OBSERVATION at all because `env.step()` never runs in a `*Wholebody*`
+        task (`sim_main.py:476-479` + `robot_control_system.py:120-127`), so a reward,
+        termination or event term would never fire. The wholebody provider does call
+        `observation_manager.compute()` every control step
+        (`action_provider_wh_dds.py:728`), which makes this the one per-step hook reachable
+        from inside this task package. `mdp/pause_door.py` explains the consequences.
+        """
+
+        door_state = ObsTerm(func=mdp.pause_door_state)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = False
+
+    door: DoorCfg = DoorCfg()
+
 
 @configclass
 class TerminationsCfg:
@@ -214,3 +243,15 @@ class FactoryPauseRoomG129Dex3WholebodyEnvCfg(ManagerBasedRLEnvCfg):
                 env,
                 torch.arange(env.num_envs, device=env.device))
         ))
+
+        # Manual overrides for the automatic door. Nothing in `sim_main.py` triggers these
+        # today -- the door drives itself off the robot's position, which is the point --
+        # but an evaluation that wants to test the robot arriving at a SHUT door, or to
+        # hold the door open while something else is measured, needs a way to pin it.
+        # `set_pause_door(env, None)` hands control back to the presence sensor.
+        self.event_manager.register("open_pause_door", SimpleEvent(
+            func=lambda env: mdp.set_pause_door(env, 1.0)))
+        self.event_manager.register("close_pause_door", SimpleEvent(
+            func=lambda env: mdp.set_pause_door(env, 0.0)))
+        self.event_manager.register("auto_pause_door", SimpleEvent(
+            func=lambda env: mdp.set_pause_door(env, None)))

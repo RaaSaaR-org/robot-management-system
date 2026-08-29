@@ -836,7 +836,14 @@ describe('BlockExecutor: present and demo', () => {
   });
 
   it('an executed demo runs the skill and reports what it did', async () => {
-    const runSkill = vi.fn(async () => ({ ok: true, steps: 42, durationMs: 8000, message: 'Ran "Apfel": 42 step(s) in 8.0 s.' }));
+    const runSkill = vi.fn(async () => ({
+      ok: true,
+      outcome: 'unknown' as const,
+      verdictSource: 'rollout',
+      steps: 42,
+      durationMs: 8000,
+      message: 'Ran "Apfel": 42 step(s) in 8.0 s.',
+    }));
     const { exec } = executor({ runSkill });
     const outcome = await exec.execute(block('demo', { skillId: 'skill-apple', skillName: 'Apfel', mode: 'execute', expectSeconds: 30 }));
     expect(runSkill).toHaveBeenCalledWith({ skillId: 'skill-apple', skillName: 'Apfel', timeoutMs: 60_000 });

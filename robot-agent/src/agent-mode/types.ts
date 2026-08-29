@@ -10,7 +10,7 @@
 
 import type { GeofenceEnforcement } from '../safety/types.js';
 
-/** Executable block vocabulary (v1). No `vla_skill` — deferred to TASK-188. */
+/** Executable block vocabulary. `vla_skill` landed with TASK-226. */
 export const AgentBlockKinds = [
   'walk',
   'turn',
@@ -48,6 +48,19 @@ export const AgentBlockKinds = [
   'tour',
   'present',
   'demo',
+  /**
+   * Hand the arms to a named, gated VLA manipulation policy (TASK-226). The
+   * ONLY planner-emittable block that reaches a learned policy — `demo` is the
+   * host-authored one and stays runner-only.
+   *
+   * It is a NAMED, PARAMETERISED call, not a free-text instruction: the name
+   * carries the trained prompt, the step budget, the retry policy and the
+   * gating, and the natural-language instruction is one FIELD of it, taken
+   * from the skill definition rather than improvised by the planner. Feeding a
+   * policy a prompt it was not trained on is a silent quality cliff, not an
+   * error.
+   */
+  'vla_skill',
 ] as const;
 export type AgentBlockKind = (typeof AgentBlockKinds)[number];
 
@@ -67,6 +80,21 @@ export const PlannerBlockKinds = AgentBlockKinds.filter(
   (k): k is Exclude<AgentBlockKind, RunnerOnlyBlockKind> =>
     !(RunnerOnlyBlockKinds as readonly string[]).includes(k),
 ) as unknown as readonly [Exclude<AgentBlockKind, RunnerOnlyBlockKind>, ...Exclude<AgentBlockKind, RunnerOnlyBlockKind>[]];
+
+/**
+ * How a `vla_skill` block ended (TASK-226) — three ways, on purpose.
+ *
+ * `succeeded` may ONLY be set from an external check on the world. The policy
+ * never tells you it failed: ReViP (arXiv 2601.16667) measured pi0 on a real
+ * robot continuing toward the goal in 46 of 50 trials with clear visual
+ * evidence it had never grasped anything, and `SkillExecutor` returns
+ * `completed` the moment its step loop ends without throwing. So "the rollout
+ * ran" is `unknown`, not success.
+ *
+ * `unknown` is an honest and useful answer; a false `succeeded` is not.
+ */
+export const VlaSkillOutcomes = ['succeeded', 'failed', 'unknown'] as const;
+export type VlaSkillOutcome = (typeof VlaSkillOutcomes)[number];
 
 export const AgentBlockStatuses = [
   'pending',

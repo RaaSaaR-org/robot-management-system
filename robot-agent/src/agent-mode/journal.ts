@@ -445,9 +445,28 @@ export function startJournalRetentionLoop(deps: JournalRetentionLoopDeps): Journ
  */
 export const VLM_CAPTION_BLOCK_KINDS: ReadonlySet<string> = new Set(['look', 'scan_room']);
 
+/**
+ * Every kind whose result text is worth less than the robot's own measurement.
+ *
+ * `blockTrust` FAILS OPEN — an unlisted kind is `'self'`, the one tier that may
+ * be promoted into durable memory — so a new kind has to be named here to be
+ * kept out, and naming it is the whole safeguard.
+ *
+ * `vla_skill` (TASK-226) is here because its result is a VERDICT, not a
+ * measurement: today "outcome unknown", and once a success classifier is wired
+ * up, a model's opinion about a camera frame. Neither is the robot's own
+ * experience of having done the thing, and a rollout that ran to its step
+ * budget while grasping nothing must not be able to write "I moved the apple to
+ * the plate" into memory as a fact about the world.
+ */
+export const UNTRUSTED_BLOCK_KINDS: ReadonlySet<string> = new Set([
+  ...VLM_CAPTION_BLOCK_KINDS,
+  'vla_skill',
+]);
+
 /** How much a finished block's own result text is worth. */
 export function blockTrust(blockKind: string): TrustLevel {
-  return VLM_CAPTION_BLOCK_KINDS.has(blockKind) ? 'untrusted' : 'self';
+  return UNTRUSTED_BLOCK_KINDS.has(blockKind) ? 'untrusted' : 'self';
 }
 
 /**

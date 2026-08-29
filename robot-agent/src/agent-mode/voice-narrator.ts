@@ -134,6 +134,7 @@ const PHRASES: Record<SpokenLanguage, Phrases> = {
       patrol: 'gehe die Patrouille ab',
       capture: 'mache ein Kontrollfoto',
       inspect: 'vergleiche mit der Referenz',
+      vla_skill: 'führe eine gelernte Fertigkeit aus',
     },
     outcomes: {
       estop: 'Gestoppt.',
@@ -172,6 +173,7 @@ const PHRASES: Record<SpokenLanguage, Phrases> = {
       patrol: 'walk the patrol route',
       capture: 'take a control photo',
       inspect: 'compare with the reference',
+      vla_skill: 'run a learned skill',
     },
     outcomes: {
       estop: 'Stopped.',
@@ -278,6 +280,14 @@ function describeBlock(block: AgentBlock, language: SpokenLanguage): string | nu
       const s = Number(block.params.seconds);
       if (!Number.isFinite(s)) return p.kinds.wait;
       return de ? `warte ${fmt(s)} Sekunden` : `wait ${fmt(s)} seconds`;
+    }
+    case 'vla_skill': {
+      // The skill's own label, not its instruction: the instruction is the
+      // policy's trained prompt and saying it out loud would be the robot
+      // reading a dataset annotation to the room. TASK-226.
+      const label = String(block.params.label ?? block.params.skill ?? '').trim();
+      if (!label) return p.kinds.vla_skill;
+      return de ? `versuche "${label}"` : `try to ${label}`;
     }
     // `speak` and `greet` are not announced: the robot is about to say the
     // words themselves, and prefixing them with "I will say something" turns

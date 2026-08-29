@@ -193,9 +193,9 @@ describe('ControlOwnerLock', () => {
     lock.release('teleop');
 
     expect(changes).toEqual([
-      { previous: 'idle', next: 'agent', preempted: false },
-      { previous: 'agent', next: 'teleop', preempted: true },
-      { previous: 'teleop', next: 'idle', preempted: false },
+      { previous: 'idle', next: 'agent', preempted: false, handover: false },
+      { previous: 'agent', next: 'teleop', preempted: true, handover: false },
+      { previous: 'teleop', next: 'idle', preempted: false, handover: false },
     ]);
   });
 
@@ -230,8 +230,8 @@ describe('ControlOwnerLock', () => {
     lock.release('teleop');
 
     expect(changes).toEqual([
-      { previous: 'idle', next: 'teleop', preempted: false },
-      { previous: 'teleop', next: 'idle', preempted: false },
+      { previous: 'idle', next: 'teleop', preempted: false, handover: false },
+      { previous: 'teleop', next: 'idle', preempted: false, handover: false },
     ]);
   });
 
@@ -473,5 +473,245 @@ describe('the periodic pose feed into scene memory (TASK-221)', () => {
 
     expect(scene.hasMovedSinceObservation()).toBe(false);
     expect(scene.get('table')?.distanceEstM).toBe(0.55);
+  });
+});
+
+describe('ControlOwnerLock.lend (TASK-226)', () => {
+  it('hands the lock over and gives it back, without ever passing through idle', () => {
+    const lock = new ControlOwnerLock();
+    const changes: OwnerChange[] = [];
+    lock.claim('agent');
+    lock.subscribe((c) => changes.push(c));
+
+    const lent = lock.lend('vla');
+
+    expect(lent.ok).toBe(true);
+    expect(lent.held()).toBe(true);
+    expect(lock.get()).toBe('vla');
+
+    lent.end();
+
+    expect(lock.get()).toBe('agent');
+    expect(lent.held()).toBe(false);
+    // Both edges are flagged `handover`, which is what lets a subscriber tell
+    // "somebody else is driving" from "the same owner's other subsystem".
+    expect(changes).toEqual([
+      { previous: 'agent', next: 'vla', preempted: false, handover: true },
+      { previous: 'vla', next: 'agent', preempted: false, handover: true },
+    ]);
+  });
+
+  it('restores the lender’s HOLDER COUNT, not just its name', () => {
+    const lock = new ControlOwnerLock();
+    // Two holders of the lender, which is what makes this assertion about the
+    // refcount rather than about the name. The lender is `agent` because that
+    // is the only owner a lend may park at all — a lend from `teleop` is
+    // refused outright, see 'refuses to take the lock from a human' below.
+    lock.claim('agent');
+    lock.claim('agent');
+    expect(lock.holderCount()).toBe(2);
+
+    const lent = lock.lend('vla');
+    expect(lock.holderCount()).toBe(1);
+    lent.end();
+
+    // Both holders are still holding. Restoring 1 would have let the first of
+    // them to finish hand the lock away while the other was still driving.
+    expect(lock.holderCount()).toBe(2);
+    expect(lock.get()).toBe('agent');
+  });
+
+  it('is idempotent — a second end() is a no-op', () => {
+    const lock = new ControlOwnerLock();
+    lock.claim('agent');
+    const lent = lock.lend('vla');
+    lent.end();
+    lent.end();
+    expect(lock.get()).toBe('agent');
+    expect(lock.holderCount()).toBe(1);
+  });
+
+  it('does NOT take the lock back from a teleop preemption', () => {
+    const lock = new ControlOwnerLock();
+    lock.claim('agent');
+    const lent = lock.lend('vla');
+
+    // A human takes over mid-rollout. `teleop` always wins.
+    expect(lock.claim('teleop').preempted).toBe('vla');
+    expect(lent.held()).toBe(false);
+
+    // The rollout's `finally` still runs. It must not hand the lock back to a
+    // plan the operator has just taken over.
+    lent.end();
+    expect(lock.get()).toBe('teleop');
+  });
+
+  it('does not resurrect the lender after an E-Stop reset()', () => {
+    const lock = new ControlOwnerLock();
+    lock.claim('agent');
+    const lent = lock.lend('vla');
+    lock.reset();
+
+    // The reset alone has to leave the lock completely free — an E-Stop drops
+    // every holder there is, including the one parked for the lender.
+    expect(lock.get()).toBe('idle');
+    expect(lock.holderCount()).toBe(0);
+
+    // And the rollout's `finally`, which runs a /predict round trip later,
+    // must not undo it. This is the ordering that stranded the lock on `agent`
+    // for the rest of the process: see the E-Stop test in
+    // `vla-skill-plumbing.test.ts`.
+    lent.end();
+    expect(lock.get()).toBe('idle');
+    expect(lock.holderCount()).toBe(0);
+    expect(lock.isLent()).toBe(false);
+
+    // Nothing is stranded: the next claimant gets the lock, with one holder.
+    expect(lock.claim('vla')).toEqual({ ok: true });
+    expect(lock.holderCount()).toBe(1);
+  });
+
+  it('refuses a SECOND claim of the borrower while the lock is lent out', () => {
+    // The lend turned an exclusive lock into a shared one in exactly the window
+    // where sharing is most dangerous: while Agent Mode has lent the lock to a
+    // rollout the owner reads `vla`, so an external `POST /vla/start` took
+    // `claim`'s "same owner, one more holder" path and was admitted — two
+    // SkillExecutors driving one 43-DOF humanoid. Before `lend` existed the
+    // same call was refused with "Control is held by Agent Mode".
+    const lock = new ControlOwnerLock();
+    lock.claim('agent');
+    const lent = lock.lend('vla');
+
+    const claim = lock.claim('vla');
+
+    expect(claim.ok).toBe(false);
+    // The reason names both parties, because both are true: a policy is
+    // driving, and Agent Mode is waiting to have its lock back.
+    expect(claim.reason).toContain('VLA skill rollout');
+    expect(claim.reason).toContain('Agent Mode');
+    // Refused, so it left no holder behind to be released later.
+    expect(lock.holderCount()).toBe(1);
+
+    // Admitted again the moment the loan is over.
+    lent.end();
+    expect(lock.get()).toBe('agent');
+    lock.release('agent');
+    expect(lock.claim('vla')).toEqual({ ok: true });
+  });
+
+  it('refuses a second LEND of the borrower too', () => {
+    // The same rule from the other side: a second `vla_skill` block cannot join
+    // a rollout that is already borrowing the lock. `lend` routes the
+    // same-owner case through `claim`, so it inherits the refusal.
+    const lock = new ControlOwnerLock();
+    lock.claim('agent');
+    const first = lock.lend('vla');
+
+    const second = lock.lend('vla');
+
+    expect(second.ok).toBe(false);
+    expect(second.held()).toBe(false);
+    expect(lock.holderCount()).toBe(1);
+
+    // And the refused lend's `end()` gives nothing back — there is nothing to
+    // give — so the live loan survives it.
+    second.end();
+    expect(first.held()).toBe(true);
+    expect(lock.get()).toBe('vla');
+  });
+
+  it('still lets a human take a lock that is out on loan', () => {
+    // Teleop outranks a loan like it outranks everything else. Asserted next to
+    // the refusal above so the exclusivity can never be read as "the borrower
+    // is safe from the operator".
+    const lock = new ControlOwnerLock();
+    lock.claim('agent');
+    lock.lend('vla');
+
+    expect(lock.claim('teleop')).toEqual({ ok: true, preempted: 'vla' });
+    expect(lock.get()).toBe('teleop');
+    expect(lock.isLent()).toBe(false);
+  });
+
+  it('lets the human’s SECOND socket in after it preempted a loan', () => {
+    // The exclusivity is a property of the loan, not a sticky flag on the lock.
+    // A preemption ends the loan, so the operator's other windows — four of
+    // them open `/ws/keyboard-teleop` — claim normally, which is the whole
+    // reason the refcount exists.
+    const lock = new ControlOwnerLock();
+    lock.claim('agent');
+    lock.lend('vla');
+    lock.claim('teleop');
+
+    expect(lock.claim('teleop')).toEqual({ ok: true });
+    expect(lock.holderCount()).toBe(2);
+  });
+
+  it('refuses to take the lock from a human at the sticks', () => {
+    // `lend` used to park and reassign unconditionally, so this returned ok and
+    // took control from an operator mid-drive. Worse than a plain preemption:
+    // both lend edges are flagged `handover` rather than `preempted`, so the
+    // controller's teleop-takeover hook did not fire and nothing was aborted —
+    // the plan just carried on driving under the operator's hands. Reachable
+    // through a narrow race, teleop claiming between the abort check and the
+    // lend.
+    const lock = new ControlOwnerLock();
+    const changes: OwnerChange[] = [];
+    lock.claim('teleop');
+    lock.subscribe((c) => changes.push(c));
+
+    const lent = lock.lend('vla');
+
+    expect(lent.ok).toBe(false);
+    expect(lent.reason).toMatch(/human teleoperation/);
+    expect(lent.held()).toBe(false);
+    expect(lock.get()).toBe('teleop');
+    expect(lock.holderCount()).toBe(1);
+    // Nothing happened at all — no handover event for a subscriber to act on.
+    expect(changes).toEqual([]);
+
+    // And the refused lend's `end()` is inert, as `lendRefused` promises.
+    lent.end();
+    expect(lock.get()).toBe('teleop');
+    expect(lock.holderCount()).toBe(1);
+  });
+
+  it('refuses to take the lock from a rollout somebody else started', () => {
+    // The direction of a lend is the point: it is a delegation from an owner to
+    // one of its own subsystems, and Agent Mode is not a subsystem of a VLA
+    // rollout. `POST /vla/start` holds `vla` here, and parking it would leave a
+    // live SkillExecutor streaming actions while a plan drove the base.
+    const lock = new ControlOwnerLock();
+    lock.claim('vla');
+
+    const lent = lock.lend('agent');
+
+    expect(lent.ok).toBe(false);
+    expect(lent.reason).toMatch(/VLA skill rollout/);
+    expect(lock.get()).toBe('vla');
+  });
+
+  it('from idle is a plain claim with a finally-safe release', () => {
+    const lock = new ControlOwnerLock();
+    const lent = lock.lend('vla');
+    expect(lent.ok).toBe(true);
+    expect(lock.get()).toBe('vla');
+    lent.end();
+    expect(lock.get()).toBe('idle');
+  });
+
+  it('to the CURRENT owner is one more holder, not an ownership change', () => {
+    const lock = new ControlOwnerLock();
+    const changes: OwnerChange[] = [];
+    lock.claim('vla');
+    lock.subscribe((c) => changes.push(c));
+
+    const lent = lock.lend('vla');
+    expect(lock.holderCount()).toBe(2);
+    lent.end();
+
+    expect(lock.get()).toBe('vla');
+    expect(lock.holderCount()).toBe(1);
+    expect(changes).toEqual([]);
   });
 });

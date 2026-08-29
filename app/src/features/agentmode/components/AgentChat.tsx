@@ -56,8 +56,15 @@ export interface AgentChatProps {
 /**
  * Blocks whose outcome depends on where the robot is standing when the plan
  * starts. A `speak` or `remember` block does not care; a `walk` does.
+ *
+ * `vla_skill` (TASK-226) is one of them, and is the strictest of the four: a
+ * manipulation policy reaches from wherever the robot happens to be, and Mobi-π
+ * (arXiv 2505.23692) measured the base-pose deviation that HALVES success at
+ * 0.031 m for one task. A rollout planned against a stale place is a rollout
+ * that reaches for empty air, so the warning this list drives is exactly the
+ * one the operator wants before that block runs.
  */
-const PLACE_DEPENDENT_KINDS: readonly AgentBlockKind[] = ['walk', 'turn', 'goto'];
+const PLACE_DEPENDENT_KINDS: readonly AgentBlockKind[] = ['walk', 'turn', 'goto', 'vla_skill'];
 
 /** Whether this plan moves the robot, i.e. whether its starting place matters. */
 function movesFromWhereItStands(plan: AgentPlan): boolean {

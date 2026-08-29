@@ -48,9 +48,16 @@ export const SELF_LOCOMOTION_KINDS: ReadonlySet<AgentBlockKind> = new Set<AgentB
  * `posture` re-arms the base — standing a collapsed G1 back up is an explicit
  * human act, never a side effect of a timer. This mirrors the rule that
  * clearing the E-Stop latch does not re-arm the base either.
+ *
+ * `vla_skill` (TASK-226) hands a 43-DOF humanoid's arms to a learned policy
+ * that cannot be interrupted between action chunks and cannot tell you whether
+ * it is failing. A robot does not reach for things on its own initiative. Note
+ * that this gate FAILS OPEN by construction — an unlisted kind is self-
+ * initiable — so the entry is what forbids it, not the absence of one.
  */
 export const SELF_FORBIDDEN_KINDS: ReadonlySet<AgentBlockKind> = new Set<AgentBlockKind>([
   'posture',
+  'vla_skill',
 ]);
 
 /** Blocks that cost nothing and cannot move anything, so the battery gate skips them. */
