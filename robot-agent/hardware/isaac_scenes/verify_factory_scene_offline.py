@@ -105,6 +105,50 @@ FORBIDDEN_NAMES = (
 
 EPS = 1e-9
 
+# The MuJoCo twin of the robot. Not part of the scene -- it is the artefact the layout
+# module's shoulder, arm and foot constants were MEASURED off, and section 16 re-derives
+# them from it so a typo in one of those numbers cannot pass unnoticed. See the long
+# comment on `check_robot_model`.
+MJCF_G1 = os.path.join(HERE, "..", "sim_evaluator", "mjcf", "g1_dex3", "g1_43dof_fixedbase.xml")
+
+# ------------------------------------------------------------------------------------------
+# How much room a walking G1 is charged.
+#
+# The G1's widest static dimension is its shoulder span, ~0.45 m, so its circumscribed
+# radius standing still is ~0.225 m. `G1_BODY_RADIUS` rounds that up to 0.25 for the sway
+# a walking gait adds. This is a DIFFERENT number from the 1.0 m charged to the USD props
+# below, and for a different reason: 0.25 is what the robot *is*, 1.0 is what an unreadable
+# USD footprint *might be*.
+#
+# `ROUTE_MARGIN` is then how much daylight a route has to leave beyond the robot's own
+# width to count as clear. `SPAWN_MARGIN` is larger because a spawn pose is placed, not
+# walked to, and there is no reason to place one anywhere near geometry; 0.25 + 0.15 = 0.40
+# is exactly the pad the spawn check used before it was given a derivation.
+# ------------------------------------------------------------------------------------------
+G1_BODY_RADIUS = 0.25
+ROUTE_MARGIN = 0.10
+SPAWN_MARGIN = 0.15
+
+# The USD props are placed by their origins and their bounding boxes are not readable
+# offline, so every check that involves one charges it this half-extent. It is deliberately
+# generous: the vendor's own two-PackingTable call site
+# (`base_scene_pickplace_cylindercfg_wholebody.py:35-53`) puts their origins 1.84 m apart,
+# so the real half-extent is at most 0.92 m and is probably a good deal less. Charging the
+# larger number means a PASS here is a real statement and a FAIL is worth investigating.
+PROP_HALF_EXTENT = 1.0
+PROP_ROUTE_CLEARANCE = 0.60   # clearance a prop must leave beside a walking route
+PROP_PAIR_CLEARANCE = 0.10    # clearance a prop must leave against any other body
+
+# The tallest a prop table is assumed to stand, for deciding which declared boxes it could
+# possibly collide with. All five props are tables; the tallest thing in the checkout's
+# `assets/objects/` that any of them could be is well under a metre.
+PROP_ASSUMED_HEIGHT = 1.0
+
+# Radius of the G1's foot contact spheres, from the MJCF's `default class="foot"`
+# (`<geom type="sphere" size="0.005" .../>`). Section 16 adds it to the forward sphere
+# offset to get the real forward foot reach.
+FOOT_SPHERE_RADIUS = 0.005
+
 
 # ==========================================================================================
 # tiny check harness
@@ -269,6 +313,232 @@ def point_seg_distance(p, a, b) -> float:
     return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
 
 
+# ------------------------------------------------------------------------------------------
+# Segment vs axis-aligned rectangle, in the floor plane.
+#
+# WHY THIS EXISTS, AND WHY THE CIRCLE MODEL COULD NOT BE STRETCHED TO COVER WALLS
+# ------------------------------------------------------------------------------
+# The route check used to model every obstacle as a point plus `half = max(w, d) / 2`,
+# i.e. a circle. That is fine for a column and tolerable for a crate, and it is the only
+# thing available for a USD prop whose footprint cannot be read offline. It is useless for
+# a wall: `wall_south` is 24.4 m long, so its circle has a radius of 12.2 m and every route
+# in the hall is "inside" it. Rather than write a check that fails on correct geometry, the
+# original author excluded every wall by name -- which meant the straight line from the
+# spawn to the door was never tested against any wall at all, and a spawn moved to the far
+# side of `pause_wall_west` still reported a clear route.
+#
+# So walls (and the columns, crates and the table, whose footprints are all known exactly)
+# get the real test: the true minimum distance between the travelled segment and the
+# obstacle's actual rectangle. No door aperture has to be carved out by hand for this,
+# because the aperture is a genuine hole in the geometry -- `pause_wall_south_left` stops
+# at x = 9.30 and `pause_wall_south_right` starts at x = 10.70, and the lintel over the
+# gap starts above `WALK_CLEARANCE_Z` and is filtered out by `blocking_boxes`. A route that
+# ends at the door centre therefore measures its clearance against the two JAMBS, which is
+# the physically meaningful question.
+# ------------------------------------------------------------------------------------------
+def point_rect_distance(p, rect) -> float:
+    """Distance from a point to an axis-aligned rectangle ((x0, x1), (y0, y1)). 0 if inside."""
+    (x0, x1), (y0, y1) = rect
+    return math.hypot(max(x0 - p[0], 0.0, p[0] - x1), max(y0 - p[1], 0.0, p[1] - y1))
+
+
+def seg_rect_intersects(a, b, rect) -> bool:
+    """Separating-axis test between a segment and an axis-aligned rectangle.
+
+    Three candidate axes suffice for two convex 2-D shapes when one of them is a segment:
+    the rectangle's own two axes, and the segment's normal. Both segment endpoints project
+    to the SAME value on that normal (the normal is perpendicular to the segment), so the
+    third test is "does the rectangle's projected interval contain that one value".
+    """
+    (x0, x1), (y0, y1) = rect
+    if max(a[0], b[0]) < x0 or min(a[0], b[0]) > x1:
+        return False
+    if max(a[1], b[1]) < y0 or min(a[1], b[1]) > y1:
+        return False
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    if dx == 0.0 and dy == 0.0:
+        return True  # degenerate segment: the two range tests already answered it
+    nx, ny = -dy, dx
+    s = nx * a[0] + ny * a[1]
+    proj = [nx * cx + ny * cy for cx in (x0, x1) for cy in (y0, y1)]
+    return min(proj) <= s <= max(proj)
+
+
+def seg_rect_distance(a, b, rect) -> float:
+    """True minimum distance between segment [a, b] and an axis-aligned rectangle.
+
+    0.0 when they intersect. Otherwise the closest pair is either an endpoint of the
+    segment against the rectangle, or a corner of the rectangle against the segment --
+    the standard result for two disjoint convex polygons, and cheap enough to just
+    enumerate.
+    """
+    if seg_rect_intersects(a, b, rect):
+        return 0.0
+    (x0, x1), (y0, y1) = rect
+    best = min(point_rect_distance(a, rect), point_rect_distance(b, rect))
+    for corner in ((x0, y0), (x0, y1), (x1, y0), (x1, y1)):
+        best = min(best, point_seg_distance(corner, a, b))
+    return best
+
+
+def box_overlap_depth(ea, eb) -> float:
+    """How deeply two axis-aligned boxes interpenetrate, in metres.
+
+    Takes two `box_extent` triples. Positive means real interpenetration on every axis, and
+    the number returned is the depth on the axis where they overlap LEAST -- i.e. how far
+    one would have to move to separate them. Zero or negative means they touch or are
+    apart, which is what abutting walls do by design.
+    """
+    return min(min(a1, b1) - max(a0, b0) for (a0, a1), (b0, b1) in zip(ea, eb))
+
+
+def walking_rects(L, exclude=()) -> list[tuple[str, tuple]]:
+    """(name, rect) for every static box a walking G1 would collide with.
+
+    Everything in `all_static_boxes()` whose z-range reaches into the walking envelope,
+    plus the door leaves at FULL OPEN. The open leaves belong here: by the time the robot
+    is anywhere near the doorway the presence sensor has had it open for many seconds
+    (section 13 proves the stroke finishes first), so the open leaf positions -- not the
+    shut ones -- are the geometry a walking route has to miss.
+    """
+    out = []
+    for name, box in L.all_static_boxes().items():
+        if name in exclude:
+            continue
+        (x0, x1), (y0, y1), (z0, z1) = L.box_extent(box)
+        if z1 > EPS and z0 < L.WALK_CLEARANCE_Z - EPS:
+            out.append((name, ((x0, x1), (y0, y1))))
+    for name, box in L.door_leaf_boxes(1.0).items():
+        (x0, x1), (y0, y1), (z0, z1) = L.box_extent(box)
+        if z1 > EPS and z0 < L.WALK_CLEARANCE_Z - EPS:
+            out.append((f"{name} (open)", ((x0, x1), (y0, y1))))
+    return out
+
+
+def tightest_rect(L, a, b, exclude=()):
+    """(name, distance) of the static box nearest the segment [a, b]. Exact, not circular."""
+    worst = None
+    for name, rect in walking_rects(L, exclude):
+        d = seg_rect_distance(a, b, rect)
+        if worst is None or d < worst[1]:
+            worst = (name, d)
+    return worst
+
+
+def tightest_prop(L, a, b):
+    """(name, clearance) of the USD prop nearest the segment [a, b], circle model.
+
+    Their footprints are not readable offline, so they keep the point-plus-generous-radius
+    treatment. This is the ONE place that model is still the best available, rather than a
+    shortcut around geometry that is right there in the layout module.
+    """
+    worst = None
+    for name, prop in L.USD_PROPS.items():
+        clear = point_seg_distance((prop["pos"][0], prop["pos"][1]), a, b) - PROP_HALF_EXTENT
+        if worst is None or clear < worst[1]:
+            worst = (name, clear)
+    return worst
+
+
+def check_lane(rep: Report, L, label: str, a, b, exclude=(), props: bool = True) -> None:
+    """Assert that a straight walk from `a` to `b` fits, against real wall rectangles."""
+    name, d = tightest_rect(L, a, b, exclude)
+    clear = d - G1_BODY_RADIUS
+    how = ("the line passes THROUGH it" if d <= EPS
+           else f"{clear:.3f} m past a {G1_BODY_RADIUS:.2f} m body radius")
+    rep.check(clear >= ROUTE_MARGIN,
+              f"walls, columns and crates clear the {label} lane",
+              f"tightest is {name} at {d:.3f} m from the line ({how}), "
+              f"needs {ROUTE_MARGIN:.2f} m"
+              + (f"; excluded: {', '.join(exclude)}" if exclude else ""))
+    if props:
+        pname, pclear = tightest_prop(L, a, b)
+        rep.check(pclear >= PROP_ROUTE_CLEARANCE,
+                  f"USD props clear the {label} lane",
+                  f"tightest is {pname} at {pclear:.2f} m of clearance, charged a "
+                  f"generous {PROP_HALF_EXTENT:.1f} m half-extent since USD footprints "
+                  "are not readable offline")
+
+
+# ==========================================================================================
+# reading the MuJoCo twin
+#
+# The layout module's shoulder, arm and foot constants were all MEASURED off
+# `../sim_evaluator/mjcf/g1_dex3/g1_43dof_fixedbase.xml`, and every one of them was a
+# hand-typed literal justified by a comment. These three functions let section 16 re-derive
+# them instead. The walk composes real rigid transforms -- MuJoCo expresses a child body's
+# `pos` in its PARENT's frame and its `quat` as the parent-to-child rotation, so summing
+# components across a body that carries a quat is wrong, and doing exactly that is how the
+# layout module came to believe the G1's ankle sits 53 mm behind its pelvis when it sits
+# directly beneath it.
+# ==========================================================================================
+def _quat_rotate_wxyz(q, v):
+    """Rotate `v` by an MJCF quaternion given as (w, x, y, z)."""
+    w, x, y, z = q
+    t = (2.0 * (y * v[2] - z * v[1]),
+         2.0 * (z * v[0] - x * v[2]),
+         2.0 * (x * v[1] - y * v[0]))
+    return (v[0] + w * t[0] + (y * t[2] - z * t[1]),
+            v[1] + w * t[1] + (z * t[0] - x * t[2]),
+            v[2] + w * t[2] + (x * t[1] - y * t[0]))
+
+
+def _quat_mul_wxyz(a, b):
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return (aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw)
+
+
+def load_mjcf_bodies(path: str) -> dict:
+    """{body name: (parent name, pos, quat_wxyz, [(geom class, geom pos), ...])}."""
+    import xml.etree.ElementTree as ET
+
+    def triple(text, default=(0.0, 0.0, 0.0)):
+        return tuple(float(v) for v in text.split()) if text else default
+
+    out: dict = {}
+
+    def walk(node, parent):
+        for b in node.findall("body"):
+            name = b.get("name")
+            out[name] = (
+                parent,
+                triple(b.get("pos")),
+                triple(b.get("quat"), (1.0, 0.0, 0.0, 0.0)),
+                [(g.get("class"), triple(g.get("pos"))) for g in b.findall("geom")],
+            )
+            walk(b, name)
+
+    for wb in ET.parse(path).getroot().iter("worldbody"):
+        walk(wb, None)
+    return out
+
+
+def mjcf_pose_in(bodies: dict, name: str, root: str):
+    """(position, quat) of `name` in `root`'s frame, with every joint at zero."""
+    chain, cur = [], name
+    while cur is not None and cur != root:
+        chain.append(cur)
+        cur = bodies[cur][0]
+    if cur != root:
+        raise KeyError(f"{name} is not a descendant of {root}")
+    p, q = (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0)
+    for link in reversed(chain):
+        _, lp, lq, _ = bodies[link]
+        r = _quat_rotate_wxyz(q, lp)
+        p = (p[0] + r[0], p[1] + r[1], p[2] + r[2])
+        q = _quat_mul_wxyz(q, lq)
+    return p, q
+
+
+def mjcf_chain_length(bodies: dict, names) -> float:
+    """Sum of the link offsets' lengths -- how far a serial chain reaches, dead straight."""
+    return sum(math.dist((0.0, 0.0, 0.0), bodies[n][1]) for n in names)
+
+
 # ==========================================================================================
 # checks
 # ==========================================================================================
@@ -303,6 +573,10 @@ def check_assets(rep: Report, L, checkout: str | None) -> None:
 
 def check_no_remote(rep: Report, paths) -> None:
     section("2. nothing reaches the network")
+    check_no_remote_paths(rep, paths)
+
+
+def check_no_remote_paths(rep: Report, paths) -> None:
     for path in paths:
         tree = parse(path)
         rel = os.path.relpath(path, HERE)
@@ -345,8 +619,10 @@ def check_gym_id(rep: Report) -> None:
     tree = parse(TASKINIT_PY)
     ids = [s for s in code_strings(tree) if s.startswith("Isaac-")]
     rep.check(ids == [GYM_ID], "task id", f"{ids}")
-    rep.check("Wholebody" in GYM_ID,
-              "id contains 'Wholebody'",
+    # Against the id read out of __init__.py, NOT against GYM_ID. `"Wholebody" in GYM_ID`
+    # only ever asked whether this file's own literal contained a substring of itself.
+    rep.check(bool(ids) and "Wholebody" in ids[0],
+              "the REGISTERED id contains 'Wholebody'",
               "sim_main.py:476-479 keys off that substring to force action_source="
               "'dds_wholebody'; without it the DDS provider never drives the robot")
 
@@ -359,8 +635,24 @@ def check_hall(rep: Report, L) -> None:
               "" if not openings else f"open runs: {openings}")
     w = L.HALL["x_max"] - L.HALL["x_min"]
     d = L.HALL["y_max"] - L.HALL["y_min"]
-    rep.check(w * d >= 24.0 * 16.0 - EPS, "clear interior floor",
-              f"{w:.1f} x {d:.1f} m = {w * d:.0f} m^2")
+    # This used to read `w * d >= 24.0 * 16.0`, which is a tautology: both factors come
+    # from HALL, and HALL declares 24 x 16, so the assertion could only ever restate its
+    # own input. The question worth asking is whether the interior HALL claims is the
+    # interior the four perimeter wall boxes actually enclose -- two independently written
+    # sets of numbers, either of which can be edited without the other. The area is then
+    # reported rather than asserted.
+    faces = {
+        "x_min": L.box_extent(L.WALLS["wall_west"])[0][1],
+        "x_max": L.box_extent(L.WALLS["wall_east"])[0][0],
+        "y_min": L.box_extent(L.WALLS["wall_south"])[1][1],
+        "y_max": L.box_extent(L.WALLS["wall_north"])[1][0],
+    }
+    off = {k: v - L.HALL[k] for k, v in faces.items()}
+    rep.check(all(abs(v) < 1e-9 for v in off.values()),
+              "the declared hall interior is the one the perimeter walls enclose",
+              f"HALL {  {k: round(L.HALL[k], 3) for k in faces} } vs inner wall faces "
+              f"{  {k: round(v, 3) for k, v in faces.items()} } "
+              f"-> {w:.1f} x {d:.1f} m = {w * d:.0f} m^2 of clear floor")
     # the floor must extend past the walls on every side
     (gx0, gx1), (gy0, gy1), (gz0, gz1) = L.box_extent(L.GROUND)
     wall_x = [v for b in L.WALLS.values() for v in L.box_extent(b)[0]]
@@ -376,6 +668,27 @@ def check_hall(rep: Report, L) -> None:
 def check_pause_room(rep: Report, L) -> None:
     section("6. the pause room encloses, with exactly one door")
     boxes = blocking_boxes(L)
+    pw = L.PAUSE_ROOM["x_max"] - L.PAUSE_ROOM["x_min"]
+    pd = L.PAUSE_ROOM["y_max"] - L.PAUSE_ROOM["y_min"]
+    # `pw >= 3.5 and pd >= 3.5` was a tautology over PAUSE_ROOM's own constants and could
+    # not fail. The real question is the same one section 5 asks of the hall: are the four
+    # sides PAUSE_ROOM declares the four surfaces that are actually there? Its west and
+    # south sides are new partitions; its north and east sides ARE the hall's walls, so
+    # those are checked against HALL rather than against a partition that does not exist.
+    proom = {
+        "x_min": L.box_extent(L.WALLS["pause_wall_west"])[0][1],
+        "y_min": L.box_extent(L.WALLS["pause_wall_south_left"])[1][1],
+        "x_max": L.HALL["x_max"],
+        "y_max": L.HALL["y_max"],
+    }
+    rep.check(all(abs(v - L.PAUSE_ROOM[k]) < 1e-9 for k, v in proom.items()),
+              "the declared pause-room interior is the one its partitions and the hall walls enclose",
+              f"PAUSE_ROOM { {k: round(L.PAUSE_ROOM[k], 3) for k in proom} } vs enclosing "
+              f"faces { {k: round(v, 3) for k, v in proom.items()} } -> {pw:.1f} x {pd:.1f} m")
+    rep.check(abs(L.box_extent(L.WALLS["pause_wall_south_right"])[1][1] - L.PAUSE_ROOM["y_min"]) < 1e-9,
+              "both south partitions stand on the same line",
+              "a doorway whose two jambs are in different walls is not a doorway")
+
     openings = perimeter_openings(L.PAUSE_ROOM, boxes)
     rep.check(len(openings) == 1, "exactly one opening in the pause-room wall ring",
               f"{[(o[0], round(o[1], 3), round(o[2], 3), round(o[3], 3)) for o in openings]}")
@@ -398,9 +711,6 @@ def check_pause_room(rep: Report, L) -> None:
               "the door lintel starts above the declared clear height",
               f"lintel underside z={lz0:.2f}, clear height {L.DOOR['clear_height']:.2f}, "
               "G1 standing height ~1.32 m")
-    pw = L.PAUSE_ROOM["x_max"] - L.PAUSE_ROOM["x_min"]
-    pd = L.PAUSE_ROOM["y_max"] - L.PAUSE_ROOM["y_min"]
-    rep.check(pw >= 3.5 and pd >= 3.5, "pause room is roughly 4 x 4 m", f"{pw:.1f} x {pd:.1f} m")
     rep.check(L.PAUSE_ROOM["x_min"] >= L.HALL["x_min"] and L.PAUSE_ROOM["x_max"] <= L.HALL["x_max"]
               and L.PAUSE_ROOM["y_min"] >= L.HALL["y_min"] and L.PAUSE_ROOM["y_max"] <= L.HALL["y_max"],
               "the pause room is inside the hall footprint")
@@ -446,7 +756,13 @@ def check_manipulation(rep: Report, L) -> None:
     # `reset_object_self` re-samples the apple over +/-jx, +/-jy. Both invariants above must
     # still hold at the worst corner of that box, not just at the nominal spawn.
     jx, jy = L.APPLE_RESET_JITTER["x"], L.APPLE_RESET_JITTER["y"]
-    worst = math.hypot(abs(ax - px) - jx, abs(ay - py) - jy)
+    # Clamp each axis at zero. `abs(offset) - jitter` goes NEGATIVE once the jitter can
+    # carry the apple past the plate on that axis, and `hypot` then squares the sign away
+    # and reports a distance that is too LARGE -- i.e. the check would understate an
+    # overlap in exactly the case where the overlap is worst. Today the offsets (0.17,
+    # 0.095) dwarf the jitter (0.03, 0.03) so it never bites; it is a latent trap, not a
+    # live bug, and it costs two `max` calls to disarm.
+    worst = math.hypot(max(0.0, abs(ax - px) - jx), max(0.0, abs(ay - py) - jy))
     rep.check(worst > pr + ar, "the reset jitter box never puts the apple on the plate",
               f"jitter +/-{jx} x, +/-{jy} y -> worst-case centre distance {worst:.4f} m "
               f"vs {pr + ar:.4f} m of touching")
@@ -473,38 +789,32 @@ def check_robot(rep: Report, L) -> None:
     rep.check(abs(rz - 0.80) < 1e-9, "spawn height matches the working move_cylinder scene",
               f"z = {rz} above a floor whose top is z = {L.GROUND_TOP_Z}")
 
-    # nothing may sit on the straight line the robot would take to the door
+    # ---- nothing may sit on the straight line the robot would take to the door ---------
+    #
+    # This test used to skip every box whose name began "wall_", "pause_wall_" or
+    # "pause_door", plus the table. The exclusion was not laziness -- the circle model it
+    # used turns a 24 m wall into a 12 m disc, which fails on correct geometry -- but the
+    # consequence was that no wall was ever tested, and a spawn moved to (4.0, 6.0), whose
+    # straight line to the door runs clean through `pause_wall_west`, still reported a
+    # clear route. Walls now get an exact segment-vs-rectangle test (see
+    # `seg_rect_distance`), so nothing has to be excluded here at all: the doorway is a
+    # real gap between two partition boxes, and the lintel over it is above
+    # WALK_CLEARANCE_Z and already filtered out.
     lane_a, lane_b = (rx, ry), L.DOOR["centre"]
-    worst = None
-    for name, box in L.all_static_boxes().items():
-        if name.startswith(("wall_", "pause_wall_", "pause_door")) or name == "pause_table":
-            continue
-        (x0, x1), (y0, y1), (z0, z1) = L.box_extent(box)
-        if z1 < 0.05:
-            continue
-        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-        half = max(x1 - x0, y1 - y0) / 2
-        clear = point_seg_distance((cx, cy), lane_a, lane_b) - half
-        if worst is None or clear < worst[1]:
-            worst = (name, clear)
-    for name, prop in L.USD_PROPS.items():
-        cx, cy = prop["pos"][0], prop["pos"][1]
-        clear = point_seg_distance((cx, cy), lane_a, lane_b) - 1.0  # generous prop half-extent
-        if worst is None or clear < worst[1]:
-            worst = (name, clear)
-    rep.check(worst is not None and worst[1] >= 0.6,
-              "the direct route to the door is clear of props and columns",
-              f"tightest is {worst[0]} at {worst[1]:.2f} m of clearance "
-              "(props charged a generous 1.0 m half-extent since their USD footprints "
-              "are not readable offline)")
+    check_lane(rep, L, "spawn -> door", lane_a, lane_b)
 
     # and the robot must not spawn inside anything
-    for name, box in L.all_static_boxes().items():
-        (x0, x1), (y0, y1), (z0, z1) = L.box_extent(box)
-        if x0 - 0.4 <= rx <= x1 + 0.4 and y0 - 0.4 <= ry <= y1 + 0.4 and z1 > 0.1:
-            rep.bad("the robot does not spawn inside geometry", f"overlaps {name}")
-            return
-    rep.ok("the robot does not spawn inside geometry", "0.4 m body radius clear of every box")
+    spawn_pad = G1_BODY_RADIUS + SPAWN_MARGIN
+    inside = None
+    for name, rect in walking_rects(L):
+        d = point_rect_distance((rx, ry), rect)
+        if d < spawn_pad and (inside is None or d < inside[1]):
+            inside = (name, d)
+    rep.check(inside is None, "the robot does not spawn inside geometry",
+              f"{spawn_pad:.2f} m ({G1_BODY_RADIUS:.2f} m body radius + "
+              f"{SPAWN_MARGIN:.2f} m, because a spawn pose is placed rather than walked "
+              "to) clear of every box"
+              if inside is None else f"only {inside[1]:.3f} m from {inside[0]}")
 
 
 def check_quaternions(rep: Report, L) -> None:
@@ -612,6 +922,19 @@ def check_reach(rep: Report, L) -> None:
               f"{L.ARM_REACH_TO_FINGERTIP:.3f} m shoulder-to-fingertip with the arm "
               f"straight (summed from g1_43dof_fixedbase.xml); grasp centre "
               f"(the knuckle) is at {L.ARM_REACH_TO_KNUCKLE:.3f} m")
+    # ...and the budget is deliberately PAST the knuckle, which is worth stating out loud
+    # rather than leaving as an arithmetic accident. Everything between 0.533 and 0.550 is
+    # reachable only with the arm essentially straight, or by pitching the waist and
+    # bending the knees toward the table -- which a free-standing G1 can do and both fixed-
+    # base reference scenes cannot. The bound below is what stops that slack from growing
+    # silently: the budget may sit beyond the knuckle, but not by more than 0.02 m.
+    over = L.GRASP_REACH_BUDGET - L.ARM_REACH_TO_KNUCKLE
+    rep.check(over <= 0.02,
+              "the budget is at most 20 mm past straight-arm knuckle range",
+              f"budget {L.GRASP_REACH_BUDGET:.3f} m is {1000 * over:+.1f} mm past the "
+              f"{L.ARM_REACH_TO_KNUCKLE:.3f} m knuckle distance -- the old check printed "
+              "this number in its detail string and never compared anything to it, which "
+              "is the same shape of miss as the section 11 bug")
 
     # The two configurations in which a G1 + Dex3 is KNOWN to pick an object off a table.
     # Recomputed here, from this module's own shoulder constants, rather than quoted -- if
@@ -647,17 +970,46 @@ def check_reach(rep: Report, L) -> None:
     # reachable proves nothing about the episode that actually runs.
     jx, jy = L.APPLE_RESET_JITTER["x"], L.APPLE_RESET_JITTER["y"]
     worst, worst_at = 0.0, None
+    per_height = {}
     for sx in (-jx, jx):
         for sy in (-jy, jy):
             for base_z in (lo_z, hi_z):
                 d = L.grasp_reach(stand, base_z, yaw,
                                   (apple[0] + sx, apple[1] + sy, apple[2]))
+                per_height[base_z] = max(per_height.get(base_z, 0.0), d)
                 if d > worst:
                     worst, worst_at = d, (sx, sy, base_z)
     rep.check(worst <= L.GRASP_REACH_BUDGET,
               "the apple stays in reach at every corner of the reset-jitter box",
               f"worst {worst:.3f} m at dx={worst_at[0]:+.2f} dy={worst_at[1]:+.2f} "
               f"base_z={worst_at[2]:.3f} vs budget {L.GRASP_REACH_BUDGET:.3f} m")
+
+    # THE BUDGET IS NOT THE ARM. Every check above compares against GRASP_REACH_BUDGET,
+    # and the budget is 17 mm beyond ARM_REACH_TO_KNUCKLE -- so "within budget" and
+    # "within a straight arm" are not the same statement, and the checks above only ever
+    # made the first one. Made explicit here, at both ends of the height band, because the
+    # two ends answer differently and the difference is the interesting part:
+    #
+    #   * at 0.725 m -- the settled crouch the README's live run says the robot is
+    #     actually in after a walk command stops -- the worst jitter corner is comfortably
+    #     inside straight-arm knuckle range. That is asserted.
+    #   * at 0.790 m -- standing tall -- it is a few millimetres OUTSIDE it, and is
+    #     reachable only with the arm essentially straight, or by leaning. That is
+    #     asserted too, but against the fingertip, with the overage reported.
+    rep.check(per_height[lo_z] <= L.ARM_REACH_TO_KNUCKLE,
+              "at the settled crouch, the worst jitter corner is inside straight-arm "
+              "KNUCKLE range",
+              f"{per_height[lo_z]:.4f} m at base_z {lo_z:.3f} vs "
+              f"{L.ARM_REACH_TO_KNUCKLE:.3f} m -- "
+              f"{1000 * (L.ARM_REACH_TO_KNUCKLE - per_height[lo_z]):.1f} mm to spare")
+    rep.check(per_height[hi_z] <= L.ARM_REACH_TO_FINGERTIP,
+              "standing tall, the worst jitter corner is at least inside FINGERTIP range",
+              f"{per_height[hi_z]:.4f} m at base_z {hi_z:.3f} is "
+              f"{1000 * (per_height[hi_z] - L.ARM_REACH_TO_KNUCKLE):+.1f} mm past the "
+              f"{L.ARM_REACH_TO_KNUCKLE:.3f} m knuckle distance and "
+              f"{1000 * (L.ARM_REACH_TO_FINGERTIP - per_height[hi_z]):.1f} mm inside the "
+              f"{L.ARM_REACH_TO_FINGERTIP:.3f} m fingertip limit -- the standing end of "
+              "the band needs a straight arm or a lean; the crouched end does not")
 
     # A blunt horizontal number, because that is the one a human eyeballs on the map.
     horiz = math.hypot(stand[0] - apple[0], stand[1] - apple[1])
@@ -682,7 +1034,43 @@ def check_reach(rep: Report, L) -> None:
               "the robot stands square to the table, not off its end",
               f"stand x {stand[0]:.2f} within table x[{tx0:.2f},{tx1:.2f}]")
 
-    # And it must be able to get there: inside the room, clear of the walls and the door.
+    # ---- the target has to be in FRONT of the robot, not merely near it ----------------
+    #
+    # `grasp_reach` is a scalar shoulder-to-target distance, and yaw only moves the
+    # shoulder +/-0.10 m sideways -- so every distance check above survives turning the
+    # robot to face anywhere at all. Setting TABLE_APPROACH_YAW_DEG to 0, which stands the
+    # robot side-on with the apple across its body, changed nothing. A sphere is not a
+    # workspace: an arm reaches forward, and `PLACE_HEADINGS` already documents that the
+    # heading at this place is load-bearing. These are the checks that make it so.
+    a = math.radians(yaw)
+    fwd_v, left_v = (math.cos(a), math.sin(a)), (-math.sin(a), math.cos(a))
+
+    def body_frame(target):
+        v = (target[0] - stand[0], target[1] - stand[1])
+        return (v[0] * fwd_v[0] + v[1] * fwd_v[1], v[0] * left_v[0] + v[1] * left_v[1])
+
+    apple_fwd, apple_left = body_frame(apple)
+    plate_fwd, plate_left = body_frame(plate)
+    for label, (f_, l_) in (("apple", (apple_fwd, apple_left)), ("plate", (plate_fwd, plate_left))):
+        rep.check(f_ >= 0.15, f"the {label} is in front of the robot, not beside it",
+                  f"{f_:+.3f} m ahead, {l_:+.3f} m to the left, at yaw {yaw:.0f} deg")
+    bearing_err = abs(math.degrees(math.atan2(apple_left, apple_fwd)))
+    rep.check(bearing_err <= 45.0,
+              "the robot's heading at 'table_front' actually points at the apple",
+              f"{bearing_err:.1f} deg off the facing direction, against a "
+              f"TABLE_APPROACH_YAW_DEG of {yaw:.0f}")
+    rep.check(abs(apple_left - L.GRASP_LATERAL_OFFSET) < 1e-9,
+              "the apple falls exactly GRASP_LATERAL_OFFSET to the robot's LEFT",
+              f"{apple_left:.3f} m vs declared {L.GRASP_LATERAL_OFFSET:.3f} m -- the spot "
+              "is derived to make this true, so it only stays true while the arrival "
+              "heading is the one the derivation assumed")
+    rep.check(plate_left < apple_left,
+              "...and the plate is to the apple's right, as in the training frames",
+              f"plate {plate_left:+.3f} m vs apple {apple_left:+.3f} m in the body frame; "
+              "every episode in the source dataset is a left-hand grasp with the place "
+              "target outboard to the right")
+
+    # ---- and it must be able to get there ----------------------------------------------
     rep.check(L.PAUSE_ROOM["x_min"] < stand[0] < L.PAUSE_ROOM["x_max"]
               and L.PAUSE_ROOM["y_min"] < stand[1] < L.PAUSE_ROOM["y_max"],
               "'table_front' is inside the pause room", f"({stand[0]:.2f}, {stand[1]:.2f})")
@@ -691,6 +1079,31 @@ def check_reach(rep: Report, L) -> None:
     rep.check(clear > 0.5, "'table_front' is clear of the open door leaves",
               f"{clear:.2f} m from the leaves' plane at y = "
               f"{L.box_extent(next(iter(leaves.values())))[1][1]:.2f}")
+
+    # The standing spot itself, and the second leg of the walk, against real rectangles --
+    # the same treatment section 8 gives the first leg. Before this, `table_front` was
+    # tested only against the pause room's bounding box, with no body radius at all: a
+    # crate dropped exactly on the standing spot, or a new partition built across the path
+    # from the doorway to the table, passed every check in this file.
+    #
+    # `pause_table` is excluded from BOTH, and that exclusion is the point of the scene
+    # rather than a hole in the check: the robot is deliberately told to stand
+    # TABLE_STANDOFF = 0.16 m from the table's near face, which is inside any body radius
+    # worth charging. What must not foul the table is the FEET, and that is asserted
+    # directly, a few lines above, against FOOT_FRONT_REACH.
+    stand_worst = None
+    for name, rect in walking_rects(L, exclude=("pause_table",)):
+        d = point_rect_distance(stand, rect)
+        if stand_worst is None or d < stand_worst[1]:
+            stand_worst = (name, d)
+    rep.check(stand_worst[1] >= G1_BODY_RADIUS + ROUTE_MARGIN,
+              "'table_front' has room for the robot's own body",
+              f"nearest is {stand_worst[0]} at {stand_worst[1]:.3f} m, against a "
+              f"{G1_BODY_RADIUS:.2f} m body radius + {ROUTE_MARGIN:.2f} m "
+              "(the table itself is excluded -- standing 0.16 m off it is the design, and "
+              "the feet are checked against it separately)")
+    check_lane(rep, L, "door -> table_front", L.DOOR["centre"], stand,
+               exclude=("pause_table",), props=False)
 
 
 def check_door(rep: Report, L) -> None:
@@ -709,7 +1122,10 @@ def check_door(rep: Report, L) -> None:
     rep.check(covered_lo <= jamb_lo + EPS and covered_hi >= jamb_hi - EPS and gap <= EPS,
               "SHUT, the leaves cover the whole declared opening",
               f"leaves cover x[{covered_lo:.3f},{covered_hi:.3f}] over an opening of "
-              f"x[{jamb_lo:.2f},{jamb_hi:.2f}]; leaf-to-leaf gap {gap * 1000:.1f} mm")
+              f"x[{jamb_lo:.2f},{jamb_hi:.2f}]; leaf-to-leaf gap {gap * 1000:.1f} mm -- "
+              "which is a sealed door and also a zero-clearance collider pair, inside "
+              "PhysX's 0.02 m default contact offset, since leaf-leaf collision is not "
+              "filtered (the joints' collisionEnabled=0 only filters leaf-to-rail)")
     rep.check(abs(L.door_clear_width(0.0)) < EPS,
               "SHUT, the doorway offers zero clear width",
               "a robot walking into it hits 2 x 25 kg of box collider, not a hole")
@@ -744,10 +1160,30 @@ def check_door(rep: Report, L) -> None:
               f"leaf top z = {lz1:.3f}, lintel underside z = {L.DOOR['clear_height']:.2f}")
 
     # -- the leaves slide along the wall, not through it ---------------------------------
+    #
+    # This bound is TWO-SIDED on purpose. `ly0 >= wy1` alone says only that the leaves are
+    # not inside the partition; it says nothing about how far in front of it they hang, so
+    # moving DOOR_ORIGIN 0.6 m into the pause room -- which parks two 25 kg panels in mid
+    # air, across the space the robot walks through, attached to nothing visible -- passed
+    # every check in this file. The upper bound is what makes "hangs ON the wall" an
+    # assertion rather than a description.
+    #
+    # Note also what the lower bound is worth: the leaf's near face and the partition's far
+    # face are at the same y to six decimal places, so the clearance between them is
+    # exactly 0.000 m for the whole stroke. That is inside PhysX's default 0.02 m contact
+    # offset, so the pair generates contacts continuously. It is a jitter and performance
+    # risk rather than a correctness one, and closing it means raising
+    # DOOR_LEAF["wall_face_offset"] and regenerating the door USD -- see the README.
+    LEAF_MOUNT_TOLERANCE = 0.05
     (_, (ly0, ly1), _) = L.box_extent(shut[L.DOOR_JOINTS[0]])
     (_, (wy0, wy1), _) = L.box_extent(L.WALLS["pause_wall_south_left"])
-    rep.check(ly0 >= wy1 - EPS, "the leaves hang clear of the partition they slide along",
-              f"leaf y[{ly0:.3f},{ly1:.3f}] against a partition ending at y = {wy1:.2f}")
+    rep.check(wy1 - EPS <= ly0 <= wy1 + LEAF_MOUNT_TOLERANCE + EPS,
+              "the leaves hang FLUSH on the pause-room face of the partition",
+              f"leaf y[{ly0:.3f},{ly1:.3f}] against a partition ending at y = {wy1:.2f} "
+              f"-> {1000 * (ly0 - wy1):.0f} mm of standoff, allowed 0 to "
+              f"{1000 * LEAF_MOUNT_TOLERANCE:.0f} mm; a leaf further out is a free-"
+              "standing obstacle in the walk-through, and at 0 mm the leaf-to-wall pair "
+              "sits inside PhysX's 0.02 m default contact offset")
     rail = L.door_rail_box()
     (rx0, rx1), (ry0, ry1), (rz0, rz1) = L.box_extent(rail)
     rep.check(rx0 <= ospans[0][0] + EPS and rx1 >= ospans[1][1] - EPS,
@@ -809,13 +1245,21 @@ def check_door(rep: Report, L) -> None:
     stroke_s = L.DOOR_LEAF_TRAVEL / a["leaf_speed"]
     # measured walk speed in this scene, from the README's live-sim section
     walk_speed = 0.11
-    arrive_s = (a["open_radius"] - L.DOOR["width"] / 2) / walk_speed
+    # NAME THE REFERENCE POINT. There are two defensible "time to arrive" numbers and they
+    # differ by a factor of 1.4: trigger radius to the door CENTRE is 2.50 / 0.11 = 22.7 s
+    # (that is the figure DOOR_AUTOMATION's comment quotes), and trigger radius to the near
+    # EDGE of the doorway -- the first point at which a leaf could be in the way -- is
+    # (2.50 - 0.70) / 0.11 = 16.4 s. This check uses the edge, because it is the earlier
+    # and therefore the binding one.
+    to_edge = a["open_radius"] - L.DOOR["width"] / 2
+    arrive_s = to_edge / walk_speed
     rep.check(stroke_s < arrive_s,
-              "the leaves finish opening before the robot arrives",
+              "the leaves finish opening before the robot reaches the doorway EDGE",
               f"full stroke {stroke_s:.2f} s vs {arrive_s:.1f} s to cover the "
-              f"{a['open_radius'] - L.DOOR['width'] / 2:.2f} m from the trigger radius at "
-              f"the measured {walk_speed:.2f} m/s -- the robot never has to stop, and never "
-              "has to push")
+              f"{to_edge:.2f} m from the trigger radius to the near edge of the opening "
+              f"at the measured {walk_speed:.2f} m/s "
+              f"({a['open_radius'] / walk_speed:.1f} s to the door centre) -- the robot "
+              "never has to stop, and never has to push")
     # and the rate limiter must actually converge
     u, dt, n = 0.0, 0.02, 0
     while u < 1.0 - 1e-9 and n < 10000:
@@ -939,6 +1383,288 @@ def check_door_usd(rep: Report, L) -> None:
               "an articulation with no actuator cannot be commanded, only shoved")
 
 
+def check_body_clearance(rep: Report, L) -> None:
+    """NOBODY EVER ASKED WHETHER TWO SCENE OBJECTS OCCUPY THE SAME SPACE.
+
+    Every geometric check in this file, before this one, measured a scene object against
+    the ROBOT -- against its spawn pose, its route, its standing spot, its arm. Nothing
+    measured a scene object against another scene object. So a crate could be authored
+    inside a packing table and the whole file would still report 142 passes; the failure
+    would surface only as visible interpenetration in a still, and only if anyone looked
+    at that corner of the hall.
+
+    That is not hypothetical. `packing_table_a` sits at (-9.00, -6.50) and the crate that
+    used to be at (-10.5, -6.0) had its near face at x = -10.00 -- the prop origin was
+    EXACTLY 1.00 m from it, against the 1.00 m half-extent this file charges every prop.
+    By the verifier's own model they touched. The crate was moved rather than the model
+    loosened; see the layout module's CRATES comment.
+
+    Two populations, two treatments, for the same reason as the route check:
+
+      * boxes whose footprints are declared here (walls, columns, crates, the table, the
+        door leaves) get an exact axis-aligned overlap test, and are allowed to TOUCH --
+        abutting geometry is how a room is built;
+      * USD props, whose real footprints cannot be read offline, get the point-plus-
+        generous-half-extent treatment and are required to keep PROP_PAIR_CLEARANCE of
+        daylight, because "touching" is not a meaningful statement about a number that is
+        an upper bound in the first place.
+    """
+    section("15. no two bodies occupy the same space")
+
+    static = [(name, L.box_extent(box)) for name, box in L.all_static_boxes().items()]
+    static.append(("door_rail", L.box_extent(L.door_rail_box())))
+
+    # Wall-against-wall is excluded, and only wall-against-wall. The partitions are
+    # authored to intersect at their corners -- `pause_wall_west` and
+    # `pause_wall_south_left` share a 0.20 x 0.20 m column of space where they meet, which
+    # is what a corner IS. Every other pairing is a real question.
+    #
+    # The door is swept TWICE, once at each end of its travel, as two separate worlds. The
+    # obvious "put both poses in one list" is wrong and says so loudly if you try it: a
+    # leaf at openness 0 overlaps the same leaf at openness 1 by 20 mm, because they are
+    # the same rigid body 0.70 m apart, not two bodies.
+    wall_names = set(L.WALLS)
+    worst = None
+    for u, tag in ((0.0, "shut"), (1.0, "open")):
+        world = list(static)
+        for name, box in L.door_leaf_boxes(u).items():
+            world.append((f"{name} ({tag})", L.box_extent(box)))
+        for i in range(len(world)):
+            for j in range(i + 1, len(world)):
+                na, ea = world[i]
+                nb, eb = world[j]
+                if na in wall_names and nb in wall_names:
+                    continue
+                d = box_overlap_depth(ea, eb)
+                if worst is None or d > worst[2]:
+                    worst = (na, nb, d)
+    n = len(static) + 2
+    rep.check(worst is not None and worst[2] <= EPS,
+              "no two declared boxes interpenetrate, door shut or open",
+              f"deepest pairing is {worst[0]} / {worst[1]} at "
+              f"{1000 * worst[2]:+.1f} mm (negative or zero = apart or touching; walls are "
+              f"allowed to meet at corners and only wall-wall pairs are exempt); "
+              f"{n} boxes, {n * (n - 1)} pairs over two door states")
+
+    # Props against declared boxes. Restricted to boxes that reach into the height a prop
+    # table occupies -- charging the door lintel, whose underside is at 2.20 m, against a
+    # 0.75 m table would be arithmetic about nothing.
+    need = PROP_HALF_EXTENT + PROP_PAIR_CLEARANCE
+    tight = None
+    for pname, prop in sorted(L.USD_PROPS.items()):
+        origin = (prop["pos"][0], prop["pos"][1])
+        for bname, box in L.all_static_boxes().items():
+            (x0, x1), (y0, y1), (z0, z1) = L.box_extent(box)
+            if z0 >= PROP_ASSUMED_HEIGHT:
+                continue
+            d = point_rect_distance(origin, ((x0, x1), (y0, y1)))
+            if tight is None or d < tight[2]:
+                tight = (pname, bname, d)
+    rep.check(tight is not None and tight[2] >= need,
+              "every USD prop keeps clear of every declared box",
+              f"tightest is {tight[0]} -> {tight[1]} at {tight[2]:.3f} m from the prop "
+              f"origin, needs {need:.2f} m ({PROP_HALF_EXTENT:.1f} m assumed half-extent + "
+              f"{PROP_PAIR_CLEARANCE:.2f} m). THE HALF-EXTENT IS AN ASSUMPTION: the USDs' "
+              f"bounding boxes are not readable offline, and 1.0 m is an upper bound taken "
+              f"from the vendor placing two PackingTables 1.84 m apart, so the real "
+              f"clearance here is probably {tight[2] - 0.92:.2f} m or better and could in "
+              f"principle be worse")
+
+    tight_pp = None
+    for pa, pb in [(a, b) for i, a in enumerate(sorted(L.USD_PROPS))
+                   for b in sorted(L.USD_PROPS)[i + 1:]]:
+        d = math.dist(L.USD_PROPS[pa]["pos"][:2], L.USD_PROPS[pb]["pos"][:2])
+        if tight_pp is None or d < tight_pp[2]:
+            tight_pp = (pa, pb, d)
+    need_pp = 2 * PROP_HALF_EXTENT + PROP_PAIR_CLEARANCE
+    rep.check(tight_pp is not None and tight_pp[2] >= need_pp,
+              "no two USD props overlap each other",
+              f"closest pair is {tight_pp[0]} / {tight_pp[1]} at {tight_pp[2]:.2f} m "
+              f"origin to origin, needs {need_pp:.2f} m")
+
+
+def check_robot_model(rep: Report, L) -> None:
+    """THE ROBOT\'S OWN DIMENSIONS ARE THE ONE SET OF NUMBERS NOTHING CHECKED.
+
+    Section 12 measures the scene against `SHOULDER_ABOVE_PELVIS`, `ARM_REACH_TO_KNUCKLE`,
+    `ARM_REACH_TO_FINGERTIP` and `FOOT_FRONT_REACH`, and its verdict is only as good as
+    those four numbers. They are all hand-typed literals whose derivations live in
+    comments, and a comment cannot be run. Setting `FOOT_FRONT_REACH` to 0.01, or
+    `ARM_REACH_TO_KNUCKLE` to 0.20, left every check in this file passing -- which is the
+    same failure mode as the one that shipped an unreachable apple, one level down.
+
+    The artefact those numbers were measured off is in this repo:
+    `../sim_evaluator/mjcf/g1_dex3/g1_43dof_fixedbase.xml`, the MuJoCo twin. So this
+    section re-derives them from it, by walking the kinematic chain with real rigid
+    transforms rather than summing components, and asserts the literals against what comes
+    back. Same rule as everywhere else here: a number the simulator uses should be a number
+    something recomputed.
+    """
+    section("16. the robot constants the reach check depends on")
+    if not os.path.isfile(MJCF_G1):
+        rep.skip("the G1 MJCF is available to re-derive the arm and foot constants",
+                 f"not found at {os.path.relpath(MJCF_G1, HERE)}")
+        return
+    bodies = load_mjcf_bodies(MJCF_G1)
+    rel = os.path.relpath(MJCF_G1, HERE)
+
+    # -- the shoulder, in the pelvis frame ------------------------------------------------
+    sp, _sq = mjcf_pose_in(bodies, "left_shoulder_pitch_link", "pelvis")
+    rep.check(abs(sp[2] - L.SHOULDER_ABOVE_PELVIS) < 1e-6,
+              "SHOULDER_ABOVE_PELVIS is what the MJCF says it is",
+              f"declared {L.SHOULDER_ABOVE_PELVIS:.5f} m, re-derived {sp[2]:.5f} m from "
+              f"{rel}")
+    rep.check(abs(sp[1] - L.SHOULDER_LATERAL) < 1e-6,
+              "SHOULDER_LATERAL is what the MJCF says it is",
+              f"declared {L.SHOULDER_LATERAL:.5f} m, re-derived {sp[1]:.5f} m")
+    rep.check(abs(sp[0]) < 1e-4,
+              "...and the shoulder really does sit directly above the pelvis in x",
+              f"{1000 * sp[0]:+.3f} mm -- the waist-roll and shoulder-pitch x offsets "
+              "cancel, which is what lets `shoulder_pos` ignore fore-aft entirely")
+
+    # -- the arm, straightened -------------------------------------------------------------
+    # Sum of the link offsets' LENGTHS: the furthest a serial chain can reach is the sum of
+    # its segment lengths, achieved with every joint straight. This is an upper bound on
+    # reach and is exactly what ARM_REACH_TO_* claim to be.
+    to_knuckle = ["left_shoulder_roll_link", "left_shoulder_yaw_link", "left_elbow_link",
+                  "left_wrist_roll_link", "left_wrist_pitch_link", "left_wrist_yaw_link",
+                  "left_hand_middle_0_link"]
+    to_tip = to_knuckle + ["left_hand_middle_1_link", "left_hand_middle_finger_tip"]
+    knuckle = mjcf_chain_length(bodies, to_knuckle)
+    tip = mjcf_chain_length(bodies, to_tip)
+    rep.check(abs(knuckle - L.ARM_REACH_TO_KNUCKLE) < 1e-3,
+              "ARM_REACH_TO_KNUCKLE is the MJCF chain length shoulder -> middle knuckle",
+              f"declared {L.ARM_REACH_TO_KNUCKLE:.3f} m, re-derived {knuckle:.4f} m over "
+              f"{len(to_knuckle)} links")
+    rep.check(abs(tip - L.ARM_REACH_TO_FINGERTIP) < 1e-3,
+              "ARM_REACH_TO_FINGERTIP is the MJCF chain length shoulder -> fingertip",
+              f"declared {L.ARM_REACH_TO_FINGERTIP:.3f} m, re-derived {tip:.4f} m over "
+              f"{len(to_tip)} links -- nothing can be touched beyond this, ever")
+
+    # -- the feet ---------------------------------------------------------------------------
+    # This one CORRECTED the layout module rather than confirming it. Its comment derived
+    # the ankle as "0.0533 m BEHIND the pelvis (hip_yaw +0.025001 x, knee -0.078273 x)",
+    # which adds two x components that are expressed in DIFFERENT frames: `left_hip_roll_link`
+    # carries quat (0.996179, 0, -0.0873386, 0) and `left_knee_link` carries its exact
+    # inverse, so the two rotations cancel and the ankle lands within 21 micrometres of
+    # directly below the pelvis. Walking the chain properly puts the toe spheres 0.125 m
+    # ahead of the pelvis, not 0.072 m. FOOT_FRONT_REACH = 0.13 survives -- barely, with
+    # 5 mm rather than the 58 mm its comment claimed.
+    ankle, _aq = mjcf_pose_in(bodies, "left_ankle_roll_link", "pelvis")
+    foot_geoms = [g for g in bodies["left_ankle_roll_link"][3] if g[0] == "foot"]
+    toe_x = max(g[1][0] for g in foot_geoms) if foot_geoms else 0.0
+    derived_foot = ankle[0] + toe_x + FOOT_SPHERE_RADIUS
+    rep.check(L.FOOT_FRONT_REACH >= derived_foot - 1e-9,
+              "FOOT_FRONT_REACH covers the MJCF's actual forward foot contact",
+              f"declared {L.FOOT_FRONT_REACH:.3f} m vs {derived_foot:.4f} m re-derived "
+              f"(ankle-roll origin {1000 * ankle[0]:+.2f} mm from the pelvis in x, "
+              f"forward contact spheres at +{toe_x:.3f} m, r = {FOOT_SPHERE_RADIUS} m) "
+              f"-> {1000 * (L.FOOT_FRONT_REACH - derived_foot):.1f} mm of margin")
+    rep.check(L.FOOT_FRONT_REACH < L.TABLE_STANDOFF,
+              "...and the standoff still beats it once the correct number is used",
+              f"standoff {L.TABLE_STANDOFF:.3f} m vs foot reach {L.FOOT_FRONT_REACH:.3f} m")
+
+    # -- the two bands the rest of the file trusts -----------------------------------------
+    rep.check(L.WALK_CLEARANCE_Z >= 1.32 + 0.30 and L.WALK_CLEARANCE_Z <= L.HALL_HEIGHT,
+              "WALK_CLEARANCE_Z is above a standing G1 and below the roofline",
+              f"{L.WALK_CLEARANCE_Z:.2f} m vs a ~1.32 m robot and {L.HALL_HEIGHT:.2f} m "
+              "walls -- it is the height below which geometry counts as blocking, so a "
+              "small value silently deletes obstacles from sections 5, 6, 8 and 13")
+    lo_z, hi_z = L.BASE_HEIGHT_BAND
+    rep.check(lo_z < hi_z and (hi_z - lo_z) >= 0.05,
+              "BASE_HEIGHT_BAND is a band, not a point",
+              f"[{lo_z:.3f}, {hi_z:.3f}] m spans {1000 * (hi_z - lo_z):.0f} mm; collapsing "
+              "it to one height would silently drop half of section 12's cases")
+    rep.check(abs(lo_z - 0.725) < 1e-9 and abs(hi_z - 0.790) < 1e-9,
+              "...and it is still the pair of heights the live run actually logged",
+              "0.790 m standing (step=50 base_z=+0.78979), 0.725 m in the settled "
+              "one-legged crouch -- see the README's live-sim section")
+
+
+def check_door_driver(rep: Report, L) -> None:
+    """THE DRIVER WAS A FILENAME TO THIS FILE, AND NOTHING ELSE.
+
+    Section 0 asserts that `mdp/pause_door.py` exists. That was the entire relationship
+    between the offline verifier and the code that actually moves the door: a syntax error
+    in the driver, a renamed entry point, or a `door` observation group quietly deleted
+    from the env cfg all passed every check here, and would have surfaced two minutes into
+    a launch as a door that never opens.
+
+    The driver cannot be IMPORTED offline -- it needs `torch` and the checkout's
+    `tasks.common_scene` on the path -- so this section reads it with `ast`, the same way
+    sections 2 and 3 read the cfg modules. That is enough to answer the questions worth
+    asking: does it parse, does it still define the entry points the env cfg calls by name,
+    is the `door` group still wired up, and is the door term still OUT of the `policy`
+    group, which is the DDS contract the rest of the stack reads.
+    """
+    section("17. the door driver is wired into the task")
+    mdp_dir = os.path.join(TASK_DIR, "mdp")
+    trees = {}
+    for name in ("__init__.py", "observations.py", "pause_door.py", "rewards.py",
+                 "terminations.py"):
+        path = os.path.join(mdp_dir, name)
+        try:
+            trees[name] = parse(path)
+            ok, detail = True, ""
+        except SyntaxError as exc:
+            ok, detail = False, f"{exc.__class__.__name__}: {exc}"
+        rep.check(ok, f"mdp/{name} parses", detail)
+    if "pause_door.py" not in trees or "__init__.py" not in trees:
+        return
+
+    door_names = code_names(trees["pause_door.py"])
+    defined = {n.name for n in ast.walk(trees["pause_door.py"])
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assigned = {t.id for n in ast.walk(trees["pause_door.py"])
+                if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
+    for entry in ("pause_door_state", "set_pause_door"):
+        rep.check(entry in defined, f"mdp/pause_door.py still defines {entry}()",
+                  "the env cfg calls it by name through `mdp.`, so a rename is a "
+                  "build-time AttributeError, not a type error")
+    rep.check("OBS_DIM" in assigned, "mdp/pause_door.py still declares OBS_DIM",
+              "the width of the door observation row is declared once, in the driver; "
+              "no consumer hardcodes it")
+
+    reexported = any(isinstance(n, ast.ImportFrom) and n.module == "pause_door"
+                     for n in ast.walk(trees["__init__.py"]))
+    rep.check(reexported, "mdp/__init__.py re-exports the door driver",
+              "`from .pause_door import *` is what makes `mdp.pause_door_state` resolve "
+              "in the env cfg")
+
+    env_tree = parse(ENVCFG_PY)
+    env_names = code_names(env_tree)
+    rep.check("pause_door_state" in env_names,
+              "the env cfg still references pause_door_state",
+              "the observation manager is the ONLY per-step hook reachable from inside "
+              "this task package in a *Wholebody* run (env.step() is never called), so "
+              "losing this term means the door never moves")
+    groups = {t.target.id for n in ast.walk(env_tree) if isinstance(n, ast.ClassDef)
+              for t in n.body if isinstance(t, ast.AnnAssign) and isinstance(t.target, ast.Name)}
+    rep.check("door" in groups, "the env cfg still declares a `door` observation group",
+              f"observation/scene group attributes found: {sorted(groups)}")
+
+    # ...and the door term must stay OUT of the policy group. `policy` is the wholebody DDS
+    # contract: whatever is in it is what the provider serialises and ships over the wire.
+    # Appending a six-float door row to it would not raise anything -- it would silently
+    # change the shape of the observation the rest of the stack reads.
+    policy = [n for n in ast.walk(env_tree)
+              if isinstance(n, ast.ClassDef) and n.name == "PolicyCfg"]
+    rep.check(bool(policy), "the env cfg still has a PolicyCfg group")
+    if policy:
+        rep.check("pause_door_state" not in code_names(policy[0]),
+                  "...and the door term is NOT in it",
+                  "the `policy` group is the DDS contract; the door lives in its own "
+                  "group so that adding it changed nothing on the wire")
+
+    for override in ("open_pause_door", "close_pause_door", "auto_pause_door"):
+        rep.check(override in code_strings(env_tree),
+                  f"the manual override `{override}` is still registered",
+                  "an evaluation that wants to pin the door -- e.g. to test the robot "
+                  "arriving at a shut one -- needs all three")
+
+    check_no_remote_paths(rep, [os.path.join(mdp_dir, n) for n in trees])
+
+
 def print_coordinates(L) -> None:
     section("coordinate table (world frame, metres, num_envs=1)")
     rows = [
@@ -1032,6 +1758,9 @@ def main() -> int:
     check_reach(rep, L)
     check_door(rep, L)
     check_door_usd(rep, L)
+    check_body_clearance(rep, L)
+    check_robot_model(rep, L)
+    check_door_driver(rep, L)
 
     print_coordinates(L)
 

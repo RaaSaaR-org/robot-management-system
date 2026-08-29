@@ -151,6 +151,10 @@ class ManipPublisher:
         self._sent = 0
         self._slot: tuple[ManipTargets, int] = (M.REST, 0)
         self._seq = 0
+        # The last frame `_publish` actually put on the wire. None until one has
+        # been. Written only by the publish thread (or `shutdown()` after it has
+        # been joined), which is the same rule `_publish` itself follows.
+        self._last_sent: ManipTargets | None = None
         self._shaper = M.ManipShaper(arm_rate_limit, hand_rate_limit)
         # Set by run() when the publish loop dies; main() reports it and exits non-zero.
         self.error: Exception | None = None
@@ -208,9 +212,37 @@ class ManipPublisher:
         return self._slot[0]
 
     def set_targets(self, targets: ManipTargets) -> None:
-        """Hand the publisher a new frame. Safe from any thread; never blocks."""
+        """Hand the publisher a new frame. Safe from any thread; never blocks.
+
+        VALIDATED HERE, ON THE PRODUCER'S OWN THREAD, AND NOWHERE ELSE IS EARLY
+        ENOUGH. `ManipTargets` is a NamedTuple, so `ManipTargets(a, b, c)` builds
+        one out of anything at all without going through `.make()`; a policy that
+        emits a NaN, a caller that hands over thirteen joints instead of
+        fourteen, and a `None` from a failed inference all reach this method
+        looking identical to a good frame.
+
+        Left unchecked, the first place any of that is noticed is `shape()` --
+        which runs on the PUBLISH thread. The failure that follows is the worst
+        one available: `run()` catches the ValueError, calls `shutdown()`, and
+        `shutdown()` used to blend out of the same poisoned slot and raise
+        again, so nothing further was ever published. rt/lowcmd LATCHES, so the
+        sim then holds the last commanded arm pose indefinitely -- the arms
+        freeze mid-reach, which this file's own comments call worse than a stop.
+
+        So the check happens on the way IN. The producer gets the ValueError on
+        its own stack, where it can drop the frame and carry on; the slot keeps
+        the last good frame; the publish thread never sees anything it cannot
+        publish. `ManipTargets.make()` is the same validation the rest of the
+        module uses -- 14 + 7 + 7, every value finite -- and it also normalises
+        lists to tuples, so the slot is genuinely immutable.
+        """
+        if not isinstance(targets, ManipTargets):
+            raise TypeError(
+                "set_targets() takes a ManipTargets (use ManipTargets.make(), "
+                f"targets_from_action31() or M.REST), got {type(targets).__name__}")
+        checked = ManipTargets.make(targets.arm, targets.left_hand, targets.right_hand)
         self._seq += 1
-        self._slot = (targets, self._seq)
+        self._slot = (checked, self._seq)
 
     def set_action31(self, action, *, left_hand_units: str,
                      right_hand_units: str) -> ManipTargets:
@@ -250,6 +282,11 @@ class ManipPublisher:
                 hmc[i].q = wire[i]
             self._pub_hand[side].Write(self._msg_hand[side])
         self._sent += 1
+        # Where the arms actually ARE, as opposed to where somebody asked for
+        # them to be. `shutdown()` ramps out of this and not out of `_slot`,
+        # because a slot can hold a target that was never publishable while this
+        # can only ever hold a frame that has just gone out on the wire.
+        self._last_sent = t
 
     def run(self) -> None:
         """The publish loop. One thread, forever, until `_stop`."""
@@ -267,7 +304,17 @@ class ManipPublisher:
                           f"lh[5]={shaped.left_hand[5]:+.3f} "
                           f"rh[3]={shaped.right_hand[3]:+.3f} (seq {seq})", flush=True)
                 next_t += period
-                time.sleep(max(0.0, next_t - time.monotonic()))
+                # `_stop.wait()`, not `time.sleep()`: the wait has to be
+                # INTERRUPTIBLE. `main()` joins this thread with a 2 s timeout
+                # and then publishes the rest pose itself, so any sleep longer
+                # than that outlives the join -- and below about 0.5 Hz one
+                # period does. The join would return with the loop still inside
+                # its sleep, and `shutdown()` would then enter `_publish()`
+                # while this thread was about to as well, with both of them
+                # mutating the one shared LowCmd_ message that CycloneDDS
+                # serialises in C. That is the invariant this class states at
+                # the top and it must hold at every rate, not just the default.
+                self._stop.wait(max(0.0, next_t - time.monotonic()))
         except Exception as exc:
             # Unlike the locomotion slot, rt/lowcmd LATCHES: if this thread dies
             # the sim keeps holding the last arm pose forever. That is worse than
@@ -289,13 +336,34 @@ class ManipPublisher:
         after this process exits. Ramping there makes the handover continuous; a
         bare stop would leave the sim to snap the arms from a reach to zero in one
         physics step, which throws whatever the robot was holding.
+
+        A STOP MUST ALWAYS BE REACHABLE, and that is a stronger requirement than
+        a nice ramp. Two things enforce it here:
+
+          * the ramp starts from `_last_sent` -- the pose actually on the wire --
+            not from `_slot`, which is a REQUEST and is exactly what a bad frame
+            poisons. Blending out of the slot is how a single NaN used to take
+            the rest pose down with the publisher;
+          * and if the ramp raises anyway, the rest pose is published directly.
+            An abrupt stop is bad; rt/lowcmd latching a mid-reach pose forever
+            is worse, and that is the only other option.
         """
         self._stop.set()
         with self._shutdown_lock:
             if self._shutdown_done:
                 return
             self._shutdown_done = True
-        start = self._slot[0]
+        try:
+            self._ramp_to_rest(ramp_s)
+        except Exception as exc:  # noqa: BLE001 -- there is no failure to pass on to
+            print(f"[manip] rest-pose RAMP failed ({exc!r}); publishing the rest pose "
+                  f"directly instead", file=sys.stderr, flush=True)
+            self._publish_rest()
+        print(f"[manip] at rest after {self._sent} frames", flush=True)
+
+    def _ramp_to_rest(self, ramp_s: float) -> None:
+        """Blend from the last frame actually published to REST, over `ramp_s`."""
+        start = self._last_sent if self._last_sent is not None else M.REST
         steps = max(1, int(ramp_s * self._rate))
         for i in range(1, steps + 1):
             f = i / steps
@@ -305,7 +373,23 @@ class ManipPublisher:
                 tuple(a + (b - a) * f for a, b in zip(start.right_hand, M.REST.right_hand)))
             self._publish(self._shaper.shape(blend))
             time.sleep(1.0 / self._rate)
-        print(f"[manip] at rest after {self._sent} frames", flush=True)
+
+    def _publish_rest(self) -> None:
+        """Put REST on the wire in one frame, with nothing in the way.
+
+        The shaper is reset first, deliberately: its rate limiter would otherwise
+        hold the arm 0.2 rad from where it last was, and this is the path taken
+        when the ramp is already known to be broken. One step to rest is not the
+        gentle handover the docstring above describes -- it is the fallback, and
+        the alternative to it is a latched pose that never moves again.
+        """
+        try:
+            self._shaper.reset(M.REST)
+            self._publish(M.REST)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[manip] COULD NOT PUBLISH THE REST POSE: {exc!r}. rt/lowcmd latches, "
+                  f"so the sim is still holding the last arm pose -- stop the scene.",
+                  file=sys.stderr, flush=True)
 
 
 def probe(pub: ManipPublisher) -> None:
@@ -416,10 +500,22 @@ def main() -> int:
     finally:
         # Join before the ramp goes out: `_publish` mutates one shared message
         # object that CycloneDDS serialises in C, so two threads must never be
-        # inside it at once.
+        # inside it at once. The loop's sleep is a `_stop.wait()`, so setting
+        # the event ends the current period immediately and this join returns
+        # in well under its timeout at any rate.
         pub._stop.set()
         worker.join(timeout=2.0)
-        pub.shutdown()
+        if worker.is_alive():
+            # Not a stop we can make. Publishing rest from here would put a
+            # second thread inside the shared LowCmd_ message, and corrupting a
+            # message mid-serialisation is a worse failure than an abrupt exit:
+            # say so loudly and let the process die instead.
+            print("[manip] the publish thread did not stop within 2 s; NOT ramping to "
+                  "rest, because that would mean two threads in one DDS message. "
+                  "The sim will hold the last arm pose (rt/lowcmd latches) -- stop the "
+                  "scene.", file=sys.stderr, flush=True)
+        else:
+            pub.shutdown()
 
     if pub.error is not None:
         print(f"[manip] publisher thread died: {pub.error!r}", file=sys.stderr, flush=True)

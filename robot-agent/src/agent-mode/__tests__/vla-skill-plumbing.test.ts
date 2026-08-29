@@ -3,7 +3,9 @@
  * @description TASK-226 step 0, and the controller's side of the `vla_skill`
  *              block: an Agent-Mode-initiated rollout is REGISTERED, so the
  *              safety loop's `abortAll()` reaches it; the `vla` control-owner
- *              lock is taken and given back on every path including a throw;
+ *              lock is taken and given back on every path including a throw,
+ *              a teleop takeover and an E-Stop, is exclusive to the rollout
+ *              that borrowed it, and is never left stranded on `agent`;
  *              the prompt handed to the policy is the trained one; and the
  *              block reports `succeeded`/`failed`/`unknown` without ever
  *              inferring success from "did not throw".
@@ -39,10 +41,22 @@ const { executors, FakeExecutor } = vi.hoisted(() => {
     }
 
     abort(): void {
+      // Sets the flag and returns, exactly as the real `SkillExecutor.abort()`
+      // does — it does NOT settle the in-flight `run()`. That gap is the whole
+      // point, and this fake used to close it by resolving `run()` from inside
+      // `abort()`. A rollout that ends the instant the flag is set cannot
+      // reproduce the state the abort actually leaves behind: the real one
+      // notices the flag on its next step and returns up to one /predict round
+      // trip later, so `lend.end()` runs AFTER whatever the aborter did to the
+      // lock. Settling early made `estop()`'s release land while the lock was
+      // still `agent`, which is precisely the ordering that hid the stranded
+      // lock this file now pins. Each test settles the rollout itself, where
+      // the sequence is visible.
       this.aborted = true;
-      // A real `SkillExecutor` notices the flag on its next step and returns
-      // `aborted`; the fake settles immediately so the test does not have to
-      // model the loop.
+    }
+
+    /** The rollout returning `aborted`, one step after the flag was set. */
+    finishAborted(): void {
       this.finish?.({ status: 'aborted', mode: 'sim', steps: 3, durationMs: 300, error: 'aborted' });
     }
 
@@ -187,6 +201,8 @@ describe('TASK-226 step 0 — an Agent-Mode rollout is reachable by the safety l
     expect(aborted).toBe(1);
     expect(executors[0].aborted).toBe(true);
 
+    // The rollout notices the flag on its next step and returns.
+    executors[0].finishAborted();
     await controller.whenIdle();
     const block = controller.getState().plan!.blocks[0];
     expect(block.status).toBe('failed');
@@ -204,14 +220,39 @@ describe('TASK-226 step 0 — an Agent-Mode rollout is reachable by the safety l
   });
 
   it('an E-Stop during the rollout aborts the policy without waiting for the safety poll', async () => {
-    const { controller } = makeController([APPLE_BLOCK]);
+    const lock = new ControlOwnerLock();
+    const { controller } = makeController([APPLE_BLOCK], { lock });
     await controller.submitCommand({ text: 'pick up the apple' });
     await runningExecutor();
+    expect(lock.get()).toBe('vla');
 
     await controller.estop('operator pressed stop');
 
     expect(executors[0].aborted).toBe(true);
+    // The lock goes with it. This is the assertion the old version of this test
+    // was missing, and the reason the fake no longer settles `run()` inside
+    // `abort()`: the E-Stop lands while the lock is LENT, so the owner is
+    // `vla`, and a `release('agent')` here is a silent no-op against its
+    // `owner !== who` guard. `estop()` therefore resets the lock outright.
+    expect(lock.get()).toBe('idle');
+    expect(lock.holderCount()).toBe(0);
+
+    // …and the rollout returns a /predict round trip later, running
+    // `runVlaSkill`'s `finally` and with it `lend.end()`. That late hand-back
+    // is what used to restore `agent` — after `estop()` had already given up on
+    // releasing it and with `runPlan`'s own release skipped as `planFinalized`.
+    // The lock then read `agent` with one holder forever: no VLA run could ever
+    // start again, the idle watcher and heartbeat were gated off for good, and
+    // every later plan leaked another holder.
+    executors[0].finishAborted();
     await controller.whenIdle();
+    expect(lock.get()).toBe('idle');
+    expect(lock.holderCount()).toBe(0);
+
+    // The proof that nothing is stranded: the next claimant gets the lock, and
+    // gets it with a refcount of one rather than of two.
+    expect(lock.claim('vla')).toEqual({ ok: true });
+    expect(lock.holderCount()).toBe(1);
   });
 
   it('a teleop takeover mid-rollout aborts the policy', async () => {
@@ -224,6 +265,7 @@ describe('TASK-226 step 0 — an Agent-Mode rollout is reachable by the safety l
     lock.claim('teleop');
 
     expect(executors[0].aborted).toBe(true);
+    executors[0].finishAborted();
     await controller.whenIdle();
   });
 });
@@ -267,11 +309,42 @@ describe('TASK-226 step 2 — the vla control-owner lock', () => {
     await controller.submitCommand({ text: 'pick up the apple' });
     await runningExecutor();
     lock.claim('teleop');
+    executors[0].finishAborted();
     await controller.whenIdle();
 
     // The rollout's `finally` ran, and did NOT hand control back to a plan that
     // a human took over.
     expect(lock.get()).toBe('teleop');
+    // One holder: the human's socket. The parked plan's holder is gone with the
+    // preemption, not stacked underneath.
+    expect(lock.holderCount()).toBe(1);
+  });
+
+  it('refuses an external VLA claim for as long as the rollout is borrowing the lock', async () => {
+    // While Agent Mode has lent its lock to a `vla_skill` block the owner reads
+    // `vla`, so `POST /vla/start` and `/skills/execute` — both of which go
+    // through `claim('vla')` in `robot/state.ts` — took the "same owner, one
+    // more holder" path and were ADMITTED. Two SkillExecutors then streamed
+    // action vectors into the same 43-DOF humanoid. Before the lend existed
+    // that call was refused with "Control is held by Agent Mode", and it has to
+    // stay refused now: `state.ts`'s other guard, `vlaActiveLocal`, is set only
+    // by the direct path and never by this one.
+    const lock = new ControlOwnerLock();
+    const { controller } = makeController([APPLE_BLOCK], { lock });
+    await controller.submitCommand({ text: 'pick up the apple' });
+    await runningExecutor();
+
+    const claim = lock.claim('vla');
+
+    expect(claim.ok).toBe(false);
+    expect(claim.reason).toMatch(/Agent Mode/);
+    expect(lock.holderCount()).toBe(1);
+    expect(executors).toHaveLength(1);
+
+    // And it is admitted again the moment the rollout gives the lock back.
+    executors[0].finish({ status: 'completed', mode: 'sim', steps: 600, durationMs: 120_000 });
+    await controller.whenIdle();
+    expect(lock.claim('vla')).toEqual({ ok: true });
   });
 
   it('fails the block with the lock’s own words when control is busy', async () => {

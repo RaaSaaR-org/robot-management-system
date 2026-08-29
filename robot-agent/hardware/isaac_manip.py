@@ -152,6 +152,27 @@ RIGHT_ISAAC_FROM_NEODEM: tuple[int, ...] = tuple(
 RIGHT_NEODEM_FROM_ISAAC: tuple[int, ...] = tuple(
     ISAAC_RIGHT_HAND.index(n) for n in NEODEM_RIGHT_HAND)
 
+# This permutation happens to be its own inverse -- it swaps two pairs and leaves
+# the three thumb slots alone -- which has one nasty consequence: applying it
+# TWICE is the identity, and the identity is exactly the bug the remap exists to
+# prevent. A second `remap_right_hand(..., to="isaac")` slipped in anywhere
+# between the policy and the wire would therefore undo the first one and produce
+# a hand whose index and middle fingers are swapped, silently, with no exception
+# and nothing wrong-looking in a log.
+#
+# Nothing can detect that from the values alone -- a permuted 7-vector of floats
+# is indistinguishable from an unpermuted one. What CAN be asserted is the
+# precondition that makes the double application dangerous and the single one
+# necessary: the permutation must not be the identity. If a future edit to either
+# joint table aligns the two orders, the remap quietly becomes a no-op and every
+# call site keeps calling it; this fails the import instead.
+assert RIGHT_ISAAC_FROM_NEODEM != tuple(range(N_HAND)), (
+    "the right-hand remap has become the identity: ISAAC_RIGHT_HAND and "
+    "NEODEM_RIGHT_HAND now agree, so remap_right_hand() does nothing and every "
+    "caller of it is silently wrong in one direction or the other")
+assert tuple(RIGHT_ISAAC_FROM_NEODEM[i] for i in RIGHT_NEODEM_FROM_ISAAC) \
+    == tuple(range(N_HAND)), "the two right-hand permutations are not inverses"
+
 # --------------------------------------------------------------------- joint limits
 #
 # Ranges lifted from `sim_evaluator/mjcf/g1_dex3/g1_43dof_fixedbase_realism.xml`,

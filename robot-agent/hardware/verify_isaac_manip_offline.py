@@ -35,9 +35,15 @@ settles those.
 Run:
     python3 robot-agent/hardware/verify_isaac_manip_offline.py
 """
+import contextlib
+import io
 import math
 import os
+import shutil
+import subprocess
 import sys
+import threading
+import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -432,6 +438,298 @@ check("isaac_manip" not in loco,
       "isaac_loco_bridge.py does not import this at all — its 100 Hz loop is untouched")
 check('ap.add_argument("--rate", type=float, default=100.0' in loco,
       "and it still publishes rt/run_command/cmd at 100 Hz")
+
+# --------------------------------------------------------------------------------
+# Everything below drives the PUBLISHER, not just the maths, so it needs the SDK
+# names `ManipPublisher.__init__` imports. A stand-in is installed instead of the
+# real `unitree_sdk2py` -- and it would be installed even if the real one were
+# available, because the point is to exercise the publish path without a DDS
+# participant, a domain, or a single datagram leaving this process. `Write()`
+# records what it was handed; that recording IS the wire, for these checks.
+class _FakeMotor:
+    __slots__ = ("q", "kp", "kd", "dq", "tau")
+
+    def __init__(self):
+        self.q = self.kp = self.kd = self.dq = self.tau = 0.0
+
+
+class _FakeMsg:
+    def __init__(self, n):
+        self.motor_cmd = [_FakeMotor() for _ in range(n)]
+        self.crc = 0
+
+
+WIRE = []          # (topic, [q for every motor slot]) in publish order
+
+
+def _install_fake_sdk():
+    import types
+    class _FakePub:
+        def __init__(self, topic, _t):
+            self.topic = topic
+
+        def Init(self):
+            pass
+
+        def Write(self, msg):
+            WIRE.append((self.topic, [m.q for m in msg.motor_cmd]))
+
+    class _FakeCRC:
+        def Crc(self, _msg):
+            return 0xC0FFEE
+
+    def _refuse_init(*_a, **_kw):
+        # If this ever runs, the check calling it asked for a real DDS
+        # participant, which this file must never create.
+        raise AssertionError("ChannelFactoryInitialize() must not be called offline")
+
+    mods = {
+        "unitree_sdk2py": {},
+        "unitree_sdk2py.core": {},
+        "unitree_sdk2py.core.channel": {"ChannelPublisher": _FakePub,
+                                        "ChannelFactoryInitialize": _refuse_init},
+        "unitree_sdk2py.idl": {},
+        "unitree_sdk2py.idl.default": {
+            "unitree_hg_msg_dds__LowCmd_": lambda: _FakeMsg(35),
+            "unitree_hg_msg_dds__HandCmd_": lambda: _FakeMsg(M.N_HAND)},
+        "unitree_sdk2py.idl.unitree_hg": {},
+        "unitree_sdk2py.idl.unitree_hg.msg": {},
+        "unitree_sdk2py.idl.unitree_hg.msg.dds_": {"LowCmd_": object, "HandCmd_": object},
+        "unitree_sdk2py.utils": {},
+        "unitree_sdk2py.utils.crc": {"CRC": _FakeCRC},
+    }
+    for name, attrs in mods.items():
+        mod = types.ModuleType(name)
+        for k, v in attrs.items():
+            setattr(mod, k, v)
+        sys.modules[name] = mod
+
+
+_install_fake_sdk()
+
+
+def arm_on_wire(index=-1):
+    """The 14 arm targets of the `index`-th rt/lowcmd frame recorded so far."""
+    lows = [w for w in WIRE if w[0] == B.TOPIC_LOWCMD]
+    return None if not lows else lows[index][1][15:29]
+
+
+print("\n(10) a bad frame is refused on the PRODUCER's thread, not the publisher's")
+# The defect, stated once: `ManipTargets` is a NamedTuple, so `ManipTargets(a,b,c)`
+# builds one out of anything without going near `.make()`, and `set_targets()` used
+# to store whatever it was handed. The first code to look at the numbers was then
+# `shape()`, ON THE PUBLISH THREAD -- see (11) for what that costs. Validation
+# belongs on the way in, where the producer can drop the frame and carry on.
+pub = B.ManipPublisher(1, rate_hz=200.0, verbose=False, init_dds=False)
+pub._shaper.reset(M.REST)
+NAN_FRAME = M.ManipTargets((float("nan"),) + M.ARM_ZERO[1:],
+                           M.HAND_OPEN_LEFT, M.HAND_OPEN_RIGHT)
+SHORT_FRAME = M.ManipTargets((0.0,) * 13, M.HAND_OPEN_LEFT, M.HAND_OPEN_RIGHT)
+SHORT_HAND = M.ManipTargets(M.ARM_ZERO, (0.0,) * 6, M.HAND_OPEN_RIGHT)
+check(raises(ValueError, pub.set_targets, NAN_FRAME),
+      "set_targets(NaN) raises on the CALLER's thread — a policy hears about its own "
+      "bad frame")
+check(raises(ValueError, pub.set_targets, SHORT_FRAME),
+      "a 13-joint arm vector is refused the same way")
+check(raises(ValueError, pub.set_targets, SHORT_HAND),
+      "and so is a 6-value hand — both hands are mandatory and both are 7")
+check(raises(TypeError, pub.set_targets, None),
+      "None is a TypeError, not an AttributeError three frames later")
+check(pub.targets == M.REST,
+      "and after all four refusals the slot still holds the last GOOD frame",
+      "REST")
+_good = M.ManipTargets.make([0.1] * 14, M.HAND_OPEN_LEFT, M.HAND_OPEN_RIGHT)
+pub.set_targets(_good)
+check(pub.targets == _good and isinstance(pub.targets.arm, tuple),
+      "a valid frame still lands, normalised to tuples (the slot stays immutable)")
+
+print("\n(11) a stop is ALWAYS reachable — a poisoned slot cannot latch the arms")
+# THE CHAIN THIS PINS. A NaN reaches `shape()` on the publish thread; `run()`
+# catches the ValueError and calls `shutdown()`; `shutdown()` blended out of the
+# SAME poisoned slot and raised again; the handler printed "rest-pose stop failed"
+# and returned, having published nothing. rt/lowcmd LATCHES, so the sim then holds
+# the last commanded arm pose indefinitely — the arms freeze mid-reach, which this
+# bridge's own comments call worse than a stop.
+#
+# Two things break the chain and both are checked: the ramp starts from the last
+# frame actually PUBLISHED rather than from the slot, and a ramp that raises
+# anyway falls back to publishing REST directly.
+WIRE.clear()
+stopper = B.ManipPublisher(1, rate_hz=200.0, verbose=False, init_dds=False)
+stopper._shaper.reset(M.REST)
+REACH = M.ManipTargets.make([0.4] * 14, M.GRIP_CLOSE_RAD, M.REST.right_hand)
+stopper.set_targets(REACH)
+stopper._publish(stopper._shaper.shape(stopper.targets))   # one loop iteration
+check(arm_on_wire()[0] != 0.0, "the arms are out at a non-rest pose to begin with",
+      f"arm[0]={arm_on_wire()[0]:+.3f}")
+stopper._slot = (NAN_FRAME, 99)          # what a direct ManipTargets() still allows
+_n_before = len(WIRE)
+_raised = False
+try:
+    stopper.shutdown(ramp_s=0.05)
+except Exception:                        # noqa: BLE001
+    _raised = True
+check(not _raised, "shutdown() from a POISONED slot does not raise")
+check(len(WIRE) > _n_before, "it publishes rather than returning empty-handed",
+      f"{len(WIRE) - _n_before} messages")
+check(arm_on_wire() == list(M.REST.arm),
+      "and the LAST rt/lowcmd frame on the wire is the rest pose — this is the check "
+      "that fails when the ramp blends out of the slot",
+      f"arm[0]={arm_on_wire()[0]:+.3f}")
+
+# The same thing again through the real failure path: the publish loop itself,
+# started on a slot it cannot publish.
+WIRE.clear()
+dying = B.ManipPublisher(1, rate_hz=200.0, verbose=False, init_dds=False)
+dying._shaper.reset(M.REST)
+dying.set_targets(REACH)
+dying._publish(dying._shaper.shape(dying.targets))
+dying._slot = (NAN_FRAME, 7)
+_t = threading.Thread(target=dying.run)
+_t.start()
+_t.join(timeout=5.0)
+check(not _t.is_alive(), "run() exits when its slot cannot be shaped")
+check(isinstance(dying.error, ValueError),
+      "it records the error for main() to exit non-zero on", repr(dying.error)[:44])
+check(arm_on_wire() == list(M.REST.arm),
+      "and it still leaves the arms AT REST on the wire, not latched mid-reach",
+      f"arm[0]={arm_on_wire()[0]:+.3f}")
+
+# The sleep has to be interruptible or `main()`'s 2 s join returns with the loop
+# still inside it, and then shutdown() and the loop are both in the one shared
+# LowCmd_ message that CycloneDDS serialises in C. One period at 0.5 Hz is 2 s,
+# so this rate is exactly where a `time.sleep()` stops being joinable.
+slow = B.ManipPublisher(1, rate_hz=0.5, verbose=False, init_dds=False)
+slow._shaper.reset(M.REST)
+_t2 = threading.Thread(target=slow.run, daemon=True)
+_t2.start()
+time.sleep(0.1)
+_t0 = time.monotonic()
+slow._stop.set()
+# A QUARTER of the 2 s period, deliberately: joining for a whole one would let an
+# uninterruptible time.sleep() finish its period and pass this by luck.
+_t2.join(timeout=0.5)
+check(not _t2.is_alive(),
+      "at 0.5 Hz the publish loop joins within a quarter of its own period — the "
+      "period is a _stop.wait(), not a time.sleep()",
+      f"joined in {time.monotonic() - _t0:.3f} s")
+
+print("\n(11b) the bridge refuses domain 0 with an exit code a script can read")
+check(raises(ValueError, B.ManipPublisher, 0),
+      "ManipPublisher(0) raises — domain 0 is the real robot's low-level bus")
+_argv, sys.argv = sys.argv, ["isaac_manip_bridge.py", "--domain", "0"]
+_err = io.StringIO()
+try:
+    with contextlib.redirect_stderr(_err):
+        _rc = B.main()
+finally:
+    sys.argv = _argv
+check(_rc == 2,
+      "and main() returns 2, not 1 — a refusal is distinguishable from a crash",
+      f"exit {_rc}")
+check("refused" in _err.getvalue(),
+      "having said so on stderr, where the bringup script's log tail will find it",
+      _err.getvalue().strip()[:60])
+
+# --------------------------------------------------------------------------------
+print("\n(12) factory_mission_bringup.sh's domain-0 guard, EXECUTED (not read)")
+SCRIPT = os.path.join(_HERE, "factory_mission_bringup.sh")
+GUARD_START = "# --- domain guard"
+GUARD_END = "# --- end domain guard"
+if not os.path.exists(SCRIPT) or not shutil.which("bash"):
+    print("    SKIP  factory_mission_bringup.sh or bash not available")
+else:
+    ssrc = open(SCRIPT, encoding="utf-8").read()
+    _lines = ssrc.splitlines()
+    _a = next((i for i, l in enumerate(_lines) if l.startswith(GUARD_START)), None)
+    _b = next((i for i, l in enumerate(_lines) if l.startswith(GUARD_END)), None)
+    check(_a is not None and _b is not None and _b > _a,
+          "the guard is delimited so this file can run the REAL text, not a copy of it",
+          f"lines {None if _a is None else _a + 1}-{None if _b is None else _b + 1}")
+    GUARD = "\n".join(_lines[_a:_b + 1]) if (_a is not None and _b is not None) else ""
+    # The checks below that assert something is GONE have to read the script's
+    # code and not its prose: several of them name the very construct they
+    # replaced, in a comment explaining why it is wrong, and a substring search
+    # over the whole file cannot tell the two apart.
+    scode = "\n".join(l for l in _lines if not l.lstrip().startswith("#"))
+
+    def domain_verdict(value):
+        """Run the script's own guard with `die` stubbed. True = the value passed."""
+        prelude = ('set -uo pipefail\n'
+                   'die() { printf "FATAL: %s\\n" "$*" >&2; exit 3; }\n')
+        proc = subprocess.run(["bash", "-c", prelude + GUARD + "\nexit 0"],
+                              env={**os.environ, "DOMAIN": str(value)},
+                              capture_output=True, text=True)
+        return proc.returncode == 0
+
+    # `[ "$DOMAIN" = "0" ]` -- the guard this replaced -- passes every one of these,
+    # and argparse's type=int makes all four of them domain ZERO in Python. Domain 0
+    # is a live G1's rt/lowcmd bus and this stack writes zeros into its leg slots.
+    REFUSE = ["0", "00", "000", " 0", "0 ", "+0", "-0", "0x0", "0.0", "", "x", "1;0"]
+    passed = [v for v in REFUSE if domain_verdict(v)]
+    check(not passed,
+          "every spelling of zero, and every non-number, is REFUSED",
+          "leaked: " + ", ".join(repr(v) for v in passed) if passed
+          else f"{len(REFUSE)}/{len(REFUSE)} refused")
+    # 08 is the one that catches a numeric comparison written without `10#`: bash
+    # reads a leading zero as octal and 08 is not a legal octal literal, so the
+    # guard would die with an arithmetic error instead of a verdict.
+    ALLOW = ["1", "9", "01", "08", "42"]
+    blocked = [v for v in ALLOW if not domain_verdict(v)]
+    check(not blocked,
+          "while every real sim domain still passes, leading zeros and 08 included",
+          "blocked: " + ", ".join(blocked) if blocked else ", ".join(ALLOW))
+    check('[ "$DOMAIN" = "0" ]' not in scode,
+          "and the string compare that let 00 through is gone from the script")
+    check('=~ ^[0-9]+$' in scode and "10#$DOMAIN == 0" in scode,
+          "the guard is a digits check followed by a NUMERIC comparison")
+
+    # ----------------------------------------------------------------------------
+    print("\n(13) ...and the three other things that script got wrong")
+    def line_of(needle):
+        return next((i for i, l in enumerate(_lines) if needle in l), None)
+
+    # C1: the VRAM check has to run BEFORE anything is killed, or it is measuring
+    # the memory the kill sweep just freed. Asserted by line number, because that
+    # is the whole of the defect.
+    _gpu = line_of("nvidia-smi --id=")
+    _kill = line_of("STALE+=(")
+    if _kill is None:
+        _kill = line_of("pkill -f")
+    check(_gpu is not None and _kill is not None and _gpu < _kill,
+          "the GPU guard runs BEFORE the process sweep, not after it",
+          f"nvidia-smi at line {None if _gpu is None else _gpu + 1}, "
+          f"first kill at {None if _kill is None else _kill + 1}")
+    # `[s]im_node.py` -- the bracket trick that kept pkill from matching the
+    # script's own command line -- is the form this actually appeared in, so undo
+    # it before searching or the search misses the line it exists to find.
+    unbracketed = scode.replace("[", "").replace("]", "")
+    check("sim_node.py" not in unbracketed,
+          "sim_node.py is no longer swept — this script never starts the MuJoCo sim")
+    check('pgrep -u "$ME"' in scode,
+          "the sweep is scoped to one user's processes")
+    check("KILL_STALE" in scode and "consent was not given" in scode,
+          "and nothing this script did not start is killed without explicit consent")
+
+    # C2: /health's `connected` is copied from the SIDECAR when --sidecar-url is
+    # set, so it is true the moment g1_sidecar.py answers and says nothing at all
+    # about whether a camera frame has ever arrived. Gating on it made the "NO
+    # CAMERA FRAME" warning unreachable -- and that warning is the one question
+    # this rig exists to answer.
+    check('grep -q \'"connected": *true\'' not in scode,
+          "the camera gate no longer reads /health's `connected` (the sidecar's, "
+          "not the cameras')")
+    check("/cameras/$CAM_NAME/snapshot" in scode,
+          "it calls the exact route Agent Mode's `look` calls, which 503s without a frame")
+
+    # C5.
+    check("trap cleanup EXIT" in scode and "PIDS+=(" in scode,
+          "there is an EXIT trap, and it can only reach pids this script recorded")
+    check("ISAAC_UP" in scode and "did not announce its image server" in scode,
+          "the Isaac readiness loop now DIES on timeout instead of falling through")
+    check(scode.count('watch_pid "$') >= 5,
+          "every background process started is checked for liveness afterwards",
+          f"{scode.count('watch_pid \"$')} call sites")
 
 print()
 if FAILURES:

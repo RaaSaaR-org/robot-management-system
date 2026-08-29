@@ -125,8 +125,14 @@ def _usd_prop(prim_path: str, key: str) -> AssetBaseCfg:
     """One of the checkout's own prop USDs, kinematic so the robot cannot shove it.
 
     `kinematic_enabled=True` (rather than the static collider used for the primitives)
-    mirrors `base_scene_pickplace_cylindercfg_wholebody.py:35-53` exactly, because that is
-    the configuration these particular USDs are already known to load correctly under.
+    mirrors `base_scene_pickplace_cylindercfg_wholebody.py:35-53`, which is where the three
+    `PackingTable*` USDs are already known to load correctly under exactly this cfg.
+
+    It is NOT prior art for `table_with_yellowbox.usd`. That asset has one call site in the
+    whole checkout, `base_scene_pickplace_redblock.py:35-43`, and there the `rigid_props`
+    line is COMMENTED OUT -- so the only configuration it is known to load under is the one
+    with no rigid body at all. Applying kinematic rigid-body props to it here is an
+    extrapolation, not a copy, and it is one of the things a launch would settle.
     """
     prop = USD_PROPS[key]
     return AssetBaseCfg(

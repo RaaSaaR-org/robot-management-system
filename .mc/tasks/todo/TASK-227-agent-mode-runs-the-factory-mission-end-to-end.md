@@ -120,10 +120,14 @@ exact, no trailing period, `maxSteps: 600`.
 
 ### Isaac scene
 `PLACES["table_front"] = (10.00, 5.35)` puts the apple 0.926 m from the pelvis
-against a ~0.60–0.70 m reach — the robot cannot touch the apple from its own authored
-standing spot. The vendor's working manipulation task uses 0.447 m. Move it, derive
-it in code, and add a reachability check to `verify_factory_scene_offline.py`, which
-today never compares any distance to where the robot stands.
+against 0.533 m of shoulder-to-knuckle reach — the robot cannot touch the apple from
+its own authored standing spot. (0.533 m is the grasp centre, where a held object
+actually sits; 0.627 m shoulder-to-fingertip is the hard geometric ceiling. Both are
+summed from `g1_43dof_fixedbase.xml` in `factory_pauseroom_layout.py`, and they are
+the only two reach numbers this PR should quote.) The vendor's working manipulation
+task uses 0.447 m. Move it, derive it in code, and add a reachability check to
+`verify_factory_scene_offline.py`, which today never compares any distance to where
+the robot stands.
 
 ### Scoring and video
 Add `--json` to `analyse_map_take.py` emitting `summary.json` + `results.json` in the
@@ -148,8 +152,20 @@ Built and verified OFFLINE (PR #277) — none of these is confirmed live yet:
 
 - [x] A camera facade adapts the scene's ZMQ streams to the sidecar contract (~115 checks)
 - [x] `walk` segments and holds its heading (2170 tests, no assertion changed)
-- [x] A powered sliding door exists and is driven per control step (142 checks)
-- [x] The standing spot is derived and within reach — 0.476 m against a 0.550 m budget
+- [x] A powered sliding door exists — its geometry, openness→joint mapping, clear
+      widths, sensor radii and stroke timing are checked offline by
+      `verify_factory_scene_offline.py`
+- [x] The driver that moves it is covered by a stub-`env` test
+      (`robot-agent/hardware/isaac_scenes/tests/test_pause_door.py`, 11 cases, no GPU and
+      no torch): it reports the leaf positions it MEASURES rather than the ones it
+      commanded, re-syncs after a scene reset, honours a fractional manual override, and
+      survives a transient failure on the construction-time probe
+- [x] The standing spot is derived in code rather than hand-typed — worst corner of the
+      reset-jitter box 0.537 m against the 0.550 m budget, i.e. 0.013 m of margin. (The
+      often-quoted 0.476 m is the BEST case: crouched, at the nominal apple.) 0.537 m is
+      also 0.004 m outside the 0.533 m straight-arm knuckle reach, so the worst corner
+      leans on the torso pitch the budget's slack was chosen to cover — see the arrival
+      gap below
 - [x] `vla_skill` is planner-emittable, `abortAll()` reaches it, outcomes are three-way
 - [x] Arms and hands are drivable over DDS without disturbing the 100 Hz loco loop (97 checks)
 - [x] `analyse_map_take.py --json` emits the shared schema, provably additively (31 tests)
@@ -157,6 +173,12 @@ Built and verified OFFLINE (PR #277) — none of these is confirmed live yet:
 
 Still open, and each needs the live run:
 
+- [ ] The door is actually driven per control step. Nothing offline shows this: the
+      verifier's entire relationship to `mdp/pause_door.py` is one `os.path.isfile`, so a
+      syntax error in that file passes every check it runs. The claim rests on the driver
+      being an observation term and `action_provider_wh_dds.py:721-729` calling
+      `observation_manager.compute()` unconditionally every step — read in the vendor
+      checkout, never executed here
 - [ ] The factory scene actually publishes camera frames (nobody has seen its banner)
 - [ ] An 8.4 m crossing arrives, with measured heading error reported
 - [ ] The robot ends up close enough to the apple to grasp — see the arrival gap below

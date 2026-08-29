@@ -11,8 +11,12 @@
  * is exactly what those two lists read as permission.
  *
  * The sweeps at the bottom are the part that protects the NEXT block kind: they
- * enumerate `PlannerBlockKinds` and fail when a new one has no narrator phrase
- * or no verdict from the initiative gate.
+ * enumerate the block kinds and pin, BY NAME, which of them the robot may start
+ * on its own, which ones the journal trusts, and which ones it narrates. All
+ * three are pinned from the permissive side — the set that is allowed, trusted,
+ * spoken — because that is the side a new kind falls into by default. Pinning
+ * the refusals instead would have let a new dangerous kind with no entry in
+ * either fail-open list slip past every sweep in this file.
  *
  * @feature agentmode
  * @status test
@@ -142,17 +146,87 @@ describe('sweeps — so the NEXT block kind cannot skip these quietly', () => {
     expect(new Set(silent)).toEqual(SILENT_KNOWN_GAP);
   });
 
-  it('the initiative gate answers for every kind, with a reason', () => {
+  it('the initiative gate lets exactly these kinds through on the robot’s own initiative', () => {
+    // Pinned as the ALLOWED set, and that direction is the whole test. The
+    // gate fails open — an unlisted kind is self-initiable — so asserting the
+    // refused set would have passed for a new dangerous kind with no
+    // `SELF_FORBIDDEN_KINDS` entry: it would simply have joined the other
+    // side of the split, unnoticed. Enumerated by name, so a new kind lands
+    // here and this assertion fails with the kind's own name in the diff, and
+    // somebody has to decide whether a robot may do it unasked.
+    //
+    // Everything is judged on a robot with nothing wrong with it (HEALTHY), so
+    // every refusal below is about the KIND and not about the situation.
+    const SELF_INITIABLE = new Set([
+      'walk',
+      'turn',
+      'goto',
+      'look',
+      'scan_room',
+      'wave',
+      'greet',
+      'speak',
+      'wait',
+      'remember',
+      // The runner-owned kinds. `patrol` is the sanctioned unattended routine
+      // (TASK-212) and the tour blocks run from an operator-authored route;
+      // none of them is reachable from the LLM planner at all.
+      'patrol',
+      'capture',
+      'inspect',
+      'tour',
+      'present',
+      'demo',
+    ]);
+    const allowed = AgentBlockKinds.filter((kind) => mayInitiate(kind, 'self', HEALTHY).ok);
+
+    expect(new Set(allowed)).toEqual(SELF_INITIABLE);
+    // The complement, said out loud: standing itself up and reaching for things
+    // are the two a robot never starts on its own.
+    expect(AgentBlockKinds.filter((kind) => !mayInitiate(kind, 'self', HEALTHY).ok)).toEqual([
+      'posture',
+      'vla_skill',
+    ]);
+    // And every verdict is speakable — `reason` is logged AND read aloud, so an
+    // empty one is a robot that refuses in silence.
     for (const kind of AgentBlockKinds) {
-      const verdict = mayInitiate(kind, 'self', HEALTHY);
-      expect(typeof verdict.ok, kind).toBe('boolean');
-      expect(verdict.reason, kind).toBeTruthy();
+      expect(mayInitiate(kind, 'self', HEALTHY).reason, kind).toBeTruthy();
     }
   });
 
-  it('blockTrust answers for every kind', () => {
-    for (const kind of AgentBlockKinds) {
-      expect(['self', 'operator', 'untrusted'], kind).toContain(blockTrust(kind));
-    }
+  it('exactly these kinds are `self`-trusted in the journal', () => {
+    // Same shape and the same reason: `blockTrust` defaults an unlisted kind to
+    // `'self'`, the one tier that may be promoted into durable memory, so the
+    // list that has to be pinned is the TRUSTED one. Asserting that every kind
+    // returns one of the three tiers only restated the return type, and a new
+    // kind whose result text is a model's opinion would have passed it while
+    // quietly earning the right to become a fact about the world.
+    const SELF_TRUSTED = new Set([
+      'walk',
+      'turn',
+      'goto',
+      'wave',
+      'greet',
+      'posture',
+      'speak',
+      'wait',
+      'remember',
+      'patrol',
+      'capture',
+      'inspect',
+      'tour',
+      'present',
+      'demo',
+    ]);
+
+    expect(new Set(AgentBlockKinds.filter((kind) => blockTrust(kind) === 'self'))).toEqual(
+      SELF_TRUSTED,
+    );
+    // The untrusted side is the VLM captions plus the rollout verdict.
+    expect(AgentBlockKinds.filter((kind) => blockTrust(kind) === 'untrusted')).toEqual([
+      'look',
+      'scan_room',
+      'vla_skill',
+    ]);
   });
 });

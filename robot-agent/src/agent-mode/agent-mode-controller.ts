@@ -1912,7 +1912,25 @@ export class AgentModeController {
     // rest of the fleet reads.
     this.robotStateManager?.triggerEmergencyStop('local', `Agent Mode E-Stop: ${reason}`);
 
-    this.lock.release('agent');
+    // `reset()`, not `release('agent')`. An E-Stop lands at any moment,
+    // including the middle of a `vla_skill` block, and there the lock is lent
+    // out: the owner reads `vla`, so `release('agent')` hit its `if (this.owner
+    // !== who) return;` guard and did NOTHING. What followed was worse than a
+    // missed release. `abortActiveSkill` above only sets a flag — the rollout
+    // returns up to one /predict round trip later — so `runVlaSkill`'s
+    // `finally` then ran `lend.end()` and put the owner back to `agent`, and
+    // `runPlan`'s finally skips its release for a plan `planFinalized` already
+    // closed. The lock stayed on `agent` with one holder for the rest of the
+    // process: `claim('vla')` refused forever (so `/skills/execute` and
+    // `/vla/start` were dead), the idle watcher, greet and heartbeat all gated
+    // off for good on `lock.get() !== 'idle'`, `GET /agent-mode` reporting
+    // `agent` while nothing drove, and every later plan's `claim('agent')`
+    // taking the same-owner path and leaking one more holder.
+    //
+    // An E-Stop is the one event entitled to drop every holder there is. The
+    // late `lend.end()` is harmless: it hands the lock back only while its own
+    // loan is still the live one, and `reset()` cancels it on the way past.
+    this.lock.reset();
     console.warn(`[AgentMode] E-STOP: ${reason}`);
     this.emit('agent:state:changed');
     return {
@@ -2159,11 +2177,19 @@ export class AgentModeController {
       plan.updatedAt = nowIso();
       this.pendingCommand = null;
       this.notePlanOutcome(plan);
-      // A plan the E-Stop already finalized has had its lock released and its
-      // `agent:plan:finished` emitted. Guarding on `planFinalized` rather than
-      // on `estopActive` is what keeps that true after a latch reset: otherwise
-      // a reset mid-block produced a SECOND finished event carrying `done` for
-      // a plan whose blocks are all `aborted`/`skipped`.
+      // A plan the E-Stop already finalized has had its `agent:plan:finished`
+      // emitted, and its lock RESET — not released, which is the distinction
+      // that matters here. `estop()` drops every holder outright, because the
+      // owner at that moment may be `vla` (a lent `vla_skill` rollout) rather
+      // than `agent`, and a release aimed at `agent` would silently do nothing
+      // and strand the lock. So this branch has nothing left to give back and
+      // must not run: releasing here would decrement a refcount that belongs to
+      // whoever has claimed the lock in the meantime.
+      //
+      // Guarding on `planFinalized` rather than on `estopActive` is what keeps
+      // that true after a latch reset: otherwise a reset mid-block produced a
+      // SECOND finished event carrying `done` for a plan whose blocks are all
+      // `aborted`/`skipped`.
       if (!this.planFinalized) {
         this.lock.release('agent');
         this.emit('agent:plan:finished', { plan: clonePlan(plan) });

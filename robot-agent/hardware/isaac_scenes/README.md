@@ -100,10 +100,19 @@ The spot is now computed in `standing_spot_for_grasp()` from two constraints, on
 `TABLE_STANDOFF = 0.16 m`. The binding constraint is the **feet**, not the belly: the
 pelvis rides at 0.725–0.79 m and the table top is at 0.75, so the pelvis may overhang the
 edge, but the feet may not foul the table's box (this table is solid to the floor). Foot
-reach ahead of the pelvis, measured off `g1_43dof_fixedbase.xml`, is 0.072 m — the ankle
-sits 0.053 m *behind* the pelvis and the forward contact spheres are 0.12 m ahead of the
-ankle. `FOOT_FRONT_REACH` rounds that up to 0.13 m for the real foot mesh and a
-leaned-forward stance, leaving 0.03 m of margin at a 0.16 m standoff.
+reach ahead of the pelvis, walked out of `g1_43dof_fixedbase.xml` with real rigid
+transforms, is **0.125 m** — the ankle-roll link sits within 21 µm of directly *below* the
+pelvis and the forward contact spheres are 0.12 m ahead of the ankle, r = 0.005.
+`FOOT_FRONT_REACH = 0.13 m` covers that with 5 mm to spare, leaving 0.03 m of margin at a
+0.16 m standoff.
+
+> ⚠ **An earlier version of this section said 0.072 m**, from "the ankle sits 0.053 m
+> *behind* the pelvis". That summed two x offsets expressed in different frames:
+> `left_hip_roll_link` carries a −10.02° quat about y and `left_knee_link` carries its
+> exact inverse, so the two rotations cancel and the offsets do not add. The figure was
+> 53 mm short, and the claimed 0.088 m of margin over `FOOT_FRONT_REACH` was really 5 mm.
+> Section 16 of the verifier now re-derives it from the MJCF on every run, which is how it
+> was found.
 
 `GRASP_LATERAL_OFFSET = 0.07 m` comes from the MJCF twin, where the apple sits 0.07 m to
 the robot's left. That sign is not incidental: every episode in the source dataset is a
@@ -145,6 +154,23 @@ extended**. The 0.017 m of budget above it is spent on the fact that a free-stan
 pitch its waist and bend its knees toward the table, which neither fixed-base reference
 can.
 
+**And be blunt about what that means for this scene.** `GRASP_REACH_BUDGET = 0.55 m` is
+17 mm *past* `ARM_REACH_TO_KNUCKLE = 0.533 m`, so "within budget" and "within a straight
+arm" are not the same statement — and every check in section 12 used to make only the
+first one. Spelled out over the height band:
+
+| at the worst corner of the reset-jitter box | shoulder → apple | vs 0.533 m knuckle |
+|---|---|---|
+| base_z 0.725 m — the settled crouch the live run actually logged after a walk | **0.5053 m** | 26 mm **inside** |
+| base_z 0.790 m — standing tall | **0.5370 m** | 4 mm **outside** |
+
+So at the height the robot is in when it stops walking, the apple is comfortably inside
+straight-arm knuckle range. At the height it holds while standing, it is a few millimetres
+beyond it, and is reachable only with the arm essentially straight, or by pitching the
+waist toward the table. Both are now asserted separately — the crouch against the knuckle,
+the stand against the 0.627 m fingertip limit — and the budget itself is bounded at 20 mm
+past the knuckle so the slack cannot grow silently.
+
 ---
 
 ## Install map
@@ -172,7 +198,9 @@ no second path to get wrong. Forgetting it gives a `FileNotFoundError` naming
 recursively (`tasks/utils/importer.py`), so the new task package registers itself with or
 without an explicit import. The copy here differs from the checkout's current file by
 exactly two added lines (one `from . import …`, one `__all__` entry). If it conflicts when
-patch `0007` is applied, **drop it** — nothing breaks.
+the next patch in `../isaac_sim_patches/` is applied, **drop it** — nothing breaks.
+(That directory holds `0001`–`0006` today; an earlier draft of this line named a patch
+`0007` that has never existed.)
 
 The blacklist is a substring test over `["utils", ".mdp", "pick_place"]` against the full
 dotted module name. `factory_pause_room_g1_29dof_dex3_wholebody` matches none of them, and
@@ -209,8 +237,12 @@ Two flags worth knowing about:
 
 * `--device cuda` is what the brief asks for. Every recorded NeoDEM run of the sibling
   wholebody task in `isaac_sim_patches/README.md` used `--device cpu`; `cuda` is untested
-  **for this scene**, and if the PhysX GPU pipeline complains, the aggregate-pair capacities
-  are already raised in `__post_init__` and `--device cpu` is the known-good fallback.
+  **for this scene**, and if the PhysX GPU pipeline complains, `--device cpu` is the
+  known-good fallback. Note the PhysX aggregate-pair capacities in `__post_init__` are
+  **inherited, not tuned** — they are byte-identical to the sibling
+  `move_cylinder_g1_29dof_dex3_hw_env_cfg.py`, and this scene has many more colliders than
+  that one. If the GPU pipeline complains about buffer overflow, raising them is the first
+  thing to try, not something already done.
 * `NEODEM_FILM_DIR=/some/dir` turns on the trailing film camera
   (`action_provider_wh_dds.py:551-568`). It works here because `film_camera` is kept
   byte-for-byte from the `move_cylinder` task.
@@ -244,10 +276,24 @@ south side, ≥ 1.0 m wide, matching the declared door; the lintel is above head
 plate rests on the table and inside its footprint; the apple starts above the table top,
 inside the footprint, and not touching the plate — **including at the worst corner of the
 reset-jitter box**; the robot starts outside the pause room, inside the hall, at 0.80 m,
-facing the door, with a clear route and not inside any geometry; the quaternion helpers
-produce the orders they claim; both fixed cameras actually have line of sight.
+facing the door, and **the straight line from there to the door centre keeps 0.25 m of body
+radius plus 0.10 m of daylight clear of every wall, partition, column, crate, table and
+open door leaf, and 0.60 m clear of every USD prop**; the quaternion helpers produce the
+orders they claim; both fixed cameras actually have line of sight.
 
-Sections 12–14 are the newer half:
+> The route wording used to read "with a clear route", which the check did not establish.
+> It modelled every obstacle as a circle of radius `max(width, depth)/2` — fine for a
+> column, useless for a 24 m wall, whose circle swallows the whole hall — so **every wall
+> and partition was excluded from it by name**, and nothing was ever tested against one.
+> Moving the spawn to `(4.0, 6.0)`, whose straight line to the door runs clean through
+> `pause_wall_west`, still reported zero failures. Walls now get an exact
+> segment-versus-rectangle test and nothing is excluded; the circle model survives only for
+> the USD props, whose footprints genuinely cannot be read offline. The tightest real
+> clearance on the shipped route is **0.419 m**, at the *corner* of the left door jamb —
+> the robot crosses the 1.40 m doorway diagonally at 44.5°, which narrows it to an
+> effective 0.84 m.
+
+Sections 12–17 are the newer half:
 
 * **12 — reach.** Shoulder-to-apple and shoulder-to-plate distances from `table_front`, at
   *both* ends of the measured base-height band and at *every* corner of the apple's
@@ -255,7 +301,11 @@ Sections 12–14 are the newer half:
   working reference scenes and stays inside the arm's geometric limit; that the feet clear
   the table box; that `table_front` is derived from the apple rather than typed; and that
   `pause_room_centre` is still *out* of reach, so nobody re-uses the waypoint as a
-  standing spot.
+  standing spot. It also asks the two questions a scalar distance cannot: whether the
+  target is in the **forward** half of the workspace at the declared arrival heading (a
+  shoulder-to-object distance is a sphere, so setting `TABLE_APPROACH_YAW_DEG` to 0 and
+  standing the robot side-on used to change nothing), and whether the standing spot and the
+  doorway→table leg of the walk have room for the robot's own body.
 * **13 — the door.** That the shut leaves cover the whole declared opening with no
   leaf-to-leaf gap and zero clear width; that the open leaves clear it completely, restore
   the full 1.40 m, and park over their own partitions rather than sticking out as new
@@ -266,17 +316,45 @@ Sections 12–14 are the newer half:
   robot arrives at the measured walk speed; that the rate limiter converges in the time it
   claims; and — by interval arithmetic over the room's whole south side, which section 6's
   sampled sweep structurally cannot see — that the shut door seals the room and the open
-  door re-opens exactly one 1.40 m gap.
+  door re-opens exactly one 1.40 m gap. Two of its bounds are two-sided rather than
+  one-sided: the leaves must hang *flush* on the partition (0–50 mm), not merely outside
+  it, because moving `DOOR_ORIGIN` 0.6 m into the room parks two 25 kg panels in mid air
+  across the walk-through and used to pass; and the "leaves open before the robot arrives"
+  check now names its reference point — trigger radius to the **near edge** of the opening,
+  16.4 s at the measured 0.11 m/s, rather than the 22.7 s to the door centre that the
+  layout module quotes. The edge is the binding one.
 * **14 — the door USD.** That the checked-in `pause_room_door.usda` is byte-for-byte what
   `make_pause_room_door_usda.py` generates from the layout module (the anti-drift check:
   the USD is opaque to every other test here, so this is the only thing that would notice a
   door that stopped fitting its doorway), that it is authored in metres, has no URL,
   reference or payload, and declares the articulation root, the fixed root joint, both
   named prismatic joints, a drive API and a collider on every part.
+* **15 — no two bodies occupy the same space.** Every check before this one measured a
+  scene object against the *robot*; nothing measured a scene object against another scene
+  object. Declared boxes (walls, columns, crates, table, door leaves, rail) get an exact
+  axis-aligned overlap test at **both** ends of the door's travel and are allowed to touch,
+  since abutting geometry is how a room is built; only wall-against-wall pairs are exempt,
+  because partitions meeting at a corner really do share a 0.20 × 0.20 m column of space.
+  USD props keep a stated-assumption clearance from everything.
+* **16 — the robot constants the reach check depends on.** Section 12's verdict is only as
+  good as `SHOULDER_ABOVE_PELVIS`, `ARM_REACH_TO_KNUCKLE`, `ARM_REACH_TO_FINGERTIP` and
+  `FOOT_FRONT_REACH`, and all four were hand-typed literals justified by comments. This
+  re-derives them from the MuJoCo twin `../sim_evaluator/mjcf/g1_dex3/g1_43dof_fixedbase.xml`
+  by walking the kinematic chain with real rigid transforms. Setting `FOOT_FRONT_REACH` to
+  0.01 or `ARM_REACH_TO_KNUCKLE` to 0.20 used to leave every check in the file passing.
+* **17 — the door driver is wired into the task.** The verifier's whole relationship to
+  `mdp/pause_door.py` was one `os.path.isfile`, so a syntax error in it passed everything.
+  The driver cannot be *imported* offline (it needs `torch` and the checkout's
+  `tasks.common_scene`), so it is read with `ast`: that all five `mdp/` modules parse, that
+  `pause_door_state` / `set_pause_door` / `OBS_DIM` are still defined, that `mdp/__init__.py`
+  still re-exports them, that the env cfg still declares the `door` observation group, that
+  all three manual overrides are still registered — and that the door term is still **out**
+  of `PolicyCfg`, which is the DDS contract the rest of the stack reads.
 
-Current result: **142 passed, 0 failed, 0 skipped** (76 before sections 12–14 were added).
+Current result: **193 passed, 0 failed, 0 skipped** (76 before section 12, 142 before
+sections 15–17).
 
-It has caught four real defects, all of which would have been invisible until a launch —
+It has caught six real defects, all of which would have been invisible until a launch —
 or worse, until a scoring run:
 
 1. the `±0.05 / ±0.04` reset-jitter box copied from the `move_cylinder` task put the apple's
@@ -294,7 +372,17 @@ or worse, until a scoring run:
 4. the door's first `PhysicsJointStateAPI:linear` did not survive a round-trip through USD
    25.11 (the prim came back with only `PhysicsDriveAPI:linear` applied), which would have
    shipped an unrecognised schema in a generated file. Dropped — the shut state is already
-   set by the leaf transforms and `init_state.joint_pos`.
+   set by the leaf transforms and `init_state.joint_pos`;
+5. **a crate was touching `packing_table_a`.** The crate at `(-10.5, -6.0)` had its near
+   face at x = −10.00 and the prop's origin is at x = −9.00 — *exactly* 1.00 m, against the
+   1.00 m half-extent this verifier charges every prop whose USD footprint it cannot read.
+   By the scene's own model the two bodies were in contact. Both are static, so nothing
+   would have exploded; it would simply have rendered as a crate growing out of a packing
+   table. The crate moved one row pitch north to `(-10.5, -3.2)`, keeping the row's x, its
+   1.4 m pitch and its 0.4 m crate-to-crate gap, and putting 2.97 m between the two. The
+   model was **not** loosened to make it pass;
+6. **`FOOT_FRONT_REACH`'s derivation was wrong by 53 mm** — see the ⚠ under *Where
+   `table_front` comes from*. The number survived; its margin did not.
 
 ---
 
@@ -363,15 +451,36 @@ appended to `policy`, which is the DDS contract the rest of the stack reads.
 
 Two consequences: the target written each step is picked up by the *next* step's
 `scene.write_data_to_sim()`, so the door lags the sensor by ~20 ms (against a 1.17 s stroke,
-nothing); and the term both drives the door and **returns its state** — openness, both leaf
-coordinates, clear width, robot-to-doorway distance — so a scoring run can ask "did the
-robot get through a door that was actually open?" rather than just "did the robot get
-through". The door also appears in the `env.scene.get_state()` payload that `sim_main.py`
-publishes over DDS every loop, for free.
+nothing); and the term both drives the door and **returns its state** — a 6-column row:
+both leaves' **measured** joint coordinates read back from `door.data.joint_pos` (columns
+0–1), the openness those measured positions imply and the resulting clear width (columns
+2–3), the robot-to-doorway distance (column 4), and the **commanded** openness (column 5).
+Commanded and measured are reported side by side on purpose: the target written on one step
+is not applied until the next `scene.write_data_to_sim()`, so the two columns differ by the
+drive lag, and a leaf that jams or is shoved shows up as a gap between them. A scoring run
+can therefore ask "did the robot get through a door that was *actually* open?" rather than
+"did the robot get through", and can tell a slow door from a stuck one. The door also
+appears in the `env.scene.get_state()` payload that `sim_main.py` publishes over DDS every
+loop, for free.
+
+> `OBS_DIM` was 5 until the driver started measuring rather than reporting its own command;
+> the commanded value moved to the new column 5 so the lag stays visible. `OBS_DIM` is
+> declared once, in `mdp/pause_door.py`, and no consumer hardcodes a width — the env cfg's
+> `ObsTerm(func=mdp.pause_door_state)` reads whatever the driver returns. Section 17 of the
+> verifier asserts the declaration still exists.
 
 `open_pause_door` / `close_pause_door` / `auto_pause_door` are registered on the
 `SimpleEventManager` as manual overrides, for an evaluation that wants to pin the door —
-e.g. to test the robot arriving at a shut one. Nothing triggers them today.
+e.g. to test the robot arriving at a shut one. Nothing triggers them today. Section 17 of
+the offline verifier asserts all three are still registered, because the env cfg names them
+as strings and a rename is silent.
+
+> ⚠ **`close_pause_door` is the one path that can shut the door on the robot.** It drives
+> the leaves shut regardless of where the robot is, overriding the presence sensor — that
+> is what it is *for*, and it is bounded by `max_force = 200 N` per leaf, so the worst case
+> is a shove rather than a crush. It is still the only override that can put moving
+> geometry into a space the robot is occupying, and no test has been run with a robot
+> standing in the doorway when it fires.
 
 Deliberately **not** done: making the leaves `kinematic_enabled=True` rigid bodies driven by
 root-pose writes. That would move and render identically and be simpler, but a kinematic
@@ -560,13 +669,19 @@ pins; the tool reaches the stage through `omni.usd` instead.
 
 ## Assumptions that could not be verified without launching
 
-Everything below is honest guesswork until the orchestrator runs it. Nothing here has been
-observed — this agent never launched Isaac.
+**This list is no longer entirely unverified, and the header that said so was wrong.** It
+used to read "Nothing here has been observed — this agent never launched Isaac", seventy
+lines below a section titled *Verified on the live sim (2026-08-29)* reporting that the
+scene builds and runs. Both could not be true. The live run settled items 1 and 10 below
+and turned item 4 from an open question into a **measured negative**; everything still
+numbered here is genuinely open, and the three resolved entries are struck rather than
+deleted so the record of what was once unknown survives.
 
-1. **That the scene builds at all.** No Isaac Lab cfg is instantiated anywhere in this
-   directory. A renamed spawner field, a `configclass` that rejects an un-annotated
-   attribute, or a keyword that moved in the 3.0 migration would all survive the offline
-   check and fail at `env = gym.make(...)`.
+~~1. **That the scene builds at all.**~~ **RESOLVED — it builds and runs.** See *Verified
+   on the live sim* above: the cfg instantiates with no `configclass` or field errors, the
+   robot spawns at exactly `(4.0000, -2.0000)` yaw 45.00°, stands with both feet evenly
+   loaded at `base_z = +0.78979`, and the cameras render. What that run did **not** cover
+   is the door, which did not exist yet — see item 7.
 2. **That `CuboidCfg` with `collision_props` and no `rigid_props` really produces a static
    collider.** The spawner module docstring says it does
    (`sim/spawners/shapes/__init__.py`: "a visual mesh (no physics) / a static collider (no
@@ -579,10 +694,18 @@ observed — this agent never launched Isaac.
    `PhysxRigidBodyMaterialCfg` that emits a `DeprecationWarning` in `__post_init__`
    (`isaaclab_physx/.../physics_materials_cfg.py:207-228`). It is used here because that is
    what the working scenes use; expect ~35 warnings on startup, one per prim.
-4. **That the G1 can actually walk 8.4 m across this hall.** The gait comes from the
-   wholebody DDS provider and a policy that lives outside this scene. The route is
-   geometrically clear (tightest obstacle clearance 1.83 m) but nothing here says the
-   locomotion works.
+4. ~~**That the G1 can actually walk 8.4 m across this hall.**~~ **MEASURED, AND IT DOES
+   NOT.** This is not an open assumption any more; it is a known negative, written up in
+   full under *Two findings that matter more than the scene itself* above. Commanding
+   `vx = 0.3` for 25 s moved the base 2.7 m of the required 8.4 — about 0.11 m/s against
+   0.3 commanded — while the heading drifted from +45° to −18°, roughly 2°/s of unbidden
+   yaw. **A `goto` across this hall ends up somewhere other than the door.** The route is
+   geometrically clear (tightest real clearance 0.419 m at the door jamb corner, 3.61 m to
+   the nearest USD prop), so the geometry is not what is stopping it: the gait comes from the
+   wholebody DDS provider and a policy that lives outside this scene, and it is the
+   TASK-203 defect that the closed-loop `turn` fix deliberately does not address. What
+   remains genuinely unverified here is only the *fix*: whether anything downstream can put
+   the robot on `table_front` to the tolerance section 12 assumes.
 5. **That the robot fits through the door in practice.** 1.40 m of clear width against a
    ~0.45 m shoulder span is generous, but the G1 sways, and the wholebody controller's
    lateral tracking error under a commanded turn has not been measured in this scene.
@@ -597,7 +720,7 @@ observed — this agent never launched Isaac.
      a hand around it with the table 0.16 m away;
    * whether a G1 that *walked* here stops within a useful tolerance of `(10.24, 5.84)`.
      The measured walk is ~0.11 m/s with ~2°/s of unbidden yaw drift over 8.4 m (below), so
-     the arrival error is likely larger than the 0.014 m of reach margin at the worst
+     the arrival error is likely larger than the 0.013 m of reach margin at the worst
      jitter corner. **This scene assumes something else puts the robot on the spot.**
    * whether 0.16 m of standoff is enough in the real stance. `FOOT_FRONT_REACH = 0.13 m`
      is derived from four 5 mm contact spheres in the MJCF, not from the Isaac G1's actual
@@ -607,25 +730,35 @@ observed — this agent never launched Isaac.
 7. **Everything about the door except its geometry.** The leaf positions, travel, limits,
    clear widths, sensor radii and timings are all checked offline and all pass. None of the
    following is:
-   * **that the articulation imports at all.** `pause_room_door.usda` was written by hand
-     (well — generated), opened and structurally validated with `pxr` 25.11 on CPU
-     (articulation root, fixed root joint, two prismatic joints with the right axes, limits,
-     bodies and drive APIs, correct world AABBs), but `pxr` opening a stage is not Isaac Lab
-     importing an articulation. A rejected schema, a joint PhysX declines to build, or an
-     articulation root Isaac Lab does not find would all survive that;
+   * **that the articulation imports at all.** `pause_room_door.usda` is generated, and
+     section 14 of the offline verifier proves it is byte-for-byte what the generator emits
+     from the layout module and that it declares the articulation root, the fixed root
+     joint, both named prismatic joints, a drive API and a collider on every part — but
+     that is `ast`- and text-level evidence about a file, not evidence that Isaac Lab
+     imports it. A rejected schema, a joint PhysX declines to build, or an articulation root
+     Isaac Lab does not find would all survive it. An earlier draft of this list claimed the
+     stage had also been "opened and structurally validated with `pxr` 25.11 on CPU"; **no
+     such check is committed anywhere in this repo**, so treat that as not having happened;
    * **that a second articulation survives `replicate_physics=True`.** `num_envs = 1` makes
      the cloning trivial, but the robot was previously the only articulation in the scene;
    * **that the `ImplicitActuatorCfg` gains hold a leaf.** 800 N/m and 120 N·s/m against a
      25 kg leaf with a 200 N force cap are guesses shaped like reasonable numbers. Too soft
      and a nudge parks the door half open; too stiff and a contact explodes;
-   * **that the driver runs.** `mdp/pause_door.py` was exercised against a stub `env` on
-     CPU — sensor, hysteresis, rate limiter, joint resolution *by name* against deliberately
-     reversed joint ordering, target tensor shape, manual override, and the fail-safe path —
-     all pass. What is unverified is the premise: that
+   * **that the driver runs.** `mdp/pause_door.py` is exercised by a committed harness,
+     `tests/test_pause_door.py` — 11 cases, standard library only, no GPU, no Isaac Lab and
+     no torch; it runs standalone (`python3 tests/test_pause_door.py`) and under pytest.
+     It covers the sensor, the hysteresis, the rate limiter, joint resolution *by name*
+     against deliberately reversed joint ordering, the observation row's shape and its
+     measured-versus-commanded columns, the manual overrides and the fail-safe path.
+     **It is not wired into `scripts/test-all.sh`** — run it yourself; nothing runs it in
+     CI today. What is unverified is the premise the harness cannot test: that
      `env.observation_manager.compute()` really is called every control step in a wholebody
      run. That is read out of `action_provider_wh_dds.py:728`, not observed. **If it turns
      out not to run, the door never opens and the robot walks into it** — which is at least
      an obvious failure rather than a silent one, since the door is authored shut;
+   * **what `close_pause_door` does to a robot standing in the doorway.** It shuts the
+     leaves regardless of the robot's position, at up to 200 N per leaf. Bounded, and
+     intentional, but never exercised against an occupied doorway — in sim or offline;
    * **that a second observation group is harmless.** The `door` group is additive and
      nothing reads it, but no wholebody run has been made with more than one group;
    * **that the leaves do not fight the floor or the lintel.** There is a 20 mm gap at each
@@ -643,7 +776,13 @@ observed — this agent never launched Isaac.
 10. **Both fixed cameras' framing.** The sight-lines are proven clear of walls, and the
    look-at orientations are proven correct, but focal length 12 mm / aperture 27 (hall) and
    14 mm / 24 (pause room) are unframed guesses.
-11. **`--device cuda`.** Every recorded run of the sibling task used `--device cpu`.
+~~11. **`--device cuda`.**~~ **RESOLVED — it works for this scene.** The live run above
+    was launched with `--device cuda` and the cameras rendered (`RTX streaming completed in
+    0.08 s`). The observation that every *prior* recorded NeoDEM run of the sibling
+    wholebody task used `--device cpu` is still true and is why this was ever in doubt;
+    `cpu` remains the known-good fallback. Note the PhysX aggregate-pair capacities are
+    inherited from the sibling cfg, not tuned for this scene's much larger collider count —
+    see *Running it*.
 12. **The reward is unreachable in this task, as in every `*Wholebody*` task.**
     `sim_main.py:476-479` forces `use_rl_action_mode = True` for any id containing
     "Wholebody", and `robot_control_system.py:120-127` then never calls `env.step()`, which
