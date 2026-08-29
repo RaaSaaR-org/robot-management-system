@@ -4,7 +4,7 @@ aliases:
 - TASK-164
 title: Login UX polish + force-password-change flow
 slug: login-ux-polish-force-password-change-flow
-status: backlog
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -17,7 +17,7 @@ depends_on:
 - TASK-163
 due_date: ''
 created: 2026-04-12
-updated: 2026-04-12
+updated: 2026-08-29
 ---
 
 

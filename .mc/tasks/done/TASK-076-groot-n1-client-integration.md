@@ -1,11 +1,28 @@
+---
+id: TASK-076
+aliases:
+- TASK-076
+title: GR00T N1 Client Integration
+slug: groot-n1-client-integration
+status: done
+priority: 2
+owner: ''
+projects: []
+customers: []
+tags:
+- extended
+- vla
+updated: 2026-08-29
+---
+
 # TASK-076: GR00T N1 Client Integration
 
 **Component:** vla-server/models/  
 **Priority:** Medium  
-**Status:** todo
+**Status:** done
 
 ---
-## 🚨 BLOCKED — Muss TASK-082 zuerst abgeschlossen sein
+## Shipped — TASK-082 unblocked this, and the backend landed
 
 **Blocked-by: TASK-082 (VLA Server Consolidation)**
 
@@ -77,3 +94,19 @@ cmd = [..., "--backend", backend, "--server-port", str(server_port), ...]
 - Depends on: TASK-075 (production hardening first)
 - See: `$VLA_TESTS/groot/client/README.md` (architecture docs)
 - See: `$VLA_TESTS/groot/server/README.md` (server setup docs)
+
+---
+
+## Where this landed
+
+`vla-server/` was extracted to its own repository after this task was written,
+so the deliverable is not in this checkout. It shipped there as:
+
+- `vla-server/models/groot.py` — `GR00TModel(VLAModel)`, 402 lines, talks to the
+  Isaac-GR00T PolicyServer over ZMQ on port 5555 as specified
+- `vla-server/tests/test_groot.py` — 963 lines of tests
+- Registered in `vla-server/server.py`: `model: "smolvla" | "pi05" | "groot" | ...`
+  selectable via the `VLA_MODEL` env var, with `groot_host` / `groot_port` /
+  `groot_video_keys` settings
+
+The blocker, [[TASK-082]] (VLA Server Consolidation), is `done`.

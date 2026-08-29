@@ -735,9 +735,51 @@ uv run python -m voice_service          # talk to the g1-edu agent (:41244)
 uv run pytest                            # unit tests (no GPU/mic needed)
 ```
 
+## Isaac sim tooling (`hardware/isaac_*.py`)
+
+Seven scripts drive and measure Unitree's `unitree_sim_isaaclab` (the G1 wholebody
+sim). They are standalone CLIs, not imported by the agent, and none of them runs in
+CI — each needs a live sim or a log from one.
+
+| Script | What it does |
+|---|---|
+| `isaac_loco_bridge.py` | **The adapter.** Answers the `sport` RPC and republishes onto `rt/run_command/cmd`, so an unmodified `LocoClient` can drive the Isaac sim. |
+| `isaac_loco_check.py` | Proves the bridge on the wire, importing no bridge code. |
+| `isaac_gait_probe.py` | Does the G1 actually walk? Subscribes to `rt/lowstate` and reports gait. |
+| `isaac_gait_report.py` | Parses the `[TASK-203]` lines a patched sim prints; reports cadence from foot contact. |
+| `isaac_yaw_sweep.py` | Paired sign-alternating yaw sweep; measures turn rate against commanded. |
+| `isaac_bob_report.py` | Band-limited gait-bob detector; measures head bob, or proves its absence. |
+| `isaac_capture.py` | Renders the G1 through a warehouse. **Kinematic glide** — no policy, legs frozen. |
+
+Four things silently produce wrong answers. All four have bitten this codebase:
+
+1. **Publish velocity commands at 100 Hz, never below 50.** The sim's command slot
+   is self-clearing: `compute_current_observations` reads the command and writes
+   `[0,0,0,0.8]` back into the same slot, so a command survives exactly one policy
+   step. The policy runs at 50 Hz. A 20 Hz publisher once produced the conclusion
+   that the G1 could not walk at all.
+2. **Run only one `sim_main.py` at a time.** Its exit handler pgreps and kills every
+   other match. After killing a container, wait for `nvidia-smi` to return to its
+   ~111 MiB baseline before relaunching.
+3. **Set `NEODEM_LOG_EVERY=5`.** The default 25 is 2 Hz of simulated time, below
+   Nyquist for a ~1.7 Hz gait — it aliases a 1.70 Hz bob down to a confident 0.50 Hz.
+   `isaac_bob_report.py` refuses undersampled input rather than reporting it.
+4. **`front_camera.data.pos_w` does not track the robot.** Under this provider's
+   hand-rolled stepping it is static — one distinct value across a whole run while
+   the base moved through 62. Read head height off the `d435_link` rigid body.
+
+Isaac Lab 3.0 returns quaternions as **(x, y, z, w)**, not (w, x, y, z)
+(`base_rigid_object_data.py:409-413`). Getting this backwards yields an angle that
+varies while the quantity it measures is constant.
+
+Patches against the (read-only) upstream checkout live in
+`hardware/isaac_sim_patches/`, documented in its own README.
+
 ## Related Documentation
 
 - `voice/README.md` - Voice interaction service
 - `../server/AGENTS.md` - Server documentation
 - `../app/AGENTS.md` - Frontend documentation
 - `../docs/architecture.md` - System architecture
+- `hardware/isaac_sim_patches/README.md` - Isaac sim patches, and what each one fixes
+- `hardware/sim_g1_dds/README.md` - MuJoCo sim speaking the real Unitree wire protocol

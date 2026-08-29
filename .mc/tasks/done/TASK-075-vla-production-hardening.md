@@ -1,3 +1,20 @@
+---
+id: TASK-075
+aliases:
+- TASK-075
+title: VLA Production Hardening
+slug: vla-production-hardening
+status: done
+priority: 2
+owner: ''
+projects: []
+customers: []
+tags:
+- extended
+- vla
+updated: 2026-08-29
+---
+
 # TASK-075: VLA Production Hardening
 
 **Component:** robot-agent / vla-tests  
