@@ -1661,12 +1661,33 @@ describe('BlockExecutor — a walk holds its heading (TASK-227)', () => {
    * Translation is integrated along the pose's CURRENT heading, so a drifting
    * base really does walk somewhere other than where it was aimed; nothing here
    * is faked at the reporting layer.
+   *
+   * The two axes are integrated INDEPENDENTLY, which is what makes an ARC
+   * (`vx > 0` and `omega != 0` in one command) a real thing here rather than a
+   * special case: omega rotates, vx translates along the heading that rotation
+   * just produced, and the drift is charged against any command that translates
+   * — arcs included. So an arc costs exactly the same drift per metre as the
+   * walk it is spliced into, and the total unbidden yaw over a walk depends only
+   * on how far the robot was told to go.
    */
   function makeWalkingBase(
     opts: {
       driftDps?: number;
       speedGain?: number;
       turnGain?: number;
+      /**
+       * Yaw tracking for an IN-PLACE LEFT command specifically (`omega > 0` with
+       * no velocity), defaulting to `turnGain`.
+       *
+       * This is the defect the arc exists for, and it is a property of one
+       * quadrant of the command space, not of the base: the G1 locomotion
+       * checkpoint this rig runs achieves a measured 0.01 of a commanded
+       * in-place CCW rotation, 0.26–0.53 of a CW one, and turns perfectly well
+       * to either side while walking. Modelled here so a test can ask what the
+       * executor does on the plant it actually has.
+       */
+      inPlaceLeftGain?: number;
+      leftTurnStrategy?: BlockExecutorDeps['leftTurnStrategy'];
       odometry?: () => Promise<{ x: number; y: number; yaw: number; source: string } | null>;
       checkForwardPath?: BlockExecutorDeps['checkForwardPath'];
     } = {}
@@ -1674,6 +1695,7 @@ describe('BlockExecutor — a walk holds its heading (TASK-227)', () => {
     const driftDps = opts.driftDps ?? 0;
     const speedGain = opts.speedGain ?? 1;
     const turnGain = opts.turnGain ?? 1;
+    const inPlaceLeftGain = opts.inPlaceLeftGain ?? turnGain;
     const moves: MoveCall[] = [];
     const pose = { x: 0, y: 0, yawRad: 0 };
     const scene = new SceneMemoryStore('robot-1');
@@ -1694,8 +1716,10 @@ describe('BlockExecutor — a walk holds its heading (TASK-227)', () => {
         move: async (vx, vy, omega, durationS) => {
           moves.push({ vx, vy, omega, durationS });
           if (omega !== 0) {
-            pose.yawRad += omega * durationS * turnGain;
-          } else {
+            const inPlaceLeft = omega > 0 && vx === 0 && vy === 0;
+            pose.yawRad += omega * durationS * (inPlaceLeft ? inPlaceLeftGain : turnGain);
+          }
+          if (vx !== 0 || vy !== 0) {
             const distanceM = Math.hypot(vx, vy) * speedGain * durationS;
             // The commanded axis is in the BODY frame, so a strafe goes sideways
             // and a forward walk goes along the heading — including whatever the
@@ -1718,14 +1742,28 @@ describe('BlockExecutor — a walk holds its heading (TASK-227)', () => {
       now: () => 1e12,
     };
     if (opts.checkForwardPath) deps.checkForwardPath = opts.checkForwardPath;
+    if (opts.leftTurnStrategy) deps.leftTurnStrategy = opts.leftTurnStrategy;
     return {
       executor: new BlockExecutor(deps),
       moves,
       scene,
-      /** Only the translation commands — the walk itself, without corrections. */
+      /** Only the STRAIGHT translation commands — the walk without corrections. */
       walkMoves: () => moves.filter((m) => m.omega === 0),
       /** Only the rotations — every heading correction this walk spent. */
       turnMoves: () => moves.filter((m) => m.omega !== 0),
+      /** Corrections taken as ARCS: rotating and translating in one command. */
+      arcMoves: () => moves.filter((m) => m.omega !== 0 && m.vx !== 0),
+      /** Corrections taken IN PLACE: rotating with no velocity at all. */
+      inPlaceMoves: () => moves.filter((m) => m.omega !== 0 && m.vx === 0 && m.vy === 0),
+      /**
+       * Total forward distance COMMANDED, over every command that translates —
+       * straight segments and arcs alike. This is the number a `walk` block
+       * promises to hold at the distance it was asked for, however many
+       * corrections it spends; `walkMoves` alone stopped being that number the
+       * moment a correction could cover ground.
+       */
+      commandedForwardM: () =>
+        moves.reduce((sum, m) => sum + Math.abs(m.vx) * m.durationS, 0),
       yawDeg: () => (pose.yawRad * 180) / Math.PI,
     };
   }
@@ -1772,20 +1810,18 @@ describe('BlockExecutor — a walk holds its heading (TASK-227)', () => {
     // Open-loop this is the defect: 8 m at 0.4 m/s is 20 s of commanded motion,
     // and 20 s × 2°/s is 40° of heading nobody asked for — reported as a clean
     // "Walked 8.00 m forward".
-    expect(h.walkMoves().reduce((sum, m) => sum + m.durationS, 0) * 2).toBeCloseTo(40, 6);
+    expect((h.commandedForwardM() / WALK_SPEED) * 2).toBeCloseTo(40, 6);
     expect(outcome.ok).toBe(true);
     // Closed, the walk ends on the heading it set off on.
     expect(Math.abs(h.yawDeg())).toBeLessThan(8);
     expect(h.turnMoves().length).toBeGreaterThan(0);
     // Every correction goes LEFT — back against a heading that is falling.
     for (const move of h.turnMoves()) expect(move.omega).toBeGreaterThan(0);
-    // Six segments, three of them ending far enough out to be worth a
-    // correction, and the walk finishes on the heading it started on.
-    expect(outcome.message).toMatch(
-      /Heading held: 0° of the 0° it set off on \(3 corrections\)/
-    );
-    // The distance is still the requested one: a correction is a turn in place.
-    expect(h.walkMoves().reduce((sum, m) => sum + m.durationS, 0) * WALK_SPEED).toBeCloseTo(8, 6);
+    expect(outcome.message).toMatch(/Heading held: 0° of the 0° it set off on/);
+    // The distance is still the requested one. It no longer all rides on the
+    // straight segments — a correction now covers ground too — so the invariant
+    // is over every command that translates, arcs included.
+    expect(h.commandedForwardM()).toBeCloseTo(8, 6);
   });
 
   it('says so, loudly, when the drift could not be corrected out', async () => {
@@ -1798,7 +1834,10 @@ describe('BlockExecutor — a walk holds its heading (TASK-227)', () => {
 
     expect(outcome.ok).toBe(true);
     expect(Math.abs(h.yawDeg())).toBeGreaterThan(8);
-    // The measured open-loop drift, stated instead of hidden: 40° right.
+    // The measured open-loop drift, stated instead of hidden: 40° right. The
+    // arcs do not change it — they translate the same 8 m the straight segments
+    // would have, and the drift is charged per metre travelled.
+    expect(h.commandedForwardM()).toBeCloseTo(8, 6);
     expect(outcome.message).toMatch(/HEADING OFF by 40° right of the 0° it set off on/);
     expect(outcome.message).toMatch(/did not go where it was aimed/);
     // And it did not burn the plan's time re-sending a rotation that measurably
@@ -1968,5 +2007,237 @@ describe('BlockExecutor — a walk holds its heading (TASK-227)', () => {
     // as wrong as a forward walk that curves.
     expect(Math.abs(h.yawDeg())).toBeLessThan(8);
     expect(outcome.message).toMatch(/Heading held/);
+  });
+
+  /**
+   * ARC TURNS (TASK-227 follow-up).
+   *
+   * Everything above assumed a heading correction is a rotation in place. On the
+   * G1 locomotion checkpoint this rig runs it is a rotation in place that does
+   * NOTHING whenever it goes left: `isaac_yaw_sweep.py` measures 0.01 of the
+   * commanded in-place CCW rate against 0.26–0.53 CW. And the base drifts right
+   * at −0.90 °/s while walking, so `-errorDeg` is a LEFT correction almost every
+   * time — the one that is dead. Every automatic heading correction in Agent
+   * Mode was therefore a command the robot accepted and ignored, and the walk
+   * loop above dutifully reported the residual it could not fix.
+   *
+   * What is measured to work is an ARC: `vx > 0` combined with `omega != 0`.
+   * Nothing in the executor could emit one — `walkToCommand` hard-zeroes omega
+   * and `turnToCommandExact` hard-zeroed vx — which is what these tests pin.
+   */
+  describe('a heading correction arcs instead of turning in place', () => {
+    it('commands vx AND omega in the SAME command', async () => {
+      const h = makeWalkingBase({ driftDps: -2 });
+
+      const outcome = await h.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+      expect(outcome.ok).toBe(true);
+      // THE defect, stated as a property: before the arc existed every entry in
+      // `turnMoves` had `vx === 0`, and this expectation was unsatisfiable.
+      expect(h.arcMoves().length).toBeGreaterThan(0);
+      // At most ONE in-place rotation, and it is the CLOSING one: by the time
+      // the last segment has run, the walk has spent all the distance it was
+      // given, so there is nothing left to arc with and the correction falls
+      // back to the turn in place. Every correction taken DURING the walk —
+      // the ones that decide whether the robot stays on its line — arcs.
+      expect(h.inPlaceMoves().length).toBeLessThanOrEqual(1);
+      for (const move of h.inPlaceMoves()) expect(move).toBe(h.moves[h.moves.length - 1]);
+      for (const move of h.arcMoves()) {
+        expect(move.vx).toBeCloseTo(WALK_SPEED, 10);
+        expect(move.omega).not.toBe(0);
+      }
+      expect(outcome.message).toMatch(/arced — turned while still walking forward/);
+    });
+
+    it('arcs LEFT for a left correction and RIGHT for a right one', async () => {
+      // The sign is the whole ballgame: get it backwards and the correction
+      // drives the robot further off the line it was already leaving, at
+      // walking speed, which is strictly worse than the dead in-place command
+      // it replaces. So it is asserted in BOTH directions, from a drift whose
+      // sign is the only thing that differs between the two runs.
+      //
+      // −0.90 °/s is the measured factory drift: the heading FALLS, the error
+      // is negative, the correction is `-errorDeg` — positive — and positive
+      // omega is CCW, i.e. left. −2 °/s below is the same sign, faster.
+      const right = makeWalkingBase({ driftDps: -2 });
+      await right.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+      expect(right.arcMoves().length).toBeGreaterThan(0);
+      for (const move of right.arcMoves()) expect(move.omega).toBeGreaterThan(0);
+
+      const left = makeWalkingBase({ driftDps: 2 });
+      await left.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+      expect(left.arcMoves().length).toBeGreaterThan(0);
+      for (const move of left.arcMoves()) expect(move.omega).toBeLessThan(0);
+    });
+
+    it('stays on its line on a base that cannot rotate CCW in place at all', async () => {
+      // The plant as measured, not as hoped: in-place left achieves 1% of what
+      // it is told, everything else tracks. Before the arc, every correction in
+      // this walk was that dead command and the robot ended 40° off its line —
+      // the truthful "HEADING OFF" of the test above, with nothing able to fix
+      // it. With arcs it ends inside one segment's worth of drift.
+      const h = makeWalkingBase({ driftDps: -2, inPlaceLeftGain: 0.01 });
+
+      const outcome = await h.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+      expect(outcome.ok).toBe(true);
+      // 40° is what this walk did open-loop, and what it still does when the
+      // only primitive is the in-place turn this base ignores.
+      expect(Math.abs(h.yawDeg())).toBeLessThan(15);
+      expect(outcome.message).toMatch(/arced — turned while still walking forward/);
+      // Every mid-walk correction went out as an arc. The residual that is left
+      // is the CLOSING correction's: the walk's distance is spent by then, so
+      // that one is in place, and in place is exactly what this base cannot do
+      // to the left. It is reported, not hidden — and the navigator re-aligns
+      // (with its own arc budget) at the top of the next stage, which is where
+      // the terminal heading actually gets used.
+      expect(h.inPlaceMoves().length).toBeLessThanOrEqual(1);
+      expect(h.arcMoves().length).toBeGreaterThan(1);
+    });
+
+    it('spends the arc OUT of the walk, so the robot still goes exactly as far as it was told', async () => {
+      // The honesty rule for the geometry: an arc translates, and those metres
+      // are part of the walk rather than extra. If they were extra, a `walk 8 m`
+      // clamped to the lidar's 8 m of clearance would drive further than the
+      // clearance it clamped itself to.
+      const h = makeWalkingBase({ driftDps: -2 });
+
+      const outcome = await h.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+      expect(h.arcMoves().length).toBeGreaterThan(0);
+      expect(h.commandedForwardM()).toBeCloseTo(8, 6);
+      // …and the metres the arcs covered are inside the walk's own measurement,
+      // not dropped on the floor the way the in-place turn's wobble is.
+      expect(outcome.measured?.distanceM).toBeCloseTo(8, 6);
+    });
+
+    it('never arcs a sideways walk', async () => {
+      // `forwardMps` is a +x velocity. Arcing a `walk left` would send the robot
+      // along an axis nobody asked for, so the strafe keeps the in-place turn.
+      const h = makeWalkingBase({ driftDps: -2 });
+
+      await h.executor.execute(block('walk', { distanceM: 4, direction: 'left' }));
+
+      expect(h.turnMoves().length).toBeGreaterThan(0);
+      expect(h.arcMoves()).toHaveLength(0);
+    });
+  });
+
+  /**
+   * The boundary: an explicit `turn` means TURN IN PLACE, and only the
+   * navigator's private `arcM` may buy a curve.
+   */
+  describe('an explicit `turn` block is never quietly curved', () => {
+    it('turns in place, with no velocity on any axis', async () => {
+      const h = makeWalkingBase();
+
+      const outcome = await h.executor.execute(block('turn', { angleDeg: -90 }));
+
+      expect(outcome.ok).toBe(true);
+      expect(h.turnMoves().length).toBeGreaterThan(0);
+      for (const move of h.turnMoves()) {
+        expect(move.vx).toBe(0);
+        expect(move.vy).toBe(0);
+      }
+      expect(outcome.message).not.toMatch(/Arced/);
+      expect(outcome.measured?.distanceM).toBeUndefined();
+    });
+
+    it('fails LOUDLY, naming the checkpoint, when the in-place left it was asked for is dead', async () => {
+      // `direct` is the strategy that says "command it anyway". The block must
+      // then report the one thing the operator needs and could not otherwise
+      // guess: it is not damped, it is not blocked, this rotation does not
+      // exist on this policy — and here is what does.
+      const h = makeWalkingBase({ inPlaceLeftGain: 0, leftTurnStrategy: 'direct' });
+
+      const outcome = await h.executor.execute(block('turn', { angleDeg: 90 }));
+
+      expect(outcome.ok).toBe(false);
+      expect(outcome.message).toMatch(/the robot did not turn/);
+      expect(outcome.message).toMatch(/in-place LEFT \(CCW\) rotation is dead/);
+      expect(outcome.message).toMatch(/ARC \(forward velocity combined with omega\)/);
+      expect(outcome.message).toMatch(/AGENT_LEFT_TURN_STRATEGY=mirror/);
+      // It did not curve to get out of failing.
+      for (const move of h.turnMoves()) expect(move.vx).toBe(0);
+    });
+
+    it('does NOT reach for the dead-left explanation when the base is simply damped', async () => {
+      // A RIGHT turn that measures nothing is the damped/blocked case, and
+      // dressing it up as the CCW asymmetry would send the operator after the
+      // wrong fault.
+      const h = makeWalkingBase({ turnGain: 0, leftTurnStrategy: 'direct' });
+
+      const outcome = await h.executor.execute(block('turn', { angleDeg: -90 }));
+
+      expect(outcome.ok).toBe(false);
+      expect(outcome.message).toMatch(/non-locomoting FSM/);
+      expect(outcome.message).not.toMatch(/in-place LEFT/);
+    });
+  });
+
+  /**
+   * `arcM` — the navigator's stage alignment, which MAY arc because it is the
+   * first few degrees of a walk that is about to happen anyway.
+   */
+  describe('`turn` with an arc budget (the navigator stage alignment)', () => {
+    it('arcs, and reports the metres it covered so the caller can take them off the stage', async () => {
+      const h = makeWalkingBase();
+
+      const outcome = await h.executor.execute(block('turn', { angleDeg: 90, arcM: 1.2 }));
+
+      expect(outcome.ok).toBe(true);
+      expect(h.arcMoves().length).toBeGreaterThan(0);
+      // 90° at 45°/s is 2 s, and 2 s at 0.4 m/s is 0.80 m of travel — which the
+      // block reports rather than leaving the caller to assume it stayed put.
+      expect(outcome.measured?.distanceM).toBeCloseTo(0.8, 6);
+      expect(outcome.measured?.angleDeg).toBeCloseTo(90, 6);
+      expect(outcome.message).toMatch(/Arced 0\.80 m forward while turning/);
+    });
+
+    it('never spends more forward distance than the budget it was handed', async () => {
+      // A poorly-tracking base is where this bites: the loop divides what is
+      // left by the measured gain, so a 90° request becomes a 150° command, and
+      // 150° at walking speed is over a metre of travel the caller never
+      // budgeted for. The budget caps the command's DURATION, which caps its
+      // angle — and when there is not one MIN_DURATION_S command left in the
+      // budget the turn stops and reports the shortfall.
+      const h = makeWalkingBase({ turnGain: 0.2 });
+
+      const outcome = await h.executor.execute(block('turn', { angleDeg: 90, arcM: 0.3 }));
+
+      expect(h.commandedForwardM()).toBeLessThanOrEqual(0.3 + 1e-9);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.message).toMatch(/short of the commanded 90°/);
+    });
+
+    it('is never mirrored, even under AGENT_LEFT_TURN_STRATEGY=mirror', async () => {
+      // Mirroring a left θ means rotating right θ−360. On the spot that is a
+      // trade worth making; at walking speed it is three quarters of a circle
+      // driven at 0.4 m/s, metres from where the caller budgeted for the robot
+      // to be. The arc is the answer to the dead left turn that mirroring exists
+      // for, so the two never both apply.
+      const h = makeWalkingBase({ leftTurnStrategy: 'mirror' });
+
+      const outcome = await h.executor.execute(block('turn', { angleDeg: 90, arcM: 1.2 }));
+
+      expect(outcome.ok).toBe(true);
+      for (const move of h.arcMoves()) expect(move.omega).toBeGreaterThan(0);
+      expect(h.yawDeg()).toBeCloseTo(90, 6);
+      expect(outcome.message).not.toMatch(/the long way round/);
+    });
+
+    it('ignores an arc budget too small to fund a single command', async () => {
+      // 0.2 s is the shortest command that exists and 0.4 m/s carries it 0.08 m.
+      // Below that there is no arc to issue, so the turn is taken in place and
+      // says nothing about arcing — rather than sending a zero-length command
+      // or quietly overrunning the caller's budget.
+      const h = makeWalkingBase();
+
+      const outcome = await h.executor.execute(block('turn', { angleDeg: 90, arcM: 0.05 }));
+
+      expect(outcome.ok).toBe(true);
+      expect(h.arcMoves()).toHaveLength(0);
+      expect(outcome.measured?.distanceM).toBeUndefined();
+    });
   });
 });

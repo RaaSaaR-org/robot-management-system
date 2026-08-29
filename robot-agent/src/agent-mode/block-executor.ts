@@ -264,6 +264,70 @@ const TURN_BUDGET_MS = 45_000;
 const MAX_TURN_STEP_DEG = 150;
 
 /**
+ * A rotation to be taken WHILE WALKING FORWARD — an ARC — and the walk distance
+ * it is allowed to spend doing it.
+ *
+ * ## Why this exists at all
+ *
+ * On the G1 locomotion checkpoint this rig runs, an in-place LEFT rotation is
+ * dead: `isaac_yaw_sweep.py` measures a commanded-to-achieved ratio of **0.01**
+ * turning left in place, against 0.26–0.53 turning right. The base also drifts
+ * **−0.90 °/s** while walking, so the heading correction the code needs is
+ * almost always LEFT — precisely the one that does nothing. Every rotation
+ * Agent Mode could emit was in-place ({@link turnToCommand} hard-zeroes vx/vy),
+ * so every automatic heading correction on this checkpoint was a no-op, and a
+ * `goto` across open floor bowed away from its line until it gave up.
+ *
+ * An ARC — `vx > 0` combined with `omega != 0` — is measured to work in both
+ * directions on the same checkpoint. This is how that primitive is asked for.
+ *
+ * ## Why the forward speed is not negotiable
+ *
+ * `forwardMps` is held at the walk speed for the whole arc and is never reduced
+ * to make an arc "gentler". Measured on this checkpoint: `vx = 0.3` produces no
+ * gait AT ALL — the command reaches the policy (it appears in the sim's own
+ * `cmd=` log) and the legs stay frozen to three decimals — while `vx = 0.5`
+ * walks at 0.156 m/s. A slower arc is therefore not a slower arc, it is an
+ * in-place turn with extra steps, i.e. exactly the dead command this replaces.
+ *
+ * The magnitude is bought with TIME instead: the budget bounds how long the
+ * arc's commands may run, which bounds the rotation each one may ask for.
+ */
+interface ArcOption {
+  /** Forward speed to hold throughout, m/s. Never reduced — see above. */
+  forwardMps: number;
+  /**
+   * Most forward distance, COMMANDED and in metres, the arc may spend. It is
+   * the caller's own distance budget: a walk's remaining metres, or the metres
+   * of the coming stage a navigator alignment may eat into. An arc that cannot
+   * fund one {@link MIN_DURATION_S} command out of what is left does not run.
+   */
+  budgetM: number;
+}
+
+/**
+ * What an arc actually cost and covered. All zero for an in-place rotation, so
+ * a caller can add these unconditionally.
+ *
+ * `commandedM` and `movedM` are deliberately BOTH reported and are not the same
+ * number: the budget is spent in commanded metres (that is what was taken from
+ * the walk), while what the robot is believed to have travelled is the measured
+ * one — 31% of commanded on this checkpoint. Reporting either alone would make
+ * one of the two consumers lie.
+ */
+interface ArcTravel {
+  /** Forward distance COMMANDED across the arc's velocity commands, m. */
+  commandedM: number;
+  /** Displacement MEASURED by odometry across them, m. 0 when unmeasured. */
+  movedM: number;
+  /** Wall time the arc's commands were held for, s. */
+  durationS: number;
+}
+
+/** An in-place rotation's travel: nothing, on every axis. */
+const NO_ARC_TRAVEL: ArcTravel = { commandedM: 0, movedM: 0, durationS: 0 };
+
+/**
  * Longest stretch of a walk that may run without the heading being re-measured.
  *
  * The measurement that forced this (TASK-227, Isaac factory scene): commanding
@@ -306,6 +370,25 @@ const NO_MOTION_HINT =
   'the command was accepted but nothing moved — the base is most likely in a ' +
   'non-locomoting FSM (damp/sit, e.g. after an E-Stop) or physically blocked. ' +
   'Send a `posture` block with pose "stand" before moving again.';
+
+/**
+ * Why an in-place LEFT rotation can be accepted and rotate nothing HERE, and
+ * what does work instead.
+ *
+ * Said out loud, and named, because the alternative is a block that reports
+ * "the robot did not turn" for the one failure mode on this rig that is neither
+ * a damped base nor an obstacle — and whose fix is not "stand up and retry".
+ */
+const DEAD_LEFT_HINT =
+  'an in-place LEFT (CCW) rotation is dead on this G1 locomotion checkpoint — ' +
+  'isaac_yaw_sweep.py measures a commanded-to-achieved ratio of 0.01 turning ' +
+  'left in place, against 0.26-0.53 turning right. What DOES rotate this base ' +
+  'to the left is an ARC (forward velocity combined with omega), which is how ' +
+  'goto takes its heading corrections — so route the move through `goto`, or ' +
+  'set AGENT_LEFT_TURN_STRATEGY=mirror to take the turn the long way round to ' +
+  'the right. If the base is damped or blocked instead, the same command ' +
+  'measures nothing for a different reason: ' +
+  NO_MOTION_HINT;
 
 const MIN_DURATION_S = 0.2;
 
@@ -369,7 +452,8 @@ export function turnToCommand(
  */
 export function turnToCommandExact(
   angleDeg: number,
-  turnSpeedDps: number = config.agentMode.turnSpeedDps
+  turnSpeedDps: number = config.agentMode.turnSpeedDps,
+  forwardMps = 0
 ): WalkCommand {
   const rate = Math.abs(turnSpeedDps) > 1e-6 ? Math.abs(turnSpeedDps) : 45;
   const angle = Number.isFinite(angleDeg)
@@ -377,7 +461,10 @@ export function turnToCommandExact(
     : 0;
   const durationS = Math.min(MAX_DURATION_S, Math.max(MIN_DURATION_S, Math.abs(angle) / rate));
   const omega = Math.sign(angle) * rate * DEG_TO_RAD;
-  return { vx: 0, vy: 0, omega, durationS };
+  // `forwardMps` is the ONLY way a command with both vx and omega leaves this
+  // file, and it defaults to 0 so every existing caller is byte-identical.
+  const vx = Number.isFinite(forwardMps) && forwardMps > 0 ? forwardMps : 0;
+  return { vx, vy: 0, omega, durationS };
 }
 
 /**
@@ -787,6 +874,21 @@ export class BlockExecutor {
     let commandedM = 0;
     let corrections = 0;
     let walkedSegments = 0;
+    /**
+     * How much of the commanded distance is still unspent.
+     *
+     * It exists because a heading correction is no longer necessarily a rotation
+     * in place: an ARC (see {@link ArcOption}) covers ground while it turns, and
+     * that ground is part of this walk, not extra. Every arc therefore DRAWS
+     * FROM this budget and the following segments shrink by what it took, so
+     * "walk 3 m" is still 3 m of commanded travel however many corrections it
+     * spends — which is what the lidar clamp, the map check and the navigator's
+     * stage arithmetic above all assumed when they sized `distanceM`.
+     */
+    let budgetM = Math.abs(distanceM);
+    /** Corrections taken as arcs, and the distance they measurably covered. */
+    let arcCorrections = 0;
+    let arcMovedM = 0;
     /** Segments whose displacement was actually measured, not assumed. */
     let measuredSegments = 0;
     /** Odometry stopped answering part-way through — measured, then blind. */
@@ -796,6 +898,20 @@ export class BlockExecutor {
 
     for (let i = 0; i < segmentCount; i++) {
       let thisSegmentM = segmentM;
+
+      // Arc corrections have already walked part of the way, so a segment may
+      // only ask for what is LEFT of the commanded distance. Without this the
+      // arcs would be distance ON TOP of the walk and the robot would overshoot
+      // what it was told — past the lidar clearance the block clamped itself to.
+      if (Math.abs(thisSegmentM) > budgetM) {
+        if (budgetM <= ZERO_MOTION_M) {
+          stopNote =
+            ` Stopped after ${walkedSegments} of ${segmentCount} segments — the heading ` +
+            `corrections arced through the rest of the commanded distance.`;
+          break;
+        }
+        thisSegmentM = Math.sign(segmentM || 1) * budgetM;
+      }
 
       // Re-run the SAME two checks `walk` opened with, from the pose the robot
       // is standing at now — a segmented walk that did not re-check would be
@@ -838,6 +954,7 @@ export class BlockExecutor {
 
       commandedS += cmd.durationS;
       commandedM += Math.abs(thisSegmentM);
+      budgetM = Math.max(0, budgetM - Math.abs(thisSegmentM));
       const result = await this.driveFor(cmd);
       if (!result.ok) return { ok: false, message: `walk failed: ${locoError(result)}` };
       walkedSegments++;
@@ -872,10 +989,50 @@ export class BlockExecutor {
       // this base cannot turn that way the correction measures nothing, the
       // loop stops correcting, and the residual is REPORTED — the honest
       // failure, not a spin.
+      //
+      // It is taken as an ARC whenever there is forward distance left to spend
+      // (TASK-227 follow-up). This is the correction the whole feature is for:
+      // the base drifts right at −0.90 °/s, so `-errorDeg` is almost always a
+      // LEFT rotation, and a left rotation IN PLACE achieves 0.01 of what it is
+      // told on this checkpoint. The mirror escape is disabled here for the
+      // reason above, which left this loop with no working primitive at all —
+      // every heading correction in every walk was a command the robot ignored.
+      // An arc is measured to work, costs no extra distance (it comes out of
+      // `budgetM`), and does not stop the gait to do it.
+      //
+      // Sideways and backward walks keep the in-place turn: `forwardMps` is a
+      // +x velocity, and arcing a `walk left` would send the robot along an axis
+      // nobody asked for.
+      //
+      // KNOWN LIMIT, stated rather than papered over: the correction after the
+      // LAST segment has no budget left by construction — the segments have
+      // spent the whole commanded distance — so it is always an in-place turn,
+      // and on this checkpoint an in-place LEFT one does nothing. The walk then
+      // ends up to one segment's drift off its line and SAYS SO (`headingNote`
+      // prints "HEADING OFF"). Buying that correction an arc would mean either
+      // walking further than commanded or holding metres back from the walk,
+      // and both are worse lies than the residual. The heading that matters is
+      // re-established at the top of the next navigator stage, which has its
+      // own arc budget.
       const errorDeg = normalizeDeg(fix.yaw * RAD_TO_DEG - startYawDeg);
       if (Math.abs(errorDeg) > WALK_HEADING_TOLERANCE_DEG) {
         corrections++;
-        const { result: turnResult } = await this.turnMeasured(-errorDeg, { allowMirror: false });
+        const arc = direction === 'forward' ? this.arcFor(budgetM) : undefined;
+        const { result: turnResult, arc: arcTravel } = await this.turnMeasured(-errorDeg, {
+          allowMirror: false,
+          ...(arc ? { arc } : {}),
+        });
+        // Booked BEFORE the failure check: a command that went out and then
+        // failed still moved the robot, and a walk that dropped those metres
+        // would under-report its own travel.
+        if (arc) {
+          arcCorrections++;
+          arcMovedM += arcTravel.movedM;
+          movedM += arcTravel.movedM;
+          commandedM += arcTravel.commandedM;
+          commandedS += arcTravel.durationS;
+          budgetM = Math.max(0, budgetM - arcTravel.commandedM);
+        }
         if (!turnResult.ok) {
           stopNote =
             ` Stopped after ${walkedSegments} of ${segmentCount} segments — the heading correction ` +
@@ -934,11 +1091,19 @@ export class BlockExecutor {
       lostFixAfter === null
         ? ''
         : ` Odometry stopped answering after segment ${lostFixAfter} — the rest is unverified.`;
+    // An arc moves the robot as well as turning it, so it is not the same event
+    // as a turn in place and must not be reported as one. The metres it covered
+    // are already inside `movedM`; this says where they came from.
+    const arcNote =
+      arcCorrections === 0
+        ? ''
+        : ` ${arcCorrections} of ${corrections} correction${corrections === 1 ? '' : 's'} arced — ` +
+          `turned while still walking forward — covering ${arcMovedM.toFixed(2)} m of the walk.`;
     return {
       ok: true,
       message:
         `Walked ${movedM.toFixed(2)} m ${direction} in ${commandedS.toFixed(1)} s${segmentNote}${note}.` +
-        `${this.headingNote(startYawDeg, fix.yaw * RAD_TO_DEG, corrections)}${stopNote}${clampNote}${lostNote}`,
+        `${this.headingNote(startYawDeg, fix.yaw * RAD_TO_DEG, corrections)}${arcNote}${stopNote}${clampNote}${lostNote}`,
       measured: { distanceM: movedM },
     };
   }
@@ -1016,8 +1181,55 @@ export class BlockExecutor {
     const angleDeg = Number(block.params.angleDeg);
     if (!Number.isFinite(angleDeg)) return { ok: false, message: 'turn: angleDeg is not a number' };
 
-    const { result, turnedDeg, mirrored } = await this.turnMeasured(angleDeg);
-    if (!result.ok) return { ok: false, message: `turn failed: ${locoError(result)}` };
+    // ── where the boundary between a turn and an arc is drawn ─────────────
+    //
+    // A `turn` block a planner emitted, or a person asked for, means TURN IN
+    // PLACE. Quietly answering it with a curve puts the robot metres from where
+    // the asker pictured it — a different error from the one being fixed, and a
+    // worse one, because nothing in the outcome would have warned them. So an
+    // explicit `turn` stays in place and, when in-place is what this checkpoint
+    // cannot do, FAILS AND SAYS WHY (see DEAD_LEFT_HINT below) rather than
+    // curving on its own initiative.
+    //
+    // Automatic CORRECTIONS are the other case, and they arc. A navigator stage
+    // alignment is not a destination, it is the first few degrees of a walk that
+    // is about to happen anyway; ending it further along the route is what it
+    // wanted. Those come in as `arcM` — the metres of the coming stage this
+    // alignment may eat into — and the block reports back how many it used so
+    // the navigator can take them off the stage.
+    //
+    // `arcM` is the NAVIGATOR'S private channel and cannot be forged: the
+    // planner's zod schema (`PlannedBlockSchema` in planner.ts) is a closed list
+    // of fields and `coerceParams` builds `params` from named ones only, so no
+    // model output and no operator text can put `arcM` on a block. That is the
+    // same mechanism `walk.planned` already relies on.
+    const requestedArcM = Number(block.params.arcM);
+    const arc = this.arcFor(Number.isFinite(requestedArcM) ? requestedArcM : 0);
+
+    const {
+      result,
+      turnedDeg,
+      mirrored,
+      arc: travel,
+    } = await this.turnMeasured(angleDeg, arc ? { allowMirror: false, arc } : {});
+    // Reported on every path from here, including the failures: the robot
+    // covered these metres whatever the rotation did, and the navigator deducts
+    // them from the stage it was going to walk next.
+    const arcedNote =
+      arc === undefined || travel.commandedM <= 0
+        ? ''
+        : ` Arced ${travel.movedM.toFixed(2)} m forward while turning ` +
+          `(${travel.commandedM.toFixed(2)} m commanded) — this base does not rotate CCW in place.`;
+    const arcedMeasured = arc === undefined ? {} : { distanceM: travel.movedM };
+    if (!result.ok) {
+      return {
+        ok: false,
+        message: `turn failed: ${locoError(result)}${arcedNote}`,
+        // Only when there is something to say: an empty `measured` on a block is
+        // not "nothing moved", it is a shape the navigator has to read past.
+        ...(arc === undefined ? {} : { measured: arcedMeasured }),
+      };
+    }
 
     const requestedSide = angleDeg >= 0 ? 'left' : 'right';
     // The side the base ACTUALLY rotated to, which is not always the one asked
@@ -1035,7 +1247,8 @@ export class BlockExecutor {
         ok: true,
         message:
           `Commanded ${normalizeDeg(angleDeg).toFixed(0)}° ${side}; heading now ` +
-          `${Math.round(this.deps.scene.getYawDeg())}° by dead reckoning (no odometry).`,
+          `${Math.round(this.deps.scene.getYawDeg())}° by dead reckoning (no odometry).${arcedNote}`,
+        ...(arc === undefined ? {} : { measured: arcedMeasured }),
       };
     }
     // Same reasoning as walk(): report the measured rotation, so a turn the
@@ -1043,12 +1256,19 @@ export class BlockExecutor {
     // Same rule as walk(): a commanded rotation that measurably did not happen
     // is a failed block, not a turn that fell short.
     if (didNotTurn(angleDeg, turnedDeg)) {
+      // The one failure on this rig whose cause is neither a damped base nor an
+      // obstacle gets named, loudly, instead of being filed under "nothing
+      // moved": an in-place LEFT command that this locomotion checkpoint
+      // accepts and ignores. Only for a left command that was actually taken in
+      // place — an arc that measured nothing, or a right turn, really is the
+      // damped-or-blocked case NO_MOTION_HINT describes.
+      const deadLeft = arc === undefined && !mirrored && normalizeDeg(angleDeg) > 0;
       return {
         ok: false,
         message:
           `turn: the robot did not turn (${turnedDeg.toFixed(0)}° measured for a commanded ` +
-          `${normalizeDeg(angleDeg).toFixed(0)}°) — ${NO_MOTION_HINT}`,
-        measured: { angleDeg: turnedDeg },
+          `${normalizeDeg(angleDeg).toFixed(0)}°) — ${deadLeft ? DEAD_LEFT_HINT : NO_MOTION_HINT}${arcedNote}`,
+        measured: { angleDeg: turnedDeg, ...arcedMeasured },
       };
     }
 
@@ -1092,8 +1312,8 @@ export class BlockExecutor {
       : '';
     return {
       ok: true,
-      message: `Turned ${turnedDeg.toFixed(0)}° (${side})${mirrorNote}; heading now ${Math.round(this.deps.scene.getYawDeg())}°${note}.`,
-      measured: { angleDeg: turnedDeg },
+      message: `Turned ${turnedDeg.toFixed(0)}° (${side})${mirrorNote}; heading now ${Math.round(this.deps.scene.getYawDeg())}°${note}.${arcedNote}`,
+      measured: { angleDeg: turnedDeg, ...arcedMeasured },
     };
   }
 
@@ -1152,27 +1372,74 @@ export class BlockExecutor {
    */
   private async turnMeasured(
     angleDeg: number,
-    options: { allowMirror?: boolean } = {}
-  ): Promise<{ result: LocoResult; turnedDeg: number | null; mirrored: boolean }> {
+    options: { allowMirror?: boolean; arc?: ArcOption } = {}
+  ): Promise<{
+    result: LocoResult;
+    turnedDeg: number | null;
+    mirrored: boolean;
+    arc: ArcTravel;
+  }> {
     const target = normalizeDeg(angleDeg);
+    // An arc with no forward speed is an in-place turn wearing a hat — and, on
+    // this checkpoint, a dead one. Treated as "no arc" so the caller's own
+    // fallback and reporting run, rather than issuing a command that cannot move.
+    const arc = options.arc && options.arc.forwardMps > 1e-6 ? options.arc : undefined;
+    /** Accumulated cost/coverage of the arc, reported to the caller. */
+    const travel: ArcTravel = { ...NO_ARC_TRAVEL };
+    /** The nominal turn rate every duration below is derived from. */
+    const arcRate =
+      Math.abs(config.agentMode.turnSpeedDps) > 1e-6
+        ? Math.abs(config.agentMode.turnSpeedDps)
+        : 45;
+    /**
+     * Largest |rotation| ONE command may ask for and still fit inside what is
+     * left of the arc's distance budget. `turnToCommandExact` derives duration
+     * from the angle, and the arc holds a fixed forward speed for that duration
+     * — so metres ÷ (m/s) is seconds, and seconds × °/s is the angle cap.
+     */
+    const arcLimitDeg = (): number =>
+      arc ? ((arc.budgetM - travel.commandedM) / arc.forwardMps) * arcRate : Infinity;
+
     const before = await this.loco.odometry();
 
     // ── no odometry: exactly the old open-loop behaviour ──────────────────
     if (!before) {
-      const result = await this.driveFor(turnToCommand(target));
-      if (!result.ok) return { result, turnedDeg: null, mirrored: false };
+      // The arc still applies here: the reason a left turn is dead is the
+      // locomotion policy, not the odometry, so a blind robot that cannot see
+      // its heading is no more able to rotate CCW in place than a sighted one.
+      // Budget-clamped exactly as in the loop; an unfundable arc falls back to
+      // the in-place command, which then reports honestly.
+      const blindDeg = arc ? Math.max(-arcLimitDeg(), Math.min(arcLimitDeg(), target)) : target;
+      const canArc = arc !== undefined && arcLimitDeg() >= MIN_DURATION_S * arcRate;
+      const cmd = canArc
+        ? turnToCommandExact(blindDeg, undefined, arc.forwardMps)
+        : turnToCommand(target);
+      const result = await this.driveFor(cmd);
+      if (canArc) {
+        travel.commandedM += cmd.vx * cmd.durationS;
+        travel.durationS += cmd.durationS;
+      }
+      if (!result.ok) return { result, turnedDeg: null, mirrored: false, arc: travel };
       // `target` is what was COMMANDED here, not merely what was wanted: the one
       // command that went out asked for exactly it. Dead reckoning it is the
       // best this path can do and it is honest about being dead reckoning.
-      this.deps.scene.advanceYawDeg(target);
+      this.deps.scene.advanceYawDeg(canArc ? blindDeg : target);
       await this.refreshYaw();
-      return { result, turnedDeg: null, mirrored: false };
+      return { result, turnedDeg: null, mirrored: false, arc: travel };
     }
 
     // ── closed loop ───────────────────────────────────────────────────────
-    const allowMirror = options.allowMirror !== false;
+    // An arc is never mirrored. Mirroring satisfies a left θ by rotating right
+    // θ−360, and doing that at walking speed does not turn the robot on the
+    // spot — it drives it three quarters of the way round a circle, metres from
+    // where the caller budgeted for it to be. The arc IS the answer to the dead
+    // left turn that mirroring exists for, so the two never both apply.
+    const allowMirror = options.allowMirror !== false && arc === undefined;
     const deadline = this.now() + TURN_BUDGET_MS;
     let previousYawDeg = before.yaw * RAD_TO_DEG;
+    /** Last fix's position, so an arc's translation can be measured per command. */
+    let previousX = before.x;
+    let previousY = before.y;
     let turnedDeg = 0;
     /**
      * Rotation this turn ISSUED and never got a measurement back for, estimated
@@ -1259,11 +1526,29 @@ export class BlockExecutor {
       // that tracks at 1.0 or less. See the method docstring for why a latched
       // estimate is not allowed to size a command on its own.
       const gain = observedHere[side] === null ? 1 : this.turnGain[side];
-      const commandDeg = Math.max(
+      let commandDeg = Math.max(
         -MAX_TURN_STEP_DEG,
         Math.min(MAX_TURN_STEP_DEG, remainingDeg / gain)
       );
-      result = await this.driveFor(turnToCommandExact(commandDeg));
+      if (arc) {
+        // The arc spends the CALLER'S distance, so the budget — not the angle —
+        // is what bounds this command. Note the gain compensation above has
+        // already multiplied the remainder (a 10° correction at a measured gain
+        // of 0.1 is a 100° command, which at walking speed is over a metre of
+        // travel), which is exactly why the clamp is applied after it and not
+        // to the raw remainder.
+        const limitDeg = arcLimitDeg();
+        if (limitDeg < MIN_DURATION_S * arcRate) break; // budget spent — stop, do not fake it
+        commandDeg = Math.max(-limitDeg, Math.min(limitDeg, commandDeg));
+      }
+      const cmd = arc
+        ? turnToCommandExact(commandDeg, undefined, arc.forwardMps)
+        : turnToCommandExact(commandDeg);
+      result = await this.driveFor(cmd);
+      if (arc) {
+        travel.commandedM += cmd.vx * cmd.durationS;
+        travel.durationS += cmd.durationS;
+      }
       if (!result.ok) break;
 
       const after = await this.loco.odometry();
@@ -1278,10 +1563,19 @@ export class BlockExecutor {
         if (iteration === 0) {
           this.deps.scene.advanceYawDeg(unmeasuredDeg);
           await this.refreshYaw();
-          return { result, turnedDeg: null, mirrored };
+          return { result, turnedDeg: null, mirrored, arc: travel };
         }
         break;
       }
+
+      // An arc TRANSLATES as well as rotating, and the caller has to be told how
+      // far: it budgeted the metres, and whatever consumes the result (the
+      // walk's own residual, the navigator's next stage) would otherwise assume
+      // the robot stayed put. Measured, never derived from the command — this is
+      // a base that achieves 31% of a commanded forward speed.
+      if (arc) travel.movedM += Math.hypot(after.x - previousX, after.y - previousY);
+      previousX = after.x;
+      previousY = after.y;
 
       const afterYawDeg = after.yaw * RAD_TO_DEG;
       // Per-iteration delta, SUMMED. Differencing only the first and last sample
@@ -1403,7 +1697,27 @@ export class BlockExecutor {
     // heading error of up to 240° reported as ok:true.
     this.deps.scene.advanceYawDeg(turnedDeg + unmeasuredDeg);
     await this.refreshYaw();
-    return { result, turnedDeg, mirrored };
+    return { result, turnedDeg, mirrored, arc: travel };
+  }
+
+  /**
+   * The {@link ArcOption} for a heading correction that may be taken while
+   * walking forward, or `undefined` when this correction has to be an in-place
+   * turn after all.
+   *
+   * One gate: an arc must be able to fund at least one {@link MIN_DURATION_S}
+   * command out of the distance budget it was given. Below that there is no arc
+   * to issue — a shorter command does not exist — and pretending otherwise would
+   * either overshoot the caller's distance or send a zero-length command.
+   */
+  private arcFor(budgetM: number): ArcOption | undefined {
+    if (!Number.isFinite(budgetM) || budgetM <= 0) return undefined;
+    const forwardMps =
+      Math.abs(config.agentMode.walkSpeedMps) > 1e-6
+        ? Math.abs(config.agentMode.walkSpeedMps)
+        : 0.4;
+    if (budgetM < forwardMps * MIN_DURATION_S) return undefined;
+    return { forwardMps, budgetM };
   }
 
   /**
