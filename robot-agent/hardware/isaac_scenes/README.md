@@ -185,7 +185,7 @@ past the knuckle so the slack cannot grow silently.
 | `g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/factory_pause_room_g1_29dof_dex3_hw_env_cfg.py` | same, under `tasks/g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/` |
 | `g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/mdp/{__init__,observations,pause_door,rewards,terminations}.py` | same, under `.../mdp/` |
 | `g1_tasks/__init__.py` | `tasks/g1_tasks/__init__.py` — **OPTIONAL, and it is a full-file replacement** |
-| `README.md`, `verify_factory_scene_offline.py` | not installed; they stay in this repo |
+| `README.md`, `verify_factory_scene_offline.py`, `make_factory_place_graph.py` | not installed; they stay in this repo. The place graph the last one writes is not installed either — it is read by the **robot agent**, from this repo, via `PLACE_GRAPH_PATH` |
 
 **The door USD is the one non-`.py` install.** It is deliberately resolved relative to
 `base_scene_factory_pauseroom.py`'s own `__file__`, not via `PROJECT_ROOT` and not from
@@ -267,6 +267,161 @@ one.
 
 ---
 
+## The place graph Agent Mode navigates on
+
+The scene knows where the table is. **Agent Mode does not, unless something tells it.** The
+robot software navigates on a place graph JSON loaded by
+`robot-agent/src/agent-mode/place-resolver.ts`, and for this scene there was none —
+`PLACE_GRAPH_PATH` pointed at `places.warehouse.json`, i.e. at another building's polygons
+expressed about another origin, so `goto table_front` resolved to nothing and every
+`goto` failed by name.
+
+```bash
+python3 make_factory_place_graph.py            # (re)write the JSON
+python3 make_factory_place_graph.py --check    # exit 1 if it is out of date, write nothing
+```
+
+It writes `../sim_evaluator/places/places.factory_pauseroom.json`, and it is a **generator
+for the same reason `pause_room_door.usda` is one**: `table_front` was hand-typed once, at
+`(10.00, 5.35)`, and was 0.4 m outside the arm's reach with nothing to notice. Every
+coordinate in the JSON is read from `factory_pauseroom_layout.py` — `table_front` comes out
+of `standing_spot_for_grasp()` on every run, so the apple cannot move without the place
+moving with it. Section 18 of the offline verifier regenerates into a string and compares,
+which turns "the graph matches the scene" from a claim into an assertion.
+
+### What it emits
+
+Six polygons, all `floor: 0`, all non-keepout. Five are 1.00 m squares; `TABLE-FRONT` is a
+1.00 x 0.90 m rectangle, for the reason below. The goal column is the point the navigator
+actually drives to (`placeGoal` takes the polygon's shoelace centroid).
+
+| id | goal | type | where it comes from |
+|---|---|---|---|
+| `ROBOT-START` | (4.000, −2.000) | staging | `PLACES["robot_start"]`, asserted equal to `ROBOT["pos"][:2]` |
+| `FACTORY-CENTRE` | (0.000, 0.000) | aisle | `PLACES["factory_centre"]` — **not** on the door route; it is *behind* the robot and routing through it adds ~4.5 m of backtrack |
+| `WEST-AISLE` | (−8.000, 0.000) | aisle | `PLACES["west_aisle"]` — not on the door route either |
+| `HALL-MIDWAY` | (7.000, 0.650) | corridor | the exact midpoint of the first lane |
+| `PAUSE-ROOM-DOOR-APPROACH` | (10.000, 3.300) | corridor | `DOOR["centre"].x` for the centreline; north edge = the partition's south face |
+| `TABLE-FRONT` | (10.240, 5.550) | cell | BOTH axes from `standing_spot_for_grasp()`; north edge = `stand_y + TABLE_STANDOFF`, cross-checked against the table's near face |
+
+**Why 1.00 m squares.** Arrival is `pointInPolygon(pose) && distanceToBoundary ≥ 0.30 &&
+dist(pose, centroid) ≤ 1.00` (`navigator.ts:198`, `:204`, `:389-392`). A polygon whose
+inradius is under 0.30 m can never be arrived in *at all*, however close the robot gets to
+its centre — and note that holds at EQUALITY: at exactly 0.30 the arrival set is a single
+point, of measure zero, so the place is unarrivable in practice too. 0.50 m of half-side
+leaves a 0.40 m arrival patch, a few centimetres wider than the G1's own footprint. The
+generator mirrors those constants and the verifier re-reads them straight out of
+`navigator.ts`, so the mirror cannot go stale.
+
+**Why `TABLE-FRONT` is shallower, and why it still is not enough.** Its north edge is
+pinned to the table, so depth is the only free axis and it trades goal accuracy against
+arrivability. Half-depth is derived, not chosen: `PLACE_ENTRY_MARGIN_M + MIN_STAGE_M/2 =
+0.45`. `MIN_STAGE_M = 0.30` (`navigator.ts:51`) is the floor under every commanded walk,
+and the place is entered head-on from the south, so a band shallower than one stage can be
+stepped clean over — short of the place, then past it into the table, with no pose ever
+inside. Width stays 0.50 m of half-side: nothing constrains x, and x is where the measured
+cross-track error lives.
+
+That leaves the goal 0.290 m short of the grasp spot, and the honest consequence is
+printed on every run: **no arrivable pose is in reach.** The arrival band tops out at
+y = 5.700 and the apple is out of the 0.55 m budget south of y = 5.792 (`reach_limit_y()`,
+solved in closed form over the base-height band). So the walk the mission appends after
+`goto TABLE-FRONT` is not a refinement — a 0.092 m minimum is what makes the grasp possible
+at all.
+
+**`pause_room_door` is deliberately not a place.** `(10.00, 3.90)` is the **mid-plane of the
+partition**, whose y extent is 3.80–4.00 — a gate point to pass through, not a spot to stand
+on, and 0.100 m from a shut leaf against a 0.40 m planner disc. A polygon centred on it
+would declare wall to be floor. `PAUSE-ROOM-DOOR-APPROACH` replaces it with the apron of
+floor immediately south of the partition, narrow enough (x 9.50–10.50) that its whole
+arrival patch lies inside the 1.40 m aperture. That is what fixes the previous jam at
+`(10.607, 3.442)`: a single straight leg from the spawn to a goal *behind* the door lets
+cross-track error build across 8 m and then aims diagonally into the frame. Making the
+approach its own goal widens that lane's tightest clearance from **0.169 m past the body
+radius to 0.588 m**, and puts the last bearing before the throat on the centreline. The
+door's own automation has it open long before: the goal is 0.600 m from `DOOR["centre"]`,
+inside the 2.50 m open radius, and the far edge of the place is 1.100 m out — still short of
+the 3.20 m shut radius, so standing there cannot cycle the door.
+
+`HALL-MIDWAY` is there for the **stage budget**, not for geometry. It is the exact midpoint
+of the first lane, so it bends the route by nothing, but it splits the 8 m crossing into two
+`goto` legs that each get their own `AGENT_MAX_NAV_STAGES`. At the measured ~31% of
+commanded travel the default 12 stages buy about 7.5 m, which does not reach in one leg.
+
+### Three things the schema cannot carry — read this before debugging a failed grasp
+
+`parsePlaceGraph` is strict by **rebuilding a whitelisted object** (`place-resolver.ts:276-285`)
+rather than by rejecting extra keys, so a field it does not know is not an error — it
+*vanishes*. Nothing below is expressible, and inventing a key for any of it would be worse
+than having none, because the robot would then fail for no visible reason.
+
+1. **The arrival heading. There is nowhere to put it.** `PLACE_HEADINGS` declares 90° (world
+   +y, `TABLE_APPROACH_YAW_DEG`) at `pause_room_door` and `table_front`, and every reach
+   number in the *Where `table_front` comes from* section is computed at that heading. The
+   `Place` interface has no heading field, and `navigateToPlaceInner` issues no final
+   alignment turn — its last commanded turn is the heading of the last *path segment*, so a
+   robot entering `TABLE-FRONT` from the door ends up facing into the room, not at the
+   table. **The mission plan must append an explicit `turn` block after the `goto`**, or use
+   a patrol checkpoint's `headingDeg` + `capture`, which is the only arrival-heading
+   mechanism in the codebase. Section 18 asserts the headings are *absent*, so that nobody
+   later "fixes" this by adding a key the loader eats.
+2. **Arrival precision.** A resolved place is one goal *point* plus a containment test, with
+   a 1.00 m tolerance against a 0.55 m `GRASP_REACH_BUDGET`. `TABLE-FRONT`'s goal is
+   **0.340 m short** of the grasp spot, and up to **0.576 m** from the far corner of the
+   arrival patch. The polygon cannot be shrunk to fix this — see the 0.30 m inradius floor
+   above — so **the mission must append that walk explicitly** too.
+3. **The door.** No field for a doorway, a clear opening, a leaf sweep, or an edge between
+   places; despite the name it is a flat list of floor polygons with no adjacency. The
+   1.40 m opening reaches the planner only through the live lidar occupancy map.
+
+### Why there are no keepouts
+
+The loader *does* consume `keepout` — and both consumers would break this mission:
+
+* The **geofence** inflates every keepout by `DEFAULT_KEEPOUT_MARGIN_M = 0.5 m` and turns a
+  breach into a `zone_violation` protective stop. `table_front` stands 0.16 m from the
+  table's near face *by design*; fencing the table would stop the robot at the exact moment
+  it arrived to grasp, and releasing the latch needs a further 0.25 m.
+* The **path planner** gets the same polygons with the same 0.5 m margin plus a 0.40 m robot
+  disc. Fencing the partitions would leave 1.40 − 2 × 0.5 = **0.40 m** of doorway against an
+  0.80 m disc: `planPath` would answer `no-path` and the pre-walk check would refuse the
+  approach. Fencing the walls *seals the door*.
+
+Walls, columns, crates, the table and the door leaves reach the planner through the lidar
+occupancy map instead, which is where the code expects to find them. `landmarks` is parsed
+and read by nobody, so it is emitted empty.
+
+### Making the robot see it
+
+The file is inert until the robot agent is told about it. Two environment variables, neither
+of which has a useful default:
+
+```bash
+# absolute, or relative to the robot-agent process cwd (config.ts:795 — EMPTY by default)
+PLACE_GRAPH_PATH=hardware/sim_evaluator/places/places.factory_pauseroom.json
+# navigateToPlace refuses outright without a planner (navigator.ts:382-387)
+AGENT_NAV_PLANNER=grid
+```
+
+Leave `PLACE_TWIN_ID` unset: `PLACE_GRAPH_PATH` wins when both are set, and a `frame.twinId`
+would make the frame *unregistered*, which yields zero goto-able places. `frame.kind` is the
+literal `"sim"` for the same reason — anything else and `assessFrameRegistration` returns
+`registered: false`, `knownPlaces()` returns `[]`, and `goto` fails with a registration
+message rather than a missing-place one.
+
+On a successful load the agent logs `Place graph loaded: 7 places (0 keepout) in frame
+'factory-pauseroom-sim'`. On a *failed* load it logs `Place graph … could not be loaded —
+place stays UNKNOWN` and **boots anyway**, with no `PlaceTracker`, no pose subscription and
+`getPlaces()` empty — loud, but not fatal, so check for that line before blaming the walk.
+
+Round-tripped through the real loader (`npx tsx`, not a re-implementation): the graph loads,
+the frame registers `{"registered":true,"how":"identity"}`, all seven places are goto-able,
+and `"table front"`, `"table_front"`, `"the Table Front"` all resolve to `TABLE-FRONT`.
+`"pause room door"` resolves to `PAUSE-ROOM-DOOR-APPROACH` — the name is a superset of the
+phrase, on purpose, so the natural words land on the safe standing spot instead of failing.
+
+---
+
 ## Offline verification
 
 ```bash
@@ -295,6 +450,19 @@ facing the door, and **the straight line from there to the door centre keeps 0.2
 radius plus 0.10 m of daylight clear of every wall, partition, column, crate, table and
 open door leaf, and 0.60 m clear of every USD prop**; the quaternion helpers produce the
 orders they claim; both fixed cameras actually have line of sight.
+
+Section 18 then leaves the Isaac scene entirely and checks the **robot software's** copy of
+this geometry: that `places.factory_pauseroom.json` is byte-for-byte what
+`make_factory_place_graph.py` emits from the layout, that its frame block is the one
+`parsePlaceGraph` asserts (version 1, `kind: "sim"`, no `twinId`), that every `placeType`
+and `source` is in the closed set **read out of `types.ts`** rather than remembered, that
+every place has an inradius above the 0.30 m entry margin **read out of `navigator.ts`** so
+arrival is geometrically possible, that no polygon overlaps a wall, crate, table, open door
+leaf or USD prop, that every leg of the mission route is clear between the goals the
+navigator will actually drive to, and that nothing in `PLACES` was silently forgotten. It
+also asserts the two things the schema *cannot* carry — the 90° arrival headings and the
+0.340 m residual to the grasp spot — so that neither can be closed by adding a key the
+loader would eat.
 
 > The route wording used to read "with a clear route", which the check did not establish.
 > It modelled every obstacle as a circle of radius `max(width, depth)/2` — fine for a

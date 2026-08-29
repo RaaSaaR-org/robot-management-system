@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "frame": {
+    "id": "factory-pauseroom-sim",
+    "kind": "sim",
+    "units": "m",
+    "yawConvention": "deg,+x=0,CCW+"
+  },
+  "places": [
+    {
+      "id": "ROBOT-START",
+      "name": "Robot Start",
+      "placeType": "staging",
+      "floor": 0,
+      "polygon": [[3.5, -2.5], [4.5, -2.5], [4.5, -1.5], [3.5, -1.5]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "FACTORY-CENTRE",
+      "name": "Factory Centre",
+      "placeType": "aisle",
+      "floor": 0,
+      "polygon": [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "WEST-AISLE",
+      "name": "West Aisle",
+      "placeType": "aisle",
+      "floor": 0,
+      "polygon": [[-8.5, -0.5], [-7.5, -0.5], [-7.5, 0.5], [-8.5, 0.5]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "HALL-MIDWAY",
+      "name": "Hall Midway",
+      "placeType": "corridor",
+      "floor": 0,
+      "polygon": [[6.5, 0.15], [7.5, 0.15], [7.5, 1.15], [6.5, 1.15]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "PAUSE-ROOM-DOOR-APPROACH",
+      "name": "Pause Room Door Approach",
+      "placeType": "corridor",
+      "floor": 0,
+      "polygon": [[9.5, 2.8], [10.5, 2.8], [10.5, 3.8], [9.5, 3.8]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "TABLE-FRONT",
+      "name": "Table Front",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [[9.74, 5.1], [10.74, 5.1], [10.74, 6], [9.74, 6]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    }
+  ]
+}
