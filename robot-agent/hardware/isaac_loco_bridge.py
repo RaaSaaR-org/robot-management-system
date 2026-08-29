@@ -21,7 +21,8 @@ including the FSM gate: a `Damp`/`Sit` transition zeroes the velocity command, a
 zero is published like any other command rather than merely being withheld.
 
 Run it on the SAME DDS domain as the Isaac sim, and do NOT run `sim_g1_dds` on that domain
-at the same time. Two `sport` services on one domain means the RPC is answered by whichever
+at the same time. **Domain 0 is REFUSED** (exit 2): it is the real robot's bus, and this
+process both publishes a walk command and answers the sport RPC the robot answers itself. Two `sport` services on one domain means the RPC is answered by whichever
 wins the race, and the loser's LocoState is never stepped -- SetVelocity returns code 0
 while the robot stands still. Domains in use: 0 = real robot, 1 = sim, 9 = mock.
 
@@ -90,6 +91,7 @@ TASK-203/TASK-223.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import signal
 import sys
@@ -137,6 +139,40 @@ ODOM_TOPIC = "rt/odommodestate"      # what g1_sidecar.py's /loco/odom subscribe
 # stale after 2 s, so a 10% shortfall is three orders of magnitude of headroom,
 # and the alternative is a busy-wait competing with the sim for CPU.
 ODOM_TICK_HZ = 100.0
+
+
+def achievable_odom_rate_hz(rate_hz: float, tick_hz: float = ODOM_TICK_HZ) -> float:
+    """The odometry rate this bridge can ACTUALLY deliver for a requested one.
+
+    A frame can only leave on a tick boundary, so the delivered period is the
+    requested one rounded UP to a whole number of ticks. Only divisors of
+    `tick_hz` come back unchanged: at 100 Hz ticks a requested 30 Hz is served
+    every 4th tick and arrives at 25, a requested 15 arrives at 14.3, and a
+    requested 60 arrives at 50. Nothing validated that, so the startup banner
+    printed the request verbatim and an operator reading "20 Hz" had no way to
+    know they were getting 16.7 -- which is the number the odom rate was raised
+    from 50 to 100 Hz ticks to fix in the first place.
+    """
+    if rate_hz <= 0:
+        return rate_hz
+    ticks = max(1, math.ceil(tick_hz / rate_hz))
+    return tick_hz / ticks
+
+
+def odom_publish_period_s(rate_hz: float, tick_hz: float = ODOM_TICK_HZ) -> float:
+    """The publish period to hand `OdomIntegrator` for a requested rate.
+
+    Half a tick EARLY, deliberately. `OdomIntegrator` emits on the first tick
+    where `now - last_pub >= period`, and when the period is a whole number of
+    ticks that comparison lands exactly on a tick boundary -- so which side of it
+    a given tick falls on is decided by scheduler jitter of a few microseconds.
+    The delivered rate then wobbles between the intended one and one tick slower
+    (20 Hz and 16.7 Hz for the default), for no reason anybody watching could
+    diagnose. Backing the period off by half a tick puts the boundary in the
+    middle of the gap between two ticks, where jitter cannot reach it, and the
+    frame goes out on the tick that was intended every time.
+    """
+    return 1.0 / achievable_odom_rate_hz(rate_hz, tick_hz) - 0.5 / tick_hz
 
 # No lowstate this recently means the heading is unknown, and this stops publishing
 # entirely. Deliberate: g1_sidecar.py 503s when rt/odommodestate goes quiet, and
@@ -188,7 +224,9 @@ class OdomPublisher:
     def __init__(self, command_source, quat_order: str, rate_hz: float) -> None:
         self._command_source = command_source
         self._order = quat_order
-        self._rate = rate_hz
+        # What this publisher will really do, not what it was asked for -- every
+        # message that quotes a rate quotes this one. See achievable_odom_rate_hz.
+        self.rate = achievable_odom_rate_hz(rate_hz)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.error: Exception | None = None
@@ -202,7 +240,7 @@ class OdomPublisher:
         # rate limiting -- lives in this pure object so the offline verifier can drive
         # the failure paths without DDS. This class is threads and wire, nothing else.
         self._integ = isaac_odom.OdomIntegrator(
-            publish_period=1.0 / rate_hz,
+            publish_period=odom_publish_period_s(rate_hz),
             stale_after=ODOM_LOWSTATE_STALE_S,
             command_stale_after=ODOM_COMMAND_STALE_S)
 
@@ -254,7 +292,7 @@ class OdomPublisher:
                               f"Agent Mode falls back to open loop.", flush=True)
                     else:
                         print(f"[odom] {LOWSTATE_TOPIC} acquired — publishing "
-                              f"{ODOM_TOPIC} at {self._rate:g} Hz", flush=True)
+                              f"{ODOM_TOPIC} at {self.rate:g} Hz", flush=True)
                 if (self.samples == 0 and not warned_silent
                         and now - t_start > ODOM_NO_LOWSTATE_WARN_S):
                     # Never say nothing. "Odometry ON" in the banner plus silence here
@@ -310,6 +348,20 @@ class IsaacLocoBridge:
         self._shutdown_lock = threading.Lock()
         self._shutdown_done = False
 
+        if domain == 0:
+            # Not a warning, and not negotiable. Domain 0 is the REAL ROBOT.
+            # This process publishes rt/run_command/cmd -- a walk-command channel
+            # -- and stands up the sport service that answers SetVelocity, so a
+            # bridge started here would drive a real G1 with a locomotion policy
+            # that is not on it, while a second sport service (the robot's own)
+            # races it for every RPC. `isaac_manip_bridge.py` refuses the same
+            # domain for the same reason.
+            raise ValueError(
+                "domain 0 is the REAL ROBOT and is refused: this bridge publishes "
+                "rt/run_command/cmd and answers the sport RPC, which a real G1 "
+                "would obey and also answer itself. Use the sim domain (1) or the "
+                "mock (9).")
+
         # Pass the interface only when asked: the SDK's default config works here, whereas
         # sim_node.py's hardcoded `lo0` is a macOS name that fails on Linux.
         if iface:
@@ -334,8 +386,11 @@ class IsaacLocoBridge:
         print(f"[bridge] sport service up on domain {domain}, publishing {RUN_COMMAND_TOPIC} "
               f"at {rate_hz:g} Hz", flush=True)
         if self._odom is not None:
+            # The ACHIEVABLE rate, never the requested one: a banner that promises
+            # a rate the tick loop cannot divide into is how a 16.7 Hz feed passed
+            # for 20 Hz. main() has already said so if the two differ.
             print(f"[bridge] odometry ON — subscribing {LOWSTATE_TOPIC}, publishing "
-                  f"{ODOM_TOPIC} at {odom_rate_hz:g} Hz, quaternion order "
+                  f"{ODOM_TOPIC} at {self._odom.rate:g} Hz, quaternion order "
                   f"'{quat_order}'. yaw is MEASURED; x/y are DEAD RECKONED from the "
                   f"commanded velocity and WILL drift — do not trust them as an "
                   f"absolute position.", flush=True)
@@ -459,7 +514,8 @@ def probe(bridge: IsaacLocoBridge) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--domain", type=int, default=1,
-                    help="DDS domain; must match the Isaac sim (0=real robot, 1=sim, 9=mock)")
+                    help="DDS domain; must match the Isaac sim. 0 (the real robot) "
+                         "is REFUSED. 1 = sim, 9 = mock.")
     # 100 Hz, matching the vendor's send_commands_keyboard.py (`time.sleep(0.01)`).
     #
     # This was 50 Hz until 2026-08-28 (TASK-203 step 2) and that is NOT a safe
@@ -526,17 +582,31 @@ def main() -> int:
 
     if args.publish_odom and args.odom_rate <= 0:
         ap.error("--odom-rate must be > 0 (use --no-odom to turn odometry off)")
-    if args.publish_odom and args.odom_rate > ODOM_TICK_HZ:
-        # Not an error, just arithmetic: the loop samples at ODOM_TICK_HZ, so it
-        # cannot emit faster than that however high this is set. Say so rather than
-        # letting an operator believe they asked for something they did not get.
-        print(f"[bridge] NOTE: --odom-rate {args.odom_rate:g} Hz exceeds the "
-              f"{ODOM_TICK_HZ:g} Hz odometry tick; frames will go out at "
-              f"{ODOM_TICK_HZ:g} Hz.", flush=True)
+    if args.publish_odom:
+        # Not an error, just arithmetic: a frame can only leave on a tick
+        # boundary, so any rate that is not a divisor of ODOM_TICK_HZ -- and any
+        # rate above it -- is served slower than it was asked for. Say so rather
+        # than letting an operator believe they got what they typed. Nothing
+        # rounds the request away: the bridge publishes at the achievable rate
+        # and every message that quotes a rate quotes that one.
+        achievable = achievable_odom_rate_hz(args.odom_rate)
+        if abs(achievable - args.odom_rate) > 1e-9:
+            print(f"[bridge] NOTE: --odom-rate {args.odom_rate:g} Hz is not a divisor of "
+                  f"the {ODOM_TICK_HZ:g} Hz odometry tick, and a frame can only go out on "
+                  f"a tick boundary — so odometry will be published at "
+                  f"{achievable:g} Hz. Use a divisor (100, 50, 25, 20, 10, 5, 4, 2, 1) "
+                  f"to get exactly what you ask for.", flush=True)
 
-    bridge = IsaacLocoBridge(args.domain, args.rate, verbose=not args.quiet,
-                             iface=args.iface, publish_odom=args.publish_odom,
-                             odom_rate_hz=args.odom_rate, quat_order=args.quat_order)
+    try:
+        bridge = IsaacLocoBridge(args.domain, args.rate, verbose=not args.quiet,
+                                 iface=args.iface, publish_odom=args.publish_odom,
+                                 odom_rate_hz=args.odom_rate, quat_order=args.quat_order)
+    except ValueError as exc:
+        # An argument mistake (domain 0) is an operator message, not a traceback.
+        # Exit 2 so a script can tell it apart from a bridge that started and then
+        # died (1) -- the same contract as isaac_manip_bridge.py.
+        print(f"[bridge] refused: {exc}", file=sys.stderr, flush=True)
+        return 2
 
     stopping = threading.Event()
 
