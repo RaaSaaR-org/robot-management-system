@@ -203,6 +203,44 @@ const TURN_BUDGET_MS = 45_000;
  */
 const MAX_TURN_STEP_DEG = 150;
 
+/**
+ * Longest stretch of a walk that may run without the heading being re-measured.
+ *
+ * The measurement that forced this (TASK-227, Isaac factory scene): commanding
+ * `vx = 0.3` for 25 s produced 2.7 m of travel while the heading fell from +45°
+ * to −18° — about **2°/s of unbidden yaw**, in a straight-line walk nobody asked
+ * to curve. `walk` measured DISTANCE ONLY, so the curve was invisible: the block
+ * reported "Walked 2.70 m" and the navigator re-planned from a pose 63° off the
+ * one the robot was in.
+ *
+ * Sized in DURATION, expressed in metres, because drift accrues with the time a
+ * velocity command is held and `walkToCommand` derives that time from
+ * `AGENT_WALK_SPEED_MPS`. At the 0.4 m/s default, 1.5 m is 3.75 s of commanded
+ * motion — about 7.5° at the measured drift rate, i.e. roughly one
+ * {@link WALK_HEADING_TOLERANCE_DEG} per segment. So the heading is re-measured
+ * about as often as it can go out of tolerance, and no faster: each correction
+ * costs two odometry reads and at least one {@link MIN_DURATION_S} command.
+ *
+ * It is deliberately SHORTER than the navigator's own `AGENT_NAV_MAX_SEGMENT_M`
+ * (2 m), so a planned `goto` stage is corrected inside itself rather than only
+ * at the stage boundary where the navigator happens to re-plan.
+ */
+const MAX_WALK_SEGMENT_M = 1.5;
+
+/**
+ * How far off its starting heading a walk may be before a segment boundary
+ * spends a correction on it.
+ *
+ * Two numbers bound this from either side. Below, {@link TURN_TOLERANCE_DEG}
+ * (5°) is where the closed-loop turn stops correcting, and a walk tolerance at
+ * or under it would ask for a correction the turn declines to finish — the two
+ * loops would chase each other for the whole walk. Above, 8° of heading error
+ * over one {@link MAX_WALK_SEGMENT_M} segment puts the end of the segment
+ * 1.5·sin 8° ≈ 0.21 m off the line, which is inside the `MIN_STAGE_M` (0.3 m)
+ * granularity the navigator already plans and arrives at.
+ */
+const WALK_HEADING_TOLERANCE_DEG = 8;
+
 /** Why a motion command can be accepted and still move nothing. */
 const NO_MOTION_HINT =
   'the command was accepted but nothing moved — the base is most likely in a ' +
@@ -614,51 +652,277 @@ export class BlockExecutor {
       }
     }
 
-    const cmd = walkToCommand(distanceM, direction);
     const before = await this.loco.odometry();
-    const result = await this.driveFor(cmd);
-    if (!result.ok) return { ok: false, message: `walk failed: ${locoError(result)}` };
-    const after = await this.loco.odometry();
 
-    // Report what the robot ACHIEVED, not what it was told to do. The two differ
-    // whenever the robot is slowed, blocked or the command expires early, and a
-    // block that claims "walked 2.00 m" after moving 1.71 m makes the planner
-    // re-plan from a pose that does not exist. Without odometry we say so.
-    if (!before || !after) {
+    // ── no odometry: exactly the open-loop walk that shipped ──────────────
+    //
+    // Same rule as `turnMeasured`: a robot that cannot measure its heading has
+    // nothing to hold it against, and segmenting a walk to compare dead-reckoned
+    // yaw with itself would be guesswork dressed up as feedback. One command,
+    // and the message says the walk is unverified — including, now, its heading,
+    // because "I do not know where I am pointing" is exactly the thing this
+    // block must never leave unsaid.
+    if (!before) {
+      const cmd = walkToCommand(distanceM, direction);
+      const result = await this.driveFor(cmd);
+      if (!result.ok) return { ok: false, message: `walk failed: ${locoError(result)}` };
       return {
         ok: true,
         message:
           `Commanded ${distanceM.toFixed(2)} m ${direction} ` +
           `(${cmd.durationS.toFixed(1)} s at ${config.agentMode.walkSpeedMps} m/s). ` +
-          `No odometry available — distance travelled is unverified.${clampNote}`,
+          `No odometry available — distance travelled and heading held are unverified.${clampNote}`,
       };
     }
 
-    const moved = Math.hypot(after.x - before.x, after.y - before.y);
+    // ── closed loop on HEADING (TASK-227) ─────────────────────────────────
+    //
+    // `walk` measured distance and nothing else, so a base that curves as it
+    // walks reported a perfectly good number for a walk that went somewhere
+    // else. The factory-scene measurement behind {@link MAX_WALK_SEGMENT_M} is
+    // 2°/s of unbidden yaw; over one long command that is tens of degrees, and
+    // the navigator's next stage is planned from a heading the robot left.
+    //
+    // The walk is therefore cut into segments, the yaw is re-measured at every
+    // boundary, and an error beyond {@link WALK_HEADING_TOLERANCE_DEG} is
+    // steered out with the SAME closed-loop turn the `turn` block uses — so the
+    // measured tracking ratio in `this.turnGain` is shared, never re-estimated.
+    //
+    // Segmenting must not change how far the robot goes: the segments are equal
+    // and sum to `distanceM`.
+    const startYawDeg = normalizeDeg(before.yaw * RAD_TO_DEG);
+    const segmentCount = Math.max(1, Math.ceil(Math.abs(distanceM) / MAX_WALK_SEGMENT_M));
+    const segmentM = distanceM / segmentCount;
+
+    let fix = before;
+    let movedM = 0;
+    let commandedS = 0;
+    let commandedM = 0;
+    let corrections = 0;
+    let walkedSegments = 0;
+    /** Segments whose displacement was actually measured, not assumed. */
+    let measuredSegments = 0;
+    /** Odometry stopped answering part-way through — measured, then blind. */
+    let lostFixAfter: number | null = null;
+    /** A per-segment re-check, a dead segment or the duration cap stopped us. */
+    let stopNote = '';
+
+    for (let i = 0; i < segmentCount; i++) {
+      let thisSegmentM = segmentM;
+
+      // Re-run the SAME two checks `walk` opened with, from the pose the robot
+      // is standing at now — a segmented walk that did not re-check would be
+      // the old open-loop walk with extra steps. Skipped for i === 0, which the
+      // block-level checks above already covered from this very pose, so no
+      // check is paid for twice and `checkForwardPath` is not called twice for
+      // an unsegmented walk. Sideways and backward walks are not re-checked for
+      // the same reason they are not checked at all: `forwardClearance` and
+      // `checkForwardPath` measure the +x corridor and nothing else.
+      if (i > 0 && direction === 'forward') {
+        const recheck = await this.checkSegmentAhead(thisSegmentM);
+        if (recheck.reason !== null) {
+          if (recheck.allowedM < MIN_STAGE_M) {
+            stopNote =
+              ` Stopped after ${walkedSegments} of ${segmentCount} segments — ` +
+              `${recheck.reason}, inside the shortest useful stage.`;
+            break;
+          }
+          // Something is in the way within this segment. Walk up to it and stop
+          // there: the rest of the walk was aimed through whatever this is.
+          thisSegmentM = recheck.allowedM;
+          stopNote =
+            ` Stopped after ${walkedSegments + 1} of ${segmentCount} segments — ${recheck.reason}.`;
+        }
+      }
+
+      const cmd = walkToCommand(thisSegmentM, direction);
+      // `walkToCommand` caps ONE command at MAX_DURATION_S, which is what used
+      // to bound a hallucinated "walk 1000 m" to a minute of motion. Segmenting
+      // would have turned that cap into `segments × MAX_DURATION_S` — 667
+      // minutes for the same block — so it is applied to the WHOLE walk here.
+      // The first segment always fits (it is at most MAX_WALK_SEGMENT_M), so
+      // this can never refuse to take a step.
+      if (i > 0 && commandedS + cmd.durationS > MAX_DURATION_S) {
+        stopNote =
+          ` Stopped after ${walkedSegments} of ${segmentCount} segments — ` +
+          `${MAX_DURATION_S} s is the most one walk block may command.`;
+        break;
+      }
+
+      commandedS += cmd.durationS;
+      commandedM += Math.abs(thisSegmentM);
+      const result = await this.driveFor(cmd);
+      if (!result.ok) return { ok: false, message: `walk failed: ${locoError(result)}` };
+      walkedSegments++;
+
+      const after = await this.loco.odometry();
+      // Odometry that goes away mid-walk is not a measurement of zero — the
+      // same rule the turn loop follows. Stop, and report what was measured up
+      // to the last good fix rather than guessing at the rest.
+      if (!after) {
+        lostFixAfter = walkedSegments;
+        break;
+      }
+      const stepM = Math.hypot(after.x - fix.x, after.y - fix.y);
+      movedM += stepM;
+      measuredSegments++;
+      fix = after;
+
+      // A segment that measurably did not move will not be fixed by sending it
+      // again: stop, and let the zero-motion rule below decide what it means
+      // for the walk as a whole.
+      if (Math.abs(thisSegmentM) > ZERO_MOTION_M && stepM < ZERO_MOTION_M) {
+        if (stopNote === '') {
+          stopNote = ` Stopped after ${walkedSegments} of ${segmentCount} segments — the base stopped moving.`;
+        }
+        break;
+      }
+      if (stopNote !== '') break; // the re-check above shortened this segment
+
+      // Steer the heading back. `allowMirror: false` deliberately: a base the
+      // mirror strategy exists for would answer a 10° correction with 350° of
+      // rotation in the middle of a walk, which is worse than the drift. If
+      // this base cannot turn that way the correction measures nothing, the
+      // loop stops correcting, and the residual is REPORTED — the honest
+      // failure, not a spin.
+      const errorDeg = normalizeDeg(fix.yaw * RAD_TO_DEG - startYawDeg);
+      if (Math.abs(errorDeg) > WALK_HEADING_TOLERANCE_DEG) {
+        corrections++;
+        const { result: turnResult } = await this.turnMeasured(-errorDeg, { allowMirror: false });
+        if (!turnResult.ok) {
+          stopNote =
+            ` Stopped after ${walkedSegments} of ${segmentCount} segments — the heading correction ` +
+            `failed: ${locoError(turnResult)}.`;
+          break;
+        }
+        const afterTurn = await this.loco.odometry();
+        if (!afterTurn) {
+          lostFixAfter = walkedSegments;
+          break;
+        }
+        // From the post-correction pose, so the in-place turn's own wobble is
+        // not counted as distance walked.
+        fix = afterTurn;
+      }
+    }
+
+    // Report what the robot ACHIEVED, not what it was told to do. The two differ
+    // whenever the robot is slowed, blocked or the command expires early, and a
+    // block that claims "walked 2.00 m" after moving 1.71 m makes the planner
+    // re-plan from a pose that does not exist.
+    if (measuredSegments === 0) {
+      // The pose was there before the first command and gone after it, so
+      // nothing about this walk was measured. Report the COMMAND, and do not
+      // let the zero-motion rule below read an absent measurement as a zero.
+      return {
+        ok: true,
+        message:
+          `Commanded ${commandedM.toFixed(2)} m ${direction} ` +
+          `(${commandedS.toFixed(1)} s at ${config.agentMode.walkSpeedMps} m/s). ` +
+          `No odometry available — distance travelled and heading held are unverified.${clampNote}`,
+      };
+    }
+
     // Zero measured motion for a real command is a FAILURE, not a 100% short
     // success: the plan must stop here rather than keep issuing blocks against
     // a pose the robot never reached.
-    if (Math.abs(distanceM) > ZERO_MOTION_M && moved < ZERO_MOTION_M) {
+    if (Math.abs(distanceM) > ZERO_MOTION_M && movedM < ZERO_MOTION_M) {
       return {
         ok: false,
         message:
-          `walk: the robot did not move (${moved.toFixed(2)} m measured for a commanded ` +
+          `walk: the robot did not move (${movedM.toFixed(2)} m measured for a commanded ` +
           `${Math.abs(distanceM).toFixed(2)} m) — ${NO_MOTION_HINT}`,
-        measured: { distanceM: moved },
+        measured: { distanceM: movedM },
       };
     }
 
-    const shortfall = distanceM > 0 ? 1 - moved / distanceM : 0;
+    const shortfall = distanceM > 0 ? 1 - movedM / distanceM : 0;
     const note =
       shortfall > SHORTFALL_TOLERANCE
         ? ` — ${(shortfall * 100).toFixed(0)}% short of the commanded ${distanceM.toFixed(2)} m` +
           ` (blocked, slowed, or the command expired early)`
         : '';
+    const segmentNote = segmentCount > 1 ? ` over ${walkedSegments} of ${segmentCount} segments` : '';
+    const lostNote =
+      lostFixAfter === null
+        ? ''
+        : ` Odometry stopped answering after segment ${lostFixAfter} — the rest is unverified.`;
     return {
       ok: true,
-      message: `Walked ${moved.toFixed(2)} m ${direction} in ${cmd.durationS.toFixed(1)} s${note}.${clampNote}`,
-      measured: { distanceM: moved },
+      message:
+        `Walked ${movedM.toFixed(2)} m ${direction} in ${commandedS.toFixed(1)} s${segmentNote}${note}.` +
+        `${this.headingNote(startYawDeg, fix.yaw * RAD_TO_DEG, corrections)}${stopNote}${clampNote}${lostNote}`,
+      measured: { distanceM: movedM },
     };
+  }
+
+  /**
+   * The heading the walk ended on against the one it set off on, in one
+   * sentence, ALWAYS present.
+   *
+   * It is stated even when the heading held, because "the robot arrived
+   * pointing where it meant to" is the fact the journal was missing: before
+   * TASK-227 a walk that curved 60° off course and a walk that ran true
+   * produced byte-identical block outcomes, so nothing downstream — planner,
+   * operator, or the journal a failed mission is read back from — could tell
+   * them apart.
+   */
+  private headingNote(startYawDeg: number, endYawDeg: number, corrections: number): string {
+    const errorDeg = normalizeDeg(endYawDeg - startYawDeg);
+    // `toFixed` renders −0.4 as "-0"; the magnitude plus a side word cannot.
+    const magnitude = Math.abs(errorDeg).toFixed(0);
+    const side = Math.abs(errorDeg) < 0.5 ? '' : errorDeg > 0 ? ' left' : ' right';
+    // Same reason: a heading of −0.2° must read as "0°", not "-0°".
+    const from = (Math.round(startYawDeg) === 0 ? 0 : startYawDeg).toFixed(0);
+    const spent =
+      corrections === 0
+        ? 'no correction needed'
+        : `${corrections} correction${corrections === 1 ? '' : 's'}`;
+    return Math.abs(errorDeg) <= WALK_HEADING_TOLERANCE_DEG
+      ? ` Heading held: ${magnitude}°${side} of the ${from}° it set off on (${spent}).`
+      : ` HEADING OFF by ${magnitude}°${side} of the ${from}° it set off on ` +
+          `(${spent}) — this walk did not go where it was aimed.`;
+  }
+
+  /**
+   * The clearance and the map, re-asked for the next `segmentM` from the pose
+   * the robot is standing at NOW.
+   *
+   * Same two checks, same margins and same fail-open rule as the block-level
+   * ones at the top of {@link walk}: a `null` clearance and a `null` map answer
+   * are UNKNOWN and shorten nothing, so this can never make the robot more
+   * timid than the sensors justify. What it adds is that they are asked again
+   * part-way through a long walk instead of once, before it — which is strictly
+   * more checking than the single open-loop command it replaces.
+   */
+  private async checkSegmentAhead(
+    segmentM: number
+  ): Promise<{ allowedM: number; reason: string | null }> {
+    let allowedM = segmentM;
+    let reason: string | null = null;
+
+    const clearanceM = this.deps.scene.getForwardClearanceM();
+    if (clearanceM !== null) {
+      const clearM = Math.max(0, clearanceM - CLEARANCE_MARGIN_M);
+      if (clearM < allowedM) {
+        allowedM = clearM;
+        reason = `the lidar measures ${clearanceM.toFixed(2)} m straight ahead`;
+      }
+    }
+
+    if (this.deps.checkForwardPath) {
+      const check = await this.deps.checkForwardPath(allowedM);
+      if (check?.blocker && check.allowedM < allowedM) {
+        allowedM = check.allowedM;
+        const what =
+          check.blocker.kind === 'keepout'
+            ? `${check.blocker.label} keepout`
+            : check.blocker.label;
+        reason = `${what} ahead at ${check.allowedM.toFixed(2)} m on the map`;
+      }
+    }
+
+    return { allowedM, reason };
   }
 
   private async turn(block: AgentBlock): Promise<BlockOutcome> {

@@ -1372,3 +1372,338 @@ describe('BlockExecutor — closed-loop turns (TASK-203)', () => {
     expect(Math.abs(h.scene.getYawDeg())).toBeLessThan(4 * 5);
   });
 });
+
+/**
+ * TASK-227. The measurement behind every test below, from a live run in the
+ * Isaac factory scene: commanding `vx = 0.3` for 25 s produced 2.7 m of travel
+ * (~0.11 m/s) while the heading fell from +45° to −18° — about **2°/s of
+ * unbidden yaw** in a walk that was asked to go straight.
+ *
+ * `walk` measured DISTANCE ONLY. It therefore reported that curve as a clean
+ * "Walked 2.70 m forward", and a `goto` across the hall never arrived: the
+ * robot bowed away from the line and no block outcome said so. The walk is now
+ * cut into segments, the heading re-measured at every boundary and steered back
+ * with the same closed loop `turn` uses, and the residual stated in the outcome
+ * whether it held or not.
+ */
+describe('BlockExecutor — a walk holds its heading (TASK-227)', () => {
+  /**
+   * A base that WALKS, with the two defects the factory run measured kept
+   * independently settable:
+   *
+   *   - `driftDps` — unbidden yaw while a TRANSLATION command runs. −2 is the
+   *     measured factory number (the heading falls, i.e. the robot curves right).
+   *   - `speedGain` — the fraction of the commanded speed actually achieved.
+   *
+   * Translation is integrated along the pose's CURRENT heading, so a drifting
+   * base really does walk somewhere other than where it was aimed; nothing here
+   * is faked at the reporting layer.
+   */
+  function makeWalkingBase(
+    opts: {
+      driftDps?: number;
+      speedGain?: number;
+      turnGain?: number;
+      odometry?: () => Promise<{ x: number; y: number; yaw: number; source: string } | null>;
+      checkForwardPath?: BlockExecutorDeps['checkForwardPath'];
+    } = {}
+  ) {
+    const driftDps = opts.driftDps ?? 0;
+    const speedGain = opts.speedGain ?? 1;
+    const turnGain = opts.turnGain ?? 1;
+    const moves: MoveCall[] = [];
+    const pose = { x: 0, y: 0, yawRad: 0 };
+    const scene = new SceneMemoryStore('robot-1');
+    const deps: BlockExecutorDeps = {
+      scene,
+      vision: {
+        observe: async () => ({
+          currentView: 'a factory hall',
+          entities: [],
+          personVisible: false,
+          raw: '{}',
+          degraded: false,
+        }),
+      } as unknown as VisionClient,
+      range: noRange(),
+      isAborted: () => false,
+      loco: {
+        move: async (vx, vy, omega, durationS) => {
+          moves.push({ vx, vy, omega, durationS });
+          if (omega !== 0) {
+            pose.yawRad += omega * durationS * turnGain;
+          } else {
+            const distanceM = Math.hypot(vx, vy) * speedGain * durationS;
+            // The commanded axis is in the BODY frame, so a strafe goes sideways
+            // and a forward walk goes along the heading — including whatever the
+            // drift has already done to it.
+            const heading = pose.yawRad + Math.atan2(vy, vx);
+            pose.x += distanceM * Math.cos(heading);
+            pose.y += distanceM * Math.sin(heading);
+            pose.yawRad += driftDps * durationS * DEG_TO_RAD;
+          }
+          return { ok: true };
+        },
+        action: async () => ({ ok: true }),
+        fsm: async () => ({ ok: true }),
+        standHeight: async () => ({ ok: true }),
+        odometry:
+          opts.odometry ??
+          (async () => ({ x: pose.x, y: pose.y, yaw: pose.yawRad, source: 'test' })),
+      },
+      sleep: async () => {},
+      now: () => 1e12,
+    };
+    if (opts.checkForwardPath) deps.checkForwardPath = opts.checkForwardPath;
+    return {
+      executor: new BlockExecutor(deps),
+      moves,
+      scene,
+      /** Only the translation commands — the walk itself, without corrections. */
+      walkMoves: () => moves.filter((m) => m.omega === 0),
+      /** Only the rotations — every heading correction this walk spent. */
+      turnMoves: () => moves.filter((m) => m.omega !== 0),
+      yawDeg: () => (pose.yawRad * 180) / Math.PI,
+    };
+  }
+
+  it('spends no correction on a base that walks straight', async () => {
+    const h = makeWalkingBase();
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 4, direction: 'forward' }));
+
+    expect(outcome.ok).toBe(true);
+    // Not one rotation: a base that holds its heading is driven exactly as it
+    // was before this loop existed, only in more pieces.
+    expect(h.turnMoves()).toHaveLength(0);
+    expect(h.yawDeg()).toBeCloseTo(0, 6);
+    expect(outcome.message).toMatch(
+      /Heading held: 0° of the 0° it set off on \(no correction needed\)/
+    );
+    expect(outcome.message).not.toMatch(/HEADING OFF/);
+  });
+
+  it('segments a long walk without changing how far it goes', async () => {
+    const h = makeWalkingBase();
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+    // 8 m in 1.5 m segments is six equal 1.333 m pieces, and six of those is
+    // 8 m — segmenting changes WHEN the heading is measured, never how far the
+    // robot is sent.
+    expect(h.walkMoves()).toHaveLength(6);
+    const commandedM = h.walkMoves().reduce((sum, m) => sum + m.durationS, 0) * WALK_SPEED;
+    expect(commandedM).toBeCloseTo(8, 6);
+    for (const move of h.walkMoves()) expect(move.vx).toBeCloseTo(WALK_SPEED, 10);
+    expect(outcome.measured?.distanceM).toBeCloseTo(8, 6);
+    expect(outcome.message).toMatch(/Walked 8\.00 m forward/);
+    expect(outcome.message).toMatch(/over 6 of 6 segments/);
+    expect(outcome.message).not.toMatch(/short of/);
+  });
+
+  it('holds the heading through the 2°/s drift the factory run measured', async () => {
+    const h = makeWalkingBase({ driftDps: -2 });
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+    // Open-loop this is the defect: 8 m at 0.4 m/s is 20 s of commanded motion,
+    // and 20 s × 2°/s is 40° of heading nobody asked for — reported as a clean
+    // "Walked 8.00 m forward".
+    expect(h.walkMoves().reduce((sum, m) => sum + m.durationS, 0) * 2).toBeCloseTo(40, 6);
+    expect(outcome.ok).toBe(true);
+    // Closed, the walk ends on the heading it set off on.
+    expect(Math.abs(h.yawDeg())).toBeLessThan(8);
+    expect(h.turnMoves().length).toBeGreaterThan(0);
+    // Every correction goes LEFT — back against a heading that is falling.
+    for (const move of h.turnMoves()) expect(move.omega).toBeGreaterThan(0);
+    // Six segments, three of them ending far enough out to be worth a
+    // correction, and the walk finishes on the heading it started on.
+    expect(outcome.message).toMatch(
+      /Heading held: 0° of the 0° it set off on \(3 corrections\)/
+    );
+    // The distance is still the requested one: a correction is a turn in place.
+    expect(h.walkMoves().reduce((sum, m) => sum + m.durationS, 0) * WALK_SPEED).toBeCloseTo(8, 6);
+  });
+
+  it('says so, loudly, when the drift could not be corrected out', async () => {
+    // A base that drifts AND cannot rotate: `turnGain: 0`. The honest answer is
+    // a walk that reports where it actually ended up — not a success, and not a
+    // block that spends the rest of the plan spinning.
+    const h = makeWalkingBase({ driftDps: -2, turnGain: 0 });
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+    expect(outcome.ok).toBe(true);
+    expect(Math.abs(h.yawDeg())).toBeGreaterThan(8);
+    // The measured open-loop drift, stated instead of hidden: 40° right.
+    expect(outcome.message).toMatch(/HEADING OFF by 40° right of the 0° it set off on/);
+    expect(outcome.message).toMatch(/did not go where it was aimed/);
+    // And it did not burn the plan's time re-sending a rotation that measurably
+    // does nothing: one dead command per boundary, not a loop of them.
+    expect(h.turnMoves().length).toBeLessThanOrEqual(6);
+  });
+
+  it('degrades to one open-loop command with no odometry, and calls the heading unverified', async () => {
+    const { executor, moves } = makeExecutor();
+
+    const outcome = await executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+    // No fix to close against: iterating on dead-reckoned yaw would be guesswork
+    // presented as feedback, so the walk stays the single command it always was.
+    expect(moves).toHaveLength(1);
+    expect(moves[0].durationS).toBeCloseTo(8 / WALK_SPEED, 6);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.measured).toBeUndefined();
+    expect(outcome.message).toMatch(/heading held are unverified/);
+    expect(outcome.message).not.toMatch(/Heading held:/);
+  });
+
+  it('reads odometry that goes away mid-walk as unknown, never as a zero', async () => {
+    // The trap this pins: with no measured segment `movedM` stays 0, and the
+    // zero-motion rule would fail the block with "the robot did not move" on the
+    // strength of a measurement that was never taken.
+    let call = 0;
+    const h = makeWalkingBase({
+      odometry: async () => (call++ === 0 ? { x: 0, y: 0, yaw: 0, source: 'test' } : null),
+    });
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 4, direction: 'forward' }));
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).not.toMatch(/did not move/);
+    expect(outcome.message).toMatch(/unverified/);
+    // And it stopped rather than walking the remaining segments blind.
+    expect(h.walkMoves()).toHaveLength(1);
+    expect(outcome.measured).toBeUndefined();
+  });
+
+  it('still refuses a walk into a clearance inside the stopping margin', async () => {
+    const h = makeWalkingBase();
+    h.scene.merge(
+      { currentView: 'a wall', entities: [], personVisible: false, raw: '{}', degraded: false },
+      undefined,
+      { forwardClearanceM: 0.6 }
+    );
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/refusing to walk into it/);
+    expect(h.moves).toHaveLength(0);
+  });
+
+  it('still refuses a walk into a blocker the map knows about', async () => {
+    const h = makeWalkingBase({
+      checkForwardPath: () => ({
+        allowedM: 0.1,
+        knownM: 0.1,
+        blocker: { kind: 'robot', label: 'robot Bravo' },
+        blockerAtM: 0.1,
+      }),
+    });
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/robot Bravo is 0\.10 m ahead on the map — refusing/);
+    expect(h.moves).toHaveLength(0);
+  });
+
+  it('re-asks the map at every segment boundary, and stops when it answers differently', async () => {
+    // The safety half of segmenting: the map is consulted from the pose the
+    // robot is standing at NOW, not once from the pose it set off from. A crate
+    // pushed into the aisle after the walk started stops the walk.
+    let calls = 0;
+    const h = makeWalkingBase({
+      checkForwardPath: () => {
+        calls++;
+        return calls === 1
+          ? { allowedM: 8, knownM: 8, blocker: null, blockerAtM: null }
+          : {
+              allowedM: 0.1,
+              knownM: 0.1,
+              blocker: { kind: 'keepout', label: 'AISLE' },
+              blockerAtM: 0.1,
+            };
+      },
+    });
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+    expect(outcome.ok).toBe(true);
+    expect(h.walkMoves()).toHaveLength(1);
+    expect(calls).toBe(2);
+    expect(outcome.message).toMatch(
+      /Stopped after 1 of 6 segments — AISLE keepout ahead at 0\.10 m on the map/
+    );
+    expect(outcome.message).toMatch(/short of the commanded 8\.00 m/);
+  });
+
+  it('walks up to a blocker a later segment finds, then stops there', async () => {
+    let calls = 0;
+    const h = makeWalkingBase({
+      checkForwardPath: () => {
+        calls++;
+        return calls === 1
+          ? { allowedM: 8, knownM: 8, blocker: null, blockerAtM: null }
+          : {
+              allowedM: 0.8,
+              knownM: 0.8,
+              blocker: { kind: 'keepout', label: 'TABLE' },
+              blockerAtM: 0.8,
+            };
+      },
+    });
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 8, direction: 'forward' }));
+
+    expect(outcome.ok).toBe(true);
+    expect(h.walkMoves()).toHaveLength(2);
+    // The shortened second segment is the 0.80 m the map allowed, not 1.33 m.
+    expect(h.walkMoves()[1].durationS).toBeCloseTo(0.8 / WALK_SPEED, 6);
+    expect(outcome.message).toMatch(
+      /Stopped after 2 of 6 segments — TABLE keepout ahead at 0\.80 m on the map/
+    );
+  });
+
+  it('never lets segmenting turn the one-minute command cap into a minute per segment', async () => {
+    // Open-loop, `walkToCommand` capped a hallucinated distance at
+    // MAX_DURATION_S of motion. Segmented, that cap has to bound the WHOLE walk:
+    // 667 segments of 60 s would be eleven hours inside one block.
+    const h = makeWalkingBase();
+
+    const outcome = await h.executor.execute(
+      block('walk', { distanceM: 1000, direction: 'forward' })
+    );
+
+    const commandedS = h.walkMoves().reduce((sum, m) => sum + m.durationS, 0);
+    expect(commandedS).toBeLessThanOrEqual(60);
+    expect(commandedS).toBeGreaterThan(56);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/60 s is the most one walk block may command/);
+    expect(outcome.message).toMatch(/short of the commanded 1000\.00 m/);
+  });
+
+  it('never checks the map for a sideways walk, and holds the heading anyway', async () => {
+    let calls = 0;
+    const h = makeWalkingBase({
+      driftDps: -2,
+      checkForwardPath: () => {
+        calls++;
+        return null;
+      },
+    });
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 4, direction: 'left' }));
+
+    expect(outcome.ok).toBe(true);
+    // `forwardClearance` and `checkForwardPath` measure the +x corridor and
+    // nothing else, so a left walk asks neither — before or during.
+    expect(calls).toBe(0);
+    for (const move of h.walkMoves()) expect(move.vy).toBeCloseTo(WALK_SPEED, 10);
+    // Heading is not a direction-specific concern: a strafe that spins is just
+    // as wrong as a forward walk that curves.
+    expect(Math.abs(h.yawDeg())).toBeLessThan(8);
+    expect(outcome.message).toMatch(/Heading held/);
+  });
+});
