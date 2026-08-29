@@ -322,6 +322,39 @@ to do — but together they say the scene is ready before the locomotion is.
 is still open. Drive the base into a partition before trusting the geometry to
 contain anything.
 
+## Stills
+
+`capture_factory_stills.py` renders every camera the scene registers, plus any
+number of ad-hoc framings, with no DDS and no robot control:
+
+    python capture_factory_stills.py --out ~/shots --headless --enable_cameras \
+      --light-scale 0.35 --shot-camera film_camera \
+      --shot "hall_overview:-7,-15,9.5:3,1,1.2" \
+      --shot "apple_and_plate:9.85,5.75,1.05:10.25,6.21,0.78"
+
+`--shot NAME:EYE:TARGET` re-aims an existing camera rather than spawning one —
+sensors cannot be added after the scene is built — so any viewpoint is reachable
+without touching the scene cfg.
+
+Three traps, each of which cost a launch:
+
+1. **`PROJECT_ROOT` must be set before `tasks` is imported.** Every scene module
+   in the checkout resolves its USD props against it, and `sim_main.py:7-8` is the
+   only thing that sets it. Without it you get
+   `None/assets/objects/PackingTable/PackingTable.usd` and a `FileNotFoundError`
+   that reads like a missing asset rather than a missing env var. This tool sets
+   it itself.
+2. **Write the output somewhere under the Docker bind mount.** With `--rm` and an
+   `--out` outside `/home/humanoid`, the run reports "wrote 7 image(s)" and the
+   files die with the container.
+3. **`--light-scale`.** The scene is lit for a roofless hall of white surfaces and
+   renders blown out at 1.0 — the columns, the table and the walls all read as the
+   same white. 0.35 restores the shadows. This is a *rendering* preference and
+   changes no physics, so it is a flag rather than a scene edit.
+
+`isaacsim.core.utils.stage` does not exist in the Isaac Lab 3.0 this checkout
+pins; the tool reaches the stage through `omni.usd` instead.
+
 ## Assumptions that could not be verified without launching
 
 Everything below is honest guesswork until the orchestrator runs it. Nothing here has been
