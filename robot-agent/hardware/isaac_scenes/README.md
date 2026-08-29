@@ -279,6 +279,49 @@ of every task in this checkout (`base_reward_pickplace_cylindercfg.py:50`,
 
 ---
 
+## Verified on the live sim (2026-08-29)
+
+Launched for real, headless in the Docker root workaround, on the RTX 5090:
+
+    --task Isaac-Factory-PauseRoom-G129-Dex3-Wholebody
+    --enable_dex3_dds --enable_wholebody_dds --robot_type g129
+    --device cuda --headless --enable_cameras
+
+**It builds and runs.** The things the offline checker explicitly could not prove:
+
+| Claim | Result |
+|---|---|
+| The cfg instantiates at all | yes — no `configclass` or field errors |
+| Robot spawns at the designed pose | `step=0 xy=(+4.0000,-2.0000) yaw=+0.7854` — exact, 45.00° |
+| It stands rather than falling through the floor | `step=50 base_z=+0.78979 foot_fz=[191.6, 191.0] contact_t=[1.125, 1.125]` — both feet evenly loaded on the local floor box |
+| Cameras render | `RTX streaming completed in 0.08 s` |
+| `--device cuda` works for this scene | yes (every prior NeoDEM run of the sibling task used `--device cpu`) |
+
+**Two findings that matter more than the scene itself.**
+
+*The 8.4 m walk to the door does not arrive.* Commanding `vx=0.3` for 25 s moved
+the base from `(3.97, -1.90)` to `(6.39, -0.68)` — 2.7 m of travel, ~0.11 m/s
+against 0.3 commanded — while the heading drifted from `+0.7854` rad (45°, aimed
+at the door) to `-0.31` rad (−18°). That is roughly 2°/s of unbidden yaw, and it
+is the TASK-203 defect that the closed-loop `turn` fix deliberately does NOT
+address: `walk` measures distance travelled and never measures heading. A `goto`
+across this hall will end up somewhere other than the door, and no amount of
+turning accuracy fixes it.
+
+*After the command stops the policy settles into a one-legged crouch* —
+`base_z` 0.79 → 0.725, knees at 1.15/0.91 rad, left foot airborne for 9 s with
+all load on the right. Upright (`proj_grav ≈ (0, 0, −1)`, roll and pitch under
+0.03) and stable, but not a clean stand, and not a pose to begin a manipulation
+from.
+
+Neither is a defect in this scene — both reproduce whatever the robot is asked
+to do — but together they say the scene is ready before the locomotion is.
+
+**Still unverified:** wall collision. The walk never reached a wall, so the
+`CuboidCfg` + `collision_props` + no `rigid_props` question in the section below
+is still open. Drive the base into a partition before trusting the geometry to
+contain anything.
+
 ## Assumptions that could not be verified without launching
 
 Everything below is honest guesswork until the orchestrator runs it. Nothing here has been
