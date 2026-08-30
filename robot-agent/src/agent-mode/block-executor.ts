@@ -436,9 +436,119 @@ export function walkToCommand(
  */
 export function turnToCommand(
   angleDeg: number,
-  turnSpeedDps: number = config.agentMode.turnSpeedDps
+  turnSpeed?: number | TurnProfile
 ): WalkCommand {
-  return turnToCommandExact(normalizeDeg(angleDeg), turnSpeedDps);
+  return turnToCommandExact(normalizeDeg(angleDeg), turnSpeed);
+}
+
+/**
+ * The two DIFFERENT numbers a turn command is made of.
+ *
+ * They used to be one number, `AGENT_TURN_SPEED_DPS`, doing double duty: it set
+ * the commanded omega AND the rate the hold duration was divided out of. That
+ * works exactly as long as the base does what it is told. On the Isaac factory
+ * rig it does not — measured 2026-08-29, in place, commanded rad/s → achieved
+ * deg/s:
+ *
+ * ```
+ *   0.60 → left +0.11  right −0.25      (both effectively dead)
+ *   0.79 → left +0.10  right −3.5
+ *   0.90 → left +0.51  right −5.45
+ *   1.20 → left +5.09  right −14.73
+ *   1.60 → left +7.88  right −13.89
+ *   2.00 → left +9.29  right −20.35
+ * ```
+ *
+ * Two facts fall out, and they pull the single knob in OPPOSITE directions:
+ *
+ *   1. There is a **deadband**. Below about 0.9 rad/s an in-place turn produces
+ *      essentially nothing, and the 45 °/s default is 0.785 rad/s — inside it.
+ *      The COMMANDED omega therefore has to go UP.
+ *   2. What comes back **saturates** an order of magnitude below the command, so
+ *      the DURATION has to be derived from a much LOWER rate. Dividing 90° by
+ *      45 °/s and holding 2 s buys ~19° at 9.29 °/s.
+ *
+ * The asymmetry (roughly 2× better turning right than left) lives in the
+ * vendor's trained locomotion policy, not in this file. It cannot be fixed here,
+ * only compensated — which is why the achieved rate is per-direction.
+ */
+export interface TurnProfile {
+  /** Commanded |omega| in rad/s. Must clear the base's deadband. */
+  commandRadS: number;
+  /** Yaw rate ACHIEVED turning left (CCW, +omega), deg/s. Sizes the duration. */
+  achievedDpsLeft: number;
+  /** Yaw rate ACHIEVED turning right (CW, −omega), deg/s. Sizes the duration. */
+  achievedDpsRight: number;
+}
+
+/** `AGENT_TURN_SPEED_DPS`, or 45 when it is unset or nonsense. */
+function nominalTurnDps(): number {
+  return Math.abs(config.agentMode.turnSpeedDps) > 1e-6
+    ? Math.abs(config.agentMode.turnSpeedDps)
+    : 45;
+}
+
+/** A finite, strictly positive override, or the fallback. */
+function positiveOr(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 1e-6 ? value : fallback;
+}
+
+/**
+ * The profile a command with this forward speed is issued under: the ARC
+ * numbers when `vx > 0`, the in-place ones otherwise. Forward motion partially
+ * lifts the deadband (0.785 rad/s is dead standing still and turns at 4.68 °/s
+ * at `vx = 0.5`), so the two are measured and configured separately.
+ *
+ * EVERY fallback ends at `nominalTurnDps()`, which is what the coupled code did.
+ * With no env var set this returns `{ 45°/s as rad/s, 45, 45 }` and every number
+ * downstream is identical to the code this replaced.
+ */
+export function turnProfileFor(forwardMps = 0): TurnProfile {
+  const a = config.agentMode;
+  const nominal = nominalTurnDps();
+  const arcing = Number.isFinite(forwardMps) && forwardMps > 1e-6;
+  const commandRadS = positiveOr(
+    arcing ? a.turnArcCommandRadS : 0,
+    positiveOr(a.turnCommandRadS, nominal * DEG_TO_RAD)
+  );
+  return {
+    commandRadS,
+    achievedDpsLeft: positiveOr(
+      arcing ? a.turnArcAchievedDpsLeft : 0,
+      positiveOr(a.turnAchievedDpsLeft, nominal)
+    ),
+    achievedDpsRight: positiveOr(
+      arcing ? a.turnArcAchievedDpsRight : 0,
+      positiveOr(a.turnAchievedDpsRight, nominal)
+    ),
+  };
+}
+
+/**
+ * A `turnSpeedDps` number, as every caller used to pass, expressed as the
+ * profile it always implicitly meant: commanded omega and achieved rate equal,
+ * both directions the same. An explicit number is therefore still an exact
+ * override of both roles and bypasses the env tuning — which is what a caller
+ * that hands over a rate is asking for.
+ */
+function coupledProfile(turnSpeedDps: number): TurnProfile {
+  const rate = Math.abs(turnSpeedDps) > 1e-6 ? Math.abs(turnSpeedDps) : 45;
+  return { commandRadS: rate * DEG_TO_RAD, achievedDpsLeft: rate, achievedDpsRight: rate };
+}
+
+/** The rate a rotation of this sign is expected to actually achieve, deg/s. */
+export function achievedDpsFor(profile: TurnProfile, angleDeg: number): number {
+  return angleDeg >= 0 ? profile.achievedDpsLeft : profile.achievedDpsRight;
+}
+
+/** Resolve whatever the second argument of a turn conversion was given as. */
+function resolveTurnProfile(
+  turnSpeed: number | TurnProfile | undefined,
+  forwardMps: number
+): TurnProfile {
+  if (typeof turnSpeed === 'number') return coupledProfile(turnSpeed);
+  if (turnSpeed) return turnSpeed;
+  return turnProfileFor(forwardMps);
 }
 
 /**
@@ -452,18 +562,23 @@ export function turnToCommand(
  */
 export function turnToCommandExact(
   angleDeg: number,
-  turnSpeedDps: number = config.agentMode.turnSpeedDps,
+  turnSpeed?: number | TurnProfile,
   forwardMps = 0
 ): WalkCommand {
-  const rate = Math.abs(turnSpeedDps) > 1e-6 ? Math.abs(turnSpeedDps) : 45;
+  // `forwardMps` is the ONLY way a command with both vx and omega leaves this
+  // file, and it defaults to 0 so every existing caller is byte-identical. It
+  // also selects the profile: an arc and an in-place turn are different plants.
+  const vx = Number.isFinite(forwardMps) && forwardMps > 0 ? forwardMps : 0;
+  const profile = resolveTurnProfile(turnSpeed, vx);
   const angle = Number.isFinite(angleDeg)
     ? Math.max(-360, Math.min(360, angleDeg))
     : 0;
-  const durationS = Math.min(MAX_DURATION_S, Math.max(MIN_DURATION_S, Math.abs(angle) / rate));
-  const omega = Math.sign(angle) * rate * DEG_TO_RAD;
-  // `forwardMps` is the ONLY way a command with both vx and omega leaves this
-  // file, and it defaults to 0 so every existing caller is byte-identical.
-  const vx = Number.isFinite(forwardMps) && forwardMps > 0 ? forwardMps : 0;
+  // The two roles, separated. The DURATION carries the magnitude and so must be
+  // divided by what the base ACHIEVES in this direction; the OMEGA has to clear
+  // the deadband and is not that number. See {@link TurnProfile}.
+  const achieved = achievedDpsFor(profile, angle);
+  const durationS = Math.min(MAX_DURATION_S, Math.max(MIN_DURATION_S, Math.abs(angle) / achieved));
+  const omega = Math.sign(angle) * profile.commandRadS;
   return { vx, vy: 0, omega, durationS };
 }
 
@@ -478,9 +593,11 @@ export function turnToCommandExact(
  * refused below it), and a "shortfall" smaller than this is quantisation, not a
  * robot that fell short.
  */
-function smallestCommandableDeg(turnSpeedDps: number = config.agentMode.turnSpeedDps): number {
-  const rate = Math.abs(turnSpeedDps) > 1e-6 ? Math.abs(turnSpeedDps) : 45;
-  return MIN_DURATION_S * rate;
+function smallestCommandableDeg(angleDeg: number, forwardMps: number): number {
+  // Direction-dependent, because the ACHIEVED rate is: on the Isaac rig the
+  // shortest command buys 1.9° to the left and 4.1° to the right. With no env
+  // tuning both are `MIN_DURATION_S × AGENT_TURN_SPEED_DPS`, exactly as before.
+  return MIN_DURATION_S * achievedDpsFor(turnProfileFor(forwardMps), angleDeg);
 }
 
 /** Everything a block handler may touch. Injectable end-to-end for tests. */
@@ -1204,7 +1321,9 @@ export class BlockExecutor {
     // model output and no operator text can put `arcM` on a block. That is the
     // same mechanism `walk.planned` already relies on.
     const requestedArcM = Number(block.params.arcM);
-    const arc = this.arcFor(Number.isFinite(requestedArcM) ? requestedArcM : 0);
+    // 'travelled': `arcM` is metres of REAL ground out of the coming stage — see
+    // {@link BlockExecutor.arcFor}.
+    const arc = this.arcFor(Number.isFinite(requestedArcM) ? requestedArcM : 0, 'travelled');
 
     const {
       result,
@@ -1386,19 +1505,29 @@ export class BlockExecutor {
     const arc = options.arc && options.arc.forwardMps > 1e-6 ? options.arc : undefined;
     /** Accumulated cost/coverage of the arc, reported to the caller. */
     const travel: ArcTravel = { ...NO_ARC_TRAVEL };
-    /** The nominal turn rate every duration below is derived from. */
-    const arcRate =
-      Math.abs(config.agentMode.turnSpeedDps) > 1e-6
-        ? Math.abs(config.agentMode.turnSpeedDps)
-        : 45;
+    /** The profile this turn's commands are issued under. */
+    const profile = turnProfileFor(arc ? arc.forwardMps : 0);
     /**
-     * Largest |rotation| ONE command may ask for and still fit inside what is
-     * left of the arc's distance budget. `turnToCommandExact` derives duration
-     * from the angle, and the arc holds a fixed forward speed for that duration
-     * — so metres ÷ (m/s) is seconds, and seconds × °/s is the angle cap.
+     * Seconds of arc the UNSPENT budget can still fund.
+     *
+     * The budget is a DISTANCE, and a distance is metres = m/s × seconds — so
+     * seconds is what it actually bounds. It used to be converted into a
+     * ceiling on the commanded ANGLE instead (metres ÷ m/s × °/s), which was
+     * arithmetically the same thing only while the commanded omega and the
+     * achieved rate were the same number. They are not: see {@link TurnProfile}.
+     * Converting through the nominal rate would now bound neither the distance
+     * nor the angle correctly, and — worse — it silently truncated the ROTATION
+     * the closed loop had just sized, which is what made gain compensation inert
+     * (it computed `remainingDeg / gain` and then clamped it straight back to
+     * `AGENT_TURN_SPEED_DPS / AGENT_WALK_SPEED_MPS` = 90°/m of budget).
+     *
+     * The command is therefore built at full commanded omega and only its HOLD
+     * is cut to what the budget affords; the angle it can honestly claim to have
+     * asked for is recomputed from that hold, so the gain estimator downstream
+     * still divides the measured rotation by the rotation actually requested.
      */
-    const arcLimitDeg = (): number =>
-      arc ? ((arc.budgetM - travel.commandedM) / arc.forwardMps) * arcRate : Infinity;
+    const arcBudgetS = (): number =>
+      arc ? (arc.budgetM - travel.commandedM) / arc.forwardMps : Infinity;
 
     const before = await this.loco.odometry();
 
@@ -1409,11 +1538,18 @@ export class BlockExecutor {
       // its heading is no more able to rotate CCW in place than a sighted one.
       // Budget-clamped exactly as in the loop; an unfundable arc falls back to
       // the in-place command, which then reports honestly.
-      const blindDeg = arc ? Math.max(-arcLimitDeg(), Math.min(arcLimitDeg(), target)) : target;
-      const canArc = arc !== undefined && arcLimitDeg() >= MIN_DURATION_S * arcRate;
+      const canArc = arc !== undefined && arcBudgetS() >= MIN_DURATION_S;
       const cmd = canArc
-        ? turnToCommandExact(blindDeg, undefined, arc.forwardMps)
+        ? turnToCommandExact(target, undefined, arc.forwardMps)
         : turnToCommand(target);
+      let blindDeg = target;
+      if (canArc) {
+        const budgetS = arcBudgetS();
+        if (cmd.durationS > budgetS) {
+          cmd.durationS = budgetS;
+          blindDeg = Math.sign(target) * achievedDpsFor(profile, target) * budgetS;
+        }
+      }
       const result = await this.driveFor(cmd);
       if (canArc) {
         travel.commandedM += cmd.vx * cmd.durationS;
@@ -1508,7 +1644,7 @@ export class BlockExecutor {
         if (Math.sign(remainingDeg) !== planSign) {
           if (
             reversals >= MAX_TURN_REVERSALS ||
-            Math.abs(remainingDeg) <= smallestCommandableDeg()
+            Math.abs(remainingDeg) <= smallestCommandableDeg(remainingDeg, arc ? arc.forwardMps : 0)
           ) {
             break;
           }
@@ -1530,20 +1666,28 @@ export class BlockExecutor {
         -MAX_TURN_STEP_DEG,
         Math.min(MAX_TURN_STEP_DEG, remainingDeg / gain)
       );
-      if (arc) {
-        // The arc spends the CALLER'S distance, so the budget — not the angle —
-        // is what bounds this command. Note the gain compensation above has
-        // already multiplied the remainder (a 10° correction at a measured gain
-        // of 0.1 is a 100° command, which at walking speed is over a metre of
-        // travel), which is exactly why the clamp is applied after it and not
-        // to the raw remainder.
-        const limitDeg = arcLimitDeg();
-        if (limitDeg < MIN_DURATION_S * arcRate) break; // budget spent — stop, do not fake it
-        commandDeg = Math.max(-limitDeg, Math.min(limitDeg, commandDeg));
-      }
+      if (arc && arcBudgetS() < MIN_DURATION_S) break; // budget spent — stop, do not fake it
       const cmd = arc
         ? turnToCommandExact(commandDeg, undefined, arc.forwardMps)
         : turnToCommandExact(commandDeg);
+      if (arc) {
+        // The arc spends the CALLER'S distance, so the budget bounds how long
+        // this command may be HELD — the one thing that actually consumes
+        // metres. The commanded omega is untouched: cutting it would take the
+        // command back under the deadband and buy nothing at all.
+        //
+        // Note the gain compensation above has already multiplied the remainder
+        // (a 10° correction at a measured gain of 0.1 is a 100° command), which
+        // is why this is applied after it. What changed is that a truncated
+        // command no longer pretends it asked for the full angle: `commandDeg`
+        // is rewritten to the rotation the shortened hold can actually request,
+        // so the tracking-ratio update below stays honest.
+        const budgetS = arcBudgetS();
+        if (cmd.durationS > budgetS) {
+          cmd.durationS = budgetS;
+          commandDeg = Math.sign(commandDeg) * achievedDpsFor(profile, commandDeg) * budgetS;
+        }
+      }
       result = await this.driveFor(cmd);
       if (arc) {
         travel.commandedM += cmd.vx * cmd.durationS;
@@ -1709,15 +1853,38 @@ export class BlockExecutor {
    * command out of the distance budget it was given. Below that there is no arc
    * to issue — a shorter command does not exist — and pretending otherwise would
    * either overshoot the caller's distance or send a zero-length command.
+   *
+   * `budgetIn` is the CURRENCY of `budgetM`, and the two callers genuinely
+   * differ:
+   *
+   *   - `'commanded'` — the `walk` loop. Its segments are commanded metres and
+   *     its budget is `Math.abs(distanceM)`, so an arc that spends commanded
+   *     metres is exactly what keeps "walk 3 m" at 3 m commanded.
+   *   - `'travelled'` — the navigator's stage alignment. `arcM` is carved out of
+   *     `stageM`, a MEASURED distance to the target, and the navigator then
+   *     subtracts the arc's MEASURED displacement from it. That budget is real
+   *     ground, and charging it in commanded metres over-charges every arc by
+   *     `1 / AGENT_ARC_TRAVEL_GAIN` — 3.2× on a base that covers 31% of what it
+   *     commands, which is why a 0.70 m alignment budget bought almost no turn.
+   *
+   * The conversion is the identity at the default gain of 1, so nothing about
+   * the untuned behaviour changes.
    */
-  private arcFor(budgetM: number): ArcOption | undefined {
+  private arcFor(
+    budgetM: number,
+    budgetIn: 'commanded' | 'travelled' = 'commanded'
+  ): ArcOption | undefined {
     if (!Number.isFinite(budgetM) || budgetM <= 0) return undefined;
     const forwardMps =
       Math.abs(config.agentMode.walkSpeedMps) > 1e-6
         ? Math.abs(config.agentMode.walkSpeedMps)
         : 0.4;
-    if (budgetM < forwardMps * MIN_DURATION_S) return undefined;
-    return { forwardMps, budgetM };
+    const gain = config.agentMode.arcTravelGain;
+    const travelGain =
+      budgetIn === 'travelled' && Number.isFinite(gain) && gain > 1e-6 && gain <= 1 ? gain : 1;
+    const commandedBudgetM = budgetM / travelGain;
+    if (commandedBudgetM < forwardMps * MIN_DURATION_S) return undefined;
+    return { forwardMps, budgetM: commandedBudgetM };
   }
 
   /**
