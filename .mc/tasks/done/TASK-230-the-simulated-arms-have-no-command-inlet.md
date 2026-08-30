@@ -3,7 +3,7 @@ id: "TASK-230"
 aliases: []
 title: "The simulated arms have no command inlet"
 slug: "the-simulated-arms-have-no-command-inlet"
-status: "todo"
+status: "done"
 priority: 1
 owner: ""
 projects: []

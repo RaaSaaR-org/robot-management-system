@@ -3,7 +3,7 @@ id: "TASK-229"
 aliases: []
 title: "The policy's action vector reaches the wrong joints"
 slug: "the-policys-action-vector-reaches-the-wrong-joints"
-status: "todo"
+status: "done"
 priority: 1
 owner: ""
 projects: []

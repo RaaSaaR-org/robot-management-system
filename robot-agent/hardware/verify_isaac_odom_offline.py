@@ -17,6 +17,17 @@ mode is indistinguishable, on a video or a plot, from a robot drifting off cours
 must not be able to regress quietly, so check (2) below asserts the two orderings
 DISAGREE, not merely that the right one is right.
 
+The third defect it is built around is the SOURCE of x/y, and it is the biggest of
+the three. They were dead reckoned from the velocity the bridge itself commanded, so
+they reported the command back: commanded 8.00 m forward on 2026-08-30, dead reckoning
+said 7.995 m while the sim's TRUE root pose had moved 0.113 m -- wrong by 71x, and
+wrong BY CONSTRUCTION, because integrating your own command can only ever return your
+own command. The sim publishes its true world pose on `rt/sim_state` the whole time.
+Section (8) covers reading it (against a real capture off the live rig), publishing it
+verbatim, the trap that the ORIGIN MUST NOT BE ADDED TO IT while it must still be added
+to dead reckoning, the fallback when the topic goes stale or absent, and the provenance
+that makes the switch between a true pose and a 71x-wrong one impossible to miss.
+
 The second defect it is built around is the FRAME. x/y are dead reckoned from zero,
 so the bridge published (0.00, 0.00) while the robot stood at the scene's authored
 spawn, world (4.00, -2.00), and Agent Mode -- whose place graph is in world metres --
@@ -41,6 +52,7 @@ Run:
     python3 robot-agent/hardware/verify_isaac_odom_offline.py
 """
 import ast
+import json
 import math
 import os
 import sys
@@ -86,12 +98,31 @@ def bridge_pure_defs(*names):
 
 
 BRIDGE = bridge_pure_defs("ODOM_TICK_HZ", "achievable_odom_rate_hz", "odom_publish_period_s")
+# The ground-truth timings (8f), lifted the same way and for the same reason: they are
+# what the bridge really runs on, not what this file believes it runs on.
+GT_BRIDGE = bridge_pure_defs("ODOM_GROUND_TRUTH_STALE_S", "ODOM_LOWSTATE_STALE_S",
+                             "ODOM_STATUS_PERIOD_S")
 
 
 def check(ok, label, detail=""):
     print(f"    {'PASS' if ok else 'FAIL'}  {label}" + (f"  [{detail}]" if detail else ""))
     if not ok:
         FAILURES.append(label)
+
+
+def _missing_body_error():
+    """The message parse_sim_state gives when the robot articulation is not there.
+
+    Its own check, because "present: [...]" is what turns a renamed key in a vendor
+    bump from an afternoon into a one-line fix.
+    """
+    try:
+        isaac_odom.parse_sim_state(
+            '{"init_state": {"articulation": {"robot": {"root_pose": [[0, 0, 0, 0, 0, '
+            '0, 1]]}}}}', body="nonesuch")
+    except ValueError as exc:
+        return str(exc)
+    return "(no error raised)"
 
 
 def quat_wxyz(roll=0.0, pitch=0.0, yaw=0.0):
@@ -579,8 +610,279 @@ else:
           "reading a machine-readable line back by prefix, not by parsing the "
           "human-readable description")
 
+
 # --------------------------------------------------------------------------------
-print("\n(8) against the real IDL, if this interpreter has one")
+print("\n(8) GROUND TRUTH: the pose the SIM holds, and the origin that must not "
+      "reach it")
+# The defect this section exists for is measured, not hypothetical: commanded 8.00 m
+# forward, dead reckoning reported 7.995 m travelled while `rt/sim_state` said the base
+# had moved 0.113 m. Anything derived from the first number was circular. What this
+# section CANNOT check is that the sim really publishes the topic (only the live rig
+# settles that -- it was verified read-only at ~70 Hz, and the capture below is one of
+# those messages), nor that the pose in it is where the robot visually is.
+
+print("  (8a) parse_sim_state against a REAL rt/sim_state capture")
+# Captured verbatim off DDS domain 1 on 2026-08-30 while the factory rig was running;
+# only the `joint_position` / `joint_velocity` arrays were trimmed to three entries, so
+# every key, every nesting level and every pose is the sim's own. A hand-written fixture
+# would encode what this file BELIEVES the payload looks like, which is exactly the
+# assumption under test.
+CAPTURE = '{"init_state": "{\\"articulation\\": {\\"pause_room_door\\": {\\"root_pose\\": [[10.0, 4.03000020980835, 2.240000009536743, 0.0, 0.0, 0.0, 1.0]], \\"root_velocity\\": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], \\"joint_position\\": [[-2.643657808221178e-07, 2.643657808221178e-07]], \\"joint_velocity\\": [[4.561717901196971e-07, -4.561717901196971e-07]]}, \\"robot\\": {\\"root_pose\\": [[11.224272727966309, -4.021523952484131, 0.7889862656593323, -0.0046118078753352165, -0.014807315543293953, -0.6244250535964966, 0.7809306383132935]], \\"root_velocity\\": [[-0.0007865113439038396, 5.539422545552952e-06, 0.0019437994342297316, 0.02837812528014183, 0.01205469947308302, 0.0005620673182420433]], \\"joint_position\\": [[0.005460300482809544, 0.010188178159296513, -0.0004954873584210873]], \\"joint_velocity\\": [[-0.00024364468117710203, 0.014452519826591015, -0.0015915987314656377]]}}, \\"deformable_object\\": {}, \\"rigid_object\\": {\\"object\\": {\\"root_pose\\": [[10.170000076293945, 6.260000228881836, 0.7900000214576721, 0.0, 0.0, 0.0, 1.0]], \\"root_velocity\\": [[0.0, 0.0, 8.24002199806273e-10, 0.0, 0.0, 0.0]]}}, \\"gripper\\": {}}", "task_name": "Isaac-Factory-PauseRoom-G129-Dex3-Wholebody", "_timestamp": 1788089671}'
+ROBOT_XY = (11.224272727966309, -4.021523952484131)
+ROBOT_Z = 0.7889862656593323
+ROBOT_YAW = -1.349145913505           # xyzw; read as wxyz the same buffer gives +179.4 deg
+
+outer = json.loads(CAPTURE)
+check(sorted(outer) == ["_timestamp", "init_state", "task_name"],
+      "the capture has the envelope sim_main.py publishes", str(sorted(outer)))
+check(isinstance(outer["init_state"], str),
+      "and 'init_state' is JSON INSIDE JSON -- a string that must be parsed AGAIN "
+      "(indexing it once gets a string subscript, not a dict)")
+gt = isaac_odom.parse_sim_state(CAPTURE)
+check((gt.x, gt.y) == ROBOT_XY, "the robot's true world x/y come through exactly",
+      f"({gt.x}, {gt.y})")
+check(gt.z == ROBOT_Z, "and z, which the wire drops (position[2] is 0)", f"{gt.z}")
+check(abs(gt.yaw - ROBOT_YAW) < 1e-9,
+      "yaw is derived from root_pose's quaternion as XYZW",
+      f"{math.degrees(gt.yaw):.4f} deg")
+check(isaac_odom.parse_sim_state(json.loads(CAPTURE)) == gt,
+      "an already-decoded dict parses to the same pose as the raw string")
+check(isaac_odom.parse_sim_state(CAPTURE.encode("utf-8")) == gt,
+      "and so do the raw bytes off the wire")
+check(isaac_odom.SIM_STATE_QUAT_ORDER == "xyzw",
+      "xyzw is the declared order for rt/sim_state", isaac_odom.SIM_STATE_QUAT_ORDER)
+# The proof that it IS xyzw, from the capture itself: the pause-room door is
+# axis-aligned, and its root_pose quaternion is [0, 0, 0, 1] -- identity in XYZW,
+# a 180 deg turn in WXYZ. A door mounted at +180 deg would be a door in the wall.
+door = isaac_odom.parse_sim_state(CAPTURE, body="pause_room_door")
+door_wxyz = isaac_odom.parse_sim_state(CAPTURE, body="pause_room_door",
+                                       quat_order="wxyz")
+check(abs(door.yaw) < 1e-12,
+      "the scene's unrotated door reads as yaw 0 under xyzw (identity is 0,0,0,1)",
+      f"{math.degrees(door.yaw):.3f} deg")
+check(abs(abs(door_wxyz.yaw) - math.pi) < 1e-9,
+      "and as a 180 deg turn under wxyz -- which is how we know the order",
+      f"{math.degrees(door_wxyz.yaw):.1f} deg")
+
+print("  (8b) a payload it cannot read DEGRADES -- named ValueError, never a pose")
+BAD = [
+    (None, "None"), (3.5, "a float"), ("", "empty string"),
+    ("not json at all", "not JSON"), ("[1, 2, 3]", "JSON, but not an object"),
+    ('{"task_name": "x"}', "no init_state"),
+    ('{"init_state": "{"}', "init_state is a string but not JSON"),
+    ('{"init_state": 7}', "init_state is not an object"),
+    ('{"init_state": {}}', "no articulation"),
+    ('{"init_state": {"articulation": {"pause_room_door": {}}}}', "no robot"),
+    ('{"init_state": {"articulation": {"robot": {}}}}', "no root_pose"),
+    ('{"init_state": {"articulation": {"robot": {"root_pose": []}}}}', "empty root_pose"),
+    ('{"init_state": {"articulation": {"robot": {"root_pose": [[1, 2, 3]]}}}}',
+     "root_pose[0] too short"),
+    ('{"init_state": {"articulation": {"robot": {"root_pose": [["a", 0, 0, 0, 0, 0, 1]]}}}}',
+     "non-numeric component"),
+    ('{"init_state": {"articulation": {"robot": {"root_pose": [[NaN, 0, 0, 0, 0, 0, 1]]}}}}',
+     "a NaN position"),
+]
+for bad, why in BAD:
+    try:
+        got = isaac_odom.parse_sim_state(bad)
+    except ValueError as exc:
+        # ValueError EXACTLY: the bridge's listener catches one type, and a KeyError or
+        # a TypeError leaking out of here would read as a bug in the caller instead of
+        # a payload the sim changed.
+        check(type(exc) is ValueError and str(exc).strip() != "",
+              f"{why} is refused with a named ValueError",
+              str(exc).split(" -- ")[0][:64])
+    except Exception as exc:  # noqa: BLE001
+        check(False, f"{why} raised {type(exc).__name__}, not ValueError", str(exc)[:64])
+    else:
+        # A fabricated (0, 0) would be published as confidently as a real reading, and
+        # a wrong position is the one thing worse than a missing one.
+        check(False, f"{why} must be refused, never turned into a pose", str(got))
+check("robot" in str(_missing_body_error()),
+      "a missing robot articulation names the ones that ARE present",
+      _missing_body_error())
+
+print("  (8c) ground truth is published VERBATIM, and the origin is NOT added")
+GT_ORIGIN = (4.0, -2.0)                  # the factory spawn --odom-origin carries
+TRUE = isaac_odom.GroundTruthPose(11.224272727966309, -4.021523952484131,
+                                  0.7889862656593323, -1.349145913505,
+                                  (0.0, 0.0, 0.0, 1.0))
+gt_integ = isaac_odom.OdomIntegrator(0.0, STALE, CMD_STALE, origin=GT_ORIGIN)
+GT_STALE = gt_integ.ground_truth_stale_after
+MEASURED_YAW = 0.3                       # deliberately NOT the ground-truth yaw
+f_gt = gt_integ.tick(0.0, (MEASURED_YAW, 0.0), (1.0, 0.0, 0.0), (TRUE, 0.0))
+check(f_gt is not None and f_gt.x == TRUE.x and f_gt.y == TRUE.y,
+      "the published x/y ARE the sim's pose, to the last bit",
+      f"({f_gt.x}, {f_gt.y})")
+check(f_gt.x != TRUE.x + GT_ORIGIN[0] and f_gt.y != TRUE.y + GT_ORIGIN[1],
+      "THE ORIGIN IS NOT ADDED to it -- it is already world (applying both would "
+      "double the offset, the likeliest way to get TASK-231 wrong)",
+      f"would have been ({TRUE.x + GT_ORIGIN[0]:.3f}, {TRUE.y + GT_ORIGIN[1]:.3f})")
+check(f_gt.source == isaac_odom.ODOM_SOURCE_GROUND_TRUTH,
+      "and the frame says where it came from", f_gt.source)
+check(f_gt.yaw == MEASURED_YAW and f_gt.yaw != TRUE.yaw,
+      "yaw still comes from rt/lowstate, unrotated and unoffset -- ground truth "
+      "supplies x/y only", f"{f_gt.yaw} vs a ground-truth {TRUE.yaw:.3f}")
+# The 71x defect in miniature: walk the command hard while the sim holds the robot
+# still. Dead reckoning would climb; the published pose must not move at all.
+held = []
+for i in range(1, 101):                  # 1 s at 1 m/s COMMANDED, sim pose constant
+    t_h = i * 0.01
+    f = gt_integ.tick(t_h, (MEASURED_YAW, t_h), (1.0, 0.0, t_h), (TRUE, t_h))
+    if f is not None:
+        held.append(f)
+check(all(f.x == TRUE.x and f.y == TRUE.y for f in held),
+      "1 s COMMANDED at 1 m/s against a stationary sim publishes no motion at all",
+      f"{len(held)} frames, all at ({TRUE.x:.3f}, {TRUE.y:.3f})")
+check(abs(gt_integ.reckoner.distance - 1.0) < 1e-9,
+      "(while the dead reckoner underneath walked the full 1.00 m it was commanded -- "
+      "the number that used to reach the wire, and only ever ~100% of the command)",
+      f"{gt_integ.reckoner.distance:.4f} m")
+check(gt_integ.yaw_disagreement is not None
+      and abs(gt_integ.yaw_disagreement - abs(TRUE.yaw - MEASURED_YAW)) < 1e-9,
+      "the two headings are compared, so a quaternion order that disagrees is visible",
+      f"{math.degrees(gt_integ.yaw_disagreement):.1f} deg")
+
+print("  (8d) losing it falls back to dead reckoning, which DOES carry the origin")
+# The pose stops being refreshed at t = 1.0 and the clock runs on to t = 2.0. Each
+# fallback frame is kept alongside how far the DEAD RECKONER moved since the last frame
+# that was still ground truth -- which is the displacement the fallback is allowed to
+# add, and nothing else.
+GT_FROZEN_AT, still_true, lost, last_true = 1.0, [], [], None
+for i in range(101, 201):
+    t_h = i * 0.01
+    f = gt_integ.tick(t_h, (MEASURED_YAW, t_h), (1.0, 0.0, t_h), (TRUE, GT_FROZEN_AT))
+    if f is None:
+        continue
+    if f.source == isaac_odom.ODOM_SOURCE_GROUND_TRUTH:
+        still_true.append((t_h, f))
+        last_true = (gt_integ.reckoner.x, gt_integ.reckoner.y)
+    else:
+        lost.append((t_h, f, gt_integ.reckoner.x - last_true[0],
+                     gt_integ.reckoner.y - last_true[1]))
+check(all(f.x == TRUE.x for _, f in still_true)
+      and abs(still_true[-1][0] - (GT_FROZEN_AT + GT_STALE)) < 1e-9,
+      f"a pose keeps being published for exactly the {GT_STALE:g}s staleness window "
+      f"after it stops being refreshed",
+      f"last true frame at t={still_true[-1][0]:.2f}s")
+check(abs(lost[0][0] - (GT_FROZEN_AT + GT_STALE + 0.01)) < 1e-9,
+      "and the tick after that window falls back — promptly, not eventually",
+      f"first fallback frame at t={lost[0][0]:.2f}s")
+check(lost[0][1].source == isaac_odom.ODOM_SOURCE_DEAD_RECKONED,
+      "a pose older than the window is NOT published as if it were fresh", 
+      lost[0][1].source)
+# Continuity: it continues from the last TRUE pose plus the dead reckoning since, NOT
+# from origin + everything the command has claimed since the bridge started. The naive
+# version would have jumped this frame by (0.95 + 4.0 - 11.22) = -6.3 m, through a wall
+# as far as Agent Mode's place graph is concerned.
+check(all(abs(f.x - (TRUE.x + dx)) < 1e-9 and abs(f.y - (TRUE.y + dy)) < 1e-9
+          for _, f, dx, dy in lost),
+      "every fallback frame is the last TRUE pose plus the dead reckoning SINCE — the "
+      "pose degrades, it does not teleport",
+      f"{len(lost)} frames, last {lost[-1][1].x - TRUE.x:+.4f} m past it")
+check(abs(lost[-1][1].x - (TRUE.x + GT_ORIGIN[0])) > 1.0,
+      "(the origin is NOT what it continues from -- that would jump it metres)",
+      f"{lost[-1][1].x:.3f} vs {TRUE.x + GT_ORIGIN[0]:.3f}")
+check(lost[-1][1].x > lost[0][1].x,
+      "and it keeps MOVING: a stale true pose must not freeze the published one, "
+      "which reads to block-executor.ts as 'the robot did not move'",
+      f"{lost[0][1].x:.3f} -> {lost[-1][1].x:.3f} m")
+check(gt_integ.frames_ground_truth == len(held) + len(still_true) + 1
+      and gt_integ.frames_dead_reckoned == len(lost),
+      "the integrator counts both kinds, which is what the bridge's status line and "
+      "shutdown summary report",
+      f"{gt_integ.frames_ground_truth} true, {gt_integ.frames_dead_reckoned} reckoned")
+
+# Never seen at all is the other half: the origin is then exactly what anchors it, and
+# the whole run must be byte-identical to a bridge built before any of this existed.
+absent_i, f_absent, _ = replay(ORIGIN)                       # no ground_truth argument
+none_gt = isaac_odom.OdomIntegrator(PUB, STALE, CMD_STALE, origin=ORIGIN)
+f_none_gt = [f for now, ys, cmd in STREAM
+             if (f := none_gt.tick(now, ys, cmd, None)) is not None]
+forced = isaac_odom.OdomIntegrator(PUB, STALE, CMD_STALE, origin=ORIGIN,
+                                   use_ground_truth=False)
+f_forced = [f for now, ys, cmd in STREAM
+            if (f := forced.tick(now, ys, cmd, (TRUE, now))) is not None]
+check([repr(f) for f in f_none_gt] == [repr(f) for f in f_absent],
+      "with ground truth enabled but ABSENT, every frame is byte-identical to before")
+check(all(f.source == isaac_odom.ODOM_SOURCE_DEAD_RECKONED for f in f_absent),
+      "and every one of them is labelled dead-reckoned")
+check(f_absent[0].x == ORIGIN[0] + base.reckoner.x * 0 + f_base[0].x,
+      "the ORIGIN IS STILL APPLIED to dead reckoning -- that behaviour is untouched",
+      f"{f_absent[0].x:.4f} = {ORIGIN[0]:.2f} + {f_base[0].x:.4f}")
+check([repr(f) for f in f_forced] == [repr(f) for f in f_absent],
+      "--no-ground-truth ignores a perfectly fresh pose and dead-reckons anyway "
+      "(that is what makes the fallback testable on a healthy rig)")
+check(not forced.ground_truth_seen and none_gt.ground_truth_seen is False,
+      "neither integrator claims to have seen ground truth")
+
+print("  (8e) the provenance a consumer can read without trusting the log")
+check(isaac_odom.odom_error_code(isaac_odom.ODOM_SOURCE_GROUND_TRUTH)
+      == isaac_odom.ODOM_ERROR_CODE_GROUND_TRUTH == 0x600D,
+      "a true pose is stamped 0x600D on the wire")
+check(isaac_odom.odom_error_code(isaac_odom.ODOM_SOURCE_DEAD_RECKONED)
+      == isaac_odom.ODOM_ERROR_CODE_DEAD_RECKONED == 0xDEAD,
+      "a reckoned one is stamped 0xDEAD")
+check(isaac_odom.ODOM_ERROR_CODE_GROUND_TRUTH != 0,
+      "neither is 0, which would be indistinguishable from a real G1's healthy state")
+try:
+    isaac_odom.odom_error_code("measured-ish")
+except ValueError as exc:
+    check("measured-ish" in str(exc), "an unknown source is refused, not defaulted",
+          str(exc)[:60])
+else:
+    check(False, "an unknown source must not fall back to either code")
+check(isaac_odom.OdomFrame(0, 0, 0, 0, 0, 0, 0).source
+      == isaac_odom.ODOM_SOURCE_DEAD_RECKONED,
+      "a frame built without stating a source claims the PESSIMISTIC one")
+gt_msg = isaac_odom.fill_odom_msg(
+    FakeSportModeState(), x=TRUE.x, y=TRUE.y, yaw=0.3, stamp_s=1.0,
+    error_code=isaac_odom.odom_error_code(f_gt.source))
+check(gt_msg.error_code == 0x600D and gt_msg.position == [TRUE.x, TRUE.y, 0.0],
+      "and the filled message carries both the true pose and its marker",
+      hex(gt_msg.error_code))
+
+print("  (8f) isaac_loco_bridge.py subscribes it, prefers it, and says so out loud")
+gt_src = open(BRIDGE_PATH, encoding="utf-8").read()
+check('SIM_STATE_TOPIC = isaac_odom.SIM_STATE_TOPIC' in gt_src,
+      "the bridge takes the topic name from isaac_odom, not a second literal")
+check("ChannelSubscriber(SIM_STATE_TOPIC, String_)" in gt_src,
+      "it subscribes rt/sim_state as a String_")
+check("isaac_odom.parse_sim_state(msg.data)" in gt_src,
+      "and parses it with the shared, offline-testable parser")
+check("use_ground_truth=self.use_ground_truth" in gt_src
+      and "ground_truth_stale_after=ODOM_GROUND_TRUTH_STALE_S" in gt_src,
+      "the integrator is built with the preference and the staleness window")
+check("self._ground_truth()" in gt_src,
+      "and every tick is handed the latest pose")
+check("error_code=isaac_odom.odom_error_code(frame.source)" in gt_src,
+      "each published message is stamped with ITS OWN frame's provenance")
+check('"--ground-truth"' in gt_src and '"--no-ground-truth"' in gt_src
+      and "use_ground_truth=args.ground_truth" in gt_src,
+      "--no-ground-truth exists and reaches the publisher (the fallback is testable)")
+check("x/y source: GROUND TRUTH" in gt_src
+      and "x/y source: DEAD RECKONING, FORCED" in gt_src,
+      "the startup banner names the source before a message has arrived")
+check("--odom-origin is NOT applied to it" in gt_src,
+      "and says the origin is not applied to a true pose")
+check("acquired — x/y are now the" in gt_src and "FALLEN BACK" in gt_src,
+      "both directions of the switch are logged when they happen "
+      "(a silent switch between a true pose and a 71x-wrong one is the worst outcome)")
+check("no {SIM_STATE_TOPIC} at all after" in gt_src,
+      "a topic that never arrives is warned about, not merely fallen back from")
+check("def _print_status" in gt_src and "now >= next_status" in gt_src,
+      "and a periodic status line states the live source unprompted")
+check(GT_BRIDGE["ODOM_GROUND_TRUTH_STALE_S"] <= GT_BRIDGE["ODOM_LOWSTATE_STALE_S"],
+      "a true pose is dropped no later than the heading is: a FROZEN pose is worse "
+      "than none, because it keeps publishing",
+      f"{GT_BRIDGE['ODOM_GROUND_TRUTH_STALE_S']:g}s vs "
+      f"{GT_BRIDGE['ODOM_LOWSTATE_STALE_S']:g}s")
+check(0 < GT_BRIDGE["ODOM_STATUS_PERIOD_S"] <= 60.0,
+      "the status line is frequent enough to answer 'which source?' during a mission",
+      f"{GT_BRIDGE['ODOM_STATUS_PERIOD_S']:g}s")
+
+# --------------------------------------------------------------------------------
+print("\n(9) against the real IDL, if this interpreter has one")
 try:
     from unitree_sdk2py.idl.default import (  # type: ignore
         unitree_go_msg_dds__SportModeState_ as real_ctor)
