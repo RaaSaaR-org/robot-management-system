@@ -62,12 +62,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import importlib.util
 import json
 import math
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LAYOUT_PY = os.path.join(HERE, "common_scene", "factory_pauseroom_layout.py")
@@ -75,6 +77,17 @@ SCENE_PY = os.path.join(HERE, "common_scene", "base_scene_factory_pauseroom.py")
 TASK_DIR = os.path.join(HERE, "g1_tasks", "factory_pause_room_g1_29dof_dex3_wholebody")
 ENVCFG_PY = os.path.join(TASK_DIR, "factory_pause_room_g1_29dof_dex3_hw_env_cfg.py")
 TASKINIT_PY = os.path.join(TASK_DIR, "__init__.py")
+
+# The offline luminance tool that produced the tabletop measurement the lighting is sized
+# from, and the MuJoCo scene that measurement is compared against. The MJCF is READ, not
+# copied: section 19 derives the Isaac tabletop's expected colour from the MJCF's own
+# material and texture elements, so a change on one side cannot pass unnoticed on the other.
+# The door generator is read too -- it holds the only two colours in the ego frame that are
+# not in the scene cfg.
+MEASURE_PY = os.path.join(HERE, "measure_scene_exposure.py")
+MJCF_SCENE = os.path.normpath(
+    os.path.join(HERE, "..", "sim_evaluator", "mjcf", "g1_apple_pnp_scene.xml"))
+DOORGEN_PY = os.path.join(HERE, "common_scene", "make_pause_room_door_usda.py")
 
 # The place graph Agent Mode navigates on, its generator, and the two consumer modules that
 # define the schema it has to satisfy. The graph is NOT part of the Isaac scene -- it is the
@@ -201,6 +214,11 @@ class Report:
         return sum(1 for s, _, _ in self.rows if s == "PASS")
 
 
+def fmt3(values) -> str:
+    """A colour triple at three decimals -- the precision both scenes author them to."""
+    return "(" + ", ".join(f"{v:.3f}" for v in values) + ")"
+
+
 def section(title: str) -> None:
     print(f"\n{title}\n{'-' * len(title)}")
 
@@ -209,11 +227,23 @@ def section(title: str) -> None:
 # loading
 # ==========================================================================================
 def load_layout(path: str):
+    """Import `factory_pauseroom_layout.py` from source, bypassing the bytecode cache.
+
+    NOT `spec.loader.exec_module`, which is what this used to be. That path consults
+    `__pycache__`, and its staleness test is (source mtime to the second, source size). Edit
+    a constant to another of the same width -- `304.0` to `160.0`, say -- and re-run inside
+    the same second, and the verifier silently checks the PREVIOUS value while printing a
+    verdict about the current file. That was not hypothetical: it happened while these
+    checks were being mutation-tested, and it is the exact failure mode this whole file
+    exists to prevent. Compiling the source we just read cannot go stale.
+    """
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
     spec = importlib.util.spec_from_file_location("factory_pauseroom_layout", path)
-    if spec is None or spec.loader is None:
+    if spec is None:
         raise RuntimeError(f"cannot load {path}")
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    exec(compile(source, path, "exec"), mod.__dict__)
     return mod
 
 
@@ -2304,6 +2334,447 @@ def check_place_graph(rep: Report, L) -> None:
               "map, which is where the code expects them")
 
 
+def module_constant(tree: ast.Module, name: str):
+    """The value of a module-level `name = <literal>` assignment, or None.
+
+    Used to read the scene cfg's palette without importing it -- it needs isaaclab, which
+    needs a GPU. `ast.literal_eval` refuses anything that is not a literal, so a colour
+    that has become a computed expression reads as absent rather than as a wrong number.
+    """
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else (
+            [node.target] if isinstance(node, ast.AnnAssign) and node.value else [])
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == name:
+                try:
+                    return ast.literal_eval(node.value)
+                except (ValueError, SyntaxError):
+                    return None
+    return None
+
+
+def dotted_target(node: ast.AST) -> str | None:
+    """`self.sim.render.ambient_light_intensity` -> that string, for Name/Attribute chains."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def attribute_assignments(tree: ast.AST, dotted: str) -> list[ast.AST]:
+    """Every RHS assigned to the attribute path `dotted`, ANYWHERE in the tree.
+
+    An AST walk and not a substring search. `"foo = bar" in source` is satisfied by a
+    commented-out line, by the same text inside a docstring, and by a mention in an error
+    message; all three were true of the checks this replaced, and prefixing the two live
+    lines with `# DISABLED` left the whole verifier passing. A statement either exists in
+    the parse tree or it does not.
+    """
+    out: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if dotted_target(target) == dotted:
+                    out.append(node.value)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            if dotted_target(node.target) == dotted:
+                out.append(node.value)
+    return out
+
+
+def call_keyword(tree: ast.AST, callee: str, keyword: str) -> list[ast.AST]:
+    """Every `keyword=` argument node passed to a call whose callee spells `callee`.
+
+    `callee` is matched against the dotted spelling, so both `DomeLightCfg(...)` and
+    `sim_utils.DomeLightCfg(...)` are found by their last component.
+    """
+    out: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = dotted_target(node.func)
+        if name is None or name.split(".")[-1] != callee.split(".")[-1]:
+            continue
+        for kw in node.keywords:
+            if kw.arg == keyword:
+                out.append(kw.value)
+    return out
+
+
+def is_bare_call(node: ast.AST, name: str) -> bool:
+    """True only for `name()` -- the exact call, no arguments, and nothing wrapped round it.
+
+    The point of the distinction: the check this replaced asked whether the NAME appeared in
+    any `ast.Call` anywhere in the file, which `intensity=dome_intensity() * 7.0` satisfies
+    while restoring the original brightness and ignoring the sweep variable.
+    """
+    return (isinstance(node, ast.Call)
+            and dotted_target(node.func) is not None
+            and dotted_target(node.func).split(".")[-1] == name
+            and not node.args and not node.keywords)
+
+
+def mjcf_materials(path: str) -> dict[str, dict]:
+    """`{name: {"rgba": (r, g, b, a) | None, "texture": str | None}}` from an MJCF's <asset>.
+
+    Parsed at check time rather than transcribed. The whole point of section 19 is that the
+    two scenes' literals must not drift apart, and a check that compared against a copy of
+    one of them would only prove that the copy had not been edited.
+    """
+    out: dict[str, dict] = {}
+    root = ET.parse(path).getroot()
+    for mat in root.iter("material"):
+        name = mat.get("name")
+        if not name:
+            continue
+        rgba = mat.get("rgba")
+        parsed = tuple(float(v) for v in rgba.split()) if rgba else None
+        out[name] = {"rgba": parsed, "texture": mat.get("texture")}
+    return out
+
+
+def mjcf_textures(path: str) -> dict[str, str]:
+    """`{name: file}` for every named <texture> with a `file` attribute."""
+    out: dict[str, str] = {}
+    root = ET.parse(path).getroot()
+    for tex in root.iter("texture"):
+        name, file = tex.get("name"), tex.get("file")
+        if name and file:
+            out[name] = file
+    return out
+
+
+def sha256_of(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def check_palette_and_lighting(rep: Report, L) -> None:
+    section("19. the palette matches the surface the camera sees, and the lights are sized")
+
+    # --- what this section is defending against -------------------------------------------
+    #
+    # On the matched tabletop region the Isaac ego view renders 8.3x more light than the
+    # MuJoCo scene the manipulation policy was trained on. That splits into a PALETTE bug
+    # (the Isaac tabletop was painted 2.11x too light) and an EXPOSURE bug (the rig puts
+    # 3.95x too much light in the room), and the two are fixed in different files by
+    # different numbers. This section pins both halves so that neither can be quietly
+    # re-absorbed into the other -- in particular so that "the render is too bright" cannot
+    # be answered by darkening the rest of the palette, and so that a light intensity cannot
+    # be re-typed as a literal that ignores the sweep variables.
+    #
+    # It does NOT pin `_TABLETOP` to the MJCF's `tablecloth` material, which is what the
+    # previous version of this section did. `tablecloth` is the MJCF's collision material --
+    # `g1_apple_pnp_scene.xml:49-50` says "Physics table faces (almost fully hidden under
+    # the visual cloth plane)" -- so that assertion pinned the Isaac scene to a surface that
+    # appears in no frame, and it would have failed the correct fix. A check that enforces a
+    # false fact is worse than no check.
+    scene_tree = parse(SCENE_PY)
+    envcfg_tree = parse(ENVCFG_PY)
+    door_tree = parse(DOORGEN_PY) if os.path.isfile(DOORGEN_PY) else None
+    tabletop = module_constant(scene_tree, "_TABLETOP")
+
+    # A missing or unparseable MJCF is a FAILURE and not a skip. It is a checked-in file in
+    # this repository, two directories away, and the pins below are the only thing tying
+    # this scene to the training distribution: if it cannot be read, they are not "not
+    # applicable", they are unenforced.
+    materials: dict[str, dict] = {}
+    textures: dict[str, str] = {}
+    if not os.path.isfile(MJCF_SCENE):
+        rep.bad("the MuJoCo training scene is readable",
+                f"{MJCF_SCENE} is missing. It is checked in at "
+                f"{os.path.relpath(MJCF_SCENE, HERE)} and every palette pin below reads it")
+    else:
+        try:
+            materials = mjcf_materials(MJCF_SCENE)
+            textures = mjcf_textures(MJCF_SCENE)
+        except ET.ParseError as exc:
+            rep.bad("the MuJoCo training scene parses", f"{MJCF_SCENE}: {exc}")
+        else:
+            rep.ok("the MuJoCo training scene parses",
+                   f"{os.path.relpath(MJCF_SCENE, HERE)} -> {len(materials)} materials, "
+                   f"{len(textures)} textures: {', '.join(sorted(materials))}")
+
+    def material(name: str, why: str) -> dict | None:
+        got = materials.get(name)
+        if got is None or got.get("rgba") is None:
+            rep.bad(f"the MJCF still declares `{name}`",
+                    f"{why} There is no `{name}` material with an rgba in "
+                    f"{os.path.relpath(MJCF_SCENE, HERE)}. Either the training scene was "
+                    "re-authored, in which case this pin needs re-deriving against whatever "
+                    "replaced it, or the wrong file is being read")
+            return None
+        return got
+
+    # --- PIN 1: the tabletop, against the surface that is actually in frame -----------------
+    velvet = material("cloth_real", "It is the visual cloth plane -- the tabletop in every "
+                                    "training frame, and what `_TABLETOP` is derived from.")
+    expected_tabletop = None
+    if velvet is not None:
+        tint = velvet["rgba"][:3]
+        tex_name = velvet.get("texture")
+        tex_file = textures.get(tex_name or "")
+        tex_path = (os.path.normpath(os.path.join(os.path.dirname(MJCF_SCENE), tex_file))
+                    if tex_file else None)
+
+        # The verifier is stdlib-only by design, so it cannot decode a PNG and re-measure the
+        # texture mean. It can do the next best thing: pin the FILE, so that the cited mean
+        # in `factory_pauseroom_layout.py` cannot go stale behind a texture swap.
+        if tex_path is None:
+            rep.bad("the cloth texture is resolvable from the MJCF",
+                    f"`cloth_real` names texture {tex_name!r}, which no <texture> element "
+                    "declares with a file")
+        elif not os.path.isfile(tex_path):
+            rep.bad("the cloth texture is resolvable from the MJCF",
+                    f"{tex_path} does not exist")
+        else:
+            digest = sha256_of(tex_path)
+            rep.check(digest == L.CLOTH_TEXTURE_SHA256,
+                      "the cloth texture is the one whose mean was measured",
+                      f"{os.path.relpath(tex_path, HERE)} sha256 {digest[:16]}... against the "
+                      f"cited {L.CLOTH_TEXTURE_SHA256[:16]}.... The mean RGB "
+                      f"{fmt3(L.CLOTH_TEXTURE_MEAN)} in CLOTH_TEXTURE_MEAN was measured with "
+                      "PIL over this exact file; this verifier is stdlib-only and cannot "
+                      "re-derive it, so the digest is what keeps the citation honest. If the "
+                      "texture is replaced, re-measure the mean and the tabletop colour "
+                      "with it")
+            rep.check(os.path.relpath(tex_path, os.path.dirname(MJCF_SCENE)).replace(os.sep, "/")
+                      == L.CLOTH_TEXTURE_RELPATH,
+                      "the cited texture path is the one the MJCF names",
+                      f"MJCF says {tex_file}, layout cites {L.CLOTH_TEXTURE_RELPATH}")
+
+        expected_tabletop = tuple(round(m * t, 3)
+                                  for m, t in zip(L.CLOTH_TEXTURE_MEAN, tint))
+        if tabletop is None:
+            rep.bad("the tabletop is the MJCF's VISIBLE cloth, not its collision material",
+                    "`_TABLETOP` is not a module-level literal in "
+                    f"{os.path.relpath(SCENE_PY, HERE)} any more")
+        else:
+            rep.check(tuple(round(c, 6) for c in tabletop) == expected_tabletop,
+                      "the tabletop is the MJCF's VISIBLE cloth, not its collision material",
+                      f"Isaac _TABLETOP {fmt3(tabletop)} against `cloth_real` = texture mean "
+                      f"{fmt3(L.CLOTH_TEXTURE_MEAN)} x rgba {fmt3(tint)} = "
+                      f"{fmt3(expected_tabletop)}. The MJCF's own comment on the tint (line "
+                      "54) is \"rgba < 1 compensates the scene lighting gain\", so the "
+                      "product and not the tint is the albedo the camera sees. Rendered "
+                      "luminance parity is NOT asserted here -- `cloth_real` is a textured "
+                      "surface with per-pixel variance and this scene has a flat "
+                      "PreviewSurface; only the mean is matchable")
+
+    # --- PIN 1b: and specifically NOT the collision material --------------------------------
+    cloth_mjcf = material("tablecloth", "It is the physics face this constant used to be "
+                                        "pinned to, and the check is now that it is NOT.")
+    if cloth_mjcf is not None and tabletop is not None:
+        rep.check(tuple(round(c, 6) for c in tabletop)
+                  != tuple(round(c, 6) for c in cloth_mjcf["rgba"][:3]),
+                  "the tabletop is NOT the MJCF's hidden `tablecloth` grey",
+                  f"`tablecloth` is {fmt3(cloth_mjcf['rgba'][:3])} and _TABLETOP is "
+                  f"{fmt3(tabletop)}. This assertion is inverted on purpose. The MJCF "
+                  "comment above that material reads \"Physics table faces (almost fully "
+                  "hidden under the visual cloth plane)\": it is the collider's colour and "
+                  "it is in no frame. `_TABLETOP` was equal to it, this section used to "
+                  "assert that equality, and the result was that the tabletop was painted "
+                  f"{L.tabletop_albedo_ratio():.2f}x too light and the check defended it")
+
+    # --- PIN 2: the plate --------------------------------------------------------------------
+    plate = material("plate_white", "It is the static place target whose contact defines "
+                                    "success, and the Isaac plate is its literal.")
+    if plate is not None:
+        plate_isaac = L.PLATE["colour"]
+        rep.check(tuple(round(c, 6) for c in plate_isaac)
+                  == tuple(round(c, 6) for c in plate["rgba"][:3]),
+                  "the plate is the same colour in both scenes",
+                  f"Isaac PLATE['colour'] {fmt3(plate_isaac)} vs MJCF `plate_white` rgba "
+                  f"{fmt3(plate['rgba'][:3])}. Both trace to the same measured dataset value "
+                  "(~(226, 227, 232)/255), and it is the same object doing the same job: "
+                  "the static place target whose contact defines success. Unlike the "
+                  "tabletop, `plate_white` is untextured, so the two are directly comparable")
+
+    # --- the repaint guard ------------------------------------------------------------------
+    #
+    # Every diffuse colour the ego frame contains, pinned to what it was when the exposure
+    # was measured. The previous version of this guard covered the table and the plate only,
+    # which left the floor, the walls, the partitions, the columns and the crates free: a
+    # 2.6x darkening of ground, concrete and partition -- most of the pixels in a hall frame
+    # -- passed every check. That is precisely the "hide the exposure in the albedos" edit
+    # the section exists to prevent, and the surfaces it would hide in are the ones that were
+    # not pinned.
+    #
+    # These values are NOT claimed to be right. There is no MuJoCo counterpart for a factory
+    # floor; they are scene dressing. What is claimed is that the lighting calibration below
+    # was measured against a render made with exactly these, so changing one changes the
+    # brightness the calibration controls, and it has to be re-derived rather than typed.
+    guard = [
+        (SCENE_PY, scene_tree, "_GROUND", (0.34, 0.34, 0.35), "the factory floor -- the "
+         "single largest surface in a hall ego frame"),
+        (SCENE_PY, scene_tree, "_CONCRETE", (0.62, 0.62, 0.60), "the four perimeter walls"),
+        (SCENE_PY, scene_tree, "_PARTITION", (0.80, 0.79, 0.75), "the pause-room partitions, "
+         "which fill the frame on the approach to the door"),
+        (SCENE_PY, scene_tree, "_STEEL", (0.42, 0.44, 0.48), "the eight columns"),
+        (SCENE_PY, scene_tree, "_CRATE", (0.55, 0.42, 0.26), "the six crates"),
+    ]
+    if door_tree is not None:
+        guard += [
+            (DOORGEN_PY, door_tree, "_LEAF_COLOUR", (0.72, 0.78, 0.82),
+             "the two sliding door leaves, which the ego view stares at while the door opens"),
+            (DOORGEN_PY, door_tree, "_RAIL_COLOUR", (0.42, 0.44, 0.48), "the door frame"),
+        ]
+    else:
+        rep.bad("the door generator is readable",
+                f"{DOORGEN_PY} is missing -- the door's two colours cannot be pinned")
+    for path, tree, name, expected, what in guard:
+        got = module_constant(tree, name)
+        rep.check(got is not None and tuple(round(c, 6) for c in got) == expected,
+                  f"{name} has not been repainted",
+                  f"{os.path.relpath(path, HERE)}: {name} = "
+                  f"{fmt3(got) if got else got} (expected {fmt3(expected)}) -- {what}. "
+                  "Not a claim that this value is correct; a claim that the exposure below "
+                  "was calibrated with it")
+    for name, expected, what in (("PLATE", (0.886, 0.888, 0.912), "the place target"),
+                                 ("APPLE", (0.86, 0.24, 0.16), "the object being carried, "
+                                  "and the highest-chroma thing in frame")):
+        got = getattr(L, name)["colour"]
+        rep.check(tuple(round(c, 6) for c in got) == expected,
+                  f"{name}['colour'] has not been repainted",
+                  f"{fmt3(got)} (expected {fmt3(expected)}) -- {what}")
+
+    # --- the lights: still the ones the measurement sized -----------------------------------
+    dome, distant, ambient = L.DOME_INTENSITY, L.DISTANT_INTENSITY, L.AMBIENT_INTENSITY
+    rep.check(0.0 < dome <= 3000.0 and 0.0 < distant <= 3000.0,
+              "both light intensities are inside Isaac Lab's own range",
+              f"dome {dome:g}, distant {distant:g}; the shipped Isaac Lab environments use "
+              "500-3000 for a dome or a distant light, almost always as a scene's ONLY "
+              f"light, and this scene stacks two. The resolver refuses above "
+              f"LIGHT_INTENSITY_MAX = {L.LIGHT_INTENSITY_MAX:g}, which is the typo bound, "
+              "not the taste bound this check is")
+
+    # The derivation is ONE factor applied to all three terms; that is the whole reason it is
+    # valid without knowing how the room's light divides between them. So the thing to check
+    # is not any single intensity but that the three moved together.
+    scales = L.light_scale()
+    spread = max(scales) / min(scales) if min(scales) > 0 else float("inf")
+    rep.check(spread <= 1.02,
+              "all three light terms are cut by the SAME factor",
+              f"dome {L.AUTHORED_DOME_INTENSITY:g}/{dome:g} = {scales[0]:.3f}x, distant "
+              f"{L.AUTHORED_DISTANT_INTENSITY:g}/{distant:g} = {scales[1]:.3f}x, ambient "
+              f"{L.AUTHORED_AMBIENT_INTENSITY:g}/{ambient:g} = {scales[2]:.3f}x; spread "
+              f"{spread:.4f}x against the 1.02x rounding allowance. Nothing offline can say "
+              "how the measured 2.40 gain at the tabletop divides between a dome, a distant "
+              "light and an RTX ambient term, so a uniform cut is the only one that is "
+              "correct for every division -- and it is the only one that leaves the shadow "
+              "contrast alone, which the matched-region measurement says is already right "
+              "(1.23x against MuJoCo's 1.29x). Cutting one term harder than another is a "
+              "claim about the mixture, and there is no measurement to make it from")
+
+    required = L.required_light_cut()
+    achieved = sum(scales) / len(scales)
+    # +/- 0.20 stops. The derivation is now a direct ratio rather than a residual, so the
+    # slack is for rounding the intensities to whole numbers and nothing else. It is a band
+    # on the AUTHORED CONSTANTS; the sweep brackets in README.md move the env vars, which
+    # this check never reads, so a wide sweep is not in conflict with a tight band.
+    lo, hi = required / (2 ** 0.20), required * (2 ** 0.20)
+    rep.check(lo <= achieved <= hi,
+              "the light cut is the size the measurement asks for",
+              f"matched-region tabletop medians "
+              f"{L.MEASURED_TABLETOP['isaac_table']['median']:.4f} (Isaac) vs "
+              f"{L.MEASURED_TABLETOP['mujoco_training']['median']:.4f} (MuJoCo) -> "
+              f"{L.rendered_tabletop_ratio():.2f}x more light rendered "
+              f"({math.log2(L.rendered_tabletop_ratio()):.2f} stops), of which "
+              f"{L.tabletop_albedo_ratio():.2f}x is the albedo bug fixed above, leaving "
+              f"{required:.2f}x ({math.log2(required):.2f} stops) for the lights. The rig is "
+              f"cut {achieved:.2f}x. Accepted band {lo:.2f}x-{hi:.2f}x. A different "
+              "defensible pair of tabletop rectangles gives 4.26x rather than 3.95x -- 0.11 "
+              "stops -- which is why the band is 0.20 stops and not 0.05")
+
+    # --- the scene cfg must actually be reading them ---------------------------------------
+    #
+    # Checked by looking at the `intensity=` ARGUMENT of the light spawners, not by asking
+    # whether the resolver's name appears somewhere in the file. The version this replaced
+    # asked the second question, and `intensity=dome_intensity() * 7.0` -- which restores the
+    # original brightness exactly and ignores the sweep variable -- answered it.
+    for cfg, fn, colour in (("DomeLightCfg", "dome_intensity", "DOME_COLOUR"),
+                            ("DistantLightCfg", "distant_intensity", "DISTANT_COLOUR")):
+        found = call_keyword(scene_tree, cfg, "intensity")
+        rep.check(len(found) == 1 and is_bare_call(found[0], fn),
+                  f"{cfg}(intensity=) is exactly {fn}()",
+                  f"{len(found)} `intensity=` argument(s) to {cfg}; "
+                  f"{'as ' + ast.dump(found[0])[:90] + '...' if found else 'none found'}. "
+                  "A literal re-typed here, or any arithmetic wrapped round the call, "
+                  f"would ignore {L.DOME_INTENSITY_ENV_VAR} / "
+                  f"{L.DISTANT_INTENSITY_ENV_VAR} without saying so, and a sweep would "
+                  "report that the default was right")
+        found_c = call_keyword(scene_tree, cfg, "color")
+        rep.check(len(found_c) == 1 and isinstance(found_c[0], ast.Name)
+                  and found_c[0].id == colour,
+                  f"{cfg}(color=) is the layout module's {colour}",
+                  f"the colours are authored in factory_pauseroom_layout.py and imported "
+                  f"here, so that the luminance weighting in the derivation and the value "
+                  f"the scene spawns are one object and not two copies. Found "
+                  f"{ast.dump(found_c[0])[:70] if found_c else 'nothing'}")
+
+    # --- the env cfg must actually be setting the ambient term -------------------------------
+    ambient_rhs = attribute_assignments(envcfg_tree, "self.sim.render.ambient_light_intensity")
+    rep.check(len(ambient_rhs) == 1 and is_bare_call(ambient_rhs[0], "ambient_intensity"),
+              "the env cfg assigns the ambient term from the layout module",
+              "`self.sim.render.ambient_light_intensity = FPR_LAYOUT.ambient_intensity()`, "
+              "as an assignment in the parse tree. Left unset, the inherited kit value of "
+              "1.0 stands and a third of the cut is absent. The substring test this "
+              "replaced was satisfied by the same line commented out")
+    mode_rhs = attribute_assignments(envcfg_tree, "self.sim.render.rendering_mode")
+    rep.check(not mode_rhs,
+              "the env cfg does NOT pin a rendering mode",
+              "naming a mode loads `apps/rendering_modes/<mode>.kit` and applies every "
+              "setting in it. With no `--rendering_mode` on the command line AppLauncher "
+              "stores the empty string (`app_launcher.py:1299-1309` -- there is no "
+              "`balanced` default), SimulationContext finds that falsy, falls through to "
+              "`render_cfg.rendering_mode` = None (`simulation_context.py:234-237`) and "
+              "loads NO preset. That is the state the ego view was measured in, so pinning "
+              "a mode would move the very thing the calibration controls. Re-measure first "
+              "if one is ever wanted")
+
+    # --- the overrides parse, and refuse ----------------------------------------------------
+    #
+    # Exercised through the `value=` parameter rather than by setting os.environ, for the
+    # same reason section 8 does it for NEODEM_ROBOT_SPAWN: this process must not mutate
+    # the environment it is running in.
+    rep.check(L.dome_intensity("") == dome and L.distant_intensity("") == distant
+              and L.ambient_intensity("") == ambient,
+              "unset overrides leave the authored intensities exactly as written",
+              f"dome {dome:g}, distant {distant:g}, ambient {ambient:g}")
+    rep.check(L.dome_intensity("1234.5") == 1234.5 and L.distant_intensity(" 7 ") == 7.0,
+              "a well-formed override is honoured, whitespace and all",
+              f"{L.DOME_INTENSITY_ENV_VAR}=1234.5 -> 1234.5, "
+              f"{L.DISTANT_INTENSITY_ENV_VAR}=' 7 ' -> 7.0; one GPU session can sweep the "
+              "bracket without editing a file or re-running install_into_checkout.sh")
+    refused = []
+    for bad in ("bright", "-1", "1e9", "nan", "3000,"):
+        try:
+            L.dome_intensity(bad)
+        except ValueError:
+            refused.append(bad)
+    rep.check(len(refused) == 5,
+              "a malformed override is REFUSED, not quietly defaulted",
+              f"refused {refused}; a sweep whose typo'd value fell back to the calculated "
+              "default would render a frame identical to the previous one and report that "
+              "the default was correct -- the same failure shape as the NEODEM_ROBOT_SPAWN "
+              "typo section 8 guards against")
+
+    # --- the tool that made the measurement -------------------------------------------------
+    rep.check(os.path.isfile(MEASURE_PY),
+              "the tool that produced these numbers ships next to them",
+              "measure_scene_exposure.py: it re-measures any directory of frames, over the "
+              "same rectangles, and says whether the tabletop is inside the training band. "
+              "Without it the numbers in the lighting comment are assertions nobody can "
+              "re-run")
+
+
 def print_coordinates(L) -> None:
     section("coordinate table (world frame, metres, num_envs=1)")
     rows = [
@@ -2361,6 +2832,40 @@ def print_coordinates(L) -> None:
               f"{L.grasp_reach(stand, base_z, L.TABLE_APPROACH_YAW_DEG, apple):.3f} m")
     print(f"    budget {L.GRASP_REACH_BUDGET:.3f} m; arm is {L.ARM_REACH_TO_KNUCKLE:.3f} m "
           f"to the knuckle, {L.ARM_REACH_TO_FINGERTIP:.3f} m to the fingertip")
+
+    # What THIS process would light the scene with. Same arrangement as the spawn line
+    # above and for the same reason: section 19 exercises the resolvers through `value=`,
+    # so it passes with a broken variable exported, and a run that never printed the LIVE
+    # value would let a typo'd sweep look like a clean verification.
+    print("\n  lighting (calculated from the tabletop measurement, NEVER RENDERED):")
+    live = []
+    for label, var, fn, authored in (
+            ("dome", L.DOME_INTENSITY_ENV_VAR, L.dome_intensity, L.AUTHORED_DOME_INTENSITY),
+            ("distant", L.DISTANT_INTENSITY_ENV_VAR, L.distant_intensity,
+             L.AUTHORED_DISTANT_INTENSITY),
+            ("ambient", L.AMBIENT_INTENSITY_ENV_VAR, L.ambient_intensity,
+             L.AUTHORED_AMBIENT_INTENSITY)):
+        set_to = os.environ.get(var, "") or "<unset>"
+        try:
+            value = fn()
+        except ValueError as exc:
+            print(f"    {label.ljust(8)} {var}={set_to} -> REFUSED: {exc}")
+            live.append(None)
+        else:
+            live.append(value)
+            print(f"    {label.ljust(8)} {value:>8.3f}   (was {authored:g} when the ego view "
+                  f"was measured, /{authored / value if value else float('inf'):.2f})   "
+                  f"{var}={set_to}")
+    print(f"    the tabletop renders {L.rendered_tabletop_ratio():.2f}x the training "
+          f"scene's, = albedo {L.tabletop_albedo_ratio():.2f}x (fixed in the palette) x "
+          f"light {L.required_light_cut():.2f}x (fixed here).")
+    if all(v is not None for v in live):
+        scales = L.light_scale(*live)
+        print(f"    THIS PROCESS would cut the rig by {scales[0]:.2f}x / {scales[1]:.2f}x / "
+              f"{scales[2]:.2f}x (dome / distant / ambient) against a required "
+              f"{L.required_light_cut():.2f}x.")
+    print("    Re-measure with measure_scene_exposure.py --roi; the rectangles are in "
+          "MEASURED_TABLETOP.")
 
     print("\n  automatic door:")
     a = L.DOOR_AUTOMATION
@@ -2420,6 +2925,7 @@ def main() -> int:
     check_robot_model(rep, L)
     check_door_driver(rep, L)
     check_place_graph(rep, L)
+    check_palette_and_lighting(rep, L)
 
     print_coordinates(L)
 

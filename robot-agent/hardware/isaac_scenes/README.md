@@ -185,7 +185,7 @@ past the knuckle so the slack cannot grow silently.
 | `g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/factory_pause_room_g1_29dof_dex3_hw_env_cfg.py` | same, under `tasks/g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/` |
 | `g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/mdp/{__init__,observations,pause_door,rewards,terminations}.py` | same, under `.../mdp/` |
 | `g1_tasks/__init__.py` | `tasks/g1_tasks/__init__.py` — **OPTIONAL, and it is a full-file replacement** |
-| `README.md`, `verify_factory_scene_offline.py`, `make_factory_place_graph.py` | not installed; they stay in this repo. The place graph the last one writes is not installed either — it is read by the **robot agent**, from this repo, via `PLACE_GRAPH_PATH` |
+| `README.md`, `verify_factory_scene_offline.py`, `make_factory_place_graph.py`, `measure_scene_exposure.py`, `capture_factory_stills.py` | not installed; they stay in this repo. The place graph the last one writes is not installed either — it is read by the **robot agent**, from this repo, via `PLACE_GRAPH_PATH` |
 
 **The door USD is the one non-`.py` install.** It is deliberately resolved relative to
 `base_scene_factory_pauseroom.py`'s own `__file__`, not via `PROJECT_ROOT` and not from
@@ -261,6 +261,35 @@ Three flags worth knowing about:
   not a spawn**: it sits 0.100 m from a shut door leaf, against the 0.40 m pad the verifier
   charges a spawn, so starting there puts the robot inside a 25 kg leaf on a stiff position
   drive at t = 0. Section 8 of the offline verifier prints that number on every run.
+
+* `NEODEM_DOME_INTENSITY`, `NEODEM_DISTANT_INTENSITY`, `NEODEM_AMBIENT_INTENSITY` sweep the
+  scene's exposure without editing a file or re-running `install_into_checkout.sh`. The
+  authored defaults (dome **760**, distant **304**, ambient **0.253**) are **calculated from
+  a measurement and have never been rendered** — see *The tabletop renders ~8× too bright*
+  below. They accept a plain float and, like `NEODEM_ROBOT_SPAWN`, **raise on anything else
+  rather than falling back**: a swept value that quietly reverted to the default would
+  produce a frame identical to the previous one and report that the default was right.
+
+  The defaults are one factor — 3.95× — applied to all three terms, so a sweep should move
+  all three together and step in stops around them:
+
+  | stops | dome | distant | ambient |
+  |---|---|---|---|
+  | +1.0 | 1520 | 608 | 0.506 |
+  | +0.5 | 1075 | 430 | 0.358 |
+  | **0** | **760** | **304** | **0.253** |
+  | −0.5 | 537 | 215 | 0.179 |
+  | −1.0 | 380 | 152 | 0.127 |
+
+  then `measure_scene_exposure.py --roi … --reference <the MuJoCo frames> <the new frames>`
+  on each — **with `--roi`**, or the answer is about content and not light. These are sweep
+  points, not candidate defaults: the offline verifier's ±0.20-stop band applies to the
+  authored constants in `factory_pauseroom_layout.py`, which it reads, and never to these
+  environment variables, which it does not. Widening the sweep is free; moving a default
+  outside the band means re-deriving it.
+
+  The one axis worth sweeping *non*-uniformly is `NEODEM_AMBIENT_INTENSITY=0`, which tests
+  whether the RTX ambient term is doing anything visible. Nothing offline can say.
 
 **Only one `sim_main.py` at a time on this box** — its exit handler `SIGKILL`s every other
 one.
@@ -430,8 +459,9 @@ python3 verify_factory_scene_offline.py \
 ```
 
 No Isaac, no GPU, no network. It imports `factory_pauseroom_layout.py` **for real** (that
-module imports nothing but `math`, which is the entire reason the geometry was split out of
-the cfg) and does actual arithmetic on the numbers the simulator will use — so the check and
+module imports nothing but `math` and `os` — `os` only for the handful of environment
+variables that select the spawn pose and sweep the lighting — which is the entire reason
+the geometry was split out of the cfg) and does actual arithmetic on the numbers the simulator will use — so the check and
 the scene cannot drift. The two cfg modules *cannot* be imported (they need `isaaclab`,
 which needs a Kit app and a GPU), so those are read with `ast`, which is enough for the two
 questions asked of them: which prim paths are declared, and whether any remote URL or
@@ -763,6 +793,70 @@ of every task in this checkout (`base_reward_pickplace_cylindercfg.py:50`,
 | sliding friction | 1.2 | 1.2 — carried over. It is load-bearing twice: it is what lets a closed Dex3 hand hold the apple, and the low-friction version rolled >1 m off the table on any grazing contact. |
 | table surface | textured cloth, visual-only plane 0.5 mm above the collider | flat grey `PreviewSurfaceCfg`. The MJCF's texture work was matched against real dataset frames for a *policy*; nothing in this scene is trained on pixels yet. |
 | robot base | fixed at `(-0.15, 0, 0.76)`, +90° yaw | free-standing on the factory floor at `(4, -2, 0.8)`, 45° yaw. The whole point here is that it has to walk. |
+| lighting | headlight `diffuse 0.6 / ambient 0.4` plus three lights, no tone mapping | dome + distant light + an RTX ambient term, through RTX's ACES tonemapper. **Not comparable as settings; only as rendered pixels on a surface both scenes contain** — which is what the next section does. |
+
+### The tabletop renders ~8× too bright: half palette, half exposure
+
+The head camera is the VLA policy's `ego_view` and it is the policy's **only** visual input.
+
+**Measure a region, not a frame.** The first version of this analysis compared whole-frame
+medians — 0.827 for the Isaac ego view at the table against 0.333 for MuJoCo — and sized a
+light cut from the 7.18× that implies. That is not a lighting measurement. The MuJoCo frame
+is a tabletop close-up that is ~90 % cloth; the Isaac frame also carries walls, a floor, a
+plate and two black hands; the Isaac "hall" frames contain no tabletop at all, which is the
+entire content of the old finding that "the hall is a separate, hotter viewpoint". The same
+trap voided the claim that the Isaac scene was "6× flatter": whole-frame p90/p10 is 10.24×
+against 1.66×, but the MuJoCo p90 is the white plate and the Isaac p10 is the black hands.
+
+Measured instead over **the tabletop and nothing else**, in both scenes, pooled over the
+first 12 frames of each run (`measure_scene_exposure.py --roi`, rectangles recorded in
+`MEASURED_TABLETOP`):
+
+| region | median | p10 | p90 | linear p90/p10 |
+|---|---|---|---|---|
+| MuJoCo cloth, `120,60,620,250` | 0.3261 | 0.3056 | 0.3457 | 1.29× |
+| Isaac tabletop, three rects clear of the hands | 0.8667 | 0.7955 | 0.8706 | 1.23× |
+
+```bash
+/home/humanoid/anaconda3/envs/unitree_sim_env6/bin/python measure_scene_exposure.py \
+  --reference /home/humanoid/factory-mission-logs/groot/ab_on/ep_seed0 \
+  --reference-roi 120,60,620,250 \
+  --roi 60,175,580,235 --roi 80,240,200,330 --roi 490,240,570,330 \
+  --reference-albedo 0.142686 --albedo 0.300722 \
+  /home/humanoid/factory-mission-logs/grasp3-002355/grasp_frames
+```
+
+The two spreads are 1.23× and 1.29×, so **there is no flatness defect.** The medians differ
+by **8.33× (3.06 stops)** of rendered light. That splits in two:
+
+**1. The palette, 2.11×.** `_TABLETOP` was `(0.30, 0.30, 0.31)`, copied from the MJCF's
+`<material name="tablecloth" rgba="0.30 0.30 0.31 1">`. `tablecloth` is the **collision**
+material — the comment above it at `g1_apple_pnp_scene.xml:49-50` says "Physics table faces
+(almost fully hidden under the visual cloth plane)". What every training frame shows is
+`cloth_real`: `textures/cloth.png` (mean RGB `(0.2937, 0.2969, 0.3051)`) tinted by
+`rgba="0.48 0.48 0.49"`, effective albedo `(0.141, 0.143, 0.149)`, luminance 0.1427 against
+the authored 0.3007. **The Isaac table was painted 2.11× too light**, and it is now
+`(0.141, 0.143, 0.149)`. That is a palette correction and would be right at any light level.
+
+**2. The lights, 3.95×** = 8.33 ÷ 2.11. Applied as **one factor to every term that puts
+light in the room** — dome 3000 → **760**, distant 1200 → **304**, and
+`/rtx/sceneDb/ambientLightIntensity` 1.0 → **0.253** in the env cfg. Uniform because nothing
+offline can say how the room's light divides between those three, and one factor is exact
+for any division while leaving the shadow contrast — which is already right — alone.
+`visible_in_primary_ray=False` on the dome is separate and costs no illumination: both rooms
+are roofless, so the head camera was looking straight at the light source above the wall
+line.
+
+Section 19 of the offline verifier pins the tabletop against `cloth_real` (rgba parsed from
+the MJCF, texture mean cited with the texture's sha256), asserts that it is **not** equal to
+`tablecloth`, pins every other diffuse colour in the ego frame against repaint, and checks
+that all three light terms moved by the same factor and that the scene cfg reads them
+through the resolvers rather than as literals.
+
+**None of it has been rendered.** Predicted, arithmetically: the tabletop lands at 0.326
+encoded against MuJoCo's 0.3261, and the hall floor — repainted by nothing — goes from 0.906
+to 0.487. The full derivation, what is still unknown, and the sweep variables live in the
+`LIGHTING` block of `common_scene/factory_pauseroom_layout.py`.
 
 ---
 
@@ -842,10 +936,16 @@ Three traps, each of which cost a launch:
 2. **Write the output somewhere under the Docker bind mount.** With `--rm` and an
    `--out` outside `/home/humanoid`, the run reports "wrote 7 image(s)" and the
    files die with the container.
-3. **`--light-scale`.** The scene is lit for a roofless hall of white surfaces and
-   renders blown out at 1.0 — the columns, the table and the walls all read as the
-   same white. 0.35 restores the shadows. This is a *rendering* preference and
-   changes no physics, so it is a flag rather than a scene edit.
+3. **`--light-scale` now multiplies an already-cut rig — do not stack the old 0.35 on
+   top of it.** This entry used to read "renders blown out at 1.0 … 0.35 restores the
+   shadows", and it was right: at dome 3000 / distant 1200 the columns, the table and the
+   walls all read as the same white. Those intensities have since been measured and cut to
+   760 / 304 (a 3.95× reduction, which is most of the flag's old 0.35), so
+   `--light-scale 0.35` on today's scene is a *second* cut of about 1.4 stops. Leave it at
+   1.0 unless you are sweeping, and sweep with `NEODEM_DOME_INTENSITY` /
+   `NEODEM_DISTANT_INTENSITY` / `NEODEM_AMBIENT_INTENSITY` instead — the flag rescales the
+   built stage, cannot reach the RTX ambient term at all, and the env vars change what the
+   scene declares, so only the env vars describe a state the mission would actually run in.
 
 `isaacsim.core.utils.stage` does not exist in the Isaac Lab 3.0 this checkout
 pins; the tool reaches the stage through `omni.usd` instead.
@@ -953,9 +1053,32 @@ deleted so the record of what was once unknown survives.
    boxes are not readable offline, so the verifier charges each a generous 1.0 m half-extent
    for the route check. If `yellowbox_table_b` at `(5.00, -6.50)` turns out to be huge, it
    is the one nearest anything that matters.
-9. **Lighting.** A dome at 3000 plus a distant light at 1200 into a roofless hall is a
-   guess. The scene lost the warehouse USD's eight ceiling RectLights along with the
-   warehouse; the hall may render darker than the `move_cylinder` scene does.
+9. **Lighting — the guess was measured, and it was wrong twice; the replacement is
+   arithmetic and has still not been rendered.** The original entry read "a dome at 3000 plus
+   a distant light at 1200 into a roofless hall is a guess … the hall may render darker than
+   the `move_cylinder` scene does." It rendered *brighter*. The first attempt to fix it then
+   sized a 7.18× light cut from whole-frame medians, which measured content rather than
+   light and double-counted a palette bug as brightness. See *The tabletop renders ~8× too
+   bright* above. What is now open is narrower and sharper:
+   * **whether dome 760 / distant 304 / ambient 0.253 actually lands the tabletop on
+     0.326.** Every one of those numbers is arithmetic on recorded frames. Nothing has been
+     rendered at them.
+   * **whether the split between 2.11× of albedo and 3.95× of light is the right one.** The
+     8.33× total is rendered-pixel against rendered-pixel and is safe; the split compares a
+     USD linear `diffuse_color` against an MJCF rgba applied to raw 8-bit texels, and those
+     need not be the same space. The tabletop lands at 0.326 either way — what the split
+     decides is how bright the rest of the room is, and nothing is measured there at all.
+   * **whether `/rtx/sceneDb/ambientLightIntensity` scales linearly.** It is a scalar named
+     "intensity" and nothing readable offline says otherwise, but the uniform-cut argument
+     rests on it. `NEODEM_AMBIENT_INTENSITY=0` is the experiment.
+   * **whether the dome and the distant light are on the same per-unit scale.** Less
+     important than it was — they are now cut by the same factor, so the assumption only
+     affects the claim that the directional share is unchanged, not the size of the cut.
+   * **whether matching the tabletop median is enough for the policy.** A scene can hit the
+     band on one surface and be wrong everywhere else. Nothing offline can answer that.
+   * **how much of the hall's 65 % saturated pixels was the dome rendering as sky.**
+     `visible_in_primary_ray` is now `False`; the geometry makes it a strong hypothesis and
+     it costs no illumination either way, but nobody has counted the sky pixels.
 10. **Both fixed cameras' framing.** The sight-lines are proven clear of walls, and the
    look-at orientations are proven correct, but focal length 12 mm / aperture 27 (hall) and
    14 mm / 24 (pause room) are unframed guesses.

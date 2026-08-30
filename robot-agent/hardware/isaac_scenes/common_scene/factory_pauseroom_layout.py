@@ -823,6 +823,339 @@ def robot_spawn(value: str | None = None) -> dict:
 WORLD_CAMERA = {"eye": (-2.00, -13.50, 10.00), "target": (5.00, 1.00, 1.00)}
 PAUSE_ROOM_CAMERA = {"eye": (8.60, 4.60, 2.40), "target": (10.20, 6.70, 0.85)}
 
+# ---------------------------------------------------------------------------------------
+# LIGHTING -- INTENSITIES ONLY.
+#
+# The light COLOURS live in this module too (`DOME_COLOUR` / `DISTANT_COLOUR` below); the
+# scene cfg imports them. Everything in this block is here for the same reason every other
+# number is: `base_scene_factory_pauseroom.py` cannot be imported without a GPU, and these
+# are the numbers that have to be checked offline and swept at launch time.
+#
+# THE MEASUREMENT THAT SET THEM -- AND WHY IT IS A REGION AND NOT A FRAME
+# ----------------------------------------------------------------------
+# The head camera is the VLA policy's `ego_view` and it is the policy's ONLY visual input.
+# An earlier version of this block sized the lights from WHOLE-FRAME medians: 0.827 for the
+# Isaac ego view at the table against 0.333 for the MuJoCo scene the manipulation policy was
+# trained on. That comparison is invalid. The two frames do not show the same thing -- the
+# MuJoCo frame is a tabletop close-up that is ~90 % cloth, the Isaac frame at the table also
+# carries walls, floor, plate and two black hands, and the Isaac "hall" frames contain no
+# tabletop at all. A median over different content is a statement about content, not about
+# light. (The clearest casualty: the old block claimed the Isaac scene was "6x flatter" from
+# whole-frame p90/p10, 1.66x against 10.24x. On the MATCHED tabletop region the two spreads
+# are 1.23x and 1.29x. The MuJoCo p90 was the white plate and the Isaac p10 was the black
+# hands. There is no measured flatness defect.)
+#
+# So the measurement is taken over a REGION OF INTEREST containing one surface -- the
+# tabletop -- in both scenes, and nothing else. Luminance = 0.2126R + 0.7152G + 0.0722B on
+# sRGB values in [0, 1], pooled over the first 12 frames of each run. Reproduce with
+# `measure_scene_exposure.py --roi` in this directory; its docstring names the frame
+# directories and the exact rectangles.
+#
+#     region                                       median enc   -> linear
+#     MuJoCo cloth, x120-620 y60-250                   0.3261      0.0868
+#     Isaac tabletop, three rects clear of the hands   0.8667      0.7231
+#
+# The Isaac tabletop renders 8.33x (3.06 stops) more light than the MuJoCo cloth does.
+#
+# THE DEFECT IS TWO DEFECTS, AND THEY MULTIPLY
+# --------------------------------------------
+# 8.33x is rendered light. It splits into an ALBEDO error and an ILLUMINATION error, and
+# the split is the whole reason the previous fix was the wrong size:
+#
+#   1. ALBEDO, 2.11x (1.08 stops). `_TABLETOP` in the scene cfg was authored as the MJCF's
+#      `tablecloth` (0.30, 0.30, 0.31). `tablecloth` is the MJCF's COLLISION material and
+#      its own comment (`g1_apple_pnp_scene.xml:49-50`) says so: "Physics table faces
+#      (almost fully hidden under the visual cloth plane)". The surface that appears in
+#      every training frame is `cloth_real` -- `textures/cloth.png` (mean RGB
+#      (0.2937, 0.2969, 0.3051)) tinted by rgba (0.48, 0.48, 0.49), effective albedo
+#      (0.141, 0.143, 0.149), luminance 0.1427 against the authored 0.3007. The Isaac table
+#      was painted 2.11x too light. That is a PALETTE BUG, fixed in the palette, and it is
+#      not exposure compensation: see the block above `_TABLETOP` in the scene cfg.
+#
+#   2. ILLUMINATION, 3.95x (1.98 stops), = 8.33 / 2.11. Dividing each side's rendered
+#      linear light by its own albedo gives a per-scene lighting gain that the albedo error
+#      cannot contaminate:
+#
+#          MuJoCo   0.0868 linear / 0.1427 albedo = 0.609
+#          Isaac    0.7231 linear / 0.3007 albedo = 2.405     ->  3.95x, 1.98 stops
+#
+# The old block put all 8.33x-minus-nothing on the lights, quoting "7.18x": it inverted the
+# sRGB encode (correct) but compared whole frames (wrong) and never divided out the albedo
+# (wrong), so it double-counted the palette bug as brightness and then sized a 6.0x light
+# cut from it -- plus switching the ambient term off entirely, for a total the arithmetic
+# there could not name. Cutting the lights 6.04x AND repainting the table lands the tabletop
+# at 12.7x against the required 8.33x: 0.61 stops dark before the ambient term is counted at
+# all. That is the cost of sizing a fix from a confounded ratio.
+#
+# HOW THE DEFAULTS BELOW WERE DERIVED  (CALCULATED -- NOT ONE OF THESE HAS BEEN RENDERED)
+# ---------------------------------------------------------------------------------------
+# ONE factor, applied to EVERY term that puts light into the room:
+#
+#     dome     3000  / 3.951 = 759.2  -> 760
+#     distant  1200  / 3.951 = 303.7  -> 304
+#     ambient  1.0   / 3.951 = 0.253  -> 0.253    (`/rtx/sceneDb/ambientLightIntensity`)
+#
+# Uniform is not laziness, it is the only split that is derivable from what was measured.
+# The rendered tabletop is `albedo * (dome + distant + ambient)` in some unknown mixture:
+# nothing offline can say how the 2.405 gain divides between the three, and the RTX ambient
+# term is not a light prim so it is not even in the same units. Scaling all three by the
+# same k makes the result k-exact for ANY mixture, and it leaves the ratio between them --
+# i.e. the shadow contrast -- untouched, which the ROI measurement says is already right
+# (1.23x against MuJoCo's 1.29x). Cutting one term harder than another, as the old block did
+# with "the distant light is cut less because the scene is flat", requires knowing the
+# mixture AND a flatness defect, and neither exists.
+#
+# Predicted result, arithmetic: tabletop 0.7231 / 2.108 / 3.947 = 0.0869 linear = 0.326
+# encoded, against the MuJoCo cloth's 0.3261. The hall floor, which is repainted by nothing,
+# goes 0.906 -> 0.487 encoded. NEITHER HAS BEEN RENDERED.
+#
+# WHAT IS STILL UNKNOWN
+#   * the ROI choice moves the answer. A different defensible pair of rectangles gives
+#     4.26x rather than 3.95x -- 0.11 stops, well inside the +/- 0.5 stop band the tool
+#     judges with, but it is why the number is quoted as "about 4x" and not to three digits.
+#   * `/rtx/sceneDb/ambientLightIntensity` is assumed to scale its contribution linearly.
+#     It is a scalar named "intensity" and nothing readable offline says otherwise, but it
+#     is an assumption and it is the one that would break the uniform-k argument.
+#   * the SPLIT between 2.11x and 3.95x is a modelling choice, not a measurement. The 8.33x
+#     total is safe: it is rendered pixels against rendered pixels, and turning it into a
+#     scene-linear factor uses only Isaac's own pipeline, so MuJoCo's colour management
+#     cannot corrupt it. The albedo ratio, though, compares a USD `diffuse_color` (a linear
+#     reflectance) against an MJCF rgba multiplied into raw 8-bit texels -- the MJCF's own
+#     line 54 describes it as a byte-domain gain -- and those need not be the same space.
+#     The tabletop lands at 0.326 either way, because the two factors multiply to 8.33x
+#     however they are split. WHAT THE SPLIT DECIDES IS THE REST OF THE ROOM: the floor, the
+#     walls and the crates are repainted by nothing and only get the light cut. Putting the
+#     whole 8.33x on the lights, as the previous version effectively did, takes the hall
+#     floor from 0.906 to 0.34 encoded instead of 0.49 -- and there is no measurement
+#     anywhere that says a factory floor should be either.
+#   * whether matching the tabletop median is enough for the policy. Nothing offline says.
+#
+# THE SWEEP. One GPU session can move all of this without editing a file or re-running
+# `install_into_checkout.sh`:
+#
+#     NEODEM_DOME_INTENSITY=... NEODEM_DISTANT_INTENSITY=... NEODEM_AMBIENT_INTENSITY=...
+#
+# then `measure_scene_exposure.py --roi ... --reference <the MuJoCo frames> <the new
+# frames>`. Keep the three in the ratio 3000 : 1200 : 1 unless you are deliberately testing
+# the mixture; the bracket README.md recommends does exactly that.
+# ---------------------------------------------------------------------------------------
+EXPOSURE_SCALE = 3.951   # the measured illumination excess at the tabletop; see above
+
+DOME_INTENSITY = 760.0        # was 3000.0
+DISTANT_INTENSITY = 304.0     # was 1200.0
+AMBIENT_INTENSITY = 0.253     # was 1.0, inherited from the Isaac Lab kit files
+
+DOME_INTENSITY_ENV_VAR = "NEODEM_DOME_INTENSITY"
+DISTANT_INTENSITY_ENV_VAR = "NEODEM_DISTANT_INTENSITY"
+AMBIENT_INTENSITY_ENV_VAR = "NEODEM_AMBIENT_INTENSITY"
+
+# What the ego view was rendered with when the frames above were captured. The derivation is
+# a RATIO against these, so they are data, not history: change what they say and every
+# derived intensity is wrong.
+AUTHORED_DOME_INTENSITY = 3000.0
+AUTHORED_DISTANT_INTENSITY = 1200.0
+AUTHORED_AMBIENT_INTENSITY = 1.0
+
+# Upper bound the resolver refuses above. Isaac Lab's own shipped environments use dome
+# and distant intensities between 500 and 3000, almost always as a scene's only light;
+# 20000 is far outside that and a value that large is a typo (a stray zero on 2000), not a
+# lighting choice. The bound exists because the failure mode of a too-bright light is a
+# render that looks plausible in a thumbnail and is 100 % saturated where the policy looks.
+LIGHT_INTENSITY_MAX = 20000.0
+
+# The `cloth_real` texture, as a citation the offline verifier can hold to account. The mean
+# was measured with PIL over all 1024x1024 pixels; the digest is what makes the mean a
+# checkable claim instead of a comment, since the verifier is stdlib-only and cannot decode
+# a PNG. Re-measure BOTH if the texture is ever replaced.
+CLOTH_TEXTURE_RELPATH = "textures/cloth.png"
+CLOTH_TEXTURE_MEAN = (0.293714, 0.296887, 0.305081)
+CLOTH_TEXTURE_SHA256 = "b43a1b15b4711e18c296374897dca3a37fd29b1a07ec21148e02dd624dd8b49a"
+
+# The ego-view tabletop measurement, as data, so the offline verifier can re-derive the
+# required cut instead of trusting a number typed into a comment. `roi` is in pixels on the
+# 640x480 frames, x0,y0,x1,y1, half-open, and is quoted so the numbers can be reproduced.
+# `albedo` is the surface's own diffuse luminance -- dividing it out is what separates the
+# palette bug from the exposure bug.
+MEASURED_TABLETOP = {
+    "mujoco_training": {
+        "frames": "/home/humanoid/factory-mission-logs/groot/ab_on/ep_seed0",
+        "roi": ((120, 60, 620, 250),),
+        "median": 0.3261, "p10": 0.3056, "p90": 0.3457, "linear_spread": 1.29,
+        "albedo": 0.142686,   # cloth.png mean x cloth_real rgba, Rec.709 luminance
+    },
+    "isaac_table": {
+        "frames": "/home/humanoid/factory-mission-logs/grasp3-002355/grasp_frames",
+        "roi": ((60, 175, 580, 235), (80, 240, 200, 330), (490, 240, 570, 330)),
+        "median": 0.8667, "p10": 0.7955, "p90": 0.8706, "linear_spread": 1.23,
+        "albedo": 0.300722,   # the _TABLETOP that was authored when these frames were made
+    },
+}
+
+# Whole-frame numbers from the same three runs. KEPT ONLY AS A COUNTER-EXAMPLE: they are
+# what the previous derivation used, and comparing them across scenes is the mistake this
+# block exists to undo. `isaac_hall` has no tabletop in it at all, which is why there is no
+# ROI row for it and why "the hall is a separate, hotter viewpoint" was never a finding
+# about light. Nothing computes an exposure from these.
+WHOLE_FRAME_EGO_LUMINANCE = {
+    "mujoco_training": {"mean": 0.395, "median": 0.333, "p10": 0.296, "p90": 0.870,
+                        "saturated": 0.099, "linear_spread": 10.24},
+    "isaac_table": {"mean": 0.792, "median": 0.827, "p10": 0.694, "p90": 0.871,
+                    "saturated": 0.014, "linear_spread": 1.66},
+    "isaac_hall": {"mean": 0.882, "median": 0.906, "p10": 0.855, "p90": 0.910,
+                   "saturated": 0.651, "linear_spread": 1.15},
+}
+
+# The light colours. They live HERE and the scene cfg imports them, so that the value the
+# derivation reasons about and the value the scene spawns are one object and not two copies.
+# Section 19 asserts that the scene cfg passes these NAMES to `DomeLightCfg(color=)` /
+# `DistantLightCfg(color=)` -- it does not re-derive anything from a literal, because after
+# this arrangement there is no literal on that side to re-derive from.
+DOME_COLOUR = (0.78, 0.78, 0.80)
+DISTANT_COLOUR = (1.00, 0.98, 0.94)
+
+
+def srgb_to_linear(u: float) -> float:
+    """The sRGB electro-optical transfer function: encoded value in [0, 1] -> linear light.
+
+    Exposure error is multiplicative in LINEAR light, and sRGB values are not proportional
+    to light. Comparing the encoded tabletop medians directly (0.867 / 0.326) says "2.7x"
+    where the rendered ratio is 8.3x -- a factor of three, and the reason this function
+    exists rather than a subtraction somewhere.
+
+    `measure_scene_exposure.py` carries the same formula in vectorised form; it is the
+    standard IEC 61966-2-1 curve and not a choice either file gets to make differently.
+    """
+    return u / 12.92 if u <= 0.04045 else ((u + 0.055) / 1.055) ** 2.4
+
+
+def relative_luminance(rgb: tuple[float, float, float]) -> float:
+    """0.2126R + 0.7152G + 0.0722B. The same weights the frame measurement uses."""
+    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+
+
+def rendered_tabletop_ratio() -> float:
+    """How many times more light the Isaac tabletop RENDERS than the MuJoCo cloth does.
+
+    Rendered pixels against rendered pixels, on the matched region, in scene-linear light:
+    no albedo, no light model, no assumption about either renderer beyond the sRGB encode.
+    This is the total defect (about 8.3x); `required_light_cut` is the part of it the lights
+    are responsible for, and the rest is the palette.
+
+    It inverts the sRGB encode but not RTX's ACES-approximation tonemapper, whose
+    implementation is compiled into the RTX plugin. Substituting the standard Narkowicz
+    approximation on the ISAAC side only -- MuJoCo has no tonemapper, so inverting one there
+    too would be wrong -- moves 8.33x to 8.23x, about 1 %. Close and reproducible, but an
+    approximation and not a bound. "About 8x" is safe; a third digit is not.
+    """
+    return (srgb_to_linear(MEASURED_TABLETOP["isaac_table"]["median"])
+            / srgb_to_linear(MEASURED_TABLETOP["mujoco_training"]["median"]))
+
+
+def tabletop_albedo_ratio() -> float:
+    """How many times lighter the authored Isaac tabletop is than the surface MuJoCo shows.
+
+    The palette half of the defect, about 2.11x. `_TABLETOP` was pinned to the MJCF's hidden
+    collision material instead of the visible textured cloth; see the scene cfg.
+    """
+    return (MEASURED_TABLETOP["isaac_table"]["albedo"]
+            / MEASURED_TABLETOP["mujoco_training"]["albedo"])
+
+
+def required_light_cut() -> float:
+    """How many times too much light the Isaac rig puts on the tabletop. About 3.95x.
+
+    The rendered ratio with the albedo error divided out -- equivalently, each scene's
+    rendered linear light over its own surface albedo, ratioed. This is the number the
+    intensities below are sized from, and it is the number a sweep has to land on.
+    """
+    return rendered_tabletop_ratio() / tabletop_albedo_ratio()
+
+
+def light_scale(dome: float | None = None, distant: float | None = None,
+                ambient: float | None = None) -> tuple[float, float, float]:
+    """The factor each of the three terms is cut by, against what the ego view was measured at.
+
+    Three numbers and not one sum. The old version of this returned a single
+    colour-weighted budget, which was doubly useless: the weights appeared in the numerator
+    and the denominator and very nearly cancelled, and a sum cannot express the thing that
+    actually has to hold, which is that all three terms move TOGETHER. A dome cut 4x and a
+    distant light cut 2x average to something plausible and are not what was derived.
+    """
+    d = DOME_INTENSITY if dome is None else dome
+    s = DISTANT_INTENSITY if distant is None else distant
+    a = AMBIENT_INTENSITY if ambient is None else ambient
+    return (AUTHORED_DOME_INTENSITY / d if d else float("inf"),
+            AUTHORED_DISTANT_INTENSITY / s if s else float("inf"),
+            AUTHORED_AMBIENT_INTENSITY / a if a else float("inf"))
+
+
+def light_intensity(env_var: str, default: float, value: str | None = None) -> float:
+    """Resolve one light intensity: `default`, or the number `env_var` names.
+
+    `value` is read from the environment when it is not passed; the parameter exists so the
+    offline verifier can exercise every branch -- including the unset one -- without
+    mutating `os.environ` out from under the process it is running in. Same arrangement as
+    `robot_spawn` above, and for the same reason.
+
+    RAISES ON A MALFORMED VALUE RATHER THAN FALLING BACK, exactly as `robot_spawn` does.
+    The whole point of these variables is to sweep an exposure that is currently a
+    calculation; a swept value that silently reverted to the calculated default would
+    produce a frame indistinguishable from the one before it, and the sweep would report
+    that the default was right. That is worse than no sweep.
+    """
+    raw = os.environ.get(env_var, "") if value is None else value
+    text = raw.strip()
+    if not text:
+        return float(default)
+    try:
+        out = float(text)
+    except ValueError:
+        raise ValueError(
+            f"{env_var}={raw!r} is not a number. It is a raw USD `inputs:intensity` "
+            f"multiplier -- unitless, not lux and not nits. Unset it for the authored "
+            f"{default:g}, or give a plain float; 0 turns the light off.") from None
+    if out != out or out in (float("inf"), float("-inf")):
+        raise ValueError(f"{env_var}={raw!r} is not a finite number.")
+    if out < 0.0:
+        raise ValueError(
+            f"{env_var}={raw!r} is negative. Intensity scales a light's power linearly; "
+            "0 is off and there is nothing below it.")
+    if out > LIGHT_INTENSITY_MAX:
+        raise ValueError(
+            f"{env_var}={raw!r} exceeds LIGHT_INTENSITY_MAX = {LIGHT_INTENSITY_MAX:g}. "
+            f"The authored value is {default:g} and Isaac Lab's own scenes run 500-3000; "
+            "a value this large is a stray zero, and it would render the policy's ego "
+            "view fully saturated while still producing a picture.")
+    return out
+
+
+def dome_intensity(value: str | None = None) -> float:
+    """`DOME_INTENSITY`, or `NEODEM_DOME_INTENSITY`."""
+    return light_intensity(DOME_INTENSITY_ENV_VAR, DOME_INTENSITY, value)
+
+
+def distant_intensity(value: str | None = None) -> float:
+    """`DISTANT_INTENSITY`, or `NEODEM_DISTANT_INTENSITY`."""
+    return light_intensity(DISTANT_INTENSITY_ENV_VAR, DISTANT_INTENSITY, value)
+
+
+def ambient_intensity(value: str | None = None) -> float:
+    """`AMBIENT_INTENSITY`, or `NEODEM_AMBIENT_INTENSITY`.
+
+    Not a light prim: this becomes `/rtx/sceneDb/ambientLightIntensity`, a constant term
+    RTX adds to every surface with no shadowing at all. The env cfg applies it through
+    `RenderCfg`, so it is resolved there and not in the scene cfg.
+
+    It is CUT BY THE SAME FACTOR as the two lights rather than switched off. Switching it
+    off was the previous plan, on the argument that it was filling in shadows -- an argument
+    that came from a whole-frame p90/p10 comparison between frames of different content and
+    does not survive the matched-region measurement (1.23x against 1.29x; no flatness
+    defect). Zeroing it would also remove an unknown fraction of the illumination the 3.95x
+    was measured against, which is exactly the confound that produced the last set of
+    numbers. `NEODEM_AMBIENT_INTENSITY=0` is one command if a GPU session wants to try it.
+    """
+    return light_intensity(AMBIENT_INTENSITY_ENV_VAR, AMBIENT_INTENSITY, value)
+
 
 def all_static_boxes() -> dict[str, dict]:
     """Every axis-aligned static box in the scene, keyed by cfg attribute name."""

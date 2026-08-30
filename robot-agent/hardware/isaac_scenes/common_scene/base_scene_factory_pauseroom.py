@@ -50,6 +50,8 @@ from tasks.common_scene.factory_pauseroom_layout import (
     APPLE,
     COLUMNS,
     CRATES,
+    DISTANT_COLOUR,
+    DOME_COLOUR,
     DOOR_DRIVE,
     DOOR_JOINTS,
     DOOR_ORIGIN,
@@ -63,6 +65,8 @@ from tasks.common_scene.factory_pauseroom_layout import (
     USD_PROPS,
     WALLS,
     WORLD_CAMERA,
+    distant_intensity,
+    dome_intensity,
     door_joint_targets,
     look_at_quat_xyzw_ros,
 )
@@ -79,11 +83,45 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 door_usd_path = os.path.join(_HERE, DOOR_USD_FILENAME)
 
 # --- palette -----------------------------------------------------------------------------
+_GROUND = (0.34, 0.34, 0.35)     # factory floor
 _CONCRETE = (0.62, 0.62, 0.60)   # perimeter walls
 _PARTITION = (0.80, 0.79, 0.75)  # pause-room partitions, lighter so the room reads apart
 _STEEL = (0.42, 0.44, 0.48)      # columns
 _CRATE = (0.55, 0.42, 0.26)      # plywood crates
-_TABLETOP = (0.30, 0.30, 0.31)   # the MJCF scene's tablecloth grey
+_TABLETOP = (0.141, 0.143, 0.149)  # the MJCF cloth the camera actually sees -- see below
+
+# WHY `_TABLETOP` IS 0.141 AND NOT THE 0.30 THE MJCF ALSO CONTAINS.
+# This was (0.30, 0.30, 0.31), copied from `g1_apple_pnp_scene.xml`'s
+# `<material name="tablecloth" rgba="0.30 0.30 0.31 1">` on the belief that it was the
+# training scene's tabletop. It is not. The comment two lines above that material, at
+# `g1_apple_pnp_scene.xml:49-50`, says what it is:
+#
+#     <!-- Physics table faces (almost fully hidden under the visual cloth
+#          plane): plain velvet grey matching the texture mean. -->
+#
+# `tablecloth` is the COLLISION box's material. The surface in every training frame is the
+# visual plane 0.5 mm above it, wearing `cloth_real`: `textures/cloth.png` (1024x1024,
+# measured mean RGB (0.29371, 0.29689, 0.30508)) tinted by rgba (0.48, 0.48, 0.49). The
+# tint is not decoration -- the MJCF says so itself at line 54: "rgba < 1 compensates the
+# scene lighting gain". Effective albedo (0.141, 0.143, 0.149), Rec.709 luminance 0.1427
+# against the 0.3007 that was authored here: the Isaac table was painted 2.11x too light.
+#
+# THIS IS A PALETTE CORRECTION, NOT EXPOSURE COMPENSATION. It moves the constant onto the
+# surface the policy was trained on, and it would be the right value at any light level.
+# The lighting cut below is a separate, separately-derived number, and the two multiply:
+# 2.11x of albedo x 3.95x of light = the 8.3x by which this scene's tabletop out-renders
+# the training scene's. Section 19 of the offline verifier pins this constant against
+# `cloth_real` (rgba parsed from the MJCF, texture mean cited with the texture's sha256),
+# and deliberately does NOT pin it against `tablecloth`, which is invisible.
+#
+# The apple and the cloth are TEXTURED in the MJCF and flat here; no diffuse triple
+# reproduces spatial variance, so that gap is accepted and unfixable by any colour edit.
+#
+# Everything else in this palette is unmeasured scene dressing -- there is no MuJoCo
+# counterpart for a 26 x 18 m factory floor -- but it is all in the ego frame, so section 19
+# pins every constant here as well. Not because the values are right: because the exposure
+# below was calibrated against a render made with exactly these, and a repaint is a silent
+# way to move the brightness the calibration is supposed to control.
 
 
 def _static_box(prim_path: str, box: dict, colour: tuple, friction: float = 0.9) -> AssetBaseCfg:
@@ -177,7 +215,7 @@ class FactoryPauseRoomSceneCfg(InteractiveSceneCfg):
     # =====================================================================================
     # Floor. OUTSIDE /World/envs. Top face at exactly z = 0.
     # =====================================================================================
-    ground = _static_box(GROUND_PRIM_PATH, GROUND, (0.34, 0.34, 0.35), friction=1.0)
+    ground = _static_box(GROUND_PRIM_PATH, GROUND, _GROUND, friction=1.0)
 
     # =====================================================================================
     # Factory perimeter, 4 m tall. Inner faces at x = +/-12, y = +/-8 -> 24 x 16 m of floor.
@@ -375,18 +413,66 @@ class FactoryPauseRoomSceneCfg(InteractiveSceneCfg):
     # Lights. OUTSIDE /World/envs. The hall has no roof, so the dome reaches the floor and
     # the interior of the (also roofless) pause room; there are no RectLights here because
     # the warehouse USD that used to supply them is deliberately not spawned.
+    #
+    # THE INTENSITIES WERE 3000 AND 1200 AND THEY PUT ~4x TOO MUCH LIGHT IN THE ROOM.
+    # On the matched tabletop region -- one surface, in both scenes, and nothing else in
+    # the rectangle -- the Isaac ego view renders 8.33x more light than the MuJoCo scene
+    # the manipulation policy was trained on. 2.11x of that is the albedo bug fixed above;
+    # the remaining 3.95x is this rig, and all three terms that light the room are divided
+    # by it: dome 3000 -> 760, distant 1200 -> 304, and
+    # `/rtx/sceneDb/ambientLightIntensity` 1.0 -> 0.253 in the env cfg's `__post_init__`.
+    #
+    # Uniform, because nothing offline can say how the room's light divides between those
+    # three, and one factor applied to all of them is exact for any division while leaving
+    # the shadow contrast where it is. `factory_pauseroom_layout.py` holds the measurement,
+    # the derivation, what is still unknown, and the three environment variables that sweep
+    # it; `measure_scene_exposure.py --roi` is what produced the measurement and what will
+    # judge the fix. NONE OF THE NEW VALUES HAS BEEN RENDERED -- they are arithmetic.
+    #
+    # An earlier version of this comment sized the cut at 7.18x from WHOLE-FRAME medians
+    # and asserted "the palette is NOT the problem". Both were wrong, and in the same way:
+    # a median over a tabletop close-up and a median over a wide shot of a hall are not
+    # measurements of the same thing. Do not re-derive anything here from a whole frame.
+    #
+    # `visible_in_primary_ray=False` is separate from the exposure cut and costs nothing:
+    # both rooms are deliberately roofless, so the head camera sees the DomeLight itself
+    # above the wall line as sky. Those are light-source pixels at full intensity, not lit
+    # surfaces, and they are the most likely single explanation of the 65 % of hall-frame
+    # pixels above 0.90. Turning them off changes the room's illumination by not one photon
+    # (the dome still lights every surface); it removes only the sky the camera was staring
+    # into -- and, because the calibration above is measured on a tabletop rectangle rather
+    # than on whole frames, it does not disturb that calibration either.
+    #
+    # The two resolvers are called HERE, in the class body, so they run once at import --
+    # the same timing as `robot_spawn()` in the env cfg, and for the same reason: a
+    # launcher sets `NEODEM_DOME_INTENSITY` / `NEODEM_DISTANT_INTENSITY` before
+    # `sim_main.py` imports the task. They RAISE on a malformed value rather than falling
+    # back to the authored default, because a sweep whose typo'd value silently reverted
+    # would report that the default was right.
     # =====================================================================================
     light = AssetBaseCfg(
         prim_path="/World/light",
-        spawn=sim_utils.DomeLightCfg(color=(0.78, 0.78, 0.80), intensity=3000.0),
+        spawn=sim_utils.DomeLightCfg(
+            color=DOME_COLOUR,
+            intensity=dome_intensity(),
+            visible_in_primary_ray=False,
+        ),
     )
     sun = AssetBaseCfg(
         prim_path="/World/sun",
         # rot is (x, y, z, w). DistantLightCfg emits along the prim's -z, so this identity
         # orientation shines straight down; it exists to give the columns and the table a
-        # readable shadow, which a dome light alone does not.
+        # readable shadow, which a dome light alone does not. It is cut by EXACTLY the same
+        # factor as the dome (3000/760 = 1200/304 = 3.947), which keeps the directional
+        # share of the room's light at the 33 % the ego view was measured with. An earlier
+        # version cut it less, to "fix" a 6x flatness deficit read off whole-frame p90/p10;
+        # on the matched tabletop region the two scenes' spreads are 1.23x and 1.29x and
+        # there is no flatness deficit to fix.
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 9.0), rot=IDENTITY_XYZW),
-        spawn=sim_utils.DistantLightCfg(color=(1.0, 0.98, 0.94), intensity=1200.0),
+        spawn=sim_utils.DistantLightCfg(
+            color=DISTANT_COLOUR,
+            intensity=distant_intensity(),
+        ),
     )
 
     # =====================================================================================
