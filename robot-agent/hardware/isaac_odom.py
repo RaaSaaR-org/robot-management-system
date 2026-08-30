@@ -26,6 +26,30 @@ Rotating the commanded body-frame velocity by the MEASURED yaw (rather than by a
 integrated yaw command) is the one thing that makes it better than pure open loop:
 heading error does not compound into position error.
 
+WHICH FRAME IS A GIVEN NUMBER IN
+--------------------------------
+Dead reckoning starts at zero, so without help the published x/y are in an ODOM frame
+whose origin is "wherever the robot happened to be standing when the bridge started".
+Agent Mode's place graph (`sim_evaluator/places/*.json`) is in WORLD metres. Those two
+frames were silently assumed to be the same one, and on the factory rig they are 4.5 m
+apart: the robot spawns at world (4.00, -2.00), the bridge published (0.00, 0.00), and
+`RobotStateManager` resolved the robot into FACTORY-CENTRE -- a place it was nowhere
+near. A `goto` from there applies a world displacement to an odom-origin pose and
+walks into a wall.
+
+`OdomIntegrator(origin=(x, y))` closes that gap. The rule, and it is one rule:
+
+    * anything read off a `DeadReckoner` (`reckoner.x`, `reckoner.y`, `.distance`)
+      is in the ODOM frame -- displacement since the bridge started;
+    * anything on an `OdomFrame`, i.e. everything that reaches the wire, is in the
+      WORLD frame.
+
+X AND Y ONLY. `yaw` is already world-absolute -- it is measured from the sim's own base
+orientation, not integrated -- so it is NOT offset by the origin and must never be.
+Adding an "obvious" yaw term for symmetry would rotate every heading the agent reads,
+which is a far worse bug than the one this fixes and a far quieter one: positions would
+still look plausible while every goto veered off by a constant angle.
+
 Quaternion order
 ----------------
 A real G1 reports `(w, x, y, z)`. This sim does not: with NeoDEM patch `0002`
@@ -61,6 +85,42 @@ SIDECAR_ODOM_FIELDS = ("position", "imu_state.rpy")
 # right conclusion about x/y, which is why this was chosen over overloading
 # `gait_type` or `mode` with a meaning they do not have.
 ODOM_ERROR_CODE_DEAD_RECKONED = 0xDEAD
+
+
+def parse_odom_origin(text):
+    """Parse an `X,Y` odometry origin in WORLD metres into a `(x, y)` float pair.
+
+    Lives here rather than in `isaac_loco_bridge.py` for the same reason the rest of
+    this module does: the bridge imports `unitree_sdk2py` at module scope and cannot be
+    imported by the offline verifier, and a value this load-bearing must be testable
+    without DDS.
+
+    REFUSES a malformed value, naming it, rather than falling back to (0, 0). A silent
+    fallback is exactly the defect this whole feature exists to fix -- an origin of zero
+    is not a neutral default, it is a claim that the robot started at the world origin,
+    and the only thing worse than an unset origin is a mistyped one that reads as unset.
+    """
+    raw = str(text).strip()
+    parts = [p.strip() for p in raw.split(",")]
+    if len(parts) != 2:
+        raise ValueError(
+            f"odom origin {text!r} is not X,Y -- expected two comma-separated numbers "
+            f"in WORLD metres (e.g. '4.0,-2.0'), got {len(parts)} field(s).")
+    out = []
+    for label, part in zip(("X", "Y"), parts):
+        try:
+            v = float(part)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"odom origin {text!r} has a non-numeric {label} component "
+                f"({part!r}).") from None
+        if not math.isfinite(v):
+            # inf/nan parse fine as floats and would poison every published pose from
+            # the first tick onwards, with nothing downstream saying where it came from.
+            raise ValueError(
+                f"odom origin {text!r} has a non-finite {label} component ({part!r}).")
+        out.append(v)
+    return (out[0], out[1])
 
 
 def yaw_from_quaternion(quat, order: str = DEFAULT_QUAT_ORDER) -> float:
@@ -173,7 +233,14 @@ class DeadReckoner:
 
 
 class OdomFrame(NamedTuple):
-    """One pose ready to go on the wire. `x`/`y` dead reckoned, `yaw` measured."""
+    """One pose ready to go on the wire, in the WORLD frame.
+
+    `x`/`y` are dead reckoned and then shifted by the integrator's origin; `yaw` is
+    measured and already world-absolute, so it carries no offset. If you are holding
+    an OdomFrame you are holding world coordinates -- see "WHICH FRAME IS A GIVEN
+    NUMBER IN" in the module docstring. (With no origin given the two frames coincide,
+    which is the old behaviour and is what makes the default byte-identical.)
+    """
     x: float
     y: float
     yaw: float              # wrapped, as a real G1 reports it
@@ -202,15 +269,37 @@ class OdomIntegrator:
         than by (outage duration x last commanded speed).
       * a command slot older than `command_stale_after` integrates as zero -- a dead
         command publisher must not keep the dead reckoner walking.
+
+    `origin` is the WORLD position of this integrator's odom (0, 0), i.e. where the
+    robot is standing when the bridge starts. `None` means "not told", which behaves
+    exactly as before: odom frame published as if it were world.
+
+    WHY THE OFFSET IS APPLIED HERE, at the frame boundary, and not by seeding the
+    DeadReckoner with it. Both would produce the same numbers on the wire. This
+    placement buys one property the other does not: every stored quantity stays in
+    exactly one frame, so a reader never has to ask which. `self.reckoner` is odom --
+    pure displacement since start, which is what makes `reckoner.distance` a path
+    length and what keeps the re-anchoring arithmetic after an outage readable as
+    "advance by nothing". The returned `OdomFrame` is world. The offset appears in
+    exactly one expression in this file, which is also what makes "was it applied
+    twice?" a one-line audit rather than a hunt through the integration loop.
+    (`DeadReckoner` keeps its own `x0`/`y0`: those seed the odom frame itself, a
+    different thing, and nothing in the bridge passes them.)
     """
 
     def __init__(self, publish_period: float, stale_after: float,
-                 command_stale_after: float, x0: float = 0.0, y0: float = 0.0) -> None:
+                 command_stale_after: float,
+                 origin: tuple[float, float] | None = None) -> None:
         self.publish_period = float(publish_period)
         self.stale_after = float(stale_after)
         self.command_stale_after = float(command_stale_after)
+        # Kept as given -- None means "no origin was supplied", which the bridge's
+        # banner reports as such. Do not normalise it to (0, 0) here: "defaulted" and
+        # "explicitly told the world origin" print differently on purpose.
+        self.origin = None if origin is None else (float(origin[0]), float(origin[1]))
+        self._ox, self._oy = (0.0, 0.0) if self.origin is None else self.origin
         self.tracker = YawTracker()
-        self.reckoner = DeadReckoner(x0, y0)
+        self.reckoner = DeadReckoner()
         self.starved = True          # nothing seen yet counts as starved, so the
                                      # first sample logs "acquired" rather than silence
         self._last_t: float | None = None
@@ -250,7 +339,13 @@ class OdomIntegrator:
             return None
         self._last_pub = now
         c, s = math.cos(cont), math.sin(cont)
-        return OdomFrame(self.reckoner.x, self.reckoner.y, yaw_sample[0], cont,
+        # THE ONE PLACE THE ORIGIN IS APPLIED: odom -> world, x and y only. yaw
+        # (`yaw_sample[0]`) and `cont` are measured and world-absolute already; adding
+        # an origin term to them would rotate every heading the agent reads. Velocity
+        # is a derivative, so a constant translation leaves it alone -- offsetting it
+        # would be the classic "applied to velocities instead of positions" bug.
+        return OdomFrame(self.reckoner.x + self._ox, self.reckoner.y + self._oy,
+                         yaw_sample[0], cont,
                          vx * c - vy * s, vx * s + vy * c, yaw_speed)
 
 
@@ -278,8 +373,11 @@ def fill_odom_msg(msg, x: float, y: float, yaw: float, stamp_s: float,
     msg.stamp.sec = int(stamp_s)
     msg.stamp.nanosec = int((stamp_s % 1.0) * 1e9)
     msg.error_code = int(error_code)
-    # x/y are DEAD RECKONED from the commanded velocity. They drift without bound
-    # and must not be trusted as an absolute position. yaw, and only yaw, is measured.
+    # x/y are DEAD RECKONED from the commanded velocity, then shifted into the WORLD
+    # frame by the integrator's origin (OdomIntegrator.tick, the only place that
+    # happens). They drift without bound and must not be trusted as an absolute
+    # position -- an origin fixes where the drift STARTS, not that it drifts. yaw, and
+    # only yaw, is measured, and it is world-absolute with no origin term.
     msg.position = [float(x), float(y), 0.0]
     msg.velocity = [float(vx_world), float(vy_world), 0.0]
     msg.yaw_speed = float(yaw_speed)

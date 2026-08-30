@@ -215,20 +215,61 @@ fi
 # where the operator asked for, and the first symptom is a camera looking at an
 # empty hall. So resolve it here, on the host, with the same resolver the scene
 # uses, and print the pose that will actually be spawned.
-if [ -n "${NEODEM_ROBOT_SPAWN:-}" ]; then
-  SPAWN_DESC="$(NEODEM_ROBOT_SPAWN="$NEODEM_ROBOT_SPAWN" "$PY" - <<'PYEOF' 2>&1
+#
+# IT IS ALSO THE ODOMETRY ORIGIN, and that is why this now runs UNCONDITIONALLY
+# rather than only when NEODEM_ROBOT_SPAWN is set. The locomotion bridge dead-reckons
+# x/y from zero, so unless it is told where zero is in the world it publishes an odom
+# frame that Agent Mode reads as world coordinates. Measured on the live rig: the
+# robot stood at world (4.00, -2.00), the bridge published (0.00, 0.00), and the agent
+# logged "Place: UNKNOWN -> FACTORY-CENTRE at (0.00, 0.00)" -- resolving itself into a
+# place 4.5 m from where it was standing. A goto from there applies a world
+# displacement to an odom-origin pose and walks into a wall.
+#
+# The whole point of taking it from HERE is that the number the sim spawns at and the
+# number the bridge anchors to come out of ONE call to ONE resolver. Re-deriving it,
+# or reading the pretty-printed line back with sed, would let the two drift apart
+# again -- which is the class of bug being fixed, not a style preference.
+#
+# The path is absolute ($HW/isaac_scenes, passed as argv[1]) because this runs long
+# before the `cd "$HW"` in step 4: the old relative sys.path only resolved when the
+# operator happened to launch from the hardware directory.
+#
+# Both values come back on PREFIXED lines and are pulled out by prefix, so a warning
+# on stderr (this python is noisy) cannot be mistaken for a coordinate. `|| true`
+# because the failure is diagnosed below, where the output is still in hand -- under
+# `set -e` a bare assignment from a failing command would abort with no message at all.
+SPAWN_OUT="$(NEODEM_ROBOT_SPAWN="${NEODEM_ROBOT_SPAWN:-}" "$PY" - "$HW/isaac_scenes" <<'PYEOF' 2>&1
 import sys
-sys.path.insert(0, "isaac_scenes")
+sys.path.insert(0, sys.argv[1])
 from common_scene.factory_pauseroom_layout import robot_spawn
 s = robot_spawn()
-print(f"{s['name']} at ({s['pos'][0]:.2f}, {s['pos'][1]:.2f}, {s['pos'][2]:.2f}) yaw {s['yaw_deg']:.0f}")
+print(f"SPAWN_XY={s['pos'][0]:.4f},{s['pos'][1]:.4f}")
+print(f"SPAWN_DESC={s['name'] or 'the authored pose'} at ({s['pos'][0]:.2f}, "
+      f"{s['pos'][1]:.2f}, {s['pos'][2]:.2f}) yaw {s['yaw_deg']:.0f}")
 PYEOF
-  )" || die "NEODEM_ROBOT_SPAWN='$NEODEM_ROBOT_SPAWN' was refused by the scene:
-     $SPAWN_DESC"
+)" || true
+SPAWN_XY="$(printf '%s\n' "$SPAWN_OUT" | sed -n 's/^SPAWN_XY=//p' | tail -1)"
+SPAWN_DESC="$(printf '%s\n' "$SPAWN_OUT" | sed -n 's/^SPAWN_DESC=//p' | tail -1)"
+# Shape-checked before this string becomes a command-line argument to the bridge.
+# robot_spawn() RAISES on a bad NEODEM_ROBOT_SPAWN rather than falling back, so an
+# empty SPAWN_XY here is that refusal, with its traceback in $SPAWN_OUT.
+if ! [[ "$SPAWN_XY" =~ ^-?[0-9]+\.[0-9]+,-?[0-9]+\.[0-9]+$ ]]; then
+  if [ -n "${NEODEM_ROBOT_SPAWN:-}" ]; then
+    die "NEODEM_ROBOT_SPAWN='$NEODEM_ROBOT_SPAWN' was refused by the scene:
+     $SPAWN_OUT"
+  fi
+  die "could not resolve the robot spawn pose from
+     $HW/isaac_scenes/common_scene/factory_pauseroom_layout.py -- without it the
+     locomotion bridge has no odometry origin, and odometry that silently claims the
+     world origin is what puts Agent Mode in the wrong room. Output was:
+     $SPAWN_OUT"
+fi
+if [ -n "${NEODEM_ROBOT_SPAWN:-}" ]; then
   echo "ok    spawn override: $SPAWN_DESC"
 else
-  echo "ok    spawn: the authored pose (NEODEM_ROBOT_SPAWN unset)"
+  echo "ok    spawn: $SPAWN_DESC (NEODEM_ROBOT_SPAWN unset)"
 fi
+echo "ok    odom origin: $SPAWN_XY (WORLD metres) -- the locomotion bridge anchors its dead reckoning here, so its x/y and the place graph share one frame"
 command -v docker >/dev/null     || die "docker missing"
 command -v nvidia-smi >/dev/null || die "nvidia-smi missing -- step 1 cannot tell whose GPU this is"
 command -v curl >/dev/null       || die "curl missing"
@@ -313,13 +354,14 @@ else
 fi
 
 say "3. pin the planner model BEFORE Isaac takes its memory"
-# `num_predict: 1` because the point is to RESIDENT the weights, not to hear back.
-# Without it this call generates until the model stops on its own, and a reasoning
-# model does not stop quickly: on the CPU-pinned planner variant that is minutes of
-# chain-of-thought at ~9 tok/s, spent before Isaac has even been asked to start,
-# and it looks exactly like a hang.
-curl -sf localhost:11434/api/generate \
-  -d "{\"model\":\"$MODEL\",\"prompt\":\"ready\",\"stream\":false,\"keep_alive\":-1,\"options\":{\"num_predict\":1}}" \
+# NO PROMPT. An empty prompt is ollama's load-only call: it residents the weights
+# and returns, which is the entire point of this step. Sending one made the step
+# generate an answer nobody reads, and a reasoning model does not stop quickly --
+# on the CPU-pinned planner variant that is minutes of chain-of-thought at ~9 tok/s
+# before Isaac has even been asked to start, and it looks exactly like a hang.
+# `num_predict` does NOT bound it: this model's thinking tokens escape that cap.
+curl -sf --max-time 300 localhost:11434/api/generate \
+  -d "{\"model\":\"$MODEL\",\"keep_alive\":-1}" \
   >/dev/null || die "ollama did not answer -- is it running, and is $MODEL pulled?"
 MODEL_PINNED=1
 echo "pinned $MODEL resident"
@@ -329,8 +371,13 @@ export OMNI_KIT_ACCEPT_EULA=YES
 
 say "4. locomotion bridge (answers the sport RPC; publishes odom)"
 cd "$HW"
+# --odom-origin is the spawn pose resolved in step 0, from the same robot_spawn() call
+# the sim itself spawns with. Without it the bridge publishes displacement-from-start
+# as though it were world coordinates, and Agent Mode's place graph resolves the robot
+# into the wrong place -- see the long note beside SPAWN_XY above.
 setsid nohup "$PY" -u isaac_loco_bridge.py --domain "$DOMAIN" --iface "$IFACE" \
-  --publish-odom >"$LOGDIR/loco_bridge.log" 2>&1 </dev/null &
+  --publish-odom --odom-origin "$SPAWN_XY" \
+  >"$LOGDIR/loco_bridge.log" 2>&1 </dev/null &
 LOCO_PID=$!
 disown "$LOCO_PID" 2>/dev/null || true
 sleep 2

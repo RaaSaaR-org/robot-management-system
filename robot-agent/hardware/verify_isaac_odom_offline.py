@@ -17,11 +17,25 @@ mode is indistinguishable, on a video or a plot, from a robot drifting off cours
 must not be able to regress quietly, so check (2) below asserts the two orderings
 DISAGREE, not merely that the right one is right.
 
+The second defect it is built around is the FRAME. x/y are dead reckoned from zero,
+so the bridge published (0.00, 0.00) while the robot stood at the scene's authored
+spawn, world (4.00, -2.00), and Agent Mode -- whose place graph is in world metres --
+resolved the robot into a place 4.5 m away. Section (7) covers the origin that closes
+that gap: unset behaves byte-identically to before, a given origin shifts x and y by
+exactly that and leaves YAW alone (yaw is measured and world-absolute; offsetting it
+"for symmetry" would rotate every heading the agent reads), a malformed value is
+refused by name, and the published path length is unchanged -- a translation cannot
+change a distance, which is what catches an offset applied twice, applied to
+velocities, or applied inside the integration loop.
+
 What this cannot check: that the sim's quaternion really is XYZW (only a live turn
 settles that -- `isaac_yaw_sweep.py` did), that DDS delivers anything, that the odom
-thread stays off the command thread under load, or that the dead-reckoned position
-resembles where the robot physically is. It never will; that is the point of check (4)
-being labelled dead reckoning.
+thread stays off the command thread under load, that the origin handed over on the
+command line is the pose Isaac really spawned at (only a live run settles that; the
+bringup script makes them one resolver call so they cannot differ), or that the
+dead-reckoned position resembles where the robot physically is. It never will; that is
+the point of check (4) being labelled dead reckoning -- an origin fixes where the drift
+STARTS, not that it drifts.
 
 Run:
     python3 robot-agent/hardware/verify_isaac_odom_offline.py
@@ -409,7 +423,164 @@ check(abs(BRIDGE["ODOM_TICK_HZ"] - 100.0) < 1e-9,
       "ODOM_TICK_HZ is still 100 Hz -- the number every gap above is computed from",
       f"{BRIDGE['ODOM_TICK_HZ']:g}")
 
-print("\n(7) against the real IDL, if this interpreter has one")
+# --------------------------------------------------------------------------------
+print("\n(7) the odometry ORIGIN: odom frame -> world frame, x and y ONLY")
+# The defect: dead reckoning starts at zero, so the bridge published (0.00, 0.00)
+# while the robot physically stood at the scene's authored spawn, world (4.00,
+# -2.00). Agent Mode's place graph is in WORLD metres, so it logged
+#   [RobotStateManager] Place: UNKNOWN -> FACTORY-CENTRE at (0.00, 0.00)
+# and resolved the robot into a place 4.5 m from where it was standing. A goto from
+# there would have applied a world displacement to an odom-origin pose.
+
+print("  (7a) --odom-origin parsing: refused by name, never defaulted to zero")
+check(isaac_odom.parse_odom_origin("4.0,-2.0") == (4.0, -2.0),
+      "a well-formed X,Y parses to a float pair",
+      str(isaac_odom.parse_odom_origin("4.0,-2.0")))
+check(isaac_odom.parse_odom_origin("  10.24 , 5.84  ") == (10.24, 5.84),
+      "surrounding and interior whitespace is tolerated")
+check(isaac_odom.parse_odom_origin("-0.5,3") == (-0.5, 3.0),
+      "negatives and integers are fine (the factory spawn's y is negative)")
+for bad, why in (("", "empty"), ("4", "one field"), ("4,5,6", "three fields"),
+                 ("four,-2", "non-numeric x"), ("4,two", "non-numeric y"),
+                 ("nan,0", "nan"), ("0,inf", "inf"), (",", "two empty fields")):
+    try:
+        got = isaac_odom.parse_odom_origin(bad)
+    except ValueError as exc:
+        # Naming the offending value is the whole point: an origin that silently
+        # became (0, 0) is indistinguishable from not passing the flag at all, which
+        # is the failure this feature exists to remove.
+        check(repr(bad) in str(exc) or bad in str(exc),
+              f"{why} ({bad!r}) is REFUSED, and the message quotes it",
+              str(exc).split(" -- ")[0][:70])
+    else:
+        check(False, f"{why} ({bad!r}) must be refused, not accepted", str(got))
+
+print("  (7b) unset origin is today's behaviour, unchanged")
+STREAM = []           # one command/heading script, replayed through every integrator
+_t = 0.0
+for _i in range(1, 121):
+    _t = _i * 0.01
+    # Turning while walking, so the offset meets a non-trivial path rather than a line.
+    STREAM.append((_t, (0.6 * math.sin(0.5 * _t), _t), (0.8, 0.15, _t)))
+
+
+def replay(origin):
+    """Run the shared script through one integrator; return its frames and reckoner."""
+    integ = (isaac_odom.OdomIntegrator(PUB, STALE, CMD_STALE) if origin is False
+             else isaac_odom.OdomIntegrator(PUB, STALE, CMD_STALE, origin=origin))
+    frames, raw = [], []
+    for now, yaw_sample, command in STREAM:
+        f = integ.tick(now, yaw_sample, command)
+        if f is not None:
+            frames.append(f)
+            # What the dead reckoner itself holds at that instant: the ODOM frame.
+            raw.append((integ.reckoner.x, integ.reckoner.y))
+    return integ, frames, raw
+
+
+base, f_base, raw_base = replay(False)          # constructed exactly as before
+none_i, f_none, _ = replay(None)                # explicit origin=None
+zero_i, f_zero, _ = replay((0.0, 0.0))          # explicitly told the world origin
+ORIGIN = (4.0, -2.0)                            # the factory scene's authored spawn
+off_i, f_off, raw_off = replay(ORIGIN)
+
+check(len(f_base) > 10, "the shared script publishes a useful number of frames",
+      f"{len(f_base)} frames")
+check(base.origin is None, "an integrator built the old way has origin=None",
+      repr(base.origin))
+# Byte-identical, asserted as identical reprs of the whole frame -- not a tolerance.
+# A tolerance would pass a version that shifted x by 1e-16 and would not notice.
+check([repr(f) for f in f_base] == [repr(f) for f in f_none],
+      "origin=None publishes byte-identical frames to not passing origin at all")
+check([repr(f) for f in f_base] == [repr(f) for f in f_zero],
+      "and an explicit (0, 0) origin is byte-identical too")
+check(all(f.x == r[0] and f.y == r[1] for f, r in zip(f_base, raw_base)),
+      "with no origin the published x/y ARE the raw dead-reckoned numbers")
+
+print("  (7c) a given origin shifts x/y by exactly that, and touches nothing else")
+ox, oy = ORIGIN
+check(all(fo.x == fb.x + ox and fo.y == fb.y + oy for fo, fb in zip(f_off, f_base)),
+      f"every frame's x/y is shifted by exactly {ORIGIN}, to the last bit")
+check(all(fo.yaw == fb.yaw and fo.yaw_continuous == fb.yaw_continuous
+          for fo, fb in zip(f_off, f_base)),
+      "YAW IS NOT OFFSET -- it is measured and already world-absolute")
+check(all(fo.vx_world == fb.vx_world and fo.vy_world == fb.vy_world
+          and fo.yaw_speed == fb.yaw_speed for fo, fb in zip(f_off, f_base)),
+      "velocity and yaw_speed are derivatives: a translation leaves them alone")
+check(all(ro == rb for ro, rb in zip(raw_off, raw_base)),
+      "the DeadReckoner itself stays in the ODOM frame -- the offset is not baked in")
+check(f_off[0].x == ORIGIN[0] + f_base[0].x,
+      "the FIRST frame already carries the origin (the anchor tick is not exempt)",
+      f"({f_off[0].x:.4f}, {f_off[0].y:.4f})")
+# The concrete regression, in the numbers that were actually logged.
+spawn = isaac_odom.OdomIntegrator(PUB, STALE, CMD_STALE, origin=(4.0, -2.0))
+first = spawn.tick(0.0, (math.pi / 2, 0.0), (0.0, 0.0, 0.0))
+check(first is not None and abs(first.x - 4.0) < 1e-12 and abs(first.y + 2.0) < 1e-12,
+      "a robot that has not moved yet publishes its WORLD spawn, not (0, 0)",
+      f"({first.x:.2f}, {first.y:.2f})")
+check(abs(first.yaw - math.pi / 2) < 1e-12,
+      "and its measured 90 deg heading comes through unrotated",
+      f"{math.degrees(first.yaw):.1f} deg")
+
+print("  (7d) a translation cannot change a distance")
+# THE invariant that catches an offset applied twice, applied to velocities instead
+# of positions, or applied inside the integration loop rather than at its boundary:
+# all three change how far consecutive published poses are apart. A constant shift
+# cannot.
+def path_len(frames):
+    return sum(math.hypot(b.x - a.x, b.y - a.y) for a, b in zip(frames, frames[1:]))
+
+
+check(abs(path_len(f_off) - path_len(f_base)) < 1e-12,
+      "the published path length is identical with and without the origin",
+      f"{path_len(f_off):.6f} m vs {path_len(f_base):.6f} m")
+check(off_i.reckoner.distance == base.reckoner.distance,
+      "and the reckoner's own integrated path length is untouched, exactly",
+      f"{off_i.reckoner.distance:.6f} m")
+check(path_len(f_base) > 0.1,
+      "(the script really does travel, so the check above is not vacuous)",
+      f"{path_len(f_base):.4f} m")
+# Applied twice would be caught by (7c); assert the shape of the failure anyway so
+# the reason this check exists survives.
+twice = [f.x + ox for f in f_off]
+check(abs(twice[0] - (f_base[0].x + 2 * ox)) < 1e-12,
+      "(an offset applied twice would land at origin*2 -- what (7c) would catch)")
+
+print("  (7e) isaac_loco_bridge.py wires the flag, and says so on startup")
+origin_src = open(BRIDGE_PATH, encoding="utf-8").read()
+check('"--odom-origin"' in origin_src, "the bridge exposes --odom-origin")
+check("isaac_odom.parse_odom_origin(args.odom_origin)" in origin_src,
+      "and parses it with the shared, offline-testable parser")
+check('ap.error(f"--odom-origin: {exc}")' in origin_src,
+      "a malformed value becomes a named usage error, never a silent (0, 0)")
+check("origin=odom_origin" in origin_src,
+      "the value reaches OdomIntegrator as `origin`, not the reckoner's x0/y0")
+check("odom origin DEFAULTED to (0.00, 0.00)" in origin_src
+      and "odom origin GIVEN as" in origin_src,
+      "the startup banner names the origin AND whether anyone chose it "
+      "(a silent origin is how this defect stayed invisible)")
+check("yaw is measured and is not offset" in origin_src,
+      "and the banner says out loud that yaw carries no offset")
+
+print("  (7f) factory_mission_bringup.sh feeds it the sim's own spawn pose")
+BRINGUP = os.path.join(_HERE, "factory_mission_bringup.sh")
+if not os.path.exists(BRINGUP):
+    print("    SKIP  factory_mission_bringup.sh not present")
+else:
+    bringup_src = open(BRINGUP, encoding="utf-8").read()
+    check("from common_scene.factory_pauseroom_layout import robot_spawn" in bringup_src,
+          "it resolves the spawn with the scene's OWN robot_spawn(), on the host")
+    check(bringup_src.count("import robot_spawn") == 1,
+          "exactly once -- one resolver call, so sim and odometry cannot disagree",
+          str(bringup_src.count("import robot_spawn")))
+    check('--odom-origin "$SPAWN_XY"' in bringup_src,
+          "and passes that pose to the bridge as --odom-origin")
+    check("SPAWN_XY=" in bringup_src and "sed -n 's/^SPAWN_XY=//p'" in bringup_src,
+          "reading a machine-readable line back by prefix, not by parsing the "
+          "human-readable description")
+
+# --------------------------------------------------------------------------------
+print("\n(8) against the real IDL, if this interpreter has one")
 try:
     from unitree_sdk2py.idl.default import (  # type: ignore
         unitree_go_msg_dds__SportModeState_ as real_ctor)

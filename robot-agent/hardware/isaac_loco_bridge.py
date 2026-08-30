@@ -60,6 +60,17 @@ rotated into the integration so at least heading error does not compound into
 position error. `SportModeState_.error_code` is stamped with
 `isaac_odom.ODOM_ERROR_CODE_DEAD_RECKONED` to say so on the wire.
 
+WHERE THE ZERO IS: `--odom-origin X,Y`. Dead reckoning starts at zero, so by default
+the published x/y are in an ODOM frame anchored at wherever the robot happened to be
+standing when this process started -- while Agent Mode's place graph
+(`sim_evaluator/places/*.json`) is in WORLD metres. Nothing reconciled the two, and on
+the factory rig they are 4.5 m apart: the robot spawned at world (4.00, -2.00), this
+bridge published (0.00, 0.00), and the agent resolved itself into FACTORY-CENTRE, a
+place it was nowhere near. `--odom-origin` names the world position of that zero, and
+`factory_mission_bringup.sh` fills it from the SAME `robot_spawn()` resolver the scene
+spawns with, so sim and odometry cannot disagree. It shifts x and y ONLY -- yaw is
+measured off the sim's base orientation and is world-absolute already.
+
 The quaternion order is `xyzw`, NOT a real G1's `wxyz` (`--quat-order` to override):
 Isaac Lab 3.0 is XYZW throughout and the vendor's 2.x-era plumbing does not convert.
 Read as `wxyz` the heading swings with ROLL while the true yaw sits still, which
@@ -225,7 +236,8 @@ class OdomPublisher:
     command path leaves a robot mid-stride with nothing publishing to it.
     """
 
-    def __init__(self, command_source, quat_order: str, rate_hz: float) -> None:
+    def __init__(self, command_source, quat_order: str, rate_hz: float,
+                 odom_origin: tuple[float, float] | None = None) -> None:
         self._command_source = command_source
         self._order = quat_order
         # What this publisher will really do, not what it was asked for -- every
@@ -246,7 +258,11 @@ class OdomPublisher:
         self._integ = isaac_odom.OdomIntegrator(
             publish_period=odom_publish_period_s(rate_hz),
             stale_after=ODOM_LOWSTATE_STALE_S,
-            command_stale_after=ODOM_COMMAND_STALE_S)
+            command_stale_after=ODOM_COMMAND_STALE_S,
+            # WORLD position of the dead reckoner's (0, 0). None = not told, which is
+            # the pre-TASK-231 behaviour: odom coordinates published as if they were
+            # world ones. x/y only -- yaw is measured and already world-absolute.
+            origin=odom_origin)
 
         self._sub = ChannelSubscriber(LOWSTATE_TOPIC, LowState_)
         self._sub.Init(self._on_lowstate, 10)
@@ -329,6 +345,9 @@ class OdomPublisher:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=1.0)
+        # `reckoner` is the ODOM frame (module docstring of isaac_odom), so this
+        # distance is a path length and is unaffected by any origin -- deliberately:
+        # a translation cannot change how far something travelled.
         print(f"[odom] {self.published} odometry messages from {self.samples} lowstate "
               f"samples; dead-reckoned path length "
               f"{self._integ.reckoner.distance:.2f} m (x/y NOT measured)", flush=True)
@@ -339,7 +358,8 @@ class IsaacLocoBridge:
                  iface: str | None = None, publish_odom: bool = True,
                  odom_rate_hz: float = 20.0,
                  quat_order: str = isaac_odom.DEFAULT_QUAT_ORDER,
-                 stand_height: float = STAND_HEIGHT_HIGH) -> None:
+                 stand_height: float = STAND_HEIGHT_HIGH,
+                 odom_origin: tuple[float, float] | None = None) -> None:
         self._lock = threading.Lock()
         self._state = LocoState()
         # THE IDLE HEIGHT IS NOT COSMETIC -- IT DECIDES WHETHER THE ROBOT STAYS PUT.
@@ -404,7 +424,7 @@ class IsaacLocoBridge:
         self._odom: OdomPublisher | None = None
         if publish_odom:
             self._odom = OdomPublisher(lambda: self._cmd_slot, quat_order,
-                                       odom_rate_hz)
+                                       odom_rate_hz, odom_origin=odom_origin)
 
         # Built last: ServerBase._Start() begins answering RPCs immediately, and a
         # SetVelocity answered before the publisher exists would be accepted and dropped.
@@ -417,9 +437,27 @@ class IsaacLocoBridge:
             # for 20 Hz. main() has already said so if the two differ.
             print(f"[bridge] odometry ON — subscribing {LOWSTATE_TOPIC}, publishing "
                   f"{ODOM_TOPIC} at {self._odom.rate:g} Hz, quaternion order "
-                  f"'{quat_order}'. yaw is MEASURED; x/y are DEAD RECKONED from the "
-                  f"commanded velocity and WILL drift — do not trust them as an "
-                  f"absolute position.", flush=True)
+                  f"'{quat_order}'. yaw is MEASURED and world-absolute; x/y are DEAD "
+                  f"RECKONED from the commanded velocity and WILL drift — do not trust "
+                  f"them as an absolute position.", flush=True)
+            # A SILENT ORIGIN IS HOW THE FRAME MISMATCH STAYED INVISIBLE. The bridge
+            # published (0, 0) while the robot stood at world (4.00, -2.00) and nothing
+            # in the log said which frame that zero was in, so Agent Mode resolved the
+            # robot into a place 4.5 m away and would have walked into a wall. Whichever
+            # branch is taken, the operator now reads the origin and whether anyone
+            # chose it.
+            if odom_origin is None:
+                print(f"[bridge] odom origin DEFAULTED to (0.00, 0.00) — --odom-origin "
+                      f"was not given, so published x/y are relative to wherever this "
+                      f"robot is standing RIGHT NOW, not world coordinates. Anything "
+                      f"holding a world map (Agent Mode's place graph) will place the "
+                      f"robot wrong by however far the spawn is from the world origin.",
+                      flush=True)
+            else:
+                print(f"[bridge] odom origin GIVEN as ({odom_origin[0]:.2f}, "
+                      f"{odom_origin[1]:.2f}) in WORLD metres — published x/y are world "
+                      f"coordinates: the spawn pose plus the dead-reckoned displacement. "
+                      f"x and y ONLY; yaw is measured and is not offset.", flush=True)
         else:
             print(f"[bridge] odometry OFF (--no-odom) — nothing publishes {ODOM_TOPIC}, "
                   f"so /loco/odom will 503 and Agent Mode has no measured heading.",
@@ -583,6 +621,19 @@ def main() -> int:
                          "--rate and of the command thread; 20 Hz matches "
                          "isaac_capture.py and is well inside the sidecar's 2 s "
                          "staleness window.")
+    ap.add_argument("--odom-origin", default=None, metavar="X,Y",
+                    help="WORLD position, in metres, of the odometry origin — i.e. "
+                         "where the robot is standing when this bridge starts. x/y are "
+                         "dead reckoned from zero, so without this they are published "
+                         "in an odom frame that Agent Mode's place graph "
+                         "(sim_evaluator/places/*.json, WORLD metres) reads as world "
+                         "coordinates: a robot spawned at (4, -2) publishes (0, 0) and "
+                         "resolves into the wrong place 4.5 m away. Offsets x and y "
+                         "ONLY — yaw is measured from the sim's base orientation and is "
+                         "already world-absolute. factory_mission_bringup.sh passes the "
+                         "scene's own spawn pose here, from the same resolver the sim "
+                         "spawns with, so the two cannot disagree. Unset = the old "
+                         "behaviour, odom frame published as world.")
     ap.add_argument("--stand-height", type=float, default=STAND_HEIGHT_HIGH,
                     help=f"absolute stand height in metres published with every command, "
                          f"including the idle ones (default {STAND_HEIGHT_HIGH}). This is a "
@@ -614,8 +665,25 @@ def main() -> int:
               f"a chopped command where it was trained on a held one, and the robot will "
               f"lean instead of walking. Use >= 50, ideally 100.", flush=True)
 
+    # Parsed by name, and REFUSED rather than defaulted: `isaac_odom.parse_odom_origin`
+    # raises with the offending text in the message, and ap.error() turns that into a
+    # usage error and exit 2. Falling back to (0, 0) on a typo would reproduce exactly
+    # the defect this flag exists to fix, and reproduce it silently.
+    odom_origin = None
+    if args.odom_origin is not None:
+        try:
+            odom_origin = isaac_odom.parse_odom_origin(args.odom_origin)
+        except ValueError as exc:
+            ap.error(f"--odom-origin: {exc}")
+
     if args.publish_odom and args.odom_rate <= 0:
         ap.error("--odom-rate must be > 0 (use --no-odom to turn odometry off)")
+    if odom_origin is not None and not args.publish_odom:
+        # Not fatal, but it is certainly not doing what the operator thinks: nothing
+        # publishes odometry at all, so an origin has nothing to shift.
+        print("[bridge] NOTE: --odom-origin was given together with --no-odom, so "
+              "nothing publishes rt/odommodestate and the origin has no effect.",
+              flush=True)
     if args.publish_odom:
         # Not an error, just arithmetic: a frame can only leave on a tick
         # boundary, so any rate that is not a divisor of ODOM_TICK_HZ -- and any
@@ -635,7 +703,8 @@ def main() -> int:
         bridge = IsaacLocoBridge(args.domain, args.rate, verbose=not args.quiet,
                                  iface=args.iface, publish_odom=args.publish_odom,
                                  odom_rate_hz=args.odom_rate, quat_order=args.quat_order,
-                                 stand_height=args.stand_height)
+                                 stand_height=args.stand_height,
+                                 odom_origin=odom_origin)
     except ValueError as exc:
         # An argument mistake (domain 0) is an operator message, not a traceback.
         # Exit 2 so a script can tell it apart from a bridge that started and then
