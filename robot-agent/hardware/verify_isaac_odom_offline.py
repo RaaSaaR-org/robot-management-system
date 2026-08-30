@@ -765,6 +765,13 @@ check(all(f.x == TRUE.x for _, f in still_true)
       f"a pose keeps being published for exactly the {GT_STALE:g}s staleness window "
       f"after it stops being refreshed",
       f"last true frame at t={still_true[-1][0]:.2f}s")
+check(bool(lost),
+      "a pose that stops being refreshed is eventually DROPPED (without this the "
+      "bridge republishes one frozen pose for as long as the sim is quiet)",
+      f"{len(lost)} fallback frames out of {len(lost) + len(still_true)}")
+if not lost:
+    # Nothing below can be evaluated, and an IndexError here would hide (8e) and (8f).
+    lost = [(float("nan"), isaac_odom.OdomFrame(0, 0, 0, 0, 0, 0, 0), 0.0, 0.0)]
 check(abs(lost[0][0] - (GT_FROZEN_AT + GT_STALE + 0.01)) < 1e-9,
       "and the tick after that window falls back — promptly, not eventually",
       f"first fallback frame at t={lost[0][0]:.2f}s")
@@ -900,6 +907,12 @@ else:
           str(list(real.imu_state.rpy)))
     check(real.error_code == isaac_odom.ODOM_ERROR_CODE_DEAD_RECKONED,
           "error_code survives on the real IDL (uint32)", hex(real.error_code))
+    # And the code that will now be on the wire for most of a healthy run.
+    real_gt = isaac_odom.fill_odom_msg(
+        real_ctor(), x=11.2, y=-4.0, yaw=0.0, stamp_s=1.0,
+        error_code=isaac_odom.ODOM_ERROR_CODE_GROUND_TRUTH)
+    check(real_gt.error_code == isaac_odom.ODOM_ERROR_CODE_GROUND_TRUTH,
+          "so does the ground-truth marker", hex(real_gt.error_code))
 
 print()
 if FAILURES:

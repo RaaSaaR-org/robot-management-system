@@ -311,9 +311,22 @@ interface ArcOption {
  *
  * `commandedM` and `movedM` are deliberately BOTH reported and are not the same
  * number: the budget is spent in commanded metres (that is what was taken from
- * the walk), while what the robot is believed to have travelled is the measured
- * one — 31% of commanded on this checkpoint. Reporting either alone would make
- * one of the two consumers lie.
+ * the walk), while what the robot is believed to have travelled is whatever
+ * odometry reports — 31% of commanded on this checkpoint. Reporting either
+ * alone would make one of the two consumers lie.
+ *
+ * HOW MUCH `movedM` IS WORTH DEPENDS ENTIRELY ON THE ODOMETRY UNDERNEATH IT, and
+ * this comment used to claim more than the Isaac rig could deliver. Until
+ * TASK-231 that bridge (`isaac_loco_bridge.py`) dead reckoned x/y from the
+ * velocity it had itself commanded, so `movedM` there was the COMMAND played
+ * back and any ratio computed from it was circular — it reported ~100% of
+ * commanded no matter what the robot did, and once measured 7.995 m against a
+ * true 0.113 m. It now publishes the sim's true world pose from `rt/sim_state`
+ * and falls back to dead reckoning only when that is missing, stamping
+ * `SportModeState_.error_code` (0x600D true, 0xDEAD reckoned) either way. A real
+ * G1 reports real odometry and never had this problem. So: a ratio out of this
+ * number is only evidence when the pose behind it was measured, and the 31%
+ * above was taken on the MuJoCo path, not on Isaac.
  */
 interface ArcTravel {
   /** Forward distance COMMANDED across the arc's velocity commands, m. */
@@ -1715,8 +1728,10 @@ export class BlockExecutor {
       // An arc TRANSLATES as well as rotating, and the caller has to be told how
       // far: it budgeted the metres, and whatever consumes the result (the
       // walk's own residual, the navigator's next stage) would otherwise assume
-      // the robot stayed put. Measured, never derived from the command — this is
-      // a base that achieves 31% of a commanded forward speed.
+      // the robot stayed put. This is a base that achieves a fraction of a
+      // commanded forward speed, so the two numbers differ — but only as far as
+      // the odometry behind `after` is itself measured rather than dead reckoned
+      // from the command. See {@link ArcTravel} and TASK-231.
       if (arc) travel.movedM += Math.hypot(after.x - previousX, after.y - previousY);
       previousX = after.x;
       previousY = after.y;
