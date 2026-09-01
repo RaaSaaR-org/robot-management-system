@@ -11,7 +11,7 @@
 #     |  ZMQ 55555/6/7 JPEG   +   REQ/REP 60000 config
 #     |
 #   isaac_loco_bridge.py    answers the sport RPC, publishes run_command + odom
-#   isaac_manip_bridge.py   publishes the arm and hand commands
+#   isaac_manip_bridge.py   publishes the arm and hand commands; :8778 takes them in
 #   g1_sidecar.py   :8777   HTTP /loco/* and /state  ->  sport RPC over DDS
 #   isaac_camera_facade.py :8779   HTTP /cameras/*, and proxies the rest to 8777
 #   robot-agent            HARDWARE_SIDECAR_URL -> :8779
@@ -42,7 +42,31 @@ PY="$CONDA_ENV/bin/python"
 NODE_BIN="${NODE_BIN:-$HOME/.nvm/versions/node/v22.23.2/bin}"
 
 DOMAIN="${DOMAIN:-1}"
-IFACE="${IFACE:-lo}"
+# EMPTY IS DELIBERATE, AND IT IS THE WHOLE REASON THIS STACK TALKS AT ALL.
+#
+# The sim calls ChannelFactoryInitialize(1) with NO interface argument
+# (dds_master.py:60, a hardcoded literal -- no flag, no env var). That takes
+# unitree_sdk2py's ChannelConfigAutoDetermine branch, and CycloneDDS then ranks the
+# host's interfaces by quality: lo scores 1, every real NIC scores 9. So the sim binds
+# enp130s0 (192.168.123.222), never loopback.
+#
+# This script used to pin the three host processes to `lo`. Both sides then sat in the
+# SAME network namespace -- --network host, verified identical net/ipc inode -- and never
+# exchanged a single packet, because Cyclone only ever transmits and receives on the one
+# interface it selected. The bridges' `lo` had auto-added unicast peers (multicast is
+# unavailable there); the sim on a multicast-capable NIC had none. The two discovery
+# mechanisms do not overlap.
+#
+# The symptom was thoroughly misleading: the sim ran, stepped at 16 Hz, printed healthy
+# DDS banners, and logged cmd=[0,0,0,0.80] -- which is action_provider_wh_dds.py:345's
+# DEFAULT, not anything we sent. Nothing anywhere said "interface mismatch".
+#
+# Empty makes the bridges take the SAME autodetermine branch as the sim, so they follow
+# whatever Cyclone picks instead of hardcoding a guess that can drift. All three consumers
+# already handle it -- isaac_loco_bridge.py:367, isaac_manip_bridge.py:174 and
+# g1_sidecar.py:980 each read `if iface:` and fall back to ChannelFactoryInitialize(domain).
+# IFACE=lo still works for a host-side sim (the MuJoCo sim_node.py needs it).
+IFACE="${IFACE-}"
 TASK_ID="${TASK_ID:-Isaac-Factory-PauseRoom-G129-Dex3-Wholebody}"
 SECONDS_CAP="${SECONDS_CAP:-1200}"
 MODEL="${MODEL:-qwen3-vl:8b}"
@@ -50,7 +74,31 @@ MIN_FREE_MB="${MIN_FREE_MB:-11000}"
 GPU_INDEX="${GPU_INDEX:-0}"
 LOGDIR="${LOGDIR:-$HOME/factory-mission-logs/$(date +%Y%m%d-%H%M%S)}"
 ENABLE_MANIP="${ENABLE_MANIP:-1}"
+# The manipulation bridge's HTTP command inlet. 8777 is the sidecar and 8779 the camera
+# facade, so 8778 is the free slot between them. Declared once and used twice -- on the
+# bridge's --serve and on the facade's --manip-url -- because those two have to agree or
+# every /action a VLA rollout sends lands on a closed port.
+MANIP_PORT="${MANIP_PORT:-8778}"
 CAM_NAME="${CAM_NAME:-head_camera}"
+# The facade's default staleness window is 0.5 s, chosen against the cameras' NOMINAL 30 fps.
+# What this rig actually delivers is one write per --camera_write_interval control steps at a
+# render-bound ~16 Hz, measured at 1.75 Hz / ~620 ms between frames. At 0.5 s essentially every
+# snapshot request would 503 as stale even with the stream perfectly healthy, and `look` would
+# report the scene as unobservable for a reason that has nothing to do with the scene.
+CAM_MAX_AGE="${CAM_MAX_AGE:-1.5}"
+# AND THE OTHER HALF OF THAT, WHICH THE SEED MAKES NECESSARY.
+#
+# Seeding a placeholder frame so the publisher binds turns a LOUD failure into a quiet one:
+# if Isaac's renderer never writes -- scene fails to load, cameras disabled -- the placeholder
+# is republished at 30 Hz forever and every health field reads OK. Before the seed, that case
+# was total silence, which at least could not be mistaken for success.
+#
+# --max-content-age is the guard: it rejects a frame whose PICTURE has not changed, as opposed
+# to one that is merely old. The seeded placeholder is a single static image, so its content
+# age grows without bound and the facade starts 503ing within seconds. A real render always
+# changes -- even a motionless robot has shadow and sensor noise. The facade's default is 0,
+# which disables the check entirely.
+CAM_MAX_CONTENT_AGE="${CAM_MAX_CONTENT_AGE:-5.0}"
 CONTAINER="${CONTAINER:-neodem-factory}"
 # 1 = kill leftovers without asking, 0 = never kill, unset = ask. There is no
 # default of "yes" here on purpose: see step 2.
@@ -143,8 +191,85 @@ fi
 say "0. preconditions"
 [ -x "$PY" ]        || die "no sim python at $PY"
 [ -d "$SIM_DIR" ]   || die "no unitree_sim_isaaclab at $SIM_DIR"
-[ -d "$SIM_DIR/tasks/g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody" ] \
-  || die "the factory task is not installed into the checkout -- run install first"
+# The scene is AUTHORED in this repo and COPIED into the checkout, and Isaac loads the
+# copy. So "the verifiers pass" says nothing about what is about to be simulated: the two
+# have already drifted once, leaving the checkout holding a pre-door snapshot while every
+# offline check went green against the source. install_into_checkout.sh --check compares
+# them file by file and is the only thing standing between that and a wasted run.
+#
+# It CHECKS rather than installs, for the same reason step 2 asks before killing: writing
+# into somebody else's checkout is not a thing a bring-the-stack-up script should do behind
+# the operator's back. INSTALL_SCENE=1 is how an operator says otherwise.
+SCENE_INSTALLER="$HW/isaac_scenes/install_into_checkout.sh"
+[ -x "$SCENE_INSTALLER" ] || die "no scene installer at $SCENE_INSTALLER"
+if [ "${INSTALL_SCENE:-0}" = "1" ]; then
+  "$SCENE_INSTALLER" || die "installing the scene into the checkout failed"
+else
+  "$SCENE_INSTALLER" --check \
+    || die "the scene in the checkout is not the scene in this repo (see above). Install it
+     with the command printed above, or re-run this script with INSTALL_SCENE=1."
+fi
+# The spawn pose is chosen on the HOST and consumed INSIDE the container, and the
+# only thing carrying it across is the -e below. A var that is set but not
+# forwarded is silent: the sim starts happily at the authored pose, 8.4 m from
+# where the operator asked for, and the first symptom is a camera looking at an
+# empty hall. So resolve it here, on the host, with the same resolver the scene
+# uses, and print the pose that will actually be spawned.
+#
+# IT IS ALSO THE ODOMETRY ORIGIN, and that is why this now runs UNCONDITIONALLY
+# rather than only when NEODEM_ROBOT_SPAWN is set. The locomotion bridge dead-reckons
+# x/y from zero, so unless it is told where zero is in the world it publishes an odom
+# frame that Agent Mode reads as world coordinates. Measured on the live rig: the
+# robot stood at world (4.00, -2.00), the bridge published (0.00, 0.00), and the agent
+# logged "Place: UNKNOWN -> FACTORY-CENTRE at (0.00, 0.00)" -- resolving itself into a
+# place 4.5 m from where it was standing. A goto from there applies a world
+# displacement to an odom-origin pose and walks into a wall.
+#
+# The whole point of taking it from HERE is that the number the sim spawns at and the
+# number the bridge anchors to come out of ONE call to ONE resolver. Re-deriving it,
+# or reading the pretty-printed line back with sed, would let the two drift apart
+# again -- which is the class of bug being fixed, not a style preference.
+#
+# The path is absolute ($HW/isaac_scenes, passed as argv[1]) because this runs long
+# before the `cd "$HW"` in step 4: the old relative sys.path only resolved when the
+# operator happened to launch from the hardware directory.
+#
+# Both values come back on PREFIXED lines and are pulled out by prefix, so a warning
+# on stderr (this python is noisy) cannot be mistaken for a coordinate. `|| true`
+# because the failure is diagnosed below, where the output is still in hand -- under
+# `set -e` a bare assignment from a failing command would abort with no message at all.
+SPAWN_OUT="$(NEODEM_ROBOT_SPAWN="${NEODEM_ROBOT_SPAWN:-}" "$PY" - "$HW/isaac_scenes" <<'PYEOF' 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+from common_scene.factory_pauseroom_layout import robot_spawn
+s = robot_spawn()
+print(f"SPAWN_XY={s['pos'][0]:.4f},{s['pos'][1]:.4f}")
+print(f"SPAWN_DESC={s['name'] or 'the authored pose'} at ({s['pos'][0]:.2f}, "
+      f"{s['pos'][1]:.2f}, {s['pos'][2]:.2f}) yaw {s['yaw_deg']:.0f}")
+PYEOF
+)" || true
+SPAWN_XY="$(printf '%s\n' "$SPAWN_OUT" | sed -n 's/^SPAWN_XY=//p' | tail -1)"
+SPAWN_DESC="$(printf '%s\n' "$SPAWN_OUT" | sed -n 's/^SPAWN_DESC=//p' | tail -1)"
+# Shape-checked before this string becomes a command-line argument to the bridge.
+# robot_spawn() RAISES on a bad NEODEM_ROBOT_SPAWN rather than falling back, so an
+# empty SPAWN_XY here is that refusal, with its traceback in $SPAWN_OUT.
+if ! [[ "$SPAWN_XY" =~ ^-?[0-9]+\.[0-9]+,-?[0-9]+\.[0-9]+$ ]]; then
+  if [ -n "${NEODEM_ROBOT_SPAWN:-}" ]; then
+    die "NEODEM_ROBOT_SPAWN='$NEODEM_ROBOT_SPAWN' was refused by the scene:
+     $SPAWN_OUT"
+  fi
+  die "could not resolve the robot spawn pose from
+     $HW/isaac_scenes/common_scene/factory_pauseroom_layout.py -- without it the
+     locomotion bridge has no odometry origin, and odometry that silently claims the
+     world origin is what puts Agent Mode in the wrong room. Output was:
+     $SPAWN_OUT"
+fi
+if [ -n "${NEODEM_ROBOT_SPAWN:-}" ]; then
+  echo "ok    spawn override: $SPAWN_DESC"
+else
+  echo "ok    spawn: $SPAWN_DESC (NEODEM_ROBOT_SPAWN unset)"
+fi
+echo "ok    odom origin: $SPAWN_XY (WORLD metres) -- the locomotion bridge anchors its dead reckoning here, so its x/y and the place graph share one frame"
 command -v docker >/dev/null     || die "docker missing"
 command -v nvidia-smi >/dev/null || die "nvidia-smi missing -- step 1 cannot tell whose GPU this is"
 command -v curl >/dev/null       || die "curl missing"
@@ -229,8 +354,14 @@ else
 fi
 
 say "3. pin the planner model BEFORE Isaac takes its memory"
-curl -sf localhost:11434/api/generate \
-  -d "{\"model\":\"$MODEL\",\"prompt\":\"ready\",\"stream\":false,\"keep_alive\":-1}" \
+# NO PROMPT. An empty prompt is ollama's load-only call: it residents the weights
+# and returns, which is the entire point of this step. Sending one made the step
+# generate an answer nobody reads, and a reasoning model does not stop quickly --
+# on the CPU-pinned planner variant that is minutes of chain-of-thought at ~9 tok/s
+# before Isaac has even been asked to start, and it looks exactly like a hang.
+# `num_predict` does NOT bound it: this model's thinking tokens escape that cap.
+curl -sf --max-time 300 localhost:11434/api/generate \
+  -d "{\"model\":\"$MODEL\",\"keep_alive\":-1}" \
   >/dev/null || die "ollama did not answer -- is it running, and is $MODEL pulled?"
 MODEL_PINNED=1
 echo "pinned $MODEL resident"
@@ -240,31 +371,98 @@ export OMNI_KIT_ACCEPT_EULA=YES
 
 say "4. locomotion bridge (answers the sport RPC; publishes odom)"
 cd "$HW"
+# --odom-origin is the spawn pose resolved in step 0, from the same robot_spawn() call
+# the sim itself spawns with. Without it the bridge publishes displacement-from-start
+# as though it were world coordinates, and Agent Mode's place graph resolves the robot
+# into the wrong place -- see the long note beside SPAWN_XY above.
 setsid nohup "$PY" -u isaac_loco_bridge.py --domain "$DOMAIN" --iface "$IFACE" \
-  --publish-odom >"$LOGDIR/loco_bridge.log" 2>&1 </dev/null &
+  --publish-odom --odom-origin "$SPAWN_XY" \
+  >"$LOGDIR/loco_bridge.log" 2>&1 </dev/null &
 LOCO_PID=$!
 disown "$LOCO_PID" 2>/dev/null || true
 sleep 2
 watch_pid "$LOCO_PID" "the locomotion bridge" "$LOGDIR/loco_bridge.log"
 
+MANIP_ARGS=()
 if [ "$ENABLE_MANIP" = "1" ]; then
-  say "5. manipulation bridge (arms + hands)"
+  say "5. manipulation bridge (arms + hands) + command inlet :$MANIP_PORT"
+  # --serve is what makes this process reachable by a VLA rollout. Without it the only
+  # producers are in-process, so the bridge sits holding the rest pose while the agent
+  # POSTs joint dicts at the sidecar's /action -- a real-robot path that cannot serve
+  # this rig at all. Loopback only, which is the bridge's own default: this port moves
+  # a robot's arms.
   setsid nohup "$PY" -u isaac_manip_bridge.py --domain "$DOMAIN" --iface "$IFACE" \
+    --serve "$MANIP_PORT" \
     >"$LOGDIR/manip_bridge.log" 2>&1 </dev/null &
   MANIP_PID=$!
   disown "$MANIP_PID" 2>/dev/null || true
   sleep 2
   watch_pid "$MANIP_PID" "the manipulation bridge" "$LOGDIR/manip_bridge.log"
+
+  # A LIVE PID IS NOT A REACHABLE INLET. watch_pid above proves the process did not
+  # refuse its arguments; it says nothing about whether the HTTP server bound. If it
+  # did not, the facade proxies every /action into a closed port and the rollout fails
+  # at frame 1 -- after Isaac has taken ten minutes to boot. This runs BEFORE that, so
+  # a verdict here is cheap and a verdict later is not.
+  #
+  # /health answers 503 when the publish thread is dead, so `curl -sf` is the whole
+  # check: 2xx means bound AND publishing.
+  MANIP_UP=0
+  for i in $(seq 1 20); do
+    if curl -sf -m 2 -o /dev/null "http://localhost:$MANIP_PORT/health"; then
+      MANIP_UP=1; break
+    fi
+    sleep 1
+  done
+  if [ "$MANIP_UP" = "1" ]; then
+    echo "ok   the manipulation inlet answers /health on :$MANIP_PORT"
+    MANIP_ARGS=(--manip-url "http://localhost:$MANIP_PORT")
+  else
+    tail -30 "$LOGDIR/manip_bridge.log" >&2 2>/dev/null || true
+    die "the manipulation bridge is running but nothing answers http://localhost:$MANIP_PORT/health after 20 s -- a VLA rollout would have no way to move the arms. See $LOGDIR/manip_bridge.log."
+  fi
 else
   say "5. manipulation bridge SKIPPED (ENABLE_MANIP=0)"
+  # No --manip-url either. With no bridge to route to, POST /action falls through to
+  # the sidecar and gets its honest 403 (G1_READ_ONLY), which is a far better answer
+  # than a 503 from a port nothing is listening on.
 fi
 
+say "5b. pre-seed the camera shared memory (the image server loses a race without it)"
+# The vendor image server binds its ZMQ publishers lazily, inside publish(), which it only
+# reaches once a frame exists. Its per-camera thread reads the ring buffer ONCE at startup
+# and, finding it empty, sets a SHARED stop event and breaks -- killing all three cameras for
+# the life of the process while :60000 keeps answering config queries perfectly. Measured on
+# this box: that read happened 1.74 s before Isaac's own writer created the shared memory.
+#
+# Seeding a valid placeholder frame first makes that read succeed. Isaac overwrites the same
+# segments seconds later, so the placeholder is never what anything sees.
+#
+# It must run HERE: after the stale sweep has removed any old container (leftover segments are
+# root-owned and this user cannot unlink them) and before the sim starts writing.
+if [ "${SKIP_CAMERA_SEED:-0}" = "1" ]; then
+  echo "SKIPPED (SKIP_CAMERA_SEED=1) -- expect no camera frames"
+else
+  "$HW/seed_camera_shm.py" || die "could not seed the camera shared memory -- Agent Mode would
+     be blind for the whole run. Re-run with SKIP_CAMERA_SEED=1 to proceed deliberately blind."
+fi
+
+# NEODEM_LOG_EVERY has to be forwarded EXPLICITLY, like NEODEM_FILM_DIR above. The sim runs
+# inside the container, so a shell variable set in front of this script reaches this script and
+# not the process that reads it -- and the failure is silent, because the default of 25 is a
+# perfectly working value. It sets BOTH the [TASK-203]/[TASK-223] log interval and, since the
+# film camera writes inside the same gate, the film's frame rate: frames per second of
+# simulated time = sim rate / NEODEM_LOG_EVERY. At the default and this rig's ~13-16 Hz that is
+# under 1 fps, which is a slideshow rather than footage. 3 is a reasonable filming value; 5 is
+# what TASK-203 asks for when measuring gait, because 25 ALIASES the ~1.7 Hz step cadence.
 say "6. Isaac, in docker (Vulkan needs a seat; the host user does not have one)"
 setsid nohup docker run --rm --name "$CONTAINER" --user 0 --runtime=nvidia --gpus all \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e HOME=/home/humanoid -e PYTHONPATH= \
   -e CYCLONEDDS_HOME="$CHECKOUTS/cyclonedds/install" \
   ${NEODEM_FILM_DIR:+-e NEODEM_FILM_DIR="$NEODEM_FILM_DIR"} \
+  ${NEODEM_LOG_EVERY:+-e NEODEM_LOG_EVERY="$NEODEM_LOG_EVERY"} \
+  ${NEODEM_ROBOT_SPAWN:+-e NEODEM_ROBOT_SPAWN="$NEODEM_ROBOT_SPAWN"} \
   --device /dev/dri --ipc=host --network host \
   -v /home/humanoid:/home/humanoid -w "$SIM_DIR" \
   neodem-isaac-host:latest \
@@ -285,15 +483,44 @@ watch_pid "$ISAAC_PID" "the Isaac container" "$LOGDIR/isaac.log"
 # and always appear in the vendor's own wording, anchored where they occur.
 ISAAC_FATAL='^Traceback \(most recent call last\):|^Fatal Python error|Error executing job with overrides|torch\.(cuda\.)?OutOfMemoryError|CUDA error: out of memory'
 
+# A FIFTH FATAL, AND THE ONLY ONE THAT IS NOT AN EXCEPTION.
+#
+# The vendor image server binds its ZMQ publisher lazily, inside publish(), which is only
+# reached once a frame exists (image_server.py:1366). Its per-camera thread reads the ring
+# buffer once at startup and, if it is empty, logs this line, sets a SHARED stop event and
+# breaks (image_server.py:1368-1370) -- killing the frame threads for all three cameras. The
+# ports then never bind for the life of the process.
+#
+# Measured here: the read happened 1.74 s before Isaac's own writer created the shared memory.
+# One line, once, and the cameras are dead for the whole run -- while port 60000 keeps
+# answering config queries perfectly, so every other signal still looks healthy.
+ISAAC_CAMERA_RACE='Image Server\].*returned no frame'
+
 echo "waiting for Isaac to build the scene (this takes a while on a cold shader cache)"
 ISAAC_UP=0
 for i in $(seq 1 180); do
-  if grep -qiE 'image server has started|Image Server' "$LOGDIR/isaac.log" 2>/dev/null; then
-    ISAAC_UP=1; break
-  fi
+  # ORDER MATTERS, AND IT WAS WRONG. The readiness test below matches the bare
+  # string "Image Server" case-insensitively, which is also a substring of
+  # "[Image Server] head returned no frame." -- so the lost-race line set
+  # ISAAC_UP=1 and broke out before the race check could ever run, downgrading a
+  # fatal to a WARNING and letting the run continue blind. Both failure tests go
+  # FIRST; only then do we ask whether it came up.
   if grep -qE "$ISAAC_FATAL" "$LOGDIR/isaac.log" 2>/dev/null; then
     tail -30 "$LOGDIR/isaac.log"
     die "Isaac failed to start -- see $LOGDIR/isaac.log"
+  fi
+  if grep -qE "$ISAAC_CAMERA_RACE" "$LOGDIR/isaac.log" 2>/dev/null; then
+    die "the image server lost its startup race -- it read an empty frame buffer before
+     Isaac had written one, and has shut down every camera thread. Ports 55555/6/7 will
+     never bind and Agent Mode would be blind for this whole run. seed_camera_shm.py
+     exists to prevent exactly this; check that it ran and that /dev/shm holds three
+     921728-byte isaac_*_image_shm segments BEFORE the container starts.
+     See $LOGDIR/isaac.log"
+  fi
+  # Only now, with both failure modes ruled out for this poll, does a mention of
+  # the image server mean it is up.
+  if grep -qiE 'image server has started|Image Server' "$LOGDIR/isaac.log" 2>/dev/null; then
+    ISAAC_UP=1; break
   fi
   # The container dying is not always a traceback: an OOM kill or a missing
   # image leaves the docker client exiting with nothing useful in the log.
@@ -311,6 +538,28 @@ done
   die "Isaac did not announce its image server within 15 minutes -- see $LOGDIR/isaac.log"
 }
 
+# THE BANNER IS NOT THE GATE. "Image server has started, waiting for client connections"
+# is printed BEFORE the per-camera threads read a frame -- 2 s before the race above was
+# lost, in the run that found this. Waiting for it therefore proves only that the server
+# object was constructed. What actually matters is whether the PUBLISHER BOUND, and that is
+# observable: publish() is what calls bind(), so a listening 55555 means a frame was
+# genuinely published at least once.
+echo "waiting for the head camera's ZMQ publisher to bind (the banner does not prove this)"
+ZMQ_BOUND=0
+for i in $(seq 1 30); do
+  if ss -ltn 2>/dev/null | grep -qE ':55555\b'; then ZMQ_BOUND=1; break; fi
+  if grep -qE "$ISAAC_CAMERA_RACE" "$LOGDIR/isaac.log" 2>/dev/null; then break; fi
+  sleep 2
+done
+if [ "$ZMQ_BOUND" = "1" ]; then
+  echo "ok   55555 is bound -- at least one real frame has been published"
+else
+  echo "WARNING: nothing is listening on 55555 after 60 s. The image server binds that port"
+  echo "         only when it publishes its first frame, so this means no frame has ever been"
+  echo "         published. The run can continue -- locomotion does not need cameras -- but"
+  echo "         look and scan_room will 503 and Agent Mode will be blind."
+fi
+
 say "7. sidecar (DDS speaker) :8777"
 cd "$HW"
 G1_SIDECAR_PORT=8777 G1_READ_ONLY=1 G1_LOCO_ENABLED=1 \
@@ -323,8 +572,12 @@ sleep 3
 watch_pid "$SIDECAR_PID" "the sidecar" "$LOGDIR/sidecar.log"
 
 say "8. camera facade :8779 (serves /cameras/*, proxies the rest to 8777)"
+# ${MANIP_ARGS[@]+...} is the empty-array-under-`set -u` idiom used everywhere else in
+# this script: with ENABLE_MANIP=0 the array is empty and the flag is simply absent.
 setsid nohup "$PY" -u isaac_camera_facade.py --serve 8779 \
-  --sidecar-url http://localhost:8777 --scene "$TASK_ID" \
+  --sidecar-url http://localhost:8777 ${MANIP_ARGS[@]+"${MANIP_ARGS[@]}"} \
+  --scene "$TASK_ID" --max-age "$CAM_MAX_AGE" \
+  --max-content-age "$CAM_MAX_CONTENT_AGE" \
   >"$LOGDIR/camera_facade.log" 2>&1 </dev/null &
 FACADE_PID=$!
 disown "$FACADE_PID" 2>/dev/null || true
@@ -368,6 +621,46 @@ if [ "$FRAME_OK" != "1" ]; then
 else
   echo
   echo "camera OK: $CAM_NAME answered /cameras/$CAM_NAME/snapshot with a frame."
+fi
+
+# --- the OTHER half of a rollout: does it get an observation? ---------------------
+#
+# Non-fatal, and reported here rather than at step 5 because rt/lowstate only starts
+# flowing once Isaac is stepping, which is minutes after the bridge starts.
+#
+# This asks the facade, not the bridge, so it proves the whole path the agent takes:
+# HARDWARE_SIDECAR_URL -> :8779 -> :$MANIP_PORT -> rt/lowstate + rt/dex3/*/state. A
+# 200 here means getStateNow() gets measured joints. Anything else means it gets 43
+# zeros, silently -- the sidecar's own /state/fast answers `{"joints": []}` with a
+# 200 because its state source is a TCP link to a real G1 that is not on this box,
+# and getStateNow() fills every joint it does not receive with 0.0.
+if [ "$ENABLE_MANIP" = "1" ]; then
+  STATE_JSON="$(curl -s -m 5 "http://localhost:8779/state/fast" 2>/dev/null || true)"
+  STATE_CODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+    "http://localhost:8779/state/fast" 2>/dev/null || echo 000)"
+  if [ "$STATE_CODE" = "200" ]; then
+    # `|| true` is NOT decoration: under `set -euo pipefail` a grep that matches
+    # nothing exits 1, the assignment inherits it, and the EXIT trap tears down
+    # ten minutes of bringup -- Isaac, bridges and all -- at its very last step.
+    # The two curls above are guarded for the same reason; this one was not.
+    STATE_COUNT="$(printf '%s' "$STATE_JSON" | grep -o '"count": *[0-9]*' | head -1 || true)"
+    echo "joint state OK: /state/fast answered 200 -- ${STATE_COUNT:-count ?} of 43"
+    if ! printf '%s' "$STATE_JSON" | grep -q '"complete": *true'; then
+      echo "     WARNING: incomplete -- $(printf '%s' "$STATE_JSON" \
+             | grep -o '"missing": *\[[^]]*\]')"
+      echo "     Those joints are ABSENT from the reply (never fabricated as 0.0), but"
+      echo "     getStateNow() fills every joint it does not receive with 0.0, so the"
+      echo "     policy sees zeros there. http://localhost:$MANIP_PORT/health has the"
+      echo "     per-source ages."
+    fi
+  else
+    echo
+    echo "NO JOINT STATE (HTTP $STATE_CODE from /state/fast). A VLA rollout would run"
+    echo "on a 43-zero observation, which is not a rollout. Check that Isaac is"
+    echo "stepping and that the manipulation bridge is on DDS domain $DOMAIN:"
+    echo "  curl -s http://localhost:$MANIP_PORT/health | python3 -m json.tool"
+    echo "and look at the 'state.sources' block -- it names each topic and its age."
+  fi
 fi
 
 cat <<TXT

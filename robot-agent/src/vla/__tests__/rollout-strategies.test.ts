@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { SkillExecutor, HighlightRing } from '../skill-executor.js';
 import { hardwareClient } from '../../hardware/HardwareClient.js';
+import { config } from '../../config/config.js';
 
 const SERVER = 'http://server.test';
 
@@ -129,8 +130,19 @@ describe('rollout strategy plumbing', () => {
 // ─── sentry ─────────────────────────────────────────────────────────────
 
 describe('sentry strategy', () => {
+  // The hardware cases here drive a six-value action, i.e. an SO-101.
+  // `config.robotType` defaults to 'h1', whose first ten joints are its
+  // legs, and TASK-229 refuses to index-map an action onto a legged
+  // embodiment — so the tests name the robot they mean.
+  const originalRobotType = config.robotType;
+
   beforeEach(() => {
     process.env.VLA_SERVER_URL = 'http://localhost:8000';
+    config.robotType = 'so101';
+  });
+
+  afterEach(() => {
+    config.robotType = originalRobotType;
   });
 
   it('sim mode: no-op with a note, no sidecar recording calls', async () => {

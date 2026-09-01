@@ -176,6 +176,43 @@ HAND_JOINTS = [
 JOINT_NAMES = BODY_JOINTS + HAND_JOINTS
 
 # ---------------------------------------------------------------------------
+# The Dex3-1 DDS WIRE order — NOT the same list as HAND_JOINTS above.
+# ---------------------------------------------------------------------------
+# HAND_JOINTS is the g1-edu.config.ts order (thumb -> index -> middle on BOTH
+# sides), which is a set of names: every consumer of it looks joints up BY NAME
+# (JOINT_NAMES membership in send_action, f"{name}.pos" in get_state and
+# _seed_commanded_unlocked). It is NOT a motor index table, and using it as one
+# is wrong on the left hand.
+#
+# `rt/dex3/{left,right}/state` and `/cmd` enumerate motor i as LHAND[i] /
+# RHAND[i], and the LEFT hand lists MIDDLE before INDEX while the right lists
+# index before middle. That asymmetry is real hardware, not a transcription
+# slip — see hardware/sim_g1_dds/joints.py:25-27, which is the shared source for
+# sim_node.py and anything else translating the wire protocol.
+#
+# Labelling motor states with HAND_JOINTS positionally therefore transposed the
+# left hand's index and middle fingers BY NAME before anything downstream saw
+# them: /state reported the middle finger's angle as the index finger's and vice
+# versa, four columns of every episode recorded off a real G1 were mislabelled,
+# and the 43-dim observation handed to a VLA policy was wrong in exactly the two
+# fingers doing the grasping (TASK-229 defect #3, which the TypeScript side
+# fixed on the assumption that this side was already right).
+LEFT_HAND_WIRE = [
+    "left_hand_thumb_0_joint", "left_hand_thumb_1_joint", "left_hand_thumb_2_joint",
+    "left_hand_middle_0_joint", "left_hand_middle_1_joint",
+    "left_hand_index_0_joint", "left_hand_index_1_joint",
+]
+RIGHT_HAND_WIRE = [
+    "right_hand_thumb_0_joint", "right_hand_thumb_1_joint", "right_hand_thumb_2_joint",
+    "right_hand_index_0_joint", "right_hand_index_1_joint",
+    "right_hand_middle_0_joint", "right_hand_middle_1_joint",
+]
+# Same 14 joints as HAND_JOINTS, only reordered — assert it, because a name that
+# exists in one list and not the other is a joint that silently stops being
+# commandable or readable.
+assert sorted(LEFT_HAND_WIRE + RIGHT_HAND_WIRE) == sorted(HAND_JOINTS)
+
+# ---------------------------------------------------------------------------
 # BLOCKER #2 — action ramping / rate-limiting (TASK-169)
 # ---------------------------------------------------------------------------
 # Per-joint position limits (rad) as ASYMMETRIC (lower, upper) tuples, taken from
@@ -183,8 +220,18 @@ JOINT_NAMES = BODY_JOINTS + HAND_JOINTS
 # single source of truth the rest of the system uses. This is the hard clamp that
 # protects against garbage VLA targets, so it MUST use the true asymmetric stops:
 # the previous symmetric ±half-range allowed e.g. ~1.4 rad of knee hyperextension
-# past the real -0.087 rad lower stop. (Dex3-1 hand limits are the config's
-# placeholders — tune against the official Dex3-1 URDF before real hand control.)
+# past the real -0.087 rad lower stop.
+#
+# The fourteen Dex3-1 entries used to be the config's OLD hand-written
+# placeholders, and they had drifted: g1-edu.config.ts now reads its hand limits
+# out of G1_FINGER_CHAINS (generated from the MJCF, cross-checked against
+# MuJoCo's jnt_range), and the placeholders here were SIGN-FLIPPED against them.
+# left_hand_index_1_joint was declared (0.0, 1.7453) where the model says
+# (-1.74533, 0.0) — two ranges meeting at the single point 0 — so the clamp
+# below turned every flexion command into 0.0 and delivered an OPEN hand. That
+# reproduced the exact failure the TASK-229 grip decoder exists to remove, one
+# layer further down and after every TypeScript test had passed: a commanded
+# closed hand that is very nearly an open hand (measured 0/15 transports).
 # Keep in sync with g1-edu.config.ts (JOINT_NAMES order, by name).
 _DEFAULT_LIMIT = 3.1416  # fallback half-range (rad) for any unmapped joint
 POS_LIMITS: dict[str, tuple[float, float]] = {
@@ -222,22 +269,25 @@ POS_LIMITS: dict[str, tuple[float, float]] = {
     "right_wrist_roll_joint": (-1.972222, 1.972222),
     "right_wrist_pitch_joint": (-1.61443, 1.61443),
     "right_wrist_yaw_joint": (-1.61443, 1.61443),
-    # Left Hand / Dex3-1 (placeholders — see note above)
+    # Left Hand / Dex3-1 — from G1_FINGER_CHAINS (teleop/g1-chains.generated.ts),
+    # which is read out of the MJCF the simulator loads and cross-checked against
+    # MuJoCo's jnt_range by sim_g1_dds/test_teleop_chains.py. See the note above.
     "left_hand_thumb_0_joint": (-1.0472, 1.0472),
-    "left_hand_thumb_1_joint": (0.0, 1.5708),
-    "left_hand_thumb_2_joint": (0.0, 1.7453),
-    "left_hand_index_0_joint": (-0.5236, 0.5236),
-    "left_hand_index_1_joint": (0.0, 1.7453),
-    "left_hand_middle_0_joint": (-0.5236, 0.5236),
-    "left_hand_middle_1_joint": (0.0, 1.7453),
-    # Right Hand / Dex3-1 (placeholders — see note above)
+    "left_hand_thumb_1_joint": (-0.724312, 1.0472),
+    "left_hand_thumb_2_joint": (0.0, 1.74533),
+    "left_hand_index_0_joint": (-1.5708, 0.0),
+    "left_hand_index_1_joint": (-1.74533, 0.0),
+    "left_hand_middle_0_joint": (-1.5708, 0.0),
+    "left_hand_middle_1_joint": (-1.74533, 0.0),
+    # Right Hand / Dex3-1 — same source. NOT a mirror of the left with the signs
+    # copied: the hands flex toward opposite signs, which is the whole point.
     "right_hand_thumb_0_joint": (-1.0472, 1.0472),
-    "right_hand_thumb_1_joint": (0.0, 1.5708),
-    "right_hand_thumb_2_joint": (0.0, 1.7453),
-    "right_hand_index_0_joint": (-0.5236, 0.5236),
-    "right_hand_index_1_joint": (0.0, 1.7453),
-    "right_hand_middle_0_joint": (-0.5236, 0.5236),
-    "right_hand_middle_1_joint": (0.0, 1.7453),
+    "right_hand_thumb_1_joint": (-1.0472, 0.724312),
+    "right_hand_thumb_2_joint": (-1.74533, 0.0),
+    "right_hand_index_0_joint": (0.0, 1.5708),
+    "right_hand_index_1_joint": (0.0, 1.74533),
+    "right_hand_middle_0_joint": (0.0, 1.5708),
+    "right_hand_middle_1_joint": (0.0, 1.74533),
 }
 
 # Slew-rate config (overridable via env). max per-tick step = vel / control_hz.
@@ -498,11 +548,12 @@ def _get_state_readonly() -> dict:
     DDS motor index i ↔ BODY_JOINTS[i] — verified against lerobot's
     G1_29_JointIndex enum (0-5 left leg, 6-11 right leg, 12-14 waist,
     15-21 left arm, 22-28 right arm). Dex3-1 hands live on separate DDS
-    topics (rt/dex3/*/state): hand-joint entries (HAND_JOINTS order — left
-    thumb_0..middle_1, then right; motor_state index i ↔ i-th hand joint of
-    that side) are appended ONLY while the matching topic is fresh — never
-    fabricated as 0.0. Likewise touch / battery / odometry are whole-group
-    omitted when their source topic is stale.
+    topics (rt/dex3/*/state): motor_state index i ↔ LEFT_HAND_WIRE[i] /
+    RIGHT_HAND_WIRE[i], which are the DDS order and NOT HAND_JOINTS — the
+    left hand enumerates middle before index. Hand entries are appended ONLY
+    while the matching topic is fresh — never fabricated as 0.0. Likewise
+    touch / battery / odometry are whole-group omitted when their source
+    topic is stale.
     """
     if not _lowstate_reader.start():
         return {"joints": [], "connected": False, "simulated": False, "timestamp": time.time()}
@@ -519,15 +570,17 @@ def _get_state_readonly() -> dict:
 
     # --- 14 hand joints + touch from rt/dex3/{left,right}/state ---------------
     touch = {}
-    n_hand = len(HAND_JOINTS) // 2  # 7 per side
-    for side, topic, offset in (("left", TOPIC_LEFT_HAND, 0), ("right", TOPIC_RIGHT_HAND, n_hand)):
+    for side, topic, wire in (
+        ("left", TOPIC_LEFT_HAND, LEFT_HAND_WIRE),
+        ("right", TOPIC_RIGHT_HAND, RIGHT_HAND_WIRE),
+    ):
         hand = _lowstate_reader.latest(topic)
         if hand is None:
             continue  # stale side → its 7 joints and touch pads are omitted
         hand_motors = hand.get("motor_state") or []
-        for i in range(min(n_hand, len(hand_motors))):
+        for i in range(min(len(wire), len(hand_motors))):
             if isinstance(hand_motors[i], dict):
-                joints.append(_motor_to_joint(HAND_JOINTS[offset + i], hand_motors[i]))
+                joints.append(_motor_to_joint(wire[i], hand_motors[i]))
         pads = _touch_pads(hand)
         if pads:
             touch[side] = pads

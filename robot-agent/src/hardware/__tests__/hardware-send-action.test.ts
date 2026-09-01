@@ -16,6 +16,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { HardwareClient, HardwareActionError } from '../HardwareClient.js';
 import { getJointConfig } from '../../robot/joint-configs/index.js';
 import { config } from '../../config/config.js';
+import { G1_APPLE_STATE_JOINT_NAMES } from '../../vla/action-contracts.js';
 
 /**
  * A client that believes a sidecar is there. `sendAction` returns early when it
@@ -157,5 +158,101 @@ describe('HardwareClient.sendActionVector — inherits the throw', () => {
     const order = getJointConfig(config.robotType).map((j) => j.name);
     expect(order.length).toBeGreaterThan(0);
     await expect(client.sendActionVector(order.map(() => 0))).rejects.toThrow('G1_READ_ONLY');
+  });
+});
+
+describe('HardwareClient.sendJointTargets — the name-keyed path (TASK-229)', () => {
+  it('posts the dict verbatim, consulting no joint order at all', async () => {
+    // The point of the method. A 31-dim apple-pick action is not in the G1
+    // EDU's 43-joint body order and never was: mapped by index, action[0]
+    // (left shoulder pitch) landed on `left_hip_pitch_joint` and the arms
+    // drove the legs of a standing humanoid. `action-contracts.ts` builds the
+    // dict by name; this method must not touch it on the way out.
+    const { client, fetchMock } = await connectedClient({
+      ok: true,
+      status: 200,
+      body: { ok: true },
+    });
+
+    const targets = {
+      left_shoulder_pitch_joint: 0.25,
+      left_hand_middle_0_joint: -0.69452,
+      waist_yaw_joint: -0.12,
+    };
+    await client.sendJointTargets(targets);
+
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).endsWith('/action'));
+    expect(call).toBeDefined();
+    expect(JSON.parse((call![1] as RequestInit).body as string)).toEqual(targets);
+  });
+
+  it('propagates a refusal, like every other write on this client', async () => {
+    const { client } = await connectedClient({
+      ok: false,
+      status: 403,
+      body: { ok: false, error: 'G1_READ_ONLY' },
+    });
+    await expect(client.sendJointTargets({ waist_yaw_joint: 0 })).rejects.toThrow('G1_READ_ONLY');
+  });
+});
+
+describe('HardwareClient.getStateNow — the observation order (TASK-229)', () => {
+  /** A sidecar reporting a distinct value per joint, so a transposition shows. */
+  async function clientReportingPose(pose: Record<string, number>): Promise<HardwareClient> {
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url);
+      if (path.endsWith('/health')) {
+        return { ok: true, status: 200, json: async () => ({ status: 'ok', connected: true }) };
+      }
+      if (path.endsWith('/state/fast')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            joints: Object.entries(pose).map(([name, position]) => ({ name, position })),
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ connected: true, joints: [] }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new HardwareClient();
+    await client.init();
+    client.stopPolling();
+    return client;
+  }
+
+  const originalRobotType = config.robotType;
+  afterEach(() => {
+    config.robotType = originalRobotType;
+  });
+
+  it('gives a G1 EDU the policy’s state contract, not its own joint order', async () => {
+    // The observation was wrong in exactly four of 43 slots — 32..35, the left
+    // hand's index/middle pair — because `dex3HandJoints()` builds both hands
+    // index-first while the Dex3-1 SDK enumerates the LEFT hand middle-first.
+    // Everything else agreed, so the policy saw a perfect body and a left hand
+    // whose two fingers were labelled as each other, throughout every grasp.
+    config.robotType = 'g1_edu';
+    const names = G1_APPLE_STATE_JOINT_NAMES;
+    const pose = Object.fromEntries(names.map((n, i) => [n, i]));
+    const client = await clientReportingPose(pose);
+
+    const state = await client.getStateNow();
+    expect(state).toHaveLength(43);
+    // Identity iff the order used is the contract order.
+    expect(state).toEqual(names.map((_, i) => i));
+    expect(state[32]).toBe(names.indexOf('left_hand_middle_0_joint'));
+    expect(state[34]).toBe(names.indexOf('left_hand_index_0_joint'));
+    // And the right hand, which never disagreed, is still index-first.
+    expect(names[39]).toBe('right_hand_index_0_joint');
+  });
+
+  it('leaves every other embodiment reading in its own joint order', async () => {
+    config.robotType = 'so101';
+    const order = getJointConfig('so101').map((j) => j.name);
+    const client = await clientReportingPose(Object.fromEntries(order.map((n, i) => [n, i * 2])));
+
+    await expect(client.getStateNow()).resolves.toEqual(order.map((_, i) => i * 2));
   });
 });

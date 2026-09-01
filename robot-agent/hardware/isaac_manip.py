@@ -287,6 +287,153 @@ def right_hand_by_name(values: Sequence[float], *, order: str) -> dict[str, floa
     return dict(zip(names, _as_floats(values, N_HAND, "right hand")))
 
 
+# ------------------------------------------------------------------ state (READING)
+#
+# Everything above this line is a command going OUT. This block is the only one
+# that describes what comes BACK, and it exists because nothing in this rig read
+# the robot's joints at all.
+#
+# THE MEASUREMENT. `g1_sidecar.py`'s read-only state source is a TCP connection
+# to the REAL G1's IP, which does not exist on this box: `/health` reports
+# `"connected": false` and `GET /state/fast` answers `{"joints": []}` with HTTP
+# 200 -- verified against the running rig through the facade on :8779. That 200
+# is the dangerous part. `HardwareClient.getStateNow()` maps the returned joints
+# by name into the 43-dim state order and DEFAULTS EVERY NAME IT CANNOT FIND TO
+# 0.0, so an empty list is not an error anywhere: the policy is handed 43 zeros
+# and the rollout looks like it ran. A GR00T rollout fed a zeroed proprioceptive
+# state is not a rollout.
+#
+# The data was on the wire the whole time. `isaac_loco_bridge.py` already
+# subscribes to rt/lowstate for its heading, and the Wholebody scene's
+# observation terms publish both topics
+# (`factory_pause_room_g1_29dof_dex3_hw_env_cfg.py:134-135` ->
+# `get_robot_boy_joint_states` and `get_robot_dex3_joint_states`).
+
+#: rt/lowstate `motor_state[i]` <-> BODY[i]. The vendor gathers Isaac's
+#: articulation into `get_robot_boy_joint_names()`
+#: (`tasks/common_observations/g1_29dof_state.py:21`) before publishing, and that
+#: list is BODY, name for name, in order: 12 legs, 3 waist, 14 arms.
+BODY_JOINTS: tuple[str, ...] = tuple(BODY)
+N_BODY = len(BODY_JOINTS)                     # 29
+
+#: The 43-dim STATE contract the g1_apple_pnp checkpoints are fed, in order:
+#: `[L-leg 6 | R-leg 6 | waist 3 | L-arm 7 | R-arm 7 | L-hand 7 | R-hand 7]`.
+#:
+#: NOT a fourth transcription of it. `sim_evaluator/envs/g1_apple_env.py`
+#: composes `STATE_JOINT_NAMES` from per-limb lists, `src/vla/action-contracts.ts`
+#: mirrors that file and `action-contracts.test.ts` parses the Python to diff the
+#: two. This line is the same 43 names reached from the protocol tables instead:
+#: BODY is exactly leg+leg+waist+arm+arm, and the two hand blocks are LHAND and
+#: RHAND. `verify_isaac_manip_offline.py` parses `g1_apple_env.py` and asserts the
+#: equality, so this cannot drift from the contract without failing that check.
+#:
+#: The happy consequence is that the 43-dim state order IS the three DDS topics
+#: concatenated, with exactly one reordering needed -- the right hand, below.
+STATE_JOINT_NAMES: tuple[str, ...] = (
+    BODY_JOINTS + NEODEM_LEFT_HAND + NEODEM_RIGHT_HAND)
+N_STATE = len(STATE_JOINT_NAMES)              # 43
+
+#: What the SIM publishes on rt/dex3/{side}/state, per side, BY NAME.
+#:
+#: THE FIFTH APPEARANCE OF THE SAME TRANSPOSITION, AND IT POINTS THE OTHER WAY.
+#: The left hand is thumb -> MIDDLE -> index and the right is thumb -> index ->
+#: middle on the REAL robot (`sim_g1_dds/joints.py` LHAND/RHAND). The Isaac scene
+#: publishes its right hand middle-first instead -- the same order it uses for
+#: the left -- which is stated outright by the vendor at
+#: `tasks/common_observations/dex3_state.py:30-49` (`get_robot_girl_joint_names`,
+#: whose right block is thumb_0/1/2, middle_0, middle_1, index_0, index_1) and
+#: which matches the command direction this module already remaps
+#: (`ISAAC_RIGHT_HAND`, contract note 2).
+#:
+#: So `g1_sidecar.py::_get_state_readonly` reading rt/dex3/right/state with
+#: RIGHT_HAND_WIRE is correct THERE -- it reads a real robot -- and would be
+#: wrong here. Two files, two conventions, one topic name. That is why this table
+#: is named for the sim and looked up by name in `label_state()` below, and why
+#: `label_state()` will not take a right hand without being told which
+#: convention it is in.
+ISAAC_HAND_STATE_ORDER: dict[str, tuple[str, ...]] = {
+    "left": ISAAC_LEFT_HAND,
+    "right": ISAAC_RIGHT_HAND,
+}
+
+assert N_STATE == 43, f"the state contract is 43 joints, this is {N_STATE}"
+assert len(set(STATE_JOINT_NAMES)) == N_STATE, (
+    "a joint name appears twice in STATE_JOINT_NAMES, so one source's value would "
+    "overwrite another's")
+assert STATE_JOINT_NAMES[:N_BODY] == BODY_JOINTS, (
+    "the state order no longer starts with the rt/lowstate motor order")
+assert ISAAC_HAND_STATE_ORDER["left"] == NEODEM_LEFT_HAND, (
+    "the LEFT hand orders have diverged; label_state() assumes they agree")
+assert ISAAC_HAND_STATE_ORDER["right"] != NEODEM_RIGHT_HAND, (
+    "the RIGHT hand orders now agree, so reading rt/dex3/right/state with the "
+    "Isaac names has become a no-op -- check the vendor's dex3_state.py before "
+    "deleting the remap, because getting this wrong swaps index for middle in "
+    "the four numbers that only carry anything during a grasp")
+
+
+def label_state(*, body: Sequence[float] | None,
+                left_hand: Sequence[float] | None,
+                right_hand: Sequence[float] | None,
+                right_hand_order: str) -> tuple[dict[str, float], list[str]]:
+    """Label three raw DDS motor vectors with the joint names they belong to.
+
+    Returns `(by_name, dropped)`. Every argument is keyword-only and mandatory,
+    including `right_hand_order` -- "read the right hand" is ambiguous exactly the
+    way "remap the right hand" is, and the two conventions differ in the four
+    finger slots that only matter mid-grasp. There is no left-hand equivalent
+    because the two conventions agree there, which is asserted above rather than
+    assumed here.
+
+    A SOURCE THAT IS `None` CONTRIBUTES NO NAMES. It does not contribute zeros.
+    That distinction is the whole point of this function: `getStateNow()` fills
+    every name it cannot find with 0.0, so a fabricated zero and a real zero are
+    the same number by the time a policy sees them, and 0.0 is a plausible joint
+    angle for most of these joints. The caller reports the absence out of band
+    (`/state/fast`'s `missing`, `/health`'s per-source ages) and refuses outright
+    when the body is the missing source.
+
+    A short vector labels what it has and stops -- 29 motor slots are expected
+    from rt/lowstate and 7 from each hand, but a truncated sample is data loss,
+    not a reason to invent the rest. Non-finite values are DROPPED and named in
+    `dropped`: a NaN would reach the policy's observation buffer, and it would
+    also make the JSON reply unparseable to `JSON.parse`, which turns a bad
+    sample into an unexplained client-side crash.
+    """
+    if right_hand is not None and right_hand_order not in ("isaac", "neodem"):
+        raise ValueError(
+            f"right_hand_order must be 'isaac' (this sim) or 'neodem' (the real "
+            f"robot's wire order), got {right_hand_order!r}")
+    out: dict[str, float] = {}
+    dropped: list[str] = []
+    sources: list[tuple[Sequence[float] | None, tuple[str, ...]]] = [
+        (body, BODY_JOINTS),
+        (left_hand, ISAAC_HAND_STATE_ORDER["left"]),
+        (right_hand, ISAAC_HAND_STATE_ORDER["right"]
+         if right_hand_order == "isaac" else NEODEM_RIGHT_HAND),
+    ]
+    for values, names in sources:
+        if values is None:
+            continue
+        for name, raw in zip(names, values):
+            value = float(raw)
+            if not math.isfinite(value):
+                dropped.append(name)
+                continue
+            out[name] = value
+    return out, dropped
+
+
+def state_joint_list(by_name: dict[str, float]) -> list[dict]:
+    """`[{"name": ..., "position": ...}]` in STATE_JOINT_NAMES order, present only.
+
+    The shape `HardwareClient.getStateNow()` and `getJointMapNow()` parse. Order
+    is cosmetic to both of them -- they key by name -- but an operator reading the
+    reply gets the policy's own 43-dim order, so a gap is visible where it is.
+    """
+    return [{"name": n, "position": by_name[n]}
+            for n in STATE_JOINT_NAMES if n in by_name]
+
+
 # ------------------------------------------------------------------- lowcmd packing
 
 def pack_lowcmd_positions(arm_rad: Sequence[float],

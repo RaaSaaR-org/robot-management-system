@@ -185,7 +185,7 @@ past the knuckle so the slack cannot grow silently.
 | `g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/factory_pause_room_g1_29dof_dex3_hw_env_cfg.py` | same, under `tasks/g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/` |
 | `g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/mdp/{__init__,observations,pause_door,rewards,terminations}.py` | same, under `.../mdp/` |
 | `g1_tasks/__init__.py` | `tasks/g1_tasks/__init__.py` — **OPTIONAL, and it is a full-file replacement** |
-| `README.md`, `verify_factory_scene_offline.py` | not installed; they stay in this repo |
+| `README.md`, `verify_factory_scene_offline.py`, `make_factory_place_graph.py`, `measure_scene_exposure.py`, `capture_factory_stills.py` | not installed; they stay in this repo. The place graph the last one writes is not installed either — it is read by the **robot agent**, from this repo, via `PLACE_GRAPH_PATH` |
 
 **The door USD is the one non-`.py` install.** It is deliberately resolved relative to
 `base_scene_factory_pauseroom.py`'s own `__file__`, not via `PROJECT_ROOT` and not from
@@ -233,7 +233,7 @@ Vulkan device node is ACL'd to whoever holds `seat0`, which over SSH is nobody; 
 `../isaac_sim_patches/README.md`. Running the same command line directly on a local seat
 also works.
 
-Two flags worth knowing about:
+Three flags worth knowing about:
 
 * `--device cuda` is what the brief asks for. Every recorded NeoDEM run of the sibling
   wholebody task in `isaac_sim_patches/README.md` used `--device cpu`; `cuda` is untested
@@ -246,9 +246,208 @@ Two flags worth knowing about:
 * `NEODEM_FILM_DIR=/some/dir` turns on the trailing film camera
   (`action_provider_wh_dds.py:551-568`). It works here because `film_camera` is kept
   byte-for-byte from the `move_cylinder` task.
+* `NEODEM_ROBOT_SPAWN=table_front` starts the robot **at the packing table** instead of at
+  the authored factory-floor pose 8.4 m and one powered door away. That is for testing the
+  manipulation without first solving the walk (TASK-228: the robot jams on the door frame);
+  it is not the mission. Unset, the spawn is byte-for-byte the authored `ROBOT` pose.
+
+  It accepts only a place in `PLACES` that also declares a heading in `PLACE_HEADINGS` —
+  today `table_front` and `pause_room_door` — and **raises on anything else rather than
+  falling back**, because a typo that quietly reverted to the default would present as a
+  manipulation failure 8 m from where you meant, not as a spawn failure. See `robot_spawn`
+  in `factory_pauseroom_layout.py`.
+
+  `pause_room_door` is selectable because it declares a heading, but it is a **waypoint,
+  not a spawn**: it sits 0.100 m from a shut door leaf, against the 0.40 m pad the verifier
+  charges a spawn, so starting there puts the robot inside a 25 kg leaf on a stiff position
+  drive at t = 0. Section 8 of the offline verifier prints that number on every run.
+
+* `NEODEM_DOME_INTENSITY`, `NEODEM_DISTANT_INTENSITY`, `NEODEM_AMBIENT_INTENSITY` sweep the
+  scene's exposure without editing a file or re-running `install_into_checkout.sh`. The
+  authored defaults (dome **760**, distant **304**, ambient **0.253**) are **calculated from
+  a measurement and have never been rendered** — see *The tabletop renders ~8× too bright*
+  below. They accept a plain float and, like `NEODEM_ROBOT_SPAWN`, **raise on anything else
+  rather than falling back**: a swept value that quietly reverted to the default would
+  produce a frame identical to the previous one and report that the default was right.
+
+  The defaults are one factor — 3.95× — applied to all three terms, so a sweep should move
+  all three together and step in stops around them:
+
+  | stops | dome | distant | ambient |
+  |---|---|---|---|
+  | +1.0 | 1520 | 608 | 0.506 |
+  | +0.5 | 1075 | 430 | 0.358 |
+  | **0** | **760** | **304** | **0.253** |
+  | −0.5 | 537 | 215 | 0.179 |
+  | −1.0 | 380 | 152 | 0.127 |
+
+  then `measure_scene_exposure.py --roi … --reference <the MuJoCo frames> <the new frames>`
+  on each — **with `--roi`**, or the answer is about content and not light. These are sweep
+  points, not candidate defaults: the offline verifier's ±0.20-stop band applies to the
+  authored constants in `factory_pauseroom_layout.py`, which it reads, and never to these
+  environment variables, which it does not. Widening the sweep is free; moving a default
+  outside the band means re-deriving it.
+
+  The one axis worth sweeping *non*-uniformly is `NEODEM_AMBIENT_INTENSITY=0`, which tests
+  whether the RTX ambient term is doing anything visible. Nothing offline can say.
 
 **Only one `sim_main.py` at a time on this box** — its exit handler `SIGKILL`s every other
 one.
+
+---
+
+## The place graph Agent Mode navigates on
+
+The scene knows where the table is. **Agent Mode does not, unless something tells it.** The
+robot software navigates on a place graph JSON loaded by
+`robot-agent/src/agent-mode/place-resolver.ts`, and for this scene there was none —
+`PLACE_GRAPH_PATH` pointed at `places.warehouse.json`, i.e. at another building's polygons
+expressed about another origin, so `goto table_front` resolved to nothing and every
+`goto` failed by name.
+
+```bash
+python3 make_factory_place_graph.py            # (re)write the JSON
+python3 make_factory_place_graph.py --check    # exit 1 if it is out of date, write nothing
+```
+
+It writes `../sim_evaluator/places/places.factory_pauseroom.json`, and it is a **generator
+for the same reason `pause_room_door.usda` is one**: `table_front` was hand-typed once, at
+`(10.00, 5.35)`, and was 0.4 m outside the arm's reach with nothing to notice. Every
+coordinate in the JSON is read from `factory_pauseroom_layout.py` — `table_front` comes out
+of `standing_spot_for_grasp()` on every run, so the apple cannot move without the place
+moving with it. Section 18 of the offline verifier regenerates into a string and compares,
+which turns "the graph matches the scene" from a claim into an assertion.
+
+### What it emits
+
+Six polygons, all `floor: 0`, all non-keepout. Five are 1.00 m squares; `TABLE-FRONT` is a
+1.00 x 0.90 m rectangle, for the reason below. The goal column is the point the navigator
+actually drives to (`placeGoal` takes the polygon's shoelace centroid).
+
+| id | goal | type | where it comes from |
+|---|---|---|---|
+| `ROBOT-START` | (4.000, −2.000) | staging | `PLACES["robot_start"]`, asserted equal to `ROBOT["pos"][:2]` |
+| `FACTORY-CENTRE` | (0.000, 0.000) | aisle | `PLACES["factory_centre"]` — **not** on the door route; it is *behind* the robot and routing through it adds ~4.5 m of backtrack |
+| `WEST-AISLE` | (−8.000, 0.000) | aisle | `PLACES["west_aisle"]` — not on the door route either |
+| `HALL-MIDWAY` | (7.000, 0.650) | corridor | the exact midpoint of the first lane |
+| `PAUSE-ROOM-DOOR-APPROACH` | (10.000, 3.300) | corridor | `DOOR["centre"].x` for the centreline; north edge = the partition's south face |
+| `TABLE-FRONT` | (10.240, 5.550) | cell | BOTH axes from `standing_spot_for_grasp()`; north edge = `stand_y + TABLE_STANDOFF`, cross-checked against the table's near face |
+
+**Why 1.00 m squares.** Arrival is `pointInPolygon(pose) && distanceToBoundary ≥ 0.30 &&
+dist(pose, centroid) ≤ 1.00` (`navigator.ts:198`, `:204`, `:389-392`). A polygon whose
+inradius is under 0.30 m can never be arrived in *at all*, however close the robot gets to
+its centre — and note that holds at EQUALITY: at exactly 0.30 the arrival set is a single
+point, of measure zero, so the place is unarrivable in practice too. 0.50 m of half-side
+leaves a 0.40 m arrival patch, a few centimetres wider than the G1's own footprint. The
+generator mirrors those constants and the verifier re-reads them straight out of
+`navigator.ts`, so the mirror cannot go stale.
+
+**Why `TABLE-FRONT` is shallower, and why it still is not enough.** Its north edge is
+pinned to the table, so depth is the only free axis and it trades goal accuracy against
+arrivability. Half-depth is derived, not chosen: `PLACE_ENTRY_MARGIN_M + MIN_STAGE_M/2 =
+0.45`. `MIN_STAGE_M = 0.30` (`navigator.ts:51`) is the floor under every commanded walk,
+and the place is entered head-on from the south, so a band shallower than one stage can be
+stepped clean over — short of the place, then past it into the table, with no pose ever
+inside. Width stays 0.50 m of half-side: nothing constrains x, and x is where the measured
+cross-track error lives.
+
+That leaves the goal 0.290 m short of the grasp spot, and the honest consequence is
+printed on every run: **no arrivable pose is in reach.** The arrival band tops out at
+y = 5.700 and the apple is out of the 0.55 m budget south of y = 5.792 (`reach_limit_y()`,
+solved in closed form over the base-height band). So the walk the mission appends after
+`goto TABLE-FRONT` is not a refinement — a 0.092 m minimum is what makes the grasp possible
+at all.
+
+**`pause_room_door` is deliberately not a place.** `(10.00, 3.90)` is the **mid-plane of the
+partition**, whose y extent is 3.80–4.00 — a gate point to pass through, not a spot to stand
+on, and 0.100 m from a shut leaf against a 0.40 m planner disc. A polygon centred on it
+would declare wall to be floor. `PAUSE-ROOM-DOOR-APPROACH` replaces it with the apron of
+floor immediately south of the partition, narrow enough (x 9.50–10.50) that its whole
+arrival patch lies inside the 1.40 m aperture. That is what fixes the previous jam at
+`(10.607, 3.442)`: a single straight leg from the spawn to a goal *behind* the door lets
+cross-track error build across 8 m and then aims diagonally into the frame. Making the
+approach its own goal widens that lane's tightest clearance from **0.169 m past the body
+radius to 0.588 m**, and puts the last bearing before the throat on the centreline. The
+door's own automation has it open long before: the goal is 0.600 m from `DOOR["centre"]`,
+inside the 2.50 m open radius, and the far edge of the place is 1.100 m out — still short of
+the 3.20 m shut radius, so standing there cannot cycle the door.
+
+`HALL-MIDWAY` is there for the **stage budget**, not for geometry. It is the exact midpoint
+of the first lane, so it bends the route by nothing, but it splits the 8 m crossing into two
+`goto` legs that each get their own `AGENT_MAX_NAV_STAGES`. At the measured ~31% of
+commanded travel the default 12 stages buy about 7.5 m, which does not reach in one leg.
+
+### Three things the schema cannot carry — read this before debugging a failed grasp
+
+`parsePlaceGraph` is strict by **rebuilding a whitelisted object** (`place-resolver.ts:276-285`)
+rather than by rejecting extra keys, so a field it does not know is not an error — it
+*vanishes*. Nothing below is expressible, and inventing a key for any of it would be worse
+than having none, because the robot would then fail for no visible reason.
+
+1. **The arrival heading. There is nowhere to put it.** `PLACE_HEADINGS` declares 90° (world
+   +y, `TABLE_APPROACH_YAW_DEG`) at `pause_room_door` and `table_front`, and every reach
+   number in the *Where `table_front` comes from* section is computed at that heading. The
+   `Place` interface has no heading field, and `navigateToPlaceInner` issues no final
+   alignment turn — its last commanded turn is the heading of the last *path segment*, so a
+   robot entering `TABLE-FRONT` from the door ends up facing into the room, not at the
+   table. **The mission plan must append an explicit `turn` block after the `goto`**, or use
+   a patrol checkpoint's `headingDeg` + `capture`, which is the only arrival-heading
+   mechanism in the codebase. Section 18 asserts the headings are *absent*, so that nobody
+   later "fixes" this by adding a key the loader eats.
+2. **Arrival precision.** A resolved place is one goal *point* plus a containment test, with
+   a 1.00 m tolerance against a 0.55 m `GRASP_REACH_BUDGET`. `TABLE-FRONT`'s goal is
+   **0.340 m short** of the grasp spot, and up to **0.576 m** from the far corner of the
+   arrival patch. The polygon cannot be shrunk to fix this — see the 0.30 m inradius floor
+   above — so **the mission must append that walk explicitly** too.
+3. **The door.** No field for a doorway, a clear opening, a leaf sweep, or an edge between
+   places; despite the name it is a flat list of floor polygons with no adjacency. The
+   1.40 m opening reaches the planner only through the live lidar occupancy map.
+
+### Why there are no keepouts
+
+The loader *does* consume `keepout` — and both consumers would break this mission:
+
+* The **geofence** inflates every keepout by `DEFAULT_KEEPOUT_MARGIN_M = 0.5 m` and turns a
+  breach into a `zone_violation` protective stop. `table_front` stands 0.16 m from the
+  table's near face *by design*; fencing the table would stop the robot at the exact moment
+  it arrived to grasp, and releasing the latch needs a further 0.25 m.
+* The **path planner** gets the same polygons with the same 0.5 m margin plus a 0.40 m robot
+  disc. Fencing the partitions would leave 1.40 − 2 × 0.5 = **0.40 m** of doorway against an
+  0.80 m disc: `planPath` would answer `no-path` and the pre-walk check would refuse the
+  approach. Fencing the walls *seals the door*.
+
+Walls, columns, crates, the table and the door leaves reach the planner through the lidar
+occupancy map instead, which is where the code expects to find them. `landmarks` is parsed
+and read by nobody, so it is emitted empty.
+
+### Making the robot see it
+
+The file is inert until the robot agent is told about it. Two environment variables, neither
+of which has a useful default:
+
+```bash
+# absolute, or relative to the robot-agent process cwd (config.ts:795 — EMPTY by default)
+PLACE_GRAPH_PATH=hardware/sim_evaluator/places/places.factory_pauseroom.json
+# navigateToPlace refuses outright without a planner (navigator.ts:382-387)
+AGENT_NAV_PLANNER=grid
+```
+
+Leave `PLACE_TWIN_ID` unset: `PLACE_GRAPH_PATH` wins when both are set, and a `frame.twinId`
+would make the frame *unregistered*, which yields zero goto-able places. `frame.kind` is the
+literal `"sim"` for the same reason — anything else and `assessFrameRegistration` returns
+`registered: false`, `knownPlaces()` returns `[]`, and `goto` fails with a registration
+message rather than a missing-place one.
+
+On a successful load the agent logs `Place graph loaded: 7 places (0 keepout) in frame
+'factory-pauseroom-sim'`. On a *failed* load it logs `Place graph … could not be loaded —
+place stays UNKNOWN` and **boots anyway**, with no `PlaceTracker`, no pose subscription and
+`getPlaces()` empty — loud, but not fatal, so check for that line before blaming the walk.
+
+Round-tripped through the real loader (`npx tsx`, not a re-implementation): the graph loads,
+the frame registers `{"registered":true,"how":"identity"}`, all seven places are goto-able,
+and `"table front"`, `"table_front"`, `"the Table Front"` all resolve to `TABLE-FRONT`.
+`"pause room door"` resolves to `PAUSE-ROOM-DOOR-APPROACH` — the name is a superset of the
+phrase, on purpose, so the natural words land on the safe standing spot instead of failing.
 
 ---
 
@@ -260,8 +459,9 @@ python3 verify_factory_scene_offline.py \
 ```
 
 No Isaac, no GPU, no network. It imports `factory_pauseroom_layout.py` **for real** (that
-module imports nothing but `math`, which is the entire reason the geometry was split out of
-the cfg) and does actual arithmetic on the numbers the simulator will use — so the check and
+module imports nothing but `math` and `os` — `os` only for the handful of environment
+variables that select the spawn pose and sweep the lighting — which is the entire reason
+the geometry was split out of the cfg) and does actual arithmetic on the numbers the simulator will use — so the check and
 the scene cannot drift. The two cfg modules *cannot* be imported (they need `isaaclab`,
 which needs a Kit app and a GPU), so those are read with `ast`, which is enough for the two
 questions asked of them: which prim paths are declared, and whether any remote URL or
@@ -280,6 +480,19 @@ facing the door, and **the straight line from there to the door centre keeps 0.2
 radius plus 0.10 m of daylight clear of every wall, partition, column, crate, table and
 open door leaf, and 0.60 m clear of every USD prop**; the quaternion helpers produce the
 orders they claim; both fixed cameras actually have line of sight.
+
+Section 18 then leaves the Isaac scene entirely and checks the **robot software's** copy of
+this geometry: that `places.factory_pauseroom.json` is byte-for-byte what
+`make_factory_place_graph.py` emits from the layout, that its frame block is the one
+`parsePlaceGraph` asserts (version 1, `kind: "sim"`, no `twinId`), that every `placeType`
+and `source` is in the closed set **read out of `types.ts`** rather than remembered, that
+every place has an inradius above the 0.30 m entry margin **read out of `navigator.ts`** so
+arrival is geometrically possible, that no polygon overlaps a wall, crate, table, open door
+leaf or USD prop, that every leg of the mission route is clear between the goals the
+navigator will actually drive to, and that nothing in `PLACES` was silently forgotten. It
+also asserts the two things the schema *cannot* carry — the 90° arrival headings and the
+0.340 m residual to the grasp spot — so that neither can be closed by adding a key the
+loader would eat.
 
 > The route wording used to read "with a clear route", which the check did not establish.
 > It modelled every obstacle as a circle of radius `max(width, depth)/2` — fine for a
@@ -580,6 +793,70 @@ of every task in this checkout (`base_reward_pickplace_cylindercfg.py:50`,
 | sliding friction | 1.2 | 1.2 — carried over. It is load-bearing twice: it is what lets a closed Dex3 hand hold the apple, and the low-friction version rolled >1 m off the table on any grazing contact. |
 | table surface | textured cloth, visual-only plane 0.5 mm above the collider | flat grey `PreviewSurfaceCfg`. The MJCF's texture work was matched against real dataset frames for a *policy*; nothing in this scene is trained on pixels yet. |
 | robot base | fixed at `(-0.15, 0, 0.76)`, +90° yaw | free-standing on the factory floor at `(4, -2, 0.8)`, 45° yaw. The whole point here is that it has to walk. |
+| lighting | headlight `diffuse 0.6 / ambient 0.4` plus three lights, no tone mapping | dome + distant light + an RTX ambient term, through RTX's ACES tonemapper. **Not comparable as settings; only as rendered pixels on a surface both scenes contain** — which is what the next section does. |
+
+### The tabletop renders ~8× too bright: half palette, half exposure
+
+The head camera is the VLA policy's `ego_view` and it is the policy's **only** visual input.
+
+**Measure a region, not a frame.** The first version of this analysis compared whole-frame
+medians — 0.827 for the Isaac ego view at the table against 0.333 for MuJoCo — and sized a
+light cut from the 7.18× that implies. That is not a lighting measurement. The MuJoCo frame
+is a tabletop close-up that is ~90 % cloth; the Isaac frame also carries walls, a floor, a
+plate and two black hands; the Isaac "hall" frames contain no tabletop at all, which is the
+entire content of the old finding that "the hall is a separate, hotter viewpoint". The same
+trap voided the claim that the Isaac scene was "6× flatter": whole-frame p90/p10 is 10.24×
+against 1.66×, but the MuJoCo p90 is the white plate and the Isaac p10 is the black hands.
+
+Measured instead over **the tabletop and nothing else**, in both scenes, pooled over the
+first 12 frames of each run (`measure_scene_exposure.py --roi`, rectangles recorded in
+`MEASURED_TABLETOP`):
+
+| region | median | p10 | p90 | linear p90/p10 |
+|---|---|---|---|---|
+| MuJoCo cloth, `120,60,620,250` | 0.3261 | 0.3056 | 0.3457 | 1.29× |
+| Isaac tabletop, three rects clear of the hands | 0.8667 | 0.7955 | 0.8706 | 1.23× |
+
+```bash
+/home/humanoid/anaconda3/envs/unitree_sim_env6/bin/python measure_scene_exposure.py \
+  --reference /home/humanoid/factory-mission-logs/groot/ab_on/ep_seed0 \
+  --reference-roi 120,60,620,250 \
+  --roi 60,175,580,235 --roi 80,240,200,330 --roi 490,240,570,330 \
+  --reference-albedo 0.142686 --albedo 0.300722 \
+  /home/humanoid/factory-mission-logs/grasp3-002355/grasp_frames
+```
+
+The two spreads are 1.23× and 1.29×, so **there is no flatness defect.** The medians differ
+by **8.33× (3.06 stops)** of rendered light. That splits in two:
+
+**1. The palette, 2.11×.** `_TABLETOP` was `(0.30, 0.30, 0.31)`, copied from the MJCF's
+`<material name="tablecloth" rgba="0.30 0.30 0.31 1">`. `tablecloth` is the **collision**
+material — the comment above it at `g1_apple_pnp_scene.xml:49-50` says "Physics table faces
+(almost fully hidden under the visual cloth plane)". What every training frame shows is
+`cloth_real`: `textures/cloth.png` (mean RGB `(0.2937, 0.2969, 0.3051)`) tinted by
+`rgba="0.48 0.48 0.49"`, effective albedo `(0.141, 0.143, 0.149)`, luminance 0.1427 against
+the authored 0.3007. **The Isaac table was painted 2.11× too light**, and it is now
+`(0.141, 0.143, 0.149)`. That is a palette correction and would be right at any light level.
+
+**2. The lights, 3.95×** = 8.33 ÷ 2.11. Applied as **one factor to every term that puts
+light in the room** — dome 3000 → **760**, distant 1200 → **304**, and
+`/rtx/sceneDb/ambientLightIntensity` 1.0 → **0.253** in the env cfg. Uniform because nothing
+offline can say how the room's light divides between those three, and one factor is exact
+for any division while leaving the shadow contrast — which is already right — alone.
+`visible_in_primary_ray=False` on the dome is separate and costs no illumination: both rooms
+are roofless, so the head camera was looking straight at the light source above the wall
+line.
+
+Section 19 of the offline verifier pins the tabletop against `cloth_real` (rgba parsed from
+the MJCF, texture mean cited with the texture's sha256), asserts that it is **not** equal to
+`tablecloth`, pins every other diffuse colour in the ego frame against repaint, and checks
+that all three light terms moved by the same factor and that the scene cfg reads them
+through the resolvers rather than as literals.
+
+**None of it has been rendered.** Predicted, arithmetically: the tabletop lands at 0.326
+encoded against MuJoCo's 0.3261, and the hall floor — repainted by nothing — goes from 0.906
+to 0.487. The full derivation, what is still unknown, and the sweep variables live in the
+`LIGHTING` block of `common_scene/factory_pauseroom_layout.py`.
 
 ---
 
@@ -659,10 +936,16 @@ Three traps, each of which cost a launch:
 2. **Write the output somewhere under the Docker bind mount.** With `--rm` and an
    `--out` outside `/home/humanoid`, the run reports "wrote 7 image(s)" and the
    files die with the container.
-3. **`--light-scale`.** The scene is lit for a roofless hall of white surfaces and
-   renders blown out at 1.0 — the columns, the table and the walls all read as the
-   same white. 0.35 restores the shadows. This is a *rendering* preference and
-   changes no physics, so it is a flag rather than a scene edit.
+3. **`--light-scale` now multiplies an already-cut rig — do not stack the old 0.35 on
+   top of it.** This entry used to read "renders blown out at 1.0 … 0.35 restores the
+   shadows", and it was right: at dome 3000 / distant 1200 the columns, the table and the
+   walls all read as the same white. Those intensities have since been measured and cut to
+   760 / 304 (a 3.95× reduction, which is most of the flag's old 0.35), so
+   `--light-scale 0.35` on today's scene is a *second* cut of about 1.4 stops. Leave it at
+   1.0 unless you are sweeping, and sweep with `NEODEM_DOME_INTENSITY` /
+   `NEODEM_DISTANT_INTENSITY` / `NEODEM_AMBIENT_INTENSITY` instead — the flag rescales the
+   built stage, cannot reach the RTX ambient term at all, and the env vars change what the
+   scene declares, so only the env vars describe a state the mission would actually run in.
 
 `isaacsim.core.utils.stage` does not exist in the Isaac Lab 3.0 this checkout
 pins; the tool reaches the stage through `omni.usd` instead.
@@ -770,9 +1053,32 @@ deleted so the record of what was once unknown survives.
    boxes are not readable offline, so the verifier charges each a generous 1.0 m half-extent
    for the route check. If `yellowbox_table_b` at `(5.00, -6.50)` turns out to be huge, it
    is the one nearest anything that matters.
-9. **Lighting.** A dome at 3000 plus a distant light at 1200 into a roofless hall is a
-   guess. The scene lost the warehouse USD's eight ceiling RectLights along with the
-   warehouse; the hall may render darker than the `move_cylinder` scene does.
+9. **Lighting — the guess was measured, and it was wrong twice; the replacement is
+   arithmetic and has still not been rendered.** The original entry read "a dome at 3000 plus
+   a distant light at 1200 into a roofless hall is a guess … the hall may render darker than
+   the `move_cylinder` scene does." It rendered *brighter*. The first attempt to fix it then
+   sized a 7.18× light cut from whole-frame medians, which measured content rather than
+   light and double-counted a palette bug as brightness. See *The tabletop renders ~8× too
+   bright* above. What is now open is narrower and sharper:
+   * **whether dome 760 / distant 304 / ambient 0.253 actually lands the tabletop on
+     0.326.** Every one of those numbers is arithmetic on recorded frames. Nothing has been
+     rendered at them.
+   * **whether the split between 2.11× of albedo and 3.95× of light is the right one.** The
+     8.33× total is rendered-pixel against rendered-pixel and is safe; the split compares a
+     USD linear `diffuse_color` against an MJCF rgba applied to raw 8-bit texels, and those
+     need not be the same space. The tabletop lands at 0.326 either way — what the split
+     decides is how bright the rest of the room is, and nothing is measured there at all.
+   * **whether `/rtx/sceneDb/ambientLightIntensity` scales linearly.** It is a scalar named
+     "intensity" and nothing readable offline says otherwise, but the uniform-cut argument
+     rests on it. `NEODEM_AMBIENT_INTENSITY=0` is the experiment.
+   * **whether the dome and the distant light are on the same per-unit scale.** Less
+     important than it was — they are now cut by the same factor, so the assumption only
+     affects the claim that the directional share is unchanged, not the size of the cut.
+   * **whether matching the tabletop median is enough for the policy.** A scene can hit the
+     band on one surface and be wrong everywhere else. Nothing offline can answer that.
+   * **how much of the hall's 65 % saturated pixels was the dome rendering as sky.**
+     `visible_in_primary_ray` is now `False`; the geometry makes it a strong hypothesis and
+     it costs no illumination either way, but nobody has counted the sky pixels.
 10. **Both fixed cameras' framing.** The sight-lines are proven clear of walls, and the
    look-at orientations are proven correct, but focal length 12 mm / aperture 27 (hall) and
    14 mm / 24 (pause room) are unframed guesses.

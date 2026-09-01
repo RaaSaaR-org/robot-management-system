@@ -21,7 +21,7 @@ How it reads the scene
 Two different mechanisms, for two different reasons:
 
 * `common_scene/factory_pauseroom_layout.py` is IMPORTED for real (importlib, by path). It
-  imports nothing but `math`, which is the entire reason it was split out of the cfg: the
+  imports nothing but `math` and `os`, which is the entire reason it was split out of the cfg: the
   numbers the simulator will use are the numbers this file does arithmetic on. No parsing,
   no drift.
 * `common_scene/base_scene_factory_pauseroom.py` and the env cfg CANNOT be imported -- they
@@ -62,10 +62,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import importlib.util
+import json
 import math
 import os
+import re
 import sys
+import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LAYOUT_PY = os.path.join(HERE, "common_scene", "factory_pauseroom_layout.py")
@@ -73,6 +77,28 @@ SCENE_PY = os.path.join(HERE, "common_scene", "base_scene_factory_pauseroom.py")
 TASK_DIR = os.path.join(HERE, "g1_tasks", "factory_pause_room_g1_29dof_dex3_wholebody")
 ENVCFG_PY = os.path.join(TASK_DIR, "factory_pause_room_g1_29dof_dex3_hw_env_cfg.py")
 TASKINIT_PY = os.path.join(TASK_DIR, "__init__.py")
+
+# The offline luminance tool that produced the tabletop measurement the lighting is sized
+# from, and the MuJoCo scene that measurement is compared against. The MJCF is READ, not
+# copied: section 19 derives the Isaac tabletop's expected colour from the MJCF's own
+# material and texture elements, so a change on one side cannot pass unnoticed on the other.
+# The door generator is read too -- it holds the only two colours in the ego frame that are
+# not in the scene cfg.
+MEASURE_PY = os.path.join(HERE, "measure_scene_exposure.py")
+MJCF_SCENE = os.path.normpath(
+    os.path.join(HERE, "..", "sim_evaluator", "mjcf", "g1_apple_pnp_scene.xml"))
+DOORGEN_PY = os.path.join(HERE, "common_scene", "make_pause_room_door_usda.py")
+
+# The place graph Agent Mode navigates on, its generator, and the two consumer modules that
+# define the schema it has to satisfy. The graph is NOT part of the Isaac scene -- it is the
+# robot software's copy of the same geometry, and section 18 is what stops the two from
+# drifting the way `pause_room_door.usda` once did.
+PLACE_GRAPH_PY = os.path.join(HERE, "make_factory_place_graph.py")
+PLACE_GRAPH_JSON = os.path.normpath(
+    os.path.join(HERE, "..", "sim_evaluator", "places", "places.factory_pauseroom.json"))
+AGENT_MODE_TS = os.path.normpath(os.path.join(HERE, "..", "..", "src", "agent-mode"))
+NAVIGATOR_TS = os.path.join(AGENT_MODE_TS, "navigator.ts")
+TYPES_TS = os.path.join(AGENT_MODE_TS, "types.ts")
 
 GYM_ID = "Isaac-Factory-PauseRoom-G129-Dex3-Wholebody"
 
@@ -188,6 +214,11 @@ class Report:
         return sum(1 for s, _, _ in self.rows if s == "PASS")
 
 
+def fmt3(values) -> str:
+    """A colour triple at three decimals -- the precision both scenes author them to."""
+    return "(" + ", ".join(f"{v:.3f}" for v in values) + ")"
+
+
 def section(title: str) -> None:
     print(f"\n{title}\n{'-' * len(title)}")
 
@@ -196,11 +227,23 @@ def section(title: str) -> None:
 # loading
 # ==========================================================================================
 def load_layout(path: str):
+    """Import `factory_pauseroom_layout.py` from source, bypassing the bytecode cache.
+
+    NOT `spec.loader.exec_module`, which is what this used to be. That path consults
+    `__pycache__`, and its staleness test is (source mtime to the second, source size). Edit
+    a constant to another of the same width -- `304.0` to `160.0`, say -- and re-run inside
+    the same second, and the verifier silently checks the PREVIOUS value while printing a
+    verdict about the current file. That was not hypothetical: it happened while these
+    checks were being mutation-tested, and it is the exact failure mode this whole file
+    exists to prevent. Compiling the source we just read cannot go stale.
+    """
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
     spec = importlib.util.spec_from_file_location("factory_pauseroom_layout", path)
-    if spec is None or spec.loader is None:
+    if spec is None:
         raise RuntimeError(f"cannot load {path}")
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    exec(compile(source, path, "exec"), mod.__dict__)
     return mod
 
 
@@ -460,6 +503,101 @@ def check_lane(rep: Report, L, label: str, a, b, exclude=(), props: bool = True)
                   "are not readable offline")
 
 
+def _poly_extent(poly) -> tuple[tuple[float, float], tuple[float, float]]:
+    """((x_min, x_max), (y_min, y_max)) of a polygon ring, for `box_overlap_depth`."""
+    xs = [v[0] for v in poly]
+    ys = [v[1] for v in poly]
+    return ((min(xs), max(xs)), (min(ys), max(ys)))
+
+
+def _read_text(path: str) -> str | None:
+    """File contents, or None. Used for the TypeScript consumer, which may not be there."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _ts_closed_sets():
+    """`PlaceTypes` and `PlaceSources`, READ out of the consumer's own `types.ts`.
+
+    Read rather than remembered. These are the sets `parsePlaceGraph` compares a graph
+    against, and a place naming a type the loader does not have is not degraded, it is
+    thrown -- at boot, taking the whole place graph with it. Returns (None, None) when the
+    file cannot be read, so the check SKIPs loudly instead of asserting against a guess.
+    """
+    text = _read_text(TYPES_TS)
+    if text is None:
+        return None, None
+    out = []
+    for name in ("PlaceTypes", "PlaceSources"):
+        m = re.search(r"export const " + name + r"\s*=\s*\[(.*?)\]\s*as const", text, re.S)
+        if not m:
+            return None, None
+        out.append({v for v in re.findall(r"'([a-z_]+)'", m.group(1))})
+    return out[0], out[1]
+
+
+def _navigator_constants():
+    """(PLACE_ENTRY_MARGIN_M, PLACE_ARRIVAL_M, MIN_STAGE_M) read out of `navigator.ts`.
+
+    The generator SIZES its polygons from the entry margin -- a polygon whose inradius is
+    below it can never be arrived in, however close the robot gets to its centre -- and it
+    floors TABLE-FRONT's DEPTH with MIN_STAGE_M, the shortest walk the navigator will ever
+    command: an arrival band shallower than one stage can be stepped clean over. All three
+    copies in the generator are mirrors of numbers owned elsewhere, and this is what stops
+    the mirrors from going stale.
+    """
+    text = _read_text(NAVIGATOR_TS)
+    if text is None:
+        return None, None, None
+    vals = []
+    for name in ("PLACE_ENTRY_MARGIN_M", "PLACE_ARRIVAL_M", "MIN_STAGE_M"):
+        m = re.search(r"export const " + name + r"\s*=\s*([0-9.]+)\s*;", text)
+        if not m:
+            return None, None, None
+        vals.append(float(m.group(1)))
+    return vals[0], vals[1], vals[2]
+
+
+def _shoelace_centroid(poly):
+    """The point `goto` drives to, computed the way `placeGoal` computes it.
+
+    navigator.ts:236-244 -- the AREA centroid of the ring, NOT the midpoint of its bounding
+    box. The two agree for a rectangle and part company for anything else, so a report that
+    used the bounding box would name a goal the robot does not walk to as soon as a polygon
+    stopped being a rectangle. Returns None for a degenerate ring, which is what
+    `placeGoal`'s own `Math.abs(area) > 1e-9` guard tests before falling back to a sampled
+    interior point.
+    """
+    area = cx = cy = 0.0
+    n = len(poly)
+    for i in range(n):
+        xi, yi = poly[i]
+        xj, yj = poly[i - 1]
+        f = xj * yi - xi * yj
+        area += f
+        cx += (xj + xi) * f
+        cy += (yj + yi) * f
+    if abs(area) <= 1e-9:
+        return None
+    return (cx / (3 * area), cy / (3 * area))
+
+
+def _inset(extent, margin: float):
+    """An extent shrunk by `margin` on every side -- for a rectangle, the set of points at
+    least `margin` from the boundary, which is exactly `goto`'s arrival region."""
+    (x0, x1), (y0, y1) = extent
+    return ((x0 + margin, x1 - margin), (y0 + margin, y1 - margin))
+
+
+def _extent_overlap(a, b) -> tuple[float, float]:
+    """(x, y) overlap of two extents; both positive means the two areas intersect."""
+    return (min(a[0][1], b[0][1]) - max(a[0][0], b[0][0]),
+            min(a[1][1], b[1][1]) - max(a[1][0], b[1][0]))
+
+
 # ==========================================================================================
 # reading the MuJoCo twin
 #
@@ -556,6 +694,10 @@ def check_files(rep: Report) -> bool:
     for name in ("pause_room_door.usda", "make_pause_room_door_usda.py"):
         p = os.path.join(HERE, "common_scene", name)
         ok &= rep.check(os.path.isfile(p), f"exists: {os.path.relpath(p, HERE)}")
+    # The place-graph generator, but NOT the JSON it emits: a missing generator means
+    # section 18 cannot run at all, while a missing JSON is a single ordinary failure that
+    # should not stop the other 190-odd checks from reporting.
+    ok &= rep.check(os.path.isfile(PLACE_GRAPH_PY), "exists: make_factory_place_graph.py")
     return ok
 
 
@@ -815,6 +957,125 @@ def check_robot(rep: Report, L) -> None:
               f"{SPAWN_MARGIN:.2f} m, because a spawn pose is placed rather than walked "
               "to) clear of every box"
               if inside is None else f"only {inside[1]:.3f} m from {inside[0]}")
+
+    check_selectable_spawns(rep, L, spawn_pad)
+
+
+def check_selectable_spawns(rep: Report, L, spawn_pad: float) -> None:
+    """Everything above measures ONE pose. `NEODEM_ROBOT_SPAWN` means there are several.
+
+    The scene can now be launched with the robot standing at a named place instead of at
+    the authored start -- that is how a manipulation test skips a walk that does not work
+    yet (TASK-228: the robot jams on the door frame). The spawn that ships is therefore no
+    longer necessarily the spawn that was checked, which is the same shape of gap as
+    section 12's: a guarantee that holds only for the default is not a guarantee about the
+    scene. So every selectable spawn gets the checks the default one gets.
+
+    `pause_table` is excluded from the clearance test for the same reason section 12
+    excludes it: `table_front` is DERIVED to stand TABLE_STANDOFF = 0.16 m off the table's
+    near face, which is inside any body radius worth charging. What must not foul the table
+    is the FEET, and section 11 asserts that directly against FOOT_FRONT_REACH.
+    """
+    print()
+    default = L.robot_spawn("")
+    rep.check(default["pos"] is L.ROBOT["pos"]
+              and default["yaw_deg"] == L.ROBOT["yaw_deg"]
+              and default["name"] is None,
+              f"an unset {L.ROBOT_SPAWN_ENV_VAR} reproduces the authored pose EXACTLY",
+              f"robot_spawn('') -> pos {default['pos']} yaw {default['yaw_deg']} "
+              f"vs ROBOT pos {L.ROBOT['pos']} yaw {L.ROBOT['yaw_deg']} -- identical "
+              "objects, not merely equal numbers, so the default launch path is the one "
+              "every check above measured")
+
+    names = L.selectable_spawns()
+    rep.check(bool(names) and all(n in L.PLACES and n in L.PLACE_HEADINGS for n in names),
+              "a spawn is selectable only where a place declares BOTH a point and a heading",
+              f"selectable: {', '.join(names)}; PLACES without a heading are refused "
+              f"({', '.join(sorted(set(L.PLACES) - set(L.PLACE_HEADINGS)))}) because a "
+              "point is not a pose")
+
+    # The two ways to get it wrong must both raise. A resolver that silently fell back to
+    # the authored pose on a typo would put the robot 8 m from where the operator meant and
+    # nothing downstream would say so -- the failure would surface as a manipulation that
+    # missed, which is the most expensive place to discover a spawn bug.
+    for bad, why in (("not_a_place", "a name that is in neither dict"),
+                     (sorted(set(L.PLACES) - set(L.PLACE_HEADINGS))[0],
+                      "a place with coordinates but no heading")):
+        try:
+            L.robot_spawn(bad)
+        except ValueError as exc:
+            msg = str(exc)
+            rep.check(L.ROBOT_SPAWN_ENV_VAR in msg and bad in msg
+                      and all(n in msg for n in names),
+                      f"{L.ROBOT_SPAWN_ENV_VAR}={bad!r} is REFUSED, not silently defaulted",
+                      f"{why}; the message names the variable, the value and all "
+                      f"{len(names)} selectable spawns")
+        else:
+            rep.bad(f"{L.ROBOT_SPAWN_ENV_VAR}={bad!r} is REFUSED, not silently defaulted",
+                    f"{why} -- but robot_spawn() returned a pose instead of raising")
+
+    for name in names:
+        spawn = L.robot_spawn(name)
+        x, y, z = spawn["pos"]
+        rep.check((x, y) == L.PLACES[name]
+                  and spawn["yaw_deg"] == L.PLACE_HEADINGS[name]
+                  and z == L.ROBOT["pos"][2],
+                  f"spawn '{name}' is the authored place, at the authored spawn HEIGHT",
+                  f"({x:.3f}, {y:.3f}) from PLACES, yaw {spawn['yaw_deg']:.0f} deg from "
+                  f"PLACE_HEADINGS, z = {z:.2f} from ROBOT -- a place carries no height "
+                  "and must not invent one")
+
+        worst = None
+        for bname, rect in walking_rects(L, exclude=("pause_table",)):
+            d = point_rect_distance((x, y), rect)
+            if worst is None or d < worst[1]:
+                worst = (bname, d)
+        rep.check(worst[1] >= spawn_pad,
+                  f"spawn '{name}' does not place the robot inside geometry",
+                  f"nearest is {worst[0]} at {worst[1]:.3f} m, against a {spawn_pad:.2f} m "
+                  f"pad ({G1_BODY_RADIUS:.2f} m body radius + {SPAWN_MARGIN:.2f} m, "
+                  "because a spawn pose is placed rather than walked to); the table is "
+                  "excluded -- standing 0.16 m off it is the design, and section 11 checks "
+                  "the feet against it")
+
+        rep.check(L.HALL["x_min"] < x < L.HALL["x_max"]
+                  and L.HALL["y_min"] < y < L.HALL["y_max"],
+                  f"spawn '{name}' is inside the building", f"({x:.2f}, {y:.2f})")
+
+    # ---- the SHUT door, which a spawn does not get to assume away ----------------------
+    #
+    # `walking_rects` models the door leaves at FULL OPEN, and for a ROUTE that is right:
+    # by the time the robot walks up to the doorway the presence sensor has had the leaves
+    # open for many seconds. A spawn is placed at t = 0, when the leaves are shut and the
+    # driver's openness is still 0.0 (`PauseDoorDriver.__init__`), and the stroke then
+    # takes 1.17 s. So the shut leaves are real geometry for a spawn and only for a spawn.
+    #
+    # This is not a hypothetical: `pause_room_door` is selectable -- it is in PLACES and it
+    # declares a heading -- and it sits 0.100 m from a shut leaf, well inside the 0.40 m
+    # pad. Its heading exists so a route can pass THROUGH the doorway facing the table, not
+    # so anything can stand there. Spawning at it would start the robot interpenetrating a
+    # 25 kg leaf on a stiff position drive.
+    #
+    # The assertion is therefore about the SET, not about one name: exactly one selectable
+    # spawn fouls the shut door, and it is the doorway itself. That fires if a new place
+    # acquires a heading somewhere in the door's swept box, and it fires again if
+    # `pause_room_door` is ever made standable or dropped -- either way the comment above
+    # would be stale, and a stale comment about the spawn is what this section exists for.
+    shut_rects = [(n, (L.box_extent(b)[0], L.box_extent(b)[1]))
+                  for n, b in L.door_leaf_boxes(0.0).items()]
+    clearances = {}
+    for name in names:
+        x, y, _ = L.robot_spawn(name)["pos"]
+        clearances[name] = min(point_rect_distance((x, y), r) for _, r in shut_rects)
+    fouls = tuple(n for n in names if clearances[n] < spawn_pad)
+    rep.check(fouls == ("pause_room_door",),
+              "the only selectable spawn that starts inside the SHUT door is the doorway itself",
+              "shut-leaf clearance: "
+              + "; ".join(f"{n} {clearances[n]:.3f} m" for n in names)
+              + f" against the same {spawn_pad:.2f} m pad. 'pause_room_door' declares a "
+              "heading so a route can walk THROUGH it, not so anything can stand in it -- "
+              "it is a waypoint, not a manipulation spawn. 'table_front' is the spawn this "
+              "feature exists for and it clears the shut leaves outright.")
 
 
 def check_quaternions(rep: Report, L) -> None:
@@ -1665,6 +1926,855 @@ def check_door_driver(rep: Report, L) -> None:
     check_no_remote_paths(rep, [os.path.join(mdp_dir, n) for n in trees])
 
 
+def check_place_graph(rep: Report, L) -> None:
+    """THE SCENE KNOWS WHERE THE TABLE IS. AGENT MODE DOES NOT, UNLESS SOMETHING TELLS IT.
+
+    Everything above this point checks the SIMULATOR's copy of the geometry. The robot
+    software navigates on a different artefact entirely -- a place graph JSON, loaded by
+    `robot-agent/src/agent-mode/place-resolver.ts`, which until now did not exist for this
+    scene at all (`PLACE_GRAPH_PATH` pointed at `places.warehouse.json`, i.e. at another
+    building's polygons expressed about another origin).
+
+    That file is GENERATED, by `make_factory_place_graph.py`, from the same layout module
+    every check above reads -- for the same reason `pause_room_door.usda` is generated:
+    `table_front` was hand-typed once, at (10.00, 5.35), and was 0.4 m outside the arm's
+    reach with nothing to notice. This section is what makes the generated copy's staleness
+    a failure rather than a surprise, and it also records the three things the consumer
+    schema CANNOT carry, so that nobody closes the gap by adding a field the loader eats.
+    """
+    section("18. the generated place graph agrees with this layout")
+
+    if not rep.check(os.path.isfile(PLACE_GRAPH_PY),
+                     "exists: make_factory_place_graph.py"):
+        return
+    if not rep.check(os.path.isfile(PLACE_GRAPH_JSON),
+                     f"exists: {os.path.relpath(PLACE_GRAPH_JSON, HERE)}",
+                     "Agent Mode's own copy of this scene's geometry, written by "
+                     "`python3 make_factory_place_graph.py`"):
+        return
+
+    spec = importlib.util.spec_from_file_location("make_factory_place_graph", PLACE_GRAPH_PY)
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+
+    with open(PLACE_GRAPH_JSON, encoding="utf-8") as fh:
+        text = fh.read()
+    graph = json.loads(text)
+    try:
+        specs = gen.build_places(L)
+    except Exception as exc:
+        # The generator refuses to emit a graph it cannot justify -- two places that would
+        # overlap, a place that could never be arrived in, or two derivations of the same
+        # edge that have drifted apart. That is a FAILURE of this section, with the reason
+        # printed, not a traceback that takes the other 240 checks down with it.
+        rep.bad("the generator can build a place graph from this layout at all", repr(exc))
+        return
+    by_id = {s.id: s for s in specs}
+    tol = 0.5 * 10 ** -gen.COORD_DP   # half a millimetre: the emit-time rounding, no more
+
+    # --- THE anti-drift check ----------------------------------------------------------
+    rep.check(gen.render(gen.build_graph(L)) == text,
+              "the checked-in place graph is exactly what the layout module generates",
+              f"{len(text)} bytes, {len(graph['places'])} places; regenerate with "
+              "`python3 make_factory_place_graph.py`. Agent Mode navigates on the FILE and "
+              "every check above measures the LAYOUT")
+
+    # --- the frame block the loader asserts rather than assumes --------------------------
+    frame = graph.get("frame", {})
+    rep.check(graph.get("version") == gen.GRAPH_VERSION,
+              "version is the one this build of the loader reads",
+              f"{graph.get('version')} vs PLACE_GRAPH_VERSION = {gen.GRAPH_VERSION} "
+              "(place-resolver.ts:226-228, a strict !==)")
+    rep.check(frame.get("units") == "m" and frame.get("yawConvention") == "deg,+x=0,CCW+",
+              "frame.units and frame.yawConvention are the asserted literals",
+              f"units {frame.get('units')!r}, yawConvention {frame.get('yawConvention')!r} "
+              "-- both are compared, not adapted (place-resolver.ts:234-242)")
+    rep.check(frame.get("kind") == "sim",
+              "frame.kind is 'sim', so the frame REGISTERS",
+              f"{frame.get('kind')!r}. Any other value leaves assessFrameRegistration "
+              "returning registered:false (place-frame.ts:79-88), and an unregistered frame "
+              "yields ZERO goto-able places and zero planner keepouts -- `goto` then fails "
+              "with a registration message, not a missing-place one")
+    rep.check("twinId" not in frame,
+              "the frame carries NO twinId",
+              "its mere presence makes the frame unregistered (place-frame.ts:68-77); a sim "
+              "graph belongs to no digital twin and inventing one would make "
+              "PlaceGraphSource.assertTwin pass by accident")
+
+    # --- the closed value sets, read out of the consumer rather than remembered ----------
+    types_ok, sources_ok = _ts_closed_sets()
+    if types_ok is None:
+        rep.skip("placeType and source come from the loader's own closed sets",
+                 f"cannot read {os.path.relpath(TYPES_TS, HERE)} -- the sets could not be "
+                 "compared against the consumer")
+    else:
+        bad = [f"{p['id']}.placeType={p['placeType']!r}" for p in graph["places"]
+               if p["placeType"] not in types_ok]
+        bad += [f"{p['id']}.source={p['source']!r}" for p in graph["places"]
+                if p["source"] not in sources_ok]
+        rep.check(not bad,
+                  "every placeType and source is in the loader's own closed set",
+                  f"read from types.ts: {' | '.join(sorted(types_ok))}; sources "
+                  f"{' | '.join(sorted(sources_ok))}" + (f"; OFFENDING: {bad}" if bad else ""))
+    rep.check(all(p.get("floor", 0) == 0 for p in graph["places"]),
+              "every place is on floor 0",
+              "knownPlaces() filters `p.floor === 0` (agent-mode-controller.ts:1237); a "
+              "place on any other floor exists in the file and nowhere else")
+
+    # --- the two consumer constants this generator sizes polygons against ----------------
+    entry, arrival, min_stage = _navigator_constants()
+    if entry is None:
+        rep.skip("the mirrored navigator constants still match navigator.ts",
+                 f"cannot read {os.path.relpath(NAVIGATOR_TS, HERE)}")
+    else:
+        rep.check(abs(entry - gen.PLACE_ENTRY_MARGIN_M) < 1e-9
+                  and abs(arrival - gen.PLACE_ARRIVAL_M) < 1e-9
+                  and abs(min_stage - gen.MIN_STAGE_M) < 1e-9,
+                  "the generator's mirrored arrival constants still match navigator.ts",
+                  f"navigator.ts PLACE_ENTRY_MARGIN_M {entry}, PLACE_ARRIVAL_M {arrival}, "
+                  f"MIN_STAGE_M {min_stage}; generator {gen.PLACE_ENTRY_MARGIN_M}, "
+                  f"{gen.PLACE_ARRIVAL_M}, {gen.MIN_STAGE_M}. The polygons are SIZED from "
+                  "the entry margin, so a change there silently makes places that can never "
+                  "be arrived in, and TABLE-FRONT's depth is floored by MIN_STAGE_M")
+        rep.check(abs(gen.TABLE_FRONT_HALF_Y_M
+                      - (gen.PLACE_ENTRY_MARGIN_M + gen.MIN_STAGE_M / 2)) < 1e-9,
+                  "TABLE-FRONT's half-depth is DERIVED from those two, not chosen",
+                  f"TABLE_FRONT_HALF_Y_M {gen.TABLE_FRONT_HALF_Y_M:.3f} = "
+                  f"PLACE_ENTRY_MARGIN_M {gen.PLACE_ENTRY_MARGIN_M:.2f} + MIN_STAGE_M/2 "
+                  f"{gen.MIN_STAGE_M / 2:.3f}. The entry margin is what a pose must clear "
+                  "before it counts; the half-stage is what makes the band that is left "
+                  "deep enough that the navigator's own smallest move cannot step over it")
+
+    # --- nothing in PLACES is silently forgotten ------------------------------------------
+    emitted = {s.layout_key for s in specs if s.layout_key}
+    accounted = emitted | set(gen.NOT_EMITTED)
+    rep.check(set(L.PLACES) <= accounted,
+              "every name in PLACES is either emitted or explained",
+              f"emitted {sorted(emitted)}; deliberately not emitted "
+              f"{sorted(gen.NOT_EMITTED)}; unaccounted {sorted(set(L.PLACES) - accounted)}")
+    rep.check("pause_room_centre" in gen.NOT_EMITTED,
+              "'pause_room_centre' is NOT emitted, because TABLE-FRONT owns that floor",
+              f"({L.PLACES['pause_room_centre'][0]:.2f}, {L.PLACES['pause_room_centre'][1]:.2f})"
+              f" lies inside TABLE-FRONT's polygon. The room is "
+              f"{L.TABLE['pos'][1] - L.TABLE['size'][1] / 2 - (L.DOOR['centre'][1] + L.WALL_THICKNESS / 2):.2f} m "
+              f"deep between the partition's north face and the table, and a second "
+              f"{2 * gen.PLACE_HALF_M:.2f} m place there overlapped both TABLE-FRONT's "
+              "polygon and its ARRIVAL region -- one pose counting as arrived in two places "
+              "is a `goto` that succeeds in the wrong room. PAUSE-ROOM-DOOR-APPROACH is the "
+              "way-in waypoint the route actually needs")
+    rep.check("pause_room_door" in gen.NOT_EMITTED,
+              "'pause_room_door' is NOT a standing place",
+              f"({L.PLACES['pause_room_door'][0]}, {L.PLACES['pause_room_door'][1]}) is the "
+              f"mid-plane of a {L.WALL_THICKNESS:.2f} m partition spanning y "
+              f"{L.DOOR['centre'][1] - L.WALL_THICKNESS / 2:.2f}.."
+              f"{L.DOOR['centre'][1] + L.WALL_THICKNESS / 2:.2f}, and a shut leaf is 0.100 m "
+              "away against a 0.40 m planner disc -- a gate point, not a spot to stand on")
+
+    # --- TABLE-FRONT is derived, not transcribed ------------------------------------------
+    stand_x, stand_y = L.standing_spot_for_grasp()
+    table_near_y = L.TABLE["pos"][1] - L.TABLE["size"][1] / 2
+    tf = by_id["TABLE-FRONT"]
+    (tfx0, tfx1), (tfy0, tfy1) = _poly_extent(tf.polygon)
+    rep.check(abs((tfx0 + tfx1) / 2 - stand_x) <= tol,
+              "'TABLE-FRONT' is centred on standing_spot_for_grasp(), not on a typed number",
+              f"polygon x centre {(tfx0 + tfx1) / 2:.3f} vs derived "
+              f"{stand_x:.6f} (apple x {L.APPLE['pos'][0]} + GRASP_LATERAL_OFFSET "
+              f"{L.GRASP_LATERAL_OFFSET}); tolerance {tol} m is the emit-time rounding")
+    rep.check(abs(tfy1 - (stand_y + L.TABLE_STANDOFF)) <= tol
+              and abs(tfy1 - table_near_y) <= tol,
+              "...and its north edge is that same spot plus TABLE_STANDOFF",
+              f"{tfy1:.3f} vs standing_spot_for_grasp().y {stand_y:.3f} + TABLE_STANDOFF "
+              f"{L.TABLE_STANDOFF:.2f} = {stand_y + L.TABLE_STANDOFF:.3f}, which is also the "
+              f"table's near face TABLE.y - TABLE.size.y/2 = {table_near_y:.3f}. Deriving it "
+              "from the STANDING SPOT and not from the table is the point: the y half of "
+              "that call used to be computed and dropped, so TABLE_STANDOFF could move "
+              "without one emitted number changing. The place abuts the table, and the "
+              f"entry margin keeps any pose that counts as arrived {gen.PLACE_ENTRY_MARGIN_M:.2f} m "
+              "clear of it")
+    rep.check(abs((tfy1 - tfy0) / 2 - gen.TABLE_FRONT_HALF_Y_M) <= tol
+              and abs((tfx1 - tfx0) / 2 - gen.PLACE_HALF_M) <= tol,
+              "...and it is a RECTANGLE: shallower than it is wide, on purpose",
+              f"{tfx1 - tfx0:.2f} m wide by {tfy1 - tfy0:.2f} m deep. The table pins the "
+              f"north edge, so depth is the one dimension here that trades the goal's "
+              f"distance from the grasp spot against the band the robot may stop in; width "
+              "is unconstrained and stays at the default")
+
+    # --- and the derivation is LOAD-BEARING, not decorative --------------------------------
+    # The hole this closes: until now `standing_spot_for_grasp()` was called, its x used and
+    # its y thrown away -- the polygon's north edge came from TABLE directly -- so the whole
+    # y half of the one derived pose in this scene could move without a single emitted number
+    # changing, and `--check` would report OK. Numbers agreeing today is not evidence that
+    # one is derived from the other; only moving the input and watching the output move is.
+    # So: run the generator against a shim layout whose grasp spot is displaced by a known
+    # amount, and require the emitted polygon to have moved by that same amount in BOTH
+    # axes. A shim rather than a monkey-patch of `L`, so nothing later in this run sees a
+    # perturbed layout.
+    class _Shim:
+        pass
+
+    dx_probe, dy_probe = 0.137, -0.071
+    shim = _Shim()
+    shim.__dict__.update(vars(L))
+    shim.standing_spot_for_grasp = lambda: (stand_x + dx_probe, stand_y + dy_probe)
+    shim.TABLE = dict(L.TABLE)
+    shim.TABLE["pos"] = (L.TABLE["pos"][0], L.TABLE["pos"][1] + dy_probe, L.TABLE["pos"][2])
+    try:
+        moved = {p.id: p for p in gen.build_places(shim)}["TABLE-FRONT"]
+        (mx0, mx1), (my0, my1) = _poly_extent(moved.polygon)
+        got = ((mx0 + mx1) / 2 - (tfx0 + tfx1) / 2, my1 - tfy1)
+        detail = (f"displacing the derived spot by ({dx_probe:+.3f}, {dy_probe:+.3f}) m moves "
+                  f"the emitted polygon by ({got[0]:+.3f}, {got[1]:+.3f}) m; centre "
+                  f"({(tfx0 + tfx1) / 2:.3f}, ...) -> ({(mx0 + mx1) / 2:.3f}, ...), north "
+                  f"edge {tfy1:.3f} -> {my1:.3f}")
+        ok = abs(got[0] - dx_probe) <= tol and abs(got[1] - dy_probe) <= tol
+    except Exception as exc:                                    # pragma: no cover
+        ok, detail = False, f"the generator raised on the perturbed layout: {exc!r}"
+    rep.check(ok,
+              "moving standing_spot_for_grasp() MOVES the emitted polygon, in both axes",
+              detail + ". Before the y half of that call was computed and dropped: the spot "
+              "could move north or south and every emitted number stayed identical, so "
+              "`--check` said OK about a graph that no longer described the pose it was "
+              "derived from -- which is the shape of the mistake that first put `table_front` "
+              "0.4 m out of reach. TABLE_STANDOFF is the one input that legitimately moves "
+              "nothing here (the polygon abuts the TABLE, and the standoff does not move the "
+              "table); what it moves is the residual below, which is stated and bounded")
+
+    # --- the door approach is on the doorway's own centreline ------------------------------
+    ap = by_id["PAUSE-ROOM-DOOR-APPROACH"]
+    (apx0, apx1), (apy0, apy1) = _poly_extent(ap.polygon)
+    door_x0 = L.DOOR["centre"][0] - L.DOOR["width"] / 2
+    door_x1 = L.DOOR["centre"][0] + L.DOOR["width"] / 2
+    rep.check(abs((apx0 + apx1) / 2 - L.DOOR["centre"][0]) <= tol
+              and apx0 >= door_x0 - tol and apx1 <= door_x1 + tol,
+              "the door approach sits on the door centreline, inside the aperture",
+              f"polygon x [{apx0:.3f}, {apx1:.3f}] inside the {L.DOOR['width']:.2f} m "
+              f"opening [{door_x0:.3f}, {door_x1:.3f}]; every pose that counts as arrived is "
+              f"within +/-{gen.PLACE_HALF_M - gen.PLACE_ENTRY_MARGIN_M:.2f} m of the "
+              "centreline, which is the cross-track error the previous run could not correct")
+    rep.check(abs(apy1 - (L.DOOR["centre"][1] - L.WALL_THICKNESS / 2)) <= tol,
+              "...with its north edge on the partition's south face",
+              f"{apy1:.3f} vs {L.DOOR['centre'][1] - L.WALL_THICKNESS / 2:.3f}; the place is "
+              "the apron of floor in front of the door, and contains no wall")
+    d_open = math.dist(ap.centre, L.DOOR["centre"])
+    rep.check(d_open <= L.DOOR_AUTOMATION["open_radius"],
+              "...and the door is already open by the time the robot stands there",
+              f"goal is {d_open:.3f} m from DOOR['centre'], inside the "
+              f"{L.DOOR_AUTOMATION['open_radius']:.2f} m open radius (and the far edge of "
+              f"the place is {math.dist((ap.centre[0], apy0), L.DOOR['centre']):.3f} m out, "
+              f"still short of the {L.DOOR_AUTOMATION['shut_radius']:.2f} m shut radius, so "
+              "standing here cannot cycle the door)")
+
+    # --- arrival has to be geometrically possible in every place --------------------------
+    for s in specs:
+        (x0, x1), (y0, y1) = _poly_extent(s.polygon)
+        inradius = min(x1 - x0, y1 - y0) / 2
+        patch_w = (x1 - x0) - 2 * gen.PLACE_ENTRY_MARGIN_M
+        patch_d = (y1 - y0) - 2 * gen.PLACE_ENTRY_MARGIN_M
+        rep.check(inradius > gen.PLACE_ENTRY_MARGIN_M,
+                  f"arrival is possible in '{s.id}'",
+                  f"inradius {inradius:.3f} m vs PLACE_ENTRY_MARGIN_M "
+                  f"{gen.PLACE_ENTRY_MARGIN_M:.2f} -- a pose must be that far INSIDE before "
+                  f"it counts, so the arrival patch is {patch_w:.2f} x {patch_d:.2f} m. "
+                  "STRICTLY greater: at equality the patch is a single point and no walking "
+                  "robot ever samples a pose on it")
+
+    # --- the goal is the SHOELACE centroid, and this file says which point that is ---------
+    # `placeGoal` takes the AREA centroid of the ring (navigator.ts:236-244), not the middle
+    # of its bounding box. Every ring here is a rectangle, where the two agree -- so this
+    # check is cheap now and is the one that fires the day a polygon stops being one and the
+    # generator's own `_centre_of` starts naming a point the robot never walks to.
+    bad_centroid, shown = [], []
+    for s_ in specs:
+        shoelace = _shoelace_centroid(s_.polygon)
+        shown.append(f"{s_.id} -> " + ("DEGENERATE" if shoelace is None
+                                       else f"({shoelace[0]:.3f}, {shoelace[1]:.3f})"))
+        if shoelace is None or max(abs(shoelace[0] - s_.centre[0]),
+                                   abs(shoelace[1] - s_.centre[1])) > 1e-9:
+            bad_centroid.append(f"{s_.id}: shoelace {shoelace} vs reported {s_.centre}")
+    rep.check(not bad_centroid,
+              "every emitted polygon's goal is its shoelace centroid",
+              "; ".join(shown) + (f"; OFFENDING: {bad_centroid}" if bad_centroid else ""))
+
+    # --- no two places, and no two ARRIVAL regions, may overlap ---------------------------
+    # `PlaceTracker.findPlace` is written to this invariant in as many words -- "the graphs
+    # are authored non-overlapping (verified on a 0.05 m grid), so at most one place matches"
+    # (place-resolver.ts:612-623) -- and its deepest-margin tie-break exists only so a graph
+    # that breaks it still resolves deterministically. The arrival regions are the sharper
+    # test: `goto` evaluates `inside(pose)` against ONE place, so a pose in two arrival
+    # regions is a `goto` that reports arrival in a place the robot is not heading for. That
+    # is what PAUSE-ROOM-CENTRE and TABLE-FRONT did to each other, over 0.53 m^2.
+    poly_hits, arr_hits, closest = [], [], None
+    for i, a in enumerate(specs):
+        for b in specs[i + 1:]:
+            ea, eb = _poly_extent(a.polygon), _poly_extent(b.polygon)
+            ox, oy = _extent_overlap(ea, eb)
+            if ox > 0 and oy > 0:
+                poly_hits.append(f"{a.id} x {b.id} by {ox:.3f} x {oy:.3f} m ({ox * oy:.3f} m^2)")
+            gap = max(-ox, -oy)
+            if closest is None or gap < closest[2]:
+                closest = (a.id, b.id, gap)
+            ox, oy = _extent_overlap(_inset(ea, gen.PLACE_ENTRY_MARGIN_M),
+                                     _inset(eb, gen.PLACE_ENTRY_MARGIN_M))
+            if ox > 0 and oy > 0:
+                arr_hits.append(f"{a.id} x {b.id} by {ox:.3f} x {oy:.3f} m")
+    rep.check(not poly_hits and not arr_hits,
+              "no two places overlap, and no two ARRIVAL regions overlap",
+              f"{len(specs) * (len(specs) - 1) // 2} pairs; the closest is "
+              f"{closest[0]} / {closest[1]} at {closest[2]:.3f} m of clear floor between "
+              f"them" + (f"; OVERLAPPING POLYGONS: {poly_hits}" if poly_hits else "")
+              + (f"; OVERLAPPING ARRIVAL REGIONS: {arr_hits}" if arr_hits else ""))
+
+    # --- no place declares wall, crate or table to be floor --------------------------------
+    rects = walking_rects(L)
+    worst = None
+    for s in specs:
+        pe = _poly_extent(s.polygon)
+        for name, rect in rects:
+            depth = box_overlap_depth(pe, rect)
+            if worst is None or depth > worst[2]:
+                worst = (s.id, name, depth)
+    rep.check(worst is not None and worst[2] <= EPS,
+              "no place polygon overlaps a wall, column, crate, table or open door leaf",
+              f"deepest is {worst[0]} vs {worst[1]} at {worst[2]:+.3f} m "
+              "(0.000 means they abut, which TABLE-FRONT and the door approach do by design; "
+              "positive would mean the graph calls solid geometry walkable)")
+    pworst = None
+    for s in specs:
+        (x0, x1), (y0, y1) = _poly_extent(s.polygon)
+        for name, prop in L.USD_PROPS.items():
+            pe = ((prop["pos"][0] - PROP_HALF_EXTENT, prop["pos"][0] + PROP_HALF_EXTENT),
+                  (prop["pos"][1] - PROP_HALF_EXTENT, prop["pos"][1] + PROP_HALF_EXTENT))
+            depth = box_overlap_depth(((x0, x1), (y0, y1)), pe)
+            if pworst is None or depth > pworst[2]:
+                pworst = (s.id, name, depth)
+    rep.check(pworst is not None and pworst[2] <= -PROP_PAIR_CLEARANCE,
+              "no place polygon reaches a USD prop's charged footprint",
+              f"nearest is {pworst[0]} vs {pworst[1]} at {-pworst[2]:.3f} m of clearance, "
+              f"charging each prop a generous {PROP_HALF_EXTENT:.1f} m half-extent since USD "
+              "footprints are not readable offline")
+
+    # --- the mission route, leg by leg, between the goals the navigator will actually use --
+    legs = [("ROBOT-START", "HALL-MIDWAY"), ("HALL-MIDWAY", "PAUSE-ROOM-DOOR-APPROACH"),
+            ("PAUSE-ROOM-DOOR-APPROACH", "TABLE-FRONT")]
+    for a_id, b_id in legs:
+        check_lane(rep, L, f"{a_id} -> {b_id}", by_id[a_id].centre, by_id[b_id].centre)
+    # And the walk the mission has to append AFTER the last goto, which is the only leg that
+    # goes inside the table's standoff -- see the residual check below.
+    check_lane(rep, L, "TABLE-FRONT goal -> grasp spot", by_id["TABLE-FRONT"].centre,
+               (stand_x, stand_y), exclude=("pause_table",), props=False)
+
+    # --- what the schema cannot carry, asserted so it cannot be quietly "fixed" -----------
+    keys_seen = set()
+    for p in graph["places"]:
+        keys_seen |= set(p.keys())
+    rep.check(keys_seen == {"id", "name", "placeType", "floor", "polygon", "source",
+                            "keepout", "landmarks"},
+              "no place carries a key the loader would silently DROP",
+              f"keys present: {sorted(keys_seen)}. parsePlaceGraph rebuilds a whitelisted "
+              "object (place-resolver.ts:276-285), so an extra field does not fail -- it "
+              "vanishes, and the robot then misbehaves for no visible reason")
+    goal = by_id["TABLE-FRONT"].centre
+    residual = math.dist(goal, (stand_x, stand_y))
+    (patch_x0, patch_x1), (patch_y0, patch_y1) = _inset(_poly_extent(tf.polygon),
+                                                        gen.PLACE_ENTRY_MARGIN_M)
+    worst_residual = max(math.dist((x, y), (stand_x, stand_y))
+                         for x in (patch_x0, patch_x1) for y in (patch_y0, patch_y1))
+    rep.check(worst_residual <= gen.PLACE_ARRIVAL_M,
+              "the walk `goto TABLE-FRONT` leaves for the mission is shorter than the "
+              "tolerance that leaves it",
+              f"goal ({goal[0]:.3f}, {goal[1]:.3f}) is {residual:.3f} m short of the grasp "
+              f"spot ({stand_x:.3f}, {stand_y:.3f}); the arrival patch is "
+              f"{patch_x1 - patch_x0:.2f} x {patch_y1 - patch_y0:.2f} m, its far corner is "
+              f"{worst_residual:.3f} m out, and a robot walking in from the south enters it "
+              f"at y = {patch_y0:.3f}, {stand_y - patch_y0:.3f} m short. The bound is "
+              f"PLACE_ARRIVAL_M = {gen.PLACE_ARRIVAL_M:.2f} m and it is not an arbitrary "
+              "one: that is how far from the centroid the navigator is willing to call "
+              "itself arrived, so a residual larger than it would mean `goto` hands the "
+              "mission a walk longer than the tolerance `goto` itself works to -- the "
+              "appended block would be doing the navigation, blind. The mission MUST append "
+              "that walk either way; the graph has no field for it")
+    rep.check(abs(residual - (gen.TABLE_FRONT_HALF_Y_M - L.TABLE_STANDOFF)) <= tol,
+              "...and that residual is exactly the depth this file chose, less the standoff",
+              f"{residual:.3f} m = TABLE_FRONT_HALF_Y_M {gen.TABLE_FRONT_HALF_Y_M:.2f} - "
+              f"TABLE_STANDOFF {L.TABLE_STANDOFF:.2f}. This is the number TABLE_STANDOFF "
+              "moves: the polygon cannot move with it (it abuts the table, and the standoff "
+              "does not move the table), so the residual is where a standoff drift shows up, "
+              "and section 12 re-measures the reach from the moved spot")
+    rep.check(patch_y1 - patch_y0 >= gen.MIN_STAGE_M - 1e-9,
+              "...and the band it may stop in is at least one navigator stage deep",
+              f"{patch_y1 - patch_y0:.3f} m deep against MIN_STAGE_M {gen.MIN_STAGE_M:.2f} "
+              f"(navigator.ts:51, the floor under every commanded walk). TABLE-FRONT is "
+              "entered head-on from the south, so a band shallower than one stage could be "
+              "stepped clean over -- from short of the place to past it, into the table, "
+              "without one pose inside. Shrinking the polygon further to shorten the "
+              f"residual is what this bound refuses: at half-depth "
+              f"{gen.PLACE_ENTRY_MARGIN_M:.2f} m the band is 0.000 m and `goto TABLE-FRONT` "
+              "could never report arrival at all")
+    rep.check(bool(L.PLACE_HEADINGS) and not any("heading" in k.lower() or "yaw" in k.lower()
+                                                 for k in keys_seen),
+              "the arrival headings are absent, and absent ON PURPOSE",
+              f"PLACE_HEADINGS declares {sorted(L.PLACE_HEADINGS)} at "
+              f"{L.TABLE_APPROACH_YAW_DEG:.0f} deg, and the Place interface has no heading "
+              "field. navigateToPlaceInner issues no final alignment turn either -- its last "
+              "turn is the heading of the last PATH segment -- so a robot entering "
+              "TABLE-FRONT from the door faces into the room, not at the table, and every "
+              "reach number in section 12 is computed at 90 deg. The mission must append a "
+              "`turn` block (or use a patrol checkpoint's headingDeg + capture, which is the "
+              "only arrival-heading mechanism in the codebase)")
+
+    # --- and why there are no keepouts, which is not an omission ---------------------------
+    rep.check(not any(p["keepout"] for p in graph["places"]),
+              "the graph declares NO keepouts, deliberately",
+              f"the geofence inflates every keepout by 0.50 m and protective-stops on breach, "
+              f"but TABLE-FRONT stands {L.TABLE_STANDOFF:.2f} m from the table by design -- "
+              f"fencing the table would stop the robot on arrival. The planner uses the same "
+              f"0.50 m margin plus a 0.40 m disc, so fencing the partitions would leave "
+              f"{L.DOOR['width'] - 1.0:.2f} m of a {L.DOOR['width']:.2f} m doorway against a "
+              "0.80 m disc and seal it. Walls reach the planner through the lidar occupancy "
+              "map, which is where the code expects them")
+
+
+def module_constant(tree: ast.Module, name: str):
+    """The value of a module-level `name = <literal>` assignment, or None.
+
+    Used to read the scene cfg's palette without importing it -- it needs isaaclab, which
+    needs a GPU. `ast.literal_eval` refuses anything that is not a literal, so a colour
+    that has become a computed expression reads as absent rather than as a wrong number.
+    """
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else (
+            [node.target] if isinstance(node, ast.AnnAssign) and node.value else [])
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == name:
+                try:
+                    return ast.literal_eval(node.value)
+                except (ValueError, SyntaxError):
+                    return None
+    return None
+
+
+def dotted_target(node: ast.AST) -> str | None:
+    """`self.sim.render.ambient_light_intensity` -> that string, for Name/Attribute chains."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def attribute_assignments(tree: ast.AST, dotted: str) -> list[ast.AST]:
+    """Every RHS assigned to the attribute path `dotted`, ANYWHERE in the tree.
+
+    An AST walk and not a substring search. `"foo = bar" in source` is satisfied by a
+    commented-out line, by the same text inside a docstring, and by a mention in an error
+    message; all three were true of the checks this replaced, and prefixing the two live
+    lines with `# DISABLED` left the whole verifier passing. A statement either exists in
+    the parse tree or it does not.
+    """
+    out: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if dotted_target(target) == dotted:
+                    out.append(node.value)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            if dotted_target(node.target) == dotted:
+                out.append(node.value)
+    return out
+
+
+def call_keyword(tree: ast.AST, callee: str, keyword: str) -> list[ast.AST]:
+    """Every `keyword=` argument node passed to a call whose callee spells `callee`.
+
+    `callee` is matched against the dotted spelling, so both `DomeLightCfg(...)` and
+    `sim_utils.DomeLightCfg(...)` are found by their last component.
+    """
+    out: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = dotted_target(node.func)
+        if name is None or name.split(".")[-1] != callee.split(".")[-1]:
+            continue
+        for kw in node.keywords:
+            if kw.arg == keyword:
+                out.append(kw.value)
+    return out
+
+
+def is_bare_call(node: ast.AST, name: str) -> bool:
+    """True only for `name()` -- the exact call, no arguments, and nothing wrapped round it.
+
+    The point of the distinction: the check this replaced asked whether the NAME appeared in
+    any `ast.Call` anywhere in the file, which `intensity=dome_intensity() * 7.0` satisfies
+    while restoring the original brightness and ignoring the sweep variable.
+    """
+    return (isinstance(node, ast.Call)
+            and dotted_target(node.func) is not None
+            and dotted_target(node.func).split(".")[-1] == name
+            and not node.args and not node.keywords)
+
+
+def mjcf_materials(path: str) -> dict[str, dict]:
+    """`{name: {"rgba": (r, g, b, a) | None, "texture": str | None}}` from an MJCF's <asset>.
+
+    Parsed at check time rather than transcribed. The whole point of section 19 is that the
+    two scenes' literals must not drift apart, and a check that compared against a copy of
+    one of them would only prove that the copy had not been edited.
+    """
+    out: dict[str, dict] = {}
+    root = ET.parse(path).getroot()
+    for mat in root.iter("material"):
+        name = mat.get("name")
+        if not name:
+            continue
+        rgba = mat.get("rgba")
+        parsed = tuple(float(v) for v in rgba.split()) if rgba else None
+        out[name] = {"rgba": parsed, "texture": mat.get("texture")}
+    return out
+
+
+def mjcf_textures(path: str) -> dict[str, str]:
+    """`{name: file}` for every named <texture> with a `file` attribute."""
+    out: dict[str, str] = {}
+    root = ET.parse(path).getroot()
+    for tex in root.iter("texture"):
+        name, file = tex.get("name"), tex.get("file")
+        if name and file:
+            out[name] = file
+    return out
+
+
+def sha256_of(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def check_palette_and_lighting(rep: Report, L) -> None:
+    section("19. the palette matches the surface the camera sees, and the lights are sized")
+
+    # --- what this section is defending against -------------------------------------------
+    #
+    # On the matched tabletop region the Isaac ego view renders 8.3x more light than the
+    # MuJoCo scene the manipulation policy was trained on. That splits into a PALETTE bug
+    # (the Isaac tabletop was painted 2.11x too light) and an EXPOSURE bug (the rig puts
+    # 3.95x too much light in the room), and the two are fixed in different files by
+    # different numbers. This section pins both halves so that neither can be quietly
+    # re-absorbed into the other -- in particular so that "the render is too bright" cannot
+    # be answered by darkening the rest of the palette, and so that a light intensity cannot
+    # be re-typed as a literal that ignores the sweep variables.
+    #
+    # It does NOT pin `_TABLETOP` to the MJCF's `tablecloth` material, which is what the
+    # previous version of this section did. `tablecloth` is the MJCF's collision material --
+    # `g1_apple_pnp_scene.xml:49-50` says "Physics table faces (almost fully hidden under
+    # the visual cloth plane)" -- so that assertion pinned the Isaac scene to a surface that
+    # appears in no frame, and it would have failed the correct fix. A check that enforces a
+    # false fact is worse than no check.
+    scene_tree = parse(SCENE_PY)
+    envcfg_tree = parse(ENVCFG_PY)
+    door_tree = parse(DOORGEN_PY) if os.path.isfile(DOORGEN_PY) else None
+    tabletop = module_constant(scene_tree, "_TABLETOP")
+
+    # A missing or unparseable MJCF is a FAILURE and not a skip. It is a checked-in file in
+    # this repository, two directories away, and the pins below are the only thing tying
+    # this scene to the training distribution: if it cannot be read, they are not "not
+    # applicable", they are unenforced.
+    materials: dict[str, dict] = {}
+    textures: dict[str, str] = {}
+    if not os.path.isfile(MJCF_SCENE):
+        rep.bad("the MuJoCo training scene is readable",
+                f"{MJCF_SCENE} is missing. It is checked in at "
+                f"{os.path.relpath(MJCF_SCENE, HERE)} and every palette pin below reads it")
+    else:
+        try:
+            materials = mjcf_materials(MJCF_SCENE)
+            textures = mjcf_textures(MJCF_SCENE)
+        except ET.ParseError as exc:
+            rep.bad("the MuJoCo training scene parses", f"{MJCF_SCENE}: {exc}")
+        else:
+            rep.ok("the MuJoCo training scene parses",
+                   f"{os.path.relpath(MJCF_SCENE, HERE)} -> {len(materials)} materials, "
+                   f"{len(textures)} textures: {', '.join(sorted(materials))}")
+
+    def material(name: str, why: str) -> dict | None:
+        got = materials.get(name)
+        if got is None or got.get("rgba") is None:
+            rep.bad(f"the MJCF still declares `{name}`",
+                    f"{why} There is no `{name}` material with an rgba in "
+                    f"{os.path.relpath(MJCF_SCENE, HERE)}. Either the training scene was "
+                    "re-authored, in which case this pin needs re-deriving against whatever "
+                    "replaced it, or the wrong file is being read")
+            return None
+        return got
+
+    # --- PIN 1: the tabletop, against the surface that is actually in frame -----------------
+    velvet = material("cloth_real", "It is the visual cloth plane -- the tabletop in every "
+                                    "training frame, and what `_TABLETOP` is derived from.")
+    expected_tabletop = None
+    if velvet is not None:
+        tint = velvet["rgba"][:3]
+        tex_name = velvet.get("texture")
+        tex_file = textures.get(tex_name or "")
+        tex_path = (os.path.normpath(os.path.join(os.path.dirname(MJCF_SCENE), tex_file))
+                    if tex_file else None)
+
+        # The verifier is stdlib-only by design, so it cannot decode a PNG and re-measure the
+        # texture mean. It can do the next best thing: pin the FILE, so that the cited mean
+        # in `factory_pauseroom_layout.py` cannot go stale behind a texture swap.
+        if tex_path is None:
+            rep.bad("the cloth texture is resolvable from the MJCF",
+                    f"`cloth_real` names texture {tex_name!r}, which no <texture> element "
+                    "declares with a file")
+        elif not os.path.isfile(tex_path):
+            rep.bad("the cloth texture is resolvable from the MJCF",
+                    f"{tex_path} does not exist")
+        else:
+            digest = sha256_of(tex_path)
+            rep.check(digest == L.CLOTH_TEXTURE_SHA256,
+                      "the cloth texture is the one whose mean was measured",
+                      f"{os.path.relpath(tex_path, HERE)} sha256 {digest[:16]}... against the "
+                      f"cited {L.CLOTH_TEXTURE_SHA256[:16]}.... The mean RGB "
+                      f"{fmt3(L.CLOTH_TEXTURE_MEAN)} in CLOTH_TEXTURE_MEAN was measured with "
+                      "PIL over this exact file; this verifier is stdlib-only and cannot "
+                      "re-derive it, so the digest is what keeps the citation honest. If the "
+                      "texture is replaced, re-measure the mean and the tabletop colour "
+                      "with it")
+            rep.check(os.path.relpath(tex_path, os.path.dirname(MJCF_SCENE)).replace(os.sep, "/")
+                      == L.CLOTH_TEXTURE_RELPATH,
+                      "the cited texture path is the one the MJCF names",
+                      f"MJCF says {tex_file}, layout cites {L.CLOTH_TEXTURE_RELPATH}")
+
+        expected_tabletop = tuple(round(m * t, 3)
+                                  for m, t in zip(L.CLOTH_TEXTURE_MEAN, tint))
+        if tabletop is None:
+            rep.bad("the tabletop is the MJCF's VISIBLE cloth, not its collision material",
+                    "`_TABLETOP` is not a module-level literal in "
+                    f"{os.path.relpath(SCENE_PY, HERE)} any more")
+        else:
+            rep.check(tuple(round(c, 6) for c in tabletop) == expected_tabletop,
+                      "the tabletop is the MJCF's VISIBLE cloth, not its collision material",
+                      f"Isaac _TABLETOP {fmt3(tabletop)} against `cloth_real` = texture mean "
+                      f"{fmt3(L.CLOTH_TEXTURE_MEAN)} x rgba {fmt3(tint)} = "
+                      f"{fmt3(expected_tabletop)}. The MJCF's own comment on the tint (line "
+                      "54) is \"rgba < 1 compensates the scene lighting gain\", so the "
+                      "product and not the tint is the albedo the camera sees. Rendered "
+                      "luminance parity is NOT asserted here -- `cloth_real` is a textured "
+                      "surface with per-pixel variance and this scene has a flat "
+                      "PreviewSurface; only the mean is matchable")
+
+    # --- PIN 1b: and specifically NOT the collision material --------------------------------
+    cloth_mjcf = material("tablecloth", "It is the physics face this constant used to be "
+                                        "pinned to, and the check is now that it is NOT.")
+    if cloth_mjcf is not None and tabletop is not None:
+        rep.check(tuple(round(c, 6) for c in tabletop)
+                  != tuple(round(c, 6) for c in cloth_mjcf["rgba"][:3]),
+                  "the tabletop is NOT the MJCF's hidden `tablecloth` grey",
+                  f"`tablecloth` is {fmt3(cloth_mjcf['rgba'][:3])} and _TABLETOP is "
+                  f"{fmt3(tabletop)}. This assertion is inverted on purpose. The MJCF "
+                  "comment above that material reads \"Physics table faces (almost fully "
+                  "hidden under the visual cloth plane)\": it is the collider's colour and "
+                  "it is in no frame. `_TABLETOP` was equal to it, this section used to "
+                  "assert that equality, and the result was that the tabletop was painted "
+                  f"{L.tabletop_albedo_ratio():.2f}x too light and the check defended it")
+
+    # --- PIN 2: the plate --------------------------------------------------------------------
+    plate = material("plate_white", "It is the static place target whose contact defines "
+                                    "success, and the Isaac plate is its literal.")
+    if plate is not None:
+        plate_isaac = L.PLATE["colour"]
+        rep.check(tuple(round(c, 6) for c in plate_isaac)
+                  == tuple(round(c, 6) for c in plate["rgba"][:3]),
+                  "the plate is the same colour in both scenes",
+                  f"Isaac PLATE['colour'] {fmt3(plate_isaac)} vs MJCF `plate_white` rgba "
+                  f"{fmt3(plate['rgba'][:3])}. Both trace to the same measured dataset value "
+                  "(~(226, 227, 232)/255), and it is the same object doing the same job: "
+                  "the static place target whose contact defines success. Unlike the "
+                  "tabletop, `plate_white` is untextured, so the two are directly comparable")
+
+    # --- the repaint guard ------------------------------------------------------------------
+    #
+    # Every diffuse colour the ego frame contains, pinned to what it was when the exposure
+    # was measured. The previous version of this guard covered the table and the plate only,
+    # which left the floor, the walls, the partitions, the columns and the crates free: a
+    # 2.6x darkening of ground, concrete and partition -- most of the pixels in a hall frame
+    # -- passed every check. That is precisely the "hide the exposure in the albedos" edit
+    # the section exists to prevent, and the surfaces it would hide in are the ones that were
+    # not pinned.
+    #
+    # These values are NOT claimed to be right. There is no MuJoCo counterpart for a factory
+    # floor; they are scene dressing. What is claimed is that the lighting calibration below
+    # was measured against a render made with exactly these, so changing one changes the
+    # brightness the calibration controls, and it has to be re-derived rather than typed.
+    guard = [
+        (SCENE_PY, scene_tree, "_GROUND", (0.34, 0.34, 0.35), "the factory floor -- the "
+         "single largest surface in a hall ego frame"),
+        (SCENE_PY, scene_tree, "_CONCRETE", (0.62, 0.62, 0.60), "the four perimeter walls"),
+        (SCENE_PY, scene_tree, "_PARTITION", (0.80, 0.79, 0.75), "the pause-room partitions, "
+         "which fill the frame on the approach to the door"),
+        (SCENE_PY, scene_tree, "_STEEL", (0.42, 0.44, 0.48), "the eight columns"),
+        (SCENE_PY, scene_tree, "_CRATE", (0.55, 0.42, 0.26), "the six crates"),
+    ]
+    if door_tree is not None:
+        guard += [
+            (DOORGEN_PY, door_tree, "_LEAF_COLOUR", (0.72, 0.78, 0.82),
+             "the two sliding door leaves, which the ego view stares at while the door opens"),
+            (DOORGEN_PY, door_tree, "_RAIL_COLOUR", (0.42, 0.44, 0.48), "the door frame"),
+        ]
+    else:
+        rep.bad("the door generator is readable",
+                f"{DOORGEN_PY} is missing -- the door's two colours cannot be pinned")
+    for path, tree, name, expected, what in guard:
+        got = module_constant(tree, name)
+        rep.check(got is not None and tuple(round(c, 6) for c in got) == expected,
+                  f"{name} has not been repainted",
+                  f"{os.path.relpath(path, HERE)}: {name} = "
+                  f"{fmt3(got) if got else got} (expected {fmt3(expected)}) -- {what}. "
+                  "Not a claim that this value is correct; a claim that the exposure below "
+                  "was calibrated with it")
+    for name, expected, what in (("PLATE", (0.886, 0.888, 0.912), "the place target"),
+                                 ("APPLE", (0.86, 0.24, 0.16), "the object being carried, "
+                                  "and the highest-chroma thing in frame")):
+        got = getattr(L, name)["colour"]
+        rep.check(tuple(round(c, 6) for c in got) == expected,
+                  f"{name}['colour'] has not been repainted",
+                  f"{fmt3(got)} (expected {fmt3(expected)}) -- {what}")
+
+    # --- the lights: still the ones the measurement sized -----------------------------------
+    dome, distant, ambient = L.DOME_INTENSITY, L.DISTANT_INTENSITY, L.AMBIENT_INTENSITY
+    rep.check(0.0 < dome <= 3000.0 and 0.0 < distant <= 3000.0,
+              "both light intensities are inside Isaac Lab's own range",
+              f"dome {dome:g}, distant {distant:g}; the shipped Isaac Lab environments use "
+              "500-3000 for a dome or a distant light, almost always as a scene's ONLY "
+              f"light, and this scene stacks two. The resolver refuses above "
+              f"LIGHT_INTENSITY_MAX = {L.LIGHT_INTENSITY_MAX:g}, which is the typo bound, "
+              "not the taste bound this check is")
+
+    # The derivation is ONE factor applied to all three terms; that is the whole reason it is
+    # valid without knowing how the room's light divides between them. So the thing to check
+    # is not any single intensity but that the three moved together.
+    scales = L.light_scale()
+    spread = max(scales) / min(scales) if min(scales) > 0 else float("inf")
+    rep.check(spread <= 1.02,
+              "all three light terms are cut by the SAME factor",
+              f"dome {L.AUTHORED_DOME_INTENSITY:g}/{dome:g} = {scales[0]:.3f}x, distant "
+              f"{L.AUTHORED_DISTANT_INTENSITY:g}/{distant:g} = {scales[1]:.3f}x, ambient "
+              f"{L.AUTHORED_AMBIENT_INTENSITY:g}/{ambient:g} = {scales[2]:.3f}x; spread "
+              f"{spread:.4f}x against the 1.02x rounding allowance. Nothing offline can say "
+              "how the measured 2.40 gain at the tabletop divides between a dome, a distant "
+              "light and an RTX ambient term, so a uniform cut is the only one that is "
+              "correct for every division -- and it is the only one that leaves the shadow "
+              "contrast alone, which the matched-region measurement says is already right "
+              "(1.23x against MuJoCo's 1.29x). Cutting one term harder than another is a "
+              "claim about the mixture, and there is no measurement to make it from")
+
+    required = L.required_light_cut()
+    achieved = sum(scales) / len(scales)
+    # +/- 0.20 stops. The derivation is now a direct ratio rather than a residual, so the
+    # slack is for rounding the intensities to whole numbers and nothing else. It is a band
+    # on the AUTHORED CONSTANTS; the sweep brackets in README.md move the env vars, which
+    # this check never reads, so a wide sweep is not in conflict with a tight band.
+    lo, hi = required / (2 ** 0.20), required * (2 ** 0.20)
+    rep.check(lo <= achieved <= hi,
+              "the light cut is the size the measurement asks for",
+              f"matched-region tabletop medians "
+              f"{L.MEASURED_TABLETOP['isaac_table']['median']:.4f} (Isaac) vs "
+              f"{L.MEASURED_TABLETOP['mujoco_training']['median']:.4f} (MuJoCo) -> "
+              f"{L.rendered_tabletop_ratio():.2f}x more light rendered "
+              f"({math.log2(L.rendered_tabletop_ratio()):.2f} stops), of which "
+              f"{L.tabletop_albedo_ratio():.2f}x is the albedo bug fixed above, leaving "
+              f"{required:.2f}x ({math.log2(required):.2f} stops) for the lights. The rig is "
+              f"cut {achieved:.2f}x. Accepted band {lo:.2f}x-{hi:.2f}x. A different "
+              "defensible pair of tabletop rectangles gives 4.26x rather than 3.95x -- 0.11 "
+              "stops -- which is why the band is 0.20 stops and not 0.05")
+
+    # --- the scene cfg must actually be reading them ---------------------------------------
+    #
+    # Checked by looking at the `intensity=` ARGUMENT of the light spawners, not by asking
+    # whether the resolver's name appears somewhere in the file. The version this replaced
+    # asked the second question, and `intensity=dome_intensity() * 7.0` -- which restores the
+    # original brightness exactly and ignores the sweep variable -- answered it.
+    for cfg, fn, colour in (("DomeLightCfg", "dome_intensity", "DOME_COLOUR"),
+                            ("DistantLightCfg", "distant_intensity", "DISTANT_COLOUR")):
+        found = call_keyword(scene_tree, cfg, "intensity")
+        rep.check(len(found) == 1 and is_bare_call(found[0], fn),
+                  f"{cfg}(intensity=) is exactly {fn}()",
+                  f"{len(found)} `intensity=` argument(s) to {cfg}; "
+                  f"{'as ' + ast.dump(found[0])[:90] + '...' if found else 'none found'}. "
+                  "A literal re-typed here, or any arithmetic wrapped round the call, "
+                  f"would ignore {L.DOME_INTENSITY_ENV_VAR} / "
+                  f"{L.DISTANT_INTENSITY_ENV_VAR} without saying so, and a sweep would "
+                  "report that the default was right")
+        found_c = call_keyword(scene_tree, cfg, "color")
+        rep.check(len(found_c) == 1 and isinstance(found_c[0], ast.Name)
+                  and found_c[0].id == colour,
+                  f"{cfg}(color=) is the layout module's {colour}",
+                  f"the colours are authored in factory_pauseroom_layout.py and imported "
+                  f"here, so that the luminance weighting in the derivation and the value "
+                  f"the scene spawns are one object and not two copies. Found "
+                  f"{ast.dump(found_c[0])[:70] if found_c else 'nothing'}")
+
+    # --- the env cfg must actually be setting the ambient term -------------------------------
+    ambient_rhs = attribute_assignments(envcfg_tree, "self.sim.render.ambient_light_intensity")
+    rep.check(len(ambient_rhs) == 1 and is_bare_call(ambient_rhs[0], "ambient_intensity"),
+              "the env cfg assigns the ambient term from the layout module",
+              "`self.sim.render.ambient_light_intensity = FPR_LAYOUT.ambient_intensity()`, "
+              "as an assignment in the parse tree. Left unset, the inherited kit value of "
+              "1.0 stands and a third of the cut is absent. The substring test this "
+              "replaced was satisfied by the same line commented out")
+    mode_rhs = attribute_assignments(envcfg_tree, "self.sim.render.rendering_mode")
+    rep.check(not mode_rhs,
+              "the env cfg does NOT pin a rendering mode",
+              "naming a mode loads `apps/rendering_modes/<mode>.kit` and applies every "
+              "setting in it. With no `--rendering_mode` on the command line AppLauncher "
+              "stores the empty string (`app_launcher.py:1299-1309` -- there is no "
+              "`balanced` default), SimulationContext finds that falsy, falls through to "
+              "`render_cfg.rendering_mode` = None (`simulation_context.py:234-237`) and "
+              "loads NO preset. That is the state the ego view was measured in, so pinning "
+              "a mode would move the very thing the calibration controls. Re-measure first "
+              "if one is ever wanted")
+
+    # --- the overrides parse, and refuse ----------------------------------------------------
+    #
+    # Exercised through the `value=` parameter rather than by setting os.environ, for the
+    # same reason section 8 does it for NEODEM_ROBOT_SPAWN: this process must not mutate
+    # the environment it is running in.
+    rep.check(L.dome_intensity("") == dome and L.distant_intensity("") == distant
+              and L.ambient_intensity("") == ambient,
+              "unset overrides leave the authored intensities exactly as written",
+              f"dome {dome:g}, distant {distant:g}, ambient {ambient:g}")
+    rep.check(L.dome_intensity("1234.5") == 1234.5 and L.distant_intensity(" 7 ") == 7.0,
+              "a well-formed override is honoured, whitespace and all",
+              f"{L.DOME_INTENSITY_ENV_VAR}=1234.5 -> 1234.5, "
+              f"{L.DISTANT_INTENSITY_ENV_VAR}=' 7 ' -> 7.0; one GPU session can sweep the "
+              "bracket without editing a file or re-running install_into_checkout.sh")
+    refused = []
+    for bad in ("bright", "-1", "1e9", "nan", "3000,"):
+        try:
+            L.dome_intensity(bad)
+        except ValueError:
+            refused.append(bad)
+    rep.check(len(refused) == 5,
+              "a malformed override is REFUSED, not quietly defaulted",
+              f"refused {refused}; a sweep whose typo'd value fell back to the calculated "
+              "default would render a frame identical to the previous one and report that "
+              "the default was correct -- the same failure shape as the NEODEM_ROBOT_SPAWN "
+              "typo section 8 guards against")
+
+    # --- the tool that made the measurement -------------------------------------------------
+    rep.check(os.path.isfile(MEASURE_PY),
+              "the tool that produced these numbers ships next to them",
+              "measure_scene_exposure.py: it re-measures any directory of frames, over the "
+              "same rectangles, and says whether the tabletop is inside the training band. "
+              "Without it the numbers in the lighting comment are assertions nobody can "
+              "re-run")
+
+
 def print_coordinates(L) -> None:
     section("coordinate table (world frame, metres, num_envs=1)")
     rows = [
@@ -1690,10 +2800,29 @@ def print_coordinates(L) -> None:
     for name, pos, note in rows:
         print(f"  {name.ljust(w)}  {pos:<26}  {note}")
     print("\n  named places:")
+    selectable = set(L.selectable_spawns())
     for name, (x, y) in sorted(L.PLACES.items()):
         head = L.PLACE_HEADINGS.get(name)
         tag = f"   arrive facing {head:.0f} deg" if head is not None else ""
+        tag += "   [selectable spawn]" if name in selectable else ""
         print(f"    {name.ljust(20)} ({x:6.2f}, {y:6.2f}){tag}")
+
+    # What THIS process would spawn, which is not necessarily the authored pose: the
+    # verifier reads the same environment variable the scene does, so a run with
+    # NEODEM_ROBOT_SPAWN set says so here rather than leaving the reader to assume.
+    set_to = os.environ.get(L.ROBOT_SPAWN_ENV_VAR, "") or "<unset>"
+    try:
+        live = L.robot_spawn()
+    except ValueError as exc:
+        # Reported rather than raised: a bad spawn name says nothing about the geometry,
+        # and losing the RESULT line of a 200-check run to a traceback would hide every
+        # answer this file just computed behind one shell-level typo.
+        print(f"\n  {L.ROBOT_SPAWN_ENV_VAR}={set_to} -> REFUSED: {exc}")
+    else:
+        where = "the authored ROBOT pose" if live["name"] is None else f"'{live['name']}'"
+        print(f"\n  {L.ROBOT_SPAWN_ENV_VAR}={set_to}"
+              f" -> spawn at {where}: ({live['pos'][0]:.2f}, {live['pos'][1]:.2f}, "
+              f"{live['pos'][2]:.2f}) yaw {live['yaw_deg']:.0f} deg")
 
     print("\n  reach from 'table_front' (shoulder to target, over the observed base-height band):")
     stand = L.PLACES["table_front"]
@@ -1703,6 +2832,40 @@ def print_coordinates(L) -> None:
               f"{L.grasp_reach(stand, base_z, L.TABLE_APPROACH_YAW_DEG, apple):.3f} m")
     print(f"    budget {L.GRASP_REACH_BUDGET:.3f} m; arm is {L.ARM_REACH_TO_KNUCKLE:.3f} m "
           f"to the knuckle, {L.ARM_REACH_TO_FINGERTIP:.3f} m to the fingertip")
+
+    # What THIS process would light the scene with. Same arrangement as the spawn line
+    # above and for the same reason: section 19 exercises the resolvers through `value=`,
+    # so it passes with a broken variable exported, and a run that never printed the LIVE
+    # value would let a typo'd sweep look like a clean verification.
+    print("\n  lighting (calculated from the tabletop measurement, NEVER RENDERED):")
+    live = []
+    for label, var, fn, authored in (
+            ("dome", L.DOME_INTENSITY_ENV_VAR, L.dome_intensity, L.AUTHORED_DOME_INTENSITY),
+            ("distant", L.DISTANT_INTENSITY_ENV_VAR, L.distant_intensity,
+             L.AUTHORED_DISTANT_INTENSITY),
+            ("ambient", L.AMBIENT_INTENSITY_ENV_VAR, L.ambient_intensity,
+             L.AUTHORED_AMBIENT_INTENSITY)):
+        set_to = os.environ.get(var, "") or "<unset>"
+        try:
+            value = fn()
+        except ValueError as exc:
+            print(f"    {label.ljust(8)} {var}={set_to} -> REFUSED: {exc}")
+            live.append(None)
+        else:
+            live.append(value)
+            print(f"    {label.ljust(8)} {value:>8.3f}   (was {authored:g} when the ego view "
+                  f"was measured, /{authored / value if value else float('inf'):.2f})   "
+                  f"{var}={set_to}")
+    print(f"    the tabletop renders {L.rendered_tabletop_ratio():.2f}x the training "
+          f"scene's, = albedo {L.tabletop_albedo_ratio():.2f}x (fixed in the palette) x "
+          f"light {L.required_light_cut():.2f}x (fixed here).")
+    if all(v is not None for v in live):
+        scales = L.light_scale(*live)
+        print(f"    THIS PROCESS would cut the rig by {scales[0]:.2f}x / {scales[1]:.2f}x / "
+              f"{scales[2]:.2f}x (dome / distant / ambient) against a required "
+              f"{L.required_light_cut():.2f}x.")
+    print("    Re-measure with measure_scene_exposure.py --roi; the rectangles are in "
+          "MEASURED_TABLETOP.")
 
     print("\n  automatic door:")
     a = L.DOOR_AUTOMATION
@@ -1761,6 +2924,8 @@ def main() -> int:
     check_body_clearance(rep, L)
     check_robot_model(rep, L)
     check_door_driver(rep, L)
+    check_place_graph(rep, L)
+    check_palette_and_lighting(rep, L)
 
     print_coordinates(L)
 

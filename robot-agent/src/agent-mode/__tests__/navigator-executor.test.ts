@@ -257,7 +257,18 @@ describe('Navigator × BlockExecutor', () => {
     // And they total what the base was really driven — the number `walkedTotalM`
     // accumulates, checked against the world's own odometer rather than against
     // the commanded metres the store already hears about.
-    const measuredTotalM = walkOutcomes.reduce((sum, b) => sum + (b.measured?.distanceM ?? 0), 0);
+    //
+    // The stage ALIGNMENT is part of that total now. It is issued as an arc —
+    // `vx > 0` with `omega != 0`, the only rotation this locomotion checkpoint
+    // performs to the left — so it covers ground as well as heading, reports the
+    // metres in `measured.distanceM`, and the navigator takes them off the stage
+    // that follows. Summing the walks alone would be short by exactly that arc,
+    // which is the assumption "a turn does not move the robot" leaving a mark.
+    const turnOutcomes = world.finished.filter((b) => b.kind === 'turn');
+    const arcedTotalM = turnOutcomes.reduce((sum, b) => sum + (b.measured?.distanceM ?? 0), 0);
+    expect(arcedTotalM).toBeGreaterThan(0);
+    const measuredTotalM =
+      walkOutcomes.reduce((sum, b) => sum + (b.measured?.distanceM ?? 0), 0) + arcedTotalM;
     expect(measuredTotalM).toBeCloseTo(world.travelledM(), 6);
   });
 

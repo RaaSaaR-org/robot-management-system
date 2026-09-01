@@ -57,6 +57,13 @@ import type { RobotStateManager } from '../robot/state.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
 import { config } from '../config/config.js';
 import type { RolloutStrategy } from './types.js';
+import {
+  resolveActionContract,
+  requiresActionContract,
+  supportedActionLengths,
+  projectStateIntoActionSpace,
+  type ActionContract,
+} from './action-contracts.js';
 
 const VLA_SERVER_URL_DEFAULT = 'http://localhost:8000';
 
@@ -330,6 +337,14 @@ interface VlaConfig {
   cameras: string[];
   stateDim: number;
   chunkSize: number;
+  /**
+   * Action width the loaded checkpoint emits, or null when `/config` did not
+   * say. Deliberately NOT defaulted: an absent field means "unknown", and a
+   * fabricated default would be exactly the positional guess TASK-229 exists
+   * to remove. When it is present the action contract can be resolved and
+   * refused BEFORE the first `/predict`, instead of after the run has started.
+   */
+  actionDim: number | null;
 }
 
 /**
@@ -690,6 +705,42 @@ export class SkillExecutor {
       };
     }
 
+    // ── Resolve the action contract (TASK-229) ──────────────────────
+    // What `action[i]` MEANS on this embodiment. Resolved once per run and
+    // memoised by width; the width is known here whenever `/config` reports
+    // `action_dim`, and otherwise on the first chunk. Hardware mode only —
+    // sim mode commands nothing a contract could aim at the wrong joint.
+    const contractState: { contract: ActionContract | null; forLength: number } = {
+      contract: null,
+      forLength: -1,
+    };
+    const useContract = (actionLength: number): string | null => {
+      if (actionLength === contractState.forLength) return null;
+      const resolved = this.resolveContractFor(actionLength);
+      if ('error' in resolved) return resolved.error;
+      contractState.contract = resolved.contract;
+      contractState.forLength = actionLength;
+      if (resolved.contract?.kind === 'named') {
+        console.log(
+          `[SkillExecutor] Action contract ${resolved.contract.id} for robotType=${config.robotType}: ` +
+            `${actionLength} actions mapped by name`,
+        );
+      }
+      return null;
+    };
+    if (mode === 'hardware' && vlaConfig.actionDim !== null) {
+      const contractError = useContract(vlaConfig.actionDim);
+      if (contractError) {
+        return {
+          status: 'failed',
+          mode,
+          steps: 0,
+          durationMs: Date.now() - startedAt,
+          error: contractError,
+        };
+      }
+    }
+
     // Reset policy state once per run (best-effort).
     try {
       await this.fetchImpl(`${baseUrl}/reset`, { method: 'POST' });
@@ -700,10 +751,19 @@ export class SkillExecutor {
     // ── Seed delta clipping with the current joint state ───────────
     // The first VLA action should be rate-limited relative to where the
     // arm actually IS, not relative to zero (which would let it jump).
-    let lastActionForClip: number[] | null = null;
+    //
+    // The seed arrives in the OBSERVATION's joint order and the clip runs in
+    // the ACTION's, which on a G1 EDU are neither the same length (43 vs 31)
+    // nor the same order (legs first vs arms first). `clipSeedFor` projects
+    // one into the other by name before the first step; until the contract is
+    // known (`/config` carrying no `action_dim`) the raw state is held here
+    // unprojected, and `clipSeedPending` says so.
+    let lastActionForClip: (number | null)[] | null = null;
+    let clipSeedPending = false;
     if (mode === 'hardware') {
       try {
         lastActionForClip = await hardwareClient.getStateNow();
+        clipSeedPending = true;
       } catch (err) {
         return {
           status: 'failed',
@@ -714,7 +774,9 @@ export class SkillExecutor {
         };
       }
       console.log(
-        `[SkillExecutor] Seeded delta clip from arm pose: [${lastActionForClip.map((v) => v.toFixed(1)).join(', ')}]`,
+        `[SkillExecutor] Seeded delta clip from arm pose: [${lastActionForClip
+          .map((v) => (v === null ? '—' : v.toFixed(1)))
+          .join(', ')}]`,
       );
     }
 
@@ -891,20 +953,51 @@ export class SkillExecutor {
       const blended = poppedBlend && source === 'policy';
       if (blended) ctx.rtcMetrics.blendedSteps += 1;
 
+      if (mode === 'hardware') {
+        // Re-check abort right before commanding hardware: a protective stop
+        // (e.g. fall detection via the safety loop's abortAll) can fire during
+        // the VLA predict await above, after the top-of-loop check. Nothing
+        // between here and the send awaits, so this is still the last word.
+        if (this.aborted) {
+          return this.abortedResult(mode, step, startedAt, lastApplied);
+        }
+        // Late resolution: only reached when `/config` carried no `action_dim`,
+        // so the first chunk is the first evidence of the policy's width. A
+        // refusal here still writes nothing — the check precedes both the clip
+        // and the send. It has to precede the CLIP too, because the clip's seed
+        // is projected through the contract and there is no honest projection
+        // of a 43-dim pose into an action space nobody has named yet.
+        const contractError = useContract(chosen.length);
+        if (contractError) {
+          return {
+            status: 'failed',
+            mode,
+            steps: step,
+            durationMs: Date.now() - startedAt,
+            error: contractError,
+          };
+        }
+        if (clipSeedPending) {
+          lastActionForClip = this.clipSeedFor(lastActionForClip!, contractState.contract);
+          clipSeedPending = false;
+        }
+      }
+
       const safe =
         mode === 'hardware'
           ? this.clipAction(chosen, lastActionForClip!)
           : chosen;
 
       if (mode === 'hardware') {
-        // Re-check abort right before commanding hardware: a protective stop
-        // (e.g. fall detection via the safety loop's abortAll) can fire during
-        // the VLA predict await above, after the top-of-loop check.
-        if (this.aborted) {
-          return this.abortedResult(mode, step, startedAt, lastApplied);
-        }
+        const contract: ActionContract | null = contractState.contract;
         try {
-          await hardwareClient.sendActionVector(safe);
+          if (contract !== null && contract.kind === 'named') {
+            await hardwareClient.sendJointTargets(contract.toJointTargets(safe));
+          } else {
+            // Embodiments whose policies were trained against their own joint
+            // order (SO-101 et al.) keep the positional path unchanged.
+            await hardwareClient.sendActionVector(safe);
+          }
         } catch (err) {
           return {
             status: 'failed',
@@ -1594,6 +1687,40 @@ export class SkillExecutor {
 
   // ── Helpers ────────────────────────────────────────────────────
 
+  /**
+   * Decide how an action vector of this width is applied on the active
+   * embodiment, or refuse (TASK-229).
+   *
+   * The refusal is the point. Before this, an unmatched width was mapped
+   * positionally anyway: on a 43-DOF G1 EDU a 31-dim apple action wrote arm
+   * trajectories into `left_hip_pitch_joint` and friends and never touched a
+   * finger, logged one warning, and kept going. A humanoid is standing on
+   * those joints. "I do not know what this vector means" must end the run
+   * before anything is commanded, not produce a guess.
+   *
+   * `requiresActionContract` asks whether the embodiment has LEGS, not whether
+   * it has 43 joints, so a G1 EDU declared as `g1` (29 DOF) or `h1` refuses
+   * too. `ROBOT_TYPE` is an env var and `getSidecarUrl()` sends `g1` to the
+   * same sidecar port a G1 EDU uses, so keying the guard on the declared DOF
+   * count left it one typo away from writing twelve leg joints on the very
+   * robot it was written to protect.
+   */
+  private resolveContractFor(
+    actionLength: number,
+  ): { contract: ActionContract | null } | { error: string } {
+    const contract = resolveActionContract(config.robotType, actionLength);
+    if (contract === null && requiresActionContract(config.robotType)) {
+      const expected = supportedActionLengths(config.robotType);
+      return {
+        error:
+          `No action contract for robotType=${config.robotType} at action length ${actionLength} ` +
+          `(known: ${expected.join(', ') || 'none'}) — refusing to command a legged humanoid ` +
+          `by index. Nothing was sent.`,
+      };
+    }
+    return { contract };
+  }
+
   private async fetchVlaConfig(baseUrl: string): Promise<VlaConfig> {
     const resp = await this.fetchImpl(`${baseUrl}/config`, { method: 'GET' });
     if (!resp.ok) {
@@ -1603,11 +1730,13 @@ export class SkillExecutor {
       cameras?: string[];
       state_dim?: number;
       chunk_size?: number;
+      action_dim?: number;
     };
     return {
       cameras: data.cameras ?? ['front'],
       stateDim: data.state_dim ?? 6,
       chunkSize: data.chunk_size ?? 50,
+      actionDim: typeof data.action_dim === 'number' ? data.action_dim : null,
     };
   }
 
@@ -1768,14 +1897,63 @@ export class SkillExecutor {
   }
 
   /**
+   * The step-0 clip seed: the robot's current pose, expressed in the ACTION
+   * space of the resolved contract.
+   *
+   * `getStateNow` returns the OBSERVATION vector — on a G1 EDU 43 values in
+   * `STATE_JOINT_NAMES` order, legs first. The clip runs over the ACTION, 31
+   * values in `ACTION_JOINT_NAMES` order, arms first. Zipping them by index
+   * pairs `left_shoulder_pitch` with `left_hip_pitch`, so the first commanded
+   * pose would be rate-limited toward a leg angle. `projectStateIntoActionSpace`
+   * does it by name instead, and returns `null` for the seven grip-CODE slots,
+   * which have no counterpart in a vector of joint angles at all.
+   *
+   * A positional contract (SO-101 et al.) projects to `null` as a whole and
+   * keeps the raw state seed it has always had: there, action and state ARE the
+   * same order, which is what "positional" means.
+   */
+  private clipSeedFor(
+    state: (number | null)[],
+    contract: ActionContract | null,
+  ): (number | null)[] {
+    if (contract === null || contract.kind !== 'named') return state;
+    const numeric = state.every((v): v is number => v !== null) ? (state as number[]) : null;
+    const projected =
+      numeric === null
+        ? null
+        : projectStateIntoActionSpace(config.robotType, contract, numeric);
+    if (projected === null) {
+      // Named contract we cannot project into: seed nothing rather than seed a
+      // vector from the wrong space. Step 0 is then unclipped, which is what it
+      // effectively already was — and is honest about it.
+      console.warn(
+        `[SkillExecutor] Cannot project the ${state.length}-value state into ` +
+          `contract ${contract.id} (${contract.names.length} slots) — first step is unclipped`,
+      );
+      return new Array<number | null>(contract.names.length).fill(null);
+    }
+    return projected;
+  }
+
+  /**
    * Delta-clip an action so no joint moves more than MAX_DELTA_DEGREES
    * from its last applied value. Prevents servo stalls from bad VLA
    * predictions.
+   *
+   * A `null` entry in `last` means "no comparable previous value" — the slot is
+   * passed through. That happens only on step 0, and only for slots the seed
+   * could not honestly fill (a grip code, or a joint the observation omits);
+   * from step 1 on, `last` is the previous action and every slot is a number.
    */
-  private clipAction(action: number[], last: number[]): number[] {
+  private clipAction(action: number[], last: readonly (number | null)[]): number[] {
     const clipped = new Array(action.length);
     for (let i = 0; i < action.length; i++) {
-      const lastVal = last[i] ?? 0;
+      const seeded = last[i];
+      if (seeded === null) {
+        clipped[i] = action[i];
+        continue;
+      }
+      const lastVal = seeded ?? 0;
       const delta = action[i] - lastVal;
       const limited = Math.max(-MAX_DELTA_DEGREES, Math.min(MAX_DELTA_DEGREES, delta));
       clipped[i] = lastVal + limited;

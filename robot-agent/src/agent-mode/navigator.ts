@@ -45,6 +45,31 @@ import {
 
 /** Below this bearing error a correction turn is not worth a stage. */
 const BEARING_DEADBAND_DEG = 8;
+
+/**
+ * How much of the coming stage a stage ALIGNMENT may spend arcing, in metres.
+ *
+ * A stage is "turn onto the bearing, then walk"; on the G1 locomotion
+ * checkpoint this rig runs, the turn half of that is dead whenever the
+ * correction is to the LEFT (a measured 0.01 of the commanded in-place rotation
+ * — and the base's −0.90 °/s drift makes the correction a left one almost every
+ * time). An ARC — forward velocity combined with omega — is measured to work,
+ * and an alignment is exactly the correction that can afford to be one: it is
+ * not a destination, it is the first few degrees of the walk that follows, so
+ * ending it further along the route is where it wanted to go anyway.
+ *
+ * The budget is the stage MINUS {@link MIN_STAGE_M}, and that subtraction is
+ * what keeps the arithmetic honest. The executor spends the budget in COMMANDED
+ * metres and reports back the MEASURED ones, which are never larger (this base
+ * achieves ~31% of a commanded forward speed), so the walk that follows always
+ * has at least MIN_STAGE_M left to ask for and can never be handed a negative
+ * or a sub-FSM-threshold distance. An alignment on a stage already at
+ * MIN_STAGE_M gets no budget and turns in place — which is right: the final
+ * approach is the one alignment that must not drive anywhere.
+ */
+function alignmentArcBudgetM(stageM: number): number {
+  return Math.max(0, stageM - MIN_STAGE_M);
+}
 /** Longest single walk stage, in metres. */
 const STAGE_LENGTH_M = 1.0;
 /** Shortest useful stage — below this the FSM barely moves. */
@@ -539,16 +564,27 @@ export class Navigator {
           `the map (${planReason ?? 'unknown'}), walking by sight until the map knows more`;
       }
 
+      // Metres the alignment covered by arcing, which come OFF the stage: the
+      // robot is already that much further along the route. See
+      // `alignmentArcBudgetM`.
+      let arcedM = 0;
       if (Math.abs(turnDeg) > BEARING_DEADBAND_DEG) {
         const turn = await this.deps.runGeneratedBlock(
           'turn',
-          { angleDeg: turnDeg },
+          { angleDeg: turnDeg, arcM: alignmentArcBudgetM(stageM) },
           planned
             ? `Turning ${Math.round(turnDeg)}° onto the planned path into ${label} (stage ${stages}).`
             : `Turning ${Math.round(turnDeg)}° towards the centre of ${label} (stage ${stages}).`,
         );
         if (turn.status !== 'done') {
           return { ok: false, message: `goto place "${label}": turn failed (${turn.error ?? 'unknown'})` };
+        }
+        arcedM = turn.measured?.distanceM ?? 0;
+        stageM = Math.max(0, stageM - arcedM);
+        // The "why" was written before the alignment ran, so it still quotes the
+        // whole stage. Say what the walk is actually being asked for.
+        if (arcedM > 0) {
+          walkWhy += `, ${arcedM.toFixed(2)} m of it already covered by the alignment arc`;
         }
       }
       if (this.deps.isAborted()) {
@@ -569,8 +605,11 @@ export class Navigator {
         return { ok: false, message: `goto place "${label}": walk failed (${walk.error ?? 'unknown'})` };
       }
       const walkedM = walk.measured?.distanceM ?? null;
-      walkedTotalM += walkedM ?? 0;
-      metresSinceLook += walkedM ?? stageM;
+      // The arc's metres count as travelled — they were, and the look interval
+      // and the total are both about ground covered, not about which block
+      // covered it.
+      walkedTotalM += arcedM + (walkedM ?? 0);
+      metresSinceLook += arcedM + (walkedM ?? stageM);
 
       if (!lookAfter) continue;
       metresSinceLook = 0;
@@ -910,13 +949,24 @@ export class Navigator {
           `${finalApproach ? ' — final approach' : bySight}`;
       }
 
+      // As in `navigateToPlace`: the alignment may arc, and whatever it covered
+      // comes off the stage that follows it. See `alignmentArcBudgetM`.
+      let arcedM = 0;
       if (intent.turnDeg !== null) {
-        const turn = await this.deps.runGeneratedBlock('turn', { angleDeg: intent.turnDeg }, intent.turnWhy);
+        const turn = await this.deps.runGeneratedBlock(
+          'turn',
+          { angleDeg: intent.turnDeg, arcM: alignmentArcBudgetM(intent.stageM) },
+          intent.turnWhy
+        );
         if (turn.status !== 'done') {
           return {
             ok: false,
             message: `goto "${entityLabel}": turn failed (${turn.error ?? 'unknown'})`,
           };
+        }
+        arcedM = turn.measured?.distanceM ?? 0;
+        if (arcedM > 0) {
+          intent.walkWhy += `, ${arcedM.toFixed(2)} m of it already covered by the alignment arc`;
         }
       }
 
@@ -924,7 +974,7 @@ export class Navigator {
         return { ok: false, message: `goto "${entityLabel}" aborted after ${stages} stages` };
       }
 
-      let stageM = intent.stageM;
+      let stageM = Math.max(0, intent.stageM - arcedM);
 
       // 2a. Never walk further than the measured way ahead allows. This is the
       //     only obstacle check the navigator has that does not require hitting
@@ -1053,8 +1103,8 @@ export class Navigator {
       }
       refusedStages = 0;
       if (walkedM === null || walkedM >= CONTACT_STALL_M) stagesThatMoved++;
-      walkedTotalM += walkedM ?? 0;
-      metresSinceLook += walkedM ?? stageM;
+      walkedTotalM += arcedM + (walkedM ?? 0);
+      metresSinceLook += arcedM + (walkedM ?? stageM);
 
       // 3p. On a planned route the map already knows what is between here and
       //     the next look; a full VLM look after every stage is what made a

@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { Navigator } from '../navigator.js';
+import { MIN_STAGE_M, Navigator } from '../navigator.js';
 import { SceneMemoryStore, type Observation } from '../scene-memory.js';
 import { normalizeDeg, type AgentBlock, type AgentBlockKind } from '../types.js';
 
@@ -86,6 +86,19 @@ interface WorldOptions {
    * the ACTUAL heading and finds the crate the route went around.
    */
   refusedWalks?: number;
+  /**
+   * Metres a stage-ALIGNMENT turn covers by arcing (TASK-227 follow-up).
+   *
+   * An alignment is no longer necessarily a rotation on the spot: on the G1
+   * locomotion checkpoint an in-place LEFT turn achieves 0.01 of what it is
+   * told, so the navigator hands the turn block an `arcM` budget out of the
+   * coming stage and the executor turns while walking. That means a `turn` can
+   * come back with `measured.distanceM`, and the stage that follows it must be
+   * shortened by exactly that much or the robot walks past its waypoint.
+   *
+   * `undefined` is the in-place world every other test in this file lives in.
+   */
+  arcedTurnM?: number;
 }
 
 /**
@@ -158,6 +171,21 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
     ran.push({ kind, params });
     if (kind === 'turn') {
       scene.advanceYawDeg(Number(params.angleDeg));
+      if (opts.arcedTurnM !== undefined) {
+        // The arc closes ground on the target as well as rotating — it is the
+        // first metres of the stage, taken early.
+        state.distance = Math.max(0, state.distance - opts.arcedTurnM * progressFactor);
+        scene.noteTranslationM(opts.arcedTurnM);
+        return {
+          id: `gen-${ran.length}`,
+          kind,
+          params,
+          status: 'done',
+          reasoning,
+          result: `Turned; arced ${opts.arcedTurnM.toFixed(2)} m forward while turning.`,
+          measured: { angleDeg: Number(params.angleDeg), distanceM: opts.arcedTurnM },
+        };
+      }
     } else if (kind === 'walk') {
       // A refusal happens BEFORE any motion: no translation to note, and no
       // `measured` on the block — the base never got the command.
@@ -1079,5 +1107,94 @@ describe('Navigator — the executor refuses a stage', () => {
     expect(outcome.ok).toBe(false);
     expect(outcome.message).toMatch(/walk failed/);
     expect(outcome.message).toMatch(/did not move/);
+  });
+});
+
+/**
+ * The stage ALIGNMENT may arc (TASK-227 follow-up).
+ *
+ * A stage is "turn onto the bearing, then walk". On the G1 locomotion
+ * checkpoint this rig runs, the turn half of that is dead whenever the
+ * correction goes LEFT — a measured 0.01 of the commanded in-place rotation —
+ * and the base's −0.90 °/s drift makes it a left correction almost every time.
+ * So the navigator hands the alignment a budget of the coming stage's own
+ * metres, the executor turns while walking, and the stage is shortened by what
+ * the arc covered. The alternative is a robot that walks the full stage from a
+ * position part-way along it and overshoots its waypoint every time.
+ */
+describe('Navigator — the stage alignment arcs', () => {
+  it('gives the alignment a budget of the stage minus the shortest useful one', async () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, { worldBearingDeg: 30, distanceM: 3, arcedTurnM: 0.4 });
+    world.look();
+
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages: 12,
+    });
+
+    await navigator.navigate('table');
+
+    const turns = world.ran.filter((b) => b.kind === 'turn');
+    expect(turns.length).toBeGreaterThan(0);
+    // The first stage is a full 1 m one (3 m out, arriving at 0.6 m), so the
+    // alignment may spend all of it but the last MIN_STAGE_M. That subtraction
+    // is what guarantees the walk after it is still worth issuing: the executor
+    // spends the budget in COMMANDED metres and reports back MEASURED ones,
+    // which are never larger.
+    expect(Number(turns[0]!.params.arcM)).toBeCloseTo(1 - MIN_STAGE_M, 6);
+  });
+
+  it('takes the metres the arc covered OFF the stage that follows it', async () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, { worldBearingDeg: 30, distanceM: 3, arcedTurnM: 0.4 });
+    world.look();
+
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages: 12,
+    });
+
+    const outcome = await navigator.navigate('table');
+    expect(outcome.ok).toBe(true);
+
+    // The stage was 1.00 m and the alignment already covered 0.40 m of it, so
+    // the walk is asked for 0.60 m. Without this the robot would walk the whole
+    // metre from 0.40 m along it and sail 0.40 m past the waypoint — the exact
+    // failure "a turn does not move the robot" produces once turns move.
+    const firstIndex = world.ran.findIndex((b) => b.kind === 'walk');
+    expect(firstIndex).toBeGreaterThan(0);
+    expect(world.ran[firstIndex - 1]!.kind).toBe('turn');
+    expect(Number(world.ran[firstIndex]!.params.distanceM)).toBeCloseTo(0.6, 6);
+  });
+
+  it('gives a final-approach stage no arc budget at all, so it turns in place', async () => {
+    // 0.85 m out is 0.25 m of approach once ARRIVAL_M is taken off — under
+    // MIN_STAGE_M, so there is nothing to spend and the alignment is the one
+    // that must not drive anywhere. `arcM: 0` is below the executor's own
+    // funding threshold, so it takes the turn in place.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, { worldBearingDeg: 30, distanceM: 0.85 });
+    world.look();
+
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages: 12,
+    });
+
+    await navigator.navigate('table');
+
+    const turns = world.ran.filter((b) => b.kind === 'turn');
+    expect(turns.length).toBeGreaterThan(0);
+    expect(Number(turns[0]!.params.arcM)).toBe(0);
   });
 });

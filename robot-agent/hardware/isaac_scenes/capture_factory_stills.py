@@ -55,10 +55,16 @@ parser.add_argument("--settle", type=int, default=90,
 parser.add_argument("--only", default="",
                     help="comma-separated camera names; default is every camera found")
 parser.add_argument("--light-scale", type=float, default=1.0,
-                    help="multiply every light's intensity. The scene is lit for a "
-                         "roofless hall of white surfaces, which renders flat and "
-                         "blown out; 0.3-0.5 restores the shadows that make the "
-                         "columns and the table legible.")
+                    help="multiply every light's intensity ON THE BUILT STAGE. The "
+                         "0.3-0.5 this flag used to recommend was measured and BAKED "
+                         "INTO THE SCENE (dome 3000 -> 760, distant 1200 -> 304, a 3.95x "
+                         "cut; see the LIGHTING block in factory_pauseroom_layout.py), "
+                         "so scaling by 0.35 again renders about 1.4 stops dark. Leave it "
+                         "at 1.0. To sweep the exposure, use NEODEM_DOME_INTENSITY / "
+                         "NEODEM_DISTANT_INTENSITY / NEODEM_AMBIENT_INTENSITY, which change "
+                         "what the SCENE declares and therefore describe a state a mission "
+                         "would really run in -- and which move the RTX ambient term too, "
+                         "which this flag cannot reach at all.")
 parser.add_argument("--shot", action="append", default=[], metavar="NAME:EX,EY,EZ:TX,TY,TZ",
                     help="render an extra framing by MOVING an existing camera to eye "
                          "EX,EY,EZ looking at TX,TY,TZ, saved as NAME.png. Repeatable. "

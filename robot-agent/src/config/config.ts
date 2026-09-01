@@ -192,8 +192,109 @@ export interface Config {
     maxNavStages: number;
     /** Walking speed used to convert `walk.distanceM` → duration (`AGENT_WALK_SPEED_MPS`). */
     walkSpeedMps: number;
+    /**
+     * COMMANDED forward velocity, m/s (`AGENT_WALK_COMMAND_MPS`). `0` — the
+     * default — keeps the legacy coupling, in which `walkSpeedMps` supplies
+     * both the commanded vx and the speed the DURATION is derived from.
+     *
+     * Those are not the same number on a base with a stepping threshold. The
+     * Isaac G1 does not initiate a gait at all below ~0.5 m/s commanded
+     * (measured: vx 0.3 -> 0.4% of commanded, vx 0.5 -> 16.6%), and the sim
+     * clamps vx at MAX_VX = 1.5, so the commanded value has a floor AND a
+     * ceiling that have nothing to do with how fast the robot actually gets
+     * anywhere.
+     */
+    walkCommandMps: number;
+    /**
+     * ACHIEVED forward speed, m/s (`AGENT_WALK_ACHIEVED_MPS`), used to turn a
+     * distance into a hold duration. `0` -> `walkSpeedMps`.
+     *
+     * Measured against the sim's true root pose (rt/sim_state), NOT against
+     * odometry: vx 1.0 -> 0.276 m/s, vx 1.5 -> 0.341 m/s, i.e. roughly a
+     * quarter of what is asked for. Deriving the duration from the COMMANDED
+     * speed instead makes every walk about 4x too short, and a 1 m walk becomes
+     * a 0.67 s command that does not outlast the base's own gait initiation --
+     * the robot then does not move at all, which is exactly what it did.
+     */
+    walkAchievedMps: number;
     /** Turn rate used to convert `turn.angleDeg` → duration (`AGENT_TURN_SPEED_DPS`). */
     turnSpeedDps: number;
+    /**
+     * COMMANDED angular velocity for an IN-PLACE rotation, rad/s
+     * (`AGENT_TURN_COMMAND_RAD_S`). `0` — the default — keeps the legacy
+     * coupling, in which `turnSpeedDps` supplies both the commanded omega
+     * (`turnSpeedDps × π/180`) and the rate the duration is derived from.
+     *
+     * It exists because those are two different physical quantities on a base
+     * whose locomotion policy has a DEADBAND. Measured on the Isaac factory rig
+     * (2026-08-29), in place, commanded rad/s → achieved deg/s:
+     *
+     * ```
+     *   0.60 → left +0.11  right −0.25   (both effectively dead)
+     *   0.79 → left +0.10  right −3.5
+     *   0.90 → left +0.51  right −5.45
+     *   1.20 → left +5.09  right −14.73
+     *   1.60 → left +7.88  right −13.89
+     *   2.00 → left +9.29  right −20.35
+     * ```
+     *
+     * The default `turnSpeedDps` of 45 °/s is 0.785 rad/s — INSIDE that
+     * deadband, which is why an in-place turn on that rig achieves ~0°. The
+     * commanded omega has to go UP past ~0.9 rad/s while the duration has to be
+     * computed from a much LOWER achieved rate, so one knob cannot do both.
+     */
+    turnCommandRadS: number;
+    /**
+     * ACHIEVED yaw rate turning LEFT (CCW, +omega) in deg/s, used to size a
+     * turn's DURATION (`AGENT_TURN_ACHIEVED_DPS_LEFT`). `0` — the default —
+     * falls back to `turnSpeedDps`, i.e. today's behaviour exactly.
+     *
+     * Split from the right-hand rate because the asymmetry is real and lives in
+     * the vendor's trained locomotion policy, not in this code: at 2.00 rad/s
+     * the rig measured +9.29 °/s left against −20.35 °/s right. It cannot be
+     * fixed here, only compensated.
+     */
+    turnAchievedDpsLeft: number;
+    /**
+     * ACHIEVED yaw rate turning RIGHT (CW, −omega) in deg/s
+     * (`AGENT_TURN_ACHIEVED_DPS_RIGHT`). `0` → `turnSpeedDps`. See
+     * {@link AgentModeConfig.turnAchievedDpsLeft}.
+     */
+    turnAchievedDpsRight: number;
+    /**
+     * The same three numbers for an ARC — a rotation issued with `vx > 0`
+     * (`AGENT_TURN_ARC_COMMAND_RAD_S`). Each falls back to its in-place
+     * counterpart when unset, which falls back to `turnSpeedDps`.
+     *
+     * Separate because forward motion partially lifts the deadband. Measured on
+     * the same rig at `vx = 0.5` m/s, commanded rad/s → achieved deg/s:
+     *
+     * ```
+     *   0.785 → left +4.68  right −9.51
+     *   1.200 → left +8.41  right −13.78
+     * ```
+     *
+     * 0.785 rad/s is dead in place and turns at 4.68 °/s while walking.
+     */
+    turnArcCommandRadS: number;
+    /** Achieved LEFT yaw rate while arcing, deg/s (`AGENT_TURN_ARC_ACHIEVED_DPS_LEFT`). */
+    turnArcAchievedDpsLeft: number;
+    /** Achieved RIGHT yaw rate while arcing, deg/s (`AGENT_TURN_ARC_ACHIEVED_DPS_RIGHT`). */
+    turnArcAchievedDpsRight: number;
+    /**
+     * Fraction of a COMMANDED forward distance an arc actually covers
+     * (`AGENT_ARC_TRAVEL_GAIN`), `0 < gain ≤ 1`. Default `1` — assume the base
+     * goes as far as it is told, which is today's behaviour exactly.
+     *
+     * It converts a caller's budget that is denominated in REAL metres — the
+     * navigator's stage alignment budget, which is a measured distance to the
+     * target and which the navigator then reduces by the arc's MEASURED
+     * displacement — into the commanded metres the executor actually spends.
+     * Without it a base that covers 31% of what it commands is charged 3.2× for
+     * every arc, and the alignment runs out of budget long before it has turned.
+     * The `walk` loop's own budget is in commanded metres and is NOT converted.
+     */
+    arcTravelGain: number;
     /**
      * How an in-place LEFT (CCW) rotation is executed (`AGENT_LEFT_TURN_STRATEGY`).
      *
@@ -705,6 +806,20 @@ export const config: Config = {
     maxNavStages: parseInt(process.env.AGENT_MAX_NAV_STAGES || '12', 10),
     walkSpeedMps: parseFloat(process.env.AGENT_WALK_SPEED_MPS || '0.4'),
     turnSpeedDps: parseFloat(process.env.AGENT_TURN_SPEED_DPS || '45'),
+    // Every one of these defaults to the sentinel that means "keep the legacy
+    // coupling" (0 for a rate, 1 for a gain), so an unconfigured robot — the
+    // warehouse rig and every other embodiment — is driven byte-for-byte as it
+    // was before the Isaac deadband measurements existed. The new tuning is
+    // strictly opt-in, per rig, through these env vars.
+    walkCommandMps: envFloat(process.env.AGENT_WALK_COMMAND_MPS, 0),
+    walkAchievedMps: envFloat(process.env.AGENT_WALK_ACHIEVED_MPS, 0),
+    turnCommandRadS: envFloat(process.env.AGENT_TURN_COMMAND_RAD_S, 0),
+    turnAchievedDpsLeft: envFloat(process.env.AGENT_TURN_ACHIEVED_DPS_LEFT, 0),
+    turnAchievedDpsRight: envFloat(process.env.AGENT_TURN_ACHIEVED_DPS_RIGHT, 0),
+    turnArcCommandRadS: envFloat(process.env.AGENT_TURN_ARC_COMMAND_RAD_S, 0),
+    turnArcAchievedDpsLeft: envFloat(process.env.AGENT_TURN_ARC_ACHIEVED_DPS_LEFT, 0),
+    turnArcAchievedDpsRight: envFloat(process.env.AGENT_TURN_ARC_ACHIEVED_DPS_RIGHT, 0),
+    arcTravelGain: envFloat(process.env.AGENT_ARC_TRAVEL_GAIN, 1),
     leftTurnStrategy: leftTurnStrategyFromEnv(),
     stopWords: (process.env.AGENT_STOP_WORDS || 'stopp,stop,halt')
       .split(',')
@@ -933,6 +1048,25 @@ export function validateConfig(): void {
     `    - Walk/Turn Speed: ${config.agentMode.walkSpeedMps} m/s, ${config.agentMode.turnSpeedDps} deg/s` +
       ` (left turns: ${config.agentMode.leftTurnStrategy})`
   );
+  // The turn tuning is opt-in and easy to forget, and a rig running with it OFF
+  // looks identical to one running with it on until the robot fails to turn.
+  // Say which of the two this process is.
+  {
+    const a = config.agentMode;
+    const tuned =
+      a.turnCommandRadS > 0 || a.turnAchievedDpsLeft > 0 || a.turnAchievedDpsRight > 0;
+    console.log(
+      `    - Turn Profile: ${
+        tuned
+          ? `commanded ${a.turnCommandRadS || (a.turnSpeedDps * Math.PI) / 180} rad/s, achieved ` +
+            `${a.turnAchievedDpsLeft || a.turnSpeedDps}/${a.turnAchievedDpsRight || a.turnSpeedDps} deg/s (left/right)` +
+            (a.turnArcCommandRadS > 0 ? `, arcs at ${a.turnArcCommandRadS} rad/s` : '') +
+            (a.arcTravelGain < 1 ? `, arc travel gain ${a.arcTravelGain}` : '')
+          : `coupled to ${a.turnSpeedDps} deg/s (untuned — set AGENT_TURN_COMMAND_RAD_S to split ` +
+            `the commanded rate from the achieved one)`
+      }`
+    );
+  }
   console.log(`    - Max Nav Stages: ${config.agentMode.maxNavStages}`);
   console.log(
     `    - Navigator: ${
