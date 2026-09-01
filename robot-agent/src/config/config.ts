@@ -192,6 +192,31 @@ export interface Config {
     maxNavStages: number;
     /** Walking speed used to convert `walk.distanceM` → duration (`AGENT_WALK_SPEED_MPS`). */
     walkSpeedMps: number;
+    /**
+     * COMMANDED forward velocity, m/s (`AGENT_WALK_COMMAND_MPS`). `0` — the
+     * default — keeps the legacy coupling, in which `walkSpeedMps` supplies
+     * both the commanded vx and the speed the DURATION is derived from.
+     *
+     * Those are not the same number on a base with a stepping threshold. The
+     * Isaac G1 does not initiate a gait at all below ~0.5 m/s commanded
+     * (measured: vx 0.3 -> 0.4% of commanded, vx 0.5 -> 16.6%), and the sim
+     * clamps vx at MAX_VX = 1.5, so the commanded value has a floor AND a
+     * ceiling that have nothing to do with how fast the robot actually gets
+     * anywhere.
+     */
+    walkCommandMps: number;
+    /**
+     * ACHIEVED forward speed, m/s (`AGENT_WALK_ACHIEVED_MPS`), used to turn a
+     * distance into a hold duration. `0` -> `walkSpeedMps`.
+     *
+     * Measured against the sim's true root pose (rt/sim_state), NOT against
+     * odometry: vx 1.0 -> 0.276 m/s, vx 1.5 -> 0.341 m/s, i.e. roughly a
+     * quarter of what is asked for. Deriving the duration from the COMMANDED
+     * speed instead makes every walk about 4x too short, and a 1 m walk becomes
+     * a 0.67 s command that does not outlast the base's own gait initiation --
+     * the robot then does not move at all, which is exactly what it did.
+     */
+    walkAchievedMps: number;
     /** Turn rate used to convert `turn.angleDeg` → duration (`AGENT_TURN_SPEED_DPS`). */
     turnSpeedDps: number;
     /**
@@ -786,6 +811,8 @@ export const config: Config = {
     // warehouse rig and every other embodiment — is driven byte-for-byte as it
     // was before the Isaac deadband measurements existed. The new tuning is
     // strictly opt-in, per rig, through these env vars.
+    walkCommandMps: envFloat(process.env.AGENT_WALK_COMMAND_MPS, 0),
+    walkAchievedMps: envFloat(process.env.AGENT_WALK_ACHIEVED_MPS, 0),
     turnCommandRadS: envFloat(process.env.AGENT_TURN_COMMAND_RAD_S, 0),
     turnAchievedDpsLeft: envFloat(process.env.AGENT_TURN_ACHIEVED_DPS_LEFT, 0),
     turnAchievedDpsRight: envFloat(process.env.AGENT_TURN_ACHIEVED_DPS_RIGHT, 0),

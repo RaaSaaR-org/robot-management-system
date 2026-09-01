@@ -421,9 +421,15 @@ export interface WalkCommand {
 }
 
 /**
- * distance (m) → (vx, vy, duration) at AGENT_WALK_SPEED_MPS. Speed is held
- * constant and the DURATION carries the distance; that is what LocoClient's
+ * distance (m) → (vx, vy, duration). Velocity is held constant and the
+ * DURATION carries the distance; that is what LocoClient's
  * `SetVelocity(vx, vy, omega, duration)` expects.
+ *
+ * Two speeds, not one: `AGENT_WALK_COMMAND_MPS` is what goes on the wire and
+ * `AGENT_WALK_ACHIEVED_MPS` is what the duration is derived from. Both default
+ * to the sentinel 0, which resolves back to `speedMps` — so an untuned rig gets
+ * the old coupled `AGENT_WALK_SPEED_MPS` arithmetic byte for byte. See
+ * `__tests__/walk-profile.test.ts`.
  */
 export function walkToCommand(
   distanceM: number,
@@ -433,8 +439,27 @@ export function walkToCommand(
   const speed = Math.abs(speedMps) > 1e-6 ? Math.abs(speedMps) : 0.4;
   const distance = Math.abs(distanceM);
   const axes = WALK_AXES[direction] ?? WALK_AXES.forward;
-  const durationS = Math.min(MAX_DURATION_S, Math.max(MIN_DURATION_S, distance / speed));
-  return { vx: axes.fx * speed, vy: axes.fy * speed, omega: 0, durationS };
+  // THE SAME TWO ROLES A TURN HAS, AND THE SAME REASON THEY MUST SEPARATE.
+  //
+  // `speed` was doing both jobs: it set the commanded vx AND the speed the
+  // duration was divided by. On a base with a stepping threshold those pull
+  // apart. The Isaac G1 will not initiate a gait below ~0.5 m/s commanded and
+  // the sim clamps vx at 1.5, while what it ACHIEVES is about a quarter of
+  // whatever it is asked for (measured against the sim's true root pose:
+  // vx 1.5 -> 0.341 m/s). Coupled, a 1 m walk at vx 1.5 becomes a 0.67 s
+  // command -- shorter than the base's own gait initiation -- and the robot
+  // does not move at all.
+  //
+  // Both overrides default to the sentinel 0, which resolves back to `speed`,
+  // so an untuned rig is byte-identical to the old behaviour.
+  const commanded = Math.abs(config.agentMode.walkCommandMps) > 1e-6
+    ? Math.abs(config.agentMode.walkCommandMps)
+    : speed;
+  const achieved = Math.abs(config.agentMode.walkAchievedMps) > 1e-6
+    ? Math.abs(config.agentMode.walkAchievedMps)
+    : speed;
+  const durationS = Math.min(MAX_DURATION_S, Math.max(MIN_DURATION_S, distance / achieved));
+  return { vx: axes.fx * commanded, vy: axes.fy * commanded, omega: 0, durationS };
 }
 
 /**
