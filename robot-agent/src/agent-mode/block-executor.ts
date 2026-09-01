@@ -421,6 +421,25 @@ export interface WalkCommand {
 }
 
 /**
+ * The forward velocity that goes ON THE WIRE, given the speed a caller asked
+ * for. `AGENT_WALK_COMMAND_MPS` wins when set; the sentinel 0 resolves back to
+ * the caller's speed, which is the old coupled behaviour.
+ *
+ * Shared by {@link walkToCommand} and {@link BlockExecutor.arcFor} on purpose.
+ * An arc drives the base forward exactly as a walk does, so if the two resolved
+ * their commanded velocity differently, tuning a rig past its stepping
+ * threshold would fix the walk and leave every arcing heading correction below
+ * it — silently, since a base that does not step still reports a completed
+ * command. That is the same dead correction the arc was added to replace.
+ */
+function commandedForwardMps(speedMps: number): number {
+  const speed = Math.abs(speedMps) > 1e-6 ? Math.abs(speedMps) : 0.4;
+  return Math.abs(config.agentMode.walkCommandMps) > 1e-6
+    ? Math.abs(config.agentMode.walkCommandMps)
+    : speed;
+}
+
+/**
  * distance (m) → (vx, vy, duration). Velocity is held constant and the
  * DURATION carries the distance; that is what LocoClient's
  * `SetVelocity(vx, vy, omega, duration)` expects.
@@ -452,9 +471,7 @@ export function walkToCommand(
   //
   // Both overrides default to the sentinel 0, which resolves back to `speed`,
   // so an untuned rig is byte-identical to the old behaviour.
-  const commanded = Math.abs(config.agentMode.walkCommandMps) > 1e-6
-    ? Math.abs(config.agentMode.walkCommandMps)
-    : speed;
+  const commanded = commandedForwardMps(speed);
   const achieved = Math.abs(config.agentMode.walkAchievedMps) > 1e-6
     ? Math.abs(config.agentMode.walkAchievedMps)
     : speed;
@@ -1359,9 +1376,27 @@ export class BlockExecutor {
     // model output and no operator text can put `arcM` on a block. That is the
     // same mechanism `walk.planned` already relies on.
     const requestedArcM = Number(block.params.arcM);
+    // AN ARC IS FORWARD MOTION, SO IT ANSWERS TO THE SAME OBSTACLES A WALK DOES.
+    //
+    // `walk` clamps to the lidar's forward clearance and runs the segment past
+    // the keepouts and the occupancy grid before it moves. This block was doing
+    // neither, on the reasoning that a turn does not travel — which stopped
+    // being true the moment `arcM` existed. The navigator hands out up to
+    // `navMaxSegmentM` of it and only clamps AFTER the turn, so an unchecked arc
+    // could drive over a metre along the OLD heading, through a keepout or into
+    // a surface the lidar had already measured, inside a block that calls itself
+    // a turn.
+    //
+    // Clamping rather than refusing: an arc is a heading correction that may
+    // travel, never one that must. Whatever ground it cannot have, it gives up,
+    // and a budget below the navigator's minimum stage turns the block back into
+    // the in-place turn it would have been before `arcM`.
+    const allowedArcM = await this.arcClearanceM(
+      Number.isFinite(requestedArcM) ? Math.max(0, requestedArcM) : 0
+    );
     // 'travelled': `arcM` is metres of REAL ground out of the coming stage — see
     // {@link BlockExecutor.arcFor}.
-    const arc = this.arcFor(Number.isFinite(requestedArcM) ? requestedArcM : 0, 'travelled');
+    const arc = this.arcFor(allowedArcM, 'travelled');
 
     const {
       result,
@@ -1910,15 +1945,52 @@ export class BlockExecutor {
    * The conversion is the identity at the default gain of 1, so nothing about
    * the untuned behaviour changes.
    */
+  /**
+   * How many of an arc's requested metres the robot is actually allowed to
+   * travel — the two checks {@link BlockExecutor.walk} runs, applied to the
+   * forward motion an arcing turn performs.
+   *
+   * Returns 0 when there is not enough room to be worth it, which
+   * {@link BlockExecutor.arcFor} turns into `undefined` and the caller into a
+   * plain in-place turn. Absent lidar or map → the check contributes nothing,
+   * exactly as it does for a walk.
+   */
+  private async arcClearanceM(requestedM: number): Promise<number> {
+    if (!(requestedM > 0)) return 0;
+    let allowedM = requestedM;
+
+    const clearanceM = this.deps.scene.getForwardClearanceM();
+    if (clearanceM !== null) {
+      allowedM = Math.min(allowedM, Math.max(0, clearanceM - CLEARANCE_MARGIN_M));
+    }
+
+    if (this.deps.checkForwardPath && allowedM > 0) {
+      const check = await this.deps.checkForwardPath(allowedM);
+      if (check?.blocker && check.allowedM < allowedM) allowedM = Math.max(0, check.allowedM);
+    }
+
+    // NOTHING IN THE WAY → the request passes through untouched. The floor
+    // below is about obstacles, not about budget size: a caller that asks for a
+    // deliberately tiny arc still gets it, and `arcFor` applies the only
+    // minimum that is really structural (one MIN_DURATION_S command).
+    if (allowedM >= requestedM) return requestedM;
+
+    // Clamped. Below one navigator stage there is nothing useful left to spend,
+    // and arcing a hand's width is worse than not arcing: it costs the same
+    // minimum command and reports travel the navigator then deducts from the
+    // stage. Give the metres up and turn in place.
+    return allowedM < MIN_STAGE_M ? 0 : allowedM;
+  }
+
   private arcFor(
     budgetM: number,
     budgetIn: 'commanded' | 'travelled' = 'commanded'
   ): ArcOption | undefined {
     if (!Number.isFinite(budgetM) || budgetM <= 0) return undefined;
-    const forwardMps =
-      Math.abs(config.agentMode.walkSpeedMps) > 1e-6
-        ? Math.abs(config.agentMode.walkSpeedMps)
-        : 0.4;
+    // The SAME velocity a `walk` would put on the wire — see
+    // {@link commandedForwardMps} for why resolving it separately here was a
+    // defect waiting on the first tuned rig.
+    const forwardMps = commandedForwardMps(config.agentMode.walkSpeedMps);
     const gain = config.agentMode.arcTravelGain;
     const travelGain =
       budgetIn === 'travelled' && Number.isFinite(gain) && gain > 1e-6 && gain <= 1 ? gain : 1;

@@ -22,6 +22,7 @@ import {
 import { RangeSensor } from '../range.js';
 import { SceneMemoryStore } from '../scene-memory.js';
 import { DEG_TO_RAD, RAD_TO_DEG, type AgentBlock } from '../types.js';
+import { CLEARANCE_MARGIN_M } from '../navigator.js';
 import { config } from '../../config/config.js';
 import type { VisionClient } from '../vision.js';
 
@@ -69,6 +70,14 @@ interface MoveCall {
   durationS: number;
 }
 
+/** What the world puts in front of an arcing turn; absent → open floor. */
+interface ArcObstacles {
+  /** What the lidar measures straight ahead, m. */
+  clearanceM?: number;
+  /** What the map allows before a keepout/occupied cell, m. */
+  pathAllowedM?: number;
+}
+
 function block(kind: AgentBlock['kind'], params: Record<string, unknown> = {}): AgentBlock {
   return { id: `b-${kind}`, kind, params, status: 'pending' };
 }
@@ -79,12 +88,26 @@ function block(kind: AgentBlock['kind'], params: Record<string, unknown> = {}): 
  * the forward distance it is told to. Nothing is faked at the reporting layer —
  * the pose really goes where these two rules put it.
  */
-function makeMeasuredBase() {
+function makeMeasuredBase(obstacles: ArcObstacles = {}) {
   const moves: MoveCall[] = [];
   const pose = { x: 0, y: 0, yawRad: 0 };
   const scene = new SceneMemoryStore('robot-1');
+  if (obstacles.clearanceM !== undefined) {
+    const clearanceM = obstacles.clearanceM;
+    scene.getForwardClearanceM = () => clearanceM;
+  }
   const deps: BlockExecutorDeps = {
     scene,
+    ...(obstacles.pathAllowedM === undefined
+      ? {}
+      : {
+          checkForwardPath: (distanceM: number) => ({
+            allowedM: Math.min(distanceM, obstacles.pathAllowedM!),
+            knownM: distanceM,
+            blocker: { kind: 'keepout' as const, label: 'loading bay' },
+            blockerAtM: obstacles.pathAllowedM!,
+          }),
+        }),
     vision: {
       observe: async () => ({
         currentView: 'a factory hall',
@@ -135,6 +158,8 @@ function makeMeasuredBase() {
 const TUNABLE = [
   'turnSpeedDps',
   'walkSpeedMps',
+  'walkCommandMps',
+  'walkAchievedMps',
   'turnCommandRadS',
   'turnAchievedDpsLeft',
   'turnAchievedDpsRight',
@@ -451,5 +476,132 @@ describe('BlockExecutor — an arc budget bounds DISTANCE, not ANGLE', () => {
     await h.executor.execute(block('walk', { distanceM: 3, direction: 'forward' }));
 
     expect(h.commandedForwardM()).toBeLessThanOrEqual(3 + 1e-9);
+  });
+});
+
+/**
+ * An arc is forward motion, so it answers to the obstacles a walk answers to.
+ *
+ * `walk` has clamped to the lidar's forward clearance and run the segment past
+ * the keepouts since TASK-208; the arcing turn did neither, on the reasoning
+ * that a turn does not travel. `arcM` ended that. The navigator hands out up to
+ * a full stage of it and only clamps AFTER the turn, so an unchecked arc drove
+ * along the OLD heading through whatever was there.
+ */
+describe('BlockExecutor — an arc answers to the same obstacles a walk does', () => {
+  const CLEAR_BUDGET_M = 0.7;
+
+  it('spends its whole budget when the floor ahead is open', async () => {
+    // The control for everything below: no clearance, no map, nothing changes.
+    applyIsaacTuning();
+    const h = makeMeasuredBase();
+
+    await h.executor.execute(block('turn', { angleDeg: 90, arcM: CLEAR_BUDGET_M }));
+
+    expect(h.travelledM()).toBeCloseTo(CLEAR_BUDGET_M, 6);
+  });
+
+  it('clamps the arc to the lidar clearance, minus the stopping margin', async () => {
+    applyIsaacTuning();
+    // 1.20 m measured − 0.45 m margin = 0.75 m allowed, under the 1.5 m asked.
+    const h = makeMeasuredBase({ clearanceM: 1.2 });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: 90, arcM: 1.5 }));
+
+    expect(outcome.ok).toBe(true);
+    expect(h.travelledM()).toBeLessThanOrEqual(1.2 - CLEARANCE_MARGIN_M + 1e-9);
+    expect(h.travelledM()).toBeGreaterThan(0);
+  });
+
+  it('clamps the arc to the map, so a keepout stops it as it stops a walk', async () => {
+    applyIsaacTuning();
+    const h = makeMeasuredBase({ pathAllowedM: 0.5 });
+
+    await h.executor.execute(block('turn', { angleDeg: 90, arcM: 1.5 }));
+
+    expect(h.travelledM()).toBeLessThanOrEqual(0.5 + 1e-9);
+  });
+
+  it('takes whichever of the two is tighter', async () => {
+    applyIsaacTuning();
+    const h = makeMeasuredBase({ clearanceM: 2.0, pathAllowedM: 0.6 });
+
+    await h.executor.execute(block('turn', { angleDeg: 90, arcM: 1.5 }));
+
+    expect(h.travelledM()).toBeLessThanOrEqual(0.6 + 1e-9);
+  });
+
+  it('gives the metres up entirely and turns IN PLACE when the room left is under a stage', async () => {
+    applyIsaacTuning();
+    // 0.50 m measured − 0.45 m margin = 0.05 m, far under MIN_STAGE_M.
+    const h = makeMeasuredBase({ clearanceM: 0.5 });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: 90, arcM: 1.5 }));
+
+    // The TURN still happens — an arc is a heading correction that MAY travel,
+    // never one that must — but nothing translates.
+    expect(outcome.ok).toBe(true);
+    expect(h.travelledM()).toBeCloseTo(0, 9);
+    expect(h.arcMoves().length).toBe(0);
+    expect(Math.abs(h.yawDeg())).toBeGreaterThan(0);
+  });
+
+  it('refuses to arc into a wall the lidar is already inside the margin of', async () => {
+    applyIsaacTuning();
+    const h = makeMeasuredBase({ clearanceM: 0.2 });
+
+    await h.executor.execute(block('turn', { angleDeg: 90, arcM: 1.5 }));
+
+    expect(h.travelledM()).toBeCloseTo(0, 9);
+  });
+
+  it('leaves a small budget alone — the floor is about obstacles, not about size', async () => {
+    // 0.10 m is under MIN_STAGE_M, but nothing is in the way, so the caller's
+    // deliberate choice stands. Pins the bug the first draft of this had.
+    applyIsaacTuning();
+    const h = makeMeasuredBase();
+
+    await h.executor.execute(block('turn', { angleDeg: 90, arcM: 0.1 }));
+
+    expect(h.travelledM()).toBeGreaterThan(0);
+    expect(h.travelledM()).toBeLessThanOrEqual(0.1 + 1e-9);
+  });
+});
+
+/**
+ * The commanded forward velocity is ONE decision, and both things that drive
+ * the base forward have to make it the same way.
+ *
+ * `walkToCommand` moved to AGENT_WALK_COMMAND_MPS; `arcFor` kept reading
+ * AGENT_WALK_SPEED_MPS. Untuned that is invisible — the sentinel resolves back
+ * to the same number — so it would have survived every test here and failed on
+ * the first rig that used the knob, by putting every arc back under the gait
+ * threshold the knob exists to clear.
+ */
+describe('BlockExecutor — the arc commands what a walk commands', () => {
+  it('puts the tuned commanded velocity on the wire, not AGENT_WALK_SPEED_MPS', async () => {
+    applyIsaacTuning();
+    config.agentMode.walkSpeedMps = 0.4;
+    config.agentMode.walkCommandMps = 1.5;
+    const h = makeMeasuredBase();
+
+    await h.executor.execute(block('turn', { angleDeg: 90, arcM: 0.7 }));
+
+    const arcs = h.arcMoves();
+    expect(arcs.length).toBeGreaterThan(0);
+    // 0.4 is the number the defect put here, and it is below the ~0.5 m/s this
+    // base needs to take a step at all.
+    for (const move of arcs) expect(Math.abs(move.vx)).toBeCloseTo(1.5, 12);
+  });
+
+  it('still falls back to the walk speed when the knob is untuned', async () => {
+    applyIsaacTuning();
+    config.agentMode.walkSpeedMps = 0.5;
+    config.agentMode.walkCommandMps = 0;
+    const h = makeMeasuredBase();
+
+    await h.executor.execute(block('turn', { angleDeg: 90, arcM: 0.7 }));
+
+    for (const move of h.arcMoves()) expect(Math.abs(move.vx)).toBeCloseTo(0.5, 12);
   });
 });

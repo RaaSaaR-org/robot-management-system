@@ -499,9 +499,12 @@ ISAAC_CAMERA_RACE='Image Server\].*returned no frame'
 echo "waiting for Isaac to build the scene (this takes a while on a cold shader cache)"
 ISAAC_UP=0
 for i in $(seq 1 180); do
-  if grep -qiE 'image server has started|Image Server' "$LOGDIR/isaac.log" 2>/dev/null; then
-    ISAAC_UP=1; break
-  fi
+  # ORDER MATTERS, AND IT WAS WRONG. The readiness test below matches the bare
+  # string "Image Server" case-insensitively, which is also a substring of
+  # "[Image Server] head returned no frame." -- so the lost-race line set
+  # ISAAC_UP=1 and broke out before the race check could ever run, downgrading a
+  # fatal to a WARNING and letting the run continue blind. Both failure tests go
+  # FIRST; only then do we ask whether it came up.
   if grep -qE "$ISAAC_FATAL" "$LOGDIR/isaac.log" 2>/dev/null; then
     tail -30 "$LOGDIR/isaac.log"
     die "Isaac failed to start -- see $LOGDIR/isaac.log"
@@ -513,6 +516,11 @@ for i in $(seq 1 180); do
      exists to prevent exactly this; check that it ran and that /dev/shm holds three
      921728-byte isaac_*_image_shm segments BEFORE the container starts.
      See $LOGDIR/isaac.log"
+  fi
+  # Only now, with both failure modes ruled out for this poll, does a mention of
+  # the image server mean it is up.
+  if grep -qiE 'image server has started|Image Server' "$LOGDIR/isaac.log" 2>/dev/null; then
+    ISAAC_UP=1; break
   fi
   # The container dying is not always a traceback: an OOM kill or a missing
   # image leaves the docker client exiting with nothing useful in the log.
@@ -631,7 +639,11 @@ if [ "$ENABLE_MANIP" = "1" ]; then
   STATE_CODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
     "http://localhost:8779/state/fast" 2>/dev/null || echo 000)"
   if [ "$STATE_CODE" = "200" ]; then
-    STATE_COUNT="$(printf '%s' "$STATE_JSON" | grep -o '"count": *[0-9]*' | head -1)"
+    # `|| true` is NOT decoration: under `set -euo pipefail` a grep that matches
+    # nothing exits 1, the assignment inherits it, and the EXIT trap tears down
+    # ten minutes of bringup -- Isaac, bridges and all -- at its very last step.
+    # The two curls above are guarded for the same reason; this one was not.
+    STATE_COUNT="$(printf '%s' "$STATE_JSON" | grep -o '"count": *[0-9]*' | head -1 || true)"
     echo "joint state OK: /state/fast answered 200 -- ${STATE_COUNT:-count ?} of 43"
     if ! printf '%s' "$STATE_JSON" | grep -q '"complete": *true'; then
       echo "     WARNING: incomplete -- $(printf '%s' "$STATE_JSON" \

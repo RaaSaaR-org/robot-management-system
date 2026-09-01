@@ -787,7 +787,26 @@ export class HardwareClient {
    * Sent when teleop ends. Without it the sidecar keeps ramping from the last
    * commanded pose, so the NEXT operator's first `/action` would continue a
    * stranger's motion instead of starting from where the robot actually stands.
-   * It does not make the arms drop — the robot holds the pose it was left in.
+   *
+   * WHAT THE ARMS DO IS THE BACKEND'S CHOICE, and it is not the same everywhere
+   * — this comment used to promise "the robot holds the pose it was left in",
+   * which is false on the Isaac rig and matters most exactly where it is false.
+   *
+   *   - `g1_sidecar.py` clears a ramp-state dict and publishes nothing, so the
+   *     arms do hold. That is where the old sentence came from.
+   *   - `isaac_manip_bridge.py` RAMPS TO REST (arms to 0, hands open), and
+   *     argues for it at length in its own `/estop` docstring: `rt/lowcmd`
+   *     latches in the Wholebody task, so publishing nothing would freeze the
+   *     arms mid-reach indefinitely, and REST is where they go a moment after
+   *     the bridge exits — ramping there makes the handover continuous rather
+   *     than a lurch.
+   *
+   * The consequence to know at the call site: on the Isaac rig, ending teleop
+   * OPENS THE HANDS. An operator who teleoperates the robot into a grasp and
+   * then stops teleop normally will drop what it is holding. If a future caller
+   * needs "release the ramp but keep the pose" on that rig, it needs its own
+   * endpoint — do not quietly change `/estop`, whose behaviour here is load
+   * bearing for the latching case.
    */
   async releaseAction(): Promise<void> {
     if (!this.sidecarAvailable) return;
