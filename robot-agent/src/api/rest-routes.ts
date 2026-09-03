@@ -1659,6 +1659,56 @@ export function createRestRoutes(
     res.type('image/jpeg').send(jpeg);
   });
 
+  // GET /robots/:id/cameras — which cameras this robot can actually serve.
+  //
+  // NOT behind `personalDataGate`, deliberately: this carries names and a
+  // reason, never imagery. The cockpit needs it precisely when the gate would
+  // be the wrong answer — it is how the operator finds out that "head_camera"
+  // has no source behind it instead of watching a stream fail silently.
+  router.get('/robots/:id/cameras', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const upstream = http.get(`${getSidecarUrl()}/cameras`, (stream) => {
+      const chunks: Buffer[] = [];
+      stream.on('data', (c: Buffer) => chunks.push(c));
+      stream.on('end', () => {
+        if (stream.statusCode !== 200) {
+          res.status(502).json({
+            code: 'CAMERA_UNAVAILABLE',
+            message: `sidecar answered ${stream.statusCode} for the camera list`,
+          });
+          return;
+        }
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          res.json({
+            cameras: Array.isArray(body?.cameras) ? body.cameras : [],
+            source: body?.source ?? null,
+            ...(body?.detail ? { detail: String(body.detail) } : {}),
+          });
+        } catch {
+          res.status(502).json({
+            code: 'CAMERA_UNAVAILABLE',
+            message: 'sidecar camera list was not JSON',
+          });
+        }
+      });
+      stream.on('error', () => {
+        if (!res.headersSent) {
+          res.status(502).json({ code: 'CAMERA_UNAVAILABLE', message: 'camera list read failed' });
+        }
+      });
+    });
+    upstream.on('error', () => {
+      if (!res.headersSent) {
+        // No sidecar at all — a simulation-only agent, or one whose sidecar is
+        // down. Not an error the operator can act on inside the app, so answer
+        // with an empty list and say so rather than a 502 the cockpit would
+        // have to translate anyway.
+        res.json({ cameras: [], source: null, detail: 'cannot reach the hardware sidecar' });
+      }
+    });
+  });
+
   // GET /robots/:id/camera/:name/stream — live MJPEG, proxied from the sidecar.
   //
   // GATED for the same reason as the patrol photos, only more so: this is a LIVE

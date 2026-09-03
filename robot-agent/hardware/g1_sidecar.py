@@ -785,19 +785,46 @@ _PC2_FMT = {1: "b", 2: "B", 3: "h", 4: "H", 5: "i", 6: "I", 7: "f", 8: "d"}  # P
 _rs_pipeline = None
 _rs_lock = threading.RLock()
 
+#: How long a MISSING (or unstartable) RealSense is remembered before we try
+#: again. Sized to be invisible to a person plugging the camera in, while
+#: keeping a 15 fps stream from re-enumerating USB on every single frame.
+_RS_ABSENT_COOLDOWN_S = 2.0
+_rs_absent_until = 0.0
+
 
 def _ensure_realsense():
     """Lazily start a shared RealSense pipeline (depth + color). None if absent.
 
     Requires the `pyrealsense2` package AND a connected RealSense device.
+
+    Absence is CHEAP and CACHED, which it has to be. `pipe.start()` does not
+    fail fast when no device is attached — it blocks while librealsense
+    enumerates, and it blocks holding `_rs_lock`, so a single hung start stalls
+    every later camera request behind that lock. Observed for real: with
+    pyrealsense2 installed and the D435 not yet plugged in, Agent Mode's idle
+    watcher (one camera read every 3 s) piled up 28 connections and filled the
+    listen backlog until /health itself stopped being accepted. Enumerating the
+    context first is instant and answers the same question, and a negative
+    result is remembered for `_RS_ABSENT_COOLDOWN_S` so nothing retries at
+    frame rate.
     """
-    global _rs_pipeline
+    global _rs_pipeline, _rs_absent_until
     with _rs_lock:
         if _rs_pipeline is not None:
             return _rs_pipeline
+        if time.time() < _rs_absent_until:
+            return None
         try:
             import pyrealsense2 as rs  # type: ignore  # optional
         except ImportError:
+            return None
+        try:
+            if not list(rs.context().devices):
+                _rs_absent_until = time.time() + _RS_ABSENT_COOLDOWN_S
+                return None
+        except Exception as e:  # noqa: BLE001
+            _rs_absent_until = time.time() + _RS_ABSENT_COOLDOWN_S
+            print(f"[G1 Sidecar] RealSense enumeration failed ({e})", flush=True)
             return None
         try:
             w = int(os.environ.get("G1_REALSENSE_WIDTH", "640"))
@@ -812,6 +839,9 @@ def _ensure_realsense():
             print(f"[G1 Sidecar] ✅ RealSense pipeline started ({w}x{h}@{fps})", flush=True)
             return pipe
         except Exception as e:  # noqa: BLE001
+            # A device that enumerates but will not start (busy, wrong profile,
+            # USB2 link) must not be retried at frame rate either.
+            _rs_absent_until = time.time() + _RS_ABSENT_COOLDOWN_S
             print(f"[G1 Sidecar] RealSense unavailable ({e})", flush=True)
             return None
 
@@ -970,6 +1000,16 @@ def _lerobot_camera_names() -> "tuple[str, ...]":
     return names
 
 
+# Why no frame source was found, in the operator's words rather than a stack
+# trace. It reaches the cockpit through /cameras and through the stream's 503
+# body, because "the camera panel is empty" is useless on its own: the operator
+# needs to know whether to plug in a camera or to look at the robot's services.
+_NO_CAMERA_SOURCE_DETAIL = (
+    "no camera source available: the lerobot driver has no frames "
+    "(read-only mode never loads it) and no RealSense device is attached"
+)
+
+
 def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
     """(active frame source, camera names it can serve).
 
@@ -1000,10 +1040,7 @@ def _grab_camera_jpeg(name: str):
     """
     source, names = _camera_source_and_names()
     if source is None:
-        return None, None, (
-            "no camera source available: the lerobot driver has no frames "
-            "(read-only mode never loads it) and no RealSense device is attached"
-        ), "no_source"
+        return None, None, _NO_CAMERA_SOURCE_DETAIL, "no_source"
     if name not in names:
         return None, source, (
             f"camera '{name}' is not served by source '{source}' "
@@ -2216,7 +2253,10 @@ class Handler(BaseHTTPRequestHandler):
             # with a lone D435 attached that is one name, and the two wrist
             # names are gone rather than aliases for the same frame.
             source, names = _camera_source_and_names()
-            self._send(200, {"cameras": list(names), "source": source})
+            body = {"cameras": list(names), "source": source}
+            if source is None:
+                body["detail"] = _NO_CAMERA_SOURCE_DETAIL
+            self._send(200, body)
         elif self.path.startswith("/cameras/") and self.path.endswith("/stream"):
             self._stream_mjpeg(self.path[len("/cameras/"):-len("/stream")])
         elif self.path.startswith("/cameras/") and self.path.endswith("/snapshot"):
