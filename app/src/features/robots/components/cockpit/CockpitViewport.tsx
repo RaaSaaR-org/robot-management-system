@@ -2,17 +2,19 @@
  * @file CockpitViewport.tsx
  * @description The cockpit's signature element: a primary "what the robot sees"
  *   viewport framed by a heads-up display. Shows the live MJPEG camera feed when
- *   a sidecar is streaming; otherwise falls back to the live 3D model posed by
- *   telemetry so the viewport is never blank. HUD corner brackets, a connection
- *   pill, a camera/source selector and a telemetry ticker overlay both.
+ *   a sidecar is streaming; when the operator asks for a camera that has no feed
+ *   it says so, and only the 3D model source falls back to the posed model. HUD
+ *   corner brackets, a connection pill, a camera/source selector and a telemetry
+ *   ticker overlay all of them.
  * @feature robots
  */
 
 import { memo, useState } from 'react';
-import { Camera, Box, Radio } from 'lucide-react';
+import { Camera, Box, Radio, CameraOff, RefreshCw } from 'lucide-react';
 import { apiClient } from '@/api/client';
 import { cn } from '@/shared/utils/cn';
 import { useCameraStreamUrl } from '../../hooks/useCameraStreamUrl';
+import { useRobotCameras } from '../../hooks/useRobotCameras';
 import { Robot3DViewer } from '../visualization/Robot3DViewer';
 import type { JointState, RobotType } from '../../types/robots.types';
 
@@ -22,12 +24,33 @@ export interface CockpitViewportProps {
   jointStates?: JointState[];
   /** Telemetry link is live (drives the LIVE pill + model breathing). */
   telemetryConnected: boolean;
-  /** Camera channels to expose in the source selector. */
+  /** Camera channels to expose in the source selector. Omit to ask the robot. */
   cameras?: string[];
   className?: string;
 }
 
 type Source = { kind: 'camera'; name: string } | { kind: 'model' };
+
+/**
+ * Camera channels to offer per robot type, used only while the live list from
+ * `GET /robots/:id/cameras` has not arrived yet.
+ *
+ * The old default for every robot was `['top', 'wrist']` — SO-101 names. On a
+ * G1 that produced two selector buttons which BOTH 404: the humanoid sidecars
+ * (`hardware/g1_sidecar.py` and `sim_g1_dds/sim_node.py`) serve `head_camera`,
+ * which is also the one camera `embodiment/configs/g1_edu.yaml` ships enabled
+ * and what the VR panel already asks for (`PANEL_CAMERA` in vrConstants).
+ *
+ * These are a first paint, not the answer: the sidecar knows which cameras have
+ * a source behind them right now, and that is what the chips settle on.
+ */
+const DEFAULT_CAMERAS: Record<RobotType, string[]> = {
+  g1_edu: ['head_camera'],
+  g1: ['head_camera'],
+  h1: ['head_camera'],
+  so101: ['top', 'wrist'],
+  generic: ['top', 'wrist'],
+};
 
 /** L-shaped HUD bracket pinned to a corner. */
 function Bracket({ corner }: { corner: 'tl' | 'tr' | 'bl' | 'br' }) {
@@ -46,21 +69,40 @@ export const CockpitViewport = memo(function CockpitViewport({
   robotType,
   jointStates,
   telemetryConnected,
-  cameras = ['top', 'wrist'],
+  cameras,
   className,
 }: CockpitViewportProps) {
   const [source, setSource] = useState<Source>({ kind: 'model' });
   const [cameraErrored, setCameraErrored] = useState<Record<string, boolean>>({});
+
+  // Which cameras exist is a live question, not configuration: a RealSense gets
+  // attached to the bridge machine and one appears without a restart.
+  const {
+    cameras: servedCameras,
+    source: cameraSource,
+    detail: cameraDetail,
+    loading: camerasLoading,
+    refresh: refreshCameras,
+  } = useRobotCameras(cameras ? null : robotId);
+  const cameraNames =
+    cameras ??
+    (camerasLoading ? (DEFAULT_CAMERAS[robotType] ?? ['top', 'wrist']) : servedCameras);
 
   // A camera stream needs a ticket in its URL (TASK-214) — an `<img>` cannot
   // send an Authorization header, and this view never sent anything at all, so
   // with auth enabled it was a silent 401. Absolute base is fine here: unlike
   // the VR panel there is no canvas readback, so nothing taints.
   const cameraName = source.kind === 'camera' ? source.name : null;
+  // Retry has to be able to re-ticket. `denied` is sticky for a given
+  // (robot, camera) — a refused or expired ticket never clears itself — so
+  // without a nonce to bump, the Retry button below is a no-op for the one
+  // failure whose message it is showing.
+  const [ticketNonce, setTicketNonce] = useState(0);
   const { url: streamUrl, denied: ticketDenied } = useCameraStreamUrl(
     robotId,
     cameraName,
     apiClient.defaults.baseURL ?? '',
+    ticketNonce,
   );
   // Two states, not one. `cameraArmed` is "the operator asked for this camera
   // and nothing has refused it"; `showCamera` adds "and its URL has arrived".
@@ -71,6 +113,19 @@ export const CockpitViewport = memo(function CockpitViewport({
     source.kind === 'camera' && !cameraErrored[source.name] && !ticketDenied;
   const showCamera = cameraArmed && Boolean(streamUrl);
   const cameraPending = cameraArmed && !streamUrl;
+  // The whole point of the panel below: a camera the operator selected which is
+  // not going to produce a picture. It used to render `Robot3DViewer`, so asking
+  // for the robot's own view answered with a rendering OF the robot — the one
+  // image guaranteed not to be what its camera sees.
+  const cameraFailed = source.kind === 'camera' && !showCamera && !cameraPending;
+  const failureReason = (() => {
+    if (source.kind !== 'camera') return null;
+    if (ticketDenied) return 'The server refused a stream ticket for this camera.';
+    if (!camerasLoading && !servedCameras.includes(source.name) && !cameras) {
+      return cameraDetail ?? `This robot is not serving a camera called “${source.name}”.`;
+    }
+    return cameraDetail ?? 'The robot accepted the request but sent no frames.';
+  })();
 
   const sourceLabel = source.kind === 'camera' ? `CAM · ${source.name.toUpperCase()}` : 'MODEL · LIVE POSE';
   const liveLabel = source.kind === 'camera'
@@ -102,6 +157,40 @@ export const CockpitViewport = memo(function CockpitViewport({
           <div className="flex h-full w-full items-center justify-center bg-[#06070A] font-mono text-[11px] tracking-wider text-theme-tertiary">
             ACQUIRING STREAM…
           </div>
+        ) : cameraFailed ? (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-[#06070A] px-8 text-center">
+            <CameraOff className="h-9 w-9 text-theme-tertiary" aria-hidden />
+            <p className="font-mono text-[12px] font-semibold tracking-wider text-theme-secondary">
+              NO CAMERA FEED
+            </p>
+            {failureReason && (
+              <p className="max-w-md text-[12px] leading-relaxed text-theme-tertiary">
+                {failureReason}
+              </p>
+            )}
+            <div className="mt-1 flex items-center gap-2">
+              <button
+                onClick={() => {
+                  if (source.kind === 'camera') {
+                    setCameraErrored((m) => ({ ...m, [source.name]: false }));
+                  }
+                  setTicketNonce((n) => n + 1);
+                  refreshCameras();
+                }}
+                className="flex items-center gap-1.5 rounded-full bg-[#2A5FFF]/15 px-3 py-1 font-mono text-[11px] text-[#7FA3FF] transition-colors hover:bg-[#2A5FFF]/25"
+              >
+                <RefreshCw className="h-3 w-3" />
+                Retry
+              </button>
+              <button
+                onClick={() => setSource({ kind: 'model' })}
+                className="flex items-center gap-1.5 rounded-full bg-black/55 px-3 py-1 font-mono text-[11px] text-theme-secondary transition-colors hover:text-theme-primary"
+              >
+                <Box className="h-3 w-3" />
+                Show 3D model
+              </button>
+            </div>
+          </div>
         ) : (
           <Robot3DViewer
             robotType={robotType}
@@ -128,13 +217,15 @@ export const CockpitViewport = memo(function CockpitViewport({
         <Bracket corner="tr" />
         <Bracket corner="bl" />
         <Bracket corner="br" />
-        {/* centre reticle */}
-        <div className="absolute left-1/2 top-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2">
-          <span className="absolute left-1/2 top-0 h-2 w-px -translate-x-1/2 bg-[#18E4C3]/50" />
-          <span className="absolute left-1/2 bottom-0 h-2 w-px -translate-x-1/2 bg-[#18E4C3]/50" />
-          <span className="absolute top-1/2 left-0 h-px w-2 -translate-y-1/2 bg-[#18E4C3]/50" />
-          <span className="absolute top-1/2 right-0 h-px w-2 -translate-y-1/2 bg-[#18E4C3]/50" />
-        </div>
+        {/* centre reticle — hidden over the failure copy it would strike through */}
+        {!cameraFailed && (
+          <div className="absolute left-1/2 top-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2">
+            <span className="absolute left-1/2 top-0 h-2 w-px -translate-x-1/2 bg-[#18E4C3]/50" />
+            <span className="absolute left-1/2 bottom-0 h-2 w-px -translate-x-1/2 bg-[#18E4C3]/50" />
+            <span className="absolute top-1/2 left-0 h-px w-2 -translate-y-1/2 bg-[#18E4C3]/50" />
+            <span className="absolute top-1/2 right-0 h-px w-2 -translate-y-1/2 bg-[#18E4C3]/50" />
+          </div>
+        )}
       </div>
 
       {/* source pill (top-left) */}
@@ -155,14 +246,14 @@ export const CockpitViewport = memo(function CockpitViewport({
       </div>
 
       {/* source selector (bottom) */}
-      <div className="absolute inset-x-0 bottom-4 flex items-center justify-center gap-1.5">
+      <div className="absolute inset-x-0 bottom-4 flex flex-wrap items-center justify-center gap-1.5">
         <SourceChip
           active={source.kind === 'model'}
           onClick={() => setSource({ kind: 'model' })}
           icon={<Box className="h-3 w-3" />}
           label="Model"
         />
-        {cameras.map((name) => (
+        {cameraNames.map((name) => (
           <SourceChip
             key={name}
             active={source.kind === 'camera' && source.name === name}
@@ -171,12 +262,24 @@ export const CockpitViewport = memo(function CockpitViewport({
             label={name}
           />
         ))}
+        {/* Nothing to offer is worth a chip of its own. Silence here is what
+            sent operators clicking a camera that was never going to work. */}
+        {!cameras && !camerasLoading && cameraNames.length === 0 && (
+          <span
+            title={cameraDetail ?? 'This robot reports no camera source.'}
+            className="flex items-center gap-1.5 rounded-full bg-black/55 px-3 py-1 font-mono text-[11px] text-theme-tertiary backdrop-blur-sm"
+          >
+            <CameraOff className="h-3 w-3" />
+            No camera
+          </span>
+        )}
       </div>
 
       {/* ticker (bottom-left, above chips on desktop) */}
       <div className="absolute left-5 bottom-14 hidden items-center gap-2 font-mono text-[10px] text-theme-tertiary sm:flex">
         <Radio className="h-3 w-3" />
         <span className="uppercase">{robotId}</span>
+        {cameraSource && <span className="uppercase">· {cameraSource}</span>}
       </div>
     </div>
   );

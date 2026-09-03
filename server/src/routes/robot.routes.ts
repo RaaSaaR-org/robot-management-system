@@ -306,6 +306,71 @@ robotRoutes.post('/:id/camera/:name/ticket', async (req: Request, res: Response)
 });
 
 /**
+ * GET /:id/cameras — which cameras this robot can actually serve, and why not.
+ *
+ * The cockpit used to guess: a per-robot-type list of names compiled into the
+ * frontend. On a G1 with no camera attached that produced a chip which, when
+ * clicked, quietly fell back to the 3D model — the operator saw a rendering of
+ * the robot where they had asked for the robot's own view. This is the answer
+ * from the only party that knows it: the sidecar, asked live.
+ *
+ * Names and a reason only. Frames still go through the gated stream route.
+ */
+robotRoutes.get('/:id/cameras', async (req: Request, res: Response) => {
+  try {
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) {
+      return res.status(404).json({ error: 'Robot not found' });
+    }
+
+    const target = `${registered.baseUrl.replace(/\/$/, '')}` +
+      `/api/v1/robots/${encodeURIComponent(req.params.id)}/cameras`;
+
+    const upstream = http.get(target, { headers: agentServiceAuthHeaders() }, (stream) => {
+      const chunks: Buffer[] = [];
+      stream.on('data', (c: Buffer) => chunks.push(c));
+      stream.on('end', () => {
+        if (stream.statusCode !== 200) {
+          return res.json({
+            cameras: [],
+            source: null,
+            detail: `agent answered ${stream.statusCode} for the camera list`,
+          });
+        }
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          res.json({
+            cameras: Array.isArray(body?.cameras) ? body.cameras : [],
+            source: body?.source ?? null,
+            ...(body?.detail ? { detail: String(body.detail) } : {}),
+          });
+        } catch {
+          res.json({ cameras: [], source: null, detail: 'agent camera list was not JSON' });
+        }
+      });
+      stream.on('error', () => {
+        if (!res.headersSent) {
+          res.json({ cameras: [], source: null, detail: 'camera list read failed' });
+        }
+      });
+    });
+    // An unreachable agent is the normal state of an offline robot; the cockpit
+    // renders that as "no cameras, here is why" rather than an error banner.
+    upstream.on('error', () => {
+      if (!res.headersSent) {
+        res.json({ cameras: [], source: null, detail: 'cannot reach the robot agent' });
+      }
+    });
+    res.on('close', () => upstream.destroy());
+  } catch (error) {
+    console.error('Error listing robot cameras:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to list robot cameras' });
+    }
+  }
+});
+
+/**
  * GET /:id/camera/:name — Proxy the robot's live MJPEG camera to the browser.
  *
  * This used to guess a camera sidecar at `<agent host>:8765/camera/<name>`, an

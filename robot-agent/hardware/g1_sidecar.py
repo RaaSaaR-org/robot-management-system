@@ -23,8 +23,16 @@ Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_UR
   GET  /state/fast    → joint read that keeps motors enabled (closed loop)
   POST /action        → {"<joint>": value, ...} → RAMPED + CLAMPED, then sent
   POST /estop         → clears the action-ramp state (soft stop, see caveat)
-  GET  /cameras       → list available camera names
+  GET  /cameras       → {"cameras": [...],
+                         "source": "lerobot"|"teleimager"|"pc2cam"|"realsense"|null}
+                        The names the ACTIVE source can serve, not a fixed list:
+                        a lone RealSense D435 is ONE camera (G1_CAMERA_NAME,
+                        default head_camera), not three aliases for one frame.
   GET  /cameras/<name>/snapshot → one-shot base64 JPEG
+  GET  /cameras/<name>/stream   → live MJPEG (multipart/x-mixed-replace), the
+                        route app/ + robot-agent's camera proxy expect (TASK-233).
+                        Capped by G1_CAMERA_STREAM_FPS (default 15) per stream.
+                        404 = no such camera on this source, 503 = no frame.
   GET  /pointcloud/sensors → list available depth/LiDAR sensor names
   GET  /pointcloud/<name>/snapshot → one-shot point cloud (flat XYZ + intensity)
                         Optional `X-Scan-Session: <id>` scopes the MID-360
@@ -58,6 +66,7 @@ import base64
 import json
 import math
 import os
+import socket
 import struct
 import threading
 import time
@@ -778,19 +787,46 @@ _PC2_FMT = {1: "b", 2: "B", 3: "h", 4: "H", 5: "i", 6: "I", 7: "f", 8: "d"}  # P
 _rs_pipeline = None
 _rs_lock = threading.RLock()
 
+#: How long a MISSING (or unstartable) RealSense is remembered before we try
+#: again. Sized to be invisible to a person plugging the camera in, while
+#: keeping a 15 fps stream from re-enumerating USB on every single frame.
+_RS_ABSENT_COOLDOWN_S = 2.0
+_rs_absent_until = 0.0
+
 
 def _ensure_realsense():
     """Lazily start a shared RealSense pipeline (depth + color). None if absent.
 
     Requires the `pyrealsense2` package AND a connected RealSense device.
+
+    Absence is CHEAP and CACHED, which it has to be. `pipe.start()` does not
+    fail fast when no device is attached — it blocks while librealsense
+    enumerates, and it blocks holding `_rs_lock`, so a single hung start stalls
+    every later camera request behind that lock. Observed for real: with
+    pyrealsense2 installed and the D435 not yet plugged in, Agent Mode's idle
+    watcher (one camera read every 3 s) piled up 28 connections and filled the
+    listen backlog until /health itself stopped being accepted. Enumerating the
+    context first is instant and answers the same question, and a negative
+    result is remembered for `_RS_ABSENT_COOLDOWN_S` so nothing retries at
+    frame rate.
     """
-    global _rs_pipeline
+    global _rs_pipeline, _rs_absent_until
     with _rs_lock:
         if _rs_pipeline is not None:
             return _rs_pipeline
+        if time.time() < _rs_absent_until:
+            return None
         try:
             import pyrealsense2 as rs  # type: ignore  # optional
         except ImportError:
+            return None
+        try:
+            if not list(rs.context().devices):
+                _rs_absent_until = time.time() + _RS_ABSENT_COOLDOWN_S
+                return None
+        except Exception as e:  # noqa: BLE001
+            _rs_absent_until = time.time() + _RS_ABSENT_COOLDOWN_S
+            print(f"[G1 Sidecar] RealSense enumeration failed ({e})", flush=True)
             return None
         try:
             w = int(os.environ.get("G1_REALSENSE_WIDTH", "640"))
@@ -805,6 +841,9 @@ def _ensure_realsense():
             print(f"[G1 Sidecar] ✅ RealSense pipeline started ({w}x{h}@{fps})", flush=True)
             return pipe
         except Exception as e:  # noqa: BLE001
+            # A device that enumerates but will not start (busy, wrong profile,
+            # USB2 link) must not be retried at frame rate either.
+            _rs_absent_until = time.time() + _RS_ABSENT_COOLDOWN_S
             print(f"[G1 Sidecar] RealSense unavailable ({e})", flush=True)
             return None
 
@@ -848,8 +887,16 @@ def _realsense_pointcloud(target_count: int):
         return None
 
 
-def _realsense_color_jpeg():
-    """One RealSense color frame as a base64 JPEG, or None. Needs cv2 + numpy."""
+def _realsense_color_jpeg_bytes():
+    """One RealSense color frame as raw JPEG bytes, or None. Needs cv2 + numpy.
+
+    `_rs_lock` is held for the GRAB ONLY and released before `imencode`. That
+    was already true and is now load-bearing: a 15 fps MJPEG stream (TASK-233)
+    calls this in a loop, and the same lock serialises
+    /pointcloud/<n>/snapshot, which waits up to 2000 ms for frames. On this
+    robot the LiDAR feeds Agent Mode's `goto` arrival test, so encoding inside
+    the lock would starve navigation to feed a video preview.
+    """
     try:
         import numpy as np  # type: ignore
         import cv2  # type: ignore
@@ -868,10 +915,555 @@ def _realsense_color_jpeg():
         ok, buf = cv2.imencode(".jpg", img)
         if not ok:
             return None
-        return base64.b64encode(buf).decode()
+        return bytes(buf)
     except Exception as e:  # noqa: BLE001
         print(f"[G1 Sidecar] RealSense color frame failed ({e})", flush=True)
         return None
+
+
+def _realsense_color_jpeg():
+    """One RealSense color frame as a base64 JPEG, or None — /snapshot's shape."""
+    jpeg = _realsense_color_jpeg_bytes()
+    return base64.b64encode(jpeg).decode() if jpeg else None
+
+
+def _lerobot_color_jpeg_bytes(name: str):
+    """One lerobot observation camera as raw JPEG bytes, or None. Needs cv2.
+
+    Always None in read-only mode: `_connect_unlocked` refuses to load the
+    driver there, so there is no observation to read.
+    """
+    try:
+        import cv2  # type: ignore
+    except ImportError:
+        return None
+    with robot_lock:
+        if not (connected or _connect_unlocked()):
+            return None
+        try:
+            frame = (robot.get_observation() or {}).get(name)
+        except Exception as e:  # noqa: BLE001
+            print(f"[G1 Sidecar] lerobot observation failed ({e})", flush=True)
+            return None
+    if frame is None:
+        return None
+    ok, buf = cv2.imencode(".jpg", frame)
+    return bytes(buf) if ok else None
+
+
+# ---------------------------------------------------------------------------
+# CAMERAS (TASK-233) — one source of truth for which cameras exist
+# ---------------------------------------------------------------------------
+# /cameras used to answer a hardcoded three-name list while the RealSense grab
+# IGNORED the name it was handed, so head_camera, left_wrist_camera and
+# right_wrist_camera all returned the same D435 frame and an operator could not
+# tell which view was live. Every camera route now asks the ACTIVE SOURCE what
+# it can serve, so the advertised list and what a stream accepts cannot drift.
+#
+# The env is read at CALL time, not at import: this process is long-lived and
+# the rest of the camera code has always read its env that way.
+
+#: Name for the single RealSense colour stream. The G1 EDU embodiment config
+#: (src/embodiment/configs/g1_edu.yaml) enables exactly `head_camera` and ships
+#: both wrist cameras disabled, so this is the name the cockpit asks for.
+_REALSENSE_DEFAULT_NAME = "head_camera"
+
+#: Cached lerobot observation camera keys — discovery costs a live observation
+#: and /cameras has to stay cheap enough to poll.
+_lerobot_cam_names: "tuple[str, ...] | None" = None
+
+#: How long a lerobot driver with no cameras is remembered, for the same reason
+#: the other three sources have a cooldown. This one guards more than a camera
+#: read: the probe takes `robot_lock`, which is also the lock `send_action`
+#: holds to command motors, and with G1_READ_ONLY=0 and the driver not yet up,
+#: `_connect_unlocked()` is a real blocking connect. Retrying that on every
+#: /cameras poll and every snapshot would serialise robot control behind a
+#: question about a camera.
+_LEROBOT_ABSENT_COOLDOWN_S = 2.0
+_lerobot_absent_until = 0.0
+
+
+def _lerobot_camera_names() -> "tuple[str, ...]":
+    """Camera keys the lerobot observation actually carries (image-shaped only).
+
+    Empty in read-only mode by construction. A positive answer is remembered
+    for good; a miss only for `_LEROBOT_ABSENT_COOLDOWN_S`, so a driver that
+    connects later is still found without re-probing at request rate.
+    """
+    global _lerobot_cam_names, _lerobot_absent_until
+    if _lerobot_cam_names is not None:
+        return _lerobot_cam_names
+    if time.time() < _lerobot_absent_until:
+        return ()
+    try:
+        import numpy as np  # type: ignore
+    except ImportError:
+        _lerobot_absent_until = time.time() + _LEROBOT_ABSENT_COOLDOWN_S
+        return ()
+    with robot_lock:
+        if not (connected or _connect_unlocked()):
+            _lerobot_absent_until = time.time() + _LEROBOT_ABSENT_COOLDOWN_S
+            return ()
+        try:
+            obs = robot.get_observation() or {}
+        except Exception as e:  # noqa: BLE001
+            print(f"[G1 Sidecar] lerobot observation failed ({e})", flush=True)
+            _lerobot_absent_until = time.time() + _LEROBOT_ABSENT_COOLDOWN_S
+            return ()
+    # An observation carries joint vectors next to frames; only a 3-D array is
+    # an image. Guessing by key name would break on the first driver rename.
+    names = tuple(k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3)
+    if names:
+        _lerobot_cam_names = names
+    else:
+        _lerobot_absent_until = time.time() + _LEROBOT_ABSENT_COOLDOWN_S
+    return names
+
+
+# --- teleimager image server (the robot's OWN cameras, over ZMQ) -------------
+#
+# This is the path Unitree's own teleoperation uses, and on a real G1 it is the
+# ONLY way to reach the head camera: the robot's `video_hub_pc4` service serves
+# `rt/api/videohub/request` over DDS and is frequently dead (status=-1), while
+# `image_server.py` on PC2 publishes plain JPEG over ZMQ and does not care.
+#
+# The protocol, from `teleimager/image_client.py`:
+#   • REQ b"GET_DATA" to tcp://<host>:60000 → a JSON camera config, one entry
+#     per camera with `zmq_port`, `enable_zmq`, `image_shape`, `binocular`
+#   • SUB tcp://<host>:<zmq_port>, subscribe "" → each message is raw JPEG
+#
+# Read-only in the strictest sense: a SUB socket and one config request. No DDS
+# participant, no `rt/lowcmd`, nothing that reaches a motor. The image server
+# has to be running on the robot; when it is not, every call here must fail
+# CHEAPLY, hence the same negative cooldown the RealSense probe uses.
+_TELEIMAGER_ABSENT_COOLDOWN_S = 5.0
+_teleimager_absent_until = 0.0
+_teleimager_config = None
+_teleimager_subs = {}
+_teleimager_lock = threading.RLock()
+
+
+def _teleimager_host_port() -> "tuple[str, int]":
+    return (
+        os.environ.get("G1_IMAGE_SERVER_HOST", ROBOT_IP),
+        int(os.environ.get("G1_IMAGE_SERVER_PORT", "60000")),
+    )
+
+
+def _teleimager_cam_config():
+    """The image server's camera config, cached. None when it is not running.
+
+    A REQ socket is single-shot by protocol — one send must be followed by one
+    recv — so a timed-out request poisons the socket. It is therefore created
+    and closed per attempt rather than kept, which costs nothing at the once-per
+    -cooldown rate this runs at.
+    """
+    global _teleimager_config, _teleimager_absent_until
+    with _teleimager_lock:
+        if _teleimager_config is not None:
+            return _teleimager_config
+        if time.time() < _teleimager_absent_until:
+            return None
+        try:
+            import zmq  # type: ignore  # optional
+        except ImportError:
+            _teleimager_absent_until = time.time() + _TELEIMAGER_ABSENT_COOLDOWN_S
+            return None
+
+        host, port = _teleimager_host_port()
+        timeout_ms = int(os.environ.get("G1_IMAGE_SERVER_TIMEOUT_MS", "1000"))
+        ctx = zmq.Context.instance()
+        sock = ctx.socket(zmq.REQ)
+        sock.setsockopt(zmq.LINGER, 0)
+        try:
+            sock.connect(f"tcp://{host}:{port}")
+            sock.send(b"GET_DATA")
+            if sock.poll(timeout_ms) & zmq.POLLIN:
+                cfg = sock.recv_json()
+            else:
+                cfg = None
+        except Exception as e:  # noqa: BLE001
+            print(f"[G1 Sidecar] image server config request failed ({e})", flush=True)
+            cfg = None
+        finally:
+            sock.close()
+
+        if not isinstance(cfg, dict) or not cfg:
+            _teleimager_absent_until = time.time() + _TELEIMAGER_ABSENT_COOLDOWN_S
+            return None
+        _teleimager_config = cfg
+        names = ", ".join(sorted(_teleimager_camera_ports(cfg)))
+        print(f"[G1 Sidecar] ✅ image server at {host}:{port} — cameras: {names}", flush=True)
+        return cfg
+
+
+def _teleimager_camera_ports(cfg) -> "dict[str, int]":
+    """{camera name: zmq port} for the cameras actually publishing JPEG.
+
+    `enable_zmq: false` means the vendor config routes that camera to WebRTC
+    instead, which this sidecar does not speak — advertising it would be a name
+    whose stream can never open.
+    """
+    ports = {}
+    for name, entry in (cfg or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        port = entry.get("zmq_port")
+        if entry.get("enable_zmq") and isinstance(port, int):
+            ports[str(name)] = port
+    return ports
+
+
+class _TeleimagerSubscriber:
+    """Keeps the newest JPEG from one image-server camera.
+
+    A background thread owns the socket. The alternative — receiving inside the
+    HTTP handler — would hand whatever frame happened to be queued rather than
+    the newest one, and would block a request whenever the publisher paused.
+    RCVHWM 1 plus CONFLATE means ZMQ itself drops stale frames.
+    """
+
+    def __init__(self, host: str, port: int):
+        self.host = host
+        self.port = port
+        self._jpeg = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self) -> None:
+        import zmq  # type: ignore
+
+        ctx = zmq.Context.instance()
+        sock = ctx.socket(zmq.SUB)
+        sock.setsockopt(zmq.RCVHWM, 1)
+        sock.setsockopt(zmq.CONFLATE, 1)
+        sock.setsockopt(zmq.LINGER, 0)
+        sock.setsockopt_string(zmq.SUBSCRIBE, "")
+        sock.connect(f"tcp://{self.host}:{self.port}")
+        try:
+            while not self._stop.is_set():
+                try:
+                    if sock.poll(200) & zmq.POLLIN:
+                        data = sock.recv()
+                        if data:
+                            with self._lock:
+                                self._jpeg = bytes(data)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[G1 Sidecar] image server SUB {self.port} error ({e})", flush=True)
+                    break
+        finally:
+            sock.close()
+
+    def latest(self):
+        with self._lock:
+            return self._jpeg
+
+
+def _teleimager_jpeg_bytes(name: str):
+    """Newest JPEG for one image-server camera, or None.
+
+    First call for a camera only starts the subscriber; ZMQ connect plus the
+    publisher's next frame take a moment, so it waits briefly rather than
+    reporting a dead camera on the very request that woke it up.
+    """
+    cfg = _teleimager_cam_config()
+    if cfg is None:
+        return None
+    ports = _teleimager_camera_ports(cfg)
+    if name not in ports:
+        return None
+    host, _ = _teleimager_host_port()
+    with _teleimager_lock:
+        sub = _teleimager_subs.get(name)
+        if sub is None:
+            sub = _TeleimagerSubscriber(host, ports[name])
+            _teleimager_subs[name] = sub
+            fresh = True
+        else:
+            fresh = False
+    jpeg = sub.latest()
+    if jpeg is None and fresh:
+        deadline = time.time() + float(os.environ.get("G1_IMAGE_SERVER_FIRST_FRAME_S", "2.0"))
+        while jpeg is None and time.time() < deadline:
+            time.sleep(0.05)
+            jpeg = sub.latest()
+    return jpeg
+
+
+# --- PC2 head-camera publisher (this lab's G1: g1_cam_pub.py on :5600) ------
+#
+# The G1 EDU's head RealSense D435i hangs off PC2's USB, not this workstation's,
+# and PC2 runs `g1_cam_pub.py` under the `g1-head-cam` systemd unit to serve it.
+# That script exists because PC2's ROS 2 Foxy install segfaults, so it skips ROS
+# entirely and speaks a two-field wire format over plain TCP:
+#
+#     uint32 be length | uint64 be ns timestamp | <length> bytes of JPEG
+#
+# It encodes ONLY while a client is connected ("nobody watching: idle"), so the
+# reader below holds the socket open rather than reconnecting per frame — a
+# connect-per-frame client would spend its life waiting for the first encode.
+#
+# Read-only: one outbound TCP connection that never sends a byte. Nothing here
+# joins DDS or can reach a motor.
+_PC2CAM_ABSENT_COOLDOWN_S = 5.0
+_pc2cam_absent_until = 0.0
+_pc2cam_reader = None
+_pc2cam_lock = threading.RLock()
+_PC2CAM_HDR = struct.Struct("!IQ")
+#: Refuse absurd frame lengths rather than trusting the header and allocating
+#: whatever it claims. 640x480 JPEG at q80 is ~40 KB; 32 MB is far past any
+#: real frame and well short of hurting this process.
+_PC2CAM_MAX_FRAME = 32 * 1024 * 1024
+
+
+def _pc2cam_endpoint() -> "tuple[str, int]":
+    return (
+        os.environ.get("G1_PC2_CAMERA_HOST", ROBOT_IP),
+        int(os.environ.get("G1_PC2_CAMERA_PORT", "5600")),
+    )
+
+
+class _Pc2CameraReader:
+    """Holds the TCP stream from g1_cam_pub.py and keeps the newest JPEG.
+
+    Reconnects on its own: PC2's publisher drops every client when the RealSense
+    re-enumerates on the USB bus (observed 2026-09-04 00:44), and a sidecar that
+    gave up there would need a restart to see the camera come back.
+    """
+
+    def __init__(self, host: str, port: int):
+        self.host = host
+        self.port = port
+        self._jpeg = None
+        self._connected = False
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _read_exactly(self, sock, n: int):
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = sock.recv(n - len(buf))
+            if not chunk:
+                return None
+            buf += chunk
+        return bytes(buf)
+
+    def _run(self) -> None:
+        backoff = 1.0
+        while not self._stop.is_set():
+            sock = None
+            try:
+                sock = socket.create_connection((self.host, self.port), timeout=5.0)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                sock.settimeout(10.0)
+                with self._lock:
+                    self._connected = True
+                backoff = 1.0
+                print(f"[G1 Sidecar] ✅ PC2 head camera stream {self.host}:{self.port}", flush=True)
+                while not self._stop.is_set():
+                    header = self._read_exactly(sock, _PC2CAM_HDR.size)
+                    if header is None:
+                        break
+                    length, _ts_ns = _PC2CAM_HDR.unpack(header)
+                    if not 0 < length <= _PC2CAM_MAX_FRAME:
+                        print(f"[G1 Sidecar] PC2 camera sent an implausible frame length "
+                              f"({length}); resynchronising", flush=True)
+                        break
+                    payload = self._read_exactly(sock, length)
+                    if payload is None:
+                        break
+                    with self._lock:
+                        self._jpeg = payload
+            except Exception as e:  # noqa: BLE001
+                print(f"[G1 Sidecar] PC2 camera stream lost ({e})", flush=True)
+            finally:
+                with self._lock:
+                    self._connected = False
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            # Stale frames must not outlive the connection: a frozen picture
+            # labelled LIVE is worse than an honest empty panel.
+            with self._lock:
+                self._jpeg = None
+            if self._stop.wait(backoff):
+                break
+            backoff = min(backoff * 2, 10.0)
+
+    def latest(self):
+        with self._lock:
+            return self._jpeg
+
+    @property
+    def connected(self) -> bool:
+        with self._lock:
+            return self._connected
+
+
+def _pc2cam_available() -> "tuple[bool, bool]":
+    """`(reachable, reader_was_just_started)`. Cheap, and caches absence.
+
+    A plain TCP connect, not a frame read: the publisher idles until someone
+    connects, so "can I open the socket" is the only fast question there is.
+
+    The second flag is what tells a caller whether waiting for a frame can be
+    justified — see `_pc2cam_jpeg_bytes`.
+    """
+    global _pc2cam_reader, _pc2cam_absent_until
+    with _pc2cam_lock:
+        if _pc2cam_reader is not None:
+            if _pc2cam_reader.connected or _pc2cam_reader.latest() is not None:
+                return True, False
+            if time.time() < _pc2cam_absent_until:
+                return False, False
+        elif time.time() < _pc2cam_absent_until:
+            return False, False
+
+        host, port = _pc2cam_endpoint()
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                pass
+        except OSError:
+            _pc2cam_absent_until = time.time() + _PC2CAM_ABSENT_COOLDOWN_S
+            return False, False
+
+        if _pc2cam_reader is None:
+            _pc2cam_reader = _Pc2CameraReader(host, port)
+            return True, True
+        return True, False
+
+
+def _pc2cam_jpeg_bytes():
+    """Newest JPEG from PC2's head camera, or None.
+
+    Only the request that STARTS the reader waits for a frame, the same gate
+    `_teleimager_jpeg_bytes` uses. Waiting unconditionally would mean that every
+    caller blocks for `G1_PC2_CAMERA_FIRST_FRAME_S` throughout a reconnect —
+    and the reader drops its cached frame on every disconnect by design, while
+    its backoff reaches 10 s. With one thread per request and Agent Mode's idle
+    watcher reading a camera every 3 s, those blocked handlers pile up exactly
+    the way the RealSense ones did before the cooldown above was added.
+    """
+    reachable, fresh = _pc2cam_available()
+    if not reachable:
+        return None
+    reader = _pc2cam_reader
+    if reader is None:
+        return None
+    jpeg = reader.latest()
+    if jpeg is None and fresh:
+        # The reader has only just connected, and the publisher encodes nothing
+        # until it has a client — so the first frame is always a moment behind
+        # the request that woke it up.
+        deadline = time.time() + float(os.environ.get("G1_PC2_CAMERA_FIRST_FRAME_S", "3.0"))
+        while jpeg is None and time.time() < deadline:
+            time.sleep(0.05)
+            jpeg = reader.latest()
+    return jpeg
+
+
+# Why no frame source was found, in the operator's words rather than a stack
+# trace. It reaches the cockpit through /cameras and through the stream's 503
+# body, because "the camera panel is empty" is useless on its own: the operator
+# needs to know whether to plug in a camera or to look at the robot's services.
+def _no_camera_source_detail() -> str:
+    """Why no frame source was found, in the operator's words.
+
+    Built from the endpoints actually configured rather than the ones this lab
+    happens to use: `G1_PC2_CAMERA_HOST`/`_PORT` and `G1_IMAGE_SERVER_HOST`/
+    `_PORT` are overridable, and a message that names a machine nobody is
+    running sends the operator to the wrong box.
+    """
+    pc2_host, pc2_port = _pc2cam_endpoint()
+    img_host, img_port = _teleimager_host_port()
+    return (
+        "no camera source available. The robot's head camera is served by PC2 — "
+        f"check `systemctl status g1-head-cam` on {pc2_host} (it publishes on "
+        f"port {pc2_port}), or start the teleimager image server on {img_host} "
+        f"(port {img_port}). Otherwise: no RealSense on this machine's USB, and "
+        "the lerobot driver has no frames (read-only mode never loads it)."
+    )
+
+
+def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
+    """(active frame source, camera names it can serve).
+
+    Source comes from G1_CAMERA_SOURCE ∈
+    {auto|lerobot|teleimager|pc2cam|realsense}, the same knob
+    /cameras/<n>/snapshot has always used. The `auto` order is lerobot (richest,
+    but never loaded in read-only mode), then the two ways to reach the ROBOT's
+    own head camera — the vendor's teleimager image server, then this lab's
+    `g1_cam_pub.py` on PC2 — and only then a RealSense on this machine's USB.
+    That last place is deliberate: the first three are what the robot sees,
+    while a D435 plugged into the workstation sees whatever the desk faces.
+    """
+    cam_source = os.environ.get("G1_CAMERA_SOURCE", "auto").lower()
+    if cam_source in ("auto", "lerobot"):
+        names = _lerobot_camera_names()
+        if names:
+            return "lerobot", names
+        if cam_source == "lerobot":
+            return None, ()
+    if cam_source in ("auto", "teleimager"):
+        cfg = _teleimager_cam_config()
+        ports = _teleimager_camera_ports(cfg) if cfg else {}
+        if ports:
+            # Sorted so /cameras is stable across restarts; the chip order in
+            # the cockpit should not depend on dict insertion.
+            return "teleimager", tuple(sorted(ports))
+        if cam_source == "teleimager":
+            return None, ()
+    if cam_source in ("auto", "pc2cam"):
+        if _pc2cam_available()[0]:
+            return "pc2cam", (os.environ.get("G1_PC2_CAMERA_NAME", _REALSENSE_DEFAULT_NAME),)
+        if cam_source == "pc2cam":
+            return None, ()
+    if cam_source in ("auto", "realsense"):
+        if _ensure_realsense() is not None:
+            return "realsense", (os.environ.get("G1_CAMERA_NAME", _REALSENSE_DEFAULT_NAME),)
+    return None, ()
+
+
+def _grab_camera_jpeg(name: str, resolved=None):
+    """One frame for `name` as `(jpeg_bytes, source, error, kind)`.
+
+    Exactly one of `jpeg` / `error` is set. `kind` is None on success and
+    otherwise one of `no_source`, `unknown_name`, `no_frame` — the stream route
+    maps it to an HTTP status, /snapshot ignores it. Shared by both so a name
+    /cameras advertises is a name a stream will serve.
+
+    `resolved` is an already-known `(source, names)` from
+    `_camera_source_and_names()`, and a caller that grabs in a LOOP must pass
+    it. Resolution is not free: in `auto` order every source ahead of the live
+    one gets probed, and a probe that fails only fails cheaply for the length
+    of its cooldown. Measured on this lab's rig — pc2cam serving, pyzmq
+    installed, no teleimager image server — re-resolving per frame stalled the
+    15 fps stream for a full 1.0 s every 5 s, which is a visible freeze in what
+    the panel labels LIVE.
+    """
+    source, names = resolved if resolved is not None else _camera_source_and_names()
+    if source is None:
+        return None, None, _no_camera_source_detail(), "no_source"
+    if name not in names:
+        return None, source, (
+            f"camera '{name}' is not served by source '{source}' "
+            f"(have: {', '.join(names)})"
+        ), "unknown_name"
+    if source == "realsense":
+        jpeg = _realsense_color_jpeg_bytes()
+    elif source == "pc2cam":
+        jpeg = _pc2cam_jpeg_bytes()
+    elif source == "teleimager":
+        jpeg = _teleimager_jpeg_bytes(name)
+    else:
+        jpeg = _lerobot_color_jpeg_bytes(name)
+    if jpeg is None:
+        return None, source, f"source '{source}' returned no frame for '{name}'", "no_frame"
+    return jpeg, source, None, None
 
 
 # --- Livox MID-360 via ROS2 (livox_ros_driver2 → sensor_msgs/PointCloud2) ----
@@ -2001,6 +2593,82 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args) -> None:  # silence default logging
         pass
 
+    def _stream_mjpeg(self, name: str) -> None:
+        """Serve `name` as multipart MJPEG until the client goes away (TASK-233).
+
+        Mirrors sim_g1_dds/sim_node.py's streamer so the cockpit behaves the
+        same against the robot as against the sim — the app has been asking for
+        this route all along (`/robots/:id/camera/:name/stream` in
+        src/api/rest-routes.ts proxies straight to it) and got a 404.
+
+        The first frame is grabbed BEFORE the 200. Once the multipart header is
+        on the wire there is no longer any way to say "no such camera" that a
+        browser will show — it would just wait forever on an empty stream. So
+        an unknown name answers 404 and a source with no frame 503, both as
+        JSON, and the agent's proxy turns either into CAMERA_UNAVAILABLE.
+
+        This is the SECOND reply path in a handler where `_send` is otherwise
+        the only one. A stream has no Content-Length — it is not supposed to
+        end — so the connection is closed by hand instead of kept alive: leave
+        keep-alive on and the next request on this socket is read as more image
+        data, which does not fail, it desynchronises.
+
+        Each open stream grabs its own frames; two viewers are two grabs, not a
+        shared one. G1_CAMERA_STREAM_FPS bounds a single stream, not their sum.
+
+        The SOURCE is resolved once, before the 200, and then pinned for the
+        life of the stream. Re-resolving per frame re-probes every source ahead
+        of the live one in `auto` order, and each of those only fails cheaply
+        for the length of its cooldown: with pc2cam serving and no teleimager
+        image server running, that cost a measured 1.0 s freeze every 5 s. A
+        camera appearing or vanishing mid-stream is /cameras' business — the
+        cockpit polls it — not something to pay for on every frame.
+        """
+        resolved = _camera_source_and_names()
+        jpeg, source, error, kind = _grab_camera_jpeg(name, resolved)
+        if jpeg is None:
+            self._send(404 if kind == "unknown_name" else 503,
+                       {"ok": False, "camera": name, "source": source, "error": error})
+            return
+
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        # A viewer that vanishes without closing the socket — a sleeping laptop,
+        # WiFi dropping, a NAT dropping the flow — leaves `write` blocking with
+        # nothing to raise. This is the file's only long-lived response, and
+        # ThreadingHTTPServer gives each one a thread and no cap, so without a
+        # deadline every such viewer leaks one thread until the sidecar restarts.
+        try:
+            self.connection.settimeout(
+                float(os.environ.get("G1_CAMERA_STREAM_WRITE_TIMEOUT_S", "20"))
+            )
+        except OSError:  # pragma: no cover — a socket that cannot be configured
+            pass
+
+        min_dt = 1.0 / max(1.0, float(os.environ.get("G1_CAMERA_STREAM_FPS", "15")))
+        try:
+            while True:
+                started = time.time()
+                self.wfile.write(b"--FRAME\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                                 + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n")
+                self.wfile.flush()
+                jpeg, _, _, _ = _grab_camera_jpeg(name, resolved)
+                if jpeg is None:
+                    break  # camera unplugged, driver dropped, source changed
+                slack = min_dt - (time.time() - started)
+                if slack > 0:
+                    time.sleep(slack)
+        except (BrokenPipeError, ConnectionResetError, socket.timeout):
+            # `socket.timeout` rather than `TimeoutError`: they are only the same
+            # class from Python 3.10 on, and this file also has to run under the
+            # 3.8 that ships with the Ubuntu 20.04 on the robot's PC2.
+            pass  # the viewer closed the tab, or stopped reading — how these end
+
     def do_GET(self) -> None:
         if self.path == "/health":
             # Point-cloud replay mode reports "connected" so the Node hardware
@@ -2018,7 +2686,16 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/state/fast":
             self._send(200, get_state(keep_alive=True))
         elif self.path == "/cameras":
-            self._send(200, {"cameras": ["head_camera", "left_wrist_camera", "right_wrist_camera"]})
+            # What the ACTIVE SOURCE can serve, not a fixed list (TASK-233):
+            # with a lone D435 attached that is one name, and the two wrist
+            # names are gone rather than aliases for the same frame.
+            source, names = _camera_source_and_names()
+            body = {"cameras": list(names), "source": source}
+            if source is None:
+                body["detail"] = _no_camera_source_detail()
+            self._send(200, body)
+        elif self.path.startswith("/cameras/") and self.path.endswith("/stream"):
+            self._stream_mjpeg(self.path[len("/cameras/"):-len("/stream")])
         elif self.path.startswith("/cameras/") and self.path.endswith("/snapshot"):
             name = self.path[len("/cameras/"):-len("/snapshot")]
             self._send(200, self._snapshot(name))
@@ -2079,42 +2756,24 @@ class Handler(BaseHTTPRequestHandler):
     def _snapshot(self, name: str) -> dict:
         """One-shot camera frame as base64 JPEG.
 
-        Source via G1_CAMERA_SOURCE ∈ {auto|lerobot|realsense} (default auto):
-          • lerobot  : the named camera from the G1 driver's observation.
-          • realsense: a RealSense color frame (pyrealsense2 + cv2 + numpy).
-        Falls back along that chain, preserving the existing response shape
-        ({"ok","camera","jpeg_base64"}).
+        Source and name resolution now live in `_grab_camera_jpeg` (TASK-233),
+        so this route, /cameras and /cameras/<n>/stream cannot disagree about
+        which cameras exist. G1_CAMERA_SOURCE gained two values
+        (∈ {auto|lerobot|teleimager|pc2cam|realsense}) and `auto` gained the two
+        ways to reach the ROBOT's own head camera ahead of a RealSense on this
+        machine's USB — see `_camera_source_and_names`. The response SHAPE is
+        unchanged ({"ok","camera","jpeg_base64","source"} / {"ok": false,"error"}).
+
+        The 200 is deliberately kept even for a name that does not exist: the
+        Node hardware seam has always read failure out of the `ok` field here,
+        and a status change would be a silent contract break for a route that
+        already had callers. `/stream` is new, so it answers with real codes.
         """
-        cam_source = os.environ.get("G1_CAMERA_SOURCE", "auto").lower()
-
-        # --- lerobot observation camera (primary / prior contract) -----------
-        if cam_source in ("auto", "lerobot"):
-            with robot_lock:
-                if connected or _connect_unlocked():
-                    try:
-                        obs = robot.get_observation()
-                        frame = obs.get(name)
-                        if frame is not None:
-                            import cv2  # type: ignore
-                            ok, buf = cv2.imencode(".jpg", frame)
-                            if ok:
-                                return {
-                                    "ok": True,
-                                    "camera": name,
-                                    "jpeg_base64": base64.b64encode(buf).decode(),
-                                    "source": "lerobot",
-                                }
-                    except Exception as e:  # noqa: BLE001
-                        if cam_source == "lerobot":
-                            return {"ok": False, "error": str(e)}
-
-        # --- RealSense color frame -------------------------------------------
-        if cam_source in ("auto", "realsense"):
-            b64 = _realsense_color_jpeg()
-            if b64:
-                return {"ok": True, "camera": name, "jpeg_base64": b64, "source": "realsense"}
-
-        return {"ok": False, "error": f"no camera frame for '{name}'"}
+        jpeg, source, error, _ = _grab_camera_jpeg(name)
+        if jpeg is None:
+            return {"ok": False, "error": error or f"no camera frame for '{name}'"}
+        return {"ok": True, "camera": name,
+                "jpeg_base64": base64.b64encode(jpeg).decode(), "source": source}
 
 
 def main() -> None:

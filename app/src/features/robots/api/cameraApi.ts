@@ -10,6 +10,7 @@ import { apiClient } from '@/api/client';
 const ENDPOINTS = {
   ticket: (robotId: string, cameraName: string) =>
     `/robots/${encodeURIComponent(robotId)}/camera/${encodeURIComponent(cameraName)}/ticket`,
+  list: (robotId: string) => `/robots/${encodeURIComponent(robotId)}/cameras`,
 } as const;
 
 export interface CameraTicket {
@@ -58,4 +59,33 @@ export function cameraStreamUrl(
     `${baseUrl.replace(/\/$/, '')}` +
     `/robots/${encodeURIComponent(robotId)}/camera/${encodeURIComponent(cameraName)}`;
   return ticket ? `${path}?ticket=${encodeURIComponent(ticket)}` : path;
+}
+
+/** What a robot's sidecar says it can serve right now. */
+export interface RobotCameraList {
+  /** Camera names a stream request will actually answer. Possibly empty. */
+  cameras: string[];
+  /** The frame source behind them (`realsense`, `lerobot`, …), null if none. */
+  source: string | null;
+  /** Why the list is empty, when it is. Written for an operator to read. */
+  detail?: string;
+}
+
+/**
+ * Ask which cameras this robot can serve (TASK-233).
+ *
+ * The cockpit used to compile a per-robot-type guess into the bundle, so a G1
+ * with nothing attached still offered a `head_camera` chip that fell through to
+ * the 3D model when clicked. Only the sidecar knows the truth, and it changes
+ * while the robot is running — a camera gets plugged in — so this is a live
+ * question, not configuration.
+ */
+export async function fetchRobotCameras(robotId: string): Promise<RobotCameraList> {
+  const response = await apiClient.get<RobotCameraList>(ENDPOINTS.list(robotId));
+  const data = response.data;
+  return {
+    cameras: Array.isArray(data?.cameras) ? data.cameras : [],
+    source: data?.source ?? null,
+    ...(data?.detail ? { detail: data.detail } : {}),
+  };
 }
