@@ -94,6 +94,60 @@ grab itself is first exercised on robot day):
       D435 over USB, restart the sidecar, confirm `head_camera` appears in
       `/cameras` and renders live in the cockpit.
 
+### Follow-up (same branch, commit 69ec19e0): the cockpit lied when there was no camera
+
+Found by driving the real robot: clicking `head_camera` on `g1-edu-4` showed a
+rendering of the G1. Two causes, one of them not cosmetic.
+
+- `CockpitViewport.tsx` compiled a per-robot-type camera list into the bundle,
+  so it offered a chip the robot had no source for. The sidecar has known the
+  answer since this task began — `/cameras` reports what the ACTIVE source can
+  serve — but nothing carried it to the browser. Added `GET /robots/:id/cameras`
+  on the agent (deliberately NOT behind `personalDataGate`: names and a reason,
+  never imagery, and it is how an operator learns the gate is not the problem),
+  `GET /:id/cameras` on the server, and `useRobotCameras` in the app, polled
+  because the answer changes under a running robot when a camera is plugged in.
+- The viewport's only alternative to the `<img>` was `Robot3DViewer`, so a
+  camera with no frames fell through to the posed model — the one image
+  guaranteed not to be the camera's view — behind an 11 px `NO SIGNAL` pill. A
+  selected camera with no feed now renders an explicit `NO CAMERA FEED` panel
+  carrying the sidecar's own `detail` sentence, a Retry, and a way back to the
+  model. `/cameras` grew that `detail`.
+- `_ensure_realsense()` now enumerates `rs.context().devices` before
+  `pipe.start()` and caches absence for 2 s. With pyrealsense2 installed and no
+  D435 attached, `start()` blocked while holding `_rs_lock`; Agent Mode's 3 s
+  idle camera read piled up 28 connections and filled the listen backlog until
+  `/health` stopped being accepted. 164 ms → 0 ms.
+
+### Why the robot's OWN head camera still cannot be reached (2026-09-03)
+
+Investigated on the live robot, and this is a robot-side fault, not a gap in
+this repo:
+
+- `RobotStateClient.ServiceList()` on domain 0 reports `video_hub_pc4`
+  (the head camera hub) at **`status=-1`**, while `video_hub_pc4_chest` and
+  `lidar_driver` sit at `status=0` (running).
+- No DDS endpoint subscribes to `rt/api/videohub/request`, so
+  `VideoClient.GetImageSample()` returns 3102 (send/timeout). The SDK's client
+  is fine and does exist at `unitree_sdk2py/go2/video/video_client.py`; there is
+  simply no service behind it.
+- `rt/videohub/inner` is a `std_msgs::msg::dds_::String_`, i.e. status text —
+  there is no passive image topic to subscribe to.
+- `ServiceSwitch('video_hub_pc4', False)` and `(…, True)` both return **5201**
+  (`ROBOT_STATE_ERR_SERVICE_SWITCH`) and the status stays `-1`. The service is
+  not refusing to be switched; it is refusing to run. (Run once with the
+  owner's explicit authorisation; Stage-1 read-only otherwise forbids it.)
+- Nothing on the robot subnet serves video: `192.168.123.161` has no open TCP
+  port, and `192.168.123.164` (PC2) has only 22 and 80 — port 80 being
+  Unitree's `unitree-upgrade` OTA web UI (TornadoServer/6.3.3, built 2023-11),
+  not a stream.
+
+So the head camera needs either hands on PC2 (is the D435 actually plugged into
+it? does the hub's binary/config survive a look?) or the workstation-USB path
+this task already implements. Diagnosing the former means an SSH login on PC2
+with the owner's password, which is the box the architecture in
+`docs/g1-edu-lab-bringup.md` deliberately leaves untouched.
+
 ## Notes
 
 The RealSense frame is not calibrated to the torso — the same caveat the
