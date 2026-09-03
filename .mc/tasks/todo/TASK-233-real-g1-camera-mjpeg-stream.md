@@ -101,10 +101,20 @@ grab itself is first exercised on robot day):
       `GET /api/robots/g1-edu-4/camera/head_camera?ticket=…` delivered 45
       frames in 3 s (the 15 fps cap). Cockpit rendered it live with
       `CAM · HEAD_CAMERA` / `STREAMING`, zero console errors.
-- [ ] Robot day, EITHER path: start `python -m teleimager.image_server` on PC2
-      and confirm `head_camera` appears by itself (the cockpit polls, no
-      reload); OR attach a D435 to this machine's USB with `pyrealsense2`
-      installed in the sidecar's env.
+- [x] **Robot day, done 2026-09-03 against the physical G1 EDU 4.** The head
+      RealSense is on PC2, served by `g1_cam_pub.py` on port 5600. `/cameras`
+      reports `{"cameras": ["head_camera"], "source": "pc2cam"}`; a snapshot
+      returned a 17 KB JPEG showing both Dex3 hands, the table and a blue
+      crate; and the full chain delivered **59 frames in 4 s, all 59 distinct**
+      (the 15 fps cap) on
+      `GET /api/robots/g1-edu-4/camera/head_camera?ticket=…`. Rendered live in
+      the cockpit as `CAM · HEAD_CAMERA` / `STREAMING` / `PC2CAM`, no console
+      errors.
+- [x] `tests/test_g1_sidecar_pc2cam.py` — 10 tests against a real socket
+      server: framing, byte-exact pass-through, advancing frames, one held
+      connection rather than per-frame reconnects, reconnect after the
+      publisher drops clients, an implausible frame length refused, and cheap
+      failure when nothing is listening.
 
 ### Follow-up (same branch, commit 69ec19e0): the cockpit lied when there was no camera
 
@@ -200,6 +210,49 @@ cd ~/image_server && python -m teleimager.image_server   # or: teleimager-server
 | `G1_IMAGE_SERVER_PORT` | `60000` | Its config responder port |
 | `G1_IMAGE_SERVER_TIMEOUT_MS` | `1000` | Config request timeout |
 | `G1_IMAGE_SERVER_FIRST_FRAME_S` | `2.0` | Grace for the first frame after a SUB connects |
+
+### What actually serves this robot's head camera: PC2 on port 5600 (2026-09-03)
+
+The teleimager investigation was the right shape and the wrong host. This lab's
+G1 does not run `image_server.py` at all — PC2 has no `teleimager` module. What
+it does run, as an **enabled systemd unit**, is `g1-head-cam.service` →
+`~/g1_cam_pub.py`, whose own docstring explains itself: *"No ROS on PC2 (its
+Foxy install segfaults)"*. It grabs `/dev/video4` (the head D435i, USB id
+`8086:0b3a`) with V4L2 at 640x480@30 and serves length-prefixed JPEG over TCP:
+
+    uint32 be length | uint64 be ns timestamp | <length> bytes of JPEG
+
+on port **5600**. It encodes only while a client is connected.
+
+Why it looked dead: the service **was** running the whole time, and my earlier
+port sweep of `192.168.123.164` simply never tried 5600. The journal tells the
+rest — the camera worked from 23:32:31, then at **00:44:53** the D435i
+re-enumerated on the USB bus (`VIDIOC_REQBUFS: errno=19`, and every
+`/dev/video*` node was recreated at 00:44), the publisher lost its handle,
+retried, and recovered at 00:44:55. So "teleop had video hours ago" and "no
+video now" were both true of a service that never stopped.
+
+`g1_sidecar.py` gained `pc2cam` as a camera source, between `teleimager` and
+`realsense` in the `auto` order. The reader holds one socket open (a
+reconnect-per-frame client would never catch an encode), reconnects with
+backoff when the publisher drops clients — which is what a USB re-enumeration
+looks like from here — and drops its cached frame on disconnect, because a
+frozen picture labelled LIVE is worse than an empty panel. Read-only: one
+outbound TCP connection that never sends a byte.
+
+Access: a robot-scoped key (`~/.ssh/id_ed25519_g1`, host alias `g1-pc2`) was
+installed in PC2's `authorized_keys` with the owner's explicit approval, so the
+unit can be inspected without a password. That single line is the only change
+ever made to PC2; removing it fully reverses this.
+
+### New environment variables (pc2cam)
+
+| Var | Default | Meaning |
+|---|---|---|
+| `G1_PC2_CAMERA_HOST` | `G1_ROBOT_IP` (192.168.123.164) | Where `g1_cam_pub.py` runs |
+| `G1_PC2_CAMERA_PORT` | `5600` | Its TCP port |
+| `G1_PC2_CAMERA_NAME` | `head_camera` | Name the single stream is served under |
+| `G1_PC2_CAMERA_FIRST_FRAME_S` | `3.0` | Grace for the first frame after connecting |
 
 ## Notes
 
