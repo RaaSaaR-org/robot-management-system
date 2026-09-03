@@ -1707,6 +1707,10 @@ export function createRestRoutes(
         res.json({ cameras: [], source: null, detail: 'cannot reach the hardware sidecar' });
       }
     });
+    // Same teardown the stream route below does: the cockpit polls this every
+    // 15 s, and resolving a source can take a second or more, so a viewer who
+    // navigates away mid-poll must not leave the sidecar request dangling.
+    res.on('close', () => upstream.destroy());
   });
 
   // GET /robots/:id/camera/:name/stream — live MJPEG, proxied from the sidecar.

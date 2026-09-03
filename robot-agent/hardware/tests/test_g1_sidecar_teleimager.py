@@ -243,5 +243,5 @@ def test_no_server_fails_fast_and_stays_cheap(monkeypatch):
 def test_no_source_message_names_the_image_server():
     # The operator reads this sentence in the cockpit. It has to say which
     # thing to go and start.
-    assert "image server" in g1_sidecar._NO_CAMERA_SOURCE_DETAIL
-    assert "60000" in g1_sidecar._NO_CAMERA_SOURCE_DETAIL
+    assert "image server" in g1_sidecar._no_camera_source_detail()
+    assert "60000" in g1_sidecar._no_camera_source_detail()

@@ -85,6 +85,25 @@ describe('CockpitViewport', () => {
     await waitFor(() => expect(screen.getByTestId('robot-3d-viewer')).toBeInTheDocument());
   });
 
+  it('re-tickets on Retry, so a refused ticket is recoverable', async () => {
+    // `denied` is sticky for a (robot, camera) pair: nothing but a new ticket
+    // request clears it. A Retry button that only re-asked for the camera LIST
+    // left the operator pressing it forever on the very message — "the server
+    // refused a stream ticket" — that it was showing them.
+    mockList.mockResolvedValue({ cameras: ['head_camera'], source: 'realsense' });
+    mockTicket.mockRejectedValueOnce(new Error('403'));
+
+    render(<CockpitViewport {...props} />);
+    await userEvent.click(await screen.findByRole('button', { name: /head_camera/i }));
+    expect(await screen.findByText(/refused a stream ticket/i)).toBeInTheDocument();
+
+    mockTicket.mockResolvedValue({ ticket: 'tkt-2', expiresIn: 120 });
+    await userEvent.click(screen.getByRole('button', { name: /retry/i }));
+
+    await waitFor(() => expect(screen.queryByText(/no camera feed/i)).not.toBeInTheDocument());
+    expect(mockTicket).toHaveBeenCalledTimes(2);
+  });
+
   it('still shows the posed model when the model source is the one selected', async () => {
     mockList.mockResolvedValue({ cameras: [], source: null, detail: 'nothing attached' });
 

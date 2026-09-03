@@ -3,7 +3,7 @@ id: "TASK-233"
 aliases: []
 title: "Live camera view for the real G1: MJPEG stream on g1_sidecar.py"
 slug: "real-g1-camera-mjpeg-stream"
-status: "review"
+status: "done"
 priority: 2
 owner: ""
 projects: []

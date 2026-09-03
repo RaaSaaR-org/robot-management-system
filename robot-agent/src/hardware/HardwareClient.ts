@@ -828,10 +828,17 @@ export class HardwareClient {
    * List of camera names the sidecar exposes. Called once at connect time
    * by SkillExecutor so it can map vla-server's expected camera names onto
    * the physical cameras.
+   *
+   * Budget note (TASK-233): `/cameras` used to answer a hardcoded list and
+   * cost nothing. It now asks the ACTIVE source, and in `auto` order a cold
+   * call probes each absent one in turn — the teleimager request and the PC2
+   * connect are a second apiece, so a robot that is simply switched off takes
+   * a measured ~2.04 s to answer "none". At the old 2 s deadline that threw
+   * instead of returning an empty list.
    */
   async getCameras(): Promise<string[]> {
     const res = await fetch(`${getSidecarUrl()}/cameras`, {
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(6000),
     });
     if (!res.ok) {
       throw new Error(`Sidecar /cameras returned ${res.status}`);

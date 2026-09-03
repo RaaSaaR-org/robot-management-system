@@ -214,11 +214,11 @@ def test_no_publisher_fails_fast_and_caches_absence(monkeypatch):
     monkeypatch.setenv("G1_PC2_CAMERA_PORT", str(dead_port))
 
     t0 = time.time()
-    assert g1_sidecar._pc2cam_available() is False
+    assert g1_sidecar._pc2cam_available() == (False, False)
     first = time.time() - t0
 
     t1 = time.time()
-    assert g1_sidecar._pc2cam_available() is False
+    assert g1_sidecar._pc2cam_available() == (False, False)
     cached = time.time() - t1
 
     assert first < 2.0, "a missing publisher must not stall a camera request"
@@ -227,6 +227,72 @@ def test_no_publisher_fails_fast_and_caches_absence(monkeypatch):
 
 def test_the_no_source_message_points_at_pc2():
     # The operator reads this in the cockpit; it has to name the thing to check.
-    detail = g1_sidecar._NO_CAMERA_SOURCE_DETAIL
+    detail = g1_sidecar._no_camera_source_detail()
     assert "g1-head-cam" in detail
     assert "5600" in detail
+
+
+def test_the_no_source_message_names_the_configured_host(monkeypatch):
+    # It has to name the box that is actually configured, not this lab's.
+    monkeypatch.setenv("G1_PC2_CAMERA_HOST", "10.9.9.9")
+    monkeypatch.setenv("G1_PC2_CAMERA_PORT", "5678")
+    detail = g1_sidecar._no_camera_source_detail()
+    assert "10.9.9.9" in detail
+    assert "5678" in detail
+
+
+def test_a_stream_does_not_reprobe_the_sources_ahead_of_it(monkeypatch, publisher):
+    """The frame loop must not pay for a source it already ruled out.
+
+    `auto` tries teleimager before pc2cam, and an image server that is not
+    running only fails cheaply for the length of its cooldown. Measured against
+    this lab's rig — pc2cam serving, pyzmq installed, no image server — a loop
+    that re-resolved per frame froze the 15 fps stream for a full second every
+    five. The source is therefore pinned for the life of the stream.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    monkeypatch.setenv("G1_CAMERA_SOURCE", "auto")
+    monkeypatch.setenv("G1_CAMERA_STREAM_FPS", "15")
+    # Stand in for the absent image server: one probe is fine, per frame is not.
+    probes = []
+
+    def _slow_absent_teleimager():
+        probes.append(time.time())
+        time.sleep(1.0)
+        return None
+
+    monkeypatch.setattr(g1_sidecar, "_teleimager_cam_config", _slow_absent_teleimager)
+    monkeypatch.setattr(g1_sidecar, "_lerobot_camera_names", lambda: ())
+    assert _wait_for_frame() is not None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), g1_sidecar.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        probes.clear()
+        res = urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/cameras/head_camera/stream", timeout=10
+        )
+        assert res.status == 200
+        deadline = time.time() + 3.0
+        boundaries = 0
+        while time.time() < deadline and boundaries < 20:
+            line = res.readline()
+            if not line:
+                break
+            if line.strip() == b"--FRAME":
+                boundaries += 1
+        res.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert boundaries >= 20, f"the 15 fps stream stalled: {boundaries} frames in 3 s"
+    assert len(probes) <= 1, (
+        f"the source was re-resolved {len(probes)} times mid-stream; each one is "
+        "a second the viewer spends looking at a frozen picture labelled LIVE"
+    )

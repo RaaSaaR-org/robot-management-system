@@ -93,10 +93,16 @@ export const CockpitViewport = memo(function CockpitViewport({
   // with auth enabled it was a silent 401. Absolute base is fine here: unlike
   // the VR panel there is no canvas readback, so nothing taints.
   const cameraName = source.kind === 'camera' ? source.name : null;
+  // Retry has to be able to re-ticket. `denied` is sticky for a given
+  // (robot, camera) — a refused or expired ticket never clears itself — so
+  // without a nonce to bump, the Retry button below is a no-op for the one
+  // failure whose message it is showing.
+  const [ticketNonce, setTicketNonce] = useState(0);
   const { url: streamUrl, denied: ticketDenied } = useCameraStreamUrl(
     robotId,
     cameraName,
     apiClient.defaults.baseURL ?? '',
+    ticketNonce,
   );
   // Two states, not one. `cameraArmed` is "the operator asked for this camera
   // and nothing has refused it"; `showCamera` adds "and its URL has arrived".
@@ -168,6 +174,7 @@ export const CockpitViewport = memo(function CockpitViewport({
                   if (source.kind === 'camera') {
                     setCameraErrored((m) => ({ ...m, [source.name]: false }));
                   }
+                  setTicketNonce((n) => n + 1);
                   refreshCameras();
                 }}
                 className="flex items-center gap-1.5 rounded-full bg-[#2A5FFF]/15 px-3 py-1 font-mono text-[11px] text-[#7FA3FF] transition-colors hover:bg-[#2A5FFF]/25"
