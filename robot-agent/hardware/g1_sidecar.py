@@ -23,8 +23,15 @@ Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_UR
   GET  /state/fast    → joint read that keeps motors enabled (closed loop)
   POST /action        → {"<joint>": value, ...} → RAMPED + CLAMPED, then sent
   POST /estop         → clears the action-ramp state (soft stop, see caveat)
-  GET  /cameras       → list available camera names
+  GET  /cameras       → {"cameras": [...], "source": "lerobot"|"realsense"|null}
+                        The names the ACTIVE source can serve, not a fixed list:
+                        a lone RealSense D435 is ONE camera (G1_CAMERA_NAME,
+                        default head_camera), not three aliases for one frame.
   GET  /cameras/<name>/snapshot → one-shot base64 JPEG
+  GET  /cameras/<name>/stream   → live MJPEG (multipart/x-mixed-replace), the
+                        route app/ + robot-agent's camera proxy expect (TASK-233).
+                        Capped by G1_CAMERA_STREAM_FPS (default 15) per stream.
+                        404 = no such camera on this source, 503 = no frame.
   GET  /pointcloud/sensors → list available depth/LiDAR sensor names
   GET  /pointcloud/<name>/snapshot → one-shot point cloud (flat XYZ + intensity)
                         Optional `X-Scan-Session: <id>` scopes the MID-360
@@ -848,8 +855,16 @@ def _realsense_pointcloud(target_count: int):
         return None
 
 
-def _realsense_color_jpeg():
-    """One RealSense color frame as a base64 JPEG, or None. Needs cv2 + numpy."""
+def _realsense_color_jpeg_bytes():
+    """One RealSense color frame as raw JPEG bytes, or None. Needs cv2 + numpy.
+
+    `_rs_lock` is held for the GRAB ONLY and released before `imencode`. That
+    was already true and is now load-bearing: a 15 fps MJPEG stream (TASK-233)
+    calls this in a loop, and the same lock serialises
+    /pointcloud/<n>/snapshot, which waits up to 2000 ms for frames. On this
+    robot the LiDAR feeds Agent Mode's `goto` arrival test, so encoding inside
+    the lock would starve navigation to feed a video preview.
+    """
     try:
         import numpy as np  # type: ignore
         import cv2  # type: ignore
@@ -868,10 +883,137 @@ def _realsense_color_jpeg():
         ok, buf = cv2.imencode(".jpg", img)
         if not ok:
             return None
-        return base64.b64encode(buf).decode()
+        return bytes(buf)
     except Exception as e:  # noqa: BLE001
         print(f"[G1 Sidecar] RealSense color frame failed ({e})", flush=True)
         return None
+
+
+def _realsense_color_jpeg():
+    """One RealSense color frame as a base64 JPEG, or None — /snapshot's shape."""
+    jpeg = _realsense_color_jpeg_bytes()
+    return base64.b64encode(jpeg).decode() if jpeg else None
+
+
+def _lerobot_color_jpeg_bytes(name: str):
+    """One lerobot observation camera as raw JPEG bytes, or None. Needs cv2.
+
+    Always None in read-only mode: `_connect_unlocked` refuses to load the
+    driver there, so there is no observation to read.
+    """
+    try:
+        import cv2  # type: ignore
+    except ImportError:
+        return None
+    with robot_lock:
+        if not (connected or _connect_unlocked()):
+            return None
+        try:
+            frame = (robot.get_observation() or {}).get(name)
+        except Exception as e:  # noqa: BLE001
+            print(f"[G1 Sidecar] lerobot observation failed ({e})", flush=True)
+            return None
+    if frame is None:
+        return None
+    ok, buf = cv2.imencode(".jpg", frame)
+    return bytes(buf) if ok else None
+
+
+# ---------------------------------------------------------------------------
+# CAMERAS (TASK-233) — one source of truth for which cameras exist
+# ---------------------------------------------------------------------------
+# /cameras used to answer a hardcoded three-name list while the RealSense grab
+# IGNORED the name it was handed, so head_camera, left_wrist_camera and
+# right_wrist_camera all returned the same D435 frame and an operator could not
+# tell which view was live. Every camera route now asks the ACTIVE SOURCE what
+# it can serve, so the advertised list and what a stream accepts cannot drift.
+#
+# The env is read at CALL time, not at import: this process is long-lived and
+# the rest of the camera code has always read its env that way.
+
+#: Name for the single RealSense colour stream. The G1 EDU embodiment config
+#: (src/embodiment/configs/g1_edu.yaml) enables exactly `head_camera` and ships
+#: both wrist cameras disabled, so this is the name the cockpit asks for.
+_REALSENSE_DEFAULT_NAME = "head_camera"
+
+#: Cached lerobot observation camera keys — discovery costs a live observation
+#: and /cameras has to stay cheap enough to poll.
+_lerobot_cam_names: "tuple[str, ...] | None" = None
+
+
+def _lerobot_camera_names() -> "tuple[str, ...]":
+    """Camera keys the lerobot observation actually carries (image-shaped only).
+
+    Empty in read-only mode by construction. A miss is NOT cached — the driver
+    may connect later — so only a real answer is remembered.
+    """
+    global _lerobot_cam_names
+    if _lerobot_cam_names is not None:
+        return _lerobot_cam_names
+    try:
+        import numpy as np  # type: ignore
+    except ImportError:
+        return ()
+    with robot_lock:
+        if not (connected or _connect_unlocked()):
+            return ()
+        try:
+            obs = robot.get_observation() or {}
+        except Exception as e:  # noqa: BLE001
+            print(f"[G1 Sidecar] lerobot observation failed ({e})", flush=True)
+            return ()
+    # An observation carries joint vectors next to frames; only a 3-D array is
+    # an image. Guessing by key name would break on the first driver rename.
+    names = tuple(k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3)
+    if names:
+        _lerobot_cam_names = names
+    return names
+
+
+def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
+    """(active frame source, camera names it can serve).
+
+    Source comes from G1_CAMERA_SOURCE ∈ {auto|lerobot|realsense} — the same
+    knob /cameras/<n>/snapshot has always used, in the same auto order: lerobot
+    first (the richer source: several real cameras), RealSense second.
+    """
+    cam_source = os.environ.get("G1_CAMERA_SOURCE", "auto").lower()
+    if cam_source in ("auto", "lerobot"):
+        names = _lerobot_camera_names()
+        if names:
+            return "lerobot", names
+        if cam_source == "lerobot":
+            return None, ()
+    if cam_source in ("auto", "realsense"):
+        if _ensure_realsense() is not None:
+            return "realsense", (os.environ.get("G1_CAMERA_NAME", _REALSENSE_DEFAULT_NAME),)
+    return None, ()
+
+
+def _grab_camera_jpeg(name: str):
+    """One frame for `name` as `(jpeg_bytes, source, error, kind)`.
+
+    Exactly one of `jpeg` / `error` is set. `kind` is None on success and
+    otherwise one of `no_source`, `unknown_name`, `no_frame` — the stream route
+    maps it to an HTTP status, /snapshot ignores it. Shared by both so a name
+    /cameras advertises is a name a stream will serve.
+    """
+    source, names = _camera_source_and_names()
+    if source is None:
+        return None, None, (
+            "no camera source available: the lerobot driver has no frames "
+            "(read-only mode never loads it) and no RealSense device is attached"
+        ), "no_source"
+    if name not in names:
+        return None, source, (
+            f"camera '{name}' is not served by source '{source}' "
+            f"(have: {', '.join(names)})"
+        ), "unknown_name"
+    jpeg = (_realsense_color_jpeg_bytes() if source == "realsense"
+            else _lerobot_color_jpeg_bytes(name))
+    if jpeg is None:
+        return None, source, f"source '{source}' returned no frame for '{name}'", "no_frame"
+    return jpeg, source, None, None
 
 
 # --- Livox MID-360 via ROS2 (livox_ros_driver2 → sensor_msgs/PointCloud2) ----
@@ -2001,6 +2143,58 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args) -> None:  # silence default logging
         pass
 
+    def _stream_mjpeg(self, name: str) -> None:
+        """Serve `name` as multipart MJPEG until the client goes away (TASK-233).
+
+        Mirrors sim_g1_dds/sim_node.py's streamer so the cockpit behaves the
+        same against the robot as against the sim — the app has been asking for
+        this route all along (`/robots/:id/camera/:name/stream` in
+        src/api/rest-routes.ts proxies straight to it) and got a 404.
+
+        The first frame is grabbed BEFORE the 200. Once the multipart header is
+        on the wire there is no longer any way to say "no such camera" that a
+        browser will show — it would just wait forever on an empty stream. So
+        an unknown name answers 404 and a source with no frame 503, both as
+        JSON, and the agent's proxy turns either into CAMERA_UNAVAILABLE.
+
+        This is the SECOND reply path in a handler where `_send` is otherwise
+        the only one. A stream has no Content-Length — it is not supposed to
+        end — so the connection is closed by hand instead of kept alive: leave
+        keep-alive on and the next request on this socket is read as more image
+        data, which does not fail, it desynchronises.
+
+        Each open stream grabs its own frames; two viewers are two grabs, not a
+        shared one. G1_CAMERA_STREAM_FPS bounds a single stream, not their sum.
+        """
+        jpeg, source, error, kind = _grab_camera_jpeg(name)
+        if jpeg is None:
+            self._send(404 if kind == "unknown_name" else 503,
+                       {"ok": False, "camera": name, "source": source, "error": error})
+            return
+
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        min_dt = 1.0 / max(1.0, float(os.environ.get("G1_CAMERA_STREAM_FPS", "15")))
+        try:
+            while True:
+                started = time.time()
+                self.wfile.write(b"--FRAME\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                                 + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n")
+                self.wfile.flush()
+                jpeg, _, _, _ = _grab_camera_jpeg(name)
+                if jpeg is None:
+                    break  # camera unplugged, driver dropped, source changed
+                slack = min_dt - (time.time() - started)
+                if slack > 0:
+                    time.sleep(slack)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the viewer closed the tab — how every one of these ends
+
     def do_GET(self) -> None:
         if self.path == "/health":
             # Point-cloud replay mode reports "connected" so the Node hardware
@@ -2018,7 +2212,13 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/state/fast":
             self._send(200, get_state(keep_alive=True))
         elif self.path == "/cameras":
-            self._send(200, {"cameras": ["head_camera", "left_wrist_camera", "right_wrist_camera"]})
+            # What the ACTIVE SOURCE can serve, not a fixed list (TASK-233):
+            # with a lone D435 attached that is one name, and the two wrist
+            # names are gone rather than aliases for the same frame.
+            source, names = _camera_source_and_names()
+            self._send(200, {"cameras": list(names), "source": source})
+        elif self.path.startswith("/cameras/") and self.path.endswith("/stream"):
+            self._stream_mjpeg(self.path[len("/cameras/"):-len("/stream")])
         elif self.path.startswith("/cameras/") and self.path.endswith("/snapshot"):
             name = self.path[len("/cameras/"):-len("/snapshot")]
             self._send(200, self._snapshot(name))
@@ -2079,42 +2279,22 @@ class Handler(BaseHTTPRequestHandler):
     def _snapshot(self, name: str) -> dict:
         """One-shot camera frame as base64 JPEG.
 
-        Source via G1_CAMERA_SOURCE ∈ {auto|lerobot|realsense} (default auto):
-          • lerobot  : the named camera from the G1 driver's observation.
-          • realsense: a RealSense color frame (pyrealsense2 + cv2 + numpy).
-        Falls back along that chain, preserving the existing response shape
-        ({"ok","camera","jpeg_base64"}).
+        Source and name resolution now live in `_grab_camera_jpeg` (TASK-233),
+        so this route, /cameras and /cameras/<n>/stream cannot disagree about
+        which cameras exist. Source order is unchanged
+        (G1_CAMERA_SOURCE ∈ {auto|lerobot|realsense}), and so is the response
+        SHAPE ({"ok","camera","jpeg_base64","source"} / {"ok": false,"error"}).
+
+        The 200 is deliberately kept even for a name that does not exist: the
+        Node hardware seam has always read failure out of the `ok` field here,
+        and a status change would be a silent contract break for a route that
+        already had callers. `/stream` is new, so it answers with real codes.
         """
-        cam_source = os.environ.get("G1_CAMERA_SOURCE", "auto").lower()
-
-        # --- lerobot observation camera (primary / prior contract) -----------
-        if cam_source in ("auto", "lerobot"):
-            with robot_lock:
-                if connected or _connect_unlocked():
-                    try:
-                        obs = robot.get_observation()
-                        frame = obs.get(name)
-                        if frame is not None:
-                            import cv2  # type: ignore
-                            ok, buf = cv2.imencode(".jpg", frame)
-                            if ok:
-                                return {
-                                    "ok": True,
-                                    "camera": name,
-                                    "jpeg_base64": base64.b64encode(buf).decode(),
-                                    "source": "lerobot",
-                                }
-                    except Exception as e:  # noqa: BLE001
-                        if cam_source == "lerobot":
-                            return {"ok": False, "error": str(e)}
-
-        # --- RealSense color frame -------------------------------------------
-        if cam_source in ("auto", "realsense"):
-            b64 = _realsense_color_jpeg()
-            if b64:
-                return {"ok": True, "camera": name, "jpeg_base64": b64, "source": "realsense"}
-
-        return {"ok": False, "error": f"no camera frame for '{name}'"}
+        jpeg, source, error, _ = _grab_camera_jpeg(name)
+        if jpeg is None:
+            return {"ok": False, "error": error or f"no camera frame for '{name}'"}
+        return {"ok": True, "camera": name,
+                "jpeg_base64": base64.b64encode(jpeg).decode(), "source": source}
 
 
 def main() -> None:
