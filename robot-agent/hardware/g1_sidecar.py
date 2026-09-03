@@ -1000,22 +1000,199 @@ def _lerobot_camera_names() -> "tuple[str, ...]":
     return names
 
 
+# --- teleimager image server (the robot's OWN cameras, over ZMQ) -------------
+#
+# This is the path Unitree's own teleoperation uses, and on a real G1 it is the
+# ONLY way to reach the head camera: the robot's `video_hub_pc4` service serves
+# `rt/api/videohub/request` over DDS and is frequently dead (status=-1), while
+# `image_server.py` on PC2 publishes plain JPEG over ZMQ and does not care.
+#
+# The protocol, from `teleimager/image_client.py`:
+#   • REQ b"GET_DATA" to tcp://<host>:60000 → a JSON camera config, one entry
+#     per camera with `zmq_port`, `enable_zmq`, `image_shape`, `binocular`
+#   • SUB tcp://<host>:<zmq_port>, subscribe "" → each message is raw JPEG
+#
+# Read-only in the strictest sense: a SUB socket and one config request. No DDS
+# participant, no `rt/lowcmd`, nothing that reaches a motor. The image server
+# has to be running on the robot; when it is not, every call here must fail
+# CHEAPLY, hence the same negative cooldown the RealSense probe uses.
+_TELEIMAGER_ABSENT_COOLDOWN_S = 5.0
+_teleimager_absent_until = 0.0
+_teleimager_config = None
+_teleimager_subs = {}
+_teleimager_lock = threading.RLock()
+
+
+def _teleimager_host_port() -> "tuple[str, int]":
+    return (
+        os.environ.get("G1_IMAGE_SERVER_HOST", ROBOT_IP),
+        int(os.environ.get("G1_IMAGE_SERVER_PORT", "60000")),
+    )
+
+
+def _teleimager_cam_config():
+    """The image server's camera config, cached. None when it is not running.
+
+    A REQ socket is single-shot by protocol — one send must be followed by one
+    recv — so a timed-out request poisons the socket. It is therefore created
+    and closed per attempt rather than kept, which costs nothing at the once-per
+    -cooldown rate this runs at.
+    """
+    global _teleimager_config, _teleimager_absent_until
+    with _teleimager_lock:
+        if _teleimager_config is not None:
+            return _teleimager_config
+        if time.time() < _teleimager_absent_until:
+            return None
+        try:
+            import zmq  # type: ignore  # optional
+        except ImportError:
+            _teleimager_absent_until = time.time() + _TELEIMAGER_ABSENT_COOLDOWN_S
+            return None
+
+        host, port = _teleimager_host_port()
+        timeout_ms = int(os.environ.get("G1_IMAGE_SERVER_TIMEOUT_MS", "1000"))
+        ctx = zmq.Context.instance()
+        sock = ctx.socket(zmq.REQ)
+        sock.setsockopt(zmq.LINGER, 0)
+        try:
+            sock.connect(f"tcp://{host}:{port}")
+            sock.send(b"GET_DATA")
+            if sock.poll(timeout_ms) & zmq.POLLIN:
+                cfg = sock.recv_json()
+            else:
+                cfg = None
+        except Exception as e:  # noqa: BLE001
+            print(f"[G1 Sidecar] image server config request failed ({e})", flush=True)
+            cfg = None
+        finally:
+            sock.close()
+
+        if not isinstance(cfg, dict) or not cfg:
+            _teleimager_absent_until = time.time() + _TELEIMAGER_ABSENT_COOLDOWN_S
+            return None
+        _teleimager_config = cfg
+        names = ", ".join(sorted(_teleimager_camera_ports(cfg)))
+        print(f"[G1 Sidecar] ✅ image server at {host}:{port} — cameras: {names}", flush=True)
+        return cfg
+
+
+def _teleimager_camera_ports(cfg) -> "dict[str, int]":
+    """{camera name: zmq port} for the cameras actually publishing JPEG.
+
+    `enable_zmq: false` means the vendor config routes that camera to WebRTC
+    instead, which this sidecar does not speak — advertising it would be a name
+    whose stream can never open.
+    """
+    ports = {}
+    for name, entry in (cfg or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        port = entry.get("zmq_port")
+        if entry.get("enable_zmq") and isinstance(port, int):
+            ports[str(name)] = port
+    return ports
+
+
+class _TeleimagerSubscriber:
+    """Keeps the newest JPEG from one image-server camera.
+
+    A background thread owns the socket. The alternative — receiving inside the
+    HTTP handler — would hand whatever frame happened to be queued rather than
+    the newest one, and would block a request whenever the publisher paused.
+    RCVHWM 1 plus CONFLATE means ZMQ itself drops stale frames.
+    """
+
+    def __init__(self, host: str, port: int):
+        self.host = host
+        self.port = port
+        self._jpeg = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self) -> None:
+        import zmq  # type: ignore
+
+        ctx = zmq.Context.instance()
+        sock = ctx.socket(zmq.SUB)
+        sock.setsockopt(zmq.RCVHWM, 1)
+        sock.setsockopt(zmq.CONFLATE, 1)
+        sock.setsockopt(zmq.LINGER, 0)
+        sock.setsockopt_string(zmq.SUBSCRIBE, "")
+        sock.connect(f"tcp://{self.host}:{self.port}")
+        try:
+            while not self._stop.is_set():
+                try:
+                    if sock.poll(200) & zmq.POLLIN:
+                        data = sock.recv()
+                        if data:
+                            with self._lock:
+                                self._jpeg = bytes(data)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[G1 Sidecar] image server SUB {self.port} error ({e})", flush=True)
+                    break
+        finally:
+            sock.close()
+
+    def latest(self):
+        with self._lock:
+            return self._jpeg
+
+
+def _teleimager_jpeg_bytes(name: str):
+    """Newest JPEG for one image-server camera, or None.
+
+    First call for a camera only starts the subscriber; ZMQ connect plus the
+    publisher's next frame take a moment, so it waits briefly rather than
+    reporting a dead camera on the very request that woke it up.
+    """
+    cfg = _teleimager_cam_config()
+    if cfg is None:
+        return None
+    ports = _teleimager_camera_ports(cfg)
+    if name not in ports:
+        return None
+    host, _ = _teleimager_host_port()
+    with _teleimager_lock:
+        sub = _teleimager_subs.get(name)
+        if sub is None:
+            sub = _TeleimagerSubscriber(host, ports[name])
+            _teleimager_subs[name] = sub
+            fresh = True
+        else:
+            fresh = False
+    jpeg = sub.latest()
+    if jpeg is None and fresh:
+        deadline = time.time() + float(os.environ.get("G1_IMAGE_SERVER_FIRST_FRAME_S", "2.0"))
+        while jpeg is None and time.time() < deadline:
+            time.sleep(0.05)
+            jpeg = sub.latest()
+    return jpeg
+
+
 # Why no frame source was found, in the operator's words rather than a stack
 # trace. It reaches the cockpit through /cameras and through the stream's 503
 # body, because "the camera panel is empty" is useless on its own: the operator
 # needs to know whether to plug in a camera or to look at the robot's services.
 _NO_CAMERA_SOURCE_DETAIL = (
-    "no camera source available: the lerobot driver has no frames "
-    "(read-only mode never loads it) and no RealSense device is attached"
+    "no camera source available. The robot's own cameras come from the "
+    "teleimager image server (image_server.py on PC2, config port 60000) — "
+    "start it on the robot and this panel fills in by itself. Otherwise: no "
+    "RealSense on this machine's USB, and the lerobot driver has no frames "
+    "(read-only mode never loads it)."
 )
 
 
 def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
     """(active frame source, camera names it can serve).
 
-    Source comes from G1_CAMERA_SOURCE ∈ {auto|lerobot|realsense} — the same
-    knob /cameras/<n>/snapshot has always used, in the same auto order: lerobot
-    first (the richer source: several real cameras), RealSense second.
+    Source comes from G1_CAMERA_SOURCE ∈ {auto|lerobot|teleimager|realsense} —
+    the same knob /cameras/<n>/snapshot has always used. The `auto` order is
+    lerobot (richest, but never loaded in read-only mode), then the robot's own
+    teleimager image server, then a RealSense on this machine's USB. teleimager
+    outranks RealSense deliberately: on a real G1 it is the robot's actual eyes,
+    while a locally attached D435 sees whatever the workstation is pointed at.
     """
     cam_source = os.environ.get("G1_CAMERA_SOURCE", "auto").lower()
     if cam_source in ("auto", "lerobot"):
@@ -1023,6 +1200,15 @@ def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
         if names:
             return "lerobot", names
         if cam_source == "lerobot":
+            return None, ()
+    if cam_source in ("auto", "teleimager"):
+        cfg = _teleimager_cam_config()
+        ports = _teleimager_camera_ports(cfg) if cfg else {}
+        if ports:
+            # Sorted so /cameras is stable across restarts; the chip order in
+            # the cockpit should not depend on dict insertion.
+            return "teleimager", tuple(sorted(ports))
+        if cam_source == "teleimager":
             return None, ()
     if cam_source in ("auto", "realsense"):
         if _ensure_realsense() is not None:
@@ -1046,8 +1232,12 @@ def _grab_camera_jpeg(name: str):
             f"camera '{name}' is not served by source '{source}' "
             f"(have: {', '.join(names)})"
         ), "unknown_name"
-    jpeg = (_realsense_color_jpeg_bytes() if source == "realsense"
-            else _lerobot_color_jpeg_bytes(name))
+    if source == "realsense":
+        jpeg = _realsense_color_jpeg_bytes()
+    elif source == "teleimager":
+        jpeg = _teleimager_jpeg_bytes(name)
+    else:
+        jpeg = _lerobot_color_jpeg_bytes(name)
     if jpeg is None:
         return None, source, f"source '{source}' returned no frame for '{name}'", "no_frame"
     return jpeg, source, None, None

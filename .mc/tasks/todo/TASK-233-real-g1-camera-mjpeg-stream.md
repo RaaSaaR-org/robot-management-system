@@ -90,9 +90,21 @@ grab itself is first exercised on robot day):
 - [x] Full chain browser → server ticket → agent proxy → sidecar: 45 frames in
       3 s on `GET /api/robots/sim-robot-g1-edu/camera/head_camera?ticket=…`.
 - [x] `robot-agent/hardware/tests/` — 86 passed, 17 skipped (unchanged).
-- [ ] Robot day: `pip install pyrealsense2` into the sidecar's env, attach the
-      D435 over USB, restart the sidecar, confirm `head_camera` appears in
-      `/cameras` and renders live in the cockpit.
+- [x] teleimager transport, against a real in-process image server
+      (`tests/test_g1_sidecar_teleimager.py`, 9 tests): config handshake, only
+      `enable_zmq` cameras advertised, JPEG passed through byte for byte,
+      alternating payloads proving a live SUB rather than a cached frame,
+      unknown/WebRTC-only names refused as names, and a missing server failing
+      in <2 s and then <0.05 s from cache.
+- [x] Full chain with a stand-in image server on this box: `/cameras` reports
+      `source: teleimager` through sidecar -> agent -> server, and
+      `GET /api/robots/g1-edu-4/camera/head_camera?ticket=…` delivered 45
+      frames in 3 s (the 15 fps cap). Cockpit rendered it live with
+      `CAM · HEAD_CAMERA` / `STREAMING`, zero console errors.
+- [ ] Robot day, EITHER path: start `python -m teleimager.image_server` on PC2
+      and confirm `head_camera` appears by itself (the cockpit polls, no
+      reload); OR attach a D435 to this machine's USB with `pyrealsense2`
+      installed in the sidecar's env.
 
 ### Follow-up (same branch, commit 69ec19e0): the cockpit lied when there was no camera
 
@@ -147,6 +159,47 @@ it? does the hub's binary/config survive a look?) or the workstation-USB path
 this task already implements. Diagnosing the former means an SSH login on PC2
 with the owner's password, which is the box the architecture in
 `docs/g1-edu-lab-bringup.md` deliberately leaves untouched.
+
+### The path that actually reaches the robot's eyes: teleimager (2026-09-03)
+
+Prompted by the owner pointing out that teleoperation HAD live camera hours
+earlier. It does, and not through DDS: Unitree's own teleop reads frames from
+`image_server.py` running on **PC2**, over plain ZMQ. That is the supported
+route to the G1's cameras and it sidesteps the dead `video_hub_pc4` entirely.
+
+Protocol, read out of `xr_teleoperate/teleop/teleimager/src/teleimager/image_client.py`:
+
+- REQ `b"GET_DATA"` to `tcp://<host>:60000` → JSON config, one entry per camera
+  with `zmq_port`, `enable_zmq`, `image_shape`, `binocular`
+- SUB `tcp://<host>:<zmq_port>`, subscribe `""` → each message is a raw JPEG
+
+`g1_sidecar.py` gained `teleimager` as a camera source, ahead of `realsense` in
+the `auto` order (on a real G1 it IS the robot's eyes; a D435 on the
+workstation sees whatever the desk faces). Only cameras with `enable_zmq: true`
+are advertised — a WebRTC-only camera would be a name whose stream can never
+open, which is the exact defect this task exists to remove. Frames are passed
+through unmodified: no decode, no re-encode, so the sidecar adds no latency and
+no quality loss to what teleop already receives.
+
+Failure stays cheap, for the reason the RealSense probe taught us: a REQ socket
+is poisoned by a timeout, so it is created and closed per attempt, and absence
+is cached for 5 s. Measured <2 s first attempt, <0.05 s cached.
+
+Starting it on the robot (from `xr_teleoperate/README.md:394`):
+
+```bash
+ssh unitree@192.168.123.164
+cd ~/image_server && python -m teleimager.image_server   # or: teleimager-server
+```
+
+### New environment variables (teleimager)
+
+| Var | Default | Meaning |
+|---|---|---|
+| `G1_IMAGE_SERVER_HOST` | `G1_ROBOT_IP` (192.168.123.164) | Where image_server.py runs |
+| `G1_IMAGE_SERVER_PORT` | `60000` | Its config responder port |
+| `G1_IMAGE_SERVER_TIMEOUT_MS` | `1000` | Config request timeout |
+| `G1_IMAGE_SERVER_FIRST_FRAME_S` | `2.0` | Grace for the first frame after a SUB connects |
 
 ## Notes
 
