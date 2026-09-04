@@ -26,33 +26,24 @@ Each component has its own `AGENTS.md` file with detailed guidance:
 
 ## Agent Development Workflow
 
-The project uses Claude Code subagents for automated development. The pipeline is:
+Work runs through five skills, each handing off to exactly one next command:
 
 ```
-claude --agent ship
-├── Phase 1: implement (blue)   → picks next task, branches, codes, typechecks, creates PR
-├── Phase 2: test-frontend (cyan) → Playwright MCP UI testing (only if app/ changed)
-├── Phase 3: review (purple)    → code review, PR comment, fixes, merges via gh
-└── Phase 4: deploy (orange)    → pull main, restart systemd services, health checks
+/grill  → spec + decision record, task becomes `todo`
+/plan   → splits an epic into sized children (skip for a single slice)
+/implement → branch, code, `verify` subagent, push
+/review → standards + acceptance criteria, opens the PR
+/ship   → CI, feedback, squash-merge, closes the task
 ```
 
-**Subagents:** defined in `.claude/agents/`
+| Piece | File | Owns |
+|-------|------|------|
+| **skills** | `.claude/skills/<name>/SKILL.md` | the five workflows above |
+| **verify** | `.claude/agents/verify.md` | runs the gates in an isolated context, returns a bounded report |
+| **tracker policy** | `.claude/rules/tasks.md` | statuses, hierarchy, branch and PR naming |
+| **size scale** | `.claude/references/spe.md` | the `spe:` numbers and the ceiling |
 
-| Agent | File | Description |
-|-------|------|-------------|
-| **ship** | `ship.md` | Orchestrator — spawns the others, handles deploy |
-| **implement** | `implement.md` | Implements the next task from `.mc/tasks/todo/` |
-| **review** | `review.md` | Reviews PR, posts findings on GitHub, merges |
-| **test-frontend** | `test-frontend.md` | Tests UI via Playwright MCP (desktop + mobile) |
-
-**Usage:**
-
-```bash
-claude --agent ship                  # Full pipeline: implement → test → review → deploy
-claude --agent implement             # Just implement next task + create PR
-claude --agent review                # Just review latest open PR
-claude --agent test-frontend         # Just test frontend via Playwright
-```
+Invoke a skill by typing `/grill`, `/plan`, `/implement`, `/review` or `/ship`. Never push to `main`; every change lands through a PR.
 
 **Key tools:**
 
@@ -301,7 +292,10 @@ robot-management-system/
 │   └── ...                 # Compliance, operations, processes
 │
 ├── .claude/                # Claude Code configuration
-│   └── agents/             # Subagent definitions (ship, implement, review, test-frontend)
+│   ├── skills/             # /grill /plan /implement /review /ship
+│   ├── agents/             # Subagent definitions (verify)
+│   ├── rules/              # Always-on policy (tasks.md — the tracker)
+│   └── references/         # Demand-loaded lookups (spe.md — the size scale)
 │
 └── .mc/                    # Task backlog (Markdown + YAML frontmatter)
     ├── tasks/              # Task files, split into todo/ and done/
