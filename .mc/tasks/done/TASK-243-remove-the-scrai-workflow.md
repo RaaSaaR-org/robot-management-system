@@ -3,7 +3,7 @@ id: "TASK-243"
 aliases: []
 title: "Remove the SCRAI workflow"
 slug: "remove-the-scrai-workflow"
-status: "in-progress"
+status: "done"
 priority: 3
 owner: "sebastian"
 projects: []
@@ -48,10 +48,10 @@ backlog task files.
 
 ## Acceptance Criteria
 
-- [ ] No file in the repository matches `scrai` (case-insensitive) or references OpenCode
-- [ ] `.github/workflows/` retains only `build-images`, `check`, `deploy-demo`, `prepare-release-pr`, `release`
-- [ ] `CLAUDE.md` describes the five-skill workflow and no longer names the removed subagents
-- [ ] `./scripts/test-all.sh --skip-pw` is unaffected (no code paths touched)
+- [x] No file in the repository matches `scrai` (case-insensitive) or references OpenCode
+- [x] `.github/workflows/` retains only `build-images`, `check`, `deploy-demo`, `prepare-release-pr`, `release`
+- [x] `CLAUDE.md` describes the five-skill workflow and no longer names the removed subagents
+- [x] `./scripts/test-all.sh --skip-pw` is unaffected (no code paths touched)
 
 ## Notes
 
