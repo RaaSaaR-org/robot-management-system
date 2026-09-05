@@ -3,7 +3,7 @@ id: "TASK-244"
 aliases: []
 title: "Track the Claude Code workflow files in git"
 slug: "track-the-claude-code-workflow-files-in-git"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "sebastian"
 projects: []
