@@ -251,16 +251,18 @@ Three flags worth knowing about:
   manipulation without first solving the walk (TASK-228: the robot jams on the door frame);
   it is not the mission. Unset, the spawn is byte-for-byte the authored `ROBOT` pose.
 
-  It accepts only a place in `PLACES` that also declares a heading in `PLACE_HEADINGS` —
-  today `table_front` and `pause_room_door` — and **raises on anything else rather than
-  falling back**, because a typo that quietly reverted to the default would present as a
+  It accepts only a place in `PLACES` that also declares a heading in `PLACE_HEADINGS` **and
+  is not a gate point** — today `table_front` alone — and **raises on anything else rather
+  than falling back**, because a typo that quietly reverted to the default would present as a
   manipulation failure 8 m from where you meant, not as a spawn failure. See `robot_spawn`
   in `factory_pauseroom_layout.py`.
 
-  `pause_room_door` is selectable because it declares a heading, but it is a **waypoint,
-  not a spawn**: it sits 0.100 m from a shut door leaf, against the 0.40 m pad the verifier
-  charges a spawn, so starting there puts the robot inside a 25 kg leaf on a stiff position
-  drive at t = 0. Section 8 of the offline verifier prints that number on every run.
+  `pause_room_door` declares a heading and is still **refused**, because it is a waypoint,
+  not a spawn: it sits 0.100 m from a shut door leaf, against the 0.40 m pad the verifier
+  charges a spawn, so starting there would put the robot inside a 25 kg leaf on a stiff
+  position drive at t = 0. It used to be accepted — declaring a heading was the whole test —
+  and TASK-232 defect 6 closed that. Section 8 of the offline verifier prints the clearance
+  on every run and asserts every gate point is refused.
 
 * `NEODEM_DOME_INTENSITY`, `NEODEM_DISTANT_INTENSITY`, `NEODEM_AMBIENT_INTENSITY` sweep the
   scene's exposure without editing a file or re-running `install_into_checkout.sh`. The

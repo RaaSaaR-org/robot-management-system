@@ -443,7 +443,12 @@ say "5b. pre-seed the camera shared memory (the image server loses a race withou
 if [ "${SKIP_CAMERA_SEED:-0}" = "1" ]; then
   echo "SKIPPED (SKIP_CAMERA_SEED=1) -- expect no camera frames"
 else
-  "$HW/seed_camera_shm.py" || die "could not seed the camera shared memory -- Agent Mode would
+  # --interpreter is not optional decoration: the helper image ships no python of its own,
+  # so the seeder execs whatever path it is given inside the container. Left to its own
+  # default it would exec the stock env even when CONDA_ENV points somewhere else, and the
+  # failure surfaces as "the helper container returned no JSON" -- a shared-memory message
+  # for what is really a wrong interpreter path.
+  "$HW/seed_camera_shm.py" --interpreter "$PY" || die "could not seed the camera shared memory -- Agent Mode would
      be blind for the whole run. Re-run with SKIP_CAMERA_SEED=1 to proceed deliberately blind."
 fi
 
@@ -542,8 +547,9 @@ done
 # is printed BEFORE the per-camera threads read a frame -- 2 s before the race above was
 # lost, in the run that found this. Waiting for it therefore proves only that the server
 # object was constructed. What actually matters is whether the PUBLISHER BOUND, and that is
-# observable: publish() is what calls bind(), so a listening 55555 means a frame was
-# genuinely published at least once.
+# observable: publish() is what calls bind(), so a listening 55555 means SOME frame was
+# published at least once -- the placeholder from 5b counts, which is why this gate cannot
+# tell a rendering scene from a dead one on its own.
 echo "waiting for the head camera's ZMQ publisher to bind (the banner does not prove this)"
 ZMQ_BOUND=0
 for i in $(seq 1 30); do
@@ -552,7 +558,13 @@ for i in $(seq 1 30); do
   sleep 2
 done
 if [ "$ZMQ_BOUND" = "1" ]; then
-  echo "ok   55555 is bound -- at least one real frame has been published"
+  # THE BIND PROVES publish() RAN, AND NOTHING MORE. This line used to claim a REAL frame,
+  # which stopped being true the moment step 5b started seeding a placeholder: the seed
+  # exists precisely so that first publish succeeds, so a scene whose renderer never writes
+  # binds 55555 too. Whether anything RENDERED is settled further down, by the snapshot gate
+  # against --max-content-age; it is not knowable from a listening socket.
+  echo "ok   55555 is bound -- the image server published at least one frame, which may still"
+  echo "     be the seeded placeholder. The snapshot gate below is what proves a rendered one."
 else
   echo "WARNING: nothing is listening on 55555 after 60 s. The image server binds that port"
   echo "         only when it publishes its first frame, so this means no frame has ever been"

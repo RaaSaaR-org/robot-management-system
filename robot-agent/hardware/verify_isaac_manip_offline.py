@@ -1492,7 +1492,11 @@ state_pub._shaper.reset(M.REST)
 state_worker = threading.Thread(target=state_pub.run, daemon=True)
 state_worker.start()
 state_rd = B.StateReader(max_age_s=5.0, subscribe=False, verbose=False)
-state_httpd = B.serve(state_pub, "127.0.0.1", 0, reader=state_rd)
+# Checks (16e)-(16g) below are written for the body-only line, which is no longer the
+# default: TASK-232 defect 1 moved it to "all", because a silently zero-filled Dex3
+# reads as an OPEN hand to a policy that is holding something. (16h) covers "all" on
+# its own server, so pin this one explicitly rather than following the default.
+state_httpd = B.serve(state_pub, "127.0.0.1", 0, reader=state_rd, state_require="body")
 SBASE = f"http://127.0.0.1:{state_httpd.server_address[1]}"
 try:
     code, body = get_json(f"{SBASE}/state/fast")

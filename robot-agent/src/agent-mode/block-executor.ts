@@ -303,6 +303,14 @@ interface ArcOption {
    * fund one {@link MIN_DURATION_S} command out of what is left does not run.
    */
   budgetM: number;
+  /**
+   * Most forward distance the arc may be MEASURED to cover, m. Set only when
+   * the caller budgeted REAL ground — the navigator's stage alignment — in
+   * which case {@link budgetM} is this number divided by the CONFIGURED
+   * `AGENT_ARC_TRAVEL_GAIN`. That gain is a prior about the base; this is the
+   * promise, and the arc holds to it at the ratio it measures for itself.
+   */
+  travelBudgetM?: number;
 }
 
 /**
@@ -1581,6 +1589,16 @@ export class BlockExecutor {
     /** The profile this turn's commands are issued under. */
     const profile = turnProfileFor(arc ? arc.forwardMps : 0);
     /**
+     * Commanded arc metres that buy a rotation the odometry can actually READ:
+     * {@link ZERO_MOTION_DEG} and half again, so a base turning somewhat worse
+     * than its configured rate still clears the floor. Below this a command is
+     * not a small correction — it is a sample the loop scores as "this base did
+     * not move", and an arc whose first command is one of those ends there.
+     */
+    const measurableArcM = arc
+      ? (arc.forwardMps * 1.5 * ZERO_MOTION_DEG) / achievedDpsFor(profile, target)
+      : 0;
+    /**
      * Seconds of arc the UNSPENT budget can still fund.
      *
      * The budget is a DISTANCE, and a distance is metres = m/s × seconds — so
@@ -1599,8 +1617,35 @@ export class BlockExecutor {
      * asked for is recomputed from that hold, so the gain estimator downstream
      * still divides the measured rotation by the rotation actually requested.
      */
-    const arcBudgetS = (): number =>
-      arc ? (arc.budgetM - travel.commandedM) / arc.forwardMps : Infinity;
+    const arcBudgetS = (): number => {
+      if (!arc) return Infinity;
+      let remainingM = arc.budgetM - travel.commandedM;
+      if (arc.travelBudgetM !== undefined) {
+        // The commanded budget was derived from a CONFIGURED gain, which is a
+        // prior about the base and not a measurement of this arc. A base tuned
+        // to walk better than that prior spends the whole commanded budget and
+        // covers up to `1 / AGENT_ARC_TRAVEL_GAIN` times the real ground it was
+        // promised — 3.2x at the documented 0.31 — which drives it clean past
+        // the stage the alignment was for. So the arc re-derives the ratio from
+        // what it has just measured and bounds the hold by the real metres it
+        // has left.
+        const measuredGain =
+          travel.commandedM > 1e-6 && travel.movedM > 0 ? travel.movedM / travel.commandedM : null;
+        // Nothing measured yet, so the only ratio the arc may assume is the one
+        // no base beats: it does not travel further than it is told. The one
+        // exception is a probe too short to measure — it would re-derive
+        // nothing and be read as a dead base — and there the prior stands for
+        // one command, which is why a budget under `measurableArcM` can still
+        // overrun by up to that much. Never beyond the prior's own budget.
+        remainingM = Math.min(
+          remainingM,
+          measuredGain === null
+            ? Math.max(arc.travelBudgetM, measurableArcM)
+            : (arc.travelBudgetM - travel.movedM) / measuredGain
+        );
+      }
+      return remainingM / arc.forwardMps;
+    };
 
     const before = await this.loco.odometry();
 
@@ -1943,7 +1988,11 @@ export class BlockExecutor {
    *     commands, which is why a 0.70 m alignment budget bought almost no turn.
    *
    * The conversion is the identity at the default gain of 1, so nothing about
-   * the untuned behaviour changes.
+   * the untuned behaviour changes. The gain only ever OPENS the budget, and
+   * only as far as the arc's own odometry agrees: a travelled budget is carried
+   * on the {@link ArcOption} as well, and `arcBudgetS` holds the measured
+   * metres to it, so a base tuned better than its configured gain cannot arc
+   * past the stage it is aligning for.
    */
   /**
    * How many of an arc's requested metres the robot is actually allowed to
@@ -1995,8 +2044,17 @@ export class BlockExecutor {
     const travelGain =
       budgetIn === 'travelled' && Number.isFinite(gain) && gain > 1e-6 && gain <= 1 ? gain : 1;
     const commandedBudgetM = budgetM / travelGain;
-    if (commandedBudgetM < forwardMps * MIN_DURATION_S) return undefined;
-    return { forwardMps, budgetM: commandedBudgetM };
+    // Gated on the budget AS THE CALLER DENOMINATED IT, never on the
+    // gain-expanded one: the arc is held to its real metres by measurement (see
+    // `arcBudgetS`), so what has to fit inside the ground the caller actually
+    // promised is the shortest command that exists. Gating on the expanded
+    // number admits budgets whose very first command overruns them.
+    if (budgetM < forwardMps * MIN_DURATION_S) return undefined;
+    return {
+      forwardMps,
+      budgetM: commandedBudgetM,
+      ...(budgetIn === 'travelled' ? { travelBudgetM: budgetM } : {}),
+    };
   }
 
   /**

@@ -293,6 +293,11 @@ export interface Config {
      * Without it a base that covers 31% of what it commands is charged 3.2× for
      * every arc, and the alignment runs out of budget long before it has turned.
      * The `walk` loop's own budget is in commanded metres and is NOT converted.
+     *
+     * It is a PRIOR, not a promise: the arc measures its own ratio as it runs
+     * and holds its measured travel to the caller's real metres either way, so
+     * a gain set lower than the base actually achieves costs the arc some
+     * rotation and can no longer drive it past the stage it was aligning for.
      */
     arcTravelGain: number;
     /**

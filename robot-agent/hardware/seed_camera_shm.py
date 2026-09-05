@@ -160,8 +160,10 @@ JPEG_QUALITY = 85                       # what the live writer uses; matched for
 
 DEFAULT_PREFIX = "isaac"
 
-#: The sim's image, and the interpreter factory_mission_bringup.sh invokes inside it. The
-#: image itself has no python, so this path is not optional decoration — see the docstring.
+#: The sim's image, and the stock interpreter inside it. The image itself has no python, so
+#: this path is not optional decoration — see the docstring. It is only a fallback for a hand
+#: run: factory_mission_bringup.sh passes --interpreter from its own CONDA_ENV, because a
+#: default that disagrees with the env the sim uses fails as unreadable docker noise.
 DEFAULT_DOCKER_IMAGE = "neodem-isaac-host:latest"
 DEFAULT_INTERPRETER = "/home/humanoid/anaconda3/envs/unitree_sim_env6/bin/python"
 

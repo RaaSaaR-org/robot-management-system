@@ -84,13 +84,22 @@ function block(kind: AgentBlock['kind'], params: Record<string, unknown> = {}): 
 
 /**
  * A base that behaves like the measured rig: it rotates at whatever the table
- * above says the COMMANDED omega buys, and it covers `MEASURED_TRAVEL_GAIN` of
- * the forward distance it is told to. Nothing is faked at the reporting layer —
+ * above says the COMMANDED omega buys, and it covers `plantTravelGain` of the
+ * forward distance it is told to. Nothing is faked at the reporting layer —
  * the pose really goes where these two rules put it.
+ *
+ * `plantTravelGain` is what the BASE does; `config.agentMode.arcTravelGain` is
+ * what the configuration believes about it. They are the same number on the rig
+ * that was measured, and the two are deliberately separable here because a rig
+ * tuned to walk better than its configured gain is where the arc budget breaks.
  */
-function makeMeasuredBase(obstacles: ArcObstacles = {}) {
+function makeMeasuredBase(
+  obstacles: ArcObstacles = {},
+  plantTravelGain: number = MEASURED_TRAVEL_GAIN
+) {
   const moves: MoveCall[] = [];
   const pose = { x: 0, y: 0, yawRad: 0 };
+  let pathM = 0;
   const scene = new SceneMemoryStore('robot-1');
   if (obstacles.clearanceM !== undefined) {
     const clearanceM = obstacles.clearanceM;
@@ -124,10 +133,11 @@ function makeMeasuredBase(obstacles: ArcObstacles = {}) {
         moves.push({ vx, vy, omega, durationS });
         if (omega !== 0) pose.yawRad += plantDps(omega, vx) * durationS * DEG_TO_RAD;
         if (vx !== 0 || vy !== 0) {
-          const distanceM = Math.hypot(vx, vy) * MEASURED_TRAVEL_GAIN * durationS;
+          const distanceM = Math.hypot(vx, vy) * plantTravelGain * durationS;
           const heading = pose.yawRad + Math.atan2(vy, vx);
           pose.x += distanceM * Math.cos(heading);
           pose.y += distanceM * Math.sin(heading);
+          pathM += distanceM;
         }
         return { ok: true };
       },
@@ -148,8 +158,15 @@ function makeMeasuredBase(obstacles: ArcObstacles = {}) {
     /** Total rotation the commands ASKED FOR, deg — |omega| × hold, summed. */
     commandedYawDeg: () =>
       moves.reduce((sum, m) => sum + Math.abs(m.omega) * m.durationS * RAD_TO_DEG, 0),
-    /** Distance the robot actually covered, m. */
+    /** How far the robot ended up from where it started, m. */
     travelledM: () => Math.hypot(pose.x, pose.y),
+    /**
+     * GROUND covered, m — the path, which is what a distance budget bounds. It
+     * equals `travelledM()` only while the whole arc runs on one heading; spent
+     * over two commands, the curve between them makes the displacement from the
+     * start the shorter of the two.
+     */
+    pathM: () => pathM,
     yawDeg: () => pose.yawRad * RAD_TO_DEG,
   };
 }
@@ -383,7 +400,7 @@ describe('BlockExecutor — an arc budget bounds DISTANCE, not ANGLE', () => {
     // stage and the navigator subtracts the arc's MEASURED displacement from it.
     expect(h.travelledM()).toBeLessThanOrEqual(BUDGET_M + 1e-9);
     expect(outcome.measured?.distanceM ?? 0).toBeLessThanOrEqual(BUDGET_M + 1e-9);
-    expect(h.travelledM()).toBeCloseTo(BUDGET_M, 6);
+    expect(h.pathM()).toBeCloseTo(BUDGET_M, 6);
   });
 
   it('tuned, it asks for far more rotation than the old 90°/m ceiling allowed', async () => {
@@ -405,7 +422,9 @@ describe('BlockExecutor — an arc budget bounds DISTANCE, not ANGLE', () => {
     // distance being budgeted nor the rotation the base delivers, and one the
     // gain-compensation loop was clamped back to whatever it computed. Nothing
     // in the arc path may read it any more, so moving it must change nothing.
-    const runs: Array<{ yawDeg: number; travelledM: number; commandedYawDeg: number }> = [];
+    // The budget bounds GROUND COVERED, so what is compared is `pathM`: an arc
+    // that spends its budget over more than one command curves as it does so.
+    const runs: Array<{ yawDeg: number; pathM: number; commandedYawDeg: number }> = [];
     for (const nominal of [45, 120]) {
       applyIsaacTuning();
       config.agentMode.turnSpeedDps = nominal;
@@ -416,15 +435,15 @@ describe('BlockExecutor — an arc budget bounds DISTANCE, not ANGLE', () => {
       await h.executor.execute(block('turn', { angleDeg: 90, arcM: 0.1 }));
       runs.push({
         yawDeg: h.yawDeg(),
-        travelledM: h.travelledM(),
+        pathM: h.pathM(),
         commandedYawDeg: h.commandedYawDeg(),
       });
     }
 
     expect(runs[0]!.yawDeg).toBeCloseTo(runs[1]!.yawDeg, 10);
-    expect(runs[0]!.travelledM).toBeCloseTo(runs[1]!.travelledM, 10);
+    expect(runs[0]!.pathM).toBeCloseTo(runs[1]!.pathM, 10);
     expect(runs[0]!.commandedYawDeg).toBeCloseTo(runs[1]!.commandedYawDeg, 10);
-    expect(runs[0]!.travelledM).toBeCloseTo(0.1, 6);
+    expect(runs[0]!.pathM).toBeCloseTo(0.1, 6);
   });
 
   it('tuned, the robot actually rotates several times further for the same metres', async () => {
@@ -466,6 +485,59 @@ describe('BlockExecutor — an arc budget bounds DISTANCE, not ANGLE', () => {
     expect(outcome.measured?.distanceM).toBeUndefined();
   });
 
+  it('a base that walks BETTER than its configured gain still stops at the budget', async () => {
+    // The gain is a PRIOR, and the budget is divided by it: at 0.31 a 0.70 m
+    // alignment budget buys 2.26 m of COMMANDED forward motion. Tune the base
+    // to beat that prior — this one covers everything it commands — and all
+    // 2.26 m becomes real ground. The navigator then subtracts more than the
+    // stage it handed out, `Math.max(0, stageM - arcedM)` floors at zero, the
+    // walk that follows is nothing, and the robot is already three times past
+    // the stage the alignment was for. The arc measures its own ratio instead.
+    applyIsaacTuning();
+    const h = makeMeasuredBase({}, 1.0);
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: 90, arcM: BUDGET_M }));
+
+    expect(outcome.ok).toBe(true);
+    expect(h.pathM()).toBeLessThanOrEqual(BUDGET_M + 1e-9);
+    expect(outcome.measured?.distanceM ?? 0).toBeLessThanOrEqual(BUDGET_M + 1e-9);
+    // And it is still an ARC — the fix bounds the travel, it does not quietly
+    // fall back to the in-place turn this base cannot make to the left.
+    expect(h.arcMoves().length).toBeGreaterThan(0);
+    expect(h.yawDeg()).toBeGreaterThan(0);
+  });
+
+  it('spends the budget it was promised, whatever ratio the base turns out to have', async () => {
+    // The other half: measuring the ratio may not COST the arc metres either.
+    // Whether the base beats its configured gain or matches it, the alignment
+    // gets the full 0.70 m of real ground the navigator carved out for it.
+    for (const plantGain of [MEASURED_TRAVEL_GAIN, 0.6, 1.0]) {
+      applyIsaacTuning();
+      const h = makeMeasuredBase({}, plantGain);
+
+      await h.executor.execute(block('turn', { angleDeg: 90, arcM: BUDGET_M }));
+
+      expect(h.pathM()).toBeCloseTo(BUDGET_M, 6);
+    }
+  });
+
+  it('a budget too small to MEASURE overruns by one probe, not by the prior', async () => {
+    // The corner the bound does not close, stated instead of hidden. 0.10 m of
+    // real ground does not fund a command whose rotation clears the odometry's
+    // noise floor, and a probe that cannot be measured re-derives nothing — so
+    // that one command is sized by the prior after all. It is ONE command: the
+    // arc measures itself and stops, where the defect let the prior spend the
+    // whole 1/0.31 of the budget on a base that covers everything it commands.
+    applyIsaacTuning();
+    const h = makeMeasuredBase({}, 1.0);
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: 90, arcM: 0.1 }));
+
+    expect(outcome.ok).toBe(true);
+    expect(h.arcMoves()).toHaveLength(1);
+    expect(h.pathM()).toBeLessThan(0.1 / MEASURED_TRAVEL_GAIN);
+  });
+
   it('never converts a WALK loop budget, which is already in commanded metres', async () => {
     // The walk's segments are commanded metres, so its arcs must spend commanded
     // metres too or "walk 3 m" stops being 3 m of command. Only the navigator's
@@ -498,7 +570,7 @@ describe('BlockExecutor — an arc answers to the same obstacles a walk does', (
 
     await h.executor.execute(block('turn', { angleDeg: 90, arcM: CLEAR_BUDGET_M }));
 
-    expect(h.travelledM()).toBeCloseTo(CLEAR_BUDGET_M, 6);
+    expect(h.pathM()).toBeCloseTo(CLEAR_BUDGET_M, 6);
   });
 
   it('clamps the arc to the lidar clearance, minus the stopping margin', async () => {
