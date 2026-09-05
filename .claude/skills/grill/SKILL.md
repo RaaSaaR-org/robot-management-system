@@ -45,7 +45,12 @@ Only after the user confirms shared understanding.
 
 **"Do not build it" is a valid close** — say it plainly, set `status: cancelled`, `git mv` to `done/`, record why in the file. No spec, no hand-off.
 
-Otherwise, one commit:
+Otherwise, one commit — **on a branch, never on `main`** ([`rules/tasks.md`](../../rules/tasks.md)). The spec and the record are task-file edits like any other and land through a PR:
+
+```bash
+git checkout main && git pull origin main
+git checkout -b "docs/task-nnn-<slug>"
+```
 
 | Artifact   | Lands                                                                    |
 | ---------- | ------------------------------------------------------------------------ |
@@ -54,9 +59,9 @@ Otherwise, one commit:
 
 The record carries every decision with the alternative it rejected, marks every override by owner (the user's over yours, and yours rejected), and links the task and the section 4 hand-off.
 
-Then the frontmatter in one edit: `status: todo`, `owner:`, `updated:`, plus `spe: <n>` ([`spe.md`](../../references/spe.md)) for a leaf or `tags: [epic]` for something `/plan` must split.
+Then the frontmatter in one edit: `status: todo`, `owner:`, `updated:`, plus — for a leaf — `spe: <n>` ([`spe.md`](../../references/spe.md)) and `effort:` (`/plan`'s scale, which `/implement` reads). An epic gets neither: it is an epic because its children carry `parent:`, which is what `/ship` actually reads.
 
-Read the file back: status, owner, and the number or the epic tag all landed.
+Read the file back: status, owner, and the numbers all landed. Then push with `git-push-bot -u origin HEAD` and hand off.
 
 Grilling stops at `todo` — nothing has been built.
 

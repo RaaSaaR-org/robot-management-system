@@ -38,9 +38,30 @@ Each finding names what breaks and the input or state that breaks it.
 
 **Clean** → open the PR, *then* set `status: review`. That order — a status ahead of the thing it claims is the tracker lying.
 
+Write the body first — no step before this one produces it — and resolve the authenticated CLI in the same command ([`rules/tasks.md`](../../rules/tasks.md)):
+
+A PR may already be open — `/ship` section 2 routes feedback back through `/implement`, and it comes back here. Check first, and never hardcode `.git/`: in a worktree it is a file, not a directory.
+
 ```bash
-gh pr create --title "<the task's title, read from the file>" --body-file /tmp/pr.md
+GH=$(gh auth status >/dev/null 2>&1 && echo gh || echo gh-bot)
+N=$($GH pr view --json number --jq .number 2>/dev/null)
+[ -n "$N" ] && echo "PR #$N already open — push the fixes, leave the status, hand back to /ship"
+
+PB="$(git rev-parse --git-dir)/pr-body.md"
+cat > "$PB" <<'EOF'
+Closes TASK-NNN.
+
+<what changed and why, in a few lines>
+
+## Acceptance criteria
+- [x] <criterion> — <file:line where it is met>
+EOF
+$GH pr create --title "<the task's title, read from the file>" --body-file "$PB"
 ```
+
+Git never tracks anything under the git dir, so the body file cannot leak into the diff.
+
+**On a round trip** (`$N` was already set): do not run `pr create` — it fails on a head branch that already has an open PR. Push the fixes with `git-push-bot origin HEAD`, leave `status: review` alone, and hand back to `/ship`.
 
 Then: `run /ship on TASK-NNN` once the PR is approved.
 

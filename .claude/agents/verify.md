@@ -24,10 +24,12 @@ Classify the change set before running anything: which components (`app/`, `serv
 
 Every applicable gate, scoped to what changed. **Fix nothing.**
 
+Each gate runs in its own subshell, from the repo root. A bare `cd` would persist and every later line would run from the wrong directory — silently, since a missing script and a passing one both leave the report looking clean.
+
 ```bash
-cd app && npx tsc --noEmit
-cd server && npm run typecheck
-cd robot-agent && npm run typecheck
+(cd app && npx tsc --noEmit)
+(cd server && npm run typecheck)
+(cd robot-agent && npm run typecheck)
 ./scripts/test-all.sh --skip-pw       # add Playwright only when app/ changed
 ```
 

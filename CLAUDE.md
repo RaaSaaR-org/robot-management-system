@@ -33,7 +33,7 @@ Work runs through five skills, each handing off to exactly one next command:
 /plan   → splits an epic into sized children (skip for a single slice)
 /implement → branch, code, `verify` subagent, push
 /review → standards + acceptance criteria, opens the PR
-/ship   → CI, feedback, squash-merge, closes the task
+/ship   → CI, feedback, closes the task in the PR, squash-merges
 ```
 
 | Piece | File | Owns |
@@ -47,8 +47,8 @@ Invoke a skill by typing `/grill`, `/plan`, `/implement`, `/review` or `/ship`. 
 
 **Key tools:**
 
-- `gh` — GitHub CLI; all PR operations go through it (`gh pr create`, `gh pr checks`, `gh pr merge`)
-- `git push origin <branch>` — pushing a feature branch
+- GitHub CLI — all PR operations go through it, but plain `gh` is unauthenticated here; resolve the wrapper in the same command (see `.claude/rules/tasks.md`)
+- `git-push-bot origin <branch>` — pushing a feature branch; plain `git push` has no credentials
 
 **Tasks** live in `.mc/tasks/` as Markdown files — there is no task CLI. See
 [Task Management](#task-management) for how to read, create and close one.
@@ -298,7 +298,7 @@ robot-management-system/
 │   └── references/         # Demand-loaded lookups (spe.md — the size scale)
 │
 └── .mc/                    # Task backlog (Markdown + YAML frontmatter)
-    ├── tasks/              # Task files, split into todo/ and done/
+    ├── tasks/              # Task files, split into todo/, done/ and deferred/
     ├── config.yml          # Allowed statuses, priorities, id prefixes
     └── templates/          # Task/sprint/proposal templates
 ```
@@ -363,7 +363,7 @@ When building features across the stack:
 
 Project tasks live in `.mc/tasks/` as Markdown files with YAML frontmatter. There is
 no CLI for them — read, write and move the files directly. `todo/` holds everything
-unfinished, `done/` holds what shipped.
+unfinished, `done/` holds what shipped, `deferred/` what is parked but not cancelled.
 
 ```bash
 ls .mc/tasks/todo/                                   # the backlog
