@@ -3,7 +3,7 @@ id: "TASK-245"
 aliases: []
 title: "Repair the five-skill workflow so it can actually run"
 slug: "repair-the-five-skill-workflow-so-it-can-actually-run"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
@@ -98,3 +98,21 @@ All twelve are fixed in the second commit.
 ## Test Strategy
 
 Re-run the six-lens audit against the patched files and confirm every finding above is gone. Run each replaced command literally (the greps, the `$GH` resolution, the subshell gate block) and check the output matches what the skill claims. Then walk a real task through `/implement → /review → /ship` end to end.
+
+## Outcome
+
+Twenty-two defects fixed across two commits. Both audit rounds ran the same
+shape — six lenses over the six files, then adversarial refuters over every
+finding — and the second round was aimed at the first round's own patch: R1,
+R2 and R3 above are defects the first fix introduced, two of which would have
+failed on the first line executed.
+
+The workflow was then walked end to end against itself. `/implement` branched
+and pushed with `git-push-bot`, `/review` opened PR #283 with the worktree-safe
+body path, and `/ship` derived `$N` from the task and read CI by bucket — which
+caught three jobs still `QUEUED` right after the push, exactly the state where
+the old `--watch` would have exited 1 claiming no checks reported.
+
+Folded in: `**/.claude/worktrees/` was added to `.gitignore`. #281 narrowed the
+blanket `**/.claude/` rule to two specific paths and this directory was covered
+by neither, so agent worktrees surfaced as untracked noise.
