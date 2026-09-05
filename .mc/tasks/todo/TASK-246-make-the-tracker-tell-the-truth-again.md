@@ -3,7 +3,7 @@ id: "TASK-246"
 aliases: []
 title: "Make the tracker tell the truth again"
 slug: "make-the-tracker-tell-the-truth-again"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
