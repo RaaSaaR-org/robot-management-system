@@ -38,9 +38,22 @@ Each finding names what breaks and the input or state that breaks it.
 
 **Clean** → open the PR, *then* set `status: review`. That order — a status ahead of the thing it claims is the tracker lying.
 
+Write the body first — no step before this one produces it — and resolve the authenticated CLI in the same command ([`rules/tasks.md`](../../rules/tasks.md)):
+
 ```bash
-gh pr create --title "<the task's title, read from the file>" --body-file /tmp/pr.md
+cat > .git/pr-body.md <<'EOF'
+Closes TASK-NNN.
+
+<what changed and why, in a few lines>
+
+## Acceptance criteria
+- [x] <criterion> — <file:line where it is met>
+EOF
+GH=$(gh auth status >/dev/null 2>&1 && echo gh || echo gh-bot)
+$GH pr create --title "<the task's title, read from the file>" --body-file .git/pr-body.md
 ```
+
+`.git/` is never committed, so the body file cannot leak into the diff.
 
 Then: `run /ship on TASK-NNN` once the PR is approved.
 

@@ -298,7 +298,7 @@ robot-management-system/
 │   └── references/         # Demand-loaded lookups (spe.md — the size scale)
 │
 └── .mc/                    # Task backlog (Markdown + YAML frontmatter)
-    ├── tasks/              # Task files, split into todo/ and done/
+    ├── tasks/              # Task files, split into todo/, done/ and deferred/
     ├── config.yml          # Allowed statuses, priorities, id prefixes
     └── templates/          # Task/sprint/proposal templates
 ```
@@ -363,7 +363,7 @@ When building features across the stack:
 
 Project tasks live in `.mc/tasks/` as Markdown files with YAML frontmatter. There is
 no CLI for them — read, write and move the files directly. `todo/` holds everything
-unfinished, `done/` holds what shipped.
+unfinished, `done/` holds what shipped, `deferred/` what is parked but not cancelled.
 
 ```bash
 ls .mc/tasks/todo/                                   # the backlog

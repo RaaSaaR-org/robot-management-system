@@ -52,12 +52,16 @@ Blockers first, so a child can name a number that already exists. Write the edge
 
 A child is published **complete**, or it is filed rather than planned — self-contained enough that a reader implements it without opening another file. Every child carries:
 
-- the parent and its blockers in `depends_on`
+- `parent: "[[TASK-NNN]]"` — the epic. Blockers go in `depends_on`, never the parent; `/ship` reads the two apart ([`tasks.md`](../../rules/tasks.md))
 - a body with Description · Details (file paths, API shapes, per-component sections) · Acceptance Criteria · Test Strategy
 - `spe:` (section 4) · `effort:` (section 5) · `owner:` · `created:`/`updated:`
 - `status: todo` — it is ready to work
 - `tags:` — `core`, `extended` or `compliance`
 
-Read the new children back together (`head -20 .mc/tasks/todo/TASK-*.md`) and confirm all of it landed on all of them.
+Read the new children back — **the children, not the backlog** — and confirm every field above landed on every one of them:
+
+```bash
+head -25 .mc/tasks/todo/TASK-{201,202,203}-*.md   # the ids you just wrote
+```
 
 Then: `run /implement on TASK-NNN` — the first unblocked child.

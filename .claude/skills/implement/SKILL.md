@@ -12,7 +12,7 @@ Gates live in `CLAUDE.md`, tracker policy in `.claude/rules/tasks.md`, component
 
 ## 1. Read the task, pick the shape
 
-Read the task and the `AGENTS.md` of every component it touches. Then:
+Read the task and the `AGENTS.md` of every component it touches. Its `effort:` is the reasoning effort this slice was planned for — carry it into the subagents you spawn. Then:
 
 | Situation                           | Do                                                 |
 | ----------------------------------- | -------------------------------------------------- |
@@ -32,12 +32,16 @@ Send independent subagents in one message so they run concurrently.
 
 ## 3. Branch first
 
+`/review` and `/ship` both route work back here, so this step must be re-enterable: on a round trip the branch already exists and carries commits.
+
 ```bash
-git checkout main && git pull origin main
-git checkout -b <type>/task-nnn-<slug>   # name owned by rules/tasks.md
+B=<type>/task-nnn-<slug>        # name owned by rules/tasks.md
+git rev-parse --verify "$B" >/dev/null 2>&1 \
+  && git checkout "$B" \
+  || { git checkout main && git pull origin main && git checkout -b "$B"; }
 ```
 
-Never work on `main`. Set `status: in-progress` and commit it on the branch with the code.
+Never work on `main`. On first entry set `status: in-progress` and commit it on the branch with the code; on a round trip the status is already right — leave it, a round trip is not a change of state.
 
 ## 4. Verify before claiming anything
 
