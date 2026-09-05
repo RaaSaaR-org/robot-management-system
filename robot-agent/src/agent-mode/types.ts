@@ -114,8 +114,13 @@ export const ControlOwners = ['idle', 'teleop', 'vla', 'agent'] as const;
 export type ControlOwner = (typeof ControlOwners)[number];
 
 /**
- * Languages the robot can be spoken to and answer in — the two the voice
- * service has a Piper voice for (`piper_voice_de` / `piper_voice_en`).
+ * Languages the robot can be spoken to and answer in.
+ *
+ * Language and voice are separate axes (TASK-229): the voice service picks a
+ * pack from its own registry, and a pack may speak a language this list does
+ * not name, or several. This list is only about what the robot understands and
+ * answers in — it is not a count of installed voices, which is what tied it to
+ * Piper before.
  */
 export const SpokenLanguages = ['en', 'de'] as const;
 export type SpokenLanguage = (typeof SpokenLanguages)[number];

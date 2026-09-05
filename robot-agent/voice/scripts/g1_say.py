@@ -32,7 +32,7 @@ import httpx
 
 from voice_service.audio.resample import resample_s16le
 from voice_service.config import PIPELINE_SAMPLE_RATE, VoiceConfig
-from voice_service.tts.piper_engine import PiperEngine
+from voice_service.tts.registry import VoiceRegistry
 
 # Enough to separate the two languages we ship voices for. Anything cleverer
 # belongs in the voice service, which already does real detection via Whisper.
@@ -65,12 +65,26 @@ def write_wav(path: Path, pcm: bytes, rate: int) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("text", nargs="?", help="what the robot should say")
-    parser.add_argument("--lang", choices=["de", "en"], help="voice language (default: auto-detect)")
+    parser.add_argument("--lang", choices=["de", "en"], help="spoken language (default: auto-detect)")
+    # Separate from --lang on purpose: a pack may speak a language, several, or one
+    # the operator did not pick. The registry refuses an unknown or unloaded id
+    # rather than falling back, so a wrong --voice is an error, never silent Piper.
+    parser.add_argument("--voice", help="voice pack id (default: VOICE_VOICE). --voice list prints the packs")
     parser.add_argument("--adapter", default="http://localhost:8766", help="adapter base URL")
     parser.add_argument("--volume", type=int, metavar="0..100", help="set speaker volume (before speaking, if text given)")
     parser.add_argument("--stop-after", type=float, metavar="SECONDS", help="POST /stop mid-playback, to verify it cuts")
     parser.add_argument("--save", metavar="PATH", help="also write the 16 kHz PCM to a WAV file")
     args = parser.parse_args()
+
+    # Before the text and adapter checks on purpose: listing the packs reads the
+    # registry and talks to no robot, so it must work on a box with no G1 attached.
+    if args.voice == "list":
+        registry = VoiceRegistry(VoiceConfig.from_env())
+        registry.load()
+        for pack in registry.describe():
+            state = "ok" if pack["available"] else f"unavailable: {pack['reason']}"
+            print(f"{pack['id']:<12} {pack['licence']:<24} realtime={str(pack['realtime']):<5} {state}")
+        return 0
 
     if args.text is None and args.volume is None:
         parser.error("give TEXT to speak, or --volume to set the level")
@@ -97,11 +111,11 @@ def main() -> int:
 
     language = args.lang or detect_language(args.text)
     config = VoiceConfig.from_env()
-    engine = PiperEngine(config)
-    engine.load()
+    registry = VoiceRegistry(config)
+    registry.load()
 
     t0 = time.perf_counter()
-    pcm, rate = engine.synthesize(args.text, language)
+    pcm, rate = registry.synthesize(args.text, language, args.voice or config.voice)
     print(f"tts [{language}]: {len(pcm) / 2 / rate:.2f}s audio @ {rate} Hz in {time.perf_counter() - t0:.2f}s")
 
     pcm16 = resample_s16le(pcm, rate, PIPELINE_SAMPLE_RATE)

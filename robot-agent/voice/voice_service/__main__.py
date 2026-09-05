@@ -76,8 +76,17 @@ def _build_components(config: VoiceConfig, bus: EventBus, args: argparse.Namespa
         build("audio_out", make_output)
 
     def make_tts():
-        from .tts.piper_engine import PiperEngine
-        return PiperEngine(config)
+        # The registry IS the pipeline's TTS: it duck-types load()/synthesize()
+        # and adds the voice axis on top. Individual packs load in its own
+        # load(), where a broken one degrades to "unavailable with a reason"
+        # instead of costing the service its whole mouth.
+        from .tts.registry import VoiceRegistry, set_active_registry
+
+        registry = VoiceRegistry(config)
+        # Published process-wide so POST /config can refuse a runtime voice
+        # switch to a pack that never loaded (config._require_loaded_voice).
+        set_active_registry(registry)
+        return registry
     build("tts", make_tts)
 
     def make_stt():

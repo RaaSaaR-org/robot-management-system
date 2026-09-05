@@ -1,14 +1,23 @@
 """HTTP control API for the voice service (stdlib, per repo sidecar convention).
 
 Endpoints:
-    GET  /health          liveness + model/agent readiness
+    GET  /health          liveness + model/agent readiness + the voice packs
     GET  /status          pipeline state, session, last transcript/reply, latency
+                          (including TTS latency per voice pack)
+    GET  /voices          the declared voice packs and which one is active
     GET  /config          full resolved config
     POST /config          patch runtime-mutable config keys
-    POST /say             {"text": "...", "language": "de"|"en"?} -> direct TTS
+    POST /say             {"text": "...", "language": "de"|"en"?, "voice": "id"?}
+                          -> direct TTS
     POST /listen/toggle   pause/resume the mic pipeline
     POST /session/reset   start a fresh conversation (new A2A contextId)
     GET  /events          Server-Sent Events stream of pipeline events
+
+`voice` is a separate axis from `language` (see tts/registry.py): language says
+what the text is, voice says who says it. An unknown voice is 404 and an
+unloaded one 409 — never a silent fall back to the default pack, which would
+answer a customer's own voice request in somebody else's voice while every
+health check stayed green.
 
 The pipeline runs in an asyncio loop; this server runs in threads and calls
 into the pipeline only through the thread-safe PipelineController protocol.
@@ -24,6 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Protocol
 
 from .events import EventBus
+from .tts.registry import UnknownVoiceError, VoiceError
 
 SSE_HEARTBEAT_S = 15.0
 
@@ -48,9 +58,11 @@ class PipelineController(Protocol):
 
     def health(self) -> dict: ...
     def status(self) -> dict: ...
+    def voices(self) -> dict: ...
     def get_config(self) -> dict: ...
     def patch_config(self, patch: dict) -> dict: ...
-    def say(self, text: str, language: str | None) -> None: ...
+    def say(self, text: str, language: str | None, voice: str | None = None) -> str: ...
+    # returns the pack id the utterance will be spoken in
     def toggle_listen(self) -> bool: ...  # returns True if now paused
     def reset_session(self) -> str: ...  # returns new context id
 
@@ -97,6 +109,8 @@ class VoiceHttpServer:
                         self._send(200, controller_ref.health())
                     elif self.path == "/status":
                         self._send(200, controller_ref.status())
+                    elif self.path == "/voices":
+                        self._send(200, controller_ref.voices())
                     elif self.path == "/config":
                         self._send(200, controller_ref.get_config())
                     elif self.path == "/events":
@@ -119,8 +133,14 @@ class VoiceHttpServer:
                         if not text:
                             self._send(400, {"error": "missing 'text'"})
                             return
-                        controller_ref.say(text, body.get("language"))
-                        self._send(202, {"accepted": True, "text": text})
+                        voice = body.get("voice") or None
+                        if voice is not None and not isinstance(voice, str):
+                            self._send(400, {"error": "'voice' must be a pack id"})
+                            return
+                        pack = controller_ref.say(text, body.get("language"), voice)
+                        # Echo the pack that will speak, not the one asked for:
+                        # a caller that omitted `voice` learns which it got.
+                        self._send(202, {"accepted": True, "text": text, "voice": pack})
                     elif self.path == "/listen/toggle":
                         paused = controller_ref.toggle_listen()
                         self._send(200, {"paused": paused})
@@ -129,6 +149,13 @@ class VoiceHttpServer:
                         self._send(200, {"contextId": context_id})
                     else:
                         self._send(404, {"error": f"unknown path {self.path}"})
+                except VoiceError as exc:
+                    # The client asked for a voice this service cannot speak in.
+                    # 404 = no such pack, 409 = declared but did not load; both
+                    # carry the registry's own reason, which is the only thing
+                    # that tells an operator which of the two it is.
+                    code = 404 if isinstance(exc, UnknownVoiceError) else 409
+                    self._send(code, {"error": str(exc)})
                 except ValueError as exc:
                     self._send(400, {"error": str(exc)})
                 except RuntimeError as exc:
