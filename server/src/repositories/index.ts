@@ -117,6 +117,8 @@ export {
   TrainingJobRepository,
   modelVersionRepository,
   ModelVersionRepository,
+  modelCheckpointRepository,
+  ModelCheckpointRepository,
   deploymentRepository,
   DeploymentRepository,
   skillChainRepository,

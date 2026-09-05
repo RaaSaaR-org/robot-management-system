@@ -16,6 +16,7 @@ import { EventEmitter } from 'events';
 import {
   trainingJobRepository,
   modelVersionRepository,
+  modelCheckpointRepository,
   datasetRepository,
   episodeRewardRepository,
 } from '../repositories/index.js';
@@ -144,6 +145,9 @@ const WORKER_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 export class TrainingOrchestrator extends EventEmitter {
   private static instance: TrainingOrchestrator;
   private etaStates: Map<string, EtaState> = new Map();
+  // Write-through cache over the ModelCheckpoint rows (TASK-238). The rows are
+  // the record; this only serves getCheckpoints() without a round-trip, and is
+  // empty for anything reported before the last restart.
   private checkpoints: Map<string, { epoch: number; uri: string }[]> = new Map();
   private workers: Map<string, WorkerStatus> = new Map();
   private workerCleanupTimer: NodeJS.Timeout | null = null;
@@ -654,12 +658,29 @@ export class TrainingOrchestrator extends EventEmitter {
       const timestamp = Date.now();
       const version = `v${timestamp}`;
 
+      // Read the checkpoints off the rows, not the in-memory cache: a server
+      // restart mid-run empties the cache but not the table (TASK-238).
+      // listByJob is ordered by epoch, so the last entry is the newest.
+      const checkpoints = await modelCheckpointRepository.listByJob(jobId);
+      const lastCheckpoint = checkpoints[checkpoints.length - 1];
+
+      // TASK-239 gives TrainingJob a `parentModelVersionId` so a fine-tune
+      // records the model it started from; adding that field to the type is
+      // the whole change — this reads it the moment it exists.
+      const parentModelVersionId =
+        (job as { parentModelVersionId?: string | null }).parentModelVersionId ?? null;
+
       const modelVersion = await modelVersionRepository.create({
         skillId: dataset?.skillId ?? null,
         trainingJobId: jobId,
+        parentModelVersionId,
+        // A job that started from another registered model produces a derived
+        // model, not a fresh one.
+        sourceKind: parentModelVersionId ? 'derived' : 'training',
         modelType: job.kind === 'sim_rl' ? 'rl_policy' : 'vla',
         version,
         artifactUri,
+        checkpointUri: lastCheckpoint?.uri,
         trainingMetrics: updatedMetrics,
         validationMetrics: finalMetrics.validationLoss
           ? { final_loss: finalMetrics.validationLoss }
@@ -668,10 +689,17 @@ export class TrainingOrchestrator extends EventEmitter {
       });
 
       modelVersionId = modelVersion.id;
+
+      // The checkpoints were written while the job ran, before this model
+      // existed; link them now so the model detail view can show them.
+      if (checkpoints.length > 0) {
+        await modelCheckpointRepository.attachToModelVersion(jobId, modelVersionId);
+      }
+
       console.log(
         `[TrainingOrchestrator] Created ModelVersion: ${modelVersionId} (kind=${
           job.kind ?? 'supervised'
-        }, skill=${dataset?.skillId ?? 'none'})`
+        }, skill=${dataset?.skillId ?? 'none'}, checkpoints=${checkpoints.length})`
       );
     } catch (error) {
       console.error('[TrainingOrchestrator] Failed to create ModelVersion:', error);
@@ -774,12 +802,13 @@ export class TrainingOrchestrator extends EventEmitter {
     if (lastCheckpoint) {
       const job = await trainingJobRepository.findById(jobId);
       if (job) {
-        const checkpointList = this.checkpoints.get(jobId) || [];
-        checkpointList.push({
+        // Same path as a worker-reported checkpoint, so the dying job's last
+        // artifact is persisted rather than only cached (TASK-238).
+        await this.recordCheckpoint({
+          jobId,
           epoch: job.currentEpoch || 0,
-          uri: lastCheckpoint,
+          checkpointUri: lastCheckpoint,
         });
-        this.checkpoints.set(jobId, checkpointList);
       }
     }
 
@@ -798,12 +827,28 @@ export class TrainingOrchestrator extends EventEmitter {
 
   /**
    * Record a checkpoint
+   *
+   * The row is written first and the cache second, so the cache can never
+   * claim a checkpoint the database does not have (TASK-238).
    */
   async recordCheckpoint(request: WorkerCheckpointRequest): Promise<void> {
     const { jobId, epoch, checkpointUri } = request;
 
+    await modelCheckpointRepository.create({
+      trainingJobId: jobId,
+      epoch,
+      uri: checkpointUri,
+    });
+
     const checkpointList = this.checkpoints.get(jobId) || [];
-    checkpointList.push({ epoch, uri: checkpointUri });
+    // Mirrors the row's upsert on (jobId, epoch): a re-reported epoch replaces
+    // its cache entry rather than appearing twice.
+    const existingIndex = checkpointList.findIndex((c) => c.epoch === epoch);
+    if (existingIndex >= 0) {
+      checkpointList[existingIndex] = { epoch, uri: checkpointUri };
+    } else {
+      checkpointList.push({ epoch, uri: checkpointUri });
+    }
     this.checkpoints.set(jobId, checkpointList);
 
     console.log(`[TrainingOrchestrator] Checkpoint recorded: ${jobId} epoch ${epoch}`);
@@ -811,6 +856,9 @@ export class TrainingOrchestrator extends EventEmitter {
 
   /**
    * Get checkpoints for a job
+   *
+   * Cache only — see `modelCheckpointRepository.listByJob` for the persisted
+   * set, which is what survives a restart.
    */
   getCheckpoints(jobId: string): { epoch: number; uri: string }[] {
     return this.checkpoints.get(jobId) || [];

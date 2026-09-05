@@ -9,6 +9,7 @@
  * - Dataset - Training datasets (LeRobot v3 format)
  * - TrainingJob - Training job queue
  * - ModelVersion - Trained model artifacts
+ * - ModelCheckpoint - Per-epoch checkpoints reported by the training worker
  * - Deployment - Fleet deployment tracking
  */
 
@@ -19,6 +20,7 @@ import type {
   Dataset as PrismaDataset,
   TrainingJob as PrismaTrainingJob,
   ModelVersion as PrismaModelVersion,
+  ModelCheckpoint as PrismaModelCheckpoint,
   Deployment as PrismaDeployment,
   SkillChain as PrismaSkillChain,
   SkillChainStep as PrismaSkillChainStep,
@@ -47,6 +49,11 @@ import type {
   CreateModelVersionInput,
   UpdateModelVersionInput,
   ModelVersionQueryParams,
+  ModelVersionEvaluationSummary,
+  ModelVersionLineage,
+  ModelSourceKind,
+  ModelCheckpoint,
+  CreateModelCheckpointInput,
   Deployment,
   CreateDeploymentInput,
   UpdateDeploymentInput,
@@ -283,6 +290,9 @@ function dbModelVersionToDomain(db: PrismaModelVersion): ModelVersion {
     id: db.id,
     skillId: db.skillId,
     trainingJobId: db.trainingJobId,
+    name: db.name,
+    sourceKind: db.sourceKind as ModelSourceKind,
+    parentModelVersionId: db.parentModelVersionId,
     modelType: (db.modelType as ModelVersion['modelType']) ?? 'vla',
     version: db.version,
     artifactUri: db.artifactUri,
@@ -293,6 +303,70 @@ function dbModelVersionToDomain(db: PrismaModelVersion): ModelVersion {
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
   };
+}
+
+/** Prisma ModelVersion row with the detail relations loaded (TASK-238) */
+type PrismaModelVersionWithRelations = PrismaModelVersion & {
+  skill?: PrismaSkillDefinition | null;
+  trainingJob?: PrismaTrainingJob | null;
+  parent?: PrismaModelVersion | null;
+  children?: PrismaModelVersion[];
+  checkpoints?: PrismaModelCheckpoint[];
+};
+
+/** Shared include for the single-version read (GET /api/models/versions/:id) */
+const modelVersionDetailInclude = {
+  skill: true,
+  trainingJob: true,
+  parent: true,
+  children: { orderBy: { createdAt: 'desc' } },
+  checkpoints: { orderBy: { epoch: 'asc' } },
+} as const;
+
+function dbModelVersionWithRelationsToDomain(db: PrismaModelVersionWithRelations): ModelVersion {
+  return {
+    ...dbModelVersionToDomain(db),
+    skill: db.skill ? dbSkillDefinitionToDomain(db.skill) : undefined,
+    trainingJob: db.trainingJob ? dbTrainingJobToDomain(db.trainingJob) : undefined,
+    parent: db.parent ? dbModelVersionToDomain(db.parent) : null,
+    children: db.children?.map(dbModelVersionToDomain),
+    checkpoints: db.checkpoints?.map(dbModelCheckpointToDomain),
+  };
+}
+
+// ============================================================================
+// HELPER FUNCTIONS - ModelCheckpoint
+// ============================================================================
+
+function dbModelCheckpointToDomain(db: PrismaModelCheckpoint): ModelCheckpoint {
+  return {
+    id: db.id,
+    modelVersionId: db.modelVersionId,
+    trainingJobId: db.trainingJobId,
+    epoch: db.epoch,
+    uri: db.uri,
+    metrics: parseCheckpointMetrics(db.metricsJson),
+    createdAt: db.createdAt,
+  };
+}
+
+/**
+ * Parse a checkpoint's metricsJson column (TASK-238).
+ *
+ * An unreadable or non-object blob reads as "no metrics" rather than throwing:
+ * a checkpoint whose metrics got mangled is still a checkpoint the detail
+ * endpoint has to return.
+ */
+function parseCheckpointMetrics(val: string | null | undefined): Record<string, number> {
+  if (!val) return {};
+  try {
+    const parsed: unknown = JSON.parse(val);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, number>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 // ============================================================================
@@ -965,12 +1039,18 @@ export class TrainingJobRepository {
 // MODEL VERSION REPOSITORY
 // ============================================================================
 
+/** Hard stop for the lineage walk — deeper than any genuine fine-tune chain. */
+const MAX_LINEAGE_DEPTH = 100;
+
 export class ModelVersionRepository {
   async create(input: CreateModelVersionInput): Promise<ModelVersion> {
     const modelVersion = await prisma.modelVersion.create({
       data: {
         skillId: input.skillId,
-        trainingJobId: input.trainingJobId,
+        trainingJobId: input.trainingJobId ?? null,
+        name: input.name ?? null,
+        sourceKind: input.sourceKind ?? 'training',
+        parentModelVersionId: input.parentModelVersionId ?? null,
         modelType: input.modelType ?? 'vla',
         version: input.version,
         artifactUri: input.artifactUri,
@@ -988,6 +1068,72 @@ export class ModelVersionRepository {
       where: { id },
     });
     return modelVersion ? dbModelVersionToDomain(modelVersion) : null;
+  }
+
+  /**
+   * One version with everything the detail view shows: skill, training job,
+   * parent, direct children and persisted checkpoints. (TASK-238)
+   */
+  async findByIdWithRelations(id: string): Promise<ModelVersion | null> {
+    const modelVersion = await prisma.modelVersion.findUnique({
+      where: { id },
+      include: modelVersionDetailInclude,
+    });
+    return modelVersion ? dbModelVersionWithRelationsToDomain(modelVersion) : null;
+  }
+
+  /**
+   * The ancestor chain from this model to the root, plus its direct children.
+   * (TASK-238)
+   *
+   * Walks the parent edge one row at a time because the depth is unknown.
+   * Both guards below exist because the edge is writable through PATCH: a
+   * self-parent or a cycle would otherwise spin here forever, and a chain
+   * longer than MAX_LINEAGE_DEPTH is corruption, not lineage.
+   */
+  async getLineage(id: string): Promise<ModelVersionLineage | null> {
+    const root = await prisma.modelVersion.findUnique({
+      where: { id },
+      include: { children: { orderBy: { createdAt: 'desc' } } },
+    });
+    if (!root) return null;
+
+    const ancestors: ModelVersion[] = [];
+    // Seeded with the model itself: it must never appear as its own ancestor.
+    const seen = new Set<string>([root.id]);
+    let parentId = root.parentModelVersionId;
+
+    while (parentId && !seen.has(parentId) && ancestors.length < MAX_LINEAGE_DEPTH) {
+      seen.add(parentId);
+      const parent = await prisma.modelVersion.findUnique({ where: { id: parentId } });
+      if (!parent) break;
+      ancestors.push(dbModelVersionToDomain(parent));
+      parentId = parent.parentModelVersionId;
+    }
+
+    return {
+      modelVersionId: root.id,
+      ancestors,
+      children: root.children.map(dbModelVersionToDomain),
+    };
+  }
+
+  /**
+   * Evaluation rollup over the EvaluationEpisode rows that carry this model's
+   * id. Rows that only ever had the free `modelVersion` string are not
+   * counted — see the TASK-238 migration.
+   */
+  async getEvaluationSummary(id: string): Promise<ModelVersionEvaluationSummary> {
+    const [episodeCount, successCount] = await Promise.all([
+      prisma.evaluationEpisode.count({ where: { modelVersionId: id } }),
+      prisma.evaluationEpisode.count({ where: { modelVersionId: id, success: true } }),
+    ]);
+
+    return {
+      episodeCount,
+      successCount,
+      successRate: episodeCount > 0 ? successCount / episodeCount : 0,
+    };
   }
 
   async findBySkillAndVersion(skillId: string, version: string): Promise<ModelVersion | null> {
@@ -1049,6 +1195,12 @@ export class ModelVersionRepository {
     try {
       const updateData: Record<string, unknown> = {};
 
+      // null is a meaningful value for skillId / name / parentModelVersionId —
+      // it unlinks. Only `undefined` leaves the column untouched.
+      if (input.skillId !== undefined) updateData.skillId = input.skillId;
+      if (input.name !== undefined) updateData.name = input.name;
+      if (input.parentModelVersionId !== undefined)
+        updateData.parentModelVersionId = input.parentModelVersionId;
       if (input.artifactUri !== undefined) updateData.artifactUri = input.artifactUri;
       if (input.checkpointUri !== undefined) updateData.checkpointUri = input.checkpointUri;
       if (input.trainingMetrics !== undefined) updateData.trainingMetrics = JSON.stringify(input.trainingMetrics);
@@ -1094,6 +1246,79 @@ export class ModelVersionRepository {
     }
 
     return where;
+  }
+}
+
+// ============================================================================
+// MODEL CHECKPOINT REPOSITORY
+// ============================================================================
+
+export class ModelCheckpointRepository {
+  /**
+   * Record one per-epoch checkpoint. (TASK-238)
+   *
+   * Upserts on the unique `(trainingJobId, epoch)`: a worker that re-reports
+   * an epoch — a retry, a resumed run — must update its row, not add a second
+   * one for the same epoch.
+   */
+  async create(input: CreateModelCheckpointInput): Promise<ModelCheckpoint> {
+    const checkpoint = await prisma.modelCheckpoint.upsert({
+      where: {
+        trainingJobId_epoch: { trainingJobId: input.trainingJobId, epoch: input.epoch },
+      },
+      create: {
+        trainingJobId: input.trainingJobId,
+        epoch: input.epoch,
+        uri: input.uri,
+        modelVersionId: input.modelVersionId ?? null,
+        metricsJson: JSON.stringify(input.metrics ?? {}),
+      },
+      update: {
+        uri: input.uri,
+        // Omitted fields stay as they are: a re-report that carries no
+        // modelVersionId must not blank the link `attachToModelVersion` set.
+        ...(input.modelVersionId !== undefined
+          ? { modelVersionId: input.modelVersionId }
+          : {}),
+        ...(input.metrics !== undefined
+          ? { metricsJson: JSON.stringify(input.metrics) }
+          : {}),
+      },
+    });
+    return dbModelCheckpointToDomain(checkpoint);
+  }
+
+  async listByJob(trainingJobId: string): Promise<ModelCheckpoint[]> {
+    const checkpoints = await prisma.modelCheckpoint.findMany({
+      where: { trainingJobId },
+      orderBy: { epoch: 'asc' },
+    });
+    return checkpoints.map(dbModelCheckpointToDomain);
+  }
+
+  async listByModelVersion(modelVersionId: string): Promise<ModelCheckpoint[]> {
+    const checkpoints = await prisma.modelCheckpoint.findMany({
+      where: { modelVersionId },
+      orderBy: { epoch: 'asc' },
+    });
+    return checkpoints.map(dbModelCheckpointToDomain);
+  }
+
+  /**
+   * Link the checkpoints a job reported to the ModelVersion it produced, and
+   * return how many rows were linked.
+   *
+   * Checkpoints arrive while the job is still running, so they are written
+   * with a null `modelVersionId`; without this the model detail read would
+   * show no checkpoints at all. Rows already linked are left alone — a job
+   * that produces a second ModelVersion must not steal the first one's.
+   */
+  async attachToModelVersion(trainingJobId: string, modelVersionId: string): Promise<number> {
+    const result = await prisma.modelCheckpoint.updateMany({
+      where: { trainingJobId, modelVersionId: null },
+      data: { modelVersionId },
+    });
+    return result.count;
   }
 }
 
@@ -1449,5 +1674,6 @@ export const skillDefinitionRepository = new SkillDefinitionRepository();
 export const datasetRepository = new DatasetRepository();
 export const trainingJobRepository = new TrainingJobRepository();
 export const modelVersionRepository = new ModelVersionRepository();
+export const modelCheckpointRepository = new ModelCheckpointRepository();
 export const deploymentRepository = new DeploymentRepository();
 export const skillChainRepository = new SkillChainRepository();

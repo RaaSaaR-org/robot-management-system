@@ -6,6 +6,7 @@
 
 import { Card, Badge } from '@/shared/components/ui';
 import { cn } from '@/shared/utils';
+import { useModelVersionById } from '../hooks/useModelVersions';
 import type { SkillDefinition } from '../types';
 import { SkillStatusBadge } from './SkillStatusBadge';
 
@@ -24,6 +25,13 @@ export function SkillCard({
   compact = false,
   className,
 }: SkillCardProps) {
+  // The skills endpoint returns the id, not the relation, so the card resolves
+  // it — but skips the lookup when a caller has already supplied the model.
+  const fetchedModel = useModelVersionById(
+    skill.linkedModelVersion ? undefined : skill.linkedModelVersionId
+  );
+  const linkedModel = skill.linkedModelVersion ?? fetchedModel;
+
   return (
     <Card
       interactive={!!onClick}
@@ -82,11 +90,15 @@ export function SkillCard({
             <span>Retries: {skill.maxRetries}</span>
           )}
           {skill.linkedModelVersionId && (
-            <span className="flex items-center gap-1">
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <span className="flex items-center gap-1 min-w-0">
+              <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
               </svg>
-              Model linked
+              <span className="truncate">
+                {linkedModel
+                  ? `${linkedModel.name || linkedModel.skill?.name || 'Model'} v${linkedModel.version}`
+                  : `Model ${skill.linkedModelVersionId.slice(0, 8)}`}
+              </span>
             </span>
           )}
         </div>

@@ -2387,6 +2387,7 @@ model TrainingJob {
   dataset       Dataset?             @relation(fields: [datasetId], references: [id])
   scene         SimScene?            @relation(fields: [sceneId], references: [id])
   modelVersions ModelVersion[]
+  checkpoints   ModelCheckpoint[]
   // The full mixture. `datasetId` above stays, and stays authoritative for a
   // single-dataset job — every existing row, every existing query, and the
   // wizard's single-select all keep working untouched. A multi-dataset job
@@ -2402,27 +2403,46 @@ model TrainingJob {
 
 // ModelVersion - Trained model artifacts
 model ModelVersion {
-  id                 String   @id @default(uuid())
-  skillId            String? // Optional — models can be linked to a skill later
-  trainingJobId      String
+  id                   String   @id @default(uuid())
+  skillId              String? // Optional — models can be linked to a skill later
+  // Nullable since TASK-238: an imported model was trained elsewhere and has
+  // no TrainingJob row on this server.
+  trainingJobId        String?
+  // Human-readable name ("GR00T-N1.7 AppleToPlate") beside the machine
+  // `version`, which is a timestamp for everything this server trains.
+  name                 String?
+  // 'training' (produced here) | 'imported' (registered from outside) |
+  // 'derived' (fine-tuned from another ModelVersion).
+  sourceKind           String   @default("training")
+  // Lineage: the model this one was fine-tuned from, if any.
+  parentModelVersionId String?
   // 'vla' (supervised fine-tune, default) | 'rl_policy' (sim_rl nav policy,
   // TASK-172.C). Drives the sim-only validation gate + the eval runner choice.
-  modelType          String   @default("vla")
-  version            String // Semantic version string
-  artifactUri        String // RustFS model location
-  checkpointUri      String? // Intermediate checkpoints location
-  trainingMetrics    String   @default("{}") // JSON: training metrics
-  validationMetrics  String   @default("{}") // JSON: validation metrics
-  deploymentStatus   String   @default("staging") // 'staging' | 'canary' | 'production' | 'archived'
-  mlflowModelName    String?
-  mlflowModelVersion String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  modelType            String   @default("vla")
+  version              String // Semantic version string
+  artifactUri          String // RustFS model location
+  checkpointUri        String? // Intermediate checkpoints location
+  trainingMetrics      String   @default("{}") // JSON: training metrics
+  validationMetrics    String   @default("{}") // JSON: validation metrics
+  deploymentStatus     String   @default("staging") // 'staging' | 'canary' | 'production' | 'archived'
+  mlflowModelName      String?
+  mlflowModelVersion   String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   // Relations
   skill       SkillDefinition? @relation(fields: [skillId], references: [id])
-  trainingJob TrainingJob      @relation(fields: [trainingJobId], references: [id])
+  trainingJob TrainingJob?     @relation(fields: [trainingJobId], references: [id])
   deployments Deployment[]
+
+  // Self-relation for lineage. A deleted parent nulls its children's link
+  // rather than deleting them: a derived model outlives the model it came
+  // from, and losing the edge is recoverable where losing the row is not.
+  parent   ModelVersion?  @relation("ModelLineage", fields: [parentModelVersionId], references: [id])
+  children ModelVersion[] @relation("ModelLineage")
+
+  checkpoints        ModelCheckpoint[]
+  evaluationEpisodes EvaluationEpisode[]
 
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
@@ -2430,7 +2450,32 @@ model ModelVersion {
   @@unique([skillId, version])
   @@index([deploymentStatus])
   @@index([trainingJobId])
+  @@index([parentModelVersionId])
   @@index([tenantId, createdAt])
+}
+
+// ModelCheckpoint - per-epoch checkpoints reported by the training worker
+// (TASK-238)
+//
+// Previously an in-memory Map on TrainingOrchestrator, so every checkpoint a
+// worker reported was lost on server restart. `modelVersionId` is nullable
+// because checkpoints arrive while the job is still running, before the
+// ModelVersion the job will produce exists.
+model ModelCheckpoint {
+  id             String   @id @default(uuid())
+  modelVersionId String?
+  trainingJobId  String
+  epoch          Int
+  uri            String
+  metricsJson    String   @default("{}") // JSON: metrics at this epoch
+  createdAt      DateTime @default(now())
+
+  modelVersion ModelVersion? @relation(fields: [modelVersionId], references: [id])
+  trainingJob  TrainingJob   @relation(fields: [trainingJobId], references: [id], onDelete: Cascade)
+
+  // A worker re-reporting the same epoch upserts rather than duplicating.
+  @@unique([trainingJobId, epoch])
+  @@index([modelVersionId])
 }
 
 // Deployment - Fleet deployment tracking
@@ -2464,23 +2509,29 @@ model Deployment {
 
 // EvaluationEpisode - Track VLA model evaluation rollouts
 model EvaluationEpisode {
-  id           String   @id @default(uuid())
-  robotId      String
-  modelVersion String
-  taskPrompt   String
-  startedAt    DateTime
-  endedAt      DateTime
-  durationMs   Int
-  success      Boolean
-  errorType    String?
-  videoUrl     String?
-  metadata     String   @default("{}") // JSON: Record<string, unknown>
-  createdAt    DateTime @default(now())
+  id             String   @id @default(uuid())
+  robotId        String
+  // The free string stays (TASK-238): rows exist that only ever had it, and a
+  // migration that guesses an id is worse than a nullable foreign key.
+  modelVersion   String
+  modelVersionId String?
+  taskPrompt     String
+  startedAt      DateTime
+  endedAt        DateTime
+  durationMs     Int
+  success        Boolean
+  errorType      String?
+  videoUrl       String?
+  metadata       String   @default("{}") // JSON: Record<string, unknown>
+  createdAt      DateTime @default(now())
 
-  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  robot           Robot         @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  // Named because `modelVersion` above is already the free string column.
+  modelVersionRef ModelVersion? @relation(fields: [modelVersionId], references: [id])
 
   @@index([robotId])
   @@index([modelVersion])
+  @@index([modelVersionId])
   @@index([createdAt])
   @@index([success])
 }

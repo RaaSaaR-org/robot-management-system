@@ -29,6 +29,10 @@ import type {
   ExecuteChainRequest,
   ChainExecutionResult,
   ModelVersion,
+  ModelVersionDetail,
+  ModelVersionLineage,
+  RegisterModelVersionInput,
+  UpdateModelVersionInput,
 } from '../types';
 
 const ENDPOINTS = {
@@ -67,7 +71,18 @@ const ENDPOINTS = {
 
   // Model Versions (for deployment selection)
   modelVersions: '/models/versions',
+  modelVersion: (id: string) => `/models/versions/${id}`,
+  modelVersionLineage: (id: string) => `/models/versions/${id}/lineage`,
 } as const;
+
+/**
+ * The model registry routes wrap their payload as `{ modelVersion }`, like the
+ * rest of the API. The fallback keeps a bare-object response readable rather
+ * than handing every caller an `undefined` to debug. (TASK-238)
+ */
+function unwrapModelVersion<T extends ModelVersion>(data: { modelVersion?: T } | T): T {
+  return (data as { modelVersion?: T }).modelVersion ?? (data as T);
+}
 
 export const deploymentApi = {
   // ============================================================================
@@ -493,5 +508,47 @@ export const deploymentApi = {
       { params: queryParams }
     );
     return response.data.modelVersions;
+  },
+
+  /**
+   * Get one model version with its skill, training job, parent, children,
+   * checkpoints and evaluation summary
+   */
+  async getModelVersion(id: string): Promise<ModelVersionDetail> {
+    const response = await apiClient.get<{ modelVersion: ModelVersionDetail } | ModelVersionDetail>(
+      ENDPOINTS.modelVersion(id)
+    );
+    return unwrapModelVersion(response.data);
+  },
+
+  /**
+   * Get the ancestor chain and direct children of a model version
+   */
+  async getModelVersionLineage(id: string): Promise<ModelVersionLineage> {
+    const response = await apiClient.get<ModelVersionLineage>(ENDPOINTS.modelVersionLineage(id));
+    return response.data;
+  },
+
+  /**
+   * Register a model version — the entry point for a fine-tune trained
+   * outside this server
+   */
+  async registerModelVersion(input: RegisterModelVersionInput): Promise<ModelVersion> {
+    const response = await apiClient.post<{ modelVersion: ModelVersion } | ModelVersion>(
+      ENDPOINTS.modelVersions,
+      input
+    );
+    return unwrapModelVersion(response.data);
+  },
+
+  /**
+   * Update a model version's skill link, deployment status or name
+   */
+  async updateModelVersion(id: string, input: UpdateModelVersionInput): Promise<ModelVersion> {
+    const response = await apiClient.patch<{ modelVersion: ModelVersion } | ModelVersion>(
+      ENDPOINTS.modelVersion(id),
+      input
+    );
+    return unwrapModelVersion(response.data);
   },
 };

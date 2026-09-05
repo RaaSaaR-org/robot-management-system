@@ -138,6 +138,7 @@ server/src/
 │   ├── DataContributionService.ts
 │   ├── TrainingJobService.ts       # Training jobs
 │   ├── TrainingOrchestrator.ts     # Training pipeline
+│   ├── ModelRegistryService.ts     # Model registry writes + skill link both ways (TASK-238)
 │   ├── TrainingDataDocService.ts
 │   ├── DeploymentService.ts        # Fleet deployment
 │   ├── DeploymentMetricsService.ts
@@ -346,7 +347,7 @@ Photos: `PatrolPhotoStore` — S3 bucket `patrol-photos` when RustFS is configur
 
 - `/api/datasets` — Dataset management
 - `/api/training` — Training job orchestration
-- `/api/models` — Model registry (versions, metrics)
+- `/api/models` — Model registry (versions, metrics, lineage, checkpoints)
 - `/api/deployments` — Fleet deployment (canary, blue-green, rolling)
 - `/api/skills` — Skill library management
 - `/api/embodiments` — Robot type/embodiment configs

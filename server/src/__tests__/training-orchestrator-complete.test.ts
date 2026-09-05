@@ -15,6 +15,7 @@ const {
   mockModelVersionRepository,
   mockDatasetRepository,
   mockEpisodeRewardRepository,
+  mockModelCheckpointRepository,
   mockTrainingJobService,
 } = vi.hoisted(() => ({
   mockTrainingJobRepository: {
@@ -24,6 +25,14 @@ const {
   },
   mockModelVersionRepository: {
     create: vi.fn(),
+  },
+  // TASK-238: completeJob reads the persisted checkpoints to fill
+  // checkpointUri. No fixture here reports one, so the list is empty — which
+  // is what the table really holds for these jobs.
+  mockModelCheckpointRepository: {
+    create: vi.fn(),
+    listByJob: vi.fn(async () => []),
+    attachToModelVersion: vi.fn(async () => 0),
   },
   mockDatasetRepository: {
     findById: vi.fn(),
@@ -41,6 +50,7 @@ const {
 vi.mock('../repositories/index.js', () => ({
   trainingJobRepository: mockTrainingJobRepository,
   modelVersionRepository: mockModelVersionRepository,
+  modelCheckpointRepository: mockModelCheckpointRepository,
   datasetRepository: mockDatasetRepository,
   episodeRewardRepository: mockEpisodeRewardRepository,
 }));

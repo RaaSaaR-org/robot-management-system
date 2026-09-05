@@ -7,6 +7,7 @@
 import { useState, useMemo } from 'react';
 import { Card, Input, Badge } from '@/shared/components/ui';
 import { cn } from '@/shared/utils';
+import { useDeploymentStore, selectSkills } from '../store';
 import type { ModelVersion } from '../types';
 import { ModelVersionCard } from './ModelVersionCard';
 
@@ -20,9 +21,27 @@ export interface ModelBrowserProps {
 
 type StatusFilter = 'all' | 'staging' | 'production' | 'archived';
 
+/**
+ * Map key for the group holding every version with no skill. Skill ids are
+ * cuids, so this cannot collide with a real one. (TASK-238)
+ */
+const UNLINKED_GROUP_KEY = '__unlinked__';
+
+/**
+ * Heading for that group. A model registered from outside carries no skill
+ * until someone links it, and a training job whose dataset had no skill
+ * produces one too — that is the normal state of a fresh registry, not a
+ * lookup failure, so it must not read like one ("Unknown Skill"). The wording
+ * matches the "No skill" option in the register modal. (TASK-238)
+ */
+const UNLINKED_GROUP_NAME = 'Not linked to a skill';
+
 interface GroupedVersions {
-  skillId: string;
+  /** `UNLINKED_GROUP_KEY` for the skill-less group. */
+  groupKey: string;
   skillName: string;
+  /** True for the skill-less group, which sorts last and explains itself. */
+  isUnlinked: boolean;
   versions: ModelVersion[];
 }
 
@@ -35,6 +54,17 @@ export function ModelBrowser({
 }: ModelBrowserProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+
+  // `GET /api/models/versions` returns the skill id but not the relation, so a
+  // heading taken from `version.skill` alone would be missing for every linked
+  // model too. ModelsPage loads the skills into the store; resolve names from
+  // there rather than issuing a request per group. (TASK-238)
+  const skills = useDeploymentStore(selectSkills);
+  const skillNamesById = useMemo(() => {
+    const byId = new Map<string, string>();
+    skills.forEach((skill) => byId.set(skill.id, skill.name));
+    return byId;
+  }, [skills]);
 
   // Filter versions
   const filteredVersions = useMemo(() => {
@@ -61,18 +91,29 @@ export function ModelBrowser({
     const groups = new Map<string, GroupedVersions>();
 
     filteredVersions.forEach((version) => {
+      // A version can be skill-less in two ways depending on the endpoint:
+      // `null` from the registry, `''` from an older payload. Both are the
+      // same thing to a reader, so they share one group.
       const skillId = version.skillId;
-      const skillName = version.skill?.name || 'Unknown Skill';
+      const isUnlinked = !skillId;
+      const groupKey = isUnlinked ? UNLINKED_GROUP_KEY : skillId;
+      // A skill that is linked but neither hydrated nor in the store (deleted,
+      // or the list has not loaded) is still a real link — say so by id
+      // instead of claiming the model has no skill.
+      const skillName = isUnlinked
+        ? UNLINKED_GROUP_NAME
+        : version.skill?.name ?? skillNamesById.get(skillId) ?? `Skill ${skillId.slice(0, 8)}`;
 
-      if (!groups.has(skillId)) {
-        groups.set(skillId, {
-          skillId,
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, {
+          groupKey,
           skillName,
+          isUnlinked,
           versions: [],
         });
       }
 
-      groups.get(skillId)!.versions.push(version);
+      groups.get(groupKey)!.versions.push(version);
     });
 
     // Sort versions within each group by version number (descending)
@@ -80,8 +121,13 @@ export function ModelBrowser({
       group.versions.sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }));
     });
 
-    return Array.from(groups.values()).sort((a, b) => a.skillName.localeCompare(b.skillName));
-  }, [filteredVersions]);
+    // Skills alphabetically, and the skill-less group last — it is a holding
+    // area, not a skill, so it does not belong in the alphabet.
+    return Array.from(groups.values()).sort((a, b) => {
+      if (a.isUnlinked !== b.isUnlinked) return a.isUnlinked ? 1 : -1;
+      return a.skillName.localeCompare(b.skillName);
+    });
+  }, [filteredVersions, skillNamesById]);
 
   const statusCounts = useMemo(() => {
     return modelVersions.reduce(
@@ -160,12 +206,17 @@ export function ModelBrowser({
       {!isLoading && groupedVersions.length > 0 && (
         <div className="space-y-6">
           {groupedVersions.map((group) => (
-            <div key={group.skillId} className="space-y-3">
-              <div className="flex items-center gap-2">
+            <div key={group.groupKey} className="space-y-3">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="font-semibold text-theme-primary">{group.skillName}</h3>
                 <Badge variant="default" size="sm">
                   {group.versions.length} version(s)
                 </Badge>
+                {group.isUnlinked && (
+                  <span className="text-xs text-theme-secondary">
+                    Link one to a skill to run it from the Skill Library.
+                  </span>
+                )}
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
