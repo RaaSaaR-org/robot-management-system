@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { TrainingJobWizard } from '../TrainingJobWizard';
 import type { CompatibilityReport, Dataset } from '../../types';
+import type { ModelCheckpoint, ModelVersion } from '@/features/deployment/types';
 
 const checkCompatibility = vi.fn();
 
@@ -17,6 +18,55 @@ vi.mock('../../api', () => ({
     checkCompatibility: (...a: unknown[]) => checkCompatibility(...a),
   },
 }));
+
+/**
+ * The registry the "Continue from an existing model" mode reads. Mocked at the
+ * hook so this file stays about the wizard: what the hook does — list the
+ * models, then ask each one for the architecture its own run trained — is the
+ * hook's own concern. It answers per architecture here because that filtering
+ * is what the picker relies on. The fixtures live inside the factory because
+ * `vi.mock` is hoisted above the module's own consts. (TASK-239)
+ */
+vi.mock('../../hooks/useInitFromModelVersions', () => {
+  const version: ModelVersion = {
+    id: 'mv-groot',
+    skillId: 'skill-1',
+    trainingJobId: 'job-1',
+    name: 'GR00T-N1.7 AppleToPlate',
+    sourceKind: 'training',
+    parentModelVersionId: null,
+    version: '1.0.0',
+    artifactUri: 's3://models/mv-groot',
+    trainingMetrics: {},
+    validationMetrics: {},
+    deploymentStatus: 'staging',
+    createdAt: '2026-09-01T00:00:00.000Z',
+    updatedAt: '2026-09-01T00:00:00.000Z',
+  };
+  const checkpoint = (id: string, epoch: number): ModelCheckpoint => ({
+    id,
+    modelVersionId: 'mv-groot',
+    trainingJobId: 'job-1',
+    epoch,
+    uri: `s3://checkpoints/${id}`,
+    metrics: { loss: 0.081 },
+    createdAt: '2026-09-01T00:00:00.000Z',
+  });
+  const candidates = [
+    {
+      version,
+      baseModel: 'groot_n1_7' as const,
+      checkpoints: [checkpoint('cp-7', 7), checkpoint('cp-14', 14)],
+    },
+  ];
+
+  return {
+    useInitFromModelVersions: (baseModel: string) =>
+      baseModel === 'groot_n1_7'
+        ? { candidates, hiddenCount: 0, isLoading: false }
+        : { candidates: [], hiddenCount: candidates.length, isLoading: false },
+  };
+});
 
 vi.mock('@/features/simulation/store/simulationStore', () => {
   const state = { scenes: [], scenesLoading: false, fetchScenes: async () => {} };
@@ -301,5 +351,143 @@ describe('what reaches the server', () => {
 
     expect(screen.queryByTestId('bad-weight-notice')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Submit Training Job' })).not.toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Starting from a model that already exists (TASK-239).
+//
+// `baseModel` used to be the only thing that said where the weights came from,
+// so a run continuing a fine-tune was indistinguishable from one starting at
+// the foundation model — on the review step and in the submitted body alike.
+// ---------------------------------------------------------------------------
+
+/** Open the wizard on the Model step with a dataset chosen. */
+function renderOnModelStep(onSubmit = vi.fn().mockResolvedValue(undefined)) {
+  render(<TrainingJobWizard isOpen onClose={() => {}} onSubmit={onSubmit} datasets={DATASETS} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' })); // type → dataset
+  fireEvent.click(screen.getByRole('button', { name: /GR00T AppleToPlate/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' })); // dataset → model
+  return onSubmit;
+}
+
+describe('continuing from an existing model', () => {
+  it('blocks the Model step until a model is picked, and advances once one is', () => {
+    renderOnModelStep();
+
+    fireEvent.click(screen.getByRole('button', { name: /GR00T N1\.7/ }));
+    fireEvent.click(screen.getByTestId('weights-source-existing'));
+
+    // Continuing from nothing would silently fall back to the foundation
+    // weights, which is the opposite of what was asked for.
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate'));
+    expect(screen.getByRole('button', { name: 'Continue' })).not.toBeDisabled();
+  });
+
+  it('offers no model of another architecture, and stays blocked', () => {
+    renderOnModelStep(); // baseModel is pi0 by default
+
+    fireEvent.click(screen.getByTestId('weights-source-existing'));
+
+    expect(screen.getByTestId('init-from-empty')).toHaveTextContent(
+      'No registered model was trained as Pi0'
+    );
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+  });
+
+  it('sends the picked model as initFromModelVersionId, and no checkpoint', async () => {
+    const onSubmit = renderOnModelStep();
+
+    fireEvent.click(screen.getByRole('button', { name: /GR00T N1\.7/ }));
+    fireEvent.click(screen.getByTestId('weights-source-existing'));
+    fireEvent.click(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate'));
+
+    await advanceToReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    const body = onSubmit.mock.calls[0][0];
+    expect(body.initFromModelVersionId).toBe('mv-groot');
+    // A run starts from one set of weights; the server refuses a body with both.
+    expect(body).not.toHaveProperty('initFromCheckpointId');
+    // The architecture is still the architecture, not the origin.
+    expect(body.baseModel).toBe('groot_n1_7');
+  });
+
+  it('sends only the checkpoint id when an epoch is picked', async () => {
+    const onSubmit = renderOnModelStep();
+
+    fireEvent.click(screen.getByRole('button', { name: /GR00T N1\.7/ }));
+    fireEvent.click(screen.getByTestId('weights-source-existing'));
+    fireEvent.click(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate'));
+    fireEvent.change(screen.getByLabelText('Checkpoint'), { target: { value: 'cp-14' } });
+
+    await advanceToReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    const body = onSubmit.mock.calls[0][0];
+    expect(body.initFromCheckpointId).toBe('cp-14');
+    expect(body).not.toHaveProperty('initFromModelVersionId');
+  });
+
+  it('names the starting model on the review step, not just the architecture', async () => {
+    renderOnModelStep();
+
+    fireEvent.click(screen.getByRole('button', { name: /GR00T N1\.7/ }));
+    fireEvent.click(screen.getByTestId('weights-source-existing'));
+    fireEvent.click(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate'));
+
+    await advanceToReview();
+
+    const startsFrom = screen.getByTestId('review-starts-from');
+    expect(startsFrom).toHaveTextContent('GR00T-N1.7 AppleToPlate');
+    expect(startsFrom).toHaveTextContent('(groot_n1_7)');
+  });
+
+  it('names the epoch when the run continues from a checkpoint', async () => {
+    renderOnModelStep();
+
+    fireEvent.click(screen.getByRole('button', { name: /GR00T N1\.7/ }));
+    fireEvent.click(screen.getByTestId('weights-source-existing'));
+    fireEvent.click(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate'));
+    fireEvent.change(screen.getByLabelText('Checkpoint'), { target: { value: 'cp-14' } });
+
+    await advanceToReview();
+
+    expect(screen.getByTestId('review-starts-from')).toHaveTextContent(
+      'Epoch 14 of GR00T-N1.7 AppleToPlate'
+    );
+  });
+
+  it('leaves a foundation run exactly as it was', async () => {
+    const onSubmit = renderOnModelStep();
+
+    await advanceToReview();
+    // Still the architecture, spelled the way it always was.
+    expect(screen.getByTestId('review-starts-from')).toHaveTextContent('PI0');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    const body = onSubmit.mock.calls[0][0];
+    expect(body).not.toHaveProperty('initFromModelVersionId');
+    expect(body).not.toHaveProperty('initFromCheckpointId');
+  });
+
+  it('drops a picked model when the architecture changes under it', () => {
+    // The server refuses a run whose baseModel differs from the weights it
+    // starts from, and the picker no longer lists that model at all — leaving
+    // the id in the form would submit a body the server has to reject.
+    renderOnModelStep();
+
+    fireEvent.click(screen.getByRole('button', { name: /GR00T N1\.7/ }));
+    fireEvent.click(screen.getByTestId('weights-source-existing'));
+    fireEvent.click(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate'));
+    expect(screen.getByRole('button', { name: 'Continue' })).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /OpenVLA/ }));
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
   });
 });

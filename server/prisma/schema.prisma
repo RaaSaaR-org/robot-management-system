@@ -2379,26 +2379,46 @@ model TrainingJob {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
+  // What this run's weights start from (TASK-239). At most ONE is set — the
+  // pair is a union, and it is TrainingJobService that refuses a submission
+  // carrying both: a CHECK constraint would refuse the row with a Postgres
+  // error string the operator cannot act on, and the guard has to live in the
+  // service anyway to resolve the artifact and compare base models.
+  //
+  // `baseModel` stays required beside them: a run initialised from a
+  // groot_n1_7 fine-tune is still a groot_n1_7 run, and the worker reads
+  // baseModel to pick a trainer.
+  initFromModelVersionId String?
+  initFromCheckpointId   String?
+
   // Multi-tenancy (TASK-155) — nullable so single-tenant mode works without it
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
   // Relations
-  dataset       Dataset?             @relation(fields: [datasetId], references: [id])
-  scene         SimScene?            @relation(fields: [sceneId], references: [id])
-  modelVersions ModelVersion[]
-  checkpoints   ModelCheckpoint[]
+  dataset              Dataset?             @relation(fields: [datasetId], references: [id])
+  scene                SimScene?            @relation(fields: [sceneId], references: [id])
+  modelVersions        ModelVersion[]
+  checkpoints          ModelCheckpoint[]
+  // SetNull, like the ModelVersion lineage edge: deleting the model a run
+  // started from must not delete the run. The edge is worth keeping while the
+  // row exists; a dangling id would make the export manifest cite an artifact
+  // nobody can resolve.
+  initFromModelVersion ModelVersion?        @relation("TrainingJobInitFromModel", fields: [initFromModelVersionId], references: [id], onDelete: SetNull)
+  initFromCheckpoint   ModelCheckpoint?     @relation("TrainingJobInitFromCheckpoint", fields: [initFromCheckpointId], references: [id], onDelete: SetNull)
   // The full mixture. `datasetId` above stays, and stays authoritative for a
   // single-dataset job — every existing row, every existing query, and the
   // wizard's single-select all keep working untouched. A multi-dataset job
   // writes BOTH: `datasetId` = the first member, `datasets` = all of them.
-  datasets      TrainingJobDataset[]
+  datasets             TrainingJobDataset[]
 
   @@index([datasetId])
   @@index([status])
   @@index([baseModel])
   @@index([kind])
   @@index([tenantId, updatedAt])
+  @@index([initFromModelVersionId])
+  @@index([initFromCheckpointId])
 }
 
 // ModelVersion - Trained model artifacts
@@ -2443,6 +2463,8 @@ model ModelVersion {
 
   checkpoints        ModelCheckpoint[]
   evaluationEpisodes EvaluationEpisode[]
+  // Runs that started from this model's weights (TASK-239).
+  initializedJobs    TrainingJob[]       @relation("TrainingJobInitFromModel")
 
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
@@ -2470,8 +2492,10 @@ model ModelCheckpoint {
   metricsJson    String   @default("{}") // JSON: metrics at this epoch
   createdAt      DateTime @default(now())
 
-  modelVersion ModelVersion? @relation(fields: [modelVersionId], references: [id])
-  trainingJob  TrainingJob   @relation(fields: [trainingJobId], references: [id], onDelete: Cascade)
+  modelVersion    ModelVersion? @relation(fields: [modelVersionId], references: [id])
+  trainingJob     TrainingJob   @relation(fields: [trainingJobId], references: [id], onDelete: Cascade)
+  // Runs that resumed from this checkpoint (TASK-239).
+  initializedJobs TrainingJob[] @relation("TrainingJobInitFromCheckpoint")
 
   // A worker re-reporting the same epoch upserts rather than duplicating.
   @@unique([trainingJobId, epoch])

@@ -417,6 +417,18 @@ trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
       })
     );
 
+    // What the run starts from, or null when it starts from `job.baseModel`
+    // (TASK-239). ALWAYS present, and always additive: a worker that has never
+    // heard of the field ignores it and trains from baseModel exactly as
+    // before, which is why the server contract can land before the worker's.
+    // Resolved only when the job actually names one: workers poll this route
+    // on an interval, and the overwhelming majority of runs start from a
+    // foundation model, for which there is nothing to look up.
+    const initFrom =
+      job.initFromModelVersionId || job.initFromCheckpointId
+        ? await trainingJobService.resolveInitFrom(job)
+        : null;
+
     res.json({
       job,
       dataset: dataset
@@ -427,6 +439,7 @@ trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
           }
         : null,
       datasets: rows.filter((row): row is NonNullable<typeof row> => row !== null),
+      initFrom,
     });
   } catch (error) {
     console.error('[TrainingRoutes] Error claiming job:', error);

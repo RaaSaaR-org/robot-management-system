@@ -10,6 +10,8 @@ import {
   trainingJobRepository,
   datasetRepository,
   simSceneRepository,
+  modelVersionRepository,
+  modelCheckpointRepository,
 } from '../repositories/index.js';
 import {
   getJobQueue,
@@ -24,6 +26,7 @@ import type {
   PaginatedResult,
   Hyperparameters,
   GpuRequirements,
+  TrainingInitFrom,
 } from '../types/vla.types.js';
 import type {
   TrainingJobEvent,
@@ -95,7 +98,8 @@ export interface MixtureSubmitFields {
 export type SubmitTrainingJobWithMixture =
   Omit<SubmitTrainingJobRequest, 'datasetId'>
   & { datasetId?: string }
-  & MixtureSubmitFields;
+  & MixtureSubmitFields
+  & InitFromSubmitFields;
 
 /**
  * A sampling weight, or a refusal naming the member that carried it.
@@ -145,6 +149,114 @@ function resolveMixtureMembers(
     return request.datasetIds.map((datasetId) => ({ datasetId, weight: 1 }));
   }
   return null;
+}
+
+// ============================================================================
+// STARTING FROM AN EXISTING MODEL (TASK-239)
+// ============================================================================
+
+/**
+ * The "continue from" half of a submission, beside the mixture half for the
+ * same reason: a run that starts from one of the six foundation models is
+ * still the common case and its request shape is unchanged.
+ *
+ * At most one of the two may be set. They are not interchangeable — a
+ * ModelVersion is a finished artifact, a ModelCheckpoint is one epoch of a run
+ * that may still be going — and a run that named both would be a run nobody
+ * can say what it started from.
+ */
+export interface InitFromSubmitFields {
+  initFromModelVersionId?: string | null;
+  initFromCheckpointId?: string | null;
+}
+
+/** The pair as it is persisted: normalised to nulls, never undefined. */
+interface InitFromColumns {
+  initFromModelVersionId: string | null;
+  initFromCheckpointId: string | null;
+}
+
+/**
+ * One submitted id, or null when the field was not used.
+ *
+ * The body is JSON off the wire: `null`, `''` and an absent key all mean "not
+ * starting from anything", while a number or an object means the caller is
+ * confused about the field. Refused by name rather than reaching Prisma as a
+ * `where` clause it cannot build.
+ */
+function readInitFromId(value: unknown, field: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') {
+    throw new Error(`${field} must be an id string, or null to start from the base model.`);
+  }
+  return value.trim() || null;
+}
+
+/**
+ * A submission's starting weights, refused where the operator cannot rescue it.
+ *
+ * The base-model rule is the one worth spelling out: `baseModel` decides which
+ * trainer the worker starts and what the architecture of the resulting weights
+ * is, so initialising a `pi0` run from GR00T weights is not a run that trains
+ * badly — it is a run that cannot load its own starting point. There is no
+ * decision at submission time that saves it, which is exactly the line
+ * `CompatibilityAxis.verdict === 'blocking'` draws for datasets, so it is
+ * refused here in one sentence a 400 can quote.
+ *
+ * A model the registry cannot attribute to a base model — an imported
+ * checkpoint has no TrainingJob on this server — is ALLOWED through. The check
+ * compares what is recorded; inventing a verdict from a missing record would
+ * block the registered-GR00T-checkpoint case this feature exists to serve.
+ */
+async function checkInitFrom(
+  request: InitFromSubmitFields,
+  baseModel: string | null | undefined,
+): Promise<InitFromColumns> {
+  const modelVersionId = readInitFromId(request.initFromModelVersionId, 'initFromModelVersionId');
+  const checkpointId = readInitFromId(request.initFromCheckpointId, 'initFromCheckpointId');
+
+  if (modelVersionId && checkpointId) {
+    throw new Error(
+      'A run starts from one set of weights: pass either initFromModelVersionId or '
+      + 'initFromCheckpointId, not both.',
+    );
+  }
+
+  if (modelVersionId) {
+    const model = await modelVersionRepository.findByIdWithRelations(modelVersionId);
+    if (!model) {
+      throw new Error(`Model version not found: ${modelVersionId}`);
+    }
+    const modelBaseModel = model.trainingJob?.baseModel ?? null;
+    if (modelBaseModel && baseModel && modelBaseModel !== baseModel) {
+      throw new Error(
+        `This run trains ${baseModel} but "${model.name ?? model.version}" holds `
+        + `${modelBaseModel} weights, so it cannot start from that model.`,
+      );
+    }
+    return { initFromModelVersionId: modelVersionId, initFromCheckpointId: null };
+  }
+
+  if (checkpointId) {
+    const checkpoint = await modelCheckpointRepository.findById(checkpointId);
+    if (!checkpoint) {
+      throw new Error(`Model checkpoint not found: ${checkpointId}`);
+    }
+    // A checkpoint carries no architecture of its own — the run that wrote it
+    // does. Same rule as above, and the same reason: these weights load into
+    // one architecture only.
+    const sourceJob = await trainingJobRepository.findById(checkpoint.trainingJobId);
+    const sourceBaseModel = sourceJob?.baseModel ?? null;
+    if (sourceBaseModel && baseModel && sourceBaseModel !== baseModel) {
+      throw new Error(
+        `This run trains ${baseModel} but checkpoint epoch ${checkpoint.epoch} was written by a `
+        + `${sourceBaseModel} run, so it cannot start from that checkpoint.`,
+      );
+    }
+    return { initFromModelVersionId: null, initFromCheckpointId: checkpointId };
+  }
+
+  return { initFromModelVersionId: null, initFromCheckpointId: null };
 }
 
 // ============================================================================
@@ -252,6 +364,12 @@ export class TrainingJobService extends EventEmitter {
       ...request.gpuRequirements,
     };
 
+    // Where the weights start from (TASK-239). Judged before the row is
+    // written, for the same reason the mixture is: an unloadable starting
+    // point is a refusal, not a run that fails on the GPU an hour later. Both
+    // fields absent is the ordinary case and produces two nulls.
+    const initFrom = await checkInitFrom(request, request.baseModel);
+
     // Create job in database
     const jobInput: CreateTrainingJobInput = {
       datasetId: primaryDatasetId,
@@ -260,6 +378,7 @@ export class TrainingJobService extends EventEmitter {
       hyperparameters,
       gpuRequirements,
       totalEpochs: request.totalEpochs ?? hyperparameters.epochs,
+      ...initFrom,
     };
 
     const job = await trainingJobRepository.create(jobInput);
@@ -337,6 +456,40 @@ export class TrainingJobService extends EventEmitter {
    */
   async checkMixture(members: MixtureMemberInput[]): Promise<CompatibilityReport> {
     return await analyzeDatasetIds(members.map((m) => m.datasetId));
+  }
+
+  /**
+   * What a job starts from, resolved to an artifact a worker can fetch, or
+   * null when it starts from its foundation `baseModel`. (TASK-239)
+   *
+   * The URI is read at claim/export time rather than copied onto the job row
+   * when it was submitted, so a re-registered artifact is not served from a
+   * stale copy — the referenced row is the single place the location lives.
+   *
+   * Returns null, never throws, when the referenced row has gone: a job whose
+   * starting model was deleted must still be claimable and still exportable,
+   * and `initFromModelVersionId` on the job says what it named.
+   */
+  async resolveInitFrom(job: {
+    initFromModelVersionId?: string | null;
+    initFromCheckpointId?: string | null;
+  }): Promise<TrainingInitFrom | null> {
+    if (job.initFromModelVersionId) {
+      const model = await modelVersionRepository.findById(job.initFromModelVersionId);
+      if (!model) return null;
+      return { artifactUri: model.artifactUri, kind: 'model', id: model.id };
+    }
+    if (job.initFromCheckpointId) {
+      const checkpoint = await modelCheckpointRepository.findById(job.initFromCheckpointId);
+      if (!checkpoint) return null;
+      return {
+        artifactUri: checkpoint.uri,
+        kind: 'checkpoint',
+        id: checkpoint.id,
+        epoch: checkpoint.epoch,
+      };
+    }
+    return null;
   }
 
   /**

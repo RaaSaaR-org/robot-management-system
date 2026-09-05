@@ -348,6 +348,24 @@ export class TrainingRunExportService {
       warnings.push(`Compatibility: ${compatibility.headline}`);
     }
 
+    // What this run started from, resolved to the artifact it names (TASK-239).
+    // The job service owns that resolution and is loaded lazily, in the branch
+    // that needs it: an export of an ordinary run — one that starts from a
+    // foundation model, which is most of them — has nothing to resolve and no
+    // reason to construct the job service and its messaging dependencies.
+    let initFrom: TrainingRunManifest['job']['initFrom'] = null;
+    if (job.initFromModelVersionId || job.initFromCheckpointId) {
+      const { trainingJobService } = await import('./TrainingJobService.js');
+      initFrom = await trainingJobService.resolveInitFrom(job);
+      if (!initFrom) {
+        warnings.push(
+          'This run was started from another model or checkpoint, but that row no longer exists, '
+          + 'so its weights cannot be located from this document. The run is not reproducible as '
+          + 'written.',
+        );
+      }
+    }
+
     const image = process.env.TRAINER_IMAGE?.trim();
     if (!image) {
       warnings.push(
@@ -389,6 +407,7 @@ export class TrainingRunExportService {
         baseModel: job.baseModel ?? null,
         fineTuneMethod: job.fineTuneMethod ?? null,
         status: job.status,
+        initFrom,
       },
       datasets,
       compatibility,

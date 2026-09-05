@@ -9,6 +9,7 @@ import { Modal, Button, Badge } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { HyperparameterForm, getDefaultHyperparameters } from './HyperparameterForm';
 import { DatasetCompatibilityPanel } from './DatasetCompatibilityPanel';
+import { InitFromModelPicker } from './InitFromModelPicker';
 import {
   useSimulationStore,
   selectScenes,
@@ -20,10 +21,12 @@ import type {
   BaseModel,
   FineTuneMethod,
   HyperparametersInput,
+  InitFromSelection,
   MixtureMemberInput,
   SubmitTrainingJobInput,
   SubmitSimRlJobInput,
   TrainingJobKind,
+  WeightsSource,
 } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { getErrorMessage } from '@/shared/utils';
@@ -110,6 +113,10 @@ interface FormState {
   mixture: MixtureMember[];
   baseModel: BaseModel;
   fineTuneMethod: FineTuneMethod;
+  /** Foundation weights, or a model already in the registry. (TASK-239) */
+  weightsSource: WeightsSource;
+  /** The picked model/checkpoint; null while `weightsSource` is 'foundation'. */
+  initFrom: InitFromSelection | null;
   sceneId: string;
   hyperparameters: HyperparametersInput;
   gpuType: 'a100' | 'h100' | 'any';
@@ -122,6 +129,8 @@ const INITIAL_FORM: FormState = {
   mixture: [],
   baseModel: 'pi0',
   fineTuneMethod: 'lora',
+  weightsSource: 'foundation',
+  initFrom: null,
   sceneId: '',
   hyperparameters: getDefaultHyperparameters('lora'),
   gpuType: 'any',
@@ -148,6 +157,23 @@ function selectCardCls(active: boolean, accent: 'cobalt' | 'purple' = 'cobalt'):
     ring,
     active ? on : off
   );
+}
+
+/**
+ * What the run actually starts from, for the review step. The architecture
+ * alone ("GROOT_N1_7") is the whole truth only for a foundation run — a run
+ * continuing a fine-tune says so by name, because that is the difference
+ * between the two runs and the only thing the reader cannot infer. (TASK-239)
+ */
+function describeStartingPoint(form: FormState): string {
+  const initFrom = form.weightsSource === 'existing' ? form.initFrom : null;
+  if (!initFrom) return form.baseModel.toUpperCase();
+
+  const head =
+    initFrom.checkpointEpoch !== null
+      ? `Epoch ${initFrom.checkpointEpoch} of ${initFrom.modelName}`
+      : initFrom.modelName;
+  return `${head} (${form.baseModel})`;
 }
 
 /**
@@ -243,6 +269,28 @@ export function TrainingJobWizard({
     }
   }, [form.kind, currentStep]);
 
+  // Changing the architecture drops the picked model: the picker only lists
+  // models of the chosen architecture, and the server refuses a run whose
+  // baseModel differs from the weights it starts from — so a selection made
+  // under the previous architecture cannot survive the change. (TASK-239)
+  const handleBaseModelChange = useCallback((value: BaseModel) => {
+    setForm((prev) =>
+      prev.baseModel === value ? prev : { ...prev, baseModel: value, initFrom: null }
+    );
+  }, []);
+
+  const handleWeightsSourceChange = useCallback((source: WeightsSource) => {
+    setForm((prev) => ({
+      ...prev,
+      weightsSource: source,
+      initFrom: source === 'foundation' ? null : prev.initFrom,
+    }));
+  }, []);
+
+  const handleInitFromChange = useCallback((selection: InitFromSelection | null) => {
+    setForm((prev) => ({ ...prev, initFrom: selection }));
+  }, []);
+
   const handleFineTuneMethodChange = useCallback((method: FineTuneMethod) => {
     setForm((prev) => ({
       ...prev,
@@ -268,6 +316,7 @@ export function TrainingJobWizard({
         });
       } else {
         const members = form.mixture;
+        const initFrom = form.weightsSource === 'existing' ? form.initFrom : null;
         await onSubmit({
           datasetId: members[0]?.datasetId ?? form.datasetId,
           baseModel: form.baseModel,
@@ -280,6 +329,15 @@ export function TrainingJobWizard({
           ...(members.length > 1
             ? { mixture: members.map((m) => ({ datasetId: m.datasetId, weight: m.weight })) }
             : {}),
+          // A run starts from one set of weights, and the server refuses a body
+          // carrying both ids — a picked checkpoint replaces its model rather
+          // than joining it. A foundation run sends neither, so its body is
+          // byte-for-byte the one it was before. (TASK-239)
+          ...(initFrom?.checkpointId
+            ? { initFromCheckpointId: initFrom.checkpointId }
+            : initFrom
+              ? { initFromModelVersionId: initFrom.modelVersionId }
+              : {}),
         });
       }
       handleClose();
@@ -313,7 +371,14 @@ export function TrainingJobWizard({
       case 'dataset':
         return form.mixture.length > 0;
       case 'model':
-        return !!form.baseModel && !!form.fineTuneMethod;
+        // "Continue from an existing model" without a model is not a run the
+        // server could start: it would silently fall back to the foundation
+        // weights, which is the opposite of what was asked for. (TASK-239)
+        return (
+          !!form.baseModel &&
+          !!form.fineTuneMethod &&
+          (form.weightsSource === 'foundation' || !!form.initFrom)
+        );
       case 'scene':
         return !!form.sceneId;
       case 'hyperparams':
@@ -327,6 +392,7 @@ export function TrainingJobWizard({
     }
   }, [currentStep, form]);
 
+  const selectedBaseModel = baseModels.find((m) => m.value === form.baseModel);
   const selectedDataset = datasets.find((d) => d.id === form.datasetId);
   const selectedScene = scenes.find((s) => s.id === form.sceneId);
 
@@ -540,14 +606,15 @@ export function TrainingJobWizard({
               <div>
                 <h3 className="text-lg font-medium text-theme-primary">Base Model</h3>
                 <p className="text-sm text-theme-secondary mb-3">
-                  Select the VLA foundation model to fine-tune.
+                  Select the VLA architecture to train. A run that continues an existing model
+                  keeps the architecture that model was trained as.
                 </p>
                 <div className="grid grid-cols-2 gap-3" role="group" aria-label="Base model">
                   {baseModels.map((model) => (
                     <button
                       key={model.value}
                       aria-pressed={form.baseModel === model.value}
-                      onClick={() => setForm({ ...form, baseModel: model.value })}
+                      onClick={() => handleBaseModelChange(model.value)}
                       className={cn('p-4 text-left', selectCardCls(form.baseModel === model.value))}
                     >
                       <span className="font-medium text-theme-primary">{model.label}</span>
@@ -555,6 +622,54 @@ export function TrainingJobWizard({
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* Where the weights come from — the foundation model, or a
+                  fine-tune already in the registry. (TASK-239) */}
+              <div>
+                <h3 className="text-lg font-medium text-theme-primary">Starting Weights</h3>
+                <p className="text-sm text-theme-secondary mb-3">
+                  Start from the foundation model, or continue training a model that already
+                  exists so an experiment can improve on the last one.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" role="group" aria-label="Starting weights">
+                  <button
+                    data-testid="weights-source-foundation"
+                    aria-pressed={form.weightsSource === 'foundation'}
+                    onClick={() => handleWeightsSourceChange('foundation')}
+                    className={cn('p-4 text-left', selectCardCls(form.weightsSource === 'foundation'))}
+                  >
+                    <span className="font-medium text-theme-primary">Foundation model</span>
+                    <p className="text-xs text-theme-secondary mt-1">
+                      Train from the published {selectedBaseModel?.label ?? form.baseModel} weights.
+                    </p>
+                  </button>
+                  <button
+                    data-testid="weights-source-existing"
+                    aria-pressed={form.weightsSource === 'existing'}
+                    onClick={() => handleWeightsSourceChange('existing')}
+                    className={cn('p-4 text-left', selectCardCls(form.weightsSource === 'existing'))}
+                  >
+                    <span className="font-medium text-theme-primary">
+                      Continue from an existing model
+                    </span>
+                    <p className="text-xs text-theme-secondary mt-1">
+                      Pick a registered model, or one of its epoch checkpoints, as the starting
+                      point.
+                    </p>
+                  </button>
+                </div>
+
+                {form.weightsSource === 'existing' && (
+                  <div className="mt-3">
+                    <InitFromModelPicker
+                      baseModel={form.baseModel}
+                      baseModelLabel={selectedBaseModel?.label ?? form.baseModel}
+                      value={form.initFrom}
+                      onChange={handleInitFromChange}
+                    />
+                  </div>
+                )}
               </div>
 
               <div>
@@ -736,10 +851,10 @@ export function TrainingJobWizard({
                           );
                         })}
                       </div>
-                      <div>
-                        <span className="text-sm text-theme-tertiary">Base Model</span>
+                      <div data-testid="review-starts-from">
+                        <span className="text-sm text-theme-tertiary">Starts From</span>
                         <p className="font-medium text-theme-primary">
-                          {form.baseModel.toUpperCase()}
+                          {describeStartingPoint(form)}
                         </p>
                       </div>
                       <div>

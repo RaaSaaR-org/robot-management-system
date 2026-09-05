@@ -535,6 +535,31 @@ export interface AnnotateHyperparameters {
 /**
  * Training job queue entry
  */
+/**
+ * Where a run's weights start from, as the worker payload and the export
+ * manifest state it. (TASK-239)
+ *
+ * `kind` is the whole reason this is not just a URI: a 'model' is a finished,
+ * registered ModelVersion, a 'checkpoint' is one epoch of a run that may still
+ * be going — a trainer that resumes an optimiser state from the second and
+ * merely initialises weights from the first has to be able to tell them apart.
+ *
+ * Null on every run that starts from a foundation model, which is most of
+ * them; a worker that has never heard of the field trains exactly as before.
+ */
+export interface TrainingInitFrom {
+  /** Scheme-tagged location of the weights, straight off the referenced row. */
+  artifactUri: string;
+  kind: TrainingInitFromKind;
+  /** The ModelVersion id, or the ModelCheckpoint id when kind is 'checkpoint'. */
+  id: string;
+  /** Checkpoints only: the epoch these weights were written at. */
+  epoch?: number;
+}
+
+export const TrainingInitFromKinds = ['model', 'checkpoint'] as const;
+export type TrainingInitFromKind = (typeof TrainingInitFromKinds)[number];
+
 export interface TrainingJob {
   id: string;
   kind: TrainingJobKind;
@@ -559,6 +584,22 @@ export interface TrainingJob {
   errorMessage?: string;
   createdAt: Date;
   updatedAt: Date;
+
+  /**
+   * The registered model this run initialises its weights from, or the
+   * checkpoint of another run it continues. At most one is ever set — the
+   * submission that carries both is refused by TrainingJobService, since a run
+   * that starts from two different sets of weights is not a run anyone can
+   * describe. Both null is the ordinary case: start from `baseModel`.
+   * (TASK-239)
+   *
+   * Optional as well as nullable: a row read from the database always carries
+   * both (null when unset), while a caller assembling a job object by hand may
+   * legitimately not mention weights it does not start from. Readers use
+   * `?? null` and get the same answer either way.
+   */
+  initFromModelVersionId?: string | null;
+  initFromCheckpointId?: string | null;
 
   // Optional relations
   dataset?: Dataset;
@@ -590,6 +631,10 @@ export interface CreateTrainingJobInput {
   hyperparameters?: Hyperparameters | RewardModelHyperparameters | AnnotateHyperparameters;
   gpuRequirements?: GpuRequirements;
   totalEpochs?: number;
+  // TASK-239. Validated by TrainingJobService before it gets here: the
+  // repository writes what it is given.
+  initFromModelVersionId?: string | null;
+  initFromCheckpointId?: string | null;
 }
 
 export interface UpdateTrainingJobInput {

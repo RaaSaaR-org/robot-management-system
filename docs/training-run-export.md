@@ -79,6 +79,68 @@ the difference means for training.
   and your own storage configuration. If you need this enforced rather than described, that is
   a schema change, not an export change.
 
+## `job.initFrom` — what the run started from
+
+A run does not have to start from one of the six foundation models. It can start from a model
+already in this server's registry, or from one checkpoint of another run — that is what
+`initFromModelVersionId` / `initFromCheckpointId` on the job record, and what `job.initFrom`
+states in the manifest:
+
+```json
+"job": {
+  "kind": "supervised",
+  "baseModel": "groot_n1_7",
+  "fineTuneMethod": "lora",
+  "status": "running",
+  "initFrom": {
+    "artifactUri": "s3://vla-models/g1-apple-pnp/v1757000000/",
+    "kind": "model",
+    "id": "0f1c…"
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `artifactUri` | Where the starting weights are, read off the registry row at export time |
+| `kind` | `model` — a finished, registered `ModelVersion`; `checkpoint` — one epoch of a run |
+| `id` | The `ModelVersion` id, or the `ModelCheckpoint` id when `kind` is `checkpoint` |
+| `epoch` | Checkpoints only: the epoch those weights were written at |
+
+`initFrom` is `null` for a run that starts from `baseModel` itself, which is most of them.
+
+**`baseModel` still means what it always meant.** It is the architecture, not the origin of
+the weights: a run initialised from a `groot_n1_7` fine-tune is still a `groot_n1_7` run, and
+that is the field the trainer reads to decide which trainer to start. A submission whose
+`initFromModelVersionId` names a model of a *different* base model is refused with a 400 —
+those weights cannot be loaded into this run's architecture, and no decision made at
+submission time recovers it.
+
+Reading the manifest without this field is how a record ends up saying "groot_n1_7" for a run
+that actually continued a 14k-step fine-tune. That is the same failure `datasets[].revision`
+exists to close, one level up: the starting weights are an input to the run exactly as the
+data is.
+
+### The same field on the worker contract
+
+`POST /api/training/workers/claim` returns `initFrom` beside `job`, `dataset` and `datasets`,
+in the identical shape, resolved to the artifact the job names:
+
+```json
+{ "job": { … }, "dataset": { … }, "datasets": [ … ], "initFrom": { "artifactUri": "s3://…", "kind": "checkpoint", "id": "…", "epoch": 14 } }
+```
+
+The field is **additive and never required**. A worker that ignores it loads `baseModel` from
+its usual place and trains as it always has — which is why the server side of this can ship
+before the training worker's (that repo is `../training-worker/`, tracked separately). A
+worker that does honour it loads those weights instead of the foundation checkpoint, and
+`kind` is what tells it whether it is resuming a run (`checkpoint`, optimiser state and epoch
+included where the trainer keeps one) or fine-tuning a finished model (`model`).
+
+`initFrom` is `null` when the job starts from a foundation model **and** when the row it named
+has since been deleted; the export adds a `warnings` entry for the second case, because a run
+whose starting weights cannot be located is not reproducible as written.
+
 ## Weights
 
 `weight` is what the operator typed; `normalizedWeight` is that weight over the sum, so the
@@ -95,6 +157,7 @@ fields map onto a LeRobot-style trainer directly:
 | `datasets[].uri` + `revision` | the dataset repos to pull, pinned |
 | `datasets[].normalizedWeight` | mixture sampling ratio |
 | `job.baseModel`, `job.fineTuneMethod` | policy and fine-tune method |
+| `job.initFrom.artifactUri` | the weights to start from, instead of the foundation checkpoint |
 | `hyperparameters` | learning rate, batch size, epochs, LoRA rank … |
 | `gpu` | `count`, `memory` (GB), `type` — for placement |
 | `runtime.image` / `entrypoint` / `command` | what to execute |
@@ -106,7 +169,8 @@ in the document itself, so an operator reading only the JSON is not misled.
 
 ## Reproducibility
 
-Together, `datasets[].uri` (repo + commit), `hyperparameters`, `job.baseModel` and
-`runtime.image` are what it takes to say truthfully what a model was trained on. All four are
+Together, `datasets[].uri` (repo + commit), `hyperparameters`, `job.baseModel`,
+`job.initFrom` and `runtime.image` are what it takes to say truthfully what a model was
+trained on. All four are
 in the manifest; keep it next to the resulting checkpoint. The gap to be aware of is
 `runtime.image` when it is a placeholder — fill it in before you rely on the record.

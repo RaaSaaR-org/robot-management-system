@@ -23,6 +23,8 @@ export { TrainingJobList } from './TrainingJobList';
 export type { TrainingJobListProps } from './TrainingJobList';
 export { TrainingJobWizard } from './TrainingJobWizard';
 export type { TrainingJobWizardProps } from './TrainingJobWizard';
+export { InitFromModelPicker } from './InitFromModelPicker';
+export type { InitFromModelPickerProps } from './InitFromModelPicker';
 export { HyperparameterForm, getDefaultHyperparameters } from './HyperparameterForm';
 export type { HyperparameterFormProps } from './HyperparameterForm';
 export { TrainingProgressMonitor } from './TrainingProgressMonitor';

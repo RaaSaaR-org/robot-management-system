@@ -230,6 +230,10 @@ describe('buildManifest', () => {
       baseModel: 'groot_n1_7',
       fineTuneMethod: 'lora',
       status: 'pending',
+      // TASK-239: null, and present, for a run that starts from its foundation
+      // model — the field states the answer rather than leaving it to be
+      // inferred from its absence.
+      initFrom: null,
     });
     expect(manifest?.gpu).toEqual({ count: 2, memory: 80, type: 'H100' });
     expect(manifest?.compatibility.verdict).toBe('identical');

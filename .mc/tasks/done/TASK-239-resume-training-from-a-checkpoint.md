@@ -5,9 +5,9 @@ aliases:
 title: Let a training run start from an existing model, so a fine-tune can be improved
   instead of only re-derived from a foundation model
 slug: resume-training-from-a-checkpoint
-status: todo
+status: "done"
 priority: 2
-owner: ''
+owner: "huhn511"
 projects: []
 customers: []
 tags:
@@ -140,3 +140,23 @@ unconditionally.
 Deliberately out of scope: actually making the training worker honour
 `initFrom`. That lives in `../training-worker/` and is tracked there; the server
 contract is additive so both sides can land independently.
+
+### Follow-ups surfaced 2026-09-05
+
+All seven acceptance criteria are met, but two limits are worth writing down rather than
+discovering later.
+
+**A running job's checkpoints cannot be enumerated.** The server accepts any valid
+`ModelCheckpoint` id, so "from a running or finished job" holds at the API. The *wizard*
+dropdown lists finished runs only, because checkpoint rows reach a `ModelVersion` when its job
+completes and there is no endpoint for a running job's rows.
+`GET /api/training/jobs/:id/checkpoints` would close it — `training.routes.ts` and
+`ModelCheckpointRepository.listByJob` both already exist.
+
+**The picker is an N+1.** `GET /api/models/versions` carries no `baseModel`, so the wizard
+issues one `GET /api/models/versions/:id` per registered model to filter by architecture. It is
+cached per id and fine for today's registry; adding `baseModel` (or the `trainingJob` relation)
+to the list endpoint removes it.
+
+Also, as the task scopes it: the training worker in `../training-worker/` still ignores
+`initFrom`. The contract is additive, so both sides land independently.

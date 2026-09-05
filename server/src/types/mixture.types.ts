@@ -18,6 +18,12 @@
  * frontend; the shapes are fixed even where a narrower one would do.
  */
 
+// Type-only, and therefore erased: no runtime import exists in either
+// direction, so the pair of files does not form a module cycle. The manifest
+// states what a run started from in exactly the shape the worker payload
+// carries, rather than a second copy of it that can drift.
+import type { TrainingInitFrom } from './vla.types.js';
+
 /**
  * How a set of datasets relates to each other.
  *
@@ -148,6 +154,16 @@ export interface TrainingRunManifest {
     baseModel: string | null;
     fineTuneMethod: string | null;
     status: string;
+    /**
+     * The weights the run started from, or null for a run that started from
+     * `baseModel` itself. (TASK-239)
+     *
+     * A manifest that says only "groot_n1_7" for a run that actually resumed a
+     * 14k-step fine-tune does not describe a reproducible run — it describes a
+     * different one. This is the same failure `datasets[].revision` exists to
+     * close, one level up: the starting weights are an input like the data is.
+     */
+    initFrom: TrainingInitFrom | null;
   };
   datasets: TrainingRunManifestDataset[];
   compatibility: CompatibilityReport;

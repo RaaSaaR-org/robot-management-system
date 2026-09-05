@@ -10,3 +10,4 @@ export * from './useTrainingProgress';
 export * from './useWorkers';
 export * from './useQueueStats';
 export * from './useSyntheticGeneration';
+export * from './useInitFromModelVersions';
