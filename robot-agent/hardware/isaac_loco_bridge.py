@@ -46,10 +46,15 @@ subscribes to `rt/odommodestate`. Unitree's Isaac sim does not publish that topi
 without this every turn against Isaac was dead-reckoned open loop. This process fills
 the gap (`--no-odom` to turn it off):
 
-    rt/sim_state.articulation.robot.root_pose -> x, y  (GROUND TRUTH, preferred)
-    rt/lowstate.imu_state.quaternion          -> yaw   (MEASURED)
-    rt/run_command/cmd we published           -> x, y  (DEAD RECKONED, the fallback)
-                                              -> rt/odommodestate (SportModeState_)
+    rt/sim_state...robot.root_pose     -> x, y                  (GROUND TRUTH)
+    rt/sim_state...robot.root_velocity -> velocity, yaw_speed   (GROUND TRUTH)
+    rt/lowstate.imu_state.quaternion   -> yaw                   (MEASURED, always)
+    rt/run_command/cmd we published    -> x, y, velocity        (DEAD RECKONED)
+                                       -> rt/odommodestate (SportModeState_)
+
+The first three lines are the preferred path and the fourth is the fallback; x/y and
+the velocity always come from the SAME one of the two, which is what lets the single
+`error_code` on the message be true of all of it.
 
 x AND y HAD ONE SOURCE UNTIL TASK-231, AND IT REPORTED THE COMMAND BACK. Dead
 reckoning integrates the velocity this bridge asked for, so it reproduces the command
@@ -60,9 +65,12 @@ short, and every "N% of commanded" figure ever derived from those x/y was circul
 
 The sim was publishing the answer the whole time. `sim_main.py`'s main loop writes
 `env.scene.get_state()` to `rt/sim_state` as JSON on every iteration (~70 Hz measured,
-~2.9 KB), and it carries the articulation's true world root pose. This bridge
-subscribes to it and publishes THAT as x/y, falling back to dead reckoning only when
-the topic is stale or absent, and saying which on startup, on every switch, in a
+~2.9 KB), and it carries the articulation's true world root pose AND its true world
+root velocity. This bridge subscribes to it and publishes THAT as x/y and as
+`velocity`/`yaw_speed` -- both, or neither: a message whose position was exact while
+its velocity was still the command was the TASK-231 defect one field over, and one
+`error_code` cannot describe two provenances. It falls back to dead reckoning only when
+the topic is stale or absent, and says which on startup, on every switch, in a
 periodic status line, and on the wire (`SportModeState_.error_code` is
 `isaac_odom.ODOM_ERROR_CODE_GROUND_TRUTH` = 0x600D or `..._DEAD_RECKONED` = 0xDEAD).
 A silent switch between an exact pose and a 71x-wrong one would be worse than either
@@ -393,9 +401,9 @@ class OdomPublisher:
             # ON" plus a quiet fallback is the one outcome nobody could diagnose.
             self.gt_bad_samples += 1
             if self.gt_bad_samples == 1:
-                print(f"[odom] cannot read {SIM_STATE_TOPIC} ({exc}) — x/y will fall "
-                      f"back to DEAD RECKONING, which reports the command rather than "
-                      f"the robot", file=sys.stderr, flush=True)
+                print(f"[odom] cannot read {SIM_STATE_TOPIC} ({exc}) — x/y AND "
+                      f"velocity will fall back to DEAD RECKONING, which reports the "
+                      f"command rather than the robot", file=sys.stderr, flush=True)
             return
         with self._gt_lock:
             self._gt = (pose, time.monotonic())
@@ -433,16 +441,18 @@ class OdomPublisher:
                     # not a change of implementation detail.
                     if self._integ.source == isaac_odom.ODOM_SOURCE_GROUND_TRUTH:
                         print(f"[odom] {SIM_STATE_TOPIC} acquired — x/y are now the "
-                              f"sim's TRUE world root pose, published verbatim "
+                              f"sim's TRUE world root pose and velocity/yaw_speed its "
+                              f"TRUE world root velocity, both published verbatim "
                               f"(error_code "
                               f"{isaac_odom.ODOM_ERROR_CODE_GROUND_TRUTH:#x}). The "
                               f"--odom-origin is NOT applied to it.", flush=True)
                     else:
                         print(f"[odom] WARNING: no usable {SIM_STATE_TOPIC} for "
-                              f"{ODOM_GROUND_TRUTH_STALE_S:g}s — x/y have FALLEN BACK "
+                              f"{ODOM_GROUND_TRUTH_STALE_S:g}s — x/y AND velocity/"
+                              f"yaw_speed have FALLEN BACK "
                               f"to DEAD RECKONING (error_code "
                               f"{isaac_odom.ODOM_ERROR_CODE_DEAD_RECKONED:#x}). They "
-                              f"are now the commanded velocity integrated, they drift "
+                              f"are now the commanded velocity, they drift "
                               f"without bound, and on this rig that has read 71x the "
                               f"true distance. Continuing from the last true pose, not "
                               f"from the origin.", file=sys.stderr, flush=True)
@@ -518,15 +528,28 @@ class OdomPublisher:
             traceback.print_exception(type(exc), exc, exc.__traceback__)
 
     def _print_status(self) -> None:
-        """One line: where we say the robot is, and which source said so."""
+        """One line: where and how fast we say the robot is, and who said so."""
         frame = self._last_frame
+        # The velocity is in the line because it now shares the position's provenance:
+        # an operator comparing "0.50 m/s commanded" against a ground-truth 0.02 m/s is
+        # reading the 71x defect off the log directly, which was impossible while this
+        # number was the command on every frame.
         where = ("no frame published yet" if frame is None
                  else f"({frame.x:+.2f}, {frame.y:+.2f}) m, yaw "
-                      f"{math.degrees(frame.yaw):+.1f} deg")
+                      f"{math.degrees(frame.yaw):+.1f} deg, "
+                      f"{math.hypot(frame.vx_world, frame.vy_world):.2f} m/s")
         if not self.use_ground_truth:
             source = "DEAD RECKONED (--no-ground-truth), drifts"
         elif self._integ.source == isaac_odom.ODOM_SOURCE_GROUND_TRUTH:
             source = f"GROUND TRUTH from {SIM_STATE_TOPIC}, exact"
+        elif self._integ.ground_truth_unusable:
+            # A fresh pose that had to be thrown away whole (its velocity was not
+            # finite). Named rather than folded into "LOST", because the cause and the
+            # fix are different ones: this is a payload the sim changed, not a topic
+            # that went quiet.
+            source = (f"DEAD RECKONED — {self._integ.ground_truth_unusable} "
+                      f"{SIM_STATE_TOPIC} pose(s) REFUSED for an unusable velocity; "
+                      f"drifts")
         elif self._integ.ground_truth_seen:
             source = (f"DEAD RECKONED — {SIM_STATE_TOPIC} LOST, continuing from the "
                       f"last true pose; drifts")
@@ -551,7 +574,9 @@ class OdomPublisher:
         self._print_status()
         print(f"[odom] {self.published} odometry messages from {self.samples} lowstate "
               f"samples and {self.gt_samples} {SIM_STATE_TOPIC} samples "
-              f"({self.gt_bad_samples} unreadable); "
+              f"({self.gt_bad_samples} unreadable, "
+              f"{self._integ.ground_truth_unusable} refused for an unusable "
+              f"velocity); "
               f"{self._integ.frames_ground_truth} carried the sim's TRUE x/y, "
               f"{self._integ.frames_dead_reckoned} were dead reckoned. "
               f"Dead-reckoned (i.e. COMMANDED) path length "
@@ -652,18 +677,20 @@ class IsaacLocoBridge:
             # be absent, and this is printed before a single message has arrived).
             if use_ground_truth:
                 print(f"[bridge] x/y source: GROUND TRUTH — subscribing "
-                      f"{SIM_STATE_TOPIC} for the sim's true world root pose, "
-                      f"published verbatim with error_code "
+                      f"{SIM_STATE_TOPIC} for the sim's true world root pose AND "
+                      f"root velocity, both published verbatim (position, velocity "
+                      f"and yaw_speed) with error_code "
                       f"{isaac_odom.ODOM_ERROR_CODE_GROUND_TRUTH:#x}. The "
                       f"--odom-origin is NOT added to it (it is already world). If "
                       f"that topic is silent or stale for "
-                      f"{ODOM_GROUND_TRUTH_STALE_S:g}s, x/y FALL BACK to dead "
-                      f"reckoning and this log says so, loudly, both ways.",
+                      f"{ODOM_GROUND_TRUTH_STALE_S:g}s, all of them FALL BACK to dead "
+                      f"reckoning together and this log says so, loudly, both ways.",
                       flush=True)
             else:
                 print(f"[bridge] x/y source: DEAD RECKONING, FORCED "
                       f"(--no-ground-truth) — {SIM_STATE_TOPIC} is not even "
-                      f"subscribed. x/y are the commanded velocity integrated: they "
+                      f"subscribed. x/y are the commanded velocity integrated and the "
+                      f"published velocity IS that command: they "
                       f"report the COMMAND back, they drift without bound, and on "
                       f"this rig they have read 71x the true distance travelled. This "
                       f"flag is for testing the fallback.", flush=True)
@@ -838,8 +865,12 @@ def main() -> int:
     odom = ap.add_mutually_exclusive_group()
     odom.add_argument("--publish-odom", dest="publish_odom", action="store_true",
                       default=True,
-                      help="publish rt/odommodestate from rt/lowstate (the default). "
-                           "yaw is measured; x/y are dead reckoned and drift.")
+                      help=f"publish rt/odommodestate (the default). yaw comes from "
+                           f"rt/lowstate and is always measured; x/y and the velocity "
+                           f"come from {SIM_STATE_TOPIC} when it is fresh (GROUND "
+                           f"TRUTH, exact) and from dead reckoning when it is not "
+                           f"(the COMMAND, which drifts) — see --ground-truth, and "
+                           f"read error_code on the message to tell which.")
     odom.add_argument("--no-odom", dest="publish_odom", action="store_false",
                       help="do not publish odometry. /loco/odom then 503s and Agent "
                            "Mode has no measured heading — use only when something "
@@ -851,8 +882,11 @@ def main() -> int:
                          "staleness window.")
     ap.add_argument("--odom-origin", default=None, metavar="X,Y",
                     help="WORLD position, in metres, of the odometry origin — i.e. "
-                         "where the robot is standing when this bridge starts. x/y are "
-                         "dead reckoned from zero, so without this they are published "
+                         "where the robot is standing when this bridge starts. Applies "
+                         "to the DEAD-RECKONED fallback ONLY: while rt/sim_state is "
+                         "fresh, x/y are the sim's true world root pose and need no "
+                         "offset, and applying one would move them off world. The "
+                         "fallback dead reckons from zero, so without this it publishes "
                          "in an odom frame that Agent Mode's place graph "
                          "(sim_evaluator/places/*.json, WORLD metres) reads as world "
                          "coordinates: a robot spawned at (4, -2) publishes (0, 0) and "
@@ -860,12 +894,13 @@ def main() -> int:
                          "ONLY — yaw is measured from the sim's base orientation and is "
                          "already world-absolute. factory_mission_bringup.sh passes the "
                          "scene's own spawn pose here, from the same resolver the sim "
-                         "spawns with, so the two cannot disagree. Unset = the old "
-                         "behaviour, odom frame published as world.")
+                         "spawns with, so the two cannot disagree. Unset = the "
+                         "fallback's odom frame is published as world.")
     ground_truth = ap.add_mutually_exclusive_group()
     ground_truth.add_argument("--ground-truth", dest="ground_truth",
                               action="store_true", default=True,
-                              help=f"publish the sim's TRUE world x/y from "
+                              help=f"publish the sim's TRUE world x/y AND its true "
+                                   f"world velocity/yaw_speed from "
                                    f"{SIM_STATE_TOPIC} when that topic is fresh, "
                                    f"falling back to dead reckoning when it is not "
                                    f"(the default). The origin is NOT applied to a "
@@ -873,7 +908,8 @@ def main() -> int:
     ground_truth.add_argument("--no-ground-truth", dest="ground_truth",
                               action="store_false",
                               help=f"never read {SIM_STATE_TOPIC}; dead-reckon x/y "
-                                   f"from the commanded velocity, as this bridge did "
+                                   f"from the commanded velocity and publish that "
+                                   f"command as the velocity, as this bridge did "
                                    f"before TASK-231. That reports the COMMAND back — "
                                    f"measured at 71x the true distance on this rig — "
                                    f"so use it to exercise the fallback, not to run a "

@@ -19,6 +19,10 @@
 # reuse either venv above. Without an interpreter, that stage is reported as
 # SKIPPED, never as passed.
 #
+# The Isaac offline verifiers (stage 3d, added by TASK-231) are the exception: they
+# need nothing but a stdlib python3, so they have no skip path at all — no interpreter
+# there is counted as a FAILURE.
+#
 # Every stage runs even when an earlier one fails, so one invocation gives the full
 # picture. Exits 0 if all tests pass, non-zero otherwise.
 
@@ -118,6 +122,73 @@ if [ -n "$HW_PY" ] && "$HW_PY" -c 'import numpy' >/dev/null 2>&1; then
     || { echo "  hardware pytest FAILED"; FAILURES=$((FAILURES + 1)); }
 else
   step "Hardware sidecar (SKIPPED — set HARDWARE_PYTHON to a python with numpy+pytest)"
+fi
+
+# ------------------------------------------ 3d. Isaac offline verifiers (python)
+# The `verify_*_offline.py` scripts under robot-agent/hardware/ are the only automated
+# guard on the Isaac bridges' maths. They exist BECAUSE the GPU on this box is
+# serialised and an Isaac boot costs minutes, so the bugs they catch -- quaternion
+# order, the Dex3 grip code, the odometry source -- have to be caught on CPU or not at
+# all. Until TASK-231 not one of them ran from here: `grep -c verify_isaac
+# scripts/test-all.sh` returned 0, so the guard on a priority-1 defect (odometry x/y
+# reporting the COMMANDED velocity back, wrong by 71x on the live rig) fired only when
+# a human remembered to type the filename. That is how it stayed green through a review
+# while the defect was still on the wire.
+#
+# These four need the STANDARD LIBRARY ONLY -- no numpy, no cyclonedds, no mujoco, no
+# Isaac, no GPU and no network (two of them start HTTP servers, both on loopback). So
+# this stage deliberately does NOT get the "SKIPPED when the interpreter is missing"
+# treatment of stages 3, 3b and 3c: those need a venv somebody has to build, this needs
+# a python3. A box without one is broken, not unconfigured, and a guard that quietly
+# reports SKIPPED is exactly the failure this stage was added to end -- so it counts as
+# a FAILURE instead, and the run cannot say "All tests passed" without it.
+#
+# The list is explicit rather than a glob: isaac_sim_patches/verify_push_probe_offline.py
+# also matches `verify_*_offline.py` but exits 1 without UNITREE_SIM_ROOT pointing at an
+# out-of-repo unitree_sim_isaaclab checkout, so it is an environment check, not a gate.
+# Each verifier prints its own verdict line on success and dumps its whole output on
+# failure, which is where the named check that broke is.
+step "Isaac offline verifiers"
+# HARDWARE_PYTHON if it is set AND runs, so this stage follows the same operator knob
+# as 3c; otherwise plain python3. A HARDWARE_PYTHON that does not run is announced
+# rather than swallowed -- it is usually a stale venv path, and the reader deserves to
+# know the interpreter they configured is not the one that ran.
+VERIFY_PY="${HARDWARE_PYTHON:-}"
+if [ -n "$VERIFY_PY" ] && ! "$VERIFY_PY" -c '' >/dev/null 2>&1; then
+  echo "  HARDWARE_PYTHON=$VERIFY_PY does not run — falling back to python3"
+  VERIFY_PY=""
+fi
+if [ -z "$VERIFY_PY" ] && command -v python3 >/dev/null 2>&1; then VERIFY_PY="python3"; fi
+if [ -n "$VERIFY_PY" ]; then
+  echo "  interpreter: $VERIFY_PY ($("$VERIFY_PY" -V 2>&1))"
+  VERIFY_OUT="$(mktemp)"
+  for verifier in \
+    robot-agent/hardware/verify_isaac_odom_offline.py \
+    robot-agent/hardware/verify_isaac_manip_offline.py \
+    robot-agent/hardware/verify_isaac_camera_facade_offline.py \
+    robot-agent/hardware/isaac_scenes/verify_factory_scene_offline.py
+  do
+    if (cd "$REPO_ROOT" && "$VERIFY_PY" "$REPO_ROOT/$verifier") >"$VERIFY_OUT" 2>&1; then
+      # The verdict line, not the last line: the scene verifier ends with a rule of
+      # '=' characters, and "✓ ======" would say nothing about how many checks ran.
+      VERIFY_MSG="$(grep -aE '^(RESULT:|all .* checks passed)' "$VERIFY_OUT" | tail -1)"
+      [ -n "$VERIFY_MSG" ] || VERIFY_MSG="$(grep -av '^[[:space:]]*$' "$VERIFY_OUT" | tail -1)"
+      ok "$verifier — $VERIFY_MSG"
+    else
+      cat "$VERIFY_OUT"
+      echo "  $verifier FAILED"
+      FAILURES=$((FAILURES + 1))
+    fi
+  done
+  rm -f "$VERIFY_OUT"
+else
+  # Not a skip. These need nothing but a stdlib python3, so "no interpreter" here is a
+  # broken box, and a silent pass would hand back the very false green this stage exists
+  # to prevent.
+  echo "  NOT RUN: no usable python3 (HARDWARE_PYTHON unset or not executable, and no"
+  echo "  python3 on PATH). The Isaac offline verifiers need only the standard library,"
+  echo "  so this counts as a FAILURE, not a skip."
+  FAILURES=$((FAILURES + 1))
 fi
 
 # Training E2E — now in separate training-worker repo (run ../training-worker/scripts/test-e2e.sh)

@@ -28,6 +28,17 @@ verbatim, the trap that the ORIGIN MUST NOT BE ADDED TO IT while it must still b
 to dead reckoning, the fallback when the topic goes stale or absent, and the provenance
 that makes the switch between a true pose and a 71x-wrong one impossible to miss.
 
+The FIRST fix for that defect left it alive one field over, and section (8g) is the
+guard for the second: `rt/sim_state` carries `root_velocity` beside the `root_pose`,
+and until TASK-231's second half a frame stamped 0x600D "ground truth" still built its
+velocity as the COMMAND rotated by the measured yaw and put that in
+`SportModeState_.velocity` / `yaw_speed`, which `g1_sidecar.py` surfaces and
+`HardwareClient.ts` parses into robot state. So a consumer reading a message labelled
+measured was handed the command back. (8g) asserts the published velocity is the sim's
+own, that it is NOT the rotated command, that it survives to the wire, and that a
+`root_velocity` the parser cannot read degrades the WHOLE message to dead reckoning
+rather than pairing an exact position with an invented velocity.
+
 The second defect it is built around is the FRAME. x/y are dead reckoned from zero,
 so the bridge published (0.00, 0.00) while the robot stood at the scene's authored
 spawn, world (4.00, -2.00), and Agent Mode -- whose place graph is in world metres --
@@ -48,6 +59,14 @@ dead-reckoned position resembles where the robot physically is. It never will; t
 the point of check (4) being labelled dead reckoning -- an origin fixes where the drift
 STARTS, not that it drifts.
 
+THE PROSE IS CHECKED TOO, in (8f-2). Not tidiness: the operator's only account of
+which source is live is the text these two files print, and a help string that still
+says "x/y are dead reckoned from zero" after the ground-truth path landed is the same
+71x lie as a wrong number, told to the one person who could have caught it. Those
+claims are read the way the interpreter reads them -- string-concatenation seams
+closed up -- because the last one hid across such a seam, where every line-oriented
+grep in this file walked straight past it.
+
 Run:
     python3 robot-agent/hardware/verify_isaac_odom_offline.py
 """
@@ -55,6 +74,7 @@ import ast
 import json
 import math
 import os
+import re
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -304,8 +324,9 @@ isaac_odom.fill_odom_msg(msg, x=1.25, y=-0.5, yaw=0.75, stamp_s=1234.5,
 check(msg.position == [1.25, -0.5, 0.0], "position = [x, y, 0]", str(msg.position))
 check(msg.imu_state.rpy == [0.0, 0.0, 0.75],
       "imu_state.rpy = [0, 0, yaw] -- the sidecar reads rpy[2]", str(msg.imu_state.rpy))
-check(msg.velocity == [0.4, -0.1, 0.0], "velocity = the commanded world velocity",
-      str(msg.velocity))
+check(msg.velocity == [0.4, -0.1, 0.0],
+      "velocity = the world velocity it was handed, [vx, vy, 0] (whose SOURCE is the "
+      "frame's, and is stated by error_code -- see 8g)", str(msg.velocity))
 check(msg.yaw_speed == 0.2, "yaw_speed set", str(msg.yaw_speed))
 check(msg.stamp.sec == 1234 and abs(msg.stamp.nanosec - 5e8) < 1e6,
       "stamp split into sec/nanosec",
@@ -631,6 +652,11 @@ CAPTURE = '{"init_state": "{\\"articulation\\": {\\"pause_room_door\\": {\\"root
 ROBOT_XY = (11.224272727966309, -4.021523952484131)
 ROBOT_Z = 0.7889862656593323
 ROBOT_YAW = -1.349145913505           # xyzw; read as wxyz the same buffer gives +179.4 deg
+# The robot's row of `root_velocity` in that same capture: [vx, vy, vz, wx, wy, wz] in
+# the WORLD frame. The rig was holding station, so it is a robot that is very nearly
+# not moving -- which is exactly the case the commanded velocity gets 71x wrong.
+ROBOT_TWIST = (-0.0007865113439038396, 5.539422545552952e-06, 0.0019437994342297316,
+               0.02837812528014183, 0.01205469947308302, 0.0005620673182420433)
 
 outer = json.loads(CAPTURE)
 check(sorted(outer) == ["_timestamp", "init_state", "task_name"],
@@ -642,6 +668,15 @@ gt = isaac_odom.parse_sim_state(CAPTURE)
 check((gt.x, gt.y) == ROBOT_XY, "the robot's true world x/y come through exactly",
       f"({gt.x}, {gt.y})")
 check(gt.z == ROBOT_Z, "and z, which the wire drops (position[2] is 0)", f"{gt.z}")
+check(gt.twist == ROBOT_TWIST,
+      "the TRUE world root velocity comes through from the SAME message, exactly -- "
+      "it was in every capture all along and nothing read it",
+      f"{gt.twist[0]:+.6f}, {gt.twist[1]:+.6f} m/s")
+check(gt.vx == ROBOT_TWIST[0] and gt.vy == ROBOT_TWIST[1]
+      and gt.yaw_rate == ROBOT_TWIST[5],
+      "and vx/vy/yaw_rate are its linear x, linear y and angular z -- WORLD frame "
+      "already, so nothing rotates them",
+      f"vx={gt.vx:+.6f} vy={gt.vy:+.6f} yaw_rate={gt.yaw_rate:+.6f}")
 check(abs(gt.yaw - ROBOT_YAW) < 1e-9,
       "yaw is derived from root_pose's quaternion as XYZW",
       f"{math.degrees(gt.yaw):.4f} deg")
@@ -682,6 +717,33 @@ BAD = [
     ('{"init_state": {"articulation": {"robot": {"root_pose": [[NaN, 0, 0, 0, 0, 0, 1]]}}}}',
      "a NaN position"),
 ]
+
+
+def with_velocity(vel):
+    """A payload with a PERFECTLY GOOD root_pose and `vel` (raw JSON) beside it."""
+    return ('{"init_state": {"articulation": {"robot": {"root_pose": '
+            '[[1.0, 2.0, 0.8, 0.0, 0.0, 0.0, 1.0]]'
+            + ('' if vel is None else ', "root_velocity": ' + vel) + '}}}}')
+
+
+# Sanity first, so the five cases below are known to fail on the VELOCITY and not on a
+# typo in the template around it.
+ok_v = isaac_odom.parse_sim_state(with_velocity("[[0.3, -0.1, 0.0, 0.0, 0.0, 0.25]]"))
+check((ok_v.x, ok_v.vx, ok_v.vy, ok_v.yaw_rate) == (1.0, 0.3, -0.1, 0.25),
+      "the template payload itself parses, pose and velocity both",
+      f"{ok_v.vx}, {ok_v.vy}, {ok_v.yaw_rate}")
+# A GOOD POSE WITH AN UNUSABLE VELOCITY IS REFUSED WHOLE. The tempting alternative --
+# keep the exact x/y, zero the velocity, keep the 0x600D marker -- ships one measured
+# number and one invented one under a single provenance byte, which is TASK-231 in
+# miniature. `SportModeState_` has one error_code, so the message says one thing or
+# the other; this says the other, loudly, and the pose degrades to dead reckoning.
+BAD += [
+    (with_velocity(None), "root_pose fine, no root_velocity at all"),
+    (with_velocity("[]"), "root_pose fine, empty root_velocity"),
+    (with_velocity("[[0.3, -0.1, 0.0]]"), "root_velocity[0] too short"),
+    (with_velocity('[["a", 0, 0, 0, 0, 0]]'), "non-numeric velocity component"),
+    (with_velocity("[[NaN, 0, 0, 0, 0, 0]]"), "a NaN velocity"),
+]
 for bad, why in BAD:
     try:
         got = isaac_odom.parse_sim_state(bad)
@@ -701,15 +763,28 @@ for bad, why in BAD:
 check("robot" in str(_missing_body_error()),
       "a missing robot articulation names the ones that ARE present",
       _missing_body_error())
+try:
+    isaac_odom.parse_sim_state(with_velocity(None))
+    vel_err = "(no error raised)"
+except ValueError as exc:
+    vel_err = str(exc)
+check("root_velocity" in vel_err,
+      "and a velocity refusal NAMES the field, so 'the pose looked fine' is not the "
+      "operator's only clue", vel_err[:70])
 
 print("  (8c) ground truth is published VERBATIM, and the origin is NOT added")
 GT_ORIGIN = (4.0, -2.0)                  # the factory spawn --odom-origin carries
+# Pose AND velocity, both taken from the real capture above: a robot holding station
+# at ~0.0008 m/s while this section commands it 1.0 m/s. That ratio is the 71x defect.
 TRUE = isaac_odom.GroundTruthPose(11.224272727966309, -4.021523952484131,
                                   0.7889862656593323, -1.349145913505,
-                                  (0.0, 0.0, 0.0, 1.0))
+                                  (0.0, 0.0, 0.0, 1.0),
+                                  ROBOT_TWIST[0], ROBOT_TWIST[1], ROBOT_TWIST[5],
+                                  ROBOT_TWIST)
 gt_integ = isaac_odom.OdomIntegrator(0.0, STALE, CMD_STALE, origin=GT_ORIGIN)
 GT_STALE = gt_integ.ground_truth_stale_after
 MEASURED_YAW = 0.3                       # deliberately NOT the ground-truth yaw
+CMD_VX = 1.0                             # what this section commands, every tick
 f_gt = gt_integ.tick(0.0, (MEASURED_YAW, 0.0), (1.0, 0.0, 0.0), (TRUE, 0.0))
 check(f_gt is not None and f_gt.x == TRUE.x and f_gt.y == TRUE.y,
       "the published x/y ARE the sim's pose, to the last bit",
@@ -722,7 +797,25 @@ check(f_gt.source == isaac_odom.ODOM_SOURCE_GROUND_TRUTH,
       "and the frame says where it came from", f_gt.source)
 check(f_gt.yaw == MEASURED_YAW and f_gt.yaw != TRUE.yaw,
       "yaw still comes from rt/lowstate, unrotated and unoffset -- ground truth "
-      "supplies x/y only", f"{f_gt.yaw} vs a ground-truth {TRUE.yaw:.3f}")
+      "supplies x/y and the velocity, not the heading",
+      f"{f_gt.yaw} vs a ground-truth {TRUE.yaw:.3f}")
+# THE FIELD THE FIRST FIX MISSED. Same frame, same 0x600D marker: the velocity has to
+# come off the same message the position did, or a consumer reading a frame labelled
+# measured is handed the command back.
+PREFIX_VX = CMD_VX * math.cos(MEASURED_YAW)     # what :655-656 used to publish
+PREFIX_VY = CMD_VX * math.sin(MEASURED_YAW)
+check(f_gt.vx_world == TRUE.vx and f_gt.vy_world == TRUE.vy,
+      "the published velocity IS the sim's own world root velocity, to the last bit",
+      f"({f_gt.vx_world:+.6f}, {f_gt.vy_world:+.6f}) m/s")
+check(abs(f_gt.vx_world - PREFIX_VX) > 0.9 and abs(f_gt.vy_world - PREFIX_VY) > 0.2,
+      "and it is NOT the commanded velocity rotated by the measured yaw -- the "
+      "pre-fix expression, which on this frame would have claimed a robot moving at "
+      f"{math.hypot(PREFIX_VX, PREFIX_VY):.2f} m/s",
+      f"({PREFIX_VX:+.4f}, {PREFIX_VY:+.4f}) would have been published")
+check(f_gt.yaw_speed == TRUE.yaw_rate,
+      "yaw_speed on a ground-truth frame is the sim's own body yaw rate, sampled with "
+      "the velocity beside it rather than differenced a tick later",
+      f"{f_gt.yaw_speed:+.6f} rad/s")
 # The 71x defect in miniature: walk the command hard while the sim holds the robot
 # still. Dead reckoning would climb; the published pose must not move at all.
 held = []
@@ -734,6 +827,13 @@ for i in range(1, 101):                  # 1 s at 1 m/s COMMANDED, sim pose cons
 check(all(f.x == TRUE.x and f.y == TRUE.y for f in held),
       "1 s COMMANDED at 1 m/s against a stationary sim publishes no motion at all",
       f"{len(held)} frames, all at ({TRUE.x:.3f}, {TRUE.y:.3f})")
+check(all(f.vx_world == TRUE.vx and f.vy_world == TRUE.vy
+          and f.yaw_speed == TRUE.yaw_rate for f in held),
+      "...and no SPEED either: every one of those frames reports the sim's "
+      f"{math.hypot(TRUE.vx, TRUE.vy):.4f} m/s, not the 1.00 m/s asked for. A "
+      "position that stands still beside a velocity of 1 m/s is the mixed message "
+      "this section exists to make impossible",
+      f"{len(held)} frames at {math.hypot(TRUE.vx, TRUE.vy):.4f} m/s")
 check(abs(gt_integ.reckoner.distance - 1.0) < 1e-9,
       "(while the dead reckoner underneath walked the full 1.00 m it was commanded -- "
       "the number that used to reach the wire, and only ever ~100% of the command)",
@@ -794,6 +894,17 @@ check(lost[-1][1].x > lost[0][1].x,
       "and it keeps MOVING: a stale true pose must not freeze the published one, "
       "which reads to block-executor.ts as 'the robot did not move'",
       f"{lost[0][1].x:.3f} -> {lost[-1][1].x:.3f} m")
+# The velocity falls back WITH the position, and on this path the command is the
+# honest answer: it is the exact quantity whose integral produced those x/y, and the
+# frame is stamped 0xDEAD, so nothing is claiming it was measured.
+check(all(abs(f.vx_world - PREFIX_VX) < 1e-9 and abs(f.vy_world - PREFIX_VY) < 1e-9
+          for _, f, _, _ in lost),
+      "a dead-reckoned frame publishes the COMMAND rotated into the world frame -- "
+      "which is what its 0xDEAD marker says it is",
+      f"({lost[-1][1].vx_world:+.4f}, {lost[-1][1].vy_world:+.4f}) m/s")
+check(all(f.vx_world != TRUE.vx for _, f, _, _ in lost),
+      "(so the two paths really do publish different numbers here -- the check above "
+      "is not vacuous)")
 check(gt_integ.frames_ground_truth == len(held) + len(still_true) + 1
       and gt_integ.frames_dead_reckoned == len(lost),
       "the integrator counts both kinds, which is what the bridge's status line and "
@@ -887,6 +998,223 @@ check(GT_BRIDGE["ODOM_GROUND_TRUTH_STALE_S"] <= GT_BRIDGE["ODOM_LOWSTATE_STALE_S
 check(0 < GT_BRIDGE["ODOM_STATUS_PERIOD_S"] <= 60.0,
       "the status line is frequent enough to answer 'which source?' during a mission",
       f"{GT_BRIDGE['ODOM_STATUS_PERIOD_S']:g}s")
+check("vx_world=frame.vx_world" in gt_src and "vy_world=frame.vy_world" in gt_src
+      and "yaw_speed=frame.yaw_speed" in gt_src,
+      "the published message's velocity is THE FRAME'S, so it carries the same "
+      "provenance as the frame's x/y and as the error_code beside it")
+check("yaw is measured; x/y are dead reckoned and drift" not in gt_src,
+      "--publish-odom no longer describes x/y as dead reckoned unconditionally — "
+      "that stopped being true when the ground-truth path landed")
+check("root velocity" in gt_src,
+      "and the startup banner tells the operator the velocity has a source too")
+
+print("  (8f-2) no help, docstring, comment or log line still says x/y are ALWAYS "
+      "reckoned")
+# The check above greps ONE LINE of the bridge, and the untruth it was written against
+# was not the only one in the file. `--odom-origin`'s help also stated, flatly and
+# after the ground-truth path had landed, that "x/y are dead reckoned from zero" —
+# and it survived this verifier untouched, because Python had wrapped that sentence
+# across a string-concatenation seam and so no single LINE of the bridge ever
+# contained it. Everything below therefore reads the two publishers' text the way the
+# interpreter does rather than the way `grep` does. The stakes are the same as for the
+# numbers: `error_code` tells a program which source is live, and this prose is the
+# only thing that tells a person.
+
+
+def literal_text(node):
+    """The text of a string-literal AST node; `{}` stands in for an f-string hole.
+
+    None of the claims below turns on an interpolated value, so folding the holes to
+    a placeholder makes an f-string help exactly as greppable as a plain one.
+    """
+    if isinstance(node, ast.Constant):
+        return str(node.value)
+    if isinstance(node, ast.JoinedStr):
+        return "".join(literal_text(v) if isinstance(v, ast.Constant) else "{}"
+                       for v in node.values)
+    return ""
+
+
+def argument_help(src, flag):
+    """The whole `help=` of `ap.add_argument(flag, ...)`, or None if there is none."""
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Call) and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == flag):
+            for kw in node.keywords:
+                if kw.arg == "help":
+                    return literal_text(kw.value)
+    return None
+
+
+origin_help = argument_help(gt_src, "--odom-origin")
+check(origin_help is not None,
+      "--odom-origin still exists and still carries a help= this file can read "
+      "(renaming the flag must fail here, not quietly stop checking it)")
+ORIGIN_HELP = origin_help or ""
+check("x/y are dead reckoned from zero" not in ORIGIN_HELP,
+      "--odom-origin's help no longer says x/y are dead reckoned from zero — that "
+      "describes the FALLBACK, and stopped being true of the default path when "
+      "ground truth landed")
+check("DEAD-RECKONED fallback ONLY" in ORIGIN_HELP,
+      "it says, in the operator's own --help output, what the origin applies to")
+check(isaac_odom.SIM_STATE_TOPIC in ORIGIN_HELP and "need no offset" in ORIGIN_HELP,
+      "and that a true pose needs no offset — the double-offset trap is stated where "
+      "the person passing the flag reads it, not only in the module docstring")
+# The general form of the two checks above: a REWORDED unconditional claim fails here
+# even though it matches no fixed string. Sentence-level because the qualification has
+# to sit next to the claim -- "x/y are dead reckoned" three sentences away from the
+# word "fallback" is what a reader takes away.
+unqualified = [s.strip() for s in ORIGIN_HELP.split(". ")
+               if "reckon" in s.lower() and "fallback" not in s.lower()]
+check(not unqualified,
+      "every sentence of that help mentioning reckoning also says `fallback`",
+      unqualified[0][:70] if unqualified else "")
+
+
+def joined_text(path):
+    """A publisher's source with newlines and string-concatenation seams closed up.
+
+    `"a " "b"` and `f"a " f"b"` are one string to the interpreter and two lines to
+    `grep`; this makes them one string here too, which is the difference between
+    catching the `--odom-origin` claim and walking past it for a whole task.
+    """
+    flat = re.sub(r"\s+", " ", open(path, encoding="utf-8").read())
+    return re.sub(r"""(['"])\s*f?\1""", "", flat)
+
+
+PUBLISHERS = {os.path.basename(p): joined_text(p)
+              for p in (BRIDGE_PATH, os.path.join(_HERE, "isaac_odom.py"))}
+# Each phrase was TRUE of this code before TASK-231 and each is phrased as what the
+# publisher ALWAYS does, so each is a way for the defect to come back as prose while
+# the code stays right — and prose is what decides whether anyone bothers to read
+# `error_code`. Sourced from the diff that fixed them, not invented.
+STALE_CLAIMS = (
+    ("x/y are dead reckoned from zero",
+     "--odom-origin's help; true of the fallback only"),
+    ("Unset = the old behaviour",
+     "unset now means the FALLBACK's odom frame, not the pre-TASK-231 path"),
+    ("x/y will fall back to DEAD RECKONING",
+     "the unreadable-payload log; the velocity falls back with them"),
+    ("x/y have FALLEN BACK",
+     "the staleness switch log; same message, same fallback, same sentence"),
+    ("x/y FALL BACK to dead reckoning",
+     "the startup banner; all of them fall back together or none does"),
+    ("TRUE world root pose, published verbatim",
+     "the acquisition log; the root VELOCITY is published verbatim beside it"),
+    ("x/y are the commanded velocity integrated:",
+     "the --no-ground-truth banner; the published velocity IS that command too"),
+    ("preferred for x/y and is used VERBATIM",
+     "OdomIntegrator.tick; ground truth is preferred for the velocity as well"),
+    ("ODOM_SOURCE_GROUND_TRUTH or ODOM_SOURCE_DEAD_RECKONED, for x/y only",
+     "OdomFrame.source; the wire marker is message-level, so the field must be"),
+    ("velocity` is the COMMANDED velocity rotated into the world frame, not a "
+     "measured one",
+     "fill_odom_msg; the exact sentence that made a 0x600D frame a lie"),
+)
+for phrase, why in STALE_CLAIMS:
+    said_by = [name for name, text in PUBLISHERS.items() if phrase in text]
+    check(not said_by, f"no publisher says {phrase!r} — {why}", ", ".join(said_by))
+
+print("  (8g) THE VELOCITY IS THE ROBOT'S TOO — the field the first fix left behind")
+# The audit that reopened TASK-231: on a frame stamped 0x600D "ground truth",
+# isaac_odom.py still built the OdomFrame velocity as (vx*c - vy*s, vx*s + vy*c) --
+# the COMMANDED velocity rotated by the measured yaw -- and fill_odom_msg wrote it to
+# msg.velocity, which g1_sidecar.py surfaces as odometry.velocity/yawSpeed and
+# HardwareClient.ts parses into robot state. So the defect this task is named for was
+# alive in the same DDS message, one field over, while root_velocity sat unread in the
+# very payload the position was being read from. Everything below fails on that code.
+
+cap = isaac_odom.parse_sim_state(CAPTURE)        # the real rig, not a fixture
+V_YAW, V_CMD = -0.6, (0.9, 0.2)                  # heading and a body-frame command
+was_vx = V_CMD[0] * math.cos(V_YAW) - V_CMD[1] * math.sin(V_YAW)
+was_vy = V_CMD[0] * math.sin(V_YAW) + V_CMD[1] * math.cos(V_YAW)
+v_integ = isaac_odom.OdomIntegrator(0.0, STALE, CMD_STALE)
+v_f = v_integ.tick(0.0, (V_YAW, 0.0), (V_CMD[0], V_CMD[1], 0.0), (cap, 0.0))
+check(v_f is not None and v_f.source == isaac_odom.ODOM_SOURCE_GROUND_TRUTH
+      and v_f.vx_world == cap.vx and v_f.vy_world == cap.vy
+      and v_f.yaw_speed == cap.yaw_rate,
+      "a frame labelled ground truth publishes the capture's root_velocity, verbatim",
+      f"({v_f.vx_world:+.6f}, {v_f.vy_world:+.6f}) m/s, {v_f.yaw_speed:+.6f} rad/s")
+check(math.hypot(v_f.vx_world - was_vx, v_f.vy_world - was_vy) > 0.5,
+      "and NOT the pre-fix (vx*c - vy*s, vx*s + vy*c) for the same tick — the check "
+      "that fails on the code this task reopened",
+      f"pre-fix would have said ({was_vx:+.4f}, {was_vy:+.4f}) m/s")
+
+# The sign the command can never produce: a robot being shoved backwards while it is
+# commanded forwards. `goto` reading the old field saw only its own +0.9.
+PUSHED = isaac_odom.GroundTruthPose(0.0, 0.0, 0.8, 0.0, (0.0, 0.0, 0.0, 1.0),
+                                    -0.35, 0.0, 0.0,
+                                    (-0.35, 0.0, 0.0, 0.0, 0.0, 0.0))
+push = isaac_odom.OdomIntegrator(0.0, STALE, CMD_STALE)
+f_push = push.tick(0.0, (0.0, 0.0), (0.9, 0.0, 0.0), (PUSHED, 0.0))
+check(f_push.vx_world < 0.0 and f_push.vx_world == PUSHED.vx,
+      "a base moving BACKWARD under a forward command reports a backward velocity — "
+      "a sign the rotated command cannot express",
+      f"{f_push.vx_world:+.2f} m/s while commanded +0.90")
+
+print("  (8g-2) it survives to the wire, next to a marker that is true of all of it")
+gt_wire = isaac_odom.fill_odom_msg(
+    FakeSportModeState(), v_f.x, v_f.y, v_f.yaw, 2.0, vx_world=v_f.vx_world,
+    vy_world=v_f.vy_world, yaw_speed=v_f.yaw_speed,
+    error_code=isaac_odom.odom_error_code(v_f.source))
+check(gt_wire.velocity == [cap.vx, cap.vy, 0.0] and gt_wire.yaw_speed == cap.yaw_rate,
+      "SportModeState_.velocity / yaw_speed carry the MEASURED numbers "
+      "(g1_sidecar.py's odometry.velocity / yawSpeed, HardwareClient.ts's robot state)",
+      str(gt_wire.velocity))
+check(gt_wire.position == [cap.x, cap.y, 0.0]
+      and gt_wire.error_code == isaac_odom.ODOM_ERROR_CODE_GROUND_TRUTH,
+      "beside the true position and one 0x600D that is now true of the whole message",
+      hex(gt_wire.error_code))
+check(gt_wire.velocity != [was_vx, was_vy, 0.0],
+      "(the message a pre-fix bridge would have written differs — not vacuous)")
+dr_wire = isaac_odom.fill_odom_msg(
+    FakeSportModeState(), 1.0, 2.0, V_YAW, 2.0, vx_world=was_vx, vy_world=was_vy,
+    yaw_speed=0.0, error_code=isaac_odom.ODOM_ERROR_CODE_DEAD_RECKONED)
+check(dr_wire.velocity == [was_vx, was_vy, 0.0] and dr_wire.error_code == 0xDEAD,
+      "the fallback puts the SAME rotated command on the wire — under 0xDEAD, where "
+      "it is an honest statement of what was asked for", hex(dr_wire.error_code))
+
+print("  (8g-3) an unusable velocity degrades the WHOLE message, and is counted")
+# parse_sim_state refuses such a payload outright (8b), so this is the hand-built
+# pose the integrator must still not half-trust.
+BROKEN = cap._replace(vx=float("nan"))
+broken_i = isaac_odom.OdomIntegrator(0.0, STALE, CMD_STALE, origin=GT_ORIGIN)
+f_broken = broken_i.tick(0.0, (0.0, 0.0), (1.0, 0.0, 0.0), (BROKEN, 0.0))
+check(f_broken.source == isaac_odom.ODOM_SOURCE_DEAD_RECKONED,
+      "a fresh pose whose velocity is not finite produces a DEAD-RECKONED frame",
+      f_broken.source)
+check(f_broken.x == GT_ORIGIN[0] and f_broken.y == GT_ORIGIN[1]
+      and f_broken.x != cap.x,
+      "its exact x/y are NOT published either: one error_code cannot describe two "
+      "provenances, so the message says dead reckoning and means it",
+      f"({f_broken.x:.2f}, {f_broken.y:.2f}) — the origin, not ({cap.x:.2f}, ...)")
+check(math.isfinite(f_broken.vx_world) and math.isfinite(f_broken.vy_world)
+      and math.isfinite(f_broken.yaw_speed),
+      "and nothing non-finite reaches the wire, where it would poison every consumer "
+      "that differences it")
+check(broken_i.ground_truth_unusable == 1 and not broken_i.ground_truth_seen,
+      "the refusal is COUNTED (the bridge's status line and shutdown summary read "
+      "it), not silently swallowed",
+      f"{broken_i.ground_truth_unusable} refused")
+check(isaac_odom.odom_error_code(f_broken.source)
+      == isaac_odom.ODOM_ERROR_CODE_DEAD_RECKONED,
+      "so the wire marker for that frame is 0xDEAD, not the exact one")
+
+print("  (8g-4) yaw_speed is measured on BOTH paths — never the commanded turn rate")
+# The commanded turn rate is not even an input to OdomIntegrator: `command` is
+# (vx, vy, t). This asserts the fallback's yaw_speed is the measured heading
+# differenced, which is what makes 0xDEAD's yaw_speed usable where its x/y are not.
+turn_i = isaac_odom.OdomIntegrator(0.0, STALE, CMD_STALE)
+turn_i.tick(0.0, (0.0, 0.0), (0.5, 0.0, 0.0))
+f_turn = turn_i.tick(0.1, (0.05, 0.1), (0.5, 0.0, 0.1))
+check(abs(f_turn.yaw_speed - 0.5) < 1e-9,
+      "0.05 rad of MEASURED heading in 0.1 s reads as 0.5 rad/s on a dead-reckoned "
+      "frame", f"{f_turn.yaw_speed:+.4f} rad/s")
+check(f_turn.source == isaac_odom.ODOM_SOURCE_DEAD_RECKONED
+      and f_turn.vx_world != 0.0,
+      "(on the same frame whose x/y and velocity ARE the command)",
+      f"{f_turn.vx_world:+.3f} m/s")
 
 # --------------------------------------------------------------------------------
 print("\n(9) against the real IDL, if this interpreter has one")

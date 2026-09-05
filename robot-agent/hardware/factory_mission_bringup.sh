@@ -216,14 +216,19 @@ fi
 # empty hall. So resolve it here, on the host, with the same resolver the scene
 # uses, and print the pose that will actually be spawned.
 #
-# IT IS ALSO THE ODOMETRY ORIGIN, and that is why this now runs UNCONDITIONALLY
-# rather than only when NEODEM_ROBOT_SPAWN is set. The locomotion bridge dead-reckons
-# x/y from zero, so unless it is told where zero is in the world it publishes an odom
-# frame that Agent Mode reads as world coordinates. Measured on the live rig: the
-# robot stood at world (4.00, -2.00), the bridge published (0.00, 0.00), and the agent
-# logged "Place: UNKNOWN -> FACTORY-CENTRE at (0.00, 0.00)" -- resolving itself into a
-# place 4.5 m from where it was standing. A goto from there applies a world
-# displacement to an odom-origin pose and walks into a wall.
+# IT IS ALSO THE ODOMETRY ORIGIN OF LAST RESORT, and that is why this now runs
+# UNCONDITIONALLY rather than only when NEODEM_ROBOT_SPAWN is set. The locomotion
+# bridge publishes the sim's TRUE world root pose off rt/sim_state whenever that topic
+# is fresh, and that pose is ALREADY world metres -- --odom-origin is deliberately not
+# added to it, because adding it would double the offset. The origin exists for the
+# labelled FALLBACK: with rt/sim_state absent or stale the bridge dead-reckons, and
+# dead reckoning starts at zero. Measured on the live rig before the ground-truth path
+# existed: the robot stood at world (4.00, -2.00), the bridge published (0.00, 0.00),
+# and the agent logged "Place: UNKNOWN -> FACTORY-CENTRE at (0.00, 0.00)" -- resolving
+# itself into a place 4.5 m from where it was standing. A goto from there applies a
+# world displacement to an odom-origin pose and walks into a wall. That is what the
+# fallback costs without an origin, so the origin is resolved every run whether or not
+# the fallback is ever taken.
 #
 # The whole point of taking it from HERE is that the number the sim spawns at and the
 # number the bridge anchors to come out of ONE call to ONE resolver. Re-deriving it,
@@ -269,7 +274,7 @@ if [ -n "${NEODEM_ROBOT_SPAWN:-}" ]; then
 else
   echo "ok    spawn: $SPAWN_DESC (NEODEM_ROBOT_SPAWN unset)"
 fi
-echo "ok    odom origin: $SPAWN_XY (WORLD metres) -- the locomotion bridge anchors its dead reckoning here, so its x/y and the place graph share one frame"
+echo "ok    odom origin: $SPAWN_XY (WORLD metres) -- odom x/y are the sim's TRUE root pose (rt/sim_state) while that topic is fresh, which is already world; this anchors the dead-reckoned FALLBACK, so either source shares one frame with the place graph"
 command -v docker >/dev/null     || die "docker missing"
 command -v nvidia-smi >/dev/null || die "nvidia-smi missing -- step 1 cannot tell whose GPU this is"
 command -v curl >/dev/null       || die "curl missing"
@@ -372,7 +377,9 @@ export OMNI_KIT_ACCEPT_EULA=YES
 say "4. locomotion bridge (answers the sport RPC; publishes odom)"
 cd "$HW"
 # --odom-origin is the spawn pose resolved in step 0, from the same robot_spawn() call
-# the sim itself spawns with. Without it the bridge publishes displacement-from-start
+# the sim itself spawns with. It is applied to the DEAD-RECKONED fallback only; the
+# ground-truth pose from rt/sim_state is already world and is published untouched.
+# Without the origin, a run that loses rt/sim_state publishes displacement-from-start
 # as though it were world coordinates, and Agent Mode's place graph resolves the robot
 # into the wrong place -- see the long note beside SPAWN_XY above.
 setsid nohup "$PY" -u isaac_loco_bridge.py --domain "$DOMAIN" --iface "$IFACE" \

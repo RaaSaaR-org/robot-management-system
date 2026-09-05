@@ -167,12 +167,31 @@ function _parseBattery(v: unknown): BatteryState | null {
   return battery;
 }
 
-function _parseOdometry(v: unknown): OdometryState | null {
+/**
+ * Coerce the sidecar's `provenance` string, defaulting to `'unknown'`.
+ *
+ * Anything unrecognised — an absent field from an older sidecar, a value added
+ * to the wire later — becomes `'unknown'` rather than being carried through as
+ * a string this type does not admit. Defaulting the OTHER way (assuming an
+ * unmarked frame is measured) is the exact failure TASK-231 exists to prevent.
+ */
+function _toProvenance(v: unknown): LocoOdometryProvenance {
+  return v === 'ground-truth' || v === 'dead-reckoned' ? v : 'unknown';
+}
+
+function _parseOdometry(v: unknown): HardwareOdometry | null {
   if (!v || typeof v !== 'object') return null;
   const o = v as Record<string, unknown>;
   const position = _toVec3(o.position);
   if (!position) return null; // position is the only required field
-  const odom: OdometryState = { position };
+  // Provenance covers the WHOLE sample, not just `position`: the sidecar decodes
+  // it from a message-level marker, and `velocity`/`yawSpeed` are precisely the
+  // fields that hand back our own command on a dead-reckoned frame (TASK-231).
+  const odom: HardwareOdometry = {
+    position,
+    provenance: _toProvenance(o.provenance),
+    errorCode: _toNum(o.errorCode) ?? null,
+  };
   const rpy = _toVec3(o.rpy);
   const velocity = _toVec3(o.velocity);
   const yawSpeed = _toNum(o.yawSpeed);
@@ -268,6 +287,38 @@ export class HardwareActionError extends Error {
   }
 }
 
+/**
+ * Where an odometry frame's numbers actually came from — a different question
+ * from which wire carried them (see {@link LocoOdometry.source}).
+ *
+ * `'ground-truth'` — MEASURED. On the Isaac bridge, x/y are the simulator's true
+ * root pose, copied verbatim.
+ * `'dead-reckoned'` — GUESSED by integrating the velocity we ourselves
+ * commanded. Such a frame reports ~100% of the command no matter what the base
+ * did: on 2026-08-30 it claimed 7.995 m of a commanded 8.00 m while the true
+ * root pose had moved 0.113 m. Any "% of commanded" figure derived from it is
+ * circular, and an arrival test against it will fire metres early (TASK-231).
+ * `'unknown'` — the publisher stamped no marker, or one this client does not
+ * recognise (a real G1's own state estimator, or a sidecar predating TASK-231).
+ * Treat it as "not certain", never as "probably measured".
+ */
+export type LocoOdometryProvenance = 'ground-truth' | 'dead-reckoned' | 'unknown';
+
+/**
+ * The `/state` odometry group plus its provenance.
+ *
+ * Extends {@link OdometryState} rather than widening it, so every existing
+ * consumer of `getOdometry()` keeps compiling and only callers that care about
+ * provenance have to know the field exists. Same marker, same message, same
+ * meaning as {@link LocoOdometry.provenance} — and it applies to `velocity` and
+ * `yawSpeed` as much as to `position`.
+ */
+export interface HardwareOdometry extends OdometryState {
+  provenance: LocoOdometryProvenance;
+  /** Raw `SportModeState_.error_code`, or null when the frame carried none. */
+  errorCode: number | null;
+}
+
 /** Planar base pose from `GET /loco/odom` (`rt/odommodestate`). */
 export interface LocoOdometry {
   /** Base x in metres, world frame. */
@@ -276,8 +327,20 @@ export interface LocoOdometry {
   y: number;
   /** Base yaw in **radians**, CCW positive (DDS convention). */
   yaw: number;
-  /** Where the sidecar got it from, e.g. `rt/odommodestate` or `sim`. */
+  /**
+   * The TRANSPORT the sidecar read the frame over — `'zmq'` (read-only bridge)
+   * or `'dds'` (direct subscriber), `'unknown'` when it said nothing. This is
+   * NOT provenance: a DDS frame can be either measured or dead reckoned.
+   */
   source: string;
+  /** Whether the pose was measured or guessed. See {@link LocoOdometryProvenance}. */
+  provenance: LocoOdometryProvenance;
+  /**
+   * The raw `SportModeState_.error_code` the provenance was decoded from, or
+   * null when the frame carried none. Kept so an operator can see the marker
+   * itself (0x600D / 0xDEAD) in a log without re-reading the wire.
+   */
+  errorCode: number | null;
 }
 
 /**
@@ -386,7 +449,7 @@ export class HardwareClient {
   private imu: ImuTelemetry | null = null;
   private touch: HandTouch | null = null;
   private battery: BatteryState | null = null;
-  private odometry: OdometryState | null = null;
+  private odometry: HardwareOdometry | null = null;
   // TASK-195: planar base pose, refreshed on the SAME 2 s poll. Null means "no
   // pose", which is a routine event on this stack, never "the origin".
   private basePose: CachedBasePose | null = null;
@@ -726,8 +789,13 @@ export class HardwareClient {
     return this.battery;
   }
 
-  /** Latest odometry sample, or null when the odom topic is absent/stale. */
-  getOdometry(): OdometryState | null {
+  /**
+   * Latest odometry sample, or null when the odom topic is absent/stale.
+   *
+   * Carries `provenance` (TASK-231): a `'dead-reckoned'` sample's `velocity`
+   * and `yawSpeed` are the velocity WE commanded, not the one the base reached.
+   */
+  getOdometry(): HardwareOdometry | null {
     return this.odometry;
   }
 
@@ -1478,13 +1546,22 @@ export class HardwareClient {
         y?: unknown;
         yaw?: unknown;
         source?: unknown;
+        provenance?: unknown;
+        errorCode?: unknown;
       };
       if (data.ok === false) return null;
       const x = _toNum(data.x);
       const y = _toNum(data.y);
       const yaw = _toNum(data.yaw);
       if (x === undefined || y === undefined || yaw === undefined) return null;
-      return { x, y, yaw, source: typeof data.source === 'string' ? data.source : 'unknown' };
+      return {
+        x,
+        y,
+        yaw,
+        source: typeof data.source === 'string' ? data.source : 'unknown',
+        provenance: _toProvenance(data.provenance),
+        errorCode: _toNum(data.errorCode) ?? null,
+      };
     } catch {
       return null;
     }
