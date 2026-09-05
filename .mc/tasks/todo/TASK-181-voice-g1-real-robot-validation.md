@@ -14,10 +14,13 @@ tags:
 - robot
 - voice
 sprint: ''
+parent: ""
 depends_on: []
+spe: 5
+effort: ""
 due_date: ''
 created: 2026-07-11
-updated: 2026-07-17
+updated: "2026-09-05"
 status_note: 'PARTIAL ON REAL ROBOT (2026-07-17) — SPEAKER LEG VALIDATED, MIC BLOCKED ON ADMIN FIREWALL. With the G1 powered and on 192.168.123.164: adapter came up mock=false on DDS domain 0; GetVolume returned 100 (real DDS round-trip); scripts/g1_say.py spoke DE + EN phrases out of the robot speaker (Piper->resample->/play); /stop cut a long clip at exactly 2.0s (cancelled=true). Step 2 output leg = DONE. Steps 3-8 (mic in, full conversation) still BLOCKED: the inbound UDP 5555 firewall rule needs an ADMIN shell and none was available this session (UAC declined; user has no admin rights atm) — g1_mic_dump.py confirmed the IGMP join succeeds but zero mic packets arrive, the exact firewall signature. Robot-agent A2A on :41244 up (gpt-oss:20b). New tooling: scripts/g1_say.py (speaker CLI, real-robot-validated), scripts/add_mic_firewall_rule.ps1 (elevated helper). Remaining: run the firewall rule from an admin shell, then steps 3-8.'
 ---
 

@@ -15,10 +15,13 @@ tags:
 - training
 - deployment
 sprint: ''
+parent: ""
 depends_on: []
+spe: 8
+effort: ""
 due_date: ''
 created: 2026-09-04
-updated: 2026-09-04
+updated: "2026-09-05"
 status_note: 'Written 2026-09-04 from a read of the live registry path. This is the
   foundation task for the agent-experiment work (TASK-239 .. TASK-242): none of the
   three above it can cite a model until a model can be registered, addressed and

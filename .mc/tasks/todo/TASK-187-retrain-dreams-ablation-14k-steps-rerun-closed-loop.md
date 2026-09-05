@@ -15,7 +15,10 @@ tags:
 - world-model
 - vla
 sprint: ''
+parent: ""
 depends_on:
+spe: 8
+effort: ""
 - '[[TASK-185]]'
 - '[[TASK-186]]'
 - '[[TASK-188]]'
@@ -23,7 +26,7 @@ depends_on:
 - '[[TASK-225]]'
 due_date: ''
 created: 2026-07-17
-updated: 2026-08-28
+updated: "2026-09-05"
 status_note: 'THE FINAL STEP, not the next one — it is blocked on all three fixes and
   must not be run before them. TASK-185 failed for three independent reasons: the sim
   cannot score a push (TASK-186), both arms sat at 0-2/10 so the ablation hit a floor

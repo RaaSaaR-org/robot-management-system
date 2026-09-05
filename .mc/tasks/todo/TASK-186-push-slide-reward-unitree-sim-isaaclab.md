@@ -4,7 +4,7 @@ aliases:
 - TASK-186
 title: Push/slide success reward for unitree_sim_isaaclab (unblocks unseen-behavior closed-loop ablations)
 slug: push-slide-reward-unitree-sim-isaaclab
-status: in-progress
+status: "todo"
 priority: 2
 owner: ''
 projects: []
@@ -14,10 +14,13 @@ tags:
 - synthetic-data
 - vla
 sprint: ''
+parent: ""
 depends_on: []
+spe: 5
+effort: ""
 due_date: ''
 created: 2026-07-17
-updated: 2026-08-29
+updated: "2026-09-05"
 status_note: 'Reward written and carried as 0003-neodem-push-slide-reward.patch; gate logic
   verified offline (14/14) with verify_push_reward_gates.py. NOT yet run inside Isaac — the
   four in-sim controls are written down but unexecuted. Two findings that change the shape of

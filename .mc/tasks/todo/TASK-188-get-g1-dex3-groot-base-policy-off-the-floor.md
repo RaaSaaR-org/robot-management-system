@@ -13,12 +13,15 @@ tags:
 - extended
 - vla
 sprint: ''
+parent: ""
 depends_on:
+spe: 8
+effort: ""
 - '[[TASK-185]]'
 - '[[TASK-225]]'
 due_date: ''
 created: 2026-07-17
-updated: 2026-08-28
+updated: "2026-09-05"
 status_note: 'Spun out of TASK-185. THE bottleneck: our best policy completes its own
   trained task only 2/10, so every ablation runs into a floor effect and can detect
   nothing. Fix absolute policy quality before testing any data-augmentation idea

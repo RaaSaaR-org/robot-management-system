@@ -14,10 +14,13 @@ tags:
 - training
 - curation
 sprint: ''
+parent: ""
 depends_on: []
+spe: 8
+effort: ""
 due_date: ''
 created: 2026-09-04
-updated: 2026-09-04
+updated: "2026-09-05"
 status_note: 'Written 2026-09-04. Independent of TASK-238/234 — it touches the data
   side, not the model side — but TASK-242 needs both.'
 ---

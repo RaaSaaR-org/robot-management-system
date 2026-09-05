@@ -15,10 +15,13 @@ tags:
 - voice
 - tts
 sprint: ''
+parent: ""
 depends_on: []
+spe: 8
+effort: ""
 due_date: ''
 created: 2026-08-29
-updated: 2026-08-29
+updated: "2026-09-05"
 status_note: 'Written 2026-08-29 from a read of the live voice stack and of the finished
   Saar-TTS project (separate repo `saar-voice-example`, finetune trained and evaluated
   2026-08-29). The Saarländisch voice is the DELIVERABLE but not the POINT: the point is
