@@ -98,8 +98,9 @@ robot-agent/data/update-backups/
 /brand/*
 !/brand/_template/
 
-# Local Claude Code settings
-**/.claude/
+# Local Claude Code state (the workflow files under .claude/ are tracked)
+**/.claude/settings.local.json
+**/.claude/agent-memory/
 
 # Playwright live-run outputs
 app/e2e/report-live/
