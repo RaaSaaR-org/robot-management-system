@@ -150,13 +150,18 @@ chat / voice ──► A2A message ──► planner (Ollama) ──► block li
                                                               real G1 (FSM)   sim_g1_dds
 ```
 
-**Blocks** (v1): `walk`, `turn`, `goto`, `look`, `scan_room`, `wave`, `greet`, `posture`,
-`speak`, `wait`, plus the runner-owned kinds the planner may never emit — `patrol`,
-`capture`, `inspect` (patrol, TASK-212) and `tour`, `present`, `demo` (host mode,
+**Blocks**: `walk`, `turn`, `goto`, `look`, `scan_room`, `wave`, `greet`, `posture`,
+`speak`, `wait`, `vla_skill`, plus the runner-owned kinds the planner may never emit —
+`patrol`, `capture`, `inspect` (patrol, TASK-212) and `tour`, `present`, `demo` (host mode,
 TASK-213). `walk`/`turn`/`goto` become `SetVelocity` (api 7105) with a duration;
 `wave`/`greet` become arm tasks (7106); `posture` becomes `SetFsmId` (7101). `look` and
 `scan_room` take no robot action — they capture a head-camera frame and send it to the
-vision model. A `vla_skill` block is deliberately **not** in v1.
+vision model.
+
+`vla_skill` is the one block that does not become a LocoClient call: it hands the named skill
+to the VLA runner and waits, so a plan can pick and place rather than only move. It was
+deliberately held out of v1 and landed with TASK-226; the authoritative list is
+`AgentBlockKinds` in `robot-agent/src/agent-mode/types.ts`.
 
 **Planning** is re-entrant: the planner emits a full block list, and after each block it
 may rewrite only the *remaining* plan. Completed blocks are frozen. A running block is

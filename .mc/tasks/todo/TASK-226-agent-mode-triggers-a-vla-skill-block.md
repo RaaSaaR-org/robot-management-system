@@ -290,10 +290,11 @@ Proposed for closure and refuted 2 of 3. The behaviour is on main and tested —
 ran the full robot-agent suite green (133 files, 2315 tests) — but two things the task itself
 names are unfinished:
 
-- **`docs/architecture.md` still states the deferral this task exists to undo.** Line 159
-  reads "A `vla_skill` block is deliberately **not** in v1", and the `**Blocks** (v1)` list at
-  :153 omits the kind. The task quotes that exact sentence as the thing to remove; a doc that
-  contradicts main is worse than no doc.
+- ~~**`docs/architecture.md` still states the deferral this task exists to undo.**~~ Fixed
+  2026-09-05: the `(v1)` qualifier is gone, `vla_skill` is in the block list, and the
+  paragraph now says what the kind does and points at `AgentBlockKinds` in
+  `robot-agent/src/agent-mode/types.ts` as the authoritative list, so the doc cannot drift
+  from the code again the same way.
 - **The planner bench was never re-run.** The task says "the bench is the gate" and flags
   prompt length as a measured regression risk. `robot-agent/scripts/planner-bench.ts` last
   changed at 79e417bd, before this work, and was neither extended for the new block kind nor
@@ -303,3 +304,10 @@ names are unfinished:
   TASK-227.
 
 The first two are offline work and small.
+
+### Remaining after 2026-09-05
+
+Only the planner bench. It cannot run on this box today: `robot-agent/scripts/planner-bench.ts`
+loads models of 6-13 GB one at a time, and another user's `Isaac-GR00T`, `isaac-sim` and
+`ollama` processes hold 23.6 GB of the 32.6 GB card. Loading a bench model would either fail or
+evict a running measurement, so it waits for an idle GPU rather than being forced.
