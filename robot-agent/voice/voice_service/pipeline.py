@@ -17,6 +17,7 @@ loop where needed.
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from enum import Enum
 
@@ -26,10 +27,33 @@ from .events import EventBus
 from .metrics import Metrics
 from .session import Session
 from .tts.normalize import tts_normalize
+from .tts.registry import VoiceUnavailableError
 from .vad.segmenter import SpeechEnd, SpeechStart, UtteranceSegmenter
 from .wake import match_wake
 
 LOW_CONFIDENCE_LOGPROB = -1.5
+
+# Per-pack TTS latency is recorded under this prefix ("tts.piper_de"), next to
+# the aggregate "tts" stage. One aggregate number cannot tell a slow voice from
+# a slow robot, and two packs can differ by an order of magnitude.
+TTS_STAGE_PREFIX = "tts."
+
+# Hard ceiling on one synthesize() call. A pack that hangs must fail its own
+# request instead of wedging the speak lock forever: the upstream dialect-voice
+# project has an unresolved hang where a single text stalls the model
+# indefinitely (>600 s for what should take ~45 s, TASK-229).
+#
+# The ceiling scales with how much speech was asked for, because a fixed one is
+# either useless against a hang or truncates a long reply — and a reply cut off
+# mid-sentence would be a new bug traded for an old one. ~15 characters of prose
+# per second of speech holds for both German and English; the multiplier is the
+# worst real-time factor a pack may still be before it counts as wedged rather
+# than slow. Piper runs at RTF < 1 on CPU; the dialect pack measured 1.95 on
+# MPS, and `realtime: false` is what buys it the wider allowance.
+TTS_CHARS_PER_SECOND = 15.0
+TTS_TIMEOUT_BASE_S = 15.0  # fixed grace for warmup, chunking, a remote roundtrip
+TTS_TIMEOUT_RTF = 4.0
+TTS_SLOW_TIMEOUT_RTF = 12.0
 
 # Metadata key that tells a NeoDEM robot-agent this turn came from a MOUTH and
 # is going back to an EAR. It matters because this pipeline is half-duplex: the
@@ -58,6 +82,30 @@ CANNED = {
         "en": "Yes?",
     },
 }
+
+
+def _settle(
+    loop: asyncio.AbstractEventLoop,
+    future: asyncio.Future,
+    *,
+    result: object = None,
+    exc: BaseException | None = None,
+) -> None:
+    """Hand a worker thread's outcome back to the loop, dropping it if nobody
+    is waiting any more (the call timed out) or the loop is already gone."""
+
+    def apply() -> None:
+        if future.cancelled():
+            return
+        if exc is not None:
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+
+    try:
+        loop.call_soon_threadsafe(apply)
+    except RuntimeError:
+        pass  # loop closed during shutdown — the result is nobody's business now
 
 
 class State(str, Enum):
@@ -129,8 +177,14 @@ class VoicePipeline:
 
         if self.tts is not None:
             await asyncio.to_thread(self.tts.load)
-            self._models_loaded["tts"] = True
-            self.bus.publish("tts_loaded", engine=self.config.tts_engine)
+            # A registry that came up with no usable pack is not a loaded TTS,
+            # however cleanly it degraded: reporting True there is exactly the
+            # green health check on a mute robot that this axis exists to stop.
+            registry = self._voice_registry()
+            self._models_loaded["tts"] = registry is None or bool(registry.loaded_ids())
+            self.bus.publish(
+                "tts_loaded", engine=self.config.tts_engine, voice=self.config.voice
+            )
         if self.stt is not None:
             await asyncio.to_thread(self.stt.load)
             self._models_loaded["stt"] = True
@@ -340,23 +394,125 @@ class VoicePipeline:
         self.audio_in.set_muted(False)
         self._set_state(State.LISTENING)
 
-    async def _speak(self, text: str, language: str) -> None:
+    async def _speak(self, text: str, language: str, voice: str | None = None) -> None:
         if self.tts is None or self.audio_out is None:
             self.bus.publish("speak_skipped", reason="no TTS/output wired", text=text[:100])
             return
         text = tts_normalize(text)
         if not text:
             return
+        # Resolved before the lock so an unknown or unloaded pack fails at once
+        # instead of queueing behind whatever is currently being said.
+        pack = self._resolve_voice(voice)
         async with self._speak_lock:
             self._set_state(State.SPEAKING)
             t0 = time.monotonic()
-            pcm, rate = await asyncio.to_thread(self.tts.synthesize, text, language)
-            self.metrics.record("tts", time.monotonic() - t0)
-            self.bus.publish("tts_start", chars=len(text), language=language)
+            # normalize -> prepare -> synthesize. prepare() is the pack's own
+            # text stage (dialect rules, a corpus orthography) and a separate
+            # call by design: synthesize() does not apply it, so skipping it
+            # here would leave a dialect pack reading standard German. The
+            # latency below therefore covers prepare + synthesize, which is
+            # what the listener actually waits through.
+            text = await asyncio.to_thread(self._tts_prepare, text, language, pack)
+            pcm, rate = await self._synthesize(text, language, pack)
+            elapsed = time.monotonic() - t0
+            self.metrics.record("tts", elapsed)
+            self.metrics.record(f"{TTS_STAGE_PREFIX}{pack}", elapsed)
+            self.bus.publish("tts_start", chars=len(text), language=language, voice=pack)
             t1 = time.monotonic()
             await self.audio_out.play(pcm, rate)
             self.metrics.record("speak", time.monotonic() - t1)
             self.bus.publish("tts_end")
+
+    async def _synthesize(self, text: str, language: str, voice: str) -> tuple[bytes, int]:
+        """Synthesize under a hard timeout, on a thread that may be abandoned.
+
+        Deliberately not asyncio.to_thread: a timeout there cancels the await
+        only. Python cannot interrupt a blocking call, so the thread runs on —
+        and to_thread borrows the loop's *shared* default executor, where a few
+        wedged synthesis calls would silently starve STT and every other
+        to_thread user. On a private daemon thread the cost of a hang is bounded
+        to one leaked thread whose result is dropped; this request fails, the
+        speak lock is released, and the next utterance is unaffected. The thread
+        itself lives until the engine returns, if it ever does — it is a daemon,
+        so it cannot hold up shutdown either.
+        """
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future = loop.create_future()
+
+        def run() -> None:
+            try:
+                result = self._tts_synthesize(text, language, voice)
+            except BaseException as exc:  # noqa: BLE001 — re-raised on the loop
+                _settle(loop, done, exc=exc)
+            else:
+                _settle(loop, done, result=result)
+
+        threading.Thread(target=run, name=f"tts-{voice}", daemon=True).start()
+        timeout_s = self._tts_timeout_s(voice, text)
+        try:
+            return await asyncio.wait_for(done, timeout_s)
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"voice pack {voice!r} produced no audio within {timeout_s:g}s"
+            ) from exc
+
+    # ------------------------------------------------------------------
+    # The voice axis
+    # ------------------------------------------------------------------
+
+    def _voice_registry(self):
+        """The wired TTS if it carries voice packs, else None.
+
+        Components here are duck-typed (see the module docstring): the registry
+        offers resolve(), a bare TTSEngine — the dev scripts under scripts/, the
+        fakes in the tests — does not, and then there is exactly one voice.
+        """
+        return self.tts if hasattr(self.tts, "resolve") else None
+
+    def _resolve_voice(self, voice: str | None) -> str:
+        """The pack id this utterance speaks in. Raises rather than substituting.
+
+        Answering a request for one voice in another is the failure this whole
+        axis exists to prevent: the demo speaks the wrong language while every
+        health check stays green.
+        """
+        registry = self._voice_registry()
+        if registry is not None:
+            return registry.resolve(voice).pack.id
+        if voice is not None and voice != self.config.voice:
+            raise VoiceUnavailableError(
+                f"voice pack {voice!r} is not available: no voice registry is wired"
+            )
+        return self.config.voice
+
+    def _tts_prepare(self, text: str, language: str, voice: str) -> str:
+        registry = self._voice_registry()
+        if registry is not None:
+            return registry.prepare(text, language, voice)
+        prepare = getattr(self.tts, "prepare", None)
+        return text if prepare is None else prepare(text, language)
+
+    def _tts_synthesize(self, text: str, language: str, voice: str) -> tuple[bytes, int]:
+        registry = self._voice_registry()
+        if registry is not None:
+            return registry.synthesize(text, language, voice)
+        return self.tts.synthesize(text, language)
+
+    def _tts_timeout_s(self, voice: str, text: str) -> float:
+        """How long this pack may take on this much text before it is wedged."""
+        registry = self._voice_registry()
+        realtime = True if registry is None else registry.resolve(voice).pack.realtime
+        rtf = TTS_TIMEOUT_RTF if realtime else TTS_SLOW_TIMEOUT_RTF
+        return TTS_TIMEOUT_BASE_S + rtf * len(text) / TTS_CHARS_PER_SECOND
+
+    def _voice_latency(self, stages: dict) -> dict:
+        """The per-pack slice of the metrics, keyed by pack id."""
+        return {
+            stage[len(TTS_STAGE_PREFIX):]: value
+            for stage, value in stages.items()
+            if stage.startswith(TTS_STAGE_PREFIX)
+        }
 
     # ------------------------------------------------------------------
     # PipelineController (called from HTTP server threads)
@@ -376,9 +532,33 @@ class VoicePipeline:
                 "a2a": self.a2a is not None,
             },
             "agent_reachable": getattr(self.a2a, "last_ok", None),
+            "voice": self.voices(),
+        }
+
+    def voices(self) -> dict:
+        """The pack list, for GET /voices and GET /health.
+
+        A pack that failed to load is listed with available=false and its
+        reason, never omitted: an absent entry is indistinguishable from a pack
+        nobody ever configured, and that is what makes a broken voice look like
+        a healthy service.
+        """
+        registry = self._voice_registry()
+        active = self.config.voice
+        if registry is None:
+            # A bare engine (dev scripts, tests) has no packs to describe; say
+            # so rather than inventing an entry for the configured id.
+            return {"active": active, "available": self.tts is not None,
+                    "reason": None, "voices": []}
+        return {
+            "active": active,
+            "available": registry.is_loaded(active),
+            "reason": registry.reason(active),
+            "voices": registry.describe(),
         }
 
     def status(self) -> dict:
+        metrics = self.metrics.summary()
         return {
             "state": self._state.value,
             "paused": self._paused,
@@ -391,7 +571,13 @@ class VoicePipeline:
             "contextId": self.session.peek(),
             "lastTranscript": self.last_transcript,
             "lastReply": self.last_reply,
-            "metrics": self.metrics.summary(),
+            "metrics": metrics,
+            # The same numbers as metrics.stages["tts.<pack>"], keyed by pack so
+            # a reader does not have to know the prefix to compare two voices.
+            "voice": {
+                "active": self.config.voice,
+                "tts": self._voice_latency(metrics["stages"]),
+            },
         }
 
     def get_config(self) -> dict:
@@ -416,22 +602,29 @@ class VoicePipeline:
         self.bus.publish("config_changed", **changed)
         return changed
 
-    def say(self, text: str, language: str | None) -> None:
+    def say(self, text: str, language: str | None, voice: str | None = None) -> str:
+        """Queue an utterance; returns the pack id it will be spoken in."""
         if self.tts is None or self.audio_out is None:
             raise RuntimeError("TTS path not available")
         if self._loop is None:
             raise RuntimeError("pipeline not running yet")
         lang = language if language in self.config.languages else self.config.default_language
-        asyncio.run_coroutine_threadsafe(self._say_task(text, lang), self._loop)
+        # Resolve here, on the HTTP thread, so a bad voice is the caller's 4xx.
+        # _say_task is fire-and-forget: without this the request would be
+        # answered 202 and then quietly say nothing at all. Returning the id
+        # also lets the caller see which pack answered, rather than assume.
+        pack = self._resolve_voice(voice)
+        asyncio.run_coroutine_threadsafe(self._say_task(text, lang, voice), self._loop)
+        return pack
 
-    async def _say_task(self, text: str, language: str) -> None:
+    async def _say_task(self, text: str, language: str, voice: str | None = None) -> None:
         # Ref-counted acquire/release keeps /say half-duplex-correct even when it
         # overlaps a live VAD turn or another /say, guards a missing segmenter
         # (VAD failed to load), and always restores the right resting state
         # (LISTENING / PAUSED / IDLE) — including when the pipeline is paused.
         self._acquire_mic()
         try:
-            await self._speak(text, language)
+            await self._speak(text, language, voice)
         except Exception as exc:  # noqa: BLE001
             self.bus.publish("error", stage="say", error=str(exc))
             print(f"[Voice] /say failed: {exc}")

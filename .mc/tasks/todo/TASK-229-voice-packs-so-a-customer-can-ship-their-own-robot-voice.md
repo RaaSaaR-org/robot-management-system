@@ -5,9 +5,9 @@ aliases:
 title: Make the robot's voice a selectable pack, so a customer can ship their own — starting
   with Saarländisch
 slug: voice-packs-so-a-customer-can-ship-their-own-robot-voice
-status: todo
+status: "todo"
 priority: 2
-owner: ''
+owner: "huhn511"
 projects: []
 customers: []
 tags:
@@ -416,3 +416,28 @@ backing the claim is in the table above.
   customer voice is trained on one speaker, the relevant number is the trained-
   speaker one (−42 %). Nothing here validates a customer voice generalising to a
   reference clip it never saw.
+
+### Landed 2026-09-05 — the registry axis, without the Saar pack
+
+The voice-pack registry, the widened engine contract, the Piper split, config, and the
+`/say` / `/health` / `/voices` / `/status` surface. Eight of the twelve acceptance criteria.
+
+Deliberately not built: anything needing the Saar Space. `huhn511/saar-tts` is private (an
+anonymous request returns 401), the repo carrying the `/speak_pcm` signature and the
+Hochdeutsch→Saarländisch rules is not on this machine, and the local HF token may not be sent
+outward. No fake pack was stubbed to make a criterion look met — the seam is left open, and
+what a Saar pack has to fill in is three concrete things: a `VoicePack` entry with its licence,
+`realtime=False` and the dialect `prepare`; a `tts/saar_engine.py` with `load()` and
+`synthesize()`; and one line in `ENGINE_FACTORIES`.
+
+Also out of this slice: the server relay (`GET /:id/voice/voices`), the Voice tab composer, and
+Agent Mode narration through the pack. They live in trees other work was using; the Python
+service is self-contained and lands on its own.
+
+**A false alarm worth recording.** The implementing agent reported that Piper cannot synthesize
+at all on this box — an espeak-ng data-path abort — and called it pre-existing. It is neither.
+The worktree had its `.venv` **symlinked** in from the primary checkout, which makes
+`sys.prefix` the worktree path; piper resolves its espeak-ng data from there, misses, and falls
+back to a compiled-in build path. Same interpreter, same packages, same models: only the prefix
+differs. Invoked through the real venv path, synthesis works and the opt-in real-Piper test
+passes. Never symlink a Python venv into a worktree.

@@ -11,11 +11,15 @@ import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from .tts.registry import active_registry, engine_ids, pack_ids
+
 ENV_PREFIX = "VOICE_"
 
 VALID_MODES = ("vad", "ptt")
 VALID_BACKENDS = ("local", "g1")
-VALID_TTS_ENGINES = ("piper",)
+# Derived, never hand-kept: a literal list here would silently drift out of
+# step with the packs the registry can actually build.
+VALID_TTS_ENGINES = engine_ids()
 
 # Audio contract used across the whole pipeline (Silero v5+ requires
 # 512-sample frames at 16 kHz; the G1 speaker/mic are 16 kHz s16le too).
@@ -46,6 +50,9 @@ class VoiceConfig:
     language_min_prob: float = 0.6
 
     tts_engine: str = "piper"
+    # The selected voice pack (tts/registry.py). A voice is its own axis: it is
+    # not derived from `languages` and does not constrain what may be spoken.
+    voice: str = "piper_de"
     piper_voice_de: str = "de_DE-thorsten-high"
     piper_voice_en: str = "en_US-lessac-high"
 
@@ -98,6 +105,8 @@ class VoiceConfig:
             raise ValueError(f"VOICE_OUTPUT_BACKEND must be one of {VALID_BACKENDS}")
         if self.tts_engine not in VALID_TTS_ENGINES:
             raise ValueError(f"VOICE_TTS_ENGINE must be one of {VALID_TTS_ENGINES}")
+        if self.voice not in pack_ids():
+            raise ValueError(f"VOICE_VOICE must be one of {pack_ids()}, got {self.voice!r}")
         if not (0.0 < self.vad_threshold < 1.0):
             raise ValueError("VOICE_VAD_THRESHOLD must be in (0, 1)")
         if self.default_language not in self.languages:
@@ -111,6 +120,8 @@ class VoiceConfig:
             raise ValueError("VOICE_WAKE_WINDOW_S must be >= 0")
 
     def piper_voice_for(self, language: str) -> str:
+        """Which Piper model file a Piper pack uses — the pack's own option
+        lookup, not a language->voice mapping for the service."""
         mapping = {"de": self.piper_voice_de, "en": self.piper_voice_en}
         if language in mapping:
             return mapping[language]
@@ -134,6 +145,8 @@ class VoiceConfig:
         "half_duplex_tail_ms",
         "session_timeout_s",
         "default_language",
+        # Only ever to an already-loaded pack — see _require_loaded_voice().
+        "voice",
         "thinking_filler_s",
         "wake_phrases",
         "wake_window_s",
@@ -163,6 +176,8 @@ class VoiceConfig:
                 if key not in snapshot:
                     snapshot[key] = getattr(self, key)
                 coerced = _coerce(key, str(value))
+                if key == "voice":
+                    self._require_loaded_voice(str(coerced))
                 setattr(self, key, coerced)
                 changed[key] = coerced
             self.validate()
@@ -171,6 +186,23 @@ class VoiceConfig:
                 setattr(self, key, old)
             raise
         return changed
+
+    def _require_loaded_voice(self, voice: str) -> None:
+        """A runtime voice switch may only target a pack that is already loaded.
+
+        RUNTIME_MUTABLE promises "no model reloads needed", so switching to a
+        pack that never came up must be an explicit error here rather than a
+        twenty-second stall inside POST /config — or, worse, a robot that keeps
+        speaking the old voice while /config reports the new one.
+
+        Before a registry exists (unit tests, a TTS-less run) the declared-id
+        check in validate() is all there is to go on.
+        """
+        registry = active_registry()
+        if registry is None:
+            return
+        if not registry.is_loaded(voice):
+            raise ValueError(f"voice pack {voice!r} is not loaded: {registry.reason(voice)}")
 
 
 def _coerce(name: str, raw: str) -> object:
