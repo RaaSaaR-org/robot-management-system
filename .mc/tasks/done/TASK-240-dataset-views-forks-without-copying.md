@@ -4,7 +4,7 @@ aliases:
 - TASK-240
 title: Dataset views — fork a dataset by selecting episodes, not by copying bytes
 slug: dataset-views-forks-without-copying
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
