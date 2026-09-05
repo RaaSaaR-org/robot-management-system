@@ -28,6 +28,28 @@ A subagent is a **context firewall, not a personality.** Never give one a person
 - **In:** acceptance criteria · the paths it may touch · the anchor file to copy.
 - **Out:** a diff summary and any decision it had to make. Never a transcript.
 
+**Subagents launched together share one working tree.** "The paths it may touch" is not
+advice, it is the thing that keeps two of them from overwriting each other — and neither will
+error when they do. Give every agent an explicit list of the files it owns, make the lists
+disjoint, and say plainly that a file it does not own belongs to an agent running right now.
+Where a slice genuinely needs the same file as another, sequence those two instead.
+
+Forbid git state changes in the same breath: no `add`, `commit`, `checkout`, `stash`,
+`branch`, `push`, `reset`. Agents leave their work in the tree; you commit it. One agent
+checking out a branch mid-flight moves the tree under every other agent.
+
+**An agent isolated in its own worktree cannot run a single npm gate** — a fresh worktree has
+no `node_modules`, so `npm run typecheck` and `vitest` fail for a reason that has nothing to do
+with the change, and `npx` quietly tries to fetch the tool from the network instead. Symlink
+the primary checkout's directories in before spawning anything:
+
+```bash
+for c in app server robot-agent; do ln -sfn "$MAIN/$c/node_modules" "$WT/$c/node_modules"; done
+```
+
+They are identical and shared, which is also the catch: `prisma generate` writes into
+`node_modules/.prisma`, so only one tree at a time may change `schema.prisma`.
+
 Send independent subagents in one message so they run concurrently.
 
 ## 3. Branch first

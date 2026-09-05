@@ -37,6 +37,33 @@ Each gate runs in its own subshell, from the repo root. A bare `cd` would persis
 
 **The dev database is not scratch.** Never `prisma migrate reset` or `prisma migrate diff` against `DATABASE_URL`. A drift check is `prisma migrate status`.
 
+**A diff touching `server/prisma/` has a gate the typecheck cannot see.** CI replays every
+committed migration onto a clean Postgres and asserts it reproduces `schema.prisma` exactly
+(`.github/workflows/check.yml`, "Prisma migrations match schema"). A hand-written migration
+that drifts typechecks fine and fails there. Run it here instead — against its own container,
+so the rule above still holds:
+
+```bash
+docker run -d --rm --name neodem-drift -e POSTGRES_PASSWORD=shadow -e POSTGRES_DB=neodem \
+  -p 55432:5432 postgres:16-alpine >/dev/null
+until docker exec neodem-drift pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done
+T=$(mktemp -d); cp -r server/prisma "$T/prisma"
+sed -i 's/provider = "sqlite"/provider = "postgresql"/' "$T/prisma/schema.prisma"   # a copy, never the repo
+U=postgresql://postgres:shadow@localhost:55432/neodem
+(cd server \
+  && DATABASE_URL=$U npx prisma migrate deploy --schema "$T/prisma/schema.prisma" \
+  && DATABASE_URL=$U npx prisma migrate diff \
+       --from-schema-datasource "$T/prisma/schema.prisma" \
+       --to-schema-datamodel    "$T/prisma/schema.prisma" --exit-code)
+echo "drift exit $?"        # 0 = matches · 2 = drift, and the output names the column
+docker rm -f neodem-drift >/dev/null; rm -rf "$T"
+```
+
+The `sed` runs on the copy because the committed schema says `sqlite` for local dev and the
+deploy target is Postgres — editing the real file would leave the repo dirty in a way the diff
+gate then reports as your change. `command -v docker` failing is a **skipped** gate, named as
+such; a migration nobody replayed is not a migration anybody checked.
+
 UI gate: capture the screenshot, report its path, leave the comparison to whoever spawned you.
 
 ## Out — the bounded report
