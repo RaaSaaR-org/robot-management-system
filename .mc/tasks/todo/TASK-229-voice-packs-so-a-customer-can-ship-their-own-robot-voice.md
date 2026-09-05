@@ -5,7 +5,7 @@ aliases:
 title: Make the robot's voice a selectable pack, so a customer can ship their own — starting
   with Saarländisch
 slug: voice-packs-so-a-customer-can-ship-their-own-robot-voice
-status: "in-progress"
+status: "todo"
 priority: 2
 owner: "huhn511"
 projects: []
