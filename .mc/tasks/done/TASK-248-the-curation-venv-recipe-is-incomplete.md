@@ -3,7 +3,7 @@ id: "TASK-248"
 aliases: []
 title: "The curation venv recipe in CLAUDE.md builds a broken venv"
 slug: "the-curation-venv-recipe-is-incomplete"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
