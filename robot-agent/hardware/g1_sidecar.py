@@ -49,9 +49,13 @@ Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_UR
                         → WaveHand / ShakeHand / StopMove
   POST /loco/fsm      → {"id": int} → LocoClient.SetFsmId (0 zero-torque, 1 damp,
                         3 sit, 500 start, 706 squat↔stand)
-  GET  /loco/odom     → {"ok","x","y","yaw","source"} from rt/odommodestate
-                        (source "zmq" = read-only bridge, "dds" = direct DDS;
-                         503 + error when nothing fresh — NEVER zeros)
+  GET  /loco/odom     → {"ok","x","y","yaw","source","provenance","errorCode"}
+                        from rt/odommodestate. "source" is the TRANSPORT we read
+                        it over ("zmq" = read-only bridge, "dds" = direct DDS);
+                        "provenance" is where the POSE itself came from —
+                        "ground-truth" | "dead-reckoned" | "unknown" — decoded
+                        from the publisher's SportModeState_.error_code marker
+                        (TASK-231). 503 + error when nothing fresh — NEVER zeros.
                         These four are 403 while the gate is off and 503 when the
                         Unitree SDK is missing or DDS is down. They are NOT behind
                         G1_READ_ONLY — see the gate's rationale at LOCO_ENABLED.
@@ -642,6 +646,14 @@ def _get_state_readonly() -> dict:
             yaw_speed = _opt_float(odom.get("yaw_speed"))
             if yaw_speed is not None:
                 odometry["yawSpeed"] = yaw_speed
+            # Provenance of the WHOLE group, not just position: the marker is
+            # message-level, and `velocity`/`yawSpeed` are the fields that carry
+            # the commanded velocity back on a dead-reckoned frame (TASK-231).
+            # Always present, unlike the optional fields above — "unknown" is an
+            # answer, not a fabricated value, and its presence also tells a
+            # caller this sidecar is new enough to decode the marker at all.
+            (odometry["provenance"],
+             odometry["errorCode"]) = _odom_provenance(odom.get("error_code"))
             result["odometry"] = odometry
 
     return result
@@ -2462,6 +2474,31 @@ def loco_stand_height(body: dict) -> tuple[int, dict]:
 #     itself).
 # If neither has anything fresh we return 503 and say so. Returning (0,0,0)
 # would be a fabricated pose, and the navigator would happily integrate it.
+#
+# NEITHER of those two names says whether the POSE is measured or guessed — they
+# name the wire we read it off. That distinction lives one field over, in
+# SportModeState_.error_code, which the Isaac bridge stamps as a PROVENANCE
+# MARKER (isaac_odom.py): 0x600D = x/y came verbatim off the sim's true root
+# pose, 0xDEAD = x/y were dead reckoned from the velocity we ourselves commanded
+# and are therefore a guess that reports ~100% of the command no matter what the
+# base did (TASK-231). The marker is message-level: it describes the whole frame.
+# Until now the sidecar dropped it, so Agent Mode could not tell an exact pose
+# from a reckoned one. We decode it into a SEPARATE "provenance" field rather
+# than folding it into "source": callers already read "source" as the transport
+# and the two answers are independent (a DDS frame can be either).
+ODOM_ERROR_CODE_GROUND_TRUTH = 0x600D
+ODOM_ERROR_CODE_DEAD_RECKONED = 0xDEAD
+ODOM_PROVENANCE_BY_ERROR_CODE = {
+    ODOM_ERROR_CODE_GROUND_TRUTH: "ground-truth",
+    ODOM_ERROR_CODE_DEAD_RECKONED: "dead-reckoned",
+}
+# Anything else — a real G1's 0, a real G1 fault code, a publisher that predates
+# the marker, a bridge that never stamps one. "unknown" is the only honest answer
+# there: calling an unstamped frame "ground-truth" is exactly the lie this task
+# exists to kill, and calling it "dead-reckoned" would libel a real robot's own
+# state estimator. A caller that needs certainty must treat "unknown" as "not
+# certain", not as "probably fine".
+ODOM_PROVENANCE_UNKNOWN = "unknown"
 
 _dds_odom_source = None
 _dds_odom_lock = threading.Lock()
@@ -2497,11 +2534,30 @@ class _UnitreeDdsOdomSource:
         return entry[0]
 
 
-def _pose_from(position, rpy):
-    """(x, y, yaw) from a SportModeState_ position + rpy pair, or None.
+def _odom_provenance(error_code):
+    """(provenance, error_code) decoded from a SportModeState_.error_code.
+
+    `error_code` is whatever the message carried — an int, None on a feed that
+    omits the field, or junk off a JSON bridge. Both halves come back JSON-safe:
+    the code is echoed only when it really was an integer, so a caller reading
+    `errorCode: null` knows the frame carried no marker rather than one it
+    could not parse.
+    """
+    try:
+        code = int(error_code)
+    except (TypeError, ValueError):
+        return ODOM_PROVENANCE_UNKNOWN, None
+    return ODOM_PROVENANCE_BY_ERROR_CODE.get(code, ODOM_PROVENANCE_UNKNOWN), code
+
+
+def _pose_from(position, rpy, error_code=None):
+    """(x, y, yaw, provenance, error_code) from a SportModeState_, or None.
 
     yaw is rpy[2]; a message without a usable position is not a pose, so we
-    refuse it rather than defaulting anything to 0.
+    refuse it rather than defaulting anything to 0. `error_code` is the
+    publisher's provenance marker and is OPTIONAL — a feed that omits it yields
+    "unknown", which never blocks a pose: an undated pose is still a pose, it is
+    just one the caller must not call exact.
     """
     pos = _coerce3(position)
     if pos is None:
@@ -2509,7 +2565,8 @@ def _pose_from(position, rpy):
     ang = _coerce3(rpy)
     if ang is None:
         return None
-    return pos[0], pos[1], ang[2]
+    provenance, code = _odom_provenance(error_code)
+    return pos[0], pos[1], ang[2], provenance, code
 
 
 def _odom_from_zmq():
@@ -2524,7 +2581,7 @@ def _odom_from_zmq():
     rpy = data.get("rpy")
     if rpy is None and isinstance(data.get("imu_state"), dict):
         rpy = data["imu_state"].get("rpy")
-    return _pose_from(data.get("position"), rpy)
+    return _pose_from(data.get("position"), rpy, data.get("error_code"))
 
 
 def _odom_from_dds():
@@ -2544,14 +2601,22 @@ def _odom_from_dds():
         if msg is None:
             return None
         return _pose_from(getattr(msg, "position", None),
-                          getattr(getattr(msg, "imu_state", None), "rpy", None))
+                          getattr(getattr(msg, "imu_state", None), "rpy", None),
+                          getattr(msg, "error_code", None))
     except Exception as e:  # noqa: BLE001
         print(f"[G1 Sidecar] DDS odometry unavailable ({e})", flush=True)
         return None
 
 
 def loco_odom() -> tuple[int, dict]:
-    """GET /loco/odom — {"ok","x","y","yaw","source"} in the world frame.
+    """GET /loco/odom — the base pose in the world frame, with its provenance.
+
+    {"ok","x","y","yaw","source","provenance","errorCode","topic"}. "source" is
+    the TRANSPORT ("zmq"/"dds") and keeps the meaning callers already read;
+    "provenance" answers the different question of whether the pose was MEASURED
+    ("ground-truth") or GUESSED from our own command ("dead-reckoned"), or
+    whether the publisher said nothing ("unknown") — see the two error-code
+    constants above.
 
     Read-only, but gated with the rest of /loco/* per the Agent Mode contract:
     a sidecar that refuses to move should not advertise a navigation feed
@@ -2568,9 +2633,10 @@ def loco_odom() -> tuple[int, dict]:
     for source, fetch in order:
         pose = fetch()
         if pose is not None:
-            x, y, yaw = pose
+            x, y, yaw, provenance, error_code = pose
             return 200, {"ok": True, "x": x, "y": y, "yaw": yaw,
-                         "source": source, "topic": TOPIC_ODOM}
+                         "source": source, "provenance": provenance,
+                         "errorCode": error_code, "topic": TOPIC_ODOM}
     return 503, {
         "ok": False,
         "error": (

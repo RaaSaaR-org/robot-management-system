@@ -9,7 +9,12 @@
  */
 
 import { config, type LeftTurnStrategy } from '../config/config.js';
-import { hardwareClient, type LocoActionName, type LocoResult } from '../hardware/HardwareClient.js';
+import {
+  hardwareClient,
+  type LocoActionName,
+  type LocoOdometryProvenance,
+  type LocoResult,
+} from '../hardware/HardwareClient.js';
 // The two clamp constants live in navigator.ts because that is where they are
 // justified (the 0.45 m comment is the reason the number exists). Importing
 // them is acyclic: navigator.ts imports only config, place-resolver, scene-memory and types.
@@ -335,6 +340,10 @@ interface ArcOption {
  * G1 reports real odometry and never had this problem. So: a ratio out of this
  * number is only evidence when the pose behind it was measured, and the 31%
  * above was taken on the MuJoCo path, not on Isaac.
+ *
+ * That marker now reaches this far: {@link reckoned} says which of the two
+ * `movedM` is, so a caller reporting these metres can name them instead of
+ * asserting a measurement it cannot back.
  */
 interface ArcTravel {
   /** Forward distance COMMANDED across the arc's velocity commands, m. */
@@ -343,10 +352,39 @@ interface ArcTravel {
   movedM: number;
   /** Wall time the arc's commands were held for, s. */
   durationS: number;
+  /**
+   * Whether the fixes `movedM` was differenced from were stamped DEAD RECKONED
+   * by the publisher — i.e. whether this "measured" metre is the velocity we
+   * ourselves commanded, integrated and handed back.
+   *
+   * It describes `movedM` and nothing else, so it is `false` whenever `movedM`
+   * is 0 (an in-place rotation, or an arc no fix ever covered): there is no
+   * number to mislabel. `false` therefore means "not known to be reckoned", not
+   * "proven measured" — an unmarked frame (a real G1's own state estimator, a
+   * sidecar predating TASK-231) reads as `'unknown'` and is left alone, because
+   * decorating every real-robot walk with a warning would add no information.
+   */
+  reckoned: boolean;
 }
 
 /** An in-place rotation's travel: nothing, on every axis. */
-const NO_ARC_TRAVEL: ArcTravel = { commandedM: 0, movedM: 0, durationS: 0 };
+const NO_ARC_TRAVEL: ArcTravel = { commandedM: 0, movedM: 0, durationS: 0, reckoned: false };
+
+/**
+ * Whether a pose fix is the robot's own command played back rather than a
+ * measurement of the base (TASK-231).
+ *
+ * Only the POSITIVE marker demotes a reading. `'dead-reckoned'` is the
+ * publisher saying "I integrated the velocity you sent me", and such a frame
+ * reports ~100% of the command whatever the robot did — 7.995 m of a commanded
+ * 8.00 m while the true root pose had moved 0.113 m. `'unknown'` and an absent
+ * field are left as they were: they are what a real G1 and every pre-TASK-231
+ * sidecar look like, and treating them as suspect would change the wording of
+ * every walk on real hardware without telling anyone anything new.
+ */
+function isReckoned(fix: { provenance?: LocoOdometryProvenance }): boolean {
+  return fix.provenance === 'dead-reckoned';
+}
 
 /**
  * Longest stretch of a walk that may run without the heading being re-measured.
@@ -722,7 +760,24 @@ export interface BlockExecutorDeps {
     action(name: LocoActionName, args?: Record<string, unknown>): Promise<LocoResult>;
     fsm(id: number): Promise<LocoResult>;
     standHeight(preset: 'high' | 'low'): Promise<LocoResult>;
-    odometry(): Promise<{ x: number; y: number; yaw: number; source: string } | null>;
+    /**
+     * One planar base fix, or null when nothing answered.
+     *
+     * `source` is the TRANSPORT the sidecar read the frame over (`'dds'` /
+     * `'zmq'`); `provenance` is whether the POSE is a measurement or the
+     * command played back. They are different questions and the first has
+     * never answered the second — see {@link isReckoned} and TASK-231.
+     *
+     * `provenance` is optional so a test double that does not care about it
+     * still satisfies this dependency; absent reads exactly like `'unknown'`.
+     */
+    odometry(): Promise<{
+      x: number;
+      y: number;
+      yaw: number;
+      source: string;
+      provenance?: LocoOdometryProvenance;
+    } | null>;
   };
   /** Voice service POST. Default: `${VOICE_SERVICE_URL}/say`. */
   say?: (text: string, language?: SpokenLanguage) => Promise<boolean>;
@@ -1049,6 +1104,13 @@ export class BlockExecutor {
     const segmentM = distanceM / segmentCount;
 
     let fix = before;
+    /**
+     * Whether ANY fix this walk differenced was stamped dead reckoned. One is
+     * enough: `movedM` is a sum of steps and a single reckoned endpoint puts
+     * the command back into the total, so the number stops being evidence for
+     * the whole walk rather than for that segment.
+     */
+    let reckoned = isReckoned(before);
     let movedM = 0;
     let commandedS = 0;
     let commandedM = 0;
@@ -1150,6 +1212,7 @@ export class BlockExecutor {
       const stepM = Math.hypot(after.x - fix.x, after.y - fix.y);
       movedM += stepM;
       measuredSegments++;
+      if (isReckoned(after)) reckoned = true;
       fix = after;
 
       // A segment that measurably did not move will not be fixed by sending it
@@ -1207,6 +1270,10 @@ export class BlockExecutor {
         // would under-report its own travel.
         if (arc) {
           arcCorrections++;
+          // The arc's metres land in `movedM`, so its provenance lands here too
+          // — otherwise a walk could report an arc-supplied reckoned metre as
+          // measured just because its own segment fixes happened to be clean.
+          if (arcTravel.reckoned) reckoned = true;
           arcMovedM += arcTravel.movedM;
           movedM += arcTravel.movedM;
           commandedM += arcTravel.commandedM;
@@ -1226,6 +1293,7 @@ export class BlockExecutor {
         }
         // From the post-correction pose, so the in-place turn's own wobble is
         // not counted as distance walked.
+        if (isReckoned(afterTurn)) reckoned = true;
         fix = afterTurn;
       }
     }
@@ -1247,6 +1315,17 @@ export class BlockExecutor {
       };
     }
 
+    // What `movedM` is worth, in the block's own words. Nothing downstream of
+    // here can re-derive it — `BlockOutcome.measured` carries a bare number —
+    // so the sentence the planner, the journal and the operator all read is
+    // where the distinction has to survive (TASK-231).
+    const reckonedWord = reckoned ? 'dead reckoned' : 'measured';
+    const reckonedNote = reckoned
+      ? ` The distance is DEAD RECKONED from the velocity this bridge itself commanded, not ` +
+        `measured off the base — such a frame reports back roughly what it was told whatever ` +
+        `the robot did, so this is evidence of the command and not of arrival.`
+      : '';
+
     // Zero measured motion for a real command is a FAILURE, not a 100% short
     // success: the plan must stop here rather than keep issuing blocks against
     // a pose the robot never reached.
@@ -1254,7 +1333,7 @@ export class BlockExecutor {
       return {
         ok: false,
         message:
-          `walk: the robot did not move (${movedM.toFixed(2)} m measured for a commanded ` +
+          `walk: the robot did not move (${movedM.toFixed(2)} m ${reckonedWord} for a commanded ` +
           `${Math.abs(distanceM).toFixed(2)} m) — ${NO_MOTION_HINT}`,
         measured: { distanceM: movedM },
       };
@@ -1279,11 +1358,15 @@ export class BlockExecutor {
         ? ''
         : ` ${arcCorrections} of ${corrections} correction${corrections === 1 ? '' : 's'} arced — ` +
           `turned while still walking forward — covering ${arcMovedM.toFixed(2)} m of the walk.`;
+    // "Walked N m" is a claim to have covered ground. On a reckoned frame the
+    // only defensible verb is the one that names where the number came from.
+    const verb = reckoned ? 'Dead reckoned' : 'Walked';
     return {
       ok: true,
       message:
-        `Walked ${movedM.toFixed(2)} m ${direction} in ${commandedS.toFixed(1)} s${segmentNote}${note}.` +
-        `${this.headingNote(startYawDeg, fix.yaw * RAD_TO_DEG, corrections)}${arcNote}${stopNote}${clampNote}${lostNote}`,
+        `${verb} ${movedM.toFixed(2)} m ${direction} in ${commandedS.toFixed(1)} s${segmentNote}${note}.` +
+        `${this.headingNote(startYawDeg, fix.yaw * RAD_TO_DEG, corrections)}${arcNote}${stopNote}${clampNote}` +
+        `${lostNote}${reckonedNote}`,
       measured: { distanceM: movedM },
     };
   }
@@ -1419,7 +1502,12 @@ export class BlockExecutor {
       arc === undefined || travel.commandedM <= 0
         ? ''
         : ` Arced ${travel.movedM.toFixed(2)} m forward while turning ` +
-          `(${travel.commandedM.toFixed(2)} m commanded) — this base does not rotate CCW in place.`;
+          `(${travel.commandedM.toFixed(2)} m commanded) — this base does not rotate CCW in place.` +
+          // Only the metres. The rotation this block reports is measured off
+          // the base's own orientation and is unaffected (TASK-231).
+          (travel.reckoned
+            ? ` Those metres are DEAD RECKONED from the commanded velocity, not measured off the base.`
+            : '');
     const arcedMeasured = arc === undefined ? {} : { distanceM: travel.movedM };
     if (!result.ok) {
       return {
@@ -1837,7 +1925,15 @@ export class BlockExecutor {
       // commanded forward speed, so the two numbers differ — but only as far as
       // the odometry behind `after` is itself measured rather than dead reckoned
       // from the command. See {@link ArcTravel} and TASK-231.
-      if (arc) travel.movedM += Math.hypot(after.x - previousX, after.y - previousY);
+      if (arc) {
+        travel.movedM += Math.hypot(after.x - previousX, after.y - previousY);
+        // Booked with the metres it qualifies, and only here: `travel.movedM`
+        // is the one number in this loop that comes from x/y, and x/y is the
+        // half of the fix TASK-231 is about. The yaw below stays trustworthy on
+        // a reckoned frame — it is measured off the base orientation either way
+        // — so nothing about the ROTATION is demoted.
+        if (isReckoned(after) || isReckoned(before)) travel.reckoned = true;
+      }
       previousX = after.x;
       previousY = after.y;
 

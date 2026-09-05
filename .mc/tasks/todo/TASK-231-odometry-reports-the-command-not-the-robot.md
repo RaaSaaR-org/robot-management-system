@@ -118,3 +118,40 @@ the same DDS message, one field over.**
   and no number was written down.
 
 Everything above except the live check is offline work.
+
+### Closed 2026-09-05, offline half
+
+Everything in the audit above except the live check:
+
+- A ground-truth frame publishes the sim's **measured** `root_velocity`, parsed and validated
+  as strictly as `root_pose`. The rotated command survives only in the dead-reckoned branch,
+  where the frame is stamped `0xDEAD` and the command is the honest answer.
+- A ground-truth pose whose velocity is unusable is published as **dead reckoned**, not as an
+  exact position beside an invented velocity. `SportModeState_` carries one provenance marker
+  for the whole message, so a half-measured frame cannot be labelled truthfully.
+- Provenance reaches Agent Mode. `g1_sidecar.py` decodes `error_code`, `HardwareClient` types
+  it, and `block-executor` now says *"Dead reckoned 2.31 m forward"* rather than *"Walked"* —
+  `movedM` is the number that was 71x wrong. Only the positive `dead-reckoned` marker demotes
+  a reading; an unmarked frame, which is what a real G1 and every older sidecar produce, keeps
+  today's wording.
+- `scripts/test-all.sh` gained an *Isaac offline verifiers* stage running four verifiers that
+  previously ran only by hand.
+- Every stale "x/y are dead reckoned" claim in the two publishers is corrected **and locked**:
+  the verifier now reads argparse help through the AST rather than by line, because the
+  headline untruth was split across a string-concatenation seam and no single line ever
+  contained it.
+
+### Still open
+
+Only the live check: command 8 m forward on the Isaac rig and compare the published
+displacement against the true root pose. It needs a GPU this box does not have free — another
+user's `Isaac-GR00T`, `isaac-sim` and `ollama` processes hold 23.6 GB of 32.6 GB.
+
+Two follow-ups the work surfaced, neither in this task's scope:
+
+- `BlockExecutor.refreshYaw()` calls `scene.noteOdometryM(x, y)`, which takes no source, so
+  scene memory still books a reckoned pose as measured travel. `SceneMemoryStore` already has
+  `PoseSource` with a `'dead-reckoning'` member; widening `noteOdometryM` would change what
+  `hasMovedSinceObservation()` believes, i.e. robot behaviour, so it is a task of its own.
+- `BlockOutcome.measured` is a bare `{ distanceM }`, so a consumer downstream of the block
+  message cannot re-derive provenance.
