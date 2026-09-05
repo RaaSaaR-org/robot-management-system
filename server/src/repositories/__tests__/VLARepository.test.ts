@@ -774,6 +774,10 @@ describe('TrainingJobRepository', () => {
         hyperparameters: JSON.stringify({ learning_rate: 1e-4, batch_size: 32, epochs: 100 }),
         gpuRequirements: JSON.stringify({ count: 1, memory: 40 }),
         totalEpochs: 100,
+        // TASK-239: written as explicit nulls for a run that starts from its
+        // foundation model, which is what this input is.
+        initFromModelVersionId: null,
+        initFromCheckpointId: null,
       },
     });
     expect(result.id).toBe('tj-1');

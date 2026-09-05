@@ -664,11 +664,13 @@ export class TrainingOrchestrator extends EventEmitter {
       const checkpoints = await modelCheckpointRepository.listByJob(jobId);
       const lastCheckpoint = checkpoints[checkpoints.length - 1];
 
-      // TASK-239 gives TrainingJob a `parentModelVersionId` so a fine-tune
-      // records the model it started from; adding that field to the type is
-      // the whole change — this reads it the moment it exists.
-      const parentModelVersionId =
-        (job as { parentModelVersionId?: string | null }).parentModelVersionId ?? null;
+      // The model this run started from becomes the parent of the model it
+      // produced, so the chain is recorded with nobody maintaining it by hand.
+      // A run resumed from a CHECKPOINT sets no parent: the checkpoint belongs
+      // to a run whose ModelVersion may not exist yet, and claiming a parent
+      // that is not the row those weights came from would be worse than the
+      // gap. (TASK-239)
+      const parentModelVersionId = job.initFromModelVersionId ?? null;
 
       const modelVersion = await modelVersionRepository.create({
         skillId: dataset?.skillId ?? null,

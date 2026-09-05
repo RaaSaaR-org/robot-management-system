@@ -277,6 +277,8 @@ function dbTrainingJobToDomain(
     errorMessage: db.errorMessage ?? undefined,
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
+    initFromModelVersionId: db.initFromModelVersionId ?? null,
+    initFromCheckpointId: db.initFromCheckpointId ?? null,
     modelVersionId: latestVersion?.id,
   };
 }
@@ -888,6 +890,9 @@ export class TrainingJobRepository {
         }),
         gpuRequirements: JSON.stringify(input.gpuRequirements ?? { count: 1, memory: 40 }),
         totalEpochs: input.totalEpochs,
+        // TASK-239 — at most one of the two, checked in TrainingJobService.
+        initFromModelVersionId: input.initFromModelVersionId ?? null,
+        initFromCheckpointId: input.initFromCheckpointId ?? null,
       },
     });
     return dbTrainingJobToDomain(job);
@@ -1286,6 +1291,18 @@ export class ModelCheckpointRepository {
       },
     });
     return dbModelCheckpointToDomain(checkpoint);
+  }
+
+  /**
+   * One checkpoint by id, for a run that wants to start from it. (TASK-239)
+   *
+   * The caller needs the row itself — its URI is the artifact a resumed run
+   * loads — and reads the base model off `trainingJobId` separately, because a
+   * checkpoint carries no architecture of its own.
+   */
+  async findById(id: string): Promise<ModelCheckpoint | null> {
+    const checkpoint = await prisma.modelCheckpoint.findUnique({ where: { id } });
+    return checkpoint ? dbModelCheckpointToDomain(checkpoint) : null;
   }
 
   async listByJob(trainingJobId: string): Promise<ModelCheckpoint[]> {

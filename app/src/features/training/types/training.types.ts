@@ -446,6 +446,14 @@ export interface TrainingJob {
    * older server have no such field.
    */
   datasets?: TrainingJobDatasetMember[];
+  /**
+   * The registered model this run started from, if any. `baseModel` stays the
+   * architecture either way — a run continuing a groot_n1_7 model is still a
+   * groot_n1_7 run. (TASK-239)
+   */
+  initFromModelVersionId?: string | null;
+  /** The checkpoint of an earlier run this run started from. (TASK-239) */
+  initFromCheckpointId?: string | null;
 }
 
 export interface SubmitTrainingJobInput {
@@ -460,6 +468,45 @@ export interface SubmitTrainingJobInput {
   mixture?: MixtureMemberInput[];
   /** Equal-weight shorthand for `mixture`. */
   datasetIds?: string[];
+  /**
+   * Start from a registered model's weights instead of the foundation model.
+   * At most one of the two may be sent — the server refuses a body carrying
+   * both, because a run starts from one set of weights. Omitted, `null` and
+   * `''` all mean "start from `baseModel`". (TASK-239)
+   */
+  initFromModelVersionId?: string | null;
+  /** Start from a specific epoch checkpoint of an earlier run. (TASK-239) */
+  initFromCheckpointId?: string | null;
+}
+
+// ============================================================================
+// STARTING WEIGHTS (TASK-239)
+// ============================================================================
+
+/**
+ * Where a supervised run's weights come from. `foundation` is the historical
+ * behaviour — one of the six `BaseModels`; `existing` continues a model already
+ * in the registry (or one of its checkpoints).
+ */
+export type WeightsSource = 'foundation' | 'existing';
+
+/**
+ * The wizard's answer to "continue from what?". Carries the labels alongside
+ * the ids so the review step can name the starting model without refetching
+ * the registry after the picker has been unmounted.
+ */
+export interface InitFromSelection {
+  modelVersionId: string;
+  /** The model's name as the registry shows it. */
+  modelName: string;
+  /**
+   * Architecture of the run that produced the model, or null for an imported
+   * model — one registered by hand has no training job here to read it from.
+   */
+  modelBaseModel: BaseModel | null;
+  /** Set when a specific epoch was picked; null means the final weights. */
+  checkpointId: string | null;
+  checkpointEpoch: number | null;
 }
 
 /**
