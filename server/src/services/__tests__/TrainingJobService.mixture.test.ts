@@ -120,8 +120,14 @@ describe('a submission that names one dataset', () => {
     expect(trainingJobRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({ datasetId: 'ds-a', baseModel: 'smolvla' }),
     );
-    // No compatibility read, no rows: the old path never touches either.
-    expect(prisma.dataset.findMany).not.toHaveBeenCalled();
+    // No compatibility read, no rows: the old path never touches either. The
+    // one dataset read a single-dataset submission now makes is the freeze
+    // lookup (TASK-240) — "is anything this job cites a view?" — which reads
+    // only ids and never runs the analyzer.
+    expect(prisma.dataset.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.dataset.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ kind: 'view' }) }),
+    );
     expect(prisma.trainingJobDataset.createMany).not.toHaveBeenCalled();
   });
 

@@ -25,6 +25,8 @@ const {
   rustfsList,
   jsPublish,
   findMixtureMembers,
+  findDerivedViews,
+  findDatasetRow,
 } = vi.hoisted(() => ({
   getDatasetUploadUrl: vi.fn(),
   deleteDatasetFromStorage: vi.fn(),
@@ -43,11 +45,20 @@ const {
   // Which training mixtures name the dataset being deleted. Default: none, so
   // every pre-existing delete test keeps describing the ordinary case.
   findMixtureMembers: vi.fn(async () => [] as { trainingJobId: string }[]),
+  // Which views were forked from the dataset being read or deleted (TASK-240).
+  // Default: none, so every pre-existing case is an ordinary dataset.
+  findDerivedViews: vi.fn(async () => [] as { id: string; name: string }[]),
+  findDatasetRow: vi.fn(async () => null),
 }));
 
 vi.mock('../../database/index.js', () => ({
   prisma: {
     trainingJobDataset: { findMany: findMixtureMembers },
+    // TASK-240: the service reads the view columns (kind/parentDatasetId/…)
+    // that `dbDatasetToDomain` does not carry, and asks which views were
+    // forked from a dataset before deleting it. Empty by default, so every
+    // pre-existing case still describes an ordinary materialized dataset.
+    dataset: { findMany: findDerivedViews, findUnique: findDatasetRow },
   },
 }));
 

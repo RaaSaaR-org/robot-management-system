@@ -11,3 +11,4 @@ export * from './useWorkers';
 export * from './useQueueStats';
 export * from './useSyntheticGeneration';
 export * from './useInitFromModelVersions';
+export * from './useDatasetViews';

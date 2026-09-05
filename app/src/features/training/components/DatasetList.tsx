@@ -17,6 +17,11 @@ export interface DatasetListProps {
   onViewEpisodes?: (dataset: Dataset) => void;
   onDelete?: (dataset: Dataset) => void;
   onRetryImport?: (dataset: Dataset) => void;
+  /**
+   * Fork a frozen view again. A frozen view cannot be edited, so its card
+   * offers this instead of a delete control it would only be refused for.
+   */
+  onDuplicateView?: (dataset: Dataset) => void;
   showFilters?: boolean;
   /**
    * A filter outside this component (the page's robot-type / skill selects) is
@@ -54,6 +59,7 @@ export function DatasetList({
   onViewEpisodes,
   onDelete,
   onRetryImport,
+  onDuplicateView,
   showFilters = true,
   filtersActive = false,
   selectedIds,
@@ -67,6 +73,18 @@ export function DatasetList({
 
   const selectable = !!onToggleSelection;
   const selection = selectedIds ?? [];
+
+  // A view's card says "142 of 400 episodes", and the 400 lives on the parent
+  // row — which this list already holds. Resolved here rather than fetched, and
+  // never by walking `parentDatasetId` any further than one hop: composing a
+  // chain is `DatasetViewService.resolve`'s job, on the server, alone.
+  const byId = new Map(datasets.map((dataset) => [dataset.id, dataset]));
+  const parentOf = (dataset: Dataset) => {
+    const parent = dataset.parentDatasetId ? byId.get(dataset.parentDatasetId) : undefined;
+    return parent
+      ? { id: parent.id, name: parent.name, demonstrationCount: parent.demonstrationCount }
+      : null;
+  };
 
   const filteredDatasets = datasets.filter((dataset) => {
     // Search filter
@@ -166,6 +184,8 @@ export function DatasetList({
               onViewEpisodes={onViewEpisodes ? () => onViewEpisodes(dataset) : undefined}
               onDelete={onDelete ? () => onDelete(dataset) : undefined}
               onRetryImport={onRetryImport ? () => onRetryImport(dataset) : undefined}
+              parent={parentOf(dataset)}
+              onDuplicateView={onDuplicateView ? () => onDuplicateView(dataset) : undefined}
             />
           ))}
         </div>

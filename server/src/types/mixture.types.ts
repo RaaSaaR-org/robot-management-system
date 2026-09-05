@@ -23,6 +23,11 @@
 // states what a run started from in exactly the shape the worker payload
 // carries, rather than a second copy of it that can drift.
 import type { TrainingInitFrom } from './vla.types.js';
+// Same reasoning as above, for the dataset side: a run may cite a VIEW — a
+// named episode selection over another dataset, holding no bytes of its own
+// (TASK-240) — and the manifest has to state the selection in the one shape
+// the server stores it in.
+import type { DatasetSelection, SelectedEpisode } from './dataset-view.types.js';
 
 /**
  * How a set of datasets relates to each other.
@@ -100,6 +105,32 @@ export interface TrainingJobDatasetRef {
  * which of those this is, in one boolean, so a reader does not have to parse
  * the URI to find out.
  */
+/**
+ * The episode selection a member is, when the member is a view (TASK-240).
+ *
+ * A view holds no bytes: `uri` on the member beside this points at the ROOT
+ * dataset, and this block is the rest of the answer — which of that root's
+ * episodes the run actually trained on. Without it a cluster reading the
+ * manifest would load the whole root and train a DIFFERENT arm of the
+ * experiment while reporting this one, which is the exact failure the view
+ * feature exists to make cheap and this field exists to keep honest.
+ *
+ * `episodes` is stated resolved, in the root's own episode indices, so the
+ * reader needs nothing from this server to apply it.
+ */
+export interface TrainingRunManifestSelection {
+  /** The view row on the source server — the id the job actually cites. */
+  viewDatasetId: string;
+  /** The dataset the indices below are indices INTO. Same row `uri` locates. */
+  rootDatasetId: string;
+  /** Episode indices in the root, with any frame ranges already composed. */
+  episodes: SelectedEpisode[];
+  /** How the selection was arrived at, for a human. Null if it was not recorded. */
+  origin: DatasetSelection['origin'] | null;
+  /** When the selection was pinned by a citing job. ISO-8601, or null. */
+  frozenAt: string | null;
+}
+
 export interface TrainingRunManifestDataset {
   datasetId: string;
   name: string;
@@ -119,7 +150,20 @@ export interface TrainingRunManifestDataset {
   cameraKeys: string[];
   totalEpisodes: number;
   totalFrames: number;
+  /**
+   * Whether `uri` alone locates the data from somewhere else.
+   *
+   * A view inherits this from its root and cannot improve on it: a selection
+   * over a `file://` directory is still a `file://` directory.
+   */
   portable: boolean;
+  /**
+   * The episode selection this member is, or null when it is a whole dataset.
+   *
+   * Always present as a key so a reader can tell "the whole dataset" from an
+   * older manifest that predates views and could not have said either.
+   */
+  selection: TrainingRunManifestSelection | null;
 }
 
 /** The runtime the run expects. Never a guessed image tag — see the service. */

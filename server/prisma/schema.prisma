@@ -2273,7 +2273,7 @@ model SkillChainStep {
 
 // Dataset - Training datasets in LeRobot v3 format
 model Dataset {
-  id                 String   @id @default(uuid())
+  id                 String    @id @default(uuid())
   name               String
   description        String?
   robotTypeId        String
@@ -2289,11 +2289,11 @@ model Dataset {
   totalDuration      Float // Duration in seconds
   demonstrationCount Int
   qualityScore       Int? // 0-100
-  infoJson           String   @default("{}") // JSON: LeRobot metadata
-  statsJson          String   @default("{}") // JSON: LeRobot stats
-  status             String   @default("uploading") // 'uploading' | 'validating' | 'ready' | 'failed'
+  infoJson           String    @default("{}") // JSON: LeRobot metadata
+  statsJson          String    @default("{}") // JSON: LeRobot stats
+  status             String    @default("uploading") // 'uploading' | 'validating' | 'ready' | 'failed'
   huggingFaceRepoId  String? // HuggingFace repo ID (e.g. "lerobot/svla_so101_pickplace")
-  annotationsJson    String   @default("[]") // JSON: EpisodeAnnotation[] from lerobot-annotate jobs (TASK-179)
+  annotationsJson    String    @default("[]") // JSON: EpisodeAnnotation[] from lerobot-annotate jobs (TASK-179)
   // Which commit of the source repo this actually is (TASK-220).
   //
   // The HF revision was only ever kept inside the description STRING
@@ -2332,8 +2332,37 @@ model Dataset {
   // approximation of the score breakdown from the row's own numbers, which
   // could only ever agree with itself.
   validationJson     String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  // ── Views: a fork is a selection, not a copy (TASK-240) ───────────────────
+  //
+  // A view IS a Dataset row rather than its own model, so every foreign key
+  // that already points at a dataset — TrainingJob.datasetId,
+  // TrainingJobDataset, Dataset.skillId, the export manifest — keeps working
+  // with no second code path. The price of that is one rule: resolution lives
+  // in exactly one place (DatasetViewService.resolve). Nothing else walks
+  // `parentDatasetId`.
+  //
+  // 'materialized' (bytes under storagePath, the default every existing row
+  // gets) | 'view' (no bytes; `storagePath` empty, contents = the parent's
+  // episodes filtered by `selectionJson`).
+  kind               String    @default("materialized")
+  parentDatasetId    String?
+  // JSON: DatasetSelection — { episodes: SelectedEpisode[], origin }.
+  //
+  // Stored RESOLVED, never as a live query. A view built from "reward >= 0.7"
+  // must not change meaning when a later reward job rewrites the scores; that
+  // is the difference between an experiment arm somebody can reproduce and a
+  // result nobody can explain a month later. `origin` records the rule for
+  // humans, `episodes` is the truth.
+  selectionJson      String?
+  // Set the first time a training job cites this view. A frozen view refuses
+  // edits (409 naming the job) — copy-on-write at the metadata level, so the
+  // arm a finished run was trained on still says what it said.
+  frozenAt           DateTime?
+  // Set only if the view was ever written to disk by `materialize`. Null is
+  // the normal state and the whole point: no bytes copied.
+  materializedPath   String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   // Multi-tenancy (TASK-155) — nullable so single-tenant mode works without it
   tenantId String?
@@ -2344,12 +2373,20 @@ model Dataset {
   skill        SkillDefinition?     @relation(fields: [skillId], references: [id])
   trainingJobs TrainingJob[]
   mixtureIn    TrainingJobDataset[]
+  // Self-relation (TASK-240). Deliberately NOT cascading: deleting a dataset
+  // that views were forked from must not silently delete the arms of finished
+  // experiments, and a view whose parent is gone cannot be resolved at all —
+  // the delete path has to refuse while derived rows exist, which it can only
+  // do if the database has not already thrown them away.
+  parent       Dataset?             @relation("DatasetDerivation", fields: [parentDatasetId], references: [id], onDelete: Restrict)
+  derived      Dataset[]            @relation("DatasetDerivation")
 
   @@index([robotTypeId])
   @@index([skillId])
   @@index([status])
   @@index([huggingFaceRepoId])
   @@index([tenantId, updatedAt])
+  @@index([parentDatasetId])
 }
 
 // TrainingJob - Training job queue entries

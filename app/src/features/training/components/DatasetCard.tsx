@@ -15,12 +15,15 @@ import {
   ShieldQuestion,
   ExternalLink,
   RotateCw,
+  GitFork,
+  Lock,
+  Copy,
 } from 'lucide-react';
 import { Card, Badge, Button } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api/trainingApi';
-import { datasetShape } from '../types';
-import type { Dataset, DatasetStatus } from '../types';
+import { datasetShape, describeSelectionOrigin, isDatasetView } from '../types';
+import type { Dataset, DatasetParentSummary, DatasetStatus } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface DatasetCardProps {
@@ -30,6 +33,17 @@ export interface DatasetCardProps {
   onDelete?: () => void;
   /** Re-run the import behind this row (it must have a huggingFaceRepoId). */
   onRetryImport?: () => void;
+  /**
+   * The dataset this view was forked from, when the caller can name it — the
+   * grid resolves it out of the list it already holds. `dataset.parent` is
+   * used when the server inlined it instead. Ignored for a materialized row.
+   */
+  parent?: DatasetParentSummary | null;
+  /**
+   * Fork this view again. A frozen view cannot be edited, so the card offers
+   * this in place of the delete control rather than a dead button.
+   */
+  onDuplicateView?: () => void;
   selected?: boolean;
   /** Show the mixture-selection checkbox. */
   selectable?: boolean;
@@ -64,6 +78,8 @@ export function DatasetCard({
   onViewEpisodes,
   onDelete,
   onRetryImport,
+  parent,
+  onDuplicateView,
   selected,
   selectable,
   checked,
@@ -73,6 +89,14 @@ export function DatasetCard({
   const qualityPercent = dataset.qualityScore
     ? Math.round(dataset.qualityScore)
     : null;
+
+  // A view copies no bytes: it is `selection` applied to a parent dataset
+  // (TASK-240). Viewness is read off `kind` alone — a materialized row can
+  // carry a `parentDatasetId` as provenance without being a view.
+  const isView = isDatasetView(dataset);
+  const viewParent = parent ?? dataset.parent ?? null;
+  const selectedEpisodes = dataset.selection?.episodes.length ?? dataset.demonstrationCount;
+  const isFrozen = isView && !!dataset.frozenAt;
 
   const isSynthetic = !!dataset.infoJson?._synthetic;
   const showThumb = isSynthetic && dataset.status === 'ready' && dataset.totalFrames > 0;
@@ -147,6 +171,28 @@ export function DatasetCard({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            {isView && (
+              <Badge
+                data-testid="dataset-view-badge"
+                variant="cobalt"
+                size="sm"
+                className="gap-1"
+                title="A view — a named episode selection over another dataset. No files were copied."
+              >
+                <GitFork className="h-3 w-3" />
+                View
+              </Badge>
+            )}
+            {isFrozen && (
+              <span
+                data-testid="dataset-view-frozen"
+                title="Frozen — a training run cites this selection, so it can no longer be edited"
+                className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-xs font-medium text-amber-400"
+              >
+                <Lock className="h-3 w-3" />
+                Frozen
+              </span>
+            )}
             {isSynthetic && !showThumb && (
               <Badge variant="purple" size="sm" className="gap-1" title="Synthetic — generated with NVIDIA Cosmos 3">
                 <Sparkles className="h-3 w-3" />
@@ -158,6 +204,30 @@ export function DatasetCard({
             </Badge>
           </div>
         </div>
+
+        {/* What this view actually is: whose episodes, how many of them, and by
+            what rule they were picked. Without the parent's total, "142
+            episodes" reads like a small dataset rather than a third of a big
+            one — and which third is the whole experiment. */}
+        {isView && (
+          <div
+            data-testid="dataset-view-origin"
+            className="mt-3 rounded-md bg-cobalt-500/5 px-3 py-2 text-sm text-theme-secondary"
+          >
+            <p className="truncate">
+              Fork of{' '}
+              <span className="font-medium text-theme-primary">
+                {viewParent?.name ?? 'another dataset'}
+              </span>
+            </p>
+            <p className="mt-0.5 text-theme-tertiary">
+              {viewParent?.demonstrationCount !== undefined
+                ? `${selectedEpisodes} of ${viewParent.demonstrationCount} episodes`
+                : `${selectedEpisodes} episodes selected`}
+              {dataset.selection ? ` · ${describeSelectionOrigin(dataset.selection.origin)}` : ''}
+            </p>
+          </div>
+        )}
 
         {/* Why the import stopped. A "Failed" badge on its own sends whoever
             reads it to the server's log, on a machine they may not have — and
@@ -354,14 +424,34 @@ export function DatasetCard({
                 Episodes
               </Button>
             )}
-            {onDelete && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                className="p-1 rounded text-theme-tertiary hover:text-red-500 hover:bg-red-500/10 transition-colors"
-                title="Delete dataset"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+            {/* A frozen view is what a finished run was trained on: it cannot
+                be edited or deleted. The card offers the thing that CAN happen
+                — a new view starting from the same episodes — rather than a
+                disabled bin with no explanation. */}
+            {isFrozen ? (
+              onDuplicateView && (
+                <Button
+                  data-testid="dataset-view-duplicate"
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => { e.stopPropagation(); onDuplicateView(); }}
+                  className="text-xs gap-1 px-2 py-1 h-auto"
+                  title="Frozen by a training run — fork it again to change the selection"
+                >
+                  <Copy className="w-3 h-3" />
+                  Duplicate
+                </Button>
+              )
+            ) : (
+              onDelete && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                  className="p-1 rounded text-theme-tertiary hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                  title={isView ? 'Delete view' : 'Delete dataset'}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )
             )}
           </div>
         </div>

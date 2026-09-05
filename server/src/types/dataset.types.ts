@@ -14,6 +14,7 @@ import type {
   LeRobotInfo,
   LeRobotStats,
 } from './vla.types.js';
+import type { DatasetKind, DatasetSelection } from './dataset-view.types.js';
 
 // Provenance types live in the domain module (`vla.types.ts`) and are
 // re-exported here so an API consumer has one import for the whole response
@@ -231,6 +232,28 @@ export interface DatasetResponse extends Omit<Dataset, 'robotType' | 'skill'> {
     imageKeys: string[];
     fileCount: number;
   };
+  /**
+   * What this row IS (TASK-240). `view` means it copies no bytes: its contents
+   * are `selection` applied to `parentDatasetId`.
+   *
+   * All five are optional because they are answered only where the view
+   * columns were read — the single-dataset and list endpoints — and a client
+   * that never sees them is looking at a materialized dataset, which is what
+   * every row was before views existed.
+   */
+  kind?: DatasetKind;
+  parentDatasetId?: string | null;
+  /**
+   * The parent, inlined, so a card can say "142 of 400 episodes" without a
+   * second request. Only on a view.
+   */
+  parent?: { id: string; name: string; demonstrationCount: number } | null;
+  /** The resolved episode list. Only on a view. */
+  selection?: DatasetSelection | null;
+  /** Set the first time a training job cited this view; it is then read-only. */
+  frozenAt?: string | null;
+  /** Set only if the view was ever forced onto disk. Null is the normal state. */
+  materializedPath?: string | null;
 }
 
 /**

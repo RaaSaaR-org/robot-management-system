@@ -49,6 +49,16 @@ vi.mock('../../messaging/index.js', () => ({
   getJobQueue: vi.fn(),
 }));
 
+// Submission asks which of the cited datasets are views, so it can pin them
+// before the run exists (TASK-240). Empty: every job in this file names an
+// ordinary materialized dataset, so nothing is frozen.
+vi.mock('../../database/index.js', () => ({
+  prisma: {
+    dataset: { findMany: vi.fn(async () => []), findUnique: vi.fn(async () => null) },
+    trainingJobDataset: { findMany: vi.fn(async () => []), createMany: vi.fn() },
+  },
+}));
+
 import { trainingJobService, TrainingJobService } from '../TrainingJobService.js';
 import {
   trainingJobRepository as _trainingJobRepository,

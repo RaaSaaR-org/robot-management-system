@@ -6,3 +6,4 @@
 
 export * from './trainingApi';
 export * from './syntheticApi';
+export * from './datasetViewsApi';

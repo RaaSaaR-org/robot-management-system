@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Pause, Flag, Film, Activity, Clock, Layers, Gauge, MessageSquareText, Sparkles, ArrowRight, X } from 'lucide-react';
+import { ArrowLeft, Play, Pause, Flag, Film, Activity, Clock, Layers, Gauge, MessageSquareText, Sparkles, ArrowRight, X, GitFork, Lock, Copy } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -21,7 +21,12 @@ import { Spinner } from '@/shared/components/ui';
 import { evaluationApi } from '@/features/evaluation/api/evaluationApi';
 import type { EpisodeReward } from '@/features/evaluation/types/evaluation.types';
 import { trainingApi } from '../api/trainingApi';
-import type { Dataset, EpisodeMeta, FrameData, EpisodeAnnotation, CurationResult, CurationSuggestion } from '../types';
+import { datasetViewsApi } from '../api/datasetViewsApi';
+import { CreateViewModal } from '../components/CreateViewModal';
+import { DatasetViewsSection } from '../components/DatasetViewsSection';
+import { useDatasetViews } from '../hooks/useDatasetViews';
+import { describeSelectionOrigin, isDatasetView } from '../types';
+import type { CreateDatasetViewInput, DatasetSelection, Dataset, EpisodeMeta, FrameData, EpisodeAnnotation, CurationResult, CurationSuggestion } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 const JOINT_COLORS: Record<string, string> = {
@@ -86,6 +91,21 @@ export function DatasetEpisodesPage() {
   const [annotations, setAnnotations] = useState<EpisodeAnnotation[]>([]);
   const [annotating, setAnnotating] = useState(false);
   const [annotationMsg, setAnnotationMsg] = useState<string | null>(null);
+  // Views (TASK-240): episodes ticked for a fork, and the two dialogs that
+  // turn them into one. The selection is made HERE because this is where the
+  // flags and the reward scores are — the evidence and the decision in one
+  // place, resolved to an explicit episode list before it is stored.
+  const [checkedEpisodes, setCheckedEpisodes] = useState<number[]>([]);
+  const [isCreateViewOpen, setIsCreateViewOpen] = useState(false);
+  // The view a "Duplicate" click wants forked again — this dataset itself when
+  // it is a frozen view, or one of the rows in the Views section. Only the
+  // three fields the dialog needs, because those two sources are different
+  // shapes and neither of them is what is being copied: the selection is.
+  const [duplicateTarget, setDuplicateTarget] =
+    useState<{ id: string; name: string; selection: DatasetSelection } | null>(null);
+  // The dataset this one was forked from, when this one is a view. Fetched so
+  // the header can say "142 of 400" instead of just "142".
+  const [parentDataset, setParentDataset] = useState<Dataset | null>(null);
 
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
@@ -137,6 +157,33 @@ export function DatasetEpisodesPage() {
       .catch(() => setDataset(null));
   }, [datasetId]);
 
+  // Views forked off this dataset. A view of a view is a legitimate thing, so
+  // this loads for every dataset and not only for materialized ones.
+  const {
+    views,
+    isLoading: viewsLoading,
+    error: viewsError,
+    createView,
+    deleteView,
+    materializeView,
+  } = useDatasetViews(datasetId);
+
+  // The dataset THIS one was forked from, when it is a view. One hop only —
+  // composing a whole chain is `DatasetViewService.resolve`'s job on the
+  // server, and a second walker here is exactly how the two would drift apart.
+  useEffect(() => {
+    const parentId = dataset?.parentDatasetId;
+    if (!parentId) {
+      setParentDataset(null);
+      return;
+    }
+    let cancelled = false;
+    trainingApi.getDataset(parentId)
+      .then((parent) => { if (!cancelled) setParentDataset(parent); })
+      .catch(() => { if (!cancelled) setParentDataset(null); });
+    return () => { cancelled = true; };
+  }, [dataset?.parentDatasetId]);
+
   // Load episodes
   useEffect(() => {
     if (!datasetId) return;
@@ -144,6 +191,7 @@ export function DatasetEpisodesPage() {
     setSelectedEpisode(null);
     setFrames([]);
     setCurrentTime(0);
+    setCheckedEpisodes([]);
 
     trainingApi.getEpisodes(datasetId)
       .then((eps) => {
@@ -411,6 +459,64 @@ export function DatasetEpisodesPage() {
     [annotations, selectedEpisode]
   );
 
+  // ── Views: the evidence on this page, turned into a selection ──────────────
+  const toggleEpisodeChecked = useCallback((episodeIndex: number) => {
+    setCheckedEpisodes((prev) =>
+      prev.includes(episodeIndex)
+        ? prev.filter((index) => index !== episodeIndex)
+        : [...prev, episodeIndex],
+    );
+  }, []);
+
+  const checkedSet = useMemo(() => new Set(checkedEpisodes), [checkedEpisodes]);
+  const allEpisodeIndices = useMemo(() => episodes.map((ep) => ep.index), [episodes]);
+  const flaggedIndices = useMemo(
+    () => new Set(Object.entries(flaggedMap).filter(([, on]) => on).map(([index]) => Number(index))),
+    [flaggedMap],
+  );
+  const rewardScores = useMemo(
+    () => Object.values(rewardsByEpisode).map((reward) => ({
+      episodeIndex: reward.episodeIndex,
+      score: reward.score,
+      rewardType: reward.rewardType,
+    })),
+    [rewardsByEpisode],
+  );
+
+  const isView = !!dataset && isDatasetView(dataset);
+  const isFrozen = isView && !!dataset?.frozenAt;
+
+  const handleCreateView = useCallback(
+    async (input: CreateDatasetViewInput) => {
+      const created = await createView(input);
+      // The ticks were a proposal; the view is the record of it.
+      setCheckedEpisodes([]);
+      return created;
+    },
+    [createView],
+  );
+
+  /**
+   * Fork a FROZEN view again. The copy is a sibling — a new view of the same
+   * parent — not a view of the frozen one: nesting it would add a level of
+   * indirection that says nothing, and the parent is where its episodes are
+   * indexed anyway.
+   */
+  const handleDuplicateView = useCallback(
+    async (input: CreateDatasetViewInput) => {
+      if (!duplicateTarget) throw new Error('Nothing to duplicate');
+      if (duplicateTarget.id === datasetId) {
+        const parentId = dataset?.parentDatasetId;
+        if (!parentId) throw new Error('This view has no parent to fork');
+        return datasetViewsApi.createView(parentId, input);
+      }
+      // A row in the Views section: its parent is the dataset on screen, so
+      // the sibling goes through the hook and lands in the list immediately.
+      return createView(input);
+    },
+    [duplicateTarget, datasetId, dataset?.parentDatasetId, createView],
+  );
+
   // Chart data
   const chartData = frames.map((frame) => {
     const point: Record<string, number> = { timestamp: frame.timestamp };
@@ -478,6 +584,62 @@ export function DatasetEpisodesPage() {
         </div>
       </header>
 
+      {/* ── This dataset IS a view: whose episodes, which ones, and whether it
+             can still change (TASK-240) ── */}
+      {isView && (
+        <div
+          data-testid="view-banner"
+          className="flex flex-wrap items-center gap-3 rounded-xl border border-cobalt-500/30 bg-cobalt-500/5 px-4 py-2.5"
+        >
+          <GitFork className="w-4 h-4 shrink-0 text-cobalt-400" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm text-theme-primary">
+              A view of{' '}
+              {dataset?.parentDatasetId ? (
+                <button
+                  onClick={() => navigate(`/datasets/${dataset.parentDatasetId}/episodes`)}
+                  className="font-medium text-cobalt-400 hover:underline"
+                >
+                  {parentDataset?.name ?? 'its parent dataset'}
+                </button>
+              ) : (
+                <span className="font-medium">its parent dataset</span>
+              )}
+            </p>
+            <p className="text-[11px] text-theme-tertiary">
+              {parentDataset
+                ? `${dataset?.selection?.episodes.length ?? dataset?.demonstrationCount ?? 0} of ${parentDataset.demonstrationCount} episodes`
+                : `${dataset?.selection?.episodes.length ?? dataset?.demonstrationCount ?? 0} episodes selected`}
+              {dataset?.selection ? ` · ${describeSelectionOrigin(dataset.selection.origin)}` : ''}
+              {' · no files were copied'}
+            </p>
+          </div>
+          {isFrozen && (
+            <span
+              data-testid="view-banner-frozen"
+              className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-400"
+            >
+              <Lock className="w-3 h-3" />
+              Frozen — a training run cites this selection
+            </span>
+          )}
+          {isFrozen && dataset?.parentDatasetId && dataset.selection && (
+            <button
+              data-testid="view-banner-duplicate"
+              onClick={() => setDuplicateTarget({
+                id: dataset.id,
+                name: dataset.name,
+                selection: dataset.selection!,
+              })}
+              className="inline-flex items-center gap-1 rounded px-2.5 py-1 text-[11px] font-medium bg-cobalt-500/15 hover:bg-cobalt-500/25 text-cobalt-400 transition-colors"
+            >
+              <Copy className="w-3 h-3" />
+              Duplicate as new view
+            </button>
+          )}
+        </div>
+      )}
+
       {/* ── Main layout ── */}
       <div className="flex flex-col lg:flex-row gap-3 min-h-[500px]">
         {/* ── Episode Sidebar ── */}
@@ -504,10 +666,25 @@ export function DatasetEpisodesPage() {
             className="hidden lg:flex flex-col overflow-y-auto rounded-xl border border-white/[0.04] bg-[#1E1F24]/40"
             style={{ maxHeight: 'calc(100vh - 10rem)' }}
           >
-            <div className="px-3 py-2 border-b border-white/[0.04]">
+            <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/[0.04]">
               <span className="text-[11px] font-medium uppercase tracking-wider text-theme-tertiary">
                 Episodes
               </span>
+              {episodes.length > 0 && (
+                <label className="flex items-center gap-1 text-[10px] text-theme-tertiary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="episode-select-all"
+                    aria-label="Select all episodes"
+                    checked={checkedEpisodes.length === episodes.length && episodes.length > 0}
+                    onChange={(e) =>
+                      setCheckedEpisodes(e.target.checked ? allEpisodeIndices : [])
+                    }
+                    className="h-3 w-3"
+                  />
+                  all
+                </label>
+              )}
             </div>
             {episodesLoading ? (
               <div className="flex items-center justify-center py-8">
@@ -536,6 +713,17 @@ export function DatasetEpisodesPage() {
                     >
                       <div className="flex items-center justify-between">
                         <span className={`inline-flex items-center gap-1.5 text-sm font-medium ${isActive ? 'text-cobalt-400' : 'text-theme-primary'}`}>
+                          {/* Ticking an episode is a selection, not a
+                              navigation: the click must not also load it. */}
+                          <input
+                            type="checkbox"
+                            data-testid={`episode-check-${ep.index}`}
+                            aria-label={`Select episode ${ep.index} for a view`}
+                            checked={checkedSet.has(ep.index)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={() => toggleEpisodeChecked(ep.index)}
+                            className="h-3 w-3"
+                          />
                           Episode {ep.index}
                           {reward && (
                             <span
@@ -565,6 +753,36 @@ export function DatasetEpisodesPage() {
               </div>
             )}
           </div>
+
+          {/* The fork action sits under the list it reads from: the flags and
+              the reward scores are on this page, so the selection is made where
+              the evidence is visible. */}
+          {checkedEpisodes.length > 0 && (
+            <div
+              data-testid="episode-selection-bar"
+              className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-cobalt-500/30 bg-cobalt-500/5 px-3 py-2"
+            >
+              <span className="text-[11px] text-theme-secondary">
+                <span className="font-semibold text-theme-primary">{checkedEpisodes.length}</span>
+                {' of '}
+                {episodes.length} selected
+              </span>
+              <button
+                data-testid="create-view-from-selection"
+                onClick={() => setIsCreateViewOpen(true)}
+                className="inline-flex items-center gap-1 rounded px-2.5 py-1 text-[11px] font-medium bg-cobalt-500/15 hover:bg-cobalt-500/25 text-cobalt-400 transition-colors"
+              >
+                <GitFork className="w-3 h-3" />
+                Create view from selection
+              </button>
+              <button
+                onClick={() => setCheckedEpisodes([])}
+                className="rounded px-2 py-1 text-[11px] text-theme-tertiary hover:text-theme-secondary transition-colors"
+              >
+                Clear
+              </button>
+            </div>
+          )}
         </div>
 
         {/* ── Viewer Panel ── */}
@@ -1004,6 +1222,51 @@ export function DatasetEpisodesPage() {
           )}
         </div>
       </div>
+
+      {/* ── Views forked off this dataset (TASK-240) ── */}
+      <DatasetViewsSection
+        parentEpisodeCount={episodes.length || dataset?.demonstrationCount || 0}
+        views={views}
+        isLoading={viewsLoading}
+        error={viewsError}
+        onCreate={() => setIsCreateViewOpen(true)}
+        onOpen={(view) => navigate(`/datasets/${view.id}/episodes`)}
+        onDelete={(view) => deleteView(view.id)}
+        onDuplicate={(view) => setDuplicateTarget(view)}
+        onMaterialize={async (view) => { await materializeView(view.id); }}
+      />
+
+      <CreateViewModal
+        isOpen={isCreateViewOpen}
+        onClose={() => setIsCreateViewOpen(false)}
+        parentName={dataset?.name ?? 'this dataset'}
+        parentEpisodeCount={episodes.length || dataset?.demonstrationCount || 0}
+        selectedEpisodes={checkedEpisodes}
+        allEpisodes={allEpisodeIndices}
+        flaggedEpisodes={flaggedIndices}
+        rewards={rewardScores}
+        onCreate={handleCreateView}
+      />
+
+      {duplicateTarget?.selection && (
+        <CreateViewModal
+          isOpen={!!duplicateTarget}
+          onClose={() => setDuplicateTarget(null)}
+          parentName={
+            duplicateTarget.id === datasetId
+              ? (parentDataset?.name ?? 'its parent dataset')
+              : (dataset?.name ?? 'this dataset')
+          }
+          parentEpisodeCount={
+            duplicateTarget.id === datasetId
+              ? (parentDataset?.demonstrationCount ?? duplicateTarget.selection.episodes.length)
+              : (episodes.length || dataset?.demonstrationCount || 0)
+          }
+          duplicateOf={{ name: duplicateTarget.name, selection: duplicateTarget.selection }}
+          onCreate={handleDuplicateView}
+          onCreated={(created) => navigate(`/datasets/${created.id}/episodes`)}
+        />
+      )}
     </div>
   );
 }
