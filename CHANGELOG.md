@@ -3,6 +3,74 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.09.05] - 2026-09-05
+
+### Added
+
+- live camera stream for the real G1 (TASK-233) (#279)
+- odometry and the place graph now share one frame (TASK-228)
+- heading corrections can arc, because in-place left does nothing (TASK-228)
+- a place graph for the factory, generated from the scene (TASK-228)
+- the rig can read its own joints, and the spawn reaches the sim (TASK-230)
+- the robot can start at the table, not only at the far wall (TASK-227)
+- the simulated arms can now be told something (TASK-230)
+- the cameras publish, and the door can be seen to move (TASK-227)
+- the robot can reach the apple, and the pause room has a real door (TASK-227)
+- the planner can call a VLA skill, and E-Stop can reach it (TASK-226)
+- bring the whole factory-mission stack up in one call (TASK-227)
+- Agent Mode can see in the factory scene (TASK-227)
+- NeoDEM can drive the G1's arms and hands in Isaac, not just its legs (TASK-227)
+- render stills from the factory scene, from any viewpoint (TASK-203)
+- a factory hall with a pause room, for testing Agent Mode end to end (TASK-203)
+- the Isaac bridge now publishes the heading it was only ever guessing (TASK-203)
+- the left turn is the checkpoint, not our plumbing; and the head really does bob (TASK-203) (#272)
+- the G1 walks — our probe was under-publishing the command 5x (TASK-203) (#270)
+- a push/slide reward that a lift-and-place cannot satisfy (TASK-186) (#269)
+- make the RTC loop period configurable and actually assert the delta clip (TASK-183) (#262)
+
+### Fixed
+
+- the ground-truth frame carried the command in its velocity (TASK-231) (#289)
+- an arc is forward motion, and answers to what a walk answers to (PR #278 review)
+- a walk's commanded speed and its duration are two numbers, not one (TASK-227)
+- thinking off means Ollama's own endpoint, not a /v1 hint (TASK-227)
+- odometry published the command back, not the robot (TASK-231)
+- a turn's omega and its duration are two numbers, not one (TASK-228)
+- the factory scene is over-lit, and its tabletop was matched to a hidden material
+- the policy's action vector reached the wrong joints (TASK-229)
+- the factory stack could not talk to its own simulator (TASK-227)
+- ask whether the loco bridge IMPORTS the manip code, not whether it says the words
+- close the review findings on the factory mission (TASK-227)
+- a stale turn gain can no longer spin the robot 150° (TASK-203)
+- a walk holds the heading it set off on (TASK-227)
+- the odom tick must divide the publish rate, or the banner lies (TASK-203)
+- compensate the turn command for measured yaw tracking (TASK-203)
+- turns close the loop on measured yaw, and left turns work (TASK-203)
+- the TASK-186 push reward is dead code — Wholebody tasks never call it (TASK-186) (#273)
+- the G1 was not failing to balance — it was falling through the floor (TASK-223) (#268)
+- the EpisodeRecorder tests spent a 10 s budget in 200 ms of wall clock (#263)
+- the robot agent image could not be built, on either architecture (#259)
+- the G1 sim was copying camera frames it then threw away (TASK-204) (#260)
+
+### Maintenance
+
+- vla_skill is in the block list, not deferred from it (TASK-226) (#287)
+- close TASK-244, merged in #281 (#282)
+- the eight review findings #278 does not fix (TASK-232)
+- a ratio is only evidence when the pose behind it was measured (TASK-231)
+- the first end-to-end Agent Mode factory run, and what stopped it (TASK-228)
+- the door is measured, and the mission stops at the doorway (TASK-227)
+- index the Isaac sim tooling, and make done/ actually say done (#274)
+- TASK-228 — walking to a manipulation pose is an open-loop bet (TASK-227)
+- TASK-227 — the factory mission, scored and filmed (TASK-227)
+- TASK-226 — the planner can trigger a VLA skill, and can tell when it failed
+- the factory scene launches — and the walk to the door does not arrive (TASK-203)
+- TASK-225 steps 1-2 are done, and the data that came back is not the data TASK-188 measured (TASK-225) (#267)
+- close TASK-204 — its fix shipped, its last two steps belong to TASK-223 (TASK-204) (#266)
+- TASK-188's two headline levers were already run a month ago (#261)
+- the Windows GPU box is retired — and it took the eval harness with it (#264)
+
+
 ## [v2026.08.27] - 2026-08-27
 
 ### Added
