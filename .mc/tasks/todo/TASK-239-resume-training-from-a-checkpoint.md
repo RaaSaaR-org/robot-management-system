@@ -5,7 +5,7 @@ aliases:
 title: Let a training run start from an existing model, so a fine-tune can be improved
   instead of only re-derived from a foundation model
 slug: resume-training-from-a-checkpoint
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
