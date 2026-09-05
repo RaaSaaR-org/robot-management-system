@@ -3,7 +3,7 @@ id: "TASK-245"
 aliases: []
 title: "Repair the five-skill workflow so it can actually run"
 slug: "repair-the-five-skill-workflow-so-it-can-actually-run"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
