@@ -91,10 +91,13 @@ may have run none of them:
 
 - `SIM_PYTHON` → the cyclonedds+mujoco venv described in
   `robot-agent/hardware/sim_g1_dds/README.md`
-- `CURATION_PYTHON` → a venv with pyarrow + pandas + pytest, described in
-  `server/curation/README.md`. Defaults to `server/curation/.venv/bin/python`
-  when that exists, so creating it there needs no env var. The server looks in
-  the same place when it converts a v3.0 dataset to a readable view.
+- `CURATION_PYTHON` → a venv built from `server/curation/requirements.txt`
+  (`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`, from
+  `server/curation/`). Install less than that and the suite still *runs* — it
+  just errors on five tests, which is the same "looks set up, isn't" trap this
+  section is warning about. Defaults to `server/curation/.venv/bin/python` when
+  that exists, so creating it there needs no env var. The server looks in the
+  same place when it converts a v3.0 dataset to a readable view.
 - `HARDWARE_PYTHON` → `robot-agent/hardware/tests/` (the `g1_sidecar.py`
   point-cloud/frame-convention tests). Needs only numpy + pytest, and falls back
   to either venv above when neither env var is set, so it usually needs no
