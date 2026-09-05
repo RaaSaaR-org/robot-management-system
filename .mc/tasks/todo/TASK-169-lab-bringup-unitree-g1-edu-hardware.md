@@ -15,10 +15,13 @@ tags:
 - g1
 - safety
 sprint: ''
+parent: ""
 depends_on: []
+spe: 8
+effort: ""
 due_date: ''
 created: 2026-06-21
-updated: 2026-07-17
+updated: "2026-09-05"
 status_note: 'BLOCKED ON HARDWARE ACCESS for all remaining gates. Software prerequisites are done (Stage 0-1 complete incl. live read-only telemetry; Stage-3 sim-eval wiring shipped via TASK-171/172; voice stack PC-validated, see TASK-181). PC-side prep sweep 2026-07-17 closed the last pre-robot gaps (WebXR certs, tv DDS deps, register script) — see "Prep completed" note in the robot-day checklist. Only manual step left: the admin firewall rule (voice/scripts/add_mic_firewall_rule.ps1). Next robot session: work the "Robot-day checklist (2026-07-11)" section below.'
 ---
 

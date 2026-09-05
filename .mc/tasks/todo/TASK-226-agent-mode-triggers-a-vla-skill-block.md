@@ -6,7 +6,7 @@ title: Let the Agent Mode planner trigger a VLA skill block, so a plan can pick 
 slug: agent-mode-triggers-a-vla-skill-block
 status: todo
 priority: 2
-owner: ''
+owner: "huhn511"
 projects: []
 customers: []
 tags:
@@ -14,10 +14,13 @@ tags:
 - agent-mode
 - vla
 sprint: ''
+parent: ""
 depends_on: []
+spe: 1
+effort: ""
 due_date: ''
 created: 2026-08-29
-updated: 2026-08-29
+updated: "2026-09-05"
 status_note: 'Written 2026-08-29 from four internal code-research passes and one external
   prior-art survey. The block was already designed and deliberately deferred: types.ts:13 reads
   "Executable block vocabulary (v1). No `vla_skill` — deferred to TASK-188", and the stated reason
@@ -279,3 +282,24 @@ the `G1_READ_ONLY=1` default), and TASK-213's `demo` block semantics.
 - Whether the planner (gemma3:4b, with documented instruction-following problems)
   can be given a new block kind without regressing the existing bench. **The bench
   is the gate**, and prompt length is a measured regression risk.
+
+
+## What is actually left — 2026-09-05 audit
+
+Proposed for closure and refuted 2 of 3. The behaviour is on main and tested — one reviewer
+ran the full robot-agent suite green (133 files, 2315 tests) — but two things the task itself
+names are unfinished:
+
+- **`docs/architecture.md` still states the deferral this task exists to undo.** Line 159
+  reads "A `vla_skill` block is deliberately **not** in v1", and the `**Blocks** (v1)` list at
+  :153 omits the kind. The task quotes that exact sentence as the thing to remove; a doc that
+  contradicts main is worse than no doc.
+- **The planner bench was never re-run.** The task says "the bench is the gate" and flags
+  prompt length as a measured regression risk. `robot-agent/scripts/planner-bench.ts` last
+  changed at 79e417bd, before this work, and was neither extended for the new block kind nor
+  re-run.
+- The Test Strategy's Live item (factory scene, robot placed at the table rather than walked
+  there) has no recorded run. That one is not an acceptance criterion and is covered by
+  TASK-227.
+
+The first two are offline work and small.

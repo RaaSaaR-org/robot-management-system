@@ -13,10 +13,13 @@ tags:
 - core
 - vla
 sprint: ''
+parent: ""
 depends_on: []
+spe: 8
+effort: ""
 due_date: ''
 created: 2026-08-28
-updated: 2026-08-28
+updated: "2026-09-05"
 status_note: 'Blocks TASK-188 and TASK-187. Rewritten 2026-08-28 after review: the first
   draft had this backwards in both directions. The TOOLING largely survived — ~/develop/vla-training
   is a committed repo with the GR00T prepare/finetune/serve scripts AND the 2-cam modality config

@@ -14,11 +14,14 @@ tags:
 - core
 - training
 sprint: ''
+parent: ""
 depends_on:
+spe: 5
+effort: ""
 - '[[TASK-238]]'
 due_date: ''
 created: 2026-09-04
-updated: 2026-09-04
+updated: "2026-09-05"
 status_note: 'Written 2026-09-04. Depends on TASK-238 because a run cannot cite a
   starting model until model versions are addressable and their checkpoints
   persisted.'

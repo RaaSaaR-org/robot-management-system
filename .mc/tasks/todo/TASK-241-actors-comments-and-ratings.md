@@ -15,12 +15,15 @@ tags:
 - training
 - compliance
 sprint: ''
+parent: ""
 depends_on:
+spe: 8
+effort: ""
 - '[[TASK-238]]'
 - '[[TASK-240]]'
 due_date: ''
 created: 2026-09-04
-updated: 2026-09-04
+updated: "2026-09-05"
 status_note: 'Written 2026-09-04. Depends on TASK-238 and TASK-240 because two of the
   four comment subjects (ModelVersion, DatasetView) only become addressable there.'
 ---

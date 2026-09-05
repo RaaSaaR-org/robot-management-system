@@ -3,17 +3,20 @@ id: "TASK-227"
 aliases: []
 title: "Agent Mode runs the factory mission end to end — and the run is scored, filmed, and repeatable"
 slug: "agent-mode-runs-the-factory-mission-end-to-end"
-status: "in-progress"
+status: "todo"
 priority: 1
 owner: ""
 projects: []
 customers: []
 tags: ["core", "sim", "agent-mode", "vla"]
 sprint: ""
+parent: ""
 depends_on: ["[[TASK-203]]", "[[TASK-226]]"]
+spe: 8
+effort: ""
 due_date: ""
 created: "2026-08-29"
-updated: "2026-08-29"
+updated: "2026-09-05"
 ---
 
 # Agent Mode runs the factory mission end to end — and the run is scored, filmed, and repeatable

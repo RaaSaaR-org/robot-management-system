@@ -4,9 +4,9 @@ aliases:
 - TASK-203
 title: Run Agent Mode against Isaac Sim so the G1 walks instead of glides
 slug: run-agent-mode-against-isaac-sim-so-the-g1-walks
-status: in-progress
+status: "todo"
 priority: 2
-owner: ''
+owner: "huhn511"
 projects: []
 customers: []
 tags:
@@ -15,9 +15,12 @@ tags:
 - g1
 - sim
 depends_on: []
+spe: 3
+effort: ""
 due_date: ''
 created: 2026-08-08
-updated: 2026-08-29
+updated: "2026-09-05"
+parent: ""
 ---
 
 
@@ -381,3 +384,26 @@ Two things Isaac needs to start at all here:
    for the walking case too — a silent false negative on the very claim this step tests. Patch
    0006 reads the `d435_link` rigid body instead, whose pose comes from the same articulation
    buffer as `base_z`.
+
+
+## What is actually left — 2026-09-05 audit
+
+Proposed for closure on the grounds that TASK-227/TASK-228 work in PR #278 satisfied the open
+step 4. Refuted 3 of 3, at high confidence:
+
+- **Step 4 is still unticked in this file** and says so verbatim: the `walk` / `turn` / `goto`
+  blocks "have not been run end to end".
+- **Its own wording — "with no Agent Mode code changes" — was violated by the PR claimed to
+  satisfy it.** #278 changed `block-executor.ts` by +663 lines (3fd9fb22 arcing heading
+  corrections, 9ae6c92d turn omega/duration, add5b...).
+- **The only live record contradicts "end to end".** TASK-227's second live run has the robot
+  reaching (10.607, 3.442) and jamming on the pause-room door frame; TASK-228:120-140 records
+  `goto place "Table Front"` stopping short.
+- **The code now on main has never been driven live at all.** c432f820, the last #278 commit,
+  landed after that run.
+- **The shipped config cannot produce a gait in this scene.**
+  `robot-agent/.env.g1-edu-agent.example:211` sets `AGENT_WALK_SPEED_MPS=0.4` with no
+  `AGENT_WALK_COMMAND_MPS`, and `config.ts:814` derives the command from the latter.
+
+This needs a live Isaac campaign, and TASK-228's approach control before it. It is `todo`, not
+done.
