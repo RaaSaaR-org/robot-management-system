@@ -4,7 +4,7 @@ aliases:
 - TASK-183
 title: Real-Time Chunking (RTC) in skill-executor — no stalls at action-chunk boundaries
 slug: real-time-chunking-rtc-in-skill-executor-for-groot-pi05-closed-loop-control
-status: review
+status: "todo"
 priority: 2
 owner: ''
 projects: []
@@ -15,10 +15,13 @@ tags:
 - lerobot
 - robot
 sprint: ''
+parent: ""
 depends_on: []
+spe: 5
+effort: ""
 due_date: ''
 created: 2026-07-12
-updated: 2026-08-28
+updated: "2026-09-05"
 status_note: ''
 ---
 

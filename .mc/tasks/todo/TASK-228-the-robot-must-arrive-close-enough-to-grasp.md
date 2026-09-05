@@ -10,10 +10,13 @@ projects: []
 customers: []
 tags: ["core", "sim", "agent-mode"]
 sprint: ""
+parent: ""
 depends_on: ["[[TASK-227]]"]
+spe: 8
+effort: ""
 due_date: ""
 created: "2026-08-29"
-updated: "2026-08-29"
+updated: "2026-09-05"
 ---
 
 # The robot must arrive close enough to grasp — odometry alone cannot

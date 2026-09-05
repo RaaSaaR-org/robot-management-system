@@ -14,10 +14,13 @@ tags:
 - agent-mode
 - vla
 sprint: ''
+parent: ""
 depends_on: []
+spe: 1
+effort: ""
 due_date: ''
 created: 2026-08-29
-updated: 2026-08-29
+updated: "2026-09-05"
 status_note: 'Written 2026-08-29 from four internal code-research passes and one external
   prior-art survey. The block was already designed and deliberately deferred: types.ts:13 reads
   "Executable block vocabulary (v1). No `vla_skill` — deferred to TASK-188", and the stated reason

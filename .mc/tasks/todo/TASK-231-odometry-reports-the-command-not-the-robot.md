@@ -10,7 +10,10 @@ projects: []
 customers: []
 tags: ["core", "sim", "agent-mode"]
 sprint: ""
+parent: ""
 depends_on: []
+spe: 1
+effort: ""
 ---
 
 ## Description

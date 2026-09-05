@@ -10,10 +10,13 @@ projects: []
 customers: []
 tags: ["core", "sim", "vla"]
 sprint: ""
+parent: ""
 depends_on: []
+spe: 8
+effort: ""
 due_date: ""
 created: 2026-09-02
-updated: 2026-09-02
+updated: "2026-09-05"
 ---
 
 # The manip bridge reports health it cannot know

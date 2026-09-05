@@ -15,9 +15,12 @@ tags:
 - g1
 - sim
 depends_on: []
+spe: 3
+effort: ""
 due_date: ''
 created: 2026-08-08
-updated: 2026-08-29
+updated: "2026-09-05"
+parent: ""
 ---
 
 
