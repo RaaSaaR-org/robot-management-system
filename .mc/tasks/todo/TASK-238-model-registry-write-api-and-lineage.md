@@ -5,7 +5,7 @@ aliases:
 title: Make the model registry writable and give it a lineage, so a fine-tune is a
   thing the system knows rather than a path someone remembers
 slug: model-registry-write-api-and-lineage
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
