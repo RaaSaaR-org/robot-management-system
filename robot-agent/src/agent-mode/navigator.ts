@@ -59,13 +59,16 @@ const BEARING_DEADBAND_DEG = 8;
  * ending it further along the route is where it wanted to go anyway.
  *
  * The budget is the stage MINUS {@link MIN_STAGE_M}, and that subtraction is
- * what keeps the arithmetic honest. The executor spends the budget in COMMANDED
- * metres and reports back the MEASURED ones, which are never larger (this base
- * achieves ~31% of a commanded forward speed), so the walk that follows always
- * has at least MIN_STAGE_M left to ask for and can never be handed a negative
- * or a sub-FSM-threshold distance. An alignment on a stage already at
- * MIN_STAGE_M gets no budget and turns in place — which is right: the final
- * approach is the one alignment that must not drive anywhere.
+ * what keeps the arithmetic honest. The budget is REAL GROUND and the executor
+ * holds the arc's MEASURED displacement to it — it converts to commanded metres
+ * through AGENT_ARC_TRAVEL_GAIN, but that gain is only a prior and the arc's own
+ * odometry overrides it — so the walk that follows always has at least
+ * MIN_STAGE_M left to ask for and can never be handed a negative or a
+ * sub-FSM-threshold distance. That used to rest on the base being no faster than
+ * its configured gain, which is a property of the tuning and not of the
+ * arithmetic. An alignment on a stage already at MIN_STAGE_M gets no budget and
+ * turns in place — which is right: the final approach is the one alignment that
+ * must not drive anywhere.
  */
 function alignmentArcBudgetM(stageM: number): number {
   return Math.max(0, stageM - MIN_STAGE_M);

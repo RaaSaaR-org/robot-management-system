@@ -727,6 +727,32 @@ Only the two places where the heading is load-bearing are listed: standing at
 `table_front` facing anywhere but the table makes the reach numbers meaningless.
 """
 
+GATE_POINTS: dict[str, str] = {
+    "pause_room_door": (
+        "the mid-plane of the partition (y 3.80..4.00) and 0.100 m from a shut leaf: a "
+        "point to pass THROUGH facing the table, not floor to stand on"
+    ),
+}
+"""Places that declare a heading and are still not somewhere to stand.
+
+A heading says how to arrive; it does not say that arriving is standing. `pause_room_door`
+has one so a route can cross the threshold facing the table, and that is the whole of its
+purpose. A SPAWN is placed at t = 0, when the driver's openness is still 0.0 and the leaves
+have their full 1.17 s stroke ahead of them, so spawning there starts the robot 0.100 m
+inside a 25 kg leaf on a stiffness-800, 200 N position drive.
+
+`make_factory_place_graph.py` refuses the same coordinate for the same reason -- its
+`NOT_EMITTED` is the authority on which of these names get no polygon, and section 18 of
+`verify_factory_scene_offline.py` asserts that nothing it lists is selectable here, so the
+two cannot drift apart in either direction.
+
+The fact is stated here rather than imported from that generator because the generator is
+not one of the files `install_into_checkout.sh` copies: inside the container this module
+sits alone in the checkout's `common_scene/`, and a resolver that needed a file that is not
+there would refuse `table_front` -- the spawn this feature exists for -- two minutes into a
+launch, which is exactly the failure the offline checks exist to move forward in time.
+"""
+
 # ---------------------------------------------------------------------------------------
 # WHICH of those places the robot is actually spawned at.
 #
@@ -759,8 +785,13 @@ def selectable_spawns() -> tuple[str, ...]:
     apple behind the robot, and every reach number in this module is computed at
     `TABLE_APPROACH_YAW_DEG`; a spawn that ignores the heading would make all of them
     describe a configuration the scene never actually starts in.
+
+    And only if it is not a GATE_POINT. A heading is necessary and not sufficient: the
+    doorway declares one so a route can pass through it, and a robot placed there at t = 0
+    is inside a shut leaf.
     """
-    return tuple(sorted(name for name in PLACES if name in PLACE_HEADINGS))
+    return tuple(sorted(name for name in PLACES
+                        if name in PLACE_HEADINGS and name not in GATE_POINTS))
 
 
 def robot_spawn(value: str | None = None) -> dict:
@@ -796,6 +827,14 @@ def robot_spawn(value: str | None = None) -> dict:
             f"{ROBOT['yaw_deg']:.0f} deg. This refuses instead of falling back on purpose: "
             "a spawn that quietly reverts to the default puts the robot 8 m and one door "
             "away from wherever you meant, and nothing downstream says so.")
+    if name in GATE_POINTS:
+        raise ValueError(
+            f"{ROBOT_SPAWN_ENV_VAR}={raw!r} names a gate point, not a standing place: "
+            f"{GATE_POINTS[name]}. Its heading exists so a route can walk THROUGH it; the "
+            f"leaves are shut at t = 0 and take {DOOR_LEAF_TRAVEL / DOOR_AUTOMATION['leaf_speed']:.2f} s "
+            f"to open, so a spawn there begins inside a {DOOR_LEAF_MASS:.0f} kg leaf on a "
+            f"{DOOR_DRIVE['stiffness']:.0f}-stiffness position drive. The place graph "
+            f"refuses this coordinate too. Selectable spawns: {options}.")
     if name not in PLACE_HEADINGS:
         raise ValueError(
             f"{ROBOT_SPAWN_ENV_VAR}={raw!r} names a place that has coordinates but no "

@@ -107,10 +107,12 @@ subscribes to rt/lowstate for its heading — and this process is already on the
 sim's DDS domain with the factory initialised. So the read path lives here, next
 to the write path, and follows the same two rules the rest of the file follows:
 
-* ABSENT, NEVER ZERO. A source that has not been heard, or whose last sample is
-  older than `--state-max-age`, contributes NO joints. A fabricated 0.0 is
+* ABSENT, NEVER ZERO. A source that has not been heard, whose last sample is
+  older than `--state-max-age`, or that is still republishing a measurement whose
+  `tick` stopped moving that long ago, contributes NO joints. A fabricated 0.0 is
   indistinguishable from a measured one by the time it reaches the policy, and
-  0.0 is a plausible angle for most of these joints.
+  0.0 is a plausible angle for most of these joints. What a delivered sample was
+  SHORT of is named joint by joint in `missing`, for the same reason.
 * AND THE RIGHT HAND IS REORDERED ON THE WAY OUT. rt/dex3/right/state carries
   middle_0, middle_1 in slots 3-4 in THIS sim and index_0, index_1 on a real G1
   (`tasks/common_observations/dex3_state.py:30-49`). `g1_sidecar.py` reads the
@@ -172,6 +174,7 @@ import threading
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import NamedTuple
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -191,6 +194,28 @@ TOPIC_HAND_STATE = "rt/dex3/{}/state"
 
 #: The three state sources, in the order `/state/fast` emits their joints.
 STATE_SOURCES: tuple[str, ...] = ("body", "left_hand", "right_hand")
+
+#: What each source OWES the reply, by name. A sample that arrives with fewer
+#: motor slots than this is data loss, not a shorter robot -- and it is the one
+#: loss that used to be invisible, because a source-level `missing` cannot say
+#: "four of these seven fingers did not come".
+#:
+#: The right hand is named in THIS SIM's order, because `read()` labels it with
+#: `right_hand_order="isaac"`; only the order differs, the names are the same set.
+SOURCE_JOINTS: dict[str, tuple[str, ...]] = {
+    "body": tuple(M.BODY_JOINTS),
+    "left_hand": tuple(M.ISAAC_HAND_STATE_ORDER["left"]),
+    "right_hand": tuple(M.ISAAC_HAND_STATE_ORDER["right"]),
+}
+
+# Derived from `isaac_manip`'s own tables, so this holds by construction today and
+# is asserted because a future edit to a joint table is what would break it: a
+# source whose name list drifted from what `label_state()` produces would report
+# joints permanently "missing" that are in fact present under another name.
+assert sorted(n for names in SOURCE_JOINTS.values() for n in names) == sorted(
+    M.STATE_JOINT_NAMES), (
+    "SOURCE_JOINTS and isaac_manip.STATE_JOINT_NAMES disagree about which joints "
+    "the three state topics carry")
 
 #: A sample older than this is treated as ABSENT, not as data.
 #:
@@ -428,6 +453,15 @@ class ManipPublisher:
         self._sent = 0
         self._slot: tuple[ManipTargets, int] = (M.REST, 0)
         self._seq = 0
+        # Held ONLY across "bump the counter -> store the slot", by producers.
+        # `self._seq += 1` is a read-modify-write and the producers are not all on
+        # one thread: `main()` accepts `--probe --serve` together, so a probe leg
+        # and an HTTP /action can hand in a frame at the same moment. Two frames
+        # sharing a seq is not cosmetic -- /action hands it back as the caller's
+        # frame id and `run()` gates its verbose line on `seq != last_seq`, so the
+        # second frame reads as "the policy stalled". The publish thread never
+        # takes this lock; it still reads `_slot` in one unsynchronised load.
+        self._seq_lock = threading.Lock()
         # The last frame `_publish` actually put on the wire. None until one has
         # been. Written only by the publish thread (or `shutdown()` after it has
         # been joined), which is the same rule `_publish` itself follows.
@@ -529,7 +563,11 @@ class ManipPublisher:
         }
 
     def set_targets(self, targets: ManipTargets) -> None:
-        """Hand the publisher a new frame. Safe from any thread; never blocks.
+        """Hand the publisher a new frame. Safe from any thread.
+
+        It never blocks the PUBLISH thread, which is the property that matters;
+        one producer can wait behind another for the two statements that bump the
+        sequence and store the slot. See `_seq_lock`.
 
         VALIDATED HERE, ON THE PRODUCER'S OWN THREAD, AND NOWHERE ELSE IS EARLY
         ENOUGH. `ManipTargets` is a NamedTuple, so `ManipTargets(a, b, c)` builds
@@ -558,8 +596,11 @@ class ManipPublisher:
                 "set_targets() takes a ManipTargets (use ManipTargets.make(), "
                 f"targets_from_action31() or M.REST), got {type(targets).__name__}")
         checked = ManipTargets.make(targets.arm, targets.left_hand, targets.right_hand)
-        self._seq += 1
-        self._slot = (checked, self._seq)
+        # Validation happens OUTSIDE the lock, above: it is the expensive half and
+        # the publish thread must never wait behind a producer's bad frame.
+        with self._seq_lock:
+            self._seq += 1
+            self._slot = (checked, self._seq)
 
     def set_action31(self, action, *, left_hand_units: str,
                      right_hand_units: str) -> ManipTargets:
@@ -716,6 +757,26 @@ class ManipPublisher:
                   file=sys.stderr, flush=True)
 
 
+class StateSample(NamedTuple):
+    """One state topic's newest sample, as `StateReader` stores it.
+
+    Immutable and replaced whole, so a reader thread sees the previous sample in
+    full or the new one in full -- the lock-free hand-off `StateReader` documents.
+    """
+    #: The motor angles that arrived, in wire order. As MANY as arrived: a short
+    #: sample is kept short and reported short, never padded.
+    values: tuple[float, ...]
+    #: `time.monotonic()` when this process received it. Delivery, not measurement.
+    recv: float
+    #: `LowState_.tick`, the sim's own step counter. None where the message type
+    #: carries no counter (HandState_) or the field could not be read.
+    tick: int | None
+    #: `time.monotonic()` when `tick` was last seen to CHANGE, or None until it has
+    #: been. None means "this source has never been observed to tick", which is not
+    #: the same claim as "it is frozen" and must never be reported as one.
+    tick_moved: float | None
+
+
 class StateReader:
     """Keep the newest rt/lowstate and rt/dex3/{left,right}/state. Nothing else.
 
@@ -747,6 +808,22 @@ class StateReader:
     `isaac_manip.label_state()` for why a fabricated zero is worse here than
     anywhere else: 0.0 is a plausible angle for most of these joints, and the
     consumer cannot tell the two apart.
+
+    AND STALENESS IS MEASURED AT THE SIM, NOT AT THIS PROCESS. `_take` stamps the
+    moment a sample was DELIVERED, which answers "is the publisher alive" and not
+    "is the robot moving". The vendor publishers (`dds/g1_robot_dds.py`,
+    `dds/dex3_dds.py`) re-`Write()` one reused message on their own timer, so an
+    Isaac step loop that has stalled leaves them delivering the same angles
+    forever: every source reads `ok`, `age_s` a few hundredths, `complete` true,
+    and the policy is fed frozen joints. `LowState_.tick` is the sim's own step
+    counter and is already on the wire, so a sample whose tick has not moved for
+    longer than `max_age_s` is reported `frozen` and contributes no joints —
+    exactly as a stale one does, because that is what it is.
+
+    A tick that has NEVER been seen to move is not a verdict. HandState_ carries
+    no counter at all, and a publisher that leaves the field at 0 is
+    indistinguishable from a stalled one on the first sample; the freeze check
+    therefore arms only once a source has been observed to tick at least once.
     """
 
     def __init__(self, *, max_age_s: float = DEFAULT_STATE_MAX_AGE_S,
@@ -758,9 +835,8 @@ class StateReader:
         self.max_age_s = float(max_age_s)
         self.subscribed = bool(subscribe)
         self._verbose = verbose
-        # source -> (values, monotonic recv) or None. Replaced whole; never mutated.
-        self._slot: dict[str, tuple[tuple[float, ...], float] | None] = {
-            s: None for s in STATE_SOURCES}
+        # source -> its newest StateSample, or None. Replaced whole; never mutated.
+        self._slot: dict[str, StateSample | None] = {s: None for s in STATE_SOURCES}
         self.samples: dict[str, int] = {s: 0 for s in STATE_SOURCES}
         self.bad: dict[str, int] = {s: 0 for s in STATE_SOURCES}
         self.topics: dict[str, str] = {
@@ -807,6 +883,13 @@ class StateReader:
         reporting the age of the last good sample, i.e. the exact silence this
         whole file exists to remove. Count it, say so once, keep the old sample
         (which will go stale on its own and then be reported as absent).
+
+        A SHORT SAMPLE IS STORED SHORT. `min(count, len(motors))` takes what came
+        rather than reading past the end, and the shortfall is carried into the
+        reply by `_source_report` and `read()`: a `HandState_` with three motor
+        slots used to be stored as a perfectly healthy sample of a seven-joint
+        hand, and the four fingers it did not carry simply were not in the joint
+        list -- which `getStateNow()` then fills with 0.0, the OPEN pose.
         """
         try:
             motors = msg.motor_state
@@ -818,49 +901,107 @@ class StateReader:
                       f"({exc!r}); those joints will be reported ABSENT, not zero",
                       file=sys.stderr, flush=True)
             return
-        self._slot[source] = (values, time.monotonic())
+        # `tick` is LowState_'s step counter; HandState_ has no such field and a
+        # message whose tick is unreadable is treated the same as one without.
+        try:
+            tick = int(msg.tick)
+        except (AttributeError, TypeError, ValueError):
+            tick = None
+        self._slot[source] = self._sample(source, values, tick)
         self.samples[source] += 1
         if self.samples[source] == 1 and self._verbose:
             print(f"[state] {self.topics[source]} acquired — {len(values)} joints",
                   flush=True)
 
+    def _sample(self, source: str, values: tuple[float, ...],
+                tick: int | None) -> StateSample:
+        """Build the sample to store, carrying forward when this source last ticked.
+
+        Read of `_slot` and write to it are not atomic together, but only ONE
+        thread ever writes a given source (its SDK reader, or a test's `feed`), so
+        there is no producer to race with; the HTTP threads only read.
+        """
+        now = time.monotonic()
+        prev = self._slot[source]
+        moved: float | None = None
+        if prev is not None and prev.tick is not None and tick is not None:
+            moved = now if tick != prev.tick else prev.tick_moved
+        return StateSample(values, now, tick, moved)
+
     # ------------------------------------------------------------ reader side
-    def feed(self, source: str, values) -> None:
-        """Inject one sample without DDS. For `subscribe=False` embedders and tests."""
+    def feed(self, source: str, values, *, tick: int | None = None) -> None:
+        """Inject one sample without DDS. For `subscribe=False` embedders and tests.
+
+        `tick` is the sim step counter `_take` reads off `LowState_`; pass it to
+        exercise the freeze check, leave it out for a source that has none.
+        """
         if source not in STATE_SOURCES:
             raise ValueError(f"unknown state source {source!r}; expected one of "
                              f"{', '.join(STATE_SOURCES)}")
-        self._slot[source] = (tuple(float(v) for v in values), time.monotonic())
+        self._slot[source] = self._sample(
+            source, tuple(float(v) for v in values), tick)
         self.samples[source] += 1
 
     def _source_report(self, source: str, now: float) -> tuple[dict, tuple | None]:
         """`({report}, values-or-None)` for one source, from ONE read of its slot."""
         slot = self._slot[source]
+        expected = len(SOURCE_JOINTS[source])
         report = {
             "topic": self.topics[source],
             "samples": self.samples[source],
             "bad_samples": self.bad[source],
+            "expected": expected,
         }
         if slot is None:
             report["state"] = "never"
             report["age_s"] = None
+            report["tick"] = None
+            report["tick_age_s"] = None
             report["joints"] = 0
             return report, None
-        values, at = slot
-        age = now - at
+        age = now - slot.recv
         report["age_s"] = round(age, 3)
-        # "never" and "stale" are different failures and are named differently:
-        # the first means that publisher never came up (wrong DDS domain, scene
-        # without hands, sim not started); the second means it stopped.
-        report["state"] = "ok" if age <= self.max_age_s else "stale"
-        report["joints"] = len(values) if age <= self.max_age_s else 0
-        return report, (values if age <= self.max_age_s else None)
+        report["tick"] = slot.tick
+        # How long the sim's own step counter has stood still, or None while this
+        # source has never been seen to tick -- which is not a freeze verdict.
+        tick_age = None if slot.tick_moved is None else now - slot.tick_moved
+        report["tick_age_s"] = None if tick_age is None else round(tick_age, 3)
+        # Four different failures, named differently because the operator's next
+        # move differs: "never" means that publisher never came up (wrong DDS
+        # domain, scene without hands, sim not started); "stale" means it stopped;
+        # "frozen" means it is still publishing a measurement that stopped
+        # changing, i.e. the sim's step loop stalled underneath a live publisher;
+        # "short" means it arrived with fewer motor slots than the topic carries.
+        if age > self.max_age_s:
+            report["state"] = "stale"
+        elif tick_age is not None and tick_age > self.max_age_s:
+            report["state"] = "frozen"
+        elif len(slot.values) < expected:
+            report["state"] = "short"
+        else:
+            report["state"] = "ok"
+        # A frozen sample is a stale sample that keeps arriving, so it is withheld
+        # exactly as a stale one is. A SHORT one is not withheld: the joints it did
+        # carry are measured, and `read()` names the ones it did not.
+        delivered = report["state"] in ("ok", "short")
+        report["joints"] = len(slot.values) if delivered else 0
+        return report, (slot.values if delivered else None)
 
     def read(self) -> dict:
         """The whole read contract, from one pass over the three slots.
 
         Every age in the reply is measured against ONE `now`, so the three cannot
         disagree about when they were taken.
+
+        `missing` NAMES WHAT IS NOT IN `joints`, at the coarsest level that is
+        true: a source that contributed nothing at all by its source name, and
+        otherwise every individual joint that source failed to deliver. It used to
+        be the source list alone, which cannot express the two losses that happen
+        INSIDE a delivered sample -- a truncated `motor_state` and a joint dropped
+        for being non-finite -- so both were served as a 200 with `complete` true
+        and the caller filled the gap with 0.0. `incomplete_sources` is the same
+        verdict rolled back up to the three sources, which is the granularity
+        `--state-require` gates on.
         """
         now = time.monotonic()
         reports: dict[str, dict] = {}
@@ -877,11 +1018,22 @@ class StateReader:
             # two files disagreeing is correct and looks like a bug.
             right_hand=values["right_hand"],
             right_hand_order="isaac")
-        missing = [s for s in STATE_SOURCES if values[s] is None]
+        missing: list[str] = []
+        incomplete: list[str] = []
+        for source in STATE_SOURCES:
+            if values[source] is None:
+                missing.append(source)
+                incomplete.append(source)
+                continue
+            gaps = [n for n in SOURCE_JOINTS[source] if n not in by_name]
+            if gaps:
+                missing.extend(gaps)
+                incomplete.append(source)
         return {
             "joints": M.state_joint_list(by_name),
             "sources": reports,
             "missing": missing,
+            "incomplete_sources": incomplete,
             "dropped_joints": dropped,
             "complete": not missing and not dropped
             and len(by_name) == M.N_STATE,
@@ -933,10 +1085,19 @@ UNITS = "radians"
 #: What `/state/fast` REFUSES to answer a partial vector for. See `state_fast()`.
 STATE_REQUIRE_CHOICES = ("body", "all")
 
+#: And ALL THREE are required by default, because this bridge serves ONE profile:
+#: the 43-DOF G1 EDU with both Dex3 hands. A missing hand is 7 of those 43, and
+#: `getStateNow()` fills them with 0.0 — which for the left Dex3 is the OPEN pose,
+#: so a policy holding the apple is told it has let go, with a 200 everywhere. The
+#: rig's own bringup (`factory_mission_bringup.sh`) passes no `--state-require` at
+#: all, so the default is what it gets; `--state-require body` remains for a scene
+#: that genuinely has no hands.
+DEFAULT_STATE_REQUIRE = "all"
+
 
 def make_handler(pub: "ManipPublisher", *, port: int,
                  reader: "StateReader | None" = None,
-                 state_require: str = "body"):
+                 state_require: str = DEFAULT_STATE_REQUIRE):
     """The HTTP surface of the manipulation bridge: /action, /estop, /state*, /health.
 
     A closure rather than a class attribute so a test can stand up two of these
@@ -1057,6 +1218,7 @@ def make_handler(pub: "ManipPublisher", *, port: int,
                 "joints": len(snap["joints"]),
                 "expected": M.N_STATE,
                 "missing": snap["missing"],
+                "incomplete_sources": snap["incomplete_sources"],
                 "require": state_require,
                 "max_age_s": snap["max_age_s"],
                 "sources": snap["sources"],
@@ -1227,9 +1389,13 @@ def make_handler(pub: "ManipPublisher", *, port: int,
             "count": len(snap["joints"]),
             "expected": M.N_STATE,
             # The three questions an operator has when the vector is short: is it
-            # short, which source is gone, and how long has it been gone.
+            # short, WHAT is gone -- a whole source by name, or the individual
+            # joints a delivered sample did not carry -- and how long it has been
+            # gone. `count` against `expected` answers the first from numbers
+            # alone, for a caller that reads no other field.
             "complete": snap["complete"],
             "missing": snap["missing"],
+            "incomplete_sources": snap["incomplete_sources"],
             "sources": snap["sources"],
             "max_age_s": snap["max_age_s"],
             "units": UNITS,
@@ -1265,15 +1431,21 @@ def make_handler(pub: "ManipPublisher", *, port: int,
         with the reason attached, the correct outcome for a closed loop whose
         observation is missing.
 
-        SO THE LINE IS DRAWN AT THE BODY TOPIC, and by default only there. Without
-        rt/lowstate, 29 of 43 numbers would be fabricated — every leg, the waist
-        and both arms, i.e. the robot's whole posture. That is not an observation
-        with gaps, it is a different robot. A missing HAND costs 7 of 43 and only
-        matters during a grasp, and it is the more likely of the two to hiccup
-        (the vendor rate-limits that observation term separately), so by default
-        those joints are simply absent and the absence is reported in `missing`,
-        in `complete`, and in `/health`. `--state-require all` moves the line to
-        all three for a caller that would rather stop than grasp on a zeroed hand.
+        SO THE LINE IS DRAWN AT ALL THREE SOURCES BY DEFAULT. Without rt/lowstate,
+        29 of 43 numbers would be fabricated — every leg, the waist and both arms,
+        i.e. the robot's whole posture. That is not an observation with gaps, it is
+        a different robot. A missing HAND costs only 7 of 43 and only matters
+        during a grasp, which is why the line used to sit at the body topic alone —
+        but "only during a grasp" is the whole of what this rig does, and the
+        fabricated left-hand zeros are the OPEN pose, so the one moment the hand
+        joints matter is the moment they are silently wrong. `--state-require body`
+        moves the line back for a scene that has no hands at all.
+
+        AND A DELIVERED SAMPLE IS NOT AUTOMATICALLY A COMPLETE ONE. The gate is
+        `incomplete_sources`, not "the source said nothing": a `HandState_` with
+        three motor slots, or a joint dropped for arriving non-finite, leaves that
+        source short by joints the caller will fill with 0.0 just the same. If the
+        source is required, that refuses too.
 
         No waiting for a fresh sample, unlike `isaac_camera_facade`: the sources
         publish on the scene's own step, so a request can be at most one step
@@ -1284,7 +1456,7 @@ def make_handler(pub: "ManipPublisher", *, port: int,
             return state_disabled()
         snap = reader.read()
         payload = state_payload(snap)
-        blocked = sorted(s for s in snap["missing"] if s in required)
+        blocked = sorted(s for s in snap["incomplete_sources"] if s in required)
         if blocked:
             detail = "; ".join(
                 f"{s} ({snap['sources'][s]['topic']}: {snap['sources'][s]['state']}"
@@ -1403,7 +1575,7 @@ def make_handler(pub: "ManipPublisher", *, port: int,
 
 def serve(pub: "ManipPublisher", bind: str, port: int,
           reader: "StateReader | None" = None,
-          state_require: str = "body") -> ThreadingHTTPServer:
+          state_require: str = DEFAULT_STATE_REQUIRE) -> ThreadingHTTPServer:
     """Start the inlet on its own daemon thread and return the server.
 
     Caller shuts it down BEFORE stopping the publisher, so no request can arrive
@@ -1506,11 +1678,14 @@ def main() -> int:
     ap.add_argument("--state-max-age", type=float, default=DEFAULT_STATE_MAX_AGE_S,
                     help="a state sample older than this counts as ABSENT — its joints "
                          "are left out of /state/fast rather than reported as 0.0")
-    ap.add_argument("--state-require", default="body", choices=STATE_REQUIRE_CHOICES,
-                    help="which sources must be fresh for GET /state/fast to answer at "
-                         "all. 'body' (rt/lowstate: legs, waist, arms) refuses only "
-                         "when the posture is unknown and lets a missing hand show up "
-                         "as absent joints; 'all' also refuses on a missing hand.")
+    ap.add_argument("--state-require", default=DEFAULT_STATE_REQUIRE,
+                    choices=STATE_REQUIRE_CHOICES,
+                    help="which sources must deliver ALL their joints for GET "
+                         "/state/fast to answer at all. 'all' (the default) refuses on "
+                         "a missing or incomplete hand too, because getStateNow() fills "
+                         "those seven joints with 0.0 and 0.0 is the left Dex3's OPEN "
+                         "pose; 'body' (rt/lowstate: legs, waist, arms) refuses only "
+                         "when the posture is unknown, for a scene with no hands.")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
     if args.serve and not (0 < args.serve < 65536):
@@ -1557,7 +1732,8 @@ def main() -> int:
                      "no --serve, so nothing is served — StateReader.read() only")
                   + " the 43-joint observation, absent-not-zero, refusing when "
                   f"{'any source' if args.state_require == 'all' else 'the body topic'} "
-                  f"is missing or older than {args.state_max_age:g}s", flush=True)
+                  f"is missing, short of joints, older than {args.state_max_age:g}s or "
+                  f"republishing a tick that stopped moving that long ago", flush=True)
 
     stopping = threading.Event()
 

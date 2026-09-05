@@ -3,9 +3,9 @@ id: "TASK-232"
 aliases: []
 title: "The manip bridge reports health it cannot know — joint loss, frozen publishers and a spawn on the door seam"
 slug: "manip-bridge-reports-health-it-cannot-know"
-status: "todo"
+status: "in-progress"
 priority: 2
-owner: ""
+owner: "huhn511"
 projects: []
 customers: []
 tags: ["core", "sim", "vla"]

@@ -969,7 +969,9 @@ def check_selectable_spawns(rep: Report, L, spawn_pad: float) -> None:
     yet (TASK-228: the robot jams on the door frame). The spawn that ships is therefore no
     longer necessarily the spawn that was checked, which is the same shape of gap as
     section 12's: a guarantee that holds only for the default is not a guarantee about the
-    scene. So every selectable spawn gets the checks the default one gets.
+    scene. So every selectable spawn gets the checks the default one gets, and the places
+    that are NOT selectable are checked for being refused -- the door seam is in PLACES and
+    declares a heading, and only the GATE_POINTS gate keeps it out of the spawn set.
 
     `pause_table` is excluded from the clearance test for the same reason section 12
     excludes it: `table_front` is DERIVED to stand TABLE_STANDOFF = 0.16 m off the table's
@@ -994,13 +996,20 @@ def check_selectable_spawns(rep: Report, L, spawn_pad: float) -> None:
               f"({', '.join(sorted(set(L.PLACES) - set(L.PLACE_HEADINGS)))}) because a "
               "point is not a pose")
 
-    # The two ways to get it wrong must both raise. A resolver that silently fell back to
+    rep.check(not (set(names) & set(L.GATE_POINTS)),
+              "a place that is a gate point is NOT selectable, heading or no heading",
+              f"gate points: {', '.join(sorted(L.GATE_POINTS))} -- a heading says how to "
+              "arrive, not that arriving is standing")
+
+    # The three ways to get it wrong must all raise. A resolver that silently fell back to
     # the authored pose on a typo would put the robot 8 m from where the operator meant and
     # nothing downstream would say so -- the failure would surface as a manipulation that
     # missed, which is the most expensive place to discover a spawn bug.
-    for bad, why in (("not_a_place", "a name that is in neither dict"),
-                     (sorted(set(L.PLACES) - set(L.PLACE_HEADINGS))[0],
-                      "a place with coordinates but no heading")):
+    for bad, why in ([("not_a_place", "a name that is in neither dict"),
+                      (sorted(set(L.PLACES) - set(L.PLACE_HEADINGS))[0],
+                       "a place with coordinates but no heading")]
+                     + [(n, "a place that declares a heading and is still not floor")
+                        for n in sorted(L.GATE_POINTS)]):
         try:
             L.robot_spawn(bad)
         except ValueError as exc:
@@ -1050,17 +1059,14 @@ def check_selectable_spawns(rep: Report, L, spawn_pad: float) -> None:
     # driver's openness is still 0.0 (`PauseDoorDriver.__init__`), and the stroke then
     # takes 1.17 s. So the shut leaves are real geometry for a spawn and only for a spawn.
     #
-    # This is not a hypothetical: `pause_room_door` is selectable -- it is in PLACES and it
-    # declares a heading -- and it sits 0.100 m from a shut leaf, well inside the 0.40 m
-    # pad. Its heading exists so a route can pass THROUGH the doorway facing the table, not
-    # so anything can stand there. Spawning at it would start the robot interpenetrating a
-    # 25 kg leaf on a stiff position drive.
-    #
-    # The assertion is therefore about the SET, not about one name: exactly one selectable
-    # spawn fouls the shut door, and it is the doorway itself. That fires if a new place
-    # acquires a heading somewhere in the door's swept box, and it fires again if
-    # `pause_room_door` is ever made standable or dropped -- either way the comment above
-    # would be stale, and a stale comment about the spawn is what this section exists for.
+    # `pause_room_door` was selectable -- it is in PLACES and it declares a heading -- and
+    # it sits 0.100 m from a shut leaf, well inside the 0.40 m pad. It is now a GATE_POINT
+    # and refused above; these two checks are what keep that true from both sides. The
+    # first is about the SET rather than about one name, so it fires if any new place
+    # acquires a heading somewhere in the door's swept box. The second measures the gate
+    # point itself, so the exclusion stays earned rather than merely declared: a name
+    # dropped into GATE_POINTS that the shut door does not actually foul is a spawn taken
+    # away for a reason that is no longer in the geometry.
     shut_rects = [(n, (L.box_extent(b)[0], L.box_extent(b)[1]))
                   for n, b in L.door_leaf_boxes(0.0).items()]
     clearances = {}
@@ -1068,14 +1074,21 @@ def check_selectable_spawns(rep: Report, L, spawn_pad: float) -> None:
         x, y, _ = L.robot_spawn(name)["pos"]
         clearances[name] = min(point_rect_distance((x, y), r) for _, r in shut_rects)
     fouls = tuple(n for n in names if clearances[n] < spawn_pad)
-    rep.check(fouls == ("pause_room_door",),
-              "the only selectable spawn that starts inside the SHUT door is the doorway itself",
+    rep.check(fouls == (),
+              "no selectable spawn starts inside the SHUT door",
               "shut-leaf clearance: "
               + "; ".join(f"{n} {clearances[n]:.3f} m" for n in names)
-              + f" against the same {spawn_pad:.2f} m pad. 'pause_room_door' declares a "
-              "heading so a route can walk THROUGH it, not so anything can stand in it -- "
-              "it is a waypoint, not a manipulation spawn. 'table_front' is the spawn this "
-              "feature exists for and it clears the shut leaves outright.")
+              + f" against the same {spawn_pad:.2f} m pad. 'table_front' is the spawn this "
+              "feature exists for and it clears the shut leaves outright."
+              if not fouls else f"{', '.join(fouls)} is inside a shut leaf")
+
+    gate_clearances = {n: min(point_rect_distance(L.PLACES[n], r) for _, r in shut_rects)
+                       for n in sorted(L.GATE_POINTS)}
+    rep.check(all(d < spawn_pad for d in gate_clearances.values()),
+              "every gate point is refused for a reason the geometry still shows",
+              "; ".join(f"{n} {d:.3f} m from a shut leaf" for n, d in gate_clearances.items())
+              + f" against the same {spawn_pad:.2f} m pad -- measured here, not taken on "
+              "the layout's word")
 
 
 def check_quaternions(rep: Report, L) -> None:
@@ -2069,6 +2082,25 @@ def check_place_graph(rep: Report, L) -> None:
               f"{L.DOOR['centre'][1] - L.WALL_THICKNESS / 2:.2f}.."
               f"{L.DOOR['centre'][1] + L.WALL_THICKNESS / 2:.2f}, and a shut leaf is 0.100 m "
               "away against a 0.40 m planner disc -- a gate point, not a spot to stand on")
+
+    # --- and what the graph refuses, the spawn resolver refuses ----------------------------
+    #
+    # THE EDGE THAT WAS MISSING. `selectable_spawns()` gated on "declares a heading" alone,
+    # so `NEODEM_ROBOT_SPAWN=pause_room_door` put the robot on the door seam -- the exact
+    # coordinate this generator had already refused to emit as unstandable. Two files
+    # answering the same question, one of them not asked. This asserts they agree.
+    selectable = set(L.selectable_spawns())
+    rep.check(not (selectable & set(gen.NOT_EMITTED)),
+              "no place this generator refuses to emit is a selectable spawn",
+              f"selectable {sorted(selectable)} against NOT_EMITTED "
+              f"{sorted(gen.NOT_EMITTED)}. The layout names the unstandable ones again in "
+              "GATE_POINTS rather than importing this file, because the checkout Isaac "
+              "loads carries no copy of it; this check is what stops the two from drifting")
+    rep.check(set(L.GATE_POINTS) <= set(gen.NOT_EMITTED),
+              "every GATE_POINT in the layout is a place this generator also refuses",
+              f"GATE_POINTS {sorted(L.GATE_POINTS)} <= NOT_EMITTED "
+              f"{sorted(gen.NOT_EMITTED)} -- the layout may not withdraw a spawn on grounds "
+              "of unstandability that the place graph does not share")
 
     # --- TABLE-FRONT is derived, not transcribed ------------------------------------------
     stand_x, stand_y = L.standing_spot_for_grasp()
