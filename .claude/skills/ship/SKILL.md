@@ -15,17 +15,20 @@ Everything after "PR opened": feedback, merge, the close, the parent's close-out
 
 ```bash
 GH=$(gh auth status >/dev/null 2>&1 && echo gh || echo gh-bot)
-N=$($GH pr view --json number --jq .number)   # the PR for the current branch
+N=$($GH pr list --state open --search "TASK-NNN" --json number,headRefName --jq '.[0].number')
+[ -n "$N" ] || { echo "no open PR for TASK-NNN — /review has not run"; exit 1; }
 echo "PR #$N"
 ```
 
-Every `$GH` and `$N` below assumes that line ran in the same invocation.
+You are invoked by task id, not by branch, so derive the PR from the task — never from whatever branch happens to be checked out. Empty or more than one match is a stop, not a guess.
 
-- **CI is green.** `$GH pr checks $N` — read it; a red check is a finding, not a formality.
+**Re-resolve `$GH` and `$N` in every block below.** Shell state does not survive between tool calls, and an unset `$GH` silently runs the unrelated `pr` paginator instead of failing.
+
+- **CI is green.** Read the buckets, not the table: `$GH pr checks $N --json name,bucket,state`. `pass` is green and `fail` is a finding. `cancel` on a run your own push superseded is neither — re-read the new run.
 
 ## 2. Feedback
 
-`$GH pr view $N --json reviews,comments`, and read every unresolved one.
+`$GH pr view $N --json reviews,comments` (resolve `$GH`/`$N` again in this block), and read every unresolved one.
 
 A comment that changes code is a finding: hand it to `/implement` and stop — shipping resumes when review is clean again. A comment that only needs an answer gets one, in the thread.
 
@@ -35,17 +38,32 @@ The close is a task-file edit, so it rides in the PR like every other one ([`rul
 
 Two steps — the folder alone sets nothing:
 
+Check out the branch and move the file — re-enterable, because a second /ship pass over the same PR finds it already moved:
+
 ```bash
-git checkout <the PR's branch>
-git mv .mc/tasks/todo/TASK-NNN-*.md .mc/tasks/done/
-# then edit that file's frontmatter: status: done, updated: <the real date, from `date +%F`>
-git add -A && git commit -m "chore(tasks): close TASK-NNN"
-git push origin HEAD
+git checkout "$($GH pr view $N --json headRefName --jq .headRefName)"
+git status --porcelain            # anything unrelated dirty → stop, this commit is task files only
+ls .mc/tasks/todo/TASK-NNN-*.md >/dev/null 2>&1 \
+  && git mv .mc/tasks/todo/TASK-NNN-*.md .mc/tasks/done/ \
+  || echo "already in done/ — check the status field, then skip to section 4"
+```
+
+**Now edit the frontmatter** — outside the block above, because the folder alone sets nothing: `status: done`, `updated:` the real date from `date +%F`. Then commit only the tracker:
+
+```bash
+git add .mc/tasks && git commit -m "chore(tasks): close TASK-NNN"
+git-push-bot origin HEAD          # plain `git push` has no credentials here
 ```
 
 `status: done` claims merged code, and the merge is the next step — so this commit is the last thing the PR receives.
 
-**The push restarts CI.** Wait for it before section 4: `$GH pr checks $N --watch`.
+**The push restarts CI, and it must go green before section 4.** `--watch` does not wait for checks that have not registered yet: on a fresh push it prints `no checks reported` and exits 1 immediately. Poll instead, and treat that message as *not started*:
+
+```bash
+$GH pr checks $N --json name,bucket   # repeat until every job is present and every bucket is "pass"
+```
+
+**If it goes red, or the merge is refused:** the tracker must not be left claiming `done` for work that never merged. Undo the close — `git revert` the close commit, or move the file back to `todo/` and restore its previous status — then hand to `/implement` with the failure. Only then is this skill done with the task.
 
 ## 4. Merge
 
@@ -68,19 +86,22 @@ git log --oneline -1 -- .mc/tasks/done/TASK-NNN-*.md   # the close is on main no
 Read the parent off the child's **`parent:`** field. Never off `depends_on` — that carries blockers too, and closing a blocker as if it were an epic destroys an unrelated task's spec ([`rules/tasks.md`](../../rules/tasks.md)). No `parent:` → stop here.
 
 ```bash
-PARENT=$(grep -oP '^parent:\s*"\[\[\K[^\]]+' .mc/tasks/done/TASK-NNN-*.md)
-[ -n "$PARENT" ] && grep -l "parent:.*\[\[$PARENT\]\]" .mc/tasks/todo/*.md   # siblings still open
+PARENT=$(grep -oP '^parent:\s*"?\[\[\K[^\]]+' .mc/tasks/done/TASK-NNN-*.md)
+# both open folders — a child parked in deferred/ is still an open child
+[ -n "$PARENT" ] && grep -l "parent:.*\[\[$PARENT\]\]" .mc/tasks/todo/*.md .mc/tasks/deferred/*.md
 ```
 
 Match the **edge**, not the id: `grep -l 'TASK-NNN' .mc/tasks/todo/*.md` also matches the epic's own file through its `id:` line, so it never reports zero.
 
 Siblings remain → the next one is the hand-off, and this skill is done.
 
-None remain → the parent closes **now**, in its own branch and PR like any other change:
+None remain → the parent closes **now**, as a full lap of the workflow rather than a shortcut. Sections 3 and 4 cannot be reused directly: both need a PR, and `/review` is the only skill that opens one.
 
-- Distill its spec into `docs/adr/ADR-<the parent's own task number>-slug.md` — reusing the number needs no allocator and cannot collide.
-- Delete the spec body from the parent in the same commit; a spec that outlives its epic reads as current when it is not.
-- Then close it as in section 3, and merge as in section 4.
+1. Branch off `main` for the parent: `chore/task-nnn-close-epic`.
+2. Distill its spec into `docs/adr/ADR-<the parent's own task number>-slug.md` — reusing the epic's number needs no allocator and cannot collide.
+3. Delete the spec body from the parent in the same commit; a spec that outlives its epic reads as current when it is not.
+4. Close the parent's task file as in section 3, and push with `git-push-bot`.
+5. Hand to `run /review on TASK-NNN` for the parent. It opens the PR; then re-enter this skill from section 1, which derives a fresh `$N` for that PR.
 
 ## 6. Hand off
 
