@@ -67,6 +67,18 @@ file-ownership list written by hand.
 `node_modules`, so `npm run typecheck` and `vitest` fail for a reason that has nothing to do
 with the change. Symlinking the primary checkout's directories in is enough.
 
+**7. The wait from gap 2 was itself wrong, and its first real use proved it.** `$GH pr checks`
+answers about *the PR*, and for a few seconds after a push that still means the previous run.
+Shipping #284, the loop read four passes one second after the push — the pre-close run — and
+stopped. `pr checks` then said `no checks reported` while the new run registered, and only
+then reported it in progress: three different answers to the same question inside ten seconds.
+The wait has to be anchored to the pushed SHA, `/commits/$SHA/check-runs`, which can only
+describe the commit that was actually pushed.
+
+**8. `--delete-branch` fails when a worktree holds the branch.** `cannot delete branch 'x',
+used in worktree '...'`. The merge has already succeeded by then, so it is cleanup, not a
+failure — but it reads as one.
+
 ### Key files
 
 - `.claude/skills/ship/SKILL.md` — gaps 1, 2, 3
@@ -76,8 +88,10 @@ with the change. Symlinking the primary checkout's directories in is enough.
 ## Acceptance Criteria
 
 - [ ] `/ship` syncs the branch with `origin/main` before the close commit
-- [ ] `/ship`'s CI wait is a command that actually waits, and treats "no checks reported" as
-      not-started
+- [ ] `/ship`'s CI wait is a command that actually waits, treats "no checks reported" as
+      not-started, and is anchored to the pushed SHA rather than to the branch
+- [ ] `/ship` says that `--delete-branch` cannot remove a branch a worktree holds, and what to
+      do instead
 - [ ] `/ship` updates the PR body when it adds to what the PR contains
 - [ ] `verify` runs the Postgres migration drift check when a diff touches
       `server/prisma/`, and reports it skipped rather than passed when docker is absent

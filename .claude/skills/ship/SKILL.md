@@ -78,18 +78,28 @@ $GH pr edit $N --body-file "$PB"
 **The push restarts CI, and it must go green before section 4.** `--watch` does not wait for checks that have not registered yet: on a fresh push it prints `no checks reported` and exits 1 immediately. Poll instead, and treat that message as *not started*:
 
 ```bash
-for i in $(seq 1 40); do
-  B=$($GH pr checks $N --json bucket --jq '[.[].bucket] | @csv' 2>/dev/null)
-  echo "$(date +%T) ${B:-no checks reported — not started}"
-  case "${B:-pending}" in *pending*|"") sleep 30 ;; *) break ;; esac
+SHA=$(git rev-parse HEAD)                    # the commit you just pushed, not "the branch"
+R="repos/$($GH repo view --json nameWithOwner --jq .nameWithOwner)/commits/$SHA/check-runs"
+for i in $(seq 1 60); do
+  S=$($GH api "$R" --jq '[.check_runs[].status] | @csv' 2>/dev/null)
+  echo "$(date +%T) ${S:-no run registered yet for ${SHA:0:8}}"
+  case "${S:-queued}" in *queued*|*in_progress*|"") sleep 20 ;; *) break ;; esac
 done
-$GH pr checks $N --json name,bucket,state    # the final read, job by job
+$GH api "$R" --jq '.check_runs[] | "\(.conclusion)\t\(.name)"'    # success | failure, per job
 ```
 
-`${B:-...}` is what makes this a wait rather than a race: an empty result means the checks
-have not registered yet, which is *not started*, not *finished with nothing*. Treating those
-two the same is the whole reason `--watch` cannot be used here. Both pushes that shipped this
-skill had three jobs still `QUEUED` at the first poll.
+**Anchor the wait to the SHA, never to the branch.** `$GH pr checks` answers about "the PR",
+and for a few seconds after a push that still means the *previous* run — so a branch that was
+green before your close commit reads green immediately after it, and the loop exits on a
+result that describes code you have already replaced. That is not a hypothetical: the first
+run of the branch-based version of this loop did exactly that, one second after the push, and
+`pr checks` then said `no checks reported` while the real run was still registering. Three
+distinct answers to the same question inside ten seconds. `/commits/$SHA/check-runs` can only
+ever describe the commit you pushed.
+
+An empty result is still *not started*, not *finished with nothing* — hence `${S:-queued}`.
+That is the same distinction `--watch` gets wrong, and it survives the SHA fix because the run
+takes a moment to register against the new commit too.
 
 **If it goes red, or the merge is refused:** the tracker must not be left claiming `done` for work that never merged. Undo the close — `git revert` the close commit, or move the file back to `todo/` and restore its previous status — then hand to `/implement` with the failure. Only then is this skill done with the task.
 
@@ -100,6 +110,15 @@ $GH pr merge $N --squash --delete-branch
 ```
 
 Squash is the norm for a single-task PR; keep history only when the PR argues for it.
+
+`--delete-branch` deletes the remote branch and then tries the local one, which **fails if a
+worktree still has it checked out** — `cannot delete branch 'x', used in worktree '...'`. The
+merge itself already succeeded at that point, so this is cleanup, not a failure: drop the
+worktree and the branch goes with it.
+
+```bash
+git worktree remove <path> && git branch -D <branch>
+```
 
 Confirm from the remote, not from the exit code:
 
