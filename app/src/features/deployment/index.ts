@@ -21,7 +21,15 @@ export type {
   ThresholdViolation,
   TrainingMetrics,
   ModelVersionMetrics,
+  ModelSourceKind,
+  ModelDeploymentStatus,
   ModelVersion,
+  ModelCheckpoint,
+  ModelVersionEvaluationSummary,
+  ModelVersionDetail,
+  ModelVersionLineage,
+  RegisterModelVersionInput,
+  UpdateModelVersionInput,
   Deployment,
   DeploymentResponse,
   CreateDeploymentInput,
@@ -65,6 +73,9 @@ export type {
 
 // Export constants from types
 export {
+  ModelSourceKinds,
+  MODEL_SOURCE_KIND_LABELS,
+  ARTIFACT_URI_SCHEMES,
   DeploymentStatuses,
   DeploymentStrategies,
   SkillStatuses,
@@ -112,3 +123,4 @@ export {
 
 // Pages
 export { DeploymentsPage, DeploymentDetailPage, SkillsPage } from './pages';
+export { ModelsPage } from './pages/ModelsPage';

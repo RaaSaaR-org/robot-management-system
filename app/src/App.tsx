@@ -5,7 +5,7 @@
  * @dependencies react-router-dom, react
  */
 
-import { Suspense } from 'react';
+import { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { ProtectedRoute } from './features/auth';
 import { useAuthStore, selectMustChangePassword, selectUserRole } from './features/auth/store/authStore';
@@ -65,6 +65,11 @@ import {
   LazyTwinViewerPage,
   LazyNotFoundPage,
 } from './routes/lazyPages';
+
+// Model Registry (TASK-238)
+const LazyModelsPage = lazy(() =>
+  import('./features/deployment').then((m) => ({ default: m.ModelsPage }))
+);
 
 // ============================================================================
 // ROUTE HELPERS
@@ -449,8 +454,15 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          {/* /models removed (TASK-142): MLflow registry deleted */}
-          <Route path="/models" element={<Navigate to="/training" replace />} />
+          {/* Model Registry — registered model versions and their lineage (TASK-238) */}
+          <Route
+            path="/models"
+            element={
+              <ProtectedAppRoute>
+                <LazyModelsPage />
+              </ProtectedAppRoute>
+            }
+          />
 
           {/* DataCollection - Robot data collection sessions */}
           <Route

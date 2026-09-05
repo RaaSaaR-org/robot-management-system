@@ -35,6 +35,13 @@ vi.mock('../../repositories/index.js', () => ({
   modelVersionRepository: {
     create: vi.fn(),
   },
+  // Checkpoints are rows since TASK-238: recordCheckpoint writes through here
+  // and completeJob reads them back to fill checkpointUri.
+  modelCheckpointRepository: {
+    create: vi.fn(),
+    listByJob: vi.fn(),
+    attachToModelVersion: vi.fn(),
+  },
   datasetRepository: {
     findById: vi.fn(),
   },
@@ -67,6 +74,7 @@ import {
 import {
   trainingJobRepository as _trainingJobRepository,
   modelVersionRepository as _modelVersionRepository,
+  modelCheckpointRepository as _modelCheckpointRepository,
   datasetRepository as _datasetRepository,
 } from '../../repositories/index.js';
 import { natsClient as _natsClient, getJobQueue as _getJobQueue } from '../../messaging/index.js';
@@ -74,7 +82,16 @@ import { trainingJobService as _trainingJobService } from '../TrainingJobService
 
 const trainingJobRepository = vi.mocked(_trainingJobRepository, true);
 const modelVersionRepository = vi.mocked(_modelVersionRepository, true);
+const modelCheckpointRepository = vi.mocked(_modelCheckpointRepository, true);
 const datasetRepository = vi.mocked(_datasetRepository, true);
+
+/**
+ * Stand-in for the ModelCheckpoint table, keyed by trainingJobId. It is a
+ * store rather than a fixed return value because recordCheckpoint writes and
+ * completeJob reads: a stub would let completeJob claim a checkpointUri no
+ * checkpoint call ever produced.
+ */
+const checkpointRows = new Map<string, { epoch: number; uri: string }[]>();
 const natsClient = vi.mocked(_natsClient, true);
 const getJobQueue = vi.mocked(_getJobQueue, true);
 const trainingJobService = vi.mocked(_trainingJobService, true);
@@ -144,6 +161,28 @@ beforeEach(() => {
   // Default queue/run counts so listWorkers() is safe everywhere.
   trainingJobRepository.findByStatus.mockResolvedValue([]);
   trainingJobRepository.findRunning.mockResolvedValue([]);
+
+  // Checkpoint rows round-trip: upsert on (jobId, epoch) and read back by
+  // epoch, the way the real repository does.
+  checkpointRows.clear();
+  modelCheckpointRepository.create.mockImplementation((async (input: {
+    trainingJobId: string;
+    epoch: number;
+    uri: string;
+  }) => {
+    const rows = checkpointRows.get(input.trainingJobId) ?? [];
+    const row = { epoch: input.epoch, uri: input.uri };
+    const existing = rows.findIndex((r) => r.epoch === input.epoch);
+    if (existing >= 0) rows[existing] = row;
+    else rows.push(row);
+    rows.sort((a, b) => a.epoch - b.epoch);
+    checkpointRows.set(input.trainingJobId, rows);
+    return { id: `ckpt-${input.trainingJobId}-${input.epoch}`, ...row };
+  }) as never);
+  modelCheckpointRepository.listByJob.mockImplementation((async (jobId: string) => [
+    ...(checkpointRows.get(jobId) ?? []),
+  ]) as never);
+  modelCheckpointRepository.attachToModelVersion.mockResolvedValue(0);
 });
 
 // ===========================================================================
@@ -754,6 +793,25 @@ describe('completeJob', () => {
       trainingMetrics: Record<string, unknown>;
     };
     expect(created.trainingMetrics).not.toHaveProperty('mean_reward');
+  });
+
+  it('sets checkpointUri from the newest persisted checkpoint and links the rows', async () => {
+    trainingJobRepository.findById.mockResolvedValue(makeJob({ status: 'running' }));
+    trainingJobService.updateJobStatus.mockResolvedValue(makeJob({ status: 'completed' }));
+    datasetRepository.findById.mockResolvedValue(makeDataset());
+    modelVersionRepository.create.mockResolvedValue({ id: 'mv1' } as never);
+
+    await trainingOrchestrator.recordCheckpoint({ jobId: 'job1', epoch: 1, checkpointUri: 'a' });
+    await trainingOrchestrator.recordCheckpoint({ jobId: 'job1', epoch: 2, checkpointUri: 'b' });
+
+    await trainingOrchestrator.completeJob(req);
+
+    expect(modelVersionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ checkpointUri: 'b' })
+    );
+    // The rows were written before the model existed, so they carry no
+    // modelVersionId until completion links them.
+    expect(modelCheckpointRepository.attachToModelVersion).toHaveBeenCalledWith('job1', 'mv1');
   });
 });
 

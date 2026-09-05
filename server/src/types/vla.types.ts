@@ -76,6 +76,12 @@ export type DeploymentStrategy = (typeof DeploymentStrategies)[number];
 export const ModelDeploymentStatuses = ['staging', 'canary', 'production', 'archived'] as const;
 export type ModelDeploymentStatus = (typeof ModelDeploymentStatuses)[number];
 
+// Where a model came from (TASK-238). 'training' is one this server produced,
+// 'imported' one registered from outside it, 'derived' a fine-tune of another
+// registered model.
+export const ModelSourceKinds = ['training', 'imported', 'derived'] as const;
+export type ModelSourceKind = (typeof ModelSourceKinds)[number];
+
 // ============================================================================
 // JSON FIELD TYPES
 // ============================================================================
@@ -312,7 +318,9 @@ export interface UpdateSkillDefinitionInput {
   timeout?: number;
   maxRetries?: number;
   status?: SkillStatus;
-  linkedModelVersionId?: string;
+  // null unlinks: the model this skill resolved no longer claims the skill
+  // (TASK-238, ModelRegistryService).
+  linkedModelVersionId?: string | null;
   compatibleRobotTypeIds?: string[];
 }
 
@@ -622,7 +630,13 @@ export type ModelType = 'vla' | 'rl_policy';
 export interface ModelVersion {
   id: string;
   skillId: string | null;
-  trainingJobId: string;
+  // null for an imported model: it was trained somewhere this server cannot
+  // see, so there is no TrainingJob row to point at. (TASK-238)
+  trainingJobId: string | null;
+  // Human-readable name beside the machine `version`.
+  name: string | null;
+  sourceKind: ModelSourceKind;
+  parentModelVersionId: string | null;
   modelType: ModelType;
   version: string;
   artifactUri: string;
@@ -636,11 +650,18 @@ export interface ModelVersion {
   // Optional relations
   skill?: SkillDefinition;
   trainingJob?: TrainingJob;
+  parent?: ModelVersion | null;
+  children?: ModelVersion[];
+  checkpoints?: ModelCheckpoint[];
 }
 
 export interface CreateModelVersionInput {
   skillId: string | null;
-  trainingJobId: string;
+  // Optional since TASK-238 — an imported model has no training job here.
+  trainingJobId?: string | null;
+  name?: string | null;
+  sourceKind?: ModelSourceKind;
+  parentModelVersionId?: string | null;
   modelType?: ModelType;
   version: string;
   artifactUri: string;
@@ -651,6 +672,9 @@ export interface CreateModelVersionInput {
 }
 
 export interface UpdateModelVersionInput {
+  skillId?: string | null;
+  name?: string | null;
+  parentModelVersionId?: string | null;
   artifactUri?: string;
   checkpointUri?: string;
   trainingMetrics?: TrainingMetrics;
@@ -664,6 +688,56 @@ export interface ModelVersionQueryParams {
   deploymentStatus?: ModelDeploymentStatus | ModelDeploymentStatus[];
   page?: number;
   pageSize?: number;
+}
+
+// ============================================================================
+// DOMAIN TYPES - ModelCheckpoint
+// ============================================================================
+
+/**
+ * One per-epoch checkpoint reported by the training worker. (TASK-238)
+ *
+ * `modelVersionId` is null while the job is still running — the ModelVersion
+ * that job will produce does not exist until it completes.
+ */
+export interface ModelCheckpoint {
+  id: string;
+  modelVersionId: string | null;
+  trainingJobId: string;
+  epoch: number;
+  uri: string;
+  metrics: Record<string, number>;
+  createdAt: Date;
+}
+
+export interface CreateModelCheckpointInput {
+  trainingJobId: string;
+  epoch: number;
+  uri: string;
+  modelVersionId?: string | null;
+  metrics?: Record<string, number>;
+}
+
+/**
+ * Evaluation rollup for one model, counted over `EvaluationEpisode` rows that
+ * carry its id. Rows that only ever had the free `modelVersion` string are not
+ * counted — see the TASK-238 migration.
+ */
+export interface ModelVersionEvaluationSummary {
+  episodeCount: number;
+  successCount: number;
+  successRate: number;
+}
+
+/**
+ * `GET /api/models/versions/:id/lineage` — the chain from this model to the
+ * root, plus its direct children.
+ */
+export interface ModelVersionLineage {
+  modelVersionId: string;
+  /** Nearest parent first, root last. Excludes the model itself. */
+  ancestors: ModelVersion[];
+  children: ModelVersion[];
 }
 
 // ============================================================================

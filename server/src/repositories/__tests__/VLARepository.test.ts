@@ -912,6 +912,11 @@ describe('ModelVersionRepository', () => {
       data: {
         skillId: 'sk-1',
         trainingJobId: 'tj-1',
+        // TASK-238 columns: a create that names none of them registers a model
+        // this server trained itself, unnamed and with no parent.
+        name: null,
+        sourceKind: 'training',
+        parentModelVersionId: null,
         modelType: 'vla',
         version: '1.0.0',
         artifactUri: 's3://models/mv-1',

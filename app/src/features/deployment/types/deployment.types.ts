@@ -213,20 +213,97 @@ export interface ModelVersionMetrics {
   successRate?: number;
 }
 
+export const ModelSourceKinds = ['training', 'imported', 'derived'] as const;
+export type ModelSourceKind = (typeof ModelSourceKinds)[number];
+
+export const MODEL_SOURCE_KIND_LABELS: Record<ModelSourceKind, string> = {
+  training: 'Trained here',
+  imported: 'Imported',
+  derived: 'Derived',
+};
+
+export type ModelDeploymentStatus = 'staging' | 'canary' | 'production' | 'archived';
+
+/**
+ * Schemes an `artifactUri` may carry. A bare path is rejected by
+ * `POST /api/models/versions` with a 400 — it is not portable and fails on
+ * another machine in a way nobody can debug. Mirrored here so the modal can
+ * say so before the round trip. (TASK-238)
+ */
+export const ARTIFACT_URI_SCHEMES = ['hf://', 's3://', 'file://'] as const;
+
 export interface ModelVersion {
   id: string;
   skillId: string;
-  trainingJobId: string;
+  /** null for an imported model — it was trained outside this server. */
+  trainingJobId: string | null;
+  /** Human-readable name beside the machine `version`. */
+  name?: string | null;
+  sourceKind?: ModelSourceKind;
+  parentModelVersionId?: string | null;
+  modelType?: 'vla' | 'rl_policy';
   version: string;
   artifactUri: string;
   checkpointUri?: string;
   trainingMetrics: TrainingMetrics;
   validationMetrics: TrainingMetrics;
-  deploymentStatus: 'staging' | 'canary' | 'production' | 'archived';
+  deploymentStatus: ModelDeploymentStatus;
   metrics?: ModelVersionMetrics;
   createdAt: string;
   updatedAt: string;
   skill?: SkillDefinition;
+  parent?: ModelVersion | null;
+  children?: ModelVersion[];
+  checkpoints?: ModelCheckpoint[];
+}
+
+/** One per-epoch checkpoint reported by the training worker. (TASK-238) */
+export interface ModelCheckpoint {
+  id: string;
+  modelVersionId?: string | null;
+  trainingJobId: string;
+  epoch: number;
+  uri: string;
+  metrics: Record<string, number>;
+  createdAt: string;
+}
+
+/** Evaluation rollup returned with `GET /api/models/versions/:id`. */
+export interface ModelVersionEvaluationSummary {
+  count: number;
+  successRate: number;
+}
+
+export interface ModelVersionDetail extends ModelVersion {
+  evaluation?: ModelVersionEvaluationSummary;
+}
+
+/** `GET /api/models/versions/:id/lineage` — ancestors (nearest first) + direct children. */
+export interface ModelVersionLineage {
+  modelVersionId: string;
+  ancestors: ModelVersion[];
+  children: ModelVersion[];
+}
+
+/** Body of `POST /api/models/versions`. */
+export interface RegisterModelVersionInput {
+  name?: string;
+  version: string;
+  artifactUri: string;
+  modelType?: 'vla' | 'rl_policy';
+  skillId?: string | null;
+  parentModelVersionId?: string | null;
+  trainingJobId?: string | null;
+  trainingMetrics?: TrainingMetrics;
+  validationMetrics?: TrainingMetrics;
+  deploymentStatus?: ModelDeploymentStatus;
+}
+
+/** Body of `PATCH /api/models/versions/:id`. */
+export interface UpdateModelVersionInput {
+  skillId?: string | null;
+  deploymentStatus?: ModelDeploymentStatus;
+  name?: string | null;
 }
 
 // ============================================================================
