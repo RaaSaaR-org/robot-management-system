@@ -54,6 +54,7 @@ import { complianceTrackerRoutes } from './routes/compliance-tracker.routes.js';
 import { trainingRoutes } from './routes/training.routes.js';
 import { storageRoutes } from './routes/storage.routes.js';
 import { datasetRoutes } from './routes/datasets.routes.js';
+import { datasetViewRoutes } from './routes/dataset-views.routes.js';
 import { deploymentsRoutes } from './routes/deployments.routes.js';
 import { modelsRoutes } from './routes/models.routes.js';
 import { skillsRoutes } from './routes/skills.routes.js';
@@ -282,6 +283,12 @@ export function createApp(): Express {
   app.use('/api/storage', authMiddleware, storageRoutes);
 
   // Dataset routes (protected) - VLA training dataset management
+  //
+  // Views first (TASK-240). A view is a Dataset row, so its endpoints live
+  // under the same prefix; declared ahead of the main dataset router so that
+  // nothing in it can shadow `/views/:id`, and anything these do not match
+  // falls straight through.
+  app.use('/api/datasets', authMiddleware, datasetViewRoutes);
   app.use('/api/datasets', authMiddleware, datasetRoutes);
 
   // Deployment routes (protected) - VLA model fleet deployment

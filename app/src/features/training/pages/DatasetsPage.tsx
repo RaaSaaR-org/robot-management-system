@@ -16,12 +16,14 @@ import { HFDatasetBrowserModal } from '../components/HFDatasetBrowserModal';
 import { HFPushModal } from '../components/HFPushModal';
 import { GenerateSyntheticModal } from '../components/GenerateSyntheticModal';
 import { DatasetCompatibilityPanel } from '../components/DatasetCompatibilityPanel';
+import { CreateViewModal } from '../components/CreateViewModal';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
-import { trainingApi } from '../api';
+import { datasetViewsApi, trainingApi } from '../api';
 import { useDatasetsAutoFetch, useTrainingJobs } from '../hooks';
 import { useTrainingStore } from '../store';
 import type {
   CompatibilityReport,
+  CreateDatasetViewInput,
   Dataset,
   DatasetQueryParams,
   RobotType,
@@ -74,6 +76,9 @@ export function DatasetsPage() {
   // Mixture selection: ids picked in the list, the report they produced, and
   // the wizard they hand over to.
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // The frozen view a "Duplicate" click wants forked again. A frozen view is
+  // what a finished run was trained on, so it is never edited in place.
+  const [duplicateSource, setDuplicateSource] = useState<Dataset | null>(null);
   const [isCompatibilityOpen, setIsCompatibilityOpen] = useState(false);
   const [report, setReport] = useState<CompatibilityReport | null>(null);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
@@ -182,6 +187,40 @@ export function DatasetsPage() {
       navigate('/training');
     },
     [submitJob, navigate],
+  );
+
+  // The parent of the view being duplicated, out of the list already loaded —
+  // it supplies the "of M episodes" total the dialog shows.
+  const duplicateParent = useMemo(
+    () =>
+      datasets.find((d) => d.id === duplicateSource?.parentDatasetId)
+        ?? duplicateSource?.parent
+        ?? null,
+    [datasets, duplicateSource],
+  );
+
+  const handleDuplicateView = useCallback((view: Dataset) => {
+    setActionError(null);
+    // Both facts come off the row itself; without either there is nothing to
+    // copy, and saying so beats opening a dialog that cannot submit.
+    if (!view.parentDatasetId || !view.selection) {
+      setActionError(
+        `"${view.name}" does not carry the selection it was built from — open its parent dataset to fork it again`,
+      );
+      return;
+    }
+    setDuplicateSource(view);
+  }, []);
+
+  const handleCreateView = useCallback(
+    async (input: CreateDatasetViewInput) => {
+      const parentId = duplicateSource?.parentDatasetId;
+      if (!parentId) throw new Error('No parent dataset to fork');
+      const created = await datasetViewsApi.createView(parentId, input);
+      fetchDatasets();
+      return created;
+    },
+    [duplicateSource, fetchDatasets],
   );
 
   const handleFilterChange = (key: keyof DatasetQueryParams, value: string) => {
@@ -334,6 +373,7 @@ export function DatasetsPage() {
         onViewEpisodes={(dataset) => navigate(`/datasets/${dataset.id}/episodes`)}
         onDelete={handleDeleteClick}
         onRetryImport={handleRetryImport}
+        onDuplicateView={handleDuplicateView}
         selectedIds={selectedIds}
         onToggleSelection={toggleSelection}
         onClearSelection={() => setSelectedIds([])}
@@ -408,6 +448,20 @@ export function DatasetsPage() {
         datasets={datasets}
         initialMixture={selectedIds.map((datasetId) => ({ datasetId, weight: 1 }))}
       />
+
+      {/* Fork a frozen view again, starting from the episodes it already holds */}
+      {duplicateSource?.selection && (
+        <CreateViewModal
+          isOpen={!!duplicateSource}
+          onClose={() => setDuplicateSource(null)}
+          parentName={duplicateParent?.name ?? 'the parent dataset'}
+          parentEpisodeCount={
+            duplicateParent?.demonstrationCount ?? duplicateSource.selection.episodes.length
+          }
+          duplicateOf={{ name: duplicateSource.name, selection: duplicateSource.selection }}
+          onCreate={handleCreateView}
+        />
+      )}
 
       {/* Delete confirmation modal */}
       <Modal

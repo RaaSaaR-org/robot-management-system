@@ -34,6 +34,7 @@
  */
 
 import { prisma } from '../../database/index.js';
+import { datasetViewService, isDatasetView } from '../DatasetViewService.js';
 import type {
   AxisVerdict,
   CompatibilityAxis,
@@ -536,19 +537,45 @@ export async function analyzeDatasetIds(datasetIds: string[]): Promise<Compatibi
     throw new UnknownDatasetError(missing);
   }
 
+  // A view has no axes of its own — no fps, no widths, no cameras, because it
+  // has no files. Every one of them belongs to the dataset its episodes are
+  // indices into, so the row that gets judged is the RESOLVED ROOT (TASK-240).
+  // Judging the view row itself would compare the empty columns of a metadata
+  // stub and call two arms of the same experiment incompatible.
+  //
+  // The identity stays the view's: the operator cited "top-100 by reward", not
+  // the 400-episode dataset underneath, and a report that renames their member
+  // is a report about something they did not ask about. `report.datasetIds`
+  // also feeds the mixture rows, which must name what the job cites.
+  const axisRows = new Map<string, (typeof rows)[number]>();
+  for (const id of datasetIds) {
+    const row = byId.get(id)!;
+    if (!isDatasetView(row)) continue;
+    // `resolve` is the ONE walker; nothing here follows `parentDatasetId`.
+    const { rootDatasetId } = await datasetViewService.resolve(id);
+    const root =
+      byId.get(rootDatasetId)
+      ?? (await prisma.dataset.findUnique({
+        where: { id: rootDatasetId },
+        include: { robotType: true },
+      }));
+    if (root) axisRows.set(id, root);
+  }
+
   return analyzeCompatibility(
     datasetIds.map((id) => {
       const row = byId.get(id)!;
+      const axes = axisRows.get(id) ?? row;
       return {
         id: row.id,
         name: row.name,
-        status: row.status,
-        fps: row.fps,
-        lerobotVersion: row.lerobotVersion,
-        robotTypeId: row.robotTypeId,
-        robotTypeName: row.robotType?.name ?? null,
-        infoJson: row.infoJson,
-        validationJson: row.validationJson,
+        status: axes.status,
+        fps: axes.fps,
+        lerobotVersion: axes.lerobotVersion,
+        robotTypeId: axes.robotTypeId,
+        robotTypeName: axes.robotType?.name ?? null,
+        infoJson: axes.infoJson,
+        validationJson: axes.validationJson,
       };
     }),
   );

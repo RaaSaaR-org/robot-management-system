@@ -5,3 +5,4 @@
  */
 
 export * from './training.types';
+export * from './dataset-view.types';

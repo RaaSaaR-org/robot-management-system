@@ -50,6 +50,7 @@ import type {
   TrainingJobDatasetRef,
 } from '../types/mixture.types.js';
 import { analyzeDatasetIds, MixtureIncompatibleError } from './lerobot/datasetCompatibility.js';
+import { datasetViewService, isDatasetView } from './DatasetViewService.js';
 import { prisma } from '../database/index.js';
 
 // ============================================================================
@@ -370,6 +371,19 @@ export class TrainingJobService extends EventEmitter {
     // fields absent is the ordinary case and produces two nulls.
     const initFrom = await checkInitFrom(request, request.baseModel);
 
+    // Pin every view this job cites, BEFORE the job row exists (TASK-240).
+    //
+    // A view is an episode selection over another dataset, and a selection
+    // that can still be edited after a run has trained on it makes the run's
+    // report a claim about data nobody can reconstruct. Freezing is not
+    // destructive — it only forbids edits — so doing it before the row is
+    // written is the safe order: a submission that then fails leaves a view
+    // pinned to a selection nobody can quietly change, which is the state it
+    // should have been in anyway.
+    await this.freezeCitedViews(
+      members ? members.map((m) => m.datasetId) : [primaryDatasetId],
+    );
+
     // Create job in database
     const jobInput: CreateTrainingJobInput = {
       datasetId: primaryDatasetId,
@@ -456,6 +470,34 @@ export class TrainingJobService extends EventEmitter {
    */
   async checkMixture(members: MixtureMemberInput[]): Promise<CompatibilityReport> {
     return await analyzeDatasetIds(members.map((m) => m.datasetId));
+  }
+
+  /**
+   * Freeze every cited dataset that is a view. (TASK-240)
+   *
+   * One query decides which of the cited ids are views, so an ordinary job on
+   * ordinary datasets pays for exactly one indexed read and no walk at all —
+   * and the answer comes off the `kind` column, which is the only thing that
+   * says what a row is. `freeze` then pins the whole ancestor chain of each,
+   * because editing the PARENT of a cited view changes what the cited view
+   * resolves to just as surely as editing the view itself.
+   *
+   * Not caught: a freeze that fails has left a run able to cite data that can
+   * still be changed underneath it, and the submission is refused instead.
+   */
+  private async freezeCitedViews(datasetIds: string[]): Promise<void> {
+    const ids = [...new Set(datasetIds.filter((id): id is string => Boolean(id)))];
+    if (ids.length === 0) return;
+    const rows = (await prisma.dataset.findMany({
+      where: { id: { in: ids }, kind: 'view' },
+      select: { id: true, kind: true },
+    })) as Array<{ id: string; kind: string }>;
+    for (const row of rows ?? []) {
+      // The `where` already asked for views; asked again off the row because
+      // `kind` is what decides, and one place deciding it is the point.
+      if (!isDatasetView(row)) continue;
+      await datasetViewService.freeze(row.id);
+    }
   }
 
   /**
@@ -651,6 +693,10 @@ export class TrainingJobService extends EventEmitter {
       ...(request.maxFrames !== undefined ? { maxFrames: request.maxFrames } : {}),
     };
 
+    // A reward job reads this dataset's episodes, so a view it cites is pinned
+    // for the same reason a training run's is (TASK-240).
+    await this.freezeCitedViews([request.datasetId]);
+
     const job = await trainingJobRepository.create({
       kind: 'reward_model',
       datasetId: request.datasetId,
@@ -688,6 +734,9 @@ export class TrainingJobService extends EventEmitter {
     const hyperparameters: AnnotateHyperparameters = {
       ...(request.episodes !== undefined ? { episodes: request.episodes } : {}),
     };
+
+    // Same as reward_model: an annotate job reads the cited episodes.
+    await this.freezeCitedViews([request.datasetId]);
 
     const job = await trainingJobRepository.create({
       kind: 'annotate',

@@ -4,6 +4,12 @@
  * @feature training
  */
 
+import type {
+  DatasetKind,
+  DatasetParentSummary,
+  DatasetSelection,
+} from './dataset-view.types';
+
 // ============================================================================
 // ENUMS & CONSTANTS
 // ============================================================================
@@ -222,6 +228,25 @@ export interface Dataset {
    * wrote `status: 'ready'` without a check. The card says which.
    */
   validation?: DatasetValidation;
+  /**
+   * `view` means this row copies no bytes: its contents are `selection`
+   * applied to `parentDatasetId` (TASK-240). Absent on rows written before
+   * views existed, which are all materialized.
+   */
+  kind?: DatasetKind;
+  parentDatasetId?: string | null;
+  /**
+   * The parent, when the server inlines it. Never required — the grid resolves
+   * the parent out of the list it already holds, so a card can name it either
+   * way, and `isDatasetView` is what decides viewness in both cases.
+   */
+  parent?: DatasetParentSummary | null;
+  /** Resolved episode list. Present on views, absent on materialized rows. */
+  selection?: DatasetSelection | null;
+  /** Set the first time a training job cited this view. A frozen view is read-only. */
+  frozenAt?: string | null;
+  /** Set only if a consumer forced the view onto disk. Null is the normal state. */
+  materializedPath?: string | null;
   createdAt: string;
   updatedAt: string;
   robotType?: RobotType;

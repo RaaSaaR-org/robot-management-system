@@ -39,12 +39,15 @@ import {
   declaredWidth,
   type CompatibilityDatasetInput,
 } from './lerobot/datasetCompatibility.js';
+import { datasetViewService, isDatasetView } from './DatasetViewService.js';
 import { BUCKETS } from '../storage/model-storage.js';
 import {
   TRAINING_RUN_SCHEMA_VERSION,
   type TrainingRunManifest,
   type TrainingRunManifestDataset,
+  type TrainingRunManifestSelection,
 } from '../types/mixture.types.js';
+import type { DatasetSelection } from '../types/dataset-view.types.js';
 
 /** A `Dataset` row as this service reads it, plus its mixture weight/position. */
 interface MixtureRow {
@@ -65,6 +68,13 @@ interface MixtureRow {
     validationJson: string | null;
     totalFrames: number;
     demonstrationCount: number;
+    // The view columns (TASK-240). A member may be a selection over another
+    // dataset rather than a dataset with bytes of its own, and a manifest that
+    // could not say so would send a cluster to train on the wrong episodes.
+    kind: string;
+    parentDatasetId: string | null;
+    selectionJson: string | null;
+    frozenAt: Date | null;
   };
 }
 
@@ -259,6 +269,49 @@ export class TrainingRunExportService {
   }
 
   /**
+   * The selection a member is, plus the dataset its bytes are in — or null when
+   * the member is an ordinary dataset (TASK-240).
+   *
+   * `kind` is the authority on whether this is a view; `resolve` is the only
+   * thing that walks the chain, and it is asked for the ROOT rather than the
+   * immediate parent, because a view of a view still resolves to exactly one
+   * directory of files and one list of episode indices into it.
+   *
+   * Returns null rather than throwing when the chain cannot be resolved: an
+   * export that refuses is an export nobody can read to find out why, and the
+   * `warnings` list carries the reason instead.
+   */
+  private async readSelection(row: MixtureRow['dataset']): Promise<{
+    root: MixtureRow['dataset'];
+    manifest: TrainingRunManifestSelection;
+  } | null> {
+    if (!isDatasetView(row)) return null;
+    try {
+      const resolved = await datasetViewService.resolve(row.id);
+      const root = (await prisma.dataset.findUnique({
+        where: { id: resolved.rootDatasetId },
+      })) as unknown as MixtureRow['dataset'] | null;
+      if (!root) return null;
+      const stored = row.selectionJson
+        ? (JSON.parse(row.selectionJson) as { origin?: DatasetSelection['origin'] })
+        : null;
+      return {
+        root,
+        manifest: {
+          viewDatasetId: row.id,
+          rootDatasetId: resolved.rootDatasetId,
+          episodes: resolved.episodes,
+          origin: stored?.origin ?? null,
+          frozenAt: row.frozenAt ? row.frozenAt.toISOString() : null,
+        },
+      };
+    } catch (error) {
+      console.warn(`[TrainingRunExportService] Could not resolve view ${row.id}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Build the manifest for a job, or null when there is no such job.
    *
    * Never throws for a job whose data is incomplete: an export that refuses is
@@ -284,35 +337,70 @@ export class TrainingRunExportService {
       );
     }
 
-    const datasets: TrainingRunManifestDataset[] = members.map((member) => {
-      const row = member.dataset;
-      const located = resolveDatasetUri(row);
-      if (located.warning) warnings.push(located.warning);
-      const widths = readWidths(row.validationJson, row.infoJson);
-      const info = parseJson(row.infoJson);
-      const robotType = typeof info?.robot_type === 'string' && info.robot_type.trim()
-        ? info.robot_type.trim()
-        : row.robotTypeId;
+    const datasets: TrainingRunManifestDataset[] = await Promise.all(
+      members.map(async (member) => {
+        const row = member.dataset;
+        // A view has no files, no fps and no widths of its own — every one of
+        // those belongs to the dataset its episodes are indices into. So the
+        // LOCATOR half of this entry is the root's, and the selection below
+        // carries the rest. Anything else would hand a cluster a `file://`
+        // path of "" and a state width of null (TASK-240).
+        const selection = await this.readSelection(row);
+        const located = resolveDatasetUri(selection?.root ?? row);
+        if (located.warning) warnings.push(located.warning);
+        const axes = selection?.root ?? row;
+        const widths = readWidths(axes.validationJson, axes.infoJson);
+        const info = parseJson(axes.infoJson);
+        const robotType = typeof info?.robot_type === 'string' && info.robot_type.trim()
+          ? info.robot_type.trim()
+          : axes.robotTypeId;
 
-      return {
-        datasetId: row.id,
-        name: row.name,
-        uri: located.uri,
-        revision: row.sourceRevision ?? null,
-        license: readLicense(row.sourceLicense ?? null, row.infoJson),
-        weight: member.weight,
-        normalizedWeight: usableTotal ? member.weight / rawTotal : 1 / members.length,
-        lerobotVersion: row.lerobotVersion,
-        robotType,
-        fps: row.fps,
-        stateWidth: widths.state,
-        actionWidth: widths.action,
-        cameraKeys: readCameraKeys(row),
-        totalEpisodes: row.demonstrationCount,
-        totalFrames: row.totalFrames,
-        portable: located.portable,
-      };
-    });
+        if (!selection && isDatasetView(row)) {
+          // A view whose chain could not be resolved. Said out loud: the entry
+          // below describes a dataset with no bytes, and a reader who is not
+          // told that will read `totalEpisodes` as data they can fetch.
+          warnings.push(
+            `"${row.name}" is a view — an episode selection over another dataset — and this server `
+            + 'could not resolve which dataset or which episodes. The entry below therefore locates '
+            + 'nothing loadable. Repair the view on the source server and export again.',
+          );
+        }
+        if (selection) {
+          // The most consequential line this document can carry for such a
+          // run: a reader that loads `uri` and ignores `selection` trains on a
+          // superset of the data and reports it as this arm.
+          warnings.push(
+            `"${row.name}" is a VIEW of "${selection.root.name}": it holds no data of its own and `
+            + `selects ${selection.manifest.episodes.length} of that dataset's `
+            + `${selection.root.demonstrationCount} episodes. The uri above locates the WHOLE parent `
+            + '— apply datasets[].selection.episodes before training, or this run will not be the '
+            + 'run this manifest describes.',
+          );
+        }
+
+        return {
+          datasetId: row.id,
+          name: row.name,
+          uri: located.uri,
+          revision: axes.sourceRevision ?? null,
+          license: readLicense(axes.sourceLicense ?? null, axes.infoJson),
+          weight: member.weight,
+          normalizedWeight: usableTotal ? member.weight / rawTotal : 1 / members.length,
+          lerobotVersion: axes.lerobotVersion,
+          robotType,
+          fps: axes.fps,
+          stateWidth: widths.state,
+          actionWidth: widths.action,
+          cameraKeys: readCameraKeys(axes),
+          // The view's OWN counts: what the run trained on, not what the
+          // parent holds. `selection.episodes` says which they are.
+          totalEpisodes: row.demonstrationCount,
+          totalFrames: row.totalFrames,
+          portable: located.portable,
+          selection: selection?.manifest ?? null,
+        };
+      }),
+    );
 
     // A job with no members is one of two quite different things, and saying
     // the wrong one is a lie in a document meant to be trusted. A `sim_rl` job

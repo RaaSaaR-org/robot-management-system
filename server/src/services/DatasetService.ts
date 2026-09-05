@@ -17,6 +17,10 @@ import {
   robotTypeRepository,
   skillDefinitionRepository,
 } from '../repositories/index.js';
+// From the concrete module rather than the repository barrel: the barrel is a
+// large surface and this is one repository. (`datasets.routes.ts` reads the
+// episode-flag repository the same way.)
+import { episodeRewardRepository } from '../repositories/EpisodeRewardRepository.js';
 import { modelStorage, BUCKETS } from '../storage/model-storage.js';
 import { getRustFSClient, isRustFSInitialized } from '../storage/rustfs-client.js';
 import { DatasetStoreError, openDatasetTree } from './lerobot/DatasetTree.js';
@@ -54,7 +58,18 @@ import type {
   ValidationContext,
 } from './lerobot/validateDataset.js';
 import { prisma } from '../database/index.js';
-import { ConflictError } from '../utils/errors.js';
+import { ConflictError, NotFoundError } from '../utils/errors.js';
+import {
+  datasetViewService,
+  DatasetViewError,
+  isDatasetView,
+} from './DatasetViewService.js';
+import type {
+  DatasetKind,
+  DatasetSelection,
+  ParentEpisodeMetadata,
+  SelectedEpisode,
+} from '../types/dataset-view.types.js';
 import { natsClient } from '../messaging/index.js';
 import { kvPut, kvGet, KV_STORE_NAMES } from '../messaging/kv-stores.js';
 import type { KV } from 'nats';
@@ -157,6 +172,389 @@ export function datasetStorageRoot(): string {
 // declared twice: the same four numbers used to live here AND in
 // `dataset.types.ts`, and nothing kept them equal.
 const QUALITY = QUALITY_THRESHOLDS;
+
+// ============================================================================
+// DATASET VIEWS (TASK-240)
+// ============================================================================
+
+/**
+ * The view-side columns of a `Dataset` row.
+ *
+ * A separate shape from the domain `Dataset` on purpose: a view is a Dataset
+ * ROW so that every foreign key keeps working, but the columns that make it one
+ * are plumbing, and only the handful of call sites that care about views read
+ * them.
+ */
+export interface DatasetViewColumns {
+  id: string;
+  kind: string;
+  parentDatasetId: string | null;
+  selectionJson: string | null;
+  frozenAt: Date | null;
+  materializedPath: string | null;
+}
+
+/** What creating a view needs beyond the parent it is created from. */
+export interface CreateDatasetViewInput {
+  name: string;
+  description?: string;
+  selection: DatasetSelection;
+}
+
+/**
+ * A view as the views API returns it.
+ *
+ * Deliberately NOT a `DatasetResponse`: the fields a view is interesting for —
+ * what it was forked from, what it selects, whether it is pinned — do not
+ * exist on a dataset, and the list a card renders ("142 of 400 episodes") needs
+ * the parent's count beside the view's own.
+ */
+export interface DatasetViewSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  kind: DatasetKind;
+  status: string;
+  fps: number;
+  /** The row this view selects from — one hop, which may itself be a view. */
+  parentDatasetId: string;
+  parentName: string;
+  /** How many episodes the parent has, so a card can say "142 of 400". */
+  parentDemonstrationCount: number;
+  /** The materialized dataset the bytes are in, at the end of the chain. */
+  rootDatasetId: string;
+  demonstrationCount: number;
+  totalFrames: number;
+  totalDuration: number;
+  /** As stored: episode indices in the PARENT, plus how they were chosen. */
+  selection: DatasetSelection;
+  /** The same thing in the ROOT's episode indices, ranges composed. */
+  resolvedEpisodes: SelectedEpisode[];
+  /** Set once a training job cited this view; edits are refused after that. */
+  frozenAt: string | null;
+  /** Set only if `materialize` has ever written these episodes to disk. */
+  materializedPath: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Frames per episode, and whether they were read or estimated. */
+export interface EpisodeLengthReadout extends ParentEpisodeMetadata {
+  /**
+   * True when the lengths came from the dataset's own episode metadata.
+   *
+   * False means they were divided out of `totalFrames` because that metadata
+   * could not be read, so they are a mean and not a measurement — which is
+   * enough to size a card and NOT enough to validate a frame range against.
+   */
+  exact: boolean;
+}
+
+/**
+ * The `Dataset` columns a view operation reads. Narrow on purpose: a view is
+ * decided by six columns and nothing here wants the stats blobs.
+ */
+const VIEW_PARENT_SELECT = {
+  id: true,
+  name: true,
+  kind: true,
+  status: true,
+  fps: true,
+  robotTypeId: true,
+  skillId: true,
+  lerobotVersion: true,
+  storagePath: true,
+  demonstrationCount: true,
+  totalFrames: true,
+  totalDuration: true,
+  parentDatasetId: true,
+  selectionJson: true,
+  frozenAt: true,
+  materializedPath: true,
+  description: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
+interface ViewParentRow {
+  id: string;
+  name: string;
+  kind: string;
+  status: string;
+  fps: number;
+  robotTypeId: string;
+  skillId: string | null;
+  lerobotVersion: string;
+  storagePath: string;
+  demonstrationCount: number;
+  totalFrames: number;
+  totalDuration: number;
+  parentDatasetId: string | null;
+  selectionJson: string | null;
+  frozenAt: Date | null;
+  materializedPath: string | null;
+  description: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * The stored validation blob, parsed. `undefined` for null AND for unparseable,
+ * because both mean the same to a reader: there is no report to show.
+ */
+function parseValidationJson(
+  value: string | null | undefined,
+): { breakdown?: QualityScoreBreakdown; report?: DatasetStructureReport; validatedAt?: string }
+  | undefined {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value) as {
+      breakdown?: QualityScoreBreakdown;
+      report?: DatasetStructureReport;
+      validatedAt?: string;
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+
+/** The stored selection, or null for an absent or unparseable one. */
+function parseSelectionJson(value: string | null): DatasetSelection | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as DatasetSelection;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Frames per episode, read out of a dataset's own episode metadata.
+ *
+ * Three layouts, because this platform has all three on disk: the LeRobot v2.1
+ * `meta/episodes.jsonl`, the Cosmos converter's `meta/episodes.json` array, and
+ * v3.0's `meta/episodes/**` parquet shards. Returns null when none of them can
+ * be read — an answer, not a failure: the caller falls back to a mean and stops
+ * validating frame ranges it cannot check.
+ *
+ * Goes through `openDatasetTree`, so a dataset in RustFS answers as readily as
+ * one on this disk.
+ */
+async function readEpisodeLengths(storagePath: string): Promise<number[] | null> {
+  if (!storagePath) return null;
+  let tree;
+  try {
+    tree = openDatasetTree(storagePath);
+  } catch {
+    return null;
+  }
+  if (!tree) return null;
+
+  const fromRows = (rows: Array<{ episode_index?: unknown; length?: unknown }>): number[] => {
+    // Indexed by episode_index rather than by position: the file is not
+    // promised to be in order, and an off-by-one here silently trims the wrong
+    // episode.
+    const lengths: number[] = [];
+    rows.forEach((row, i) => {
+      const index = Number(row.episode_index ?? i);
+      const length = Number(row.length ?? 0);
+      if (Number.isFinite(index) && index >= 0) {
+        lengths[index] = Number.isFinite(length) ? length : 0;
+      }
+    });
+    for (let i = 0; i < lengths.length; i += 1) {
+      if (lengths[i] === undefined) lengths[i] = 0;
+    }
+    return lengths;
+  };
+
+  try {
+    for (const name of ['meta/episodes.json', 'meta/episodes.jsonl']) {
+      const entry = await tree.stat(name);
+      if (!entry) continue;
+      const raw = (await tree.read(name)).toString('utf8');
+      const rows = name.endsWith('.jsonl')
+        ? raw
+            .split('\n')
+            .filter((line) => line.trim().length > 0)
+            .map((line) => JSON.parse(line) as { episode_index?: unknown; length?: unknown })
+        : (JSON.parse(raw) as Array<{ episode_index?: unknown; length?: unknown }>);
+      if (Array.isArray(rows) && rows.length > 0) return fromRows(rows);
+    }
+
+    const shards = (await tree.list('meta/episodes')).filter((f) => f.path.endsWith('.parquet'));
+    if (shards.length === 0) return null;
+    const { ParquetReader } = await import('@dsnp/parquetjs');
+    const rows: Array<{ episode_index?: unknown; length?: unknown }> = [];
+    for (const shard of shards) {
+      // Read whole: this is the manifest — one row of scalars per episode —
+      // not the data. The data parquets are the ones read by footer.
+      const reader = await ParquetReader.openBuffer(await tree.read(shard.path));
+      try {
+        const cursor = reader.getCursor();
+        let row: Record<string, unknown> | null;
+        while ((row = (await cursor.next()) as Record<string, unknown> | null)) {
+          rows.push(row as { episode_index?: unknown; length?: unknown });
+        }
+      } finally {
+        await reader.close().catch(() => undefined);
+      }
+    }
+    return rows.length > 0 ? fromRows(rows) : null;
+  } catch (error) {
+    console.warn(`[DatasetService] Could not read episode lengths from ${storagePath}:`, error);
+    return null;
+  }
+}
+
+/** The mean episode length, repeated. A stand-in, never a measurement. */
+function evenlySplitFrames(totalFrames: number, episodes: number): number[] {
+  if (episodes <= 0) return [];
+  const each = Math.max(0, Math.floor(totalFrames / episodes));
+  return new Array(episodes).fill(each) as number[];
+}
+
+/**
+ * A selection off the wire, checked into shape.
+ *
+ * Shape only — whether the episodes EXIST is a question about the parent and is
+ * asked in `validateAgainstParent`. Both refuse rather than coerce: a client
+ * that sent `episodeIndex: "3"` has a bug, and quietly accepting it puts a
+ * different arm of an experiment in the database than the one it asked for.
+ */
+function normalizeSelection(raw: DatasetSelection | undefined): DatasetSelection {
+  if (!raw || !Array.isArray(raw.episodes)) {
+    throw new DatasetViewError(
+      'selection must be an object with an `episodes` array',
+      'VIEW_MALFORMED',
+    );
+  }
+  if (raw.episodes.length === 0) {
+    throw new DatasetViewError(
+      'A view that selects no episodes is not a dataset',
+      'VIEW_EMPTY_SELECTION',
+    );
+  }
+
+  const episodes: SelectedEpisode[] = raw.episodes.map((ep, i) => {
+    if (!ep || !Number.isInteger(ep.episodeIndex) || ep.episodeIndex < 0) {
+      throw new DatasetViewError(
+        `selection.episodes[${i}].episodeIndex must be a non-negative integer`,
+        'VIEW_MALFORMED',
+        { position: i },
+      );
+    }
+    const out: SelectedEpisode = { episodeIndex: ep.episodeIndex };
+    if (ep.start !== undefined && ep.start !== null) {
+      if (!Number.isInteger(ep.start) || ep.start < 0) {
+        throw new DatasetViewError(
+          `selection.episodes[${i}].start must be a non-negative integer frame`,
+          'VIEW_MALFORMED',
+          { position: i },
+        );
+      }
+      if (ep.start > 0) out.start = ep.start;
+    }
+    if (ep.end !== undefined && ep.end !== null) {
+      if (!Number.isInteger(ep.end) || ep.end < 0) {
+        throw new DatasetViewError(
+          `selection.episodes[${i}].end must be a non-negative integer frame`,
+          'VIEW_MALFORMED',
+          { position: i },
+        );
+      }
+      out.end = ep.end;
+    }
+    if (out.end !== undefined && out.end <= (out.start ?? 0)) {
+      throw new DatasetViewError(
+        `selection.episodes[${i}] trims episode ${ep.episodeIndex} to [${out.start ?? 0}, ${out.end}), `
+        + 'which contains no frames',
+        'VIEW_EMPTY_RANGE',
+        { position: i, episodeIndex: ep.episodeIndex },
+      );
+    }
+    return out;
+  });
+
+  const seen = new Set<number>();
+  for (const ep of episodes) {
+    if (seen.has(ep.episodeIndex)) {
+      throw new DatasetViewError(
+        `Episode ${ep.episodeIndex} appears more than once in the selection`,
+        'VIEW_DUPLICATE_EPISODE',
+        { episodeIndex: ep.episodeIndex },
+      );
+    }
+    seen.add(ep.episodeIndex);
+  }
+
+  return { episodes, origin: normalizeOrigin(raw.origin) };
+}
+
+/** The origin, or `manual` — a selection with no recorded rule is a hand-made one. */
+function normalizeOrigin(origin: DatasetSelection['origin'] | undefined): DatasetSelection['origin'] {
+  if (!origin || typeof origin !== 'object') return { kind: 'manual' };
+  switch (origin.kind) {
+    case 'manual':
+    case 'flags':
+    case 'reward':
+    case 'agent':
+      return origin;
+    default:
+      return { kind: 'manual' };
+  }
+}
+
+/**
+ * Does the parent actually have what this selection names?
+ *
+ * The episode index is always checkable — the parent's `demonstrationCount` is
+ * a column. A frame range is only checkable when the episode lengths were
+ * really read; against a mean it would pass ranges that do not exist and fail
+ * ones that do, so an unreadable parent refuses trims outright instead. That
+ * refusal is recoverable (materialize the parent, or select whole episodes);
+ * a view that claims frames nobody has is not.
+ */
+function validateAgainstParent(
+  parent: { id: string; name: string; demonstrationCount: number },
+  selection: DatasetSelection,
+  metadata: EpisodeLengthReadout,
+): void {
+  for (const ep of selection.episodes) {
+    if (ep.episodeIndex >= parent.demonstrationCount) {
+      throw new DatasetViewError(
+        `"${parent.name}" has ${parent.demonstrationCount} episode(s), so episode `
+        + `${ep.episodeIndex} cannot be selected`,
+        'VIEW_EPISODE_OUT_OF_RANGE',
+        {
+          parentDatasetId: parent.id,
+          episodeIndex: ep.episodeIndex,
+          parentCount: parent.demonstrationCount,
+        },
+      );
+    }
+    const trimmed = (ep.start ?? 0) > 0 || ep.end !== undefined;
+    if (!trimmed) continue;
+    if (!metadata.exact) {
+      throw new DatasetViewError(
+        `Episode lengths for "${parent.name}" could not be read, so a frame range cannot be checked `
+        + 'against them. Select whole episodes, or materialize the parent first.',
+        'VIEW_MALFORMED',
+        { parentDatasetId: parent.id, episodeIndex: ep.episodeIndex },
+      );
+    }
+    const length = metadata.episodeLengths[ep.episodeIndex] ?? 0;
+    if ((ep.start ?? 0) >= length || (ep.end ?? length) > length) {
+      throw new DatasetViewError(
+        `Episode ${ep.episodeIndex} of "${parent.name}" is ${length} frames long, so `
+        + `[${ep.start ?? 0}, ${ep.end ?? length}) is not inside it`,
+        'VIEW_EPISODE_OUT_OF_RANGE',
+        { parentDatasetId: parent.id, episodeIndex: ep.episodeIndex, episodeLength: length },
+      );
+    }
+  }
+}
 
 // ============================================================================
 // DATASET SERVICE
@@ -320,7 +718,8 @@ export class DatasetService extends EventEmitter {
     if (!dataset) {
       return null;
     }
-    return this.toResponse(dataset);
+    const views = await this.loadViewColumns([id]);
+    return this.toResponse(dataset, views.get(id));
   }
 
   /**
@@ -350,7 +749,8 @@ export class DatasetService extends EventEmitter {
 
     const result = await datasetRepository.findAll(params);
 
-    const data = await Promise.all(result.data.map((d) => this.toResponse(d)));
+    const views = await this.loadViewColumns(result.data.map((d) => d.id));
+    const data = await Promise.all(result.data.map((d) => this.toResponse(d, views.get(d.id))));
 
     return {
       data,
@@ -392,7 +792,8 @@ export class DatasetService extends EventEmitter {
       return null;
     }
 
-    const response = await this.toResponse(updated);
+    const views = await this.loadViewColumns([id]);
+    const response = await this.toResponse(updated, views.get(id));
 
     // Emit event
     this.emitEvent({
@@ -425,6 +826,37 @@ export class DatasetService extends EventEmitter {
     const dataset = await datasetRepository.findById(id);
     if (!dataset) {
       return false;
+    }
+
+    // A frozen view is one a run trained on, and this is the door every
+    // delete comes through — the ordinary `DELETE /api/datasets/:id` as well
+    // as the views endpoint — so the refusal lives here rather than in one of
+    // them (TASK-240).
+    const own = (await this.loadViewColumns([id])).get(id);
+    if (own && isDatasetView(own) && own.frozenAt) {
+      throw await this.frozenViewConflict(id, dataset.name, own.frozenAt);
+    }
+
+    // Forks first (TASK-240). A view's every episode is an index INTO this
+    // dataset, so a view whose parent is gone is not a dataset at all — the
+    // foreign key is `ON DELETE RESTRICT` for exactly that reason. Asked here
+    // so the operator is told WHICH views hold it, rather than meeting a raw
+    // constraint violation after the bytes have already been removed below.
+    const derived = await prisma.dataset.findMany({
+      where: { parentDatasetId: id },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    if (derived.length > 0) {
+      const shown = derived.slice(0, 5).map((v) => `"${v.name}"`).join(', ');
+      const rest = derived.length > 5 ? ` and ${derived.length - 5} more` : '';
+      throw new ConflictError(
+        `"${dataset.name}" has ${derived.length} view${derived.length === 1 ? '' : 's'} forked from `
+        + `it (${shown}${rest}). Those views hold no data of their own — every episode they name is `
+        + 'an episode of this dataset — so deleting it would leave them unresolvable. Delete the '
+        + 'views first, or keep the dataset.',
+        { derivedDatasetIds: derived.map((v) => v.id) },
+      );
     }
 
     const heldBy = await prisma.trainingJobDataset.findMany({
@@ -1259,7 +1691,44 @@ export class DatasetService extends EventEmitter {
   /**
    * Convert Dataset to DatasetResponse with relations
    */
-  private async toResponse(dataset: Dataset): Promise<DatasetResponse> {
+  /**
+   * The view-side columns for a set of datasets, in ONE query.
+   *
+   * They are read here rather than off the domain object because
+   * `dbDatasetToDomain` does not carry them: `Dataset` is the shape every
+   * existing caller compiles against, and widening it to hold a view's
+   * plumbing would put five fields into hundreds of call sites that have no
+   * use for them. One indexed `in` query per listing is the cost — not one per
+   * row, which is what a naive `isView(id)` check inside `toResponse` would
+   * have been.
+   */
+  private async loadViewColumns(ids: string[]): Promise<Map<string, DatasetViewColumns>> {
+    const found = new Map<string, DatasetViewColumns>();
+    if (ids.length === 0) return found;
+    const rows = (await prisma.dataset.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        kind: true,
+        parentDatasetId: true,
+        selectionJson: true,
+        frozenAt: true,
+        materializedPath: true,
+      },
+    })) as DatasetViewColumns[];
+    for (const row of rows) found.set(row.id, row);
+    return found;
+  }
+
+  /**
+   * @param view the row's view columns, when the caller has loaded them. A
+   *   dataset whose columns were not loaded is answered as materialized, which
+   *   is what every row was before TASK-240 and what almost every row is now.
+   */
+  private async toResponse(
+    dataset: Dataset,
+    view?: DatasetViewColumns | null,
+  ): Promise<DatasetResponse> {
     const response: DatasetResponse = {
       id: dataset.id,
       name: dataset.name,
@@ -1321,9 +1790,48 @@ export class DatasetService extends EventEmitter {
     // report is the real one, and its ABSENCE is information too: it means
     // nothing has ever opened this dataset, which is the state every locally
     // registered dataset is in.
-    const stored = dataset.validation as
+    // A VIEW has never been validated and never can be: it has no files of its
+    // own, so nothing has ever opened them. What it can honestly show is the
+    // report for the dataset its episodes are indices into — the same bytes, a
+    // subset of the same episodes — so the root's report is borrowed rather
+    // than left blank (which would read as "nobody has checked this data",
+    // when somebody has) and rather than a report of its own (which would be a
+    // claim no run could support). Counts stay the view's own: those ARE
+    // derived, and were computed against the parent when the view was created.
+    let stored = dataset.validation as
       | { breakdown?: QualityScoreBreakdown; report?: DatasetStructureReport; validatedAt?: string }
       | undefined;
+    if (view) {
+      response.kind = (view.kind === 'view' ? 'view' : 'materialized') as DatasetKind;
+    }
+    if (view && isDatasetView(view)) {
+      // `resolve` is the one walker — this never follows `parentDatasetId`.
+      const { rootDatasetId } = await datasetViewService.resolve(dataset.id);
+      const root = (await prisma.dataset.findUnique({
+        where: { id: rootDatasetId },
+        select: { validationJson: true },
+      })) as { validationJson: string | null } | null;
+      stored = parseValidationJson(root?.validationJson);
+
+      // The rest of what makes a view a view, so a card can render "142 of 400
+      // episodes" and a lock without a second request. The parent is one hop —
+      // read, not walked; `rootDatasetId` above is the end of the chain and
+      // came from the resolver.
+      response.parentDatasetId = view.parentDatasetId;
+      response.frozenAt = view.frozenAt ? view.frozenAt.toISOString() : null;
+      response.materializedPath = view.materializedPath;
+      // Tolerant, unlike `resolve`: a row whose selection blob got mangled is
+      // still a row the list endpoint has to return, and the refusal that
+      // matters happens where the episodes are actually read.
+      response.selection = parseSelectionJson(view.selectionJson);
+      if (view.parentDatasetId) {
+        const parent = (await prisma.dataset.findUnique({
+          where: { id: view.parentDatasetId },
+          select: { id: true, name: true, demonstrationCount: true },
+        })) as { id: string; name: string; demonstrationCount: number } | null;
+        response.parent = parent;
+      }
+    }
     if (stored?.breakdown) {
       response.qualityBreakdown = stored.breakdown;
     }
@@ -1340,6 +1848,351 @@ export class DatasetService extends EventEmitter {
     }
 
     return response;
+  }
+
+
+  // ============================================================================
+  // VIEWS — a fork is a selection over a parent, not a copy of its bytes
+  // (TASK-240)
+  // ============================================================================
+
+  /**
+   * How long each of this dataset's episodes is, in frames.
+   *
+   * Needed twice over: to refuse a frame range that runs off the end of an
+   * episode, and to tell a view's card how many frames it actually holds
+   * without opening a single data file.
+   *
+   * Read through `resolve`, so asking a VIEW answers about the episodes THAT
+   * VIEW has — index 0 is its first selected episode, already trimmed — which
+   * is what a view of a view has to be validated against.
+   */
+  async episodeLengthsFor(datasetId: string): Promise<EpisodeLengthReadout> {
+    const row = await this.loadViewRow(datasetId);
+    const resolved = await datasetViewService.resolve(datasetId);
+    const root = resolved.isView ? await this.loadViewRow(resolved.rootDatasetId) : row;
+
+    const measured = await readEpisodeLengths(root.storagePath);
+    const exact = measured !== null;
+    // A dataset whose episode metadata cannot be read still has to size a
+    // card, and `totalFrames / demonstrationCount` is the only number left. It
+    // is a mean, not a measurement, so `exact` says so and the caller refuses
+    // frame ranges rather than validating them against an average.
+    const rootLengths =
+      measured
+      ?? evenlySplitFrames(root.totalFrames, root.demonstrationCount);
+
+    if (!resolved.isView) {
+      return { episodeLengths: rootLengths, fps: row.fps, exact };
+    }
+    const own = resolved.episodes.map((ep) => {
+      const length = rootLengths[ep.episodeIndex] ?? 0;
+      const start = Math.max(0, ep.start ?? 0);
+      const end = Math.min(ep.end ?? length, length);
+      return Math.max(0, end - start);
+    });
+    return { episodeLengths: own, fps: row.fps, exact };
+  }
+
+  /**
+   * Fork a dataset: a named selection of its episodes, zero bytes written.
+   *
+   * The selection is validated against the parent HERE and stored resolved —
+   * `resolve` maps indices, it does not check them, and a selection that named
+   * an episode its parent does not have would otherwise only fail much later,
+   * inside a training run, as a missing file.
+   */
+  async createView(
+    parentDatasetId: string,
+    input: CreateDatasetViewInput,
+  ): Promise<DatasetViewSummary> {
+    const parent = await this.loadViewRow(parentDatasetId);
+    const name = input.name?.trim();
+    if (!name) {
+      throw new DatasetViewError('A view needs a name', 'VIEW_MALFORMED', { parentDatasetId });
+    }
+
+    const selection = normalizeSelection(input.selection);
+    const metadata = await this.episodeLengthsFor(parentDatasetId);
+    validateAgainstParent(parent, selection, metadata);
+    const counts = datasetViewService.derivedCounts(selection, metadata);
+
+    const created = (await prisma.dataset.create({
+      data: {
+        name,
+        description: input.description?.trim() || null,
+        robotTypeId: parent.robotTypeId,
+        skillId: parent.skillId,
+        // Empty, and the point of the whole feature: a view owns no bytes.
+        storagePath: '',
+        lerobotVersion: parent.lerobotVersion,
+        fps: parent.fps,
+        totalFrames: counts.totalFrames,
+        totalDuration: counts.totalDuration,
+        demonstrationCount: counts.demonstrationCount,
+        // Inherited, not assumed: a view of a dataset that failed validation
+        // is not a dataset anybody should be able to train on either.
+        status: parent.status,
+        kind: 'view',
+        parentDatasetId: parent.id,
+        selectionJson: JSON.stringify(selection),
+      },
+      select: VIEW_PARENT_SELECT,
+    })) as ViewParentRow;
+
+    const summary = await this.toViewSummary(created, parent);
+
+    // The same event an ordinary dataset emits, because a view IS a dataset
+    // row — the lists and the WebSocket feed must not have to learn a second
+    // kind of "a dataset appeared".
+    const dataset = await datasetRepository.findById(created.id);
+    if (dataset) {
+      this.emitEvent({
+        type: 'dataset:created',
+        datasetId: created.id,
+        dataset: await this.toResponse(dataset, created),
+        timestamp: new Date().toISOString(),
+      });
+    }
+    console.log(
+      `[DatasetService] View created: ${created.id} (${counts.demonstrationCount} of `
+      + `${parent.demonstrationCount} episodes of ${parent.id})`,
+    );
+    return summary;
+  }
+
+  /** The views forked directly from this dataset, newest first. */
+  async listViews(parentDatasetId: string): Promise<DatasetViewSummary[]> {
+    const parent = await this.loadViewRow(parentDatasetId);
+    const rows = (await prisma.dataset.findMany({
+      where: { parentDatasetId, kind: 'view' },
+      select: VIEW_PARENT_SELECT,
+      orderBy: { createdAt: 'desc' },
+    })) as ViewParentRow[];
+    return Promise.all(rows.map((row) => this.toViewSummary(row, parent)));
+  }
+
+  /** One view, or a 404 for a row that is not one. */
+  async getView(viewId: string): Promise<DatasetViewSummary> {
+    const row = await this.loadViewRow(viewId);
+    this.assertView(row);
+    const parent = await this.loadViewRow(row.parentDatasetId!);
+    return this.toViewSummary(row, parent);
+  }
+
+  /**
+   * Delete a view.
+   *
+   * Refused while it is frozen: a frozen view is one a training job cites, and
+   * the run's report names data that would then no longer exist. The answer
+   * offered instead is to duplicate the selection into a new view, which costs
+   * nothing — that is what makes copy-on-write at the metadata level bearable.
+   */
+  async deleteView(viewId: string): Promise<boolean> {
+    const row = await this.loadViewRow(viewId);
+    this.assertView(row);
+
+    // The frozen refusal itself lives in `delete`, which this delegates to
+    // below, so that the ordinary dataset delete endpoint cannot walk past it.
+    if (row.frozenAt) {
+      throw await this.frozenViewConflict(viewId, row.name, row.frozenAt);
+    }
+
+    // Anything `materialize` wrote is this view's alone, so it goes with it —
+    // but only when it is inside the dataset root. `materializedPath` is a
+    // database column, and `rm -rf` on an unvalidated column is how a bug
+    // becomes a catastrophe.
+    if (row.materializedPath) {
+      const storageRoot = datasetStorageRoot();
+      const target = resolvePath(row.materializedPath);
+      if (target !== storageRoot && target.startsWith(storageRoot + sep)) {
+        await rm(target, { recursive: true, force: true }).catch((error: unknown) => {
+          console.warn(`[DatasetService] Failed to remove materialized view ${viewId}:`, error);
+        });
+      }
+    }
+
+    // Everything else a delete has to refuse for — mixture membership, views
+    // forked from THIS view — is already `delete`'s job, and a view is a
+    // dataset row like any other.
+    return this.delete(viewId);
+  }
+
+  /**
+   * Write a view's episodes to real files, for the consumer that cannot take an
+   * episode filter. Idempotent: the second call returns the first one's path.
+   */
+  async materializeView(viewId: string, backend?: 'native' | 'lerobot'): Promise<string> {
+    const row = await this.loadViewRow(viewId);
+    this.assertView(row);
+    const outputPath = join(datasetStorageRoot(), `view-${viewId}`);
+    return datasetViewService.materialize(viewId, outputPath, backend ? { backend } : undefined);
+  }
+
+  /**
+   * A selection built from what operators decided about individual episodes.
+   *
+   * `keep` takes only the episodes somebody explicitly kept. `remove` takes
+   * everything NOT explicitly removed, which is the other question people
+   * actually ask — "drop the bad ones" — and answers it including every
+   * episode nobody has looked at yet.
+   *
+   * Resolved at this moment and stored as a list, never as the rule: a later
+   * review must not silently change what a finished run trained on.
+   */
+  async selectionFromFlags(
+    parentDatasetId: string,
+    decision: 'keep' | 'remove',
+  ): Promise<DatasetSelection> {
+    const parent = await this.loadViewRow(parentDatasetId);
+    const flags = (await prisma.datasetEpisodeFlag.findMany({
+      where: { datasetId: parentDatasetId },
+      select: { episodeIndex: true, reviewDecision: true },
+      orderBy: { episodeIndex: 'asc' },
+    })) as Array<{ episodeIndex: number; reviewDecision: string | null }>;
+
+    let indices: number[];
+    if (decision === 'keep') {
+      indices = flags
+        .filter((f) => f.reviewDecision === 'keep')
+        .map((f) => f.episodeIndex)
+        .filter((i) => i >= 0 && i < parent.demonstrationCount);
+    } else {
+      const removed = new Set(
+        flags.filter((f) => f.reviewDecision === 'remove').map((f) => f.episodeIndex),
+      );
+      indices = [];
+      for (let i = 0; i < parent.demonstrationCount; i += 1) {
+        if (!removed.has(i)) indices.push(i);
+      }
+    }
+
+    return {
+      episodes: [...new Set(indices)].sort((a, b) => a - b).map((episodeIndex) => ({ episodeIndex })),
+      origin: { kind: 'flags', decision },
+    };
+  }
+
+  /**
+   * A selection of the episodes a reward model scored at or above a threshold.
+   *
+   * The scores are read ONCE, here, and written out as a list of episodes. A
+   * later reward job that rewrites them does not change this view — that is
+   * the whole difference between an experiment arm somebody can reproduce and
+   * a result nobody can explain a month later. `origin` keeps the rule for a
+   * human to read; the episode list is the truth.
+   */
+  async selectionFromRewards(
+    parentDatasetId: string,
+    rewardType: 'robometer' | 'topreward',
+    minScore: number,
+  ): Promise<DatasetSelection> {
+    const parent = await this.loadViewRow(parentDatasetId);
+    if (!Number.isFinite(minScore)) {
+      throw new DatasetViewError(
+        'minScore must be a finite number',
+        'VIEW_MALFORMED',
+        { parentDatasetId, minScore },
+      );
+    }
+    const rewards = await episodeRewardRepository.findByDataset(parentDatasetId, rewardType);
+    const indices = rewards
+      .filter((r) => r.score >= minScore)
+      .map((r) => r.episodeIndex)
+      .filter((i) => i >= 0 && i < parent.demonstrationCount);
+
+    return {
+      episodes: [...new Set(indices)].sort((a, b) => a - b).map((episodeIndex) => ({ episodeIndex })),
+      origin: { kind: 'reward', rewardType, minScore },
+    };
+  }
+
+  /**
+   * The 409 a frozen view answers an edit with.
+   *
+   * It names the citing job, because "this is frozen" is not actionable and
+   * "job-4f2 trained on it" is: the operator can look at that run, and the UI
+   * can offer to duplicate the selection instead. Freezing walks the ancestor
+   * chain, so a view can also be frozen because a view derived FROM it was
+   * cited — saying "job unknown" would read as a bug, so that case says what
+   * actually happened.
+   */
+  private async frozenViewConflict(
+    datasetId: string,
+    name: string,
+    frozenAt: Date,
+  ): Promise<ConflictError> {
+    const jobs = await this.citingJobIds(datasetId);
+    const cited = jobs.length
+      ? `training ${jobs.length === 1 ? 'job' : 'jobs'} ${jobs.slice(0, 5).join(', ')}`
+      : 'a training job that cites a view derived from it';
+    return new ConflictError(
+      `"${name}" was frozen on ${frozenAt.toISOString()} because ${cited} cites it, so its episode `
+      + 'selection is now part of what those runs trained on and cannot be taken away. Duplicate '
+      + 'it as a new view if you need a different selection.',
+      { datasetId, frozenAt: frozenAt.toISOString(), trainingJobIds: jobs },
+    );
+  }
+
+  /** The training jobs that name this dataset — directly or as a mixture member. */
+  private async citingJobIds(datasetId: string): Promise<string[]> {
+    const [direct, mixed] = await Promise.all([
+      prisma.trainingJob.findMany({
+        where: { datasetId },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' },
+      }) as Promise<Array<{ id: string }>>,
+      prisma.trainingJobDataset.findMany({
+        where: { datasetId },
+        select: { trainingJobId: true },
+        orderBy: { trainingJobId: 'asc' },
+      }) as Promise<Array<{ trainingJobId: string }>>,
+    ]);
+    return [...new Set([...direct.map((j) => j.id), ...mixed.map((m) => m.trainingJobId)])];
+  }
+
+  private assertView(row: ViewParentRow): void {
+    if (!isDatasetView(row) || !row.parentDatasetId) {
+      throw new DatasetViewError(
+        `Dataset ${row.id} is not a view`,
+        'VIEW_NOT_A_VIEW',
+        { datasetId: row.id },
+      );
+    }
+  }
+
+  private async loadViewRow(datasetId: string): Promise<ViewParentRow> {
+    const row = (await prisma.dataset.findUnique({
+      where: { id: datasetId },
+      select: VIEW_PARENT_SELECT,
+    })) as ViewParentRow | null;
+    if (!row) throw new NotFoundError('Dataset', datasetId);
+    return row;
+  }
+
+  private async toViewSummary(row: ViewParentRow, parent: ViewParentRow): Promise<DatasetViewSummary> {
+    const resolved = await datasetViewService.resolve(row.id);
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      kind: 'view',
+      status: row.status,
+      fps: row.fps,
+      parentDatasetId: parent.id,
+      parentName: parent.name,
+      parentDemonstrationCount: parent.demonstrationCount,
+      rootDatasetId: resolved.rootDatasetId,
+      demonstrationCount: row.demonstrationCount,
+      totalFrames: row.totalFrames,
+      totalDuration: row.totalDuration,
+      selection: JSON.parse(row.selectionJson ?? '{"episodes":[],"origin":{"kind":"manual"}}') as DatasetSelection,
+      resolvedEpisodes: resolved.episodes,
+      frozenAt: row.frozenAt ? row.frozenAt.toISOString() : null,
+      materializedPath: row.materializedPath,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
   }
 
   // ============================================================================

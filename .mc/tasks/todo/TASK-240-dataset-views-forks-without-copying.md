@@ -4,9 +4,9 @@ aliases:
 - TASK-240
 title: Dataset views — fork a dataset by selecting episodes, not by copying bytes
 slug: dataset-views-forks-without-copying
-status: todo
+status: "in-progress"
 priority: 2
-owner: ''
+owner: "huhn511"
 projects: []
 customers: []
 tags:
@@ -212,3 +212,32 @@ Explicitly out of scope: making LeRobot itself accept the episode filter
 in-process. Until that lands, a run on a view materializes once and caches
 `materializedPath` — which is still one copy per *used* view instead of one per
 *created* view, and the agent creates far more than it uses.
+
+### Two defects the last acceptance criterion caught — 2026-09-05
+
+The ninth criterion ("materialize produces a dataset directory byte-equivalent to running
+`curate.py delete` with the same episode list") was the only one no gate covered: it had been
+read, not executed. Writing the pytest the Test Strategy asks for found two real bugs, both
+reproduced against a real 6-episode dataset.
+
+**`resolve` and `materialize` disagreed about episode order.** `resolve` built a view's list in
+*selection* order; `materialize` produced *ascending root* order, because that is how
+`curate.py delete` renumbers survivors. A selection of `[{5}, {1}]` resolved as lengths
+`[65, 61]` and materialized as `[61, 65]`. So a view-of-a-view resolved child index 0 to a
+different episode than the directory a training run actually reads, and a UI episode number did
+not address the episode it named. Resolved in favour of parent order — `curate.py`'s ascending
+numbering is the one written to disk, and selection order carried no information beyond the
+order somebody clicked.
+
+**A stale `demonstrationCount` silently shipped unselected episodes.** The delete complement
+came from the database column and was never checked against the dataset on disk. With six
+episodes on disk and a row claiming four, a selection of `{0, 2}` materialized to
+`[60, 62, 64, 65]` — four episodes for a two-episode selection, two of them selected by nobody.
+`curate.py` cannot catch it: it validates the indices it is *told* to delete and has no way to
+know what was meant to be kept. It now reads the root's own `meta/info.json` and refuses with
+both numbers named, because whichever is right, a selection validated against a row that does
+not describe the files was validated against nothing.
+
+The second is the worse of the two: silent, and the result is wrong training data inside
+something the system calls a frozen, reproducible experiment arm — the one guarantee this
+feature exists to make.
