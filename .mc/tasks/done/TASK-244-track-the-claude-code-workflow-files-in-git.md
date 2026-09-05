@@ -3,7 +3,7 @@ id: "TASK-244"
 aliases: []
 title: "Track the Claude Code workflow files in git"
 slug: "track-the-claude-code-workflow-files-in-git"
-status: "review"
+status: "done"
 priority: 2
 owner: "sebastian"
 projects: []
@@ -40,10 +40,10 @@ All nine were scanned before staging: no keys, tokens, emails, home paths or mac
 
 ## Acceptance Criteria
 
-- [ ] `git ls-tree -r --name-only origin/main .claude` lists the nine workflow files after merge
-- [ ] `git check-ignore .claude/agent-memory/x .claude/settings.local.json` still reports both as ignored
-- [ ] `git check-ignore .claude/skills/grill/SKILL.md` reports nothing
-- [ ] Every path `CLAUDE.md` names under `.claude/` exists in a fresh clone
+- [x] `git ls-tree -r --name-only origin/main .claude` lists the nine workflow files after merge
+- [x] `git check-ignore .claude/agent-memory/x .claude/settings.local.json` still reports both as ignored
+- [x] `git check-ignore .claude/skills/grill/SKILL.md` reports nothing
+- [x] Every path `CLAUDE.md` names under `.claude/` exists in a fresh clone
 
 ## Test Strategy
 
