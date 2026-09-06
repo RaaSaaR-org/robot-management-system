@@ -12,10 +12,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   APPROACH_CASE_IDS,
+  BENCH_CASE_IDS,
+  VLA_CASES,
   benchHeaderLines,
   openLoopDashes,
   type Case,
 } from './planner-bench.js';
+import { VLA_SKILL_IDS } from '../src/agent-mode/vla-skills.js';
 import type { PlannedBlock } from '../src/agent-mode/planner.js';
 
 const approachCase: Case = {
@@ -100,5 +103,35 @@ describe('benchHeaderLines', () => {
     expect(benchHeaderLines(['m'], 'table: bearing 17°').join('\n')).toContain(
       'table: bearing 17°'
     );
+  });
+});
+
+describe('VLA_CASES', () => {
+  it('is kept out of the 18-case gate, so the historical score stays comparable', () => {
+    // 51/54 on gemma4:e4b (TASK-221, 2026-08-27) is only a baseline while the
+    // denominator holds. Folding three cases in would silently make it 63 and
+    // every past number unreadable.
+    expect(BENCH_CASE_IDS).toHaveLength(18);
+    for (const c of VLA_CASES) expect(BENCH_CASE_IDS).not.toContain(c.id);
+  });
+
+  it('only ever asks for a skill this robot actually has', () => {
+    // The bench grades on an exact id. If the catalogue renames one, this test
+    // fails here rather than the bench quietly scoring 0/9 forever and reading
+    // as a planner regression.
+    const wanted = VLA_CASES.map((c) => c.skill);
+    expect(wanted.filter(Boolean)).toHaveLength(VLA_CASES.length);
+    for (const id of wanted) expect(VLA_SKILL_IDS).toContain(id);
+  });
+
+  it('requires the walk before the rollout, because the block does not walk', () => {
+    const approachFirst = VLA_CASES.find((c) => c.id === 'vla-needs-approach');
+    expect(approachFirst).toBeDefined();
+    const goto = { kind: 'goto', params: { entity: 'table' } };
+    const skill = { kind: 'vla_skill', params: { skill: 'g1_apple_pnp' } };
+    expect(approachFirst?.check([goto, skill] as never)).toBe(true);
+    // The rollout first is the failure mode: the robot grasps at air.
+    expect(approachFirst?.check([skill, goto] as never)).toBe(false);
+    expect(approachFirst?.check([skill] as never)).toBe(false);
   });
 });

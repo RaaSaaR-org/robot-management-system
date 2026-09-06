@@ -4,7 +4,7 @@ aliases:
 - TASK-226
 title: Let the Agent Mode planner trigger a VLA skill block, so a plan can pick and place
 slug: agent-mode-triggers-a-vla-skill-block
-status: todo
+status: done
 priority: 2
 owner: "huhn511"
 projects: []
@@ -20,7 +20,7 @@ spe: 1
 effort: ""
 due_date: ''
 created: 2026-08-29
-updated: "2026-09-05"
+updated: "2026-09-06"
 status_note: 'Written 2026-08-29 from four internal code-research passes and one external
   prior-art survey. The block was already designed and deliberately deferred: types.ts:13 reads
   "Executable block vocabulary (v1). No `vla_skill` — deferred to TASK-188", and the stated reason
@@ -254,17 +254,17 @@ the `G1_READ_ONLY=1` default), and TASK-213's `demo` block semantics.
 
 ## Acceptance Criteria
 
-- [ ] `runVlaSkill` registers with `skillExecutorRegistry`; protective stop and
+- [x] `runVlaSkill` registers with `skillExecutorRegistry`; protective stop and
       teleop preempt an Agent-Mode-initiated rollout (shipped separately, first)
-- [ ] `vla_skill` exists in all three mirrored type files and the planner may emit it
-- [ ] It is explicitly listed in every allow-list it touches, and fails closed
-- [ ] The instruction sent to the policy is the trained prompt from the skill
+- [x] `vla_skill` exists in all three mirrored type files and the planner may emit it
+- [x] It is explicitly listed in every allow-list it touches, and fails closed
+- [x] The instruction sent to the policy is the trained prompt from the skill
       definition
-- [ ] The block acquires and releases the `vla` control-owner lock on every path
-- [ ] The block reports `succeeded`/`failed`/`unknown` and never infers success
+- [x] The block acquires and releases the `vla` control-owner lock on every path
+- [x] The block reports `succeeded`/`failed`/`unknown` and never infers success
       from "did not throw"
-- [ ] A failed block's reason reaches the planner's next context
-- [ ] Typecheck and the full robot-agent suite pass
+- [x] A failed block's reason reaches the planner's next context
+- [x] Typecheck and the full robot-agent suite pass
 
 ## Not verified / open questions
 
@@ -305,9 +305,66 @@ names are unfinished:
 
 The first two are offline work and small.
 
-### Remaining after 2026-09-05
+### Remaining after 2026-09-05 — closed 2026-09-06
 
-Only the planner bench. It cannot run on this box today: `robot-agent/scripts/planner-bench.ts`
-loads models of 6-13 GB one at a time, and another user's `Isaac-GR00T`, `isaac-sim` and
-`ollama` processes hold 23.6 GB of the 32.6 GB card. Loading a bench model would either fail or
-evict a running measurement, so it waits for an idle GPU rather than being forced.
+The bench ran. It did not regress, and the answer is a number rather than the
+absence of one.
+
+**Why it could run now.** The 2026-09-05 note said the box was busy: another
+user's `Isaac-GR00T`, `isaac-sim` and `ollama` held 23.6 GB of the 32.6 GB card.
+On 2026-09-06 the card held 5.7 GB (one `rg-smoke` IsaacLab container, left
+alone), so a 7.6 GB planner model loads beside it without evicting anything.
+
+**What was measured.** `scripts/planner-bench.ts`, 18 cases × 3 repeats, real
+prompt and real schema, `AGENT_PLANNER_THINKING` unset (thinking off):
+
+| commit | model | plans that would do the right thing | open-loop dashes |
+|---|---|---|---|
+| `79e417bd` (before this task) | `gemma4:e4b` | 51/54 (94%) | 0 |
+| `fef77f4e` (this task) | `gemma4:e4b` | **51/54 (94%)** | 0 |
+| `main` 2026-09-06 | `gemma4:12b` (`AGENT_PLANNER_MODEL`) | **51/54 (94%)** | 0 |
+
+The `79e417bd` row reproduces TASK-221's 2026-08-27 number exactly, which is what
+makes the other rows readable. **The longer prompt costs nothing.** The risk this
+task flagged — "prompt length is a measured regression risk" — was real to worry
+about and did not materialise: same score, same single failing case (`scan`), no
+open-loop dashes.
+
+The new block kind is now measured in its own right, apart from the 18-case gate
+so the historical denominator survives: **`vla_skill` 9/9** on `gemma4:12b` — it
+picks `g1_apple_pnp` for the apple, `g1_dex3` for the bottle, and puts the `goto`
+before the rollout when the robot has to walk there first.
+
+**Three defects in the bench itself, found by running it and fixed here.** All
+three are the same shape: the bench looked runnable and was not.
+
+1. `DEFAULT_MODELS` named four models — `gemma4:e2b`, `gemma4:latest`,
+   `qwen2.5vl:7b`, `gpt-oss:20b` — of which **none has been installed on this box
+   since at least 2026-08-27**. TASK-221's review said so and it stayed. A bare
+   `npm run bench:planner` therefore could not run at all, which is a large part
+   of why "the bench is the gate" survived this long with the gate unmeasured.
+   It now defaults to `config.agentMode.plannerModel`, the model the robot plans
+   with, so it cannot go stale the same way.
+2. The bench **never loaded `.env`**. `src/index.ts` is the only place that
+   imports `dotenv/config`, so `config` in the bench process saw defaults:
+   `DEFAULT_AGENT_MODEL` (`gemma3:4b`, not installed) rather than
+   `AGENT_PLANNER_MODEL`. Worse, `benchHeaderLines` prints the thinking setting
+   read off that same `config` — so the header recorded a fact about an
+   unconfigured process while claiming to record one about the robot, which is
+   exactly the "a pair of runs recorded without it is not a pair" trap the
+   comment beside it warns about.
+3. The three new cases live in `VLA_CASES`, not appended to `CASES`. Appending
+   would have moved the denominator from 54 to 63 and made every historical
+   number silently unreadable. `planner-bench.test.ts` now pins both the split
+   and the skill ids against `VLA_SKILL_IDS`.
+
+**Out of scope, filed separately.** The same A/B on `gemma4:e4b` — the model
+TASK-221 used — shows 51/54 before `32697991` and 42/54 after, with 3 open-loop
+dashes, stable across two runs and bisected to that single commit. It is not a
+production regression: `AGENT_PLANNER_MODEL=gemma4:12b` scores 51/54 on both
+sides. It is a measured property of switching thinking-off from the inert `/v1`
+`reasoning_effort` hint to Ollama's native `think: false`, and it belongs to
+whoever next changes that transport, not to this task.
+
+**The Live item** in the Test Strategy (factory scene, robot placed at the table)
+still has no recorded run. It is not an acceptance criterion and is TASK-227's.
