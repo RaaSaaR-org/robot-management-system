@@ -133,9 +133,11 @@ Both CI jobs are written and independently verified, and neither can be pushed f
 
 That is GitHub refusing the App, not a broken command, and it is not something to work
 around — an agent quietly editing what gates the repo is exactly what that permission exists
-to prevent. The patch is held at
-`scratchpad/ci-check-yml.patch` (95 lines, `git apply` against `main`) and its content is
-summarised here so it can be re-derived if the file is lost:
+to prevent. The patch is committed alongside this task at
+`.mc/patches/TASK-250-check-yml-ci-jobs.patch` (95 lines, `git apply` from the repo root) —
+in the repo rather than in a session scratchpad, because a pointer that outlives neither the
+session nor the reader is not a handover. Its content is summarised here as well, so the
+jobs can be re-derived even if the patch goes stale against a moved `check.yml`:
 
 - **job `python`** — `ubuntu-latest`, python 3.12, `pip install -r server/curation/requirements.txt`
   then `pip install mujoco pytest numpy httpx pyzmq`, `apt-get install ffmpeg`, then
@@ -150,8 +152,13 @@ summarised here so it can be re-derived if the file is lost:
 To unblock, either grant the App the `workflows` permission, or apply the patch by hand:
 
 ```bash
-git apply scratchpad/ci-check-yml.patch     # or paste the two jobs into check.yml
+git apply .mc/patches/TASK-250-check-yml-ci-jobs.patch
+cd app && npx playwright test          # what the e2e job runs
+./scripts/test-all.sh --python-only    # what the python job runs
 ```
+
+Both were run locally before the patch was written, and the python job's install list was
+reproduced in a clean `ubuntu:24.04` container, so applying it should not be a leap of faith.
 
 Everything else in this task landed and is verified. Without the CI half the suites are green
 but still ungated, which is the state that let this rot in the first place — so this is worth
