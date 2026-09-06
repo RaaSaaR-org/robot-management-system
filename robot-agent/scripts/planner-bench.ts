@@ -26,6 +26,14 @@
  * not move. Each case says what it wants in `want`, so a disagreement about the
  * grading is a disagreement you can read.
  */
+// FIRST, and before `../src/config/config.js` is pulled in: `config` is read at
+// module scope, and this script is not `src/index.ts`, which is the only other
+// place that loads the env. Without this the bench silently benched
+// `DEFAULT_AGENT_MODEL` ('gemma3:4b', not installed here) instead of
+// `AGENT_PLANNER_MODEL`, and printed `AGENT_PLANNER_THINKING → off` as a fact
+// about the robot when it was a fact about an unconfigured process.
+import 'dotenv/config';
+
 import { pathToFileURL } from 'node:url';
 import { Planner } from '../src/agent-mode/planner.js';
 import { agentModelRef } from '../src/agent-mode/llm.js';
@@ -37,7 +45,20 @@ import { config } from '../src/config/config.js';
 // which only ever worked because it reads `kind` and `params` and nothing else.
 import type { PlannedBlock, PlannerSceneTarget } from '../src/agent-mode/planner.js';
 
-const DEFAULT_MODELS = ['gemma4:e2b', 'gemma4:latest', 'qwen2.5vl:7b', 'gpt-oss:20b'];
+/**
+ * Benched when no model is named on the command line.
+ *
+ * This is the model the robot actually plans with — `AGENT_PLANNER_MODEL`, read
+ * through `config` so it is the same string `Planner.plan` hands Ollama. It is
+ * NOT a hand-written list: the previous one (`gemma4:e2b`, `gemma4:latest`,
+ * `qwen2.5vl:7b`, `gpt-oss:20b`) named four models, and by 2026-08-27 not one of
+ * them was installed on the box — TASK-221's review said so and it stayed. A
+ * bench whose default invocation cannot run is a bench nobody runs, which is how
+ * TASK-226 reached "the bench is the gate" with the gate never measured.
+ *
+ * Pass models explicitly to compare several: `npm run bench:planner -- a b c`.
+ */
+const DEFAULT_MODELS = [config.agentMode.plannerModel];
 const REPEATS = Number(process.env.REPEATS ?? 3);
 
 /**
@@ -92,6 +113,13 @@ export interface Case {
    * {@link openLoopDashes}, which is the only thing that reads this.
    */
   approach?: true;
+  /**
+   * `VLA_CASES` only: the catalogued skill id this case expects. Declared as a
+   * field rather than left inside `check`, so `planner-bench.test.ts` can pin
+   * it against `VLA_SKILL_IDS` — a renamed skill then fails as a rename
+   * instead of scoring 0/9 and reading as a planner regression.
+   */
+  skill?: string;
   check: (blocks: PlannedBlock[]) => boolean;
 }
 
@@ -267,6 +295,64 @@ const CASES: Case[] = [
   },
 ];
 
+/**
+ * The `vla_skill` cases, graded SEPARATELY and never folded into `CASES`.
+ *
+ * TASK-226 added the block kind and named this bench as its gate, because a
+ * longer prompt is a measured regression risk for a small planner. The gate is
+ * read off the 18 cases in `CASES`, whose score has a history — 51/54 on
+ * `gemma4:e4b`, 2026-08-27 (TASK-221), reproduced at `fef77f4e` on 2026-09-06.
+ * Appending three cases to that array would have changed the denominator to 63
+ * and quietly made every past number incomparable, which is the one thing a
+ * regression gate must not do.
+ */
+export const VLA_CASES: Case[] = [
+  {
+    id: 'vla-apple',
+    command: 'leg den Apfel auf den Teller',
+    // The planner writes a NAME, never an instruction: the prompt the policy
+    // gets is the catalogue's trained string. So the only thing gradeable here
+    // is whether it picked the right skill out of the catalogue.
+    want: 'vla_skill with skill=g1_apple_pnp',
+    skill: 'g1_apple_pnp',
+    check: (b) => first(b, 'vla_skill')?.params.skill === 'g1_apple_pnp',
+  },
+  {
+    id: 'vla-bottle',
+    command: 'stell die Flasche in den Teller',
+    // Two skills in the catalogue differ only by the object. Picking the apple
+    // policy for a bottle is the failure this case exists to catch — it would
+    // run a real rollout with the wrong trained prompt and look busy doing it.
+    want: 'vla_skill with skill=g1_dex3 (not the apple policy)',
+    skill: 'g1_dex3',
+    check: (b) => first(b, 'vla_skill')?.params.skill === 'g1_dex3',
+  },
+  {
+    id: 'vla-needs-approach',
+    command: 'geh zum Tisch und leg den Apfel auf den Teller',
+    // The block does not walk — the prompt says so in as many words. A plan
+    // that opens with the rollout leaves the robot grasping at air from across
+    // the room, which is the whole reason `goto` has to come first.
+    want: 'goto the table FIRST, then vla_skill — the rollout does not walk',
+    approach: true,
+    skill: 'g1_apple_pnp',
+    check: (b) => {
+      const order = kinds(b);
+      const g = order.indexOf('goto');
+      const v = order.indexOf('vla_skill');
+      return (
+        g !== -1 &&
+        v !== -1 &&
+        g < v &&
+        /tisch|table/i.test(String(first(b, 'goto')?.params.entity ?? ''))
+      );
+    },
+  },
+];
+
+/** Every id in the 18-case gate — pinned by `planner-bench.test.ts`. */
+export const BENCH_CASE_IDS: readonly string[] = CASES.map((c) => c.id);
+
 /** The ids of the cases that ask the robot to approach something. */
 export const APPROACH_CASE_IDS: readonly string[] = CASES.filter((c) => c.approach).map(
   (c) => c.id
@@ -349,7 +435,8 @@ function median(xs: number[]): number {
 async function benchModel(
   model: string,
   summary: string,
-  targets: PlannerSceneTarget[]
+  targets: PlannerSceneTarget[],
+  cases: readonly Case[] = CASES
 ): Promise<Row> {
   const modelRef = await agentModelRef(model);
   const planner = new Planner({ modelRef });
@@ -365,7 +452,7 @@ async function benchModel(
   };
   const latencies: number[] = [];
 
-  for (const testCase of CASES) {
+  for (const testCase of cases) {
     for (let i = 0; i < REPEATS; i++) {
       const startedAt = Date.now();
       let result;
@@ -411,11 +498,18 @@ async function main(): Promise<void> {
   for (const line of benchHeaderLines(models, summary)) console.log(line);
 
   const rows: Row[] = [];
+  // The `vla_skill` set is run and reported apart from the 18-case gate — see
+  // VLA_CASES for why the denominators must not merge.
+  const vlaRows: Row[] = [];
   for (const model of models) {
     process.stdout.write(`${model} … `);
     const row = await benchModel(model, summary, targets);
     rows.push(row);
     console.log(`${row.pass}/${row.total}`);
+    process.stdout.write(`${model} (vla_skill) … `);
+    const vlaRow = await benchModel(model, summary, targets, VLA_CASES);
+    vlaRows.push(vlaRow);
+    console.log(`${vlaRow.pass}/${vlaRow.total}`);
   }
 
   console.log(
@@ -429,9 +523,18 @@ async function main(): Promise<void> {
     );
   }
 
+  console.log(
+    `\n| model | vla_skill: picked the right catalogued skill, in the right order |`
+  );
+  console.log('|---|---|');
+  for (const r of vlaRows) {
+    console.log(`| ${r.model} | ${r.pass}/${r.total} |`);
+  }
+
   console.log('\nPer-case failures (case: how many of the runs got it wrong)');
-  for (const r of rows) {
+  for (const r of [...rows, ...vlaRows]) {
     const worst = [...r.failures.entries()].sort((a, b) => b[1] - a[1]);
+    if (worst.length === 0 && rows.includes(r) === false) continue;
     console.log(
       `  ${r.model}: ${worst.length === 0 ? '(none)' : worst.map(([id, n]) => `${id} ${n}/${REPEATS}`).join(', ')}`
     );
