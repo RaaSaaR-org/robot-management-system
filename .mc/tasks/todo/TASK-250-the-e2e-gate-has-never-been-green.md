@@ -5,7 +5,7 @@ title: "The e2e gate has never been green, and CI never ran the half of the suit
 slug: "the-e2e-gate-has-never-been-green"
 status: "in-progress"
 priority: 2
-owner: ""
+owner: "huhn511"
 projects: []
 customers: []
 tags: ["core", "testing"]
@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-09-06"
-updated: "2026-09-06"
+updated: "2026-09-08"
 ---
 
 # The e2e gate has never been green, and CI never ran the half of the suite that could tell
