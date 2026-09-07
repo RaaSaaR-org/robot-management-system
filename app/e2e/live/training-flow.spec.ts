@@ -4,7 +4,7 @@
  */
 import { test, expect } from '@playwright/test';
 
-// baseURL comes from playwright.config.ts (demo mode uses HashRouter)
+// Live suite: baseURL comes from playwright.live.config.ts against a running stack.
 
 test.describe('Training page', () => {
   test('history tab shows completed jobs with loss values', async ({ page }) => {

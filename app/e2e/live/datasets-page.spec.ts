@@ -4,7 +4,7 @@
  */
 import { test, expect } from '@playwright/test';
 
-// baseURL comes from playwright.config.ts (demo mode uses HashRouter)
+// Live suite: baseURL comes from playwright.live.config.ts against a running stack.
 
 test.describe('Datasets page', () => {
   test('lists imported datasets with status badges and frame counts', async ({ page }) => {

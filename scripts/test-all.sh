@@ -30,10 +30,17 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKIP_PW=false
+# --python-only runs stages 3a-3d and nothing else. CI has its own jobs for the
+# typechecks, the vitest suites and Playwright; what it did NOT have, until
+# 2026-09-06, was anything running the python. Giving it one entry point here
+# rather than four inlined pytest invocations means the CI job and a developer's
+# local run cannot drift apart about what "the python suites" are.
+PYTHON_ONLY=false
 
 for arg in "$@"; do
   case "$arg" in
-    --skip-pw)  SKIP_PW=true ;;
+    --skip-pw)      SKIP_PW=true ;;
+    --python-only)  PYTHON_ONLY=true; SKIP_PW=true ;;
   esac
 done
 
@@ -44,6 +51,7 @@ fail() { echo -e "${RED}✗${NC} $*" >&2; exit 1; }
 
 FAILURES=0
 
+if [ "$PYTHON_ONLY" = false ]; then
 # ---------------------------------------------------------------- 1. Typecheck
 step "Server typecheck"
 (cd "$REPO_ROOT/server" && npm run typecheck) || { echo "  server typecheck FAILED"; FAILURES=$((FAILURES + 1)); }
@@ -63,6 +71,7 @@ step "App unit tests"
 
 step "Robot agent unit tests"
 (cd "$REPO_ROOT/robot-agent" && npm test) || { echo "  robot-agent vitest FAILED"; FAILURES=$((FAILURES + 1)); }
+fi  # PYTHON_ONLY
 
 # ------------------------------------------------------- 3. Python sim state machine
 # sim_g1_dds is what makes Agent Mode testable without a G1, so its state machine is
