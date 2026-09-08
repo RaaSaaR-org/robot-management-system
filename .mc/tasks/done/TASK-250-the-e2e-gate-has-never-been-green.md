@@ -3,7 +3,7 @@ id: "TASK-250"
 aliases: []
 title: "The e2e gate has never been green, and CI never ran the half of the suite that could tell"
 slug: "the-e2e-gate-has-never-been-green"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -95,7 +95,7 @@ them.
       sim-node dependencies fail the gate. Optional individual integrations are
       explicitly reported; they are not counted as passed.
 - [x] `scripts/test-all.sh --python-only` runs stages 3a-3d and nothing else
-- [ ] CI is green on the PR that carries this
+- [x] CI is green on the PR that carries this
 
 ## Test Strategy
 
@@ -153,3 +153,5 @@ passed; the scene verifier reported **273 passed / 1 optional out-of-repository 
 check skipped**. Evidence: `/tmp/neodem-task250-linux-complete.log`. Read-only pytest
 cache warnings do not affect assertions. This validates Linux dependency/render coverage;
 GitHub's Ubuntu runner and the final PR SHA still require remote CI before task closure.
+
+PR #300: all six initial GitHub checks passed, including Python and Playwright. Independent review of origin/main...404e3a4a was clean. Final close-commit checks must pass before merge.
