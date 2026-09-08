@@ -6,6 +6,7 @@
 
 import { memo } from 'react';
 import { ArrowDown, ArrowUpRight, Blocks, Cpu, Database, Radio } from 'lucide-react';
+import { NeoDEMMark } from '@/components/common/NeoDEMMark';
 import { scrollToSection } from './scrollToSection';
 import './platform.css';
 
@@ -74,7 +75,7 @@ export const PlatformSection = memo(function PlatformSection() {
           </div>
           <div className="platform-core" aria-hidden="true">
             <span className="platform-core-symbol">
-              <Blocks size={32} strokeWidth={1.2} />
+              <NeoDEMMark width={40} height={40} />
             </span>
             <strong className="lp-display">NeoDEM</strong>
             <span className="platform-core-caption">

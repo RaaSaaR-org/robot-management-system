@@ -105,3 +105,9 @@ Final frontend build/typecheck and whitespace check passed (`/tmp/task256-orbita
 Refined the accepted orbital symbol with a CPU package, eight pins and a central die. Extracted `app/src/components/common/NeoDEMMark.tsx` so navigation and hero use identical geometry. The hero projects the atom above its shared intelligence platform with gentle floating motion; reduced motion disables it. Playwright MCP verified 320, 390, 1024 and 1440px without overflow/page errors, plus animation and reduced motion. Screenshots reviewed: `/tmp/atom-hero-1440.png`, `/tmp/atom-hero-320.png`.
 
 Verification: 11 landing tests and whitespace check passed. Full workspace build hit a concurrent unrelated DocsSidebar move/import mismatch. An isolated copy of HEAD plus only the four atom/hero files passed frontend build/typecheck (`/tmp/task256-atom-isolated-build.log`); unrelated docs edits were left untouched.
+
+## Platform brand consistency — 9 September 2026
+
+Replaced the Blocks icon beside NeoDEM in the “A home for Physical AI” blueprint with the shared CPU-atom mark at 40px. The workflow capability retains its Blocks icon. Playwright MCP screenshots reviewed at 390 and 1440px with no overflow: `/tmp/platform-cpu-mark-390.png`, `/tmp/platform-cpu-mark-1440.png`.
+
+Isolated frontend build/typecheck passed (`/tmp/task256-platform-mark-build.log`), as did scoped whitespace validation. Isolated build excludes ongoing unrelated docs edits.
