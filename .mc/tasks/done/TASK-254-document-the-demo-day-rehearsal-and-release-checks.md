@@ -2,7 +2,7 @@
 id: "TASK-254"
 title: "Document the demo day rehearsal and release checks"
 slug: "document-the-demo-day-rehearsal-and-release-checks"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 tags: ["core"]
@@ -41,3 +41,5 @@ Cross-check commands/configuration and links; use browser gate evidence from TAS
 Validation: commands checked against package scripts, Vite/Playwright config and workflows; repository document links resolve. Independent review corrected browser installation instructions and in-app documentation link compatibility. TASK-252 browser rehearsal passed 45 tests.
 
 Independent continuation review: checked demo commands against package scripts, Vite/Playwright and Pages configuration, and Agent Mode API descriptions against the actual routes. Corrected terminal working directories, host answer/privacy boundaries, patrol confirmation semantics, memory/identity HTTP methods and the shipped TASK-201 geofence advisory. Screenshot links now also work outside the in-app docs renderer. No simulator or physical hardware validation was performed for this documentation review.
+
+Independent review of origin/main...214157ec is clean after correcting tour distance behavior, initiative exemptions and transcript retention semantics. PR #299 initial checks passed; final six checks include the pending TASK-250 CI dependency and must pass before merge.
