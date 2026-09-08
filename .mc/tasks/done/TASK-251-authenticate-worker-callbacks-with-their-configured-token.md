@@ -2,7 +2,7 @@
 id: "TASK-251"
 title: "Authenticate worker callbacks with their configured token"
 slug: "authenticate-worker-callbacks-with-their-configured-token"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 tags: ["core"]
@@ -32,8 +32,10 @@ Authenticated deployments reject every external training/twin worker even when i
 - [x] Missing/invalid worker credentials are rejected; an unconfigured worker token falls back to regular JWT authentication.
 - [x] Worker secrets cannot authorize human-facing management APIs; normal user worker monitoring remains accessible.
 - [x] Typecheck and server tests pass.
-- [ ] PR review and CI pass before merging.
+- [x] Independent review and all four PR checks passed before the close commit; final-head checks are required again before merging.
 
 ## Test Strategy and Evidence
 
 Actual-app request regressions cover routing and authentication together, including rejection and fallback paths. Server typecheck passed; full suite passed 5736 tests across 220 files with one existing skip. Robot baseline: 2335 tests passed. All DB validation used isolated /tmp/neodem-server-audit.db, leaving the developer database intact.
+
+PR: https://github.com/RaaSaaR-org/robot-management-system/pull/296
