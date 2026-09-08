@@ -15,7 +15,7 @@ const GITHUB_URL = 'https://github.com/RaaSaaR-org/robot-management-system';
 
 /** Anchors here must match the section ids on the landing page. */
 const NAV_ITEMS: ReadonlyArray<{ label: string; href: string }> = [
-  { label: 'Full circle', href: '#circle' },
+  { label: 'Embodied Loop', href: '#circle' },
   { label: 'Data', href: '#data' },
   { label: 'Models', href: '#models' },
   { label: 'Safety', href: '#safety' },

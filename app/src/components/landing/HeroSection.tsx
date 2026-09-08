@@ -1,286 +1,219 @@
 /**
  * @file HeroSection.tsx
- * @description Interactive Physical AI hero with an illustrative humanoid mission scene.
+ * @description Embodiment-independent Physical AI hero and interactive intelligence field.
  * @feature landing
  */
-
 import { memo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowDown, ArrowUpRight, MoveUpRight, Pause, Play } from 'lucide-react';
+import { ArrowDown, ArrowUpRight, Pause, Play } from 'lucide-react';
 import { useBrand } from '@/brand';
 import { scrollToSection } from './scrollToSection';
 import './hero.css';
 
-const STAGES = [
+const EMBODIMENTS = [
   {
-    name: 'Teach',
-    eyebrow: '01 / FROM HUMAN TO ROBOT',
-    title: 'Your expertise. Its next skill.',
-    description: 'Capture demonstrations and turn real movement into training data.',
-    status: 'Demonstration → Dataset',
-    detail: 'Collect',
-    target: '#data',
+    name: 'Drones',
+    verb: 'Above the ground.',
+    detail: 'Aerial robots',
+    path: 'M-22-13L22 13M-22 13L22-13M-9-7H9V7H-9Z',
+    rotors: true,
   },
   {
-    name: 'Deploy',
-    eyebrow: '02 / FROM MODEL TO MOVEMENT',
-    title: 'Bring the model into the world.',
-    description: 'Manage policies, evaluate in simulation, and deploy with safety gates.',
-    status: 'Model → Robot',
-    detail: 'Deploy',
-    target: '#circle',
+    name: 'Wheeled robots',
+    verb: 'Across the floor.',
+    detail: 'Mobile ground robots',
+    path: 'M-24 8V-12L-13-20H13L24-12V8ZM-17-12H17M-28 9H28M-20 9V19H-10V9M10 9V19H20V9M-4-20V-28H4',
   },
   {
-    name: 'Improve',
-    eyebrow: '03 / FROM EXPERIENCE TO INTELLIGENCE',
-    title: 'Every run is a new beginning.',
-    description: 'Inspect what happened. Bring the evidence back into the next training cycle.',
-    status: 'Fleet → Feedback',
-    detail: 'Evaluate',
-    target: '#circle',
+    name: 'Quadrupeds',
+    verb: 'Beyond flat terrain.',
+    detail: 'Four-legged robots (robot dogs)',
+    path: 'M-23-12H16L26-5V3H-23ZM-19 3L-25 17-17 26M-9 3L-4 17-10 26M12 3L7 17 15 26M21 3L27 17 21 26M-23-9L-30-17',
+  },
+  {
+    name: 'Humanoids',
+    verb: 'In human spaces.',
+    detail: 'Robots with a human-like form',
+    path: 'M-7-24V-14H7V-24ZM-13-7H13L9 9H-9ZM-13-5L-23 12M13-5L23 12M-7 9L-11 28M7 9L11 28',
   },
 ] as const;
 
-/** Decorative vector concept, deliberately not presented as product telemetry. */
-const RobotScene = memo(function RobotScene({ stage }: { stage: number }) {
+function EmbodimentGlyph({ index, x = 0, y = 0 }: { index: number; x?: number; y?: number }) {
+  const item = EMBODIMENTS[index];
   return (
-    <svg className="mission-robot" viewBox="0 0 640 720" fill="none" aria-hidden="true">
-      <defs>
-        <linearGradient
-          id="robot-shell"
-          x1="190"
-          y1="100"
-          x2="430"
-          y2="470"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop stopColor="#f5f7fb" />
-          <stop offset=".3" stopColor="#aebbc9" />
-          <stop offset=".55" stopColor="#e2e8ef" />
-          <stop offset="1" stopColor="#53667a" />
-        </linearGradient>
-        <linearGradient id="robot-edge">
-          <stop stopColor="#233244" />
-          <stop offset=".5" stopColor="#5c6f84" />
-          <stop offset="1" stopColor="#172333" />
-        </linearGradient>
-        <linearGradient id="robot-visor" x2="0" y2="1">
-          <stop stopColor="#253d50" />
-          <stop offset="1" stopColor="#070e19" />
-        </linearGradient>
-        <radialGradient id="robot-halo">
-          <stop stopColor="currentColor" stopOpacity=".18" />
-          <stop offset="1" stopColor="currentColor" stopOpacity="0" />
-        </radialGradient>
-        <pattern id="mission-grid" width="36" height="36" patternUnits="userSpaceOnUse">
-          <path d="M36 0H0V36" stroke="#a0b8ce" strokeOpacity=".09" />
-        </pattern>
-      </defs>
-      <circle cx="330" cy="330" r="290" fill="url(#robot-halo)" />
-      <path
-        d="M20 580L320 420 620 580 320 740Z"
-        fill="url(#mission-grid)"
-        stroke="#8ba1b5"
-        strokeOpacity=".14"
-      />
-      <g className="mission-orbits" stroke="currentColor">
-        <ellipse cx="322" cy="590" rx="231" ry="76" strokeOpacity=".16" />
-        <ellipse cx="322" cy="590" rx="177" ry="58" strokeOpacity=".3" strokeDasharray="3 9" />
-        <ellipse cx="322" cy="590" rx="122" ry="40" strokeOpacity=".5" />
-        <path d="M91 590h28m406 0h28M322 505v18m0 135v18" strokeOpacity=".6" />
-      </g>
-      <ellipse cx="320" cy="600" rx="98" ry="24" fill="#000" opacity=".5" />
-      <g className="mission-body" stroke="#0d1928" strokeWidth="2">
-        {/* Legs and exposed knee actuators. */}
-        <path d="M271 372L312 378 306 467 269 465 258 408Z" fill="url(#robot-shell)" />
-        <path d="M331 378L371 372 383 409 373 465 336 467Z" fill="url(#robot-shell)" />
-        <circle cx="285" cy="474" r="22" fill="url(#robot-edge)" />
-        <circle cx="355" cy="474" r="22" fill="url(#robot-edge)" />
-        <circle cx="285" cy="474" r="11" stroke="#7d91a5" />
-        <circle cx="355" cy="474" r="11" stroke="#7d91a5" />
-        <path d="M263 486L306 490 300 568 269 569 257 518Z" fill="url(#robot-shell)" />
-        <path d="M336 490L378 486 384 518 371 569 340 568Z" fill="url(#robot-shell)" />
-        <path d="M267 565L301 565 303 597 248 599 244 586Z" fill="url(#robot-edge)" />
-        <path d="M339 565L372 565 394 587 390 599 336 597Z" fill="url(#robot-edge)" />
-        <path d="M250 591h44m50 0h42" stroke="#b6c4d4" strokeWidth="3" />
-        {/* Pelvis, waist and torso. */}
-        <path
-          d="M263 337Q320 320 378 337L369 392 338 409 319 390 302 408 270 391Z"
-          fill="url(#robot-edge)"
-        />
-        <path d="M278 317H362V349H278Z" fill="#111e2c" />
-        <path d="M285 325h70m-70 9h70" stroke="#6e7e8d" />
-        <path
-          d="M257 195L289 182H350L383 195 375 266 354 321Q320 334 283 321L265 269Z"
-          fill="url(#robot-shell)"
-        />
-        <path d="M269 208L296 196H345L370 208 357 254Q320 270 283 254Z" fill="url(#robot-edge)" />
-        <path d="M297 219H344" stroke="currentColor" strokeWidth="3" />
-        <path d="M299 285h42m-45 8h48m-43 8h38" stroke="#657a90" strokeWidth="3" />
-        <path d="M277 268l9 39m78-39-9 39" stroke="#f4f8fc" strokeOpacity=".55" />
-        {/* Shoulders and arms. */}
-        <circle cx="250" cy="218" r="27" fill="url(#robot-edge)" />
-        <circle cx="391" cy="218" r="27" fill="url(#robot-edge)" />
-        <path d="M226 217Q242 201 260 216L255 282 228 295 216 279Z" fill="url(#robot-shell)" />
-        <path d="M382 215Q400 201 415 218L425 279 413 295 385 282Z" fill="url(#robot-shell)" />
-        <circle cx="237" cy="297" r="18" fill="url(#robot-edge)" />
-        <circle cx="404" cy="297" r="18" fill="url(#robot-edge)" />
-        <path d="M220 308L250 309 244 360 225 377 212 365Z" fill="url(#robot-shell)" />
-        <path d="M391 309L421 308 430 365 416 377 397 360Z" fill="url(#robot-shell)" />
-        <path d="M218 373L241 373 247 404 239 421 216 413 210 391Z" fill="url(#robot-edge)" />
-        <path d="M400 373L423 373 431 391 425 413 402 421 394 404Z" fill="url(#robot-edge)" />
-        <path d="M220 389l3 19m5-21 3 23m179-23-3 23m11-21-3 19" stroke="#879aaf" />
-        {/* Head, inset visor and neck. */}
-        <path d="M301 159H340V188H301Z" fill="url(#robot-edge)" />
-        <path
-          d="M281 110Q281 86 307 82H334Q361 87 361 111L355 156 341 171H300L285 156Z"
-          fill="url(#robot-shell)"
-        />
-        <path d="M290 111Q319 101 353 111L349 145Q321 156 294 145Z" fill="url(#robot-visor)" />
-        <path d="M300 125H341" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-        <path d="M305 160h30" stroke="#5d7184" />
-      </g>
-      <g className="mission-scan" stroke="currentColor" strokeWidth="1">
-        <path d="M174 250H464" strokeOpacity=".8" />
-        <path d="M174 240v20m290-20v20" />
-        <rect
-          x="175"
-          y="251"
-          width="288"
-          height="45"
-          fill="currentColor"
-          fillOpacity=".035"
-          stroke="none"
-        />
-      </g>
-      <g stroke="currentColor" strokeOpacity=".65">
-        <path
-          d={
-            stage === 0
-              ? 'M341 125H445L481 89H571'
-              : stage === 1
-                ? 'M345 220H445L481 184H571'
-                : 'M355 474H440L482 432H571'
-          }
-        />
-        <circle
-          cx={stage === 0 ? 341 : stage === 1 ? 345 : 355}
-          cy={stage === 0 ? 125 : stage === 1 ? 220 : 474}
-          r="5"
-          fill="#0b1723"
-        />
-        <path d="M270 347H181L145 383H67" />
-        <circle cx="270" cy="347" r="4" fill="#0b1723" />
-      </g>
-      <g fill="#9fafc1" fontFamily="monospace" fontSize="9" letterSpacing="1.5">
-        <text x="70" y="400">
-          HUMANOID / CONCEPT
-        </text>
-        <text x="485" y={stage === 0 ? 80 : stage === 1 ? 175 : 423}>
-          {stage === 0 ? 'PERCEPTION' : stage === 1 ? 'POLICY' : 'FEEDBACK'}
-        </text>
-        <text x="279" y="667">
-          PHYSICAL AI
-        </text>
-      </g>
-    </svg>
+    <g
+      transform={`translate(${x} ${y})`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d={item.path} />
+      {'rotors' in item &&
+        [
+          [-25, -15],
+          [25, 15],
+          [-25, 15],
+          [25, -15],
+        ].map(([cx, cy]) => <ellipse key={`${cx}-${cy}`} cx={cx} cy={cy} rx="12" ry="5" />)}
+    </g>
   );
-});
+}
 
 export const HeroSection = memo(function HeroSection() {
   const brand = useBrand();
   const [active, setActive] = useState(0);
   const [paused, setPaused] = useState(false);
-  const stage = STAGES[active];
-
   return (
     <section
-      className={`mission-hero mission-stage-${active}${paused ? ' mission-paused' : ''}`}
+      className={`field-hero${paused ? ' field-paused' : ''}`}
       aria-labelledby="hero-heading"
     >
-      <div className="mission-noise" aria-hidden="true" />
-      <div className="lp-container mission-layout">
-        <div className="mission-copy">
-          <p className="mission-kicker">
-            <span /> {brand.name} / THE OPEN PHYSICAL AI PLATFORM
-          </p>
-          <h1 id="hero-heading">
-            Give intelligence
-            <br />a <em>body.</em>
-          </h1>
-          <p className="mission-lede">
-            From the first demonstration to a working fleet.
-            <br className="hidden sm:block" /> Teach, deploy, and improve your robots in one place.
-          </p>
-          <div className="mission-actions">
-            <Link to="/dashboard" className="mission-primary">
-              Explore the platform <ArrowUpRight size={18} />
-            </Link>
-            <a
-              href="#circle"
-              onClick={(event) => scrollToSection(event, '#circle')}
-              className="mission-secondary"
-            >
-              See how it works <ArrowDown size={16} />
-            </a>
-          </div>
-          <p className="mission-ownership">
-            Open source. Your models. Your hardware. Your control.
-          </p>
+      <div className="field-grid" aria-hidden="true" />
+      <div className="lp-container field-content">
+        <p className="field-kicker">
+          <span /> {brand.name} / THE OPEN PHYSICAL AI PLATFORM
+        </p>
+        <h1 id="hero-heading">
+          Intelligence.
+          <br />
+          <em>Beyond the screen.</em>
+        </h1>
+        <p className="field-lede">
+          Different bodies. One continuous loop.
+          <br />
+          Turn robot experience into intelligence — and bring it back into the world.
+        </p>
+        <div className="field-actions">
+          <Link to="/dashboard" className="field-primary">
+            Explore the platform <ArrowUpRight size={18} />
+          </Link>
+          <a href="#circle" onClick={(event) => scrollToSection(event, '#circle')}>
+            Discover the Embodied Loop <ArrowDown size={16} />
+          </a>
         </div>
-        <div className="mission-visual">
-          <div className="mission-scene-label">
-            <span className="mission-cross">+</span> INTELLIGENCE, EMBODIED <span>FIG. 01</span>
+        <div className="intelligence-field">
+          <div className="field-caption">
+            <span>ONE PLATFORM. MANY FORMS.</span>
+            <span>CONCEPT / PHYSICAL AI</span>
           </div>
-          <RobotScene stage={active} />
-          <div className="mission-scene-footer">
-            <span>ILLUSTRATIVE WORKFLOW · NO LIVE TELEMETRY</span>
+          <svg className="field-orbit" viewBox="0 0 1100 420" fill="none" aria-hidden="true">
+            <defs>
+              <radialGradient id="field-aura">
+                <stop stopColor="#83e8da" stopOpacity=".28" />
+                <stop offset="1" stopColor="#83e8da" stopOpacity="0" />
+              </radialGradient>
+              <linearGradient id="field-spectrum">
+                <stop stopColor="#658aff" />
+                <stop offset=".5" stopColor="#a2f8e2" />
+                <stop offset="1" stopColor="#a092ff" />
+              </linearGradient>
+            </defs>
+            <ellipse cx="550" cy="215" rx="380" ry="205" fill="url(#field-aura)" />
+            {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+              <ellipse
+                key={i}
+                cx="550"
+                cy="215"
+                rx={310 + i * 12}
+                ry={56 + i * 9}
+                transform={`rotate(${-28 + i * 8} 550 215)`}
+                stroke="url(#field-spectrum)"
+                strokeOpacity={0.16 + i * 0.035}
+              />
+            ))}
+            <g className="field-stream">
+              <ellipse
+                cx="550"
+                cy="215"
+                rx="390"
+                ry="118"
+                stroke="#b9ffeb"
+                strokeWidth="2"
+                strokeDasharray="2 80 130 1800"
+                transform="rotate(-12 550 215)"
+              />
+            </g>
+            <g className="field-stream field-stream-reverse">
+              <ellipse
+                cx="550"
+                cy="215"
+                rx="360"
+                ry="125"
+                stroke="#a695ff"
+                strokeWidth="2"
+                strokeDasharray="100 1800"
+                transform="rotate(18 550 215)"
+              />
+            </g>
+            {[
+              [190, 170],
+              [360, 315],
+              [748, 95],
+              [920, 257],
+            ].map(([x, y], i) => (
+              <g key={i} className={active === i ? 'field-node field-node-active' : 'field-node'}>
+                <path
+                  d={`M${x} ${y}L550 215`}
+                  stroke="currentColor"
+                  strokeDasharray="3 7"
+                  opacity=".35"
+                />
+                <circle cx={x} cy={y} r="43" fill="#0a1522" stroke="currentColor" />
+                <EmbodimentGlyph index={i} x={x} y={y} />
+              </g>
+            ))}
+            <circle cx="550" cy="215" r="72" fill="#09131f" stroke="#9deed9" strokeOpacity=".4" />
+            <circle cx="550" cy="215" r="63" stroke="#a2f8e2" strokeOpacity=".12" />
+            <g transform="translate(550 208) scale(1.2)" className="field-center-glyph">
+              <EmbodimentGlyph index={active} />
+            </g>
+            <text
+              x="550"
+              y="260"
+              fill="#c2e5e1"
+              textAnchor="middle"
+              fontSize="8"
+              fontFamily="monospace"
+              letterSpacing="2"
+            >
+              EMBODIED AI
+            </text>
+          </svg>
+          <div className="field-selection" id="field-selection" aria-live="polite">
+            <strong>{EMBODIMENTS[active].verb}</strong>
+            <span>{EMBODIMENTS[active].detail}</span>
+          </div>
+          <div className="field-controls">
+            <div className="field-embodiments" role="group" aria-label="Explore robot forms">
+              {EMBODIMENTS.map((item, index) => (
+                <button
+                  key={item.name}
+                  type="button"
+                  aria-pressed={active === index}
+                  aria-controls="field-selection"
+                  onClick={() => setActive(index)}
+                >
+                  <span>0{index + 1}</span>
+                  {item.name}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
+              className="field-pause"
               onClick={() => setPaused(!paused)}
               aria-label={paused ? 'Play hero animation' : 'Pause hero animation'}
             >
-              {paused ? <Play size={14} /> : <Pause size={14} />}
+              {paused ? <Play size={16} /> : <Pause size={16} />}
             </button>
           </div>
         </div>
-        <div className="mission-workflow">
-          <div className="mission-selectors" role="group" aria-label="Explore the robot lifecycle">
-            {STAGES.map((item, index) => (
-              <button
-                key={item.name}
-                type="button"
-                aria-pressed={active === index}
-                aria-controls="mission-stage-description"
-                onClick={() => setActive(index)}
-              >
-                <span>0{index + 1}</span>
-                {item.name}
-                <MoveUpRight size={17} />
-              </button>
-            ))}
-          </div>
-          <div id="mission-stage-description" className="mission-description" aria-live="polite">
-            <div>
-              <p className="mission-eyebrow">{stage.eyebrow}</p>
-              <h2>{stage.title}</h2>
-              <p>{stage.description}</p>
-            </div>
-            <a
-              href={stage.target}
-              onClick={(event) => scrollToSection(event, stage.target)}
-              className="mission-flow-link"
-            >
-              <span>{stage.status}</span>
-              <ArrowUpRight size={22} />
-              <span className="sr-only">Explore {stage.detail}</span>
-            </a>
-          </div>
+        <div className="field-footnote">
+          <span>OPEN SOURCE. YOUR MODELS. YOUR HARDWARE. YOUR CONTROL.</span>
+          <span>Hardware-agnostic architecture. Integration readiness varies by robot.</span>
         </div>
-      </div>
-      <div className="mission-bottom">
-        <span>BUILT FOR THE ENTIRE ROBOT LIFECYCLE</span>
-        <span>SCROLL TO EXPLORE ↓</span>
       </div>
     </section>
   );
