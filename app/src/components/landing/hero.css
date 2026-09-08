@@ -125,6 +125,79 @@
 .scene-drone {
   animation: scene-arrive-air 4.8s ease-in-out both;
 }
+.scene-drone-hover {
+  animation: scene-hover 6s ease-in-out 4.8s infinite;
+}
+.scene-fleet {
+  animation: scene-arrive-ground 4.8s ease-out both;
+}
+.scene-humanoid-body {
+  animation: scene-idle 5.5s ease-in-out 4.8s infinite;
+}
+.scene-fleet > g:nth-child(2) .scene-humanoid-body {
+  animation-delay: 5.5s;
+}
+.scene-fleet > g:nth-child(3) .scene-humanoid-body {
+  animation-delay: 6.2s;
+}
+.scene-humanoid-head {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: scene-look 9s ease-in-out 4.8s infinite;
+}
+.scene-fleet > g:nth-child(2) .scene-humanoid-head {
+  animation-delay: 7s;
+}
+.scene-connections {
+  animation: scene-data-flow 3s linear infinite;
+}
+.scene-core-light {
+  animation: scene-core-light 4s ease-in-out infinite;
+}
+@keyframes scene-hover {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+@keyframes scene-idle {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1.5px);
+  }
+}
+@keyframes scene-look {
+  0%,
+  20%,
+  80%,
+  100% {
+    transform: rotate(0deg);
+  }
+  40%,
+  60% {
+    transform: rotate(5deg);
+  }
+}
+@keyframes scene-data-flow {
+  to {
+    stroke-dashoffset: -36;
+  }
+}
+@keyframes scene-core-light {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
 .scene-rover {
   animation: scene-arrive-ground 4.8s ease-out both;
 }
@@ -135,10 +208,10 @@
   animation: scene-core-reveal 4.8s ease-out both;
 }
 .scene-signal {
-  animation: scene-transmit 4.8s ease-out both;
+  animation: scene-transmit 14s linear infinite;
 }
 .scene-rotor {
-  animation: scene-propeller 0.4s linear 12;
+  animation: scene-propeller 1.2s linear infinite;
 }
 .field-footnote {
   display: flex;

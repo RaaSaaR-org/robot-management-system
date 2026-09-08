@@ -10,13 +10,72 @@ import { useBrand } from "@/brand";
 import { scrollToSection } from "./scrollToSection";
 import "./hero.css";
 
-/** Decorative concept art. The entrance sequence settles within five seconds. */
+/** A fleet member uses local coordinates so its stance can move independently. */
+function FleetHumanoid() {
+  return (
+    <g strokeLinejoin="round" strokeLinecap="round">
+      <ellipse cy="103" rx="25" ry="8" fill="#030a13" opacity=".55" />
+      <g fill="url(#scene-side)" stroke="#8ba7ba" strokeWidth="1.2">
+        <path d="M-12 49L-14 72-11 96H-3L0 72 1 51Z" />
+        <path d="M4 50L5 72 12 94 20 92 15 69 17 48Z" />
+        <path d="M-12 96L-17 101-3 103 0 98Z" fill="#a3bacb" />
+        <path d="M12 94L12 100 26 99 21 93Z" fill="#a3bacb" />
+      </g>
+      <g className="scene-humanoid-body">
+        <path
+          d="M-10 39L15 37 18 51 1 57-14 50Z"
+          fill="#243f52"
+          stroke="#89a7bb"
+        />
+        <path
+          d="M-19 7L-3 0 23 10 16 36-5 44-20 31Z"
+          fill="url(#scene-metal)"
+          stroke="#c2d6e1"
+        />
+        <path d="M-19 7L-4 14 23 10M-4 14L-5 44" stroke="#66899f" />
+        <path
+          d="M-11 18L-1 22 14 17 11 29-2 34-11 29Z"
+          fill="url(#scene-glass)"
+        />
+        <path d="M-6 24L4 26 10 23" stroke="#a1ffe0" strokeWidth="2" />
+        <g
+          className="scene-humanoid-arm"
+          stroke="url(#scene-metal)"
+          strokeWidth="8"
+        >
+          <path d="M-22 12L-29 31-25 49" />
+          <path d="M25 16L30 35 26 51" />
+        </g>
+        <g fill="#243e50" stroke="#9ab7c9">
+          <circle cx="-22" cy="12" r="5" />
+          <circle cx="25" cy="16" r="5" />
+          <circle cx="-29" cy="31" r="3" />
+          <circle cx="30" cy="35" r="3" />
+        </g>
+        <path d="M-25 48V54M26 50V56" stroke="#91aebe" strokeWidth="6" />
+        <path d="M0 1V-6" stroke="#7595a9" strokeWidth="7" />
+        <g className="scene-humanoid-head">
+          <path
+            d="M-12-24L0-29 13-23 12-8 0-3-12-10Z"
+            fill="url(#scene-metal)"
+            stroke="#b7cddd"
+          />
+          <path d="M-10-20L0-16 11-20V-12L0-8-10-13Z" fill="#122735" />
+          <path d="M-7-15L0-12 8-15" stroke="#b2ffe6" strokeWidth="1.5" />
+        </g>
+      </g>
+      <path d="M-12 72H-4M8 72L15 70" stroke="#b5cad6" strokeWidth="3" />
+    </g>
+  );
+}
+
+/** Decorative concept art with a brief entrance and gentle ambient motion. */
 function IntelligenceScene() {
   return (
     <div
       className="intelligence-field"
       role="img"
-      aria-label="Physical AI concept: a drone, a wheeled robot and a quadruped (robot dog) connected through a shared intelligence core."
+      aria-label="Physical AI concept: a fleet of three humanoids, a drone, a wheeled robot and a quadruped (robot dog) connected through a shared intelligence core."
     >
       <div className="field-caption">
         <span>ONE INTELLIGENCE. MANY FORMS.</span>
@@ -81,8 +140,25 @@ function IntelligenceScene() {
             strokeDasharray="85 1025"
           />
         </g>
-        <g stroke="#99edd9" strokeOpacity=".45" strokeDasharray="3 6">
-          <path d="M330 322V204L401 168M330 350L181 428M351 352L475 421" />
+        <g
+          className="scene-connections"
+          stroke="#99edd9"
+          strokeOpacity=".45"
+          strokeDasharray="3 6"
+        >
+          <path d="M330 322V204L401 168M330 350L181 428M351 352L475 421M294 305L174 252" />
+        </g>
+        {/* Three humanoids share a formation, with slightly staggered idle motion. */}
+        <g className="scene-fleet">
+          <g transform="translate(105 176) scale(.65)">
+            <FleetHumanoid />
+          </g>
+          <g transform="translate(183 186) scale(.7)">
+            <FleetHumanoid />
+          </g>
+          <g transform="translate(140 204) scale(.83)">
+            <FleetHumanoid />
+          </g>
         </g>
         {/* Shared intelligence core, drawn as a floating stack of glass and metal. */}
         <g className="scene-core">
@@ -123,7 +199,7 @@ function IntelligenceScene() {
             fillOpacity=".12"
             stroke="#b4ffeb"
           />
-          <path d="M305 300L330 287 355 300 330 313Z" fill="#c6ffee" />
+          <path className="scene-core-light" d="M305 300L330 287 355 300 330 313Z" fill="#c6ffee" />
           {[0, 1, 2, 3, 4].map((i) => (
             <path
               key={i}
@@ -134,71 +210,73 @@ function IntelligenceScene() {
           ))}
         </g>
         {/* Drone: four rotor assemblies, articulated arms, camera and landing gear. */}
-        <g transform="translate(386 153)">
-          <g className="scene-drone" strokeLinejoin="round">
-            <path
-              d="M-25-8L-78-32M24-8L78-32M-23 11L-76 38M24 11L78 38"
-              stroke="#3e596e"
-              strokeWidth="12"
-            />
-            <path
-              d="M-25-11L-78-35M24-11L78-35M-23 8L-76 35M24 8L78 35"
-              stroke="#a5bccc"
-              strokeWidth="5"
-            />
-            {[-1, 1].flatMap((x) =>
-              [-1, 1].map((y) => (
-                <g
-                  key={`${x}-${y}`}
-                  transform={`translate(${x * 79} ${y === -1 ? -35 : 36})`}
-                >
-                  <ellipse
-                    rx="41"
-                    ry="14"
-                    fill="#84c9ce"
-                    fillOpacity=".04"
-                    stroke="#7c9aa8"
-                    strokeOpacity=".65"
-                  />
-                  <ellipse
-                    className="scene-rotor"
-                    rx="34"
-                    ry="9"
-                    stroke="#d5eeee"
-                    strokeDasharray="35 14"
-                  />
-                  <path d="M0-5V8" stroke="#bed0db" strokeWidth="7" />
-                  <ellipse cy="-5" rx="6" ry="3" fill="#e5eff4" />
-                </g>
-              )),
-            )}
-            <path
-              d="M-33-9L-5-24 35-7 27 15-3 29-30 12Z"
-              fill="url(#scene-metal)"
-              stroke="#c2d6e0"
-            />
-            <path
-              d="M-30 12L-3 29 27 15V3L-3 16-33-1"
-              fill="url(#scene-side)"
-            />
-            <path d="M-20-9L-4-17 21-7 3 3Z" fill="url(#scene-glass)" />
-            <path
-              d="M-20 19L-25 37-10 43M20 21L24 36 12 42"
-              stroke="#8daabb"
-              strokeWidth="3"
-            />
-            <path d="M-2 27V34" stroke="#95b3c3" strokeWidth="6" />
-            <rect
-              x="-10"
-              y="32"
-              width="20"
-              height="13"
-              rx="5"
-              fill="#182a3b"
-              stroke="#8daabb"
-            />
-            <circle cy="38" r="4" fill="#8cf5dc" />
-            <path d="M-27 6L-15 12" stroke="#b1ffe8" strokeWidth="3" />
+        <g transform="translate(410 145)">
+          <g className="scene-drone-hover">
+            <g className="scene-drone" strokeLinejoin="round">
+              <path
+                d="M-25-8L-78-32M24-8L78-32M-23 11L-76 38M24 11L78 38"
+                stroke="#3e596e"
+                strokeWidth="12"
+              />
+              <path
+                d="M-25-11L-78-35M24-11L78-35M-23 8L-76 35M24 8L78 35"
+                stroke="#a5bccc"
+                strokeWidth="5"
+              />
+              {[-1, 1].flatMap((x) =>
+                [-1, 1].map((y) => (
+                  <g
+                    key={`${x}-${y}`}
+                    transform={`translate(${x * 79} ${y === -1 ? -35 : 36})`}
+                  >
+                    <ellipse
+                      rx="41"
+                      ry="14"
+                      fill="#84c9ce"
+                      fillOpacity=".04"
+                      stroke="#7c9aa8"
+                      strokeOpacity=".65"
+                    />
+                    <ellipse
+                      className="scene-rotor"
+                      rx="34"
+                      ry="9"
+                      stroke="#d5eeee"
+                      strokeDasharray="35 14"
+                    />
+                    <path d="M0-5V8" stroke="#bed0db" strokeWidth="7" />
+                    <ellipse cy="-5" rx="6" ry="3" fill="#e5eff4" />
+                  </g>
+                )),
+              )}
+              <path
+                d="M-33-9L-5-24 35-7 27 15-3 29-30 12Z"
+                fill="url(#scene-metal)"
+                stroke="#c2d6e0"
+              />
+              <path
+                d="M-30 12L-3 29 27 15V3L-3 16-33-1"
+                fill="url(#scene-side)"
+              />
+              <path d="M-20-9L-4-17 21-7 3 3Z" fill="url(#scene-glass)" />
+              <path
+                d="M-20 19L-25 37-10 43M20 21L24 36 12 42"
+                stroke="#8daabb"
+                strokeWidth="3"
+              />
+              <path d="M-2 27V34" stroke="#95b3c3" strokeWidth="6" />
+              <rect
+                x="-10"
+                y="32"
+                width="20"
+                height="13"
+                rx="5"
+                fill="#182a3b"
+                stroke="#8daabb"
+              />
+              <circle cy="38" r="4" fill="#8cf5dc" />
+              <path d="M-27 6L-15 12" stroke="#b1ffe8" strokeWidth="3" />
+            </g>
           </g>
         </g>
         {/* Autonomous mobile robot: raised lidar, protective chassis and wheels. */}
@@ -297,6 +375,10 @@ function IntelligenceScene() {
           fontSize="9"
           letterSpacing="1.6"
         >
+          <text x="60" y="117">
+            04 / HUMANOID FLEET
+          </text>
+          <path fill="none" d="M85 129V145H102" stroke="#52697d" />
           <text x="408" y="74">
             01 / AERIAL
           </text>

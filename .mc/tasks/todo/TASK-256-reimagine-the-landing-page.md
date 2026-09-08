@@ -53,3 +53,11 @@ Review: current branch against merge-base with main, plus the revision working d
 Replaced the centered gradient heading and interactive form selector with solid white typography on the left and an automatically animated illustration on the right. Detailed native vector art depicts a drone, wheeled robot and quadruped (robot dog) around a shared intelligence core. Illustration controls are removed; the entrance sequence settles within five seconds and respects reduced motion. Mobile stacks the scene below the copy. Main page navigation links remain.
 
 Verification: app build/typecheck and 11 landing unit tests passed. Playwright MCP checked 320, 390, 768, 1024 and 1440px without overflow, solid heading color, zero illustration buttons, desktop right-side placement, reduced motion, completed animations and lifecycle section-link focus. No page errors. Desktop/mobile and both themes visually reviewed. Evidence: `/tmp/hero-split-desktop.png`, `/tmp/hero-split-mobile.png`, `/tmp/hero-split-final-light.png`; gate logs `/tmp/task256-hero-split-{build,unit}.log`. Earlier full-suite results above predate this presentation-only refinement.
+
+## Humanoid fleet and ambient motion — 9 September 2026
+
+Added three humanoids in formation to the hero concept, with a connection to the shared intelligence core. After the entrance, drone hovering and rotor motion continue, data signals circulate, the core light gently pulses, and staggered humanoid idle/head motion keeps the scene alive. No illustration buttons were added. Reduced motion disables every animation.
+
+Playwright MCP confirmed three humanoids, ongoing motion after seven seconds, zero illustration buttons, zero animations with reduced motion, and no overflow at 320, 390, 768, 1024 and 1440px. Desktop and mobile screenshots visually reviewed: `/tmp/hero-fleet-desktop.png`, `/tmp/hero-fleet-mobile.png`.
+
+Final fleet revision gates: frontend build/typecheck and 11 landing tests passed; diff check clean. Logs: `/tmp/task256-fleet-{build,tests,diff}.log`.
