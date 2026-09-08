@@ -1,6 +1,6 @@
 /**
  * @file Header.tsx
- * @description Fixed landing chrome — matte bar, legend-voice nav, theme control, mobile menu.
+ * @description Fixed landing navigation with a shared marketing surface and mobile menu.
  * @feature landing
  */
 
@@ -8,44 +8,24 @@ import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { Logo } from '@/components/common/Logo';
-import { useThemeStore, type ThemeMode } from '@/features/settings/store/themeStore';
 import { scrollToSection } from './scrollToSection';
 
 const GITHUB_URL = 'https://github.com/RaaSaaR-org/robot-management-system';
 
 /** Anchors here must match the section ids on the landing page. */
 const NAV_ITEMS: ReadonlyArray<{ label: string; href: string }> = [
-  { label: 'Full circle', href: '#circle' },
+  { label: 'Platform', href: '#platform' },
+  { label: 'Embodied Loop', href: '#circle' },
   { label: 'Data', href: '#data' },
   { label: 'Models', href: '#models' },
   { label: 'Safety', href: '#safety' },
   { label: 'Install', href: '#install' },
 ];
 
-/**
- * Flat, matte bar. Glass is the product's language; the page is an instrument
- * panel, so the chrome is a solid surface with a hairline rule under it.
- *
- * Fully opaque, not 92%: at 92% with no backdrop blur the page scrolled visibly
- * through the bar, and on mobile the hero readout's rows showed through the open
- * menu behind the nav labels. Matte means matte.
- */
+/** Opaque landing surface keeps navigation readable over the animated scenes. */
 const SURFACE: CSSProperties = {
   backgroundColor: 'var(--bg-primary)',
   borderBottom: '1px solid var(--border-color)',
-};
-
-/** themeStore.cycleTheme() goes system → light → dark → system. */
-const THEME_NAME: Record<ThemeMode, string> = {
-  system: 'System',
-  light: 'Light',
-  dark: 'Dark',
-};
-
-const THEME_ACTION: Record<ThemeMode, string> = {
-  system: 'Switch theme to light',
-  light: 'Switch theme to dark',
-  dark: 'Switch theme to system',
 };
 
 const LINK_BASE =
@@ -67,62 +47,8 @@ function GitHubMark({ className }: { className?: string }) {
   );
 }
 
-function ThemeIcon({ mode, className }: { mode: ThemeMode; className?: string }) {
-  if (mode === 'light') {
-    return (
-      <svg
-        className={className}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.6}
-        strokeLinecap="round"
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-      >
-        <circle cx="12" cy="12" r="4" />
-        <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4" />
-      </svg>
-    );
-  }
-
-  if (mode === 'dark') {
-    return (
-      <svg
-        className={className}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.6}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-      >
-        <path d="M20 14.4A8.4 8.4 0 019.6 4a8.4 8.4 0 1010.4 10.4z" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.6}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
-      <rect x="3" y="4" width="18" height="12" rx="1.5" />
-      <path d="M9 20h6M12 16v4" />
-    </svg>
-  );
-}
-
 export function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const theme = useThemeStore((state) => state.theme);
-  const cycleTheme = useThemeStore((state) => state.cycleTheme);
 
   const closeMenu = () => setMobileMenuOpen(false);
 
@@ -141,7 +67,7 @@ export function Header() {
         <div className="flex h-16 items-center justify-between gap-4">
           <Logo />
 
-          {/* Desktop navigation — the legend rail's voice, repeated in the chrome. */}
+          {/* Discover the platform, then explore its capabilities and evidence. */}
           <nav className="hidden items-center gap-x-6 lg:flex xl:gap-x-8" aria-label="Landing page sections">
             {NAV_ITEMS.map((item) => (
               <a
@@ -170,16 +96,6 @@ export function Header() {
           </nav>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={cycleTheme}
-              className="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus:outline-none focus-visible:ring-2"
-              aria-label={THEME_ACTION[theme]}
-              title={THEME_ACTION[theme]}
-            >
-              <ThemeIcon mode={theme} className="h-5 w-5" />
-            </button>
-
             <Link
               to="/dashboard"
               className="lp-btn-primary hidden h-11 items-center px-4 text-sm focus:outline-none focus-visible:ring-2 sm:inline-flex"
@@ -247,19 +163,6 @@ export function Header() {
             <GitHubMark className="h-4 w-4" />
             GitHub
           </a>
-
-          <button
-            type="button"
-            onClick={cycleTheme}
-            className={`${MOBILE_LINK} w-full justify-between text-left`}
-            aria-label={THEME_ACTION[theme]}
-          >
-            <span className="flex items-center gap-2">
-              <ThemeIcon mode={theme} className="h-4 w-4" />
-              Theme
-            </span>
-            <span className="lp-value">{THEME_NAME[theme]}</span>
-          </button>
 
           <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-color)' }}>
             <Link
