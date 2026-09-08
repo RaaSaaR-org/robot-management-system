@@ -87,3 +87,9 @@ Verification: frontend build/typecheck, 11 existing landing tests and diff check
 Unified the full marketing page with a scoped navy/mint palette, consistent display type, section spacing, horizontal eyebrow labels, rounded panels and mint actions. Replaced the older sticky sidebar labels with full-width content. Platform and Embodied Loop headings now share the lower-page scale and alignment. Header includes Platform navigation; the marketing page has a fixed dark appearance and no theme toggle, while application theme settings remain untouched. Evidence and readiness copy preserved.
 
 Verification: frontend build/typecheck, 11 landing tests and diff check passed. Playwright MCP checked 320/390/768/1024/1440px without page/header overflow; mobile navigation and Escape, all six stages, three install tabs, pause and light-preference isolation passed with no page errors. Desktop/mobile screenshots visually reviewed, including header at 1024px, models, data, safety and footer. Evidence: `/tmp/unified-final-{1024,320,platform,data,safety,hero,footer}.png`; logs `/tmp/task256-unified-verify-{build,tests,diff}.log`.
+
+## Navigation mark — 9 September 2026
+
+Replaced the default three-robot icon in the shared Logo component with a mint, clipped-corner tile and continuous navy N monogram. Custom brand image support and existing sizes remain; logo links now have an explicit brand name for icon-only accessibility.
+
+Validation: frontend build/typecheck and 11 existing landing tests passed; diff whitespace check passed. Playwright MCP checked 320, 390, 1024 and 1440px without overflow or page errors, keyboard focus and home-link navigation. Desktop/mobile screenshots reviewed: `/tmp/nav-mark-1440.png`, `/tmp/nav-mark-320.png`. Gate logs: `/tmp/task256-nav-mark-build.log`, `/tmp/task256-nav-mark-tests.log`.

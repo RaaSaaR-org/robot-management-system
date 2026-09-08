@@ -1,3 +1,9 @@
+/**
+ * @file Logo.tsx
+ * @description Shared brand lockup with the NeoDEM folded-N mark and custom logo support.
+ * @feature brand
+ */
+
 import { Link } from 'react-router-dom';
 import { useBrand } from '@/brand';
 
@@ -7,35 +13,28 @@ interface LogoProps {
   linkTo?: string;
 }
 
+/** A folded N: one continuous route between intelligence and the physical world. */
 function DefaultLogoSVG({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
-      {/* Connection lines */}
+    <svg
+      viewBox="0 0 40 40"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      aria-hidden="true"
+      focusable="false"
+    >
       <path
-        d="M8 10 L24 10 M8 10 L16 24 M24 10 L16 24"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        className="text-turquoise"
+        d="M10 2H27L38 13V30C38 34.4 34.4 38 30 38H10C5.6 38 2 34.4 2 30V10C2 5.6 5.6 2 10 2Z"
+        fill="#B2F8DF"
       />
-
-      {/* Top left robot node */}
-      <circle cx="8" cy="10" r="5" className="fill-cobalt" />
-      <circle cx="6.5" cy="9" r="1" className="fill-white" />
-      <circle cx="9.5" cy="9" r="1" className="fill-white" />
-      <rect x="6" y="11" width="4" height="1" rx="0.5" className="fill-white/60" />
-
-      {/* Top right robot node */}
-      <circle cx="24" cy="10" r="5" className="fill-cobalt" />
-      <circle cx="22.5" cy="9" r="1" className="fill-white" />
-      <circle cx="25.5" cy="9" r="1" className="fill-white" />
-      <rect x="22" y="11" width="4" height="1" rx="0.5" className="fill-white/60" />
-
-      {/* Bottom robot node */}
-      <circle cx="16" cy="24" r="5" className="fill-cobalt" />
-      <circle cx="14.5" cy="23" r="1" className="fill-white" />
-      <circle cx="17.5" cy="23" r="1" className="fill-white" />
-      <rect x="14" y="25" width="4" height="1" rx="0.5" className="fill-white/60" />
+      <path
+        d="M11 29V13C11 11 12.5 10.5 14 12.5L26 27.5C27.5 29.5 29 29 29 27V11"
+        stroke="#080F18"
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -46,7 +45,7 @@ export function Logo({ showText = true, size = 'default', linkTo = '/' }: LogoPr
   const textSize = size === 'sm' ? 'text-base' : 'text-lg';
 
   const logoElement = brand.logoUrl
-    ? <img src={brand.logoUrl} alt={brand.name} className={`${iconSize} object-contain`} />
+    ? <img src={brand.logoUrl} alt={showText ? '' : brand.name} className={`${iconSize} object-contain`} />
     : <DefaultLogoSVG className={`${iconSize} w-full h-full`} />;
 
   const content = (
@@ -61,7 +60,7 @@ export function Logo({ showText = true, size = 'default', linkTo = '/' }: LogoPr
   );
 
   if (linkTo) {
-    return <Link to={linkTo}>{content}</Link>;
+    return <Link to={linkTo} aria-label={brand.name}>{content}</Link>;
   }
 
   return content;
