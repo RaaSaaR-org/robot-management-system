@@ -2,7 +2,7 @@
 id: "TASK-255"
 title: "Repair real backend browser workflows"
 slug: "repair-real-backend-browser-workflows"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 tags: [browser, integration]
@@ -28,3 +28,5 @@ Exercise the production frontend and real local server using Playwright MCP, wit
 - Independent frontend/backend review: no material findings.
 - Details and reproduction: `docs/testing/real-backend-browser-audit.md`.
 - No robot hardware, training worker, or object storage exercised. Authorization changes cover zones, tours, and patrol routes, not an audit of every server endpoint.
+
+PR: https://github.com/RaaSaaR-org/robot-management-system/pull/301
