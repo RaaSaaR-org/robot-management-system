@@ -2,7 +2,7 @@
 id: "TASK-256"
 title: "Reimagine the landing page"
 slug: "reimagine-the-landing-page"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 tags: [design, landing]
@@ -18,7 +18,7 @@ Give the public page a memorable hero and clearer content that explains the full
 ## Acceptance Criteria
 - [x] Distinctive responsive hero with animated illustration and clear calls to action.
 - [x] Benefit-led content covering the full lifecycle and self-hosting.
-- [x] Keyboard access, reduced motion, light/dark themes and mobile layout verified in a browser.
+- [x] Keyboard access, reduced motion and mobile layout verified; landing palette remains consistent under either app theme preference.
 - [x] Frontend build and relevant regression checks pass.
 
 ## Verification
@@ -111,3 +111,11 @@ Verification: 11 landing tests and whitespace check passed. Full workspace build
 Replaced the Blocks icon beside NeoDEM in the “A home for Physical AI” blueprint with the shared CPU-atom mark at 40px. The workflow capability retains its Blocks icon. Playwright MCP screenshots reviewed at 390 and 1440px with no overflow: `/tmp/platform-cpu-mark-390.png`, `/tmp/platform-cpu-mark-1440.png`.
 
 Isolated frontend build/typecheck passed (`/tmp/task256-platform-mark-build.log`), as did scoped whitespace validation. Isolated build excludes ongoing unrelated docs edits.
+
+## Final review and shipping — 9 September 2026
+
+Reviewed `c7cb4465e56fc556880c9f09c131e32162dc7798..f00e5a91d54b9aaba2267da30dc682e16657de34` against repository conventions and the final user-approved scope. No blocking findings or unresolved PR comments.
+
+Acceptance evidence: `HeroSection.tsx` and `hero.css` provide the responsive multi-embodiment hero and reduced motion; `PlatformSection.tsx`, `FullCircleSection.tsx` and the data/model/ownership sections explain the platform and full lifecycle while retaining readiness disclosures. The shared `NeoDEMMark.tsx` appears consistently in navigation, hero and platform introduction. Browser validation covered 320–1440px, stage selection, installation tabs, mobile menu/Escape, anchor focus, pause and reduced motion with no page errors or overflow. Screenshot evidence: `/tmp/task256-ship-desktop.png`, `/tmp/task256-ship-mobile.png`, `/tmp/task256-ship-platform.png`.
+
+The isolated frontend build passed (`/tmp/task256-ship-build.log`). All six GitHub CI jobs passed on f00e5a91: app tests/builds (default and demo), server tests/build, robot tests, migration consistency, Python suites and demo Playwright. Closing commit CI is required to pass before merge. Shipping uses an isolated detached worktree, excluding the other session’s ongoing docs, shared-hook and chat work.
