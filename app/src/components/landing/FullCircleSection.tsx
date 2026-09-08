@@ -340,16 +340,15 @@ export function FullCircleSection() {
           </p>
 
           <h2 id="fullcircle-heading" className="lp-display lp-h2 mt-6">
-            Collect. Train. Deploy. Evaluate. Operate. Comply.
+            From first demonstration
             <br />
-            Then again.
+            to the next breakthrough.
           </h2>
 
           <p className="lp-lede mx-auto mt-6">
-            One platform carries a robot&rsquo;s whole working life. Data becomes a model, the
-            model ships to the fleet, the fleet gets measured — and what it does on shift becomes
-            the next dataset. No export step between the stages, because there is nothing to
-            export to.
+            Collect. Train. Deploy. Evaluate. Operate. Comply. Connect all six stages in one
+            workspace, so what your robots learn on the job can improve what they do next.
+            Explore the loop to see what works today and what is still being built.
           </p>
         </div>
 

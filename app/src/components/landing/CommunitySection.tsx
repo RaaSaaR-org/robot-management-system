@@ -35,7 +35,7 @@ const PARTIES: Party[] = [
     role: 'Partner slot',
     slot: 'open',
     description:
-      'There is no managed cloud. Today the only way to run it is to run it yourself. A host willing to carry a public instance would let people drive the stack without installing anything first.',
+      'Help make the platform easier to try. Today it is self-hosted; a public hosting partner could let more teams explore it without setting up their own instance.',
   },
   {
     key: 'compute',
@@ -43,7 +43,7 @@ const PARTIES: Party[] = [
     role: 'Partner slot',
     slot: 'open',
     description:
-      'GPU time for the agentic crew, for SmolVLA fine-tuning in the training worker, and for evaluation runs. More credits buys more experiments per week — nothing more, and we would say so.',
+      'Support more training and evaluation experiments with GPU time and inference credits, from SmolVLA fine-tuning to testing the next model.',
   },
 ];
 
@@ -61,21 +61,21 @@ export function CommunitySection() {
 
           <div>
             <h2 id="who-heading" className="lp-display lp-h2">
-              Written by agents.
+              Build what comes next.
               <br />
-              Directed by people.
+              In the open.
             </h2>
 
             <p className="lp-lede mt-5">
-              {brand.name} is built by EmAI Robotics GmbH in Saarbrücken, Germany. A 24/7 agentic crew
-              writes the code, runs the tests, triages the issues and ships the fixes. Humans set
-              direction and decide what is worth building. Everything that comes out is
-              MIT-licensed and public — including the page you are reading.
+              {brand.name} is built by EmAI Robotics GmbH in Saarbrücken, Germany, with AI agents
+              contributing code, tests and fixes. People set the direction and review the work.
+              The platform is MIT-licensed and public. Bring your ideas, your hardware or your
+              next experiment.
             </p>
 
             {/* Ledger of roles. Filled and open are told apart by the tag and the
                 hairline, not by a glowing card. */}
-            <p className="lp-key mt-12">Roles</p>
+            <p className="lp-key mt-12">The team and open opportunities</p>
 
             <ul
               className="mt-3 border-b"
@@ -110,8 +110,8 @@ export function CommunitySection() {
             {/* Last block on the page. One line of finality and the contact action —
                 deliberately not a CTA band; the closing slab was cut for good reason. */}
             <p className="lp-body mt-10">
-              That is the whole page. The code, the runs behind every number on it, and the gaps
-              we have not closed are all public. If you want to close one of them, write.
+              Have a robot, a research question or a use case worth exploring? Let&rsquo;s build
+              the next step together. The code, the evidence and the open problems are public.
             </p>
 
             <div className="mt-6">
@@ -121,7 +121,7 @@ export function CommunitySection() {
                 )}`}
                 className="lp-btn-secondary inline-flex min-h-[2.75rem] items-center px-5 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
               >
-                Write to {CONTACT_EMAIL}
+                Start a conversation
               </a>
             </div>
           </div>
