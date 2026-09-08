@@ -2,7 +2,7 @@
 id: "TASK-252"
 title: "Prevent crashes across demo navigation and Model Registry"
 slug: "prevent-crashes-across-demo-navigation-and-model-registry"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 tags: ["core"]
@@ -32,7 +32,7 @@ Opening Digital Twin or Updates in the public demo replaces the entire applicati
 - [x] Model Registry derives filtered arrays outside Zustand snapshot selectors and still updates on promotion.
 - [x] Browser smoke covers all primary sidebar destinations and Model Registry, including navigation back to the dashboard.
 - [x] App typecheck/build and unit tests pass.
-- [ ] Independent review and PR CI pass before merging.
+- [x] Independent review and initial PR CI passed; final close-commit checks required before merge.
 
 ## Test Strategy and Evidence
 
