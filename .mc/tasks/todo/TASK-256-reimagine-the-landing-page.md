@@ -81,3 +81,9 @@ Placed the infinity illustration on the left and the single-column stage details
 Added “A home for Physical AI” between hero and Embodied Loop. Defines the open all-in-one platform, illustrates data/models/workflows/fleet connecting in one workspace, and introduces the expert-led AI-agent maintenance fleet. Discovery links lead into the lifecycle. Responsive native artwork respects reduced motion and labels hardware integration readiness.
 
 Verification: frontend build/typecheck, 11 existing landing tests and diff check passed. Playwright MCP verified 320–1440px without overflow, discovery-link focus, reduced motion and no page errors. Desktop/mobile screenshots reviewed: `/tmp/platform-1440.png`, `/tmp/platform-390.png`. Logs: `/tmp/task256-platform-build.log`, `/tmp/task256-platform-tests.log`.
+
+## Unified visual system — 9 September 2026
+
+Unified the full marketing page with a scoped navy/mint palette, consistent display type, section spacing, horizontal eyebrow labels, rounded panels and mint actions. Replaced the older sticky sidebar labels with full-width content. Platform and Embodied Loop headings now share the lower-page scale and alignment. Header includes Platform navigation; the marketing page has a fixed dark appearance and no theme toggle, while application theme settings remain untouched. Evidence and readiness copy preserved.
+
+Verification: frontend build/typecheck, 11 landing tests and diff check passed. Playwright MCP checked 320/390/768/1024/1440px without page/header overflow; mobile navigation and Escape, all six stages, three install tabs, pause and light-preference isolation passed with no page errors. Desktop/mobile screenshots visually reviewed, including header at 1024px, models, data, safety and footer. Evidence: `/tmp/unified-final-{1024,320,platform,data,safety,hero,footer}.png`; logs `/tmp/task256-unified-verify-{build,tests,diff}.log`.

@@ -18,10 +18,11 @@ import { CommunitySection } from '../components/landing/CommunitySection';
 import { SafetyRobotScene } from '../components/landing/SafetyRobotScene';
 import { BeliefReadout } from '../components/landing/BeliefReadout';
 import { Footer } from '../components/landing/Footer';
+import '../components/landing/landing-theme.css';
 
 export function LandingPage() {
   return (
-    <div className="min-h-screen section-primary">
+    <div className="landing-page min-h-screen">
       <Header />
       <main>
         <HeroSection />
