@@ -1,6 +1,6 @@
 /**
  * @file embodied-loop.css
- * @description The Embodied Loop's responsive orbital lifecycle and stage readout.
+ * @description The Embodied Loop's responsive infinity lifecycle and stage readout.
  * @feature landing
  */
 .embodied-loop {
@@ -256,13 +256,9 @@
   border: 1px solid #2a3c54;
   border-radius: 20px;
   background: linear-gradient(135deg, #172539b3, #111b2bb3);
-  display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-  column-gap: 52px;
-  align-items: start;
+  min-width: 0;
 }
 .embodied-loop-readout-meta {
-  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -274,14 +270,12 @@
   letter-spacing: 0.08em;
 }
 .embodied-loop-stage-name {
-  grid-column: 1;
   margin-top: 28px;
   color: #aae8dd;
   font-size: 14px;
   font-weight: 500;
 }
 .embodied-loop-readout h3 {
-  grid-column: 1;
   margin-top: 10px;
   color: #f0f5fd;
   font-size: clamp(1.8rem, 2.5vw, 2.35rem);
@@ -289,15 +283,12 @@
   letter-spacing: -0.045em;
 }
 .embodied-loop-stage-summary {
-  grid-column: 1;
   margin-top: 18px;
   color: #d3deeb;
   font-size: 14px;
   line-height: 1.7;
 }
 .embodied-loop-evidence {
-  grid-column: 2;
-  grid-row: 2 / 6;
   display: grid;
   gap: 14px;
   padding: 24px 0;
@@ -323,7 +314,6 @@
   border-radius: 50%;
 }
 .embodied-loop-link {
-  grid-column: 1;
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -372,6 +362,29 @@
 .embodied-loop-disclosure strong {
   color: #c7d5e6;
   font-weight: 500;
+}
+@media (min-width: 1024px) {
+  .embodied-loop-workspace {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 32px;
+    margin-top: 52px;
+  }
+  .embodied-loop-node {
+    width: 96px;
+    min-height: 78px;
+    padding: 9px 6px;
+  }
+  .embodied-loop-node-label {
+    font-size: 14px;
+  }
+  .embodied-loop-lobe strong {
+    font-size: clamp(17px, 1.55vw, 21px);
+  }
+  .embodied-loop-lobe span {
+    font-size: 7px;
+    letter-spacing: 0.07em;
+  }
 }
 @media (max-width: 760px) {
   .embodied-loop-workspace {

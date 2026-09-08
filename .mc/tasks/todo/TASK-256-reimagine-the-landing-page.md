@@ -71,3 +71,7 @@ The lifecycle revision replaces the circular orbit with a horizontal infinity pa
 Verification: build/typecheck and 11 landing tests passed. Playwright MCP verified all six stage selections, keyboard Enter, pause, reduced motion, section-link focus, and 320–1440px layouts without overflow or undersized stage targets. Corrected legs and infinity artwork reviewed in screenshots, including 320px mobile. Evidence: `/tmp/hero-legs-fixed.png`, `/tmp/infinity-desktop.png`, `/tmp/infinity-mobile.png`, `/tmp/infinity-final-polished.png`, `/tmp/infinity-final-320.png`. Logs: `/tmp/task256-infinity-verify-{build,tests}.log`. The crossover shadow received a final cosmetic shortening after these tests.
 
 Final build/typecheck and diff check also passed after the crossover polish.
+
+## Loop placement — 9 September 2026
+
+Placed the infinity illustration on the left and the single-column stage details on the right at desktop widths, with stacked content below 1024px. Sized stage nodes and lobe labels for the narrower illustration. Frontend build/typecheck and diff check passed. Playwright MCP confirmed placement at 1024/1440px, stacking at 320/390/768px, no horizontal overflow, and stage selection. Evidence: `/tmp/loop-split-1440.png`, `/tmp/loop-split-390.png`; build log `/tmp/task256-loop-split-build.log`.
