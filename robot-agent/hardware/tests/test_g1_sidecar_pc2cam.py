@@ -57,6 +57,8 @@ class FakePublisher:
         self._srv.listen(4)
         self.port = self._srv.getsockname()[1]
         self._stop = threading.Event()
+        self._clients = set()
+        self._clients_lock = threading.Lock()
         self.connections = 0
         self._thread = threading.Thread(target=self._serve, daemon=True)
 
@@ -74,6 +76,8 @@ class FakePublisher:
             except OSError:
                 break
             self.connections += 1
+            with self._clients_lock:
+                self._clients.add(conn)
             threading.Thread(target=self._pump, args=(conn,), daemon=True).start()
 
     def _pump(self, conn):
@@ -88,16 +92,26 @@ class FakePublisher:
         except OSError:
             pass
         finally:
+            with self._clients_lock:
+                self._clients.discard(conn)
             conn.close()
 
     def drop_clients(self):
         """What the publisher does when the camera re-enumerates."""
-        self._stop.set()
-        time.sleep(0.15)
-        self._stop.clear()
+        # Keep accepting reconnects. Toggling _stop also stopped the listener
+        # permanently whenever its accept timeout landed during the pause.
+        with self._clients_lock:
+            clients = list(self._clients)
+        for conn in clients:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            conn.close()
 
     def stop(self):
         self._stop.set()
+        self.drop_clients()
         try:
             self._srv.close()
         except OSError:
@@ -190,8 +204,16 @@ def test_it_reconnects_after_the_publisher_drops_clients(publisher):
     # Exactly what happened on the robot when the D435i re-enumerated.
     assert _wait_for_frame() is not None
     before = publisher.connections
+    publisher.frames = (b"\xff\xd8reconnected\xff\xd9",)
     publisher.drop_clients()
-    assert _wait_for_frame(timeout=8.0) is not None
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        if (publisher.connections > before
+                and g1_sidecar._pc2cam_jpeg_bytes() == publisher.frames[0]):
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("the reader did not receive a fresh frame after reconnecting")
     assert publisher.connections > before, "the reader never reconnected"
 
 

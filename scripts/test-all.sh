@@ -17,14 +17,14 @@
 # has them (server/curation/.venv/bin/python is found automatically). The hardware
 # sidecar stage needs only numpy + pytest — point HARDWARE_PYTHON at one, or let it
 # reuse either venv above. Without an interpreter, that stage is reported as
-# SKIPPED, never as passed.
+# SKIPPED, never as passed. --python-only and CI instead fail missing stages.
 #
 # The Isaac offline verifiers (stage 3d, added by TASK-231) are the exception: they
 # need nothing but a stdlib python3, so they have no skip path at all — no interpreter
 # there is counted as a FAILURE.
 #
 # Every stage runs even when an earlier one fails, so one invocation gives the full
-# picture. Exits 0 if all tests pass, non-zero otherwise.
+# picture. Exits non-zero for failures; local optional skips appear in the summary.
 
 set -euo pipefail
 
@@ -50,6 +50,16 @@ ok()   { echo -e "${GREEN}✓${NC} $*"; }
 fail() { echo -e "${RED}✗${NC} $*" >&2; exit 1; }
 
 FAILURES=0
+SKIPPED_STAGES=0
+python_unavailable() {
+  if [ "$PYTHON_ONLY" = true ] || [ "${CI:-}" = true ]; then
+    echo "  $* — required Python stage unavailable"
+    FAILURES=$((FAILURES + 1))
+  else
+    step "$* (SKIPPED)"
+    SKIPPED_STAGES=$((SKIPPED_STAGES + 1))
+  fi
+}
 
 if [ "$PYTHON_ONLY" = false ]; then
 # ---------------------------------------------------------------- 1. Typecheck
@@ -82,9 +92,16 @@ SIM_PY="${SIM_PYTHON:-}"
 if [ -z "$SIM_PY" ] && [ -x "$SIM_DIR/.venv/bin/python" ]; then SIM_PY="$SIM_DIR/.venv/bin/python"; fi
 if [ -n "$SIM_PY" ] && "$SIM_PY" -c 'import mujoco' >/dev/null 2>&1; then
   step "Sim state machine (pytest)"
-  (cd "$SIM_DIR" && "$SIM_PY" -m pytest -q) || { echo "  sim_g1_dds pytest FAILED"; FAILURES=$((FAILURES + 1)); }
+  # CI must collect the DDS/rendering tests instead of importorskip hiding them.
+  if [ "$PYTHON_ONLY" = true ] || [ "${CI:-}" = true ]; then
+    (cd "$SIM_DIR" && "$SIM_PY" -c 'import sim_node') || {
+      echo "  sim_node dependencies unavailable (Unitree SDK, CycloneDDS, MuJoCo)"
+      FAILURES=$((FAILURES + 1))
+    }
+  fi
+  (cd "$SIM_DIR" && "$SIM_PY" -m pytest -q -rs) || { echo "  sim_g1_dds pytest FAILED"; FAILURES=$((FAILURES + 1)); }
 else
-  step "Sim state machine (SKIPPED — set SIM_PYTHON, see $SIM_DIR/README.md)"
+  python_unavailable "Sim state machine — set SIM_PYTHON, see $SIM_DIR/README.md"
 fi
 
 # ---------------------------------------------------- 3b. Curation / LeRobot format
@@ -99,10 +116,10 @@ if [ -z "$CURATION_PY" ] && [ -x "$CURATION_DIR/.venv/bin/python" ]; then
 fi
 if [ -n "$CURATION_PY" ] && "$CURATION_PY" -c 'import pyarrow, pandas' >/dev/null 2>&1; then
   step "Curation + LeRobot converter (pytest)"
-  (cd "$CURATION_DIR" && "$CURATION_PY" -m pytest tests -q) \
+  (cd "$CURATION_DIR" && "$CURATION_PY" -m pytest tests -q -rs) \
     || { echo "  curation pytest FAILED"; FAILURES=$((FAILURES + 1)); }
 else
-  step "Curation + LeRobot converter (SKIPPED — set CURATION_PYTHON to a python with pyarrow+pandas)"
+  python_unavailable "Curation + LeRobot converter — set CURATION_PYTHON to a python with pyarrow+pandas"
 fi
 
 # ------------------------------------------------- 3c. Hardware sidecar (python)
@@ -127,10 +144,10 @@ if [ -z "$HW_PY" ] && [ -x "$REPO_ROOT/server/curation/.venv/bin/python" ]; then
 fi
 if [ -n "$HW_PY" ] && "$HW_PY" -c 'import numpy' >/dev/null 2>&1; then
   step "Hardware sidecar (pytest)"
-  (cd "$HW_DIR" && "$HW_PY" -m pytest tests -q) \
+  (cd "$HW_DIR" && "$HW_PY" -m pytest tests -q -rs) \
     || { echo "  hardware pytest FAILED"; FAILURES=$((FAILURES + 1)); }
 else
-  step "Hardware sidecar (SKIPPED — set HARDWARE_PYTHON to a python with numpy+pytest)"
+  python_unavailable "Hardware sidecar — set HARDWARE_PYTHON to a python with numpy+pytest"
 fi
 
 # ------------------------------------------ 3d. Isaac offline verifiers (python)
@@ -208,17 +225,9 @@ if $SKIP_PW; then
 else
   step "Playwright UI tests"
   if command -v npx >/dev/null && [ -f "$REPO_ROOT/app/playwright.config.ts" ] || [ -f "$REPO_ROOT/app/playwright-tests/training-flow.spec.ts" ]; then
-    # Ensure server + app are running
-    if ! curl -sf http://localhost:3001/api/robots >/dev/null 2>&1; then
-      echo "  Server not running on :3001 — starting..."
-      (cd "$REPO_ROOT/server" && nohup npm run dev > /tmp/neodem-server.log 2>&1 &)
-      for i in {1..15}; do sleep 2; curl -sf http://localhost:3001/api/robots >/dev/null 2>&1 && break; done
-    fi
-    if ! curl -sf http://localhost:1420 >/dev/null 2>&1; then
-      echo "  App not running on :1420 — starting..."
-      (cd "$REPO_ROOT/app" && nohup npm run dev > /tmp/neodem-app.log 2>&1 &)
-      for i in {1..15}; do sleep 2; curl -sf http://localhost:1420 >/dev/null 2>&1 && break; done
-    fi
+    # The default config owns its demo build and preview server. Starting the
+    # live stack here would touch the developer database and leave processes
+    # behind even though none of these browser tests use them.
     (cd "$REPO_ROOT/app" && npx playwright test) || { echo "  playwright FAILED"; FAILURES=$((FAILURES + 1)); }
   else
     echo "  Playwright not configured — skipping"
@@ -229,7 +238,7 @@ fi
 echo
 step "Results"
 if [ "$FAILURES" -eq 0 ]; then
-  ok "All tests passed"
+  ok "All executed stages passed ($SKIPPED_STAGES Python stages skipped; see suite output for individual skips)"
   exit 0
 else
   fail "$FAILURES test suite(s) failed"
