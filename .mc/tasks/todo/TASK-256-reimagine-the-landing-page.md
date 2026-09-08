@@ -2,7 +2,7 @@
 id: "TASK-256"
 title: "Reimagine the landing page"
 slug: "reimagine-the-landing-page"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 tags: [design, landing]
@@ -31,3 +31,5 @@ Give the public page a memorable hero and clearer content that explains the full
 - Gate logs: `/tmp/task256-verify-build.log`, `/tmp/task256-verify-unit.log`, `/tmp/task256-verify-demo.log`.
 - No backend, hardware or dependency changes.
 - Final rebuilt production demo: safety link preserves HashRouter route and moves focus; primary CTA opens dashboard. Verified with a separate Playwright browser because the existing MCP session intentionally blocks service workers required by the demo.
+
+PR: https://github.com/RaaSaaR-org/robot-management-system/pull/302
