@@ -7,6 +7,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 
+vi.mock('../auth.middleware.js', () => ({
+  authMiddleware: vi.fn((_req: Request, _res: Response, next: NextFunction) => next()),
+}));
+import { authMiddleware } from '../auth.middleware.js';
 import { workerAuthMiddleware } from '../workerAuth.middleware.js';
 
 /** Build a fake express response with chainable status/json. */
@@ -35,6 +39,7 @@ describe('workerAuthMiddleware', () => {
     originalEnv = { ...process.env };
     delete process.env.AUTH_DISABLED;
     delete process.env.WORKER_API_TOKEN;
+    vi.mocked(authMiddleware).mockClear();
     next = vi.fn() as unknown as NextFunction & ReturnType<typeof vi.fn>;
   });
 
@@ -73,16 +78,17 @@ describe('workerAuthMiddleware', () => {
   });
 
   // --------------------------------------------------------------------------
-  // No WORKER_API_TOKEN configured → passthrough
+  // No WORKER_API_TOKEN configured → regular authentication
   // --------------------------------------------------------------------------
 
-  it('calls next() when WORKER_API_TOKEN is not set (falls back to regular auth)', () => {
+  it('delegates to regular authentication when WORKER_API_TOKEN is not set', () => {
     // AUTH_DISABLED and WORKER_API_TOKEN both unset
     const req = makeReq();
     const res = makeRes();
 
     workerAuthMiddleware(req, res, next);
 
+    expect(authMiddleware).toHaveBeenCalledWith(req, res, next);
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
   });
@@ -94,6 +100,7 @@ describe('workerAuthMiddleware', () => {
 
     workerAuthMiddleware(req, res, next);
 
+    expect(authMiddleware).toHaveBeenCalledWith(req, res, next);
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
   });
@@ -185,6 +192,7 @@ describe('workerAuthMiddleware', () => {
 
     workerAuthMiddleware(req, res, next);
 
+    expect(authMiddleware).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
   });
