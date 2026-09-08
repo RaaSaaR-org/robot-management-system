@@ -2,7 +2,7 @@
 id: "TASK-253"
 title: "Authenticate robot platform callbacks"
 slug: "authenticate-robot-platform-callbacks"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 tags: ["core"]
@@ -24,12 +24,14 @@ Add a small shared header helper following the existing token use in agent-mode/
 
 ## Acceptance Criteria
 
-- [ ] Platform callbacks send the configured service credential and work with authentication enabled.
-- [ ] Rejected HTTP responses never count as accepted delivery; retry/error behavior remains truthful.
-- [ ] No configured token preserves development requests; third-party/sidecar requests receive no platform credential.
-- [ ] Agent environment examples and compose describe/wire the token and reachable server callback URL.
-- [ ] Focused regressions and agent typecheck/full tests pass; independent review and PR CI pass before merge.
+- [x] Platform callbacks send the configured service credential and work with authentication enabled.
+- [x] Rejected HTTP responses never count as accepted delivery; retry/error behavior remains truthful.
+- [x] No configured token preserves development requests; third-party/sidecar requests receive no platform credential.
+- [x] Agent environment examples and compose describe/wire the token and reachable server callback URL.
+- [x] Focused regressions and agent typecheck/full tests pass; independent review and PR CI pass before merge.
 
 ## Test Strategy
 
 Use existing client unit-test anchors to assert headers, successful responses, authorization rejection and retries. Where practical use a local HTTP server to test real requests. Verify compose configuration without changing running user services. No real robot movement.
+
+Validation: typecheck and all 2,341 agent tests passed (136 files); focused HTTP/client suite passed 135 tests across five files. Compose configuration validates. Independent review of origin/main...31b64d04 confirmed actual server routes, service-token authentication and role compatibility. PR #298 passed initial CI; final close-commit checks are required before merge.
