@@ -12,6 +12,7 @@
  * @status live-conditional
  */
 
+import { platformAuthHeaders } from '../utils/platform-auth.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
@@ -190,7 +191,7 @@ export class PatrolRouteSource {
 
   async fetch(routeId: string): Promise<{ route: PatrolRoute | null; origin: PatrolRouteOrigin; error?: string }> {
     try {
-      const res = await this.fetchImpl(this.url(routeId), { signal: AbortSignal.timeout(this.timeoutMs) });
+      const res = await this.fetchImpl(this.url(routeId), { headers: platformAuthHeaders(), signal: AbortSignal.timeout(this.timeoutMs) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const route = parsePatrolRoute(await res.json(), this.url(routeId));
       this.remember(route);

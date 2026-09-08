@@ -10,6 +10,7 @@
  * @status live
  */
 
+import { platformAuthHeaders } from '../utils/platform-auth.js';
 import { config } from '../config/config.js';
 
 // ============================================================================
@@ -171,7 +172,7 @@ export class ComplianceLogClient {
     try {
       const response = await fetch(`${this.serverUrl}/api/compliance/sessions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...platformAuthHeaders() },
         body: JSON.stringify({ robotId: this.robotId }),
         signal: this.requestSignal(),
       });
@@ -217,10 +218,12 @@ export class ComplianceLogClient {
     try {
       // Bounded like the rest: this one runs from the SIGTERM/SIGINT path, where
       // an unbounded wait holds the whole shutdown open behind a stalled server.
-      await fetch(`${this.serverUrl}/api/compliance/sessions/${this.sessionId}`, {
+      const response = await fetch(`${this.serverUrl}/api/compliance/sessions/${this.sessionId}`, {
         method: 'DELETE',
+        headers: platformAuthHeaders(),
         signal: this.requestSignal(),
       });
+      if (!response.ok) throw new Error(`Failed to end session: HTTP ${response.status}`);
       console.log(`[ComplianceLogClient] Session ended: ${this.sessionId}`);
     } catch (error) {
       console.error('[ComplianceLogClient] Failed to end session:', error);
@@ -357,7 +360,7 @@ export class ComplianceLogClient {
     try {
       const response = await fetch(`${this.serverUrl}/api/compliance/logs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...platformAuthHeaders() },
         body: JSON.stringify({
           sessionId,
           robotId: this.robotId,
@@ -413,7 +416,7 @@ export class ComplianceLogClient {
       try {
         const response = await fetch(`${this.serverUrl}/api/compliance/logs`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...platformAuthHeaders() },
           body: JSON.stringify({
             sessionId,
             robotId: this.robotId,
