@@ -13,10 +13,10 @@ updated: "2026-09-09"
 
 # Reimagine the landing page
 
-Give the public page a memorable hero and clearer content that explains the full Physical AI lifecycle. Use an interactive, native illustration with an explicit illustrative label; preserve feature maturity and safety disclosures.
+Give the public page a memorable hero and clearer content that explains the full Physical AI lifecycle. Use an animated native illustration with an explicit illustrative label; preserve feature maturity and safety disclosures.
 
 ## Acceptance Criteria
-- [x] Distinctive responsive hero with useful interaction and clear calls to action.
+- [x] Distinctive responsive hero with animated illustration and clear calls to action.
 - [x] Benefit-led content covering the full lifecycle and self-hosting.
 - [x] Keyboard access, reduced motion, light/dark themes and mobile layout verified in a browser.
 - [x] Frontend build and relevant regression checks pass.
@@ -47,3 +47,9 @@ Revision evidence: frontend build/typecheck passed; 2,070 unit tests across 123 
 Playwright MCP verified all four hero forms, all six loop stages, keyboard activation, section-link focus, both pause controls and reduced motion. No page errors and no horizontal overflow at 320, 390, 768, 1024 and 1440px. Light/dark and mobile screenshots reviewed, including the stationary humanoid beside the simulation readout. Evidence: `/tmp/landing256-revision-{hero,mobile,small-loop,safety-exhibit,dark}.png`; gate logs `/tmp/task256-revision-*.log`.
 
 Review: current branch against merge-base with main, plus the revision working diff; all acceptance criteria met in HeroSection, FullCircleSection, SafetyRobotScene and LandingPage. No outstanding concrete findings.
+
+## Hero refinement — 9 September 2026
+
+Replaced the centered gradient heading and interactive form selector with solid white typography on the left and an automatically animated illustration on the right. Detailed native vector art depicts a drone, wheeled robot and quadruped (robot dog) around a shared intelligence core. Illustration controls are removed; the entrance sequence settles within five seconds and respects reduced motion. Mobile stacks the scene below the copy. Main page navigation links remain.
+
+Verification: app build/typecheck and 11 landing unit tests passed. Playwright MCP checked 320, 390, 768, 1024 and 1440px without overflow, solid heading color, zero illustration buttons, desktop right-side placement, reduced motion, completed animations and lifecycle section-link focus. No page errors. Desktop/mobile and both themes visually reviewed. Evidence: `/tmp/hero-split-desktop.png`, `/tmp/hero-split-mobile.png`, `/tmp/hero-split-final-light.png`; gate logs `/tmp/task256-hero-split-{build,unit}.log`. Earlier full-suite results above predate this presentation-only refinement.

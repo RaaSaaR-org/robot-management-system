@@ -1,8 +1,8 @@
-/** Physical AI field and the stationary safety illustration. */
+/** Physical AI hero and the stationary safety illustration. */
 .field-hero {
   position: relative;
   overflow: hidden;
-  padding: 128px 0 30px;
+  padding: 125px 0 28px;
   background: #070e19;
   color: #f1f5fc;
 }
@@ -10,86 +10,82 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background:
-    radial-gradient(ellipse at 50% 66%, #16444255, transparent 52%),
-    linear-gradient(#a0c8ff05 1px, transparent 1px),
-    linear-gradient(90deg, #a0c8ff05 1px, transparent 1px);
-  background-size:
-    auto,
-    64px 64px,
-    64px 64px;
-  mask-image: linear-gradient(transparent, #000 30%, #000 85%, transparent);
+  background: radial-gradient(ellipse at 80% 50%, #16444235, transparent 52%);
 }
 .field-content {
   position: relative;
-  text-align: center;
+}
+.field-layout {
+  display: grid;
+  grid-template-columns: 0.95fr 1.15fr;
+  align-items: center;
+  gap: 12px;
+  min-height: 610px;
+}
+.field-copy {
+  position: relative;
+  z-index: 1;
+  padding: 20px 0 36px;
 }
 .field-kicker,
 .field-caption,
 .field-footnote,
-.field-embodiments button span {
+.field-scene-footer {
   font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
 }
 .field-kicker {
   color: #b3c8d7;
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 10px;
+  font-size: 9px;
 }
 .field-kicker > span {
-  width: 6px;
-  height: 6px;
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: #a2f8e2;
   box-shadow: 0 0 16px #a2f8e2;
 }
 .field-content h1 {
-  font-family: var(--font-display, 'Archivo Variable', sans-serif);
-  font-size: clamp(62px, 7.7vw, 110px);
+  font-family: var(--font-display, "Archivo Variable", sans-serif);
+  font-size: clamp(64px, 6.4vw, 92px);
   font-weight: 560;
   line-height: 0.99;
   letter-spacing: -0.065em;
-  margin: 28px 0 24px;
-}
-.field-content h1 em {
-  font-style: normal;
-  background: linear-gradient(100deg, #f3fbff 10%, #aff9de 48%, #a5a6ff 95%);
-  background-clip: text;
-  color: transparent;
+  margin: 30px 0 26px;
+  color: #f1f5fc;
 }
 .field-lede {
-  font-size: 17px;
-  line-height: 1.75;
+  font-size: 15px;
+  line-height: 1.8;
   color: #abbccc;
-  max-width: 570px;
-  margin: auto;
+  max-width: 365px;
 }
 .field-actions {
   display: flex;
-  justify-content: center;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 28px;
-  margin-top: 27px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 29px;
 }
 .field-actions a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  font-size: 13px;
-  min-height: 48px;
+  font-size: 12px;
+  min-height: 46px;
 }
 .field-primary {
-  padding: 0 22px;
+  padding: 0 20px;
   border-radius: 5px;
   background: #b2f8df;
   color: #0a2225;
   font-weight: 600;
-  box-shadow: 0 0 28px #a2f8e216;
 }
 .field-actions a:hover {
   color: #fff;
@@ -100,103 +96,49 @@
 }
 .intelligence-field {
   position: relative;
-  margin-top: 40px;
+  min-width: 0;
+  margin-right: -25px;
 }
 .field-caption {
   display: flex;
   justify-content: space-between;
+  gap: 16px;
   color: #92a6bb;
-  font-size: 9px;
+  font-size: 8px;
+  padding: 0 28px;
 }
-.field-orbit {
+.field-scene {
   width: 100%;
   height: auto;
   display: block;
-  margin: -14px 0 -22px;
   overflow: visible;
 }
-.field-stream {
-  stroke-dashoffset: 0;
-  animation: field-flow 18s linear infinite;
-}
-.field-stream-reverse {
-  animation-direction: reverse;
-  animation-duration: 25s;
-}
-.field-node {
-  color: #657e9c;
-  transition: color 0.35s;
-}
-.field-node-active {
-  color: #b0ffe2;
-  filter: drop-shadow(0 0 14px #94ffd33b);
-}
-.field-center-glyph {
-  color: #d0ffec;
-}
-.field-selection {
+.field-scene-footer {
   display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin: 0 0 26px;
-}
-.field-selection strong {
-  font-weight: 450;
-  font-size: 24px;
-  letter-spacing: -0.04em;
-}
-.field-selection > span {
-  color: #a8baca;
-  font-size: 12px;
-}
-.field-controls {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 18px;
-}
-.field-embodiments {
-  display: flex;
-  gap: 6px;
-  padding: 5px;
-  border: 1px solid #ffffff1c;
-  background: #101b2a88;
-  border-radius: 7px;
-}
-.field-embodiments button {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: center;
-  min-height: 46px;
-  padding: 0 18px;
-  font-size: 12px;
-  color: #a8bacb;
-  border-radius: 4px;
-  cursor: pointer;
-  border: 1px solid transparent;
-}
-.field-embodiments button span {
-  color: #8aa6b6;
+  justify-content: space-between;
+  color: #91aabb;
   font-size: 9px;
+  border-top: 1px solid #9accc51c;
+  margin: 0 28px;
+  padding-top: 16px;
 }
-.field-embodiments button[aria-pressed='true'] {
-  color: #c2ffe9;
-  background: #a2f8e20c;
-  border-color: #a2f8e23a;
+.scene-drone {
+  animation: scene-arrive-air 4.8s ease-in-out both;
 }
-.field-embodiments button:hover {
-  background: #ffffff0b;
+.scene-rover {
+  animation: scene-arrive-ground 4.8s ease-out both;
 }
-.field-pause {
-  display: grid;
-  place-items: center;
-  min-width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: 1px solid #ffffff25;
-  color: #a8becf;
-  cursor: pointer;
+.scene-dog {
+  animation: scene-arrive-dog 4.8s ease-out both;
+}
+.scene-core {
+  animation: scene-core-reveal 4.8s ease-out both;
+}
+.scene-signal {
+  animation: scene-transmit 4.8s ease-out both;
+}
+.scene-rotor {
+  animation: scene-propeller 0.4s linear 12;
 }
 .field-footnote {
   display: flex;
@@ -208,7 +150,6 @@
   color: #91a6ba;
   font-size: 8px;
   letter-spacing: 0.07em;
-  text-align: left;
 }
 .field-footnote > span:last-child {
   font-family: var(--font-sans);
@@ -216,16 +157,70 @@
   font-size: 10px;
   text-align: right;
 }
-.field-hero :is(a, button):focus-visible {
+.field-hero a:focus-visible {
   outline: 2px solid #c1ffe9;
   outline-offset: 5px;
 }
-.field-paused * {
-  animation-play-state: paused !important;
+@keyframes scene-arrive-air {
+  0% {
+    opacity: 0;
+    transform: translate(18px, -28px);
+  }
+  35% {
+    opacity: 1;
+    transform: translate(0, 5px);
+  }
+  65% {
+    transform: translate(0, -5px);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
 }
-@keyframes field-flow {
+@keyframes scene-arrive-ground {
+  0% {
+    opacity: 0;
+    transform: translate(-28px, 14px);
+  }
+  65%,
+  100% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+}
+@keyframes scene-arrive-dog {
+  0% {
+    opacity: 0;
+    transform: translate(24px, 12px);
+  }
+  65%,
+  100% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+}
+@keyframes scene-core-reveal {
+  0% {
+    opacity: 0.3;
+    transform: translateY(10px);
+  }
+  65%,
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes scene-transmit {
+  from {
+    stroke-dashoffset: 1110;
+  }
   to {
-    stroke-dashoffset: -2112;
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes scene-propeller {
+  to {
+    stroke-dashoffset: -49;
   }
 }
 .safety-exhibit {
@@ -291,63 +286,58 @@
   line-height: 1.7;
   margin-top: 16px;
 }
-@media (max-width: 700px) {
-  .field-hero {
-    padding-top: 108px;
+@media (max-width: 1000px) {
+  .field-layout {
+    grid-template-columns: 0.95fr 1fr;
+    min-height: 560px;
   }
   .field-content h1 {
-    font-size: clamp(46px, 9.8vw, 68px);
-    margin-top: 28px;
-  }
-  .field-lede {
-    font-size: 14px;
-    max-width: 360px;
+    font-size: clamp(55px, 7vw, 72px);
   }
   .field-kicker {
     font-size: 8px;
-    letter-spacing: 0.05em;
-  }
-  .field-actions {
-    gap: 8px 20px;
-  }
-  .field-actions a {
-    font-size: 12px;
+    letter-spacing: 0.04em;
   }
   .intelligence-field {
-    margin-top: 32px;
+    margin-right: -12px;
   }
   .field-caption {
     font-size: 7px;
-    letter-spacing: 0.05em;
-  }
-  .field-orbit {
-    width: 140%;
-    max-width: none;
-    margin: 4px -20% 0;
-  }
-  .field-selection {
-    margin: 5px 0 22px;
-  }
-  .field-selection strong {
-    font-size: 22px;
-  }
-  .field-controls {
-    gap: 9px;
-    align-items: stretch;
-  }
-  .field-embodiments {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    flex: 1;
-    gap: 4px;
-  }
-  .field-embodiments button {
     padding: 0 8px;
-    gap: 8px;
-    font-size: 11px;
   }
-  .field-pause {
-    align-self: center;
+}
+@media (max-width: 700px) {
+  .field-hero {
+    padding-top: 100px;
+  }
+  .field-layout {
+    grid-template-columns: 1fr;
+    gap: 25px;
+  }
+  .field-copy {
+    padding: 10px 0 0;
+  }
+  .field-content h1 {
+    font-size: clamp(58px, 13vw, 82px);
+    margin-top: 25px;
+  }
+  .field-lede {
+    font-size: 14px;
+    max-width: 370px;
+  }
+  .field-actions {
+    margin-top: 24px;
+    gap: 5px;
+  }
+  .intelligence-field {
+    margin: 10px -10px 0;
+  }
+  .field-caption {
+    padding: 0 10px;
+  }
+  .field-scene-footer {
+    margin: 0 10px;
+    font-size: 8px;
   }
   .field-footnote {
     flex-direction: column;
