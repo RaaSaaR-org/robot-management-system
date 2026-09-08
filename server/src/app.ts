@@ -51,7 +51,7 @@ import { incidentRoutes, templateRoutes } from './routes/incident.routes.js';
 import { oversightRoutes } from './routes/oversight.routes.js';
 import { approvalRoutes } from './routes/approval.routes.js';
 import { complianceTrackerRoutes } from './routes/compliance-tracker.routes.js';
-import { trainingRoutes } from './routes/training.routes.js';
+import { trainingRoutes, trainingWorkerRoutes } from './routes/training.routes.js';
 import { storageRoutes } from './routes/storage.routes.js';
 import { datasetRoutes } from './routes/datasets.routes.js';
 import { datasetViewRoutes } from './routes/dataset-views.routes.js';
@@ -275,8 +275,8 @@ export function createApp(): Express {
   app.use('/api/approvals', authMiddleware, approvalRoutes);
 
   // Training job routes (protected) - VLA model training management
-  // Worker callback sub-routes get additional token-based auth
-  app.use('/api/training/workers', authMiddleware, workerAuthMiddleware, trainingRoutes);
+  // Worker callbacks authenticate independently; ordinary training APIs keep user auth.
+  app.use('/api/training/workers', trainingWorkerRoutes);
   app.use('/api/training', authMiddleware, trainingRoutes);
 
   // Storage routes (protected) - RustFS object storage
@@ -316,8 +316,8 @@ export function createApp(): Express {
   app.use('/api/scan-sessions', authMiddleware, scanSessionRoutes);
 
   // Digital twin sidecar worker routes (protected) - build-job poll/claim.
-  // Worker sub-routes get additional token-based auth (mirrors training workers).
-  app.use('/api/twin/workers', authMiddleware, workerAuthMiddleware, twinWorkerRoutes);
+  // Shared-token auth falls back to user auth when no worker token is configured.
+  app.use('/api/twin/workers', workerAuthMiddleware, twinWorkerRoutes);
 
   // Digital twin CRUD + artifacts + zones + export (protected) - TASK-170
   app.use('/api/digital-twins', authMiddleware, digitalTwinRoutes);

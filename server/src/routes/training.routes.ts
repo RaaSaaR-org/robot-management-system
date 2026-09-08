@@ -5,6 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { workerAuthMiddleware } from '../middleware/workerAuth.middleware.js';
 import {
   trainingJobService,
   type SubmitTrainingJobWithMixture,
@@ -21,6 +22,10 @@ import type {
 import type { TrainingJob, TrainingJobStatus, BaseModel, FineTuneMethod } from '../types/vla.types.js';
 
 export const trainingRoutes = Router();
+// Separate worker dispatch prevents both a doubled /workers prefix and shared
+// credentials from authorizing the human-facing training management routes.
+export const trainingWorkerRoutes = Router();
+trainingRoutes.use('/workers', trainingWorkerRoutes);
 
 // ============================================================================
 // POST /api/training/jobs - Submit new training job
@@ -338,7 +343,7 @@ import type {
 // Returns 204 No Content when no jobs are waiting.
 // ============================================================================
 
-trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
+trainingWorkerRoutes.post('/claim', workerAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const { workerId, device, kinds, features } = req.body as {
       workerId?: string;
@@ -451,7 +456,7 @@ trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
 // POST /api/training/workers/heartbeat - Worker alive check
 // ============================================================================
 
-trainingRoutes.post('/workers/heartbeat', async (req: Request, res: Response) => {
+trainingWorkerRoutes.post('/heartbeat', workerAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const body = req.body as WorkerHeartbeatRequest;
     const { jobId, gpuUtil, memoryUtil, workerId, device } = body;
@@ -488,7 +493,7 @@ trainingRoutes.post('/workers/heartbeat', async (req: Request, res: Response) =>
 // POST /api/training/workers/progress - Progress update
 // ============================================================================
 
-trainingRoutes.post('/workers/progress', async (req: Request, res: Response) => {
+trainingWorkerRoutes.post('/progress', workerAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const request = req.body as WorkerProgressRequest;
 
@@ -514,7 +519,7 @@ trainingRoutes.post('/workers/progress', async (req: Request, res: Response) => 
 // POST /api/training/workers/complete - Training complete
 // ============================================================================
 
-trainingRoutes.post('/workers/complete', async (req: Request, res: Response) => {
+trainingWorkerRoutes.post('/complete', workerAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const request = req.body as WorkerCompleteRequest;
 
@@ -546,7 +551,7 @@ trainingRoutes.post('/workers/complete', async (req: Request, res: Response) => 
 // POST /api/training/workers/failed - Training failed
 // ============================================================================
 
-trainingRoutes.post('/workers/failed', async (req: Request, res: Response) => {
+trainingWorkerRoutes.post('/failed', workerAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const request = req.body as WorkerFailedRequest;
 
@@ -574,7 +579,7 @@ trainingRoutes.post('/workers/failed', async (req: Request, res: Response) => {
 // POST /api/training/workers/checkpoint - Checkpoint saved
 // ============================================================================
 
-trainingRoutes.post('/workers/checkpoint', async (req: Request, res: Response) => {
+trainingWorkerRoutes.post('/checkpoint', workerAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const request = req.body as WorkerCheckpointRequest;
 
