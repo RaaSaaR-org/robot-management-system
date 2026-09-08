@@ -7,6 +7,7 @@ import { memo } from "react";
 import { Link } from "react-router-dom";
 import { ArrowDown, ArrowUpRight } from "lucide-react";
 import { useBrand } from "@/brand";
+import { NeoDEMMark } from "@/components/common/NeoDEMMark";
 import { scrollToSection } from "./scrollToSection";
 import "./hero.css";
 
@@ -84,7 +85,7 @@ function IntelligenceScene() {
     <div
       className="intelligence-field"
       role="img"
-      aria-label="Physical AI concept: a fleet of three humanoids, a drone, a wheeled robot and a quadruped (robot dog) connected through a shared intelligence core."
+      aria-label="Physical AI concept: a fleet of three humanoids, a drone, a wheeled robot and a quadruped (robot dog) connected through a shared intelligence core, shown as an atom with a CPU chip at its center."
     >
       <div className="field-caption">
         <span>ONE INTELLIGENCE. MANY FORMS.</span>
@@ -213,6 +214,11 @@ function IntelligenceScene() {
             d="M305 300L330 287 355 300 330 313Z"
             fill="#c6ffee"
           />
+          {/* The brand atom becomes the holographic intelligence above the hardware. */}
+          <path d="M310 294L320 266M350 294L340 266" stroke="#b2f8df" strokeOpacity=".2" />
+          <g className="scene-atom">
+            <NeoDEMMark x="282" y="198" width="96" height="96" />
+          </g>
           {[0, 1, 2, 3, 4].map((i) => (
             <path
               key={i}

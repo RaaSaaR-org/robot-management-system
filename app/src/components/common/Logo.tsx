@@ -6,32 +6,12 @@
 
 import { Link } from 'react-router-dom';
 import { useBrand } from '@/brand';
+import { NeoDEMMark } from './NeoDEMMark';
 
 interface LogoProps {
   showText?: boolean;
   size?: 'sm' | 'default';
   linkTo?: string;
-}
-
-/** Two interlocking orbits around a shared intelligence core. */
-function DefaultLogoSVG({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 32 32"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={className}
-      aria-hidden="true"
-      focusable="false"
-    >
-      <g stroke="var(--color-primary)" strokeWidth="1.8">
-        <ellipse cx="16" cy="16" rx="12.5" ry="5.8" transform="rotate(-42 16 16)" />
-        <ellipse cx="16" cy="16" rx="12.5" ry="5.8" transform="rotate(42 16 16)" />
-      </g>
-      <path d="M16 12.5L19.5 16L16 19.5L12.5 16Z" fill="var(--color-primary)" />
-      <circle cx="25.3" cy="7.6" r="2.3" fill="var(--text-primary)" />
-    </svg>
-  );
 }
 
 export function Logo({ showText = true, size = 'default', linkTo = '/' }: LogoProps) {
@@ -41,7 +21,7 @@ export function Logo({ showText = true, size = 'default', linkTo = '/' }: LogoPr
 
   const logoElement = brand.logoUrl
     ? <img src={brand.logoUrl} alt={showText ? '' : brand.name} className={`${iconSize} object-contain`} />
-    : <DefaultLogoSVG className={`${iconSize} w-full h-full`} />;
+    : <NeoDEMMark className={`${iconSize} w-full h-full`} />;
 
   const content = (
     <div className="flex items-center gap-2">

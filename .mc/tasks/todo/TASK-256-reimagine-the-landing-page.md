@@ -99,3 +99,9 @@ Validation: frontend build/typecheck and 11 existing landing tests passed; diff 
 User preferred a small abstract symbol. Replaced the N tile with two fine interlocking orbits, a diamond core and a bright satellite. Uses existing theme colors and retains brand overrides and link accessibility. Playwright MCP verified 320, 390, 1024 and 1440px, keyboard focus and home navigation without overflow/page errors; screenshots reviewed at `/tmp/orbital-mark-320.png` and `/tmp/orbital-mark-1440.png`.
 
 Final frontend build/typecheck and whitespace check passed (`/tmp/task256-orbital-final-build.log`). The 11 existing landing tests passed before the final color-token correction (`/tmp/task256-orbital-tests.log`).
+
+## Atom CPU and hero — 9 September 2026
+
+Refined the accepted orbital symbol with a CPU package, eight pins and a central die. Extracted `app/src/components/common/NeoDEMMark.tsx` so navigation and hero use identical geometry. The hero projects the atom above its shared intelligence platform with gentle floating motion; reduced motion disables it. Playwright MCP verified 320, 390, 1024 and 1440px without overflow/page errors, plus animation and reduced motion. Screenshots reviewed: `/tmp/atom-hero-1440.png`, `/tmp/atom-hero-320.png`.
+
+Verification: 11 landing tests and whitespace check passed. Full workspace build hit a concurrent unrelated DocsSidebar move/import mismatch. An isolated copy of HEAD plus only the four atom/hero files passed frontend build/typecheck (`/tmp/task256-atom-isolated-build.log`); unrelated docs edits were left untouched.
