@@ -78,6 +78,9 @@ BrowserRouter > ThemeProvider > AuthProvider > App
 | `/patrol`         | `PatrolPage`          | Patrol routes, runs, findings (TASK-212) |
 | `/patrol/routes/new`, `/patrol/routes/:id` | `RouteEditorPage` | Patrol route editor |
 | `/patrol/runs/:runId` | `RunDetailPage`   | Patrol run: legs, photo pairs, findings |
+| `/tour`           | `TourPage`            | Host mode: tour routes and visits (TASK-213) |
+| `/tour/routes/new`, `/tour/routes/:id` | `TourEditorPage` | Tour editor: greeting, offer, farewell, site card, stops |
+| `/tour/runs/:runId` | `RunDetailPage` (tour) | One visit: stops, disclosure spoken, questions and where each answer came from |
 | `/processes`      | `ProcessesPage`       | Workflow/process list        |
 | `/processes/:id`  | `ProcessDetailPage`   | Process detail               |
 | `/settings`       | `SettingsPage`        | Theme preferences            |
@@ -138,6 +141,7 @@ src/
 │   ├── incidents/       # Incident management & regulatory reporting
 │   ├── oversight/       # Human oversight dashboard
 │   ├── patrol/          # Patrol routes, scheduled runs, findings (TASK-212)
+│   ├── tour/            # Host mode: tour routes, visits (TASK-213)
 │   ├── processes/       # Workflow/process management
 │   ├── robots/          # Robot management, telemetry, 3D viewer
 │   ├── safety/          # Safety monitoring

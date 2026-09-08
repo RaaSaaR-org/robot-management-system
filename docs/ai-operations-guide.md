@@ -124,6 +124,18 @@ curl http://localhost:41243/state
 curl http://localhost:41243/.well-known/agent.json
 ```
 
+**Agent Mode (local LLM on the robot):** off by default; `npm run dev:g1-edu-agent` turns it
+on against the MuJoCo G1 and a local Ollama (`gemma4:e2b` planner, `qwen2.5vl:7b` vision). The
+cockpit is `/agent`; patrol and host mode are opt-in on top of it. Operator's guide:
+[`agent-mode.md`](agent-mode.md).
+
+```bash
+# Agent Mode state, and a plain-language command (port 41246 is the Agent Mode profile)
+curl http://localhost:41246/api/v1/robots/sim-robot-g1-edu/agent-mode
+curl -X POST http://localhost:41246/api/v1/robots/sim-robot-g1-edu/agent-mode/command \
+  -H 'Content-Type: application/json' -d '{"text": "turn left and tell me what you see"}'
+```
+
 **Send Commands:**
 ```bash
 # Natural language command via A2A

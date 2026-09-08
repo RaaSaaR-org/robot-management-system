@@ -71,13 +71,13 @@ The robot agent uses `.env.so101` for SO-101 configuration (port 41245, robot ty
 ## Screenshots
 
 ### Fleet Dashboard
-![Fleet Dashboard](screenshots/dashboard.png)
+![Fleet Dashboard](https://raw.githubusercontent.com/RaaSaaR-org/robot-management-system/main/app/public/screenshots/dashboard.png)
 
 ### Robot Fleet
-![Robot Fleet](screenshots/robots.png)
+![Robot Fleet](https://raw.githubusercontent.com/RaaSaaR-org/robot-management-system/main/app/public/screenshots/robots.png)
 
 ### H1 Robot Detail
-![Robot Detail](screenshots/robot-h1-detail.png)
+![Robot Detail](https://raw.githubusercontent.com/RaaSaaR-org/robot-management-system/main/app/public/screenshots/robot-h1-detail.png)
 
 ## Documentation
 
@@ -85,6 +85,7 @@ The robot agent uses `.env.so101` for SO-101 configuration (port 41245, robot ty
 |----------|-------------|
 | [Architecture](architecture.md) | Services, data flow, infrastructure |
 | [API Reference](api.md) | HTTP endpoints for all services |
+| [Agent Mode, patrol and host mode](agent-mode.md) | The on-robot local-LLM agent and its two use cases: what they do, how to switch them on, what they refuse |
 | [VLA Integration](vla-integration-guide.md) | VLA models, camera setup, inference pipeline |
 | [Robot Integration](robot-integration-guide.md) | SO-101 setup, calibration, sidecar |
 | [Dev Workflow](dev-workflow.md) | Code conventions, feature structure |

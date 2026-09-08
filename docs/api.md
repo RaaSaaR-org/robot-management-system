@@ -168,6 +168,38 @@ untouched.
 | POST | `/sessions` | Start logging session |
 | POST | `/export` | Export logs to JSON |
 
+### Agent Mode (`/api/robots/:id/agent-mode`, TASK-194)
+
+The server holds the last plan per robot in memory, fans `agent:*` events out over `/api/a2a/ws`, and proxies the operator calls to the robot. See [`agent-mode.md`](agent-mode.md).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/events` | Robot → server: every `agent:*` event (`plan`, `block`, `scene`, `state`, `memory`, `patrol`, `finding`, `tour`), mirrored to the app; the robot separately submits a compliance record per finished block |
+| GET | `/` | Last known plan and state, refreshed from the robot's `GET /api/v1/robots/:id/agent-mode` when it is reachable |
+| GET | `/scene` | The robot's scene memory: entities with world bearings, current view, `personVisible` |
+| GET | `/map` · `/map/cloud` | Occupancy grid (with keepouts, peers, planned route) and the 3-D world cloud, proxied from the robot |
+| GET | `/memory` | Digest of the robot's durable workspace (`MEMORY.md`, place notes, intents) |
+| GET/POST | `/identity` | Read / edit `IDENTITY.md` |
+| POST | `/command` | `{text, contextId?}` → the robot plans and runs it |
+| POST | `/toggle` | `{enabled}` — switch Agent Mode on or off |
+| POST | `/estop` · `/estop/reset` | Manual E-Stop and its acknowledge; the answer says `delivered` and `deliveryError` rather than assuming the robot stopped |
+
+### Tour / host mode (`/api/tour`, TASK-213)
+
+Routes are the server's record; runs are what the robot reports back. There is no `/api/robots` half: a tour is never started by a schedule.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET/POST | `/routes` | List / create `TourRoute` (`name, robotId?, twinId?, language:'en'\|'de', greetingPlaceId, greeting, offer, farewell, siteCard:string[], stops:[{placeId, headline, talkTrack, facts[], demo?, dwellS?, askToContinue?}], enabled, autoGreet`). The AI disclosure is appended by the robot and is not a column. |
+| GET/PUT/DELETE | `/routes/:id` | Read / update / delete a route (runs survive deletion) |
+| POST | `/routes/:id/start` | Body `{origin?:'visitor'\|'operator', robotId?}` → `TourStartResult` (200 even when `accepted:false`, with `reason` and `message`; the refusal is also recorded as a `skipped` run) |
+| POST | `/routes/:id/abort` | `{robotId?, reason?}` → `{ok, runId?}` |
+| GET | `/runs?robotId=&routeId=&status=&limit=` | Visit history (`TourRun` with legs, turns, `disclosureSpoken`, `language`) |
+| GET | `/runs/:runId` | One visit; each turn carries `answered: grounded\|from_camera\|declined\|unanswered` |
+| GET | `/places?robotId=` | The robot's place graph for the stop editor |
+
+Visits arrive through `POST /api/robots/:id/agent-mode/events` (`agent:tour:started\|leg\|turn\|finished`). Host mode uploads no photos, so there is no photo endpoint.
+
 ### Patrol (`/api/patrol`, TASK-212)
 
 Routes are the server's record; runs, findings and photos are what the robot reports back.
@@ -245,6 +277,21 @@ Base URL: `http://localhost:41245`
 | GET | `/places` | The robot's place graph as `{places:[…]}` (TASK-212, for the patrol route editor) |
 | GET | `/map` | The robot's own occupancy grid (TASK-206) + accepted fleet peers and `peersDropped` (TASK-207) + `nav` (TASK-208: `{target, planned, path, goal, lengthM, segments, reason}` while a `goto` runs, else null); `location.frame` on `GET /` says which odometry frame the poses are in |
 
+### Agent Mode (`/api/v1/robots/:id/agent-mode`, TASK-194)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | `{enabled, controlOwner, plan, estop, place, ...}` (personal-data gate: configured `AGENT_MEMORY_TOKEN` required; loopback only when unset; cross-origin browser requests refused) |
+| POST | `/command` | `{text, contextId?, spoken?}` → plan and run; a stop word or a pending yes/no answer is handled here without a model call |
+| POST | `/toggle` | `{enabled}` |
+| POST | `/estop` · `/estop/reset` | Manual E-Stop → `{stopped, delivered, deliveryError}`; reset clears the latch |
+| GET | `/scene` · `/scene.md` | Scene memory as JSON / as the rendered `current_view.md` (personal-data gate) |
+| GET/POST | `/intents` · DELETE `/intents/:intentId` | Standing intents ("tell me when you see a person") |
+| GET | `../memory` · `../memory.md` | Workspace digest / raw `MEMORY.md` (personal-data gate) |
+| DELETE | `../memory` | GDPR Art. 17 workspace erasure (personal-data gate) |
+| GET/POST | `../identity` | Read the identity snapshot / edit Name, Emoji, Operator and Site (personal-data gate) |
+| GET | `../identity/body.md` | Generated `BODY.md` hardware inventory (personal-data gate) |
+
 ### Patrol (`/api/v1/robots/:id/agent-mode/patrol`, TASK-212)
 
 | Method | Path | Description |
@@ -253,9 +300,18 @@ Base URL: `http://localhost:41245`
 | POST | `/abort` | Abort the active run (`{reason}`) |
 | GET | `/` | `{enabled, active, last}` |
 | GET | `/runs?limit=` · `/runs/:runId` | Run history on this robot (incl. findings) |
-| GET | `/runs/:runId/photos/:key` · `/baseline/:routeId/:window/:key` | JPEGs (personal-data gate: loopback or `AGENT_MEMORY_TOKEN`) |
+| GET | `/runs/:runId/photos/:key` · `/baseline/:routeId/:window/:key` | JPEGs (personal-data gate: configured `AGENT_MEMORY_TOKEN` required; loopback only when unset; cross-origin browser requests refused) |
 | POST | `/findings/:findingId/normal` | "This is normal" → widens the baseline for that checkpoint × window |
 | POST | `/runs/:runId/promote` | Use this run's photos + checklist answers as the baseline |
+
+### Tour / host mode (`/api/v1/robots/:id/agent-mode/tour`, TASK-213)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/` | Start a visit: `{routeId, origin?:'visitor'\|'operator', route?}` (route inline; falls back to `GET {SERVER_URL}/api/tour/routes/:id`, then the disk cache) → `TourStartResult`; a refusal `{accepted:false, reason ∈ disabled\|estop\|busy\|battery\|place_unknown\|damped\|crash_unacknowledged\|route_unknown\|no_places\|no_stops\|person_too_close\|running, message}` is recorded as a `skipped` run |
+| POST | `/abort` | Abort the active visit (`{reason}`); the farewell is still spoken |
+| GET | `/` | `{enabled, active, last}` |
+| GET | `/runs?limit=` · `/runs/:runId` | Visit history on this robot, text only (personal-data gate) |
 
 ### Safety (`/api/v1/robots/:id/safety`)
 

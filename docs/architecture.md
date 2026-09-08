@@ -119,7 +119,7 @@ Key endpoints:
 
 ## Fleet Map
 
-![Fleet Map](screenshots/fleet-map.png)
+![Fleet Map](https://raw.githubusercontent.com/RaaSaaR-org/robot-management-system/main/app/public/screenshots/fleet-map.png)
 
 ## Communication Protocols
 
@@ -194,7 +194,8 @@ answer. Both are one Agent Mode plan driven by a runner rather than by the plann
 so E-Stop, geofence, arbitration and the audit log apply to a tour stop exactly as
 to an operator's `goto`. Host mode stores no images and no audio at all, and infers
 no age, gender or emotion — emotion recognition in a workplace is prohibited, not
-merely discouraged. See `robot-agent/AGENTS.md` for both.
+merely discouraged. The operator's guide to all of this is [`agent-mode.md`](agent-mode.md);
+`robot-agent/AGENTS.md` has the developer detail for both.
 
 > **Safety deviation — read before pointing this at hardware.** Agent Mode ships with a
 > **manual E-Stop only** — three triggers, all manual: the UI button on `/agent`, a spoken

@@ -60,7 +60,7 @@ step between the stages — there is nothing to export *to*.
 | **Train** | Queue SmolVLA LoRA fine-tuning jobs, reward models, annotation jobs. The trainer itself runs in a separate repo that polls this server for work. |
 | **Deploy** | Model registry, canary rollouts with per-stage health checks, one-click rollback, Ed25519-signed OTA packages. You always know which model version runs on which robot. |
 | **Evaluate** | MuJoCo simulation jobs, per-episode reward scoring, success-rate and error breakdowns, model comparison. |
-| **Operate** | Fleet dashboard, natural-language control over the A2A protocol, real-time telemetry and 3D view, four layers of safety: fleet, zone, robot, and human approval. |
+| **Operate** | Fleet dashboard, natural-language control over the A2A protocol, real-time telemetry and 3D view, four layers of safety: fleet, zone, robot, and human approval. **Agent Mode** puts a local LLM on the robot and ships two complete use cases on top of it: scheduled **patrol** with baseline comparison and findings, and **host mode**, the robot greeting and guiding a visitor. See [Agent Mode](#agent-mode-patrol-and-host-mode). |
 | **Comply** | Hash-chained tamper-evident audit logs with a `verify` endpoint (EU AI Act Art. 12), technical documentation per Annex IV, GDPR Art. 30 RoPA, a self-service portal for data-subject requests, legal holds and retention policies. |
 
 The stages are **not equally mature**, and the platform says which is which rather than levelling
@@ -154,6 +154,8 @@ npm run dev:g1                   # http://localhost:41244
 
 Plain `npm run dev` reads `.env` instead and starts the default simulated humanoid on port
 41243. See [Robots & embodiments](#robots--embodiments) for the other profiles.
+To drive the robot by plain language instead, use the Agent Mode profile — see
+[Agent Mode, patrol and host mode](#agent-mode-patrol-and-host-mode).
 
 ### 3. Frontend
 
@@ -282,7 +284,10 @@ measured, estimated or unknown rather than guessing, and it labels anything simu
 | **Agent Mode** — a local Ollama model turns a typed or spoken utterance into a typed, auditable block plan (`walk`, `turn`, `goto`, `look`, `scan_room`, `wave`, `greet`, `posture`, `speak`, `wait`, `remember`) executed over the Unitree LocoClient — the same call path for the simulator and a real G1. Cockpit at `/agent`. | Sim-only | [#212](https://github.com/RaaSaaR-org/robot-management-system/pull/212) |
 | **LiDAR ranging** — a cone query on the Livox MID-360 cloud replaces the vision model's guess: 0.017 m mean error over 24 landmark/pose pairs versus 0.94 m for the guess, which was usually null. **Both numbers are simulator numbers**, scored in the MuJoCo MJCF room scene where ground truth is exact; they measure the cone query against a synthetic cloud, not a real MID-360's accuracy. A missing return is reported as UNKNOWN, never "clear". | Sim-only | [#214](https://github.com/RaaSaaR-org/robot-management-system/pull/214) |
 | **Voice** — spoken commands drive Agent Mode; type-to-speak, live mic transcripts and pipeline controls in the UI. | Sim-only | [#215](https://github.com/RaaSaaR-org/robot-management-system/pull/215), [#203](https://github.com/RaaSaaR-org/robot-management-system/pull/203) |
-| **Place awareness, enforced geofence, durable safety state, identity and memory** — metric pose + named place (STAGING, AISLE-1, DOCK-1) + confidence, with hysteresis and a drift budget; on unmapped floor the belief goes to NULL instead of holding the last place. A trusted pose inside a margined keepout triggers a SafetyMonitor protective stop, aborts the plan and refuses the next command while latched — verified with a 2 m walk aimed at rack RACK-A that stopped 0.48 m clear of the rack face, reproduced twice. **Known open defect:** that only holds while the pose is trusted. Past `PLACE_DRIFT_BUDGET_M` (default 15 m, and a 20 m hall spends it in one errand) the belief degrades to `stale`, the fence stops enforcing, and *nothing says so* — the same 2 m walk then went straight through RACK-A and out the far side with `estop=armed`, `systemHealthy=true` and no warning. Tracked as [TASK-201](.mc/tasks/todo/TASK-201-say-when-the-geofence-is-not-enforcing.md); the fix is to surface the lapse, not to weaken the fence. Boot lineage is one JSONL line per process life; a line with no clean close is a crash, and the next boot says so, restores the E-Stop latch behind an acknowledge gate and drops pose/place/held-object as too old. The robot has an identity (`IDENTITY.md`) and a durable memory workspace. | Sim-only, geofence enforcement **has a known gap** (see the cell); heartbeat/self-initiative **gated** behind `AGENT_HEARTBEAT_ENABLED` and never self-initiates locomotion | [#216](https://github.com/RaaSaaR-org/robot-management-system/pull/216) |
+| **Patrol** — the first complete Agent Mode use case: an operator-defined route on a cron schedule, a control photo at every checkpoint, the whole way compared against a baseline of normal, findings as alerts with baseline/current photo pairs, promotion of a run to the new baseline, VDA5050 export. Verified live in the sim house scene: 4/4 legs in under three minutes, findings escalated into an incident from the browser. | Sim-only, opt-in (`AGENT_PATROL_ENABLED`) | [#229](https://github.com/RaaSaaR-org/robot-management-system/pull/229) |
+| **Host mode** — the robot greets a visitor, discloses that it is an AI, offers a tour, walks them through authored stops and answers questions from authored facts, place notes and camera observations, declining otherwise. Verified live in the sim warehouse scene against a real Ollama, in German: greeting → "ja" → four stops → one grounded answer, one honest decline → farewell and back to STAGING. | Sim-only, opt-in (`AGENT_HOST_ENABLED`) | [#234](https://github.com/RaaSaaR-org/robot-management-system/pull/234) |
+| **Agent Mode calls a VLA skill** — a `vla_skill` block hands a named, catalogued manipulation skill to the VLA runner and waits, so one plan can walk somewhere and then pick something up. | Sim-only | [#276](https://github.com/RaaSaaR-org/robot-management-system/pull/276), [#294](https://github.com/RaaSaaR-org/robot-management-system/pull/294) |
+| **Place awareness, enforced geofence, durable safety state, identity and memory** — metric pose + named place (STAGING, AISLE-1, DOCK-1) + confidence, with hysteresis and a drift budget; on unmapped floor the belief goes to NULL instead of holding the last place. A trusted pose inside a margined keepout triggers a SafetyMonitor protective stop, aborts the plan and refuses the next command while latched — verified with a 2 m walk aimed at rack RACK-A that stopped 0.48 m clear of the rack face, reproduced twice. **Pose limitation:** past `PLACE_DRIFT_BUDGET_M` (default 15 m), the belief degrades to `stale` and the fence stops enforcing. [TASK-201](.mc/tasks/done/TASK-201-say-when-the-geofence-is-not-enforcing.md) now surfaces that lapse as `not-enforcing`, with a safety warning and a "fence off" marker in the cockpit; it does not restore enforcement or automatically stop motion. The live GPU-box recheck remains outstanding in that task. Boot lineage is one JSONL line per process life; a line with no clean close is a crash, and the next boot says so, restores the E-Stop latch behind an acknowledge gate and drops pose/place/held-object as too old. The robot has an identity (`IDENTITY.md`) and a durable memory workspace. | Sim-only, geofence enforcement **requires a trusted pose** (see the cell); heartbeat/self-initiative **gated** behind `AGENT_HEARTBEAT_ENABLED` and never self-initiates locomotion | [#216](https://github.com/RaaSaaR-org/robot-management-system/pull/216) |
 | **Local & sovereign LLM** — `LLM_PROVIDER=gemini \| openrouter \| ollama`. One provider abstraction (`server/src/services/llm/`) backs command interpretation, the A2A orchestrator and dataset-curation suggestions. Set it to `ollama` and the server needs no cloud key. The model id is written into the EU AI Act audit trail either way. | Live | [#218](https://github.com/RaaSaaR-org/robot-management-system/pull/218), [#185](https://github.com/RaaSaaR-org/robot-management-system/pull/185) |
 | **Real-time 3D telemetry** — 29 body joints, 14 hand joints, IMU, battery/BMS, per-motor temperatures, Dex3 fingertip touch pads, MID-360 LiDAR and RealSense reach the UI through one path. The 3D view is driven by a 10 Hz joints/IMU/odometry fast channel with damped interpolation and zero React re-renders. The read-only path was live-verified against a powered G1. | Live (read-only path) | [#202](https://github.com/RaaSaaR-org/robot-management-system/pull/202), [#195](https://github.com/RaaSaaR-org/robot-management-system/pull/195) |
 | **Digital twin from a real scan** — upload a PLY/PCD and the `../twin-builder` sidecar produces a twin plus a usable MuJoCo scene. Validated with a real 240k-point MID-360 capture of the lab. Twin zones can generate the named places Agent Mode navigates by. | Live | [#164](https://github.com/RaaSaaR-org/robot-management-system/pull/164), [#185](https://github.com/RaaSaaR-org/robot-management-system/pull/185) |
@@ -328,6 +333,51 @@ copy the closest one to the filename the profile expects. Embodiment definitions
 `robot-agent/hardware/sim_g1_dds/` runs a MuJoCo G1 that speaks the **real Unitree wire
 protocol** (`arm_sdk` and `LocoClient`), so the same agent code drives the simulator and the
 robot. That is what makes Agent Mode testable without a G1 in the room.
+
+---
+
+## Agent Mode, patrol and host mode
+
+Agent Mode is the robot acting on plain language with **no cloud model in the loop**. A local
+Ollama model turns a typed or spoken sentence into a short list of typed, auditable **blocks**
+(`walk`, `turn`, `goto`, `look`, `scan_room`, `speak`, `remember`, `vla_skill`, ...), and the robot
+executes them over the Unitree LocoClient — the same call path for the MuJoCo simulator and a
+real G1. The planner never sees pixels: a separate vision model turns the head camera into text,
+and the planner works from that text plus what the robot remembers. Every finished block is
+mirrored to the cockpit at `/agent` and written to the EU AI Act audit log with the model id.
+
+Underneath it the robot has a **place belief** (metric pose + named place + confidence, from a
+file or from the digital twin's place index), a self-built **occupancy map** that `goto` plans
+on with other robots overlaid as obstacles, **LiDAR ranging** instead of guessed distances, a
+**durable memory** in plain files per robot, an identity, a boot lineage that detects crashes,
+and an **initiative gate** that decides whether the robot may do something on its own at all.
+Two complete use cases sit on top:
+
+| Use case | The robot... | Route | Opt-in |
+|----------|-------------|-------|--------|
+| **Patrol** | ...alone. Walks an operator-defined route on a cron schedule, aligns to a stored heading and takes a control photo at every checkpoint, compares what it sees on the *whole* way against a baseline of "normal" (photo, checklist, seen labels, map), and raises findings — person, unexpected or missing object, open door, lights on — as alerts with evidence. A photo is stored only when nobody is in it; a person is a finding without an image. Routes export as VDA5050 orders. | `/patrol` | `AGENT_PATROL_ENABLED=true` |
+| **Host mode** | ...with a member of the public in front of it. Greets a visitor from where it stands, states that it is an AI (EU AI Act Art. 50) in a sentence that no configuration can remove, offers a tour, walks them to authored stops, says an authored talk track at each, and answers questions from authored facts, place notes and camera observations — recording "I do not know" as a first-class outcome rather than inventing an answer. Stores no images, audio or visitor identity, and infers no age, gender or emotion. | `/tour` | `AGENT_HOST_ENABLED=true` + `AGENT_TOUR_ROUTE_ID` |
+
+Both are one Agent Mode plan driven by a runner rather than by the planner, so the E-Stop,
+the geofence, control arbitration and the audit log apply to a patrol leg or a tour stop
+exactly as to an operator's `goto`. A run that cannot start is refused before the robot moves
+and still recorded, with the reason. Scripted greetings and talk tracks use authored text
+and templates; visitor consent uses keyword matches. Unscripted questions receive one
+grounded model call using the allowed sources, with an explicit decline when those sources
+do not support an answer.
+
+```bash
+(cd robot-agent/hardware/sim_g1_dds && python sim_node.py --domain 1 --http-port 8777) # terminal 1
+# Terminal 2, from the repository root (server and frontend from Quick Start running):
+ollama pull gemma4:e2b && ollama pull qwen2.5vl:7b                                     # planner + vision
+cd robot-agent && cp .env.g1-edu-agent.example .env.g1-edu-agent && npm run dev:g1-edu-agent
+```
+
+Then switch Agent Mode on at **http://localhost:1420/agent** and type or say a command, in
+German or English. The full operator's guide — configuration, what each use case refuses to do,
+where its data lives, and the safety caveats — is [`docs/agent-mode.md`](docs/agent-mode.md).
+**All of it is proven in simulation only**; the manual-only E-Stop and the geofence pose limitation
+are spelled out there and in [Status & limitations](#status--limitations).
 
 ---
 
@@ -531,11 +581,13 @@ Full contributor guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 | [`docs/app-architecture.md`](docs/app-architecture.md) | Frontend architecture in depth |
 | [`docs/brand.md`](docs/brand.md) | Colors, typography, design tokens |
 | [`docs/demo-intro.md`](docs/demo-intro.md) | Guided intro to the public demo |
+| [`docs/demo-day.md`](docs/demo-day.md) | Demo rehearsal, local fallback and release checks |
 
 ### Robots, VLA & data
 
 | Document | What's in it |
 |----------|-------------|
+| [`docs/agent-mode.md`](docs/agent-mode.md) | Agent Mode, patrol and host mode: what they do, how to switch them on, what they refuse, where their data lives |
 | [`docs/robot-integration-guide.md`](docs/robot-integration-guide.md) | Wiring a robot up: SO-101, G1 EDU, calibration, sidecars |
 | [`docs/vla-integration-guide.md`](docs/vla-integration-guide.md) | VLA models, cameras, inference pipeline |
 | [`docs/g1-edu-lab-bringup.md`](docs/g1-edu-lab-bringup.md) | Real G1 EDU lab bringup — status and log |
