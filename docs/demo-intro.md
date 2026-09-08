@@ -2,14 +2,17 @@
 
 Welcome to the NeoDEM documentation.
 
-NeoDEM is an open-source fleet management platform for autonomous robots — from single-arm manipulators to full humanoid fleets.
+NeoDEM is an open-source Physical AI platform spanning collection, training, deployment, evaluation, operation and compliance.
 
 ## What You're Seeing
 
-This is a **live demo** running entirely in your browser. The demo uses:
+This is a **browser simulation**. It does not connect to a physical fleet or run training jobs. The demo uses:
 - **H1 Humanoid** as the primary robot (19 DOF)
 - **Simulated telemetry** via MSW (Mock Service Worker)
-- **Full UI** — dashboards, fleet maps, alerts, docs
+- **Interactive examples** — dashboards, fleet maps, Agent Mode, alerts and docs
+- **Placeholders and empty states** for features that need a live backend or registered data
+
+For presentation setup, rehearsal and recovery, see the [demo day runbook](https://github.com/RaaSaaR-org/robot-management-system/blob/main/docs/demo-day.md).
 
 ## Quick Navigation
 
@@ -23,7 +26,7 @@ This is a **live demo** running entirely in your browser. The demo uses:
 
 ## Get Started
 
-- [Open Dashboard](#/dashboard) — See the live fleet
+- [Open Dashboard](#/dashboard) — Explore the simulated fleet
 - [View Robots](#/robots) — Browse the demo fleet
 - [GitHub](https://github.com/RaaSaaR-org/robot-management-system) — Star the repo
 
