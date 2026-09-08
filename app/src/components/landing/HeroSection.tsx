@@ -15,11 +15,21 @@ function FleetHumanoid() {
   return (
     <g strokeLinejoin="round" strokeLinecap="round">
       <ellipse cy="103" rx="25" ry="8" fill="#030a13" opacity=".55" />
-      <g fill="url(#scene-side)" stroke="#8ba7ba" strokeWidth="1.2">
-        <path d="M-12 49L-14 72-11 96H-3L0 72 1 51Z" />
-        <path d="M4 50L5 72 12 94 20 92 15 69 17 48Z" />
-        <path d="M-12 96L-17 101-3 103 0 98Z" fill="#a3bacb" />
-        <path d="M12 94L12 100 26 99 21 93Z" fill="#a3bacb" />
+      {/* Straight load-bearing legs: separate thigh/calf shells around aligned knees. */}
+      <g className="scene-humanoid-legs" stroke="#8ba7ba" strokeWidth="1.2">
+        <path d="M-13 48L-3 50-4 70-13 70Z" fill="url(#scene-metal)" />
+        <path d="M5 51L15 48 16 70 7 71Z" fill="url(#scene-metal)" />
+        <path d="M-13 77H-4L-5 96-13 96Z" fill="url(#scene-side)" />
+        <path d="M7 78L16 77 18 96H9Z" fill="url(#scene-side)" />
+        <circle cx="-8.5" cy="73.5" r="5.5" fill="#233f52" />
+        <circle cx="11.5" cy="74.5" r="5.5" fill="#233f52" />
+        <path d="M-10 72H-7M10 73H13" stroke="#c0d6e1" strokeWidth="2" />
+        <path
+          d="M-13 96H-5L-2 101-3 104H-17L-17 101Z"
+          fill="url(#scene-metal)"
+        />
+        <path d="M9 96H18L23 101V104H8L7 101Z" fill="url(#scene-metal)" />
+        <path d="M-17 104H-3M8 104H23" stroke="#213848" strokeWidth="3" />
       </g>
       <g className="scene-humanoid-body">
         <path
@@ -64,7 +74,6 @@ function FleetHumanoid() {
           <path d="M-7-15L0-12 8-15" stroke="#b2ffe6" strokeWidth="1.5" />
         </g>
       </g>
-      <path d="M-12 72H-4M8 72L15 70" stroke="#b5cad6" strokeWidth="3" />
     </g>
   );
 }
@@ -199,7 +208,11 @@ function IntelligenceScene() {
             fillOpacity=".12"
             stroke="#b4ffeb"
           />
-          <path className="scene-core-light" d="M305 300L330 287 355 300 330 313Z" fill="#c6ffee" />
+          <path
+            className="scene-core-light"
+            d="M305 300L330 287 355 300 330 313Z"
+            fill="#c6ffee"
+          />
           {[0, 1, 2, 3, 4].map((i) => (
             <path
               key={i}
@@ -329,8 +342,8 @@ function IntelligenceScene() {
               opacity=".6"
             />
             <g stroke="#496578" strokeWidth="12">
-              <path d="M-43-2L-55 34-38 67" />
-              <path d="M27 0L17 33 34 63" />
+              <path d="M-43-2L-48 31-42 67" />
+              <path d="M27 0L23 32 29 63" />
             </g>
             <path
               d="M-62-29L-27-48 57-16 27 4Z"
@@ -350,17 +363,17 @@ function IntelligenceScene() {
               strokeWidth="2"
             />
             <g stroke="url(#scene-metal)" strokeWidth="13">
-              <path d="M-47 8L-56 45-38 80" />
-              <path d="M20 31L9 61 31 88" />
+              <path d="M-47 8L-52 43-46 80" />
+              <path d="M20 31L15 59 21 88" />
             </g>
             <g fill="#20394a" stroke="#9bb5c5" strokeWidth="2">
               <circle cx="-47" cy="8" r="10" />
               <circle cx="20" cy="31" r="10" />
-              <circle cx="-56" cy="45" r="7" />
-              <circle cx="9" cy="61" r="7" />
+              <circle cx="-52" cy="43" r="7" />
+              <circle cx="15" cy="59" r="7" />
             </g>
             <path
-              d="M-44 82L-31 84M25 90L39 91M-44 69L-33 71M29 65L40 67"
+              d="M-50 82H-38M17 90H29M-46 69H-34M25 65H37"
               stroke="#111f2d"
               strokeWidth="7"
             />

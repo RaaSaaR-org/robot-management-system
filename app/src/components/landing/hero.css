@@ -132,12 +132,18 @@
   animation: scene-arrive-ground 4.8s ease-out both;
 }
 .scene-humanoid-body {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
   animation: scene-idle 5.5s ease-in-out 4.8s infinite;
 }
 .scene-fleet > g:nth-child(2) .scene-humanoid-body {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
   animation-delay: 5.5s;
 }
 .scene-fleet > g:nth-child(3) .scene-humanoid-body {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
   animation-delay: 6.2s;
 }
 .scene-humanoid-head {
@@ -166,10 +172,10 @@
 @keyframes scene-idle {
   0%,
   100% {
-    transform: translateY(0);
+    transform: rotate(0deg);
   }
   50% {
-    transform: translateY(-1.5px);
+    transform: rotate(0.6deg);
   }
 }
 @keyframes scene-look {

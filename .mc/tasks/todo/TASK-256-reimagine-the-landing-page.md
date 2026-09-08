@@ -61,3 +61,13 @@ Added three humanoids in formation to the hero concept, with a connection to the
 Playwright MCP confirmed three humanoids, ongoing motion after seven seconds, zero illustration buttons, zero animations with reduced motion, and no overflow at 320, 390, 768, 1024 and 1440px. Desktop and mobile screenshots visually reviewed: `/tmp/hero-fleet-desktop.png`, `/tmp/hero-fleet-mobile.png`.
 
 Final fleet revision gates: frontend build/typecheck and 11 landing tests passed; diff check clean. Logs: `/tmp/task256-fleet-{build,tests,diff}.log`.
+
+## Leg alignment and infinity redesign — 9 September 2026
+
+User requested corrected robot legs and a true horizontal figure-eight for the Embodied Loop. Humanoid legs now use aligned thigh/calf shells, visible round knee joints and flat feet. Upper-body idle movement pivots around the pelvis so the legs stay planted; quadruped leg angles are gentler.
+
+The lifecycle revision replaces the circular orbit with a horizontal infinity path while preserving all six stages, evidence/readiness disclosures, section navigation and animation controls.
+
+Verification: build/typecheck and 11 landing tests passed. Playwright MCP verified all six stage selections, keyboard Enter, pause, reduced motion, section-link focus, and 320–1440px layouts without overflow or undersized stage targets. Corrected legs and infinity artwork reviewed in screenshots, including 320px mobile. Evidence: `/tmp/hero-legs-fixed.png`, `/tmp/infinity-desktop.png`, `/tmp/infinity-mobile.png`, `/tmp/infinity-final-polished.png`, `/tmp/infinity-final-320.png`. Logs: `/tmp/task256-infinity-verify-{build,tests}.log`. The crossover shadow received a final cosmetic shortening after these tests.
+
+Final build/typecheck and diff check also passed after the crossover polish.

@@ -1,6 +1,6 @@
 /**
  * @file FullCircleSection.test.tsx
- * @description Checks the clockwise lifecycle and accessible stage selection.
+ * @description Checks the infinity lifecycle and accessible stage selection.
  * @feature landing
  */
 
@@ -11,7 +11,7 @@ import { FullCircleSection, STAGES, stagePosition } from '../FullCircleSection';
 afterEach(cleanup);
 
 describe('The Embodied Loop', () => {
-  it('visits the six stages clockwise from Collect and closes the loop', () => {
+  it('follows both lobes in lifecycle order and closes the infinity path', () => {
     expect(STAGES.map((stage) => stage.key)).toEqual([
       'collect',
       'train',
@@ -23,10 +23,16 @@ describe('The Embodied Loop', () => {
     STAGES.forEach((stage, index) => {
       expect(stage.index).toBe(index + 1);
       const position = stagePosition(stage.index);
-      expect(Math.hypot(position.x - 50, position.y - 50)).toBeCloseTo(37);
+      expect(position.x).toBeGreaterThanOrEqual(10);
+      expect(position.x).toBeLessThanOrEqual(90);
     });
-    expect(stagePosition(1).x).toBeCloseTo(50);
-    expect(stagePosition(1).y).toBeCloseTo(13);
+    expect(stagePosition(1).x).toBeCloseTo(10);
+    expect(stagePosition(1).y).toBeCloseTo(50);
+    expect(stagePosition(2).y).toBeLessThan(50);
+    expect(stagePosition(3).y).toBeGreaterThan(50);
+    expect(stagePosition(4).x).toBeCloseTo(90);
+    expect(stagePosition(5).y).toBeLessThan(50);
+    expect(stagePosition(6).y).toBeGreaterThan(50);
     expect(stagePosition(7).x).toBeCloseTo(stagePosition(1).x);
     expect(stagePosition(7).y).toBeCloseTo(stagePosition(1).y);
   });

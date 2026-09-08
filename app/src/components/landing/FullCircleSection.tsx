@@ -121,11 +121,31 @@ function tagLabel(maturity: Maturity): string {
   return maturity === 'live' ? 'Live' : maturity === 'gated' ? 'Gated' : 'Sim';
 }
 
-/** Clockwise from twelve o'clock; the final stage closes back into Collect. */
+/** Six stops following one continuous figure-eight, including its return crossing. */
+const STAGE_ANGLES = [
+  -Math.PI / 2,
+  -Math.PI / 4,
+  Math.PI / 4,
+  Math.PI / 2,
+  (3 * Math.PI) / 4,
+  (5 * Math.PI) / 4,
+];
 export function stagePosition(index: number): { x: number; y: number } {
-  const angle = ((index - 1) / STAGES.length) * Math.PI * 2 - Math.PI / 2;
-  return { x: 50 + Math.cos(angle) * 37, y: 50 + Math.sin(angle) * 37 };
+  const angle = STAGE_ANGLES[(((index - 1) % STAGES.length) + STAGES.length) % STAGES.length];
+  return {
+    x: 50 + 40 * Math.sin(angle),
+    y: 50 + (155 / 480) * 100 * Math.sin(2 * angle),
+  };
 }
+
+function infinityPath(start = -Math.PI / 2, end = (3 * Math.PI) / 2): string {
+  return Array.from({ length: 241 }, (_, i) => {
+    const angle = start + ((end - start) * i) / 240;
+    return `${i ? 'L' : 'M'}${500 + 400 * Math.sin(angle)},${240 + 155 * Math.sin(2 * angle)}`;
+  }).join(' ');
+}
+const LOOP_PATH = infinityPath();
+const CROSSING_PATH = infinityPath(Math.PI - 0.1, Math.PI + 0.1);
 
 export const FullCircleSection = memo(function FullCircleSection() {
   const [activeKey, setActiveKey] = useState('collect');
@@ -158,76 +178,82 @@ export const FullCircleSection = memo(function FullCircleSection() {
               role="group"
               aria-label="The Embodied Loop — select a stage"
             >
-              <svg className="embodied-loop-paths" viewBox="0 0 600 600" aria-hidden="true">
+              <svg className="embodied-loop-paths" viewBox="0 0 1000 480" aria-hidden="true">
                 <defs>
-                  <linearGradient id="embodiedLoopGradient" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stopColor="#98f2e3" />
-                    <stop offset="50%" stopColor="#8eb7ff" />
-                    <stop offset="100%" stopColor="#c3aaff" />
+                  <linearGradient id="embodiedLoopGradient" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor="#98f2d5" />
+                    <stop offset="48%" stopColor="#9bdaf2" />
+                    <stop offset="100%" stopColor="#b8a0ff" />
                   </linearGradient>
                 </defs>
-                <circle cx="300" cy="300" r="270" className="embodied-loop-outer" />
-                <circle
-                  cx="300"
-                  cy="300"
-                  r="222"
-                  stroke="url(#embodiedLoopGradient)"
-                  strokeOpacity=".45"
-                  strokeWidth="1.5"
-                  fill="none"
-                />
-                <circle cx="300" cy="300" r="196" className="embodied-loop-inner" />
-                <circle
-                  cx="300"
-                  cy="300"
-                  r="222"
-                  className="embodied-loop-signal"
+                <path d={LOOP_PATH} className="embodied-loop-aura" />
+                <path d={LOOP_PATH} className="embodied-loop-ribbon" />
+                <path d={LOOP_PATH} className="embodied-loop-track" />
+                <path d={LOOP_PATH} className="embodied-loop-signal" pathLength="1000" />
+                <path
+                  d={LOOP_PATH}
+                  className="embodied-loop-signal embodied-loop-signal-secondary"
                   pathLength="1000"
-                  transform="rotate(-90 300 300)"
                 />
+                <path
+                  d={infinityPath(Math.PI - 0.035, Math.PI + 0.035)}
+                  className="embodied-loop-crossing-shadow"
+                />
+                <path d={CROSSING_PATH} className="embodied-loop-ribbon" />
+                <path d={CROSSING_PATH} className="embodied-loop-track" />
                 {STAGES.map((stage) => {
-                  const angle = ((stage.index - 0.5) / 6) * 360;
+                  const point = stagePosition(stage.index);
                   return (
-                    <path
+                    <g
                       key={stage.key}
-                      d="m 295 78 7 0 -5 -5 m 5 5 -5 5"
-                      transform={`rotate(${angle} 300 300)`}
-                      stroke="#b8c7d9"
-                      strokeWidth="1.5"
-                      fill="none"
-                    />
+                      className="embodied-loop-marker"
+                      data-active={activeKey === stage.key}
+                      transform={`translate(${point.x * 10} ${point.y * 4.8})`}
+                    >
+                      <circle r="17" />
+                      <text textAnchor="middle" dominantBaseline="central">
+                        {stage.index}
+                      </text>
+                    </g>
                   );
                 })}
               </svg>
-              <div className="embodied-loop-core" aria-hidden="true">
-                <span className="embodied-loop-core-symbol">∞</span>
-                <span>EXPERIENCE</span>
-                <span className="embodied-loop-core-divider">↕</span>
-                <span>INTELLIGENCE</span>
+              <div className="embodied-loop-lobe embodied-loop-lobe-left" aria-hidden="true">
+                <span>FROM THE WORLD</span>
+                <strong>Experience</strong>
               </div>
-              {STAGES.map((stage) => {
-                const point = stagePosition(stage.index);
-                return (
-                  <button
-                    key={stage.key}
-                    type="button"
-                    className="embodied-loop-node"
-                    style={
-                      { '--node-x': `${point.x}%`, '--node-y': `${point.y}%` } as CSSProperties
-                    }
-                    aria-label={`${stage.label} — ${tagLabel(stage.maturity)}`}
-                    aria-pressed={activeKey === stage.key}
-                    aria-controls={READOUT_ID}
-                    onClick={() => setActiveKey(stage.key)}
-                  >
-                    <span className="embodied-loop-node-index">0{stage.index}</span>
-                    <span className="embodied-loop-node-label">{stage.label}</span>
-                    <span className={`embodied-loop-tag embodied-loop-tag-${stage.maturity}`}>
-                      {tagLabel(stage.maturity)}
-                    </span>
-                  </button>
-                );
-              })}
+              <div className="embodied-loop-lobe embodied-loop-lobe-right" aria-hidden="true">
+                <span>BACK TO THE WORLD</span>
+                <strong>Intelligence</strong>
+              </div>
+              <div className="embodied-loop-stages">
+                {STAGES.map((stage) => {
+                  const point = stagePosition(stage.index);
+                  return (
+                    <button
+                      key={stage.key}
+                      type="button"
+                      className="embodied-loop-node"
+                      style={
+                        {
+                          '--node-x': `${point.x}%`,
+                          '--node-y': `${point.y}%`,
+                        } as CSSProperties
+                      }
+                      aria-label={`${stage.label} — ${tagLabel(stage.maturity)}`}
+                      aria-pressed={activeKey === stage.key}
+                      aria-controls={READOUT_ID}
+                      onClick={() => setActiveKey(stage.key)}
+                    >
+                      <span className="embodied-loop-node-index">0{stage.index}</span>
+                      <span className="embodied-loop-node-label">{stage.label}</span>
+                      <span className={`embodied-loop-tag embodied-loop-tag-${stage.maturity}`}>
+                        {tagLabel(stage.maturity)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div className="embodied-loop-visual-footer">
               <span>Select a stage. Follow the loop.</span>
