@@ -130,10 +130,12 @@ between commands, rate-limited and inside configured hours. Even then the allowe
 are `look`, `speak`, `wait` and `remember`. The allowlist is enforced on the plan
 structure, not by a rule in a prompt, so a model cannot talk its way past it.
 
-Every self-started action goes through the **initiative gate**: battery at or above 20 %,
-a known and fresh place, an armed base, not damped, and no unacknowledged crash. An
-operator command skips those checks. A scheduled patrol is the one sanctioned way the
-robot walks with nobody watching, and it passes the same gate.
+Every self-started action goes through the **initiative gate**: no latched E-Stop or
+unacknowledged crash, and no self-started `posture` or `vla_skill`. Battery must be known
+and at least 20 %, except for `speak` and `wait`. Locomotion additionally requires a known,
+fresh place and a base that is not damped. Operator commands bypass this initiative gate;
+the controller and safety monitor still enforce their E-Stop checks. Scheduled patrols
+pass the initiative gate as locomotion.
 
 ---
 
@@ -257,11 +259,16 @@ the door because one aisle was blocked is worse than missing a stop.
   can only extend it through `TOUR_DISCLOSURE_EXTRA`.
 - **No stored images, audio or visitor identity.** Host mode uses camera observations
   and voice transcripts while running, but stores neither images nor audio. It infers no age,
-  gender or emotion. What persists is the text of the visit: questions, answers, timings,
-  under `workspace-<robotId>/tour/`, swept after `TOUR_TRANSCRIPT_RETENTION_DAYS` (30) and
-  erased with the workspace. `TOUR_TRANSCRIPT_ENABLED=false` drops even that.
-- **It keeps its distance.** It never approaches the person, and it refuses to start a
-  walking leg while someone is closer than `TOUR_MIN_PERSON_M` (1.2 m).
+  gender or emotion. Runs persist under `workspace-<robotId>/tour/`. After
+  `TOUR_TRANSCRIPT_RETENTION_DAYS` (30), the robot clears the turns from each expired run
+  but retains its operational metadata. `TOUR_TRANSCRIPT_ENABLED=false` blanks question
+  and answer text in stored and mirrored turns while retaining counts, outcomes and timing.
+  Workspace erasure removes the robot’s stored runs.
+- **Personal distance is checked at tour start.** A visible person with a known forward
+  range below `TOUR_MIN_PERSON_M` (1.2 m) causes a start refusal. During a tour, the robot
+  asks for room once per leg and waits two seconds, then continues; that courtesy pause
+  does not enforce a 1.2 m separation. Motion uses the executor’s existing forward-clearance
+  checks.
 - **Barge-in is not solved and not pretended.** The voice service is half-duplex, so a
   visitor cannot interrupt a sentence in flight. The chunked talk track is the mitigation.
 - A tour the robot **offered on its own** counts as self-initiative and needs the full
