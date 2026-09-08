@@ -44,6 +44,9 @@
  */
 import { defineConfig } from '@playwright/test';
 
+// Fail on an occupied port instead of testing another local app by accident.
+const previewPort = Number(process.env.PLAYWRIGHT_PORT || 4173);
+
 export default defineConfig({
   testDir: './e2e',
   testIgnore: ['**/videos/**', '**/live/**', '**/scripts/**'],
@@ -56,16 +59,16 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
 
   use: {
-    baseURL: 'http://localhost:4173/robot-management-system',
+    baseURL: `http://localhost:${previewPort}/robot-management-system/`,
     colorScheme: 'dark',
     viewport: { width: 1440, height: 900 },
   },
 
   // Build demo app and start preview server
   webServer: {
-    command: 'VITE_DEMO_MODE=true npm run build && VITE_DEMO_MODE=true npx vite preview --port 4173',
-    port: 4173,
-    reuseExistingServer: !process.env.CI,
+    command: `VITE_DEMO_MODE=true npm run build && VITE_DEMO_MODE=true npx vite preview --port ${previewPort} --strictPort`,
+    port: previewPort,
+    reuseExistingServer: false,
     timeout: 120_000,
     stdout: 'ignore',
     stderr: 'pipe',
