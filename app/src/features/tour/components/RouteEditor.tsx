@@ -66,6 +66,7 @@ export interface RouteEditorRobot {
 }
 
 export interface RouteEditorProps {
+  readOnly?: boolean;
   /** Existing tour to edit; null/undefined = new tour. */
   route?: TourRoute | null;
   robots: RouteEditorRobot[];
@@ -314,6 +315,7 @@ const TalkTrackMeter = memo(function TalkTrackMeter({ talkTrack, stopNumber }: {
 // ============================================================================
 
 export const RouteEditor = memo(function RouteEditor({
+  readOnly = false,
   route,
   robots,
   defaultRobotId,
@@ -331,7 +333,7 @@ export const RouteEditor = memo(function RouteEditor({
   const [previewingStopId, setPreviewingStopId] = useState<string | null>(null);
   const [manualPlace, setManualPlace] = useState('');
   /** Stop ids whose details are folded away (inputs stay mounted). */
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(route?.stops.map((s) => s.id) ?? []));
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(readOnly ? [] : route?.stops.map((s) => s.id) ?? []));
 
   const saveRoute = useTourStore((s) => s.saveRoute);
   const fetchPlaces = useTourStore((s) => s.fetchPlaces);
@@ -343,8 +345,8 @@ export const RouteEditor = memo(function RouteEditor({
   // Reset the draft when a different tour is opened.
   useEffect(() => {
     setDraft(draftFromRoute(route, defaultRobotId));
-    setCollapsed(new Set(route?.stops.map((s) => s.id) ?? []));
-  }, [route?.id]);
+    setCollapsed(new Set(readOnly ? [] : route?.stops.map((s) => s.id) ?? []));
+  }, [route?.id, readOnly]);
 
   useEffect(() => {
     if (draft.robotId) void fetchPlaces(draft.robotId);
@@ -434,14 +436,14 @@ export const RouteEditor = memo(function RouteEditor({
   const problems = useMemo(() => validateDraft(draft), [draft]);
 
   const handleSave = useCallback(async () => {
-    if (problems.length > 0) return;
+    if (readOnly || problems.length > 0) return;
     setSaving(true);
     setSaveError(null);
     const saved = await saveRoute(draftToInput(draft), route?.id ?? null);
     setSaving(false);
     if (saved) onSaved(saved);
     else setSaveError(useTourStore.getState().error ?? 'Saving failed');
-  }, [problems, saveRoute, draft, route?.id, onSaved]);
+  }, [readOnly, problems, saveRoute, draft, route?.id, onSaved]);
 
   const placeOptions: TourPlace[] = places ?? [];
   const robotLabel = robots.find((r) => r.id === draft.robotId)?.name ?? (draft.robotId || 'any robot');
@@ -454,7 +456,8 @@ export const RouteEditor = memo(function RouteEditor({
   const stopsFull = draft.stops.length >= TOUR_STOPS_MAX;
 
   return (
-    <div className={cn('flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start min-w-0', className)} data-testid="tour-route-editor">
+    <>
+    <fieldset disabled={readOnly} className={cn('flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start min-w-0', className)} data-testid="tour-route-editor">
       {/* ------------------------------------------------------------ left: form */}
       <div className="flex flex-col gap-4 min-w-0">
         {/* Tour */}
@@ -1079,12 +1082,12 @@ export const RouteEditor = memo(function RouteEditor({
                 variant="ghost"
                 className="mr-auto min-h-9 text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
                 data-testid="tour-route-delete"
-                onClick={() => onDelete(route)}
+                onClick={() => { if (!readOnly) onDelete(route); }}
               >
                 Delete tour
               </Button>
             )}
-            {onCancel && (
+            {onCancel && !readOnly && (
               <Button size="sm" variant="ghost" className="min-h-9" onClick={onCancel}>
                 Cancel
               </Button>
@@ -1103,6 +1106,10 @@ export const RouteEditor = memo(function RouteEditor({
           </div>
         </div>
       </aside>
-    </div>
+    </fieldset>
+    {readOnly && <div className="flex gap-2">
+      {onCancel && <Button size="sm" variant="ghost" onClick={onCancel}>Back to routes</Button>}
+    </div>}
+    </>
   );
 });

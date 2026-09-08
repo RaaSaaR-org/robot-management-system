@@ -8,6 +8,7 @@
  * @feature tour
  */
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
@@ -52,6 +53,8 @@ export const RouteList = memo(function RouteList({
   onAbort,
   className,
 }: RouteListProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   if (routes.length === 0) {
     return (
       <div className={cn('glass-card rounded-brand-lg p-4', className)} data-testid="tour-route-list">
@@ -166,7 +169,7 @@ export const RouteList = memo(function RouteList({
             {/* Row 4: actions */}
             <div className="flex items-center justify-end gap-1.5 flex-wrap">
               {active ? (
-                <Button size="sm" variant="destructive" className="min-h-9" data-testid="tour-abort" onClick={() => onAbort(route)}>
+                <Button size="sm" variant="destructive" className="min-h-9" data-testid="tour-abort" disabled={!canWrite} onClick={() => onAbort(route)}>
                   End tour
                 </Button>
               ) : (
@@ -175,7 +178,7 @@ export const RouteList = memo(function RouteList({
                   variant="primary"
                   className="min-h-9 hover:shadow-[0_0_20px_-4px_color-mix(in_srgb,var(--color-primary)_45%,transparent)]"
                   data-testid="tour-start"
-                  disabled={busy || route.stops.length === 0}
+                  disabled={!canWrite || busy || route.stops.length === 0}
                   isLoading={busy}
                   title="Walk this tour now, as if a visitor had accepted the offer"
                   onClick={() => onStart(route)}

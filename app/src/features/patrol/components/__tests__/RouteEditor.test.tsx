@@ -179,3 +179,17 @@ describe('RouteEditor', () => {
     click.mockRestore();
   });
 });
+
+
+it('shows existing route values without allowing a read-only user to save or delete', async () => {
+  const onDelete = vi.fn();
+  render(<RouteEditor readOnly route={{ id: 'read-route', name: 'Read route', robotId: null, twinId: null, checkpoints: [cp('hall', 'hall')], cronExpression: null, enabled: true, timeWindows: [], homePlaceId: null, createdAt: 'x', updatedAt: 'x' }} robots={[]} onSaved={vi.fn()} onDelete={onDelete} />);
+  await act(async () => {});
+  expect(screen.getByTestId('patrol-route-name')).toBeDisabled();
+  expect(screen.getByTestId('patrol-route-save')).toBeDisabled();
+  expect(screen.getByTestId('patrol-route-delete')).toBeDisabled();
+  fireEvent.click(screen.getByTestId('patrol-route-save'));
+  fireEvent.click(screen.getByTestId('patrol-route-delete'));
+  expect(api.updateRoute).not.toHaveBeenCalled();
+  expect(onDelete).not.toHaveBeenCalled();
+});

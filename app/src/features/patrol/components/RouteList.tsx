@@ -7,6 +7,7 @@
  * @feature patrol
  */
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
@@ -84,6 +85,8 @@ export const RouteList = memo(function RouteList({
   onAbort,
   className,
 }: RouteListProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const nextRuns = useNextRuns(routes);
 
   if (routes.length === 0) {
@@ -205,7 +208,7 @@ export const RouteList = memo(function RouteList({
                   size="sm"
                   variant="destructive"
                   className="min-h-9"
-                  data-testid="patrol-abort"
+                  data-testid="patrol-abort" disabled={!canWrite}
                   onClick={() => onAbort(route)}
                 >
                   Abort
@@ -217,7 +220,7 @@ export const RouteList = memo(function RouteList({
                     variant="outline"
                     className="min-h-9"
                     data-testid="patrol-run-baseline"
-                    disabled={busy || route.checkpoints.length === 0}
+                    disabled={!canWrite || busy || route.checkpoints.length === 0}
                     isLoading={busy}
                     title="Walk the route supervised and record what is normal"
                     onClick={() => onStart(route, 'baseline')}
@@ -229,7 +232,7 @@ export const RouteList = memo(function RouteList({
                     variant="primary"
                     className="min-h-9 hover:shadow-[0_0_20px_-4px_color-mix(in_srgb,var(--color-primary)_45%,transparent)]"
                     data-testid="patrol-run-now"
-                    disabled={busy || route.checkpoints.length === 0}
+                    disabled={!canWrite || busy || route.checkpoints.length === 0}
                     isLoading={busy}
                     title="Walk the route now and compare against the baseline"
                     onClick={() => onStart(route, 'patrol')}

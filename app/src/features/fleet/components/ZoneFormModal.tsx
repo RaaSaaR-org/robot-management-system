@@ -5,7 +5,8 @@
  * @dependencies @/shared/components/ui, @/features/fleet/hooks, @/features/fleet/types
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useId } from 'react';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { Modal, Button, Input } from '@/shared/components/ui';
 import { useZoneManagement, useZoneEditor } from '../hooks';
 import type { Zone, ZoneType, ZoneBounds, CreateZoneRequest } from '../types/fleet.types';
@@ -90,6 +91,9 @@ export function ZoneFormModal({
   onClose,
   onSuccess,
 }: ZoneFormModalProps) {
+  const typeId = useId();
+  const { can } = useAuth();
+  const canManage = can('fleet:manage');
   const { createZone, updateZone, isLoading, error } = useZoneManagement();
   const { closeFormModal } = useZoneEditor();
   const [formData, setFormData] = useState<FormData>(DEFAULT_FORM_DATA);
@@ -175,7 +179,7 @@ export function ZoneFormModal({
     async (e: React.FormEvent) => {
       e.preventDefault();
 
-      if (!validateForm()) return;
+      if (!canManage || !validateForm()) return;
 
       const bounds: ZoneBounds = {
         x: parseFloat(formData.x),
@@ -218,7 +222,7 @@ export function ZoneFormModal({
         console.error('Failed to save zone:', err);
       }
     },
-    [formData, zone, validateForm, createZone, updateZone, onSuccess]
+    [canManage, formData, zone, validateForm, createZone, updateZone, onSuccess]
   );
 
   const handleClose = useCallback(() => {
@@ -229,27 +233,26 @@ export function ZoneFormModal({
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title={zone ? 'Edit Zone' : 'Create Zone'}>
       <form onSubmit={handleSubmit} className="space-y-4">
+        {!canManage && <p role="status" className="text-sm text-theme-secondary">An owner role is required to manage zones.</p>}
         {/* Name */}
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">Name</label>
           <Input
+            label="Name"
             value={formData.name}
             onChange={handleInputChange('name')}
             placeholder="Zone name"
-            className={validationErrors.name ? 'border-red-500' : ''}
+            error={validationErrors.name}
           />
-          {validationErrors.name && (
-            <p className="text-red-500 text-xs mt-1">{validationErrors.name}</p>
-          )}
         </div>
 
         {/* Type */}
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">Type</label>
+          <label htmlFor={typeId} className="block text-sm font-medium text-theme-secondary mb-1">Type</label>
           <select
+            id={typeId}
             value={formData.type}
             onChange={handleInputChange('type')}
-            className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-gray-200 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            className="w-full px-3 py-2 bg-theme-card border border-theme rounded-lg text-theme-primary focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
           >
             {ZONE_TYPE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -261,8 +264,8 @@ export function ZoneFormModal({
 
         {/* Floor */}
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">Floor</label>
           <Input
+            label="Floor"
             value={formData.floor}
             onChange={handleInputChange('floor')}
             placeholder="Floor identifier"
@@ -272,59 +275,47 @@ export function ZoneFormModal({
         {/* Bounds */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">X</label>
             <Input
+              label="X"
               type="number"
               value={formData.x}
               onChange={handleInputChange('x')}
-              className={validationErrors.x ? 'border-red-500' : ''}
+              error={validationErrors.x}
             />
-            {validationErrors.x && (
-              <p className="text-red-500 text-xs mt-1">{validationErrors.x}</p>
-            )}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Y</label>
             <Input
+              label="Y"
               type="number"
               value={formData.y}
               onChange={handleInputChange('y')}
-              className={validationErrors.y ? 'border-red-500' : ''}
+              error={validationErrors.y}
             />
-            {validationErrors.y && (
-              <p className="text-red-500 text-xs mt-1">{validationErrors.y}</p>
-            )}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Width</label>
             <Input
+              label="Width"
               type="number"
               value={formData.width}
               onChange={handleInputChange('width')}
-              className={validationErrors.width ? 'border-red-500' : ''}
+              error={validationErrors.width}
             />
-            {validationErrors.width && (
-              <p className="text-red-500 text-xs mt-1">{validationErrors.width}</p>
-            )}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Height</label>
             <Input
+              label="Height"
               type="number"
               value={formData.height}
               onChange={handleInputChange('height')}
-              className={validationErrors.height ? 'border-red-500' : ''}
+              error={validationErrors.height}
             />
-            {validationErrors.height && (
-              <p className="text-red-500 text-xs mt-1">{validationErrors.height}</p>
-            )}
           </div>
         </div>
 
         {/* Description */}
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">Description</label>
           <Input
+            label="Description"
             value={formData.description}
             onChange={handleInputChange('description')}
             placeholder="Optional description"
@@ -340,10 +331,10 @@ export function ZoneFormModal({
 
         {/* Actions */}
         <div className="flex justify-end gap-3 pt-4">
-          <Button variant="secondary" onClick={handleClose} disabled={isLoading}>
+          <Button type="button" variant="secondary" onClick={handleClose} disabled={isLoading}>
             Cancel
           </Button>
-          <Button type="submit" disabled={isLoading}>
+          <Button type="submit" disabled={isLoading || !canManage}>
             {isLoading ? 'Saving...' : zone ? 'Update Zone' : 'Create Zone'}
           </Button>
         </div>

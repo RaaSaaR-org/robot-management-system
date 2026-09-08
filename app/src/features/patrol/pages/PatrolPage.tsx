@@ -6,6 +6,7 @@
  * @feature patrol
  */
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
@@ -31,6 +32,8 @@ export interface PatrolPageProps {
 }
 
 export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const robots = useRobotsStore(selectRobots);
   const fetchRobots = useRobotsStore((s) => s.fetchRobots);
 
@@ -177,14 +180,16 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
                   </option>
                 ))}
               </select>
-              <Link to="/patrol/routes/new">
+              {canWrite && <Link to="/patrol/routes/new">
                 <Button size="sm" data-testid="patrol-new-route">
                   New route
                 </Button>
-              </Link>
+              </Link>}
             </>
           }
         />
+
+        {!canWrite && <p className="text-sm text-theme-secondary">Read-only access. A member role or higher is required to manage routes and runs.</p>}
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 min-w-0" data-testid="patrol-kpis">
           <KpiTile

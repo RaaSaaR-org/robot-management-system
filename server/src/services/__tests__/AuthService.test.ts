@@ -109,14 +109,16 @@ describe('register', () => {
     expect(refreshTokenRepository.create).toHaveBeenCalledOnce();
   });
 
-  it('propagates mustChangePassword from the created user', async () => {
+  it('does not require a second password after self-registration', async () => {
     vi.mocked(userRepository.findByEmail).mockResolvedValue(null as never);
-    vi.mocked(userRepository.create).mockResolvedValue(
-      makeUser({ forcePasswordChange: true }) as never
+    // Model the database default used for accounts with temporary passwords.
+    vi.mocked(userRepository.create).mockImplementation(async (input) =>
+      makeUser({ forcePasswordChange: input.forcePasswordChange ?? true })
     );
 
     const result = await authService.register('c@example.com', VALID_PASSWORD, 'C');
-    expect(result.mustChangePassword).toBe(true);
+    expect(result.mustChangePassword).toBe(false);
+    expect(result.user.forcePasswordChange).toBe(false);
   });
 
   it('throws when the email is already registered', async () => {
@@ -149,6 +151,19 @@ describe('register', () => {
 // ===========================================================================
 
 describe('login', () => {
+  it('still requires a password change when a provisioned user logs in', async () => {
+    const bcrypt = (await import('bcryptjs')).default;
+    const passwordHash = await bcrypt.hash(VALID_PASSWORD, 10);
+    vi.mocked(userRepository.findByEmailWithPassword).mockResolvedValue(
+      makeUserWithPassword({ passwordHash, forcePasswordChange: true })
+    );
+
+    const result = await authService.login('alice@example.com', VALID_PASSWORD);
+
+    expect(result.mustChangePassword).toBe(true);
+    expect(result.user.forcePasswordChange).toBe(true);
+  });
+
   it('logs in with valid credentials and strips sensitive fields', async () => {
     // create a real bcrypt hash for the password so verifyPassword passes
     const bcrypt = (await import('bcryptjs')).default;

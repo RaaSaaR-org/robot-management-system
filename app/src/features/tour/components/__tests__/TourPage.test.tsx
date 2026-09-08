@@ -6,6 +6,8 @@
  * @feature tour
  */
 
+import { useAuthStore } from '@/features/auth/store/authStore';
+import { MOCK_USER } from '@/mocks/mockData';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
@@ -86,6 +88,7 @@ const run: TourRun = {
 };
 
 beforeEach(() => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'member' } });
   useTourStore.getState().reset();
   vi.clearAllMocks();
   useRobotsStore.setState({
@@ -321,4 +324,23 @@ describe('TourPage', () => {
     await screen.findByTestId('tour-route-row');
     expect(screen.getByTestId('tour-new-route').closest('a')).toHaveAttribute('href', '/tour/routes/new');
   });
+});
+
+
+it('keeps routes readable for viewers but disables starting and aborting runs', async () => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'viewer' } });
+  renderWithProviders(<TourPage />, { withAuth: false });
+  await screen.findByTestId('tour-route-row');
+  expect(screen.queryByTestId('tour-new-route')).not.toBeInTheDocument();
+  expect(screen.getByText(/Read-only access/)).toBeInTheDocument();
+  expect(screen.getByTestId('tour-start')).toBeDisabled();
+  fireEvent.click(screen.getByTestId('tour-start'));
+  expect(api.startRoute).not.toHaveBeenCalled();
+  act(() => { useTourStore.setState({ activeRunByRobot: { [run.robotId]: { ...run, status: 'running' } } }); });
+  await waitFor(() => expect(screen.getAllByTestId('tour-abort').length).toBeGreaterThan(0));
+  for (const button of screen.getAllByTestId('tour-abort')) {
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+  }
+  expect(api.abortRoute).not.toHaveBeenCalled();
 });

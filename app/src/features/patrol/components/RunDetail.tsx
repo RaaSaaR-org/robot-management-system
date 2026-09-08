@@ -7,6 +7,7 @@
  * @feature patrol
  */
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
@@ -114,6 +115,8 @@ interface FindingRowProps {
 }
 
 const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAck, onNormal, onEscalate }: FindingRowProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const ev = finding.evidence ?? {};
   // A verdict is a judgement, not a one-way door. Only the verdict a finding
   // already carries is disabled: an operator who clicked "This is normal" on a
@@ -187,7 +190,7 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
           size="sm"
           variant="outline"
           data-testid="patrol-finding-ack"
-          disabled={busy || finding.status !== 'open'}
+          disabled={!canWrite || busy || finding.status !== 'open'}
           onClick={() => onAck(finding.id)}
         >
           Acknowledge
@@ -197,7 +200,7 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
           variant="outline"
           className="text-turquoise-700 dark:text-turquoise-400 border-turquoise-500/40"
           data-testid="patrol-finding-normal"
-          disabled={busy || isNormal}
+          disabled={!canWrite || busy || isNormal}
           title="Dismiss and teach the baseline that this is normal"
           onClick={() => onNormal(finding.id)}
         >
@@ -207,7 +210,7 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
           size="sm"
           variant="destructive"
           data-testid="patrol-finding-escalate"
-          disabled={busy || isEscalated}
+          disabled={!canWrite || busy || isEscalated}
           title={isEscalated ? 'Already escalated — an incident exists' : 'Open an incident for this finding'}
           onClick={() => onEscalate(finding.id)}
         >
@@ -223,6 +226,8 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
 // ============================================================================
 
 export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, className }: RunDetailProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const run = usePatrolStore(selectRunById(runId));
   const findings = usePatrolStore(selectFindingsForRun(runId));
   const status = usePatrolStore((s) => s.runDetailStatus[runId] ?? 'idle');
@@ -487,7 +492,7 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
               variant="outline"
               fullWidth
               data-testid="patrol-run-promote"
-              disabled={!canPromote || promoting}
+              disabled={!canWrite || !canPromote || promoting}
               isLoading={promoting}
               title={
                 baselineIsThisRun

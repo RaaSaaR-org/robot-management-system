@@ -7,6 +7,7 @@
  * @feature patrol
  */
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
@@ -64,6 +65,8 @@ const ActiveRunCard = memo(function ActiveRunCard({
   onAbort: (run: PatrolRun) => void;
   now: number;
 }) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const current = run.legs.find((l) => l.status === 'running');
   const legs = run.legs.map((l) => ({
     index: l.index,
@@ -108,7 +111,7 @@ const ActiveRunCard = memo(function ActiveRunCard({
           size="sm"
           variant="destructive"
           className="flex-1 sm:flex-none min-h-9"
-          data-testid="patrol-abort"
+          data-testid="patrol-abort" disabled={!canWrite}
           onClick={() => onAbort(run)}
         >
           Abort

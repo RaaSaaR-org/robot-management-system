@@ -6,6 +6,8 @@
  * @feature patrol
  */
 
+import { useAuthStore } from '@/features/auth/store/authStore';
+import { MOCK_USER } from '@/mocks/mockData';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
@@ -53,6 +55,7 @@ const run: PatrolRun = {
 };
 
 beforeEach(() => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'member' } });
   usePatrolStore.getState().reset();
   vi.clearAllMocks();
   useRobotsStore.setState({
@@ -202,4 +205,23 @@ describe('PatrolPage', () => {
     await screen.findByTestId('patrol-route-row');
     expect(screen.getByTestId('patrol-new-route').closest('a')).toHaveAttribute('href', '/patrol/routes/new');
   });
+});
+
+
+it('keeps routes readable for viewers but disables starting and aborting runs', async () => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'viewer' } });
+  renderWithProviders(<PatrolPage />, { withAuth: false });
+  await screen.findByTestId('patrol-route-row');
+  expect(screen.queryByTestId('patrol-new-route')).not.toBeInTheDocument();
+  expect(screen.getByText(/Read-only access/)).toBeInTheDocument();
+  expect(screen.getByTestId('patrol-run-baseline')).toBeDisabled();
+  fireEvent.click(screen.getByTestId('patrol-run-baseline'));
+  expect(api.startRoute).not.toHaveBeenCalled();
+  act(() => { usePatrolStore.setState({ activeRunByRobot: { [run.robotId]: { ...run, status: 'running' } } }); });
+  await waitFor(() => expect(screen.getAllByTestId('patrol-abort').length).toBeGreaterThan(0));
+  for (const button of screen.getAllByTestId('patrol-abort')) {
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+  }
+  expect(api.abortRoute).not.toHaveBeenCalled();
 });

@@ -8,6 +8,7 @@
  * @feature tour
  */
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
@@ -64,6 +65,8 @@ const ActiveRunCard = memo(function ActiveRunCard({
   onAbort: (run: TourRun) => void;
   now: number;
 }) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const current = currentLeg(run);
   // Shared with the Agent Mode rail's tour chip — see `currentStopText`.
   const stopText = currentStopText(
@@ -105,7 +108,7 @@ const ActiveRunCard = memo(function ActiveRunCard({
         <span className={cn(PATROL_MONO, 'text-sm text-theme-primary')} title="Elapsed" aria-hidden="true">
           {formatElapsed(run.startedAt, now)}
         </span>
-        <Button size="sm" variant="destructive" className="flex-1 sm:flex-none min-h-9" data-testid="tour-abort" onClick={() => onAbort(run)}>
+        <Button size="sm" variant="destructive" className="flex-1 sm:flex-none min-h-9" data-testid="tour-abort" disabled={!canWrite} onClick={() => onAbort(run)}>
           End tour
         </Button>
       </div>

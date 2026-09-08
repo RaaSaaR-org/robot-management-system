@@ -53,6 +53,7 @@ export interface RouteEditorRobot {
 }
 
 export interface RouteEditorProps {
+  readOnly?: boolean;
   /** Existing route to edit; null/undefined = new route. */
   route?: PatrolRoute | null;
   robots: RouteEditorRobot[];
@@ -296,6 +297,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }): Reac
 // ============================================================================
 
 export const RouteEditor = memo(function RouteEditor({
+  readOnly = false,
   route,
   robots,
   defaultRobotId,
@@ -311,7 +313,7 @@ export const RouteEditor = memo(function RouteEditor({
   const [pickPlace, setPickPlace] = useState<string>('');
   const [manualPlace, setManualPlace] = useState('');
   /** Checkpoint ids whose details are folded away (inputs stay mounted). */
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(route?.checkpoints.map((c) => c.id) ?? []));
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(readOnly ? [] : route?.checkpoints.map((c) => c.id) ?? []));
 
   const saveRoute = usePatrolStore((s) => s.saveRoute);
   const fetchPlaces = usePatrolStore((s) => s.fetchPlaces);
@@ -321,8 +323,8 @@ export const RouteEditor = memo(function RouteEditor({
   // Reset the draft when a different route is opened.
   useEffect(() => {
     setDraft(draftFromRoute(route, defaultRobotId));
-    setCollapsed(new Set(route?.checkpoints.map((c) => c.id) ?? []));
-  }, [route?.id]);
+    setCollapsed(new Set(readOnly ? [] : route?.checkpoints.map((c) => c.id) ?? []));
+  }, [route?.id, readOnly]);
 
   // Places of the selected robot.
   useEffect(() => {
@@ -398,14 +400,14 @@ export const RouteEditor = memo(function RouteEditor({
   const cronBlocks = Boolean(draft.cronExpression.trim()) && cron !== null && !cron.valid;
 
   const handleSave = useCallback(async () => {
-    if (problems.length > 0 || cronBlocks) return;
+    if (readOnly || problems.length > 0 || cronBlocks) return;
     setSaving(true);
     setSaveError(null);
     const saved = await saveRoute(draftToInput(draft), route?.id ?? null);
     setSaving(false);
     if (saved) onSaved(saved);
     else setSaveError(usePatrolStore.getState().error ?? 'Saving failed');
-  }, [problems, cronBlocks, saveRoute, draft, route?.id, onSaved]);
+  }, [readOnly, problems, cronBlocks, saveRoute, draft, route?.id, onSaved]);
 
   const handleExport = useCallback(async () => {
     if (!route) return;
@@ -429,7 +431,8 @@ export const RouteEditor = memo(function RouteEditor({
   const allCollapsed = draft.checkpoints.length > 0 && draft.checkpoints.every((c) => collapsed.has(c.id));
 
   return (
-    <div className={cn('flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start min-w-0', className)} data-testid="patrol-route-editor">
+    <>
+    <fieldset disabled={readOnly} className={cn('flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start min-w-0', className)} data-testid="patrol-route-editor">
       {/* ------------------------------------------------------------ left: form */}
       <div className="flex flex-col gap-4 min-w-0">
         {/* Route */}
@@ -1021,17 +1024,17 @@ export const RouteEditor = memo(function RouteEditor({
                 variant="ghost"
                 className="mr-auto min-h-9 text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
                 data-testid="patrol-route-delete"
-                onClick={() => onDelete(route)}
+                onClick={() => { if (!readOnly) onDelete(route); }}
               >
                 Delete route
               </Button>
             )}
-            {route && (
+            {route && !readOnly && (
               <Button size="sm" variant="outline" className="min-h-9" data-testid="patrol-export-vda5050" onClick={() => void handleExport()}>
                 Export VDA5050
               </Button>
             )}
-            {onCancel && (
+            {onCancel && !readOnly && (
               <Button size="sm" variant="ghost" className="min-h-9" onClick={onCancel}>
                 Cancel
               </Button>
@@ -1050,6 +1053,12 @@ export const RouteEditor = memo(function RouteEditor({
           </div>
         </div>
       </aside>
-    </div>
+    </fieldset>
+    {readOnly && <div className="flex gap-2">
+      {onCancel && <Button size="sm" variant="ghost" onClick={onCancel}>Back to routes</Button>}
+      {route && <Button size="sm" variant="outline" data-testid="patrol-export-vda5050" onClick={() => void handleExport()}>Export VDA5050</Button>}
+      {exportNote && <p role="status">{exportNote}</p>}
+    </div>}
+    </>
   );
 });

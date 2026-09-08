@@ -5,6 +5,7 @@
  * @feature patrol
  */
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { memo, useCallback, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
@@ -21,6 +22,8 @@ export interface RouteEditorPageProps {
 }
 
 export const RouteEditorPage = memo(function RouteEditorPage({ className }: RouteEditorPageProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const { id } = useParams<{ id: string }>();
   const isNew = !id || id === 'new';
   const navigate = useNavigate();
@@ -80,10 +83,12 @@ export const RouteEditorPage = memo(function RouteEditorPage({ className }: Rout
             </Link>
           }
         />
-        {!isNew && !route ? (
+        {!canWrite && <p className="text-sm text-theme-secondary">Read-only access. A member role or higher is required to manage routes.</p>}
+        {isNew && !canWrite ? null : !isNew && !route ? (
           <div className={cn(PATROL_PANEL, 'card-meta text-sm', !error && 'animate-pulse')}>{error ? `Route not found: ${error}` : 'Loading route…'}</div>
         ) : (
           <RouteEditor
+            readOnly={!canWrite}
             key={route?.id ?? 'new'}
             route={route}
             robots={robotOptions}

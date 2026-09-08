@@ -5,6 +5,7 @@
  * @feature tour
  */
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { memo, useCallback, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
@@ -21,6 +22,8 @@ export interface TourEditorPageProps {
 }
 
 export const TourEditorPage = memo(function TourEditorPage({ className }: TourEditorPageProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const { id } = useParams<{ id: string }>();
   const isNew = !id || id === 'new';
   const navigate = useNavigate();
@@ -82,10 +85,12 @@ export const TourEditorPage = memo(function TourEditorPage({ className }: TourEd
             </Link>
           }
         />
-        {!isNew && !route ? (
+        {!canWrite && <p className="text-sm text-theme-secondary">Read-only access. A member role or higher is required to manage routes.</p>}
+        {isNew && !canWrite ? null : !isNew && !route ? (
           <div className={cn(PATROL_PANEL, 'card-meta text-sm', !error && 'animate-pulse')}>{error ? `Tour not found: ${error}` : 'Loading tour…'}</div>
         ) : (
           <RouteEditor
+            readOnly={!canWrite}
             key={route?.id ?? 'new'}
             route={route}
             robots={robotOptions}

@@ -5,6 +5,7 @@
  * @dependencies @/features/fleet/components, @/features/fleet/hooks, @/features/robots/hooks
  */
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
@@ -55,6 +56,8 @@ export interface FleetPageProps {
  * ```
  */
 export function FleetPage({ className }: FleetPageProps) {
+  const { can } = useAuth();
+  const canManage = can('fleet:manage');
   const navigate = useNavigate();
 
   // Tab state synced via ?tab= so /robots → /fleet?tab=list redirect
@@ -184,6 +187,8 @@ export function FleetPage({ className }: FleetPageProps) {
                   variant={editorMode === 'draw' ? 'primary' : 'secondary'}
                   size="sm"
                   onClick={handleToggleDrawMode}
+                  disabled={!canManage}
+                  title={!canManage ? 'An owner role or higher is required to manage zones' : undefined}
                 >
                   {editorMode === 'draw' ? 'Exit Draw Mode' : 'Draw Zone'}
                 </Button>

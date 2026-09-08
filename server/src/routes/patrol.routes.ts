@@ -12,6 +12,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
+import { memberOrAbove } from '../middleware/auth.middleware.js';
 import { patrolService } from '../services/PatrolService.js';
 import { patrolPhotoStore, PatrolPhotoKinds, isSafeIdSegment, isSafePhotoKey, type PatrolPhotoKind } from '../services/PatrolPhotoStore.js';
 import { HttpClientError } from '../services/HttpClient.js';
@@ -93,7 +94,7 @@ patrolRoutes.get('/routes', async (req: Request, res: Response) => {
 });
 
 /** POST /routes — create. Body: name, robotId?, twinId?, checkpoints, cronExpression?, enabled?, timeWindows?, homePlaceId? */
-patrolRoutes.post('/routes', async (req: Request, res: Response) => {
+patrolRoutes.post('/routes', memberOrAbove, async (req: Request, res: Response) => {
   try {
     res.status(201).json(await patrolService.createRoute(req.body ?? {}));
   } catch (error) {
@@ -149,7 +150,7 @@ patrolRoutes.get('/routes/:id/baseline', async (req: Request, res: Response) => 
  * PatrolStartResult (200 even when refused; 502 when the robot is unreachable
  * — the server has then recorded a `skipped` run and raised the alert).
  */
-patrolRoutes.post('/routes/:id/start', async (req: Request, res: Response) => {
+patrolRoutes.post('/routes/:id/start', memberOrAbove, async (req: Request, res: Response) => {
   try {
     const body = (req.body ?? {}) as { robotId?: string; mode?: string; origin?: string };
     if (body.mode !== undefined && body.mode !== 'baseline' && body.mode !== 'patrol') {
@@ -170,7 +171,7 @@ patrolRoutes.post('/routes/:id/start', async (req: Request, res: Response) => {
 });
 
 /** POST /routes/:id/abort {robotId?, reason?} → {ok, runId?} */
-patrolRoutes.post('/routes/:id/abort', async (req: Request, res: Response) => {
+patrolRoutes.post('/routes/:id/abort', memberOrAbove, async (req: Request, res: Response) => {
   try {
     const body = (req.body ?? {}) as { robotId?: string; reason?: string };
     res.json(await patrolService.abortRun(req.params.id, body.robotId, body.reason));
@@ -189,7 +190,7 @@ patrolRoutes.get('/routes/:id', async (req: Request, res: Response) => {
 });
 
 /** PUT /routes/:id — partial update (same body as POST). */
-patrolRoutes.put('/routes/:id', async (req: Request, res: Response) => {
+patrolRoutes.put('/routes/:id', memberOrAbove, async (req: Request, res: Response) => {
   try {
     res.json(await patrolService.updateRoute(req.params.id, req.body ?? {}));
   } catch (error) {
@@ -198,7 +199,7 @@ patrolRoutes.put('/routes/:id', async (req: Request, res: Response) => {
 });
 
 /** DELETE /routes/:id → 204 */
-patrolRoutes.delete('/routes/:id', async (req: Request, res: Response) => {
+patrolRoutes.delete('/routes/:id', memberOrAbove, async (req: Request, res: Response) => {
   try {
     await patrolService.deleteRoute(req.params.id);
     res.status(204).send();
@@ -237,7 +238,7 @@ patrolRoutes.get('/runs/:runId', async (req: Request, res: Response) => {
 });
 
 /** POST /runs/:runId/promote → {ok} (proxy to the robot: this run becomes the baseline) */
-patrolRoutes.post('/runs/:runId/promote', async (req: Request, res: Response) => {
+patrolRoutes.post('/runs/:runId/promote', memberOrAbove, async (req: Request, res: Response) => {
   try {
     res.json(await patrolService.promoteRun(req.params.runId));
   } catch (error) {
@@ -276,7 +277,7 @@ patrolRoutes.get('/findings/:id', async (req: Request, res: Response) => {
 });
 
 /** POST /findings/:id/acknowledge → finding (status acknowledged, alert acknowledged) */
-patrolRoutes.post('/findings/:id/acknowledge', async (req: Request, res: Response) => {
+patrolRoutes.post('/findings/:id/acknowledge', memberOrAbove, async (req: Request, res: Response) => {
   try {
     res.json(await patrolService.acknowledgeFinding(req.params.id, userId(req)));
   } catch (error) {
@@ -285,7 +286,7 @@ patrolRoutes.post('/findings/:id/acknowledge', async (req: Request, res: Respons
 });
 
 /** POST /findings/:id/normal → finding & { robotNotified } (status dismissed_normal) */
-patrolRoutes.post('/findings/:id/normal', async (req: Request, res: Response) => {
+patrolRoutes.post('/findings/:id/normal', memberOrAbove, async (req: Request, res: Response) => {
   try {
     res.json(await patrolService.markFindingNormal(req.params.id, userId(req)));
   } catch (error) {
@@ -294,7 +295,7 @@ patrolRoutes.post('/findings/:id/normal', async (req: Request, res: Response) =>
 });
 
 /** POST /findings/:id/escalate → finding (status escalated, incidentId when created) */
-patrolRoutes.post('/findings/:id/escalate', async (req: Request, res: Response) => {
+patrolRoutes.post('/findings/:id/escalate', memberOrAbove, async (req: Request, res: Response) => {
   try {
     res.json(await patrolService.escalateFinding(req.params.id, userId(req)));
   } catch (error) {
@@ -311,7 +312,7 @@ patrolRoutes.post('/findings/:id/escalate', async (req: Request, res: Response) 
  * Body: { imageB64, contentType:'image/jpeg', kind:'control'|'baseline'|'finding', checkpointId?, routeId?, capturedAt? }
  * → { ok, key, url }
  */
-patrolRobotRoutes.put('/:id/patrol-runs/:runId/photos/:key', async (req: Request, res: Response) => {
+patrolRobotRoutes.put('/:id/patrol-runs/:runId/photos/:key', memberOrAbove, async (req: Request, res: Response) => {
   try {
     const { id: robotId, runId, key } = req.params;
     if (!isSafeIdSegment(robotId) || !isSafeIdSegment(runId) || !isSafePhotoKey(key)) {
@@ -378,7 +379,7 @@ patrolRobotRoutes.get('/:id/patrol-runs/:runId/photos', async (req: Request, res
  * POST /:id/agent-mode/patrol {routeId, mode?, origin?} — spec-named alias of
  * `POST /api/patrol/routes/:routeId/start` with the robot in the path.
  */
-patrolRobotRoutes.post('/:id/agent-mode/patrol', async (req: Request, res: Response) => {
+patrolRobotRoutes.post('/:id/agent-mode/patrol', memberOrAbove, async (req: Request, res: Response) => {
   try {
     const body = (req.body ?? {}) as { routeId?: unknown; mode?: string; origin?: string };
     if (typeof body.routeId !== 'string' || !body.routeId) return res.status(400).json({ error: 'routeId is required' });
@@ -397,7 +398,7 @@ patrolRobotRoutes.post('/:id/agent-mode/patrol', async (req: Request, res: Respo
 });
 
 /** POST /:id/agent-mode/patrol/abort {reason?} → {ok, runId?} */
-patrolRobotRoutes.post('/:id/agent-mode/patrol/abort', async (req: Request, res: Response) => {
+patrolRobotRoutes.post('/:id/agent-mode/patrol/abort', memberOrAbove, async (req: Request, res: Response) => {
   try {
     const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
     res.json(await patrolService.abortOnRobot(req.params.id, reason));

@@ -12,6 +12,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
+import { memberOrAbove } from '../middleware/auth.middleware.js';
 import { tourService } from '../services/TourService.js';
 // The place list is a proxy to the robot's `GET /places` and PatrolService
 // already owns it. Host mode picks stops from the same graph patrol picks
@@ -88,7 +89,7 @@ tourRoutes.get('/routes', async (req: Request, res: Response) => {
 });
 
 /** POST /routes — create. Body: name, greetingPlaceId, greeting, stops[…] + the optional rest. */
-tourRoutes.post('/routes', async (req: Request, res: Response) => {
+tourRoutes.post('/routes', memberOrAbove, async (req: Request, res: Response) => {
   try {
     res.status(201).json(await tourService.createRoute(req.body ?? {}));
   } catch (error) {
@@ -112,7 +113,7 @@ tourRoutes.get('/places', async (req: Request, res: Response) => {
  * the robot refuses — it then emits a `skipped` run, which ingest alerts on;
  * 502 when the robot could not be reached at all).
  */
-tourRoutes.post('/routes/:id/start', async (req: Request, res: Response) => {
+tourRoutes.post('/routes/:id/start', memberOrAbove, async (req: Request, res: Response) => {
   try {
     const body = (req.body ?? {}) as { robotId?: string; origin?: string };
     if (body.origin !== undefined && body.origin !== 'visitor' && body.origin !== 'operator') {
@@ -129,7 +130,7 @@ tourRoutes.post('/routes/:id/start', async (req: Request, res: Response) => {
 });
 
 /** POST /routes/:id/abort {robotId?, reason?} → {ok, runId?} */
-tourRoutes.post('/routes/:id/abort', async (req: Request, res: Response) => {
+tourRoutes.post('/routes/:id/abort', memberOrAbove, async (req: Request, res: Response) => {
   try {
     const body = (req.body ?? {}) as { robotId?: string; reason?: string };
     res.json(await tourService.abortRun(req.params.id, body.robotId, body.reason));
@@ -148,7 +149,7 @@ tourRoutes.get('/routes/:id', async (req: Request, res: Response) => {
 });
 
 /** PUT /routes/:id — partial update (same body as POST). */
-tourRoutes.put('/routes/:id', async (req: Request, res: Response) => {
+tourRoutes.put('/routes/:id', memberOrAbove, async (req: Request, res: Response) => {
   try {
     res.json(await tourService.updateRoute(req.params.id, req.body ?? {}));
   } catch (error) {
@@ -157,7 +158,7 @@ tourRoutes.put('/routes/:id', async (req: Request, res: Response) => {
 });
 
 /** DELETE /routes/:id → 204. The route's runs survive it. */
-tourRoutes.delete('/routes/:id', async (req: Request, res: Response) => {
+tourRoutes.delete('/routes/:id', memberOrAbove, async (req: Request, res: Response) => {
   try {
     await tourService.deleteRoute(req.params.id);
     res.status(204).send();

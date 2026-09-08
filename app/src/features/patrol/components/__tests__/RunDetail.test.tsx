@@ -7,6 +7,8 @@
  * @feature patrol
  */
 
+import { useAuthStore } from '@/features/auth/store/authStore';
+import { MOCK_USER } from '@/mocks/mockData';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
@@ -60,6 +62,7 @@ const finding: PatrolFinding = {
 };
 
 beforeEach(() => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'member' } });
   usePatrolStore.getState().reset();
   vi.clearAllMocks();
   api.getRun.mockResolvedValue({ ...run, findings: [finding] });
@@ -239,4 +242,14 @@ describe('RunDetail', () => {
     expect(api.getBaseline).not.toHaveBeenCalled();
     expect(screen.getByTestId('patrol-run-promote')).toBeDisabled();
   });
+});
+
+it('lets viewers read findings but prevents review actions and baseline promotion', async () => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'viewer' } });
+  renderWithProviders(<RunDetail runId="run-1" />, { withAuth: false });
+  await screen.findByTestId('patrol-finding');
+  for (const id of ['patrol-finding-ack', 'patrol-finding-normal', 'patrol-finding-escalate']) {
+    expect(screen.getByTestId(id)).toBeDisabled();
+  }
+  expect(screen.getByRole('button', { name: /Promote to baseline/i })).toBeDisabled();
 });

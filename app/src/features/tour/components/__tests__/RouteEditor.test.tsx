@@ -224,3 +224,17 @@ describe('RouteEditor', () => {
     expect(screen.getByTestId('tour-autogreet-inert')).toHaveTextContent('will not offer it to anyone');
   });
 });
+
+
+it('shows existing route values without allowing a read-only user to save or delete', async () => {
+  const onDelete = vi.fn();
+  renderWithProviders(<RouteEditor readOnly route={route} robots={[]} onSaved={vi.fn()} onDelete={onDelete} />, { withAuth: false });
+  await settle();
+  expect(screen.getByTestId('tour-route-name')).toBeDisabled();
+  expect(screen.getByTestId('tour-route-save')).toBeDisabled();
+  expect(screen.getByTestId('tour-route-delete')).toBeDisabled();
+  fireEvent.click(screen.getByTestId('tour-route-save'));
+  fireEvent.click(screen.getByTestId('tour-route-delete'));
+  expect(api.updateRoute).not.toHaveBeenCalled();
+  expect(onDelete).not.toHaveBeenCalled();
+});

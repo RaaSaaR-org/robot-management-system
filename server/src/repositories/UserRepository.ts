@@ -52,6 +52,8 @@ export interface CreateUserInput {
   role?: string;
   avatar?: string;
   tenantId?: string;
+  /** Self-registration supplies false; provisioned users keep the database default. */
+  forcePasswordChange?: boolean;
 }
 
 /**
@@ -176,6 +178,7 @@ export class UserRepository {
         role: input.role ?? 'viewer',
         avatar: input.avatar,
         tenantId: input.tenantId,
+        forcePasswordChange: input.forcePasswordChange,
       },
     });
     return dbUserToDomain(user);

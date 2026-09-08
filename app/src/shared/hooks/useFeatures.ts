@@ -64,13 +64,21 @@ export function useFeatures(): FeatureFlags {
   const flags = useFeaturesStore((s) => s.flags);
   const loaded = useFeaturesStore((s) => s.loaded);
   const loading = useFeaturesStore((s) => s.loading);
+  const error = useFeaturesStore((s) => s.error);
   const fetch = useFeaturesStore((s) => s.fetch);
 
   useEffect(() => {
-    if (!loaded && !loading) {
-      void fetch();
+    if (loaded || loading) return;
+
+    if (error !== null) {
+      // A failed request flips loading back to false. Wait before retrying
+      // so a backend outage cannot drive a render/request loop.
+      const retry = setTimeout(() => void fetch(), 5_000);
+      return () => clearTimeout(retry);
     }
-  }, [loaded, loading, fetch]);
+
+    void fetch();
+  }, [loaded, loading, error, fetch]);
 
   return flags;
 }
