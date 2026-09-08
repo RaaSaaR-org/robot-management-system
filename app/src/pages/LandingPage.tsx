@@ -7,6 +7,7 @@
 import { scrollToSection } from '../components/landing/scrollToSection';
 import { Header } from '../components/landing/Header';
 import { HeroSection } from '../components/landing/HeroSection';
+import { PlatformSection } from '../components/landing/PlatformSection';
 import { FullCircleSection } from '../components/landing/FullCircleSection';
 import { DataEngineSection } from '../components/landing/DataEngineSection';
 import { ModelLayerSection } from '../components/landing/ModelLayerSection';
@@ -24,6 +25,7 @@ export function LandingPage() {
       <Header />
       <main>
         <HeroSection />
+        <PlatformSection />
         <FullCircleSection />
         <DataEngineSection />
         <ModelLayerSection />

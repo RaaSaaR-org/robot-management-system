@@ -75,3 +75,9 @@ Final build/typecheck and diff check also passed after the crossover polish.
 ## Loop placement — 9 September 2026
 
 Placed the infinity illustration on the left and the single-column stage details on the right at desktop widths, with stacked content below 1024px. Sized stage nodes and lobe labels for the narrower illustration. Frontend build/typecheck and diff check passed. Playwright MCP confirmed placement at 1024/1440px, stacking at 320/390/768px, no horizontal overflow, and stage selection. Evidence: `/tmp/loop-split-1440.png`, `/tmp/loop-split-390.png`; build log `/tmp/task256-loop-split-build.log`.
+
+## Platform introduction — 9 September 2026
+
+Added “A home for Physical AI” between hero and Embodied Loop. Defines the open all-in-one platform, illustrates data/models/workflows/fleet connecting in one workspace, and introduces the expert-led AI-agent maintenance fleet. Discovery links lead into the lifecycle. Responsive native artwork respects reduced motion and labels hardware integration readiness.
+
+Verification: frontend build/typecheck, 11 existing landing tests and diff check passed. Playwright MCP verified 320–1440px without overflow, discovery-link focus, reduced motion and no page errors. Desktop/mobile screenshots reviewed: `/tmp/platform-1440.png`, `/tmp/platform-390.png`. Logs: `/tmp/task256-platform-build.log`, `/tmp/task256-platform-tests.log`.
