@@ -4,13 +4,11 @@
  * @feature deployment
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   useDeploymentStore,
   selectModelVersions,
   selectModelVersionsLoading,
-  selectStagingVersions,
-  selectProductionVersions,
 } from '../store';
 import { deploymentApi } from '../api';
 import type { ModelVersion } from '../types';
@@ -31,8 +29,16 @@ export interface UseModelVersionsReturn {
 export function useModelVersions(): UseModelVersionsReturn {
   const versions = useDeploymentStore(selectModelVersions);
   const isLoading = useDeploymentStore(selectModelVersionsLoading);
-  const stagingVersions = useDeploymentStore(selectStagingVersions);
-  const productionVersions = useDeploymentStore(selectProductionVersions);
+  // Derived arrays must not be external-store snapshots: a fresh array on
+  // every read makes React keep rendering even when the store has not changed.
+  const stagingVersions = useMemo(
+    () => versions.filter((version) => version.deploymentStatus === 'staging'),
+    [versions],
+  );
+  const productionVersions = useMemo(
+    () => versions.filter((version) => version.deploymentStatus === 'production'),
+    [versions],
+  );
   const fetchVersions = useDeploymentStore((s) => s.fetchModelVersions);
 
   return {

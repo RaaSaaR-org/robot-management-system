@@ -13,6 +13,7 @@
  * @status live
  */
 
+import { platformAuthHeaders } from '../utils/platform-auth.js';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { parsePlaceGraph } from './place-resolver.js';
@@ -112,7 +113,7 @@ export class PlaceGraphSource {
    */
   async refresh(): Promise<PlaceGraphResult> {
     try {
-      const res = await this.fetchImpl(this.url, { signal: AbortSignal.timeout(this.timeoutMs) });
+      const res = await this.fetchImpl(this.url, { headers: platformAuthHeaders(), signal: AbortSignal.timeout(this.timeoutMs) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as unknown;
       const graph = this.assertTwin(parsePlaceGraph(body, this.url));

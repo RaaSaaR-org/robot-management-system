@@ -214,6 +214,10 @@ export const handlers = [
     return HttpResponse.json({ data: [], total: 0 });
   }),
 
+  http.get('/api/simulation/jobs', () => {
+    return HttpResponse.json({ jobs: [], backend: 'mock' });
+  }),
+
   http.get('/api/simulation/*', () => {
     return HttpResponse.json({ data: [], total: 0 });
   }),
@@ -579,6 +583,35 @@ export const handlers = [
   http.get('/api/marketplace/credits/balance', () => {
     return HttpResponse.json({ balance: demoCreditBalance });
   }),
+
+  // ========================================================================
+  // Empty demo collections retain each endpoint's response contract.
+  // A generic envelope can put undefined or objects into array store slices.
+  // ========================================================================
+
+  http.get('/api/teleoperation/sessions', () => HttpResponse.json({
+    sessions: [],
+    pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+  })),
+  http.get('/api/federated/rounds', () => HttpResponse.json({
+    rounds: [], total: 0, limit: 20, offset: 0,
+  })),
+  http.get('/api/federated/convergence', () => HttpResponse.json([])),
+  http.get('/api/federated/privacy-budgets', () => HttpResponse.json({
+    budgets: [], totalRobots: 0,
+  })),
+  http.get('/api/federated/metrics/rohe', () => HttpResponse.json({
+    period: { start: new Date().toISOString(), end: new Date().toISOString() },
+    totalInterventions: 0, performanceImprovement: 0, improvementPerIntervention: 0,
+    byRobot: {}, byTask: {},
+  })),
+  http.get('/api/digital-twins', () => HttpResponse.json([])),
+  http.get('/api/updates', () => HttpResponse.json([])),
+  http.get('/api/models/versions', () => HttpResponse.json({ modelVersions: [] })),
+  http.get('/api/skills', () => HttpResponse.json({
+    skills: [],
+    pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },
+  })),
 
   // ========================================================================
   // Catch-all: other GET /api/* return empty data
