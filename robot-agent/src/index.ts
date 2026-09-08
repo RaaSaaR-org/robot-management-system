@@ -5,6 +5,7 @@
  */
 
 import 'dotenv/config';
+import { reportRobotIdentity } from './utils/platform-registration.js';
 import express from 'express';
 import cors from 'cors';
 import http from 'http';
@@ -336,16 +337,11 @@ async function main() {
     void (async () => {
       try {
         const robotUrl = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
-        await fetch(`${config.serverUrl}/api/robots/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ robotUrl }),
-          signal: AbortSignal.timeout(5000),
-        });
+        await reportRobotIdentity(config.serverUrl, robotUrl);
         console.log('[Identity] Server accepted identity re-report');
       } catch (err) {
         console.warn(
-          '[Identity] Identity re-report failed (server unreachable?):',
+          '[Identity] Identity re-report failed:',
           err instanceof Error ? err.message : err
         );
       }
