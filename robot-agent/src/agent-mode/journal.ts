@@ -15,6 +15,7 @@
  * treated as a free side effect.
  */
 
+import { SERVICE_TOKEN_ENV, platformAuthHeaders } from '../utils/platform-auth.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config/config.js';
@@ -59,7 +60,7 @@ export const RETENTION_CACHE_TTL_MS = 60 * 60_000;
  * from the environment at call time rather than from `config`, which is frozen
  * at import: a rotated token must not need a robot restart.
  */
-export const SERVICE_TOKEN_ENV = 'NEODEM_SERVICE_TOKEN';
+export { SERVICE_TOKEN_ENV } from '../utils/platform-auth.js';
 
 /** What governs pruning right now. */
 export interface JournalRetention {
@@ -314,7 +315,7 @@ export async function fetchJournalRetention(
   const get = async (url: string): Promise<unknown> => {
     const res = await fetchImpl(url, {
       signal: AbortSignal.timeout(timeoutMs),
-      ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
+      ...(authToken ? { headers: platformAuthHeaders(authToken) } : {}),
     });
     if (!res.ok) {
       throw new Error(

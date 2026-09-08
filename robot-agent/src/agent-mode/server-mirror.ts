@@ -2,13 +2,13 @@
  * @file server-mirror.ts
  * @description Mirrors Agent Mode activity to the NeoDEM server: plan/block/
  *              scene/state events to `POST /api/robots/:id/agent-mode/events`
- *              (fire-and-forget, unauthenticated like the existing compliance
- *              and task-status pushes), and one compliance record per finished
- *              block.
+ *              (fire-and-forget with the configured service-account credential),
+ *              and one compliance record per finished block.
  * @feature agentmode
  * @status live
  */
 
+import { platformAuthHeaders } from '../utils/platform-auth.js';
 import { config } from '../config/config.js';
 import { complianceLogClient } from '../compliance/ComplianceLogClient.js';
 import { Journal, blockJournalRecord, getJournalBootId } from './journal.js';
@@ -80,7 +80,7 @@ export class ServerMirror {
 
   /**
    * Upload one patrol photo (TASK-212) — JSON body with the JPEG base64, so it
-   * rides the same unauthenticated robot→server path as the events. Fire-and-
+   * uses the same authenticated robot→server path as the events. Fire-and-
    * forget for the caller; inside, three attempts with a pause between them.
    * The photo stays on the robot's disk either way, so a server that is down
    * costs the operator a picture in the UI, never the record.
@@ -107,7 +107,7 @@ export class ServerMirror {
       try {
         const res = await this.fetchImpl(url, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...platformAuthHeaders() },
           body,
           signal: AbortSignal.timeout(PHOTO_UPLOAD_TIMEOUT_MS),
         });
@@ -136,15 +136,16 @@ export class ServerMirror {
   /** Awaitable variant — used by the tests and by `emit` internally. */
   async push(event: AgentModeEvent): Promise<void> {
     try {
-      await this.fetchImpl(
+      const response = await this.fetchImpl(
         `${this.serverUrl}/api/robots/${encodeURIComponent(this.robotId)}/agent-mode/events`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...platformAuthHeaders() },
           body: JSON.stringify(event),
           signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
         }
       );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
     } catch (err) {
       // Throttled: a disconnected server would otherwise log per block.
       const now = Date.now();

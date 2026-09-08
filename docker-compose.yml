@@ -192,7 +192,10 @@ services:
       NODE_ENV: production
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       SERVER_URL: http://server:3001
-      PUBLIC_URL: ${ROBOT_PUBLIC_URL:-http://localhost:41243}
+      # Service-account API token provisioned in the platform Team page.
+      NEODEM_SERVICE_TOKEN: ${NEODEM_SERVICE_TOKEN:-}
+      # This URL is fetched by the server container, where localhost is itself.
+      PUBLIC_URL: ${ROBOT_PUBLIC_URL:-http://robot-agent:41243}
       PORT: 41243
       ROBOT_ID: ${ROBOT_ID:-sim-robot-001}
       ROBOT_NAME: ${ROBOT_NAME:-SimBot-01}

@@ -39,7 +39,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config/config.js';
 import { safeSegment } from './baseline.js';
 import { mayInitiate, SELF_INITIATIVE_MIN_BATTERY, type InitiativeContext } from './initiative.js';
-import { SERVICE_TOKEN_ENV } from './journal.js';
+import { SERVICE_TOKEN_ENV, platformAuthHeaders } from '../utils/platform-auth.js';
 import { PLACE_STALE_MS } from '../robot/StatePersistence.js';
 import type {
   AgentBlock,
@@ -236,7 +236,7 @@ export class TourRouteSource {
     try {
       const res = await this.fetchImpl(this.url(routeId), {
         signal: AbortSignal.timeout(this.timeoutMs),
-        ...(this.authToken ? { headers: { Authorization: `Bearer ${this.authToken}` } } : {}),
+        ...(this.authToken ? { headers: platformAuthHeaders(this.authToken) } : {}),
       });
       if (!res.ok) {
         // Auto-greet is the one host-mode path where the robot fetches for
