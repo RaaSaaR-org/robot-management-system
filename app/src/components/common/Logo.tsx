@@ -1,6 +1,6 @@
 /**
  * @file Logo.tsx
- * @description Shared brand lockup with the NeoDEM folded-N mark and custom logo support.
+ * @description Shared brand lockup with the NeoDEM orbital mark and custom logo support.
  * @feature brand
  */
 
@@ -13,28 +13,23 @@ interface LogoProps {
   linkTo?: string;
 }
 
-/** A folded N: one continuous route between intelligence and the physical world. */
+/** Two interlocking orbits around a shared intelligence core. */
 function DefaultLogoSVG({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 40 40"
+      viewBox="0 0 32 32"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden="true"
       focusable="false"
     >
-      <path
-        d="M10 2H27L38 13V30C38 34.4 34.4 38 30 38H10C5.6 38 2 34.4 2 30V10C2 5.6 5.6 2 10 2Z"
-        fill="#B2F8DF"
-      />
-      <path
-        d="M11 29V13C11 11 12.5 10.5 14 12.5L26 27.5C27.5 29.5 29 29 29 27V11"
-        stroke="#080F18"
-        strokeWidth="5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+      <g stroke="var(--color-primary)" strokeWidth="1.8">
+        <ellipse cx="16" cy="16" rx="12.5" ry="5.8" transform="rotate(-42 16 16)" />
+        <ellipse cx="16" cy="16" rx="12.5" ry="5.8" transform="rotate(42 16 16)" />
+      </g>
+      <path d="M16 12.5L19.5 16L16 19.5L12.5 16Z" fill="var(--color-primary)" />
+      <circle cx="25.3" cy="7.6" r="2.3" fill="var(--text-primary)" />
     </svg>
   );
 }

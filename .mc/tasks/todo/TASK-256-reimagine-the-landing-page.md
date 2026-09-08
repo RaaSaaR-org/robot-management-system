@@ -93,3 +93,9 @@ Verification: frontend build/typecheck, 11 landing tests and diff check passed. 
 Replaced the default three-robot icon in the shared Logo component with a mint, clipped-corner tile and continuous navy N monogram. Custom brand image support and existing sizes remain; logo links now have an explicit brand name for icon-only accessibility.
 
 Validation: frontend build/typecheck and 11 existing landing tests passed; diff whitespace check passed. Playwright MCP checked 320, 390, 1024 and 1440px without overflow or page errors, keyboard focus and home-link navigation. Desktop/mobile screenshots reviewed: `/tmp/nav-mark-1440.png`, `/tmp/nav-mark-320.png`. Gate logs: `/tmp/task256-nav-mark-build.log`, `/tmp/task256-nav-mark-tests.log`.
+
+## Orbital icon revision — 9 September 2026
+
+User preferred a small abstract symbol. Replaced the N tile with two fine interlocking orbits, a diamond core and a bright satellite. Uses existing theme colors and retains brand overrides and link accessibility. Playwright MCP verified 320, 390, 1024 and 1440px, keyboard focus and home navigation without overflow/page errors; screenshots reviewed at `/tmp/orbital-mark-320.png` and `/tmp/orbital-mark-1440.png`.
+
+Final frontend build/typecheck and whitespace check passed (`/tmp/task256-orbital-final-build.log`). The 11 existing landing tests passed before the final color-token correction (`/tmp/task256-orbital-tests.log`).
