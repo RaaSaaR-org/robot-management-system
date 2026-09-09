@@ -56,7 +56,7 @@ export function DocsCodeBlock({ code, language }: DocsCodeBlockProps) {
   }, [code]);
 
   return (
-    <div className="not-prose group my-6 overflow-hidden rounded-brand border border-theme section-tertiary">
+    <div className="not-prose my-6 overflow-hidden rounded-brand border border-theme section-tertiary">
       <div className="flex items-center justify-between gap-3 border-b border-theme px-3 py-1.5">
         <span className="font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-theme-tertiary">
           {label}

@@ -3,7 +3,7 @@ id: "TASK-257"
 aliases: []
 title: "The docs viewer renders markdown as unstyled text"
 slug: "the-docs-viewer-renders-markdown-as-unstyled-text"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -70,10 +70,15 @@ on top of it.
   button, theme-aware highlighter, wrapped in `not-prose`.
 - `app/src/components/docs/DocsToc.tsx` (new) — "On this page" rail with a
   scroll spy rooted on the reading column.
+- `app/src/components/docs/docsRegistry.ts` (new) — the document set: the
+  `docs/**/*.md` glob, slugs, titles, categories and ordering.
+- `app/src/components/docs/DocsArticle.tsx` (new) — the markdown renderer: take
+  fenced blocks over at the `pre` level, anchor headings by source line, resolve
+  links to in-app routes, drop empty `thead`s.
 - `app/src/components/docs/DocsSidebar.tsx` — moved from `components/`.
-- `app/src/pages/DocsPage.tsx` — take fenced blocks over at the `pre` level;
-  anchor headings by source line; resolve links to in-app routes; drop empty
-  `thead`s; provenance rail, prev/next pager, scroll reset on document change.
+- `app/src/pages/DocsPage.tsx` — layout, navigation and scroll behaviour only:
+  provenance rail, contents rail, prev/next pager, deep links and the scroll
+  reset on document change.
 - `app/src/shared/hooks/useIsDarkTheme.ts` (new) — resolved theme for the
   highlighter palette.
 - `app/src/features/a2a/components/MessageBubble.tsx` — `prose-inherit` in place
@@ -85,6 +90,9 @@ on top of it.
   against anchors the docs already link to (`#tls--https`,
   `#7-current-limitations`), heading extraction inside and outside fences,
   duplicate-heading de-duplication, and every branch of link resolution.
+- `app/src/components/docs/__tests__/docsRegistry.test.ts` covers slugs, titles,
+  categories and the loaded set — including that no document is stranded in
+  `Other`, which is how a newly added doc announces itself.
 - Manually: `/docs/README` and `/docs/architecture` in both themes, at 1440px
   and 430px.
 

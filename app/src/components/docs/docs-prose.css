@@ -46,7 +46,8 @@
   --tw-prose-quote-borders: var(--color-primary);
   --tw-prose-captions: var(--text-tertiary);
   --tw-prose-kbd: var(--text-primary);
-  --tw-prose-kbd-shadows: 0 0 0 0;
+  /* An RGB triplet, not a shadow — the plugin drops it into rgb(… / 10%). */
+  --tw-prose-kbd-shadows: 0 0 0;
   --tw-prose-code: var(--text-primary);
   --tw-prose-pre-code: var(--text-secondary);
   --tw-prose-pre-bg: var(--bg-tertiary);
@@ -282,8 +283,11 @@
   content: none;
 }
 
+/* max-width, not width: a screenshot fills the column, but a badge or an icon
+   keeps its own size instead of being blown up to match. */
 .docs-prose img {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-brand-lg, 16px);
-  width: 100%;
+  max-width: 100%;
+  height: auto;
 }
