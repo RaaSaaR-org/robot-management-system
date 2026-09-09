@@ -2,7 +2,7 @@
 id: "TASK-258"
 title: "Create a cinematic Three.js hero"
 slug: "create-a-cinematic-threejs-hero"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 tags: [landing, design]
@@ -36,3 +36,7 @@ Replace the landing hero illustration with a professional, cinematic Three.js ba
 ## Review
 
 PR #303 opened after clean review of `14768a61..a9bdbaab`. Caption and its CSS removed. Final production build passed after removal.
+
+## Shipping
+
+All six CI gates passed on `88d69edd`. Final caption removal verified in production at 390px and 1440px with no page errors or overflow (`/tmp/task258-ship-390.png`, `/tmp/task258-ship-1440.png`). Task closure rides in PR #303; merge waits for all checks on this final commit. No parent task.
