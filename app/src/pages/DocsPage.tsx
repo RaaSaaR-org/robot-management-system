@@ -1,199 +1,29 @@
 /**
  * @file DocsPage.tsx
- * @description Documentation viewer with categorized sidebar, search, and markdown rendering
+ * @description Documentation viewer — sidebar, reading column, contents rail and navigation
  * @feature docs
  */
 
-import { useState } from 'react';
-import { useParams, Navigate, useLocation } from 'react-router-dom';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useParams, Navigate, useLocation, useNavigate, Link } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, Github, Menu } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
-import { DocsSidebar, type DocEntry } from '@/components/DocsSidebar';
+import { DocsSidebar, type DocEntry } from '@/components/docs/DocsSidebar';
+import { DocsArticle } from '@/components/docs/DocsArticle';
+import { DocsToc } from '@/components/docs/DocsToc';
+import { extractHeadings, headingIdsByLine, type DocHeading } from '@/components/docs/docsMarkdown';
+import {
+  DEFAULT_SLUG,
+  DOC_CONTENT,
+  DOC_ENTRIES,
+  DOC_GROUPS,
+  GITHUB_DOCS_URL,
+  ORDERED_CATEGORIES,
+} from '@/components/docs/docsRegistry';
 
-// ---------------------------------------------------------------------------
-// Load all markdown files from docs/ including subdirectories
-// ---------------------------------------------------------------------------
-
-const docsRaw = import.meta.glob<string>('../../../docs/**/*.md', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-});
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Extract slug from a glob key, supporting subdirectories.
- *  "../../../docs/architecture.md" → "architecture"
- *  "../../../docs/planning/prd.md" → "planning/prd"
- */
-function slugFromKey(key: string): string {
-  const match = key.match(/docs\/(.+)\.md$/);
-  return match ? match[1] : key;
-}
-
-/** Convert a kebab-case filename to a readable title (uses last segment of path) */
-function titleFromSlug(slug: string): string {
-  const acronyms = new Set(['vla', 'prd', 'ai', 'gdpr', 'nats', 'a2a', 'api']);
-  const parts = slug.split('/');
-  const filename = parts[parts.length - 1];
-
-  return filename
-    .split('-')
-    .map((word) => {
-      if (word === '') return '';
-      const lower = word.toLowerCase();
-      if (acronyms.has(lower)) return word.toUpperCase();
-      return word.charAt(0).toUpperCase() + word.slice(1);
-    })
-    .join(' ');
-}
-
-// ---------------------------------------------------------------------------
-// Category mapping
-// ---------------------------------------------------------------------------
-
-const CATEGORY_MAP: Record<string, string> = {
-  'demo-intro': 'Getting Started',
-  'README': 'Getting Started',
-  'architecture': 'Architecture',
-  'app-architecture': 'Architecture',
-  'api': 'Architecture',
-  'robot-integration-guide': 'Robot Integration',
-  'VLA-integration-guide': 'Robot Integration',
-  'deployment': 'Operations',
-  'dev-workflow': 'Operations',
-  'process-delegation-architecture': 'Operations',
-  'nats-rustfs': 'Operations',
-  'regulatory-compliance': 'Compliance',
-  'ai-operations-guide': 'Compliance',
-  'brand': 'Brand',
-};
-
-/** Determine the category for a given slug */
-function categoryFromSlug(slug: string): string {
-  // Subdirectory-based category
-  const parts = slug.split('/');
-  if (parts.length > 1) {
-    const dir = parts[0];
-    if (dir === 'planning') return 'Planning';
-    if (dir === 'research') return 'Research';
-    return dir.charAt(0).toUpperCase() + dir.slice(1);
-  }
-  // Map-based category for root-level docs
-  return CATEGORY_MAP[slug] ?? 'Other';
-}
-
-// Category display order
-const CATEGORY_ORDER = [
-  'Getting Started',
-  'Architecture',
-  'Robot Integration',
-  'Operations',
-  'Compliance',
-  'Brand',
-  'Planning',
-  'Research',
-  'Other',
-];
-
-// ---------------------------------------------------------------------------
-// Build docs list grouped by category
-// ---------------------------------------------------------------------------
-
-function buildDocEntries(): {
-  entries: DocEntry[];
-  contentMap: Map<string, string>;
-  grouped: Map<string, DocEntry[]>;
-} {
-  const entries: DocEntry[] = [];
-  const contentMap = new Map<string, string>();
-
-  for (const [key, content] of Object.entries(docsRaw)) {
-    const slug = slugFromKey(key);
-    const category = categoryFromSlug(slug);
-    entries.push({ slug, title: titleFromSlug(slug), category });
-    contentMap.set(slug, content);
-  }
-
-  // Sort: demo-intro first (in demo mode), then README, then alphabetical
-  const isDemo = import.meta.env.VITE_DEMO_MODE === 'true';
-  entries.sort((a, b) => {
-    const aIsDemoIntro = a.slug === 'demo-intro';
-    const bIsDemoIntro = b.slug === 'demo-intro';
-    const aIsReadme = a.slug.toUpperCase() === 'README';
-    const bIsReadme = b.slug.toUpperCase() === 'README';
-    if (isDemo && aIsDemoIntro && !bIsDemoIntro) return -1;
-    if (isDemo && !aIsDemoIntro && bIsDemoIntro) return 1;
-    if (aIsReadme && !bIsReadme) return -1;
-    if (!aIsReadme && bIsReadme) return 1;
-    return a.title.localeCompare(b.title);
-  });
-
-  // Group by category
-  const grouped = new Map<string, DocEntry[]>();
-  for (const entry of entries) {
-    const cat = entry.category ?? 'Other';
-    const list = grouped.get(cat) ?? [];
-    list.push(entry);
-    grouped.set(cat, list);
-  }
-
-  return { entries, contentMap, grouped };
-}
-
-const { entries: DOC_ENTRIES, contentMap: DOC_CONTENT, grouped: DOC_GROUPS } = buildDocEntries();
-
-// In demo mode, demo-intro is sorted first; otherwise README is first
-const DEFAULT_SLUG = DOC_ENTRIES[0]?.slug ?? '';
-
-// Ordered categories (only those that have entries)
-const ORDERED_CATEGORIES = CATEGORY_ORDER.filter((cat) => DOC_GROUPS.has(cat));
-
-// ---------------------------------------------------------------------------
-// Custom markdown components
-// ---------------------------------------------------------------------------
-
-type CodeProps = React.ComponentProps<'code'> & { inline?: boolean };
-
-function CodeBlock({ inline, className, children, ...props }: CodeProps) {
-  const match = /language-(\w+)/.exec(className ?? '');
-  const codeString = String(children).replace(/\n$/, '');
-
-  if (!inline && match) {
-    return (
-      <div className="relative group">
-        <span className="absolute top-2 right-3 text-xs text-gray-400 uppercase font-mono opacity-60">
-          {match[1]}
-        </span>
-        <SyntaxHighlighter
-          style={oneDark}
-          language={match[1]}
-          PreTag="div"
-          className="!rounded-brand !my-4 !text-sm"
-        >
-          {codeString}
-        </SyntaxHighlighter>
-      </div>
-    );
-  }
-
-  return (
-    <code
-      className={cn(
-        'px-1.5 py-0.5 rounded text-sm',
-        'bg-white/10 text-cobalt-300',
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </code>
-  );
+/** ~200 wpm, rounded up — enough to tell a reference card from a runbook. */
+function readingMinutes(markdown: string): number {
+  return Math.max(1, Math.round(markdown.trim().split(/\s+/).length / 200));
 }
 
 // ---------------------------------------------------------------------------
@@ -203,10 +33,56 @@ function CodeBlock({ inline, className, children, ...props }: CodeProps) {
 export function DocsPage() {
   const { '*': splat } = useParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const scrollRef = useRef<HTMLElement | null>(null);
 
   // Extract slug from location — supports both /docs/:slug and /docs/planning/prd
   const slug = splat || '';
+
+  const content = DOC_CONTENT.get(slug);
+  const currentDoc = DOC_ENTRIES.find((e) => e.slug === slug);
+  const currentIndex = DOC_ENTRIES.findIndex((e) => e.slug === slug);
+  const previousDoc = currentIndex > 0 ? DOC_ENTRIES[currentIndex - 1] : undefined;
+  const nextDoc = currentIndex >= 0 ? DOC_ENTRIES[currentIndex + 1] : undefined;
+
+  const headings = useMemo(() => (content ? extractHeadings(content) : []), [content]);
+  const idsByLine = useMemo(() => headingIdsByLine(headings), [headings]);
+  const tocHeadings = useMemo<DocHeading[]>(
+    () => headings.filter((h) => h.depth === 2 || h.depth === 3),
+    [headings],
+  );
+
+  /** Scroll a heading to the top of the reading column (respects scroll-margin). */
+  const scrollToHeading = useCallback((id: string) => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const target = container.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`);
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const goToHeading = useCallback(
+    (id: string) => {
+      scrollToHeading(id);
+      navigate({ hash: `#${id}` }, { replace: true });
+    },
+    [navigate, scrollToHeading],
+  );
+
+  // A new document starts at the top; a deep link starts at its anchor. The
+  // reading column is the scroll container, so neither happens on its own.
+  const hash = location.hash;
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    if (!hash) {
+      container.scrollTo({ top: 0 });
+      return;
+    }
+    const id = decodeURIComponent(hash.slice(1));
+    const frame = requestAnimationFrame(() => scrollToHeading(id));
+    return () => cancelAnimationFrame(frame);
+  }, [slug, hash, scrollToHeading]);
 
   // If no slug given, redirect to default
   if (!slug) {
@@ -215,9 +91,6 @@ export function DocsPage() {
       return <Navigate to={`/docs/${DEFAULT_SLUG}`} replace />;
     }
   }
-
-  const content = DOC_CONTENT.get(slug);
-  const currentDoc = DOC_ENTRIES.find((e) => e.slug === slug);
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
@@ -247,7 +120,7 @@ export function DocsPage() {
       </div>
 
       {/* Content area */}
-      <main className="flex-1 overflow-y-auto">
+      <main ref={scrollRef} className="flex-1 overflow-y-auto">
         {/* Mobile header with menu button */}
         <div className="lg:hidden flex items-center gap-3 p-4 border-b border-theme sticky top-0 section-secondary z-10">
           <button
@@ -255,50 +128,118 @@ export function DocsPage() {
             className="p-1.5 rounded-brand hover:bg-theme-hover transition-colors"
             aria-label="Open navigation"
           >
-            <svg className="w-5 h-5 text-theme-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
+            <Menu className="w-5 h-5 text-theme-primary" />
           </button>
           <span className="font-medium text-sm text-theme-primary truncate">
             {currentDoc?.title ?? 'Documentation'}
           </span>
         </div>
 
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
-          {content ? (
-            <article className="prose prose-sm md:prose-base dark:prose-invert max-w-none prose-headings:text-theme-primary prose-headings:scroll-mt-20 prose-h1:text-3xl prose-h1:font-bold prose-h1:border-b prose-h1:border-theme prose-h1:pb-3 prose-h2:text-2xl prose-h2:mt-10 prose-h3:text-xl prose-a:text-cobalt prose-a:no-underline hover:prose-a:underline prose-code:before:content-none prose-code:after:content-none prose-pre:p-0 prose-pre:bg-transparent prose-img:rounded-brand prose-img:max-w-full prose-table:text-sm prose-blockquote:border-l-cobalt prose-blockquote:italic prose-blockquote:text-theme-secondary">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                urlTransform={(url) => {
-                  if (url && !url.startsWith('http') && !url.startsWith('/')) {
-                    return `${import.meta.env.BASE_URL}${url}`;
-                  }
-                  return url;
-                }}
-                components={{
-                  code: CodeBlock as never,
-                  table: ({ children, ...props }) => (
-                    <div className="overflow-x-auto -mx-4 sm:mx-0 my-4">
-                      <table {...props}>{children}</table>
-                    </div>
-                  ),
-                }}
-              >
-                {content}
-              </ReactMarkdown>
-            </article>
-          ) : (
-            <div className="text-center py-20">
-              <h2 className="text-xl font-semibold text-theme-primary mb-2">
-                Document not found
-              </h2>
-              <p className="text-theme-secondary">
-                No documentation file matching &ldquo;{slug}&rdquo; was found.
-              </p>
-            </div>
+        <div className="mx-auto flex w-full max-w-[76rem] gap-8 px-4 sm:px-8">
+          <div className="min-w-0 flex-1 py-8 lg:py-10 xl:max-w-3xl">
+            {content ? (
+              <>
+                {/* Provenance rail: where this page sits, how long it is, and
+                    where the file it is rendered from actually lives. */}
+                <div className="mb-8 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-theme pb-4 font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-theme-tertiary">
+                  <span>{currentDoc?.category ?? 'Documentation'}</span>
+                  <span aria-hidden>/</span>
+                  <span className="text-theme-secondary">{slug}.md</span>
+                  <span aria-hidden>·</span>
+                  <span>{readingMinutes(content)} min read</span>
+                  <a
+                    href={`${GITHUB_DOCS_URL}/${slug}.md`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-auto flex items-center gap-1.5 text-theme-tertiary transition-colors hover:text-theme-primary"
+                  >
+                    <Github className="h-3.5 w-3.5" />
+                    View source
+                  </a>
+                </div>
+
+                <DocsArticle
+                  content={content}
+                  slug={slug}
+                  idsByLine={idsByLine}
+                  onNavigateToHeading={goToHeading}
+                />
+
+                {/* Sequential navigation, in sidebar order */}
+                {(previousDoc || nextDoc) && (
+                  <nav className="mt-14 grid gap-3 border-t border-theme pt-6 sm:grid-cols-2">
+                    {previousDoc ? (
+                      <DocsPagerLink doc={previousDoc} direction="previous" />
+                    ) : (
+                      <span />
+                    )}
+                    {nextDoc && <DocsPagerLink doc={nextDoc} direction="next" />}
+                  </nav>
+                )}
+              </>
+            ) : (
+              <div className="py-20 text-center">
+                <p className="font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-signal-unknown">
+                  Not found
+                </p>
+                <h2 className="mt-3 text-xl font-semibold text-theme-primary">
+                  No document at &ldquo;{slug}&rdquo;
+                </h2>
+                <p className="mt-2 text-sm text-theme-secondary">
+                  It may have been renamed or moved. Pick a page from the sidebar to carry on.
+                </p>
+                <Link
+                  to={`/docs/${DEFAULT_SLUG}`}
+                  className="mt-6 inline-flex items-center gap-2 rounded-brand border border-theme px-4 py-2 text-sm text-theme-primary transition-colors hover:bg-theme-hover"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back to {DOC_ENTRIES[0]?.title ?? 'the docs'}
+                </Link>
+              </div>
+            )}
+          </div>
+
+          {content && (
+            <DocsToc
+              headings={tocHeadings}
+              scrollRef={scrollRef}
+              onSelect={goToHeading}
+              className="hidden xl:block"
+            />
           )}
         </div>
       </main>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pager
+// ---------------------------------------------------------------------------
+
+function DocsPagerLink({ doc, direction }: { doc: DocEntry; direction: 'previous' | 'next' }) {
+  const isNext = direction === 'next';
+  return (
+    <Link
+      to={`/docs/${doc.slug}`}
+      className={cn(
+        'flex flex-col gap-1 rounded-brand border border-theme px-4 py-3 transition-colors hover:bg-theme-hover',
+        isNext && 'sm:col-start-2 sm:text-right',
+      )}
+    >
+      <span className="font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-theme-tertiary">
+        {isNext ? 'Next' : 'Previous'}
+      </span>
+      <span
+        className={cn(
+          'flex items-center gap-1.5 text-sm font-medium text-theme-primary',
+          isNext && 'sm:justify-end',
+        )}
+      >
+        {!isNext && <ArrowLeft className="h-3.5 w-3.5 text-theme-tertiary" />}
+        {doc.title}
+        {isNext && <ArrowRight className="h-3.5 w-3.5 text-theme-tertiary" />}
+      </span>
+    </Link>
   );
 }

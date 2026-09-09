@@ -9,6 +9,7 @@ export { useLocalStorage } from './useLocalStorage';
 export { useApi, useApiOnce, type UseApiOptions } from './useApi';
 export { useWebSocket, type UseWebSocketOptions } from './useWebSocket';
 export { useCountUp } from './useCountUp';
+export { useIsDarkTheme } from './useIsDarkTheme';
 export {
   useMediaQuery,
   useIsMobile,
