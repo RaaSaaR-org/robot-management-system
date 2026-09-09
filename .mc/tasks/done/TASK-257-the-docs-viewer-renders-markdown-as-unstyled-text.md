@@ -3,7 +3,7 @@ id: "TASK-257"
 aliases: []
 title: "The docs viewer renders markdown as unstyled text"
 slug: "the-docs-viewer-renders-markdown-as-unstyled-text"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
