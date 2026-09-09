@@ -66,8 +66,14 @@ describe('the loaded registry', () => {
     expect(DOC_CONTENT.get('README')).toContain('# NeoDEM');
   });
 
-  it('opens on README outside demo mode', () => {
-    expect(DEFAULT_SLUG).toBe('README');
+  it('opens on the first entry, and README sorts ahead of the alphabetical list', () => {
+    // Asserted as an ordering rule rather than a literal slug: demo mode floats
+    // demo-intro to the front, and the test must hold in both builds.
+    const readme = DOC_ENTRIES.findIndex((e) => e.slug === 'README');
+    const api = DOC_ENTRIES.findIndex((e) => e.slug === 'api');
+    expect(readme).toBeGreaterThanOrEqual(0);
+    expect(readme).toBeLessThan(api);
+    expect(DEFAULT_SLUG).toBe(DOC_ENTRIES[0]?.slug);
   });
 
   it('lists only categories that have entries', () => {
