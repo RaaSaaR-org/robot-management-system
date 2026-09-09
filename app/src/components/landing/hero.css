@@ -1,74 +1,71 @@
-/** Physical AI hero and the stationary safety illustration. */
+/** @file hero.css — Cinematic Physical AI hero and stationary safety illustration. */
 .field-hero {
   position: relative;
+  isolation: isolate;
   overflow: hidden;
-  padding: 125px 0 28px;
-  background: #070e19;
+  padding: 145px 0 28px;
+  background: #080f18;
   color: #f1f5fc;
-}
-.field-grid {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: radial-gradient(ellipse at 80% 50%, #16444235, transparent 52%);
 }
 .field-content {
   position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+.field-content a {
+  pointer-events: auto;
 }
 .field-layout {
-  display: grid;
-  grid-template-columns: 0.95fr 1.15fr;
+  position: relative;
+  min-height: 585px;
+  display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 610px;
 }
 .field-copy {
   position: relative;
-  z-index: 1;
-  padding: 20px 0 36px;
+  padding: 18px 0 75px;
+  max-width: 610px;
 }
 .field-kicker,
-.field-caption,
 .field-footnote,
-.field-scene-footer {
+.field-scene-note {
   font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
 }
 .field-kicker {
-  color: #b3c8d7;
   display: flex;
   align-items: center;
   gap: 10px;
+  color: #b3c8d7;
   font-size: 9px;
 }
 .field-kicker > span {
-  flex-shrink: 0;
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #a2f8e2;
-  box-shadow: 0 0 16px #a2f8e2;
+  background: #b2f8df;
+  box-shadow: 0 0 14px #b2f8df80;
 }
 .field-content h1 {
   font-family: var(--font-display, "Archivo Variable", sans-serif);
-  font-size: clamp(64px, 6.4vw, 92px);
+  font-size: clamp(68px, 6.7vw, 100px);
   font-weight: 560;
-  line-height: 0.99;
+  line-height: 1.01;
   letter-spacing: -0.065em;
-  margin: 30px 0 26px;
+  margin: 30px 0 28px;
   color: #f1f5fc;
 }
 .field-lede {
   font-size: 15px;
-  line-height: 1.8;
-  color: #abbccc;
-  max-width: 365px;
+  line-height: 1.85;
+  color: #b2c3d5;
+  max-width: 355px;
 }
 .field-actions {
   display: flex;
-  align-items: flex-start;
   flex-direction: column;
+  align-items: flex-start;
   gap: 10px;
   margin-top: 29px;
 }
@@ -82,7 +79,7 @@
 }
 .field-primary {
   padding: 0 20px;
-  border-radius: 5px;
+  border-radius: 10px;
   background: #b2f8df;
   color: #0a2225;
   font-weight: 600;
@@ -94,144 +91,85 @@
   background: #d9fff1;
   color: #0a2225 !important;
 }
-.intelligence-field {
-  position: relative;
-  min-width: 0;
-  margin-right: -25px;
+.field-hero a:focus-visible {
+  outline: 2px solid #c1ffe9;
+  outline-offset: 5px;
 }
-.field-caption {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  color: #92a6bb;
-  font-size: 8px;
-  padding: 0 28px;
+.hero-universe {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 76% 42%, #153b3c65, transparent 52%);
 }
-.field-scene {
-  width: 100%;
-  height: auto;
+.hero-universe-canvas {
+  position: absolute;
+  top: 30px;
+  bottom: 10px;
+  left: 34%;
+  width: 75%;
+  mask-image: radial-gradient(ellipse at 50% 50%, #000 36%, transparent 72%);
+}
+.hero-universe-canvas canvas {
   display: block;
-  overflow: visible;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 1.6s ease;
 }
-.field-scene-footer {
+.hero-universe.is-ready canvas {
+  opacity: 1;
+}
+.hero-universe-fallback {
+  position: absolute;
+  inset: 15% 0 15% 42%;
+  display: grid;
+  place-items: center;
+  opacity: 0.35;
+}
+.hero-universe.is-ready .hero-universe-fallback {
+  opacity: 0;
+}
+.hero-universe-shade {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      90deg,
+      #080f18 1%,
+      #080f18f5 23%,
+      #080f1890 42%,
+      transparent 59%
+    ),
+    linear-gradient(0deg, #080f18, transparent 24%, transparent 85%, #080f1860);
+}
+.field-scene-note {
+  position: absolute;
+  bottom: 49px;
+  right: 0;
   display: flex;
-  justify-content: space-between;
-  color: #91aabb;
-  font-size: 9px;
-  border-top: 1px solid #9accc51c;
-  margin: 0 28px;
-  padding-top: 16px;
+  flex-direction: column;
+  gap: 9px;
+  color: #b9d4d1;
+  font-size: 10px;
+  letter-spacing: 0.025em;
+  border-left: 1px solid #b2f8df50;
+  padding-left: 16px;
 }
-.scene-drone {
-  animation: scene-arrive-air 4.8s ease-in-out both;
+.field-scene-index {
+  font-size: 8px;
+  letter-spacing: 0.13em;
+  color: #a0b7c5;
 }
-.scene-drone-hover {
-  animation: scene-hover 6s ease-in-out 4.8s infinite;
-}
-.scene-fleet {
-  animation: scene-arrive-ground 4.8s ease-out both;
-}
-.scene-humanoid-body {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: scene-idle 5.5s ease-in-out 4.8s infinite;
-}
-.scene-fleet > g:nth-child(2) .scene-humanoid-body {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation-delay: 5.5s;
-}
-.scene-fleet > g:nth-child(3) .scene-humanoid-body {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation-delay: 6.2s;
-}
-.scene-humanoid-head {
-  transform-box: fill-box;
-  transform-origin: center bottom;
-  animation: scene-look 9s ease-in-out 4.8s infinite;
-}
-.scene-fleet > g:nth-child(2) .scene-humanoid-head {
-  animation-delay: 7s;
-}
-.scene-connections {
-  animation: scene-data-flow 3s linear infinite;
-}
-.scene-atom {
-  animation: scene-atom-float 6s ease-in-out infinite;
-}
-@keyframes scene-atom-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-5px); }
-}
-.scene-core-light {
-  animation: scene-core-light 4s ease-in-out infinite;
-}
-@keyframes scene-hover {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-7px);
-  }
-}
-@keyframes scene-idle {
-  0%,
-  100% {
-    transform: rotate(0deg);
-  }
-  50% {
-    transform: rotate(0.6deg);
-  }
-}
-@keyframes scene-look {
-  0%,
-  20%,
-  80%,
-  100% {
-    transform: rotate(0deg);
-  }
-  40%,
-  60% {
-    transform: rotate(5deg);
-  }
-}
-@keyframes scene-data-flow {
-  to {
-    stroke-dashoffset: -36;
-  }
-}
-@keyframes scene-core-light {
-  0%,
-  100% {
-    opacity: 0.5;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-.scene-rover {
-  animation: scene-arrive-ground 4.8s ease-out both;
-}
-.scene-dog {
-  animation: scene-arrive-dog 4.8s ease-out both;
-}
-.scene-core {
-  animation: scene-core-reveal 4.8s ease-out both;
-}
-.scene-signal {
-  animation: scene-transmit 14s linear infinite;
-}
-.scene-rotor {
-  animation: scene-propeller 1.2s linear infinite;
+.field-scene-note small {
+  font-size: 8px;
+  color: #91a6ba;
 }
 .field-footnote {
   display: flex;
   justify-content: space-between;
   gap: 20px;
   border-top: 1px solid #ffffff13;
-  margin-top: 34px;
   padding-top: 22px;
   color: #91a6ba;
   font-size: 8px;
@@ -243,70 +181,96 @@
   font-size: 10px;
   text-align: right;
 }
-.field-hero a:focus-visible {
-  outline: 2px solid #c1ffe9;
-  outline-offset: 5px;
-}
-@keyframes scene-arrive-air {
-  0% {
-    opacity: 0;
-    transform: translate(18px, -28px);
+@media (min-width: 1600px) {
+  .hero-universe-canvas {
+    left: 38%;
+    width: 65%;
   }
-  35% {
-    opacity: 1;
-    transform: translate(0, 5px);
-  }
-  65% {
-    transform: translate(0, -5px);
-  }
-  100% {
-    transform: translate(0, 0);
+  .field-layout {
+    min-height: 665px;
   }
 }
-@keyframes scene-arrive-ground {
-  0% {
-    opacity: 0;
-    transform: translate(-28px, 14px);
+@media (max-width: 1000px) and (min-width: 701px) {
+  .field-content h1 {
+    font-size: 70px;
   }
-  65%,
-  100% {
-    opacity: 1;
-    transform: translate(0, 0);
+  .field-copy {
+    max-width: 450px;
   }
-}
-@keyframes scene-arrive-dog {
-  0% {
-    opacity: 0;
-    transform: translate(24px, 12px);
+  .hero-universe-canvas {
+    left: 28%;
+    width: 88%;
   }
-  65%,
-  100% {
-    opacity: 1;
-    transform: translate(0, 0);
+  .field-scene-note {
+    bottom: 10px;
   }
 }
-@keyframes scene-core-reveal {
-  0% {
-    opacity: 0.3;
-    transform: translateY(10px);
+@media (max-width: 700px) {
+  .field-hero {
+    padding-top: 108px;
   }
-  65%,
-  100% {
-    opacity: 1;
-    transform: translateY(0);
+  .field-layout {
+    min-height: 820px;
+    align-items: flex-start;
+  }
+  .field-copy {
+    padding: 0;
+    max-width: 100%;
+  }
+  .field-kicker {
+    font-size: 8px;
+    letter-spacing: 0.03em;
+  }
+  .field-content h1 {
+    font-size: clamp(48px, 10.7vw, 74px);
+    margin: 26px 0 22px;
+  }
+  .field-lede {
+    font-size: 14px;
+    max-width: 355px;
+  }
+  .field-actions {
+    margin-top: 22px;
+    gap: 4px;
+  }
+  .hero-universe-canvas {
+    top: 395px;
+    bottom: 60px;
+    left: -19%;
+    width: 138%;
+  }
+  .hero-universe-shade {
+    background: linear-gradient(
+      180deg,
+      #080f18 0%,
+      #080f18 37%,
+      transparent 55%,
+      transparent 82%,
+      #080f18 95%
+    );
+  }
+  .hero-universe-fallback {
+    inset: 45% 0 10%;
+  }
+  .field-scene-note {
+    left: 0;
+    right: auto;
+    bottom: 24px;
+    gap: 7px;
+  }
+  .field-footnote {
+    flex-direction: column;
+    gap: 10px;
+    line-height: 1.7;
+  }
+  .field-footnote > span:last-child {
+    text-align: left;
   }
 }
-@keyframes scene-transmit {
-  from {
-    stroke-dashoffset: 1110;
-  }
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-@keyframes scene-propeller {
-  to {
-    stroke-dashoffset: -49;
+@media (prefers-reduced-motion: reduce) {
+  .field-hero * {
+    animation: none !important;
+    transition: none !important;
   }
 }
 .safety-exhibit {
@@ -372,67 +336,7 @@
   line-height: 1.7;
   margin-top: 16px;
 }
-@media (max-width: 1000px) {
-  .field-layout {
-    grid-template-columns: 0.95fr 1fr;
-    min-height: 560px;
-  }
-  .field-content h1 {
-    font-size: clamp(55px, 7vw, 72px);
-  }
-  .field-kicker {
-    font-size: 8px;
-    letter-spacing: 0.04em;
-  }
-  .intelligence-field {
-    margin-right: -12px;
-  }
-  .field-caption {
-    font-size: 7px;
-    padding: 0 8px;
-  }
-}
 @media (max-width: 700px) {
-  .field-hero {
-    padding-top: 100px;
-  }
-  .field-layout {
-    grid-template-columns: 1fr;
-    gap: 25px;
-  }
-  .field-copy {
-    padding: 10px 0 0;
-  }
-  .field-content h1 {
-    font-size: clamp(58px, 13vw, 82px);
-    margin-top: 25px;
-  }
-  .field-lede {
-    font-size: 14px;
-    max-width: 370px;
-  }
-  .field-actions {
-    margin-top: 24px;
-    gap: 5px;
-  }
-  .intelligence-field {
-    margin: 10px -10px 0;
-  }
-  .field-caption {
-    padding: 0 10px;
-  }
-  .field-scene-footer {
-    margin: 0 10px;
-    font-size: 8px;
-  }
-  .field-footnote {
-    flex-direction: column;
-    gap: 10px;
-    line-height: 1.7;
-  }
-  .field-footnote > span:last-child {
-    text-align: left;
-  }
   .safety-exhibit {
     grid-template-columns: 1fr;
   }
@@ -444,11 +348,5 @@
   }
   .safety-evidence {
     padding: 16px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .field-hero * {
-    animation: none !important;
-    transition: none !important;
   }
 }
