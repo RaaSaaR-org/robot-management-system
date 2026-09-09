@@ -7,6 +7,14 @@
    See main.tsx for why they are self-hosted at all. */
 @import "tailwindcss";
 
+/* Typography plugin. v4 does not read tailwind.config.js unless it is pulled in
+   with @config, so registering the plugin there registered nothing: every
+   `prose` class in the app emitted zero CSS and the rendered markdown in /docs
+   and in the A2A chat came out as one unstyled 16px block. Loaded here it is
+   actually part of the build. The reading styles that sit on top of it live in
+   components/docs/docs-prose.css. */
+@plugin "@tailwindcss/typography";
+
 /* Enable class-based dark mode for Tailwind v4 (matches ThemeProvider .dark/.light on :root) */
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -468,6 +476,25 @@
   /* Theme primary background */
   .bg-theme-primary {
     background-color: var(--bg-primary);
+  }
+
+  /* Markdown rendered onto a coloured surface — chat bubbles above all. The
+     typography plugin ships its own greys, which paint dark body text onto the
+     cobalt user bubble; here the container's own text colour is the right one. */
+  .prose-inherit {
+    --tw-prose-body: inherit;
+    --tw-prose-headings: inherit;
+    --tw-prose-lead: inherit;
+    --tw-prose-links: inherit;
+    --tw-prose-bold: inherit;
+    --tw-prose-code: inherit;
+    --tw-prose-quotes: inherit;
+    --tw-prose-counters: currentColor;
+    --tw-prose-bullets: currentColor;
+    --tw-prose-hr: currentColor;
+    --tw-prose-quote-borders: currentColor;
+    --tw-prose-th-borders: currentColor;
+    --tw-prose-td-borders: currentColor;
   }
 }
 

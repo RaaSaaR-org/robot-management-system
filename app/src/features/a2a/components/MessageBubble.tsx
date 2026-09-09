@@ -48,7 +48,7 @@ function MessagePart({ part, messageId, taskId }: MessagePartProps) {
 
   if (isTextPart(part)) {
     return (
-      <div className="prose prose-sm dark:prose-invert max-w-none break-words prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0">
+      <div className="prose prose-sm prose-inherit max-w-none break-words prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0">
         <ReactMarkdown>{part.text}</ReactMarkdown>
       </div>
     );
