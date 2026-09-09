@@ -45,13 +45,6 @@ export const HeroSection = memo(function HeroSection() {
               </a>
             </div>
           </div>
-          <div className="field-scene-note" aria-hidden="true">
-            <span className="field-scene-index">
-              01 — THE INTELLIGENCE ENGINE
-            </span>
-            <span>Many forms. One connected future.</span>
-            <small>Concept visualization / not live telemetry</small>
-          </div>
         </div>
         <div className="field-footnote">
           <span>OPEN SOURCE. YOUR MODELS. YOUR HARDWARE. YOUR CONTROL.</span>

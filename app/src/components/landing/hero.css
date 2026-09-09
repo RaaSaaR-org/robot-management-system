@@ -27,8 +27,7 @@
   max-width: 610px;
 }
 .field-kicker,
-.field-footnote,
-.field-scene-note {
+.field-footnote {
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.08em;
@@ -143,28 +142,9 @@
     ),
     linear-gradient(0deg, #080f18, transparent 24%, transparent 85%, #080f1860);
 }
-.field-scene-note {
-  position: absolute;
-  bottom: 49px;
-  right: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  color: #b9d4d1;
-  font-size: 10px;
-  letter-spacing: 0.025em;
-  border-left: 1px solid #b2f8df50;
-  padding-left: 16px;
-}
-.field-scene-index {
-  font-size: 8px;
-  letter-spacing: 0.13em;
-  color: #a0b7c5;
-}
-.field-scene-note small {
-  font-size: 8px;
-  color: #91a6ba;
-}
+
+
+
 .field-footnote {
   display: flex;
   justify-content: space-between;
@@ -201,9 +181,7 @@
     left: 28%;
     width: 88%;
   }
-  .field-scene-note {
-    bottom: 10px;
-  }
+
 }
 @media (max-width: 700px) {
   .field-hero {
@@ -252,12 +230,7 @@
   .hero-universe-fallback {
     inset: 45% 0 10%;
   }
-  .field-scene-note {
-    left: 0;
-    right: auto;
-    bottom: 24px;
-    gap: 7px;
-  }
+
   .field-footnote {
     flex-direction: column;
     gap: 10px;

@@ -22,6 +22,8 @@ Replace the landing hero illustration with a professional, cinematic Three.js ba
 - [x] Reduced motion, hidden/offscreen suspension, WebGL fallback and GPU cleanup are handled.
 - [x] App build, landing tests and Playwright browser validation pass.
 
+- [x] Remove the floating hero caption/info box as requested before shipping.
+
 ## Verification
 
 - App production build (TypeScript + Vite) passed; 11 existing landing tests passed.
