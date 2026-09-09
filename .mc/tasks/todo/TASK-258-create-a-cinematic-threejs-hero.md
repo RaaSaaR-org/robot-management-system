@@ -2,7 +2,7 @@
 id: "TASK-258"
 title: "Create a cinematic Three.js hero"
 slug: "create-a-cinematic-threejs-hero"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 tags: [landing, design]
@@ -32,3 +32,7 @@ Replace the landing hero illustration with a professional, cinematic Three.js ba
 - Evidence: `/tmp/task258-final-build.log`, `/tmp/task258-final-tests.log`, `/tmp/hero-three-final-1440.png`, `/tmp/hero-three-final-390.png`; browser scripts `/tmp/neodem-mcp-255/hero-three-lifecycle.js` and `/tmp/neodem-mcp-255/hero-three-final.js`.
 - Implemented in `/tmp/neodem-hero-three`, separate from the other session's dirty primary checkout. No dependencies added. Standalone production preview on port 4494.
 - Unrelated backend/robot/Python suites skipped. Full app authentication and Docs flows are outside this decorative hero slice; the standalone preview has no configured authenticated backend.
+
+## Review
+
+PR #303 opened after clean review of `14768a61..a9bdbaab`. Caption and its CSS removed. Final production build passed after removal.
