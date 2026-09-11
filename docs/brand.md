@@ -212,12 +212,14 @@ Content      Panel(s) · DataTable · card grid
 | Step | Pattern |
 |---|---|
 | List | `DataTable` for records with ≥3 attributes; a card grid of `Panel interactive` for visual entities (robots, sites, marketplace items). Both sit under a `Toolbar` with `SearchInput` (client-side filter at minimum) and filters. |
+| Paging | A server-paged list passes `pagination={{ page, totalPages, total, noun, onPageChange }}` to `DataTable`, which renders the kit `Pager` in its footer ("Page 2 of 7 · 1,234 entries", Previous / Next; disabled while loading; hidden for one page). `Pager` alone only under a list that is not a table. Never a hand-built pager. |
 | Open | Row / card click → the detail page if one exists, else opens Edit. |
 | Row actions | `RowActions` (kebab menu): Edit, then other verbs, then a separator and **Delete** (danger) last. |
 | Create | Header primary button **"New ‹thing›"** (use "Add", "Invite", "Register", "Import", "Upload" only when that is literally the act) → `FormModal` titled "New ‹thing›", footer **Cancel** (ghost) + **Create ‹thing›** (primary). Large editors (route editors, training setup) are pages with the same header and a sticky footer bar: Cancel + Save. |
 | Edit | Same `FormModal`, prefilled, title "Edit ‹thing›", primary **Save changes**. |
 | Delete | Always `ConfirmDialog` tone `danger`: title "Delete ‹name›?", body states the consequence, confirm **Delete**. Never `window.confirm`, never a one-click delete. |
-| Feedback | `toast.success("Route created")`, `toast.error("Couldn't delete route", { description: reason })`. Field errors inline under the field via `FormField error`. Submit button shows its loading state; the form is disabled while submitting. |
+| Feedback | `toast.success("Route created")`, `toast.error("Couldn't delete route", { description: errorMessage(err) })`. Field errors inline under the field via `FormField error`; a failed request is the form-level `FormModal error={errorMessage(err)}`. Submit button shows its loading state; the form is disabled while submitting. Toasts sit bottom-right from 640px and at the top below it, so a bottom sheet's footer and a sticky dock stay reachable. |
+| Error text | Always `errorMessage(err, fallback?)`. The API client rejects with plain `{ code, message, statusCode }` objects, not `Error`s, so `err instanceof Error ? err.message : String(err)` prints "[object Object]". `errorMessage` reads a server body (`response.data.message` / `.error`), `Error.message`, `{ message }`, `{ error }` or a string, else the fallback ("Something went wrong. Try again."). |
 | Empty | `EmptyState`: icon, "No ‹things› yet", one line on what they are, and the same primary action as the header. Filtered-to-nothing shows "No ‹things› match" + Clear filters. |
 | Loading | `Skeleton` shaped like the content (rows, tiles). Never a blank area; `Spinner` only for small inline waits. |
 | Error | `ErrorState` in place of the content: "Couldn't load ‹things›", the message, **Retry**. |
@@ -238,13 +240,24 @@ styled with the tokens and sit inside kit panels.
 - **Actions:** `Button`, `LinkButton`, `RowActions` / `DropdownMenu`,
   `SegmentedControl` (+ `ToggleChip`).
 - **Forms:** `FormField`, `Input`, `SearchInput`, `Textarea`, `Select`,
-  `Checkbox`, `Switch`, `FormModal`.
+  `Checkbox`, `Switch`, `ChoiceCard` / `ChoiceCardGroup`, `FormModal`.
 - **Feedback:** `Modal`, `ConfirmDialog` / `confirm()`, `toast` / `useToast`,
-  `EmptyState`, `ErrorState`, `Skeleton` (+ `SkeletonText`, `SkeletonRows`),
-  `Spinner`, `PageLoader`, `ProgressBar`, `Tooltip` (+ `InfoIcon`).
+  `errorMessage()`, `EmptyState`, `ErrorState`, `Skeleton` (+ `SkeletonText`,
+  `SkeletonRows`), `Spinner`, `PageLoader`, `ProgressBar` (+ `indeterminate`),
+  `Tooltip` (+ `InfoIcon`).
 - **Status:** `StatusTag`, `statusTone()`, `humanizeStatus()`, `Badge`,
-  `chartColors` / `chartTheme` / `chartSeriesColor()`.
-- **Data:** `DataTable`.
+  `chartColors` / `chartTheme` / `chartSeriesColor()`, `cssColor()` /
+  `useCssColor()` (a token's value for three.js, canvas and SVG attributes).
+- **Data:** `DataTable` (+ `pagination`), `Pager`.
+- **Class strings:** `focusRing`, `focusRingInset`, `buttonClasses()`,
+  `panelClasses()`, `choiceSurface()` — for the rare element that cannot be a
+  kit component.
+
+Every test hook is optional and additive: `FormModal submitTestId` /
+`cancelTestId`, `testId` on a `DropdownMenuItem` / `RowActionItem`, on
+`confirm()` options and on `Modal` / `ConfirmDialog` (the buttons get
+`‹testId›-confirm` / `-cancel`), `data-testid` on `StatTile` and `ChoiceCard`,
+and `rowProps(row)` on `DataTable`.
 
 `FeedbackProvider` (alias `ToastProvider`: the `Toaster` plus the
 `ConfirmHost`) is mounted once in `App.tsx`, around every route. Pages never
@@ -265,7 +278,7 @@ the same barrel (`ButtonProps`, `DataTableColumn<T>`, …).
 | `Panel.Header` | `title` (Archivo 16px) · `description` · `eyebrow` · `actions` · `titleAs` `h2` · `h3` · `borderless` |
 | `Panel.Body`, `Panel.Footer` | div attributes; they pad themselves (the footer right-aligns its buttons) |
 | `panelClasses({ variant?, interactive?, padding? })` | the panel's class string, for elements that cannot be a `Panel` |
-| `StatTile` | `label` · `value` · `unit` · `hint` · `tone` (any `Tone`) · `icon` · `trend={{ value, direction: 'up'\|'down'\|'flat', sentiment?: 'positive'\|'negative'\|'neutral' }}` · `progress` (0–100) · `isLoading` |
+| `StatTile` | `label` · `value` · `unit` · `hint` · `tone` (any `Tone`) · `icon` · `trend={{ value, direction: 'up'\|'down'\|'flat', sentiment?: 'positive'\|'negative'\|'neutral' }}` · `progress` (0–100) · `isLoading` · `data-testid` |
 | `StatRow` | `columns` 2–6 (default: the number of tiles; 2-up on phones) |
 | `Toolbar` | `search` (grows) · `filters` · `actions` (pushed right) · or free `children` |
 | `KeyValueList` | `items: { label, value, mono?, key? }[]` (an empty value renders "—") · `columns` 1–3 (default 2) |
@@ -283,7 +296,7 @@ the same barrel (`ButtonProps`, `DataTableColumn<T>`, …).
 | `LinkButton` | a router `Link` styled as a `Button`: `to` + `variant` · `size` · `iconOnly` · `leftIcon` · `rightIcon` · `fullWidth` |
 | `DropdownMenu` | `trigger` (an element, usually a `Button`) · `items` · `align` `start` · `end` (default `end`) · `label`. Portalled; arrow keys, Home/End, Esc with focus return |
 | `RowActions` | a kebab `Button` plus a `DropdownMenu`: `items` · `label` (default "More actions") · `align` · `size` |
-| item shape (`DropdownMenuItem` = `RowActionItem`) | `{ label, onSelect, icon?, tone?: 'danger'\|'default', disabled?, separatorBefore?, key? }`. Delete goes last, `tone: 'danger'`, `separatorBefore: true` |
+| item shape (`DropdownMenuItem` = `RowActionItem`) | `{ label, onSelect, icon?, tone?: 'danger'\|'default', disabled?, separatorBefore?, key?, testId? }`. Delete goes last, `tone: 'danger'`, `separatorBefore: true` |
 | `SegmentedControl<T>` | `options: { value, label, title?, disabled? }[]` · `value` · `onChange` · `label` · `size` `sm` · `md` |
 | `ToggleChip` | `active` · `onClick` · `title` · `disabled` · `size` `sm` · `md` |
 | `MenuButton` | legacy hamburger: `isOpen` · `onClick` · `label` |
@@ -299,16 +312,20 @@ the same barrel (`ButtonProps`, `DataTableColumn<T>`, …).
 | `Select` | `options: { value, label, disabled? }[]` (or `<option>` children) · `placeholder` (an empty first option) · `size` · `invalid` · `fullWidth` (default true; `false` in toolbars) · `className` on the wrapper (width lives there) · `selectClassName` on the `<select>` |
 | `Checkbox` | all input attributes · `label` · `description` · `invalid` |
 | `Switch` | `checked` · `onCheckedChange(checked)` · `label` · `description` · `size` `sm` · `md` · `labelPosition` `left` · `right` |
-| `FormModal` | `isOpen` · `onClose` · `title` · `description` · `onSubmit(event)` (default already prevented; may return a promise) · `submitLabel` · `submittingLabel` · `cancelLabel` · `isSubmitting` (disables every field, blocks Esc) · `submitDisabled` · `submitVariant` `primary` · `danger` · `error` (form-level) · `size` · `closeOnBackdrop` (default false) · `noValidate` |
+| `FormModal` | `isOpen` · `onClose` · `title` · `description` · `onSubmit(event)` (default already prevented; may return a promise) · `submitLabel` · `submittingLabel` · `cancelLabel` · `isSubmitting` (disables every field, blocks Esc) · `submitDisabled` · `submitVariant` `primary` · `danger` · `error` (form-level; `errorMessage(err)`) · `size` · `closeOnBackdrop` (default false) · `noValidate` · `submitTestId` · `cancelTestId` |
+| `ChoiceCard` | one selectable card (an `aria-pressed` button): `selected` · `onSelect` · `title` · `description` · `aside` (a `StatusTag`: Beta, Ready) · `disabled` · `data-testid`. For one of a few options that each need a line of explanation; short options use `SegmentedControl` |
+| `ChoiceCardGroup` | the labelled grid around them: `label` (required, the group's name) · `columns` 1–4 from 640px (default 2; one column on phones) |
+| `choiceSurface(selected)` | the card's border and tint, for a custom selectable row (a multi-select list) |
 
 **Feedback**
 
 | Export | Props |
 |---|---|
-| `Modal` | `isOpen` · `onClose` · `title` · `description` · `footer` (right-aligned buttons) · `size` `sm` · `md` · `lg` · `xl` · `full` · `closeOnBackdrop` · `closeOnEscape` · `showCloseButton` · `bodyClassName` · `initialFocusRef` · `role` `dialog` · `alertdialog` · `onSubmit` (the panel becomes a `<form>`) · `noValidate`. Focus trap, Esc, focus return, scroll lock, nested stacking; a bottom sheet below 640px |
-| `ConfirmDialog` | `isOpen` · `onClose` · `onConfirm` (a returned promise shows loading) · `title` · `description` · `children` · `confirmLabel` (default "Delete" for danger, else "Confirm") · `cancelLabel` · `tone` `danger` · `default` · `isLoading` |
-| `confirm(options)` | imperative: `await confirm({ title, description?, confirmLabel?, cancelLabel?, tone? })` resolves `true`/`false`. The usual way to confirm a delete |
-| `toast` / `useToast()` | `toast(title, options?)`, `toast.success` · `.error` · `.warning` · `.info`, `toast.dismiss(id?)`. Options: `description` · `tone` · `duration` (ms, `null` = sticky; default 5000, errors 8000) · `id` (reusing one replaces that toast) · `action: { label, onClick }`. Each call returns the toast id |
+| `Modal` | `isOpen` · `onClose` · `title` · `description` · `footer` (right-aligned buttons) · `size` `sm` · `md` · `lg` · `xl` · `full` · `closeOnBackdrop` · `closeOnEscape` · `showCloseButton` · `bodyClassName` · `initialFocusRef` · `role` `dialog` · `alertdialog` · `onSubmit` (the panel becomes a `<form>`; the page reload is prevented before it runs) · `noValidate` · `testId`. Focus trap, Esc, focus return, scroll lock, nested stacking; a bottom sheet below 640px |
+| `ConfirmDialog` | `isOpen` · `onClose` · `onConfirm` (a returned promise shows loading) · `title` · `description` · `children` · `confirmLabel` (default "Delete" for danger, else "Confirm") · `cancelLabel` · `tone` `danger` · `default` · `isLoading` · `testId`. One `alertdialog` element, no `dialog` around it |
+| `confirm(options)` | imperative: `await confirm({ title, description?, confirmLabel?, cancelLabel?, tone?, testId? })` resolves `true`/`false`. The usual way to confirm a delete |
+| `toast` / `useToast()` | `toast(title, options?)`, `toast.success` · `.error` · `.warning` · `.info`, `toast.dismiss(id?)`. Options: `description` · `tone` · `duration` (ms, `null` = sticky; default 5000, errors 8000) · `id` (reusing one replaces that toast) · `action: { label, onClick }`. Each call returns the toast id. Errors are `role="alert"`, every other tone `role="status"`. Bottom-right from 640px, top of the screen below it |
+| `errorMessage(err, fallback?)` | the readable text of any rejection, for toast descriptions and form errors (see §4 "Error text"). `ERROR_MESSAGE_FALLBACK` is the default fallback |
 | `dismissToast(id?)`, `getToasts()`, `TOAST_DURATION`, `TOAST_ERROR_DURATION` | helpers for tests and edge cases |
 | `FeedbackProvider` / `ToastProvider`, `Toaster`, `ConfirmHost` | the hosts; already mounted once in `App.tsx` |
 | `EmptyState` | `icon` · `title` · `description` · `action` · `secondaryAction` · `size` `sm` · `md` · `lg` |
@@ -316,9 +333,9 @@ the same barrel (`ButtonProps`, `DataTableColumn<T>`, …).
 | `Skeleton` | `className` sets size and shape ("h-4 w-32") |
 | `SkeletonText` | `lines` (default 3) |
 | `SkeletonRows` | `rows` (default 5) · `columns` (default 4) · `dense` |
-| `Spinner` | `size` `xs` … `xl` · `color` `current` (default) · `primary` · `accent` (legacy `cobalt` / `turquoise` / `white` still map) · `label` |
+| `Spinner` | `size` `xs` … `xl` · `color` `current` (default) · `primary` · `accent` (legacy `cobalt` / `turquoise` / `white` still map while auth, a2a and processes pass them; deprecated) · `label` |
 | `PageLoader` | `message` |
-| `ProgressBar` | `value` · `max` · `variant` `default` · `success` · `info` · `warning` · `error` · `label` · `showValue` · `size` `sm` · `md` |
+| `ProgressBar` | `value` · `max` · `variant` `default` · `success` · `info` · `warning` · `error` · `label` · `showValue` · `size` `sm` · `md` · `indeterminate` (a sliding segment, no value or percentage, for work with no known end) |
 | `Tooltip` | `content` · `children` (the trigger) · `side` `top` · `bottom` · `left` · `right` (flips) · `maxWidth` (default 260). Portalled, so panels and tables cannot clip it |
 | `InfoIcon` | a lucide `Info` icon with a `Tooltip`: `content` · `side` · `size` · `label` · `maxWidth` |
 | `NextStepBanner` | `title` · `description` · `ctaLabel` · `ctaHref` · `icon` · `variant` `default` · `subtle` |
@@ -335,23 +352,47 @@ the same barrel (`ButtonProps`, `DataTableColumn<T>`, …).
 | `chartColors` | CSS var strings: `primary` · `accent` · `measured` · `estimated` · `unknown` · `stopped` · `series[6]` · `grid` · `axis` · `tick` · `label` · `muted` · `surface` · `tooltipBg` · `tooltipBorder` · `tooltipText` |
 | `chartTheme` | recharts props to spread: `grid` · `xAxis` · `yAxis` · `tooltip` · `legend` |
 | `chartSeriesColor(i)` | the i-th categorical colour (wraps; red last) |
+| `cssColor(name, fallback?)`, `useCssColor(name, fallback?)` | a token's resolved value (`cssColor('--color-primary')`) for renderers that cannot read `var(…)`: three.js materials, canvas, SVG attributes set from code. The hook re-reads when the theme changes |
 
 **Data**
 
 | Export | Props |
 |---|---|
-| `DataTable<T>` | `columns` · `rows` · `getRowId` · `onRowClick` (rows become focusable, Enter opens) · `rowActions(row)` (a trailing `RowActions` kebab) · `rowActionsLabel(row)` · `isLoading` (skeleton rows until the first rows arrive) · `skeletonRows` · `error` + `errorTitle` + `onRetry` (an `ErrorState`) · `empty` (usually an `EmptyState`) · `dense` · `caption` · `defaultSort` or `sort` + `onSortChange` · `rowClassName(row)`. Scrolls horizontally inside its container |
+| `DataTable<T>` | `columns` · `rows` · `getRowId` · `onRowClick` (rows become focusable, Enter opens) · `rowActions(row)` (a trailing `RowActions` kebab) · `rowActionsLabel(row)` · `isLoading` (skeleton rows until the first rows arrive) · `skeletonRows` · `error` + `errorTitle` + `onRetry` (an `ErrorState`) · `empty` (usually an `EmptyState`) · `dense` · `caption` · `defaultSort` or `sort` + `onSortChange` · `rowClassName(row)` · `rowProps(row)` (extra `<tr>` attributes: `data-testid`, `data-*`, `title`) · `pagination` (the `Pager` props; renders it in the footer, outside the scroll area, and keeps it under an empty page; `disabled` defaults to `isLoading`). Scrolls horizontally inside its container |
 | column (`DataTableColumn<T>`) | `{ key, header, cell?(row, i), align?: 'left'\|'right'\|'center', width?, sortable?, sortValue?(row), hideBelow?: 'sm'\|'md'\|'lg', className? }`; without `cell` it renders `row[key]` |
+| `Pager` | `page` (1-based) · `totalPages` · `total` · `noun` + `nounPlural` ("entry" / "entries"; without a noun the total reads "57 total") · `onPageChange(page)` · `disabled` · `showSinglePage` (keep it, and the total, on one page) · `label` (landmark name, default "Pagination"). A `nav` with "Page x of y · total" and Previous / Next; renders nothing for one page |
+
+**Class strings**
+
+| Export | Use |
+|---|---|
+| `focusRing`, `focusRingInset` | the kit's focus-visible outline (inset for rows and flush list items), for an element that is not a kit component |
 
 Put a `DataTable` in `<Panel padding="none">` so it runs flush to the panel's
 edges.
 
-`statusTone` map: success — online, active, running, completed, succeeded,
-healthy, deployed, approved, connected, ready, published; info — busy, queued,
-in_progress, training, recording, syncing, rolling_out; warning — charging,
-degraded, paused, pending, pending_review, warning, stale, draft_review;
-danger — error, failed, stopped, estop, e-stop, critical, rejected, blocked,
-fault; neutral — offline, idle, draft, archived, cancelled, unknown (fallback).
+`statusTone` map (amber means unknown or needs attention, red means stopped or
+a fault):
+
+- success — online, active, running, completed, succeeded, healthy, deployed,
+  approved, connected, ready, published; done (runs), production
+  (deployments), resolved, closed (incidents), sent, acknowledged
+  (notifications).
+- info — busy, queued, in_progress, training, recording, syncing, rolling_out;
+  working, submitted (A2A tasks), canary (deployments), investigating,
+  contained (incidents being worked on).
+- warning — charging, degraded, paused, pending, pending_review, warning,
+  stale, draft_review; aborted, abandoned (runs), input_required (A2A),
+  rolling_back, rolled_back (deployments), detected (a new incident), medium
+  (severity), overdue (notifications).
+- danger — error, failed, stopped, estop, e-stop, critical, rejected, blocked,
+  fault; high (severity).
+- neutral — offline, idle, draft, archived, cancelled, canceled, unknown
+  (fallback); low, info (severities), deprecated (deployments).
+
+A feature keeps its own map only where its word means something else (a
+compliance legal hold that is `active` needs attention; a patrol leg that is
+`pending` is calm), and says so next to the map.
 
 A dev-only `/design-system` route renders every primitive in every state.
 
