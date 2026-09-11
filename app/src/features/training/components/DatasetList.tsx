@@ -1,229 +1,240 @@
 /**
  * @file DatasetList.tsx
- * @description Grid list of datasets with filters and mixture selection
+ * @description Dataset table: search, status and synthetic filters, row actions and the four list states
  * @feature training
  */
 
-import { useState } from 'react';
-import { Input, Spinner, EmptyState, Button } from '@/shared/components/ui';
-import { DatasetCard } from './DatasetCard';
-import type { Dataset, DatasetStatus } from '../types';
+import { useMemo, useState, type ReactNode } from 'react';
+import { Database, Search } from 'lucide-react';
+import {
+  Button,
+  DataTable,
+  EmptyState,
+  Panel,
+  SearchInput,
+  Select,
+  StatusTag,
+  ToggleChip,
+  Toolbar,
+  Tooltip,
+  type DataTableColumn,
+  type RowActionItem,
+} from '@/shared/components/ui';
+import { datasetShape } from '../types';
+import type { Dataset, DatasetStatus, RobotType } from '../types';
+import { DatasetNameCell } from './datasets/DatasetNameCell';
+import { formatCount, formatDuration, formatRelative } from './datasets/datasetFormat';
 
 export interface DatasetListProps {
   datasets: Dataset[];
   isLoading?: boolean;
-  selectedId?: string;
+  /** The list failed to load. */
+  error?: string | null;
+  onRetry?: () => void;
+  /** Robot types by id, to name the robot-type column. */
+  robotTypes?: RobotType[];
+  /** Opens a row. Only ready rows open. */
   onSelect?: (dataset: Dataset) => void;
-  onViewEpisodes?: (dataset: Dataset) => void;
-  onDelete?: (dataset: Dataset) => void;
-  onRetryImport?: (dataset: Dataset) => void;
+  /** The actions of one row, in menu order. */
+  rowActions?: (dataset: Dataset) => RowActionItem[];
+  /** Extra filters from the page (robot type), placed after the status filter. */
+  extraFilters?: ReactNode;
   /**
-   * Fork a frozen view again. A frozen view cannot be edited, so its card
-   * offers this instead of a delete control it would only be refused for.
-   */
-  onDuplicateView?: (dataset: Dataset) => void;
-  showFilters?: boolean;
-  /**
-   * A filter outside this component (the page's robot-type / skill selects) is
-   * narrowing `datasets`. Without it an empty list is indistinguishable from an
-   * empty database, and the page told people to import their first dataset when
-   * they already had eleven.
+   * A filter outside this component narrows `datasets`. Without it an empty
+   * list is indistinguishable from an empty database.
    */
   filtersActive?: boolean;
-  /** Ids currently picked for a training mixture. Enables the checkboxes. */
-  selectedIds?: string[];
-  onToggleSelection?: (dataset: Dataset) => void;
-  onClearSelection?: () => void;
-  onPrepareTraining?: () => void;
-  /** How many datasets one comparison takes. Reached, it is said out loud. */
-  maxSelection?: number;
+  /** Clears the page's own filters as part of "Clear filters". */
+  onClearFilters?: () => void;
+  /** The primary action shown in the first-run empty state. */
+  emptyAction?: ReactNode;
 }
 
-const statusOptions: { value: DatasetStatus | 'all'; label: string }[] = [
-  { value: 'all', label: 'All Status' },
-  { value: 'ready', label: 'Ready' },
-  { value: 'importing', label: 'Importing' },
-  { value: 'validating', label: 'Validating' },
-  { value: 'uploading', label: 'Uploading' },
-  { value: 'failed', label: 'Failed' },
-];
+const STATUS_ORDER: DatasetStatus[] = ['ready', 'importing', 'validating', 'uploading', 'failed'];
+const STATUS_LABEL: Record<DatasetStatus, string> = {
+  ready: 'Ready',
+  importing: 'Importing',
+  validating: 'Validating',
+  uploading: 'Uploading',
+  failed: 'Failed',
+};
 
-/**
- * Grid list of datasets with search and filters
- */
 export function DatasetList({
   datasets,
   isLoading,
-  selectedId,
+  error,
+  onRetry,
+  robotTypes = [],
   onSelect,
-  onViewEpisodes,
-  onDelete,
-  onRetryImport,
-  onDuplicateView,
-  showFilters = true,
+  rowActions,
+  extraFilters,
   filtersActive = false,
-  selectedIds,
-  onToggleSelection,
-  onClearSelection,
-  onPrepareTraining,
-  maxSelection,
+  onClearFilters,
+  emptyAction,
 }: DatasetListProps) {
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<DatasetStatus | 'all'>('all');
+  const [status, setStatus] = useState<DatasetStatus | ''>('');
+  const [syntheticOnly, setSyntheticOnly] = useState(false);
 
-  const selectable = !!onToggleSelection;
-  const selection = selectedIds ?? [];
+  const byId = useMemo(() => new Map(datasets.map((d) => [d.id, d])), [datasets]);
+  const typeName = useMemo(() => new Map(robotTypes.map((t) => [t.id, t.name])), [robotTypes]);
+  const hasSynthetic = datasets.some((d) => d.infoJson?._synthetic);
 
-  // A view's card says "142 of 400 episodes", and the 400 lives on the parent
-  // row — which this list already holds. Resolved here rather than fetched, and
-  // never by walking `parentDatasetId` any further than one hop: composing a
-  // chain is `DatasetViewService.resolve`'s job, on the server, alone.
-  const byId = new Map(datasets.map((dataset) => [dataset.id, dataset]));
-  const parentOf = (dataset: Dataset) => {
-    const parent = dataset.parentDatasetId ? byId.get(dataset.parentDatasetId) : undefined;
-    return parent
-      ? { id: parent.id, name: parent.name, demonstrationCount: parent.demonstrationCount }
-      : null;
+  const statusOptions = useMemo(
+    () =>
+      STATUS_ORDER.map((s) => ({
+        value: s,
+        label: `${STATUS_LABEL[s]} (${datasets.filter((d) => d.status === s).length})`,
+      })),
+    [datasets],
+  );
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return datasets.filter(
+      (d) =>
+        (!status || d.status === status) &&
+        (!syntheticOnly || d.infoJson?._synthetic) &&
+        (!q || d.name.toLowerCase().includes(q) || d.description?.toLowerCase().includes(q)),
+    );
+  }, [datasets, search, status, syntheticOnly]);
+
+  const parentOf = (d: Dataset) => {
+    const p = d.parentDatasetId ? byId.get(d.parentDatasetId) : undefined;
+    return p ? { id: p.id, name: p.name, demonstrationCount: p.demonstrationCount } : null;
   };
 
-  const filteredDatasets = datasets.filter((dataset) => {
-    // Search filter
-    if (search) {
-      const searchLower = search.toLowerCase();
-      if (
-        !dataset.name.toLowerCase().includes(searchLower) &&
-        !dataset.description?.toLowerCase().includes(searchLower)
-      ) {
-        return false;
-      }
-    }
+  const robotLabel = (d: Dataset) =>
+    d.robotType?.name ?? typeName.get(d.robotTypeId) ?? datasetShape(d).robotType ?? '—';
 
-    // Status filter
-    if (statusFilter !== 'all' && dataset.status !== statusFilter) {
-      return false;
-    }
+  const columns: DataTableColumn<Dataset>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      sortable: true,
+      sortValue: (d) => d.name.toLowerCase(),
+      cell: (d) => <DatasetNameCell dataset={d} parent={parentOf(d)} />,
+    },
+    { key: 'robot', header: 'Robot type', hideBelow: 'md', sortable: true, sortValue: robotLabel, cell: robotLabel },
+    {
+      key: 'demonstrationCount',
+      header: 'Episodes',
+      align: 'right',
+      sortable: true,
+      cell: (d) => formatCount(d.demonstrationCount),
+    },
+    {
+      key: 'totalDuration',
+      header: 'Duration',
+      align: 'right',
+      sortable: true,
+      hideBelow: 'sm',
+      cell: (d) => formatDuration(d.totalDuration),
+    },
+    {
+      key: 'totalFrames',
+      header: 'Frames',
+      align: 'right',
+      sortable: true,
+      hideBelow: 'lg',
+      cell: (d) => formatCount(d.totalFrames),
+    },
+    { key: 'status', header: 'Status', sortable: true, cell: (d) => <DatasetStatusCell dataset={d} /> },
+    {
+      key: 'updatedAt',
+      header: 'Updated',
+      align: 'right',
+      sortable: true,
+      hideBelow: 'md',
+      sortValue: (d) => new Date(d.updatedAt),
+      cell: (d) => <span className="whitespace-nowrap">{formatRelative(d.updatedAt)}</span>,
+    },
+  ];
 
-    return true;
-  });
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <Spinner size="lg" label="Loading datasets..." />
-      </div>
-    );
-  }
-
-  const narrowed = filtersActive || !!search || statusFilter !== 'all';
+  const narrowed = filtersActive || Boolean(search || status || syntheticOnly);
+  const clearAll = () => {
+    setSearch('');
+    setStatus('');
+    setSyntheticOnly(false);
+    onClearFilters?.();
+  };
 
   return (
-    <div className="space-y-4">
-      {showFilters && (
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="flex-1">
-            <Input
-              placeholder="Search datasets..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full"
+    <div className="flex flex-col gap-4">
+      <Toolbar
+        search={<SearchInput value={search} onChange={setSearch} placeholder="Search datasets" />}
+        filters={
+          <>
+            <Select
+              aria-label="Status"
+              fullWidth={false}
+              className="w-40"
+              placeholder="All statuses"
+              options={statusOptions}
+              value={status}
+              onChange={(e) => setStatus(e.target.value as DatasetStatus | '')}
             />
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            {statusOptions.map((option) => (
-              <button
-                key={option.value}
-                onClick={() => setStatusFilter(option.value)}
-                className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
-                  statusFilter === option.value
-                    ? 'bg-primary text-on-primary'
-                    : 'bg-theme-secondary/20 text-theme-secondary hover:bg-theme-secondary/30'
-                }`}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {filteredDatasets.length === 0 ? (
-        narrowed ? (
-          <EmptyState
-            title="No datasets match your filters."
-            description="Clear a filter to see the rest."
-          />
-        ) : (
-          <EmptyState
-            icon={
-              <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M4 7c0-2 1-3 3-3h10c2 0 3 1 3 3M4 7h16M9 12h6" />
-              </svg>
-            }
-            title="No datasets yet"
-            description={
-              <>
-                Datasets are the fuel for training VLA models. Start by{' '}
-                <strong className="text-theme-secondary">uploading your own</strong>,{' '}
-                <strong className="text-theme-secondary">importing from HuggingFace</strong>, or{' '}
-                <strong className="text-theme-secondary">exporting a teleoperation session</strong>.
-              </>
-            }
-          />
-        )
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredDatasets.map((dataset) => (
-            <DatasetCard
-              key={dataset.id}
-              dataset={dataset}
-              selected={dataset.id === selectedId}
-              selectable={selectable}
-              checked={selection.includes(dataset.id)}
-              onToggleChecked={onToggleSelection ? () => onToggleSelection(dataset) : undefined}
-              onClick={() => onSelect?.(dataset)}
-              onViewEpisodes={onViewEpisodes ? () => onViewEpisodes(dataset) : undefined}
-              onDelete={onDelete ? () => onDelete(dataset) : undefined}
-              onRetryImport={onRetryImport ? () => onRetryImport(dataset) : undefined}
-              parent={parentOf(dataset)}
-              onDuplicateView={onDuplicateView ? () => onDuplicateView(dataset) : undefined}
-            />
-          ))}
-        </div>
-      )}
-
-      {showFilters && datasets.length > 0 && (
-        <div className="text-sm text-theme-tertiary">
-          Showing {filteredDatasets.length} of {datasets.length} datasets
-        </div>
-      )}
-
-      {/* Sticky because the selection is made by scrolling through a grid: the
-          action has to stay where the eye already is. */}
-      {selectable && selection.length > 0 && (
-        <div
-          data-testid="mixture-action-bar"
-          className="sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cobalt-500/40 bg-theme-card/95 px-4 py-3 shadow-lg backdrop-blur"
-        >
-          <span className="text-sm text-theme-primary">
-            <span className="font-semibold">{selection.length} selected</span>
-            {selection.length === 1 && ' — pick another to compare them'}
-            {maxSelection !== undefined && selection.length >= maxSelection &&
-              ` — ${maxSelection} is the most one comparison takes`}
-          </span>
-          <div className="flex gap-2">
-            {onClearSelection && (
-              <Button variant="ghost" size="sm" onClick={onClearSelection}>
-                Clear
-              </Button>
+            {extraFilters}
+            {(hasSynthetic || syntheticOnly) && (
+              <ToggleChip active={syntheticOnly} onClick={() => setSyntheticOnly((v) => !v)}>
+                Synthetic only
+              </ToggleChip>
             )}
-            {onPrepareTraining && (
-              <Button size="sm" onClick={onPrepareTraining}>
-                Prepare training run
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
+          </>
+        }
+      />
+      <Panel padding="none">
+        <DataTable
+          caption="Datasets"
+          columns={columns}
+          rows={filtered}
+          getRowId={(d) => d.id}
+          defaultSort={{ key: 'updatedAt', direction: 'desc' }}
+          onRowClick={onSelect ? (d) => { if (d.status === 'ready') onSelect(d); } : undefined}
+          rowClassName={(d) => (d.status === 'ready' ? undefined : 'cursor-default')}
+          rowActions={rowActions}
+          rowActionsLabel={(d) => `Actions for ${d.name}`}
+          isLoading={isLoading}
+          error={error ?? null}
+          errorTitle="Couldn't load datasets"
+          onRetry={onRetry}
+          empty={
+            narrowed ? (
+              <EmptyState
+                icon={<Search />}
+                title="No datasets match"
+                description="Try another name, or clear the filters."
+                action={<Button variant="secondary" onClick={clearAll}>Clear filters</Button>}
+              />
+            ) : (
+              <EmptyState
+                icon={<Database />}
+                title="No datasets yet"
+                description="Upload LeRobot files, import one from Hugging Face, or package a recording session."
+                action={emptyAction}
+              />
+            )
+          }
+        />
+      </Panel>
     </div>
   );
+}
+
+/** Status tag; an import in flight shows its bar, a failed one says why on hover. */
+function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
+  if (dataset.status === 'importing' || dataset.status === 'uploading') {
+    return <StatusTag status={dataset.status} dot pulse />;
+  }
+  const err = dataset.importError;
+  if (dataset.status === 'failed' && err) {
+    return (
+      <Tooltip content={`Import failed during ${err.phase}: ${err.error}`}>
+        <span data-testid="dataset-import-error" className="inline-flex">
+          <StatusTag status="failed" dot />
+        </span>
+      </Tooltip>
+    );
+  }
+  return <StatusTag status={dataset.status} dot />;
 }

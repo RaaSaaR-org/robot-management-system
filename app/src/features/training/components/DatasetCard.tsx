@@ -19,11 +19,12 @@ import {
   Lock,
   Copy,
 } from 'lucide-react';
-import { Card, Badge, Button } from '@/shared/components/ui';
+import { Button, Checkbox, Panel, StatusTag } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api/trainingApi';
 import { datasetShape, describeSelectionOrigin, isDatasetView } from '../types';
-import type { Dataset, DatasetParentSummary, DatasetStatus } from '../types';
+import type { Dataset, DatasetParentSummary } from '../types';
+import { formatDuration } from './datasets/datasetFormat';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface DatasetCardProps {
@@ -52,22 +53,6 @@ export interface DatasetCardProps {
   onToggleChecked?: () => void;
   className?: string;
 }
-
-const statusColors: Record<DatasetStatus, string> = {
-  uploading: 'bg-blue-100 text-blue-800',
-  importing: 'bg-purple-100 text-purple-800',
-  validating: 'bg-yellow-100 text-yellow-800',
-  ready: 'bg-green-100 text-green-800',
-  failed: 'bg-red-100 text-red-800',
-};
-
-const statusLabels: Record<DatasetStatus, string> = {
-  uploading: 'Uploading',
-  importing: 'Importing',
-  validating: 'Validating',
-  ready: 'Ready',
-  failed: 'Failed',
-};
 
 /**
  * Card component for displaying dataset summary
@@ -128,17 +113,17 @@ export function DatasetCard({
   };
 
   return (
-    <Card
+    <Panel
+      padding="none"
       onClick={onClick}
       interactive={!!onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
       onKeyDown={onClick ? handleKeyDown : undefined}
       className={cn(
-        'overflow-hidden transition-all',
-        onClick && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500',
-        selected && 'ring-2 ring-cobalt-500',
-        checked && 'ring-2 ring-cobalt-400',
+        'flex flex-col transition-colors',
+        onClick && 'cursor-pointer outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
+        (selected || checked) && 'border-primary',
         className
       )}
     >
@@ -146,62 +131,48 @@ export function DatasetCard({
           Synthetic datasets show a video preview; everything else a neutral
           placeholder. */}
       {showThumb ? <SyntheticThumb datasetId={dataset.id} /> : <PlaceholderThumb />}
-      <Card.Body>
+      <div className="flex flex-col p-5">
         <div className="flex items-start justify-between gap-2">
           {selectable && (
-            <label
-              className="mt-1 flex shrink-0 items-center"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <input
-                type="checkbox"
+            <span className="mt-0.5 flex shrink-0" onClick={(e) => e.stopPropagation()}>
+              <Checkbox
                 checked={!!checked}
                 onChange={() => onToggleChecked?.()}
                 aria-label={`Select ${dataset.name} for a training mixture`}
-                className="h-4 w-4"
               />
-            </label>
+            </span>
           )}
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-theme-primary truncate">{dataset.name}</h3>
+            <h3 className="truncate text-sm font-semibold text-ink-primary">{dataset.name}</h3>
             {dataset.description && (
-              <p className="text-sm text-theme-secondary mt-1 line-clamp-2">
+              <p className="mt-1 line-clamp-2 text-[13px] text-ink-secondary">
                 {dataset.description}
               </p>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {isView && (
-              <Badge
+              <StatusTag
+                tone="accent"
                 data-testid="dataset-view-badge"
-                variant="cobalt"
-                size="sm"
-                className="gap-1"
                 title="A view — a named episode selection over another dataset. No files were copied."
               >
-                <GitFork className="h-3 w-3" />
-                View
-              </Badge>
+                <GitFork className="h-3 w-3" strokeWidth={1.75} /> View
+              </StatusTag>
             )}
             {isFrozen && (
-              <span
+              <StatusTag
+                tone="gated"
                 data-testid="dataset-view-frozen"
                 title="Frozen — a training run cites this selection, so it can no longer be edited"
-                className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-xs font-medium text-amber-400"
               >
-                <Lock className="h-3 w-3" />
-                Frozen
-              </span>
+                <Lock className="h-3 w-3" strokeWidth={1.75} /> Frozen
+              </StatusTag>
             )}
             {isSynthetic && !showThumb && (
-              <Badge variant="purple" size="sm" className="gap-1" title="Synthetic — generated with NVIDIA Cosmos 3">
-                <Sparkles className="h-3 w-3" />
-                Synthetic
-              </Badge>
+              <StatusTag tone="sim" title="Synthetic — generated with NVIDIA Cosmos 3">Synthetic</StatusTag>
             )}
-            <Badge className={statusColors[dataset.status] ?? 'bg-theme-elevated text-theme-secondary'}>
-              {statusLabels[dataset.status] ?? dataset.status ?? 'Unknown'}
-            </Badge>
+            <StatusTag status={dataset.status ?? 'unknown'} dot />
           </div>
         </div>
 
@@ -212,15 +183,15 @@ export function DatasetCard({
         {isView && (
           <div
             data-testid="dataset-view-origin"
-            className="mt-3 rounded-md bg-cobalt-500/5 px-3 py-2 text-sm text-theme-secondary"
+            className="mt-3 rounded-control bg-inset px-3 py-2 text-[13px] text-ink-secondary"
           >
             <p className="truncate">
               Fork of{' '}
-              <span className="font-medium text-theme-primary">
+              <span className="font-medium text-ink-primary">
                 {viewParent?.name ?? 'another dataset'}
               </span>
             </p>
-            <p className="mt-0.5 text-theme-tertiary">
+            <p className="mt-0.5 text-ink-tertiary">
               {viewParent?.demonstrationCount !== undefined
                 ? `${selectedEpisodes} of ${viewParent.demonstrationCount} episodes`
                 : `${selectedEpisodes} episodes selected`}
@@ -235,14 +206,14 @@ export function DatasetCard({
         {importError && (
           <div
             data-testid="dataset-import-error"
-            className="mt-3 rounded-md bg-red-50 dark:bg-red-500/10 px-3 py-2 text-sm text-red-800 dark:text-red-300"
+            className="mt-3 rounded-control border border-signal-stopped/40 bg-inset px-3 py-2 text-[13px] text-ink-secondary"
           >
             <div className="flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-signal-stopped" strokeWidth={1.75} />
               <div className="min-w-0">
-                <span className="font-medium">Import failed during {importError.phase}</span>
+                <span className="font-medium text-ink-primary">Import failed during {importError.phase}</span>
                 <p className="mt-0.5 break-words">{importError.error}</p>
-                <p className="mt-0.5 text-xs opacity-80">
+                <p className="mt-0.5 text-xs text-ink-tertiary">
                   {new Date(importError.failedAt).toLocaleString(UI_DATE_LOCALE)}
                 </p>
               </div>
@@ -252,9 +223,9 @@ export function DatasetCard({
                 variant="ghost"
                 size="sm"
                 onClick={(e) => { e.stopPropagation(); onRetryImport(); }}
-                className="mt-2 gap-1 px-2 py-1 h-auto text-xs"
+                className="mt-2"
+                leftIcon={<RotateCw className="h-4 w-4" strokeWidth={1.75} />}
               >
-                <RotateCw className="h-3 w-3" />
                 Retry import
               </Button>
             )}
@@ -269,9 +240,9 @@ export function DatasetCard({
         {noImages && (
           <div
             data-testid="dataset-no-images"
-            className="mt-3 flex items-start gap-2 rounded-md bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
+            className="mt-3 flex items-start gap-2 rounded-control border border-signal-estimated/40 bg-inset px-3 py-2 text-[13px] text-ink-secondary"
           >
-            <CameraOff className="h-4 w-4 shrink-0 mt-0.5" />
+            <CameraOff className="mt-0.5 h-4 w-4 shrink-0 text-signal-estimated" strokeWidth={1.75} />
             <span>No camera features — a VLA policy cannot train on this.</span>
           </div>
         )}
@@ -279,12 +250,12 @@ export function DatasetCard({
         {errorCount > 0 && (
           <div
             data-testid="dataset-validation-errors"
-            className="mt-3 rounded-md bg-red-50 dark:bg-red-500/10 px-3 py-2 text-sm text-red-800 dark:text-red-300"
+            className="mt-3 rounded-control border border-signal-stopped/40 bg-inset px-3 py-2 text-[13px] text-ink-secondary"
           >
             <div className="flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-signal-stopped" strokeWidth={1.75} />
               <div className="min-w-0">
-                <span className="font-medium">
+                <span className="font-medium text-ink-primary">
                   {errorCount === 1 ? '1 structural problem' : `${errorCount} structural problems`}
                 </span>
                 {/* The first one in full. A count alone sends whoever reads it
@@ -295,26 +266,26 @@ export function DatasetCard({
           </div>
         )}
 
-        <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
+        <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
           <div>
-            <span className="text-theme-tertiary">Frames</span>
-            <p className="font-medium text-theme-primary">
+            <span className="text-ink-tertiary">Frames</span>
+            <p className="font-medium text-ink-primary">
               {dataset.totalFrames.toLocaleString(UI_DATE_LOCALE)}
             </p>
           </div>
           <div>
-            <span className="text-theme-tertiary">Duration</span>
-            <p className="font-medium text-theme-primary">
+            <span className="text-ink-tertiary">Duration</span>
+            <p className="font-medium text-ink-primary">
               {formatDuration(dataset.totalDuration)}
             </p>
           </div>
           <div>
-            <span className="text-theme-tertiary">Demonstrations</span>
-            <p className="font-medium text-theme-primary">{dataset.demonstrationCount}</p>
+            <span className="text-ink-tertiary">Demonstrations</span>
+            <p className="font-medium text-ink-primary">{dataset.demonstrationCount}</p>
           </div>
           <div>
-            <span className="text-theme-tertiary">FPS</span>
-            <p className="font-medium text-theme-primary">{dataset.fps}</p>
+            <span className="text-ink-tertiary">FPS</span>
+            <p className="font-medium text-ink-primary">{dataset.fps}</p>
           </div>
         </div>
 
@@ -344,9 +315,7 @@ export function DatasetCard({
           {dataset.sourceRevision && (
             <ShapeChip label="Rev" value={dataset.sourceRevision.slice(0, 7)} unknown={false} mono />
           )}
-          {dataset.importMode === 'metadata' && (
-            <Badge variant="warning" size="sm">Metadata only</Badge>
-          )}
+          {dataset.importMode === 'metadata' && <StatusTag tone="gated" size="sm">Metadata only</StatusTag>}
         </div>
 
         {dataset.huggingFaceRepoId && (
@@ -355,9 +324,9 @@ export function DatasetCard({
             target="_blank"
             rel="noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="mt-2 inline-flex items-center gap-1 text-xs font-mono text-cobalt-400 hover:underline break-all"
+            className="mt-2 inline-flex items-center gap-1 break-all font-mono text-xs text-primary hover:underline"
           >
-            <ExternalLink className="h-3 w-3 shrink-0" />
+            <ExternalLink className="h-3 w-3 shrink-0" strokeWidth={1.75} />
             {dataset.huggingFaceRepoId}
           </a>
         )}
@@ -368,9 +337,9 @@ export function DatasetCard({
         {!validation && dataset.status === 'ready' && (
           <div
             data-testid="dataset-not-validated"
-            className="mt-3 flex items-start gap-2 text-sm text-theme-tertiary"
+            className="mt-3 flex items-start gap-2 text-sm text-ink-tertiary"
           >
-            <ShieldQuestion className="h-4 w-4 shrink-0 mt-0.5" />
+            <ShieldQuestion className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} />
             <span>Not validated — nothing has opened this dataset&rsquo;s files.</span>
           </div>
         )}
@@ -378,29 +347,21 @@ export function DatasetCard({
         {qualityPercent !== null && (
           <div className="mt-4">
             <div className="flex items-center justify-between text-sm mb-1">
-              <span className="text-theme-tertiary">Quality Score</span>
+              <span className="text-ink-tertiary">Quality Score</span>
               <span
                 className={cn(
                   'font-medium',
-                  qualityPercent >= 80
-                    ? 'text-green-600'
-                    : qualityPercent >= 60
-                      ? 'text-yellow-600'
-                      : 'text-red-600'
+                  qualityPercent >= 80 ? 'text-signal-measured' : qualityPercent >= 60 ? 'text-signal-estimated' : 'text-signal-stopped'
                 )}
               >
                 {qualityPercent}%
               </span>
             </div>
-            <div className="w-full h-2 bg-theme-secondary/20 rounded-full overflow-hidden">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-line">
               <div
                 className={cn(
                   'h-full rounded-full transition-all',
-                  qualityPercent >= 80
-                    ? 'bg-green-500'
-                    : qualityPercent >= 60
-                      ? 'bg-yellow-500'
-                      : 'bg-red-500'
+                  qualityPercent >= 80 ? 'bg-signal-measured' : qualityPercent >= 60 ? 'bg-signal-estimated' : 'bg-signal-stopped'
                 )}
                 style={{ width: `${qualityPercent}%` }}
               />
@@ -408,8 +369,8 @@ export function DatasetCard({
           </div>
         )}
 
-        <div className="mt-4 pt-3 border-t border-theme-secondary/20 flex items-center justify-between">
-          <span className="text-xs text-theme-tertiary">
+        <div className="mt-4 flex items-center justify-between border-t border-line pt-3">
+          <span className="text-xs text-ink-tertiary">
             LeRobot {dataset.lerobotVersion} &bull; {new Date(dataset.createdAt).toLocaleDateString(UI_DATE_LOCALE)}
           </span>
           <div className="flex items-center gap-1">
@@ -418,9 +379,8 @@ export function DatasetCard({
                 variant="ghost"
                 size="sm"
                 onClick={(e) => { e.stopPropagation(); onViewEpisodes(); }}
-                className="text-xs gap-1 px-2 py-1 h-auto"
+                leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />}
               >
-                <Play className="w-3 h-3" />
                 Episodes
               </Button>
             )}
@@ -435,28 +395,30 @@ export function DatasetCard({
                   variant="ghost"
                   size="sm"
                   onClick={(e) => { e.stopPropagation(); onDuplicateView(); }}
-                  className="text-xs gap-1 px-2 py-1 h-auto"
                   title="Frozen by a training run — fork it again to change the selection"
+                  leftIcon={<Copy className="h-4 w-4" strokeWidth={1.75} />}
                 >
-                  <Copy className="w-3 h-3" />
                   Duplicate
                 </Button>
               )
             ) : (
               onDelete && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                  className="p-1 rounded text-theme-tertiary hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  iconOnly
+                  aria-label={isView ? 'Delete view' : 'Delete dataset'}
                   title={isView ? 'Delete view' : 'Delete dataset'}
+                  onClick={(e) => { e.stopPropagation(); onDelete(); }}
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                  <Trash2 className="h-4 w-4" strokeWidth={1.75} />
+                </Button>
               )
             )}
           </div>
         </div>
-      </Card.Body>
-    </Card>
+      </div>
+    </Panel>
   );
 }
 
@@ -478,14 +440,14 @@ function ShapeChip({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded px-1.5 py-0.5',
+        'inline-flex items-center gap-1 rounded-tag px-1.5 py-0.5',
         unknown
-          ? 'border border-dashed border-theme-secondary/40 text-theme-tertiary'
-          : 'bg-theme-secondary/10 text-theme-secondary'
+          ? 'border border-dashed border-line-strong text-ink-tertiary'
+          : 'bg-inset text-ink-secondary'
       )}
     >
-      <span className="text-theme-tertiary">{label}</span>
-      <span className={cn('font-medium text-theme-primary', mono && 'font-mono')}>{value}</span>
+      <span className="text-ink-tertiary">{label}</span>
+      <span className={cn('font-medium text-ink-primary', mono && 'font-mono')}>{value}</span>
     </span>
   );
 }
@@ -496,16 +458,24 @@ function ShapeChip({
  */
 function PlaceholderThumb() {
   return (
-    <div className="flex aspect-video w-full items-center justify-center overflow-hidden bg-theme-elevated">
-      <Database className="h-7 w-7 text-theme-muted" />
+    <div className="flex aspect-video w-full items-center justify-center overflow-hidden bg-inset">
+      <Database className="h-7 w-7 text-ink-muted" strokeWidth={1.75} />
     </div>
+  );
+}
+
+/** "Cosmos 3" provenance tag in the corner of a synthetic thumbnail. */
+function CosmosTag() {
+  return (
+    <span className="pointer-events-none absolute left-2 top-2">
+      <StatusTag tone="sim">Cosmos 3</StatusTag>
+    </span>
   );
 }
 
 /**
  * Looping video preview for a synthetic dataset's first episode. Shows a poster
- * frame at rest and plays muted on hover — turns the synthetic list into a
- * gallery of generated clips.
+ * frame at rest and plays muted on hover.
  */
 function SyntheticThumb({ datasetId }: { datasetId: string }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -519,30 +489,27 @@ function SyntheticThumb({ datasetId }: { datasetId: string }) {
     }
   };
 
-  // Fallback when the preview can't load (missing video / non-default camera
-  // key): keep the Cosmos 3 chip, drop the broken <video> and play overlay.
+  // The preview cannot load (missing video / non-default camera key): keep the
+  // provenance tag, drop the broken <video>.
   if (failed) {
     return (
-      <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden bg-purple-500/5">
-        <Sparkles className="h-7 w-7 text-purple-400/50" />
-        <div className="absolute left-2 top-2 flex items-center gap-1 rounded-md bg-purple-500/90 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
-          <Sparkles className="h-3 w-3" />
-          Cosmos 3
-        </div>
+      <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden bg-inset">
+        <Sparkles className="h-7 w-7 text-ink-muted" strokeWidth={1.75} />
+        <CosmosTag />
       </div>
     );
   }
 
   return (
     <div
-      className="group/thumb relative aspect-video w-full overflow-hidden bg-black"
+      className="group/thumb relative aspect-video w-full overflow-hidden bg-canvas"
       onMouseEnter={() => ref.current?.play().catch(() => {})}
       onMouseLeave={() => { const v = ref.current; if (v) { v.pause(); seekPoster(); } }}
     >
       <video
         ref={ref}
         src={src}
-        className="h-full w-full object-cover transition-transform duration-500 group-hover/thumb:scale-105"
+        className="h-full w-full object-cover"
         muted
         loop
         playsInline
@@ -550,30 +517,12 @@ function SyntheticThumb({ datasetId }: { datasetId: string }) {
         onLoadedMetadata={seekPoster}
         onError={() => setFailed(true)}
       />
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/10" />
-      <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1 rounded-md bg-purple-500/90 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
-        <Sparkles className="h-3 w-3" />
-        Cosmos 3
-      </div>
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover/thumb:opacity-100">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 backdrop-blur-sm">
-          <Play className="h-4 w-4 translate-x-px text-white" fill="currentColor" />
-        </div>
-      </div>
+      <CosmosTag />
+      <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover/thumb:opacity-100">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-canvas/80 text-ink-primary">
+          <Play className="h-4 w-4 translate-x-px" strokeWidth={1.75} fill="currentColor" />
+        </span>
+      </span>
     </div>
   );
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) {
-    return `${Math.round(seconds)}s`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.round(seconds % 60);
-  if (minutes < 60) {
-    return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }

@@ -1,139 +1,136 @@
 /**
  * @file TrainingJobList.tsx
- * @description List of training jobs with filters
+ * @description Training jobs as a DataTable: name first, short id secondary, status, progress, created
  * @feature training
  */
 
-import { useState } from 'react';
-import { Spinner } from '@/shared/components/ui';
-import { TrainingJobCard } from './TrainingJobCard';
-import type { TrainingJob, TrainingJobStatus, BaseModel } from '../types';
+import type { ReactNode } from 'react';
+import { Ban, ExternalLink, RotateCcw } from 'lucide-react';
+import {
+  DataTable,
+  ProgressBar,
+  StatusTag,
+  type DataTableColumn,
+  type RowActionItem,
+} from '@/shared/components/ui';
+import type { TrainingJob } from '../types';
+import { formatRelative, isActiveJob, jobDisplayName, methodLabel, progressLabel, shortId } from './jobs/jobFormat';
 
 export interface TrainingJobListProps {
   jobs: TrainingJob[];
   isLoading?: boolean;
+  error?: string | null;
+  onRetryLoad?: () => void;
   selectedId?: string;
   onSelect?: (job: TrainingJob) => void;
   onCancel?: (id: string) => void;
   onRetry?: (id: string) => void;
+  /** Rendered when `jobs` is empty (the page decides: empty vs filtered-empty). */
+  empty?: ReactNode;
+  /** @deprecated Filtering lives in the page toolbar now; ignored. */
   showFilters?: boolean;
-  /** Render nothing when there are no jobs at all (parent shows its own EmptyState) */
+  /** @deprecated The page renders its own EmptyState; ignored. */
   hideEmpty?: boolean;
 }
 
-const statusOptions: { value: TrainingJobStatus | 'all'; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'running', label: 'Running' },
-  { value: 'queued', label: 'Queued' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'failed', label: 'Failed' },
-  { value: 'pending', label: 'Pending' },
-];
+const icon = 'h-4 w-4';
 
-/**
- * List of training jobs with filtering
- */
+/** The Jobs tab's table. Row click opens the job detail. */
 export function TrainingJobList({
   jobs,
   isLoading,
-  selectedId,
+  error,
+  onRetryLoad,
   onSelect,
   onCancel,
   onRetry,
-  showFilters = true,
-  hideEmpty = false,
+  empty,
 }: TrainingJobListProps) {
-  const [statusFilter, setStatusFilter] = useState<TrainingJobStatus | 'all'>('all');
-  const [modelFilter, setModelFilter] = useState<BaseModel | 'all'>('all');
+  const columns: DataTableColumn<TrainingJob>[] = [
+    {
+      key: 'name',
+      header: 'Job',
+      sortable: true,
+      sortValue: (j) => jobDisplayName(j),
+      cell: (j) => (
+        <div className="min-w-0">
+          <div className="truncate font-medium text-ink-primary">{jobDisplayName(j)}</div>
+          <div className="flex items-center gap-2 text-xs text-ink-tertiary">
+            {j.kind === 'sim_rl' && <StatusTag tone="sim" size="sm">Sim-RL</StatusTag>}
+            <span className="font-mono" title={j.id}>{shortId(j.id)}</span>
+          </div>
+        </div>
+      ),
+    },
+    { key: 'method', header: 'Method', hideBelow: 'md', cell: (j) => methodLabel(j) || '—' },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      sortValue: (j) => j.status,
+      cell: (j) => <StatusTag status={j.status} dot pulse={j.status === 'running'} />,
+    },
+    {
+      key: 'progress',
+      header: 'Progress',
+      hideBelow: 'sm',
+      width: '180px',
+      sortable: true,
+      sortValue: (j) => j.progress,
+      cell: (j) =>
+        isActiveJob(j) || j.status === 'completed' ? (
+          <div className="flex min-w-[120px] flex-col gap-1">
+            <ProgressBar value={j.progress} size="sm" showValue={false} />
+            <span className="text-xs text-ink-tertiary">
+              {j.status === 'completed' ? 'Done' : progressLabel(j) ?? `${j.progress}%`}
+            </span>
+          </div>
+        ) : null,
+    },
+    {
+      key: 'createdAt',
+      header: 'Created',
+      align: 'right',
+      hideBelow: 'md',
+      sortable: true,
+      sortValue: (j) => new Date(j.createdAt),
+      cell: (j) => <span title={new Date(j.createdAt).toLocaleString()}>{formatRelative(j.createdAt)}</span>,
+    },
+  ];
 
-  const filteredJobs = jobs.filter((job) => {
-    if (statusFilter !== 'all' && job.status !== statusFilter) {
-      return false;
+  const rowActions = (j: TrainingJob): RowActionItem[] => {
+    const items: RowActionItem[] = [];
+    if (onSelect) items.push({ label: 'Open', icon: <ExternalLink className={icon} />, onSelect: () => onSelect(j) });
+    if (onRetry && (j.status === 'failed' || j.status === 'cancelled')) {
+      items.push({ label: 'Retry', icon: <RotateCcw className={icon} />, onSelect: () => onRetry(j.id) });
     }
-    if (modelFilter !== 'all' && job.baseModel !== modelFilter) {
-      return false;
+    if (onCancel && isActiveJob(j)) {
+      items.push({
+        label: 'Cancel job',
+        icon: <Ban className={icon} />,
+        tone: 'danger',
+        separatorBefore: items.length > 0,
+        onSelect: () => onCancel(j.id),
+      });
     }
-    return true;
-  });
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <Spinner size="lg" label="Loading jobs..." />
-      </div>
-    );
-  }
-
-  if (hideEmpty && jobs.length === 0) {
-    return null;
-  }
+    return items;
+  };
 
   return (
-    <div className="space-y-4">
-      {showFilters && (
-        <div className="flex flex-wrap gap-3">
-          <div className="flex flex-wrap gap-1">
-            {statusOptions.map((option) => (
-              <button
-                key={option.value}
-                onClick={() => setStatusFilter(option.value)}
-                className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
-                  statusFilter === option.value
-                    ? 'bg-primary text-on-primary'
-                    : 'bg-theme-secondary/20 text-theme-secondary hover:bg-theme-secondary/30'
-                }`}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap gap-1">
-            {(['all', 'smolvla', 'pi0', 'pi0_6', 'openvla', 'groot', 'groot_n1_7'] as const).map((model) => (
-              <button
-                key={model}
-                onClick={() => setModelFilter(model)}
-                className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
-                  modelFilter === model
-                    ? 'bg-accent text-on-accent'
-                    : 'bg-theme-secondary/20 text-theme-secondary hover:bg-theme-secondary/30'
-                }`}
-              >
-                {model === 'all' ? 'All Models' : model === 'groot_n1_7' ? 'GR00T N1.7' : model.toUpperCase()}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {filteredJobs.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-theme-secondary">
-            {jobs.length === 0
-              ? 'No training jobs found. Start a new training job to get started.'
-              : 'No jobs match your filters.'}
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {filteredJobs.map((job) => (
-            <TrainingJobCard
-              key={job.id}
-              job={job}
-              selected={job.id === selectedId}
-              onClick={() => onSelect?.(job)}
-              onCancel={onCancel ? () => onCancel(job.id) : undefined}
-              onRetry={onRetry ? () => onRetry(job.id) : undefined}
-            />
-          ))}
-        </div>
-      )}
-
-      {showFilters && jobs.length > 0 && (
-        <div className="text-sm text-theme-tertiary">
-          Showing {filteredJobs.length} of {jobs.length} jobs
-        </div>
-      )}
-    </div>
+    <DataTable
+      caption="Training jobs"
+      columns={columns}
+      rows={jobs}
+      getRowId={(j) => j.id}
+      defaultSort={{ key: 'createdAt', direction: 'desc' }}
+      onRowClick={onSelect}
+      rowActions={rowActions}
+      rowActionsLabel={(j) => `Actions for ${jobDisplayName(j)}`}
+      isLoading={isLoading}
+      error={error ?? null}
+      errorTitle="Couldn't load training jobs"
+      onRetry={onRetryLoad}
+      empty={empty}
+    />
   );
 }

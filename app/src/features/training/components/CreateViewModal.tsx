@@ -7,7 +7,7 @@
 
 import { memo, useEffect, useMemo, useState } from 'react';
 import { GitFork, Layers } from 'lucide-react';
-import { Button, Input, Modal } from '@/shared/components/ui';
+import { Button, FormField, Input, Modal } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { getErrorMessage } from '@/shared/utils';
 import {
@@ -161,20 +161,36 @@ export const CreateViewModal = memo(function CreateViewModal({
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Create view" size="md">
-      <div className="space-y-4" data-testid="create-view-modal">
-        <p className="text-sm text-theme-secondary">
-          A view is a named selection of{' '}
-          <span className="font-medium text-theme-primary">{parentName}</span> — no files are
-          copied, and it can be trained on like any other dataset.
-        </p>
-
-        <fieldset className="space-y-2">
-          <legend className="text-xs font-medium uppercase tracking-wider text-theme-tertiary">
-            Which episodes
-          </legend>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Create view"
+      description={`A named selection of ${parentName} — no files are copied, and it trains like any other dataset.`}
+      size="md"
+      closeOnBackdrop={false}
+      onSubmit={(e) => { e.preventDefault(); if (canSubmit) void handleSubmit(); }}
+      noValidate
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={isSaving}>Cancel</Button>
+          <Button
+            type="submit"
+            data-testid="create-view-submit"
+            disabled={!canSubmit}
+            isLoading={isSaving}
+            loadingText="Creating…"
+            leftIcon={<GitFork className="h-4 w-4" strokeWidth={1.75} />}
+          >
+            Create view
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4" data-testid="create-view-modal">
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-2 text-sm font-medium text-ink-primary">Which episodes</legend>
           {sources.length === 0 && !rewardSelection && (
-            <p data-testid="create-view-no-source" className="text-sm text-theme-tertiary">
+            <p data-testid="create-view-no-source" className="text-sm text-ink-tertiary">
               Nothing to select yet — tick episodes in the list, flag the bad ones, or score
               them with a reward model first.
             </p>
@@ -199,67 +215,46 @@ export const CreateViewModal = memo(function CreateViewModal({
               count={rewardSelection.episodes.length}
               testId="view-source-reward"
             >
-              <label className="mt-2 flex items-center gap-2 text-xs text-theme-tertiary">
+              <div className="mt-2 flex items-center gap-2 text-xs text-ink-tertiary">
                 Minimum score
-                <input
+                <Input
                   type="number"
+                  size="sm"
                   min={0}
                   max={1}
                   step={0.05}
                   value={minScore}
                   aria-label="Minimum reward score"
                   onChange={(e) => setMinScore(Number(e.target.value))}
-                  className="w-20 rounded border border-theme-secondary/30 bg-theme-primary px-1.5 py-0.5 text-xs text-theme-primary"
+                  className="w-24"
                 />
-              </label>
+              </div>
             </SourceOption>
           )}
         </fieldset>
 
         <div
           data-testid="create-view-count"
-          className="flex items-center gap-2 rounded-md bg-theme-secondary/10 px-3 py-2 text-sm text-theme-secondary"
+          className="flex items-center gap-2 rounded-control bg-inset px-3 py-2 text-sm text-ink-secondary"
         >
-          <Layers className="h-4 w-4 shrink-0 text-cobalt-400" />
+          <Layers className="h-4 w-4 shrink-0 text-primary" strokeWidth={1.75} />
           <span>
-            <span className="font-semibold text-theme-primary">{episodeCount}</span> of{' '}
-            {parentEpisodeCount} episodes
+            <span className="font-semibold text-ink-primary">{episodeCount}</span> of {parentEpisodeCount} episodes
           </span>
         </div>
 
-        <Input
-          label="Name"
-          placeholder="e.g. Clean takes only"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <Input
-          label="Description (optional)"
-          placeholder="Why this arm exists"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
+        <FormField label="Name" required>
+          <Input placeholder="e.g. Clean takes only" value={name} onChange={(e) => setName(e.target.value)} />
+        </FormField>
+        <FormField label="Description" aside="Optional">
+          <Input placeholder="Why this arm exists" value={description} onChange={(e) => setDescription(e.target.value)} />
+        </FormField>
 
         {error && (
-          <p data-testid="create-view-error" role="alert" className="text-sm text-red-500">
+          <p data-testid="create-view-error" role="alert" className="text-sm text-signal-stopped">
             {error}
           </p>
         )}
-
-        <div className="flex justify-end gap-3 pt-2">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            data-testid="create-view-submit"
-            disabled={!canSubmit}
-            isLoading={isSaving}
-            onClick={handleSubmit}
-            leftIcon={<GitFork className="h-4 w-4" />}
-          >
-            Create view
-          </Button>
-        </div>
       </div>
     </Modal>
   );
@@ -287,19 +282,17 @@ function SourceOption({
     <label
       data-testid={testId}
       className={cn(
-        'block cursor-pointer rounded-md border px-3 py-2 transition-colors',
-        checked
-          ? 'border-cobalt-500/50 bg-cobalt-500/10'
-          : 'border-theme-secondary/20 hover:border-cobalt-500/30',
+        'block cursor-pointer rounded-control border px-3 py-2.5 transition-colors',
+        checked ? 'border-primary/60 bg-primary/10' : 'border-line hover:border-line-strong',
       )}
     >
       <span className="flex items-center gap-2">
-        <input type="radio" checked={checked} onChange={onChange} className="h-3.5 w-3.5" />
-        <span className="text-sm font-medium text-theme-primary">{label}</span>
-        <span className="ml-auto text-xs text-theme-tertiary">{count} episodes</span>
+        <input type="radio" name="view-source" checked={checked} onChange={onChange} className="h-4 w-4 accent-primary" />
+        <span className="text-sm font-medium text-ink-primary">{label}</span>
+        <span className="ml-auto whitespace-nowrap text-xs text-ink-tertiary">{count} episodes</span>
       </span>
-      <span className="mt-0.5 block pl-[22px] text-xs text-theme-tertiary">{detail}</span>
-      {children && <span className="block pl-[22px]">{children}</span>}
+      <span className="mt-0.5 block pl-6 text-xs text-ink-tertiary">{detail}</span>
+      {children && <span className="block pl-6">{children}</span>}
     </label>
   );
 }

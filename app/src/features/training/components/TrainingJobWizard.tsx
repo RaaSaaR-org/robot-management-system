@@ -1,35 +1,30 @@
 /**
  * @file TrainingJobWizard.tsx
- * @description Multi-step wizard for creating training jobs
+ * @description New training job: a stepped modal (type, datasets or scene, model, settings, resources, review)
  * @feature training
  */
 
-import { useState, useCallback, useEffect } from 'react';
-import { Modal, Button, Badge } from '@/shared/components/ui';
+import { useCallback, useEffect, useState } from 'react';
+import { Check } from 'lucide-react';
+import { Button, Modal, toast } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
+import { getErrorMessage } from '@/shared/utils';
+import { useSimulationStore, selectScenes, selectScenesLoading } from '@/features/simulation/store/simulationStore';
 import { HyperparameterForm, getDefaultHyperparameters } from './HyperparameterForm';
-import { DatasetCompatibilityPanel } from './DatasetCompatibilityPanel';
-import { InitFromModelPicker } from './InitFromModelPicker';
-import {
-  useSimulationStore,
-  selectScenes,
-  selectScenesLoading,
-} from '@/features/simulation/store/simulationStore';
+import { DatasetStep, ModelStep, ResourcesStep, SceneStep, StepSection, TypeStep } from './jobs/wizard/WizardSteps';
+import { ReviewStep } from './jobs/wizard/ReviewStep';
+import { INITIAL_FORM, TRAINING_PRESETS, badWeights, stepsFor, type FormState, type Step } from './jobs/wizard/wizardModel';
 import type {
+  BaseModel,
   CompatibilityReport,
   Dataset,
-  BaseModel,
   FineTuneMethod,
-  HyperparametersInput,
   InitFromSelection,
   MixtureMemberInput,
-  SubmitTrainingJobInput,
   SubmitSimRlJobInput,
-  TrainingJobKind,
+  SubmitTrainingJobInput,
   WeightsSource,
 } from '../types';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
-import { getErrorMessage } from '@/shared/utils';
 
 export interface TrainingJobWizardProps {
   isOpen: boolean;
@@ -41,279 +36,98 @@ export interface TrainingJobWizardProps {
   initialMixture?: MixtureMemberInput[];
 }
 
-type Step = 'type' | 'dataset' | 'model' | 'scene' | 'hyperparams' | 'gpu' | 'review';
-
-/**
- * Step list depends on the job kind: supervised picks a dataset + model,
- * sim_rl picks a twin-derived scene instead. (TASK-172.C)
- */
-function stepsFor(kind: TrainingJobKind): { id: Step; label: string }[] {
-  if (kind === 'sim_rl') {
-    return [
-      { id: 'type', label: 'Type' },
-      { id: 'scene', label: 'Scene' },
-      { id: 'hyperparams', label: 'Hyperparams' },
-      { id: 'gpu', label: 'Resources' },
-      { id: 'review', label: 'Review' },
-    ];
-  }
-  return [
-    { id: 'type', label: 'Type' },
-    { id: 'dataset', label: 'Dataset' },
-    { id: 'model', label: 'Model' },
-    { id: 'hyperparams', label: 'Hyperparams' },
-    { id: 'gpu', label: 'Resources' },
-    { id: 'review', label: 'Review' },
-  ];
-}
-
-const baseModels: { value: BaseModel; label: string; description: string }[] = [
-  { value: 'smolvla', label: 'SmolVLA', description: 'HuggingFace small VLA, LoRA-friendly on Apple Silicon' },
-  { value: 'pi0', label: 'Pi0', description: 'Physical Intelligence base model' },
-  { value: 'pi0_6', label: 'Pi0.6', description: 'Pi0 version 0.6 with improved action heads' },
-  { value: 'openvla', label: 'OpenVLA', description: 'Open Vision-Language-Action model' },
-  { value: 'groot', label: 'GROOT', description: 'NVIDIA GROOT foundation model' },
-  { value: 'groot_n1_7', label: 'GR00T N1.7', description: 'NVIDIA GR00T N1.7 via native LeRobot (no Isaac-GR00T needed)' },
-];
-
-const fineTuneMethods: { value: FineTuneMethod; label: string; description: string }[] = [
-  { value: 'lora', label: 'LoRA', description: 'Parameter-efficient, lower memory' },
-  { value: 'full', label: 'Full', description: 'All parameters, best quality' },
-  { value: 'frozen_backbone', label: 'Frozen Backbone', description: 'Fast training, action head only' },
-];
-
-const TRAINING_PRESETS = {
-  quick: {
-    label: 'Quick Train',
-    description: 'Fast iteration, fewer epochs',
-    hyperparameters: { learning_rate: 1e-4, batch_size: 8, epochs: 5, warmup_steps: 100 },
-  },
-  standard: {
-    label: 'Standard',
-    description: 'Balanced training',
-    hyperparameters: { learning_rate: 5e-5, batch_size: 16, epochs: 20, warmup_steps: 500 },
-  },
-  thorough: {
-    label: 'Thorough',
-    description: 'Best quality, more epochs',
-    hyperparameters: { learning_rate: 2e-5, batch_size: 32, epochs: 50, warmup_steps: 1000, weight_decay: 0.01 },
-  },
-} as const;
-
-/** One member of the mixture being assembled, with its sampling weight. */
-interface MixtureMember {
-  datasetId: string;
-  weight: number;
-}
-
-interface FormState {
-  kind: TrainingJobKind;
-  /** Member 0 of `mixture`. Kept because the server's single-dataset path is it. */
-  datasetId: string;
-  mixture: MixtureMember[];
-  baseModel: BaseModel;
-  fineTuneMethod: FineTuneMethod;
-  /** Foundation weights, or a model already in the registry. (TASK-239) */
-  weightsSource: WeightsSource;
-  /** The picked model/checkpoint; null while `weightsSource` is 'foundation'. */
-  initFrom: InitFromSelection | null;
-  sceneId: string;
-  hyperparameters: HyperparametersInput;
-  gpuType: 'a100' | 'h100' | 'any';
-  priority: 'low' | 'normal' | 'high';
-}
-
-const INITIAL_FORM: FormState = {
-  kind: 'supervised',
-  datasetId: '',
-  mixture: [],
-  baseModel: 'pi0',
-  fineTuneMethod: 'lora',
-  weightsSource: 'foundation',
-  initFrom: null,
-  sceneId: '',
-  hyperparameters: getDefaultHyperparameters('lora'),
-  gpuType: 'any',
-  priority: 'normal',
-};
-
-/**
- * Shared styling for the wizard's single-select "cards" (type, dataset, model,
- * scene, gpu, priority). Centralises the selected/hover/focus-ring treatment so
- * every group is keyboard-accessible and visually consistent.
- * `cobalt` = the brand-primary selection accent (matches the CTA); `purple` is
- * reserved for the Sim-RL identity. (TASK-172.C UX pass)
- */
-function selectCardCls(active: boolean, accent: 'cobalt' | 'purple' = 'cobalt'): string {
-  const on =
-    accent === 'purple' ? 'border-purple-500 bg-purple-500/10' : 'border-cobalt-500 bg-cobalt-500/10';
-  const off =
-    accent === 'purple'
-      ? 'border-theme-secondary/30 hover:border-purple-500/50'
-      : 'border-theme-secondary/30 hover:border-cobalt-500/50';
-  const ring = accent === 'purple' ? 'focus-visible:ring-purple-500/60' : 'focus-visible:ring-cobalt-500/60';
-  return cn(
-    'rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2',
-    ring,
-    active ? on : off
-  );
-}
-
-/**
- * What the run actually starts from, for the review step. The architecture
- * alone ("GROOT_N1_7") is the whole truth only for a foundation run — a run
- * continuing a fine-tune says so by name, because that is the difference
- * between the two runs and the only thing the reader cannot infer. (TASK-239)
- */
-function describeStartingPoint(form: FormState): string {
-  const initFrom = form.weightsSource === 'existing' ? form.initFrom : null;
-  if (!initFrom) return form.baseModel.toUpperCase();
-
-  const head =
-    initFrom.checkpointEpoch !== null
-      ? `Epoch ${initFrom.checkpointEpoch} of ${initFrom.modelName}`
-      : initFrom.modelName;
-  return `${head} (${form.baseModel})`;
-}
-
-/**
- * Multi-step wizard for creating training jobs
- */
-export function TrainingJobWizard({
-  isOpen,
-  onClose,
-  onSubmit,
-  datasets,
-  isSubmitting,
-  initialMixture,
-}: TrainingJobWizardProps) {
-  const [currentStep, setCurrentStep] = useState<Step>('type');
+export function TrainingJobWizard({ isOpen, onClose, onSubmit, datasets, isSubmitting, initialMixture }: TrainingJobWizardProps) {
+  const [step, setStep] = useState<Step>('type');
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [compatibility, setCompatibility] = useState<CompatibilityReport | null>(null);
+  const patch = useCallback((p: Partial<FormState>) => setForm((prev) => ({ ...prev, ...p })), []);
 
-  // SimScene registry (shared with the Simulation tab) for the sim_rl picker.
+  // The scene registry (shared with the Simulation tab) for the sim-RL picker.
   const scenes = useSimulationStore(selectScenes);
   const scenesLoading = useSimulationStore(selectScenesLoading);
   const fetchScenes = useSimulationStore((s) => s.fetchScenes);
-
-  // Load scenes the first time the wizard opens so the sim_rl Scene step has data.
   useEffect(() => {
-    if (isOpen && scenes.length === 0) {
-      void fetchScenes();
-    }
+    if (isOpen && scenes.length === 0) void fetchScenes();
   }, [isOpen, scenes.length, fetchScenes]);
 
-  // The selection made on the Datasets page, as a value that only changes when
-  // the selection does — an inline array prop is a new object every render.
-  // Weights the server will refuse (finite and positive is the whole domain of
-  // a sampling ratio). Checked here so the reason is visible next to the field
-  // rather than arriving as a 400 after the wizard has been dismissed — and
-  // `Number('') === 0`, so simply clearing the box lands here too.
-  const badWeights = (form: FormState) =>
-    form.mixture.filter((m) => !(Number.isFinite(m.weight) && m.weight > 0));
-
-  const seededMixture = (initialMixture ?? [])
-    .map((m) => `${m.datasetId}:${m.weight ?? 1}`)
-    .join(',');
-
+  // The Datasets page's selection, as a value that only changes when the
+  // selection does — an inline array prop is a new object every render.
+  const seeded = (initialMixture ?? []).map((m) => `${m.datasetId}:${m.weight ?? 1}`).join(',');
   useEffect(() => {
-    if (!isOpen || !seededMixture) return;
-    const members = seededMixture.split(',').map((entry) => {
+    if (!isOpen || !seeded) return;
+    const members = seeded.split(',').map((entry) => {
       const [datasetId, weight] = entry.split(':');
       return { datasetId, weight: Number(weight) || 1 };
     });
-    setForm((prev) => ({
-      ...prev,
-      kind: 'supervised',
-      mixture: members,
-      datasetId: members[0].datasetId,
-    }));
-    // Straight to the datasets, which is where the weights are: the person got
-    // here by choosing them, so the type step has nothing left to ask.
-    setCurrentStep('dataset');
-  }, [isOpen, seededMixture]);
+    setForm((prev) => ({ ...prev, kind: 'supervised', mixture: members, datasetId: members[0].datasetId }));
+    // Straight to the datasets: the person got here by choosing them.
+    setStep('dataset');
+  }, [isOpen, seeded]);
 
   const steps = stepsFor(form.kind);
-  const currentStepIndex = steps.findIndex((s) => s.id === currentStep);
+  const index = steps.findIndex((s) => s.id === step);
 
-  const resetForm = useCallback(() => {
-    setCurrentStep('type');
+  const close = useCallback(() => {
+    setStep('type');
     setForm(INITIAL_FORM);
     setError(null);
     setCompatibility(null);
-  }, []);
-
-  const handleClose = useCallback(() => {
-    resetForm();
     onClose();
-  }, [resetForm, onClose]);
+  }, [onClose]);
 
-  // Recompute the step list from form.kind here rather than closing over the
-  // render-scoped `steps`: when the kind changes on the type step,
-  // currentStepIndex stays 0, so a `[currentStepIndex]` dep would keep a stale
-  // closure and navigate the wrong (supervised) flow. (TASK-172.C)
-  const handleNext = useCallback(() => {
+  // Recompute the list from form.kind: the kind can change on step 0.
+  const go = (delta: 1 | -1) => {
     const list = stepsFor(form.kind);
-    const idx = list.findIndex((s) => s.id === currentStep);
-    if (idx + 1 < list.length) {
-      setCurrentStep(list[idx + 1].id);
+    const next = list[list.findIndex((s) => s.id === step) + delta];
+    if (next) setStep(next.id);
+  };
+
+  const toggleMember = (datasetId: string) => {
+    setForm((prev) => {
+      const exists = prev.mixture.some((m) => m.datasetId === datasetId);
+      const mixture = exists ? prev.mixture.filter((m) => m.datasetId !== datasetId) : [...prev.mixture, { datasetId, weight: 1 }];
+      return { ...prev, mixture, datasetId: mixture[0]?.datasetId ?? '' };
+    });
+    setCompatibility(null);
+  };
+  const setWeight = (datasetId: string, weight: number) =>
+    setForm((prev) => ({ ...prev, mixture: prev.mixture.map((m) => (m.datasetId === datasetId ? { ...m, weight } : m)) }));
+
+  // Changing the architecture drops the picked model: the server refuses a run
+  // whose baseModel differs from the weights it starts from. (TASK-239)
+  const onBaseModel = (value: BaseModel) =>
+    setForm((prev) => (prev.baseModel === value ? prev : { ...prev, baseModel: value, initFrom: null }));
+  const onWeightsSource = (source: WeightsSource) =>
+    setForm((prev) => ({ ...prev, weightsSource: source, initFrom: source === 'foundation' ? null : prev.initFrom }));
+  const onInitFrom = (initFrom: InitFromSelection | null) => patch({ initFrom });
+  const onMethod = (method: FineTuneMethod) => patch({ fineTuneMethod: method, hyperparameters: getDefaultHyperparameters(method) });
+
+  const canProceed = (() => {
+    switch (step) {
+      case 'dataset':
+        return form.mixture.length > 0;
+      case 'model':
+        // "Continue from an existing model" without one would silently fall
+        // back to the foundation weights. (TASK-239)
+        return form.weightsSource === 'foundation' || !!form.initFrom;
+      case 'scene':
+        return !!form.sceneId;
+      case 'hyperparams':
+        return form.hyperparameters.learning_rate > 0 && form.hyperparameters.epochs > 0;
+      default:
+        return true;
     }
-  }, [form.kind, currentStep]);
+  })();
 
-  const handleBack = useCallback(() => {
-    const list = stepsFor(form.kind);
-    const idx = list.findIndex((s) => s.id === currentStep);
-    if (idx - 1 >= 0) {
-      setCurrentStep(list[idx - 1].id);
-    }
-  }, [form.kind, currentStep]);
-
-  // Changing the architecture drops the picked model: the picker only lists
-  // models of the chosen architecture, and the server refuses a run whose
-  // baseModel differs from the weights it starts from — so a selection made
-  // under the previous architecture cannot survive the change. (TASK-239)
-  const handleBaseModelChange = useCallback((value: BaseModel) => {
-    setForm((prev) =>
-      prev.baseModel === value ? prev : { ...prev, baseModel: value, initFrom: null }
-    );
-  }, []);
-
-  const handleWeightsSourceChange = useCallback((source: WeightsSource) => {
-    setForm((prev) => ({
-      ...prev,
-      weightsSource: source,
-      initFrom: source === 'foundation' ? null : prev.initFrom,
-    }));
-  }, []);
-
-  const handleInitFromChange = useCallback((selection: InitFromSelection | null) => {
-    setForm((prev) => ({ ...prev, initFrom: selection }));
-  }, []);
-
-  const handleFineTuneMethodChange = useCallback((method: FineTuneMethod) => {
-    setForm((prev) => ({
-      ...prev,
-      fineTuneMethod: method,
-      hyperparameters: getDefaultHyperparameters(method),
-    }));
-  }, []);
-
-  const handleSubmit = useCallback(async () => {
+  const submit = async () => {
     setError(null);
+    setSubmitting(true);
     try {
-      // The GPU step's answer used to be collected and then dropped on the
-      // floor, so every job silently took the server's default.
       const gpuRequirements = { type: form.gpuType };
-
       if (form.kind === 'sim_rl') {
-        await onSubmit({
-          kind: 'sim_rl',
-          sceneId: form.sceneId,
-          hyperparameters: form.hyperparameters,
-          gpuRequirements,
-          priority: form.priority,
-        });
+        await onSubmit({ kind: 'sim_rl', sceneId: form.sceneId, hyperparameters: form.hyperparameters, gpuRequirements, priority: form.priority });
       } else {
         const members = form.mixture;
         const initFrom = form.weightsSource === 'existing' ? form.initFrom : null;
@@ -324,15 +138,9 @@ export function TrainingJobWizard({
           hyperparameters: form.hyperparameters,
           gpuRequirements,
           priority: form.priority,
-          // A single dataset stays exactly the request it was before mixtures
-          // existed; `mixture` only appears when there is one to describe.
-          ...(members.length > 1
-            ? { mixture: members.map((m) => ({ datasetId: m.datasetId, weight: m.weight })) }
-            : {}),
-          // A run starts from one set of weights, and the server refuses a body
-          // carrying both ids — a picked checkpoint replaces its model rather
-          // than joining it. A foundation run sends neither, so its body is
-          // byte-for-byte the one it was before. (TASK-239)
+          // A single dataset stays exactly the request it was before mixtures.
+          ...(members.length > 1 ? { mixture: members.map((m) => ({ datasetId: m.datasetId, weight: m.weight })) } : {}),
+          // One set of starting weights: a checkpoint replaces its model. (TASK-239)
           ...(initFrom?.checkpointId
             ? { initFromCheckpointId: initFrom.checkpointId }
             : initFrom
@@ -340,611 +148,103 @@ export function TrainingJobWizard({
               : {}),
         });
       }
-      handleClose();
+      toast.success('Training job created', { description: 'It starts as soon as a worker is free.' });
+      close();
     } catch (err) {
       setError(getErrorMessage(err, 'Failed to submit training job'));
+    } finally {
+      setSubmitting(false);
     }
-  }, [form, onSubmit, handleClose]);
+  };
 
-  const toggleMember = useCallback((datasetId: string) => {
-    setForm((prev) => {
-      const exists = prev.mixture.some((m) => m.datasetId === datasetId);
-      const mixture = exists
-        ? prev.mixture.filter((m) => m.datasetId !== datasetId)
-        : [...prev.mixture, { datasetId, weight: 1 }];
-      return { ...prev, mixture, datasetId: mixture[0]?.datasetId ?? '' };
-    });
-    setCompatibility(null);
-  }, []);
+  const blocked = compatibility?.verdict === 'incompatible' || badWeights(form).length > 0;
 
-  const setMemberWeight = useCallback((datasetId: string, weight: number) => {
-    setForm((prev) => ({
-      ...prev,
-      mixture: prev.mixture.map((m) => (m.datasetId === datasetId ? { ...m, weight } : m)),
-    }));
-  }, []);
-
-  const canProceed = useCallback(() => {
-    switch (currentStep) {
-      case 'type':
-        return true;
-      case 'dataset':
-        return form.mixture.length > 0;
-      case 'model':
-        // "Continue from an existing model" without a model is not a run the
-        // server could start: it would silently fall back to the foundation
-        // weights, which is the opposite of what was asked for. (TASK-239)
-        return (
-          !!form.baseModel &&
-          !!form.fineTuneMethod &&
-          (form.weightsSource === 'foundation' || !!form.initFrom)
-        );
-      case 'scene':
-        return !!form.sceneId;
-      case 'hyperparams':
-        return form.hyperparameters.learning_rate > 0 && form.hyperparameters.epochs > 0;
-      case 'gpu':
-        return true;
-      case 'review':
-        return true;
-      default:
-        return false;
-    }
-  }, [currentStep, form]);
-
-  const selectedBaseModel = baseModels.find((m) => m.value === form.baseModel);
-  const selectedDataset = datasets.find((d) => d.id === form.datasetId);
-  const selectedScene = scenes.find((s) => s.id === form.sceneId);
+  const footer = (
+    <div className="flex w-full items-center justify-end gap-2">
+      <Button variant="ghost" onClick={close} className="mr-auto">Cancel</Button>
+      {index > 0 && <Button variant="secondary" onClick={() => go(-1)}>Back</Button>}
+      {step === 'review' ? (
+        // The server refuses an incompatible mixture and a non-positive weight;
+        // refusing both here keeps the reason on screen.
+        <Button onClick={() => void submit()} isLoading={isSubmitting || submitting} loadingText="Creating…" disabled={blocked}>
+          Create training job
+        </Button>
+      ) : (
+        <Button onClick={() => go(1)} disabled={!canProceed}>Next</Button>
+      )}
+    </div>
+  );
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="New Training Job" size="lg">
-      <div className="space-y-6">
-        {/* Step indicator */}
-        <div className="flex items-center justify-between">
-          {steps.map((step, index) => (
-            <div key={step.id} className="flex items-center">
-              <button
-                onClick={() => index < currentStepIndex && setCurrentStep(step.id)}
-                disabled={index > currentStepIndex}
-                aria-current={currentStep === step.id ? 'step' : undefined}
-                aria-label={`Step ${index + 1}: ${step.label}`}
-                className={cn(
-                  'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500/60 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent',
-                  currentStep === step.id
-                    ? 'bg-primary text-on-primary'
-                    : index < currentStepIndex
-                      ? 'bg-green-500 text-white cursor-pointer hover:bg-green-600'
-                      : 'bg-theme-secondary/20 text-theme-secondary'
-                )}
-              >
-                {index < currentStepIndex ? (
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                ) : (
-                  index + 1
-                )}
-              </button>
-              <span className={cn(
-                'ml-2 text-sm hidden sm:block',
-                currentStep === step.id ? 'text-theme-primary font-medium' : 'text-theme-secondary'
-              )}>
-                {step.label}
-              </span>
-              {index < steps.length - 1 && (
-                <div className="w-8 sm:w-12 h-0.5 mx-2 bg-theme-secondary/20" />
-              )}
-            </div>
-          ))}
-        </div>
-
-        {/* Step content */}
-        <div className="min-h-[300px]">
-          {/* Job type selection (TASK-172.C) */}
-          {currentStep === 'type' && (
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium text-theme-primary">Training Type</h3>
-              <p className="text-sm text-theme-secondary">
-                Choose what to train. Supervised fine-tunes a VLA model on a recorded dataset;
-                Sim-RL trains a control policy (navigation or locomotion gait) in a digital-twin
-                simulation scene.
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" role="group" aria-label="Training type">
-                <button
-                  data-testid="wizard-kind-supervised"
-                  aria-pressed={form.kind === 'supervised'}
-                  onClick={() => setForm({ ...form, kind: 'supervised' })}
-                  className={cn('p-4 text-left', selectCardCls(form.kind === 'supervised'))}
-                >
-                  <span className="font-medium text-theme-primary">Supervised Fine-tune</span>
-                  <p className="text-xs text-theme-secondary mt-1">
-                    Fine-tune a VLA model (SmolVLA, Pi0, …) on a validated dataset.
-                  </p>
-                </button>
-
-                <button
-                  data-testid="wizard-kind-sim_rl"
-                  aria-pressed={form.kind === 'sim_rl'}
-                  onClick={() => setForm({ ...form, kind: 'sim_rl' })}
-                  className={cn('p-4 text-left', selectCardCls(form.kind === 'sim_rl', 'purple'))}
-                >
-                  <span className="font-medium text-theme-primary">Sim-RL Policy</span>
-                  <Badge variant="purple" className="ml-2">
-                    Beta
-                  </Badge>
-                  <p className="text-xs text-theme-secondary mt-1">
-                    Train an RL control policy (navigation or locomotion gait) for a robot in a
-                    simulation scene.
-                  </p>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* SimScene selection (sim_rl, TASK-172.C) */}
-          {currentStep === 'scene' && (
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium text-theme-primary">Select Scene</h3>
-              <p className="text-sm text-theme-secondary">
-                Choose the simulation environment. Digital-twin scenes replicate a real room's
-                geometry; the navigation goal is part of the scene.
-              </p>
-
-              <div
-                className="grid gap-3 max-h-[300px] overflow-y-auto"
-                data-testid="scene-list"
-                role="group"
-                aria-label="Simulation scene"
-              >
-                {scenesLoading && scenes.length === 0 && (
-                  <p className="text-center py-8 text-theme-secondary">Loading scenes…</p>
-                )}
-                {scenes.map((scene) => (
-                  <button
-                    key={scene.id}
-                    data-testid={`scene-option-${scene.id}`}
-                    aria-pressed={form.sceneId === scene.id}
-                    onClick={() => setForm({ ...form, sceneId: scene.id })}
-                    className={cn('p-4 text-left', selectCardCls(form.sceneId === scene.id, 'purple'))}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-theme-primary">{scene.name}</span>
-                      <div className="flex gap-1">
-                        <Badge variant="default">{scene.embodimentTag}</Badge>
-                        <Badge variant={scene.source === 'twin' ? 'info' : 'default'}>
-                          {scene.source === 'twin' ? 'Digital twin' : scene.source}
-                        </Badge>
-                      </div>
-                    </div>
-                    {scene.description && (
-                      <p className="text-xs text-theme-secondary mt-1">{scene.description}</p>
-                    )}
-                  </button>
-                ))}
-                {!scenesLoading && scenes.length === 0 && (
-                  <p className="text-center py-8 text-theme-secondary">
-                    No simulation scenes yet. Build a digital twin or add a built-in scene to get started.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Dataset selection — one dataset or a weighted mixture of them */}
-          {currentStep === 'dataset' && (
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium text-theme-primary">Select Datasets</h3>
-              <p className="text-sm text-theme-secondary">
-                Pick one validated dataset, or several to train as a mixture. A weight is how
-                often a dataset is sampled relative to the others — leave them at 1 for an even
-                split.
-              </p>
-
-              <div
-                className="grid gap-3 max-h-[300px] overflow-y-auto"
-                role="group"
-                aria-label="Dataset"
-              >
-                {datasets.filter((d) => d.status === 'ready').map((dataset) => {
-                  const member = form.mixture.find((m) => m.datasetId === dataset.id);
-                  return (
-                    <div
-                      key={dataset.id}
-                      className={cn('p-4', selectCardCls(!!member))}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <button
-                          aria-pressed={!!member}
-                          onClick={() => toggleMember(dataset.id)}
-                          className="min-w-0 flex-1 text-left"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-medium text-theme-primary truncate">
-                              {dataset.name}
-                            </span>
-                            <Badge variant="success">Ready</Badge>
-                          </div>
-                          <p className="text-sm text-theme-secondary mt-1">
-                            {dataset.totalFrames.toLocaleString(UI_DATE_LOCALE)} frames
-                          </p>
-                        </button>
-                        {member && (
-                          <label className="shrink-0 text-xs text-theme-tertiary">
-                            Weight
-                            <input
-                              type="number"
-                              min={0.1}
-                              step={0.1}
-                              value={member.weight}
-                              aria-label={`Weight for ${dataset.name}`}
-                              onChange={(e) => {
-                                const next = Number(e.target.value);
-                                setMemberWeight(dataset.id, Number.isFinite(next) ? next : 1);
-                              }}
-                              className="mt-1 block w-20 rounded-brand border border-theme-secondary/30 bg-theme-primary px-2 py-1 text-sm text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
-                            />
-                          </label>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-                {datasets.filter((d) => d.status === 'ready').length === 0 && (
-                  <p className="text-center py-8 text-theme-secondary">
-                    No validated datasets available. Upload and validate a dataset first.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Model selection */}
-          {currentStep === 'model' && (
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-lg font-medium text-theme-primary">Base Model</h3>
-                <p className="text-sm text-theme-secondary mb-3">
-                  Select the VLA architecture to train. A run that continues an existing model
-                  keeps the architecture that model was trained as.
-                </p>
-                <div className="grid grid-cols-2 gap-3" role="group" aria-label="Base model">
-                  {baseModels.map((model) => (
-                    <button
-                      key={model.value}
-                      aria-pressed={form.baseModel === model.value}
-                      onClick={() => handleBaseModelChange(model.value)}
-                      className={cn('p-4 text-left', selectCardCls(form.baseModel === model.value))}
-                    >
-                      <span className="font-medium text-theme-primary">{model.label}</span>
-                      <p className="text-xs text-theme-secondary mt-1">{model.description}</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Where the weights come from — the foundation model, or a
-                  fine-tune already in the registry. (TASK-239) */}
-              <div>
-                <h3 className="text-lg font-medium text-theme-primary">Starting Weights</h3>
-                <p className="text-sm text-theme-secondary mb-3">
-                  Start from the foundation model, or continue training a model that already
-                  exists so an experiment can improve on the last one.
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" role="group" aria-label="Starting weights">
-                  <button
-                    data-testid="weights-source-foundation"
-                    aria-pressed={form.weightsSource === 'foundation'}
-                    onClick={() => handleWeightsSourceChange('foundation')}
-                    className={cn('p-4 text-left', selectCardCls(form.weightsSource === 'foundation'))}
-                  >
-                    <span className="font-medium text-theme-primary">Foundation model</span>
-                    <p className="text-xs text-theme-secondary mt-1">
-                      Train from the published {selectedBaseModel?.label ?? form.baseModel} weights.
-                    </p>
-                  </button>
-                  <button
-                    data-testid="weights-source-existing"
-                    aria-pressed={form.weightsSource === 'existing'}
-                    onClick={() => handleWeightsSourceChange('existing')}
-                    className={cn('p-4 text-left', selectCardCls(form.weightsSource === 'existing'))}
-                  >
-                    <span className="font-medium text-theme-primary">
-                      Continue from an existing model
-                    </span>
-                    <p className="text-xs text-theme-secondary mt-1">
-                      Pick a registered model, or one of its epoch checkpoints, as the starting
-                      point.
-                    </p>
-                  </button>
-                </div>
-
-                {form.weightsSource === 'existing' && (
-                  <div className="mt-3">
-                    <InitFromModelPicker
-                      baseModel={form.baseModel}
-                      baseModelLabel={selectedBaseModel?.label ?? form.baseModel}
-                      value={form.initFrom}
-                      onChange={handleInitFromChange}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <h3 className="text-lg font-medium text-theme-primary">Fine-tuning Method</h3>
-                <p className="text-sm text-theme-secondary mb-3">
-                  Choose how to adapt the model.
-                </p>
-                <div className="grid grid-cols-3 gap-3" role="group" aria-label="Fine-tuning method">
-                  {fineTuneMethods.map((method) => (
-                    <button
-                      key={method.value}
-                      aria-pressed={form.fineTuneMethod === method.value}
-                      onClick={() => handleFineTuneMethodChange(method.value)}
-                      className={cn('p-4 text-left', selectCardCls(form.fineTuneMethod === method.value))}
-                    >
-                      <span className="font-medium text-theme-primary">{method.label}</span>
-                      <p className="text-xs text-theme-secondary mt-1">{method.description}</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Hyperparameters */}
-          {currentStep === 'hyperparams' && (
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium text-theme-primary">Hyperparameters</h3>
-              <p className="text-sm text-theme-secondary">
-                {form.kind === 'sim_rl'
-                  ? 'Configure RL training hyperparameters (learning rate, steps, …).'
-                  : `Configure training hyperparameters. Defaults are optimized for ${form.fineTuneMethod.toUpperCase()}.`}
-              </p>
-
-              {/* Training presets */}
+    <Modal isOpen={isOpen} onClose={close} title="New training job" size="xl" closeOnBackdrop={false} footer={footer}>
+      <div className="flex flex-col gap-6">
+        <StepIndicator steps={steps} index={index} onJump={(id) => setStep(id)} />
+        <div className="min-h-[280px]">
+          {step === 'type' && <TypeStep form={form} patch={patch} />}
+          {step === 'scene' && <SceneStep form={form} patch={patch} scenes={scenes} loading={scenesLoading} />}
+          {step === 'dataset' && <DatasetStep form={form} datasets={datasets} onToggle={toggleMember} onWeight={setWeight} />}
+          {step === 'model' && <ModelStep form={form} onBaseModel={onBaseModel} onWeightsSource={onWeightsSource} onInitFrom={onInitFrom} onMethod={onMethod} />}
+          {step === 'hyperparams' && (
+            <StepSection title="Settings" description="Start from a preset, then adjust. Defaults suit the chosen fine-tuning method.">
               <div className="flex flex-wrap gap-2">
-                <span className="text-sm text-theme-tertiary mr-2 self-center">Presets:</span>
                 {Object.entries(TRAINING_PRESETS).map(([key, preset]) => (
-                  <button
-                    key={key}
-                    onClick={() =>
-                      setForm({
-                        ...form,
-                        hyperparameters: { ...form.hyperparameters, ...preset.hyperparameters },
-                      })
-                    }
-                    className="px-3 py-1.5 text-sm rounded-lg border border-theme-secondary/30 hover:border-cobalt-500 hover:bg-cobalt-500/10 transition-colors text-theme-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500/60"
-                    title={preset.description}
-                  >
+                  <Button key={key} variant="secondary" size="sm" title={preset.description}
+                    onClick={() => patch({ hyperparameters: { ...form.hyperparameters, ...preset.hyperparameters } })}>
                     {preset.label}
-                  </button>
+                  </Button>
                 ))}
               </div>
-
-              <HyperparameterForm
-                values={form.hyperparameters}
-                onChange={(hyperparameters) => setForm({ ...form, hyperparameters })}
-                fineTuneMethod={form.fineTuneMethod}
-              />
-            </div>
+              <HyperparameterForm values={form.hyperparameters} onChange={(hyperparameters) => patch({ hyperparameters })} fineTuneMethod={form.fineTuneMethod} />
+            </StepSection>
           )}
-
-          {/* GPU Resources */}
-          {currentStep === 'gpu' && (
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-lg font-medium text-theme-primary">GPU Preference</h3>
-                <p className="text-sm text-theme-secondary mb-3">
-                  Select preferred GPU type or allow any available.
-                </p>
-                <div className="grid grid-cols-3 gap-3" role="group" aria-label="GPU preference">
-                  {[
-                    { value: 'any' as const, label: 'Any Available' },
-                    { value: 'a100' as const, label: 'A100' },
-                    { value: 'h100' as const, label: 'H100' },
-                  ].map((option) => (
-                    <button
-                      key={option.value}
-                      aria-pressed={form.gpuType === option.value}
-                      onClick={() => setForm({ ...form, gpuType: option.value })}
-                      className={cn('p-4 text-left', selectCardCls(form.gpuType === option.value))}
-                    >
-                      <span className="font-medium text-theme-primary">{option.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-lg font-medium text-theme-primary">Priority</h3>
-                <p className="text-sm text-theme-secondary mb-3">
-                  Higher priority jobs are scheduled first.
-                </p>
-                <div className="grid grid-cols-3 gap-3" role="group" aria-label="Priority">
-                  {[
-                    { value: 'low' as const, label: 'Low' },
-                    { value: 'normal' as const, label: 'Normal' },
-                    { value: 'high' as const, label: 'High' },
-                  ].map((option) => (
-                    <button
-                      key={option.value}
-                      aria-pressed={form.priority === option.value}
-                      onClick={() => setForm({ ...form, priority: option.value })}
-                      className={cn('p-4 text-center', selectCardCls(form.priority === option.value))}
-                    >
-                      <span className="font-medium text-theme-primary">{option.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-            </div>
-          )}
-
-          {/* Review */}
-          {currentStep === 'review' && (
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium text-theme-primary">Review & Submit</h3>
-              <p className="text-sm text-theme-secondary">
-                Review your configuration before submitting.
-              </p>
-
-              {badWeights(form).length > 0 && (
-                <div
-                  className="p-3 rounded-brand bg-amber-500/10 text-sm text-amber-700 dark:text-amber-300"
-                  data-testid="bad-weight-notice"
-                >
-                  {badWeights(form)
-                    .map((m) => datasets.find((d) => d.id === m.datasetId)?.name ?? m.datasetId)
-                    .join(', ')}{' '}
-                  {badWeights(form).length === 1 ? 'has' : 'have'} a weight that is not a positive
-                  number. A weight is how often the trainer samples that dataset relative to the
-                  others, so zero would silently leave it out of the run. Go back and set it, or
-                  remove the dataset from the mixture.
-                </div>
-              )}
-
-              <div className="space-y-4 p-4 bg-theme-secondary/10 rounded-lg" data-testid="review-summary">
-                <div className="grid grid-cols-2 gap-4">
-                  {form.kind === 'sim_rl' ? (
-                    <>
-                      <div>
-                        <span className="text-sm text-theme-tertiary">Type</span>
-                        <p className="font-medium text-theme-primary">Sim-RL Policy</p>
-                      </div>
-                      <div>
-                        <span className="text-sm text-theme-tertiary">Scene</span>
-                        <p className="font-medium text-theme-primary">{selectedScene?.name}</p>
-                      </div>
-                      <div>
-                        <span className="text-sm text-theme-tertiary">Embodiment</span>
-                        <p className="font-medium text-theme-primary">
-                          {selectedScene?.embodimentTag}
-                        </p>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div data-testid="review-mixture">
-                        <span className="text-sm text-theme-tertiary">
-                          {form.mixture.length > 1 ? `Mixture (${form.mixture.length} datasets)` : 'Dataset'}
-                        </span>
-                        {form.mixture.length === 0 && (
-                          <p className="font-medium text-theme-primary">{selectedDataset?.name}</p>
-                        )}
-                        {form.mixture.map((member) => {
-                          const dataset = datasets.find((d) => d.id === member.datasetId);
-                          const total = form.mixture.reduce((sum, m) => sum + (m.weight || 0), 0);
-                          return (
-                            <p key={member.datasetId} className="font-medium text-theme-primary">
-                              {dataset?.name ?? member.datasetId}
-                              {form.mixture.length > 1 && (
-                                <span className="ml-2 text-sm font-normal text-theme-secondary">
-                                  weight {member.weight}
-                                  {total > 0 && ` · ${Math.round((member.weight / total) * 100)}%`}
-                                </span>
-                              )}
-                            </p>
-                          );
-                        })}
-                      </div>
-                      <div data-testid="review-starts-from">
-                        <span className="text-sm text-theme-tertiary">Starts From</span>
-                        <p className="font-medium text-theme-primary">
-                          {describeStartingPoint(form)}
-                        </p>
-                      </div>
-                      <div>
-                        <span className="text-sm text-theme-tertiary">Fine-tune Method</span>
-                        <p className="font-medium text-theme-primary">
-                          {fineTuneMethods.find((m) => m.value === form.fineTuneMethod)?.label}
-                        </p>
-                      </div>
-                    </>
-                  )}
-                  <div>
-                    <span className="text-sm text-theme-tertiary">Priority</span>
-                    <p className="font-medium text-theme-primary capitalize">{form.priority}</p>
-                  </div>
-                </div>
-
-                <div className="border-t border-theme-secondary/20 pt-4">
-                  <span className="text-sm text-theme-tertiary">Key Hyperparameters</span>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <span className="px-2 py-1 bg-theme-primary/5 rounded text-sm">
-                      LR: {form.hyperparameters.learning_rate}
-                    </span>
-                    <span className="px-2 py-1 bg-theme-primary/5 rounded text-sm">
-                      Batch: {form.hyperparameters.batch_size}
-                    </span>
-                    <span className="px-2 py-1 bg-theme-primary/5 rounded text-sm">
-                      {form.kind === 'sim_rl' ? 'Iterations' : 'Epochs'}: {form.hyperparameters.epochs}
-                    </span>
-                    {form.kind !== 'sim_rl' && form.hyperparameters.max_steps != null && (
-                      <span className="px-2 py-1 bg-theme-primary/5 rounded text-sm">
-                        Max Steps: {form.hyperparameters.max_steps}
-                      </span>
-                    )}
-                    {form.kind !== 'sim_rl' &&
-                      form.fineTuneMethod === 'lora' &&
-                      form.hyperparameters.lora_rank && (
-                        <span className="px-2 py-1 bg-theme-primary/5 rounded text-sm">
-                          LoRA Rank: {form.hyperparameters.lora_rank}
-                        </span>
-                      )}
-                  </div>
-                </div>
-              </div>
-
-              {/* What training these together actually means, on the last
-                  screen before it is submitted rather than in a log afterwards. */}
-              {form.kind !== 'sim_rl' && form.mixture.length > 1 && (
-                <DatasetCompatibilityPanel
-                  datasetIds={form.mixture.map((m) => m.datasetId)}
-                  onReport={setCompatibility}
-                />
-              )}
-            </div>
+          {step === 'gpu' && <ResourcesStep form={form} patch={patch} />}
+          {step === 'review' && (
+            <ReviewStep form={form} datasets={datasets} scene={scenes.find((s) => s.id === form.sceneId)} onCompatibility={setCompatibility} />
           )}
         </div>
-
-        {/* Error message */}
         {error && (
-          <div
-            role="alert"
-            className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm"
-          >
+          <div role="alert" className="rounded-control border border-signal-stopped/30 bg-signal-stopped/10 px-3 py-2 text-sm text-ink-primary">
             {error}
           </div>
         )}
-
-        {/* Actions */}
-        <div className="flex justify-between">
-          <Button variant="ghost" onClick={currentStepIndex === 0 ? handleClose : handleBack}>
-            {currentStepIndex === 0 ? 'Cancel' : 'Back'}
-          </Button>
-
-          {currentStep === 'review' ? (
-            <Button
-              onClick={handleSubmit}
-              isLoading={isSubmitting}
-              // The server refuses an incompatible mixture with a 400, and a
-              // non-positive weight with another. Refusing both here means the
-              // reason is still on screen when it happens.
-              disabled={compatibility?.verdict === 'incompatible' || badWeights(form).length > 0}
-            >
-              Submit Training Job
-            </Button>
-          ) : (
-            <Button onClick={handleNext} disabled={!canProceed()}>
-              Continue
-            </Button>
-          )}
-        </div>
       </div>
     </Modal>
+  );
+}
+
+function StepIndicator({ steps, index, onJump }: { steps: { id: Step; label: string }[]; index: number; onJump: (id: Step) => void }) {
+  return (
+    <ol className="flex flex-wrap items-center gap-x-2 gap-y-2" aria-label="Steps">
+      {steps.map((s, i) => {
+        const done = i < index;
+        const current = i === index;
+        return (
+          <li key={s.id} className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => done && onJump(s.id)}
+              disabled={!done}
+              aria-current={current ? 'step' : undefined}
+              aria-label={`${s.label}${done ? ' (done)' : ''}`}
+              className={cn(
+                'flex items-center gap-2 rounded-control px-1 py-0.5 text-[13px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
+                done && 'cursor-pointer hover:text-ink-primary'
+              )}
+            >
+              <span
+                className={cn(
+                  'flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
+                  current ? 'bg-primary text-on-primary' : done ? 'bg-primary/15 text-primary' : 'bg-inset text-ink-tertiary'
+                )}
+              >
+                {done ? <Check className="h-3.5 w-3.5" strokeWidth={2} /> : i + 1}
+              </span>
+              <span className={cn('hidden sm:inline', current ? 'font-medium text-ink-primary' : 'text-ink-secondary')}>{s.label}</span>
+            </button>
+            {i < steps.length - 1 && <span aria-hidden className="h-px w-4 bg-line sm:w-6" />}
+          </li>
+        );
+      })}
+    </ol>
   );
 }

@@ -122,15 +122,15 @@ function report(verdict: CompatibilityReport['verdict']): CompatibilityReport {
   };
 }
 
-/** Click Continue until the review step is on screen. */
+/** Click Next until the review step is on screen. */
 async function advanceToReview(): Promise<void> {
   for (let i = 0; i < 6; i++) {
-    const next = screen.queryByRole('button', { name: 'Continue' });
+    const next = screen.queryByRole('button', { name: 'Next' });
     if (!next) break;
     fireEvent.click(next);
     await waitFor(() => expect(document.body).toBeTruthy());
   }
-  await screen.findByRole('button', { name: 'Submit Training Job' });
+  await screen.findByRole('button', { name: 'Create training job' });
 }
 
 beforeEach(() => {
@@ -147,14 +147,14 @@ describe('what reaches the server', () => {
       <TrainingJobWizard isOpen onClose={() => {}} onSubmit={onSubmit} datasets={DATASETS} />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));       // type → dataset
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));       // type → dataset
     fireEvent.click(screen.getByRole('button', { name: /GR00T AppleToPlate/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));       // dataset → model
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));       // model → hyperparams
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));       // hyperparams → gpu
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));       // dataset → model
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));       // model → hyperparams
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));       // hyperparams → gpu
     fireEvent.click(screen.getByRole('button', { name: 'A100' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));       // gpu → review
-    fireEvent.click(await screen.findByRole('button', { name: 'Submit Training Job' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));       // gpu → review
+    fireEvent.click(await screen.findByRole('button', { name: 'Create training job' }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(onSubmit).toHaveBeenCalledWith(
@@ -168,10 +168,10 @@ describe('what reaches the server', () => {
       <TrainingJobWizard isOpen onClose={() => {}} onSubmit={onSubmit} datasets={DATASETS} />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     fireEvent.click(screen.getByRole('button', { name: /GR00T AppleToPlate/ }));
     await advanceToReview();
-    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create training job' }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const body = onSubmit.mock.calls[0][0];
@@ -200,7 +200,7 @@ describe('what reaches the server', () => {
 
     await advanceToReview();
     await screen.findByTestId('compatibility-panel');
-    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create training job' }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(onSubmit).toHaveBeenCalledWith(
@@ -250,7 +250,7 @@ describe('what reaches the server', () => {
 
     // The reason is on screen next to the disabled button, rather than arriving
     // as a 400 after the modal has closed.
-    expect(screen.getByRole('button', { name: 'Submit Training Job' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create training job' })).toBeDisabled();
   });
 
   // -------------------------------------------------------------------------
@@ -282,8 +282,8 @@ describe('what reaches the server', () => {
     expect(await screen.findByTestId('bad-weight-notice')).toHaveTextContent(
       'G1 Dex3 ObjectPlacement'
     );
-    expect(screen.getByRole('button', { name: 'Submit Training Job' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+    expect(screen.getByRole('button', { name: 'Create training job' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create training job' }));
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
@@ -301,7 +301,7 @@ describe('what reaches the server', () => {
     fireEvent.change(weight, { target: { value: '-2' } });
 
     await advanceToReview();
-    expect(screen.getByRole('button', { name: 'Submit Training Job' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create training job' })).toBeDisabled();
   });
 
   // The api client rejects with a PLAIN OBJECT — `createApiError` in
@@ -329,7 +329,7 @@ describe('what reaches the server', () => {
     );
     await screen.findByLabelText('Weight for GR00T AppleToPlate');
     await advanceToReview();
-    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create training job' }));
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('no subsampling aligns them');
@@ -350,7 +350,7 @@ describe('what reaches the server', () => {
     await advanceToReview();
 
     expect(screen.queryByTestId('bad-weight-notice')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Submit Training Job' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create training job' })).not.toBeDisabled();
   });
 });
 
@@ -365,9 +365,9 @@ describe('what reaches the server', () => {
 /** Open the wizard on the Model step with a dataset chosen. */
 function renderOnModelStep(onSubmit = vi.fn().mockResolvedValue(undefined)) {
   render(<TrainingJobWizard isOpen onClose={() => {}} onSubmit={onSubmit} datasets={DATASETS} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Continue' })); // type → dataset
+  fireEvent.click(screen.getByRole('button', { name: 'Next' })); // type → dataset
   fireEvent.click(screen.getByRole('button', { name: /GR00T AppleToPlate/ }));
-  fireEvent.click(screen.getByRole('button', { name: 'Continue' })); // dataset → model
+  fireEvent.click(screen.getByRole('button', { name: 'Next' })); // dataset → model
   return onSubmit;
 }
 
@@ -380,10 +380,10 @@ describe('continuing from an existing model', () => {
 
     // Continuing from nothing would silently fall back to the foundation
     // weights, which is the opposite of what was asked for.
-    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
 
     fireEvent.click(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate'));
-    expect(screen.getByRole('button', { name: 'Continue' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).not.toBeDisabled();
   });
 
   it('offers no model of another architecture, and stays blocked', () => {
@@ -394,7 +394,7 @@ describe('continuing from an existing model', () => {
     expect(screen.getByTestId('init-from-empty')).toHaveTextContent(
       'No registered model was trained as Pi0'
     );
-    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
   });
 
   it('sends the picked model as initFromModelVersionId, and no checkpoint', async () => {
@@ -405,7 +405,7 @@ describe('continuing from an existing model', () => {
     fireEvent.click(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate'));
 
     await advanceToReview();
-    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create training job' }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const body = onSubmit.mock.calls[0][0];
@@ -425,7 +425,7 @@ describe('continuing from an existing model', () => {
     fireEvent.change(screen.getByLabelText('Checkpoint'), { target: { value: 'cp-14' } });
 
     await advanceToReview();
-    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create training job' }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const body = onSubmit.mock.calls[0][0];
@@ -469,7 +469,7 @@ describe('continuing from an existing model', () => {
     // Still the architecture, spelled the way it always was.
     expect(screen.getByTestId('review-starts-from')).toHaveTextContent('PI0');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create training job' }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const body = onSubmit.mock.calls[0][0];
     expect(body).not.toHaveProperty('initFromModelVersionId');
@@ -485,9 +485,9 @@ describe('continuing from an existing model', () => {
     fireEvent.click(screen.getByRole('button', { name: /GR00T N1\.7/ }));
     fireEvent.click(screen.getByTestId('weights-source-existing'));
     fireEvent.click(screen.getByLabelText('Start from GR00T-N1.7 AppleToPlate'));
-    expect(screen.getByRole('button', { name: 'Continue' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).not.toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: /OpenVLA/ }));
-    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
   });
 });

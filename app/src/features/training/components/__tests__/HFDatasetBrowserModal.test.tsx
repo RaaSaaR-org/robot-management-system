@@ -84,8 +84,8 @@ function grootPreview(over: Partial<HFDatasetPreview> = {}): HFDatasetPreview {
 
 /** Direct Link tab → type the repo → Preview. */
 async function openPreview(repoId = 'nvidia/GR00T-N1.7-AppleToPlate'): Promise<void> {
-  fireEvent.click(screen.getByRole('tab', { name: 'Direct Link' }));
-  fireEvent.change(screen.getByLabelText('HuggingFace Dataset URL or Repo ID'), {
+  fireEvent.click(screen.getByRole('tab', { name: 'Direct link' }));
+  fireEvent.change(screen.getByLabelText('Hugging Face URL or repo ID'), {
     target: { value: repoId },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
@@ -153,10 +153,10 @@ describe('what the modal shows before committing to a download', () => {
       { id: 'rt-g1', name: 'Unitree G1 EDU (Dex3-1)', manufacturer: 'Unitree' },
     ]);
     render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
-    fireEvent.click(screen.getByRole('tab', { name: 'Direct Link' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Direct link' }));
     await waitFor(() => expect(listRobotTypes).toHaveBeenCalled());
 
-    fireEvent.change(screen.getByLabelText('HuggingFace Dataset URL or Repo ID'), {
+    fireEvent.change(screen.getByLabelText('Hugging Face URL or repo ID'), {
       target: { value: 'nvidia/GR00T-N1.7-AppleToPlate' },
     });
     fireEvent.change(screen.getByLabelText('Revision'), { target: { value: 'v1.1' } });
@@ -278,7 +278,7 @@ describe('the progress socket', () => {
     const notice = await screen.findByTestId('hf-import-feed-lost');
     // The distinction that matters: the feed died, the import did not.
     expect(notice).toHaveTextContent(/still running/i);
-    expect(screen.queryByText('Importing dataset...')).not.toBeInTheDocument();
+    expect(screen.queryByText('Importing dataset…')).not.toBeInTheDocument();
   });
 
   it('lets the operator out once the feed is gone', async () => {
