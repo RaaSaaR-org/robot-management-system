@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { FormField, FormModal, Input, Select, toast } from '@/shared/components/ui';
+import { FormField, FormModal, Input, Select, errorMessage, toast } from '@/shared/components/ui';
 import type { Robot } from '@/features/robots/types/robots.types';
 import { useTwinStore } from '../store/twinStore';
 import type { DigitalTwinDTO } from '../types/twin.types';
@@ -69,7 +69,7 @@ export function NewScanModal({ isOpen, onClose, robots, nextIndex, onCreated }: 
       toast.success('Site created', { description: twin.name });
       onCreated(twin);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : String(err));
+      setFormError(errorMessage(err));
     } finally {
       setSaving(false);
     }

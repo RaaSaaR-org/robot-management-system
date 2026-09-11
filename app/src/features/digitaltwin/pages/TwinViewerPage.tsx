@@ -15,17 +15,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { FlaskConical, Trash2 } from 'lucide-react';
 import {
-  Button,
-  ErrorState,
-  PageHeader,
-  Panel,
-  RowActions,
-  Skeleton,
-  StatusTag,
-  Tabs,
-  Tooltip,
-  confirm,
-  toast,
+  Button, ErrorState,
+  PageHeader, Panel,
+  RowActions, Skeleton,
+  StatusTag, Tabs,
+  Tooltip, confirm,
+  errorMessage, toast,
 } from '@/shared/components/ui';
 import { useRobots } from '@/features/robots/hooks/useRobots';
 import type { RobotType } from '@/features/robots/types/robots.types';
@@ -53,13 +48,6 @@ function normalizeRobotType(raw?: string): RobotType {
   if (t.startsWith('h1')) return 'h1';
   if (t.startsWith('so101')) return 'so101';
   return 'generic';
-}
-
-function errorMessage(err: unknown, fallback: string): string {
-  return (
-    (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
-    (err instanceof Error ? err.message : fallback)
-  );
 }
 
 const TAB_IDS = ['scan', 'zones'] as const;

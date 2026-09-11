@@ -10,7 +10,7 @@
 
 import { memo, useCallback, useState } from 'react';
 import { Download } from 'lucide-react';
-import { Button, Panel, toast } from '@/shared/components/ui';
+import { Button, Panel, errorMessage, toast } from '@/shared/components/ui';
 import { downloadBlob } from '@/features/robots/utils/pointcloud';
 import { twinApi } from '../api/twinApi';
 
@@ -42,7 +42,7 @@ export const ExportPanel = memo(function ExportPanel({
       await work();
       toast.success(`${label} exported`, { description: name });
     } catch (e) {
-      toast.error(`Couldn't export ${label}`, { description: e instanceof Error ? e.message : String(e) });
+      toast.error(`Couldn't export ${label}`, { description: errorMessage(e) });
     } finally {
       setBusy(null);
     }

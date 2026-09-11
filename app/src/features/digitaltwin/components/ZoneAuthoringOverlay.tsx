@@ -13,6 +13,7 @@
  * @feature digitaltwin
  */
 
+import { useCssColor } from '@/shared/components/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   useTwinZoneStore,
@@ -22,7 +23,6 @@ import {
   TWIN_ZONE_COLORS,
 } from '../store/twinZoneStore';
 import type { AccumulatedCloud, DigitalTwinDTO, TwinPoint, TwinZoneDTO } from '../types/twin.types';
-import { useCssColor } from '../utils/cssColor';
 
 export interface ZoneAuthoringOverlayProps {
   twin: DigitalTwinDTO;

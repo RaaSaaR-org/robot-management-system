@@ -5,10 +5,10 @@
  * @feature digitaltwin
  */
 
+import { useCssColor } from '@/shared/components/ui';
 import { memo, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import type { TwinPose } from '../types/twin.types';
-import { useCssColor } from '../utils/cssColor';
 
 export interface RobotPathTrailProps {
   path: TwinPose[];
