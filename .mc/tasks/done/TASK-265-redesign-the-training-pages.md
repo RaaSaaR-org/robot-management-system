@@ -3,7 +3,7 @@ id: "TASK-265"
 aliases: []
 title: "Redesign the training pages"
 slug: "redesign-the-training-pages"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
