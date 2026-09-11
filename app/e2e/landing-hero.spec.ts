@@ -172,7 +172,7 @@ for (const failure of ['WebGL unavailable', 'models unavailable']) {
     });
     await page.getByRole('link', { name: 'Explore the platform' }).click();
     await expect(
-      page.getByRole('heading', { name: 'Fleet Dashboard', exact: true }),
+      page.getByRole('heading', { name: 'Dashboard', exact: true }),
     ).toBeVisible();
   });
 }
