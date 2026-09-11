@@ -41,7 +41,6 @@ export {
   SafetyBadge,
   DecisionTable,
   DecisionModal,
-  Pager,
   PerformanceDashboard,
   DocumentationPortal,
 } from './components';
@@ -50,7 +49,6 @@ export type {
   SafetyBadgeProps,
   DecisionTableProps,
   DecisionModalProps,
-  PagerProps,
   PerformanceDashboardProps,
   DocumentationPortalProps,
 } from './components';

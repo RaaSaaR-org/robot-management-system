@@ -16,8 +16,6 @@ export type { DecisionTableProps } from './DecisionTable';
 export { DecisionModal } from './DecisionModal';
 export type { DecisionModalProps } from './DecisionModal';
 
-export { Pager } from './Pager';
-export type { PagerProps } from './Pager';
 
 export { PerformanceDashboard } from './PerformanceDashboard';
 export type { PerformanceDashboardProps } from './PerformanceDashboard';
