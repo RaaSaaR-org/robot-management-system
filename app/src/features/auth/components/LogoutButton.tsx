@@ -56,7 +56,8 @@ export function LogoutButton({
   onLogout,
   children = 'Sign out',
   className,
-}: LogoutButtonProps) {
+  leftIcon,
+}: LogoutButtonProps & { leftIcon?: React.ReactNode }) {
   const { logout } = useAuth();
 
   const handleLogout = useCallback(() => {
@@ -70,6 +71,7 @@ export function LogoutButton({
       size={size}
       onClick={handleLogout}
       className={className}
+      leftIcon={leftIcon}
     >
       {children}
     </Button>

@@ -32,7 +32,7 @@ describe('MFAChallenge', () => {
 
   it('renders 6-digit input in TOTP mode', () => {
     render(<MFAChallenge {...defaultProps} />);
-    expect(screen.getByText('Two-Factor Authentication')).toBeInTheDocument();
+    expect(screen.getByText('Enter the 6-digit code from your authenticator app.')).toBeInTheDocument();
     expect(screen.getByLabelText(/authentication code/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/authentication code/i)).toHaveAttribute('inputmode', 'numeric');
   });
@@ -86,7 +86,7 @@ describe('MFAChallenge', () => {
 
     await user.click(screen.getByText(/use a recovery code instead/i));
 
-    expect(screen.getByRole('heading', { name: /recovery code/i })).toBeInTheDocument();
+    expect(screen.getByText('Enter one of your recovery codes.')).toBeInTheDocument();
     expect(screen.getByLabelText(/recovery code/i)).toBeInTheDocument();
     expect(screen.getByText(/use authenticator app instead/i)).toBeInTheDocument();
   });
