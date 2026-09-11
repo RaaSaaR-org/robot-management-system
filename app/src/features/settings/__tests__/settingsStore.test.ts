@@ -70,13 +70,47 @@ describe('settingsStore', () => {
     expect(settingsApi.getSettings).toHaveBeenCalledOnce();
   });
 
-  it('fetchSettings syncs theme with themeStore', async () => {
+  it("fetchSettings keeps this device's theme (the top bar can change it without the server)", async () => {
+    useThemeStore.setState({ theme: 'light' });
     const darkSettings = { ...MOCK_SETTINGS, theme: 'dark' as const };
     vi.mocked(settingsApi.getSettings).mockResolvedValue(darkSettings);
 
     await useSettingsStore.getState().fetchSettings();
 
+    expect(useThemeStore.getState().theme).toBe('light');
+    expect(useSettingsStore.getState().settings?.theme).toBe('dark');
+  });
+
+  it('fetchSettings fills in defaults when the API sends no settings (demo mock)', async () => {
+    useThemeStore.setState({ theme: 'dark' });
+    vi.mocked(settingsApi.getSettings).mockResolvedValue({ data: [], total: 0 } as unknown as UserSettings);
+
+    await useSettingsStore.getState().fetchSettings();
+
+    const settings = useSettingsStore.getState().settings;
+    expect(settings?.theme).toBe('dark');
+    expect(settings?.language).toBe('en');
+    expect(settings?.refreshIntervalSec).toBe(30);
     expect(useThemeStore.getState().theme).toBe('dark');
+  });
+
+  it('resetSettings puts this device back on the dark default', async () => {
+    useThemeStore.setState({ theme: 'light' });
+    // An older database column default still answers 'system'.
+    vi.mocked(settingsApi.resetSettings).mockResolvedValue(MOCK_SETTINGS);
+
+    await useSettingsStore.getState().resetSettings();
+
+    expect(useThemeStore.getState().theme).toBe('dark');
+  });
+
+  it('resetSettings fills in defaults when the API sends no settings', async () => {
+    vi.mocked(settingsApi.resetSettings).mockResolvedValue({} as UserSettings);
+
+    await useSettingsStore.getState().resetSettings();
+
+    expect(useSettingsStore.getState().settings?.theme).toBe('dark');
+    expect(useSettingsStore.getState().settings?.compactMode).toBe(false);
   });
 
   it('fetchSettings handles API error', async () => {
