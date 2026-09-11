@@ -114,7 +114,6 @@ export function SovereigntySection() {
                       <span
                         className="block text-[0.8125rem]"
                         style={{
-                          fontFamily: 'var(--font-mono)',
                           fontWeight: provider.local ? 600 : 400,
                           color: provider.local
                             ? 'var(--color-signal-measured)'

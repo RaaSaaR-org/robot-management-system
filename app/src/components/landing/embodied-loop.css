@@ -20,9 +20,7 @@
   justify-content: center;
   gap: 12px;
   color: #a4b8cc;
-  font:
-    500 10px/1.5 'JetBrains Mono Variable',
-    monospace;
+  font: 500 11px/1.5 var(--font-sans);
   letter-spacing: 0.15em;
 }
 .embodied-loop-eyebrow > span {
@@ -130,9 +128,7 @@
 .embodied-loop-lobe span {
   display: block;
   color: #91a9be;
-  font:
-    500 9px/1.5 'JetBrains Mono Variable',
-    monospace;
+  font: 500 10px/1.5 var(--font-sans);
   letter-spacing: 0.13em;
 }
 .embodied-loop-lobe strong {
@@ -184,9 +180,8 @@
 }
 .embodied-loop-node-index {
   color: #aabed4;
-  font:
-    500 10px/1.4 'JetBrains Mono Variable',
-    monospace;
+  font: 500 10px/1.4 var(--font-sans);
+  font-variant-numeric: tabular-nums;
 }
 .embodied-loop-node-label {
   font-size: 16px;
@@ -199,9 +194,7 @@
   gap: 5px;
   width: fit-content;
   color: #b8c8db;
-  font:
-    500 10px/1.5 'JetBrains Mono Variable',
-    monospace;
+  font: 500 10px/1.5 var(--font-sans);
 }
 .embodied-loop-tag::before {
   content: '';
@@ -264,9 +257,7 @@
   justify-content: space-between;
   gap: 12px;
   color: #afc1d8;
-  font:
-    500 10px/1.5 'JetBrains Mono Variable',
-    monospace;
+  font: 500 11px/1.5 var(--font-sans);
   letter-spacing: 0.08em;
 }
 .embodied-loop-stage-name {
@@ -336,9 +327,7 @@
 }
 .embodied-loop-return > span {
   color: #aabfd7;
-  font:
-    500 10px/1.5 'JetBrains Mono Variable',
-    monospace;
+  font: 500 11px/1.5 var(--font-sans);
   letter-spacing: 0.1em;
   flex-shrink: 0;
 }
@@ -382,7 +371,7 @@
     font-size: clamp(17px, 1.55vw, 21px);
   }
   .embodied-loop-lobe span {
-    font-size: 7px;
+    font-size: 10px;
     letter-spacing: 0.07em;
   }
 }
@@ -403,7 +392,7 @@
     margin-top: 24%;
   }
   .embodied-loop-lobe span {
-    font-size: 7px;
+    font-size: 10px;
     letter-spacing: 0.04em;
   }
   .embodied-loop-lobe strong {
@@ -420,9 +409,7 @@
   }
   .embodied-loop-marker text {
     fill: #dceff4;
-    font:
-      500 18px 'JetBrains Mono Variable',
-      monospace;
+    font: 600 18px var(--font-sans);
   }
   .embodied-loop-marker[data-active='true'] circle {
     fill: #284b43;

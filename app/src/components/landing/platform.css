@@ -14,9 +14,7 @@
   align-items: center;
   gap: 12px;
   color: #9ab4ca;
-  font:
-    500 10px/1.6 'JetBrains Mono Variable',
-    monospace;
+  font: 500 11px/1.6 var(--font-sans);
   letter-spacing: 0.13em;
 }
 .platform-eyebrow > span {
@@ -94,9 +92,7 @@
   justify-content: space-between;
   gap: 20px;
   color: #8fa7bd;
-  font:
-    500 9px/1.5 'JetBrains Mono Variable',
-    monospace;
+  font: 500 10px/1.5 var(--font-sans);
   letter-spacing: 0.1em;
 }
 .platform-inputs {
@@ -224,7 +220,7 @@
   margin-top: 28px;
   text-align: center;
   color: #8ca3ba;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.7;
 }
 .platform-team {
@@ -258,16 +254,13 @@
     padding: 20px 14px;
     border-radius: 18px;
   }
-  .platform-blueprint-top {
-    font-size: 8px;
-  }
   .platform-blueprint-top span:last-child {
     display: none;
   }
   .platform-input {
     flex-direction: column;
     gap: 10px;
-    font-size: 10px;
+    font-size: 11px;
     text-align: center;
   }
   .platform-core {
