@@ -3,7 +3,7 @@ id: "TASK-260"
 aliases: []
 title: "Bring the landing design language to the whole app"
 slug: "bring-the-landing-design-language-to-the-whole-app"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -94,13 +94,35 @@ TASK-262 to TASK-268 depend only on TASK-261 and run in parallel. TASK-269 lands
 
 ## Acceptance Criteria
 
-- [ ] Every app route renders on the landing tokens: body ground `rgb(8, 15, 24)` in dark mode, and no `backdrop-filter` anywhere in the app outside the landing page.
-- [ ] Normal text is Inter, headings are Archivo, and mono appears only on code and machine output. No app text is below 10px (checked in e2e).
-- [ ] Every page follows the page anatomy and the CRUD pattern in `docs/brand.md`: one header, one primary action, the same list, form, confirm, toast, empty, loading and error behavior.
-- [ ] Every route was opened in a browser at 1440px and 390px, dark and light, with no page errors and no horizontal overflow, and its CRUD flows were clicked through.
-- [ ] A white-label brand config still recolors primary surfaces, with a readable on-primary text color.
-- [ ] The drift ratchet in the gate stands at zero.
-- [ ] `docs/brand.md` and `app/AGENTS.md` describe the new language.
+- [x] Every app route renders on the landing tokens: body ground `rgb(8, 15, 24)` in dark mode, and no `backdrop-filter` anywhere in the app outside the landing page.
+- [x] Normal text is Inter, headings are Archivo, and mono appears only on code and machine output. No app text is below 10px (checked in e2e).
+- [x] Every page follows the page anatomy and the CRUD pattern in `docs/brand.md`: one header, one primary action, the same list, form, confirm, toast, empty, loading and error behavior.
+- [x] Every route was opened in a browser at 1440px and 390px, dark and light, with no page errors and no horizontal overflow, and its CRUD flows were clicked through.
+- [x] A white-label brand config still recolors primary surfaces, with a readable on-primary text color.
+- [x] The drift ratchet in the gate stands at zero.
+- [x] `docs/brand.md` and `app/AGENTS.md` describe the new language.
+
+## Outcome (2026-09-11)
+
+Shipped in #306 (TASK-261), #307 (TASK-267), #308 (TASK-262), #309 (TASK-265), #310 (TASK-264), #311 (TASK-263), #312 (TASK-266), #313 (TASK-268), #314 (TASK-269) and the PR for TASK-271. Before its PR, each child:
+
+- ran its routes through `ui-check` in live and demo mode, at 1440 and 390, dark and light
+- clicked its create, edit, delete and act flows against the API on a copy of the dev database
+- passed tsc, vitest and Playwright
+
+How each criterion is checked:
+
+- **Criteria 1 and 2:** `app/e2e/app-routes.spec.ts` (TASK-269) enforces them on 50 routes at two widths.
+- **Criterion 3:** each group's browser QA.
+- **Criterion 5:** checked in the browser on 2026-09-11 with a temporary orange brand config that set no `onPrimary`. Primary surfaces turned orange in both themes, the contrast pick chose `#0a2225` text, the title read "Acme Robotics — Robot Management System", and the STOP fill stayed red.
+- **Criterion 6:** `app/src/__tests__/design-drift.test.ts` enforces it with a short allowlist, and each entry gives its reason.
+
+Not done from the test strategy: the manual `npm run tauri dev` smoke at 800×600. The shell was checked at 800px in a browser only.
+
+Follow-ups the browser testing surfaced, filed separately:
+
+- [[TASK-270]]: GDPR self-service requests act as a placeholder user.
+- [[TASK-272]]: server gaps the Build pages ran into (update rollback, cancel and delete routes).
 
 ## Test Strategy
 
