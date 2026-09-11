@@ -1,439 +1,134 @@
 /**
  * @file RoundDetailPage.tsx
- * @description Page for viewing federated round details
+ * @description One federated round: state, participants and configuration,
+ *              with start and cancel acts
  * @feature fleetlearning
  */
 
 import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { cn } from '@/shared/utils/cn';
-import { PageHeader } from '@/shared/components/ui';
+import { useParams } from 'react-router-dom';
+import { Play } from 'lucide-react';
 import {
-  ArrowLeft,
-  Play,
-  XCircle,
-  Clock,
-  Bot,
-  Database,
-  TrendingUp,
-  Settings,
-  Loader2,
-  AlertCircle,
-  RefreshCw,
-} from 'lucide-react';
-import { RoundStatusBadge } from '../components/RoundStatusBadge';
+  Button, ErrorState, KeyValueList, PageHeader, Panel, SkeletonText, StatRow, StatTile, StatusTag,
+  confirm, toast,
+} from '@/shared/components/ui';
+import { formatDateTime, getErrorMessage } from '@/shared/utils';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { ParticipantList } from '../components/ParticipantList';
+import { shortRoundId } from '../components/RoundsSection';
+import { useRobotNames } from '../components/useRobotNames';
 import { useRoundDetail } from '../hooks/fleetlearning';
 import {
-  AGGREGATION_METHOD_LABELS,
-  SELECTION_STRATEGY_LABELS,
-  formatDuration,
-  isRoundActive,
-  canStartRound,
-  canCancelRound,
+  AGGREGATION_METHOD_LABELS, SELECTION_STRATEGY_LABELS, canStartRound, formatDuration, isRoundActive,
 } from '../types/fleetlearning.types';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+const BACK = { to: '/fleet-learning', label: 'Fleet learning' };
 
 export function RoundDetailPage() {
-  const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
+  const { id = '' } = useParams<{ id: string }>();
+  const { round, participants, isLoading, error, fetchRound, startRound } = useRoundDetail(id);
+  const robotName = useRobotNames();
+  const [pending, setPending] = useState(false);
+  // The store keeps the last round opened; show it only when it is this one.
+  const current = round?.id === id ? round : null;
 
-  const { round, participants, isLoading, error, fetchRound, startRound, cancelRound } =
-    useRoundDetail(id!);
+  if (!current) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader eyebrow="Build" back={BACK} title={`Round ${shortRoundId(id)}`} />
+        <Panel>
+          {error && !isLoading ? (
+            <ErrorState title="Couldn't load this round" message={error} onRetry={() => void fetchRound()} />
+          ) : (
+            <SkeletonText lines={4} />
+          )}
+        </Panel>
+      </div>
+    );
+  }
 
-  const [actionLoading, setActionLoading] = useState(false);
+  const r = current;
+  const active = isRoundActive(r);
+  const duration = r.startedAt
+    ? Math.floor(((r.completedAt ? new Date(r.completedAt).getTime() : Date.now()) - new Date(r.startedAt).getTime()) / 1000)
+    : undefined;
 
-  const handleBack = () => {
-    navigate('/fleet-learning');
-  };
-
-  const handleStart = async () => {
-    setActionLoading(true);
+  // Start is the only act: the server has no route to cancel a round, so the page does not offer one.
+  const start = async () => {
+    const ok = await confirm({
+      title: 'Start round?',
+      description: `Up to ${r.config.maxParticipants} robots are selected and begin local training with ${r.config.localEpochs} epoch(s).`,
+      confirmLabel: 'Start round',
+    });
+    if (!ok) return;
+    setPending(true);
     try {
       await startRound();
+      toast.success('Round started', { description: `Round ${shortRoundId(r.id)}` });
+    } catch (err) {
+      toast.error("Couldn't start the round", { description: getErrorMessage(err) });
     } finally {
-      setActionLoading(false);
+      setPending(false);
+      void fetchRound();
     }
   };
 
-  const handleCancel = async () => {
-    if (!confirm('Are you sure you want to cancel this round?')) return;
-    setActionLoading(true);
-    try {
-      await cancelRound();
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  // Loading state
-  if (isLoading && !round) {
-    return (
-      <div className="container mx-auto px-4 py-12 max-w-5xl">
-        <div className="flex items-center justify-center">
-          <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
-        </div>
-      </div>
-    );
-  }
-
-  // Error state
-  if (error && !round) {
-    return (
-      <div className="container mx-auto px-4 py-12 max-w-5xl">
-        <div className="flex flex-col items-center justify-center text-center">
-          <AlertCircle className="w-12 h-12 text-red-500 mb-4" />
-          <h2 className="text-xl font-semibold text-theme-primary mb-2">
-            Error Loading Round
-          </h2>
-          <p className="text-theme-secondary mb-4">{error}</p>
-          <button
-            onClick={handleBack}
-            className="px-4 py-2 bg-primary text-on-primary rounded-brand hover:bg-primary-hover"
-          >
-            Back to Fleet Learning
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (!round) return null;
-
-  const active = isRoundActive(round);
-  const completionRate =
-    round.participantCount > 0
-      ? Math.round((round.completedParticipants / round.participantCount) * 100)
-      : 0;
-
-  const roundDuration =
-    round.startedAt && round.completedAt
-      ? Math.floor(
-          (new Date(round.completedAt).getTime() - new Date(round.startedAt).getTime()) / 1000
-        )
-      : round.startedAt
-      ? Math.floor((Date.now() - new Date(round.startedAt).getTime()) / 1000)
-      : null;
+  const loss = r.metrics?.avgLocalLoss;
+  const improvement = r.metrics?.lossImprovement;
 
   return (
-    <div className="container mx-auto px-4 py-6 max-w-5xl">
-      {/* Header */}
-      <div className="flex items-start gap-4 mb-6">
-        <button
-          onClick={handleBack}
-          className="p-2 mt-0.5 hover:bg-theme-hover rounded-brand"
-          aria-label="Back to Fleet Learning"
-        >
-          <ArrowLeft className="w-5 h-5 text-theme-tertiary" />
-        </button>
-        <PageHeader
-          className="flex-1"
-          title={`Round ${round.id.slice(0, 8)}`}
-          subtitle={`Model: ${round.globalModelVersion}`}
-          meta={<RoundStatusBadge status={round.status} showPulse={active} />}
-          actions={
-            <>
-              <button
-                onClick={fetchRound}
-                disabled={isLoading}
-                className="p-2 hover:bg-theme-hover rounded-brand"
-                aria-label="Refresh round"
-              >
-                <RefreshCw size={18} className={cn('text-theme-tertiary', isLoading && 'animate-spin')} />
-              </button>
-              {canStartRound(round) && (
-                <button
-                  onClick={handleStart}
-                  disabled={actionLoading}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-brand hover:bg-green-700 disabled:opacity-50"
-                >
-                  <Play size={18} />
-                  Start Round
-                </button>
-              )}
-              {canCancelRound(round) && (
-                <button
-                  onClick={handleCancel}
-                  disabled={actionLoading}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-brand hover:bg-red-700 disabled:opacity-50"
-                >
-                  <XCircle size={18} />
-                  Cancel
-                </button>
-              )}
-            </>
-          }
-        />
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Build"
+        back={BACK}
+        title={`Round ${shortRoundId(r.id)}`}
+        description={`Model ${r.globalModelVersion} · ${AGGREGATION_METHOD_LABELS[r.config.aggregationMethod]}`}
+        meta={<StatusTag status={r.status} dot pulse={active} />}
+        actions={
+          canStartRound(r) ? (
+            <Button leftIcon={<Play className="h-4 w-4" />} isLoading={pending} onClick={() => void start()}>Start round</Button>
+          ) : undefined
+        }
+      />
 
-      {/* Progress (for active rounds) */}
-      {active && (
-        <div className="bg-theme-card rounded-xl border border-theme p-4 mb-6">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-theme-secondary">Progress</span>
-            <span className="text-sm text-theme-tertiary">{completionRate}%</span>
-          </div>
-          <div className="h-3 section-tertiary rounded-full overflow-hidden">
-            <div
-              className="h-full bg-cobalt rounded-full transition-all duration-300"
-              style={{ width: `${completionRate}%` }}
-            />
-          </div>
-          <div className="flex items-center justify-between mt-2 text-xs text-theme-tertiary">
-            <span>{round.completedParticipants} completed</span>
-            <span>{round.participantCount - round.completedParticipants - round.failedParticipants} in progress</span>
-            <span>{round.failedParticipants} failed</span>
-          </div>
-        </div>
+      {r.status === 'failed' && r.errorMessage && (
+        <Panel variant="inset" className="text-sm text-signal-stopped">{r.errorMessage}</Panel>
       )}
 
-      {/* Error message */}
-      {round.status === 'failed' && round.errorMessage && (
-        <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-3 text-red-700 dark:text-red-400">
-          <AlertCircle size={20} />
-          <span>{round.errorMessage}</span>
-        </div>
-      )}
+      <StatRow columns={4}>
+        <StatTile label="Participants" value={r.participantCount} unit={`/ ${r.config.maxParticipants}`}
+          hint={`${r.failedParticipants} failed`} tone={active ? 'live' : undefined} />
+        <StatTile label="Completed updates" value={r.completedParticipants} unit={`/ ${r.participantCount}`}
+          hint={`${r.totalLocalSamples.toLocaleString(UI_DATE_LOCALE)} samples`} />
+        <StatTile label="Avg local loss" value={loss !== undefined ? loss.toFixed(4) : '—'}
+          hint={improvement !== undefined ? `${improvement >= 0 ? 'Improved' : 'Worse'} ${Math.abs(improvement * 100).toFixed(2)} %` : 'Reported after aggregation'} />
+        <StatTile label="Duration" value={formatDuration(duration)} hint={r.completedAt ? 'Start to finish' : r.startedAt ? 'Running' : 'Not started'} />
+      </StatRow>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-theme-card rounded-xl border border-theme p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-              <Bot className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-            </div>
-            <div>
-              <p className="text-sm text-theme-tertiary">Participants</p>
-              <p className="text-xl font-bold text-theme-primary">
-                {round.completedParticipants} / {round.participantCount}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-theme-card rounded-xl border border-theme p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
-              <Database className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-            </div>
-            <div>
-              <p className="text-sm text-theme-tertiary">Total Samples</p>
-              <p className="text-xl font-bold text-theme-primary">
-                {round.totalLocalSamples.toLocaleString(UI_DATE_LOCALE)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-theme-card rounded-xl border border-theme p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
-              <Clock className="w-5 h-5 text-green-600 dark:text-green-400" />
-            </div>
-            <div>
-              <p className="text-sm text-theme-tertiary">Duration</p>
-              <p className="text-xl font-bold text-theme-primary">
-                {roundDuration ? formatDuration(roundDuration) : '-'}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-theme-card rounded-xl border border-theme p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
-              <TrendingUp className="w-5 h-5 text-primary-600 dark:text-primary-400" />
-            </div>
-            <div>
-              <p className="text-sm text-theme-tertiary">Improvement</p>
-              <p
-                className={cn(
-                  'text-xl font-bold',
-                  round.metrics?.lossImprovement
-                    ? round.metrics.lossImprovement > 0
-                      ? 'text-green-600 dark:text-green-400'
-                      : 'text-red-600 dark:text-red-400'
-                    : 'text-theme-primary'
-                )}
-              >
-                {round.metrics?.lossImprovement
-                  ? `${round.metrics.lossImprovement > 0 ? '+' : ''}${(
-                      round.metrics.lossImprovement * 100
-                    ).toFixed(2)}%`
-                  : '-'}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Details Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {/* Configuration */}
-        <div className="bg-theme-card rounded-xl border border-theme">
-          <div className="p-4 border-b border-theme">
-            <h2 className="font-semibold text-theme-primary flex items-center gap-2">
-              <Settings className="w-4 h-4" />
-              Configuration
-            </h2>
-          </div>
-          <div className="p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-theme-tertiary">Aggregation Method</span>
-              <span className="font-medium text-theme-primary">
-                {AGGREGATION_METHOD_LABELS[round.config.aggregationMethod]}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-theme-tertiary">Selection Strategy</span>
-              <span className="font-medium text-theme-primary">
-                {SELECTION_STRATEGY_LABELS[round.config.selectionStrategy]}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-theme-tertiary">Participant Range</span>
-              <span className="font-medium text-theme-primary">
-                {round.config.minParticipants} - {round.config.maxParticipants}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-theme-tertiary">Local Epochs</span>
-              <span className="font-medium text-theme-primary">
-                {round.config.localEpochs}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-theme-tertiary">Learning Rate</span>
-              <span className="font-medium text-theme-primary">
-                {round.config.localLearningRate}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-theme-tertiary">Secure Aggregation</span>
-              <span className="font-medium text-theme-primary">
-                {round.config.secureAggregation ? 'Enabled' : 'Disabled'}
-              </span>
-            </div>
-            {round.config.privacyEpsilon && (
-              <div className="flex items-center justify-between">
-                <span className="text-theme-tertiary">Privacy Epsilon</span>
-                <span className="font-medium text-theme-primary">
-                  {round.config.privacyEpsilon}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Metrics (if available) */}
-        {round.metrics && (
-          <div className="bg-theme-card rounded-xl border border-theme">
-            <div className="p-4 border-b border-theme">
-              <h2 className="font-semibold text-theme-primary flex items-center gap-2">
-                <TrendingUp className="w-4 h-4" />
-                Round Metrics
-              </h2>
-            </div>
-            <div className="p-4 space-y-3">
-              {round.metrics.avgLocalLoss !== undefined && (
-                <div className="flex items-center justify-between">
-                  <span className="text-theme-tertiary">Avg Local Loss</span>
-                  <span className="font-medium text-theme-primary">
-                    {round.metrics.avgLocalLoss.toFixed(4)}
-                  </span>
-                </div>
-              )}
-              {round.metrics.convergenceScore !== undefined && (
-                <div className="flex items-center justify-between">
-                  <span className="text-theme-tertiary">Convergence Score</span>
-                  <span className="font-medium text-theme-primary">
-                    {round.metrics.convergenceScore.toFixed(4)}
-                  </span>
-                </div>
-              )}
-              {round.metrics.phaseDurations && (
-                <>
-                  <div className="pt-2 border-t border-theme">
-                    <p className="text-sm font-medium text-theme-secondary mb-2">
-                      Phase Durations
-                    </p>
-                  </div>
-                  {round.metrics.phaseDurations.selection && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-theme-tertiary">Selection</span>
-                      <span className="text-theme-primary">
-                        {formatDuration(round.metrics.phaseDurations.selection)}
-                      </span>
-                    </div>
-                  )}
-                  {round.metrics.phaseDurations.distribution && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-theme-tertiary">Distribution</span>
-                      <span className="text-theme-primary">
-                        {formatDuration(round.metrics.phaseDurations.distribution)}
-                      </span>
-                    </div>
-                  )}
-                  {round.metrics.phaseDurations.training && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-theme-tertiary">Training</span>
-                      <span className="text-theme-primary">
-                        {formatDuration(round.metrics.phaseDurations.training)}
-                      </span>
-                    </div>
-                  )}
-                  {round.metrics.phaseDurations.collection && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-theme-tertiary">Collection</span>
-                      <span className="text-theme-primary">
-                        {formatDuration(round.metrics.phaseDurations.collection)}
-                      </span>
-                    </div>
-                  )}
-                  {round.metrics.phaseDurations.aggregation && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-theme-tertiary">Aggregation</span>
-                      <span className="text-theme-primary">
-                        {formatDuration(round.metrics.phaseDurations.aggregation)}
-                      </span>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* New Model Version */}
-      {round.newModelVersion && (
-        <div className="mb-6 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
-          <p className="text-green-700 dark:text-green-300">
-            <span className="font-medium">New model version created:</span> {round.newModelVersion}
-          </p>
-        </div>
-      )}
-
-      {/* Participants */}
-      <div className="bg-theme-card rounded-xl border border-theme">
-        <div className="p-4 border-b border-theme">
-          <h2 className="font-semibold text-theme-primary flex items-center gap-2">
-            <Bot className="w-4 h-4" />
-            Participants
-          </h2>
-        </div>
-        <ParticipantList participants={participants} />
-      </div>
-
-      {/* Timestamps */}
-      <div className="mt-4 text-sm text-theme-tertiary flex items-center gap-4">
-        <span>Created: {new Date(round.createdAt).toLocaleString(UI_DATE_LOCALE)}</span>
-        {round.startedAt && <span>Started: {new Date(round.startedAt).toLocaleString(UI_DATE_LOCALE)}</span>}
-        {round.completedAt && <span>Completed: {new Date(round.completedAt).toLocaleString(UI_DATE_LOCALE)}</span>}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <Panel padding="none" className="xl:col-span-2">
+          <Panel.Header title="Participants" />
+          <ParticipantList participants={participants} isLoading={isLoading} robotName={robotName} />
+        </Panel>
+        <Panel>
+          <Panel.Header title="Configuration" />
+          <Panel.Body>
+            <KeyValueList columns={1} items={[
+              { label: 'Participants', value: `${r.config.minParticipants} – ${r.config.maxParticipants}` },
+              { label: 'Local epochs', value: r.config.localEpochs },
+              { label: 'Learning rate', value: r.config.localLearningRate },
+              { label: 'Aggregation', value: AGGREGATION_METHOD_LABELS[r.config.aggregationMethod] },
+              { label: 'Selection', value: SELECTION_STRATEGY_LABELS[r.config.selectionStrategy] },
+              { label: 'Training timeout', value: formatDuration(r.config.trainingTimeout) },
+              { label: 'Upload timeout', value: formatDuration(r.config.uploadTimeout) },
+              { label: 'Secure aggregation', value: r.config.secureAggregation ? 'On' : 'Off' },
+              { label: 'Privacy ε', value: r.config.privacyEpsilon ?? 'Off' },
+              { label: 'New model version', value: r.newModelVersion, mono: true },
+              { label: 'Created', value: formatDateTime(r.createdAt) },
+              { label: 'Round ID', value: r.id, mono: true },
+            ]} />
+          </Panel.Body>
+        </Panel>
       </div>
     </div>
   );

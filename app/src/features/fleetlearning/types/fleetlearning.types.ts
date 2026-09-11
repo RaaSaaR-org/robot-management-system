@@ -398,24 +398,6 @@ export type FleetLearningStore = FleetLearningState & FleetLearningActions;
 // ============================================================================
 
 /**
- * Get status color class
- */
-export function getStatusColor(status: FederatedRoundStatus): string {
-  const colors: Record<FederatedRoundStatus, string> = {
-    created: 'text-gray-600 dark:text-gray-400',
-    selecting: 'text-blue-600 dark:text-blue-400',
-    distributing: 'text-purple-600 dark:text-purple-400',
-    training: 'text-yellow-600 dark:text-yellow-400',
-    collecting: 'text-orange-600 dark:text-orange-400',
-    aggregating: 'text-cyan-600 dark:text-cyan-400',
-    completed: 'text-green-600 dark:text-green-400',
-    failed: 'text-red-600 dark:text-red-400',
-    cancelled: 'text-gray-500 dark:text-gray-500',
-  };
-  return colors[status];
-}
-
-/**
  * Check if round is active
  */
 export function isRoundActive(round: FederatedRound): boolean {
@@ -423,10 +405,11 @@ export function isRoundActive(round: FederatedRound): boolean {
 }
 
 /**
- * Check if round can be started
+ * Check if round can be started. A round left in `selecting` by a start that
+ * failed at the distribute step can be started again.
  */
 export function canStartRound(round: FederatedRound): boolean {
-  return round.status === 'created';
+  return round.status === 'created' || round.status === 'selecting';
 }
 
 /**
@@ -440,7 +423,7 @@ export function canCancelRound(round: FederatedRound): boolean {
  * Format duration in seconds
  */
 export function formatDuration(seconds: number | undefined): string {
-  if (!seconds) return '-';
+  if (!seconds) return '—';
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   const hours = Math.floor(seconds / 3600);

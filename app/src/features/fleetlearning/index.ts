@@ -49,9 +49,7 @@ export type {
 
 // Components
 export {
-  RoundStatusBadge,
-  ParticipantStatusBadge,
-  FederatedRoundCard,
+  RoundsSection,
   ParticipantList,
   ConvergenceChart,
   PrivacyBudgetView,
@@ -59,9 +57,7 @@ export {
   CreateRoundModal,
 } from './components';
 export type {
-  RoundStatusBadgeProps,
-  ParticipantStatusBadgeProps,
-  FederatedRoundCardProps,
+  RoundsSectionProps,
   ParticipantListProps,
   ConvergenceChartProps,
   PrivacyBudgetViewProps,
