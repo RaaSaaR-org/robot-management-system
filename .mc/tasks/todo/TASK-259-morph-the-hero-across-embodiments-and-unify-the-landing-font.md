@@ -2,7 +2,7 @@
 id: "TASK-259"
 title: "Morph the hero across embodiments and unify the landing font"
 slug: "morph-the-hero-across-embodiments-and-unify-the-landing-font"
-status: "done"
+status: "in-progress"
 priority: 3
 owner: "huhn511"
 tags: [landing, design]
