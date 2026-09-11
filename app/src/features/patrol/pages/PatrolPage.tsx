@@ -1,33 +1,43 @@
 /**
  * @file PatrolPage.tsx
- * @description /patrol — KPI strip, the live run rail (over the WebSocket),
- *              route cards with Baseline run / Patrol now / Abort, and the
- *              run history.
+ * @description /patrol — header with the live link, a three-tile summary, the
+ *              live runs, and two tabs in the URL: Routes (table with start,
+ *              abort, export and delete) and Runs (the run history).
  * @feature patrol
  */
 
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
-import { cn } from '@/shared/utils/cn';
-import { Button } from '@/shared/components/ui/Button';
-import { PageHeader } from '@/shared/components/ui/PageHeader';
+import { Plus } from 'lucide-react';
+import { LinkButton, PageHeader, StatRow, StatTile, Tabs, confirm, toast } from '@/shared/components/ui';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
-import type { PatrolRoute, PatrolRun } from '../types/patrol.types';
+import type { PatrolRoute, PatrolRun, PatrolRunMode } from '../types/patrol.types';
 import { usePatrolStore, selectActiveRuns, selectRoutes, selectRuns } from '../store/patrolStore';
 import { usePatrolEvents } from '../hooks/usePatrolEvents';
 import { RouteList } from '../components/RouteList';
 import { RunHistory } from '../components/RunHistory';
 import { ActiveRunBanner } from '../components/ActiveRunBanner';
-import { KpiTile, PATROL_FADE_IN, PATROL_INSET, PATROL_MOTION, SectionHeader, StatusDot } from '../components/patrolUi';
+import { RunStartModal } from '../components/RunStartModal';
+import { LiveTag } from '../components/opsUi';
+import { exportRouteVda5050 } from '../utils/routeExport';
 
 /** Refresh cadence for the lists while the page is open (events cover the live part). */
 const REFRESH_MS = 30_000;
 /** Window of the "Runs · 24 h" tile. */
 const DAY_MS = 24 * 60 * 60 * 1000;
+const TABS = [
+  { id: 'routes', label: 'Routes' },
+  { id: 'runs', label: 'Runs' },
+] as const;
+type TabId = (typeof TABS)[number]['id'];
 
 export interface PatrolPageProps {
   className?: string;
+}
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProps) {
@@ -40,25 +50,29 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
   const runs = usePatrolStore(selectRuns);
   const runsStatus = usePatrolStore((s) => s.runsStatus);
   const runsError = usePatrolStore((s) => s.runsError);
-  // `selectActiveRuns` derives a new array each call, so the comparison has to be
-  // on its contents: the run objects themselves are replaced whenever a patrol
-  // event moves the robot on, and that is exactly when the rail must redraw.
+  // `selectActiveRuns` derives a new array each call, so compare its contents:
+  // the run objects are replaced whenever a patrol event moves the robot on.
   const activeRuns = usePatrolStore(useShallow(selectActiveRuns));
-  const startingRouteId = usePatrolStore((s) => s.startingRouteId);
-  const lastStartResult = usePatrolStore((s) => s.lastStartResult);
-  const error = usePatrolStore((s) => s.error);
-
   const fetchRoutes = usePatrolStore((s) => s.fetchRoutes);
   const fetchRuns = usePatrolStore((s) => s.fetchRuns);
-  const startRun = usePatrolStore((s) => s.startRun);
   const abortRun = usePatrolStore((s) => s.abortRun);
-  const clearStartResult = usePatrolStore((s) => s.clearStartResult);
+  const deleteRoute = usePatrolStore((s) => s.deleteRoute);
   const clearError = usePatrolStore((s) => s.clearError);
 
   const { isConnected } = usePatrolEvents();
+  const [params, setParams] = useSearchParams();
+  const tab: TabId = TABS.some((t) => t.id === params.get('tab')) ? (params.get('tab') as TabId) : 'routes';
+  const setTab = (id: string) =>
+    setParams(
+      (p) => {
+        if (id === TABS[0].id) p.delete('tab');
+        else p.set('tab', id);
+        return p;
+      },
+      { replace: true },
+    );
 
-  // Robot used for routes that are not bound to one.
-  const [fallbackRobotId, setFallbackRobotId] = useState('');
+  const [starting, setStarting] = useState<{ route: PatrolRoute; mode: PatrolRunMode } | null>(null);
 
   useEffect(() => {
     void fetchRobots();
@@ -72,15 +86,27 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
     return () => clearInterval(timer);
   }, [fetchRobots, fetchRoutes, fetchRuns]);
 
+  // A failed poll keeps the data on screen; one toast (reused id) says so.
+  const staleRoutes = routesStatus === 'error' && routes.length > 0;
+  const staleRuns = runsStatus === 'error' && runs.length > 0;
+  const warned = useRef(false);
   useEffect(() => {
-    if (!fallbackRobotId && robots.length > 0) setFallbackRobotId(robots[0].id);
-  }, [robots, fallbackRobotId]);
+    if ((staleRoutes || staleRuns) && !warned.current) {
+      warned.current = true;
+      toast.warning("Couldn't refresh patrol data", {
+        id: 'patrol-stale',
+        description: `${(staleRoutes ? routesError : runsError) ?? 'Network error'} — showing the last known state.`,
+      });
+    }
+    if (!staleRoutes && !staleRuns) warned.current = false;
+  }, [staleRoutes, staleRuns, routesError, runsError]);
 
   const robotNames = useMemo(() => {
     const m: Record<string, string> = {};
     for (const r of robots) m[r.id] = r.name;
     return m;
   }, [robots]);
+  const robotOptions = useMemo(() => robots.map((r) => ({ id: r.id, name: r.name })), [robots]);
 
   const lastRunByRoute = useMemo(() => {
     const m: Record<string, PatrolRun | undefined> = {};
@@ -110,206 +136,129 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
   // With no history in hand a failed run fetch would render "0 runs / 0 findings",
   // which reads as "the night patrol never ran" instead of "we could not ask".
   const runsUnknown = runsStatus === 'error' && runs.length === 0;
-  const linkName = fallbackRobotId ? (robotNames[fallbackRobotId] ?? fallbackRobotId) : 'WS';
 
-  const handleStart = useCallback(
-    async (route: PatrolRoute, mode: 'baseline' | 'patrol') => {
-      const robotId = route.robotId ?? fallbackRobotId ?? null;
-      const result = await startRun(route.id, mode, robotId);
-      if (result) void fetchRuns();
+  const abort = useCallback(
+    async (routeId: string, routeName: string, robotId: string | null) => {
+      const ok = await confirm({
+        title: `Abort the run on ${routeName}?`,
+        description: 'The robot stops where it is and the run is marked aborted. Photos taken so far are kept.',
+        confirmLabel: 'Abort run',
+        tone: 'danger',
+      });
+      if (!ok) return;
+      const done = await abortRun(routeId, robotId);
+      if (done) toast.success('Run aborted', { description: routeName });
+      else {
+        toast.error("Couldn't abort the run", { description: usePatrolStore.getState().error ?? undefined });
+        clearError();
+      }
+      void fetchRuns();
     },
-    [startRun, fallbackRobotId, fetchRuns]
+    [abortRun, clearError, fetchRuns],
   );
 
   const handleAbortRoute = useCallback(
-    async (route: PatrolRoute) => {
+    (route: PatrolRoute) => {
       const run = lastRunByRoute[route.id];
-      await abortRun(route.id, run?.robotId ?? route.robotId ?? fallbackRobotId ?? null);
-      void fetchRuns();
+      void abort(route.id, route.name, run?.robotId ?? route.robotId ?? robots[0]?.id ?? null);
     },
-    [abortRun, lastRunByRoute, fallbackRobotId, fetchRuns]
+    [abort, lastRunByRoute, robots],
   );
 
-  const handleAbortRun = useCallback(
-    async (run: PatrolRun) => {
-      await abortRun(run.routeId, run.robotId);
-      void fetchRuns();
+  const handleDelete = useCallback(
+    async (route: PatrolRoute) => {
+      const ok = await confirm({ title: `Delete ${route.name}?`, description: 'Scheduled runs stop. Its run history stays.', tone: 'danger' });
+      if (!ok) return;
+      try {
+        const done = await deleteRoute(route.id);
+        if (!done) throw new Error(usePatrolStore.getState().error ?? 'The server refused.');
+        toast.success('Route deleted', { description: route.name });
+      } catch (err) {
+        toast.error("Couldn't delete route", { description: message(err) });
+      } finally {
+        clearError();
+      }
     },
-    [abortRun, fetchRuns]
+    [deleteRoute, clearError],
   );
 
+  const hasRoutes = routes.length > 0;
   return (
-    <div className={cn('min-h-screen', className)} data-testid="patrol-page">
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8 flex flex-col gap-5 min-w-0">
-        <PageHeader
-          title="Patrol"
-          subtitle="Routes the robot walks on a schedule, control photos at every checkpoint, and what was not normal along the way."
-          meta={
-            <span
-              className={cn(
-                'inline-flex items-center gap-1.5 glass-subtle rounded-full px-2 py-0.5 text-[11px]',
-                PATROL_MOTION,
-                isConnected ? 'text-turquoise-700 dark:text-turquoise-400' : 'text-theme-muted'
-              )}
-              data-testid="patrol-live"
-            >
-              <StatusDot tone={isConnected ? 'accent' : 'neutral'} pulse={isConnected} />
-              {isConnected ? 'live' : 'offline'}
-            </span>
-          }
-          actions={
-            <>
-              <label className="sr-only" htmlFor="patrol-fallback-robot">
-                Robot for unbound routes
-              </label>
-              <select
-                id="patrol-fallback-robot"
-                data-testid="patrol-fallback-robot"
-                title="Robot used for routes that are not bound to one"
-                value={fallbackRobotId}
-                onChange={(e) => setFallbackRobotId(e.target.value)}
-                className="glass-subtle min-w-0 max-w-full truncate px-3 py-2 text-sm text-theme-primary rounded-brand border border-glass-subtle focus:outline-none focus:ring-2 focus:ring-cobalt-500/40"
-              >
-                {robots.length === 0 && <option value="">No robots</option>}
-                {robots.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-              <Link to="/patrol/routes/new">
-                <Button size="sm" data-testid="patrol-new-route">
-                  New route
-                </Button>
-              </Link>
-            </>
-          }
+    <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'} data-testid="patrol-page">
+      <PageHeader
+        eyebrow="Operate"
+        title="Patrol"
+        description="Routes a robot walks on its own, with control photos and what was not normal."
+        meta={<LiveTag connected={isConnected} data-testid="patrol-live" />}
+        actions={
+          <LinkButton to="/patrol/routes/new" leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} data-testid="patrol-new-route">
+            New route
+          </LinkButton>
+        }
+      />
+
+      {hasRoutes && (
+        <StatRow columns={3}>
+          <div data-testid="patrol-kpi-routes" className="contents">
+            <StatTile label="Routes armed" value={kpis.enabled} unit={`/ ${routes.length}`} hint={`${kpis.scheduled} scheduled`} tone={kpis.enabled > 0 ? 'live' : 'neutral'} />
+          </div>
+          <div data-testid="patrol-kpi-runs" className="contents">
+            <StatTile label="Runs · 24 h" value={runsUnknown ? '—' : kpis.recent} hint={runsUnknown ? 'History unavailable' : `${kpis.recentBaseline} baseline`} />
+          </div>
+          <div data-testid="patrol-kpi-findings" className="contents">
+            <StatTile
+              label="Findings raised"
+              value={runsUnknown ? '—' : kpis.findings}
+              tone={!runsUnknown && kpis.findings > 0 ? 'gated' : 'neutral'}
+              hint={runsUnknown ? 'History unavailable' : `Across ${kpis.runsWithFindings} run${kpis.runsWithFindings === 1 ? '' : 's'}`}
+            />
+          </div>
+        </StatRow>
+      )}
+
+      <ActiveRunBanner runs={activeRuns} robotNames={robotNames} onAbort={(run) => void abort(run.routeId, run.routeName || run.routeId, run.robotId)} />
+
+      <Tabs
+        label="Patrol sections"
+        tabs={[
+          { id: 'routes', label: 'Routes', count: routes.length },
+          { id: 'runs', label: 'Runs', count: runs.length },
+        ]}
+        activeTab={tab}
+        onTabChange={setTab}
+      />
+
+      {tab === 'routes' && (
+        <RouteList
+          routes={routes}
+          lastRunByRoute={lastRunByRoute}
+          robotNames={robotNames}
+          isLoading={routesStatus === 'loading' || routesStatus === 'idle'}
+          error={routesStatus === 'error' && routes.length === 0 ? (routesError ?? 'Failed to load routes') : null}
+          onRetry={() => void fetchRoutes()}
+          onStart={(route, mode) => setStarting({ route, mode })}
+          onAbort={handleAbortRoute}
+          onExport={(route) => void exportRouteVda5050(route)}
+          onDelete={(route) => void handleDelete(route)}
         />
+      )}
+      {tab === 'runs' && (
+        <RunHistory
+          runs={runs}
+          robotNames={robotNames}
+          isLoading={runsStatus === 'loading' || runsStatus === 'idle'}
+          error={runsUnknown ? (runsError ?? 'Failed to load patrol runs') : null}
+          onRetry={() => void fetchRuns()}
+        />
+      )}
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 min-w-0" data-testid="patrol-kpis">
-          <KpiTile
-            label="Routes armed"
-            value={`${kpis.enabled}/${routes.length}`}
-            sub={`${kpis.scheduled} scheduled`}
-            tone={kpis.enabled > 0 ? 'primary' : 'neutral'}
-            data-testid="patrol-kpi-routes"
-          />
-          <KpiTile
-            label="Runs · 24 h"
-            value={runsUnknown ? '—' : kpis.recent}
-            sub={runsUnknown ? 'history unavailable' : `${kpis.recentBaseline} baseline`}
-            data-testid="patrol-kpi-runs"
-          />
-          <KpiTile
-            label="Findings raised"
-            value={runsUnknown ? '—' : kpis.findings}
-            sub={runsUnknown ? 'history unavailable' : `across ${kpis.runsWithFindings} run${kpis.runsWithFindings === 1 ? '' : 's'}`}
-            tone={!runsUnknown && kpis.findings > 0 ? 'attention' : 'neutral'}
-            data-testid="patrol-kpi-findings"
-          />
-          <KpiTile
-            label="Link"
-            value={
-              <span className="truncate min-w-0 text-lg leading-tight" title={isConnected ? linkName : undefined}>
-                {isConnected ? linkName : 'offline'}
-              </span>
-            }
-            sub={isConnected ? 'events over WebSocket' : 'no live events'}
-            tone={isConnected ? 'accent' : 'neutral'}
-            live={isConnected}
-            className={isConnected ? undefined : 'opacity-80'}
-            data-testid="patrol-kpi-link"
-          />
-        </div>
-
-        <ActiveRunBanner runs={activeRuns} robotNames={robotNames} onAbort={(run) => void handleAbortRun(run)} />
-
-        {lastStartResult && (
-          <div
-            className={cn(
-              PATROL_INSET,
-              PATROL_FADE_IN,
-              'text-sm flex items-start gap-2 border-l-[3px]',
-              lastStartResult.accepted ? 'text-theme-secondary border-l-turquoise-500' : 'text-amber-700 dark:text-amber-400 border-l-amber-500'
-            )}
-            role="status"
-            data-testid="patrol-start-result"
-          >
-            <span className="flex-1 min-w-0 break-words">
-              {lastStartResult.accepted
-                ? `Run started${lastStartResult.runId ? ` (${lastStartResult.runId})` : ''}.`
-                : `Refused${lastStartResult.reason ? ` (${lastStartResult.reason})` : ''}: ${lastStartResult.message}`}
-            </span>
-            <button type="button" className={cn('text-xs underline shrink-0 min-h-9 sm:min-h-0 hover:text-theme-primary', PATROL_MOTION)} onClick={clearStartResult}>
-              dismiss
-            </button>
-          </div>
-        )}
-        {error && (
-          <div className={cn(PATROL_INSET, PATROL_FADE_IN, 'text-sm text-red-700 dark:text-red-400 flex items-start gap-2 border-l-[3px] border-l-red-500')} role="alert">
-            <span className="flex-1 min-w-0 break-words">{error}</span>
-            <button type="button" className={cn('text-xs underline shrink-0 min-h-9 sm:min-h-0 hover:text-theme-primary', PATROL_MOTION)} onClick={clearError}>
-              dismiss
-            </button>
-          </div>
-        )}
-
-        <section className="flex flex-col gap-2 min-w-0">
-          <SectionHeader title="Routes" count={routes.length} />
-          {/* Data wins over status: the 30 s poll fails on any server restart, and
-              replacing the cards with a red line would take the steppers and the
-              Abort buttons away from an operator watching a live patrol. */}
-          {routesStatus === 'error' && routes.length === 0 ? (
-            <div className={cn(PATROL_INSET, 'text-sm text-red-700 dark:text-red-400 border-l-[3px] border-l-red-500')} role="alert" data-testid="patrol-routes-error">
-              {routesError ?? 'Failed to load routes'}
-            </div>
-          ) : routesStatus === 'loading' && routes.length === 0 ? (
-            <div className="grid gap-3 lg:grid-cols-2" aria-busy="true" aria-label="Loading routes">
-              <div className="glass-card rounded-brand-lg animate-pulse h-28" />
-              <div className="glass-card rounded-brand-lg animate-pulse h-28" />
-            </div>
-          ) : (
-            <>
-              {routesStatus === 'error' && (
-                <div className={cn(PATROL_INSET, 'text-sm text-amber-700 dark:text-amber-400 border-l-[3px] border-l-amber-500')} role="status" data-testid="patrol-routes-stale">
-                  {routesError ?? 'Could not refresh the routes'} — showing the last known state.
-                </div>
-              )}
-              <RouteList
-                routes={routes}
-                lastRunByRoute={lastRunByRoute}
-                robotNames={robotNames}
-                startingRouteId={startingRouteId}
-                onStart={(route, mode) => void handleStart(route, mode)}
-                onAbort={(route) => void handleAbortRoute(route)}
-              />
-            </>
-          )}
-        </section>
-
-        <section className="flex flex-col gap-2 min-w-0">
-          <SectionHeader title="Run history" count={runs.length} />
-          {/* Without this branch a failed fetch fell through to RunHistory's
-              "No runs yet" — the operator read a read failure as "the scheduled
-              patrol never ran". */}
-          {runsStatus === 'error' && runs.length === 0 ? (
-            <div className={cn(PATROL_INSET, 'text-sm text-red-700 dark:text-red-400 border-l-[3px] border-l-red-500')} role="alert" data-testid="patrol-runs-error">
-              {runsError ?? 'Failed to load patrol runs'}
-            </div>
-          ) : runsStatus === 'loading' && runs.length === 0 ? (
-            <div className="glass-card rounded-brand-lg animate-pulse h-40" aria-busy="true" aria-label="Loading runs" />
-          ) : (
-            <>
-              {runsStatus === 'error' && (
-                <div className={cn(PATROL_INSET, 'text-sm text-amber-700 dark:text-amber-400 border-l-[3px] border-l-amber-500')} role="status" data-testid="patrol-runs-stale">
-                  {runsError ?? 'Could not refresh the run history'} — showing the last known history.
-                </div>
-              )}
-              <RunHistory runs={runs} robotNames={robotNames} />
-            </>
-          )}
-        </section>
-      </div>
+      <RunStartModal
+        route={starting?.route ?? null}
+        initialMode={starting?.mode}
+        robots={robotOptions}
+        onClose={() => setStarting(null)}
+        onStarted={() => void fetchRuns()}
+      />
     </div>
   );
 });

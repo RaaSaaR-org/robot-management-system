@@ -10,7 +10,6 @@
 import { memo, useEffect, useState } from 'react';
 import { cn } from '@/shared/utils/cn';
 import { patrolApi } from '../api/patrolApi';
-import { PATROL_MICRO } from './patrolUi';
 
 export interface PhotoPairProps {
   robotId: string;
@@ -63,12 +62,9 @@ function usePhoto(robotId: string, runId: string | null, key: string | null | un
 }
 
 const FRAME =
-  'relative aspect-[4/3] w-full rounded-brand overflow-hidden ring-1 ring-[var(--glass-border)] flex items-center justify-center bg-glass-subtle';
-const TAG = cn(
-  'absolute top-1.5 left-1.5 z-10 glass-elevated rounded px-1.5 py-px pointer-events-none',
-  PATROL_MICRO,
-  'text-theme-primary',
-);
+  'relative aspect-[4/3] w-full rounded-control overflow-hidden border border-line-subtle flex items-center justify-center bg-inset';
+const TAG =
+  'absolute top-1.5 left-1.5 z-10 rounded-tag border border-line-subtle bg-panel px-1.5 py-px text-xs font-medium text-ink-primary pointer-events-none';
 
 interface FrameProps {
   label: string;
@@ -85,7 +81,7 @@ function Frame({ label, state, missingText, alt }: FrameProps) {
         {state.status === 'ok' && state.url ? (
           <img src={state.url} alt={alt} loading="lazy" className="absolute inset-0 w-full h-full object-cover" />
         ) : (
-          <p className="card-meta text-xs text-center px-3 pt-4">
+          <p className="text-xs text-ink-tertiary text-center px-3 pt-4">
             {state.status === 'loading' ? 'loading…' : state.status === 'error' ? 'photo unavailable' : missingText}
           </p>
         )}
@@ -114,7 +110,7 @@ function SwipeFrame({ baseline, current, checkpointName }: SwipeFrameProps) {
           className="absolute inset-0 w-full h-full object-cover"
           style={{ clipPath: `inset(0 ${100 - reveal}% 0 0)` }}
         />
-        <span className="absolute inset-y-0 w-px bg-white/90 shadow-[0_0_6px_rgb(0_0_0/0.6)] pointer-events-none" style={{ left: `${reveal}%` }} aria-hidden="true" />
+        <span className="absolute inset-y-0 w-px bg-primary pointer-events-none" style={{ left: `${reveal}%` }} aria-hidden="true" />
         <figcaption className={TAG}>Baseline</figcaption>
         <span className={cn(TAG, 'left-auto right-1.5')} aria-hidden="true">
           Current
@@ -127,7 +123,7 @@ function SwipeFrame({ baseline, current, checkpointName }: SwipeFrameProps) {
         value={reveal}
         aria-label="Reveal baseline"
         onChange={(e) => setReveal(Number(e.target.value))}
-        className="w-full h-1.5 accent-cobalt-500 cursor-ew-resize"
+        className="w-full h-1.5 accent-[var(--color-primary)] cursor-ew-resize"
       />
     </figure>
   );

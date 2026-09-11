@@ -1,47 +1,38 @@
 /**
  * @file RouteEditor.tsx
- * @description Create/edit a patrol route: name, robot, ordered checkpoints
- *              (places from the robot's place graph, or a typed place id),
- *              per-checkpoint heading/actions/dwell/expectations, cron with
- *              live validation, time windows, home place, enabled, VDA5050
- *              export. Laid out as an ops form (left) with a sticky live
- *              preview rail + save bar (right); the checkpoints are a
- *              vertical stepper of collapsible cards.
+ * @description Create/edit a patrol route as one form: Basics (name, robot,
+ *              armed), Checkpoints (a vertical stepper of inset cards), Schedule
+ *              (cron with server validation, home place) and Time windows, next
+ *              to a sticky Preview. Problems show at their fields after a save
+ *              attempt; the sticky footer holds Cancel and Save.
  * @feature patrol
  */
 
-import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { cn } from '@/shared/utils/cn';
-import { Button } from '@/shared/components/ui/Button';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
+import {
+  Button,
+  FormField,
+  Input,
+  KeyValueList,
+  Panel,
+  Select,
+  Switch,
+  toast,
+} from '@/shared/components/ui';
 import { useDebounce } from '@/shared/hooks/useDebounce';
 import { getErrorMessage } from '@/shared/utils/error';
-import { downloadBlob } from '@/features/agentmode/utils/mapExport';
-import type {
-  CronValidation,
-  PatrolCheckpoint,
-  PatrolCheckpointAction,
-  PatrolPlace,
-  PatrolRoute,
-  PatrolRouteInput,
-  PatrolTimeWindow,
-} from '../types/patrol.types';
-import { DEFAULT_TIME_WINDOWS, PatrolCheckpointActions } from '../types/patrol.types';
+import type { CronValidation, PatrolCheckpoint, PatrolRoute, PatrolRouteInput, PatrolTimeWindow } from '../types/patrol.types';
+import { DEFAULT_TIME_WINDOWS } from '../types/patrol.types';
 import { patrolApi } from '../api/patrolApi';
 import { usePatrolStore, selectPlacesForRobot } from '../store/patrolStore';
 import { formatWhen, formatWindow } from '../utils/patrolFormat';
-import {
-  LEG_NODE,
-  PATROL_FADE_IN,
-  PATROL_FOCUS,
-  PATROL_MICRO,
-  PATROL_MONO,
-  PATROL_MOTION,
-  PATROL_PANEL,
-  PATROL_STICKY_RAIL,
-  RoutePath,
-  SectionHeader,
-  StatusDot,
-} from './patrolUi';
+import { describeCron } from '../utils/cronText';
+import { CheckpointCard } from './CheckpointCard';
+import { WindowBar, windowBand } from './WindowBar';
+import { RoutePath } from './opsUi';
+
+export { windowSegments } from './WindowBar';
 
 // ============================================================================
 // TYPES
@@ -60,7 +51,6 @@ export interface RouteEditorProps {
   defaultRobotId?: string | null;
   onSaved: (route: PatrolRoute) => void;
   onCancel?: () => void;
-  onDelete?: (route: PatrolRoute) => void;
   className?: string;
 }
 
@@ -76,7 +66,7 @@ interface Draft {
 }
 
 // ============================================================================
-// HELPERS
+// HELPERS (pure)
 // ============================================================================
 
 const MANUAL = '__manual__';
@@ -172,146 +162,40 @@ export function validateDraft(draft: Draft): string[] {
   return problems;
 }
 
-const INPUT = cn(
-  'glass-subtle w-full min-w-0 px-2.5 py-1.5 text-sm text-theme-primary rounded-brand border border-glass-subtle',
-  'focus:outline-none focus:ring-2 focus:ring-cobalt-500/40 focus:border-cobalt-500/40 disabled:opacity-50',
-  PATROL_MOTION
-);
-const LABEL = 'block text-xs font-medium text-theme-secondary mb-1';
-const ICON_BTN = cn(
-  'size-7 glass-subtle rounded-brand inline-flex items-center justify-center text-xs leading-none',
-  'hover:bg-theme-hover disabled:opacity-40 disabled:hover:bg-transparent',
-  PATROL_MOTION,
-  PATROL_FOCUS
-);
-const ACTION_PILL = cn(
-  'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs cursor-pointer select-none',
-  'glass-subtle text-theme-secondary hover:text-theme-primary',
-  'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-cobalt-500/40',
-  PATROL_MOTION
-);
-const ACTION_PILL_ON = 'bg-cobalt-500/15 text-cobalt-700 dark:text-cobalt-300 ring-1 ring-cobalt-500/40';
-const CHIP = cn(PATROL_MONO, 'glass-subtle rounded px-1.5 py-px text-[11px]');
-const NODE = cn('relative z-10 shrink-0 w-6 h-6 rounded-full inline-flex items-center justify-center text-[11px] font-semibold tabular-nums');
-const STEPPER_LINE = 'relative before:absolute before:left-[11px] before:top-3 before:bottom-3 before:w-px before:bg-[var(--glass-border-highlight)]';
-
-/**
- * Band colour of a time window on the 24-h bar. Windows are a tonal scale of
- * the primary (light = day, deep = night, grey = custom) so they never borrow
- * amber (attention) or turquoise (done) from the status vocabulary.
- */
-function windowBand(w: PatrolTimeWindow): string {
-  const id = windowId(w);
-  if (id === 'day') return 'bg-cobalt-300/70 dark:bg-cobalt-300/60';
-  if (id === 'night') return 'bg-cobalt-700/70 dark:bg-cobalt-500/70';
-  return 'bg-surface-light-400/80 dark:bg-surface-400/80';
-}
-function windowDot(w: PatrolTimeWindow): string {
-  const id = windowId(w);
-  if (id === 'day') return 'bg-cobalt-300';
-  if (id === 'night') return 'bg-cobalt-700 dark:bg-cobalt-500';
-  return 'bg-surface-light-400 dark:bg-surface-400';
+interface FieldErrors {
+  name?: string;
+  checkpoints?: string;
+  windows?: string;
+  byCheckpoint: Record<number, string>;
 }
 
-/** Pure: the [start,end) hour segments a window covers; wraps midnight into two. */
-export function windowSegments(w: PatrolTimeWindow): Array<[number, number]> {
-  const s = clampHour(w.startHour);
-  const e = clampHour(w.endHour);
-  if (e > s) return [[s, e]];
-  if (s === e && s === 0) return [[0, 24]];
-  return [[s, 24], [0, e]].filter(([a, b]) => b > a) as Array<[number, number]>;
-}
-
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-interface WindowBarProps {
-  windows: readonly PatrolTimeWindow[];
-  size?: 'sm' | 'md';
-  className?: string;
-}
-
-/** 24-hour bar with one band per time window and a "now" marker. */
-const WindowBar = memo(function WindowBar({ windows, size = 'md', className }: WindowBarProps) {
-  const [nowFrac, setNowFrac] = useState<number>(() => {
-    const d = new Date();
-    return (d.getHours() + d.getMinutes() / 60) / 24;
-  });
-  useEffect(() => {
-    const t = setInterval(() => {
-      const d = new Date();
-      setNowFrac((d.getHours() + d.getMinutes() / 60) / 24);
-    }, 60_000);
-    return () => clearInterval(t);
-  }, []);
-  return (
-    <div className={cn('min-w-0', className)}>
-      <div
-        className={cn('relative grid grid-cols-24 rounded-full overflow-hidden glass-subtle', size === 'sm' ? 'h-1.5' : 'h-2.5')}
-        role="img"
-        aria-label={windows.length ? `Time windows: ${windows.map((w) => `${w.name || w.id} ${formatWindow(w)}`).join(', ')}` : 'No time windows'}
-      >
-        {windows.map((w) =>
-          windowSegments(w).map(([a, b], i) => (
-            <span
-              key={`${w.id}-${i}`}
-              className={cn('h-full', windowBand(w), PATROL_MOTION)}
-              style={{ gridColumn: `${a + 1} / ${b + 1}` }}
-              aria-hidden="true"
-            />
-          ))
-        )}
-        <span
-          className="absolute inset-y-0 w-px bg-theme-primary"
-          style={{ left: `${(nowFrac * 100).toFixed(2)}%` }}
-          aria-hidden="true"
-          title="now"
-        />
-      </div>
-      {size === 'md' && (
-        <div className={cn(PATROL_MICRO, 'mt-1 flex justify-between font-mono tabular-nums')} aria-hidden="true">
-          <span>00</span>
-          <span>06</span>
-          <span>12</span>
-          <span>18</span>
-          <span>24</span>
-        </div>
-      )}
-    </div>
-  );
-});
-
-function Fact({ label, children }: { label: string; children: ReactNode }): ReactNode {
-  return (
-    <>
-      <dt className={cn(PATROL_MICRO, 'pt-0.5')}>{label}</dt>
-      <dd className={cn(PATROL_MONO, 'min-w-0 break-words')}>{children}</dd>
-    </>
-  );
+/** Pure: sorts validateDraft's messages onto the fields they belong to. */
+function fieldErrors(problems: string[]): FieldErrors {
+  const out: FieldErrors = { byCheckpoint: {} };
+  for (const p of problems) {
+    const cp = /^Checkpoint (\d+) has no place\.$/.exec(p);
+    if (cp) out.byCheckpoint[Number(cp[1]) - 1] = 'Choose or type a place.';
+    else if (p.startsWith('Give the route')) out.name = p;
+    else if (p.startsWith('Add at least')) out.checkpoints = p;
+    else out.windows = out.windows ?? p;
+  }
+  return out;
 }
 
 // ============================================================================
 // COMPONENT
 // ============================================================================
 
-export const RouteEditor = memo(function RouteEditor({
-  route,
-  robots,
-  defaultRobotId,
-  onSaved,
-  onCancel,
-  onDelete,
-  className,
-}: RouteEditorProps) {
+export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRobotId, onSaved, onCancel, className }: RouteEditorProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFromRoute(route, defaultRobotId));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [exportNote, setExportNote] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
   const [pickPlace, setPickPlace] = useState<string>('');
   const [manualPlace, setManualPlace] = useState('');
   /** Checkpoint ids whose details are folded away (inputs stay mounted). */
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(route?.checkpoints.map((c) => c.id) ?? []));
+  const formRef = useRef<HTMLFormElement>(null);
 
   const saveRoute = usePatrolStore((s) => s.saveRoute);
   const fetchPlaces = usePatrolStore((s) => s.fetchPlaces);
@@ -322,9 +206,10 @@ export const RouteEditor = memo(function RouteEditor({
   useEffect(() => {
     setDraft(draftFromRoute(route, defaultRobotId));
     setCollapsed(new Set(route?.checkpoints.map((c) => c.id) ?? []));
+    setSubmitted(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route?.id]);
 
-  // Places of the selected robot.
   useEffect(() => {
     if (draft.robotId) void fetchPlaces(draft.robotId);
   }, [draft.robotId, fetchPlaces]);
@@ -356,31 +241,19 @@ export const RouteEditor = memo(function RouteEditor({
     };
   }, [debouncedCron]);
 
-  const placeName = useCallback(
-    (id: string) => places?.find((p) => p.id === id)?.name ?? id,
-    [places]
-  );
-
+  const placeName = useCallback((id: string) => places?.find((p) => p.id === id)?.name ?? id, [places]);
   const update = useCallback((patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch })), []);
   const updateCheckpoint = useCallback((index: number, patch: Partial<PatrolCheckpoint>) => {
-    setDraft((d) => ({
-      ...d,
-      checkpoints: d.checkpoints.map((c, i) => (i === index ? { ...c, ...patch } : c)),
-    }));
+    setDraft((d) => ({ ...d, checkpoints: d.checkpoints.map((c, i) => (i === index ? { ...c, ...patch } : c)) }));
+  }, []);
+  const updateWindow = useCallback((index: number, patch: Partial<PatrolTimeWindow>) => {
+    setDraft((d) => ({ ...d, timeWindows: d.timeWindows.map((w, i) => (i === index ? { ...w, ...patch } : w)) }));
   }, []);
 
   const addCheckpoint = useCallback(() => {
     const placeId = (pickPlace === MANUAL ? manualPlace : pickPlace).trim();
     if (!placeId) return;
-    const cp: PatrolCheckpoint = {
-      id: newId('cp'),
-      placeId,
-      name: placeName(placeId),
-      headingDeg: null,
-      actions: ['capture'],
-      dwellMs: 0,
-      expectations: [],
-    };
+    const cp: PatrolCheckpoint = { id: newId('cp'), placeId, name: placeName(placeId), headingDeg: null, actions: ['capture'], dwellMs: 0, expectations: [] };
     setDraft((d) => ({ ...d, checkpoints: [...d.checkpoints, cp] }));
     if (pickPlace === MANUAL) setManualPlace('');
   }, [pickPlace, manualPlace, placeName]);
@@ -395,661 +268,276 @@ export const RouteEditor = memo(function RouteEditor({
   }, []);
 
   const problems = useMemo(() => validateDraft(draft), [draft]);
+  const errors = useMemo(() => (submitted ? fieldErrors(problems) : { byCheckpoint: {} } as FieldErrors), [submitted, problems]);
   const cronBlocks = Boolean(draft.cronExpression.trim()) && cron !== null && !cron.valid;
 
-  const handleSave = useCallback(async () => {
-    if (problems.length > 0 || cronBlocks) return;
-    setSaving(true);
-    setSaveError(null);
-    const saved = await saveRoute(draftToInput(draft), route?.id ?? null);
-    setSaving(false);
-    if (saved) onSaved(saved);
-    else setSaveError(usePatrolStore.getState().error ?? 'Saving failed');
-  }, [problems, cronBlocks, saveRoute, draft, route?.id, onSaved]);
+  const handleSubmit = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      setSubmitted(true);
+      if (problems.length > 0 || cronBlocks) {
+        // Focus the first field that needs attention once the errors are drawn.
+        requestAnimationFrame(() => formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
+        return;
+      }
+      setSaving(true);
+      setSaveError(null);
+      const saved = await saveRoute(draftToInput(draft), route?.id ?? null);
+      setSaving(false);
+      if (saved) {
+        onSaved(saved);
+        return;
+      }
+      const message = usePatrolStore.getState().error ?? 'Saving failed';
+      setSaveError(message);
+      toast.error(route ? "Couldn't update route" : "Couldn't create route", { description: message });
+    },
+    [problems, cronBlocks, saveRoute, draft, route, onSaved],
+  );
 
-  const handleExport = useCallback(async () => {
-    if (!route) return;
-    try {
-      const doc = await patrolApi.exportVda5050(route.id);
-      const stem = route.name.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || route.id;
-      downloadBlob(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }), `${stem}.vda5050.json`);
-      setExportNote(null);
-    } catch (err) {
-      setExportNote(`Export failed: ${getErrorMessage(err, 'unknown error')}`);
-    }
-  }, [route]);
-
-  const placeOptions: PatrolPlace[] = places ?? [];
-  const robotLabel = robots.find((r) => r.id === draft.robotId)?.name ?? (draft.robotId || 'any robot');
+  const placeOptions = places ?? [];
+  const placesListId = placeOptions.length ? `patrol-places-${draft.robotId}` : undefined;
+  const robotLabel = robots.find((r) => r.id === draft.robotId)?.name ?? (draft.robotId || 'Any robot');
   const previewLegs = useMemo(
     () => draft.checkpoints.map((c, i) => ({ index: i, label: c.name || c.placeId || '?', status: 'route' as const })),
-    [draft.checkpoints]
+    [draft.checkpoints],
   );
   const nextFires = cron && cron.valid ? cron.nextRuns.slice(0, 3).map(formatWhen).join(' · ') || '—' : null;
-  const allCollapsed = draft.checkpoints.length > 0 && draft.checkpoints.every((c) => collapsed.has(c.id));
+  const invalidCount = submitted
+    ? Number(Boolean(errors.name)) + Number(Boolean(errors.checkpoints)) + Number(Boolean(errors.windows)) + Object.keys(errors.byCheckpoint).length + Number(cronBlocks)
+    : 0;
+  const cronHint = !draft.cronExpression.trim()
+    ? 'Manual only — no schedule.'
+    : cronBusy && !cron
+      ? 'Checking…'
+      : cron && cron.valid
+        ? `${describeCron(draft.cronExpression) ?? 'Valid'}. Next: ${nextFires}`
+        : null;
+  const placesMeta = draft.robotId
+    ? placesStatus === 'loading'
+      ? 'Reading places…'
+      : placesStatus === 'error' || (placesStatus === 'ok' && placeOptions.length === 0)
+        ? 'The robot lists no places — type a place id.'
+        : `${placeOptions.length} places known`
+    : 'Pick a robot to list its places, or type a place id.';
 
   return (
-    <div className={cn('flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start min-w-0', className)} data-testid="patrol-route-editor">
-      {/* ------------------------------------------------------------ left: form */}
-      <div className="flex flex-col gap-4 min-w-0">
-        {/* Route */}
-        <section className={PATROL_PANEL}>
-          <SectionHeader as="h3" title="Route" className="mb-3" />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="patrol-route-name">
-                Route name
-              </label>
-              <input
-                id="patrol-route-name"
-                data-testid="patrol-route-name"
-                className={INPUT}
-                value={draft.name}
-                onChange={(e) => update({ name: e.target.value })}
-                placeholder="Night round, ground floor"
+    <form ref={formRef} onSubmit={(e) => void handleSubmit(e)} noValidate className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'} data-testid="patrol-route-editor">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3 xl:items-start">
+        <div className="flex min-w-0 flex-col gap-6 xl:col-span-2">
+          {/* Basics */}
+          <Panel>
+            <Panel.Header title="Basics" />
+            <Panel.Body className="flex flex-col gap-4">
+              {(invalidCount > 0 || saveError) && (
+                <div className="rounded-control border border-line-subtle bg-inset px-3 py-2 text-[13px] text-signal-stopped" role="alert" data-testid="patrol-editor-problems">
+                  {saveError ?? `Fix ${invalidCount} field${invalidCount === 1 ? '' : 's'} before saving.`}
+                </div>
+              )}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField label="Name" required error={errors.name}>
+                  <Input data-testid="patrol-route-name" value={draft.name} onChange={(e) => update({ name: e.target.value })} placeholder="Night round, ground floor" />
+                </FormField>
+                <FormField label="Robot" hint="Any robot: you choose one when you start a run.">
+                  <Select
+                    data-testid="patrol-route-robot"
+                    value={draft.robotId}
+                    onChange={(e) => update({ robotId: e.target.value })}
+                    options={[{ value: '', label: 'Any robot' }, ...robots.map((r) => ({ value: r.id, label: r.name }))]}
+                  />
+                </FormField>
+              </div>
+              <Switch
+                data-testid="patrol-route-enabled"
+                label="Armed"
+                description="The scheduler may start this route on its own."
+                checked={draft.enabled}
+                onCheckedChange={(enabled) => update({ enabled })}
               />
-            </div>
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="patrol-route-robot">
-                Robot
-              </label>
-              <select
-                id="patrol-route-robot"
-                data-testid="patrol-route-robot"
-                className={cn(INPUT, 'truncate')}
-                value={draft.robotId}
-                onChange={(e) => update({ robotId: e.target.value })}
-              >
-                <option value="">Any robot (choose at start)</option>
-                {robots.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </section>
+            </Panel.Body>
+          </Panel>
 
-        {/* Checkpoints */}
-        <section className={PATROL_PANEL}>
-          <SectionHeader
-            as="h3"
-            title="Checkpoints"
-            count={draft.checkpoints.length}
-            className="mb-3"
-            meta={
-              draft.robotId
-                ? placesStatus === 'loading'
-                  ? 'reading places…'
-                  : placesStatus === 'error' || (placesStatus === 'ok' && placeOptions.length === 0)
-                    ? 'no places from the robot — type a place id'
-                    : `${placeOptions.length} places known`
-                : 'pick a robot to list its places'
-            }
-            actions={
-              draft.checkpoints.length > 1 ? (
-                <button
-                  type="button"
-                  className={cn('text-[11px] text-theme-tertiary hover:text-theme-primary rounded px-1', PATROL_MOTION, PATROL_FOCUS)}
-                  onClick={() => setCollapsed(allCollapsed ? new Set() : new Set(draft.checkpoints.map((c) => c.id)))}
+          {/* Checkpoints */}
+          <Panel>
+            <Panel.Header title="Checkpoints" description={placesMeta} />
+            <Panel.Body className="flex flex-col gap-4">
+              {draft.checkpoints.length === 0 && (
+                <p className={errors.checkpoints ? 'text-[13px] text-signal-stopped' : 'text-[13px] text-ink-tertiary'} role={errors.checkpoints ? 'alert' : undefined}>
+                  {errors.checkpoints ?? 'No checkpoints yet. Add places in the order the robot should walk them.'}
+                </p>
+              )}
+              {draft.checkpoints.length > 0 && (
+                <ol className="relative flex flex-col gap-3 before:absolute before:bottom-6 before:left-3 before:top-6 before:w-px before:bg-line">
+                  {draft.checkpoints.map((cp, index) => (
+                    <CheckpointCard
+                      key={cp.id}
+                      checkpoint={cp}
+                      index={index}
+                      count={draft.checkpoints.length}
+                      open={!cp.placeId.trim() || !collapsed.has(cp.id)}
+                      placeError={errors.byCheckpoint[index]}
+                      placesListId={placesListId}
+                      onToggle={() => toggleCollapsed(cp.id)}
+                      onChange={(patch) => updateCheckpoint(index, patch)}
+                      onMove={(delta) => setDraft((d) => ({ ...d, checkpoints: moveCheckpoint(d.checkpoints, index, delta) }))}
+                      onRemove={() => setDraft((d) => ({ ...d, checkpoints: d.checkpoints.filter((_, i) => i !== index) }))}
+                    />
+                  ))}
+                </ol>
+              )}
+              <div className="flex flex-col gap-3 border-t border-line-subtle pt-4 sm:flex-row sm:items-end">
+                <FormField label="Add checkpoint at" className="min-w-0 flex-1">
+                  <Select
+                    data-testid="patrol-place-pick"
+                    value={pickPlace}
+                    onChange={(e) => setPickPlace(e.target.value)}
+                    placeholder="Choose a place…"
+                    options={[
+                      ...placeOptions.map((p) => ({ value: p.id, label: `${p.name}${p.placeType ? ` · ${p.placeType}` : ''}` })),
+                      { value: MANUAL, label: 'Type a place id…' },
+                    ]}
+                  />
+                </FormField>
+                {pickPlace === MANUAL && (
+                  <FormField label="Place id" className="min-w-0 flex-1">
+                    <Input
+                      data-testid="patrol-place-manual"
+                      className="font-mono"
+                      value={manualPlace}
+                      placeholder="hallway"
+                      onChange={(e) => setManualPlace(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addCheckpoint();
+                        }
+                      }}
+                    />
+                  </FormField>
+                )}
+                <Button
+                  variant="secondary"
+                  leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}
+                  data-testid="patrol-checkpoint-add"
+                  disabled={!pickPlace || (pickPlace === MANUAL && !manualPlace.trim())}
+                  onClick={addCheckpoint}
                 >
-                  {allCollapsed ? 'Expand all' : 'Collapse all'}
-                </button>
-              ) : undefined
-            }
-          />
+                  Add checkpoint
+                </Button>
+              </div>
+              {placesListId && (
+                <datalist id={placesListId}>
+                  {placeOptions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </datalist>
+              )}
+            </Panel.Body>
+          </Panel>
 
-          {draft.checkpoints.length === 0 && (
-            <p className="card-meta text-xs mb-3">No checkpoints yet. Add places below in the order the robot should walk them.</p>
-          )}
+          {/* Schedule */}
+          <Panel>
+            <Panel.Header title="Schedule" description="Server local time. Leave empty to start the route by hand only." />
+            <Panel.Body className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <FormField label="Cron expression" hint={cronBlocks ? undefined : cronHint} error={cronBlocks ? (cron?.error ?? 'Invalid cron expression') : undefined}>
+                <Input data-testid="patrol-cron-input" className="font-mono" value={draft.cronExpression} placeholder="0 22,3 * * 1-5" onChange={(e) => update({ cronExpression: e.target.value })} />
+              </FormField>
+              <FormField label="Home place" hint="Where the robot returns when done; empty stays at the last checkpoint.">
+                <Input data-testid="patrol-home-place" className="font-mono" list={placesListId} value={draft.homePlaceId} placeholder="HALLWAY" onChange={(e) => update({ homePlaceId: e.target.value })} />
+              </FormField>
+              {/* Machine-readable line the tests read: the three next fire times, or the server's error. */}
+              <p className="sr-only" data-testid="patrol-cron-next" aria-live="polite">
+                {cronBlocks ? (cron?.error ?? 'Invalid cron expression') : cron?.valid ? `Next: ${nextFires}` : ''}
+              </p>
+            </Panel.Body>
+          </Panel>
 
-          <ol className={cn('flex flex-col gap-2', STEPPER_LINE)}>
-            {draft.checkpoints.map((cp, index) => {
-              const missingPlace = !cp.placeId.trim();
-              const isOpen = missingPlace || !collapsed.has(cp.id);
-              const detailsId = `patrol-checkpoint-details-${cp.id}`;
-              return (
-                <li
-                  key={cp.id}
-                  className={cn('flex items-start gap-3 min-w-0', PATROL_FADE_IN)}
-                  data-testid="patrol-checkpoint"
-                  data-index={index}
-                >
-                  <span className={cn(NODE, LEG_NODE.route, missingPlace && 'ring-2 ring-amber-500/50')} aria-hidden="true">
-                    {index + 1}
-                  </span>
-
-                  <div
-                    className={cn(
-                      'glass-subtle rounded-brand p-3 flex-1 min-w-0 flex flex-col gap-2 border border-transparent',
-                      PATROL_MOTION,
-                      isOpen && 'border-glass-highlight',
-                      missingPlace && 'border-l-[3px] border-l-amber-500'
-                    )}
-                  >
-                    {/* summary line + rail */}
-                    <div className="flex items-start gap-2 min-w-0">
-                      <button
-                        type="button"
-                        className={cn('flex-1 min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-left rounded', PATROL_FOCUS, !missingPlace && 'cursor-pointer')}
-                        aria-expanded={isOpen}
-                        aria-controls={detailsId}
-                        aria-label={`Checkpoint ${index + 1} details`}
-                        disabled={missingPlace}
-                        onClick={() => toggleCollapsed(cp.id)}
-                      >
-                        <span className="text-sm font-medium text-theme-primary truncate max-w-full">
-                          {cp.name || cp.placeId || <span className="text-theme-muted">unnamed</span>}
-                        </span>
-                        <span className={CHIP}>{cp.placeId || '—'}</span>
-                        {cp.actions.map((a) => (
-                          <span key={a} className={cn(CHIP, 'text-cobalt-700 dark:text-cobalt-300')}>
-                            {a}
-                            {a === 'dwell' && cp.dwellMs ? ` ${cp.dwellMs}ms` : ''}
-                          </span>
-                        ))}
-                        {typeof cp.headingDeg === 'number' && Number.isFinite(cp.headingDeg) && <span className={CHIP}>{cp.headingDeg}°</span>}
-                        {(cp.expectations ?? []).filter((e) => e.trim()).length > 0 && (
-                          <span className={CHIP}>{(cp.expectations ?? []).filter((e) => e.trim()).length} expect.</span>
-                        )}
-                        <span className={cn('ml-auto text-theme-tertiary text-[10px]', PATROL_MOTION, isOpen && 'rotate-180')} aria-hidden="true">
-                          ▼
-                        </span>
-                      </button>
-                      <div className={cn('shrink-0 flex gap-1', isOpen ? 'flex-col sm:flex-row' : 'flex-row')}>
-                        <button
-                          type="button"
-                          className={ICON_BTN}
-                          aria-label={`Move checkpoint ${index + 1} up`}
-                          data-testid="patrol-checkpoint-up"
-                          disabled={index === 0}
-                          onClick={() => setDraft((d) => ({ ...d, checkpoints: moveCheckpoint(d.checkpoints, index, -1) }))}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className={ICON_BTN}
-                          aria-label={`Move checkpoint ${index + 1} down`}
-                          data-testid="patrol-checkpoint-down"
-                          disabled={index === draft.checkpoints.length - 1}
-                          onClick={() => setDraft((d) => ({ ...d, checkpoints: moveCheckpoint(d.checkpoints, index, 1) }))}
-                        >
-                          ↓
-                        </button>
-                        <button
-                          type="button"
-                          className={cn(ICON_BTN, 'text-red-600 dark:text-red-400 hover:bg-red-500/10')}
-                          aria-label={`Remove checkpoint ${index + 1}`}
-                          data-testid="patrol-checkpoint-remove"
-                          onClick={() => setDraft((d) => ({ ...d, checkpoints: d.checkpoints.filter((_, i) => i !== index) }))}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* details — folded with `hidden`, never unmounted */}
-                    <div id={detailsId} className={cn('flex flex-col gap-2 min-w-0', !isOpen && 'hidden')}>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <div className="min-w-0">
-                          <label className={LABEL}>Name</label>
-                          <input
-                            className={INPUT}
-                            value={cp.name}
-                            aria-label={`Checkpoint ${index + 1} name`}
-                            onChange={(e) => updateCheckpoint(index, { name: e.target.value })}
-                          />
-                        </div>
-                        <div className="min-w-0">
-                          <label className={LABEL}>Place id</label>
-                          <input
-                            className={cn(INPUT, 'font-mono text-xs')}
-                            value={cp.placeId}
-                            aria-label={`Checkpoint ${index + 1} place id`}
-                            aria-invalid={missingPlace || undefined}
-                            list={placeOptions.length ? `patrol-places-${draft.robotId}` : undefined}
-                            onChange={(e) => updateCheckpoint(index, { placeId: e.target.value })}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
-                        <div className="min-w-0">
-                          <label className={LABEL}>Heading (°)</label>
-                          <input
-                            type="number"
-                            className={INPUT}
-                            aria-label={`Checkpoint ${index + 1} heading`}
-                            placeholder="keep"
-                            value={cp.headingDeg ?? ''}
-                            onChange={(e) =>
-                              updateCheckpoint(index, {
-                                headingDeg: e.target.value === '' ? null : Number(e.target.value),
-                              })
-                            }
-                          />
-                        </div>
-                        <div className="col-span-2 sm:col-span-2 min-w-0">
-                          <span className={LABEL}>Actions</span>
-                          <div className="flex flex-wrap gap-1.5">
-                            {PatrolCheckpointActions.map((action: PatrolCheckpointAction) => {
-                              const on = cp.actions.includes(action);
-                              return (
-                                <label key={action} className={cn(ACTION_PILL, on && ACTION_PILL_ON)}>
-                                  <input
-                                    type="checkbox"
-                                    className="sr-only"
-                                    checked={on}
-                                    aria-label={`Checkpoint ${index + 1} ${action}`}
-                                    onChange={() =>
-                                      updateCheckpoint(index, {
-                                        actions: on ? cp.actions.filter((a) => a !== action) : [...cp.actions, action],
-                                      })
-                                    }
-                                  />
-                                  <span
-                                    className={cn('inline-block w-1.5 h-1.5 rounded-full', on ? 'bg-cobalt-500' : 'bg-surface-light-400 dark:bg-surface-400')}
-                                    aria-hidden="true"
-                                  />
-                                  {action}
-                                </label>
-                              );
-                            })}
-                          </div>
-                        </div>
-                        <div className="min-w-0">
-                          <label className={LABEL}>Dwell (ms)</label>
-                          <input
-                            type="number"
-                            min={0}
-                            step={500}
-                            className={cn(INPUT, 'font-mono text-xs')}
-                            aria-label={`Checkpoint ${index + 1} dwell`}
-                            disabled={!cp.actions.includes('dwell')}
-                            value={cp.dwellMs ?? 0}
-                            onChange={(e) => updateCheckpoint(index, { dwellMs: Number(e.target.value) })}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="min-w-0">
-                        <label className={LABEL}>Expectations (one per line)</label>
-                        <textarea
-                          className={cn(INPUT, 'min-h-[2.5rem]')}
-                          rows={2}
-                          aria-label={`Checkpoint ${index + 1} expectations`}
-                          placeholder="fire extinguisher on the wall left of the door"
-                          value={(cp.expectations ?? []).join('\n')}
-                          onChange={(e) => updateCheckpoint(index, { expectations: e.target.value.split('\n') })}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-
-            {/* ghost node: add the next checkpoint */}
-            <li className="flex items-start gap-3 min-w-0">
-              <span
-                className={cn(NODE, 'border border-dashed border-glass-highlight text-theme-tertiary bg-[var(--glass-bg)]')}
-                aria-hidden="true"
-              >
-                +
-              </span>
-              <div className="flex-1 min-w-0 border border-dashed border-glass-highlight rounded-brand p-3">
-                <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
-                  <div className="flex-1 min-w-0">
-                    <label className={LABEL} htmlFor="patrol-place-pick">
-                      Add checkpoint at
-                    </label>
-                    <select
-                      id="patrol-place-pick"
-                      data-testid="patrol-place-pick"
-                      className={cn(INPUT, 'truncate')}
-                      value={pickPlace}
-                      onChange={(e) => setPickPlace(e.target.value)}
-                    >
-                      <option value="">Choose a place…</option>
-                      {placeOptions.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                          {p.placeType ? ` · ${p.placeType}` : ''}
-                        </option>
-                      ))}
-                      <option value={MANUAL}>Type a place id…</option>
-                    </select>
-                  </div>
-                  {pickPlace === MANUAL && (
-                    <div className="flex-1 min-w-0">
-                      <label className={LABEL} htmlFor="patrol-place-manual">
-                        Place id
-                      </label>
-                      <input
-                        id="patrol-place-manual"
-                        data-testid="patrol-place-manual"
-                        className={cn(INPUT, 'font-mono text-xs')}
-                        value={manualPlace}
-                        placeholder="hallway"
-                        onChange={(e) => setManualPlace(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            addCheckpoint();
-                          }
-                        }}
-                      />
-                    </div>
-                  )}
+          {/* Time windows */}
+          <Panel>
+            <Panel.Header
+              title="Time windows"
+              description="Baselines are kept per window: a lit lamp is normal by day and a finding at 03:00."
+              actions={
+                <>
+                  <Button size="sm" variant="ghost" data-testid="patrol-windows-defaults" onClick={() => update({ timeWindows: DEFAULT_TIME_WINDOWS.map((w) => ({ ...w })) })}>
+                    Use day / night
+                  </Button>
                   <Button
                     size="sm"
-                    variant="outline"
-                    className="min-h-9"
-                    data-testid="patrol-checkpoint-add"
-                    disabled={!pickPlace || (pickPlace === MANUAL && !manualPlace.trim())}
-                    onClick={addCheckpoint}
+                    variant="secondary"
+                    leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}
+                    data-testid="patrol-window-add"
+                    onClick={() => update({ timeWindows: [...draft.timeWindows, { id: newId('w'), name: '', startHour: 0, endHour: 24 }] })}
                   >
-                    Add checkpoint
+                    Add window
+                  </Button>
+                </>
+              }
+            />
+            <Panel.Body className="flex flex-col gap-4">
+              <WindowBar windows={draft.timeWindows} />
+              {errors.windows && (
+                <p className="text-[13px] text-signal-stopped" role="alert">
+                  {errors.windows}
+                </p>
+              )}
+              {draft.timeWindows.length === 0 && <p className="text-[13px] text-ink-tertiary">No windows — one baseline for the whole day.</p>}
+              {draft.timeWindows.map((w, index) => (
+                <div key={w.id} className="grid grid-cols-[minmax(0,1fr)_5rem_5rem_auto] items-end gap-3" data-testid="patrol-window">
+                  <FormField label={<span className="inline-flex items-center gap-1.5"><span className={`inline-block h-2 w-2 rounded-full ${windowBand(w)}`} aria-hidden="true" />Name</span>}>
+                    <Input aria-label={`Window ${index + 1} name`} value={w.name} onChange={(e) => updateWindow(index, { name: e.target.value })} />
+                  </FormField>
+                  <FormField label="From">
+                    <Input type="number" min={0} max={24} aria-label={`Window ${index + 1} start hour`} value={w.startHour} onChange={(e) => updateWindow(index, { startHour: Number(e.target.value) })} />
+                  </FormField>
+                  <FormField label="To">
+                    <Input type="number" min={0} max={24} aria-label={`Window ${index + 1} end hour`} value={w.endHour} onChange={(e) => updateWindow(index, { endHour: Number(e.target.value) })} />
+                  </FormField>
+                  <Button variant="ghost" iconOnly aria-label={`Remove window ${index + 1}`} onClick={() => update({ timeWindows: draft.timeWindows.filter((_, i) => i !== index) })}>
+                    <Trash2 className="h-4 w-4" strokeWidth={1.75} />
                   </Button>
                 </div>
-              </div>
-            </li>
-          </ol>
-
-          {placeOptions.length > 0 && (
-            <datalist id={`patrol-places-${draft.robotId}`}>
-              {placeOptions.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
               ))}
-            </datalist>
-          )}
-        </section>
+            </Panel.Body>
+          </Panel>
+        </div>
 
-        {/* Schedule */}
-        <section className={PATROL_PANEL}>
-          <SectionHeader as="h3" title="Schedule" className="mb-3" meta={draft.cronExpression.trim() ? 'server local time' : 'manual'} />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="patrol-cron">
-                Schedule (5-field cron, server local time)
-              </label>
-              <input
-                id="patrol-cron"
-                data-testid="patrol-cron-input"
-                className={cn(INPUT, 'font-mono', cronBlocks && 'border-red-500/50 focus:ring-red-500/30')}
-                value={draft.cronExpression}
-                placeholder="0 22,3 * * 1-5"
-                aria-invalid={cronBlocks || undefined}
-                onChange={(e) => update({ cronExpression: e.target.value })}
-              />
-              <div className={cn('mt-1.5 text-xs min-h-[1.25rem] font-mono tabular-nums break-words')} data-testid="patrol-cron-next" aria-live="polite">
-                {!draft.cronExpression.trim() ? (
-                  <span className="text-theme-muted">Manual only — no schedule.</span>
-                ) : cronBusy && !cron ? (
-                  <span className="text-theme-muted">checking…</span>
-                ) : cron && !cron.valid ? (
-                  <span className="text-red-600 dark:text-red-400">{cron.error ?? 'Invalid cron expression'}</span>
-                ) : cron ? (
-                  <span className="text-theme-secondary">
-                    Next: {cron.nextRuns.slice(0, 3).map(formatWhen).join(' · ') || '—'}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="patrol-home">
-                Home place (return here when done)
-              </label>
-              <input
-                id="patrol-home"
-                data-testid="patrol-home-place"
-                className={cn(INPUT, 'font-mono text-xs')}
-                list={placeOptions.length ? `patrol-places-${draft.robotId}` : undefined}
-                value={draft.homePlaceId}
-                placeholder="stay at the last checkpoint"
-                onChange={(e) => update({ homePlaceId: e.target.value })}
-              />
-              <label className="mt-3 inline-flex items-center gap-2.5 text-sm text-theme-secondary cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  className="sr-only peer"
-                  data-testid="patrol-route-enabled"
-                  checked={draft.enabled}
-                  onChange={(e) => update({ enabled: e.target.checked })}
-                />
-                <span
-                  className={cn(
-                    'relative inline-block w-9 h-5 rounded-full shrink-0 bg-surface-light-300 dark:bg-surface-500',
-                    'peer-checked:bg-cobalt-500 peer-focus-visible:ring-2 peer-focus-visible:ring-cobalt-500/40',
-                    'after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4 after:rounded-full after:bg-white after:shadow-sm',
-                    'after:transition-transform after:duration-200 peer-checked:after:translate-x-4',
-                    PATROL_MOTION
-                  )}
-                  aria-hidden="true"
-                />
-                Enabled (the scheduler may start it)
-              </label>
-            </div>
-          </div>
-        </section>
-
-        {/* Time windows */}
-        <section className={PATROL_PANEL}>
-          <SectionHeader
-            as="h3"
-            title="Time windows"
-            count={draft.timeWindows.length}
-            className="mb-3"
-            actions={
-              <>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-testid="patrol-windows-defaults"
-                  onClick={() => update({ timeWindows: DEFAULT_TIME_WINDOWS.map((w) => ({ ...w })) })}
-                >
-                  Day / night defaults
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-testid="patrol-window-add"
-                  onClick={() =>
-                    update({
-                      timeWindows: [...draft.timeWindows, { id: newId('w'), name: '', startHour: 0, endHour: 24 }],
-                    })
-                  }
-                >
-                  Add window
-                </Button>
-              </>
-            }
-          />
-          <p className="card-meta text-xs mb-3">Baselines are kept per window: a lit lamp is normal by day and a finding at 03:00. Wraps midnight when end ≤ start.</p>
-
-          <WindowBar windows={draft.timeWindows} className="mb-2" />
-          {draft.timeWindows.length > 0 && (
-            <div className="flex flex-wrap gap-x-3 gap-y-1 mb-3">
-              {draft.timeWindows.map((w) => (
-                <span key={w.id} className={cn(PATROL_MONO, 'inline-flex items-center gap-1.5')}>
-                  <span className={cn('inline-block w-2 h-2 rounded-full', windowDot(w))} aria-hidden="true" />
-                  {w.name || w.id} {formatWindow(w)}
-                </span>
-              ))}
-            </div>
-          )}
-          {draft.timeWindows.length === 0 && <p className="card-meta text-xs">No windows — one baseline for the whole day.</p>}
-
-          <div className="flex flex-col gap-1.5">
-            {draft.timeWindows.map((w, index) => (
-              <div key={w.id} className={cn('grid grid-cols-[1fr_4.5rem_4.5rem_1.75rem] gap-2 items-end min-w-0', PATROL_FADE_IN)} data-testid="patrol-window">
-                <div className="min-w-0">
-                  <label className={cn(LABEL, 'inline-flex items-center gap-1.5')}>
-                    <span className={cn('inline-block w-2 h-2 rounded-full', windowDot(w))} aria-hidden="true" />
-                    Name
-                  </label>
-                  <input
-                    className={INPUT}
-                    aria-label={`Window ${index + 1} name`}
-                    value={w.name}
-                    onChange={(e) =>
-                      update({
-                        timeWindows: draft.timeWindows.map((x, i) => (i === index ? { ...x, name: e.target.value } : x)),
-                      })
-                    }
-                  />
-                </div>
-                <div className="min-w-0">
-                  <label className={LABEL}>From</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={24}
-                    className={cn(INPUT, 'font-mono text-xs')}
-                    aria-label={`Window ${index + 1} start hour`}
-                    value={w.startHour}
-                    onChange={(e) =>
-                      update({
-                        timeWindows: draft.timeWindows.map((x, i) => (i === index ? { ...x, startHour: Number(e.target.value) } : x)),
-                      })
-                    }
-                  />
-                </div>
-                <div className="min-w-0">
-                  <label className={LABEL}>To</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={24}
-                    className={cn(INPUT, 'font-mono text-xs')}
-                    aria-label={`Window ${index + 1} end hour`}
-                    value={w.endHour}
-                    onChange={(e) =>
-                      update({
-                        timeWindows: draft.timeWindows.map((x, i) => (i === index ? { ...x, endHour: Number(e.target.value) } : x)),
-                      })
-                    }
-                  />
-                </div>
-                <button
-                  type="button"
-                  className={cn(ICON_BTN, 'h-8 w-7 text-red-600 dark:text-red-400 hover:bg-red-500/10')}
-                  aria-label={`Remove window ${index + 1}`}
-                  onClick={() => update({ timeWindows: draft.timeWindows.filter((_, i) => i !== index) })}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        </section>
+        {/* Preview */}
+        <Panel as="aside" className="xl:sticky xl:top-20">
+          <Panel.Header title="Preview" />
+          <Panel.Body className="flex flex-col gap-4">
+            {previewLegs.length > 0 ? (
+              <RoutePath size="md" legs={previewLegs} />
+            ) : (
+              <p className="text-[13px] text-ink-tertiary">Add checkpoints to see the path.</p>
+            )}
+            <KeyValueList
+              columns={1}
+              items={[
+                { label: 'Robot', value: robotLabel },
+                { label: 'Checkpoints', value: draft.checkpoints.length },
+                { label: 'Schedule', value: draft.cronExpression.trim() ? (describeCron(draft.cronExpression) ?? draft.cronExpression.trim()) : 'Manual' },
+                { label: 'Next run', value: !draft.cronExpression.trim() ? '—' : cronBlocks ? 'Invalid schedule' : (nextFires ?? 'Checking…') },
+                { label: 'Home', value: draft.homePlaceId.trim() || 'Last checkpoint' },
+                { label: 'Windows', value: draft.timeWindows.length ? draft.timeWindows.map((w) => `${w.name || w.id} ${formatWindow(w)}`).join(' · ') : 'Whole day' },
+              ]}
+            />
+          </Panel.Body>
+        </Panel>
       </div>
 
-      {/* ------------------------------------------------------ right: preview */}
-      <aside className={cn(PATROL_STICKY_RAIL, 'flex flex-col gap-4 min-w-0')}>
-        <section className={PATROL_PANEL}>
-          <SectionHeader
-            as="h3"
-            title="Preview"
-            className="mb-3"
-            actions={
-              <span className={cn(PATROL_MONO, 'inline-flex items-center gap-1.5')}>
-                <StatusDot tone={draft.enabled ? 'accent' : 'neutral'} />
-                {draft.enabled ? 'enabled' : 'disabled'}
-              </span>
-            }
-          />
-          {previewLegs.length > 0 ? (
-            <RoutePath size="md" legs={previewLegs} className="mb-3" />
-          ) : (
-            <p className="card-meta text-xs mb-3">Add checkpoints to see the path.</p>
-          )}
-          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5">
-            <Fact label="Robot">{robotLabel}</Fact>
-            <Fact label="Legs">{draft.checkpoints.length}</Fact>
-            <Fact label="Schedule">{draft.cronExpression.trim() || 'manual'}</Fact>
-            <Fact label="Next">
-              {!draft.cronExpression.trim() ? (
-                '—'
-              ) : cronBusy && !cron ? (
-                'checking…'
-              ) : cron && !cron.valid ? (
-                <span className="text-red-600 dark:text-red-400">invalid schedule</span>
-              ) : (
-                nextFires ?? '—'
-              )}
-            </Fact>
-            <Fact label="Home">{draft.homePlaceId.trim() || 'last checkpoint'}</Fact>
-            <Fact label="Windows">
-              <WindowBar windows={draft.timeWindows} size="sm" className="mt-1" />
-              <span className="block mt-1">
-                {draft.timeWindows.length ? draft.timeWindows.map((w) => `${w.name || w.id} ${formatWindow(w)}`).join(' · ') : 'whole day'}
-              </span>
-            </Fact>
-          </dl>
-        </section>
-
-        {/* save bar — fixed to the bottom on small screens */}
-        <div
-          className={cn(
-            'fixed bottom-0 inset-x-0 z-20 glass-elevated rounded-none border-t border-glass p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]',
-            'lg:static lg:z-auto lg:rounded-brand-lg lg:border-t-0 lg:p-4',
-            'flex flex-col gap-2 min-w-0'
-          )}
-        >
-          {(problems.length > 0 || saveError || exportNote) && (
-            <ul
-              className="text-xs text-amber-700 dark:text-amber-400 list-disc pl-4 max-h-24 overflow-y-auto"
-              role="status"
-              data-testid="patrol-editor-problems"
-            >
-              {problems.map((p) => (
-                <li key={p}>{p}</li>
-              ))}
-              {saveError && <li className="text-red-600 dark:text-red-400">{saveError}</li>}
-              {exportNote && <li className="text-red-600 dark:text-red-400">{exportNote}</li>}
-            </ul>
-          )}
-          <div className="flex flex-wrap items-center gap-2 justify-end">
-            {route && onDelete && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="mr-auto min-h-9 text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
-                data-testid="patrol-route-delete"
-                onClick={() => onDelete(route)}
-              >
-                Delete route
-              </Button>
-            )}
-            {route && (
-              <Button size="sm" variant="outline" className="min-h-9" data-testid="patrol-export-vda5050" onClick={() => void handleExport()}>
-                Export VDA5050
-              </Button>
-            )}
-            {onCancel && (
-              <Button size="sm" variant="ghost" className="min-h-9" onClick={onCancel}>
-                Cancel
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="primary"
-              className={cn('min-h-9', PATROL_MOTION, 'hover:shadow-[0_0_20px_-4px_color-mix(in_srgb,var(--color-primary)_45%,transparent)]')}
-              data-testid="patrol-route-save"
-              isLoading={saving}
-              disabled={saving || problems.length > 0 || cronBlocks}
-              onClick={() => void handleSave()}
-            >
-              {route ? 'Save route' : 'Create route'}
-            </Button>
-          </div>
-        </div>
-      </aside>
-    </div>
+      <div className="sticky bottom-0 z-10 -mx-4 flex justify-end gap-2 border-t border-line bg-canvas px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+        {onCancel && (
+          <Button variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+        <Button type="submit" data-testid="patrol-route-save" isLoading={saving} disabled={saving || cronBlocks}>
+          {route ? 'Save changes' : 'Create route'}
+        </Button>
+      </div>
+    </form>
   );
 });

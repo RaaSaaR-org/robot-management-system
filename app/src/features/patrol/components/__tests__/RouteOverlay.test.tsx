@@ -12,7 +12,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { RouteOverlay, overlayMarkers } from '../RouteOverlay';
-import { PATROL_STICKY_RAIL } from '../patrolUi';
 import { usePatrolStore } from '../../store/patrolStore';
 import { patrolApi } from '../../api/patrolApi';
 import type { PatrolFinding, PatrolRun } from '../../types/patrol.types';
@@ -130,18 +129,5 @@ describe('RouteOverlay', () => {
     usePatrolStore.getState().applyEvent({ type: 'agent:patrol:started', robotId: 'g1', patrol: run, timestamp: 'x' });
     render(<RouteOverlay robotId="h1" project={project} widthPx={400} heightPx={300} />);
     expect(screen.queryByTestId('patrol-route-overlay')).toBeNull();
-  });
-});
-
-// Lives here because RouteOverlay is the overlay-side owner of the patrol
-// styling vocabulary in patrolUi.tsx.
-describe('PATROL_STICKY_RAIL', () => {
-  it('scopes self-start to lg so the rail is not shrink-to-fit on phones', () => {
-    const tokens = PATROL_STICKY_RAIL.split(/\s+/);
-    // Below lg both consumers stack the rail in a COLUMN flexbox, where
-    // align-self sizes the HORIZONTAL axis: bare `self-start` collapsed the
-    // rail to its content width beside full-width siblings.
-    expect(tokens).not.toContain('self-start');
-    expect(tokens).toContain('lg:self-start');
   });
 });

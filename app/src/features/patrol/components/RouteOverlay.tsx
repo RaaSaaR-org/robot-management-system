@@ -5,7 +5,7 @@
  *              route as a walked (solid) / remaining (dashed) path, a ping on
  *              the running leg and severity-tinted pins for its findings, drawn
  *              as SVG over the map canvas in the panel's own world→screen
- *              projection; a glass legend sitting one step ABOVE the canvas's
+ *              projection; a matte legend sitting one step ABOVE the canvas's
  *              own bottom-left "1 m" scale bar (see the legend below — do not
  *              move it back down). Renders nothing when the robot has no run —
  *              the map must not carry a permanent pill.
@@ -17,7 +17,7 @@ import { cn } from '@/shared/utils/cn';
 import type { PatrolFinding, PatrolRun } from '../types/patrol.types';
 import { usePatrolStore, selectFindingsForRun, selectOverlayRun } from '../store/patrolStore';
 import { runStatusStyle } from '../utils/patrolFormat';
-import { OVERLAY_COLOR, PATROL_GLOW_LIVE, PATROL_LIVE_BORDER, PATROL_MOTION, StatusDot, type PatrolTone } from './patrolUi';
+import { StatusTag } from '@/shared/components/ui';
 
 // ============================================================================
 // PURE
@@ -70,10 +70,20 @@ export function overlayMarkers(run: PatrolRun | null, findings: readonly PatrolF
 // COMPONENT
 // ============================================================================
 
-const LEGEND_TONE: Record<PatrolRun['status'], PatrolTone> = {
-  running: 'primary',
-  done: 'accent',
-  aborted: 'attention',
+/** SVG colours for the overlay, read from theme tokens (theme-aware). */
+const OVERLAY_COLOR = {
+  path: 'var(--color-primary)',
+  done: 'var(--color-signal-measured)',
+  running: 'var(--color-primary)',
+  finding: 'var(--color-signal-stopped)',
+  attention: 'var(--color-signal-unknown)',
+  muted: 'var(--color-ink-muted, var(--text-muted))',
+} as const;
+
+const LEGEND_TONE: Record<PatrolRun['status'], 'success' | 'warning' | 'danger' | 'neutral'> = {
+  running: 'success',
+  done: 'success',
+  aborted: 'warning',
   failed: 'danger',
   skipped: 'neutral',
 };
@@ -94,11 +104,11 @@ function pinFill(severity: FindingPin['severity']): string {
 
 /** Legend leg dot (no text — the legend's text content is contractual). */
 const LEG_DOT: Record<CheckpointMarker['status'], string> = {
-  pending: 'bg-surface-light-300 dark:bg-surface-500',
-  running: 'bg-cobalt-500 animate-pulse',
-  done: 'bg-turquoise-600 dark:bg-turquoise-500',
-  failed: 'bg-red-500',
-  skipped: 'bg-surface-light-400 dark:bg-surface-400',
+  pending: 'bg-line-strong',
+  running: 'bg-primary animate-pulse',
+  done: 'bg-signal-measured',
+  failed: 'bg-signal-stopped',
+  skipped: 'bg-ink-muted',
 };
 
 export interface RouteOverlayProps {
@@ -224,22 +234,22 @@ export const RouteOverlay = memo(function RouteOverlay({ robotId, project, width
       </svg>
       {/* bottom-8, not bottom-2: the map canvas draws its only distance
           reference — the 1 m scale bar and its label — in the bottom-left strip
-          (y = height-24 … height-10), and this glass pill is ~90 % opaque, so at
+          (y = height-24 … height-10), and this legend is opaque, so at
           bottom-2 it erased the scale for every robot that has ever patrolled.
           Up, not sideways: bottom-right holds the "keep-outs not shown" note,
           top-left the place chip, top-right the canvas north arrow.
           `pointer-events-auto` so the title below can reveal the truncated text. */}
       <div
         className={cn(
-          'absolute left-2 bottom-8 max-w-[calc(100%-1rem)] pointer-events-auto flex items-center gap-2 glass-elevated rounded-brand px-2.5 py-1.5 text-[11px] font-mono tabular-nums',
-          PATROL_MOTION,
-          isRunning && cn(PATROL_LIVE_BORDER, PATROL_GLOW_LIVE),
-          style.className
+          'absolute left-2 bottom-8 max-w-[calc(100%-1rem)] pointer-events-auto flex items-center gap-2 rounded-control border bg-panel px-2.5 py-1.5 text-xs tabular-nums text-ink-secondary',
+          isRunning ? 'border-primary/40' : 'border-line',
         )}
         data-testid="patrol-overlay-legend"
         title={`Patrol ${run.routeName || run.routeId}: ${style.label.toLowerCase()} · ${done}/${run.legs.length}`}
       >
-        <StatusDot tone={LEGEND_TONE[run.status] ?? 'neutral'} pulse={isRunning} />
+        <StatusTag tone={LEGEND_TONE[run.status] ?? 'neutral'} dot pulse={isRunning} size="sm">
+          {style.label}
+        </StatusTag>
         <span className="truncate min-w-0">
           Patrol {run.routeName || run.routeId}: {style.label.toLowerCase()} · {done}/{run.legs.length}
           {pins.length > 0 || run.findingCount > 0 ? ` · ${findingTotal} finding${findingTotal === 1 ? '' : 's'}` : ''}
