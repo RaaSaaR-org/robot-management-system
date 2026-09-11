@@ -28,22 +28,6 @@ export const DEPLOYMENT_STATUS_LABELS: Record<DeploymentStatus, string> = {
   rolled_back: 'Rolled Back',
 };
 
-export const UPDATE_STATUS_COLORS: Record<UpdatePackageStatus, string> = {
-  pending: 'text-yellow-500',
-  approved: 'text-blue-500',
-  deployed: 'text-green-500',
-  rolled_back: 'text-red-500',
-};
-
-export const DEPLOYMENT_STATUS_COLORS: Record<DeploymentStatus, string> = {
-  pending: 'text-yellow-500',
-  downloading: 'text-blue-400',
-  installing: 'text-blue-500',
-  success: 'text-green-500',
-  failed: 'text-red-500',
-  rolled_back: 'text-orange-500',
-};
-
 // ============================================================================
 // DOMAIN INTERFACES
 // ============================================================================
