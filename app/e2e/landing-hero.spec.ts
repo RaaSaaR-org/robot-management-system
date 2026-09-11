@@ -25,7 +25,7 @@ async function twinImage(page: Page) {
   });
 }
 
-async function expectPoster(page: Page) {
+async function expectPoster(page: Page, timeout = 5_000) {
   const poster = page.locator('.hero-universe-fallback img');
   await expect(poster).toBeVisible();
   await expect
@@ -38,13 +38,16 @@ async function expectPoster(page: Page) {
   await expect(page.locator('.hero-universe')).toHaveAttribute(
     'data-embodiment',
     'all',
+    { timeout },
   );
 }
 
 test('the same exhibit cycles humanoid → drone → quadruped → humanoid without controls', async ({
   page,
 }) => {
-  test.setTimeout(75_000);
+  // Software GL on a shared CI runner renders a few frames a second; every
+  // transition gets 30 s, well over the 8 s cycle it should take.
+  test.setTimeout(120_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => {
@@ -56,25 +59,25 @@ test('the same exhibit cycles humanoid → drone → quadruped → humanoid with
   });
   await page.goto('./');
   const exhibit = page.locator('.hero-universe');
-  await expect(exhibit).toHaveClass(/is-ready/, { timeout: 20_000 });
+  await expect(exhibit).toHaveClass(/is-ready/, { timeout: 30_000 });
   await expect(page.locator('.field-hero').getByRole('button')).toHaveCount(0);
   await expect(exhibit).toHaveAttribute('data-embodiment', 'humanoid');
   await expect(exhibit.locator('canvas')).toHaveCSS('opacity', '1');
   const humanoid = await twinImage(page);
   await expect(exhibit).toHaveAttribute('data-embodiment', 'drone', {
-    timeout: 20_000,
+    timeout: 30_000,
   });
   // Caption changes during transport; allow the incoming surface to resolve.
   await page.waitForTimeout(2600);
   const drone = await twinImage(page);
   expect(drone.equals(humanoid)).toBe(false);
   await expect(exhibit).toHaveAttribute('data-embodiment', 'quadruped', {
-    timeout: 20_000,
+    timeout: 30_000,
   });
   await page.waitForTimeout(2600);
   expect((await twinImage(page)).equals(drone)).toBe(false);
   await expect(exhibit).toHaveAttribute('data-embodiment', 'humanoid', {
-    timeout: 20_000,
+    timeout: 30_000,
   });
   await expect(exhibit.locator('canvas')).toHaveCount(1);
   expect(errors).toEqual([]);
@@ -85,18 +88,33 @@ test('reduced motion shows all embodiments without loading 3D and reacts to pref
 }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const assets: string[] = [];
+  const errors: string[] = [];
   page.on('request', (request) => {
     if (request.url().endsWith('.glb')) assets.push(request.url());
   });
+  page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('./');
   await expectPoster(page);
   await expect(page.locator('.hero-universe canvas')).toHaveCount(0);
   expect(assets).toEqual([]);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expect(page.locator('.hero-universe')).toHaveClass(/is-ready/, {
-    timeout: 20_000,
+    timeout: 30_000,
   });
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  // Poll state and page errors together: a teardown that throws leaves the
+  // exhibit "ready", and the failure should say why, not only that.
+  await expect
+    .poll(
+      async () => ({
+        embodiment: await page
+          .locator('.hero-universe')
+          .getAttribute('data-embodiment'),
+        errors,
+      }),
+      { timeout: 20_000 },
+    )
+    .toEqual({ embodiment: 'all', errors: [] });
   await expectPoster(page);
   await expect(page.locator('.hero-universe canvas')).toHaveCount(0);
 });
@@ -104,7 +122,7 @@ test('reduced motion shows all embodiments without loading 3D and reacts to pref
 test('context loss restores one working exhibit', async ({ page }) => {
   await page.goto('./');
   await expect(page.locator('.hero-universe')).toHaveClass(/is-ready/, {
-    timeout: 20_000,
+    timeout: 30_000,
   });
   await page
     .locator('.hero-universe canvas')
@@ -150,7 +168,7 @@ for (const failure of ['WebGL unavailable', 'models unavailable']) {
     await expectPoster(page);
     // Demo startup and GPU initialization can precede the failed fetches.
     await expect(page.locator('.hero-universe canvas')).toHaveCount(0, {
-      timeout: 20_000,
+      timeout: 30_000,
     });
     await page.getByRole('link', { name: 'Explore the platform' }).click();
     await expect(
@@ -162,16 +180,16 @@ for (const failure of ['WebGL unavailable', 'models unavailable']) {
 test('an unavailable drone does not prevent the remaining embodiments from transforming', async ({
   page,
 }) => {
-  test.setTimeout(45_000);
+  test.setTimeout(75_000);
   await page
     .context()
     .route('**/assets/landing/x500-twin.glb', (route) => route.abort());
   await page.goto('./');
   const exhibit = page.locator('.hero-universe');
-  await expect(exhibit).toHaveClass(/is-ready/, { timeout: 20_000 });
+  await expect(exhibit).toHaveClass(/is-ready/, { timeout: 30_000 });
   await expect(exhibit).toHaveAttribute('data-embodiment', 'humanoid');
   await expect(exhibit).toHaveAttribute('data-embodiment', 'quadruped', {
-    timeout: 20_000,
+    timeout: 30_000,
   });
 });
 

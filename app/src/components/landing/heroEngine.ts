@@ -523,7 +523,10 @@ export function createHeroEngine(
       frame = requestAnimationFrame(render);
       return;
     }
-    const delta = last ? Math.min((now - last) / 1000, 0.08) : 0;
+    // Cap a single step so a stall cannot skip a phase, but keep wall-clock
+    // pace on slow renderers (software GL, low-end phones) instead of playing
+    // the cycle in slow motion. refresh() already zeroes it after a pause.
+    const delta = last ? Math.min((now - last) / 1000, 0.25) : 0;
     last = now;
     lastDraw = now;
     if (animate && loaded) elapsed += delta;
