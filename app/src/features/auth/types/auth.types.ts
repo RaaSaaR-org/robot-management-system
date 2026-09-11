@@ -214,6 +214,13 @@ export interface AuthActions {
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   /** TASK-164: clear the force-password-change gate after success. */
   clearMustChangePassword: () => void;
+  /** Finish a login after the TOTP / recovery code was accepted */
+  completeMFALogin: (response: {
+    user: User;
+    accessToken: string;
+    refreshToken: string;
+    mustChangePassword?: boolean;
+  }) => void;
 }
 
 /** Combined auth store type */

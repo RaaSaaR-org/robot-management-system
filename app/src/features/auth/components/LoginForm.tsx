@@ -1,173 +1,112 @@
 /**
  * @file LoginForm.tsx
- * @description Login form component with email/password authentication
+ * @description Login form: email + password, field errors inline, one primary submit.
+ * Hands an MFA challenge up to the page instead of failing.
  * @feature auth
- * @dependencies @/shared/components/ui, @/features/auth/hooks
  * @stateAccess useAuth (read/write)
  */
 
-import { useState, type FormEvent, type ChangeEvent } from 'react';
-import { Input, Button } from '@/shared/components/ui';
+import { useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
+import { Button, FormField, Input } from '@/shared/components/ui';
 import { useAuth } from '../hooks/useAuth';
+import { AuthFormError, authLinkClass } from './AuthLayout';
 
-// ============================================================================
-// TYPES
-// ============================================================================
+export interface MFAChallengeRequest {
+  userId: string;
+  mfaToken: string;
+}
 
 export interface LoginFormProps {
   /** Callback when login succeeds */
   onSuccess?: () => void;
   /** Callback when login fails */
   onError?: (error: string) => void;
+  /** Called when the server asks for a second factor */
+  onMfaRequired?: (challenge: MFAChallengeRequest) => void;
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+type FieldErrors = { email?: string; password?: string };
 
-/**
- * Login form with email and password fields.
- * Handles validation and displays error messages.
- *
- * @example
- * ```tsx
- * function LoginPage() {
- *   const navigate = useNavigate();
- *   return (
- *     <LoginForm
- *       onSuccess={() => navigate('/dashboard')}
- *       onError={(error) => console.error(error)}
- *     />
- *   );
- * }
- * ```
- */
-export function LoginForm({ onSuccess, onError }: LoginFormProps) {
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function LoginForm({ onSuccess, onError, onMfaRequired }: LoginFormProps) {
   const { login, isLoading, error, clearError } = useAuth();
-
-  // Form state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [validationErrors, setValidationErrors] = useState<{
-    email?: string;
-    password?: string;
-  }>({});
+  const [errors, setErrors] = useState<FieldErrors>({});
 
-  // Validate form fields
   const validate = (): boolean => {
-    const errors: { email?: string; password?: string } = {};
-
-    if (!email.trim()) {
-      errors.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      errors.email = 'Please enter a valid email address';
-    }
-
-    if (!password) {
-      errors.password = 'Password is required';
-    } else if (password.length < 6) {
-      errors.password = 'Password must be at least 6 characters';
-    }
-
-    setValidationErrors(errors);
-    return Object.keys(errors).length === 0;
+    const next: FieldErrors = {};
+    if (!email.trim()) next.email = 'Enter your email.';
+    else if (!EMAIL_RE.test(email)) next.email = 'Enter a valid email address.';
+    if (!password) next.password = 'Enter your password.';
+    else if (password.length < 6) next.password = 'Passwords are at least 6 characters.';
+    setErrors(next);
+    return Object.keys(next).length === 0;
   };
 
-  // Handle form submission
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-
-    // Clear previous errors
     clearError();
-    setValidationErrors({});
-
-    // Validate
-    if (!validate()) {
-      return;
-    }
-
+    if (!validate()) return;
     try {
       await login(email, password);
       onSuccess?.();
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Login failed';
-      onError?.(errorMessage);
+      const mfa = err as Error & Partial<MFAChallengeRequest>;
+      if (mfa?.message === 'MFA_REQUIRED' && mfa.userId && mfa.mfaToken) {
+        clearError();
+        onMfaRequired?.({ userId: mfa.userId, mfaToken: mfa.mfaToken });
+        return;
+      }
+      onError?.(err instanceof Error ? err.message : 'Login failed');
     }
   };
 
-  // Clear error when user starts typing
-  const handleEmailChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setEmail(e.target.value);
-    if (validationErrors.email) {
-      setValidationErrors((prev) => ({ ...prev, email: undefined }));
-    }
-    if (error) {
-      clearError();
-    }
+  const clearField = (field: keyof FieldErrors) => {
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: undefined }));
+    if (error) clearError();
   };
 
-  const handlePasswordChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setPassword(e.target.value);
-    if (validationErrors.password) {
-      setValidationErrors((prev) => ({ ...prev, password: undefined }));
-    }
-    if (error) {
-      clearError();
-    }
-  };
+  const showError = error && error !== 'MFA_REQUIRED' ? error : null;
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6" noValidate>
-      {/* Email field */}
-      <Input
-        id="login-email"
-        type="email"
-        label="Email"
-        placeholder="you@example.com"
-        value={email}
-        onChange={handleEmailChange}
-        error={validationErrors.email}
-        disabled={isLoading}
-        autoComplete="email"
-        required
-        aria-describedby={validationErrors.email ? 'login-email-error' : undefined}
-      />
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+      <FormField label="Email" error={errors.email}>
+        <Input
+          id="login-email"
+          type="email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => { setEmail(e.target.value); clearField('email'); }}
+          disabled={isLoading}
+          autoComplete="email"
+          required
+        />
+      </FormField>
 
-      {/* Password field */}
-      <Input
-        id="login-password"
-        type="password"
+      <FormField
         label="Password"
-        placeholder="Enter your password"
-        value={password}
-        onChange={handlePasswordChange}
-        error={validationErrors.password}
-        disabled={isLoading}
-        autoComplete="current-password"
-        required
-        aria-describedby={validationErrors.password ? 'login-password-error' : undefined}
-      />
-
-      {/* API error message */}
-      {error && (
-        <div
-          role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
-        >
-          {error}
-        </div>
-      )}
-
-      {/* Submit button */}
-      <Button
-        type="submit"
-        variant="primary"
-        size="lg"
-        fullWidth
-        isLoading={isLoading}
-        disabled={isLoading}
+        error={errors.password}
+        aside={<Link to="/forgot-password" className={authLinkClass}>Forgot password?</Link>}
       >
-        {isLoading ? 'Signing in...' : 'Sign in'}
+        <Input
+          id="login-password"
+          type="password"
+          placeholder="Your password"
+          value={password}
+          onChange={(e) => { setPassword(e.target.value); clearField('password'); }}
+          disabled={isLoading}
+          autoComplete="current-password"
+          required
+        />
+      </FormField>
+
+      {showError && <AuthFormError>{showError}</AuthFormError>}
+
+      <Button type="submit" size="lg" fullWidth isLoading={isLoading} loadingText="Signing in…">
+        Sign in
       </Button>
     </form>
   );

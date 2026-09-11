@@ -1,35 +1,29 @@
 /**
  * @file OrganizationsPage.tsx
- * @description Customer organizations management page. Lists all tenants
- * and lets the platform operator create/delete them. Visible only when
- * `multiTenancyEnabled` is true — the sidebar entry is gated, but the
- * route is deliberately still mounted so direct navigation works.
+ * @description Organizations (tenants): list, create, edit, delete, onboard. The route stays
+ * mounted with multi-tenancy off so direct navigation works; a gated notice says what that means.
  * @feature organizations
  */
 
-import { useEffect, useState } from 'react';
-import { Button } from '@/shared/components/ui/Button';
-import { PageHeader } from '@/shared/components/ui/PageHeader';
+import { useEffect, useMemo, useState } from 'react';
+import { Building2, Pencil, Plus, Search, Trash2, UserPlus } from 'lucide-react';
+import {
+  Button, DataTable, EmptyState, PageHeader, Panel, SearchInput, Select, StatusTag, Toolbar,
+  confirm, toast, type DataTableColumn,
+} from '@/shared/components/ui';
 import { useFeatures } from '@/shared/hooks';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { useOrganizationsStore } from '../store/organizationsStore';
-import { OrganizationCard } from '../components/OrganizationCard';
-import { OrganizationsEmptyState } from '../components/OrganizationsEmptyState';
-import { CreateOrganizationModal } from '../components/CreateOrganizationModal';
+import { EnvVar, GatedNotice } from '../components/GatedNotice';
 import { OnboardingWizard } from '../components/OnboardingWizard';
-import { EditOrganizationModal } from '../components/EditOrganizationModal';
+import { OrganizationFormModal, orgErrorMessage } from '../components/OrganizationFormModal';
 import type { Organization } from '../types/organizations.types';
 
-const PlusIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-  </svg>
-);
-
 const SAMPLE_ORG = { name: 'Acme Robotics', slug: 'acme' };
+const plus = <Plus className="h-4 w-4" strokeWidth={1.75} />;
 
 export function OrganizationsPage() {
   const { multiTenancyEnabled } = useFeatures();
-
   const list = useOrganizationsStore((s) => s.list);
   const listLoaded = useOrganizationsStore((s) => s.listLoaded);
   const listLoading = useOrganizationsStore((s) => s.listLoading);
@@ -37,185 +31,148 @@ export function OrganizationsPage() {
   const fetchList = useOrganizationsStore((s) => s.fetchList);
   const remove = useOrganizationsStore((s) => s.remove);
 
-  const [modalOpen, setModalOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [plan, setPlan] = useState('');
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<Organization | null>(null);
+  const [prefill, setPrefill] = useState<{ name: string; slug: string } | undefined>();
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [editOrg, setEditOrg] = useState<Organization | null>(null);
-  const [modalPrefill, setModalPrefill] = useState<{ name: string; slug: string } | undefined>();
-  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!listLoaded && !listLoading) {
-      void fetchList();
-    }
+    if (!listLoaded && !listLoading) void fetchList();
   }, [listLoaded, listLoading, fetchList]);
 
-  // Auto-dismiss toast after 2.5s
-  useEffect(() => {
-    if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), 2500);
-    return () => window.clearTimeout(t);
-  }, [toast]);
+  const plans = useMemo(
+    () => [...new Set(list.map((o) => o.plan).filter((p): p is string => Boolean(p)))].sort(),
+    [list],
+  );
 
-  const handleCreate = () => {
-    setWizardOpen(true);
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return list.filter(
+      (o) => (!plan || o.plan === plan) && (!q || o.name.toLowerCase().includes(q) || o.slug.toLowerCase().includes(q)),
+    );
+  }, [list, query, plan]);
+
+  const openCreate = (sample?: { name: string; slug: string }) => {
+    setEditing(null);
+    setPrefill(sample);
+    setFormOpen(true);
+  };
+  const openEdit = (o: Organization) => {
+    setEditing(o);
+    setPrefill(undefined);
+    setFormOpen(true);
   };
 
-  const handleLoadSample = () => {
-    setModalPrefill(SAMPLE_ORG);
-    setModalOpen(true); // Quick-create path
-  };
-
-  const handleDelete = async (id: string) => {
+  const askDelete = async (o: Organization) => {
+    const ok = await confirm({
+      tone: 'danger',
+      title: `Delete ${o.name}?`,
+      description: 'Its users lose access. The server refuses while the organization still owns robots or data.',
+    });
+    if (!ok) return;
     try {
-      await remove(id);
-      setToast('Organization deleted');
+      await remove(o.id);
+      toast.success('Organization deleted', { description: o.name });
     } catch (err) {
-      // ApiError is a plain object, not an Error instance — extract .message
-      // defensively so the toast shows e.g. "Tenant is not empty" instead
-      // of a generic fallback.
-      const message =
-        err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'
-          ? (err as { message: string }).message
-          : err instanceof Error
-          ? err.message
-          : 'Failed to delete organization';
-      setToast(message);
+      toast.error("Couldn't delete organization", { description: orgErrorMessage(err, 'Unknown error') });
     }
   };
 
-  const handleCreated = (name: string) => {
-    setToast(`${name} created`);
-  };
+  const columns: DataTableColumn<Organization>[] = [
+    {
+      key: 'name', header: 'Name', sortable: true, sortValue: (o) => o.name.toLowerCase(),
+      cell: (o) => (
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-medium text-ink-primary">{o.name}</span>
+            {o.isDefault && <StatusTag tone="neutral">Default</StatusTag>}
+          </div>
+          <code className="font-mono text-xs text-ink-tertiary">{o.slug}</code>
+        </div>
+      ),
+    },
+    { key: 'plan', header: 'Plan', sortable: true, sortValue: (o) => o.plan, cell: (o) => (o.plan ? <StatusTag tone="accent">{o.plan}</StatusTag> : null) },
+    { key: 'users', header: 'Users', align: 'right', sortable: true, sortValue: (o) => o.counts.users, cell: (o) => o.counts.users },
+    { key: 'robots', header: 'Robots', align: 'right', sortable: true, hideBelow: 'sm', sortValue: (o) => o.counts.robots, cell: (o) => o.counts.robots },
+    { key: 'datasets', header: 'Datasets', align: 'right', sortable: true, hideBelow: 'md', sortValue: (o) => o.counts.datasets, cell: (o) => o.counts.datasets },
+    {
+      key: 'createdAt', header: 'Created', align: 'right', sortable: true, hideBelow: 'md',
+      sortValue: (o) => new Date(o.createdAt), cell: (o) => new Date(o.createdAt).toLocaleDateString(UI_DATE_LOCALE),
+    },
+  ];
 
-  // Show everything except DEFAULT in the "customer" list; DEFAULT always
-  // renders first so the operator has an anchor.
-  const ordered = [...list].sort((a, b) => {
-    if (a.isDefault) return -1;
-    if (b.isDefault) return 1;
-    return a.createdAt.localeCompare(b.createdAt);
-  });
-  const customerCount = list.filter((o) => !o.isDefault).length;
+  const hasFilters = Boolean(query || plan);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 sm:px-6 sm:py-8">
-      {/* Disabled-mode banner */}
-      {!multiTenancyEnabled && (
-        <div className="mb-6 rounded-brand border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
-          <strong className="font-semibold">Multi-tenancy is disabled.</strong> Set{' '}
-          <code className="font-mono">MULTI_TENANCY_ENABLED=true</code> in{' '}
-          <code className="font-mono">server/.env</code> and restart to activate
-          row-level isolation.
-        </div>
-      )}
-
-      {/* Header */}
+    <div className="flex flex-col gap-6">
       <PageHeader
-        className="mb-6"
+        eyebrow="Admin"
         title="Organizations"
-        subtitle={
+        description="Every tenant on this platform, with its users and robots."
+        actions={
           <>
-            Customer tenants on this NeoDEM instance. Each organization sees only
-            its own robots, datasets, and training jobs.
+            <Button variant="secondary" leftIcon={<UserPlus className="h-4 w-4" strokeWidth={1.75} />} onClick={() => setWizardOpen(true)}>
+              Onboard customer
+            </Button>
+            <Button leftIcon={plus} onClick={() => openCreate()}>New organization</Button>
           </>
         }
-        actions={
-          <Button
-            variant="primary"
-            size="md"
-            onClick={handleCreate}
-            leftIcon={<PlusIcon />}
-          >
-            Create organization
-          </Button>
+      />
+
+      {!multiTenancyEnabled && (
+        <GatedNotice>
+          Organizations are listed, but tenant isolation only applies when the server runs with{' '}
+          <EnvVar>MULTI_TENANCY_ENABLED=true</EnvVar>.
+        </GatedNotice>
+      )}
+
+      <Toolbar
+        search={<SearchInput value={query} onChange={setQuery} placeholder="Search organizations" />}
+        filters={
+          plans.length > 0 && (
+            <Select aria-label="Plan" fullWidth={false} className="w-40" placeholder="All plans"
+              options={plans.map((p) => ({ value: p, label: p }))} value={plan} onChange={(e) => setPlan(e.target.value)} />
+          )
         }
       />
 
-      {/* Summary strip */}
-      {listLoaded && (
-        <div className="mb-6 flex items-center gap-6 text-sm text-theme-tertiary">
-          <span>
-            <span className="text-theme-primary font-semibold tabular-nums">
-              {list.length}
-            </span>{' '}
-            total
-          </span>
-          <span>
-            <span className="text-theme-primary font-semibold tabular-nums">
-              {customerCount}
-            </span>{' '}
-            customer
-            {customerCount === 1 ? '' : 's'}
-          </span>
-        </div>
-      )}
+      <Panel padding="none">
+        <DataTable
+          caption="Organizations"
+          columns={columns}
+          rows={filtered}
+          getRowId={(o) => o.id}
+          defaultSort={{ key: 'createdAt', direction: 'asc' }}
+          onRowClick={openEdit}
+          rowActions={(o) => [
+            { label: 'Edit', icon: <Pencil />, onSelect: () => openEdit(o) },
+            ...(o.isDefault
+              ? []
+              : [{ label: 'Delete', icon: <Trash2 />, tone: 'danger' as const, separatorBefore: true, onSelect: () => void askDelete(o) }]),
+          ]}
+          rowActionsLabel={(o) => `Actions for ${o.name}`}
+          isLoading={!listLoaded && listLoading}
+          error={listLoaded ? null : error}
+          errorTitle="Couldn't load organizations"
+          onRetry={() => void fetchList()}
+          empty={
+            hasFilters ? (
+              <EmptyState icon={<Search />} title="No organizations match" description="Try another name or plan, or clear the filters."
+                action={<Button variant="secondary" onClick={() => { setQuery(''); setPlan(''); }}>Clear filters</Button>} />
+            ) : (
+              <EmptyState icon={<Building2 />} title="No organizations yet"
+                description="An organization is a tenant with its own users, robots and data."
+                action={<Button leftIcon={plus} onClick={() => openCreate()}>New organization</Button>}
+                secondaryAction={<Button variant="secondary" onClick={() => openCreate(SAMPLE_ORG)}>Load sample</Button>} />
+            )
+          }
+        />
+      </Panel>
 
-      {/* Error state */}
-      {error && (
-        <div className="mb-6 rounded-brand border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-          {error}
-        </div>
-      )}
-
-      {/* Content */}
-      {!listLoaded && listLoading ? (
-        <div className="text-sm text-theme-tertiary">Loading organizations…</div>
-      ) : customerCount === 0 && list.length > 0 ? (
-        <div className="space-y-4">
-          {ordered.map((org) => (
-            <OrganizationCard
-              key={org.id}
-              organization={org}
-              onDelete={handleDelete}
-              onEdit={setEditOrg}
-            />
-          ))}
-          <OrganizationsEmptyState
-            onCreate={handleCreate}
-            onLoadSample={handleLoadSample}
-          />
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {ordered.map((org) => (
-            <OrganizationCard
-              key={org.id}
-              organization={org}
-              onDelete={handleDelete}
-              onEdit={setEditOrg}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Toast */}
-      {toast && (
-        <div className="fixed bottom-6 right-6 z-50 rounded-brand border border-theme bg-theme-card px-4 py-3 text-sm text-theme-primary shadow-xl animate-in fade-in slide-in-from-bottom-2">
-          {toast}
-        </div>
-      )}
-
-      {/* Onboarding wizard (full flow) */}
-      <OnboardingWizard
-        isOpen={wizardOpen}
-        onClose={() => setWizardOpen(false)}
-        onCreated={handleCreated}
-      />
-
-      {/* Quick-create modal (simple 2-field form) */}
-      <CreateOrganizationModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        prefill={modalPrefill}
-        onCreated={handleCreated}
-      />
-
-      {/* Edit modal (branding) */}
-      <EditOrganizationModal
-        organization={editOrg}
-        isOpen={!!editOrg}
-        onClose={() => setEditOrg(null)}
-        onSaved={(name) => setToast(`${name} updated`)}
-      />
+      <OrganizationFormModal isOpen={formOpen} organization={editing} prefill={prefill} onClose={() => setFormOpen(false)} />
+      <OnboardingWizard isOpen={wizardOpen} onClose={() => setWizardOpen(false)} />
     </div>
   );
 }

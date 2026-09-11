@@ -1,12 +1,15 @@
 /**
  * @file DocsPage.tsx
- * @description Documentation viewer — sidebar, reading column, contents rail and navigation
+ * @description Documentation viewer — PageHeader with the doc's title, a docs
+ *              list (sidebar on wide screens, a "Browse docs" modal below lg),
+ *              the article and the "On this page" rail
  * @feature docs
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, Navigate, useLocation, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Github, Menu } from 'lucide-react';
+import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, ExternalLink, FileQuestion, ListTree } from 'lucide-react';
+import { Button, EmptyState, LinkButton, Modal, PageHeader, Panel, buttonClasses } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { DocsSidebar, type DocEntry } from '@/components/docs/DocsSidebar';
 import { DocsArticle } from '@/components/docs/DocsArticle';
@@ -26,20 +29,16 @@ function readingMinutes(markdown: string): number {
   return Math.max(1, Math.round(markdown.trim().split(/\s+/).length / 200));
 }
 
-// ---------------------------------------------------------------------------
-// DocsPage Component
-// ---------------------------------------------------------------------------
+const ICON = 'h-4 w-4';
 
 export function DocsPage() {
   const { '*': splat } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const scrollRef = useRef<HTMLElement | null>(null);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const articleRef = useRef<HTMLDivElement | null>(null);
 
-  // Extract slug from location — supports both /docs/:slug and /docs/planning/prd
   const slug = splat || '';
-
   const content = DOC_CONTENT.get(slug);
   const currentDoc = DOC_ENTRIES.find((e) => e.slug === slug);
   const currentIndex = DOC_ENTRIES.findIndex((e) => e.slug === slug);
@@ -48,16 +47,13 @@ export function DocsPage() {
 
   const headings = useMemo(() => (content ? extractHeadings(content) : []), [content]);
   const idsByLine = useMemo(() => headingIdsByLine(headings), [headings]);
-  const tocHeadings = useMemo<DocHeading[]>(
-    () => headings.filter((h) => h.depth === 2 || h.depth === 3),
-    [headings],
-  );
+  const tocHeadings = useMemo<DocHeading[]>(() => headings.filter((h) => h.depth === 2 || h.depth === 3), [headings]);
+  // The first `#` is the document's title: it becomes the page h1 and is not repeated in the body.
+  const titleHeading = headings.find((h) => h.depth === 1);
+  const title = titleHeading?.text ?? currentDoc?.title ?? 'Documentation';
 
-  /** Scroll a heading to the top of the reading column (respects scroll-margin). */
   const scrollToHeading = useCallback((id: string) => {
-    const container = scrollRef.current;
-    if (!container) return;
-    const target = container.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`);
+    const target = articleRef.current?.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`);
     target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
@@ -69,14 +65,11 @@ export function DocsPage() {
     [navigate, scrollToHeading],
   );
 
-  // A new document starts at the top; a deep link starts at its anchor. The
-  // reading column is the scroll container, so neither happens on its own.
+  // A new document starts at the top; a deep link starts at its anchor.
   const hash = location.hash;
   useEffect(() => {
-    const container = scrollRef.current;
-    if (!container) return;
     if (!hash) {
-      container.scrollTo({ top: 0 });
+      window.scrollTo({ top: 0 });
       return;
     }
     const id = decodeURIComponent(hash.slice(1));
@@ -84,138 +77,107 @@ export function DocsPage() {
     return () => cancelAnimationFrame(frame);
   }, [slug, hash, scrollToHeading]);
 
-  // If no slug given, redirect to default
-  if (!slug) {
-    // Check if we're at /docs exactly (not /docs/)
-    if (location.pathname === '/docs' || location.pathname === '/docs/') {
-      return <Navigate to={`/docs/${DEFAULT_SLUG}`} replace />;
-    }
+  if (!slug && (location.pathname === '/docs' || location.pathname === '/docs/')) {
+    return <Navigate to={`/docs/${DEFAULT_SLUG}`} replace />;
   }
 
+  const sidebarProps = {
+    docs: DOC_ENTRIES,
+    groups: DOC_GROUPS,
+    categories: ORDERED_CATEGORIES,
+    contentMap: DOC_CONTENT,
+  };
+
+  const browseButton = (
+    <Button
+      variant="secondary"
+      className="lg:hidden"
+      leftIcon={<ListTree className={ICON} strokeWidth={1.75} />}
+      onClick={() => setBrowseOpen(true)}
+    >
+      Browse docs
+    </Button>
+  );
+
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
-      {/* Mobile backdrop */}
-      {mobileSidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
-          onClick={() => setMobileSidebarOpen(false)}
-        />
-      )}
-
-      {/* Sidebar – always visible on lg+, drawer on mobile */}
-      <div
-        className={cn(
-          'fixed inset-y-0 left-0 z-50 w-72 transform transition-transform lg:relative lg:translate-x-0',
-          mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full',
-        )}
-      >
-        <DocsSidebar
-          docs={DOC_ENTRIES}
-          groups={DOC_GROUPS}
-          categories={ORDERED_CATEGORIES}
-          contentMap={DOC_CONTENT}
-          className="h-full"
-          onNavigate={() => setMobileSidebarOpen(false)}
-        />
-      </div>
-
-      {/* Content area */}
-      <main ref={scrollRef} className="flex-1 overflow-y-auto">
-        {/* Mobile header with menu button */}
-        <div className="lg:hidden flex items-center gap-3 p-4 border-b border-theme sticky top-0 section-secondary z-10">
-          <button
-            onClick={() => setMobileSidebarOpen(true)}
-            className="p-1.5 rounded-brand hover:bg-theme-hover transition-colors"
-            aria-label="Open navigation"
-          >
-            <Menu className="w-5 h-5 text-theme-primary" />
-          </button>
-          <span className="font-medium text-sm text-theme-primary truncate">
-            {currentDoc?.title ?? 'Documentation'}
-          </span>
-        </div>
-
-        <div className="mx-auto flex w-full max-w-[76rem] gap-8 px-4 sm:px-8">
-          <div className="min-w-0 flex-1 py-8 lg:py-10 xl:max-w-3xl">
-            {content ? (
-              <>
-                {/* Provenance rail: where this page sits, how long it is, and
-                    where the file it is rendered from actually lives. */}
-                <div className="mb-8 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-theme pb-4 font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-theme-tertiary">
-                  <span>{currentDoc?.category ?? 'Documentation'}</span>
-                  <span aria-hidden>/</span>
-                  <span className="text-theme-secondary">{slug}.md</span>
-                  <span aria-hidden>·</span>
-                  <span>{readingMinutes(content)} min read</span>
-                  <a
-                    href={`${GITHUB_DOCS_URL}/${slug}.md`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ml-auto flex items-center gap-1.5 text-theme-tertiary transition-colors hover:text-theme-primary"
-                  >
-                    <Github className="h-3.5 w-3.5" />
-                    View source
-                  </a>
-                </div>
-
-                <DocsArticle
-                  content={content}
-                  slug={slug}
-                  idsByLine={idsByLine}
-                  onNavigateToHeading={goToHeading}
-                />
-
-                {/* Sequential navigation, in sidebar order */}
-                {(previousDoc || nextDoc) && (
-                  <nav className="mt-14 grid gap-3 border-t border-theme pt-6 sm:grid-cols-2">
-                    {previousDoc ? (
-                      <DocsPagerLink doc={previousDoc} direction="previous" />
-                    ) : (
-                      <span />
-                    )}
-                    {nextDoc && <DocsPagerLink doc={nextDoc} direction="next" />}
-                  </nav>
-                )}
-              </>
-            ) : (
-              <div className="py-20 text-center">
-                <p className="font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-signal-unknown">
-                  Not found
-                </p>
-                <h2 className="mt-3 text-xl font-semibold text-theme-primary">
-                  No document at &ldquo;{slug}&rdquo;
-                </h2>
-                <p className="mt-2 text-sm text-theme-secondary">
-                  It may have been renamed or moved. Pick a page from the sidebar to carry on.
-                </p>
-                <Link
-                  to={`/docs/${DEFAULT_SLUG}`}
-                  className="mt-6 inline-flex items-center gap-2 rounded-brand border border-theme px-4 py-2 text-sm text-theme-primary transition-colors hover:bg-theme-hover"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  Back to {DOC_ENTRIES[0]?.title ?? 'the docs'}
-                </Link>
-              </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="System"
+        title={content ? title : 'Doc not found'}
+        description={
+          content
+            ? `${currentDoc?.category ?? 'Documentation'} · ${readingMinutes(content)} min read`
+            : 'There is no document at this address.'
+        }
+        actions={
+          <>
+            {browseButton}
+            {content && (
+              <a
+                href={`${GITHUB_DOCS_URL}/${slug}.md`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={buttonClasses({ variant: 'secondary' })}
+              >
+                <ExternalLink className={ICON} strokeWidth={1.75} aria-hidden="true" />
+                View source
+              </a>
             )}
-          </div>
+          </>
+        }
+      />
 
-          {content && (
-            <DocsToc
-              headings={tocHeadings}
-              scrollRef={scrollRef}
-              onSelect={goToHeading}
-              className="hidden xl:block"
-            />
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_13rem]">
+        <aside className="hidden lg:block">
+          <div className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto rounded-panel border border-line bg-inset p-3">
+            <DocsSidebar {...sidebarProps} />
+          </div>
+        </aside>
+
+        <div ref={articleRef} className="min-w-0">
+          {content ? (
+            <>
+              <DocsArticle
+                content={content}
+                slug={slug}
+                idsByLine={idsByLine}
+                onNavigateToHeading={goToHeading}
+                skipHeadingLine={titleHeading?.line}
+              />
+              {(previousDoc || nextDoc) && (
+                <nav aria-label="More docs" className="mt-12 grid max-w-[70ch] gap-3 border-t border-line-subtle pt-6 sm:grid-cols-2">
+                  {previousDoc ? <DocsPagerLink doc={previousDoc} direction="previous" /> : <span />}
+                  {nextDoc && <DocsPagerLink doc={nextDoc} direction="next" />}
+                </nav>
+              )}
+            </>
+          ) : (
+            <Panel>
+              <EmptyState
+                icon={<FileQuestion />}
+                title={`No document at “${slug}”`}
+                description="It may have been renamed or moved. Pick another doc to carry on."
+                action={
+                  <LinkButton to={`/docs/${DEFAULT_SLUG}`} variant="secondary" leftIcon={<ArrowLeft className={ICON} strokeWidth={1.75} />}>
+                    Back to {DOC_ENTRIES[0]?.title ?? 'the docs'}
+                  </LinkButton>
+                }
+              />
+            </Panel>
           )}
         </div>
-      </main>
+
+        {content && (
+          <DocsToc headings={tocHeadings} scrollRef={articleRef} onSelect={goToHeading} className="hidden xl:block" />
+        )}
+      </div>
+
+      <Modal isOpen={browseOpen} onClose={() => setBrowseOpen(false)} title="Browse docs" size="md">
+        <DocsSidebar {...sidebarProps} onNavigate={() => setBrowseOpen(false)} />
+      </Modal>
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Pager
-// ---------------------------------------------------------------------------
 
 function DocsPagerLink({ doc, direction }: { doc: DocEntry; direction: 'previous' | 'next' }) {
   const isNext = direction === 'next';
@@ -223,22 +185,18 @@ function DocsPagerLink({ doc, direction }: { doc: DocEntry; direction: 'previous
     <Link
       to={`/docs/${doc.slug}`}
       className={cn(
-        'flex flex-col gap-1 rounded-brand border border-theme px-4 py-3 transition-colors hover:bg-theme-hover',
+        'flex flex-col gap-1 rounded-control border border-line bg-panel px-4 py-3 transition-colors hover:border-line-strong',
+        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
         isNext && 'sm:col-start-2 sm:text-right',
       )}
     >
-      <span className="font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-theme-tertiary">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-tertiary">
         {isNext ? 'Next' : 'Previous'}
       </span>
-      <span
-        className={cn(
-          'flex items-center gap-1.5 text-sm font-medium text-theme-primary',
-          isNext && 'sm:justify-end',
-        )}
-      >
-        {!isNext && <ArrowLeft className="h-3.5 w-3.5 text-theme-tertiary" />}
+      <span className={cn('flex items-center gap-1.5 text-sm font-medium text-ink-primary', isNext && 'sm:justify-end')}>
+        {!isNext && <ArrowLeft className="h-3.5 w-3.5 text-ink-tertiary" strokeWidth={1.75} />}
         {doc.title}
-        {isNext && <ArrowRight className="h-3.5 w-3.5 text-theme-tertiary" />}
+        {isNext && <ArrowRight className="h-3.5 w-3.5 text-ink-tertiary" strokeWidth={1.75} />}
       </span>
     </Link>
   );

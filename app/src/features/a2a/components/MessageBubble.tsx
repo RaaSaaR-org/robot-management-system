@@ -1,18 +1,19 @@
 /**
  * @file MessageBubble.tsx
- * @description Individual message display component with form and pending support
+ * @description One chat message: text (markdown), files, data and agent forms
  * @feature a2a
  */
 
 import { memo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { UI_DATE_LOCALE, cn } from '@/shared/utils';
-import { Spinner } from '@/shared/components/ui/Spinner';
+import { Spinner, StatusTag } from '@/shared/components/ui';
+import { UI_DATE_LOCALE } from '@/shared/utils';
+import { cn } from '@/shared/utils/cn';
 import { OrchestrationChainSummary } from './OrchestrationChainSummary';
-import type { A2AMessage, A2APart, FormSchema } from '../types';
-import { isTextPart, isFilePart, isDataPart, isFileWithBytes, isFormData } from '../types';
 import { FormRenderer, CompletedFormCard } from './FormRenderer';
 import { useA2AStore } from '../store';
+import type { A2AMessage, A2APart, FormSchema } from '../types';
+import { isTextPart, isFilePart, isDataPart, isFileWithBytes, isFormData } from '../types';
 
 interface MessageBubbleProps {
   message: A2AMessage;
@@ -27,21 +28,15 @@ interface MessagePartProps {
   taskId?: string;
 }
 
-/**
- * Render a single message part
- */
 function MessagePart({ part, messageId, taskId }: MessagePartProps) {
   const { submitFormResponse, cancelForm, isFormCompleted, getFormData } = useA2AStore();
 
-  // Handle form submission
   const handleFormSubmit = useCallback(
     (data: Record<string, string>) => {
       submitFormResponse(messageId, taskId || '', data);
     },
-    [messageId, taskId, submitFormResponse]
+    [messageId, taskId, submitFormResponse],
   );
-
-  // Handle form cancellation
   const handleFormCancel = useCallback(() => {
     cancelForm(messageId, taskId || '');
   }, [messageId, taskId, cancelForm]);
@@ -56,35 +51,17 @@ function MessagePart({ part, messageId, taskId }: MessagePartProps) {
 
   if (isFilePart(part)) {
     const file = part.file;
-    const isImage = file.mimeType.startsWith('image/');
-
-    if (isImage) {
-      const src = isFileWithBytes(file)
-        ? `data:${file.mimeType};base64,${file.bytes}`
-        : file.uri;
-
-      return (
-        <img
-          src={src}
-          alt={file.name || 'Image'}
-          className="max-w-full h-auto rounded-lg mt-2"
-        />
-      );
+    if (file.mimeType.startsWith('image/')) {
+      const src = isFileWithBytes(file) ? `data:${file.mimeType};base64,${file.bytes}` : file.uri;
+      return <img src={src} alt={file.name || 'Image'} className="mt-2 h-auto max-w-full rounded-control" />;
     }
-
-    // Non-image file
     return (
-      <div className="flex items-center gap-2 p-3 glass-subtle rounded-lg mt-2">
-        <span className="text-sm text-theme-secondary">
+      <div className="mt-2 flex items-center gap-2 rounded-control bg-inset px-3 py-2 text-sm text-ink-secondary">
+        <span className="truncate">
           {file.name || 'File'} ({file.mimeType})
         </span>
         {!isFileWithBytes(file) && (
-          <a
-            href={file.uri}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary-500 hover:text-primary-600 hover:underline text-sm transition-colors"
-          >
+          <a href={file.uri} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
             Download
           </a>
         )}
@@ -93,17 +70,10 @@ function MessagePart({ part, messageId, taskId }: MessagePartProps) {
   }
 
   if (isDataPart(part)) {
-    // Check if this is a form schema
     if (isFormData(part.data)) {
-      const formCompleted = isFormCompleted(messageId);
-      const formData = getFormData(messageId);
-
-      // Show completed form card if already submitted/canceled
-      if (formCompleted) {
-        return <CompletedFormCard data={formData ?? null} className="mt-2" />;
+      if (isFormCompleted(messageId)) {
+        return <CompletedFormCard data={getFormData(messageId) ?? null} className="mt-2" />;
       }
-
-      // Show interactive form
       return (
         <FormRenderer
           schema={part.data as unknown as FormSchema}
@@ -115,10 +85,8 @@ function MessagePart({ part, messageId, taskId }: MessagePartProps) {
         />
       );
     }
-
-    // Regular data - show as JSON
     return (
-      <pre className="glass-subtle p-3 rounded-lg text-sm overflow-x-auto mt-2 text-theme-secondary">
+      <pre className="mt-2 overflow-x-auto rounded-control bg-inset p-3 font-mono text-xs text-ink-secondary">
         {JSON.stringify(part.data, null, 2)}
       </pre>
     );
@@ -128,127 +96,56 @@ function MessagePart({ part, messageId, taskId }: MessagePartProps) {
 }
 
 /**
- * Pending indicator component
+ * Message bubble: yours on the right (mint tint), the agent's on the left (inset).
  */
-function PendingIndicator({ status }: { status: 'pending' | 'sent' | 'failed' }) {
-  if (status === 'pending') {
-    return (
-      <div className="flex items-center gap-2 mt-2 text-xs text-primary-200">
-        <Spinner size="xs" color="white" />
-        <span>Sending...</span>
-      </div>
-    );
-  }
-
-  if (status === 'failed') {
-    return (
-      <div className="flex items-center gap-2 mt-2 text-xs text-red-300">
-        <span className="w-3 h-3 rounded-full bg-red-400" />
-        <span>Failed to send</span>
-      </div>
-    );
-  }
-
-  return null;
-}
-
-/**
- * Message bubble component
- */
-export const MessageBubble = memo(function MessageBubble({
-  message,
-  pendingStatus,
-  className,
-}: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, pendingStatus, className }: MessageBubbleProps) {
   const isUser = message.role === 'user';
-
-  // Get agent name from metadata if available (for orchestration mode)
-  const agentName = message.metadata?.agentName as string | undefined;
-  const isOrchestrated = message.metadata?.orchestrated as boolean | undefined;
-  const orchestrationChain = (message.metadata as Record<string, unknown>)?.orchestrationChain as
-    | { selectionMethod: 'llm' | 'keyword'; consideredAgents: Array<{ name: string; selected: boolean }>; timings: { selectionMs: number; forwardingMs: number; totalMs: number } }
+  const meta = (message.metadata ?? {}) as Record<string, unknown>;
+  const agentName = meta.agentName as string | undefined;
+  const isOrchestrated = Boolean(meta.orchestrated);
+  const chain = meta.orchestrationChain as
+    | {
+        selectionMethod: 'llm' | 'keyword';
+        consideredAgents: Array<{ name: string; selected: boolean }>;
+        timings: { selectionMs: number; forwardingMs: number; totalMs: number };
+      }
     | undefined;
 
   return (
-    <div
-      className={cn(
-        'flex flex-col',
-        isUser ? 'items-end' : 'items-start',
-        className
-      )}
-    >
-      {/* Orchestration chain summary — shown above orchestrated agent messages */}
-      {!isUser && isOrchestrated && orchestrationChain && agentName && (
-        <OrchestrationChainSummary
-          agentName={agentName}
-          chain={orchestrationChain}
-          className="w-full max-w-[85%]"
-        />
+    <div className={cn('flex flex-col', isUser ? 'items-end' : 'items-start', className)}>
+      {!isUser && isOrchestrated && chain && agentName && (
+        <OrchestrationChainSummary agentName={agentName} chain={chain} className="w-full max-w-[85%]" />
       )}
 
       <div
         className={cn(
-          'max-w-[80%] rounded-2xl px-4 py-3',
-          isUser
-            ? 'bg-primary text-on-primary rounded-br-md shadow-md'
-            : isOrchestrated
-              ? 'glass-card border border-accent-200 dark:border-accent-800/50 text-theme-primary rounded-bl-md'
-              : 'glass-card text-theme-primary rounded-bl-md',
+          'max-w-[85%] rounded-panel px-4 py-2.5 text-sm text-ink-primary sm:max-w-[75%]',
+          isUser ? 'rounded-br-tag border border-primary/30 bg-primary/10' : 'rounded-bl-tag border border-line-subtle bg-inset',
           pendingStatus === 'pending' && 'opacity-70',
-          'transition-all duration-300'
         )}
       >
-        {/* Role label with agent name if available */}
-        <div
-          className={cn(
-            'text-xs mb-1 flex items-center gap-1.5',
-            isUser
-              ? 'text-primary-100'
-              : 'text-theme-tertiary'
-          )}
-        >
-          {isUser ? (
-            'You'
-          ) : (
-            <>
-              {agentName || 'Agent'}
-              {isOrchestrated && (
-                <span className="px-1.5 py-0.5 bg-accent-100 dark:bg-accent-900/30 text-accent-600 dark:text-accent-400 rounded text-[10px] font-medium">
-                  Orchestrated
-                </span>
-              )}
-            </>
+        <div className="mb-1 flex items-center gap-1.5 text-xs text-ink-tertiary">
+          <span className="font-medium">{isUser ? 'You' : agentName || 'Agent'}</span>
+          {message.timestamp && !pendingStatus && (
+            <span>· {new Date(message.timestamp).toLocaleTimeString(UI_DATE_LOCALE, { hour: '2-digit', minute: '2-digit' })}</span>
           )}
         </div>
 
-        {/* Message parts */}
-        <div className="space-y-1">
+        <div className="flex flex-col gap-1">
           {message.parts.map((part, index) => (
-            <MessagePart
-              key={index}
-              part={part}
-              messageId={message.messageId}
-              taskId={message.taskId}
-            />
+            <MessagePart key={index} part={part} messageId={message.messageId} taskId={message.taskId} />
           ))}
         </div>
 
-        {/* Pending indicator */}
-        {pendingStatus && pendingStatus !== 'sent' && (
-          <PendingIndicator status={pendingStatus} />
+        {pendingStatus === 'pending' && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-ink-tertiary">
+            <Spinner size="xs" color="current" />
+            Sending…
+          </div>
         )}
-
-        {/* Timestamp */}
-        {message.timestamp && !pendingStatus && (
-          <div
-            className={cn(
-              'text-xs mt-1',
-              isUser
-                ? 'text-primary-200'
-                : 'text-theme-muted'
-            )}
-          >
-            {new Date(message.timestamp).toLocaleTimeString(UI_DATE_LOCALE)}
+        {pendingStatus === 'failed' && (
+          <div className="mt-2">
+            <StatusTag tone="danger">Not sent</StatusTag>
           </div>
         )}
       </div>

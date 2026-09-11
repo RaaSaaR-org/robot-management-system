@@ -1,123 +1,126 @@
 /**
  * @file SecuritySettings.tsx
- * @description MFA security settings panel — enable/disable TOTP, view status
+ * @description Two-step verification panel: status, set up in a kit Modal, turn off via confirm
  * @feature auth
  * @regulatory NIS2 Art. 21(2)(j)
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { Card, Button } from '@/shared/components/ui';
+import { useCallback, useEffect, useState } from 'react';
+import { ShieldCheck } from 'lucide-react';
+import { Button, ErrorState, Modal, Panel, SkeletonText, StatusTag, confirm, toast } from '@/shared/components/ui';
 import { authApi } from '../api/authApi';
 import type { MFAStatus } from '../types/auth.types';
 import { MFASetup } from './MFASetup';
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
-
 export function SecuritySettings() {
   const [mfaStatus, setMfaStatus] = useState<MFAStatus | null>(null);
-  const [showSetup, setShowSetup] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [turningOff, setTurningOff] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
     try {
-      const status = await authApi.mfaGetStatus();
-      setMfaStatus(status);
-    } catch {
-      setError('Failed to load MFA status');
+      setMfaStatus(await authApi.mfaGetStatus());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchStatus();
+    void fetchStatus();
   }, [fetchStatus]);
 
-  const handleDisableMFA = async () => {
-    if (!confirm('Are you sure you want to disable two-factor authentication? This will make your account less secure.')) {
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
+  const turnOff = async () => {
+    const ok = await confirm({
+      tone: 'danger',
+      title: 'Turn off two-step verification?',
+      description: 'Your account is then protected by your password only.',
+      confirmLabel: 'Turn off',
+    });
+    if (!ok) return;
+    setTurningOff(true);
     try {
       await authApi.mfaDisableTotp();
+      toast.success('Two-step verification turned off');
       await fetchStatus();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to disable MFA';
-      setError(msg);
+      toast.error("Couldn't turn off two-step verification", {
+        description: err instanceof Error ? err.message : String(err),
+      });
     } finally {
-      setIsLoading(false);
+      setTurningOff(false);
     }
   };
 
-  const handleSetupComplete = async () => {
-    setShowSetup(false);
-    setIsLoading(true);
-    await fetchStatus();
-  };
-
-  if (showSetup) {
-    return (
-      <MFASetup
-        onComplete={handleSetupComplete}
-        onCancel={() => setShowSetup(false)}
-      />
-    );
-  }
+  const enabled = Boolean(mfaStatus?.mfaEnabled);
 
   return (
-    <Card className="p-6">
-      <h2 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white">
-        Two-Factor Authentication
-      </h2>
-
-      {error && (
-        <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-          {error}
-        </div>
+    <Panel>
+      <Panel.Header
+        title="Two-step verification"
+        description="A code from an authenticator app, asked for after your password."
+        actions={
+          !isLoading && !error ? (
+            <StatusTag tone={enabled ? 'live' : 'neutral'} dot>
+              {enabled ? 'On' : 'Off'}
+            </StatusTag>
+          ) : undefined
+        }
+      />
+      <Panel.Body>
+        {isLoading ? (
+          <SkeletonText lines={2} />
+        ) : error ? (
+          <ErrorState size="sm" title="Couldn't load the verification status" message={error} onRetry={fetchStatus} />
+        ) : enabled ? (
+          <p className="text-sm text-ink-secondary">
+            Your account asks for a code from your authenticator app at every sign-in.
+          </p>
+        ) : (
+          <p className="text-sm text-ink-secondary">
+            Add a second step at sign-in with an authenticator app such as 1Password, Authy or Google Authenticator.
+          </p>
+        )}
+      </Panel.Body>
+      {!isLoading && !error && (
+        <Panel.Footer>
+          {enabled ? (
+            <Button variant="danger" isLoading={turningOff} onClick={() => void turnOff()}>
+              Turn off
+            </Button>
+          ) : (
+            <Button
+              variant="secondary"
+              leftIcon={<ShieldCheck className="h-4 w-4" strokeWidth={1.75} />}
+              onClick={() => setSetupOpen(true)}
+            >
+              Set up two-step verification
+            </Button>
+          )}
+        </Panel.Footer>
       )}
 
-      {isLoading ? (
-        <p className="text-sm text-gray-500 dark:text-gray-400">Loading...</p>
-      ) : mfaStatus?.mfaEnabled ? (
-        <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500" />
-            <span className="text-sm font-medium text-green-700 dark:text-green-400">
-              Enabled
-            </span>
-          </div>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            Your account is protected with TOTP two-factor authentication.
-          </p>
-          <Button
-            variant="secondary"
-            onClick={handleDisableMFA}
-            isLoading={isLoading}
-          >
-            Disable 2FA
-          </Button>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <span className="inline-block h-2.5 w-2.5 rounded-full bg-gray-400" />
-            <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
-              Not Enabled
-            </span>
-          </div>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            Add an extra layer of security to your account by enabling two-factor authentication.
-          </p>
-          <Button variant="primary" onClick={() => setShowSetup(true)}>
-            Set Up 2FA
-          </Button>
-        </div>
-      )}
-    </Card>
+      <Modal
+        isOpen={setupOpen}
+        onClose={() => setSetupOpen(false)}
+        title="Set up two-step verification"
+        size="md"
+        closeOnBackdrop={false}
+      >
+        <MFASetup
+          onCancel={() => setSetupOpen(false)}
+          onComplete={() => {
+            setSetupOpen(false);
+            toast.success('Two-step verification is on');
+            void fetchStatus();
+          }}
+        />
+      </Modal>
+    </Panel>
   );
 }

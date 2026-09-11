@@ -476,7 +476,8 @@ function getErrorMessage(error: unknown): string {
     // Check for API error format
     if ('code' in error && typeof error.code === 'string') {
       const code = error.code as TaskErrorCode;
-      if (code in ERROR_MESSAGES) {
+      // UNKNOWN_ERROR is the API client's fallback code: the server's own message says more.
+      if (code in ERROR_MESSAGES && code !== 'UNKNOWN_ERROR') {
         return ERROR_MESSAGES[code];
       }
     }

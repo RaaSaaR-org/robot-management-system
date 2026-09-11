@@ -48,6 +48,9 @@ const ENDPOINTS = {
 function transformServerToFrontend(serverData: Record<string, unknown>): Task {
   return {
     ...serverData,
+    // Instances carry the definition's name as `processName`; without this the
+    // list and the detail page render an automation with no name.
+    name: (serverData.name as string | undefined) ?? (serverData.processName as string | undefined) ?? 'Untitled automation',
     // Map assignedRobotIds[0] to robotId for frontend compatibility
     robotId: Array.isArray(serverData.assignedRobotIds) && serverData.assignedRobotIds.length > 0
       ? serverData.assignedRobotIds[0]

@@ -1,29 +1,30 @@
 /**
  * @file ConversationList.tsx
- * @description List of conversations
+ * @description Searchable list of chat conversations with the active one marked
  * @feature a2a
  */
 
-import { memo } from 'react';
-import { MessageSquare } from 'lucide-react';
-import { UI_DATE_LOCALE, cn } from '@/shared/utils';
-import { Button } from '@/shared/components/ui/Button';
-import { EmptyState } from '@/shared/components/ui/EmptyState';
+import { useMemo, useState } from 'react';
+import { MessageSquare, Search, Trash2 } from 'lucide-react';
+import { Button, EmptyState, RowActions, SearchInput } from '@/shared/components/ui';
+import { formatTimeAgo } from '@/shared/utils';
+import { cn } from '@/shared/utils/cn';
 import type { A2AConversation } from '../types';
+import { getMessageText } from '../types';
 
 interface ConversationListProps {
   conversations: A2AConversation[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onDelete?: (id: string) => void;
+  onDelete?: (conversation: A2AConversation) => void;
   onNew?: () => void;
   className?: string;
 }
 
 /**
- * Conversation list component
+ * Conversation list: search on top, rows with title, last message and time.
  */
-export const ConversationList = memo(function ConversationList({
+export function ConversationList({
   conversations,
   selectedId,
   onSelect,
@@ -31,127 +32,106 @@ export const ConversationList = memo(function ConversationList({
   onNew,
   className,
 }: ConversationListProps) {
-  return (
-    <div className={cn('flex flex-col h-full', className)}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-        <h3 className="font-semibold text-theme-primary">
-          Conversations
-        </h3>
-        {onNew && (
-          <Button size="sm" onClick={onNew}>
-            New
-          </Button>
-        )}
-      </div>
+  const [query, setQuery] = useState('');
 
-      {/* List */}
-      <div className="flex-1 overflow-y-auto">
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return conversations;
+    return conversations.filter(
+      (c) =>
+        c.name?.toLowerCase().includes(q) ||
+        c.messages.some((m) => getMessageText(m).toLowerCase().includes(q)),
+    );
+  }, [conversations, query]);
+
+  return (
+    <div className={cn('flex min-h-0 flex-col', className)}>
+      {conversations.length > 0 && (
+        <div className="border-b border-line-subtle p-3">
+          <SearchInput value={query} onChange={setQuery} placeholder="Search conversations" size="sm" />
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {conversations.length === 0 ? (
           <EmptyState
-            icon={<MessageSquare className="w-10 h-10" />}
+            size="sm"
+            icon={<MessageSquare />}
             title="No conversations yet"
-            description="Start a conversation to chat with an agent."
+            description="Start one to talk to an agent."
             action={
               onNew && (
-                <Button variant="ghost" onClick={onNew}>
-                  Start a new one
+                <Button variant="secondary" size="sm" onClick={onNew}>
+                  New conversation
                 </Button>
               )
             }
+          />
+        ) : filtered.length === 0 ? (
+          <EmptyState
             size="sm"
+            icon={<Search />}
+            title="No conversations match"
+            action={
+              <Button variant="secondary" size="sm" onClick={() => setQuery('')}>
+                Clear filters
+              </Button>
+            }
           />
         ) : (
-          <div className="divide-y divide-gray-100 dark:divide-gray-700">
-            {conversations.map((conversation) => (
-              <ConversationListItem
-                key={conversation.conversationId}
-                conversation={conversation}
-                isSelected={selectedId === conversation.conversationId}
-                onSelect={() => onSelect(conversation.conversationId)}
-                onDelete={onDelete ? () => onDelete(conversation.conversationId) : undefined}
-              />
-            ))}
-          </div>
+          <ul className="flex flex-col py-1">
+            {filtered.map((c) => {
+              const isActive = c.conversationId === selectedId;
+              const last = c.messages[c.messages.length - 1];
+              const preview = last ? getMessageText(last) : '';
+              return (
+                <li key={c.conversationId} className="relative">
+                  {isActive && <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />}
+                  <div
+                    className={cn(
+                      'group mx-1.5 flex items-start gap-1 rounded-control transition-colors',
+                      isActive ? 'bg-primary/10' : 'hover:bg-ink-primary/[0.04]',
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSelect(c.conversationId)}
+                      aria-current={isActive ? 'true' : undefined}
+                      className="min-w-0 flex-1 rounded-control px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    >
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className={cn('truncate text-sm font-medium', isActive ? 'text-primary' : 'text-ink-primary')}>
+                          {c.name || 'Untitled conversation'}
+                        </span>
+                        <span className="flex-shrink-0 text-xs text-ink-muted">{formatTimeAgo(c.updatedAt)}</span>
+                      </div>
+                      <div className="truncate text-[13px] text-ink-tertiary">
+                        {preview || `${c.messages.length} message${c.messages.length !== 1 ? 's' : ''}`}
+                      </div>
+                    </button>
+                    {onDelete && (
+                      <div className="pr-1 pt-1.5">
+                        <RowActions
+                          size="sm"
+                          label={`Actions for ${c.name || 'conversation'}`}
+                          items={[
+                            {
+                              label: 'Delete',
+                              icon: <Trash2 />,
+                              tone: 'danger',
+                              onSelect: () => onDelete(c),
+                            },
+                          ]}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
     </div>
   );
-});
-
-/**
- * Individual conversation list item
- */
-const ConversationListItem = memo(function ConversationListItem({
-  conversation,
-  isSelected,
-  onSelect,
-  onDelete,
-}: {
-  conversation: A2AConversation;
-  isSelected: boolean;
-  onSelect: () => void;
-  onDelete?: () => void;
-}) {
-  const lastMessage = conversation.messages[conversation.messages.length - 1];
-  const messageCount = conversation.messages.length;
-
-  return (
-    <div
-      className={cn(
-        'px-4 py-3 cursor-pointer transition-colors',
-        'hover:bg-gray-50 dark:hover:bg-gray-700/50',
-        isSelected && 'bg-primary-50 dark:bg-primary-900/20'
-      )}
-      onClick={onSelect}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          {/* Name */}
-          <p className={cn(
-            'font-medium truncate',
-            isSelected
-              ? 'text-primary-600 dark:text-primary-400'
-              : 'text-theme-primary'
-          )}>
-            {conversation.name}
-          </p>
-
-          {/* Last message preview */}
-          {lastMessage && (
-            <p className="text-sm text-theme-tertiary truncate mt-0.5">
-              {lastMessage.parts
-                .filter((p) => p.kind === 'text')
-                .map((p) => (p as { kind: 'text'; text: string }).text)
-                .join(' ')}
-            </p>
-          )}
-
-          {/* Meta info */}
-          <div className="flex items-center gap-2 mt-1 text-xs text-theme-muted">
-            <span>{messageCount} message{messageCount !== 1 ? 's' : ''}</span>
-            <span>·</span>
-            <span>{new Date(conversation.updatedAt).toLocaleDateString(UI_DATE_LOCALE)}</span>
-          </div>
-        </div>
-
-        {/* Delete button */}
-        {onDelete && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            className="p-1 text-theme-muted hover:text-red-500 rounded"
-            title="Delete conversation"
-            aria-label="Delete conversation"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        )}
-      </div>
-    </div>
-  );
-});
+}

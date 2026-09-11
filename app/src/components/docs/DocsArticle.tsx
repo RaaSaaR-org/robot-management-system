@@ -25,6 +25,8 @@ interface DocsArticleProps {
   idsByLine: Map<number, string>;
   /** Called when a link targets a heading on this page */
   onNavigateToHeading: (id: string) => void;
+  /** Source line of the leading `#` title, which the PageHeader already shows */
+  skipHeadingLine?: number;
 }
 
 /**
@@ -33,10 +35,10 @@ interface DocsArticleProps {
  * plugin cannot make — what is a code block, where an anchor points, whether a
  * link stays in the app.
  */
-export function DocsArticle({ content, slug, idsByLine, onNavigateToHeading }: DocsArticleProps) {
+export function DocsArticle({ content, slug, idsByLine, onNavigateToHeading, skipHeadingLine }: DocsArticleProps) {
   const components = useMemo<Components>(
-    () => buildComponents(slug, idsByLine, onNavigateToHeading),
-    [slug, idsByLine, onNavigateToHeading],
+    () => buildComponents(slug, idsByLine, onNavigateToHeading, skipHeadingLine),
+    [slug, idsByLine, onNavigateToHeading, skipHeadingLine],
   );
 
   return (
@@ -110,15 +112,19 @@ function buildComponents(
   currentSlug: string,
   idsByLine: Map<number, string>,
   goToHeading: (id: string) => void,
+  skipHeadingLine?: number,
 ): Components {
   const heading = (level: 1 | 2 | 3 | 4): Components['h1'] =>
     function Heading({ node, children, ...props }) {
-      const Tag = `h${level}` as 'h1' | 'h2' | 'h3' | 'h4';
+      // The page's PageHeader owns the only h1, so a markdown `#` renders as an
+      // h2 (styled larger), and the leading one — the title — is not repeated.
+      const Tag = (level === 1 ? 'h2' : `h${level}`) as 'h2' | 'h3' | 'h4';
       const line = node?.position?.start.line;
+      if (level === 1 && line !== undefined && line === skipHeadingLine) return null;
       const id = line === undefined ? undefined : idsByLine.get(line);
 
       return (
-        <Tag id={id} {...props}>
+        <Tag id={id} {...props} className={cn(level === 1 && 'docs-h1')}>
           {children}
           {id && (
             <a

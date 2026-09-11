@@ -1,32 +1,36 @@
 /**
  * @file AccountPage.tsx
- * @description Account settings page for authenticated users
+ * @description Account: profile, password and two-step verification; sign out in the header
  * @feature auth
- * @dependencies @/features/auth/components, @/shared/components/ui
  */
 
+import { useNavigate } from 'react-router-dom';
+import { LogOut } from 'lucide-react';
 import { PageHeader } from '@/shared/components/ui';
 import { AccountSettingsPanel } from '../components/AccountSettingsPanel';
+import { LogoutButton } from '../components/LogoutButton';
 
 export interface AccountPageProps {
   /** Callback when password is changed */
   onPasswordChanged?: () => void;
 }
 
-/**
- * Full-page account settings layout.
- */
 export function AccountPage({ onPasswordChanged }: AccountPageProps) {
+  const navigate = useNavigate();
   return (
-    <div className="mx-auto max-w-2xl px-4 py-8">
-      {/* Header */}
+    <div className="flex flex-col gap-6">
       <PageHeader
-        className="mb-8"
+        eyebrow="System"
         title="Account"
-        subtitle="Manage your account settings and preferences"
+        description="Your profile, password and sign-in security."
+        actions={
+          <LogoutButton
+            variant="secondary"
+            leftIcon={<LogOut className="h-4 w-4" strokeWidth={1.75} />}
+            onLogout={() => navigate('/login', { replace: true })}
+          />
+        }
       />
-
-      {/* Account Settings Panel */}
       <AccountSettingsPanel onPasswordChanged={onPasswordChanged} />
     </div>
   );

@@ -1,15 +1,13 @@
 /**
  * @file CredentialsHandoffModal.tsx
- * @description One-time display of the newly-added teammate's credentials.
- * The temporary password is shown exactly once; once this modal closes the
- * owner cannot recover it via the UI. This is intentional — matches the
- * "hand off out-of-band" contract from TASK-163.
+ * @description One-time display of a new teammate's temporary password or a new API token.
+ * Shown exactly once; after closing it cannot be recovered in the UI (TASK-163 contract).
  * @feature team
  */
 
 import { useState } from 'react';
-import { Modal } from '@/shared/components/ui/Modal';
-import { Button } from '@/shared/components/ui/Button';
+import { Check, Copy } from 'lucide-react';
+import { Button, KeyValueList, Modal, StatusTag } from '@/shared/components/ui';
 import type { TeamMember } from '../types/team.types';
 
 interface CredentialsHandoffModalProps {
@@ -19,12 +17,14 @@ interface CredentialsHandoffModalProps {
   onClose: () => void;
   /** Override the credential label (default: "Temporary password"). */
   credentialLabel?: string;
-  /** Override the copy button text (default: "Copy email + password"). */
+  /** Override the copy button text (default: "Copy email and password"). */
   copyLabel?: string;
-  /** Override the warning text (default: "This password will not be shown again."). */
+  /** Override the warning text */
   warningText?: string;
-  /** Override the helper text below the credential (default: first-login message). */
+  /** Override the helper text under the credential */
   helperText?: string;
+  /** Title override */
+  title?: string;
 }
 
 export function CredentialsHandoffModal({
@@ -33,70 +33,64 @@ export function CredentialsHandoffModal({
   tempPassword,
   onClose,
   credentialLabel = 'Temporary password',
-  copyLabel = 'Copy email + password',
+  copyLabel = 'Copy email and password',
   warningText,
   helperText,
+  title = 'Share these credentials',
 }: CredentialsHandoffModalProps) {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  if (!member || !tempPassword) return null;
+  const isToken = credentialLabel !== 'Temporary password';
 
-  const handleCopyAll = async () => {
-    if (!member || !tempPassword) return;
-    const text = `Email: ${member.email}\nPassword: ${tempPassword}`;
+  const copy = async () => {
+    const text = isToken ? tempPassword : `Email: ${member.email}\nPassword: ${tempPassword}`;
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard may not be available — swallow.
+      setCopyFailed(true);
     }
   };
-
-  if (!member || !tempPassword) return null;
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Share these credentials"
+      title={title}
       size="md"
-      footer={
-        <div className="flex items-center justify-between gap-2 w-full">
-          <Button variant="ghost" size="sm" onClick={handleCopyAll}>
-            {copied ? 'Copied!' : copyLabel}
-          </Button>
-          <Button variant="primary" size="sm" onClick={onClose}>
-            Done
-          </Button>
-        </div>
-      }
+      closeOnBackdrop={false}
+      footer={<Button onClick={onClose}>Done</Button>}
     >
-      <div className="space-y-4">
-        <div className="rounded-brand border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
-          <strong className="font-semibold">{warningText ?? 'This password will not be shown again.'}</strong>{' '}
-          Copy it now and send it to {member.name} via a secure channel.
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+          <StatusTag tone="gated" className="self-start sm:self-auto">Shown once</StatusTag>
+          <p className="text-[13px] text-ink-secondary">
+            {warningText ?? `Copy it now and send it to ${member.name} over a secure channel.`}
+          </p>
         </div>
-
-        <div className="rounded-brand border border-theme bg-theme-card p-4 space-y-3">
-          <div>
-            <div className="text-xs uppercase tracking-wider text-theme-tertiary mb-1">
-              Email
-            </div>
-            <div className="font-mono text-sm text-theme-primary select-all">
-              {member.email}
-            </div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wider text-theme-tertiary mb-1">
-              {credentialLabel}
-            </div>
-            <div className="font-mono text-sm text-theme-primary select-all break-all">
-              {tempPassword}
-            </div>
-          </div>
+        <div className="rounded-control border border-line-subtle bg-inset p-4">
+          <KeyValueList
+            columns={1}
+            items={[
+              ...(isToken ? [{ label: 'Service account', value: member.name }] : [{ label: 'Email', value: member.email, mono: true }]),
+              { label: credentialLabel, value: <span className="select-all break-all">{tempPassword}</span>, mono: true },
+            ]}
+          />
         </div>
-
-        <p className="text-xs text-theme-tertiary">
-          {helperText ?? `${member.name} will be asked to choose a new password on first login.`}
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="secondary"
+            leftIcon={copied ? <Check className="h-4 w-4" strokeWidth={1.75} /> : <Copy className="h-4 w-4" strokeWidth={1.75} />}
+            onClick={() => void copy()}
+          >
+            {copied ? 'Copied' : copyLabel}
+          </Button>
+          {copyFailed && <span className="text-[13px] text-ink-tertiary">Clipboard unavailable — select the value and copy it.</span>}
+        </div>
+        <p className="text-xs text-ink-tertiary">
+          {helperText ?? `${member.name} is asked to choose a new password at first sign-in.`}
         </p>
       </div>
     </Modal>
