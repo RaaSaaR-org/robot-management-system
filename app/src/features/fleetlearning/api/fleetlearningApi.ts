@@ -28,7 +28,9 @@ const ENDPOINTS = {
   // Rounds
   rounds: '/federated/rounds',
   round: (id: string) => `/federated/rounds/${id}`,
-  roundStart: (id: string) => `/federated/rounds/${id}/start`,
+  roundSelectParticipants: (id: string) => `/federated/rounds/${id}/select-participants`,
+  roundDistribute: (id: string) => `/federated/rounds/${id}/distribute`,
+  // Not served yet: the server has no cancel route, so the UI does not offer Cancel.
   roundCancel: (id: string) => `/federated/rounds/${id}/cancel`,
   roundParticipants: (id: string) => `/federated/rounds/${id}/participants`,
   // Privacy
@@ -71,11 +73,15 @@ async function createRound(data: CreateFederatedRoundRequest): Promise<Federated
 }
 
 /**
- * Start a federated round
+ * Start a federated round. The server has no single start route: starting is
+ * selecting the participants, then distributing the global model to them.
+ * Selection accepts a round that is `created` or still `selecting`, so a start
+ * that failed at the distribute step can simply be retried.
  */
 async function startRound(id: string): Promise<FederatedRound> {
-  const response = await apiClient.post<FederatedRound>(ENDPOINTS.roundStart(id));
-  return response.data;
+  await apiClient.post(ENDPOINTS.roundSelectParticipants(id), {});
+  const response = await apiClient.post<{ round: FederatedRound }>(ENDPOINTS.roundDistribute(id));
+  return response.data.round;
 }
 
 /**

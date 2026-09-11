@@ -1,130 +1,69 @@
 /**
  * @file DeploymentProgress.tsx
- * @description Per-robot deployment status grid
+ * @description Robots tab of a deployment: which robots run the new model and which failed
  * @feature deployment
  */
 
-import { Card, Badge } from '@/shared/components/ui';
-import { cn } from '@/shared/utils';
+import { useMemo } from 'react';
+import { Bot } from 'lucide-react';
+import { DataTable, EmptyState, Panel, StatusTag, type DataTableColumn } from '@/shared/components/ui';
 import type { Deployment } from '../types';
 
 export interface DeploymentProgressProps {
   deployment: Deployment;
+  /** Robot display names by id; unknown ids show the id itself. */
+  robotNames?: Record<string, string>;
   onRobotClick?: (robotId: string) => void;
   className?: string;
 }
 
-type RobotDeployStatus = 'deployed' | 'pending' | 'failed';
-
-interface RobotStatusInfo {
+interface RobotRow {
   id: string;
-  status: RobotDeployStatus;
+  status: 'failed' | 'deployed';
 }
 
-const statusColors: Record<RobotDeployStatus, string> = {
-  deployed: 'bg-green-500',
-  pending: 'bg-gray-300 dark:bg-gray-600',
-  failed: 'bg-red-500',
-};
+export function DeploymentProgress({ deployment, robotNames = {}, onRobotClick, className }: DeploymentProgressProps) {
+  const rows = useMemo<RobotRow[]>(() => {
+    const failed = new Set(deployment.failedRobotIds);
+    const ids = Array.from(new Set([...deployment.failedRobotIds, ...deployment.deployedRobotIds]));
+    return ids.map((id) => ({ id, status: failed.has(id) ? 'failed' : 'deployed' }));
+  }, [deployment.deployedRobotIds, deployment.failedRobotIds]);
 
-const statusLabels: Record<RobotDeployStatus, string> = {
-  deployed: 'Deployed',
-  pending: 'Pending',
-  failed: 'Failed',
-};
-
-export function DeploymentProgress({
-  deployment,
-  onRobotClick,
-  className,
-}: DeploymentProgressProps) {
-  // Combine robot IDs and determine status
-  const allRobotIds = new Set([
-    ...deployment.deployedRobotIds,
-    ...deployment.failedRobotIds,
-  ]);
-
-  const robots: RobotStatusInfo[] = Array.from(allRobotIds).map((id) => ({
-    id,
-    status: deployment.failedRobotIds.includes(id)
-      ? 'failed'
-      : deployment.deployedRobotIds.includes(id)
-        ? 'deployed'
-        : 'pending',
-  }));
-
-  // Sort: failed first, then deployed, then pending
-  robots.sort((a, b) => {
-    const order = { failed: 0, pending: 1, deployed: 2 };
-    return order[a.status] - order[b.status];
-  });
-
-  const deployedCount = deployment.deployedRobotIds.length;
-  const failedCount = deployment.failedRobotIds.length;
-  const totalCount = robots.length;
+  const columns: DataTableColumn<RobotRow>[] = [
+    {
+      key: 'robot',
+      header: 'Robot',
+      sortable: true,
+      sortValue: (r) => (robotNames[r.id] ?? r.id).toLowerCase(),
+      cell: (r) => (
+        <div className="min-w-0">
+          <div className="truncate font-medium text-ink-primary">{robotNames[r.id] ?? r.id}</div>
+          {robotNames[r.id] && <div className="truncate text-[13px] text-ink-tertiary">#{r.id.slice(0, 8)}</div>}
+        </div>
+      ),
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      sortValue: (r) => r.status,
+      cell: (r) => <StatusTag status={r.status} tone={r.status === 'failed' ? 'danger' : 'success'} dot />,
+    },
+  ];
 
   return (
-    <Card className={cn('space-y-4', className)}>
-      <div className="flex items-center justify-between">
-        <h4 className="font-semibold text-theme-primary">Robot Deployment Status</h4>
-        <div className="flex gap-2">
-          <Badge variant="success" size="sm">
-            {deployedCount} deployed
-          </Badge>
-          {failedCount > 0 && (
-            <Badge variant="error" size="sm">
-              {failedCount} failed
-            </Badge>
-          )}
-        </div>
-      </div>
-
-      {/* Status legend */}
-      <div className="flex gap-4 text-xs text-theme-secondary">
-        <div className="flex items-center gap-1">
-          <span className={cn('w-2 h-2 rounded-full', statusColors.deployed)} />
-          <span>Deployed</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <span className={cn('w-2 h-2 rounded-full', statusColors.pending)} />
-          <span>Pending</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <span className={cn('w-2 h-2 rounded-full', statusColors.failed)} />
-          <span>Failed</span>
-        </div>
-      </div>
-
-      {/* Robot grid */}
-      {robots.length > 0 ? (
-        <div className="grid grid-cols-8 gap-1.5 sm:grid-cols-10 md:grid-cols-12">
-          {robots.map((robot) => (
-            <button
-              key={robot.id}
-              onClick={() => onRobotClick?.(robot.id)}
-              className={cn(
-                'w-6 h-6 rounded-sm transition-all',
-                statusColors[robot.status],
-                onRobotClick && 'hover:ring-2 hover:ring-cobalt-500 cursor-pointer',
-                !onRobotClick && 'cursor-default'
-              )}
-              title={`${robot.id}: ${statusLabels[robot.status]}`}
-              aria-label={`Robot ${robot.id}: ${statusLabels[robot.status]}`}
-            />
-          ))}
-        </div>
-      ) : (
-        <p className="text-sm text-theme-secondary text-center py-4">
-          No robots in this deployment yet
-        </p>
-      )}
-
-      {/* Summary */}
-      {totalCount > 0 && (
-        <p className="text-sm text-theme-secondary">
-          {deployedCount} of {totalCount} robots ({((deployedCount / totalCount) * 100).toFixed(0)}%)
-        </p>
-      )}
-    </Card>
+    <Panel padding="none" className={className}>
+      <DataTable
+        caption="Robots in this deployment"
+        columns={columns}
+        rows={rows}
+        getRowId={(r) => r.id}
+        defaultSort={{ key: 'status', direction: 'desc' }}
+        onRowClick={onRobotClick ? (r) => onRobotClick(r.id) : undefined}
+        empty={
+          <EmptyState icon={<Bot />} title="No robots updated yet" description="Robots join when the rollout starts." />
+        }
+      />
+    </Panel>
   );
 }

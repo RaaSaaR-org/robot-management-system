@@ -116,14 +116,6 @@ export const TIER_LABELS: Record<ContributorTier, string> = {
   diamond: 'Diamond',
 };
 
-export const TIER_COLORS: Record<ContributorTier, string> = {
-  bronze: '#CD7F32',
-  silver: '#C0C0C0',
-  gold: '#FFD700',
-  platinum: '#E5E4E2',
-  diamond: '#B9F2FF',
-};
-
 export const TIER_THRESHOLDS: Record<ContributorTier, number> = {
   bronze: 0,
   silver: 1000,

@@ -1,116 +1,157 @@
 /**
  * @file UpdatesPage.tsx
- * @description Main page for managing secure OTA updates
+ * @description Secure OTA updates: list signed packages, create, approve,
+ *              deploy to a robot and roll back
  * @feature updates
  * @regulatory CRA Art. 13, MR Art. 10
  */
 
-import { useEffect, useState, useCallback } from 'react';
-import { PackageSearch } from 'lucide-react';
-import { PageHeader, EmptyState } from '@/shared/components/ui';
-import { useUpdatesStore, selectPackages, selectIsLoading, selectError } from '../store/updatesStore';
-import { UpdateCard } from '../components/UpdateCard';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, Eye, PackageSearch, Plus, Rocket, Search, Undo2 } from 'lucide-react';
+import {
+  Button, DataTable, EmptyState, PageHeader, Panel, SearchInput, Select, StatusTag, Toolbar,
+  type DataTableColumn, type RowActionItem,
+} from '@/shared/components/ui';
+import { formatTimeAgo } from '@/shared/utils';
+import { useUpdatesStore, selectPackages, selectIsLoading } from '../store/updatesStore';
+import { UPDATE_STATUS_LABELS, type UpdatePackage, type UpdatePackageStatus } from '../types/updates.types';
 import { ApproveUpdateModal } from '../components/ApproveUpdateModal';
+import { DeployUpdateModal } from '../components/DeployUpdateModal';
 import { RollbackModal } from '../components/RollbackModal';
-import type { UpdatePackage } from '../types/updates.types';
+import { NewPackageModal } from '../components/NewPackageModal';
+import { UpdateDetailsModal } from '../components/UpdateDetailsModal';
+import { firstLine, formatBytes } from '../components/updateActs';
+
+const STATUS_OPTIONS = (Object.keys(UPDATE_STATUS_LABELS) as UpdatePackageStatus[]).map((s) => ({
+  value: s,
+  label: UPDATE_STATUS_LABELS[s],
+}));
 
 export function UpdatesPage() {
   const packages = useUpdatesStore(selectPackages);
   const isLoading = useUpdatesStore(selectIsLoading);
-  const error = useUpdatesStore(selectError);
   const fetchPackages = useUpdatesStore((s) => s.fetchPackages);
-  const approvePackage = useUpdatesStore((s) => s.approvePackage);
-  const deployPackage = useUpdatesStore((s) => s.deployPackage);
-  const triggerRollback = useUpdatesStore((s) => s.triggerRollback);
 
-  const [approveModal, setApproveModal] = useState<UpdatePackage | null>(null);
-  const [rollbackModal, setRollbackModal] = useState<UpdatePackage | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [detailsId, setDetailsId] = useState<string | null>(null);
+  const [approving, setApproving] = useState<UpdatePackage | null>(null);
+  const [deploying, setDeploying] = useState<UpdatePackage | null>(null);
+  const [rollingBack, setRollingBack] = useState<UpdatePackage | null>(null);
 
-  useEffect(() => {
-    fetchPackages();
+  // The store keeps one error field for loads and acts; only a failed load
+  // belongs in the table, acts report through their modals.
+  const load = useCallback(async () => {
+    await fetchPackages();
+    const error = useUpdatesStore.getState().error;
+    setLoadError(error);
+    if (error) useUpdatesStore.setState({ error: null });
   }, [fetchPackages]);
 
-  const handleApprove = useCallback(
-    (id: string, approverId: string) => {
-      approvePackage(id, approverId);
-    },
-    [approvePackage]
-  );
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const handleDeploy = useCallback(
-    (id: string) => {
-      // Deploy to a default robot (in production, this would open a robot selector)
-      deployPackage(id, 'default-robot');
-    },
-    [deployPackage]
-  );
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return packages.filter(
+      (p) => (!status || p.status === status)
+        && (!q || `${p.version} ${p.changelog}`.toLowerCase().includes(q)),
+    );
+  }, [packages, query, status]);
 
-  const handleRollback = useCallback(
-    (packageId: string, robotId: string, targetVersion: string) => {
-      triggerRollback(packageId, robotId, targetVersion);
+  const hasFilters = Boolean(query || status);
+  const details = packages.find((p) => p.id === detailsId) ?? null;
+
+  const columns: DataTableColumn<UpdatePackage>[] = [
+    {
+      key: 'version', header: 'Version', sortable: true,
+      sortValue: (p) => p.version.split('.').map((n) => n.padStart(6, '0')).join('.'),
+      cell: (p) => (
+        // 5.5rem keeps Version + a "Pending approval" tag + the row menu inside a 390px screen.
+        <div className="min-w-0 max-w-[5.5rem] sm:max-w-md">
+          <div className="font-medium text-ink-primary">v{p.version}</div>
+          <div className="truncate text-[13px] text-ink-tertiary">{firstLine(p.changelog)}</div>
+        </div>
+      ),
     },
-    [triggerRollback]
+    {
+      key: 'status', header: 'Status', sortable: true,
+      cell: (p) => <StatusTag status={p.status} dot>{UPDATE_STATUS_LABELS[p.status]}</StatusTag>,
+    },
+    { key: 'fileSize', header: 'Size', align: 'right', sortable: true, hideBelow: 'sm', cell: (p) => formatBytes(p.fileSize) },
+    { key: 'approvedBy', header: 'Approved by', hideBelow: 'md' },
+    {
+      key: 'createdAt', header: 'Created', align: 'right', sortable: true, hideBelow: 'md',
+      sortValue: (p) => new Date(p.createdAt),
+      cell: (p) => <span className="text-ink-secondary">{formatTimeAgo(p.createdAt)}</span>,
+    },
+  ];
+
+  const rowActions = (p: UpdatePackage): RowActionItem[] => [
+    { label: 'Open', icon: <Eye />, onSelect: () => setDetailsId(p.id) },
+    ...(p.status === 'pending'
+      ? [{ label: 'Approve', icon: <CheckCircle2 />, onSelect: () => setApproving(p) }] : []),
+    ...(p.status === 'approved' || p.status === 'deployed'
+      ? [{ label: 'Deploy to robot', icon: <Rocket />, onSelect: () => setDeploying(p) }] : []),
+    ...(p.status === 'deployed'
+      ? [{ label: 'Roll back', icon: <Undo2 />, tone: 'danger' as const, separatorBefore: true, onSelect: () => setRollingBack(p) }]
+      : []),
+  ];
+
+  const newButton = (
+    <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>New package</Button>
   );
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
+    <div className="flex flex-col gap-6">
       <PageHeader
-        title="Secure Updates"
-        subtitle="OTA update management with Ed25519 signing (CRA Art. 13, MR Art. 10)"
-        actions={
-          <button
-            onClick={() => fetchPackages()}
-            className="px-4 py-2 text-sm font-medium text-theme-secondary border border-theme rounded-brand hover:bg-theme-hover transition-colors"
-          >
-            Refresh
-          </button>
-        }
-        className="mb-6"
+        eyebrow="System"
+        title="Secure updates"
+        description="Signed over-the-air packages for the robot software. Every package is approved before it reaches a robot."
+        actions={newButton}
       />
 
-      {error && (
-        <div className="mb-4 p-3 text-sm text-red-500 bg-red-500/10 border border-red-500/20 rounded-brand">
-          {error}
-        </div>
-      )}
+      <Toolbar
+        search={<SearchInput value={query} onChange={setQuery} placeholder="Search packages" />}
+        filters={
+          <Select aria-label="Status" fullWidth={false} className="w-44" placeholder="All statuses"
+            options={STATUS_OPTIONS} value={status} onChange={(e) => setStatus(e.target.value)} />
+        }
+      />
 
-      {isLoading && packages.length === 0 ? (
-        <div className="text-center py-12 text-theme-tertiary">Loading updates...</div>
-      ) : packages.length === 0 ? (
-        <EmptyState
-          icon={<PackageSearch className="w-10 h-10" />}
-          title="No update packages yet"
-          description="Packages appear here once they are uploaded and published via the server. From there you can approve, deploy, and roll back updates across your fleet."
+      <Panel padding="none">
+        <DataTable
+          caption="Update packages"
+          columns={columns}
+          rows={filtered}
+          getRowId={(p) => p.id}
+          defaultSort={{ key: 'createdAt', direction: 'desc' }}
+          onRowClick={(p) => setDetailsId(p.id)}
+          rowActions={rowActions}
+          rowActionsLabel={(p) => `Actions for v${p.version}`}
+          isLoading={isLoading}
+          error={loadError}
+          errorTitle="Couldn't load update packages"
+          onRetry={() => void load()}
+          empty={hasFilters ? (
+            <EmptyState icon={<Search />} title="No packages match" description="Try another version, or clear the filters."
+              action={<Button variant="secondary" onClick={() => { setQuery(''); setStatus(''); }}>Clear filters</Button>} />
+          ) : (
+            <EmptyState icon={<PackageSearch />} title="No update packages yet"
+              description="Packages appear here once they are created and signed. Approve one before it can reach a robot."
+              action={newButton} />
+          )}
         />
-      ) : (
-        <div className="space-y-4">
-          {packages.map((pkg) => (
-            <UpdateCard
-              key={pkg.id}
-              pkg={pkg}
-              onApprove={() => setApproveModal(pkg)}
-              onDeploy={() => handleDeploy(pkg.id)}
-              onRollback={() => setRollbackModal(pkg)}
-            />
-          ))}
-        </div>
-      )}
+      </Panel>
 
-      {approveModal && (
-        <ApproveUpdateModal
-          pkg={approveModal}
-          onApprove={handleApprove}
-          onClose={() => setApproveModal(null)}
-        />
-      )}
-
-      {rollbackModal && (
-        <RollbackModal
-          pkg={rollbackModal}
-          onRollback={handleRollback}
-          onClose={() => setRollbackModal(null)}
-        />
-      )}
+      <NewPackageModal isOpen={creating} onClose={() => setCreating(false)} />
+      <UpdateDetailsModal pkg={details} onClose={() => setDetailsId(null)} />
+      <ApproveUpdateModal pkg={approving} onClose={() => setApproving(null)} />
+      <DeployUpdateModal pkg={deploying} onClose={() => setDeploying(null)} />
+      <RollbackModal pkg={rollingBack} onClose={() => setRollingBack(null)} />
     </div>
   );
 }

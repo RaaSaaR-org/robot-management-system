@@ -1,336 +1,132 @@
 /**
  * @file CreateRoundModal.tsx
- * @description Modal component for creating a new federated learning round
+ * @description FormModal that creates a new federated learning round
  * @feature fleetlearning
  */
 
-import { useState } from 'react';
-import { cn } from '@/shared/utils/cn';
-import { X, Play, Loader2, Info } from 'lucide-react';
-import type {
-  CreateFederatedRoundRequest,
-  FederatedRoundConfig,
-  AggregationMethod,
-  SelectionStrategy,
-} from '../types/fleetlearning.types';
-import {
-  DEFAULT_ROUND_CONFIG,
-  AGGREGATION_METHOD_LABELS,
-  SELECTION_STRATEGY_LABELS,
-} from '../types/fleetlearning.types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { useEffect, useState } from 'react';
+import { Divider, FormField, FormModal, Input, Select, Switch } from '@/shared/components/ui';
+import { getErrorMessage } from '@/shared/utils';
+import type { AggregationMethod, CreateFederatedRoundRequest, FederatedRoundConfig, SelectionStrategy } from '../types/fleetlearning.types';
+import { AGGREGATION_METHOD_LABELS, DEFAULT_ROUND_CONFIG, SELECTION_STRATEGY_LABELS } from '../types/fleetlearning.types';
 
 export interface CreateRoundModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Creates the round; a thrown error stays in the modal. */
   onSubmit: (data: CreateFederatedRoundRequest) => Promise<void>;
   isLoading?: boolean;
-  availableModels?: string[];
+  /** Model versions to choose from; a free-text field when empty. */
+  availableModels?: { value: string; label: string }[];
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+const toOptions = (labels: Record<string, string>) => Object.entries(labels).map(([value, label]) => ({ value, label }));
 
-export function CreateRoundModal({
-  isOpen,
-  onClose,
-  onSubmit,
-  isLoading = false,
-  availableModels = [],
-}: CreateRoundModalProps) {
-  const [globalModelVersion, setGlobalModelVersion] = useState('');
-  const [config, setConfig] = useState<Partial<FederatedRoundConfig>>({});
+export function CreateRoundModal({ isOpen, onClose, onSubmit, availableModels = [] }: CreateRoundModalProps) {
+  const [model, setModel] = useState('');
+  const [config, setConfig] = useState<FederatedRoundConfig>(DEFAULT_ROUND_CONFIG);
+  const [privacy, setPrivacy] = useState(false);
+  const [epsilon, setEpsilon] = useState('1');
+  const [errors, setErrors] = useState<{ model?: string; participants?: string; epsilon?: string }>({});
+  const [formError, setFormError] = useState<string>();
+  const [saving, setSaving] = useState(false);
 
-  const mergedConfig = { ...DEFAULT_ROUND_CONFIG, ...config };
+  useEffect(() => {
+    if (!isOpen) return;
+    setModel('');
+    setConfig(DEFAULT_ROUND_CONFIG);
+    setPrivacy(false);
+    setEpsilon('1');
+    setErrors({});
+    setFormError(undefined);
+  }, [isOpen]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!globalModelVersion.trim()) return;
+  const set = <K extends keyof FederatedRoundConfig>(key: K, value: FederatedRoundConfig[K]) =>
+    setConfig((c) => ({ ...c, [key]: value }));
+  const num = (v: string, fallback: number) => (Number.isFinite(parseFloat(v)) ? parseFloat(v) : fallback);
 
-    await onSubmit({
-      globalModelVersion: globalModelVersion.trim(),
-      config: Object.keys(config).length > 0 ? config : undefined,
-    });
+  const handleSubmit = async () => {
+    const next: typeof errors = {};
+    if (!model.trim()) next.model = 'Choose the global model to train.';
+    if (config.minParticipants < 1 || config.maxParticipants < config.minParticipants) {
+      next.participants = 'Max must be at least min, and min at least 1.';
+    }
+    const eps = parseFloat(epsilon);
+    if (privacy && !(eps > 0)) next.epsilon = 'Epsilon must be greater than 0.';
+    setErrors(next);
+    if (Object.keys(next).length) return;
 
-    // Reset form
-    setGlobalModelVersion('');
-    setConfig({});
+    setSaving(true);
+    setFormError(undefined);
+    try {
+      await onSubmit({
+        globalModelVersion: model.trim(),
+        config: { ...config, ...(privacy ? { privacyEpsilon: eps } : {}) },
+      });
+    } catch (err) {
+      setFormError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
   };
-
-  const updateConfig = <K extends keyof FederatedRoundConfig>(
-    key: K,
-    value: FederatedRoundConfig[K]
-  ) => {
-    setConfig((prev) => ({ ...prev, [key]: value }));
-  };
-
-  if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-            Create Federated Round
-          </h2>
-          <button
-            onClick={onClose}
-            disabled={isLoading}
-            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
-          >
-            <X className="w-5 h-5 text-gray-500" />
-          </button>
-        </div>
-
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="p-4 space-y-6">
-          {/* Model Version */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Global Model Version *
-            </label>
-            {availableModels.length > 0 ? (
-              <select
-                value={globalModelVersion}
-                onChange={(e) => setGlobalModelVersion(e.target.value)}
-                disabled={isLoading}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-              >
-                <option value="">Select a model...</option>
-                {availableModels.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type="text"
-                value={globalModelVersion}
-                onChange={(e) => setGlobalModelVersion(e.target.value)}
-                placeholder="e.g., vla-base-v1.0"
-                disabled={isLoading}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-              />
-            )}
-          </div>
-
-          {/* Aggregation Method */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Aggregation Method
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              {(Object.entries(AGGREGATION_METHOD_LABELS) as [AggregationMethod, string][]).map(
-                ([method, label]) => (
-                  <button
-                    key={method}
-                    type="button"
-                    onClick={() => updateConfig('aggregationMethod', method)}
-                    disabled={isLoading}
-                    className={cn(
-                      'px-3 py-2 rounded-lg border text-sm font-medium transition-colors',
-                      mergedConfig.aggregationMethod === method
-                        ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-400'
-                        : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500 text-gray-700 dark:text-gray-300'
-                    )}
-                  >
-                    {label}
-                  </button>
-                )
-              )}
-            </div>
-          </div>
-
-          {/* Selection Strategy */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Participant Selection
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {(Object.entries(SELECTION_STRATEGY_LABELS) as [SelectionStrategy, string][]).map(
-                ([strategy, label]) => (
-                  <button
-                    key={strategy}
-                    type="button"
-                    onClick={() => updateConfig('selectionStrategy', strategy)}
-                    disabled={isLoading}
-                    className={cn(
-                      'px-3 py-2 rounded-lg border text-sm font-medium transition-colors',
-                      mergedConfig.selectionStrategy === strategy
-                        ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-400'
-                        : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500 text-gray-700 dark:text-gray-300'
-                    )}
-                  >
-                    {label}
-                  </button>
-                )
-              )}
-            </div>
-          </div>
-
-          {/* Participant Limits */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Min Participants
-              </label>
-              <input
-                type="number"
-                min={1}
-                value={mergedConfig.minParticipants}
-                onChange={(e) =>
-                  updateConfig('minParticipants', parseInt(e.target.value, 10) || 1)
-                }
-                disabled={isLoading}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Max Participants
-              </label>
-              <input
-                type="number"
-                min={1}
-                value={mergedConfig.maxParticipants}
-                onChange={(e) =>
-                  updateConfig('maxParticipants', parseInt(e.target.value, 10) || 50)
-                }
-                disabled={isLoading}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-              />
-            </div>
-          </div>
-
-          {/* Local Training Config */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Local Epochs
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={mergedConfig.localEpochs}
-                onChange={(e) => updateConfig('localEpochs', parseInt(e.target.value, 10) || 1)}
-                disabled={isLoading}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Local Learning Rate
-              </label>
-              <input
-                type="number"
-                min={0.00001}
-                max={1}
-                step={0.0001}
-                value={mergedConfig.localLearningRate}
-                onChange={(e) =>
-                  updateConfig('localLearningRate', parseFloat(e.target.value) || 0.001)
-                }
-                disabled={isLoading}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-              />
-            </div>
-          </div>
-
-          {/* Privacy Settings */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="secureAggregation"
-                checked={mergedConfig.secureAggregation}
-                onChange={(e) => updateConfig('secureAggregation', e.target.checked)}
-                disabled={isLoading}
-                className="rounded border-gray-300 dark:border-gray-600"
-              />
-              <label
-                htmlFor="secureAggregation"
-                className="text-sm text-gray-700 dark:text-gray-300"
-              >
-                Enable Secure Aggregation
-              </label>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Privacy Epsilon (optional)
-              </label>
-              <input
-                type="number"
-                min={0.1}
-                max={10}
-                step={0.1}
-                value={config.privacyEpsilon || ''}
-                onChange={(e) =>
-                  updateConfig(
-                    'privacyEpsilon',
-                    e.target.value ? parseFloat(e.target.value) : undefined
-                  )
-                }
-                placeholder="Leave empty for no DP"
-                disabled={isLoading}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-              />
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Differential privacy budget for this round
-              </p>
-            </div>
-          </div>
-
-          {/* Info Box */}
-          <div className="flex items-start gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-            <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
-            <div className="text-sm text-blue-700 dark:text-blue-300">
-              <p className="font-medium mb-1">Round Configuration</p>
-              <p>
-                The round will select eligible participants and distribute the global model for local
-                training. After training completes, model updates will be aggregated using the{' '}
-                {AGGREGATION_METHOD_LABELS[mergedConfig.aggregationMethod]} algorithm.
-              </p>
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={isLoading}
-              className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isLoading || !globalModelVersion.trim()}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 size={18} className="animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                <>
-                  <Play size={18} />
-                  Create Round
-                </>
-              )}
-            </button>
-          </div>
-        </form>
+    <FormModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="New round"
+      description="Selected robots train the global model on their own data; only the weight updates come back."
+      submitLabel="Create round"
+      submittingLabel="Creating…"
+      isSubmitting={saving}
+      error={formError}
+      onSubmit={handleSubmit}
+      size="lg"
+      noValidate
+    >
+      <FormField label="Global model version" required error={errors.model}>
+        {availableModels.length > 0 ? (
+          <Select placeholder="Choose a model…" options={availableModels} value={model} onChange={(e) => setModel(e.target.value)} />
+        ) : (
+          <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. 2026-09-04-g1-apple-pnp" />
+        )}
+      </FormField>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <FormField label="Aggregation">
+          <Select options={toOptions(AGGREGATION_METHOD_LABELS)} value={config.aggregationMethod}
+            onChange={(e) => set('aggregationMethod', e.target.value as AggregationMethod)} />
+        </FormField>
+        <FormField label="Selection strategy">
+          <Select options={toOptions(SELECTION_STRATEGY_LABELS)} value={config.selectionStrategy}
+            onChange={(e) => set('selectionStrategy', e.target.value as SelectionStrategy)} />
+        </FormField>
+        <FormField label="Min participants" error={errors.participants}>
+          <Input type="number" min={1} value={config.minParticipants}
+            onChange={(e) => set('minParticipants', Math.round(num(e.target.value, 1)))} />
+        </FormField>
+        <FormField label="Max participants">
+          <Input type="number" min={1} value={config.maxParticipants}
+            onChange={(e) => set('maxParticipants', Math.round(num(e.target.value, 1)))} />
+        </FormField>
+        <FormField label="Local epochs">
+          <Input type="number" min={1} max={10} value={config.localEpochs}
+            onChange={(e) => set('localEpochs', Math.round(num(e.target.value, 1)))} />
+        </FormField>
+        <FormField label="Learning rate">
+          <Input type="number" min={0.00001} max={1} step={0.0001} value={config.localLearningRate}
+            onChange={(e) => set('localLearningRate', num(e.target.value, 0.001))} />
+        </FormField>
       </div>
-    </div>
+      <Divider label="Privacy" />
+      <Switch label="Secure aggregation" description="The server only sees the sum of the updates, never one robot's."
+        checked={config.secureAggregation} onCheckedChange={(v) => set('secureAggregation', v)} />
+      <Switch label="Differential privacy" description="Adds noise to each update and spends privacy budget (ε)."
+        checked={privacy} onCheckedChange={setPrivacy} />
+      {privacy && (
+        <FormField label="Epsilon (ε) per round" error={errors.epsilon} hint="Lower is more private. 0.1 – 10.">
+          <Input type="number" min={0.1} max={10} step={0.1} value={epsilon} onChange={(e) => setEpsilon(e.target.value)} />
+        </FormField>
+      )}
+    </FormModal>
   );
 }

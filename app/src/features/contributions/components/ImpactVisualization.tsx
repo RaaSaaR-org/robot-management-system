@@ -39,17 +39,17 @@ function formatDate(dateString: string): string {
 }
 
 function getImprovementColor(improvement: number): string {
-  if (improvement >= 10) return 'text-green-600 dark:text-green-400';
-  if (improvement >= 5) return 'text-emerald-600 dark:text-emerald-400';
-  if (improvement > 0) return 'text-teal-600 dark:text-teal-400';
-  return 'text-gray-500 dark:text-gray-400';
+  if (improvement >= 10) return 'text-signal-measured ';
+  if (improvement >= 5) return 'text-signal-measured ';
+  if (improvement > 0) return 'text-signal-measured ';
+  return 'text-ink-tertiary ';
 }
 
 function getImprovementBgColor(improvement: number): string {
-  if (improvement >= 10) return 'bg-green-100 dark:bg-green-900/30';
-  if (improvement >= 5) return 'bg-emerald-100 dark:bg-emerald-900/30';
-  if (improvement > 0) return 'bg-teal-100 dark:bg-teal-900/30';
-  return 'bg-gray-100 dark:bg-gray-800';
+  if (improvement >= 10) return 'bg-signal-measured/10 ';
+  if (improvement >= 5) return 'bg-signal-measured/10 ';
+  if (improvement > 0) return 'bg-signal-measured/10 ';
+  return 'bg-inset ';
 }
 
 // ============================================================================
@@ -68,21 +68,21 @@ function StatCard({ icon: Icon, label, value, subtext, className }: StatCardProp
   return (
     <div
       className={cn(
-        'bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4',
+        'bg-panel rounded-lg border border-line p-4',
         className
       )}
     >
       <div className="flex items-center gap-3">
-        <div className="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
-          <Icon className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+        <div className="p-2 bg-primary/10 rounded-lg">
+          <Icon className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">{label}</p>
-          <p className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+          <p className="text-sm text-ink-tertiary">{label}</p>
+          <p className="text-xl font-semibold text-ink-primary">
             {value}
           </p>
           {subtext && (
-            <p className="text-xs text-gray-400 dark:text-gray-500">{subtext}</p>
+            <p className="text-xs text-ink-muted">{subtext}</p>
           )}
         </div>
       </div>
@@ -101,7 +101,7 @@ function ImprovementBar({ improvement }: ImprovementBarProps) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-900 dark:text-gray-100 capitalize">
+        <span className="text-sm font-medium text-ink-primary capitalize">
           {improvement.metric.replace(/_/g, ' ')}
         </span>
         <span
@@ -114,13 +114,13 @@ function ImprovementBar({ improvement }: ImprovementBarProps) {
           {changePercent.toFixed(1)}%
         </span>
       </div>
-      <div className="relative h-8 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden">
+      <div className="relative h-8 bg-inset rounded-lg overflow-hidden">
         {/* Before bar */}
         <div
-          className="absolute inset-y-0 left-0 bg-gray-300 dark:bg-gray-600 rounded-l-lg"
+          className="absolute inset-y-0 left-0 bg-line rounded-l-lg"
           style={{ width: `${(improvement.before / Math.max(improvement.before, improvement.after)) * 50}%` }}
         >
-          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-600 dark:text-gray-300">
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-ink-secondary">
             {improvement.before.toFixed(1)}
           </span>
         </div>
@@ -142,14 +142,14 @@ function ImprovementBar({ improvement }: ImprovementBarProps) {
           </span>
         </div>
         {/* Divider */}
-        <div className="absolute inset-y-0 left-1/2 w-px bg-gray-400 dark:bg-gray-500" />
+        <div className="absolute inset-y-0 left-1/2 w-px bg-line" />
       </div>
-      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
+      <div className="flex justify-between text-xs text-ink-tertiary">
         <span>Before</span>
         <span>After</span>
       </div>
       {improvement.attributionPercent > 0 && (
-        <p className="text-xs text-gray-500 dark:text-gray-400">
+        <p className="text-xs text-ink-tertiary">
           Your data attributed {improvement.attributionPercent.toFixed(1)}% of this improvement
         </p>
       )}
@@ -174,7 +174,7 @@ export function ImpactVisualization({
           className
         )}
       >
-        <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
       </div>
     );
   }
@@ -183,7 +183,7 @@ export function ImpactVisualization({
     return (
       <div
         className={cn(
-          'flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400',
+          'flex flex-col items-center justify-center py-12 text-ink-tertiary ',
           className
         )}
       >
@@ -200,7 +200,7 @@ export function ImpactVisualization({
     return (
       <div
         className={cn(
-          'flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-xl',
+          'flex flex-col items-center justify-center py-12 text-ink-tertiary bg-inset rounded-xl',
           className
         )}
       >
@@ -240,7 +240,7 @@ export function ImpactVisualization({
 
       {/* Last Used */}
       {impact.lastUsedAt && (
-        <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+        <div className="flex items-center gap-2 text-sm text-ink-tertiary">
           <Calendar className="w-4 h-4" />
           <span>Last used in training: {formatDate(impact.lastUsedAt)}</span>
         </div>
@@ -248,9 +248,9 @@ export function ImpactVisualization({
 
       {/* Performance Improvements */}
       {impact.improvements.length > 0 && (
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-          <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-green-500" />
+        <div className="bg-panel rounded-xl border border-line p-6">
+          <h3 className="font-semibold text-ink-primary mb-4 flex items-center gap-2">
+            <TrendingUp className="w-5 h-5 text-signal-measured" />
             Performance Improvements
           </h3>
           <div className="space-y-6">

@@ -42,11 +42,11 @@ const REWARD_ICONS: Record<RewardType, typeof Gift> = {
 };
 
 const REWARD_COLORS: Record<RewardType, string> = {
-  service_credit: 'from-green-500 to-emerald-600',
-  feature_unlock: 'from-purple-500 to-violet-600',
-  priority_support: 'from-blue-500 to-cyan-600',
-  training_priority: 'from-primary-500 to-accent-500',
-  merchandise: 'from-pink-500 to-rose-600',
+  service_credit: ' ',
+  feature_unlock: ' ',
+  priority_support: ' ',
+  training_priority: ' ',
+  merchandise: ' ',
 };
 
 // ============================================================================
@@ -67,7 +67,7 @@ export function RewardCard({
   return (
     <div
       className={cn(
-        'bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden',
+        'bg-panel rounded-xl border border-line overflow-hidden',
         !reward.available && 'opacity-60',
         className
       )}
@@ -75,39 +75,39 @@ export function RewardCard({
       {/* Header with Icon */}
       <div
         className={cn(
-          'h-24 bg-gradient-to-r flex items-center justify-center',
+          'h-24 bg-inset flex items-center justify-center',
           REWARD_COLORS[reward.type]
         )}
       >
-        <Icon className="w-12 h-12 text-white/90" />
+        <Icon className="w-12 h-12 text-ink-secondary" />
       </div>
 
       {/* Content */}
       <div className="p-4">
-        <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1">
+        <h3 className="font-semibold text-ink-primary mb-1">
           {reward.name}
         </h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 line-clamp-2">
+        <p className="text-sm text-ink-secondary mb-4 line-clamp-2">
           {reward.description}
         </p>
 
         {/* Price & Action */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
-            <Coins className="w-4 h-4 text-yellow-500" />
-            <span className="font-semibold text-gray-900 dark:text-gray-100">
+            <Coins className="w-4 h-4 text-signal-unknown" />
+            <span className="font-semibold text-ink-primary">
               {formatCredits(reward.creditCost)}
             </span>
-            <span className="text-sm text-gray-500">credits</span>
+            <span className="text-sm text-ink-tertiary">credits</span>
           </div>
 
           {!reward.available ? (
-            <span className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-gray-500 bg-gray-100 dark:bg-gray-700 rounded-lg">
+            <span className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-ink-tertiary bg-inset rounded-lg">
               <Lock size={14} />
               Unavailable
             </span>
           ) : !canAfford ? (
-            <span className="text-sm text-gray-500 dark:text-gray-400">
+            <span className="text-sm text-ink-tertiary">
               Need {formatCredits(reward.creditCost - availableCredits)} more
             </span>
           ) : (
@@ -127,8 +127,8 @@ export function RewardCard({
 
         {/* Limits */}
         {(reward.limitPerUser || reward.totalLimit) && (
-          <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
-            <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+          <div className="mt-3 pt-3 border-t border-line-subtle">
+            <div className="flex items-center justify-between text-xs text-ink-tertiary">
               {reward.limitPerUser && (
                 <span>Limit: {reward.limitPerUser} per user</span>
               )}
@@ -168,7 +168,7 @@ export function RewardsList({
     return (
       <div
         className={cn(
-          'flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400',
+          'flex flex-col items-center justify-center py-12 text-ink-tertiary ',
           className
         )}
       >

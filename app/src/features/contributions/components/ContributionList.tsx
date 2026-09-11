@@ -80,13 +80,13 @@ export function ContributionList({
       {/* Header with Filters */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
         <div className="flex items-center gap-3">
-          <Filter size={18} className="text-gray-400" />
+          <Filter size={18} className="text-ink-muted" />
           <select
             value={filters.status || ''}
             onChange={(e) =>
               onFilterChange({ status: e.target.value as ContributionStatus | undefined || undefined })
             }
-            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+            className="px-3 py-1.5 text-sm border border-line-strong rounded-lg bg-panel text-ink-primary"
           >
             {STATUS_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -101,7 +101,7 @@ export function ContributionList({
                 licenseType: e.target.value as ContributionLicenseType | undefined || undefined,
               })
             }
-            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+            className="px-3 py-1.5 text-sm border border-line-strong rounded-lg bg-panel text-ink-primary"
           >
             {LICENSE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -112,7 +112,7 @@ export function ContributionList({
           {hasFilters && (
             <button
               onClick={onClearFilters}
-              className="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400"
+              className="text-sm text-primary hover:text-primary"
             >
               Clear
             </button>
@@ -133,13 +133,13 @@ export function ContributionList({
       {/* Loading State */}
       {isLoading && (
         <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
         </div>
       )}
 
       {/* Empty State */}
       {!isLoading && contributions.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400">
+        <div className="flex flex-col items-center justify-center py-12 text-ink-tertiary">
           <p className="text-lg mb-2">No contributions found</p>
           <p className="text-sm">
             {hasFilters
@@ -173,8 +173,8 @@ export function ContributionList({
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex items-center justify-between pt-4 border-t border-gray-200 dark:border-gray-700">
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+            <div className="flex items-center justify-between pt-4 border-t border-line">
+              <p className="text-sm text-ink-tertiary">
                 Showing {pagination.offset + 1}-
                 {Math.min(pagination.offset + pagination.limit, pagination.total)} of{' '}
                 {pagination.total}
@@ -183,11 +183,11 @@ export function ContributionList({
                 <button
                   onClick={() => onPageChange(Math.max(0, pagination.offset - pagination.limit))}
                   disabled={currentPage === 1}
-                  className="p-2 rounded-lg border border-gray-300 dark:border-gray-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+                  className="p-2 rounded-lg border border-line-strong disabled:opacity-50 disabled:cursor-not-allowed hover:bg-inset"
                 >
                   <ChevronLeft size={18} />
                 </button>
-                <span className="text-sm text-gray-600 dark:text-gray-400">
+                <span className="text-sm text-ink-secondary">
                   Page {currentPage} of {totalPages}
                 </span>
                 <button
@@ -200,7 +200,7 @@ export function ContributionList({
                     )
                   }
                   disabled={currentPage === totalPages}
-                  className="p-2 rounded-lg border border-gray-300 dark:border-gray-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+                  className="p-2 rounded-lg border border-line-strong disabled:opacity-50 disabled:cursor-not-allowed hover:bg-inset"
                 >
                   <ChevronRight size={18} />
                 </button>
