@@ -47,7 +47,7 @@ describe('statusTone', () => {
     ['resolved', 'success'],
     ['closed', 'success'],
     // regulatory notifications
-    ['overdue', 'warning'],
+    ['overdue', 'danger'],
     ['sent', 'success'],
     ['acknowledged', 'success'],
     // deployments
@@ -67,10 +67,11 @@ describe('statusTone', () => {
 
   it('keeps amber for attention and red for stops and faults', () => {
     // Nothing that merely needs a look is red.
-    for (const s of ['aborted', 'overdue', 'rolled_back', 'input_required', 'detected']) {
+    for (const s of ['aborted', 'rolled_back', 'input_required', 'detected']) {
       expect(statusTone(s)).toBe('warning');
     }
-    for (const s of ['failed', 'estop', 'fault', 'stopped']) {
+    // A missed legal notification deadline is a fault that is true now.
+    for (const s of ['failed', 'estop', 'fault', 'stopped', 'overdue']) {
       expect(statusTone(s)).toBe('danger');
     }
   });

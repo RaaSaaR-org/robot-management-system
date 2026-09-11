@@ -14,8 +14,9 @@ export type StatusToneName = Exclude<BaseTone, 'accent'>;
 
 /**
  * The contract's map. Amber (`warning`) means unknown or needs attention, red
- * (`danger`) means stopped or a fault — so an aborted run or an overdue report
- * is amber, not red. Grouped by domain inside each tone.
+ * (`danger`) means stopped or a fault that is true now — so an aborted run is
+ * amber, while an overdue regulatory notification (a missed legal deadline) is
+ * red. Grouped by domain inside each tone.
  */
 const STATUS_GROUPS: Record<StatusToneName, string[]> = {
   success: [
@@ -70,9 +71,21 @@ const STATUS_GROUPS: Record<StatusToneName, string[]> = {
     'rolled_back',
     'detected',
     'medium',
+  ],
+  danger: [
+    'error',
+    'failed',
+    'stopped',
+    'estop',
+    'e_stop',
+    'critical',
+    'rejected',
+    'blocked',
+    'fault',
+    'high',
+    // notifications: a missed legal deadline is a fault, not a reminder
     'overdue',
   ],
-  danger: ['error', 'failed', 'stopped', 'estop', 'e_stop', 'critical', 'rejected', 'blocked', 'fault', 'high'],
   neutral: [
     'offline',
     'idle',

@@ -384,9 +384,9 @@ a fault):
 - warning — charging, degraded, paused, pending, pending_review, warning,
   stale, draft_review; aborted, abandoned (runs), input_required (A2A),
   rolling_back, rolled_back (deployments), detected (a new incident), medium
-  (severity), overdue (notifications).
+  (severity).
 - danger — error, failed, stopped, estop, e-stop, critical, rejected, blocked,
-  fault; high (severity).
+  fault; high (severity), overdue (a notification past its legal deadline).
 - neutral — offline, idle, draft, archived, cancelled, canceled, unknown
   (fallback); low, info (severities), deprecated (deployments).
 
