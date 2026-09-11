@@ -22,6 +22,7 @@ import {
   TWIN_ZONE_COLORS,
 } from '../store/twinZoneStore';
 import type { AccumulatedCloud, DigitalTwinDTO, TwinPoint, TwinZoneDTO } from '../types/twin.types';
+import { useCssColor } from '../utils/cssColor';
 
 export interface ZoneAuthoringOverlayProps {
   twin: DigitalTwinDTO;
@@ -169,7 +170,9 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
     return () => window.removeEventListener('keydown', onKey);
   }, [mode, closeDraft, cancelDraft, popDraftPoint]);
 
-  const zoneColor = (z: TwinZoneDTO) => z.color || TWIN_ZONE_COLORS[z.type] || '#2A5FFF';
+  // UI strokes (draft polygon, hint) use the primary token; zone fills are data.
+  const primary = useCssColor('--color-primary');
+  const zoneColor = (z: TwinZoneDTO) => z.color || TWIN_ZONE_COLORS[z.type] || primary;
 
   const draftScreen = draftPoints.map(transform.worldToScreen);
   const draftPath =
@@ -182,7 +185,7 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
     <svg
       ref={svgRef}
       viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-      className="w-full h-full bg-surface-950 rounded-lg select-none"
+      className="h-full w-full select-none bg-inset"
       style={{ cursor: mode === 'draw' ? 'crosshair' : 'default' }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
@@ -246,16 +249,16 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
       {/* Active draft polygon */}
       {draftScreen.length > 0 && (
         <g pointerEvents="none">
-          {draftPath && <path d={draftPath} fill="rgba(42,95,255,0.12)" stroke="#2A5FFF" strokeWidth={2} strokeDasharray="5,4" />}
+          {draftPath && <path d={draftPath} fill={primary} fillOpacity={0.12} stroke={primary} strokeWidth={2} strokeDasharray="5,4" />}
           {draftScreen.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r={4} fill="#2A5FFF" stroke="#fff" strokeWidth={1} />
+            <circle key={i} cx={p.x} cy={p.y} r={4} fill={primary} />
           ))}
         </g>
       )}
 
       {/* Draw-mode hint */}
       {mode === 'draw' && (
-        <text x={PADDING} y={PADDING} fontSize={11} fill="#7593FF" opacity={0.85} pointerEvents="none">
+        <text x={PADDING} y={PADDING} fontSize={12} fill={primary} opacity={0.9} pointerEvents="none">
           Click to add vertices · double-click / Enter to close · Backspace undo · Esc cancel
         </text>
       )}
@@ -271,6 +274,7 @@ function CloudProjection({
   cloud: AccumulatedCloud;
   worldToScreen: (p: TwinPoint) => { x: number; y: number };
 }) {
+  const dotColor = useCssColor('--color-ink-muted', 'gray');
   const dots = useMemo(() => {
     const out: Array<{ x: number; y: number }> = [];
     const n = cloud.pointCount;
@@ -285,7 +289,7 @@ function CloudProjection({
   return (
     <g pointerEvents="none">
       {dots.map((d, i) => (
-        <circle key={i} cx={d.x} cy={d.y} r={0.7} fill="#5b6472" opacity={0.6} />
+        <circle key={i} cx={d.x} cy={d.y} r={0.7} fill={dotColor} opacity={0.6} />
       ))}
     </g>
   );

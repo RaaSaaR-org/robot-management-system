@@ -1,15 +1,15 @@
 /**
  * @file ScanSessionPanel.tsx
- * @description Controls + live status for a digital-twin sweep: Start/Stop,
- *   frames captured (server-authoritative when available), coverage estimate,
- *   server build progress + stage during finalize, and a connection dot. Drive
- *   the G1 around the room while it scans and watch the room fill in.
+ * @description "Room scan" side panel of the twin viewer: status, frames,
+ *   coverage estimate, points, link state, server build progress during
+ *   finalize, and the acts — Start sweep (primary) / Stop & build, and Import
+ *   scan from a recorded .ply/.pcd file. Results are toasted by the page.
  * @feature digitaltwin
  */
 
 import { memo, useRef } from 'react';
-import { Upload } from 'lucide-react';
-import { Button, Badge } from '@/shared/components/ui';
+import { Play, Square, Upload } from 'lucide-react';
+import { Button, KeyValueList, Panel, ProgressBar, StatusTag, type StatusTagTone } from '@/shared/components/ui';
 import type { ScanStatus } from '../types/twin.types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
@@ -31,126 +31,107 @@ export interface ScanSessionPanelProps {
   /** Import a recorded .ply/.pcd file instead of sweeping. */
   onImport?: (file: File) => void;
   importing?: boolean;
-  importError?: string | null;
 }
 
-const STATUS_LABEL: Record<ScanStatus, string> = {
-  idle: 'Ready',
-  scanning: 'Scanning…',
-  finalizing: 'Building…',
-  done: 'Complete',
-  error: 'Error',
+const STATUS_TAG: Record<ScanStatus, { label: string; tone: StatusTagTone }> = {
+  idle: { label: 'Not started', tone: 'neutral' },
+  scanning: { label: 'Scanning', tone: 'live' },
+  finalizing: { label: 'Building', tone: 'info' },
+  done: { label: 'Complete', tone: 'success' },
+  error: { label: 'Error', tone: 'danger' },
 };
+
+const ICON = 'h-4 w-4';
 
 export const ScanSessionPanel = memo(function ScanSessionPanel({
   robotName, status, framesCaptured, coveragePct, pointCount, isConnected,
   serverProgress = 0, serverStage, isAuthoritative, onStart, onStop,
-  onImport, importing = false, importError,
+  onImport, importing = false,
 }: ScanSessionPanelProps) {
   const scanning = status === 'scanning';
   const finalizing = status === 'finalizing';
-  const busy = scanning || finalizing;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const tag = STATUS_TAG[status];
+  const live = isConnected && scanning;
 
   return (
-    <div className="rounded-lg border border-theme bg-theme-surface p-4 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-theme-primary">Room scan</h3>
-          <Badge variant={scanning ? 'turquoise' : 'default'} size="sm">{STATUS_LABEL[status]}</Badge>
-        </div>
-        <div className="flex items-center gap-1.5 text-xs text-theme-tertiary">
-          <span className={`inline-block w-2 h-2 rounded-full ${isConnected && scanning ? 'bg-green-400' : 'bg-surface-500'}`} />
-          {isConnected && scanning ? 'Live' : 'Idle'}
-        </div>
-      </div>
+    <Panel data-testid="scan-session-panel">
+      <Panel.Header
+        title="Room scan"
+        description={`Sweeping with ${robotName}`}
+        actions={<StatusTag tone={tag.tone} dot pulse={scanning}>{tag.label}</StatusTag>}
+      />
+      <Panel.Body className="flex flex-col gap-4">
+        <p className="text-[13px] text-ink-tertiary">
+          On Start the server captures pose-stamped frames while the robot walks a loop, and the LiDAR map fills in.
+          {isAuthoritative && ' Showing the server-built cloud.'}
+        </p>
 
-      <p className="text-xs text-theme-tertiary">
-        Sweeping with <span className="text-theme-secondary font-medium">{robotName}</span>. On Start the server
-        captures pose-stamped frames while the robot walks a loop and the LiDAR map fills in.
-        {isAuthoritative && <span className="text-turquoise"> Showing the server-built cloud.</span>}
-      </p>
-
-      {/* Coverage (scanning) */}
-      {!finalizing && (
-        <div className="space-y-1">
-          <div className="flex justify-between text-xs text-theme-tertiary">
-            <span>Coverage (est.)</span>
-            <span>{coveragePct}%</span>
-          </div>
-          <div className="h-2 rounded bg-theme-secondary/20 overflow-hidden">
-            <div className="h-full bg-cobalt transition-all" style={{ width: `${coveragePct}%` }} />
-          </div>
-        </div>
-      )}
-
-      {/* Build progress (finalizing) */}
-      {finalizing && (
-        <div className="space-y-1">
-          <div className="flex justify-between text-xs text-theme-tertiary">
-            <span>Building twin{serverStage ? ` · ${serverStage}` : ''}</span>
-            <span>{serverProgress}%</span>
-          </div>
-          <div className="h-2 rounded bg-theme-secondary/20 overflow-hidden">
-            <div className="h-full bg-turquoise transition-all" style={{ width: `${serverProgress}%` }} />
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center gap-4 text-xs text-theme-tertiary">
-        <span>Frames: <span className="text-theme-secondary font-mono">{framesCaptured}</span></span>
-        <span>Points: <span className="text-theme-secondary font-mono">{pointCount.toLocaleString(UI_DATE_LOCALE)}</span></span>
-      </div>
-
-      <div className="flex gap-2">
-        {!scanning ? (
-          <Button variant="primary" size="sm" onClick={onStart} disabled={finalizing || importing}>
-            {status === 'done' ? 'Re-scan' : 'Start sweep'}
-          </Button>
+        {finalizing ? (
+          <ProgressBar value={serverProgress} size="sm" label={`Building twin${serverStage ? ` · ${serverStage}` : ''}`} />
         ) : (
-          <Button variant="secondary" size="sm" onClick={onStop} disabled={!busy}>
-            Stop &amp; build
-          </Button>
+          <ProgressBar value={coveragePct} size="sm" label="Coverage (estimate)" />
         )}
-        {onImport && !scanning && (
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<Upload className="w-3.5 h-3.5" />}
-            disabled={finalizing || importing}
-            onClick={() => fileInputRef.current?.click()}
-            title="Import a recorded point cloud (.ply / .pcd) — e.g. a real LiDAR capture — and build the twin from it"
-          >
-            {importing ? 'Importing…' : 'Import scan'}
-          </Button>
-        )}
-      </div>
 
-      {onImport && (
-        <>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".ply,.pcd"
-            className="hidden"
-            data-testid="scan-import-input"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) onImport(file);
-              e.target.value = '';
-            }}
-          />
-          {importError && (
-            <p className="text-xs text-red-400" role="alert">{importError}</p>
+        <KeyValueList
+          columns={2}
+          items={[
+            { label: 'Frames', value: <span className="tabular-nums">{framesCaptured}</span> },
+            { label: 'Points', value: <span className="tabular-nums">{pointCount.toLocaleString(UI_DATE_LOCALE)}</span> },
+            {
+              label: 'Link',
+              value: live ? <StatusTag tone="live" dot pulse>Live</StatusTag> : <StatusTag tone="neutral" dot>Idle</StatusTag>,
+            },
+          ]}
+        />
+
+        <div className="flex flex-wrap gap-2">
+          {!scanning ? (
+            <Button leftIcon={<Play className={ICON} strokeWidth={1.75} />} onClick={onStart} disabled={finalizing || importing}>
+              {status === 'done' ? 'Scan again' : 'Start sweep'}
+            </Button>
+          ) : (
+            <Button variant="secondary" leftIcon={<Square className={ICON} strokeWidth={1.75} />} onClick={onStop}>
+              Stop and build
+            </Button>
           )}
-          {!scanning && !finalizing && (
-            <p className="text-[11px] text-theme-tertiary">
-              Have a recorded room scan? <span className="text-theme-secondary">Import scan</span> builds
-              the twin from a real .ply/.pcd capture — no sweep needed.
-            </p>
+          {onImport && !scanning && (
+            <Button
+              variant="secondary"
+              leftIcon={<Upload className={ICON} strokeWidth={1.75} />}
+              disabled={finalizing}
+              isLoading={importing}
+              loadingText="Importing…"
+              onClick={() => fileInputRef.current?.click()}
+              title="Import a recorded point cloud (.ply / .pcd) — e.g. a real LiDAR capture — and build the twin from it"
+            >
+              Import scan
+            </Button>
           )}
-        </>
-      )}
-    </div>
+        </div>
+
+        {onImport && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".ply,.pcd"
+              className="hidden"
+              data-testid="scan-import-input"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onImport(file);
+                e.target.value = '';
+              }}
+            />
+            {!scanning && !finalizing && (
+              <p className="text-xs text-ink-tertiary">
+                Have a recorded room scan? Import scan builds the twin from a real .ply or .pcd capture — no sweep needed.
+              </p>
+            )}
+          </>
+        )}
+      </Panel.Body>
+    </Panel>
   );
 });

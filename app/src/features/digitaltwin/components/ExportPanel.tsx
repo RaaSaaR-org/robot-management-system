@@ -1,15 +1,16 @@
 /**
  * @file ExportPanel.tsx
- * @description Export controls for a built twin: download the Nav2 keep-out
+ * @description Export panel for a built twin: download the Nav2 keep-out
  *   costmap filter (.pgm + .yaml), the VDA5050 graph (.json) and the robot's
- *   place graph (places/_index.json, TASK-200). Fetches each
- *   artifact as a blob via the API client (so auth headers ride along) and
- *   triggers a browser download.
+ *   place graph (places/_index.json, TASK-200). Fetches each artifact as a
+ *   blob via the API client (so auth headers ride along), triggers a browser
+ *   download, and toasts the result.
  * @feature digitaltwin
  */
 
 import { memo, useCallback, useState } from 'react';
-import { Button } from '@/shared/components/ui';
+import { Download } from 'lucide-react';
+import { Button, Panel, toast } from '@/shared/components/ui';
 import { downloadBlob } from '@/features/robots/utils/pointcloud';
 import { twinApi } from '../api/twinApi';
 
@@ -17,7 +18,7 @@ export interface ExportPanelProps {
   twinId: string;
   /** Base filename (defaults to the twin id). */
   baseName?: string;
-  /** Disable exports until the twin has a built occupancy grid. */
+  /** Disable the grid-based exports until the twin has a built occupancy grid. */
   disabled?: boolean;
   /** Number of keep-out zones masked into the Nav2 export. */
   keepoutCount?: number;
@@ -27,86 +28,89 @@ export interface ExportPanelProps {
   gridSize?: { w: number; h: number } | null;
 }
 
+type ExportKind = 'nav2' | 'vda5050' | 'places';
+
 export const ExportPanel = memo(function ExportPanel({
   twinId, baseName, disabled, keepoutCount = 0, zoneCount = 0, gridSize,
 }: ExportPanelProps) {
-  const [busy, setBusy] = useState<'nav2' | 'vda5050' | 'places' | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<ExportKind | null>(null);
   const name = baseName || twinId;
 
-  const exportNav2 = useCallback(async () => {
-    setBusy('nav2');
-    setError(null);
+  const run = useCallback(async (kind: ExportKind, label: string, work: () => Promise<void>) => {
+    setBusy(kind);
     try {
-      const [pgm, yaml] = await Promise.all([
-        twinApi.downloadKeepoutPgm(twinId),
-        twinApi.downloadKeepoutYaml(twinId),
-      ]);
-      downloadBlob(pgm, `${name}-nav2-keepout.pgm`);
-      downloadBlob(yaml, `${name}-nav2-keepout.yaml`);
+      await work();
+      toast.success(`${label} exported`, { description: name });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Nav2 export failed');
+      toast.error(`Couldn't export ${label}`, { description: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(null);
     }
-  }, [twinId, name]);
+  }, [name]);
 
-  const exportVda5050 = useCallback(async () => {
-    setBusy('vda5050');
-    setError(null);
-    try {
-      const json = await twinApi.downloadVda5050(twinId);
-      downloadBlob(json, `${name}-vda5050.json`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'VDA5050 export failed');
-    } finally {
-      setBusy(null);
-    }
-  }, [twinId, name]);
-
-  const exportPlaceGraph = useCallback(async () => {
-    setBusy('places');
-    setError(null);
-    try {
-      const json = await twinApi.downloadPlaceGraph(twinId);
-      downloadBlob(json, `${name}-places.json`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Place graph export failed');
-    } finally {
-      setBusy(null);
-    }
-  }, [twinId, name]);
+  const exports: { kind: ExportKind; label: string; hint: string; gated: boolean; work: () => Promise<void> }[] = [
+    {
+      kind: 'nav2',
+      label: 'Nav2 keep-out',
+      hint: 'Costmap filter mask (.pgm + .yaml) with every keep-out zone.',
+      gated: true,
+      work: async () => {
+        const [pgm, yaml] = await Promise.all([twinApi.downloadKeepoutPgm(twinId), twinApi.downloadKeepoutYaml(twinId)]);
+        downloadBlob(pgm, `${name}-nav2-keepout.pgm`);
+        downloadBlob(yaml, `${name}-nav2-keepout.yaml`);
+      },
+    },
+    {
+      kind: 'vda5050',
+      label: 'VDA5050 graph',
+      hint: 'Nodes and edges for a fleet manager (.json).',
+      gated: true,
+      work: async () => downloadBlob(await twinApi.downloadVda5050(twinId), `${name}-vda5050.json`),
+    },
+    {
+      // Not gated on the occupancy grid: places come from the authored zones
+      // alone, and a site can have a usable place graph before it has a map.
+      kind: 'places',
+      label: 'Robot place graph',
+      hint: 'The rooms and keep-outs the robot names out loud (.json).',
+      gated: false,
+      work: async () => downloadBlob(await twinApi.downloadPlaceGraph(twinId), `${name}-places.json`),
+    },
+  ];
 
   return (
-    <div className="rounded-lg border border-theme bg-theme-surface p-4 space-y-3">
-      <h3 className="text-sm font-semibold text-theme-primary">Export</h3>
-      <p className="text-xs text-theme-tertiary">
-        Generate deployment artifacts from this twin&apos;s occupancy grid and zones.
-      </p>
-      {!disabled && (
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-theme-tertiary font-mono">
-          <span>{keepoutCount} keep-out{keepoutCount === 1 ? '' : 's'}</span>
-          {zoneCount > keepoutCount && <span>· {zoneCount} zones total</span>}
-          {gridSize && <span>· grid {gridSize.w}×{gridSize.h}</span>}
-        </div>
-      )}
-      <div className="flex flex-col gap-2">
-        <Button variant="secondary" size="sm" onClick={() => void exportNav2()} disabled={disabled || busy !== null}>
-          {busy === 'nav2' ? 'Exporting…' : 'Nav2 keep-out (.pgm + .yaml)'}
-        </Button>
-        <Button variant="secondary" size="sm" onClick={() => void exportVda5050()} disabled={disabled || busy !== null}>
-          {busy === 'vda5050' ? 'Exporting…' : 'VDA5050 graph (.json)'}
-        </Button>
-        {/* Not gated on the occupancy grid: places come from the authored zones
-            alone, and a site can have a usable place graph before it has a map. */}
-        <Button variant="secondary" size="sm" onClick={() => void exportPlaceGraph()} disabled={busy !== null}>
-          {busy === 'places' ? 'Exporting…' : 'Robot place graph (.json)'}
-        </Button>
-      </div>
-      {disabled && (
-        <p className="text-xs text-theme-tertiary">Exports unlock once the occupancy grid is built.</p>
-      )}
-      {error && <p className="text-xs text-red-400">{error}</p>}
-    </div>
+    <Panel>
+      <Panel.Header
+        title="Export"
+        description={
+          disabled
+            ? 'Grid exports unlock once the occupancy grid is built.'
+            : `${keepoutCount} keep-out${keepoutCount === 1 ? '' : 's'}${zoneCount > keepoutCount ? ` · ${zoneCount} zones total` : ''}${gridSize ? ` · grid ${gridSize.w} × ${gridSize.h}` : ''}`
+        }
+      />
+      <Panel.Body>
+        <ul className="flex flex-col divide-y divide-line-subtle">
+          {exports.map((x) => (
+            <li key={x.kind} className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-ink-primary">{x.label}</div>
+                <div className="text-xs text-ink-tertiary">{x.hint}</div>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<Download className="h-4 w-4" strokeWidth={1.75} />}
+                disabled={(x.gated && disabled) || (busy !== null && busy !== x.kind)}
+                isLoading={busy === x.kind}
+                aria-label={`Download ${x.label}`}
+                onClick={() => void run(x.kind, x.label, x.work)}
+              >
+                Download
+              </Button>
+            </li>
+          ))}
+        </ul>
+      </Panel.Body>
+    </Panel>
   );
 });
