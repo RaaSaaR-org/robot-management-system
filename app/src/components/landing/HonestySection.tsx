@@ -148,7 +148,7 @@ export function HonestySection() {
                     <span
                       className="mt-2 block break-words"
                       style={{
-                        fontFamily: 'var(--font-mono)',
+                        fontFamily: 'var(--font-sans)',
                         fontSize: '1.375rem',
                         fontWeight: 600,
                         letterSpacing: '0.02em',

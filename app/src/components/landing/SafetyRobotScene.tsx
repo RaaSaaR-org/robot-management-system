@@ -116,7 +116,13 @@ export const SafetyRobotScene = memo(function SafetyRobotScene() {
         <path d="M270 347H181L145 383H67" />
         <circle cx="270" cy="347" r="4" fill="#0b1723" />
       </g>
-      <g fill="#9fafc1" fontFamily="monospace" fontSize="9" letterSpacing="1.5">
+      <g
+        fill="#9fafc1"
+        fontSize="10"
+        fontWeight="500"
+        letterSpacing="1.2"
+        style={{ fontFamily: 'var(--font-sans)' }}
+      >
         <text x="70" y="400">
           HUMANOID / CONCEPT
         </text>

@@ -1,21 +1,20 @@
 /**
  * @file HeroSection.tsx
- * @description Physical AI positioning over a cinematic three-dimensional intelligence engine.
+ * @description Physical AI positioning across humanoid, aerial and quadruped embodiments.
  * @feature landing
  */
-import { memo } from "react";
-import { Link } from "react-router-dom";
-import { ArrowDown, ArrowUpRight } from "lucide-react";
-import { useBrand } from "@/brand";
-import { HeroScene } from "./HeroScene";
-import { scrollToSection } from "./scrollToSection";
-import "./hero.css";
+import { memo } from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowDown, ArrowUpRight } from 'lucide-react';
+import { useBrand } from '@/brand';
+import { HeroScene } from './HeroScene';
+import { scrollToSection } from './scrollToSection';
+import './hero.css';
 
 export const HeroSection = memo(function HeroSection() {
   const brand = useBrand();
   return (
     <section className="field-hero" aria-labelledby="hero-heading">
-      <HeroScene />
       <div className="lp-container field-content">
         <div className="field-layout">
           <div className="field-copy">
@@ -23,31 +22,41 @@ export const HeroSection = memo(function HeroSection() {
               <span /> {brand.name} / THE OPEN PHYSICAL AI PLATFORM
             </p>
             <h1 id="hero-heading">
-              The Physical
+              Intelligence.
               <br />
-              AI Platform.
+              <span>Made physical.</span>
             </h1>
             <p className="field-lede">
-              Intelligence belongs in the real world.
+              A world beyond the screen.
               <br />
-              Bring your data, models and machines together — from the first
-              experiment to your entire fleet.
+              Connect your data, models and machines in one open platform. From
+              humanoids to quadrupeds to the skies.
             </p>
             <div className="field-actions">
               <Link to="/dashboard" className="field-primary">
-                Explore the platform <ArrowUpRight size={18} />
+                Explore the platform{' '}
+                <ArrowUpRight size={18} aria-hidden="true" />
               </Link>
               <a
                 href="#circle"
-                onClick={(event) => scrollToSection(event, "#circle")}
+                onClick={(event) => scrollToSection(event, '#circle')}
               >
-                Discover the Embodied Loop <ArrowDown size={16} />
+                Discover the Embodied Loop{' '}
+                <ArrowDown size={15} aria-hidden="true" />
               </a>
             </div>
+            <div className="field-principles">
+              <span>Open source</span>
+              <i />
+              <span>Any model</span>
+              <i />
+              <span>Your control</span>
+            </div>
           </div>
+          <HeroScene />
         </div>
         <div className="field-footnote">
-          <span>OPEN SOURCE. YOUR MODELS. YOUR HARDWARE. YOUR CONTROL.</span>
+          <span>ONE PLATFORM. EVERY EMBODIMENT.</span>
           <span>
             Hardware-agnostic architecture. Integration readiness varies by
             robot.
