@@ -5,8 +5,9 @@
  */
 
 import { memo, useRef, useState } from 'react';
+import { Hand } from 'lucide-react';
+import { EmptyState } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
-import { SimBadge } from '../SimBadge';
 import type { RobotTelemetry, TouchPad } from '../../types/robots.types';
 
 // ============================================================================
@@ -80,7 +81,7 @@ const THUMB_TRANSFORM = 'rotate(-50 34 120)';
  * jitter ±30; measured live 2026-07-17) — the absolute reading is meaningless,
  * only the rise above baseline is. Each pad therefore tracks a rolling
  * baseline (min ever seen) and colors by delta above it, normalized against
- * the largest delta seen so far. The floor keeps sensor jitter dark: 2 % of
+ * the largest delta seen so far. The floor keeps sensor jitter dark — 2 % of
  * baseline for raw-unit sensors, at least 1 for small-unit (sim) sources.
  */
 interface PadCalibration {
@@ -102,23 +103,15 @@ function padRatio(cal: Record<string, PadCalibration>, key: string, value: numbe
 // COLOR SCALE
 // ============================================================================
 
-type Rgba = [number, number, number, number];
-
-// surface tint → warning yellow → danger red (status hues used app-wide)
-const IDLE_RGBA: Rgba = [125, 135, 155, 0.16];
-const WARN_RGBA: Rgba = [234, 179, 8, 0.6];
-const DANGER_RGBA: Rgba = [239, 68, 68, 0.92];
-
-function mix(a: Rgba, b: Rgba, t: number): string {
-  const c = a.map((v, i) => v + (b[i] - v) * t);
-  return `rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${c[3].toFixed(2)})`;
-}
-
-/** Pressure ratio 0..1 → fill color (surface → yellow → red) */
+/** Pressure ratio 0..1 → fill color from the signal tokens (inset → unknown → stopped) */
 function pressureColor(t: number): string {
-  if (t <= 0) return mix(IDLE_RGBA, IDLE_RGBA, 0);
-  if (t < 0.5) return mix(IDLE_RGBA, WARN_RGBA, t / 0.5);
-  return mix(WARN_RGBA, DANGER_RGBA, Math.min(1, (t - 0.5) / 0.5));
+  if (t <= 0) return 'var(--bg-tertiary)';
+  if (t < 0.5) {
+    const pct = Math.round((t / 0.5) * 100);
+    return `color-mix(in oklab, var(--signal-unknown) ${pct}%, var(--bg-tertiary))`;
+  }
+  const pct = Math.round(Math.min(1, (t - 0.5) / 0.5) * 100);
+  return `color-mix(in oklab, var(--signal-stopped) ${pct}%, var(--signal-unknown))`;
 }
 
 /** Representative value for a pad: peak of its pressure array */
@@ -181,7 +174,7 @@ function HandSchematic({ side, pads, calibration, onHover }: HandSchematicProps)
             width="56"
             height="52"
             rx="14"
-            className="fill-[var(--glass-bg-subtle)] stroke-[var(--border-color)]"
+            className="fill-[var(--bg-tertiary)] stroke-[var(--border-color)]"
             strokeWidth="1"
           />
           {PAD_SEGMENTS.map((seg, segIndex) => {
@@ -204,7 +197,7 @@ function HandSchematic({ side, pads, calibration, onHover }: HandSchematicProps)
                 rx={seg.rx}
                 strokeWidth="1"
                 className="stroke-[var(--border-color)] transition-[fill] duration-200 cursor-default"
-                style={{ fill: value !== null ? pressureColor(ratio) : 'var(--glass-bg-subtle)' }}
+                style={{ fill: value !== null ? pressureColor(ratio) : 'var(--bg-tertiary)' }}
                 onMouseEnter={() =>
                   value !== null
                     ? onHover({ side, label: seg.label, delta, raw: value, temperature })
@@ -229,9 +222,9 @@ function HandSchematic({ side, pads, calibration, onHover }: HandSchematicProps)
           })}
         </g>
       </svg>
-      <span className="mt-1 text-xs text-theme-tertiary capitalize">
+      <span className="mt-1 text-xs capitalize text-ink-tertiary">
         {side}
-        {padCount > 0 && <span className="text-theme-muted"> · {padCount} pads</span>}
+        {padCount > 0 && <span className="text-ink-muted"> · {padCount} pads</span>}
       </span>
     </div>
   );
@@ -266,36 +259,18 @@ export const HandTouchPads = memo(function HandTouchPads({
 
   if (!hasData) {
     return (
-      <div className={cn('flex flex-col items-center justify-center py-8 text-center', className)}>
-        <div className="glass-subtle rounded-2xl p-4 mb-3">
-          <svg
-            className="h-8 w-8 text-theme-tertiary"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M10.05 4.575a1.575 1.575 0 10-3.15 0v3m3.15-3v-1.5a1.575 1.575 0 013.15 0v1.5m-3.15 0l.075 5.925m3.075.75V4.575m0 0a1.575 1.575 0 013.15 0V15M6.9 7.575a1.575 1.575 0 10-3.15 0v8.175a6.75 6.75 0 006.75 6.75h2.018a5.25 5.25 0 003.712-1.538l1.732-1.732a5.25 5.25 0 001.538-3.712l.003-2.024a.668.668 0 01.198-.471 1.575 1.575 0 10-2.228-2.228 3.818 3.818 0 00-1.12 2.687M6.9 7.575V12m6.27 4.318A4.49 4.49 0 0116.35 15m.002 0h-.002"
-            />
-          </svg>
-        </div>
-        <p className="text-theme-secondary font-medium">No touch data</p>
-        <p className="text-sm text-theme-tertiary mt-1">
-          Hand pressure pads have not reported yet
-        </p>
-      </div>
+      <EmptyState
+        size="sm"
+        icon={<Hand />}
+        title="No touch data yet"
+        description="The hand pressure pads have not reported."
+        className={className}
+      />
     );
   }
 
   return (
-    <div className={cn('space-y-2', className)}>
-      <div className="flex items-center justify-between">
-        <span className="card-label">Fingertip pressure</span>
-        <SimBadge telemetry={telemetry} group="touch" />
-      </div>
+    <div className={cn('flex flex-col gap-3', className)}>
       <div className="grid grid-cols-2 gap-3 max-w-sm mx-auto">
         <HandSchematic
           side="left"
@@ -310,28 +285,28 @@ export const HandTouchPads = memo(function HandTouchPads({
           onHover={setHovered}
         />
       </div>
-      <div className="flex items-center justify-between text-xs text-theme-tertiary">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-ink-tertiary">
         <span className="flex items-center gap-1.5" aria-hidden="true">
           {[0, 0.55, 1].map((t) => (
             <span
               key={t}
-              className="h-2.5 w-2.5 rounded-[3px] border border-[var(--border-color)]"
+              className="h-2.5 w-2.5 rounded-[3px] border border-line"
               style={{ backgroundColor: pressureColor(t) }}
             />
           ))}
-          <span className="ml-0.5 text-theme-muted">idle → firm</span>
+          <span className="ml-0.5 text-ink-muted">Idle → firm</span>
         </span>
         <span className="text-right" aria-live="polite">
           {hovered ? (
             <>
               <span className="capitalize">{hovered.side}</span> · {hovered.label} —{' '}
-              <span className="font-mono text-theme-secondary">Δ{hovered.delta.toFixed(0)}</span>
+              <span className="tabular-nums text-ink-secondary">Δ{hovered.delta.toFixed(0)}</span>
               {hovered.temperature !== null && (
-                <span className="font-mono text-theme-muted"> · {hovered.temperature.toFixed(0)}°C</span>
+                <span className="tabular-nums text-ink-muted"> · {hovered.temperature.toFixed(0)}°C</span>
               )}
             </>
           ) : (
-            <span className="text-theme-muted">Hover a pad for its value</span>
+            <span className="text-ink-muted">Hover a pad for its value</span>
           )}
         </span>
       </div>

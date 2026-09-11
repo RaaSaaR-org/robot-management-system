@@ -3,7 +3,7 @@ id: "TASK-263"
 aliases: []
 title: "Redesign the robot detail and control center"
 slug: "redesign-the-robot-detail-and-control-center"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []

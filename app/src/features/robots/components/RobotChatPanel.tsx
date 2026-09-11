@@ -5,9 +5,9 @@
  */
 
 import { memo, useEffect, useCallback, useRef } from 'react';
-import { cn } from '@/shared/utils';
-import { Button } from '@/shared/components/ui/Button';
-import { Spinner } from '@/shared/components/ui/Spinner';
+import { MessageSquare } from 'lucide-react';
+import { cn } from '@/shared/utils/cn';
+import { Button, EmptyState, Spinner, StatusTag } from '@/shared/components/ui';
 import { ConversationPanel } from '@/features/a2a/components/ConversationPanel';
 import { useA2A } from '@/features/a2a/hooks/useA2A';
 import { useA2AStream } from '@/features/a2a/hooks/useA2AStream';
@@ -26,7 +26,7 @@ export interface RobotChatPanelProps {
   /** Additional class names */
   className?: string;
   /** Render the panel's own title/status header (default true). Set false when an
-   *  outer container (e.g. a drawer) already provides a header. */
+   *  outer container already provides a header. */
   showHeader?: boolean;
 }
 
@@ -59,7 +59,6 @@ export const RobotChatPanel = memo(function RobotChatPanel({
     setChatMode,
   } = useA2A();
 
-  // WebSocket connection
   const { isConnected } = useA2AStream();
 
   // Always use direct mode for robot chat
@@ -67,7 +66,7 @@ export const RobotChatPanel = memo(function RobotChatPanel({
     setChatMode('direct');
   }, [setChatMode]);
 
-  // Use refs for frequently-changing values to prevent effect re-fires
+  // Refs for frequently-changing values to prevent effect re-fires
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
   const currentConversationRef = useRef(currentConversation);
@@ -76,19 +75,17 @@ export const RobotChatPanel = memo(function RobotChatPanel({
   isLoadingRef.current = isLoading;
   const hasInitConversation = useRef(false);
 
-  // Get or create conversation for this robot — only re-run when robotId changes
   useEffect(() => {
     hasInitConversation.current = false;
   }, [robotId]);
 
+  // Get or create the conversation for this robot
   useEffect(() => {
-    if (hasInitConversation.current) return;
+    if (hasInitConversation.current || !agentUrl) return;
 
     const initConversation = async () => {
       const convos = conversationsRef.current;
       const currentConvo = currentConversationRef.current;
-
-      // Look for existing conversation for this robot
       const robotConvo = convos.find(
         (c) => c.robotId === robotId || c.name === `Chat with ${robotName}`
       );
@@ -109,8 +106,8 @@ export const RobotChatPanel = memo(function RobotChatPanel({
       }
     };
 
-    initConversation();
-  }, [robotId, robotName, conversations, selectConversation, createConversation]);
+    void initConversation();
+  }, [robotId, robotName, agentUrl, conversations, selectConversation, createConversation]);
 
   const handleNewConversation = useCallback(async () => {
     try {
@@ -120,92 +117,49 @@ export const RobotChatPanel = memo(function RobotChatPanel({
     }
   }, [createConversation, robotId, robotName]);
 
-  // No A2A agent URL - show setup message
   if (!agentUrl) {
     return (
-      <div className={cn('flex flex-col items-center justify-center py-12 text-center', className)}>
-        <div className="glass-subtle rounded-2xl p-5 mb-4">
-          <svg
-            className="w-10 h-10 text-theme-tertiary"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-            />
-          </svg>
-        </div>
-        <h3 className="text-lg font-medium text-theme-primary mb-2">
-          A2A Chat Not Available
-        </h3>
-        <p className="text-sm text-theme-secondary max-w-sm">
-          This robot does not have an A2A agent configured.
-          Chat functionality will be available once the robot's A2A endpoint is registered.
-        </p>
+      <div className={cn('flex flex-col items-center justify-center p-6', className)}>
+        <EmptyState
+          icon={<MessageSquare />}
+          title="A2A Chat Not Available"
+          description="This robot has no A2A agent configured. Chat becomes available once the robot's A2A endpoint is registered."
+        />
       </div>
     );
   }
 
   return (
-    <div className={cn('flex flex-col h-full', className)}>
-      {/* Header */}
+    <div className={cn('flex h-full flex-col', className)}>
       {showHeader && (
-      <div className="flex items-center justify-between px-4 py-3 border-b border-glass-subtle">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <svg
-              className="w-5 h-5 text-cobalt-500"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-              />
-            </svg>
-            <span className="font-medium text-theme-primary">
-              Chat with {robotName}
-            </span>
-          </div>
-        </div>
-
-        {/* Connection status */}
-        <div className="flex items-center gap-1.5 glass-subtle px-2.5 py-1 rounded-full">
-          <span
-            className={cn(
-              'w-2 h-2 rounded-full transition-colors',
-              isConnected ? 'bg-accent-500' : 'bg-gray-400'
-            )}
-          />
-          <span className="text-xs text-theme-secondary">
-            {isConnected ? 'Connected' : 'Disconnected'}
+        <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3">
+          <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-ink-primary">
+            <MessageSquare className="h-4 w-4 shrink-0 text-ink-tertiary" strokeWidth={1.75} />
+            <span className="truncate">Chat with {robotName}</span>
           </span>
+          {/* The stream is the app's link to the server, not to the robot. */}
+          <StatusTag tone={isConnected ? 'live' : 'neutral'} dot>
+            {isConnected ? 'Server linked' : 'Server offline'}
+          </StatusTag>
         </div>
-      </div>
       )}
 
-      {/* Error banner */}
       {error && (
-        <div className="px-4 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 flex items-center justify-between text-sm">
-          <span>{error}</span>
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 border-b border-signal-stopped/30 bg-signal-stopped/10 px-5 py-2 text-sm text-signal-stopped"
+        >
+          <span className="min-w-0">{error}</span>
           <Button variant="ghost" size="sm" onClick={clearError}>
             Dismiss
           </Button>
         </div>
       )}
 
-      {/* Chat Area */}
-      <div className="flex-1 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden">
         {isLoading && !currentConversation ? (
-          <div className="flex items-center justify-center h-full">
-            <Spinner size="lg" color="cobalt" label="Loading..." />
+          <div className="flex h-full items-center justify-center">
+            <Spinner size="lg" color="primary" label="Loading…" />
           </div>
         ) : (
           <ConversationPanel

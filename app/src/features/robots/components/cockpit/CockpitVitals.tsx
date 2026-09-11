@@ -1,17 +1,16 @@
 /**
  * @file CockpitVitals.tsx
- * @description Compact telemetry rail for the cockpit — battery, compute, thermal,
- *   motion and joint count as monospace readouts. Reads the live telemetry stream
- *   and degrades to placeholder dashes when the link is down.
+ * @description The control center's vitals: battery, CPU, memory, temperature, speed
+ *   and joint count as a StatRow. Every tile shows "—" and "No link" while the
+ *   telemetry link is down.
  * @feature robots
  */
 
 import { memo } from 'react';
-import { Cpu, MemoryStick, Thermometer, Gauge, Bone, Activity } from 'lucide-react';
-import { cn } from '@/shared/utils/cn';
-import { BatteryGauge } from '../BatteryGauge';
-import type { RobotTelemetry } from '../../types/robots.types';
+import { Battery, Bone, Cpu, Gauge, MemoryStick, Thermometer } from 'lucide-react';
+import { StatRow, StatTile, type Tone } from '@/shared/components/ui';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import type { RobotTelemetry } from '../../types/robots.types';
 
 export interface CockpitVitalsProps {
   telemetry: RobotTelemetry | null;
@@ -20,17 +19,19 @@ export interface CockpitVitalsProps {
   className?: string;
 }
 
-function fmt(value: number | null | undefined, unit = '', digits = 0): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—';
-  return `${value.toFixed(digits)}${unit}`;
+const ICON = 'h-4 w-4';
+
+function num(value: number | null | undefined, digits = 0): string | null {
+  if (value === null || value === undefined || Number.isNaN(value)) return null;
+  return value.toFixed(digits);
 }
 
-/** Colour a 0–100 utilisation reading green → amber → red. */
-function loadColor(v: number | null | undefined): string {
-  if (v == null) return 'text-theme-secondary';
-  if (v >= 85) return 'text-red-400';
-  if (v >= 65) return 'text-amber-400';
-  return 'text-[#18E4C3]';
+/** 0–100 load: stopped at 85+, gated at 65+, otherwise untoned. */
+function loadTone(v: number | null | undefined): Tone | undefined {
+  if (v == null) return undefined;
+  if (v >= 85) return 'stopped';
+  if (v >= 65) return 'gated';
+  return undefined;
 }
 
 export const CockpitVitals = memo(function CockpitVitals({
@@ -39,78 +40,71 @@ export const CockpitVitals = memo(function CockpitVitals({
   lastUpdate,
   className,
 }: CockpitVitalsProps) {
-  const t = telemetry;
-  const jointCount = t?.jointStates?.length ?? 0;
+  const t = connected ? telemetry : null;
+  const updated = t && lastUpdate ? `Updated ${lastUpdate.toLocaleTimeString(UI_DATE_LOCALE)}` : 'Live';
+  const hint = t ? updated : 'No link';
+  const value = (v: string | null) => v ?? '—';
+  const unit = (v: string | null, u: string) => (v === null ? undefined : u);
+
+  const battery = num(t?.batteryLevel);
+  const batteryTone: Tone | undefined =
+    t?.batteryLevel == null ? undefined : t.batteryLevel < 10 ? 'stopped' : t.batteryLevel < 20 ? 'gated' : undefined;
+  const cpu = num(t?.cpuUsage);
+  const mem = num(t?.memoryUsage);
+  const temp = num(t?.temperature);
+  const speed = num(t?.speed, 2);
+  const joints = t?.jointStates?.length ? String(t.jointStates.length) : null;
+  const acPowered = t?.powerSource === 'ac_powered';
 
   return (
-    <div
-      className={cn(
-        'rounded-2xl border border-theme bg-theme-card/40 px-4 py-3',
-        className,
-      )}
-    >
-      <div className="mb-3 flex items-center justify-between">
-        <span className="flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-theme-secondary">
-          <Activity className="h-3.5 w-3.5" /> Vitals
-        </span>
-        <span className="font-mono text-[10px] text-theme-tertiary">
-          {connected && lastUpdate ? `updated ${lastUpdate.toLocaleTimeString(UI_DATE_LOCALE)}` : 'link down'}
-        </span>
-      </div>
-
-      <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-6">
-        {/* Battery */}
-        <div className="flex flex-col gap-1.5">
-          <span className="font-mono text-[10px] uppercase tracking-wide text-theme-tertiary">Power</span>
-          <BatteryGauge
-            level={t?.batteryLevel ?? null}
-            voltage={t?.batteryVoltage}
-            temperature={t?.batteryTemperature}
-            powerSource={t?.powerSource}
-            size="sm"
-          />
-        </div>
-
-        <Stat icon={<Cpu className="h-3.5 w-3.5" />} label="CPU" value={fmt(t?.cpuUsage, '%')} valueClass={loadColor(t?.cpuUsage)} bar={t?.cpuUsage ?? undefined} />
-        <Stat icon={<MemoryStick className="h-3.5 w-3.5" />} label="Memory" value={fmt(t?.memoryUsage, '%')} valueClass={loadColor(t?.memoryUsage)} bar={t?.memoryUsage} />
-        <Stat icon={<Thermometer className="h-3.5 w-3.5" />} label="Temp" value={fmt(t?.temperature, '°C')} />
-        <Stat icon={<Gauge className="h-3.5 w-3.5" />} label="Speed" value={fmt(t?.speed, ' m/s', 2)} />
-        <Stat icon={<Bone className="h-3.5 w-3.5" />} label="Joints" value={jointCount ? String(jointCount) : '—'} />
-      </div>
-    </div>
+    <StatRow columns={6} className={className}>
+      <StatTile
+        label="Battery"
+        icon={<Battery className={ICON} strokeWidth={1.75} />}
+        value={acPowered ? 'AC' : value(battery)}
+        unit={acPowered ? undefined : unit(battery, '%')}
+        tone={batteryTone}
+        progress={!acPowered && t?.batteryLevel != null ? t.batteryLevel : undefined}
+        hint={t && t.batteryVoltage != null ? `${t.batteryVoltage.toFixed(1)} V` : hint}
+      />
+      <StatTile
+        label="CPU"
+        icon={<Cpu className={ICON} strokeWidth={1.75} />}
+        value={value(cpu)}
+        unit={unit(cpu, '%')}
+        tone={loadTone(t?.cpuUsage)}
+        progress={t?.cpuUsage ?? undefined}
+        hint={hint}
+      />
+      <StatTile
+        label="Memory"
+        icon={<MemoryStick className={ICON} strokeWidth={1.75} />}
+        value={value(mem)}
+        unit={unit(mem, '%')}
+        tone={loadTone(t?.memoryUsage)}
+        progress={t?.memoryUsage ?? undefined}
+        hint={hint}
+      />
+      <StatTile
+        label="Temperature"
+        icon={<Thermometer className={ICON} strokeWidth={1.75} />}
+        value={value(temp)}
+        unit={unit(temp, '°C')}
+        hint={hint}
+      />
+      <StatTile
+        label="Speed"
+        icon={<Gauge className={ICON} strokeWidth={1.75} />}
+        value={value(speed)}
+        unit={unit(speed, 'm/s')}
+        hint={hint}
+      />
+      <StatTile
+        label="Joints"
+        icon={<Bone className={ICON} strokeWidth={1.75} />}
+        value={value(joints)}
+        hint={joints ? 'Reporting state' : hint}
+      />
+    </StatRow>
   );
 });
-
-function Stat({
-  icon,
-  label,
-  value,
-  valueClass,
-  bar,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  valueClass?: string;
-  bar?: number;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wide text-theme-tertiary">
-        {icon} {label}
-      </span>
-      <span className={cn('font-mono text-lg leading-none', valueClass ?? 'text-theme-primary')}>{value}</span>
-      {bar !== undefined && (
-        <div className="h-1 w-full overflow-hidden rounded-full bg-theme-secondary/15">
-          <div
-            className={cn(
-              'h-full rounded-full transition-all duration-500',
-              bar >= 85 ? 'bg-red-400' : bar >= 65 ? 'bg-amber-400' : 'bg-[#18E4C3]',
-            )}
-            style={{ width: `${Math.max(0, Math.min(100, bar))}%` }}
-          />
-        </div>
-      )}
-    </div>
-  );
-}

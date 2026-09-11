@@ -12,7 +12,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Grid, Center } from '@react-three/drei';
 import { XR, type XRStore } from '@react-three/xr';
 import * as THREE from 'three';
-import { brandColors } from '@/brand';
+import { readCssColor } from '../../common/readCssColor';
 import { RobotModel } from '../../visualization/RobotModel';
 import type { JointState, RobotType } from '../../../types/robots.types';
 import type { VrJointMap } from './vrRetarget';
@@ -97,13 +97,13 @@ export function VrScene({
     <Canvas
       camera={{ position: cameraPos, fov: 50 }}
       gl={{ antialias: true }}
-      style={{ background: 'linear-gradient(180deg, var(--bg-secondary, #1E1F24) 0%, var(--bg-tertiary, #0C1440) 100%)' }}
+      style={{ background: 'var(--bg-tertiary)' }}
     >
       <XR store={store}>
-        <ambientLight intensity={0.7} color="#ffffff" />
-        <directionalLight position={[5, 10, 5]} intensity={2.0} color="#ffffff" />
-        <directionalLight position={[-3, 5, -3]} intensity={1.2} color="#ffffff" />
-        <pointLight position={[-3, 2, -3]} intensity={1.0} color={brandColors().accent} distance={10} />
+        <ambientLight intensity={0.7} color="white" />
+        <directionalLight position={[5, 10, 5]} intensity={2.0} color="white" />
+        <directionalLight position={[-3, 5, -3]} intensity={1.2} color="white" />
+        <pointLight position={[-3, 2, -3]} intensity={1.0} color={readCssColor('--color-primary', 'white')} distance={10} />
 
         <group ref={yawRef}>
           <group ref={modelRef}>
@@ -143,9 +143,9 @@ export function VrScene({
         <Grid
           args={[10, 10]}
           cellSize={0.5}
-          cellColor={brandColors().primary}
+          cellColor={readCssColor('--border-color-strong', 'gray')}
           sectionSize={2}
-          sectionColor={brandColors().accent}
+          sectionColor={readCssColor('--color-primary', 'white')}
           fadeDistance={12}
           position={[0, modelType === 'so101' ? -0.05 : -0.75, 0]}
         />

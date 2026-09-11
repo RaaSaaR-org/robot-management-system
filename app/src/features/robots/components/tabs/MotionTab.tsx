@@ -7,7 +7,21 @@
  */
 
 import { Suspense, lazy, memo, useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, Button, Card, EmptyState, SegmentedControl, Spinner, ToggleChip } from '@/shared/components/ui';
+import { ChevronLeft, ChevronRight, Download, Film, Pause, Play, Trash2, Upload } from 'lucide-react';
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  Panel,
+  RowActions,
+  SegmentedControl,
+  SkeletonRows,
+  Spinner,
+  StatusTag,
+  ToggleChip,
+  confirm,
+  toast,
+} from '@/shared/components/ui';
 import type { SegmentedOption } from '@/shared/components/ui';
 import { cn } from '@/shared/utils';
 import { createClip, deleteClip, getClip, listClips } from '../../api/motionApi';
@@ -23,6 +37,8 @@ import {
   useMotionPlayback,
 } from '../../motion';
 import { normalizeRobotType } from '../../types/robots.types';
+import { downloadBlob } from '../../utils/pointcloud';
+import { Robot3DViewerFallback } from '../visualization';
 import { MAX_CLIP_FRAMES } from '../../types/motion.types';
 import type { CreateMotionClipInput, MotionClipSummary } from '../../types/motion.types';
 import type { MotionTabProps } from './types';
@@ -179,7 +195,6 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -230,7 +245,6 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
     // starting playback, which is what the tab's own keyboard hint promises.
     if (summary.id === selectedRef.current?.id) return;
     const seq = ++loadSeqRef.current;
-    setConfirmDeleteId(null);
     setSelected(summary);
     setLoadingClipId(summary.id);
     setActionError(null);
@@ -253,23 +267,41 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
 
   const handleDelete = useCallback(
     async (summary: MotionClipSummary) => {
-      setConfirmDeleteId(null);
+      const ok = await confirm({
+        title: `Delete ${summary.name}?`,
+        description: 'The clip file is removed from this robot. Import the JSON again to bring it back.',
+        tone: 'danger',
+      });
+      if (!ok) return;
       setActionError(null);
       try {
         await deleteClip(summary.id);
       } catch (error) {
-        setActionError(apiErrorMessage(error, `Could not delete "${summary.name}".`));
+        const message = apiErrorMessage(error, `Could not delete "${summary.name}".`);
+        setActionError(message);
+        toast.error("Couldn't delete motion clip", { description: message });
         return;
       }
-      if (selected?.id === summary.id) {
+      if (selectedRef.current?.id === summary.id) {
         loadSeqRef.current += 1; // a fetch for this clip may still be in flight
         setSelected(null);
         resetMotion();
       }
+      toast.success('Motion clip deleted', { description: summary.name });
       await refresh();
     },
-    [refresh, selected],
+    [refresh],
   );
+
+  const handleDownload = useCallback(async (summary: MotionClipSummary) => {
+    try {
+      const clip = await getClip(summary.id);
+      const blob = new Blob([JSON.stringify(clip, null, 2)], { type: 'application/json' });
+      downloadBlob(blob, `${summary.name.replace(/[^\w.-]+/g, '_')}.json`);
+    } catch (error) {
+      toast.error("Couldn't download motion clip", { description: apiErrorMessage(error, summary.name) });
+    }
+  }, []);
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -289,6 +321,7 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
           return;
         }
         const created = await createClip(result);
+        toast.success('Motion clip imported', { description: created.name });
         await refresh();
         await handleSelect(created);
       } catch (error) {
@@ -332,154 +365,87 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
   const warnings = selected?.warnings ?? [];
 
   return (
-    <div className="space-y-4" data-testid="motion-tab">
+    <div className="flex flex-col gap-6" data-testid="motion-tab">
       {/* Quality notes from the exporter — informational, not a failure. */}
       {warnings.length > 0 && (
-        <div
-          className="flex gap-3 p-3 rounded-xl glass-subtle border border-amber-500/30 bg-amber-500/10"
-          data-testid="motion-warnings"
-        >
-          <svg
-            className="w-4 h-4 mt-0.5 shrink-0 text-amber-500 dark:text-amber-300"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.8}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-            />
-          </svg>
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-theme-primary">
-              Retargeting notes for “{selected?.name}”
-            </p>
-            <ul className="mt-1 space-y-0.5 text-[11px] text-theme-tertiary list-disc list-inside">
-              {/* Index key: warnings can repeat verbatim, and this list is never reordered. */}
-              {warnings.map((warning, index) => (
-                <li key={index}>{warning}</li>
-              ))}
-            </ul>
-          </div>
-        </div>
+        <Panel variant="inset" padding="sm" data-testid="motion-warnings">
+          <p className="text-[13px] font-medium text-ink-primary">
+            Retargeting notes for {selected?.name}
+          </p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5 text-xs text-ink-tertiary">
+            {/* Index key: warnings can repeat verbatim, and this list is never reordered. */}
+            {warnings.map((warning, index) => (
+              <li key={index}>{warning}</li>
+            ))}
+          </ul>
+        </Panel>
       )}
 
-      <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
         {/* ── Clip library ── */}
-        <Card className="min-w-0">
-          <Card.Header>
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold text-theme-primary">Motion clips</h2>
-              {clips.length > 0 && (
-                <span className="text-xs text-theme-tertiary tabular-nums">{clips.length}</span>
-              )}
-            </div>
-          </Card.Header>
-          <Card.Body className="space-y-3">
+        <Panel className="min-w-0">
+          <Panel.Header
+            title="Motion clips"
+            description={clips.length > 0 ? `${clips.length} imported` : undefined}
+          />
+          <Panel.Body className="flex flex-col gap-4">
             {isLoading ? (
-              <div className="flex justify-center py-10">
-                <Spinner size="md" color="cobalt" />
-              </div>
+              <SkeletonRows rows={3} columns={1} dense />
             ) : listError ? (
-              <div className="py-6 text-center space-y-3">
-                <p className="text-xs text-red-500">{listError}</p>
-                <Button type="button" size="sm" variant="ghost" onClick={() => void refresh()}>
-                  Retry
-                </Button>
-              </div>
+              <ErrorState size="sm" title="Couldn't load motion clips" message={listError} onRetry={() => void refresh()} />
             ) : clips.length === 0 ? (
               <EmptyState
                 size="sm"
+                icon={<Film />}
                 title="No motion clips yet"
                 description="Clips are retargeted offline by the GVHMR→GMR pipeline (run.py, then export_neodem.py) and imported here as JSON. This app does not run pose estimation — a video upload will not work."
               />
             ) : (
-              <ul className="space-y-2 xl:max-h-[420px] xl:overflow-y-auto">
+              <ul className="-mx-2 flex flex-col gap-1 xl:max-h-[420px] xl:overflow-y-auto">
                 {clips.map((clip) => {
                   const isSelected = selected?.id === clip.id;
-                  const isConfirming = confirmDeleteId === clip.id;
                   return (
                     <li key={clip.id}>
                       <div
                         className={cn(
-                          'group flex items-start gap-2 p-2.5 rounded-brand border transition-colors duration-150',
-                          isSelected
-                            ? 'border-cobalt-500/40 bg-cobalt-500/10'
-                            : 'border-theme hover:bg-theme-elevated',
+                          'flex items-start gap-2 rounded-control border px-2 py-2 transition-colors duration-150',
+                          isSelected ? 'border-primary/50 bg-primary/10' : 'border-transparent hover:bg-ink-primary/[0.035]',
                         )}
                       >
                         <button
                           type="button"
                           onClick={() => void handleSelect(clip)}
                           aria-pressed={isSelected}
-                          className="flex-1 min-w-0 text-left"
+                          className="min-w-0 flex-1 rounded-tag text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                         >
-                          <div className="flex items-center gap-1.5">
-                            <span
-                              className={cn(
-                                'truncate text-sm font-medium',
-                                isSelected ? 'text-cobalt-500 dark:text-cobalt-300' : 'text-theme-primary',
-                              )}
-                            >
-                              {clip.name}
-                            </span>
-                            {loadingClipId === clip.id && <Spinner size="xs" color="cobalt" />}
-                          </div>
-                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-theme-tertiary tabular-nums">
-                            <Badge variant={isSelected ? 'cobalt' : 'default'} size="sm">
-                              {clip.source}
-                            </Badge>
+                          <span className="flex items-center gap-1.5">
+                            <span className="truncate text-sm font-medium text-ink-primary">{clip.name}</span>
+                            {loadingClipId === clip.id && <Spinner size="xs" color="primary" />}
+                          </span>
+                          <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs tabular-nums text-ink-tertiary">
+                            <StatusTag tone={isSelected ? 'live' : 'neutral'}>{clip.source}</StatusTag>
                             <span>{clip.durationSec.toFixed(1)} s</span>
-                            <span>·</span>
+                            <span aria-hidden="true">·</span>
                             <span>{clip.frameCount} frames</span>
-                            <span>·</span>
-                            {/* Rounding would render an NTSC 29.97 clip as "30 fps" — the exact
-                                distinction the fps column was widened to a float to preserve. */}
-                            <span>
-                              {Number.isInteger(clip.fps) ? clip.fps : clip.fps.toFixed(2)} fps
-                            </span>
-                          </div>
+                            <span aria-hidden="true">·</span>
+                            {/* Rounding would render an NTSC 29.97 clip as "30 fps". */}
+                            <span>{Number.isInteger(clip.fps) ? clip.fps : clip.fps.toFixed(2)} fps</span>
+                          </span>
                         </button>
-
-                        {isConfirming ? (
-                          <div className="flex shrink-0 items-center gap-1">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => void handleDelete(clip)}
-                              className="px-2 py-1 text-[11px]"
-                            >
-                              Delete
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => setConfirmDeleteId(null)}
-                              className="px-2 py-1 text-[11px]"
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteId(clip.id)}
-                            aria-label={`Delete ${clip.name}`}
-                            className="shrink-0 p-1 rounded-brand text-theme-tertiary hover:text-red-500 hover:bg-red-500/10"
-                          >
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
-                              />
-                            </svg>
-                          </button>
-                        )}
+                        <RowActions
+                          label={`Actions for ${clip.name}`}
+                          items={[
+                            { label: 'Preview', icon: <Play />, onSelect: () => void handleSelect(clip) },
+                            { label: 'Download', icon: <Download />, onSelect: () => void handleDownload(clip) },
+                            {
+                              label: 'Delete',
+                              icon: <Trash2 />,
+                              tone: 'danger',
+                              separatorBefore: true,
+                              onSelect: () => void handleDelete(clip),
+                            },
+                          ]}
+                        />
                       </div>
                     </li>
                   );
@@ -493,9 +459,8 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
               tabIndex={0}
               aria-label="Import a motion clip — opens a file picker for an exported .json clip"
               onClick={() => fileInputRef.current?.click()}
-              // The file input is visually hidden and out of the tab order, and this
-              // dropzone is the tab's only import path — so it has to be operable
-              // from the keyboard itself.
+              // The file input is hidden and out of the tab order, and this dropzone is the
+              // tab's only import path — so it has to be operable from the keyboard itself.
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
@@ -514,9 +479,9 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
                 if (file) void handleFile(file);
               }}
               className={cn(
-                'border-2 border-dashed rounded-brand p-4 text-center cursor-pointer transition-colors',
-                'focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:ring-offset-2',
-                isDragging ? 'border-cobalt-500 bg-cobalt-500/10' : 'border-theme-secondary/30 hover:border-cobalt-500/50',
+                'flex cursor-pointer flex-col items-center gap-1 rounded-control border border-dashed bg-inset p-4 text-center transition-colors',
+                'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
+                isDragging ? 'border-primary bg-primary/10' : 'border-line-strong hover:border-primary/60',
               )}
               data-testid="motion-import-dropzone"
             >
@@ -533,50 +498,48 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
                 }}
               />
               {isImporting ? (
-                <div className="flex items-center justify-center gap-2 text-xs text-theme-secondary">
-                  <Spinner size="xs" color="cobalt" /> Importing…
-                </div>
+                <span className="flex items-center gap-2 text-[13px] text-ink-secondary">
+                  <Spinner size="xs" color="primary" /> Importing…
+                </span>
               ) : (
                 <>
-                  <p className="text-xs font-medium text-theme-primary">Import a clip</p>
-                  <p className="mt-0.5 text-[11px] text-theme-tertiary">
-                    Drop an exported <code className="px-1 rounded bg-theme-elevated">.json</code> clip, or click to browse
-                  </p>
+                  <Upload className="h-4 w-4 text-ink-tertiary" strokeWidth={1.75} aria-hidden="true" />
+                  <span className="text-[13px] font-medium text-ink-primary">Import a clip</span>
+                  <span className="text-xs text-ink-tertiary">
+                    Drop an exported <code className="font-mono">.json</code> clip, or click to browse
+                  </span>
                 </>
               )}
             </div>
 
             {actionError && (
-              <p className="text-[11px] text-red-500" role="alert" data-testid="motion-action-error">
+              <p className="text-xs text-signal-stopped" role="alert" data-testid="motion-action-error">
                 {actionError}
               </p>
             )}
 
             {importError && (
-              <p className="text-[11px] text-red-500" role="alert" data-testid="motion-import-error">
+              <p className="text-xs text-signal-stopped" role="alert" data-testid="motion-import-error">
                 {importError}
               </p>
             )}
-          </Card.Body>
-        </Card>
+          </Panel.Body>
+        </Panel>
 
         {/* ── Viewer + transport ── */}
-        <Card className="min-w-0">
-          <Card.Header>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <h2 className="text-lg font-semibold text-theme-primary truncate">
-                  {transport.clipName ?? 'Playback'}
-                </h2>
-                {selected && (
-                  <Badge variant="turquoise" size="sm">
-                    {selected.robotType}
-                  </Badge>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
+        <Panel className="min-w-0">
+          <Panel.Header
+            title={transport.clipName ?? 'Preview'}
+            description={
+              selected
+                ? `Preview on the ${selected.robotType} model — the robot itself does not move.`
+                : 'Select a clip to preview it on the robot model.'
+            }
+            actions={
+              <>
                 <SegmentedControl
                   label="Playback speed"
+                  size="sm"
                   options={SPEED_OPTIONS}
                   value={String(transport.speed) as SpeedValue}
                   onChange={(v) => setMotionSpeed(Number(v))}
@@ -591,91 +554,81 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
                 >
                   Follow root
                 </ToggleChip>
-              </div>
-            </div>
-          </Card.Header>
-
-          <Card.Body className="p-0">
-            {/* `relative` is load-bearing: Robot3DViewer's "<type> Model" badge is positioned
-                absolute, so without a positioned ancestor here it escapes the viewer and lands
-                under the transport bar. */}
-            <div className="relative h-[320px] sm:h-[400px]">
+              </>
+            }
+          />
+          <Panel.Body className="flex flex-col gap-3">
+            <div className="relative h-[300px] sm:h-[400px]">
               {/* No robotId: it would enable the 10 Hz live telemetry channel, which would
                   fight playback for the same joints. Playback owns the pose here. */}
-              <Suspense
-                fallback={
-                  <div className="flex items-center justify-center h-full">
-                    <Spinner size="md" color="cobalt" />
-                  </div>
-                }
-              >
-                <Robot3DViewer robotType={robotType} isAnimating={false} />
+              <Suspense fallback={<Robot3DViewerFallback className="h-full min-h-0" />}>
+                <Robot3DViewer robotType={robotType} isAnimating={false} className="min-h-0" />
               </Suspense>
             </div>
 
             {/* ── Transport bar ── */}
-            <div className="p-3 space-y-2 border-t border-theme">
-              <div className="flex items-center gap-2">
-                <Button
-                              type="button"
-                  size="sm"
-                  variant="primary"
-                  onClick={toggleMotion}
-                  disabled={!transport.clipId}
-                  aria-label={transport.playing ? 'Pause' : 'Play'}
-                >
-                  {transport.playing ? 'Pause' : 'Play'}
-                </Button>
-                <Button
-                              type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => stepMotion(-1)}
-                  disabled={!transport.clipId}
-                  aria-label="Previous frame"
-                  title="Previous frame (←)"
-                  className="px-2 text-xs"
-                >
-                  −1
-                </Button>
-                <Button
-                              type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => stepMotion(1)}
-                  disabled={!transport.clipId}
-                  aria-label="Next frame"
-                  title="Next frame (→)"
-                  className="px-2 text-xs"
-                >
-                  +1
-                </Button>
-                <span className="ml-auto text-xs text-theme-tertiary tabular-nums" data-testid="motion-readout">
-                  {transport.time.toFixed(2)} s · frame{' '}
-                  {transport.frameCount > 0 ? transport.frameIndex + 1 : 0}/{transport.frameCount}
-                </span>
-              </div>
-
-              <input
-                type="range"
-                min={0}
-                max={transport.duration || 1}
-                step={0.01}
-                value={transport.time}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={toggleMotion}
                 disabled={!transport.clipId}
-                onChange={(e) => seekMotion(parseFloat(e.target.value))}
-                aria-label="Playhead"
-                className="w-full accent-cobalt-500 disabled:opacity-40"
-              />
-
-              <p className="text-[11px] text-theme-tertiary">
-                {transport.clipId
-                  ? 'Space play/pause · ← → step one frame'
-                  : 'Select a clip to preview it on the robot model.'}
-              </p>
+                aria-label={transport.playing ? 'Pause' : 'Play'}
+                leftIcon={
+                  transport.playing
+                    ? <Pause className="h-4 w-4" strokeWidth={1.75} />
+                    : <Play className="h-4 w-4" strokeWidth={1.75} />
+                }
+              >
+                {transport.playing ? 'Pause' : 'Play'}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                iconOnly
+                onClick={() => stepMotion(-1)}
+                disabled={!transport.clipId}
+                aria-label="Previous frame"
+                title="Previous frame (←)"
+              >
+                <ChevronLeft className="h-4 w-4" strokeWidth={1.75} />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                iconOnly
+                onClick={() => stepMotion(1)}
+                disabled={!transport.clipId}
+                aria-label="Next frame"
+                title="Next frame (→)"
+              >
+                <ChevronRight className="h-4 w-4" strokeWidth={1.75} />
+              </Button>
+              <span className="ml-auto text-xs tabular-nums text-ink-tertiary" data-testid="motion-readout">
+                {transport.time.toFixed(2)} s · frame{' '}
+                {transport.frameCount > 0 ? transport.frameIndex + 1 : 0}/{transport.frameCount}
+              </span>
             </div>
-          </Card.Body>
-        </Card>
+
+            <input
+              type="range"
+              min={0}
+              max={transport.duration || 1}
+              step={0.01}
+              value={transport.time}
+              disabled={!transport.clipId}
+              onChange={(e) => seekMotion(parseFloat(e.target.value))}
+              aria-label="Playhead"
+              className="w-full accent-[var(--color-primary)] disabled:opacity-40"
+            />
+
+            <p className="text-xs text-ink-tertiary">
+              {transport.clipId
+                ? 'Space play/pause · ← → step one frame'
+                : 'Select a clip to preview it on the robot model.'}
+            </p>
+          </Panel.Body>
+        </Panel>
       </div>
     </div>
   );

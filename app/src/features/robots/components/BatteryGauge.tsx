@@ -2,9 +2,16 @@
  * @file BatteryGauge.tsx
  * @description Visual battery indicator component with level, voltage, and temperature
  * @feature robots
- * @dependencies @/shared/utils/cn
  */
 
+import {
+  BatteryCharging,
+  BatteryFull,
+  BatteryLow,
+  BatteryMedium,
+  PlugZap,
+  Zap,
+} from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 
 // ============================================================================
@@ -36,43 +43,25 @@ export interface BatteryGaugeProps {
 // HELPERS
 // ============================================================================
 
-type BatteryState = 'critical' | 'low' | 'medium' | 'good' | 'full';
+type BatteryState = 'critical' | 'low' | 'ok';
 
 function getBatteryState(level: number): BatteryState {
-  if (level <= 10) return 'critical';
-  if (level <= 25) return 'low';
-  if (level <= 50) return 'medium';
-  if (level <= 80) return 'good';
-  return 'full';
+  if (level <= 15) return 'critical';
+  if (level <= 30) return 'low';
+  return 'ok';
 }
 
+/** Signal tokens: ok = measured, low = unknown (amber), critical = stopped. */
 const BATTERY_COLORS: Record<BatteryState, { fill: string; text: string }> = {
-  critical: { fill: 'bg-red-500', text: 'text-red-500' },
-  low: { fill: 'bg-orange-500', text: 'text-orange-500' },
-  medium: { fill: 'bg-yellow-500', text: 'text-yellow-500' },
-  good: { fill: 'bg-green-500', text: 'text-green-500' },
-  full: { fill: 'bg-green-500', text: 'text-green-500' },
+  critical: { fill: 'bg-signal-stopped', text: 'text-signal-stopped' },
+  low: { fill: 'bg-signal-unknown', text: 'text-signal-unknown' },
+  ok: { fill: 'bg-signal-measured', text: 'text-signal-measured' },
 };
 
 const SIZE_CONFIG = {
-  sm: {
-    container: 'w-10 h-5',
-    terminal: 'w-1 h-2',
-    text: 'text-xs',
-    details: 'text-xs gap-2',
-  },
-  md: {
-    container: 'w-14 h-7',
-    terminal: 'w-1.5 h-3',
-    text: 'text-sm',
-    details: 'text-xs gap-3',
-  },
-  lg: {
-    container: 'w-20 h-10',
-    terminal: 'w-2 h-4',
-    text: 'text-base',
-    details: 'text-sm gap-4',
-  },
+  sm: { container: 'w-9 h-4', terminal: 'w-0.5 h-1.5', text: 'text-xs', icon: 'h-4 w-4' },
+  md: { container: 'w-12 h-6', terminal: 'w-1 h-2.5', text: 'text-sm', icon: 'h-5 w-5' },
+  lg: { container: 'w-16 h-8', terminal: 'w-1 h-3', text: 'text-base', icon: 'h-6 w-6' },
 };
 
 // ============================================================================
@@ -113,138 +102,70 @@ export function BatteryGauge({
   const sizeConfig = SIZE_CONFIG[size];
   const isAcPowered = level === null || powerSource === 'ac_powered';
 
-  // AC-powered: show plug icon instead of battery gauge
   if (isAcPowered) {
     return (
-      <div className={cn('inline-flex flex-col items-center', className)}>
-        <div className="flex items-center gap-1.5">
-          <svg
-            className={cn(
-              'text-green-500',
-              size === 'sm' ? 'h-5 w-5' : size === 'md' ? 'h-7 w-7' : 'h-10 w-10'
-            )}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
-            aria-label="AC Powered"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-          {showPercentage && (
-            <span className={cn('font-medium text-green-500', sizeConfig.text)}>
-              AC
-            </span>
-          )}
-        </div>
-        {showDetails && (
-          <div className={cn('mt-1', sizeConfig.text)}>
-            <span className="text-theme-secondary">AC Powered</span>
-          </div>
+      <div className={cn('inline-flex items-center gap-2', className)}>
+        <PlugZap
+          className={cn('text-signal-measured', sizeConfig.icon)}
+          strokeWidth={1.75}
+          aria-label="AC powered"
+        />
+        {showPercentage && (
+          <span className={cn('font-semibold text-ink-primary', sizeConfig.text)}>AC powered</span>
         )}
       </div>
     );
   }
 
   const clampedLevel = Math.max(0, Math.min(100, level));
-  const state = getBatteryState(clampedLevel);
-  const colors = BATTERY_COLORS[state];
+  const colors = BATTERY_COLORS[getBatteryState(clampedLevel)];
 
   return (
-    <div className={cn('inline-flex flex-col items-center', className)}>
-      {/* Battery Icon */}
-      <div className="flex items-center gap-0.5">
-        {/* Battery Body */}
-        <div
-          className={cn(
-            'relative rounded-sm border-2 border-theme overflow-hidden',
-            sizeConfig.container
-          )}
-          role="meter"
-          aria-valuenow={clampedLevel}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label={`Battery level: ${Math.round(clampedLevel)}%`}
-        >
-          {/* Fill Level */}
+    <div className={cn('inline-flex flex-col gap-1.5', className)}>
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-0.5">
           <div
             className={cn(
-              'absolute inset-y-0 left-0 transition-all duration-500',
-              colors.fill,
-              charging && 'animate-pulse'
+              'relative overflow-hidden rounded-[3px] border border-line-strong bg-inset p-px',
+              sizeConfig.container
             )}
-            style={{ width: `${clampedLevel}%` }}
-          />
-
-          {/* Percentage Label (inside battery) */}
-          {showPercentage && size !== 'sm' && (
-            <span
-              className={cn(
-                'absolute inset-0 flex items-center justify-center font-semibold',
-                sizeConfig.text,
-                clampedLevel > 50 ? 'text-white' : 'text-theme-primary'
-              )}
-            >
-              {Math.round(clampedLevel)}%
-            </span>
-          )}
-
-          {/* Charging Indicator */}
-          {charging && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <svg
-                className={cn(
-                  'text-white drop-shadow-md',
-                  size === 'sm' ? 'h-3 w-3' : size === 'md' ? 'h-4 w-4' : 'h-5 w-5'
-                )}
-                fill="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z" />
-              </svg>
-            </div>
-          )}
+            role="meter"
+            aria-valuenow={clampedLevel}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`Battery level: ${Math.round(clampedLevel)}%`}
+          >
+            <div
+              className={cn('h-full rounded-[2px] transition-[width] duration-500', colors.fill)}
+              style={{ width: `${clampedLevel}%` }}
+            />
+          </div>
+          <div className={cn('rounded-r-sm bg-line-strong', sizeConfig.terminal)} />
         </div>
-
-        {/* Battery Terminal */}
-        <div
-          className={cn(
-            'rounded-r-sm bg-theme-secondary',
-            sizeConfig.terminal
-          )}
-        />
+        {showPercentage && (
+          <span className={cn('font-semibold tabular-nums text-ink-primary', sizeConfig.text)}>
+            {Math.round(clampedLevel)}
+            <span className="ml-0.5 font-normal text-ink-tertiary">%</span>
+          </span>
+        )}
+        {charging && (
+          <Zap className="h-4 w-4 text-signal-measured" strokeWidth={1.75} aria-label="Charging" />
+        )}
       </div>
 
-      {/* Percentage for small size */}
-      {showPercentage && size === 'sm' && (
-        <span className={cn('mt-1 font-medium', sizeConfig.text, colors.text)}>
-          {Math.round(clampedLevel)}%
-        </span>
-      )}
-
-      {/* Details Section */}
-      {showDetails && (
-        <div className={cn('flex items-center mt-2', sizeConfig.details)}>
+      {showDetails && (voltage != null || temperature != null) && (
+        <div className="flex items-center gap-3 text-xs tabular-nums text-ink-secondary">
           {voltage != null && (
-            <div className="flex items-center gap-1 text-theme-secondary">
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-              <span>{voltage.toFixed(1)}V</span>
-            </div>
+            <span>
+              {voltage.toFixed(1)}
+              <span className="ml-0.5 text-ink-tertiary">V</span>
+            </span>
           )}
           {temperature != null && (
-            <div className="flex items-center gap-1 text-theme-secondary">
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                />
-              </svg>
-              <span>{temperature.toFixed(0)}°C</span>
-            </div>
+            <span>
+              {temperature.toFixed(0)}
+              <span className="ml-0.5 text-ink-tertiary">°C</span>
+            </span>
           )}
         </div>
       )}
@@ -275,50 +196,23 @@ export function BatteryIndicator({
   if (isAcPowered) {
     return (
       <div className={cn('inline-flex items-center gap-1.5', className)}>
-        <svg className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-        </svg>
-        <span className="text-sm font-medium text-green-500">AC</span>
+        <PlugZap className="h-4 w-4 text-signal-measured" strokeWidth={1.75} />
+        <span className="text-sm font-medium text-ink-primary">AC</span>
       </div>
     );
   }
 
-  const state = getBatteryState(level);
-  const colors = BATTERY_COLORS[state];
+  const colors = BATTERY_COLORS[getBatteryState(level)];
+  const Icon = level <= 15 ? BatteryLow : level <= 60 ? BatteryMedium : BatteryFull;
 
   return (
     <div className={cn('inline-flex items-center gap-1.5', className)}>
-      {/* Battery icon */}
-      <svg
-        className={cn('h-4 w-4', colors.text)}
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        strokeWidth={2}
-      >
-        <rect x="2" y="7" width="18" height="10" rx="2" />
-        <rect x="20" y="10" width="2" height="4" rx="0.5" className="fill-current" />
-        <rect
-          x="4"
-          y="9"
-          width={`${(level / 100) * 14}`}
-          height="6"
-          rx="1"
-          className={cn('fill-current', charging && 'animate-pulse')}
-        />
-      </svg>
-
-      {/* Percentage */}
-      <span className={cn('text-sm font-medium', colors.text)}>
-        {Math.round(level)}%
-      </span>
-
-      {/* Charging bolt */}
-      {charging && (
-        <svg className="h-3 w-3 text-yellow-500" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z" />
-        </svg>
+      {charging ? (
+        <BatteryCharging className={cn('h-4 w-4', colors.text)} strokeWidth={1.75} />
+      ) : (
+        <Icon className={cn('h-4 w-4', colors.text)} strokeWidth={1.75} />
       )}
+      <span className="text-sm font-medium tabular-nums text-ink-primary">{Math.round(level)}%</span>
     </div>
   );
 }
