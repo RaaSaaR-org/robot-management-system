@@ -9,6 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { fireEvent } from '@testing-library/react';
 import { DatasetViewsSection } from '../DatasetViewsSection';
+import { FeedbackProvider } from '@/shared/components/ui';
 import type { DatasetViewSummary } from '../../types';
 
 function makeView(over: Partial<DatasetViewSummary> = {}): DatasetViewSummary {
@@ -57,8 +58,9 @@ describe('the Views section', () => {
       />,
     );
     expect(screen.getByTestId('view-frozen-view-1')).toHaveTextContent('Frozen');
-    expect(screen.getByTestId('view-duplicate-view-1')).toBeInTheDocument();
-    expect(screen.queryByTestId('view-delete-view-1')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Clean takes only' }));
+    expect(screen.getByRole('menuitem', { name: 'Duplicate' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Delete' })).not.toBeInTheDocument();
   });
 
   it('shows the server’s reason when an action is refused', async () => {
@@ -71,12 +73,15 @@ describe('the Views section', () => {
       message: 'Frozen: training job job-7 cites this selection',
     });
     render(
-      <DatasetViewsSection parentEpisodeCount={400} views={[makeView()]} onDelete={onDelete} />,
+      <FeedbackProvider>
+        <DatasetViewsSection parentEpisodeCount={400} views={[makeView()]} onDelete={onDelete} />
+      </FeedbackProvider>,
     );
-    fireEvent.click(screen.getByTestId('view-delete-view-1'));
-    await waitFor(() =>
-      expect(screen.getByTestId('views-row-error')).toHaveTextContent('job-7'),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Clean takes only' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.getByText("Couldn't delete view")).toBeInTheDocument());
+    expect(screen.getByText(/job-7/)).toBeInTheDocument();
   });
 
   it('says a dataset has no views instead of showing an empty box', () => {

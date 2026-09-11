@@ -8,18 +8,18 @@
  *
  * The verdict is not a severity scale. `multi_embodiment` means the datasets
  * have different action spaces and must be trained as a mixture with
- * per-embodiment projectors rather than concatenated — that is a supported way
- * to train, and it is coloured like an answer rather than like a warning.
- * `incompatible` is the only verdict that stops anything.
+ * per-embodiment projectors rather than concatenated — a supported way to
+ * train, so it reads as information, not as a warning. `incompatible` is the
+ * only verdict that stops anything.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Info, Layers } from 'lucide-react';
-import { Spinner, Button } from '@/shared/components/ui';
+import { ErrorState, SkeletonText, StatusTag, type StatusTagTone } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
+import { getErrorMessage } from '@/shared/utils';
 import { trainingApi } from '../api';
 import type { AxisVerdict, CompatibilityReport, CompatibilityVerdict } from '../types';
-import { getErrorMessage } from '@/shared/utils';
 
 export interface DatasetCompatibilityPanelProps {
   datasetIds: string[];
@@ -28,51 +28,37 @@ export interface DatasetCompatibilityPanelProps {
   className?: string;
 }
 
-const verdictStyles: Record<CompatibilityVerdict, { box: string; label: string; icon: typeof Info }> = {
-  identical: {
-    box: 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-300',
-    label: 'Concatenable',
-    icon: CheckCircle2,
-  },
-  compatible: {
-    box: 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-300',
-    label: 'Compatible',
-    icon: CheckCircle2,
-  },
-  multi_embodiment: {
-    box: 'border-cobalt-500/40 bg-cobalt-500/10 text-cobalt-700 dark:text-cobalt-300',
-    label: 'Multi-embodiment mixture',
-    icon: Layers,
-  },
-  incompatible: {
-    box: 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300',
-    label: 'Cannot be trained together',
-    icon: AlertTriangle,
-  },
+type VerdictTone = 'success' | 'info' | 'danger';
+
+const VERDICT: Record<CompatibilityVerdict, { tone: VerdictTone; label: string; icon: typeof Info }> = {
+  identical: { tone: 'success', label: 'Concatenable', icon: CheckCircle2 },
+  compatible: { tone: 'success', label: 'Compatible', icon: CheckCircle2 },
+  multi_embodiment: { tone: 'info', label: 'Multi-embodiment mixture', icon: Layers },
+  incompatible: { tone: 'danger', label: 'Cannot be trained together', icon: AlertTriangle },
 };
 
-const axisVerdictStyles: Record<AxisVerdict, { chip: string; label: string }> = {
-  match: { chip: 'bg-green-500/10 text-green-600 dark:text-green-400', label: 'Same' },
-  // Cobalt, not amber: on a multi-embodiment mixture a differing axis is the
-  // reason the mixture exists, not something that went wrong.
-  differs: { chip: 'bg-cobalt-500/10 text-cobalt-600 dark:text-cobalt-400', label: 'Differs' },
-  blocking: { chip: 'bg-red-500/10 text-red-600 dark:text-red-400', label: 'Blocking' },
+const TONE_BOX: Record<VerdictTone, string> = {
+  success: 'border-signal-measured/40 text-signal-measured',
+  info: 'border-signal-estimated/40 text-ink-primary',
+  danger: 'border-signal-stopped/40 text-signal-stopped',
 };
 
-export function DatasetCompatibilityPanel({
-  datasetIds,
-  onReport,
-  className,
-}: DatasetCompatibilityPanelProps) {
+// A differing axis on a mixture is the reason the mixture exists, so it is
+// information (info), not a warning.
+const AXIS: Record<AxisVerdict, { tone: StatusTagTone; label: string }> = {
+  match: { tone: 'success', label: 'Same' },
+  differs: { tone: 'info', label: 'Differs' },
+  blocking: { tone: 'danger', label: 'Blocking' },
+};
+
+export function DatasetCompatibilityPanel({ datasetIds, onReport, className }: DatasetCompatibilityPanelProps) {
   const [report, setReport] = useState<CompatibilityReport | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Held in a ref so a parent that passes an inline arrow does not re-run the
-  // request on every one of its renders.
+  // A ref so a parent passing an inline arrow does not re-run the request.
   const onReportRef = useRef(onReport);
   onReportRef.current = onReport;
-
   const key = datasetIds.join(',');
 
   const load = useCallback(async (ids: string[]) => {
@@ -93,48 +79,33 @@ export function DatasetCompatibilityPanel({
 
   useEffect(() => {
     const ids = key ? key.split(',') : [];
-    if (ids.length === 0) {
-      setReport(null);
-      return;
-    }
+    if (ids.length === 0) { setReport(null); return; }
     void load(ids);
   }, [key, load]);
 
   if (isLoading) {
     return (
-      <div className={cn('flex items-center gap-3 py-6', className)}>
-        <Spinner size="sm" />
-        <span className="text-sm text-theme-secondary">Comparing datasets…</span>
+      <div className={cn('flex flex-col gap-2 py-2', className)} aria-busy="true">
+        <p className="text-sm text-ink-secondary">Comparing datasets…</p>
+        <SkeletonText lines={4} />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div
-        data-testid="compatibility-error"
-        className={cn('rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400', className)}
-      >
-        <p>{error}</p>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mt-2"
-          onClick={() => void load(key.split(','))}
-        >
-          Try again
-        </Button>
+      <div data-testid="compatibility-error" className={className}>
+        <ErrorState size="sm" title="Couldn't compare these datasets" message={error} retryLabel="Try again" onRetry={() => void load(key.split(','))} />
       </div>
     );
   }
 
   if (!report) return null;
 
-  const style = verdictStyles[report.verdict] ?? verdictStyles.incompatible;
-  const VerdictIcon = style.icon;
+  const verdict = VERDICT[report.verdict] ?? VERDICT.incompatible;
+  const VerdictIcon = verdict.icon;
 
-  // Column order comes from the first axis that names every dataset, so the
-  // table reads in the order the report was built in rather than in id order.
+  // Column order from the first axis that names every dataset.
   const columns: Array<{ datasetId: string; datasetName: string }> = [];
   for (const axis of report.axes) {
     for (const value of axis.values) {
@@ -145,75 +116,44 @@ export function DatasetCompatibilityPanel({
   }
 
   return (
-    <div data-testid="compatibility-panel" className={cn('space-y-4', className)}>
-      <div className={cn('rounded-lg border p-4', style.box)}>
-        <div className="flex items-start gap-3">
-          <VerdictIcon className="mt-0.5 h-5 w-5 shrink-0" />
-          <div className="min-w-0">
-            <p data-testid="compatibility-verdict" className="text-xs font-semibold uppercase tracking-wide opacity-80">
-              {style.label}
-            </p>
-            <p data-testid="compatibility-headline" className="mt-1 text-base font-medium">
-              {report.headline}
-            </p>
-            <p data-testid="compatibility-recommendation" className="mt-2 text-sm opacity-90">
-              {report.recommendation}
-            </p>
-          </div>
+    <div data-testid="compatibility-panel" className={cn('flex flex-col gap-4', className)}>
+      <div data-tone={verdict.tone} className={cn('flex items-start gap-3 rounded-panel border bg-inset p-4', TONE_BOX[verdict.tone])}>
+        <VerdictIcon className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.75} />
+        <div className="min-w-0">
+          <p data-testid="compatibility-verdict" className="text-xs font-semibold">{verdict.label}</p>
+          <p data-testid="compatibility-headline" className="mt-1 text-base font-medium text-ink-primary">{report.headline}</p>
+          <p data-testid="compatibility-recommendation" className="mt-2 text-sm text-ink-secondary">{report.recommendation}</p>
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto rounded-panel border border-line">
         <table className="w-full min-w-[32rem] border-collapse text-sm">
           <thead>
-            <tr className="border-b border-theme-secondary/20 text-left">
-              <th scope="col" className="py-2 pr-3 font-medium text-theme-tertiary">Axis</th>
-              {columns.map((column) => (
-                <th
-                  key={column.datasetId}
-                  scope="col"
-                  className="py-2 pr-3 font-medium text-theme-primary"
-                >
-                  {column.datasetName}
-                </th>
+            <tr className="border-b border-line bg-inset text-left">
+              <th scope="col" className="px-3 py-2 text-xs font-medium text-ink-tertiary">Axis</th>
+              {columns.map((c) => (
+                <th key={c.datasetId} scope="col" className="px-3 py-2 text-xs font-medium text-ink-primary">{c.datasetName}</th>
               ))}
-              <th scope="col" className="py-2 font-medium text-theme-tertiary">Verdict</th>
+              <th scope="col" className="px-3 py-2 text-xs font-medium text-ink-tertiary">Verdict</th>
             </tr>
           </thead>
           <tbody>
             {report.axes.map((axis) => (
-              <tr
-                key={axis.axis}
-                data-testid={`compatibility-axis-${axis.axis}`}
-                className="border-b border-theme-secondary/10 align-top"
-              >
-                <th scope="row" className="py-2 pr-3 text-left font-normal text-theme-secondary">
+              <tr key={axis.axis} data-testid={`compatibility-axis-${axis.axis}`} className="border-b border-line-subtle align-top last:border-0">
+                <th scope="row" className="px-3 py-2 text-left font-normal text-ink-secondary">
                   {axis.label}
-                  <p className="mt-0.5 text-xs text-theme-tertiary">{axis.note}</p>
+                  <p className="mt-0.5 text-xs text-ink-tertiary">{axis.note}</p>
                 </th>
-                {columns.map((column) => {
-                  const cell = axis.values.find((v) => v.datasetId === column.datasetId);
+                {columns.map((c) => {
+                  const cell = axis.values.find((v) => v.datasetId === c.datasetId);
                   return (
-                    <td
-                      key={column.datasetId}
-                      className={cn(
-                        'py-2 pr-3 font-mono text-xs',
-                        axis.verdict === 'match' ? 'text-theme-secondary' : 'text-theme-primary font-medium'
-                      )}
-                    >
+                    <td key={c.datasetId} className={cn('px-3 py-2 tabular-nums', axis.verdict === 'match' ? 'text-ink-secondary' : 'font-medium text-ink-primary')}>
                       {cell ? cell.value : '—'}
                     </td>
                   );
                 })}
-                <td className="py-2">
-                  <span
-                    className={cn(
-                      'inline-flex rounded px-1.5 py-0.5 text-xs font-medium',
-                      axisVerdictStyles[axis.verdict].chip
-                    )}
-                  >
-                    {axisVerdictStyles[axis.verdict].label}
-                  </span>
+                <td className="px-3 py-2">
+                  <StatusTag tone={AXIS[axis.verdict].tone} size="sm">{AXIS[axis.verdict].label}</StatusTag>
                 </td>
               </tr>
             ))}

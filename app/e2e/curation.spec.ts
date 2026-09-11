@@ -2,7 +2,8 @@
  * @file curation.spec.ts
  * @description Functional tests for the episode curation panel (TASK-168):
  *   trim / delete flows (new-dataset outcome), and the AI-suggest flow
- *   (suggestions render, Apply prefills the trim inputs, delete needs confirm).
+ *   (suggestions render, Apply prefills the trim inputs, delete needs the
+ *   kit ConfirmDialog).
  *   Runs against the demo build (MSW handlers in src/mocks/handlers.ts).
  */
 import { test, expect } from '@playwright/test';
@@ -46,26 +47,26 @@ test.describe('Curation panel', () => {
   });
 
   test('delete flow asks for confirmation and reports the new revision', async ({ page }) => {
-    let dialogMessage = '';
-    page.once('dialog', (dialog) => {
-      dialogMessage = dialog.message();
-      void dialog.accept();
-    });
-
     await page.getByTestId('curate-delete').click();
+
+    // The kit's ConfirmDialog (role alertdialog), not window.confirm.
+    const dialog = page.getByRole('alertdialog');
+    await expect(dialog).toContainText('Delete episode 0');
+    await dialog.getByRole('button', { name: 'Delete' }).click();
 
     const message = page.getByTestId('curation-message');
     await expect(message).toBeVisible({ timeout: 5_000 });
     await expect(message).toContainText('Deleted');
     await expect(message).toContainText('new dataset');
-    expect(dialogMessage).toContain('Delete episode 0');
     await expect(page.getByTestId('curate-open-new')).toBeVisible();
   });
 
   test('delete flow does nothing when the confirmation is dismissed', async ({ page }) => {
-    page.once('dialog', (dialog) => void dialog.dismiss());
-
     await page.getByTestId('curate-delete').click();
+    const dialog = page.getByRole('alertdialog');
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toHaveCount(0);
 
     await expect(page.getByTestId('curation-message')).toHaveCount(0);
     await expect(page.getByTestId('curate-open-new')).toHaveCount(0);
@@ -97,18 +98,14 @@ test.describe('Curation panel', () => {
     await page.getByTestId('curate-suggest').click();
     await expect(page.getByTestId('curate-suggestions')).toBeVisible({ timeout: 5_000 });
 
-    let dialogMessage = '';
-    page.once('dialog', (dialog) => {
-      dialogMessage = dialog.message();
-      void dialog.accept();
-    });
-
     // suggestion index 1 is the delete for episode 3
     await page.getByTestId('suggest-apply-1').click();
+    const dialog = page.getByRole('alertdialog');
+    await expect(dialog).toContainText('Delete episode 3');
+    await dialog.getByRole('button', { name: 'Delete' }).click();
 
     const message = page.getByTestId('curation-message');
     await expect(message).toContainText('Deleted', { timeout: 5_000 });
-    expect(dialogMessage).toContain('Delete episode 3');
     // applied suggestion is removed from the list (2 remain)
     await expect(page.getByTestId('curate-suggestion-2')).toHaveCount(0);
     await expect(page.getByTestId('curate-suggestion-1')).toContainText('trim');

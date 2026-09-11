@@ -5,8 +5,8 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { AlertTriangle, CameraOff, CheckCircle2, XCircle } from 'lucide-react';
-import { Modal, Button, Input, ProgressBar, Spinner } from '@/shared/components/ui';
+import { AlertTriangle, CameraOff, CheckCircle2, UploadCloud, XCircle } from 'lucide-react';
+import { Button, FormField, Input, Modal, Panel, ProgressBar, Select, Spinner, Textarea, toast } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { getErrorMessage } from '@/shared/utils/error';
@@ -78,6 +78,7 @@ export function DatasetUploadModal({
   const uploading = useRef(false);
   const [busy, setBusy] = useState(false);
   const [pollOutcome, setPollOutcome] = useState<PollResult | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; robotTypeId?: string }>({});
 
   // The select had no source. `robotTypes` defaults to `[]`, `DatasetsPage`
   // never passed it, and `robotTypeId` is required — so the modal could not be
@@ -128,6 +129,7 @@ export function DatasetUploadModal({
     setFile(null);
     setUploadProgress(0);
     setError(null);
+    setFieldErrors({});
     setValidated(null);
     setDatasetId(null); // eslint-disable-line @typescript-eslint/no-unused-vars
   }, []);
@@ -190,10 +192,12 @@ export function DatasetUploadModal({
   };
 
   const handleMetadataSubmit = useCallback(async () => {
-    if (!form.name || !form.robotTypeId) {
-      setError('Please fill in all required fields');
-      return;
-    }
+    const errors = {
+      name: form.name.trim() ? undefined : 'Give the dataset a name.',
+      robotTypeId: form.robotTypeId ? undefined : 'Pick the robot the episodes were recorded on.',
+    };
+    setFieldErrors(errors);
+    if (errors.name || errors.robotTypeId) return;
 
     setError(null);
     setStep('upload');
@@ -343,278 +347,192 @@ export function DatasetUploadModal({
   }, [file, form, pollValidation]);
 
   const handleComplete = useCallback(() => {
+    if (validated?.status === 'ready') toast.success('Dataset uploaded', { description: validated.name });
     onSuccess?.();
     handleClose();
-  }, [onSuccess, handleClose]);
+  }, [onSuccess, handleClose, validated]);
+
+  const STEP_LABEL: Record<Step, string> = {
+    metadata: 'Details',
+    upload: 'File',
+    validating: 'Validation',
+    complete: 'Result',
+  };
+  const stepIndex = (['metadata', 'upload', 'validating', 'complete'] as Step[]).indexOf(step);
+
+  const footer = (
+    <>
+      {step !== 'complete' && <Button variant="ghost" onClick={handleClose}>Cancel</Button>}
+      {step === 'metadata' && <Button type="submit">Continue</Button>}
+      {/* Disabled while an upload runs: a second click created a second row. */}
+      {step === 'upload' && (
+        <Button type="submit" disabled={busy} isLoading={busy} loadingText="Uploading…">Upload</Button>
+      )}
+      {step === 'complete' && <Button onClick={handleComplete}>Done</Button>}
+    </>
+  );
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Upload Dataset" size="lg">
-      <div className="space-y-6">
-        {/* Step indicator */}
-        <div className="flex items-center justify-center gap-2 text-sm">
-          {(['metadata', 'upload', 'validating', 'complete'] as Step[]).map((s, i) => (
-            <div key={s} className="flex items-center gap-2">
-              <div
-                className={cn(
-                  'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
-                  step === s
-                    ? 'bg-primary text-on-primary'
-                    : i < ['metadata', 'upload', 'validating', 'complete'].indexOf(step)
-                      ? 'bg-green-500 text-white'
-                      : 'bg-theme-secondary/20 text-theme-secondary'
-                )}
-              >
-                {i + 1}
-              </div>
-              {i < 3 && <div className="w-8 h-0.5 bg-theme-secondary/20" />}
-            </div>
-          ))}
-        </div>
-
-        {/* Step content */}
+    <Modal
+      isOpen={isOpen}
+      onClose={handleClose}
+      title="Upload dataset"
+      description={`Step ${stepIndex + 1} of 4 · ${STEP_LABEL[step]}`}
+      size="lg"
+      closeOnBackdrop={false}
+      onSubmit={step === 'metadata' || step === 'upload' ? (e) => { e.preventDefault(); void (step === 'metadata' ? handleMetadataSubmit() : handleUpload()); } : undefined}
+      noValidate
+      footer={footer}
+    >
+      <div className="flex flex-col gap-4">
         {step === 'metadata' && (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-theme-primary mb-1">
-                Dataset Name *
-              </label>
+          <>
+            <FormField label="Name" required error={fieldErrors.name}>
               <Input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="e.g., pick-and-place-v1"
               />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-theme-primary mb-1">
-                Description
-              </label>
-              <textarea
+            </FormField>
+            <FormField label="Description" aside="Optional">
+              <Textarea
+                rows={3}
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
-                placeholder="Describe the dataset..."
-                className="w-full px-3 py-2 rounded-brand border border-theme-secondary/30 bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
-                rows={3}
+                placeholder="What was recorded, and how"
               />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-theme-primary mb-1">
-                Robot Type *
-              </label>
-              <select
+            </FormField>
+            <FormField label="Robot type" required error={fieldErrors.robotTypeId}>
+              <Select
+                placeholder="Select robot type…"
                 value={form.robotTypeId}
                 onChange={(e) => setForm({ ...form, robotTypeId: e.target.value })}
-                className="w-full px-3 py-2 rounded-brand border border-theme-secondary/30 bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
-              >
-                <option value="">Select robot type...</option>
-                {availableTypes.map((rt) => (
-                  <option key={rt.id} value={rt.id}>
-                    {rt.name} ({rt.manufacturer})
-                  </option>
-                ))}
-              </select>
-              {/* An empty select in front of a required field is a dead end.
-                  Say which kind it is, because they need different actions. */}
-              {typesLoading && noTypes && (
-                <p className="mt-1 text-sm text-theme-secondary">Loading robot types…</p>
-              )}
-              {!typesLoading && typesFailed && (
-                <p
-                  data-testid="robot-types-error"
-                  className="mt-1 flex items-center gap-2 text-sm text-red-600 dark:text-red-400"
-                >
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  <span>Could not load robot types{typesError ? `: ${typesError}` : '.'}</span>
-                  <button
-                    type="button"
-                    className="underline"
-                    onClick={() => setTypesAttempt((n) => n + 1)}
-                  >
-                    Retry
-                  </button>
-                </p>
-              )}
-              {!typesLoading && !typesFailed && noTypes && (
-                <p data-testid="robot-types-empty" className="mt-1 text-sm text-theme-secondary">
-                  No robot types are registered yet — one has to exist before a dataset can name it.
-                </p>
-              )}
-            </div>
-          </div>
+                options={availableTypes.map((rt) => ({ value: rt.id, label: `${rt.name} (${rt.manufacturer})` }))}
+              />
+            </FormField>
+            {/* An empty select in front of a required field is a dead end. Say which kind. */}
+            {typesLoading && noTypes && <p className="text-sm text-ink-secondary">Loading robot types…</p>}
+            {!typesLoading && typesFailed && (
+              <p data-testid="robot-types-error" className="flex flex-wrap items-center gap-2 text-sm text-signal-stopped">
+                <AlertTriangle className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+                <span>Could not load robot types{typesError ? `: ${typesError}` : '.'}</span>
+                <Button variant="ghost" size="sm" onClick={() => setTypesAttempt((n) => n + 1)}>Retry</Button>
+              </p>
+            )}
+            {!typesLoading && !typesFailed && noTypes && (
+              <p data-testid="robot-types-empty" className="text-sm text-ink-secondary">
+                No robot types are registered yet — one has to exist before a dataset can name it.
+              </p>
+            )}
+          </>
         )}
 
         {step === 'upload' && (
-          <div className="space-y-4">
-            <div
+          <>
+            <button
+              type="button"
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
               className={cn(
-                'border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors',
-                isDragging
-                  ? 'border-cobalt-500 bg-cobalt-500/10'
-                  : 'border-theme-secondary/30 hover:border-cobalt-500/50'
+                'flex flex-col items-center gap-1 rounded-panel border-2 border-dashed p-8 text-center transition-colors',
+                isDragging ? 'border-primary bg-primary/10' : 'border-line hover:border-line-strong',
               )}
             >
-              <input
-                ref={fileInputRef}
-                type="file"
-                onChange={handleFileSelect}
-                accept=".tar.gz,.tgz,.zip"
-                className="hidden"
-              />
-
+              <UploadCloud className="mb-1 h-6 w-6 text-ink-tertiary" strokeWidth={1.75} />
               {file ? (
-                <div>
-                  <p className="font-medium text-theme-primary">{file.name}</p>
-                  <p className="text-sm text-theme-secondary mt-1">
-                    {formatFileSize(file.size)}
-                  </p>
-                </div>
+                <>
+                  <span className="text-sm font-medium text-ink-primary">{file.name}</span>
+                  <span className="text-xs text-ink-tertiary">{formatFileSize(file.size)} · click to pick another</span>
+                </>
               ) : (
-                <div>
-                  <p className="text-theme-primary">
-                    Drag and drop your dataset here, or click to browse
-                  </p>
-                  <p className="text-sm text-theme-secondary mt-1">
-                    Supports .tar.gz and .zip files (LeRobot v3 format)
-                  </p>
-                </div>
+                <>
+                  <span className="text-sm text-ink-primary">Drop the archive here, or click to browse</span>
+                  <span className="text-xs text-ink-tertiary">.tar.gz or .zip in LeRobot v3 format</span>
+                </>
               )}
-            </div>
-
+            </button>
+            <input ref={fileInputRef} type="file" onChange={handleFileSelect} accept=".tar.gz,.tgz,.zip" className="hidden" />
             {uploadProgress > 0 && (
-              <div>
-                <div className="flex justify-between text-sm mb-1">
-                  {/* At 100% the bytes are sent and the server is unpacking.
-                      Hiding the bar there left the modal looking idle for the
-                      whole time the work was actually happening. */}
-                  <span>{uploadProgress < 100 ? 'Uploading...' : 'Uploaded — unpacking on the server...'}</span>
-                  <span>{uploadProgress}%</span>
-                </div>
-                <ProgressBar value={uploadProgress} />
-              </div>
+              <ProgressBar
+                value={uploadProgress}
+                label={uploadProgress < 100 ? 'Uploading…' : 'Uploaded — unpacking on the server…'}
+              />
             )}
-          </div>
+          </>
         )}
 
         {step === 'validating' && (
-          <div className="text-center py-8">
-            <Spinner size="lg" />
-            <p className="mt-4 text-theme-primary">Validating dataset...</p>
-            <p className="text-sm text-theme-secondary mt-1">
-              Checking LeRobot format and computing statistics
-            </p>
+          <div className="flex flex-col items-center gap-2 py-8 text-center">
+            <Spinner size="lg" color="primary" />
+            <p className="text-sm font-medium text-ink-primary">Validating dataset…</p>
+            <p className="text-sm text-ink-secondary">Checking LeRobot format and computing statistics.</p>
           </div>
         )}
 
         {step === 'complete' && (
-          <div className="py-8">
-            {/* What the server ACTUALLY found. This step used to show a green
-                tick and "will be ready for training soon" unconditionally, two
-                seconds after the upload, including for a dataset that had just
-                failed validation — and before TASK-217 the upload path could
-                not succeed at all, so that was the only thing it ever showed. */}
-            {pollOutcome?.kind === 'unreachable' ? (
-              /* Never read the status even once. A green tick here asserts
-                 something no reply ever said — it was what the modal showed
-                 through 61 consecutive HTTP 500s. */
-              <div className="text-center" data-testid="upload-status-unknown">
-                <div className="w-16 h-16 bg-amber-100 dark:bg-amber-500/15 rounded-full flex items-center justify-center mx-auto">
-                  <AlertTriangle className="w-8 h-8 text-amber-600 dark:text-amber-400" />
-                </div>
-                <p className="mt-4 text-lg font-medium text-theme-primary">
-                  Uploaded — could not read the validation status
-                </p>
-                <p className="text-sm text-theme-secondary mt-1">
-                  The file is on the server. {pollOutcome.message}
-                </p>
-              </div>
-            ) : validated?.status === 'failed' ? (
-              <div className="text-center" data-testid="upload-failed">
-                <div className="w-16 h-16 bg-red-100 dark:bg-red-500/15 rounded-full flex items-center justify-center mx-auto">
-                  <XCircle className="w-8 h-8 text-red-600 dark:text-red-400" />
-                </div>
-                <p className="mt-4 text-lg font-medium text-theme-primary">
-                  Uploaded, but it did not validate
-                </p>
-                <p className="text-sm text-theme-secondary mt-1">
-                  The files are on the server; the dataset cannot be trained on as it stands.
-                </p>
-                {validated.validation?.errors.length ? (
-                  <ul className="mt-4 text-left text-sm text-red-700 dark:text-red-300 space-y-1 max-h-40 overflow-y-auto">
-                    {validated.validation.errors.slice(0, 6).map((finding) => (
-                      <li key={`${finding.code}-${finding.message}`} className="flex items-start gap-2">
-                        <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                        <span className="break-words">{finding.message}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ) : (
-              <div className="text-center" data-testid="upload-complete">
-                <div className="w-16 h-16 bg-green-100 dark:bg-green-500/15 rounded-full flex items-center justify-center mx-auto">
-                  <CheckCircle2 className="w-8 h-8 text-green-600 dark:text-green-400" />
-                </div>
-                <p className="mt-4 text-lg font-medium text-theme-primary">
-                  {validated?.status === 'ready' ? 'Dataset uploaded and validated' : 'Dataset uploaded'}
-                </p>
-                <p className="text-sm text-theme-secondary mt-1">
-                  {validated?.status === 'ready'
-                    ? `${validated.demonstrationCount} ${validated.demonstrationCount === 1 ? 'episode' : 'episodes'}, `
-                      + `${validated.totalFrames.toLocaleString(UI_DATE_LOCALE)} frames.`
-                    : 'Still validating — it will finish in the background.'}
-                </p>
-                {validated?.validation?.warnings.some((w) => w.code === 'NO_IMAGE_FEATURES') && (
-                  <div
-                    data-testid="upload-no-images"
-                    className="mt-4 flex items-start gap-2 rounded-md bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-left text-sm text-amber-800 dark:text-amber-300"
-                  >
-                    <CameraOff className="h-4 w-4 shrink-0 mt-0.5" />
-                    <span>
-                      No camera features. A vision-language-action policy cannot train on this —
-                      training fails with &ldquo;All image features are missing from the batch&rdquo;.
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          /* What the server ACTUALLY found — never a green tick it did not say. */
+          pollOutcome?.kind === 'unreachable' ? (
+            <ResultBlock testId="upload-status-unknown" icon={<AlertTriangle className="h-8 w-8 text-signal-estimated" strokeWidth={1.75} />}
+              title="Uploaded — could not read the validation status"
+              text={`The file is on the server. ${pollOutcome.message}`} />
+          ) : validated?.status === 'failed' ? (
+            <ResultBlock testId="upload-failed" icon={<XCircle className="h-8 w-8 text-signal-stopped" strokeWidth={1.75} />}
+              title="Uploaded, but it did not validate"
+              text="The files are on the server; the dataset cannot be trained on as it stands.">
+              {validated.validation?.errors.length ? (
+                <ul className="mt-2 flex max-h-40 flex-col gap-1 overflow-y-auto text-left text-sm text-ink-secondary">
+                  {validated.validation.errors.slice(0, 6).map((finding) => (
+                    <li key={`${finding.code}-${finding.message}`} className="flex items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-signal-stopped" strokeWidth={1.75} />
+                      <span className="break-words">{finding.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </ResultBlock>
+          ) : (
+            <ResultBlock testId="upload-complete" icon={<CheckCircle2 className="h-8 w-8 text-signal-measured" strokeWidth={1.75} />}
+              title={validated?.status === 'ready' ? 'Dataset uploaded and validated' : 'Dataset uploaded'}
+              text={validated?.status === 'ready'
+                ? `${validated.demonstrationCount} ${validated.demonstrationCount === 1 ? 'episode' : 'episodes'}, `
+                  + `${validated.totalFrames.toLocaleString(UI_DATE_LOCALE)} frames.`
+                : 'Still validating — it will finish in the background.'}>
+              {validated?.validation?.warnings.some((w) => w.code === 'NO_IMAGE_FEATURES') && (
+                <Panel variant="inset" padding="sm" data-testid="upload-no-images" className="mt-2 flex items-start gap-2 text-left text-sm text-ink-secondary">
+                  <CameraOff className="mt-0.5 h-4 w-4 shrink-0 text-signal-estimated" strokeWidth={1.75} />
+                  <span>
+                    No camera features. A vision-language-action policy cannot train on this —
+                    training fails with &ldquo;All image features are missing from the batch&rdquo;.
+                  </span>
+                </Panel>
+              )}
+            </ResultBlock>
+          )
         )}
 
-        {/* Error message */}
-        {error && (
-          <div className="p-3 bg-red-100 text-red-700 rounded-lg text-sm">{error}</div>
-        )}
-
-        {/* Actions */}
-        <div className="flex justify-end gap-3">
-          {step !== 'complete' && (
-            <Button variant="ghost" onClick={handleClose}>
-              Cancel
-            </Button>
-          )}
-
-          {step === 'metadata' && (
-            <Button onClick={handleMetadataSubmit}>Continue</Button>
-          )}
-
-          {/* The Upload button is disabled while an upload is running. It
-              stayed enabled through the whole server-side unpack, and clicking
-              it again created a second Dataset row and re-uploaded the file. */}
-          {step === 'upload' && (
-            <Button onClick={handleUpload} disabled={busy} isLoading={busy}>
-              Upload
-            </Button>
-          )}
-
-          {step === 'complete' && <Button onClick={handleComplete}>Done</Button>}
-        </div>
+        {error && <p role="alert" className="text-sm text-signal-stopped">{error}</p>}
       </div>
     </Modal>
+  );
+}
+
+/** Centered result of the upload: icon, headline, one sentence, details. */
+function ResultBlock({ testId, icon, title, text, children }: {
+  testId: string;
+  icon: React.ReactNode;
+  title: string;
+  text: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div data-testid={testId} className="flex flex-col items-center gap-2 py-6 text-center">
+      {icon}
+      <p className="text-base font-medium text-ink-primary">{title}</p>
+      <p className="text-sm text-ink-secondary">{text}</p>
+      {children}
+    </div>
   );
 }
 

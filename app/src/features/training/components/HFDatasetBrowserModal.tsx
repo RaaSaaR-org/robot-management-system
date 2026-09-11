@@ -12,8 +12,12 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Modal, Button, Input, ProgressBar, Spinner, Tabs, ToggleChip } from '@/shared/components/ui';
-import type { Tab } from '@/shared/components/ui';
+import { CheckCircle2, Search, XCircle } from 'lucide-react';
+import {
+  Button, Checkbox, DataTable, EmptyState, FormField, Input, KeyValueList, Modal, Panel, ProgressBar, Select,
+  SkeletonRows, SkeletonText, Spinner, StatusTag, Tabs, ToggleChip, toast,
+} from '@/shared/components/ui';
+import type { DataTableColumn, Tab } from '@/shared/components/ui';
 import { getWebSocketUrl } from '@/shared/utils/websocket';
 import { trainingApi } from '../api';
 import type {
@@ -425,9 +429,10 @@ export function HFDatasetBrowserModal({
   }, [pendingRepoId, revision, robotTypeId, includeVideos, openSocket, applyMessage, closeSocket]);
 
   const handleDone = useCallback(() => {
+    toast.success('Dataset imported', { description: pendingRepoId ?? undefined });
     onSuccess?.();
     handleClose();
-  }, [onSuccess, handleClose]);
+  }, [onSuccess, handleClose, pendingRepoId]);
 
   // Cleanup WebSocket on unmount
   useEffect(() => {
@@ -438,98 +443,82 @@ export function HFDatasetBrowserModal({
 
   const isImporting = importState === 'importing';
 
+  const isDatasetImported = useCallback(
+    (repoId: string) => existingDatasets.some((d) => d.huggingFaceRepoId === repoId),
+    [existingDatasets],
+  );
+
   const searchTab = (
-    <div className="space-y-4">
-      <div className="flex gap-2">
-        <Input
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder='Search Hub datasets (e.g. "AppleToPlate")'
-          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-          fullWidth
-        />
-        <Button
-          onClick={handleSearch}
-          isLoading={isSearching}
-          className="shrink-0"
-        >
-          Search
-        </Button>
-      </div>
-
-      <ToggleChip
-        active={lerobotOnly}
-        onClick={() => setLerobotOnly((v) => !v)}
-        title="Restrict results to repos tagged `lerobot` on the Hub"
+    <div className="flex flex-col gap-4">
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(e) => { e.preventDefault(); void handleSearch(); }}
       >
-        LeRobot-tagged only
-      </ToggleChip>
-
-      {searchError && (
-        <div className="p-3 bg-red-100 text-red-700 rounded-lg text-sm">
-          {searchError}
+        <div className="min-w-48 flex-1">
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder='Search Hub datasets (e.g. "AppleToPlate")'
+            aria-label="Search the Hub"
+            fullWidth
+          />
         </div>
-      )}
+        <Button type="submit" variant="secondary" isLoading={isSearching}>Search</Button>
+        <ToggleChip
+          active={lerobotOnly}
+          onClick={() => setLerobotOnly((v) => !v)}
+          title="Restrict results to repos tagged lerobot on the Hub"
+        >
+          LeRobot-tagged only
+        </ToggleChip>
+      </form>
 
-      {isSearching && (
-        <div className="flex justify-center py-8">
-          <Spinner size="lg" />
-        </div>
-      )}
-
+      {searchError && <p role="alert" className="text-sm text-signal-stopped">{searchError}</p>}
+      {isSearching && <SkeletonRows rows={4} columns={2} dense />}
       {!isSearching && searchWidened && (
-        <p data-testid="search-widened" className="text-sm text-theme-secondary">
-          No repository carries the <span className="font-mono">lerobot</span> tag for this
-          search, so these are unfiltered Hub results — check each one is a LeRobot dataset
-          before importing.
+        <p data-testid="search-widened" className="text-sm text-ink-secondary">
+          No repository carries the lerobot tag for this search, so these are unfiltered Hub
+          results — check each one is a LeRobot dataset before importing.
         </p>
       )}
-
       {!isSearching && searchResults.length > 0 && (
-        <div className="grid gap-3 max-h-80 overflow-y-auto">
-          {searchResults.map((ds) => (
-            <HFDatasetCard
-              key={ds.id}
-              dataset={ds}
-              onImport={() => beginPreview(ds.id)}
-              disabled={isImporting}
-            />
-          ))}
-        </div>
+        <HubTable
+          caption="Search results"
+          disabled={isImporting}
+          onPreview={beginPreview}
+          rows={searchResults.map((ds) => ({
+            repoId: ds.id,
+            title: ds.id,
+            detail: [
+              ds.downloads !== undefined ? `${ds.downloads.toLocaleString(UI_DATE_LOCALE)} downloads` : null,
+              ds.tags?.slice(0, 3).join(', ') || null,
+            ].filter(Boolean).join(' · ') || 'Hugging Face dataset',
+            imported: isDatasetImported(ds.id),
+          }))}
+        />
       )}
-
       {!isSearching && searchQuery && searchResults.length === 0 && !searchError && (
-        <p className="text-center py-8 text-theme-secondary">
-          No datasets found for &quot;{searchQuery}&quot;
-        </p>
+        <EmptyState size="sm" icon={<Search />} title="No datasets found" description={`Nothing on the Hub matches "${searchQuery}".`} />
       )}
     </div>
   );
 
   const directLinkTab = (
-    <div className="space-y-4">
-      <Input
-        value={directUrl}
-        onChange={(e) => setDirectUrl(e.target.value)}
-        placeholder="https://huggingface.co/datasets/nvidia/GR00T-N1.7-AppleToPlate"
-        label="HuggingFace Dataset URL or Repo ID"
-        fullWidth
-      />
-
-      {directUrl.trim() && (
-        <div className="text-sm">
-          {parsedRepoId ? (
-            <p className="text-green-600">
-              Parsed repo: <span className="font-mono font-medium">{parsedRepoId}</span>
-            </p>
-          ) : (
-            <p className="text-theme-tertiary">
-              Enter a valid HuggingFace dataset URL or repo ID (e.g. lerobot/svla_so101_pickplace)
-            </p>
-          )}
-        </div>
-      )}
-
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e) => { e.preventDefault(); if (parsedRepoId) beginPreview(parsedRepoId); }}
+    >
+      <FormField
+        label="Hugging Face URL or repo ID"
+        error={directUrl.trim() && !parsedRepoId ? 'Enter a dataset URL or an owner/name repo ID.' : undefined}
+        hint={parsedRepoId ? `Repo: ${parsedRepoId}` : 'e.g. lerobot/svla_so101_pickplace'}
+      >
+        <Input
+          value={directUrl}
+          onChange={(e) => setDirectUrl(e.target.value)}
+          placeholder="https://huggingface.co/datasets/nvidia/GR00T-N1.7-AppleToPlate"
+        />
+      </FormField>
       <ImportOptions
         revision={revision}
         onRevisionChange={setRevision}
@@ -537,247 +526,160 @@ export function HFDatasetBrowserModal({
         onRobotTypeChange={setRobotTypeId}
         robotTypes={robotTypes}
       />
-
       <div className="flex justify-end">
-        <Button
-          onClick={() => parsedRepoId && beginPreview(parsedRepoId)}
-          disabled={!parsedRepoId || isImporting}
-        >
-          Preview
-        </Button>
+        <Button type="submit" disabled={!parsedRepoId || isImporting}>Preview</Button>
       </div>
-    </div>
-  );
-
-  const isDatasetImported = useCallback(
-    (repoId: string) =>
-      existingDatasets.some((d) => d.huggingFaceRepoId === repoId),
-    [existingDatasets]
+    </form>
   );
 
   const featuredTab = (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-96 overflow-y-auto">
-      {FEATURED_DATASETS.map((ds) => {
-        const imported = isDatasetImported(ds.repoId);
-        return (
-          <FeaturedDatasetCard
-            key={ds.repoId}
-            dataset={ds}
-            imported={imported}
-            onImport={() => beginPreview(ds.repoId)}
-            disabled={isImporting || imported}
-          />
-        );
-      })}
-    </div>
+    <HubTable
+      caption="Featured datasets"
+      disabled={isImporting}
+      onPreview={beginPreview}
+      rows={FEATURED_DATASETS.map((ds) => ({
+        repoId: ds.repoId,
+        title: ds.displayName,
+        detail: ds.description,
+        robotType: ds.robotType,
+        imported: isDatasetImported(ds.repoId),
+      }))}
+    />
   );
 
   const tabs: Tab[] = [
     { id: 'featured', label: 'Featured', content: featuredTab },
     { id: 'search', label: 'Search', content: searchTab },
-    { id: 'direct', label: 'Direct Link', content: directLinkTab },
+    { id: 'direct', label: 'Direct link', content: directLinkTab },
   ];
+
+  const backToList = () => { setImportState('idle'); setPreview(null); setPreviewError(null); };
+
+  const footer =
+    importState === 'idle' ? (
+      <Button variant="ghost" onClick={handleClose}>Cancel</Button>
+    ) : importState === 'preview' ? (
+      <>
+        <Button variant="ghost" onClick={backToList}>Back</Button>
+        <Button
+          variant="secondary"
+          onClick={() => pendingRepoId && void loadPreview(pendingRepoId, revision, videosTouched)}
+          disabled={previewLoading}
+        >
+          Re-check
+        </Button>
+        <Button onClick={handleImport} disabled={previewLoading}>
+          {preview ? `Import ${formatBytes(preview.dataBytes + (includeVideos ? preview.videoBytes : 0))}` : 'Import anyway'}
+        </Button>
+      </>
+    ) : importState === 'done' ? (
+      <Button onClick={handleDone}>Done</Button>
+    ) : importState === 'error' ? (
+      <>
+        <Button variant="ghost" onClick={handleClose}>Close</Button>
+        <Button onClick={() => { setImportState('preview'); setImportError(null); }}>Try again</Button>
+      </>
+    ) : feedLost ? (
+      <Button variant="secondary" onClick={handleClose}>Close</Button>
+    ) : undefined;
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={handleClose}
-      title="Import from HuggingFace Hub"
+      title="Import from Hugging Face"
+      description={importState === 'idle' ? 'Pick a LeRobot dataset on the Hub, check what it holds, then import it.' : undefined}
       size="lg"
-      // An import is a download of up to a gigabyte with no resume. A stray
-      // click on the backdrop must not be able to abandon it.
+      // An import is a download of up to a gigabyte with no resume.
       closeOnBackdrop={!isImporting || feedLost}
       closeOnEscape={!isImporting || feedLost}
+      showCloseButton={!isImporting || feedLost}
+      footer={footer}
     >
-      <div className="space-y-6">
-        {importState === 'idle' && (
-          <Tabs tabs={tabs} defaultTab="featured" />
-        )}
+      {importState === 'idle' && <Tabs tabs={tabs} defaultTab="featured" />}
 
-        {importState === 'preview' && (
-          <div className="space-y-4" data-testid="hf-preview-step">
-            <div>
-              <p className="text-sm text-theme-tertiary">About to import</p>
-              <p className="font-mono font-medium text-theme-primary break-all">{pendingRepoId}</p>
+      {importState === 'preview' && (
+        <div className="flex flex-col gap-4" data-testid="hf-preview-step">
+          <div>
+            <p className="text-xs text-ink-tertiary">About to import</p>
+            <p className="break-all text-sm font-medium text-ink-primary">{pendingRepoId}</p>
+          </div>
+          {previewLoading && (
+            <div className="flex flex-col gap-2" aria-busy="true">
+              <p className="text-sm text-ink-secondary">Reading the repository…</p>
+              <SkeletonText lines={3} />
             </div>
-
-            {previewLoading && (
-              <div className="flex items-center gap-3 py-6">
-                <Spinner size="sm" />
-                <span className="text-sm text-theme-secondary">Reading the repository…</span>
-              </div>
-            )}
-
-            {previewError && (
-              <div
-                data-testid="hf-preview-error"
-                className="rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 text-sm text-red-400"
-              >
-                {previewError}
-              </div>
-            )}
-
-            {preview && <PreviewFacts preview={preview} />}
-
-            <ImportOptions
-              revision={revision}
-              onRevisionChange={setRevision}
-              robotTypeId={robotTypeId}
-              onRobotTypeChange={setRobotTypeId}
-              robotTypes={robotTypes}
-            />
-
-            <label className="flex items-start gap-2 text-sm text-theme-secondary">
-              <input
-                type="checkbox"
-                checked={includeVideos}
-                onChange={(e) => { setVideosTouched(true); setIncludeVideos(e.target.checked); }}
-                className="mt-0.5"
-                data-testid="include-videos"
-              />
-              <span>
-                Include videos
-                {preview && preview.videoBytes > 0 && (
-                  <span className="text-theme-tertiary"> — adds {formatBytes(preview.videoBytes)}</span>
-                )}
-                {preview && preview.cameraKeys.length === 0 && (
-                  <span className="text-theme-tertiary"> — this dataset has no camera features</span>
-                )}
-              </span>
-            </label>
-
-            <div className="flex justify-between gap-3">
-              <Button variant="ghost" onClick={() => { setImportState('idle'); setPreview(null); setPreviewError(null); }}>
-                Back
-              </Button>
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  onClick={() => pendingRepoId && void loadPreview(pendingRepoId, revision, videosTouched)}
-                  disabled={previewLoading}
-                >
-                  Re-check
-                </Button>
-                <Button onClick={handleImport} disabled={previewLoading}>
-                  {preview
-                    ? `Import ${formatBytes(preview.dataBytes + (includeVideos ? preview.videoBytes : 0))}`
-                    : 'Import anyway'}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {importState === 'importing' && feedLost && (
-          <div className="py-8 space-y-4 text-center" data-testid="hf-import-feed-lost">
-            <p className="text-theme-primary font-medium">
-              Lost the live connection to the server
-            </p>
-            <p className="text-sm text-theme-secondary max-w-md mx-auto">
-              The import itself is still running — it does not depend on this window. Close this
-              and the dataset will show how it ended, with the reason if it failed.
-            </p>
-            <Button variant="secondary" onClick={handleClose}>Close</Button>
-          </div>
-        )}
-
-        {importState === 'importing' && !feedLost && (
-          <div className="text-center py-8 space-y-4">
-            <Spinner size="lg" />
-            <p className="text-theme-primary font-medium">Importing dataset...</p>
-            {importProgress && (
-              <>
-                <ProgressBar value={importProgress.progress} showValue />
-                {importProgress.currentFile && (
-                  <p className="text-sm text-theme-secondary font-mono truncate">
-                    {importProgress.currentFile}
-                  </p>
-                )}
-                <p className="text-xs text-theme-tertiary capitalize">
-                  {importProgress.status}
-                </p>
-              </>
-            )}
-          </div>
-        )}
-
-        {importState === 'done' && (
-          <div className="text-center py-8">
-            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
-              <svg
-                className="w-8 h-8 text-green-600"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-            </div>
-            <p className="mt-4 text-lg font-medium text-theme-primary">
-              Dataset imported successfully!
-            </p>
-            <p className="text-sm text-theme-secondary mt-1">
-              The dataset is ready for training.
-            </p>
-          </div>
-        )}
-
-        {importState === 'error' && (
-          <div className="text-center py-8 space-y-4">
-            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto">
-              <svg
-                className="w-8 h-8 text-red-600"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </div>
-            <p className="text-lg font-medium text-theme-primary">Import failed</p>
-            {importError && (
-              <div
-                data-testid="hf-import-error"
-                className="p-3 bg-red-100 text-red-700 rounded-lg text-sm"
-              >
-                {importError}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Actions */}
-        <div className="flex justify-end gap-3">
-          {importState === 'idle' && (
-            <Button variant="ghost" onClick={handleClose}>
-              Cancel
-            </Button>
           )}
-          {importState === 'done' && (
-            <Button onClick={handleDone}>Done</Button>
+          {previewError && (
+            <p data-testid="hf-preview-error" role="alert" className="text-sm text-signal-stopped">{previewError}</p>
           )}
-          {importState === 'error' && (
-            <>
-              <Button variant="ghost" onClick={handleClose}>
-                Close
-              </Button>
-              <Button onClick={() => { setImportState('preview'); setImportError(null); }}>
-                Try Again
-              </Button>
-            </>
+          {preview && <PreviewFacts preview={preview} />}
+          <ImportOptions
+            revision={revision}
+            onRevisionChange={setRevision}
+            robotTypeId={robotTypeId}
+            onRobotTypeChange={setRobotTypeId}
+            robotTypes={robotTypes}
+          />
+          <Checkbox
+            data-testid="include-videos"
+            label="Include videos"
+            description={
+              preview && preview.cameraKeys.length === 0
+                ? 'This dataset has no camera features.'
+                : preview && preview.videoBytes > 0
+                  ? `Adds ${formatBytes(preview.videoBytes)}.`
+                  : undefined
+            }
+            checked={includeVideos}
+            onChange={(e) => { setVideosTouched(true); setIncludeVideos(e.target.checked); }}
+          />
+        </div>
+      )}
+
+      {importState === 'importing' && feedLost && (
+        <div className="flex flex-col items-center gap-2 py-8 text-center" data-testid="hf-import-feed-lost">
+          <p className="text-sm font-medium text-ink-primary">Lost the live connection to the server</p>
+          <p className="max-w-md text-sm text-ink-secondary">
+            The import itself is still running — it does not depend on this window. Close this
+            and the dataset will show how it ended, with the reason if it failed.
+          </p>
+        </div>
+      )}
+
+      {importState === 'importing' && !feedLost && (
+        <div className="flex flex-col items-center gap-3 py-8 text-center">
+          <Spinner size="lg" color="primary" />
+          <p className="text-sm font-medium text-ink-primary">Importing dataset…</p>
+          {importProgress && (
+            <div className="flex w-full flex-col gap-2">
+              <ProgressBar value={importProgress.progress} showValue />
+              {importProgress.currentFile && (
+                <p className="truncate font-mono text-xs text-ink-tertiary">{importProgress.currentFile}</p>
+              )}
+              <StatusTag status={importProgress.status} className="self-center" />
+            </div>
           )}
         </div>
-      </div>
+      )}
+
+      {importState === 'done' && (
+        <div className="flex flex-col items-center gap-2 py-8 text-center">
+          <CheckCircle2 className="h-8 w-8 text-signal-measured" strokeWidth={1.75} />
+          <p className="text-base font-medium text-ink-primary">Dataset imported</p>
+          <p className="text-sm text-ink-secondary">It is ready for training.</p>
+        </div>
+      )}
+
+      {importState === 'error' && (
+        <div className="flex flex-col items-center gap-2 py-8 text-center">
+          <XCircle className="h-8 w-8 text-signal-stopped" strokeWidth={1.75} />
+          <p className="text-base font-medium text-ink-primary">Import failed</p>
+          {importError && (
+            <p data-testid="hf-import-error" role="alert" className="text-sm text-ink-secondary">{importError}</p>
+          )}
+        </div>
+      )}
     </Modal>
   );
 }
@@ -798,197 +700,109 @@ interface ImportOptionsProps {
  * The two things a person overrides about an import: which commit, and what the
  * robot is called here. Both default to whatever the Hub says.
  */
-function ImportOptions({
-  revision,
-  onRevisionChange,
-  robotTypeId,
-  onRobotTypeChange,
-  robotTypes,
-}: ImportOptionsProps) {
+function ImportOptions({ revision, onRevisionChange, robotTypeId, onRobotTypeChange, robotTypes }: ImportOptionsProps) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      <Input
-        value={revision}
-        onChange={(e) => onRevisionChange(e.target.value)}
-        label="Revision"
-        placeholder="main"
-        helperText="Branch, tag or commit SHA"
-        fullWidth
-      />
-      <div>
-        <label
-          htmlFor="hf-robot-type"
-          className="block text-sm font-medium text-theme-secondary mb-1.5"
-        >
-          Robot type
-        </label>
-        <select
-          id="hf-robot-type"
+    <div className="grid gap-4 sm:grid-cols-2">
+      <FormField label="Revision" hint="Branch, tag or commit SHA">
+        <Input value={revision} onChange={(e) => onRevisionChange(e.target.value)} placeholder="main" />
+      </FormField>
+      <FormField label="Robot type">
+        <Select
+          placeholder="Auto-detect from info.json"
           value={robotTypeId}
           onChange={(e) => onRobotTypeChange(e.target.value)}
-          className="w-full px-3 py-2.5 rounded-brand border border-theme-secondary/30 bg-theme-primary text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-cobalt-500"
-        >
-          <option value="">Auto-detect from info.json</option>
-          {robotTypes.map((type) => (
-            <option key={type.id} value={type.id}>{type.name}</option>
-          ))}
-        </select>
-      </div>
+          options={robotTypes.map((t) => ({ value: t.id, label: t.name }))}
+        />
+      </FormField>
     </div>
   );
 }
 
 /**
- * What the repo holds, read before a byte of it is fetched.
- *
- * The two size numbers are separate and both shown: for GR00T AppleToPlate they
- * are 73 MB and 929 MB, and nothing else on this screen changes the download by
- * an order of magnitude.
+ * What the repo holds, read before a byte of it is fetched. Data and video
+ * sizes are both shown: for GR00T AppleToPlate they are 73 MB and 929 MB.
  */
 function PreviewFacts({ preview }: { preview: HFDatasetPreview }) {
   return (
-    <div data-testid="hf-preview-facts" className="space-y-3 rounded-lg bg-theme-secondary/10 p-4">
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3 text-sm">
-        <Fact label="LeRobot version" value={preview.lerobotVersion} />
-        <Fact label="Robot type" value={preview.robotType} />
-        <Fact label="FPS" value={String(preview.fps)} />
-        <Fact label="Episodes" value={preview.totalEpisodes.toLocaleString(UI_DATE_LOCALE)} />
-        <Fact label="Frames" value={preview.totalFrames.toLocaleString(UI_DATE_LOCALE)} />
-        <Fact label="Files" value={preview.fileCount.toLocaleString(UI_DATE_LOCALE)} />
-        <Fact label="State width" value={preview.stateWidth?.toString() ?? 'unknown'} />
-        <Fact label="Action width" value={preview.actionWidth?.toString() ?? 'unknown'} />
-        <Fact label="License" value={preview.license ?? 'Not stated'} />
-      </div>
-
-      <div className="text-sm">
-        <span className="text-theme-tertiary">Cameras</span>
-        <p className="font-mono text-xs text-theme-primary break-all">
-          {preview.cameraKeys.length > 0 ? preview.cameraKeys.join(', ') : 'None'}
-        </p>
-      </div>
-
-      <div className="flex flex-wrap gap-4 border-t border-theme-secondary/20 pt-3 text-sm">
+    <Panel variant="inset" padding="sm" data-testid="hf-preview-facts" className="flex flex-col gap-4">
+      <KeyValueList
+        columns={3}
+        items={[
+          { label: 'LeRobot version', value: preview.lerobotVersion },
+          { label: 'Robot type', value: preview.robotType },
+          { label: 'FPS', value: String(preview.fps) },
+          { label: 'Episodes', value: preview.totalEpisodes.toLocaleString(UI_DATE_LOCALE) },
+          { label: 'Frames', value: preview.totalFrames.toLocaleString(UI_DATE_LOCALE) },
+          { label: 'Files', value: preview.fileCount.toLocaleString(UI_DATE_LOCALE) },
+          { label: 'State width', value: preview.stateWidth?.toString() ?? 'unknown' },
+          { label: 'Action width', value: preview.actionWidth?.toString() ?? 'unknown' },
+          { label: 'License', value: preview.license ?? 'Not stated' },
+          { label: 'Cameras', value: preview.cameraKeys.length > 0 ? preview.cameraKeys.join(', ') : 'None', mono: preview.cameraKeys.length > 0 },
+        ]}
+      />
+      <div className="flex flex-wrap gap-6 border-t border-line pt-3 text-sm">
         <div>
-          <span className="text-theme-tertiary">Data</span>
-          <p className="font-medium text-theme-primary" data-testid="preview-data-bytes">
-            {formatBytes(preview.dataBytes)}
-          </p>
+          <span className="text-xs text-ink-tertiary">Data</span>
+          <p className="font-medium text-ink-primary" data-testid="preview-data-bytes">{formatBytes(preview.dataBytes)}</p>
         </div>
         <div>
-          <span className="text-theme-tertiary">Video</span>
-          <p className="font-medium text-theme-primary" data-testid="preview-video-bytes">
-            {formatBytes(preview.videoBytes)}
-          </p>
+          <span className="text-xs text-ink-tertiary">Video</span>
+          <p className="font-medium text-ink-primary" data-testid="preview-video-bytes">{formatBytes(preview.videoBytes)}</p>
         </div>
         <div>
-          <span className="text-theme-tertiary">Pinned commit</span>
-          <p className="font-mono text-xs text-theme-primary">
-            {preview.resolvedRevision.slice(0, 12)}
-          </p>
+          <span className="text-xs text-ink-tertiary">Pinned commit</span>
+          <p className="font-mono text-xs text-ink-secondary" title={preview.resolvedRevision}>{preview.resolvedRevision.slice(0, 8)}</p>
         </div>
       </div>
-    </div>
+    </Panel>
   );
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <span className="text-theme-tertiary">{label}</span>
-      <p className="font-medium text-theme-primary break-words">{value}</p>
-    </div>
-  );
-}
-
-interface HFDatasetCardProps {
-  dataset: HFDataset;
-  onImport: () => void;
-  disabled?: boolean;
-}
-
-interface FeaturedDatasetCardProps {
-  dataset: FeaturedDataset;
+/** Featured and search results share one dense table shape. */
+interface HubRow {
+  repoId: string;
+  title: string;
+  detail: string;
+  robotType?: string;
   imported: boolean;
-  onImport: () => void;
-  disabled?: boolean;
 }
 
-function FeaturedDatasetCard({ dataset, imported, onImport, disabled }: FeaturedDatasetCardProps) {
-  return (
-    <div
-      className={`flex items-start justify-between p-4 rounded-lg border transition-colors ${
-        imported
-          ? 'border-green-500/30 bg-theme-secondary/5 opacity-75'
-          : 'border-theme-secondary/20 bg-theme-secondary/5 hover:bg-theme-secondary/10'
-      }`}
-    >
-      <div className="min-w-0 flex-1 mr-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          <p className="font-semibold text-theme-primary text-sm">
-            {dataset.displayName}
-          </p>
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-cobalt-500/15 text-cobalt-400">
-            {dataset.robotType}
+function HubTable({ rows, onPreview, disabled, caption }: {
+  rows: HubRow[];
+  onPreview: (repoId: string) => void;
+  disabled: boolean;
+  caption: string;
+}) {
+  const columns: DataTableColumn<HubRow>[] = [
+    {
+      key: 'title',
+      header: 'Dataset',
+      cell: (r) => (
+        <div className="flex min-w-0 max-w-[22rem] flex-col gap-0.5">
+          <span className="flex flex-wrap items-center gap-1.5">
+            <span className="truncate text-sm font-medium text-ink-primary">{r.title}</span>
+            {r.imported && <StatusTag tone="success" size="sm">Imported</StatusTag>}
           </span>
-          {imported && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-              Imported
-            </span>
-          )}
+          <span className="truncate text-[13px] text-ink-tertiary" title={r.detail}>{r.detail}</span>
         </div>
-        <p className="text-xs text-theme-secondary mt-1">
-          {dataset.description}
-        </p>
-        <div className="flex items-center gap-2 mt-2 flex-wrap">
-          {dataset.episodeCount !== null && (
-            <span className="text-xs text-theme-tertiary">
-              {dataset.episodeCount} episodes
-            </span>
-          )}
-          {dataset.tags.map((tag) => (
-            <span
-              key={tag}
-              className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-theme-secondary/10 text-theme-tertiary"
-            >
-              {tag}
-            </span>
-          ))}
-        </div>
-      </div>
-      <Button
-        size="sm"
-        onClick={onImport}
-        disabled={disabled}
-        className="shrink-0 mt-0.5"
-      >
-        {imported ? 'Imported' : 'Preview'}
-      </Button>
-    </div>
-  );
-}
-
-function HFDatasetCard({ dataset, onImport, disabled }: HFDatasetCardProps) {
+      ),
+    },
+    { key: 'robotType', header: 'Robot', hideBelow: 'sm', cell: (r) => r.robotType ?? '—' },
+    {
+      key: 'action',
+      header: <span className="sr-only">Action</span>,
+      align: 'right',
+      cell: (r) => (
+        <Button size="sm" variant="secondary" disabled={disabled || r.imported} onClick={() => onPreview(r.repoId)}>
+          {r.imported ? 'Imported' : 'Preview'}
+        </Button>
+      ),
+    },
+  ];
   return (
-    <div className="flex items-center justify-between p-3 rounded-lg border border-theme-secondary/20 bg-theme-secondary/5 hover:bg-theme-secondary/10 transition-colors">
-      <div className="min-w-0 flex-1 mr-3">
-        <p className="font-medium text-theme-primary font-mono text-sm truncate">
-          {dataset.id}
-        </p>
-        <div className="flex items-center gap-3 mt-1 text-xs text-theme-secondary">
-          {dataset.downloads !== undefined && (
-            <span>{dataset.downloads.toLocaleString(UI_DATE_LOCALE)} downloads</span>
-          )}
-          {dataset.tags && dataset.tags.length > 0 && (
-            <span className="truncate">
-              {dataset.tags.slice(0, 3).join(', ')}
-            </span>
-          )}
-        </div>
-      </div>
-      <Button size="sm" onClick={onImport} disabled={disabled} className="shrink-0">
-        Preview
-      </Button>
-    </div>
+    <Panel padding="none" className="max-h-96 overflow-y-auto">
+      <DataTable caption={caption} dense columns={columns} rows={rows} getRowId={(r) => r.repoId} />
+    </Panel>
   );
 }
 

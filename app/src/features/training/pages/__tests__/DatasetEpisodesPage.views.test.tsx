@@ -101,7 +101,7 @@ describe('creating a view from the episode selection', () => {
     expect(screen.getByTestId('episode-selection-bar')).toHaveTextContent('2 of 4 selected');
 
     fireEvent.click(screen.getByTestId('create-view-from-selection'));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Two good takes' } });
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Two good takes' } });
 
     // The dialog states what it is about to store before it stores it.
     expect(screen.getByTestId('create-view-count')).toHaveTextContent('2 of 4 episodes');
@@ -128,7 +128,7 @@ describe('creating a view from the episode selection', () => {
     fireEvent.click(screen.getByTestId('episode-check-0'));
 
     fireEvent.click(screen.getByTestId('create-view-from-selection'));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'One take' } });
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'One take' } });
     fireEvent.click(screen.getByTestId('create-view-submit'));
 
     await waitFor(() => expect(datasetViewsApiMock.createView).toHaveBeenCalled());
@@ -159,7 +159,7 @@ describe('creating a view from the episode selection', () => {
 
     fireEvent.click(screen.getByTestId('views-create'));
     fireEvent.click(screen.getByTestId('view-source-flags'));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Unflagged only' } });
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Unflagged only' } });
     fireEvent.click(screen.getByTestId('create-view-submit'));
 
     await waitFor(() => expect(datasetViewsApiMock.createView).toHaveBeenCalled());

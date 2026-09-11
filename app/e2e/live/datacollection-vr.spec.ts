@@ -29,7 +29,7 @@ test.describe('VR data collection in simulation', () => {
       timeout: 15_000,
     });
 
-    await page.getByRole('button', { name: /Meta Quest VR/i }).click();
+    await page.getByRole('radio', { name: /Meta Quest VR/i }).click();
 
     // VR prerequisites panel appears for VR types
     await expect(page.getByTestId('vr-prerequisites')).toBeVisible();
@@ -54,7 +54,8 @@ test.describe('VR data collection in simulation', () => {
     await expect(page.getByTestId('vr-session-panel')).toBeVisible();
 
     // ── 2. Start recording ────────────────────────────────────────────────
-    await page.getByRole('button', { name: /^Start$/ }).click();
+    await page.getByRole('button', { name: /^Start recording$/ }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: /^Start recording$/ }).click();
     await expect(page.getByText('Recording', { exact: true }).first()).toBeVisible({
       timeout: 15_000,
     });
@@ -78,16 +79,18 @@ test.describe('VR data collection in simulation', () => {
     // Let episode 1 collect some frames so the session survives the discard of ep 0
     await page.waitForTimeout(3_000);
 
-    // ── 5. Discard episode 0 (custom confirm dialog, not window.confirm) ──
+    // ── 5. Discard episode 0 (kit confirm dialog, not window.confirm) ────
     await expect(page.getByTestId('episode-row-0')).toBeVisible({ timeout: 15_000 });
     await page.getByTestId('episode-discard-0').click();
-    await expect(page.getByTestId('discard-dialog')).toBeVisible();
-    await page.getByTestId('discard-confirm').click();
+    const discardDialog = page.getByRole('alertdialog', { name: /Discard episode 0/i });
+    await expect(discardDialog).toBeVisible();
+    await discardDialog.getByRole('button', { name: /^Discard$/ }).click();
     await expect(page.getByTestId('episode-row-0')).toHaveCount(0, { timeout: 15_000 });
     await expect(page.getByTestId('episode-row-1')).toBeVisible({ timeout: 15_000 });
 
     // ── 6. End the session → auto-export → dataset card ──────────────────
-    await page.getByRole('button', { name: /^End$/ }).click();
+    await page.getByRole('button', { name: /^End session$/ }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: /^End session$/ }).click();
     await expect(page.getByText('Completed', { exact: true }).first()).toBeVisible({
       timeout: 60_000,
     });

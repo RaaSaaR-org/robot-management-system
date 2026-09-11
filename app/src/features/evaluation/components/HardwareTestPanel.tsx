@@ -1,175 +1,169 @@
 /**
  * @file HardwareTestPanel.tsx
- * @description Inline hardware evaluation runner — picks a robot + skill and
- * triggers POST /api/evaluation/run-hardware. Per-episode rows persist via
- * the agent → server pipeline; the summary is shown inline. (TASK-146 Phase C)
+ * @description Run hardware test: pick a skill and an online robot, confirm, run N closed-loop episodes;
+ *              the last result is shown in a panel. (TASK-146 Phase C)
  * @feature evaluation
  */
 
 import { useEffect, useState } from 'react';
-import { Play } from 'lucide-react';
-import { Button, Card } from '@/shared/components/ui';
+import { Cpu, Play } from 'lucide-react';
+import {
+  Button,
+  EmptyState,
+  FormField,
+  FormModal,
+  Input,
+  Panel,
+  Select,
+  StatusTag,
+  confirm,
+  toast,
+} from '@/shared/components/ui';
+import { getErrorMessage } from '@/shared/utils';
 import { useRobots } from '@/features/robots/hooks/useRobots';
 import { deploymentApi } from '@/features/deployment/api/deploymentApi';
-import { evaluationApi, type HardwareEvaluationSummary } from '../api/evaluationApi';
 import type { SkillDefinition } from '@/features/deployment/types';
+import { evaluationApi, type HardwareEvaluationSummary } from '../api/evaluationApi';
 
 export interface HardwareTestPanelProps {
-  /** Called after a run completes so the parent can refresh charts. */
+  /** Called after a run completes so the parent can refresh its charts. */
   onComplete?: () => void;
+  /** Controlled "Run hardware test" modal (the page header owns the button). */
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function HardwareTestPanel({ onComplete }: HardwareTestPanelProps) {
+export function HardwareTestPanel({ onComplete, isOpen, onOpenChange }: HardwareTestPanelProps) {
   const { robots, fetchRobots } = useRobots();
   const [skills, setSkills] = useState<SkillDefinition[]>([]);
-  const [skillId, setSkillId] = useState<string>('');
-  const [robotId, setRobotId] = useState<string>('');
-  const [episodes, setEpisodes] = useState<number>(3);
-  const [taskPrompt, setTaskPrompt] = useState<string>('');
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = isOpen ?? localOpen;
+  const setOpen = onOpenChange ?? setLocalOpen;
+  const [skillId, setSkillId] = useState('');
+  const [robotId, setRobotId] = useState('');
+  const [episodes, setEpisodes] = useState('3');
+  const [taskPrompt, setTaskPrompt] = useState('');
+  const [errors, setErrors] = useState<{ skill?: string; robot?: string; episodes?: string }>({});
   const [running, setRunning] = useState(false);
   const [summary, setSummary] = useState<HardwareEvaluationSummary | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchRobots();
-    void deploymentApi.listSkills({ pageSize: 100 }).then((res) => setSkills(res.skills));
+    deploymentApi.listSkills({ pageSize: 100 }).then((res) => setSkills(res.skills)).catch(() => setSkills([]));
   }, [fetchRobots]);
 
-  // Default the prompt to the skill's name once selected.
+  // Default the prompt to the skill's name once one is chosen.
   useEffect(() => {
     const skill = skills.find((s) => s.id === skillId);
-    if (skill && !taskPrompt) {
-      setTaskPrompt(`Execute skill ${skill.name}`);
-    }
+    if (skill && !taskPrompt) setTaskPrompt(`Execute skill ${skill.name}`);
   }, [skillId, skills, taskPrompt]);
 
-  const onlineRobots = robots.filter((r) => r.status === 'online');
+  const online = robots.filter((r) => r.status === 'online');
+  const skill = skills.find((s) => s.id === skillId);
+  const robot = online.find((r) => r.id === robotId);
+  const count = Number(episodes);
 
-  const handleRun = async () => {
+  const submit = async () => {
+    const next: typeof errors = {};
+    if (!skill) next.skill = 'Choose a skill.';
+    if (!robot) next.robot = 'Choose an online robot.';
+    if (!Number.isInteger(count) || count < 1 || count > 50) next.episodes = 'Between 1 and 50.';
+    setErrors(next);
+    if (!skill || !robot || Object.keys(next).length > 0) return;
+    const ok = await confirm({
+      title: `Run ${skill.name} on ${robot.name}?`,
+      description: `${robot.name} will move and run ${count} closed-loop ${count === 1 ? 'episode' : 'episodes'}. Keep its workspace clear.`,
+      confirmLabel: 'Run test',
+    });
+    if (!ok) return;
     setRunning(true);
-    setError(null);
-    setSummary(null);
     try {
-      const result = await evaluationApi.runHardwareEvaluation({
-        robotId,
-        skillId,
-        episodes,
-        taskPrompt,
-      });
+      const result = await evaluationApi.runHardwareEvaluation({ robotId, skillId, episodes: count, taskPrompt });
       setSummary(result);
+      setOpen(false);
+      toast.success('Hardware test finished', {
+        description: `${result.successCount} of ${result.episodes} episodes succeeded on ${robot.name}.`,
+      });
       onComplete?.();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Hardware evaluation failed';
-      setError(message);
+      toast.error("Couldn't run the hardware test", { description: getErrorMessage(err, 'The robot did not answer') });
     } finally {
       setRunning(false);
     }
   };
 
   return (
-    <Card className="border-theme section-primary">
-      <div className="p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-lg font-semibold text-theme-primary">Hardware Test</h2>
-            <p className="text-xs text-theme-secondary mt-1">
-              Run N closed-loop episodes against a real robot. Results land in the table above.
-            </p>
-          </div>
-        </div>
+    <>
+      <Panel>
+        <Panel.Header
+          title="Hardware tests"
+          description="Closed-loop episodes on a real robot. Results feed the charts above."
+          actions={
+            // The /training header owns "Run hardware test"; standalone, the panel offers it.
+            isOpen === undefined ? (
+              <Button variant="secondary" size="sm" leftIcon={<Play className="h-4 w-4" />} onClick={() => setOpen(true)}>Run hardware test</Button>
+            ) : undefined
+          }
+        />
+        <Panel.Body>
+          {summary ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-ink-primary">
+                <StatusTag tone={summary.successRate >= 0.8 ? 'success' : summary.successRate >= 0.5 ? 'warning' : 'danger'}>
+                  {`${(summary.successRate * 100).toFixed(0)}%`}
+                </StatusTag>
+                {summary.successCount} of {summary.episodes} episodes succeeded
+              </div>
+              <ul className="flex flex-col gap-1 text-[13px] text-ink-secondary">
+                {summary.results.map((r) => (
+                  <li key={r.index}>
+                    Episode {r.index + 1}: {r.status}, {r.steps} steps, {(r.durationMs / 1000).toFixed(1)} s{r.error ? ` (${r.error})` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-sm text-ink-tertiary">No test run in this session yet.</p>
+          )}
+        </Panel.Body>
+      </Panel>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <div>
-            <label className="block text-xs font-medium text-theme-secondary mb-1">Skill</label>
-            <select
-              value={skillId}
-              onChange={(e) => setSkillId(e.target.value)}
-              className="w-full px-3 py-2 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent"
-            >
-              <option value="">Pick a skill…</option>
-              {skills.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} v{s.version}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-theme-secondary mb-1">Robot</label>
-            <select
-              value={robotId}
-              onChange={(e) => setRobotId(e.target.value)}
-              className="w-full px-3 py-2 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent"
-            >
-              <option value="">Pick a robot…</option>
-              {onlineRobots.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name} ({r.id})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-theme-secondary mb-1">Episodes</label>
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={episodes}
-              onChange={(e) => setEpisodes(parseInt(e.target.value, 10) || 1)}
-              className="w-full px-3 py-2 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent"
-            />
-          </div>
-
-          <div className="flex items-end">
-            <Button
-              variant="primary"
-              onClick={handleRun}
-              disabled={running || !skillId || !robotId}
-              className="w-full"
-            >
-              <Play className="w-4 h-4 mr-1.5 inline-block" />
-              {running ? 'Running…' : 'Start hardware evaluation'}
-            </Button>
-          </div>
-        </div>
-
-        <div className="mt-3">
-          <label className="block text-xs font-medium text-theme-secondary mb-1">Task prompt</label>
-          <input
-            type="text"
-            value={taskPrompt}
-            onChange={(e) => setTaskPrompt(e.target.value)}
-            placeholder="Pick up the red cube and place it in the box."
-            className="w-full px-3 py-2 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent"
+      <FormModal
+        isOpen={open}
+        onClose={() => setOpen(false)}
+        title="Run hardware test"
+        description="Runs the deployed model on a real robot and records each episode."
+        submitLabel="Run test"
+        submittingLabel="Running…"
+        isSubmitting={running}
+        submitDisabled={online.length === 0}
+        onSubmit={submit}
+        noValidate
+      >
+        {online.length === 0 ? (
+          <EmptyState
+            size="sm"
+            icon={<Cpu />}
+            title="No robot is online"
+            description="Start a robot agent, then come back. Offline robots cannot run a test."
           />
-        </div>
-
-        {error && (
-          <div className="mt-3 p-3 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md">
-            {error}
-          </div>
+        ) : (
+          <>
+            <FormField label="Skill" required error={errors.skill}>
+              <Select placeholder="Choose a skill…" value={skillId} onChange={(e) => setSkillId(e.target.value)} options={skills.map((s) => ({ value: s.id, label: `${s.name} v${s.version}` }))} />
+            </FormField>
+            <FormField label="Robot" required error={errors.robot}>
+              <Select placeholder="Choose a robot…" value={robotId} onChange={(e) => setRobotId(e.target.value)} options={online.map((r) => ({ value: r.id, label: r.name }))} />
+            </FormField>
+            <FormField label="Episodes" error={errors.episodes}>
+              <Input type="number" min={1} max={50} value={episodes} onChange={(e) => setEpisodes(e.target.value)} />
+            </FormField>
+            <FormField label="Task prompt" aside="Optional">
+              <Input value={taskPrompt} onChange={(e) => setTaskPrompt(e.target.value)} placeholder="Pick up the red cube and place it in the box." />
+            </FormField>
+          </>
         )}
-
-        {summary && (
-          <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-md">
-            <p className="text-sm font-medium text-green-700 dark:text-green-400">
-              {summary.successCount} / {summary.episodes} succeeded ({(summary.successRate * 100).toFixed(0)}%)
-            </p>
-            <ul className="mt-2 space-y-1 text-xs text-theme-secondary">
-              {summary.results.map((r) => (
-                <li key={r.index}>
-                  Episode {r.index + 1}: <span className="font-mono">{r.status}</span> — {r.steps} steps,{' '}
-                  {(r.durationMs / 1000).toFixed(1)}s
-                  {r.error ? ` — ${r.error}` : ''}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-    </Card>
+      </FormModal>
+    </>
   );
 }

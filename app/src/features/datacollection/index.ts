@@ -53,7 +53,6 @@ export type { SimInputStatus } from './hooks/useSimulatedVrInput';
 // Components
 export {
   SessionStatusBadge,
-  SessionCard,
   SessionList,
   SessionTypeSelector,
   QualityIndicator,
@@ -65,7 +64,6 @@ export {
 } from './components';
 export type {
   SessionStatusBadgeProps,
-  SessionCardProps,
   SessionListProps,
   SessionTypeSelectorProps,
   QualityIndicatorProps,

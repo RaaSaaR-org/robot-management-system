@@ -1,196 +1,190 @@
 /**
  * @file SessionList.tsx
- * @description List component for displaying teleoperation sessions
+ * @description Sessions tab of /data-collection: Toolbar (search, status,
+ *              type) over a DataTable of teleoperation sessions, with all
+ *              four list states and server-side pagination.
  * @feature datacollection
  */
 
-import { cn } from '@/shared/utils/cn';
-import { Filter, Plus, ChevronLeft, ChevronRight, Video } from 'lucide-react';
-import { Card } from '@/shared/components/ui/Card';
-import { Spinner } from '@/shared/components/ui/Spinner';
-import { EmptyState } from '@/shared/components/ui/EmptyState';
-import { SessionCard } from './SessionCard';
+import { useMemo, useState } from 'react';
+import { ChevronLeft, ChevronRight, Database, ExternalLink, Plus, Search, Video } from 'lucide-react';
+import {
+  Button, DataTable, EmptyState, Panel, SearchInput, Select, Toolbar,
+  type DataTableColumn, type RowActionItem,
+} from '@/shared/components/ui';
+import { SessionStatusBadge } from './SessionStatusBadge';
+import { TYPE_ICONS } from './SessionTypeSelector';
 import type {
-  TeleoperationSession,
-  SessionFilters,
-  SessionPagination,
-  TeleoperationStatus,
-  TeleoperationType,
+  TeleoperationSession, SessionFilters, SessionPagination, TeleoperationStatus, TeleoperationType,
 } from '../types/datacollection.types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { TELEOPERATION_TYPE_LABELS, SESSION_STATUS_LABELS, formatDuration } from '../types/datacollection.types';
+import { formatRelative, sessionName } from '../utils/sessionFormat';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface SessionListProps {
   sessions: TeleoperationSession[];
   filters: SessionFilters;
   pagination: SessionPagination;
   isLoading: boolean;
+  error?: string | null;
+  onRetry?: () => void;
   onFilterChange: (filters: Partial<SessionFilters>) => void;
   onClearFilters: () => void;
   onPageChange: (page: number) => void;
   onSessionClick: (session: TeleoperationSession) => void;
   onNewSession?: () => void;
-  className?: string;
+  /** Package a completed session into a dataset (opens the session). */
+  onExport?: (session: TeleoperationSession) => void;
 }
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const STATUS_OPTIONS: { value: TeleoperationStatus | ''; label: string }[] = [
-  { value: '', label: 'All Statuses' },
-  { value: 'created', label: 'Ready' },
-  { value: 'recording', label: 'Recording' },
-  { value: 'paused', label: 'Paused' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'failed', label: 'Failed' },
-];
-
-const TYPE_OPTIONS: { value: TeleoperationType | ''; label: string }[] = [
-  { value: '', label: 'All Types' },
-  { value: 'vr_quest', label: 'Meta Quest VR' },
-  { value: 'vr_vision_pro', label: 'Vision Pro' },
-  { value: 'bilateral_aloha', label: 'Bilateral ALOHA' },
-  { value: 'kinesthetic', label: 'Kinesthetic' },
-  { value: 'keyboard_mouse', label: 'Keyboard & Mouse' },
-  { value: 'gamepad', label: 'Gamepad' },
-];
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
+const STATUS_OPTIONS = (Object.keys(SESSION_STATUS_LABELS) as TeleoperationStatus[]).map((s) => ({
+  value: s, label: SESSION_STATUS_LABELS[s],
+}));
+const TYPE_OPTIONS = (Object.keys(TELEOPERATION_TYPE_LABELS) as TeleoperationType[]).map((t) => ({
+  value: t, label: TELEOPERATION_TYPE_LABELS[t],
+}));
 
 export function SessionList({
-  sessions,
-  filters,
-  pagination,
-  isLoading,
-  onFilterChange,
-  onClearFilters,
-  onPageChange,
-  onSessionClick,
-  onNewSession,
-  className,
+  sessions, filters, pagination, isLoading, error, onRetry, onFilterChange, onClearFilters,
+  onPageChange, onSessionClick, onNewSession, onExport,
 }: SessionListProps) {
-  const hasFilters = filters.status || filters.type;
+  const [query, setQuery] = useState('');
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return sessions;
+    return sessions.filter((s) =>
+      [s.languageInstr, s.robot?.name, s.robotId, TELEOPERATION_TYPE_LABELS[s.type], s.id]
+        .some((v) => v?.toLowerCase().includes(q)));
+  }, [sessions, query]);
+
+  const hasFilters = Boolean(query || filters.status || filters.type);
+  const clearAll = () => { setQuery(''); onClearFilters(); };
+
+  const columns: DataTableColumn<TeleoperationSession>[] = [
+    {
+      key: 'name', header: 'Session', sortable: true, sortValue: (s) => sessionName(s).toLowerCase(),
+      cell: (s) => (
+        <div className="min-w-0 max-w-md">
+          <div className="truncate text-sm font-medium text-ink-primary">{sessionName(s)}</div>
+          <div className="truncate text-xs text-ink-tertiary">
+            {s.robot?.name ?? s.robotId}
+            {' · '}
+            <span className="font-mono" title={s.id}>{s.id.slice(0, 8)}</span>
+          </div>
+          {/* Phones hide the Status column; the status rides under the name. */}
+          <div className="mt-1.5 sm:hidden"><SessionStatusBadge status={s.status} size="sm" /></div>
+        </div>
+      ),
+    },
+    {
+      key: 'type', header: 'Input', hideBelow: 'sm', sortable: true, sortValue: (s) => TELEOPERATION_TYPE_LABELS[s.type],
+      cell: (s) => {
+        const Icon = TYPE_ICONS[s.type];
+        return (
+          <span className="inline-flex items-center gap-2 whitespace-nowrap text-[13px] text-ink-secondary">
+            {Icon && <Icon className="h-4 w-4 text-ink-tertiary" strokeWidth={1.75} />}
+            {TELEOPERATION_TYPE_LABELS[s.type]}
+          </span>
+        );
+      },
+    },
+    { key: 'status', header: 'Status', sortable: true, hideBelow: 'sm', cell: (s) => <SessionStatusBadge status={s.status} size="sm" /> },
+    {
+      key: 'frames', header: 'Frames', align: 'right', hideBelow: 'md', sortable: true, sortValue: (s) => s.frameCount,
+      cell: (s) => (
+        <span className="whitespace-nowrap text-[13px] tabular-nums text-ink-secondary">
+          {s.frameCount.toLocaleString(UI_DATE_LOCALE)}
+          <span className="text-ink-tertiary"> · {formatDuration(s.duration)}</span>
+        </span>
+      ),
+    },
+    {
+      key: 'createdAt', header: 'Created', align: 'right', hideBelow: 'md', sortable: true,
+      sortValue: (s) => new Date(s.createdAt),
+      cell: (s) => <span className="whitespace-nowrap text-[13px] text-ink-tertiary">{formatRelative(s.createdAt)}</span>,
+    },
+  ];
+
+  const rowActions = (s: TeleoperationSession): RowActionItem[] => {
+    const items: RowActionItem[] = [
+      { label: 'Open', icon: <ExternalLink />, onSelect: () => onSessionClick(s) },
+    ];
+    if (s.status === 'completed' && !s.exportedDatasetId && onExport) {
+      items.push({ label: 'Create dataset', icon: <Database />, onSelect: () => onExport(s) });
+    }
+    return items;
+  };
 
   return (
-    <div className={cn('space-y-4', className)}>
-      {/* Filters Row */}
-      <Card variant="subtle">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3">
-          <Filter size={16} className="text-theme-muted shrink-0" />
-          <select
-            value={filters.status || ''}
-            onChange={(e) =>
-              onFilterChange({ status: e.target.value as TeleoperationStatus | undefined || undefined })
-            }
-            className="px-3 py-1.5 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
-          >
-            {STATUS_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          <select
-            value={filters.type || ''}
-            onChange={(e) =>
-              onFilterChange({ type: e.target.value as TeleoperationType | undefined || undefined })
-            }
-            className="px-3 py-1.5 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
-          >
-            {TYPE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          {hasFilters && (
-            <button
-              onClick={onClearFilters}
-              className="text-sm text-cobalt-400 hover:text-cobalt-300 transition-colors"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      </Card>
+    <div className="flex flex-col gap-4">
+      <Toolbar
+        search={<SearchInput value={query} onChange={setQuery} placeholder="Search task or robot" />}
+        filters={
+          <>
+            <Select
+              aria-label="Status" fullWidth={false} className="w-40" placeholder="All statuses"
+              options={STATUS_OPTIONS} value={(filters.status as string) ?? ''}
+              onChange={(e) => onFilterChange({ status: (e.target.value || undefined) as TeleoperationStatus | undefined })}
+            />
+            <Select
+              aria-label="Input" fullWidth={false} className="w-44" placeholder="All inputs"
+              options={TYPE_OPTIONS} value={(filters.type as string) ?? ''}
+              onChange={(e) => onFilterChange({ type: (e.target.value || undefined) as TeleoperationType | undefined })}
+            />
+          </>
+        }
+      />
 
-      {/* Loading State */}
-      {isLoading && (
-        <div className="flex items-center justify-center py-12">
-          <Spinner size="lg" color="cobalt" />
-        </div>
-      )}
-
-      {/* Empty State */}
-      {!isLoading && sessions.length === 0 && (
-        <Card variant="subtle">
-          <EmptyState
-            icon={<Video className="w-10 h-10" />}
-            title={hasFilters ? 'No sessions match your filters' : 'No sessions yet'}
-            description={
-              hasFilters
-                ? 'Try adjusting your filter criteria or clear all filters.'
-                : 'Start by creating a new teleoperation session. Each session records camera frames, joint states, and actions.'
-            }
-            action={
-              !hasFilters && onNewSession ? (
-                <button
-                  onClick={onNewSession}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all"
-                >
-                  <Plus size={16} />
-                  Create Session
-                </button>
-              ) : undefined
-            }
-          />
-        </Card>
-      )}
-
-      {/* Sessions Grid */}
-      {!isLoading && sessions.length > 0 && (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {sessions.map((session) => (
-              <SessionCard
-                key={session.id}
-                session={session}
-                onClick={() => onSessionClick(session)}
+      <Panel padding="none">
+        <DataTable
+          caption="Recording sessions"
+          columns={columns}
+          rows={filtered}
+          getRowId={(s) => s.id}
+          defaultSort={{ key: 'createdAt', direction: 'desc' }}
+          onRowClick={onSessionClick}
+          rowActions={rowActions}
+          rowActionsLabel={(s) => `Actions for ${sessionName(s)}`}
+          isLoading={isLoading}
+          error={error ?? null}
+          errorTitle="Couldn't load sessions"
+          onRetry={onRetry}
+          empty={
+            hasFilters ? (
+              <EmptyState
+                icon={<Search />} title="No sessions match" description="Try another search, or clear the filters."
+                action={<Button variant="secondary" onClick={clearAll}>Clear filters</Button>}
               />
-            ))}
-          </div>
-
-          {/* Pagination */}
-          {pagination.totalPages > 1 && (
-            <div className="flex items-center justify-between pt-4 border-t border-glass-subtle">
-              <p className="text-sm text-theme-muted">
-                Page {pagination.page} of {pagination.totalPages} ({pagination.total} total)
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => onPageChange(pagination.page - 1)}
-                  disabled={pagination.page === 1}
-                  className="p-2 rounded-brand border border-theme disabled:opacity-30 disabled:cursor-not-allowed hover:bg-glass-subtle transition-colors"
-                >
-                  <ChevronLeft size={18} className="text-theme-secondary" />
-                </button>
-                <button
-                  onClick={() => onPageChange(pagination.page + 1)}
-                  disabled={pagination.page === pagination.totalPages}
-                  className="p-2 rounded-brand border border-theme disabled:opacity-30 disabled:cursor-not-allowed hover:bg-glass-subtle transition-colors"
-                >
-                  <ChevronRight size={18} className="text-theme-secondary" />
-                </button>
-              </div>
+            ) : (
+              <EmptyState
+                icon={<Video />} title="No sessions yet"
+                description="A session records camera frames, joint states and actions while you teleoperate a robot."
+                action={onNewSession && (
+                  <Button leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} onClick={onNewSession}>New session</Button>
+                )}
+              />
+            )
+          }
+        />
+        {pagination.totalPages > 1 && (
+          <div className="flex items-center justify-between gap-3 border-t border-line-subtle px-4 py-3">
+            <p className="text-[13px] text-ink-tertiary">
+              Page {pagination.page} of {pagination.totalPages} · {pagination.total} sessions
+            </p>
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" iconOnly aria-label="Previous page"
+                disabled={pagination.page <= 1} onClick={() => onPageChange(pagination.page - 1)}>
+                <ChevronLeft className="h-4 w-4" strokeWidth={1.75} />
+              </Button>
+              <Button variant="secondary" size="sm" iconOnly aria-label="Next page"
+                disabled={pagination.page >= pagination.totalPages} onClick={() => onPageChange(pagination.page + 1)}>
+                <ChevronRight className="h-4 w-4" strokeWidth={1.75} />
+              </Button>
             </div>
-          )}
-        </>
-      )}
+          </div>
+        )}
+      </Panel>
     </div>
   );
 }

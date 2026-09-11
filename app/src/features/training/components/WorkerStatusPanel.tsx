@@ -1,16 +1,17 @@
 /**
  * @file WorkerStatusPanel.tsx
- * @description Real training worker status panel — replaces the fake GPU panel
+ * @description Training workers connected to the server, each with its status, device and current job
  * @feature training
  *
- * Backed by GET /api/training/workers, which returns the in-memory worker
- * registry on the server (TASK-145). gpuUtil/memoryUtil are reported but
- * the worker doesn't yet collect real telemetry — they're shown as "n/a"
- * for cuda/mps devices and hidden for cpu.
+ * Backed by GET /api/training/workers (TASK-145). gpuUtil/memoryUtil are
+ * reported but not yet collected by the worker, so they show as "n/a" for
+ * cuda/mps devices and are hidden for cpu.
  */
 
-import { Card, Spinner } from '@/shared/components/ui';
+import { RefreshCw, Server } from 'lucide-react';
+import { Button, EmptyState, ErrorState, Panel, SkeletonRows, StatusTag } from '@/shared/components/ui';
 import type { WorkerStatusListResponse, WorkerStatusView } from '../types';
+import { shortId } from './jobs/jobFormat';
 
 export interface WorkerStatusPanelProps {
   workers: WorkerStatusListResponse | null;
@@ -18,176 +19,102 @@ export interface WorkerStatusPanelProps {
   onRefresh?: () => void;
 }
 
-export function WorkerStatusPanel({
-  workers,
-  isLoading,
-  onRefresh,
-}: WorkerStatusPanelProps) {
-  if (isLoading && !workers) {
-    return (
-      <Card>
-        <Card.Body className="flex items-center justify-center py-8">
-          <Spinner size="md" label="Loading worker status..." />
-        </Card.Body>
-      </Card>
-    );
-  }
+const WORKER_STATUS: Record<WorkerStatusView['status'], string> = {
+  busy: 'running',
+  idle: 'idle',
+  stale: 'warning',
+};
 
-  if (!workers) {
-    return (
-      <Card>
-        <Card.Body className="text-center py-8">
-          <p className="text-theme-secondary">Worker status unavailable</p>
-          {onRefresh && (
-            <button
-              onClick={onRefresh}
-              className="mt-2 text-sm text-cobalt-500 hover:text-cobalt-600"
-            >
-              Retry
-            </button>
-          )}
-        </Card.Body>
-      </Card>
-    );
-  }
-
+export function WorkerStatusPanel({ workers, isLoading, onRefresh }: WorkerStatusPanelProps) {
   return (
-    <Card>
-      <Card.Header>
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-theme-primary">Training Workers</h3>
-          {onRefresh && (
-            <button
+    <Panel>
+      <Panel.Header
+        title="Workers"
+        description="Machines that pick up queued jobs and train them."
+        actions={
+          onRefresh && (
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<RefreshCw className="h-4 w-4" strokeWidth={1.75} />}
               onClick={onRefresh}
-              className="text-sm text-cobalt-500 hover:text-cobalt-600"
             >
               Refresh
-            </button>
-          )}
-        </div>
-      </Card.Header>
-      <Card.Body className="space-y-4">
-        {workers.workers.length === 0 ? (
-          <div className="p-4 rounded text-center text-sm bg-theme-secondary/10 text-theme-secondary">
-            No workers connected. Start a training worker to begin.
-          </div>
+            </Button>
+          )
+        }
+      />
+      <Panel.Body>
+        {isLoading && !workers ? (
+          <SkeletonRows rows={2} columns={3} dense />
+        ) : !workers ? (
+          <ErrorState size="sm" title="Couldn't load workers" onRetry={onRefresh} />
+        ) : workers.workers.length === 0 ? (
+          <EmptyState
+            size="sm"
+            icon={<Server />}
+            title="No workers connected"
+            description="Queued jobs wait until a training worker connects. Start one to begin."
+          />
         ) : (
-          <div className="space-y-2">
+          <ul className="flex flex-col divide-y divide-line-subtle">
             {workers.workers.map((w) => (
               <WorkerRow key={w.workerId} worker={w} />
             ))}
-          </div>
+          </ul>
         )}
-
-        {/* Queue summary footer */}
-        <div className="pt-3 border-t border-theme-secondary/20 grid grid-cols-2 gap-3 text-sm">
-          <div className="flex justify-between">
-            <span className="text-theme-secondary">Running</span>
-            <span className="font-medium text-theme-primary">{workers.runningJobs}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-theme-secondary">Queued</span>
-            <span className="font-medium text-theme-primary">{workers.queuedJobs}</span>
-          </div>
-        </div>
-      </Card.Body>
-    </Card>
+      </Panel.Body>
+    </Panel>
   );
 }
 
 function WorkerRow({ worker }: { worker: WorkerStatusView }) {
-  const showGpuStats = worker.device === 'cuda' || worker.device === 'mps';
-  const hasRealGpuStats = worker.gpuUtil > 0 || worker.memoryUtil > 0;
-
+  const showGpu = worker.device === 'cuda' || worker.device === 'mps';
+  const realGpu = worker.gpuUtil > 0 || worker.memoryUtil > 0;
   return (
-    <div className="p-3 bg-theme-secondary/10 rounded-lg space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <StatusBadge status={worker.status} />
-          <span
-            className="font-medium text-theme-primary text-sm truncate"
-            title={worker.workerId}
-          >
-            {worker.workerId}
-          </span>
-        </div>
-        <DeviceChip device={worker.device} />
+    <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-3 first:pt-0 last:pb-0">
+      <div className="flex min-w-0 items-center gap-2">
+        <StatusTag status={WORKER_STATUS[worker.status]} dot>
+          {worker.status === 'busy' ? 'Busy' : worker.status === 'stale' ? 'Stale' : 'Idle'}
+        </StatusTag>
+        <span className="truncate text-sm font-medium text-ink-primary" title={worker.workerId}>
+          {worker.workerId}
+        </span>
+        <span className="rounded-tag bg-inset px-1.5 py-0.5 text-xs text-ink-secondary">{worker.device}</span>
       </div>
-
-      <div className="text-xs text-theme-secondary">
+      <div className="flex flex-wrap items-center gap-x-3 text-xs text-ink-tertiary">
         {worker.currentJob ? (
-          <>
-            Running{' '}
-            <span className="text-theme-primary font-mono">
-              {worker.currentJob.id.slice(0, 8)}
-            </span>{' '}
-            · {formatAge(worker.currentJob.ageSeconds)}
-            {worker.currentJob.baseModel && (
-              <> · {worker.currentJob.baseModel}</>
-            )}
-          </>
+          <span>
+            Running <span className="font-mono" title={worker.currentJob.id}>{shortId(worker.currentJob.id)}</span>
+            {' · '}
+            {formatAge(worker.currentJob.ageSeconds)}
+          </span>
         ) : (
-          <>Idle</>
+          <span>Idle</span>
         )}
-      </div>
-
-      {showGpuStats && (
-        <div className="text-xs text-theme-tertiary flex gap-3">
+        {showGpu && (
           <span>
-            GPU:{' '}
-            {hasRealGpuStats ? `${Math.round(worker.gpuUtil)}%` : 'n/a'}
+            GPU {realGpu ? `${Math.round(worker.gpuUtil)}%` : 'n/a'} · Mem{' '}
+            {realGpu ? `${Math.round(worker.memoryUtil)}%` : 'n/a'}
           </span>
-          <span>
-            Mem:{' '}
-            {hasRealGpuStats ? `${Math.round(worker.memoryUtil)}%` : 'n/a'}
-          </span>
-        </div>
-      )}
-
-      <div className="text-xs text-theme-tertiary">
-        Last heartbeat: {formatRelative(worker.lastHeartbeatAgeSeconds)}
+        )}
+        <span>Heartbeat {formatAgo(worker.lastHeartbeatAgeSeconds)}</span>
       </div>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: WorkerStatusView['status'] }) {
-  const cls =
-    status === 'busy'
-      ? 'bg-green-100 text-green-800'
-      : status === 'stale'
-        ? 'bg-yellow-100 text-yellow-800'
-        : 'bg-theme-secondary/20 text-theme-secondary';
-  return (
-    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${cls}`}>
-      {status}
-    </span>
-  );
-}
-
-function DeviceChip({ device }: { device: string }) {
-  return (
-    <span className="px-2 py-0.5 rounded text-xs font-mono bg-theme-secondary/20 text-theme-secondary">
-      {device}
-    </span>
+    </li>
   );
 }
 
 function formatAge(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  if (minutes < 60) return `${minutes}m ${secs}s`;
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return `${hours}h ${mins}m`;
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-function formatRelative(seconds: number): string {
+function formatAgo(seconds: number): string {
   if (seconds < 5) return 'just now';
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ago`;
+  return `${Math.floor(minutes / 60)}h ago`;
 }

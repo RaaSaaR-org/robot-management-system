@@ -1,13 +1,15 @@
 /**
  * @file StageCard.tsx
- * @description One stage in the training pipeline — status + next-action CTA
+ * @description One stage of the training pipeline, rendered as a row of the
+ *              vertical stepper on /pipeline: number (or check), title,
+ *              description, live summary, status and a link to the stage page.
+ *              Locked stages say "Complete previous step first" and link nowhere.
  * @feature pipeline
  */
 
-import { Link } from 'react-router-dom';
-import { ArrowRight, CheckCircle2, Circle, Loader2, Lock } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { Card } from '@/shared/components/ui/Card';
+import { useNavigate } from 'react-router-dom';
+import { ArrowRight, Check, RotateCw } from 'lucide-react';
+import { Button, LinkButton, StatusTag, type StatusTagTone as Tone } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 
 // ============================================================================
@@ -23,60 +25,34 @@ export interface StageCardProps {
   title: string;
   /** Short one-line description of what this stage does */
   description: string;
-  /** Lucide icon component */
-  icon: ReactNode;
   /** Current status */
   status: StageStatus;
-  /** Top stat line (e.g. "3 datasets · 1 ready") */
+  /** True for the first stage that still needs work */
+  isNext?: boolean;
+  /** Live summary (e.g. "3 datasets · 1 ready") */
   statLine?: string;
-  /** Secondary hint line (e.g. "Last activity: 2h ago") */
+  /** Secondary hint (e.g. "Last activity 2h ago") */
   hintLine?: string;
-  /** CTA button label */
+  /** Label of the link to the stage page */
   ctaLabel: string;
-  /** Route the CTA navigates to */
+  /** Route of the stage page */
   ctaHref: string;
-  /** Optional "view all" link below CTA */
-  viewAllHref?: string;
+  /** The stage's data could not be loaded */
+  loadError?: boolean;
+  /** Retry loading after an error */
+  onRetry?: () => void;
 }
 
 // ============================================================================
-// VISUAL TOKENS
+// STATUS
 // ============================================================================
 
-const STATUS_META: Record<
-  StageStatus,
-  { label: string; badgeClass: string; ringClass: string; iconColor: string }
-> = {
-  empty: {
-    label: 'Not started',
-    badgeClass: 'bg-glass-subtle text-theme-muted border-glass-subtle',
-    ringClass: 'border-glass-subtle',
-    iconColor: 'text-theme-muted',
-  },
-  active: {
-    label: 'Ready',
-    badgeClass: 'bg-cobalt-500/10 text-cobalt-400 border-cobalt-500/20',
-    ringClass: 'border-cobalt-500/30',
-    iconColor: 'text-cobalt-400',
-  },
-  running: {
-    label: 'In progress',
-    badgeClass: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
-    ringClass: 'border-yellow-500/30',
-    iconColor: 'text-yellow-400',
-  },
-  done: {
-    label: 'Done',
-    badgeClass: 'bg-green-500/10 text-green-400 border-green-500/20',
-    ringClass: 'border-green-500/20',
-    iconColor: 'text-green-400',
-  },
-  blocked: {
-    label: 'Waiting',
-    badgeClass: 'bg-glass-subtle text-theme-muted border-glass-subtle',
-    ringClass: 'border-glass-subtle opacity-60',
-    iconColor: 'text-theme-muted',
-  },
+const STATUS_META: Record<StageStatus, { label: string; tone: Tone }> = {
+  empty: { label: 'Not started', tone: 'neutral' },
+  active: { label: 'Ready', tone: 'neutral' },
+  running: { label: 'In progress', tone: 'info' },
+  done: { label: 'Done', tone: 'success' },
+  blocked: { label: 'Waiting', tone: 'neutral' },
 };
 
 // ============================================================================
@@ -87,107 +63,101 @@ export function StageCard({
   number,
   title,
   description,
-  icon,
   status,
+  isNext = false,
   statLine,
   hintLine,
   ctaLabel,
   ctaHref,
-  viewAllHref,
+  loadError = false,
+  onRetry,
 }: StageCardProps) {
-  const meta = STATUS_META[status];
+  const navigate = useNavigate();
   const isBlocked = status === 'blocked';
+  const isDone = status === 'done';
+  const meta = isNext && !isDone && status !== 'running'
+    ? { label: 'Up next', tone: 'accent' as Tone }
+    : STATUS_META[status];
 
-  const StatusIcon =
-    status === 'done'
-      ? CheckCircle2
-      : status === 'running'
-      ? Loader2
-      : status === 'blocked'
-      ? Lock
-      : Circle;
+  const open = () => {
+    if (!isBlocked) navigate(ctaHref);
+  };
 
   return (
-    <Card className={cn('h-full border-2 transition-all', meta.ringClass)}>
-      <div className="flex flex-col h-full gap-4">
-        {/* Header */}
-        <div className="flex flex-col gap-3">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div
-                className={cn(
-                  'w-9 h-9 rounded-brand flex items-center justify-center shrink-0',
-                  status === 'empty' || status === 'blocked'
-                    ? 'bg-glass-subtle'
-                    : 'bg-cobalt-500/10'
-                )}
-              >
-                <span className={cn(meta.iconColor)}>{icon}</span>
-              </div>
-              <div className="min-w-0">
-                <div className="text-[10px] font-mono uppercase tracking-wide text-theme-muted">
-                  Step {number}
-                </div>
-                <h3 className="text-base font-semibold text-theme-primary leading-tight">
-                  {title}
-                </h3>
-              </div>
-            </div>
-            <span
-              className={cn(
-                'inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-brand border shrink-0 whitespace-nowrap',
-                meta.badgeClass
-              )}
-            >
-              <StatusIcon
-                className={cn('w-3 h-3', status === 'running' && 'animate-spin')}
-              />
-              {meta.label}
-            </span>
+    <li
+      data-testid={`pipeline-stage-${number}`}
+      className={cn(
+        'flex gap-4 px-5 py-4',
+        !isBlocked && 'cursor-pointer transition-colors hover:bg-ink-primary/[0.035]',
+      )}
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest('a,button')) return;
+        open();
+      }}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold',
+          isDone && 'border-primary/40 bg-primary/10 text-primary',
+          !isDone && isNext && 'border-primary bg-primary text-on-primary',
+          !isDone && !isNext && 'border-line text-ink-tertiary',
+        )}
+      >
+        {isDone ? <Check className="h-4 w-4" strokeWidth={2} /> : number}
+      </span>
+
+      <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <h3 className={cn('text-sm font-semibold', isBlocked ? 'text-ink-tertiary' : 'text-ink-primary')}>
+              <span className="sr-only">Step {number}: </span>
+              {title}
+            </h3>
+            <StatusTag tone={meta.tone} dot>{meta.label}</StatusTag>
           </div>
+          <p className="mt-1 text-[13px] text-ink-tertiary">{description}</p>
         </div>
 
-        {/* Description */}
-        <p className="text-sm text-theme-secondary leading-relaxed">{description}</p>
-
-        {/* Stats */}
-        <div className="flex-1 space-y-1">
-          {statLine && (
-            <div className="text-sm font-medium text-theme-primary">{statLine}</div>
-          )}
-          {hintLine && <div className="text-xs text-theme-muted">{hintLine}</div>}
-        </div>
-
-        {/* CTA */}
-        <div className="flex flex-col gap-2 pt-2 border-t border-glass-subtle">
-          {isBlocked ? (
-            <div className="flex items-center justify-center gap-2 px-3 py-2 text-xs text-theme-muted rounded-brand bg-glass-subtle">
-              <Lock className="w-3.5 h-3.5" />
-              Complete previous step first
-            </div>
-          ) : (
-            <Link
-              to={ctaHref}
-              className={cn(
-                'flex items-center justify-center gap-2 px-3 py-2 rounded-brand',
-                'text-sm font-medium transition-all',
-                'bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20'
+        <div className="min-w-0 sm:w-56 sm:shrink-0">
+          {loadError ? (
+            <div className="flex items-center gap-2 text-[13px] text-signal-unknown">
+              Couldn&apos;t load
+              {onRetry && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  leftIcon={<RotateCw className="h-4 w-4" strokeWidth={1.75} />}
+                  onClick={onRetry}
+                >
+                  Retry
+                </Button>
               )}
+            </div>
+          ) : isBlocked ? (
+            <p className="text-[13px] text-ink-tertiary">Complete previous step first</p>
+          ) : (
+            <>
+              {statLine && <p className="text-[13px] font-medium text-ink-secondary">{statLine}</p>}
+              {hintLine && <p className="text-xs text-ink-muted">{hintLine}</p>}
+            </>
+          )}
+        </div>
+
+        <div className="sm:w-44 sm:shrink-0 sm:text-right">
+          {!isBlocked && (
+            <LinkButton
+              to={ctaHref}
+              variant="secondary"
+              size="sm"
+              className="w-full sm:w-auto"
+              rightIcon={<ArrowRight className="h-4 w-4" strokeWidth={1.75} />}
             >
               {ctaLabel}
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-          )}
-          {viewAllHref && !isBlocked && (
-            <Link
-              to={viewAllHref}
-              className="text-xs text-theme-muted hover:text-theme-secondary text-center transition-colors"
-            >
-              View all →
-            </Link>
+            </LinkButton>
           )}
         </div>
       </div>
-    </Card>
+    </li>
   );
 }

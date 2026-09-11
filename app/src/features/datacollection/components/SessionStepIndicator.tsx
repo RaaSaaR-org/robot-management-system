@@ -7,6 +7,7 @@
  */
 
 import { Check } from 'lucide-react';
+import { cn } from '@/shared/utils/cn';
 import type { TeleoperationSession } from '../types/datacollection.types';
 
 const STEPS = ['Connect input', 'Record episodes', 'Review', 'Export'] as const;
@@ -34,47 +35,36 @@ export function SessionStepIndicator({ session }: SessionStepIndicatorProps) {
 
   return (
     <nav aria-label="Session progress" data-testid="session-steps">
-      <ol className="flex items-center gap-0">
+      <ol className="flex flex-wrap items-center gap-y-2">
         {STEPS.map((label, i) => {
           const step = i + 1;
           const isDone = step < activeStep;
           const isActive = step === activeStep;
           return (
             <li key={label} className="flex items-center" data-testid={`session-step-${step}`}>
-              <div
-                className={`flex items-center gap-2 px-2.5 py-1.5 rounded-brand transition-colors ${
-                  isActive ? 'bg-cobalt-500/15' : ''
-                }`}
-                aria-current={isActive ? 'step' : undefined}
-              >
+              <div className="flex items-center gap-2" aria-current={isActive ? 'step' : undefined}>
                 <span
-                  className={`flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-semibold shrink-0 ${
-                    isDone
-                      ? 'bg-green-500/20 text-green-400'
-                      : isActive
-                        ? 'bg-primary text-on-primary'
-                        : 'bg-glass-subtle text-theme-muted'
-                  }`}
+                  className={cn(
+                    'flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-semibold',
+                    isDone && 'border-primary/40 bg-primary/10 text-primary',
+                    isActive && 'border-primary bg-primary text-on-primary',
+                    !isDone && !isActive && 'border-line text-ink-tertiary',
+                  )}
                 >
-                  {isDone ? <Check size={12} /> : step}
+                  {isDone ? <Check className="h-3.5 w-3.5" strokeWidth={2} /> : step}
                 </span>
                 <span
-                  className={`text-xs font-medium hidden sm:inline ${
-                    isActive
-                      ? 'text-cobalt-400'
-                      : isDone
-                        ? 'text-theme-secondary'
-                        : 'text-theme-muted'
-                  }`}
+                  className={cn(
+                    'text-[13px] font-medium',
+                    isActive ? 'text-ink-primary' : isDone ? 'text-ink-secondary' : 'text-ink-tertiary',
+                    !isActive && 'hidden sm:inline',
+                  )}
                 >
                   {label}
                 </span>
               </div>
               {step < STEPS.length && (
-                <span
-                  className={`w-6 h-px mx-1 ${isDone ? 'bg-green-500/40' : 'bg-glass-subtle'}`}
-                  aria-hidden
-                />
+                <span className={cn('mx-3 h-px w-6 sm:w-10', isDone ? 'bg-primary/40' : 'bg-line')} aria-hidden />
               )}
             </li>
           );

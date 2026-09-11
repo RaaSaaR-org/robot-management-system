@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { DatasetsPage } from '../../pages/DatasetsPage';
+import { FeedbackProvider } from '@/shared/components/ui';
 import { useTrainingStore } from '../../store';
 import type { Dataset } from '../../types';
 
@@ -89,14 +90,17 @@ const DATASETS = [
 function page() {
   return render(
     <MemoryRouter>
-      <DatasetsPage />
+      <FeedbackProvider>
+        <DatasetsPage />
+      </FeedbackProvider>
     </MemoryRouter>
   );
 }
 
-/** The value rendered under a stat tile's label. */
-function stat(label: string): string {
-  return screen.getByTestId(`stat-${label}`).textContent ?? '';
+/** Opens a row's menu and picks one item. */
+async function rowAction(rowName: string, item: string) {
+  fireEvent.click(await screen.findByRole('button', { name: `Actions for ${rowName}` }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: item }));
 }
 
 beforeEach(() => {
@@ -112,20 +116,21 @@ beforeEach(() => {
   ]);
 });
 
-describe('the stat tiles', () => {
-  it('counts frames that exist, not frames a failed import read out of info.json', async () => {
-    // 171,625 of the old total came from an import that downloaded nothing.
+describe('the counts', () => {
+  it('counts ready and failed rows in the status filter', async () => {
     page();
-    await waitFor(() => expect(screen.getByTestId('stat-Total Frames')).toBeInTheDocument());
-    expect(stat('Total Frames')).toBe('400');
-    expect(stat('Total Frames')).not.toContain('171,625');
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'Ready (1)' })).toBeInTheDocument()
+    );
+    expect(screen.getByRole('option', { name: 'Failed (1)' })).toBeInTheDocument();
   });
 
-  it('has a tile for the failed ones', async () => {
+  it('shows frames a ready dataset has, and offers training only for ready ones', async () => {
+    // 171,625 frames came from an import that downloaded nothing; the row says
+    // so by being failed, and the next-step banner counts only the ready one.
     page();
-    await waitFor(() => expect(screen.getByTestId('stat-Failed')).toBeInTheDocument());
-    expect(stat('Failed')).toBe('1');
-    expect(stat('Ready')).toBe('1');
+    await waitFor(() => expect(screen.getByText('Ready dataset')).toBeInTheDocument());
+    expect(screen.getByText('1 dataset is ready to train on.')).toBeInTheDocument();
   });
 });
 
@@ -134,7 +139,7 @@ describe('the filters', () => {
     // The three hardcoded slugs ("humanoid", "mobile", "arm") were matched
     // against a UUID column, so every option returned zero rows.
     page();
-    const select = await screen.findByLabelText('Filter by robot type');
+    const select = await screen.findByLabelText('Robot type');
     await waitFor(() =>
       expect(screen.getByRole('option', { name: 'Unitree G1 EDU (Dex3-1)' })).toBeInTheDocument()
     );
@@ -146,15 +151,14 @@ describe('the filters', () => {
     expect(screen.queryByRole('option', { name: 'Humanoid' })).not.toBeInTheDocument();
   });
 
-  it('hides the skill filter when no dataset carries a skill', async () => {
+  it('names the robot type in the table', async () => {
     page();
-    await waitFor(() => expect(screen.getByLabelText('Filter by robot type')).toBeInTheDocument());
-    expect(screen.queryByLabelText('Filter by skill')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('Unitree G1 EDU (Dex3-1)').length).toBeGreaterThan(1));
   });
 
   it('says "no match" rather than "no datasets yet" when a filter empties the list', async () => {
     page();
-    const select = await screen.findByLabelText('Filter by robot type');
+    const select = await screen.findByLabelText('Robot type');
     await waitFor(() =>
       expect(screen.getByRole('option', { name: 'unitree_g1' })).toBeInTheDocument()
     );
@@ -165,24 +169,22 @@ describe('the filters', () => {
     });
     fireEvent.change(select, { target: { value: 'rt-groot' } });
 
-    expect(await screen.findByText('No datasets match your filters.')).toBeInTheDocument();
+    expect(await screen.findByText('No datasets match')).toBeInTheDocument();
     expect(screen.queryByText('No datasets yet')).not.toBeInTheDocument();
   });
 });
 
-
 // ===========================================================================
 // An action that did not happen, and why
 //
-// Both `handleConfirmDelete` and `handleRetryImport` used to end in
-// `console.error` alone. The operator clicked, nothing moved, and the reason
-// was visible only with devtools open — including the 409 that names the
-// training jobs still holding a dataset, which is the whole point of that
-// refusal being written carefully.
+// Both the delete and the retry used to end in `console.error` alone. The
+// operator clicked, nothing moved, and the reason was visible only with
+// devtools open — including the 409 that names the training jobs still
+// holding a dataset. The reason now arrives as an error toast.
 // ===========================================================================
 
 describe('when a delete or a retry is refused', () => {
-  it('shows the server\u2019s reason for a refused delete', async () => {
+  it('shows the server’s reason for a refused delete', async () => {
     trainingApiMock.deleteDataset.mockRejectedValue({
       code: 'CONFLICT',
       message:
@@ -192,14 +194,13 @@ describe('when a delete or a retry is refused', () => {
     });
 
     page();
-    await waitFor(() => expect(screen.getAllByText('Ready dataset').length).toBeGreaterThan(0));
+    await rowAction('Ready dataset', 'Delete');
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Delete Ready dataset?');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
-    fireEvent.click(screen.getAllByRole('button', { name: /delete/i })[0]);
-    fireEvent.click(await screen.findByRole('button', { name: /^Delete$/ }));
-
-    const banner = await screen.findByTestId('dataset-action-error');
-    expect(banner).toHaveTextContent('member of 2 training jobs');
-    expect(banner).toHaveTextContent('job-a, job-b');
+    expect(await screen.findByText("Couldn't delete dataset")).toBeInTheDocument();
+    expect(screen.getByText(/member of 2 training jobs \(job-a, job-b\)/)).toBeInTheDocument();
   });
 
   it('shows why a retry could not start', async () => {
@@ -209,32 +210,10 @@ describe('when a delete or a retry is refused', () => {
       statusCode: 409,
     });
 
-    // The Retry button only appears on a row that carries a recorded reason,
-    // which is the row this whole feature exists for.
-    listDatasets.mockResolvedValue({
-      datasets: [
-        DATASETS[0],
-        dataset({
-          id: 'ds-groot',
-          name: 'GR00T-N1.7-AppleToPlate',
-          status: 'failed',
-          huggingFaceRepoId: 'nvidia/GR00T-N1.7-AppleToPlate',
-          importError: {
-            phase: 'download',
-            error: 'RustFS is unreachable at http://localhost:9000',
-            repoId: 'nvidia/GR00T-N1.7-AppleToPlate',
-            failedAt: '2026-08-23T01:20:11.361Z',
-          },
-        }),
-      ],
-      pagination: { page: 1, pageSize: 20, total: 2, totalPages: 1 },
-    });
-
     page();
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry import' }));
+    await rowAction('GR00T-N1.7-AppleToPlate', 'Retry import');
 
-    expect(await screen.findByTestId('dataset-action-error')).toHaveTextContent(
-      'already running'
-    );
+    expect(await screen.findByText("Couldn't restart the import")).toBeInTheDocument();
+    expect(screen.getByText('An import of this dataset is already running')).toBeInTheDocument();
   });
 });

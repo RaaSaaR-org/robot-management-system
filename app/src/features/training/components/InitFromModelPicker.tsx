@@ -6,7 +6,7 @@
  */
 
 import { useCallback } from 'react';
-import { cn } from '@/shared/utils/cn';
+import { FormField, Select, SkeletonRows } from '@/shared/components/ui';
 import { ModelVersionCard } from '@/features/deployment/components/ModelVersionCard';
 import type { ModelVersion } from '@/features/deployment/types';
 import { useInitFromModelVersions, type InitFromCandidate } from '../hooks/useInitFromModelVersions';
@@ -22,10 +22,9 @@ export interface InitFromModelPickerProps {
 }
 
 /**
- * The headline `ModelVersionCard` prints, mirrored here because the picker
- * stores the name in the wizard's form: the review step names the starting
- * model after the picker is gone, and it must be the same name the operator
- * clicked. (TASK-238's `getDisplayName`, which the card keeps private.)
+ * The headline `ModelVersionCard` prints, mirrored here because the review
+ * step names the starting model after the picker is gone, and it must be the
+ * same name the operator clicked. (TASK-238's `getDisplayName`.)
  */
 function modelDisplayName(version: ModelVersion): string {
   return version.name || version.skill?.name || `Model ${version.version}`;
@@ -37,12 +36,7 @@ function checkpointLabel(epoch: number, metrics: Record<string, number>): string
   return typeof loss === 'number' ? `Epoch ${epoch} · loss ${loss}` : `Epoch ${epoch}`;
 }
 
-export function InitFromModelPicker({
-  baseModel,
-  baseModelLabel,
-  value,
-  onChange,
-}: InitFromModelPickerProps) {
+export function InitFromModelPicker({ baseModel, baseModelLabel, value, onChange }: InitFromModelPickerProps) {
   const { candidates, hiddenCount, isLoading } = useInitFromModelVersions(baseModel);
 
   const selectModel = useCallback(
@@ -51,8 +45,8 @@ export function InitFromModelPicker({
         modelVersionId: candidate.version.id,
         modelName: modelDisplayName(candidate.version),
         modelBaseModel: candidate.baseModel,
-        // A newly picked model starts from its final weights; the dropdown
-        // below narrows that to an epoch.
+        // A newly picked model starts from its final weights; the checkpoint
+        // select below narrows that to an epoch.
         checkpointId: null,
         checkpointEpoch: null,
       });
@@ -66,44 +60,31 @@ export function InitFromModelPicker({
     (checkpointId: string) => {
       if (!value || !selected) return;
       const checkpoint = selected.checkpoints.find((c) => c.id === checkpointId) ?? null;
-      onChange({
-        ...value,
-        checkpointId: checkpoint?.id ?? null,
-        checkpointEpoch: checkpoint?.epoch ?? null,
-      });
+      onChange({ ...value, checkpointId: checkpoint?.id ?? null, checkpointEpoch: checkpoint?.epoch ?? null });
     },
     [onChange, selected, value]
   );
 
   return (
-    <div className="space-y-3" data-testid="init-from-picker">
-      {isLoading && (
-        <p className="py-6 text-center text-sm text-theme-secondary">Loading registered models…</p>
-      )}
+    <div className="flex flex-col gap-3" data-testid="init-from-picker">
+      {isLoading && <SkeletonRows rows={2} columns={2} dense />}
 
       {!isLoading && candidates.length === 0 && (
-        <p className="py-6 text-center text-sm text-theme-secondary" data-testid="init-from-empty">
+        <p className="rounded-control bg-inset px-3 py-4 text-center text-sm text-ink-secondary" data-testid="init-from-empty">
           No registered model was trained as {baseModelLabel}. Register one on the Models page, or
           start from the foundation model.
         </p>
       )}
 
       {candidates.length > 0 && (
-        <div
-          className="grid gap-3 max-h-[260px] overflow-y-auto"
-          role="radiogroup"
-          aria-label="Starting model"
-        >
+        <div className="grid max-h-[260px] gap-3 overflow-y-auto" role="radiogroup" aria-label="Starting model">
           {candidates.map((candidate) => {
             const name = modelDisplayName(candidate.version);
             const isSelected = candidate.version.id === value?.modelVersionId;
             return (
               <label
                 key={candidate.version.id}
-                className={cn(
-                  'block cursor-pointer rounded-lg',
-                  'focus-within:outline-none focus-within:ring-2 focus-within:ring-cobalt-500/60'
-                )}
+                className="block cursor-pointer rounded-control focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary"
               >
                 <input
                   type="radio"
@@ -121,28 +102,23 @@ export function InitFromModelPicker({
       )}
 
       {hiddenCount > 0 && (
-        <p className="text-xs text-theme-tertiary">
+        <p className="text-xs text-ink-tertiary">
           {hiddenCount} registered {hiddenCount === 1 ? 'model is' : 'models are'} not shown here:
           only a model trained as {baseModelLabel} can be continued by this run.
         </p>
       )}
 
       {selected && selected.checkpoints.length > 0 && (
-        <label className="block text-sm text-theme-secondary">
-          Checkpoint
-          <select
-            className="mt-1 block w-full rounded-brand border border-theme-secondary/30 bg-theme-primary px-2 py-1 text-sm text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
+        <FormField label="Checkpoint">
+          <Select
             value={value?.checkpointId ?? ''}
             onChange={(e) => selectCheckpoint(e.target.value)}
-          >
-            <option value="">Final weights (end of the run)</option>
-            {selected.checkpoints.map((checkpoint) => (
-              <option key={checkpoint.id} value={checkpoint.id}>
-                {checkpointLabel(checkpoint.epoch, checkpoint.metrics)}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={[
+              { value: '', label: 'Final weights (end of the run)' },
+              ...selected.checkpoints.map((c) => ({ value: c.id, label: checkpointLabel(c.epoch, c.metrics) })),
+            ]}
+          />
+        </FormField>
       )}
     </div>
   );
