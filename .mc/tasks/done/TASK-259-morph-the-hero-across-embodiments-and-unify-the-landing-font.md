@@ -2,7 +2,7 @@
 id: "TASK-259"
 title: "Morph the hero across embodiments and unify the landing font"
 slug: "morph-the-hero-across-embodiments-and-unify-the-landing-font"
-status: "in-progress"
+status: "done"
 priority: 3
 owner: "huhn511"
 tags: [landing, design]
@@ -53,4 +53,5 @@ The TASK-258 hero showed one abstract CPU core. It should show the claim the pla
 - `npx tsc` clean; landing vitest 11/11; full Playwright gate 52/52 (`PLAYWRIGHT_PORT=4187`, because a foreign preview held :4173), including all seven `landing-hero.spec.ts` cases.
 - Rendered-text audit of the whole landing page at 320, 390, 768 and 1440px: no font other than Inter or Archivo outside the install commands and the Agent Mode plan line, nothing under 10px, zero horizontal overflow.
 - Review fixes on top of the hero work: 6–9px mono hero labels raised to ≥10px Inter; the halo ring no longer strikes through the scene heading; phone callouts wrap onto two lines clear of the twin; the right callout no longer clips past the viewport between 1101 and 1360px (checked at seven widths).
+- First CI run (`d262ba09`) was red on the Playwright gate. Two workers each rendering software GL on a 4-vCPU runner starved each other. The hero ran its cycle at about 0.4x and missed a 20 s wait, and an unrelated robot-detail screenshot hit 30 s. The engine's 0.08 s per-frame step cap turned slow frames into slow motion. Fixes: the step cap is now 0.25 s (wall-clock pace down to 4 fps), CI runs one worker, transition waits are 30 s, and the reduced-motion test now reports page errors together with the exhibit state.
 - Known follow-up, not fixed here: `go2-twin.glb` is 1.19 MB because `scripts/build-hero-model.py` skips decimation for `base_*` meshes (the body shell alone is ~88k triangles); decimating it would roughly halve the hero's 3D payload.
