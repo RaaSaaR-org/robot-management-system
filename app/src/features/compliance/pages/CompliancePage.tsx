@@ -147,7 +147,7 @@ function CompliancePageInner() {
           type="button"
           className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             !filters.eventType
-              ? 'bg-primary-500 text-white'
+              ? 'bg-primary text-on-primary'
               : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
           }`}
           onClick={() => handleEventTypeFilter(undefined)}
@@ -161,7 +161,7 @@ function CompliancePageInner() {
               type="button"
               className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
                 filters.eventType === type
-                  ? 'bg-primary-500 text-white'
+                  ? 'bg-primary text-on-primary'
                   : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
               }`}
               onClick={() => handleEventTypeFilter(type)}

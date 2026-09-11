@@ -229,13 +229,13 @@ export function TwinViewerPage() {
           <div className="flex gap-1 rounded-lg border border-theme p-1 bg-theme-surface">
           <button
             onClick={() => setTab('scan')}
-            className={`px-3 py-1.5 text-xs font-medium rounded ${tab === 'scan' ? 'bg-cobalt text-white' : 'text-theme-tertiary hover:text-theme-secondary'}`}
+            className={`px-3 py-1.5 text-xs font-medium rounded ${tab === 'scan' ? 'bg-primary text-on-primary' : 'text-theme-tertiary hover:text-theme-secondary'}`}
           >
             Scan
           </button>
           <button
             onClick={() => setTab('zones')}
-            className={`px-3 py-1.5 text-xs font-medium rounded ${tab === 'zones' ? 'bg-cobalt text-white' : 'text-theme-tertiary hover:text-theme-secondary'}`}
+            className={`px-3 py-1.5 text-xs font-medium rounded ${tab === 'zones' ? 'bg-primary text-on-primary' : 'text-theme-tertiary hover:text-theme-secondary'}`}
           >
             Zones
           </button>

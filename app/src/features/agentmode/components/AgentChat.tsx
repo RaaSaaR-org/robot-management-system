@@ -134,7 +134,7 @@ function MessageRow({ message, plan }: { message: AgentChatMessage; plan: AgentP
         className={cn(
           'max-w-[85%] px-3.5 py-2.5 rounded-brand-lg text-sm leading-snug whitespace-pre-wrap',
           isUser
-            ? 'bg-cobalt-500 text-white rounded-br-md'
+            ? 'bg-primary text-on-primary rounded-br-md'
             : message.isError
               ? 'bg-red-500/10 text-red-600 dark:text-red-400 rounded-bl-md border border-red-500/30'
               : 'glass-card text-theme-primary rounded-bl-md'
@@ -438,7 +438,7 @@ export const AgentChat = memo(function AgentChat({
               'h-10 w-10 pointer-coarse:h-11 pointer-coarse:w-11',
               'rounded-brand flex items-center justify-center shrink-0 transition-all duration-150',
               inputValue.trim() && canSend && !isSending
-                ? 'bg-cobalt-500 hover:bg-cobalt-600 text-white active:scale-95'
+                ? 'bg-primary hover:bg-primary-hover text-on-primary active:scale-95'
                 : 'bg-gray-200 dark:bg-gray-700 text-theme-muted'
             )}
           >

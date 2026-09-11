@@ -79,7 +79,7 @@ export const A2ABottomNav = memo(function A2ABottomNav({
                         'flex items-center justify-center',
                         'min-w-[1rem] h-4 px-1',
                         'rounded-full text-[10px] font-bold',
-                        'bg-accent-500 text-white'
+                        'bg-accent text-on-accent'
                       )}
                     >
                       {badge > 99 ? '99+' : badge}

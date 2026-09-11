@@ -116,7 +116,7 @@ export function RewardCard({
               disabled={isLoading || !isAvailable}
               className={cn(
                 'px-4 py-1.5 text-sm font-medium rounded-lg transition-colors',
-                'bg-primary-600 text-white hover:bg-primary-700',
+                'bg-primary text-on-primary hover:bg-primary-hover',
                 'disabled:opacity-50 disabled:cursor-not-allowed'
               )}
             >

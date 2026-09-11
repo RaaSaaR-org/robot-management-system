@@ -1,11 +1,15 @@
 /**
  * @file Tabs.tsx
- * @description Reusable tabbed interface component with glass morphism styling
+ * @description Tabbed interface. `default` = underline tabs (page sections,
+ *              state in ?tab=); `pills` = a segmented switch. Tabs without
+ *              `content` render the tab bar only, for pages that render the
+ *              section themselves.
  * @feature shared
  */
 
 import { useState, useCallback, useId, memo, type ReactNode, type KeyboardEvent } from 'react';
 import { cn } from '@/shared/utils/cn';
+import { focusRing } from './styles';
 
 // ============================================================================
 // TYPES
@@ -16,12 +20,14 @@ export interface Tab {
   id: string;
   /** Display label for the tab */
   label: string;
-  /** Optional icon to display before the label */
+  /** Optional icon to display before the label (w-4 h-4) */
   icon?: ReactNode;
-  /** Tab content */
-  content: ReactNode;
+  /** Tab content; omit (or null) to render the bar only */
+  content?: ReactNode;
   /** Whether the tab is disabled */
   disabled?: boolean;
+  /** Small count after the label */
+  count?: number;
 }
 
 export interface TabsProps {
@@ -35,8 +41,12 @@ export interface TabsProps {
   onTabChange?: (tabId: string) => void;
   /** Additional class names for the container */
   className?: string;
+  /** Classes for the panel under the bar */
+  panelClassName?: string;
   /** Variant for tab header styling */
   variant?: 'default' | 'pills';
+  /** Accessible name of the tab list */
+  label?: string;
 }
 
 // ============================================================================
@@ -44,16 +54,15 @@ export interface TabsProps {
 // ============================================================================
 
 /**
- * Tabbed interface component with keyboard navigation and glass styling.
- *
  * @example
  * ```tsx
  * <Tabs
  *   tabs={[
- *     { id: 'telemetry', label: 'Telemetry', icon: <ChartIcon />, content: <TelemetryPanel /> },
- *     { id: 'commands', label: 'Commands', icon: <TerminalIcon />, content: <CommandsPanel /> },
+ *     { id: 'routes', label: 'Routes', count: routes.length, content: <RoutesPanel /> },
+ *     { id: 'runs', label: 'Runs', content: <RunsPanel /> },
  *   ]}
- *   defaultTab="telemetry"
+ *   activeTab={tab}
+ *   onTabChange={setTab}
  * />
  * ```
  */
@@ -63,14 +72,13 @@ export const Tabs = memo(function Tabs({
   defaultTab,
   onTabChange,
   className,
+  panelClassName,
   variant = 'default',
+  label,
 }: TabsProps) {
   const baseId = useId();
-  const [internalActiveTab, setInternalActiveTab] = useState(
-    defaultTab ?? tabs[0]?.id ?? ''
-  );
+  const [internalActiveTab, setInternalActiveTab] = useState(defaultTab ?? tabs[0]?.id ?? '');
 
-  // Use controlled or uncontrolled state
   const activeTab = controlledActiveTab ?? internalActiveTab;
 
   const handleTabClick = useCallback(
@@ -80,15 +88,13 @@ export const Tabs = memo(function Tabs({
       }
       onTabChange?.(tabId);
     },
-    [controlledActiveTab, onTabChange]
+    [controlledActiveTab, onTabChange],
   );
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
       const enabledTabs = tabs.filter((t) => !t.disabled);
-      const currentEnabledIndex = enabledTabs.findIndex(
-        (t) => t.id === tabs[currentIndex].id
-      );
+      const currentEnabledIndex = enabledTabs.findIndex((t) => t.id === tabs[currentIndex].id);
 
       let newIndex = currentEnabledIndex;
 
@@ -118,90 +124,99 @@ export const Tabs = memo(function Tabs({
       const newTab = enabledTabs[newIndex];
       if (newTab) {
         handleTabClick(newTab.id);
-        // Focus the new tab button
-        const newButton = document.getElementById(`${baseId}-tab-${newTab.id}`);
-        newButton?.focus();
+        document.getElementById(`${baseId}-tab-${newTab.id}`)?.focus();
       }
     },
-    [tabs, handleTabClick, baseId]
+    [tabs, handleTabClick, baseId],
   );
 
-  const activeTabContent = tabs.find((t) => t.id === activeTab)?.content;
+  const active = tabs.find((t) => t.id === activeTab);
+  const hasPanel = active?.content !== undefined && active?.content !== null;
+  const pills = variant === 'pills';
 
   return (
-    <div className={cn('w-full', className)}>
-      {/* Tab Headers */}
+    <div className={cn('w-full min-w-0', className)}>
       <div
         role="tablist"
         aria-orientation="horizontal"
+        aria-label={label}
         className={cn(
-          'flex gap-1 overflow-x-auto scrollbar-hide',
-          variant === 'default' && 'border-b border-glass-subtle',
-          variant === 'pills' && 'glass-subtle p-1 rounded-xl'
+          'scrollbar-hide overflow-x-auto',
+          pills
+            ? 'inline-flex max-w-full gap-0.5 rounded-control border border-line-subtle bg-inset p-[3px]'
+            : 'flex gap-6 border-b border-line-subtle',
         )}
       >
         {tabs.map((tab, index) => {
           const isActive = tab.id === activeTab;
-          const tabId = `${baseId}-tab-${tab.id}`;
-          const panelId = `${baseId}-panel-${tab.id}`;
-
           return (
             <button
               key={tab.id}
-              id={tabId}
+              id={`${baseId}-tab-${tab.id}`}
+              type="button"
               role="tab"
               aria-selected={isActive}
-              aria-controls={panelId}
+              aria-controls={isActive && hasPanel ? `${baseId}-panel-${tab.id}` : undefined}
               aria-disabled={tab.disabled}
               tabIndex={isActive ? 0 : -1}
               disabled={tab.disabled}
               onClick={() => !tab.disabled && handleTabClick(tab.id)}
               onKeyDown={(e) => handleKeyDown(e, index)}
               className={cn(
-                'flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-all duration-200 shrink-0',
-                'focus:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent',
-                variant === 'default' && [
-                  'relative -mb-px border-b-2',
-                  isActive
-                    ? 'border-cobalt-500 text-cobalt-400'
-                    : 'border-transparent text-theme-secondary hover:text-theme-primary hover:border-glass-highlight',
-                  tab.disabled && 'opacity-50 cursor-not-allowed',
-                ],
-                variant === 'pills' && [
-                  'rounded-lg',
-                  isActive
-                    ? 'bg-cobalt-500/20 text-cobalt-400 shadow-sm'
-                    : 'text-theme-secondary hover:text-theme-primary hover:bg-glass-subtle',
-                  tab.disabled && 'opacity-50 cursor-not-allowed',
-                ]
+                'flex shrink-0 items-center gap-2 whitespace-nowrap font-medium',
+                'transition-colors duration-150 ease-[var(--ease-instrument)]',
+                focusRing,
+                tab.disabled && 'cursor-not-allowed opacity-50',
+                pills
+                  ? cn(
+                      'h-8 rounded-[7px] px-3 text-[13px]',
+                      isActive
+                        ? 'bg-raised text-ink-primary shadow-[0_1px_2px_rgba(0,0,0,0.18)]'
+                        : 'text-ink-tertiary hover:text-ink-primary',
+                    )
+                  : cn(
+                      'relative -mb-px h-10 border-b-2 px-0.5 text-sm',
+                      isActive
+                        ? 'border-primary text-ink-primary'
+                        : 'border-transparent text-ink-tertiary hover:text-ink-primary',
+                    ),
               )}
             >
               {tab.icon && (
                 <span
-                  className={cn(
-                    'flex-shrink-0',
-                    isActive ? 'text-cobalt-400' : 'text-theme-tertiary'
-                  )}
+                  aria-hidden="true"
+                  className={cn('inline-flex shrink-0 [&_svg]:h-4 [&_svg]:w-4', isActive ? 'text-primary' : 'text-ink-muted')}
                 >
                   {tab.icon}
                 </span>
               )}
               <span>{tab.label}</span>
+              {tab.count !== undefined && (
+                <span
+                  className={cn(
+                    'rounded-tag px-1.5 py-px text-[11px] font-medium leading-4 tabular-nums',
+                    isActive ? 'bg-primary/10 text-primary' : 'bg-ink-secondary/[0.08] text-ink-tertiary',
+                  )}
+                >
+                  {tab.count}
+                </span>
+              )}
             </button>
           );
         })}
       </div>
 
-      {/* Tab Panel */}
-      <div
-        id={`${baseId}-panel-${activeTab}`}
-        role="tabpanel"
-        aria-labelledby={`${baseId}-tab-${activeTab}`}
-        tabIndex={0}
-        className="mt-6 focus:outline-none"
-      >
-        {activeTabContent}
-      </div>
+      {hasPanel && (
+        <div
+          id={`${baseId}-panel-${activeTab}`}
+          role="tabpanel"
+          aria-labelledby={`${baseId}-tab-${activeTab}`}
+          tabIndex={0}
+          className={cn('mt-5 focus:outline-none', panelClassName)}
+        >
+          {active?.content}
+        </div>
+      )}
     </div>
   );
 });

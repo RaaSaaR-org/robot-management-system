@@ -78,7 +78,7 @@ export function DemoFeaturePlaceholder({
         <div className="flex items-center justify-center gap-3">
           <Link
             to={docsSlug ? `/docs/${docsSlug}` : '/docs'}
-            className="px-4 py-2 text-sm font-medium rounded-brand bg-cobalt text-white hover:bg-cobalt-600 transition-colors"
+            className="px-4 py-2 text-sm font-medium rounded-brand bg-primary text-on-primary hover:bg-primary-hover transition-colors"
           >
             View Docs
           </Link>

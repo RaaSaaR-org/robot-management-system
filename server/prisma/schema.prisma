@@ -628,7 +628,7 @@ model UserSettings {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // Appearance
-  theme       String  @default("system") // "light" | "dark" | "system"
+  theme       String  @default("dark") // "light" | "dark" | "system" — dark is the app default (TASK-261)
   language    String  @default("en")
   compactMode Boolean @default(false)
 

@@ -160,7 +160,7 @@ export function ModelBrowser({
               className={cn(
                 'px-3 py-1.5 text-sm rounded-md transition-colors',
                 statusFilter === status
-                  ? 'bg-cobalt-500 text-white'
+                  ? 'bg-primary text-on-primary'
                   : 'bg-gray-100 dark:bg-gray-800 text-theme-secondary hover:bg-gray-200 dark:hover:bg-gray-700'
               )}
             >

@@ -37,7 +37,7 @@ export const ModeSwitcher = memo(function ModeSwitcher({
         className={cn(
           'px-3 py-1.5 text-xs font-medium rounded-brand transition-all duration-200 whitespace-nowrap',
           mode === 'direct'
-            ? 'bg-cobalt-500 text-white shadow-sm'
+            ? 'bg-primary text-on-primary shadow-sm'
             : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover'
         )}
         title="Direct mode: Chat with one selected agent"
@@ -50,7 +50,7 @@ export const ModeSwitcher = memo(function ModeSwitcher({
         className={cn(
           'px-3 py-1.5 text-xs font-medium rounded-brand transition-all duration-200 whitespace-nowrap',
           mode === 'orchestration'
-            ? 'bg-cobalt-500 text-white shadow-sm'
+            ? 'bg-primary text-on-primary shadow-sm'
             : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover'
         )}
         title="Orchestration mode: AI routes to all registered agents"

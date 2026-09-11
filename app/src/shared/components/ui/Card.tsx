@@ -1,12 +1,17 @@
 /**
  * @file Card.tsx
- * @description Container card component with shadow and hover effects
+ * @description Legacy container, kept so its ~340 call sites compile. It now
+ *              renders the Panel surface: default/glass/elevated → default
+ *              panel, subtle → inset, outlined → a hairline box without fill.
+ *              New code uses Panel.
  * @feature shared
- * @dependencies shared/utils/cn
+ * @dependencies shared/utils/cn, shared/components/ui/Panel
  */
 
 import { forwardRef, type HTMLAttributes, type ReactNode } from 'react';
 import { cn } from '@/shared/utils/cn';
+import { panelClasses } from './Panel';
+import { focusRing } from './styles';
 
 // ============================================================================
 // TYPES
@@ -19,9 +24,9 @@ export interface CardProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
   /** Remove default padding */
   noPadding?: boolean;
-  /** Disable hover effects */
+  /** Kept for compatibility; panels have no hover effect unless interactive */
   noHover?: boolean;
-  /** Add interactive cursor and enhanced hover */
+  /** Add interactive cursor and hover border */
   interactive?: boolean;
   /** Card variant for different visual styles */
   variant?: CardVariant;
@@ -43,22 +48,22 @@ export interface CardFooterProps extends HTMLAttributes<HTMLDivElement> {
 // CONSTANTS
 // ============================================================================
 
-const variantStyles: Record<CardVariant, string> = {
-  default: '', // Uses .card class from CSS which applies glass-card
-  glass: '', // Same as default, explicitly glass
-  elevated: 'glass-elevated', // Enhanced glass with stronger blur and shadow
-  subtle: 'glass-subtle !rounded-brand', // Subtle glass for nested elements
-  outlined: 'bg-transparent shadow-none backdrop-blur-none border border-theme',
-};
+function variantClasses(variant: CardVariant): string {
+  switch (variant) {
+    case 'subtle':
+      return panelClasses({ variant: 'inset', padding: 'none' });
+    case 'outlined':
+      return 'relative min-w-0 bg-transparent border border-line rounded-panel';
+    default:
+      return panelClasses({ variant: 'default', padding: 'none' });
+  }
+}
 
 // ============================================================================
 // COMPONENTS
 // ============================================================================
 
 /**
- * A container card component with shadow and optional hover effects.
- * Uses compound component pattern with Card.Header, Card.Body, and Card.Footer.
- *
  * @example
  * ```tsx
  * <Card>
@@ -66,103 +71,77 @@ const variantStyles: Record<CardVariant, string> = {
  *   <Card.Body>Content goes here</Card.Body>
  *   <Card.Footer>Footer actions</Card.Footer>
  * </Card>
- *
- * <Card variant="elevated" interactive>
- *   Clickable elevated card
- * </Card>
  * ```
  */
-export const Card = forwardRef<HTMLDivElement, CardProps>(
-  function Card(
-    {
-      children,
-      noPadding = false,
-      noHover = false,
-      interactive = false,
-      variant = 'default',
-      className,
-      ...props
-    },
-    ref
-  ) {
-    return (
-      <div
-        ref={ref}
-        className={cn(
-          // Base card styles (from index.css .card class which uses glass-card)
-          'card',
-          // Variant styles
-          variantStyles[variant],
-          // Padding (not for subtle variant which has its own smaller padding)
-          !noPadding && variant !== 'subtle' && 'p-6',
-          // Interactive styles - use glass-card-interactive for hover/active effects
-          interactive && 'glass-card-interactive',
-          className
-        )}
-        {...props}
-      >
-        {children}
-      </div>
-    );
-  }
-) as CardComponent;
+export const Card = forwardRef<HTMLDivElement, CardProps>(function Card(
+  { children, noPadding = false, noHover: _noHover = false, interactive = false, variant = 'default', className, ...props },
+  ref,
+) {
+  return (
+    <div
+      ref={ref}
+      className={cn(
+        variantClasses(variant),
+        // The old `.card` class clipped its content; call sites rely on it.
+        'overflow-hidden',
+        // Subtle cards never had default padding — call sites pad them.
+        !noPadding && variant !== 'subtle' && 'p-5',
+        interactive &&
+          cn('cursor-pointer transition-colors duration-150 hover:border-line-strong', focusRing),
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </div>
+  );
+}) as CardComponent;
 
-/**
- * Card header section with bottom border.
- */
-const CardHeader = forwardRef<HTMLDivElement, CardHeaderProps>(
-  function CardHeader({ children, className, ...props }, ref) {
-    return (
-      <div
-        ref={ref}
-        className={cn(
-          'px-6 py-4 border-b border-glass-subtle',
-          '-mx-6 -mt-6 mb-6', // Offset parent padding
-          'first:rounded-t-brand-lg',
-          className
-        )}
-        {...props}
-      >
-        {children}
-      </div>
-    );
-  }
-);
+/** Card header section with a hairline below; offsets the card's own padding. */
+const CardHeader = forwardRef<HTMLDivElement, CardHeaderProps>(function CardHeader(
+  { children, className, ...props },
+  ref,
+) {
+  return (
+    <div
+      ref={ref}
+      className={cn(
+        'px-5 py-4 border-b border-line-subtle',
+        '-mx-5 -mt-5 mb-5',
+        'font-display text-base font-semibold tracking-[-0.01em] text-ink-primary',
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </div>
+  );
+});
 
-/**
- * Card body section for main content.
- */
-const CardBody = forwardRef<HTMLDivElement, CardBodyProps>(
-  function CardBody({ children, className, ...props }, ref) {
-    return (
-      <div ref={ref} className={cn('flex-1', className)} {...props}>
-        {children}
-      </div>
-    );
-  }
-);
+/** Card body section for main content. */
+const CardBody = forwardRef<HTMLDivElement, CardBodyProps>(function CardBody({ children, className, ...props }, ref) {
+  return (
+    <div ref={ref} className={cn('flex-1', className)} {...props}>
+      {children}
+    </div>
+  );
+});
 
-/**
- * Card footer section with top border.
- */
-const CardFooter = forwardRef<HTMLDivElement, CardFooterProps>(
-  function CardFooter({ children, className, ...props }, ref) {
-    return (
-      <div
-        ref={ref}
-        className={cn(
-          'px-6 py-4 border-t border-glass-subtle',
-          '-mx-6 -mb-6 mt-6', // Offset parent padding
-          'last:rounded-b-brand-lg',
-          className
-        )}
-        {...props}
-      >
-        {children}
-      </div>
-    );
-  }
-);
+/** Card footer section with a hairline above; offsets the card's own padding. */
+const CardFooter = forwardRef<HTMLDivElement, CardFooterProps>(function CardFooter(
+  { children, className, ...props },
+  ref,
+) {
+  return (
+    <div
+      ref={ref}
+      className={cn('px-5 py-3 border-t border-line-subtle', '-mx-5 -mb-5 mt-5', className)}
+      {...props}
+    >
+      {children}
+    </div>
+  );
+});
 
 // ============================================================================
 // COMPOUND COMPONENT TYPE
@@ -175,7 +154,6 @@ interface CardComponent
   Footer: typeof CardFooter;
 }
 
-// Attach subcomponents
 Card.Header = CardHeader;
 Card.Body = CardBody;
 Card.Footer = CardFooter;

@@ -79,7 +79,7 @@ export function TrainingJobList({
                 onClick={() => setStatusFilter(option.value)}
                 className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
                   statusFilter === option.value
-                    ? 'bg-cobalt-500 text-white'
+                    ? 'bg-primary text-on-primary'
                     : 'bg-theme-secondary/20 text-theme-secondary hover:bg-theme-secondary/30'
                 }`}
               >
@@ -95,7 +95,7 @@ export function TrainingJobList({
                 onClick={() => setModelFilter(model)}
                 className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
                   modelFilter === model
-                    ? 'bg-accent-500 text-white'
+                    ? 'bg-accent text-on-accent'
                     : 'bg-theme-secondary/20 text-theme-secondary hover:bg-theme-secondary/30'
                 }`}
               >

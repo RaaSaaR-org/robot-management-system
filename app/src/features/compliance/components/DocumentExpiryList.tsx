@@ -81,7 +81,7 @@ export function DocumentExpiryList({ className }: DocumentExpiryListProps) {
               className={cn(
                 'px-3 py-1.5 text-sm rounded-lg transition-colors',
                 withinDays === days
-                  ? 'bg-primary-500 text-white'
+                  ? 'bg-primary text-on-primary'
                   : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
               )}
             >

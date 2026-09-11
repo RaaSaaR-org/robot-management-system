@@ -75,8 +75,8 @@ export const RUN_STATUS_DOT: Record<PatrolRunStatus, string> = {
 export const LEG_NODE: Record<PatrolLegStatus | 'route', string> = {
   route: 'bg-cobalt-500/15 text-cobalt-700 dark:text-cobalt-300',
   pending: 'bg-surface-light-300 text-theme-tertiary dark:bg-surface-500',
-  running: 'bg-cobalt-500 text-white ring-4 ring-cobalt-500/25 animate-pulse',
-  done: 'bg-turquoise-600 text-white dark:bg-turquoise-500 dark:text-surface-900',
+  running: 'bg-primary text-on-primary ring-4 ring-cobalt-500/25 animate-pulse',
+  done: 'bg-accent text-on-accent dark:bg-turquoise-500 dark:text-surface-900',
   failed: 'bg-red-500 text-white',
   skipped: 'bg-surface-light-400 text-white dark:bg-surface-400',
 };

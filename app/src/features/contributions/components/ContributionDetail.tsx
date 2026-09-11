@@ -310,7 +310,7 @@ export function ContributionDetail({
           <button
             onClick={handleSubmit}
             disabled={actionLoading}
-            className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+            className="px-4 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary-hover disabled:opacity-50"
           >
             {actionLoading ? 'Submitting...' : 'Submit for Review'}
           </button>

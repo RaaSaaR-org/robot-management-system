@@ -373,7 +373,7 @@ export const ConversationPanel = memo(function ConversationPanel({
                 'h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0',
                 'transition-all duration-150',
                 inputValue.trim() && canSend && !isSending
-                  ? 'bg-cobalt-500 hover:bg-cobalt-600 text-white shadow-md shadow-cobalt-500/25 active:scale-95'
+                  ? 'bg-primary hover:bg-primary-hover text-on-primary shadow-md shadow-cobalt-500/25 active:scale-95'
                   : isSending
                     ? 'bg-cobalt-500/60 text-white'
                     : 'bg-gray-200 dark:bg-gray-700 text-theme-muted'

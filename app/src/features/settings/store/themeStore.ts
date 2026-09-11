@@ -24,7 +24,9 @@ export interface ThemeStore {
 
 export const useThemeStore = createStore<ThemeStore>(
   (set, get) => ({
-    theme: 'system',
+    // Dark is the design's home: the canvas matches the landing page. Light and
+    // system stay one click away in Settings.
+    theme: 'dark',
 
     setTheme: (theme: ThemeMode) => {
       set((state) => {

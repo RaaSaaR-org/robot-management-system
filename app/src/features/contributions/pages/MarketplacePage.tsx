@@ -116,7 +116,7 @@ export function MarketplacePage() {
               className={cn(
                 'px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
                 filters.type === tab.value
-                  ? 'bg-cobalt-500 text-white'
+                  ? 'bg-primary text-on-primary'
                   : 'text-theme-secondary hover:text-theme-primary'
               )}
             >

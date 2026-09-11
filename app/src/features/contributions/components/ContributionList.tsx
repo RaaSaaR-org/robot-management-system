@@ -122,7 +122,7 @@ export function ContributionList({
         {onNewContribution && (
           <button
             onClick={onNewContribution}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary-hover transition-colors"
           >
             <Plus size={18} />
             <span>New Contribution</span>
@@ -149,7 +149,7 @@ export function ContributionList({
           {!hasFilters && onNewContribution && (
             <button
               onClick={onNewContribution}
-              className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+              className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary-hover"
             >
               <Plus size={18} />
               <span>Create Contribution</span>

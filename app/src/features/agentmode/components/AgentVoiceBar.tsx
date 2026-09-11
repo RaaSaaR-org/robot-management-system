@@ -125,7 +125,7 @@ function InlineMicButton({
           'rounded-brand flex items-center justify-center shrink-0 border transition-colors',
           'focus:outline-none focus:ring-2 focus:ring-cobalt-500/40',
           active
-            ? 'bg-cobalt-500 text-white border-cobalt-500 hover:bg-cobalt-600'
+            ? 'bg-primary text-on-primary border-cobalt-500 hover:bg-primary-hover'
             : 'glass-subtle text-theme-secondary border-glass-subtle hover:text-theme-primary',
           'disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none'
         )}
@@ -259,7 +259,7 @@ export const AgentVoiceBar = memo(function AgentVoiceBar({
                 'px-3 py-1.5 rounded-brand text-xs font-medium border transition-colors',
                 'disabled:opacity-50 disabled:cursor-not-allowed',
                 voice.paused
-                  ? 'bg-cobalt-500 text-white border-cobalt-500 hover:bg-cobalt-600'
+                  ? 'bg-primary text-on-primary border-cobalt-500 hover:bg-primary-hover'
                   : 'glass-subtle text-theme-secondary border-glass-subtle hover:text-theme-primary'
               )}
             >

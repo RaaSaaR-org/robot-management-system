@@ -170,7 +170,7 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
               className={cn(
                 'w-full py-3 rounded-brand text-sm font-medium transition-colors flex items-center justify-center gap-2',
                 info
-                  ? 'bg-cobalt-500 text-white hover:bg-cobalt-600'
+                  ? 'bg-primary text-on-primary hover:bg-primary-hover'
                   : 'bg-theme-elevated text-theme-muted cursor-not-allowed'
               )}
             >

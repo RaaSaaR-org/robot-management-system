@@ -125,7 +125,7 @@ function FloorSelector({
           className={cn(
             'px-3 py-1 text-xs font-medium rounded-brand transition-all',
             selectedFloor === floor
-              ? 'bg-cobalt text-white'
+              ? 'bg-primary text-on-primary'
               : 'bg-surface-700/50 text-theme-tertiary hover:bg-surface-600/50 hover:text-theme-secondary'
           )}
         >

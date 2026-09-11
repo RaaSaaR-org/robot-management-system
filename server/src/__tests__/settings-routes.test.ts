@@ -42,7 +42,7 @@ function createApp() {
 const DEFAULT_SETTINGS = {
   id: 'settings-001',
   userId: 'user-123',
-  theme: 'system',
+  theme: 'dark',
   language: 'en',
   compactMode: false,
   emailNotifications: true,
@@ -74,7 +74,7 @@ describe('Settings Routes', () => {
       const response = await request(app).get('/api/settings');
 
       expect(response.status).toBe(200);
-      expect(response.body.theme).toBe('system');
+      expect(response.body.theme).toBe('dark');
       expect(response.body.language).toBe('en');
       expect(response.body.refreshIntervalSec).toBe(30);
       expect(mockSettingsService.getSettings).toHaveBeenCalledWith('user-123');
@@ -187,7 +187,7 @@ describe('Settings Routes', () => {
       const response = await request(app).post('/api/settings/reset');
 
       expect(response.status).toBe(200);
-      expect(response.body.theme).toBe('system');
+      expect(response.body.theme).toBe('dark');
       expect(response.body.weeklyDigest).toBe(false);
       expect(mockSettingsService.resetSettings).toHaveBeenCalledWith('user-123');
     });

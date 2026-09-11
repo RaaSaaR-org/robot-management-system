@@ -148,7 +148,7 @@ src/
 │   ├── settings/        # Theme & UI stores
 │   └── training/        # VLA dataset & training management
 ├── shared/              # Cross-feature shared code
-│   ├── components/ui/   # Reusable UI (Badge, Button, Card, Input, Modal, ProgressBar, Spinner, Tabs)
+│   ├── components/ui/   # The UI kit (Panel, PageHeader, DataTable, FormModal, toast, … — see "Design System" below)
 │   ├── hooks/           # Shared hooks (useApi, useDebounce, useLocalStorage, useMediaQuery, useWebSocket)
 │   ├── types/           # Shared types (ApiResponse, PaginatedResponse, WebSocketStatus)
 │   └── utils/           # Utilities (cn, error, format, thresholds)
@@ -246,18 +246,105 @@ Concretely, when adding anything to this page:
   owns the snapshot age. A second copy is a second chance for them to disagree about what
   the robot knows.
 
-### Brand Colors (Tailwind)
+## Design System
+
+The whole app speaks the landing page's language. **`docs/brand.md` is the
+binding contract** — tokens, type, page anatomy, the CRUD pattern, the kit,
+the shell and how to test a page. Read it before touching UI. The short form:
+
+### Rules
+
+- **Tokens, not colors.** Surfaces `bg-canvas` · `bg-panel` · `bg-inset` ·
+  `bg-raised` · `bg-field`; text `text-ink-primary` · `-secondary` ·
+  `-tertiary` · `-muted`; lines `border-line-subtle` · `border-line` ·
+  `border-line-strong`; brand `bg-primary` / `text-primary` / `bg-accent`;
+  status `text-signal-measured` · `-estimated` · `-unknown` · `-stopped`
+  (tints via `/10`, `/30`); the STOP fill `bg-stop text-on-stop`.
+- **Never** raw hues (`green-500`, `red-400`, `blue-*`, `gray-*`, `slate-*` …),
+  hex literals, `cobalt-*` / `turquoise-*` (legacy aliases), or `dark:`
+  variants in new or migrated code — light is the same tokens with other
+  values. Dark is the default theme.
+- **Text on a primary/accent fill is `text-on-primary` / `text-on-accent`,
+  never `text-white`** (white on mint is 1.2:1). A fill that carries text is
+  `bg-primary`, not a ramp shade — the ramps (`primary-50…900`) are for tints.
+- **Matte, not glass.** No `backdrop-filter` / `backdrop-blur-*`, no `.glass*`
+  classes, no gradient-clipped text, no glow shadows, no hover lift
+  (`translate`/`scale`/shadow on hover). Borders and ground changes separate.
+- **Type.** Archivo (`font-display`) for page titles, panel titles and stat
+  values only; Inter (`font-sans`, the default) for all normal text; mono
+  (`font-mono`) only for code, logs, IDs, hashes and commands — never labels,
+  values, buttons or nav. Nothing below 10px (`text-[10px]` only for tags and
+  chart ticks). Sentence case.
+- **Radius** `rounded-panel` (14px) · `rounded-control` (10px) · `rounded-tag`
+  (6px). Motion 150ms `ease-instrument`.
+- **Signals are honest.** Sim is violet (`estimated`), unknown is amber, a
+  fault is red, and a STOP is the only saturated red on screen. Signal colors
+  are never brand-controlled.
+
+### How to build a page
+
+Every page, same order (see `docs/brand.md` §3):
 
 ```
-Primary: #2A5FFF (Cobalt Blue) -> primary-500
-Accent: #18E4C3 (Turquoise) -> accent-500
-Status:
-  - Online: #22c55e (green-500)
-  - Offline: #9ca3af (gray-400)
-  - Busy: #3b82f6 (blue-500)
-  - Error: #ef4444 (red-500)
-  - Charging: #eab308 (yellow-500)
+PageHeader   eyebrow (nav group) · h1 · description · meta (StatusTag) · actions (right)
+Tabs         optional, state in ?tab=
+StatRow      optional, 2–6 StatTiles
+Toolbar      optional, SearchInput · filters · view toggle
+Content      Panel(s) · DataTable · card grid of Panel interactive
 ```
+
+- One `h1` per page (from `PageHeader`), one primary button per view
+  (right-most). Detail pages use `PageHeader back={{ to, label }}`.
+- **CRUD is identical everywhere** (§4): list in `DataTable` or a card grid →
+  header **"New ‹thing›"** opens a `FormModal` (Cancel + Create ‹thing›) →
+  edit reuses it ("Edit ‹thing›", Save changes) → row actions in `RowActions`
+  with Delete last → delete always goes through `ConfirmDialog` tone `danger`
+  (never `window.confirm`) → `toast.success` / `toast.error` for feedback →
+  `EmptyState`, `Skeleton` and `ErrorState` (with Retry) for the other states →
+  status via `StatusTag` + `statusTone()`.
+- **The kit** (`@/shared/components/ui`; every prop is listed in
+  `docs/brand.md` §5 "Kit API reference"):
+  - Layout: `PageHeader`, `Panel` (+ `Panel.Header` / `.Body` / `.Footer`,
+    `panelClasses`), `StatTile`, `StatRow`, `Toolbar`, `KeyValueList`, `Tabs`,
+    `Eyebrow`, `Divider`; legacy `Card`.
+  - Actions: `Button` (+ `buttonClasses`), `LinkButton`, `DropdownMenu`,
+    `RowActions`, `SegmentedControl`, `ToggleChip`; legacy `MenuButton`.
+  - Forms: `FormField`, `Input`, `SearchInput`, `Textarea`, `Select`,
+    `Checkbox`, `Switch`, `FormModal`.
+  - Feedback: `Modal`, `ConfirmDialog`, `confirm()`, `toast` / `useToast`
+    (+ `dismissToast`, `getToasts`), `EmptyState`, `ErrorState`, `Skeleton`,
+    `SkeletonText`, `SkeletonRows`, `Spinner`, `PageLoader`, `ProgressBar`,
+    `Tooltip`, `InfoIcon`, `NextStepBanner`, `PipelineBreadcrumb`. The hosts
+    (`FeedbackProvider` = `ToastProvider`, `Toaster`, `ConfirmHost`) are
+    mounted once in `App.tsx`; pages never mount them.
+  - Status: `StatusTag`, `statusTone`, `humanizeStatus`, `normalizeStatus`,
+    `Badge`, `chartColors`, `chartTheme`, `chartSeriesColor`.
+  - Data: `DataTable` (inside `<Panel padding="none">`).
+
+  Generic UI comes from the kit; feature code keeps only domain widgets (maps,
+  3D, charts, timelines), styled with tokens inside kit panels. Every
+  primitive renders on the dev-only `/design-system` route.
+- **Kit gotchas.** `Button` defaults to `type="button"` (pass `type="submit"`
+  to submit). `SearchInput`'s `onChange` gets the string, not an event.
+  `Select` takes its width on `className` (the wrapper) and needs
+  `fullWidth={false}` in toolbars. There is no `bg-inset/50`: `bg-inset` is a
+  plain utility with no opacity modifier. A delete is
+  `if (await confirm({ title: 'Delete X?', tone: 'danger' }))`, never
+  `window.confirm`.
+- **Check it in a browser** (§8): the route at 1440 and 390, dark and light,
+  live and demo mode — and read the screenshots.
+
+### Theme and brand plumbing
+
+- Tokens live in `src/index.css` (`@theme` + `:root` / `:root.light`); the
+  landing page is scoped under `.landing-page` (`components/landing/landing-theme.css`)
+  and must look identical after any global CSS change.
+- `ThemeProvider` puts `dark`/`light` on `<html>` from `themeStore` (default
+  `dark`). `BrandProvider` writes a white-label brand's primary/accent slots and
+  on-colors (`src/brand/brandVars.ts`); see `brand/_template/README.md`.
+- Legacy names (`cobalt-*`, `.glass*`, `.card`, `--glass-*`) still render —
+  mapped onto the matte tokens — until TASK-269 removes them. Do not add new
+  uses.
 
 ## Key Dependencies
 

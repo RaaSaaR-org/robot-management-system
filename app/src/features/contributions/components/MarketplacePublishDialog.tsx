@@ -241,7 +241,7 @@ export function MarketplacePublishDialog({
                 onClick={() => setType(option.value)}
                 className={cn(
                   'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-                  type === option.value ? 'bg-cobalt-500 text-white' : 'text-theme-secondary hover:text-theme-primary'
+                  type === option.value ? 'bg-primary text-on-primary' : 'text-theme-secondary hover:text-theme-primary'
                 )}
               >
                 <option.icon size={14} />
@@ -499,7 +499,7 @@ export function MarketplacePublishDialog({
               'px-4 py-2 rounded-brand text-sm font-medium transition-colors flex items-center gap-2',
               isSubmitting
                 ? 'bg-theme-elevated text-theme-muted cursor-not-allowed'
-                : 'bg-cobalt-500 text-white hover:bg-cobalt-600'
+                : 'bg-primary text-on-primary hover:bg-primary-hover'
             )}
           >
             {isSubmitting && <Loader2 size={14} className="animate-spin" />}

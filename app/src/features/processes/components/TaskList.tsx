@@ -227,7 +227,7 @@ export function TaskList({
                 className={cn(
                   'p-2 rounded-md transition-all duration-200',
                   viewMode === 'grid'
-                    ? 'bg-cobalt-500 text-white shadow-sm'
+                    ? 'bg-primary text-on-primary shadow-sm'
                     : 'text-theme-tertiary hover:text-theme-primary'
                 )}
                 aria-label="Grid view"
@@ -246,7 +246,7 @@ export function TaskList({
                 className={cn(
                   'p-2 rounded-md transition-all duration-200',
                   viewMode === 'list'
-                    ? 'bg-cobalt-500 text-white shadow-sm'
+                    ? 'bg-primary text-on-primary shadow-sm'
                     : 'text-theme-tertiary hover:text-theme-primary'
                 )}
                 aria-label="List view"
@@ -279,7 +279,7 @@ export function TaskList({
                   className={cn(
                     'px-2.5 py-1 text-xs rounded-lg transition-all duration-200 whitespace-nowrap',
                     (status === 'all' && !currentStatus) || currentStatus === status
-                      ? 'bg-cobalt-500 text-white shadow-sm'
+                      ? 'bg-primary text-on-primary shadow-sm'
                       : 'text-theme-secondary hover:text-theme-primary hover:bg-white/5'
                   )}
                 >
@@ -300,7 +300,7 @@ export function TaskList({
                   className={cn(
                     'px-2.5 py-1 text-xs rounded-lg transition-all duration-200 whitespace-nowrap',
                     (priority === 'all' && !currentPriority) || currentPriority === priority
-                      ? 'bg-cobalt-500 text-white shadow-sm'
+                      ? 'bg-primary text-on-primary shadow-sm'
                       : 'text-theme-secondary hover:text-theme-primary hover:bg-white/5'
                   )}
                 >

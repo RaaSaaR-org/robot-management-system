@@ -433,7 +433,7 @@ function SecurityTab() {
           />
           <button
             disabled
-            className="px-4 py-2 rounded-brand bg-cobalt text-white text-sm font-medium opacity-50 cursor-not-allowed"
+            className="px-4 py-2 rounded-brand bg-primary text-on-primary text-sm font-medium opacity-50 cursor-not-allowed"
           >
             Update Password
           </button>

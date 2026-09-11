@@ -76,8 +76,8 @@ export function SessionTypeSelector({
             )}
           >
             {isSelected && (
-              <div className="absolute top-2 right-2 w-5 h-5 bg-cobalt-500 rounded-full flex items-center justify-center">
-                <Check size={12} className="text-white" />
+              <div className="absolute top-2 right-2 w-5 h-5 bg-primary rounded-full flex items-center justify-center">
+                <Check size={12} className="text-on-primary" />
               </div>
             )}
 

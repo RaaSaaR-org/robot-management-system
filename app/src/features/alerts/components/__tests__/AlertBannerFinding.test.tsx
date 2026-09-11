@@ -102,13 +102,22 @@ describe('AlertBanner sticky plate', () => {
     await renderWith(alert());
 
     // The bar sticks under the TopBar while the page scrolls beneath it. Every
-    // dark-mode severity tint is `dark:bg-*-900/20`, so without an opaque plate
-    // the page content shows straight through the alert.
+    // non-critical severity is a translucent signal tint (`bg-signal-*/10`), so
+    // without an opaque plate the page content shows straight through the alert.
     const sticky = screen.getByRole('alert');
     expect(sticky.className).toContain('sticky');
-    expect(sticky.className).toContain('bg-theme-primary');
+    expect(sticky.className).toContain('bg-canvas');
 
     const tinted = sticky.firstElementChild as HTMLElement;
-    expect(tinted.className).toMatch(/dark:bg-yellow-900\/20/);
+    expect(tinted.className).toContain('bg-signal-unknown/10');
+  });
+
+  it('puts a critical alert on the STOP fill with a readable Acknowledge', async () => {
+    await renderWith(alert({ id: 'a-4', severity: 'critical', title: 'E-stop engaged', message: 'G1 stopped' }));
+
+    const tinted = screen.getByRole('alert').firstElementChild as HTMLElement;
+    expect(tinted.className).toContain('bg-stop');
+    expect(tinted.className).toContain('text-on-stop');
+    expect(screen.getByRole('button', { name: 'Acknowledge' }).className).toContain('text-on-stop');
   });
 });

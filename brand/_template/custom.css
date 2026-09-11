@@ -2,18 +2,16 @@
  * Custom CSS overrides for your brand.
  *
  * Copy this file to brand/custom.css. It is loaded after the default styles,
- * so rules here take precedence.
+ * so rules here take precedence. Colors belong in brand.config.ts
+ * (primaryColors / accentColors / onPrimary); use this file for the rest.
+ * Signal colors (--signal-*) carry safety meaning and must not be overridden.
  *
  * Examples:
  *
- * Override button border radius:
- *   .btn-primary { border-radius: 999px; }
+ * Rounder controls:
+ *   :root { --radius-control: 999px; }
  *
- * Custom glass effect:
- *   :root { --glass-bg: rgba(20, 20, 20, 0.8); }
- *
- * Add a custom font:
- *   @import url('https://fonts.googleapis.com/css2?family=Roboto&display=swap');
+ * Add a custom font (self-host it; see app/src/main.tsx for why):
  *   :root { --font-sans: 'Roboto', sans-serif; }
  *
  * Override specific component colors:

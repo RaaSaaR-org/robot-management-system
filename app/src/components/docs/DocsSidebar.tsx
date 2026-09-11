@@ -159,7 +159,7 @@ export function DocsSidebar({
                             cn(
                               'block px-3 py-1.5 rounded-brand text-sm transition-colors',
                               isActive
-                                ? 'bg-cobalt text-white'
+                                ? 'bg-primary text-on-primary'
                                 : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover',
                             )
                           }

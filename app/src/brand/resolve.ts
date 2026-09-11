@@ -5,7 +5,7 @@
  */
 
 import type { BrandConfig } from './types';
-import { DEFAULT_BRAND } from './defaults';
+import { ACCENT_SCALE, DEFAULT_BRAND, PRIMARY_SCALE } from './defaults';
 
 let resolved: BrandConfig | null = null;
 
@@ -40,16 +40,16 @@ export interface ResolvedBrand extends BrandConfig {
 
 /**
  * Quick access to resolved brand hex colors for non-Tailwind usage (3D scenes, SVG, canvas).
- * Falls back to default cobalt/turquoise if no brand override.
+ * Falls back to the default mint/teal slots if no brand override.
  */
 export function brandColors() {
   const b = resolveBrand();
   return {
-    primary: b.primaryColors?.DEFAULT ?? '#2A5FFF',
-    primary500: b.primaryColors?.['500'] ?? b.primaryColors?.DEFAULT ?? '#2A5FFF',
-    primary600: b.primaryColors?.['600'] ?? b.primaryColors?.DEFAULT ?? '#2A5FFF',
-    accent: b.accentColors?.DEFAULT ?? '#18E4C3',
-    accent500: b.accentColors?.['500'] ?? b.accentColors?.DEFAULT ?? '#18E4C3',
+    primary: b.primaryColors?.DEFAULT ?? PRIMARY_SCALE.DEFAULT,
+    primary500: b.primaryColors?.['500'] ?? b.primaryColors?.DEFAULT ?? PRIMARY_SCALE['500'],
+    primary600: b.primaryColors?.['600'] ?? b.primaryColors?.DEFAULT ?? PRIMARY_SCALE['600'],
+    accent: b.accentColors?.DEFAULT ?? ACCENT_SCALE.DEFAULT,
+    accent500: b.accentColors?.['500'] ?? b.accentColors?.DEFAULT ?? ACCENT_SCALE['500'],
   };
 }
 

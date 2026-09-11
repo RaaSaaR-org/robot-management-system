@@ -1,7 +1,9 @@
 /**
  * @file EmptyState.tsx
- * @description Shared empty-state block (icon + title + description + optional
- *              action) so list pages stop hand-rolling their own spacing/copy.
+ * @description Shared empty-state block (icon tile + title + description +
+ *              action) so list pages never hand-roll their own spacing or copy.
+ *              "No ‹things› yet" + the page's primary action; filtered to
+ *              nothing: "No ‹things› match" + Clear filters.
  * @feature shared
  */
 
@@ -9,13 +11,15 @@ import type { ReactNode } from 'react';
 import { cn } from '@/shared/utils/cn';
 
 export interface EmptyStateProps {
-  /** Icon rendered above the title (typically a lucide icon, w-10 h-10) */
+  /** Icon shown in a 40px tile (any lucide icon; it is sized for you) */
   icon?: ReactNode;
   title: ReactNode;
-  /** Short explanation or hint about how to populate this view */
+  /** One line on what these things are / how to get the first one */
   description?: ReactNode;
-  /** Primary call-to-action (a Button or Link) */
+  /** Primary call-to-action (the same one as the page header) */
   action?: ReactNode;
+  /** Optional second action (e.g. "Import", "Read the docs") */
+  secondaryAction?: ReactNode;
   /** Vertical padding preset (default 'md') */
   size?: 'sm' | 'md' | 'lg';
   className?: string;
@@ -28,25 +32,35 @@ const sizeStyles: Record<NonNullable<EmptyStateProps['size']>, string> = {
 };
 
 /**
- * Centered empty state for lists and detail sections.
- *
  * @example
  * ```tsx
  * <EmptyState
- *   icon={<Database className="w-10 h-10" />}
- *   title="No datasets yet"
- *   description="Record a data-collection session or import a LeRobot dataset."
- *   action={<Button size="sm">Import dataset</Button>}
+ *   icon={<Route />}
+ *   title="No routes yet"
+ *   description="A route is the path a robot walks on patrol."
+ *   action={<Button leftIcon={<Plus className="w-4 h-4" />}>New route</Button>}
  * />
  * ```
  */
-export function EmptyState({ icon, title, description, action, size = 'md', className }: EmptyStateProps) {
+export function EmptyState({ icon, title, description, action, secondaryAction, size = 'md', className }: EmptyStateProps) {
   return (
-    <div className={cn('flex flex-col items-center justify-center text-center px-6', sizeStyles[size], className)}>
-      {icon && <div className="text-theme-muted mb-3">{icon}</div>}
-      <p className="text-sm font-medium text-theme-primary">{title}</p>
-      {description && <p className="text-sm text-theme-tertiary mt-1 max-w-sm">{description}</p>}
-      {action && <div className="mt-4">{action}</div>}
+    <div className={cn('flex flex-col items-center justify-center px-6 text-center', sizeStyles[size], className)}>
+      {icon && (
+        <div
+          aria-hidden="true"
+          className="mb-4 flex h-10 w-10 items-center justify-center rounded-control border border-line-subtle bg-inset text-ink-tertiary [&_svg]:!h-5 [&_svg]:!w-5"
+        >
+          {icon}
+        </div>
+      )}
+      <p className="text-sm font-semibold text-ink-primary">{title}</p>
+      {description && <p className="mt-1 max-w-sm text-[13px] leading-relaxed text-ink-tertiary">{description}</p>}
+      {(action || secondaryAction) && (
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+          {secondaryAction}
+          {action}
+        </div>
+      )}
     </div>
   );
 }

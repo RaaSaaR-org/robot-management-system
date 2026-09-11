@@ -412,7 +412,7 @@ export function TrainingJobWizard({
                   'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500/60 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent',
                   currentStep === step.id
-                    ? 'bg-cobalt-500 text-white'
+                    ? 'bg-primary text-on-primary'
                     : index < currentStepIndex
                       ? 'bg-green-500 text-white cursor-pointer hover:bg-green-600'
                       : 'bg-theme-secondary/20 text-theme-secondary'

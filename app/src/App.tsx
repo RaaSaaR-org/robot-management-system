@@ -13,6 +13,7 @@ import type { UserRole } from './features/auth/types/auth.types';
 import { AppLayout } from './components/layout';
 import { AlertProvider } from './features/alerts';
 import { PageLoader } from './shared/components/ui/PageLoader';
+import { FeedbackProvider } from './shared/components/ui/FeedbackProvider';
 import {
   LazyLandingPage,
   LazyLoginPage,
@@ -61,6 +62,7 @@ import {
   LazyNewSessionPage,
   LazySessionDetailPage,
   LazyDocsPage,
+  LazyDesignSystemPage,
   LazySitesGalleryPage,
   LazyTwinViewerPage,
   LazyNotFoundPage,
@@ -129,6 +131,8 @@ function ProtectedAppRoute({
 function App() {
   return (
     <AlertProvider>
+      {/* Toasts and confirm() for every route, public pages included */}
+      <FeedbackProvider>
       <Suspense fallback={<PageLoader />}>
         <Routes>
           {/* Public routes */}
@@ -326,6 +330,17 @@ function App() {
               </ProtectedAppRoute>
             }
           />
+          {/* Kit showcase and visual-regression page (TASK-261) — dev builds only */}
+          {import.meta.env.DEV && LazyDesignSystemPage && (
+            <Route
+              path="/design-system"
+              element={
+                <ProtectedAppRoute>
+                  <LazyDesignSystemPage />
+                </ProtectedAppRoute>
+              }
+            />
+          )}
           <Route
             path="/organizations"
             element={
@@ -631,6 +646,7 @@ function App() {
           <Route path="*" element={<LazyNotFoundPage />} />
         </Routes>
       </Suspense>
+      </FeedbackProvider>
     </AlertProvider>
   );
 }

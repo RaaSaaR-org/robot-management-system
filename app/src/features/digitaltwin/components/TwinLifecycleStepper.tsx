@@ -42,7 +42,7 @@ function deriveSteps(status: TwinStatus, zoneCount: number, hasOccupancy: boolea
 }
 
 const DOT: Record<StepState, string> = {
-  done: 'bg-cobalt text-white border-cobalt',
+  done: 'bg-primary text-on-primary border-cobalt',
   active: 'bg-transparent text-cobalt border-cobalt',
   todo: 'bg-transparent text-theme-tertiary border-surface-600',
 };

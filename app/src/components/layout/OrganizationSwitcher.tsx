@@ -1,42 +1,30 @@
 /**
  * @file OrganizationSwitcher.tsx
- * @description Compact pill + dropdown in the TopBar showing the
- * current organization. For super-admins it expands into a picker of
- * every organization on the platform with a one-click "view as"
- * action; the choice is persisted in localStorage and every API
- * request then carries an `X-Impersonate-Tenant` header.
+ * @description Compact pill + menu in the top bar showing the current
+ * organization. For super-admins it expands into a picker of every
+ * organization on the platform with a one-click "view as" action; the
+ * choice is persisted in localStorage and every API request then carries
+ * an `X-Impersonate-Tenant` header.
  *
- * Non-super-admin roles see the same pill but without the dropdown —
- * they can only ever be in their own organization. Hidden entirely
- * when multi-tenancy is off.
+ * Non-super-admin roles see the same pill but without the menu — they can
+ * only ever be in their own organization. Hidden entirely when
+ * multi-tenancy is off.
  * @feature layout
  */
 
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Building2, Check, ChevronDown, LogOut } from 'lucide-react';
 import { useFeatures } from '@/shared/hooks';
 import { useOrganizationsStore } from '@/features/organizations';
 import { useAuthStore, selectUserRole } from '@/features/auth/store/authStore';
 import { impersonationStorage } from '@/api/client';
 import type { TenantSettings } from '@/features/organizations/types/organizations.types';
+import { focusRing, labelCaps, toneTag } from '@/shared/components/ui/styles';
+import { cn } from '@/shared/utils/cn';
+import { topBarMenuItem, topBarMenuPanel, useTopBarMenu } from './useTopBarMenu';
 
-const BuildingIcon = () => (
-  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-      d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-  </svg>
-);
-
-const ChevronIcon = () => (
-  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-  </svg>
-);
-
-const CheckIcon = () => (
-  <svg className="w-4 h-4 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-  </svg>
-);
+const pill =
+  'inline-flex h-8 max-w-[14rem] items-center gap-1.5 rounded-control border px-2.5 text-[13px] transition-colors duration-150';
 
 export function OrganizationSwitcher() {
   const { multiTenancyEnabled } = useFeatures();
@@ -52,8 +40,7 @@ export function OrganizationSwitcher() {
   const listLoading = useOrganizationsStore((s) => s.listLoading);
   const fetchList = useOrganizationsStore((s) => s.fetchList);
 
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
+  const menu = useTopBarMenu();
   const [impersonating, setImpersonating] = useState<string | null>(() => impersonationStorage.get());
 
   useEffect(() => {
@@ -63,31 +50,24 @@ export function OrganizationSwitcher() {
 
   // Lazy-load the tenant list only when a super-admin opens the menu.
   useEffect(() => {
-    if (!open || !isSuperAdmin) return;
+    if (!menu.open || !isSuperAdmin) return;
     if (!listLoaded && !listLoading) void fetchList();
-  }, [open, isSuperAdmin, listLoaded, listLoading, fetchList]);
-
-  // Click-outside to close.
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(e: PointerEvent) {
-      if (!ref.current) return;
-      if (!ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [open]);
+  }, [menu.open, isSuperAdmin, listLoaded, listLoading, fetchList]);
 
   const brandColor = useMemo(() => {
     if (!current?.settings) return undefined;
-    try { return (JSON.parse(current.settings) as TenantSettings).brandColor; } catch { return undefined; }
+    try {
+      return (JSON.parse(current.settings) as TenantSettings).brandColor;
+    } catch {
+      return undefined;
+    }
   }, [current?.settings]);
 
   if (!multiTenancyEnabled || !current) return null;
 
   const handleSwitch = (tenantId: string) => {
     if (tenantId === current.id && !impersonating) {
-      setOpen(false);
+      menu.close();
       return;
     }
     impersonationStorage.set(tenantId);
@@ -101,71 +81,69 @@ export function OrganizationSwitcher() {
   };
 
   const label = current.name;
+  // A tenant's brand colour tints only the pill's border — never a fill.
+  const brandStyle = !impersonating && brandColor ? { borderColor: `${brandColor}80` } : undefined;
+  const mark = current.logoUrl ? (
+    <img src={current.logoUrl} alt="" className="h-4 w-4 rounded-sm object-contain" />
+  ) : (
+    <Building2 className={cn('h-4 w-4 shrink-0', impersonating ? 'text-signal-unknown' : 'text-accent')} strokeWidth={1.75} aria-hidden="true" />
+  );
 
   if (!isSuperAdmin) {
     return (
       <span
-        className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-theme-elevated border text-xs text-theme-secondary"
-        style={brandColor ? { borderColor: `${brandColor}60` } : undefined}
+        className={cn(pill, 'hidden sm:inline-flex border-line bg-panel text-ink-secondary')}
+        style={brandStyle}
         title={`Current organization: ${label}`}
       >
-        {current.logoUrl ? (
-          <img src={current.logoUrl} alt="" className="w-4 h-4 rounded-sm object-contain" />
-        ) : (
-          <span className="text-cobalt"><BuildingIcon /></span>
-        )}
-        <span className="font-medium text-theme-primary">{label}</span>
+        {mark}
+        <span className="truncate font-medium text-ink-primary">{label}</span>
       </span>
     );
   }
 
   return (
-    <div className="relative hidden sm:block" ref={ref}>
+    <div className="relative hidden sm:block" ref={menu.rootRef}>
       <button
+        ref={menu.triggerRef}
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs transition-colors ${
+        onClick={menu.toggle}
+        className={cn(
+          pill,
+          focusRing,
           impersonating
-            ? 'bg-amber-500/10 border-amber-500/40 text-amber-200'
-            : 'bg-theme-elevated border-theme text-theme-secondary hover:text-theme-primary'
-        }`}
-        style={!impersonating && brandColor ? { borderColor: `${brandColor}60`, backgroundColor: `${brandColor}10` } : undefined}
+            ? toneTag.warning
+            : 'border-line bg-panel text-ink-secondary hover:border-line-strong hover:text-ink-primary',
+        )}
+        style={brandStyle}
         title={impersonating ? `Impersonating ${label}` : `Current organization: ${label}`}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={menu.open}
       >
-        {current.logoUrl ? (
-          <img src={current.logoUrl} alt="" className="w-4 h-4 rounded-sm object-contain" />
-        ) : (
-          <span className={impersonating ? 'text-amber-200' : 'text-cobalt'}><BuildingIcon /></span>
-        )}
-        <span className="font-medium">{label}</span>
-        <ChevronIcon />
+        {mark}
+        <span className="truncate font-medium">{label}</span>
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" strokeWidth={1.75} aria-hidden="true" />
       </button>
 
-      {open && (
+      {menu.open && (
         <div
-          className="absolute right-0 mt-2 w-72 rounded-brand border border-theme bg-theme-card shadow-xl z-50"
+          ref={menu.menuRef}
           role="menu"
+          aria-label="View as organization"
+          onKeyDown={menu.onMenuKeyDown}
+          className={cn(topBarMenuPanel, 'w-72')}
         >
-          <div className="px-3 py-2 border-b border-theme">
-            <div className="text-xs uppercase tracking-wider text-theme-tertiary">
-              View as organization
-            </div>
-            <div className="text-xs text-theme-tertiary mt-1">
-              Super-admin troubleshooting. Every API request scopes to the
-              selected organization until you exit.
-            </div>
+          <div className="border-b border-line-subtle px-3.5 py-3">
+            <div className={labelCaps}>View as organization</div>
+            <p className="mt-1 text-xs leading-relaxed text-ink-tertiary">
+              Super-admin troubleshooting. Every API request scopes to the selected organization until you exit.
+            </p>
           </div>
 
-          <div className="max-h-80 overflow-y-auto py-1">
-            {!listLoaded && listLoading && (
-              <div className="px-3 py-2 text-xs text-theme-tertiary">Loading…</div>
-            )}
+          <div className="max-h-80 overflow-y-auto p-1">
+            {!listLoaded && listLoading && <div className="px-2.5 py-2 text-xs text-ink-tertiary">Loading…</div>}
             {listLoaded && list.length === 0 && (
-              <div className="px-3 py-2 text-xs text-theme-tertiary">
-                No organizations.
-              </div>
+              <div className="px-2.5 py-2 text-xs text-ink-tertiary">No organizations.</div>
             )}
             {list.map((org) => {
               const isActive = org.id === current.id;
@@ -173,31 +151,36 @@ export function OrganizationSwitcher() {
                 <button
                   key={org.id}
                   type="button"
-                  role="menuitem"
+                  role="menuitemradio"
+                  aria-checked={isActive}
+                  tabIndex={-1}
                   onClick={() => handleSwitch(org.id)}
-                  className="w-full flex items-center justify-between px-3 py-2 text-sm text-theme-primary hover:bg-theme-hover text-left"
+                  className={cn(topBarMenuItem, 'justify-between py-2')}
                 >
-                  <div className="flex-1 min-w-0">
-                    <div className="truncate font-medium">{org.name}</div>
-                    <div className="text-xs text-theme-tertiary truncate">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-ink-primary">{org.name}</span>
+                    <span className="block truncate text-xs text-ink-tertiary">
                       {org.slug}
                       {org.isDefault && ' · default'}
-                    </div>
-                  </div>
-                  {isActive && <CheckIcon />}
+                    </span>
+                  </span>
+                  {isActive && <Check className="text-primary" strokeWidth={1.75} aria-hidden="true" />}
                 </button>
               );
             })}
           </div>
 
           {impersonating && (
-            <div className="border-t border-theme px-3 py-2">
+            <div className="border-t border-line-subtle p-1">
               <button
                 type="button"
+                role="menuitem"
+                tabIndex={-1}
                 onClick={handleExitImpersonation}
-                className="w-full text-left text-xs text-amber-300 hover:text-amber-200"
+                className={cn(topBarMenuItem, 'h-9 text-signal-unknown hover:text-signal-unknown focus:text-signal-unknown')}
               >
-                Exit impersonation (return to your own organization)
+                <LogOut strokeWidth={1.75} aria-hidden="true" />
+                <span>Exit impersonation</span>
               </button>
             </div>
           )}

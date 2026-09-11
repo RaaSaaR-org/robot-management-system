@@ -101,7 +101,7 @@ export const A2ASideNav = memo(function A2ASideNav({
                   'flex items-center gap-3 rounded-brand transition-colors relative',
                   collapsed ? 'px-2.5 py-2.5 justify-center' : 'px-3 py-2.5',
                   isActive
-                    ? 'bg-cobalt-500 text-white'
+                    ? 'bg-primary text-on-primary'
                     : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover'
                 )
               }
@@ -112,7 +112,7 @@ export const A2ASideNav = memo(function A2ASideNav({
                 <span
                   className={cn(
                     'flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full text-xs font-medium',
-                    'bg-accent-500 text-white',
+                    'bg-accent text-on-accent',
                     collapsed && 'absolute -top-1 -right-1 min-w-[1rem] h-4 text-[10px]'
                   )}
                 >

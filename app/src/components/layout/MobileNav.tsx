@@ -1,14 +1,20 @@
 /**
  * @file MobileNav.tsx
- * @description Slide-out mobile navigation drawer
+ * @description Mobile navigation drawer (<768px): slides in from the left on
+ *              the inset ground with the same groups as the sidebar. Closes on
+ *              navigation, Esc and a click on the overlay; traps focus while
+ *              open and hands it back to the menu button when it closes.
  * @feature layout
- * @dependencies react-router-dom, @/shared/utils/cn, ./Sidebar
  */
 
-import { useEffect, useCallback } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useLocation } from 'react-router-dom';
+import { X } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
-import { useVisibleNavItems } from './Sidebar';
+import { Logo } from '@/components/common/Logo';
+import { Button } from '@/shared/components/ui/Button';
+import { NavList, logoFocusRing } from './NavList';
+import { useVisibleNavGroups } from './navigation';
 
 // ============================================================================
 // TYPES
@@ -21,14 +27,13 @@ export interface MobileNavProps {
   onClose: () => void;
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 // ============================================================================
 // COMPONENT
 // ============================================================================
 
 /**
- * Mobile navigation drawer that slides in from the left.
- * Includes backdrop overlay and closes on navigation or escape key.
- *
  * @example
  * ```tsx
  * <MobileNav isOpen={menuOpen} onClose={() => setMenuOpen(false)} />
@@ -36,105 +41,112 @@ export interface MobileNavProps {
  */
 export function MobileNav({ isOpen, onClose }: MobileNavProps) {
   const location = useLocation();
-  const navItems = useVisibleNavItems();
+  const groups = useVisibleNavGroups();
+  const panelRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const lastPathRef = useRef(location.pathname);
 
-  // Close on escape key
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && isOpen) {
-        onClose();
-      }
-    },
-    [isOpen, onClose]
-  );
-
-  // Close on route change
+  // Close on route change — a real change, not the first render.
   useEffect(() => {
-    if (isOpen) {
-      onClose();
-    }
-    // Only run when location changes, not when isOpen/onClose changes
+    if (lastPathRef.current === location.pathname) return;
+    lastPathRef.current = location.pathname;
+    if (isOpen) onClose();
+    // Only run when the location changes, not when isOpen/onClose change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
-  // Add/remove escape key listener
+  // Esc closes, wherever focus is.
   useEffect(() => {
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
+    if (!isOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
 
-  // Prevent body scroll when open
+  // Focus: into the drawer on open, back to whatever opened it on close.
   useEffect(() => {
     if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
+      returnFocusRef.current = document.activeElement as HTMLElement | null;
+      closeRef.current?.focus();
+      return;
     }
+    const target = returnFocusRef.current;
+    returnFocusRef.current = null;
+    if (target && document.contains(target)) target.focus();
+  }, [isOpen]);
+
+  // No page scroll behind the open drawer.
+  useEffect(() => {
+    if (!isOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     return () => {
-      document.body.style.overflow = '';
+      document.body.style.overflow = previous;
     };
   }, [isOpen]);
 
+  // Keep Tab inside the drawer.
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Tab' || !panelRef.current) return;
+    const nodes = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+    if (nodes.length === 0) return;
+    const first = nodes[0];
+    const last = nodes[nodes.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <>
-      {/* Backdrop overlay */}
+      {/* Overlay — dimmed, never blurred */}
       <div
+        data-testid="mobile-nav-overlay"
         className={cn(
-          'fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300',
-          'md:hidden', // Only on mobile
-          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          'fixed inset-0 z-40 bg-black/60 md:hidden',
+          'transition-opacity duration-150 ease-[var(--ease-instrument)]',
+          isOpen ? 'opacity-100' : 'pointer-events-none opacity-0',
         )}
         onClick={onClose}
         aria-hidden="true"
       />
 
-      {/* Navigation drawer */}
       <aside
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label="Navigation menu"
+        aria-hidden={!isOpen}
+        inert={!isOpen}
+        onKeyDown={onKeyDown}
         className={cn(
-          'fixed left-0 top-0 bottom-0 z-50 w-72',
-          'section-secondary border-r border-theme',
-          'transition-transform duration-300 ease-in-out',
-          'md:hidden', // Only on mobile
-          isOpen ? 'translate-x-0' : '-translate-x-full'
+          'fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col md:hidden',
+          'bg-inset border-r border-line-subtle duration-200 ease-[var(--ease-instrument)]',
+          // Opening turns visible at once (focus can land in the same frame);
+          // closing keeps it visible until the slide-out ends.
+          isOpen
+            ? 'visible translate-x-0 transition-[translate]'
+            : 'invisible -translate-x-full transition-[translate,visibility]',
         )}
       >
-        {/* Header */}
-        <div className="h-14 flex items-center justify-between px-4 border-b border-theme">
-          <span className="font-semibold text-theme-primary">Menu</span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 text-theme-secondary hover:text-theme-primary hover:bg-theme-hover rounded-lg transition-colors"
-            aria-label="Close menu"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-line-subtle pl-4 pr-2">
+          <div className={logoFocusRing}>
+            <Logo size="sm" linkTo="/dashboard" />
+          </div>
+          <Button ref={closeRef} variant="ghost" iconOnly aria-label="Close menu" onClick={onClose}>
+            <X className="h-5 w-5" strokeWidth={1.75} />
+          </Button>
         </div>
 
-        {/* Navigation items */}
-        <nav className="p-4 space-y-1">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 px-3 py-3 rounded-brand transition-colors',
-                  isActive
-                    ? 'bg-cobalt text-white'
-                    : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover'
-                )
-              }
-            >
-              {item.icon}
-              <span className="font-medium">{item.label}</span>
-            </NavLink>
-          ))}
+        <nav aria-label="Main navigation" className="flex-1 overflow-y-auto overscroll-contain px-3 py-5">
+          <NavList groups={groups} variant="drawer" onNavigate={onClose} />
         </nav>
       </aside>
     </>

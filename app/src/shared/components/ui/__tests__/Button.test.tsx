@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Button } from '../Button';
+import { Button, buttonClasses } from '../Button';
 
 describe('Button', () => {
   it('renders children text', () => {
@@ -22,6 +22,16 @@ describe('Button', () => {
     await user.click(screen.getByRole('button'));
 
     expect(handleClick).toHaveBeenCalledOnce();
+  });
+
+  it('is type="button" by default so it never submits a form by accident', () => {
+    render(<Button>Plain</Button>);
+    expect(screen.getByRole('button')).toHaveAttribute('type', 'button');
+  });
+
+  it('can still be a submit button', () => {
+    render(<Button type="submit">Save</Button>);
+    expect(screen.getByRole('button')).toHaveAttribute('type', 'submit');
   });
 
   it('is disabled when disabled prop is true', () => {
@@ -56,11 +66,25 @@ describe('Button', () => {
     expect(screen.getByRole('button')).toHaveClass('w-full');
   });
 
-  it('applies variant classes', () => {
-    const { rerender } = render(<Button variant="destructive">Delete</Button>);
-    expect(screen.getByRole('button')).toHaveClass('bg-red-500');
+  it('renders an icon-only button named by aria-label', () => {
+    render(
+      <Button iconOnly aria-label="Close">
+        <svg data-testid="icon" />
+      </Button>,
+    );
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(screen.getByTestId('icon')).toBeInTheDocument();
+  });
 
-    rerender(<Button variant="ghost">Ghost</Button>);
-    expect(screen.getByRole('button')).toHaveClass('text-theme-secondary');
+  it('maps the legacy variants onto the new ones', () => {
+    expect(buttonClasses({ variant: 'destructive' })).toBe(buttonClasses({ variant: 'danger' }));
+    expect(buttonClasses({ variant: 'outline' })).toBe(buttonClasses({ variant: 'secondary' }));
+  });
+
+  it('gives each variant a distinct look', () => {
+    const looks = new Set(
+      (['primary', 'secondary', 'ghost', 'danger'] as const).map((variant) => buttonClasses({ variant })),
+    );
+    expect(looks.size).toBe(4);
   });
 });
