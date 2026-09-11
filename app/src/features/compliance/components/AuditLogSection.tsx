@@ -19,7 +19,6 @@ import { IntegrityStatus } from './IntegrityStatus';
 import { AuditMetricsPanel } from './AuditMetricsPanel';
 import { RetentionSettings } from './RetentionSettings';
 import { LegalHoldManager } from './LegalHoldManager';
-import { Pager } from './Pager';
 import { EVENT_TYPE_OPTIONS, SEVERITIES, eventTypeLabel, humanize } from './complianceFormat';
 
 const VIEWS = [
@@ -86,6 +85,7 @@ function LogView({ onViewDecision }: AuditLogSectionProps) {
           isLoading={isLoading}
           error={logs.length === 0 ? error : null}
           onRetry={() => void fetchLogs()}
+          pagination={{ page, totalPages, total, noun: 'entry', nounPlural: 'entries', onPageChange: setPage }}
           empty={
             hasFilters ? (
               <EmptyState icon={<Search />} title="No entries match" description="Try another event type or severity, or clear the filters."
@@ -97,7 +97,6 @@ function LogView({ onViewDecision }: AuditLogSectionProps) {
           }
         />
       </Panel>
-      <Pager page={page} totalPages={totalPages} total={total} onPageChange={setPage} disabled={isLoading} />
 
       <Modal
         isOpen={selected !== null}

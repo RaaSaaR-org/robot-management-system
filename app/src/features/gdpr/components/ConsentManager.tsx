@@ -5,8 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { ErrorState, Panel, SkeletonRows, Switch, toast } from '@/shared/components/ui';
-import { errorMessage } from './errorMessage';
+import { ErrorState, Panel, SkeletonRows, Switch, errorMessage, toast } from '@/shared/components/ui';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import type { UserConsent, ConsentType } from '../types';
 import { ConsentTypes, CONSENT_TYPE_LABELS, CONSENT_TYPE_DESCRIPTIONS } from '../types';

@@ -6,10 +6,9 @@
  */
 
 import { useEffect, useState } from 'react';
-import { FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
+import { FormField, FormModal, Input, Select, Textarea, errorMessage, toast } from '@/shared/components/ui';
 import { complianceApi } from '../api';
 import { DocumentTypeLabels, type DocumentType, type ProviderDocInput } from '../types';
-import { errorMessage } from './complianceFormat';
 
 export interface ProviderDocFormModalProps {
   isOpen: boolean;

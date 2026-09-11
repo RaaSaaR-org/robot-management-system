@@ -5,9 +5,8 @@
  */
 
 import { useEffect, useState } from 'react';
-import { FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
+import { FormField, FormModal, Input, Select, Textarea, errorMessage, toast } from '@/shared/components/ui';
 import type { CreateVerificationScheduleInput } from '../types';
-import { errorMessage } from './oversightFormat';
 
 export interface VerificationFormModalProps {
   isOpen: boolean;

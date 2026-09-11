@@ -9,7 +9,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Headset } from 'lucide-react';
 import {
-  Button, FormField, Input, InfoIcon, PageHeader, Panel, PipelineBreadcrumb, Select, toast,
+  Button, FormField, Input, InfoIcon, PageHeader, Panel, PipelineBreadcrumb, Select, errorMessage, toast,
 } from '@/shared/components/ui';
 import { SessionTypeSelector } from '../components/SessionTypeSelector';
 import { useDataCollectionStore } from '../store/datacollectionStore';
@@ -74,7 +74,7 @@ export function NewSessionPage() {
       toast.success('Session created', { description: task.trim() });
       navigate(`/data-collection/${session.id}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       setFormError(message);
       toast.error("Couldn't create session", { description: message });
     } finally {

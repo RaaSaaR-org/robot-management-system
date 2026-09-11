@@ -33,6 +33,8 @@ import {
   Button,
   Card,
   Checkbox,
+  ChoiceCard,
+  ChoiceCardGroup,
   ConfirmDialog,
   ConfirmHost,
   DataTable,
@@ -51,6 +53,7 @@ import {
   NextStepBanner,
   PageHeader,
   PageLoader,
+  Pager,
   Panel,
   PipelineBreadcrumb,
   ProgressBar,
@@ -75,6 +78,7 @@ import {
   chartColors,
   chartTheme,
   confirm,
+  errorMessage,
   statusTone,
   toast,
   type DataTableColumn,
@@ -219,6 +223,8 @@ export function DesignSystemPage() {
   const [checked, setChecked] = useState(true);
   const [switchOn, setSwitchOn] = useState(true);
   const [search, setSearch] = useState('hall');
+  const [page, setPage] = useState(2);
+  const [trainingKind, setTrainingKind] = useState<'supervised' | 'sim_rl'>('supervised');
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -483,7 +489,7 @@ export function DesignSystemPage() {
         )}
       </section>
 
-      <Section id="table-states" title="Table states" description="Loading shows skeleton rows, errors replace the table with Retry, empty shows the page's empty state.">
+      <Section id="table-states" title="Table states" description="Loading shows skeleton rows, errors replace the table with Retry, empty shows the page's empty state. Server-paged lists pass pagination and get the Pager in the footer.">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <Panel padding="none">
             <DataTable caption="Loading example" columns={columns.slice(0, 3)} rows={[]} getRowId={(r) => r.id} isLoading skeletonRows={4} dense />
@@ -508,6 +514,21 @@ export function DesignSystemPage() {
               empty={<EmptyState icon={<Route />} title="No routes yet" description="A route is the path a robot walks on patrol." action={<Button size="sm" leftIcon={<Plus className="h-4 w-4" />}>New route</Button>} />}
             />
           </Panel>
+        </div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Panel padding="none" className="lg:col-span-2">
+            <DataTable
+              caption="Paged example"
+              columns={columns.slice(0, 3)}
+              rows={INITIAL_ROBOTS.slice((page - 1) % 2 * 3, ((page - 1) % 2 * 3) + 3)}
+              getRowId={(r) => r.id}
+              dense
+              pagination={{ page, totalPages: 5, total: 14, noun: 'robot', onPageChange: setPage }}
+            />
+          </Panel>
+          <Demo label="Pager on its own (under a list that is not a table)" className="block">
+            <Pager page={page} totalPages={5} total={1234} noun="entry" nounPlural="entries" onPageChange={setPage} />
+          </Demo>
         </div>
       </Section>
 
@@ -689,6 +710,23 @@ export function DesignSystemPage() {
               <Switch label="Disabled" checked={false} onCheckedChange={() => {}} disabled />
             </div>
           </Demo>
+          <Demo label="Choice cards — one of a few options that need a line of explanation" className="block">
+            <ChoiceCardGroup label="Training type">
+              <ChoiceCard
+                selected={trainingKind === 'supervised'}
+                onSelect={() => setTrainingKind('supervised')}
+                title="Supervised fine-tune"
+                description="Fine-tune a VLA model on a validated dataset."
+              />
+              <ChoiceCard
+                selected={trainingKind === 'sim_rl'}
+                onSelect={() => setTrainingKind('sim_rl')}
+                title="Sim-RL policy"
+                aside={<StatusTag tone="sim" size="sm">Beta</StatusTag>}
+                description="Train a locomotion policy in a simulation scene."
+              />
+            </ChoiceCardGroup>
+          </Demo>
         </Section>
 
         {/* ── Navigation & controls ─────────────────────────────────── */}
@@ -805,6 +843,19 @@ export function DesignSystemPage() {
             <Button variant="secondary" onClick={() => toast.info('Sync started', { description: '1,204 episodes to upload.' })}>Info</Button>
             <Button variant="secondary" onClick={() => toast('Plain notification')}>Neutral</Button>
           </Demo>
+          <Demo label="Error from an API rejection (errorMessage)">
+            <Button
+              variant="secondary"
+              onClick={() =>
+                // The API client rejects with a plain object, not an Error: errorMessage reads it.
+                toast.error("Couldn't create robot", {
+                  description: errorMessage({ code: 'CONFLICT', message: 'A robot named Atlas already exists.', statusCode: 409 }),
+                })
+              }
+            >
+              API error
+            </Button>
+          </Demo>
           <Demo label="Action and sticky">
             <Button
               variant="secondary"
@@ -862,6 +913,7 @@ export function DesignSystemPage() {
             <ProgressBar value={35} label="Estimate" variant="info" />
             <ProgressBar value={18} label="Battery" variant="warning" />
             <ProgressBar value={100} label="Failed checks" variant="error" size="sm" />
+            <ProgressBar indeterminate label="Starting job (indeterminate)" />
           </Demo>
           <Demo label="Spinner and page loader" className="flex flex-col gap-4">
             <div className="flex items-center gap-4 text-ink-secondary">

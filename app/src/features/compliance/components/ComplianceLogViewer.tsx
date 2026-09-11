@@ -6,10 +6,10 @@
  */
 
 import { Lock, Sparkles } from 'lucide-react';
-import { Button, Divider, KeyValueList, StatusTag } from '@/shared/components/ui';
+import { Button, Divider, KeyValueList, StatusTag, statusTone } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import type { ComplianceLog } from '../types';
-import { eventTypeLabel, formatDateTime, humanize, severityTone } from './complianceFormat';
+import { eventTypeLabel, formatDateTime, humanize } from './complianceFormat';
 
 export interface ComplianceLogViewerProps {
   log: ComplianceLog;
@@ -47,7 +47,7 @@ export function ComplianceLogViewer({ log, onViewDecision, className }: Complian
     <div className={cn('flex flex-col gap-5', className)}>
       <div className="flex flex-wrap items-center gap-2">
         <StatusTag tone="neutral">{eventTypeLabel(log.eventType)}</StatusTag>
-        <StatusTag tone={severityTone(log.severity)}>{humanize(log.severity)}</StatusTag>
+        <StatusTag tone={statusTone(log.severity)}>{humanize(log.severity)}</StatusTag>
         {log.immutable && (
           <span className="inline-flex items-center gap-1 text-[13px] text-ink-tertiary">
             <Lock className="h-3.5 w-3.5" strokeWidth={1.75} /> Immutable

@@ -12,6 +12,12 @@ import type { BaseTone } from './styles';
 /** Tones a status can resolve to. */
 export type StatusToneName = Exclude<BaseTone, 'accent'>;
 
+/**
+ * The contract's map. Amber (`warning`) means unknown or needs attention, red
+ * (`danger`) means stopped or a fault that is true now — so an aborted run is
+ * amber, while an overdue regulatory notification (a missed legal deadline) is
+ * red. Grouped by domain inside each tone.
+ */
 const STATUS_GROUPS: Record<StatusToneName, string[]> = {
   success: [
     'online',
@@ -25,11 +31,74 @@ const STATUS_GROUPS: Record<StatusToneName, string[]> = {
     'connected',
     'ready',
     'published',
+    // runs · deployments · incidents · notifications
+    'done',
+    'production',
+    'resolved',
+    'closed',
+    'sent',
+    'acknowledged',
   ],
-  info: ['busy', 'queued', 'in_progress', 'training', 'recording', 'syncing', 'rolling_out'],
-  warning: ['charging', 'degraded', 'paused', 'pending', 'pending_review', 'warning', 'stale', 'draft_review'],
-  danger: ['error', 'failed', 'stopped', 'estop', 'e_stop', 'critical', 'rejected', 'blocked', 'fault'],
-  neutral: ['offline', 'idle', 'draft', 'archived', 'cancelled', 'unknown'],
+  info: [
+    'busy',
+    'queued',
+    'in_progress',
+    'training',
+    'recording',
+    'syncing',
+    'rolling_out',
+    // A2A tasks · deployments · incidents (being worked on)
+    'working',
+    'submitted',
+    'canary',
+    'investigating',
+    'contained',
+  ],
+  warning: [
+    'charging',
+    'degraded',
+    'paused',
+    'pending',
+    'pending_review',
+    'warning',
+    'stale',
+    'draft_review',
+    // runs · A2A tasks · deployments · incidents · severities · notifications
+    'aborted',
+    'abandoned',
+    'input_required',
+    'rolling_back',
+    'rolled_back',
+    'detected',
+    'medium',
+  ],
+  danger: [
+    'error',
+    'failed',
+    'stopped',
+    'estop',
+    'e_stop',
+    'critical',
+    'rejected',
+    'blocked',
+    'fault',
+    'high',
+    // notifications: a missed legal deadline is a fault, not a reminder
+    'overdue',
+  ],
+  neutral: [
+    'offline',
+    'idle',
+    'draft',
+    'archived',
+    'cancelled',
+    'unknown',
+    // severities · deployments · A2A tasks
+    'low',
+    'info',
+    'deprecated',
+    'canceled',
+  ],
 };
 
 /** Case- and separator-insensitive key: "In Progress", "in-progress", "IN_PROGRESS" → "in_progress". */

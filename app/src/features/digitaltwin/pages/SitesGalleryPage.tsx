@@ -11,16 +11,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, ScanLine, Search } from 'lucide-react';
 import {
-  Button,
-  EmptyState,
+  Button, EmptyState,
   ErrorState,
-  PageHeader,
-  Panel,
-  SearchInput,
-  Select,
-  SkeletonRows,
-  Toolbar,
-  confirm,
+  PageHeader, Panel,
+  SearchInput, Select,
+  SkeletonRows, Toolbar,
+  confirm, errorMessage,
   toast,
 } from '@/shared/components/ui';
 import { useScanCapableRobots } from '../hooks/useScanCapableRobots';
@@ -96,7 +92,7 @@ export function SitesGalleryPage() {
       await removeTwin(site.id);
       toast.success('Site deleted', { description: site.name });
     } catch (err) {
-      toast.error("Couldn't delete site", { description: err instanceof Error ? err.message : String(err) });
+      toast.error("Couldn't delete site", { description: errorMessage(err) });
     }
   };
 

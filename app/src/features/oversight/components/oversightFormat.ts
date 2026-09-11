@@ -1,23 +1,14 @@
 /**
  * @file oversightFormat.ts
- * @description Pure helpers that turn oversight data into labels and status tones
+ * @description Pure helpers that turn oversight data into labels. Severity
+ *              colours come from the kit's statusTone().
  * @feature oversight
  */
-
-import type { Tone } from '@/shared/components/ui';
-import type { AnomalySeverity } from '../types';
 
 /** "sensor_malfunction" → "Sensor malfunction" */
 export function humanize(value: string): string {
   const text = value.replace(/_/g, ' ').trim();
   return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-/** Group-wide severity map: critical/high → danger, medium → warning, low → info. */
-export function severityTone(severity: AnomalySeverity): Tone {
-  if (severity === 'critical' || severity === 'high') return 'danger';
-  if (severity === 'medium') return 'warning';
-  return 'info';
 }
 
 export function formatDuration(fromIso: string, now = Date.now()): string {
@@ -32,8 +23,4 @@ export function formatInterval(minutes: number): string {
   if (minutes % 1440 === 0) return minutes === 1440 ? 'Every day' : `Every ${minutes / 1440} days`;
   if (minutes % 60 === 0) return minutes === 60 ? 'Every hour' : `Every ${minutes / 60} hours`;
   return `Every ${minutes} minutes`;
-}
-
-export function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

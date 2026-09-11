@@ -8,12 +8,12 @@
 import { useEffect, useState } from 'react';
 import { Gavel, Plus, Unlock } from 'lucide-react';
 import {
-  Button, DataTable, EmptyState, Panel, StatusTag, Switch, confirm, toast, type DataTableColumn,
+  Button, DataTable, EmptyState, Panel, StatusTag, Switch, confirm, errorMessage, toast, type DataTableColumn,
 } from '@/shared/components/ui';
 import { useComplianceStore } from '../store';
 import type { LegalHold } from '../types';
 import { LegalHoldFormModal } from './LegalHoldFormModal';
-import { errorMessage, formatDate } from './complianceFormat';
+import { formatDate } from './complianceFormat';
 
 export interface LegalHoldManagerProps {
   className?: string;

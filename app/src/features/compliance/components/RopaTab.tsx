@@ -10,12 +10,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Download, FileText, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import {
   Button, DataTable, EmptyState, FormField, Input, KeyValueList, Modal, Panel, SearchInput, Select, Toolbar,
-  confirm, toast, type DataTableColumn,
+  confirm, errorMessage, toast, type DataTableColumn,
 } from '@/shared/components/ui';
 import { useComplianceStore } from '../store';
 import type { RopaEntry } from '../types';
 import { LEGAL_BASIS_OPTIONS, RopaFormModal, legalBasisLabel } from './RopaFormModal';
-import { errorMessage, formatDateTime, formatRelative } from './complianceFormat';
+import { formatDateTime, formatRelative } from './complianceFormat';
 
 export interface RopaTabProps {
   className?: string;

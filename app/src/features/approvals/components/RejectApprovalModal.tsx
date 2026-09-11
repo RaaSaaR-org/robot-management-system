@@ -5,8 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { FormField, FormModal, Textarea, toast } from '@/shared/components/ui';
-import { errorMessage } from './approvalFormat';
+import { FormField, FormModal, Textarea, errorMessage, toast } from '@/shared/components/ui';
 
 export interface RejectApprovalModalProps {
   isOpen: boolean;

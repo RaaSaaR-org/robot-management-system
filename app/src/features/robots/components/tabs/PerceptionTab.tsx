@@ -8,13 +8,11 @@
 import { Suspense, lazy, useEffect, useState, useCallback } from 'react';
 import { Download, Radar, ScanLine } from 'lucide-react';
 import {
-  Button,
-  EmptyState,
+  Button, EmptyState,
   Panel,
   SegmentedControl,
-  StatusTag,
-  ToggleChip,
-  Tooltip,
+  StatusTag, ToggleChip,
+  Tooltip, errorMessage,
   toast,
 } from '@/shared/components/ui';
 import { Robot3DViewerFallback } from '../visualization';
@@ -49,15 +47,6 @@ function normalizeRobotType(raw?: string): RobotType {
   if (t.startsWith('h1')) return 'h1';
   if (t.startsWith('so101')) return 'so101';
   return 'generic';
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  // The API client rejects with plain {code, message} objects.
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
-    return error.message;
-  }
-  return String(error);
 }
 
 const COLOR_OPTIONS: { value: PointCloudColorMode; label: string }[] = [
@@ -129,7 +118,7 @@ export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps)
       }
     } catch (error) {
       setLidarPending(null);
-      toast.error(`Couldn't switch LiDAR ${target ? 'on' : 'off'}`, { description: errorText(error) });
+      toast.error(`Couldn't switch LiDAR ${target ? 'on' : 'off'}`, { description: errorMessage(error) });
     }
   }, [lidarOn, robotId]);
 
@@ -140,7 +129,7 @@ export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps)
       await fetchSensorScans(robotId);
       toast.success('Scan captured', { description: robot.name });
     } catch (error) {
-      toast.error("Couldn't capture scan", { description: errorText(error) });
+      toast.error("Couldn't capture scan", { description: errorMessage(error) });
     } finally {
       setCapturing(false);
     }

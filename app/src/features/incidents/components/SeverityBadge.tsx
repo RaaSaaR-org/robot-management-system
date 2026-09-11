@@ -4,10 +4,9 @@
  * @feature incidents
  */
 
-import { StatusTag } from '@/shared/components/ui';
+import { StatusTag, statusTone } from '@/shared/components/ui';
 import type { IncidentSeverity } from '../types/incidents.types';
 import { INCIDENT_SEVERITY_LABELS } from '../types/incidents.types';
-import { INCIDENT_SEVERITY_TONE } from '../utils/tones';
 
 export interface SeverityBadgeProps {
   /** Incident severity */
@@ -29,7 +28,7 @@ export interface SeverityBadgeProps {
 export function SeverityBadge({ severity, size = 'sm', showDot = false, className }: SeverityBadgeProps) {
   return (
     <StatusTag
-      tone={INCIDENT_SEVERITY_TONE[severity]}
+      tone={statusTone(severity)}
       size={size === 'sm' ? 'sm' : 'md'}
       dot={showDot}
       className={className}

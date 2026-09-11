@@ -5,9 +5,9 @@
  */
 
 import { useEffect, useState } from 'react';
-import { FormField, FormModal, Textarea, toast } from '@/shared/components/ui';
+import { FormField, FormModal, Textarea, errorMessage, toast } from '@/shared/components/ui';
 import type { AnomalyRecord } from '../types';
-import { errorMessage, humanize } from './oversightFormat';
+import { humanize } from './oversightFormat';
 
 export interface ResolveAnomalyModalProps {
   anomaly: AnomalyRecord | null;

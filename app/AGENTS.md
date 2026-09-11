@@ -310,16 +310,21 @@ Content      Panel(s) · DataTable · card grid of Panel interactive
   - Actions: `Button` (+ `buttonClasses`), `LinkButton`, `DropdownMenu`,
     `RowActions`, `SegmentedControl`, `ToggleChip`; legacy `MenuButton`.
   - Forms: `FormField`, `Input`, `SearchInput`, `Textarea`, `Select`,
-    `Checkbox`, `Switch`, `FormModal`.
+    `Checkbox`, `Switch`, `ChoiceCard` / `ChoiceCardGroup`, `FormModal`.
   - Feedback: `Modal`, `ConfirmDialog`, `confirm()`, `toast` / `useToast`
-    (+ `dismissToast`, `getToasts`), `EmptyState`, `ErrorState`, `Skeleton`,
-    `SkeletonText`, `SkeletonRows`, `Spinner`, `PageLoader`, `ProgressBar`,
-    `Tooltip`, `InfoIcon`, `NextStepBanner`, `PipelineBreadcrumb`. The hosts
-    (`FeedbackProvider` = `ToastProvider`, `Toaster`, `ConfirmHost`) are
-    mounted once in `App.tsx`; pages never mount them.
+    (+ `dismissToast`, `getToasts`), `errorMessage()`, `EmptyState`,
+    `ErrorState`, `Skeleton`, `SkeletonText`, `SkeletonRows`, `Spinner`,
+    `PageLoader`, `ProgressBar` (+ `indeterminate`), `Tooltip`, `InfoIcon`,
+    `NextStepBanner`, `PipelineBreadcrumb`. The hosts (`FeedbackProvider` =
+    `ToastProvider`, `Toaster`, `ConfirmHost`) are mounted once in
+    `App.tsx`; pages never mount them.
   - Status: `StatusTag`, `statusTone`, `humanizeStatus`, `normalizeStatus`,
-    `Badge`, `chartColors`, `chartTheme`, `chartSeriesColor`.
-  - Data: `DataTable` (inside `<Panel padding="none">`).
+    `Badge`, `chartColors`, `chartTheme`, `chartSeriesColor`, `cssColor` /
+    `useCssColor` (token values for three.js, canvas and SVG attributes).
+  - Data: `DataTable` (inside `<Panel padding="none">`; `pagination` for
+    server paging, `rowProps` for test ids), `Pager`.
+  - Class strings: `focusRing`, `focusRingInset`, `buttonClasses`,
+    `panelClasses`, `choiceSurface`.
 
   Generic UI comes from the kit; feature code keeps only domain widgets (maps,
   3D, charts, timelines), styled with tokens inside kit panels. Every
@@ -330,7 +335,15 @@ Content      Panel(s) · DataTable · card grid of Panel interactive
   `fullWidth={false}` in toolbars. There is no `bg-inset/50`: `bg-inset` is a
   plain utility with no opacity modifier. A delete is
   `if (await confirm({ title: 'Delete X?', tone: 'danger' }))`, never
-  `window.confirm`.
+  `window.confirm`. Error text is `errorMessage(err)`, never
+  `err instanceof Error ? err.message : String(err)`: the API client rejects
+  with plain objects, so that prints "[object Object]". A server-paged table
+  passes `pagination` to `DataTable`; never build a pager. A status colour is
+  `statusTone()` (it knows run, incident, notification, deployment and A2A
+  states); keep a local map only where the word means something else there.
+  Toasts sit at the top on phones, so they never cover a bottom sheet's
+  footer. Test hooks: `FormModal submitTestId` / `cancelTestId`, item and
+  `confirm()` `testId`, `StatTile data-testid`, `DataTable rowProps`.
 - **Check it in a browser** (§8): the route at 1440 and 390, dark and light,
   live and demo mode — and read the screenshots.
 

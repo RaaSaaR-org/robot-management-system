@@ -9,14 +9,14 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, ClipboardCheck } from 'lucide-react';
 import {
-  Button, FormField, FormModal, Input, KeyValueList, Modal, Select, StatusTag, toast, type DataTableColumn,
+  Button, FormField, FormModal, Input, KeyValueList, Modal, Select, StatusTag, errorMessage, toast, type DataTableColumn,
 } from '@/shared/components/ui';
 import { useComplianceTrackerStore } from '../store/complianceTrackerStore';
 import {
   GAP_SEVERITY_CONFIG, REGULATORY_FRAMEWORK_LABELS, type ComplianceGap, type GapSeverity, type RegulatoryFramework,
 } from '../types';
 import { ObligationTable } from './ObligationTable';
-import { complianceTone, errorMessage, formatDate, formatDays, humanize } from './complianceFormat';
+import { complianceTone, formatDate, formatDays, humanize } from './complianceFormat';
 
 export interface GapAnalysisPanelProps {
   className?: string;

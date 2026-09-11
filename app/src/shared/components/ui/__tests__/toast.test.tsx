@@ -104,6 +104,35 @@ describe('Toaster', () => {
     expect(screen.getByRole('alert')).toHaveTextContent("Couldn't save");
   });
 
+  it('gives every non-error toast role="status" and errors role="alert"', () => {
+    render(<Toaster />);
+    act(() => {
+      toast.success('Saved');
+      toast.info('Syncing');
+      toast.warning('Battery low');
+      toast('Plain');
+      toast.error('Failed');
+    });
+    const statuses = screen.getAllByRole('status');
+    expect(statuses.map((el) => el.getAttribute('data-tone'))).toEqual(['success', 'info', 'warning', 'neutral']);
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.getByRole('alert')).toHaveAttribute('data-tone', 'error');
+  });
+
+  it('stacks at the top on phones and bottom-right from 640px', () => {
+    render(<Toaster />);
+    act(() => {
+      toast('Where am I');
+    });
+    const region = screen.getByRole('region', { name: 'Notifications' });
+    const classes = region.className.split(/\s+/);
+    // Below sm: pinned to the top edge, never the bottom (bottom sheets live there).
+    expect(classes.some((c) => c.startsWith('top-'))).toBe(true);
+    expect(classes.some((c) => c.startsWith('bottom-'))).toBe(false);
+    // From sm: back to the bottom-right corner.
+    expect(classes).toEqual(expect.arrayContaining(['sm:top-auto', 'sm:bottom-5', 'sm:right-5']));
+  });
+
   it('closes a toast with its close button', () => {
     render(<Toaster />);
     act(() => {

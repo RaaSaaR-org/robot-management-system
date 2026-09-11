@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { FormField, FormModal, Input, toast } from '@/shared/components/ui';
+import { FormField, FormModal, Input, errorMessage, toast } from '@/shared/components/ui';
 import { useRobotsStore } from '../store/robotsStore';
 import type { Robot } from '../types/robots.types';
 
@@ -49,7 +49,7 @@ export function RegisterRobotModal({ isOpen, onClose, onSuccess }: RegisterRobot
     } catch (err) {
       // The modal shows the failure itself; don't leave it in the list's error state.
       clearError();
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = errorMessage(err);
       const generic = !detail || /unexpected error/i.test(detail);
       setFormError(
         `Couldn't register the robot. Check that its agent is running at ${value}.` +

@@ -6,7 +6,7 @@
  * @feature patrol
  */
 
-import { toast } from '@/shared/components/ui';
+import { errorMessage, toast } from '@/shared/components/ui';
 import { downloadBlob } from '@/features/agentmode/utils/mapExport';
 import { patrolApi } from '../api/patrolApi';
 import type { PatrolRoute } from '../types/patrol.types';
@@ -20,7 +20,7 @@ export async function exportRouteVda5050(route: Pick<PatrolRoute, 'id' | 'name'>
     toast.success('Route exported', { description: `${stem}.vda5050.json` });
     return true;
   } catch (err) {
-    toast.error("Couldn't export route", { description: err instanceof Error ? err.message : String(err) });
+    toast.error("Couldn't export route", { description: errorMessage(err) });
     return false;
   }
 }

@@ -8,12 +8,13 @@
 import { useEffect, useState } from 'react';
 import { CalendarClock, ListChecks } from 'lucide-react';
 import {
-  Checkbox, FormModal, ProgressBar, StatusTag, toast, type DataTableColumn,
+  Checkbox, FormModal, ProgressBar, StatusTag, errorMessage, statusTone, toast,
+  type DataTableColumn,
 } from '@/shared/components/ui';
 import { useComplianceTrackerStore } from '../store/complianceTrackerStore';
 import { COMPLIANCE_STATUS_CONFIG, REGULATORY_FRAMEWORK_LABELS, type RegulatoryDeadline } from '../types';
 import { ObligationTable } from './ObligationTable';
-import { complianceTone, errorMessage, formatDate, formatDays, humanize, severityTone } from './complianceFormat';
+import { complianceTone, formatDate, formatDays, humanize } from './complianceFormat';
 
 export interface RegulatoryTimelineProps {
   className?: string;
@@ -58,7 +59,7 @@ export function RegulatoryTimeline({ className }: RegulatoryTimelineProps) {
         </div>
       ),
     },
-    { key: 'priority', header: 'Priority', sortable: true, hideBelow: 'md', cell: (d) => <StatusTag tone={severityTone(d.priority)}>{humanize(d.priority)}</StatusTag> },
+    { key: 'priority', header: 'Priority', sortable: true, hideBelow: 'md', cell: (d) => <StatusTag tone={statusTone(d.priority)}>{humanize(d.priority)}</StatusTag> },
     {
       key: 'progress', header: 'Progress', hideBelow: 'sm', sortable: true, sortValue: progressOf, width: '12rem',
       cell: (d) => (

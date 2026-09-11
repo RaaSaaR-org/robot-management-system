@@ -42,6 +42,8 @@ export interface DropdownMenuItem {
   separatorBefore?: boolean;
   /** Stable key when labels are not strings */
   key?: string;
+  /** `data-testid` on the menu item */
+  testId?: string;
 }
 
 export type RowActionItem = DropdownMenuItem;
@@ -246,6 +248,7 @@ export function DropdownMenu({ trigger, items, align = 'end', label, className }
                   type="button"
                   role="menuitem"
                   tabIndex={-1}
+                  data-testid={item.testId}
                   disabled={item.disabled}
                   onClick={() => select(item)}
                   className={cn(

@@ -6,10 +6,9 @@
 
 import { useState } from 'react';
 import { Download, XCircle } from 'lucide-react';
-import { Button, KeyValueList, Modal, SkeletonText, StatusTag, confirm, humanizeStatus, toast } from '@/shared/components/ui';
+import { Button, KeyValueList, Modal, SkeletonText, StatusTag, confirm, errorMessage, humanizeStatus, toast } from '@/shared/components/ui';
 import { useGDPRStore } from '../store';
 import { REQUEST_TYPE_LABELS, formatDateTime, type GDPRRequest } from '../types';
-import { errorMessage } from './errorMessage';
 import { StatusBadge } from './StatusBadge';
 import { SLABadge } from './SLABadge';
 
@@ -17,8 +16,6 @@ export interface RequestDetailModalProps {
   request: GDPRRequest | null;
   onClose: () => void;
 }
-
-const errMsg = (err: unknown) => errorMessage(err);
 
 export function RequestDetailModal({ request, onClose }: RequestDetailModalProps) {
   const { selectedRequest, requestHistory, isLoadingRequest, cancelRequest, downloadExport, fetchMyRequests } = useGDPRStore();
@@ -47,7 +44,7 @@ export function RequestDetailModal({ request, onClose }: RequestDetailModalProps
       void fetchMyRequests();
       onClose();
     } catch (err) {
-      toast.error("Couldn't cancel request", { description: errMsg(err) });
+      toast.error("Couldn't cancel request", { description: errorMessage(err) });
     } finally {
       setBusy(null);
     }
@@ -65,7 +62,7 @@ export function RequestDetailModal({ request, onClose }: RequestDetailModalProps
       URL.revokeObjectURL(url);
       toast.success('Export ready', { description: a.download });
     } catch (err) {
-      toast.error("Couldn't download export", { description: errMsg(err) });
+      toast.error("Couldn't download export", { description: errorMessage(err) });
     } finally {
       setBusy(null);
     }

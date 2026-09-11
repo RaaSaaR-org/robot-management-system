@@ -13,8 +13,8 @@ import { cn } from '@/shared/utils/cn';
 // ============================================================================
 
 export type SpinnerSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
-/** `cobalt`/`turquoise`/`white` are legacy names: they map to primary/accent/current. */
-export type SpinnerColor = 'current' | 'primary' | 'accent' | 'cobalt' | 'turquoise' | 'white';
+/** `current` follows the surrounding text colour; `primary` and `accent` use the tokens. */
+export type SpinnerColor = 'current' | 'primary' | 'accent';
 
 export interface SpinnerProps {
   /** Spinner size */
@@ -43,10 +43,6 @@ const colorStyles: Record<SpinnerColor, string> = {
   current: 'border-current border-t-transparent',
   primary: 'border-primary border-t-transparent',
   accent: 'border-accent border-t-transparent',
-  cobalt: 'border-primary border-t-transparent',
-  turquoise: 'border-accent border-t-transparent',
-  // "white" was only ever used on coloured fills; the fill's own text colour is right there.
-  white: 'border-current border-t-transparent',
 };
 
 // ============================================================================

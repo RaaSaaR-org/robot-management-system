@@ -7,21 +7,16 @@
 import { useState } from 'react';
 import { Check, CheckCircle2, Eye, Wrench } from 'lucide-react';
 import {
-  Button,
-  DataTable,
-  EmptyState,
-  InfoIcon,
-  KeyValueList,
-  Modal,
-  Panel,
-  StatusTag,
-  toast,
+  Button, DataTable, EmptyState,
+  InfoIcon, KeyValueList, Modal,
+  Panel, StatusTag, errorMessage,
+  statusTone, toast,
   type DataTableColumn,
   type RowActionItem,
 } from '@/shared/components/ui';
 import type { AnomalyRecord } from '../types';
 import { ResolveAnomalyModal } from './ResolveAnomalyModal';
-import { errorMessage, humanize, severityTone } from './oversightFormat';
+import { humanize } from './oversightFormat';
 
 export interface AnomaliesPanelProps {
   anomalies: AnomalyRecord[];
@@ -78,7 +73,7 @@ export function AnomaliesPanel({ anomalies, isLoading, onAcknowledge, onResolve,
       header: 'Severity',
       sortable: true,
       sortValue: (a) => SEVERITY_ORDER.indexOf(a.severity),
-      cell: (a) => <StatusTag tone={severityTone(a.severity)}>{humanize(a.severity)}</StatusTag>,
+      cell: (a) => <StatusTag tone={statusTone(a.severity)}>{humanize(a.severity)}</StatusTag>,
     },
     {
       key: 'state',
@@ -134,7 +129,7 @@ export function AnomaliesPanel({ anomalies, isLoading, onAcknowledge, onResolve,
             <p className="max-w-[70ch] text-sm text-ink-secondary">{detail.description}</p>
             <KeyValueList
               items={[
-                { label: 'Severity', value: <StatusTag tone={severityTone(detail.severity)}>{humanize(detail.severity)}</StatusTag> },
+                { label: 'Severity', value: <StatusTag tone={statusTone(detail.severity)}>{humanize(detail.severity)}</StatusTag> },
                 { label: 'Robot', value: detail.robotName ?? detail.robotId },
                 { label: 'Robot ID', value: detail.robotId, mono: true },
                 { label: 'Acknowledged', value: detail.acknowledgedAt ? `${new Date(detail.acknowledgedAt).toLocaleString()} by ${detail.acknowledgedByName ?? detail.acknowledgedBy ?? 'unknown'}` : undefined },

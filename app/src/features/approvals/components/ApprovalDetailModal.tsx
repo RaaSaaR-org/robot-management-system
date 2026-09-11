@@ -6,12 +6,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Check, X } from 'lucide-react';
-import { Button, KeyValueList, Modal, SkeletonText, StatusTag, confirm, toast } from '@/shared/components/ui';
+import { Button, KeyValueList, Modal, SkeletonText, StatusTag, confirm, errorMessage, toast } from '@/shared/components/ui';
 import { useAuthStore } from '@/features/auth/store/authStore';
 import { useApprovalsStore } from '../store';
 import type { ApprovalRequest } from '../types';
 import { RejectApprovalModal } from './RejectApprovalModal';
-import { errorMessage, humanize, priorityTone, slaInfo, statusTone, stepTone } from './approvalFormat';
+import { humanize, priorityTone, slaInfo, statusTone, stepTone } from './approvalFormat';
 
 export interface ApprovalDetailModalProps {
   /** The row that was clicked; the modal loads the full record by its id. */

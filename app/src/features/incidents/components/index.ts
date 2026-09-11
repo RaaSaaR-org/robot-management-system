@@ -6,7 +6,6 @@
 
 export * from './SeverityBadge.js';
 export * from './StatusBadge.js';
-export * from './PaginationFooter.js';
 export * from './ReportIncidentModal.js';
 export * from './IncidentList.js';
 export * from './IncidentFilters.js';

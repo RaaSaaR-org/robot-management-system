@@ -10,7 +10,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
-import { LinkButton, PageHeader, StatRow, StatTile, Tabs, confirm, toast } from '@/shared/components/ui';
+import { LinkButton, PageHeader, StatRow, StatTile, Tabs, confirm, errorMessage, toast } from '@/shared/components/ui';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import { LiveTag } from '@/features/patrol/components/opsUi';
 import type { TourRoute, TourRun } from '../types/tour.types';
@@ -34,10 +34,6 @@ type TabId = (typeof TABS)[number]['id'];
 
 export interface TourPageProps {
   className?: string;
-}
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 export const TourPage = memo(function TourPage({ className }: TourPageProps) {
@@ -170,7 +166,7 @@ export const TourPage = memo(function TourPage({ className }: TourPageProps) {
         if (!done) throw new Error(useTourStore.getState().error ?? 'The server refused.');
         toast.success('Tour deleted', { description: route.name });
       } catch (err) {
-        toast.error("Couldn't delete tour", { description: message(err) });
+        toast.error("Couldn't delete tour", { description: errorMessage(err) });
       } finally {
         clearError();
       }

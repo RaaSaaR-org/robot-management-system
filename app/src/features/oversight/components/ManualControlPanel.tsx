@@ -6,10 +6,10 @@
 
 import { useState } from 'react';
 import { Hand, Power } from 'lucide-react';
-import { Button, EmptyState, KeyValueList, Panel, StatusTag, confirm, toast } from '@/shared/components/ui';
+import { Button, EmptyState, KeyValueList, Panel, StatusTag, confirm, errorMessage, toast } from '@/shared/components/ui';
 import type { ActivateManualModeInput, ManualControlSession } from '../types';
 import { ManualModeFormModal } from './ManualModeFormModal';
-import { errorMessage, formatDuration } from './oversightFormat';
+import { formatDuration } from './oversightFormat';
 
 export interface ManualControlPanelProps {
   /** The robot picked in the toolbar; null for "All robots". */

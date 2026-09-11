@@ -8,7 +8,7 @@
  */
 
 import { memo } from 'react';
-import { StatusTag } from '@/shared/components/ui';
+import { StatusTag, statusTone } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import type { PatrolLegStatus } from '../types/patrol.types';
 
@@ -81,16 +81,8 @@ export const LiveTag = memo(function LiveTag({ connected, 'data-testid': testId 
 
 // ---- run status ---------------------------------------------------------------
 
-/** Kit tone per run status (patrol + guide). `done` is success, a refusal is neutral. */
-const RUN_TONE: Record<string, 'success' | 'info' | 'warning' | 'danger' | 'neutral'> = {
-  running: 'success',
-  done: 'success',
-  aborted: 'warning',
-  abandoned: 'warning',
-  failed: 'danger',
-  skipped: 'neutral',
-  declined: 'neutral',
-};
+// Tones come from the kit's statusTone(): running/done success, aborted/abandoned
+// amber, failed red, skipped/declined (unknown to the map) neutral.
 const RUN_LABEL: Record<string, string> = {
   running: 'Running',
   done: 'Done',
@@ -119,7 +111,7 @@ export function describeRunReason(reason: string | null | undefined): string {
 /** Status tag for a patrol run or a guide visit. */
 export const RunStatusTag = memo(function RunStatusTag({ status }: { status: string }) {
   return (
-    <StatusTag tone={RUN_TONE[status] ?? 'neutral'} dot pulse={status === 'running'}>
+    <StatusTag tone={statusTone(status)} dot pulse={status === 'running'}>
       {RUN_LABEL[status] ?? status}
     </StatusTag>
   );

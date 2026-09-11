@@ -10,7 +10,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 import { Plus } from 'lucide-react';
-import { LinkButton, PageHeader, StatRow, StatTile, Tabs, confirm, toast } from '@/shared/components/ui';
+import { LinkButton, PageHeader, StatRow, StatTile, Tabs, confirm, errorMessage, toast } from '@/shared/components/ui';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import type { PatrolRoute, PatrolRun, PatrolRunMode } from '../types/patrol.types';
 import { usePatrolStore, selectActiveRuns, selectRoutes, selectRuns } from '../store/patrolStore';
@@ -34,10 +34,6 @@ type TabId = (typeof TABS)[number]['id'];
 
 export interface PatrolPageProps {
   className?: string;
-}
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProps) {
@@ -174,7 +170,7 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
         if (!done) throw new Error(usePatrolStore.getState().error ?? 'The server refused.');
         toast.success('Route deleted', { description: route.name });
       } catch (err) {
-        toast.error("Couldn't delete route", { description: message(err) });
+        toast.error("Couldn't delete route", { description: errorMessage(err) });
       } finally {
         clearError();
       }

@@ -21,8 +21,7 @@ import { ZoneVolumes } from './ZoneVolumes';
 import { RobotPathTrail } from './RobotPathTrail';
 import { LivePoses } from './LivePoses';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
-import { Button } from '@/shared/components/ui';
-import { useCssColor } from '../utils/cssColor';
+import { Button, useCssColor } from '@/shared/components/ui';
 
 /** Whether this browser can create a WebGL context (headless/locked-down browsers can't). */
 function detectWebGL(): boolean {

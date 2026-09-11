@@ -18,7 +18,6 @@ import {
   type DataTableColumn,
 } from '@/shared/components/ui';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
-import { PaginationFooter } from '@/features/incidents/components/PaginationFooter';
 import { useAlertHistory } from '../hooks/useAlerts';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
 import { AlertFilters, hasAlertFilters } from './AlertFilters';
@@ -40,7 +39,7 @@ export interface AlertHistoryPanelProps {
  * <AlertHistoryPanel autoFetch={tab === 'history'} />
  */
 export function AlertHistoryPanel({ autoFetch = true, className }: AlertHistoryPanelProps) {
-  const { history, pagination, filters, setFilters, isLoading, nextPage, prevPage } = useAlertHistory(autoFetch);
+  const { history, pagination, filters, setFilters, isLoading, goToPage } = useAlertHistory(autoFetch);
   const robots = useRobotsStore(selectRobots);
   const fetchRobots = useRobotsStore((state) => state.fetchRobots);
   const filtered = hasAlertFilters(filters);
@@ -113,6 +112,19 @@ export function AlertHistoryPanel({ autoFetch = true, className }: AlertHistoryP
           rows={history}
           getRowId={(a) => a.id}
           isLoading={isLoading}
+          // Once there is history the footer always shows, so the total is visible on one page too.
+          pagination={
+            history.length > 0
+              ? {
+                  page: pagination.page,
+                  totalPages: pagination.totalPages,
+                  total: pagination.total,
+                  noun: 'alert',
+                  showSinglePage: true,
+                  onPageChange: goToPage,
+                }
+              : undefined
+          }
           empty={
             filtered ? (
               <EmptyState
@@ -134,17 +146,6 @@ export function AlertHistoryPanel({ autoFetch = true, className }: AlertHistoryP
             )
           }
         />
-        {history.length > 0 && (
-          <PaginationFooter
-            page={pagination.page}
-            totalPages={pagination.totalPages}
-            total={pagination.total}
-            noun="alert"
-            onPrev={prevPage}
-            onNext={nextPage}
-            isLoading={isLoading}
-          />
-        )}
       </Panel>
     </div>
   );

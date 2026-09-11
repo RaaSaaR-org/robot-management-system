@@ -14,7 +14,6 @@ import {
 } from '@/shared/components/ui';
 import { ConfidenceGauge } from './ConfidenceGauge';
 import { SafetyBadge } from './SafetyBadge';
-import { Pager } from './Pager';
 import { DECISION_TYPE_LABELS, formatDate, type DecisionExplanation } from '../types';
 
 export interface DecisionTableProps {
@@ -86,6 +85,7 @@ export function DecisionTable(props: DecisionTableProps) {
         error={error}
         errorTitle="Couldn't load AI decisions"
         onRetry={onRetry}
+        pagination={{ page: props.page, totalPages: props.totalPages, total: props.total, onPageChange: props.onPageChange }}
         empty={
           hasFilters ? (
             <EmptyState
@@ -102,13 +102,6 @@ export function DecisionTable(props: DecisionTableProps) {
             />
           )
         }
-      />
-      <Pager
-        page={props.page}
-        totalPages={props.totalPages}
-        total={props.total}
-        onPageChange={props.onPageChange}
-        disabled={isLoading}
       />
     </Panel>
   );

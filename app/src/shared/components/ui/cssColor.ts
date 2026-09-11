@@ -2,9 +2,9 @@
  * @file cssColor.ts
  * @description Resolve a design-token CSS custom property (e.g. `--color-primary`)
  *   to a concrete colour string for renderers that cannot read `var(...)` —
- *   three.js materials and the zone editor's SVG attributes. UI colours in the
- *   3D viewer come from tokens this way; zone colours stay data from the server.
- * @feature digitaltwin
+ *   three.js materials, canvas, and SVG attributes set from code. recharts and
+ *   style objects take `chartColors` (plain `var(--…)` strings) instead.
+ * @feature shared
  */
 
 import { useEffect, useState } from 'react';
@@ -18,8 +18,14 @@ export function cssColor(name: string, fallback = 'white'): string {
 
 /**
  * Same as `cssColor`, but re-read when the theme changes (the root's
- * `data-theme` / `class` attribute or the OS colour scheme), so a canvas
- * repaints with the light or dark token value.
+ * `data-theme` / `class` / `style` attribute or the OS colour scheme), so a
+ * canvas repaints with the light or dark token value.
+ *
+ * @example
+ * ```tsx
+ * const trail = useCssColor('--color-primary');
+ * <meshBasicMaterial color={trail} />
+ * ```
  */
 export function useCssColor(name: string, fallback = 'white'): string {
   const [value, setValue] = useState(() => cssColor(name, fallback));

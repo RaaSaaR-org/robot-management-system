@@ -7,11 +7,11 @@
 
 import { useEffect, useState } from 'react';
 import {
-  Checkbox, FormField, FormModal, Input, Select, ToggleChip, toast,
+  Checkbox, FormField, FormModal, Input, Select, ToggleChip, errorMessage, toast,
 } from '@/shared/components/ui';
 import { useComplianceStore } from '../store';
 import type { ComplianceEventType } from '../types';
-import { EVENT_TYPE_OPTIONS, errorMessage } from './complianceFormat';
+import { EVENT_TYPE_OPTIONS } from './complianceFormat';
 
 export interface ExportDialogProps {
   isOpen: boolean;

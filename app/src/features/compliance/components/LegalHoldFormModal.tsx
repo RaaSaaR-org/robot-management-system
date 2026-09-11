@@ -6,9 +6,8 @@
  */
 
 import { useEffect, useState } from 'react';
-import { FormField, FormModal, Input, Textarea, toast } from '@/shared/components/ui';
+import { FormField, FormModal, Input, Textarea, errorMessage, toast } from '@/shared/components/ui';
 import { useComplianceStore } from '../store';
-import { errorMessage } from './complianceFormat';
 
 export interface LegalHoldFormModalProps {
   isOpen: boolean;

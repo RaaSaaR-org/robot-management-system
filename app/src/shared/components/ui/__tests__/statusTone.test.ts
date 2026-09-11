@@ -29,6 +29,53 @@ describe('statusTone', () => {
     expect(statusTone(status)).toBe(tone);
   });
 
+  it.each([
+    // run states
+    ['done', 'success'],
+    ['aborted', 'warning'],
+    ['abandoned', 'warning'],
+    // severities (incidents, alerts, anomalies, findings)
+    ['critical', 'danger'],
+    ['high', 'danger'],
+    ['medium', 'warning'],
+    ['low', 'neutral'],
+    ['info', 'neutral'],
+    // incident lifecycle
+    ['detected', 'warning'],
+    ['investigating', 'info'],
+    ['contained', 'info'],
+    ['resolved', 'success'],
+    ['closed', 'success'],
+    // regulatory notifications
+    ['overdue', 'danger'],
+    ['sent', 'success'],
+    ['acknowledged', 'success'],
+    // deployments
+    ['canary', 'info'],
+    ['production', 'success'],
+    ['rolling_back', 'warning'],
+    ['rolled_back', 'warning'],
+    ['deprecated', 'neutral'],
+    // A2A task states
+    ['submitted', 'info'],
+    ['working', 'info'],
+    ['input-required', 'warning'],
+    ['canceled', 'neutral'],
+  ])('maps the domain state %s to %s', (status, tone) => {
+    expect(statusTone(status)).toBe(tone);
+  });
+
+  it('keeps amber for attention and red for stops and faults', () => {
+    // Nothing that merely needs a look is red.
+    for (const s of ['aborted', 'rolled_back', 'input_required', 'detected']) {
+      expect(statusTone(s)).toBe('warning');
+    }
+    // A missed legal notification deadline is a fault that is true now.
+    for (const s of ['failed', 'estop', 'fault', 'stopped', 'overdue']) {
+      expect(statusTone(s)).toBe('danger');
+    }
+  });
+
   it('is case- and separator-insensitive', () => {
     expect(statusTone('In Progress')).toBe('info');
     expect(statusTone('IN-PROGRESS')).toBe('info');
