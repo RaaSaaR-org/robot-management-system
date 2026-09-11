@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
+import { FormField, FormModal, Input, Select, Textarea, errorMessage, toast } from '@/shared/components/ui';
 import { useZoneManagement, useZoneEditor } from '../hooks';
 import type { Zone, ZoneType, ZoneBounds } from '../types/fleet.types';
 import { ZONE_COLOR_OPTIONS, ZONE_TYPE_LABEL } from '../utils/mapColors';
@@ -144,7 +144,7 @@ export function ZoneFormModal({ isOpen, zone, defaultBounds, currentFloor, onClo
       onSuccess?.(saved);
       handleClose();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : String(err));
+      setFormError(errorMessage(err));
     } finally {
       setSaving(false);
     }

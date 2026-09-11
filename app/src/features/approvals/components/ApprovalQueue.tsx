@@ -6,20 +6,16 @@
 
 import { ArrowUpCircle, CheckCircle2, Eye, Search, XCircle } from 'lucide-react';
 import {
-  Button,
-  DataTable,
-  EmptyState,
-  Panel,
-  StatusTag,
-  confirm,
-  toast,
+  Button, DataTable, EmptyState,
+  Panel, StatusTag, confirm,
+  errorMessage, toast,
   type DataTableColumn,
   type RowActionItem,
 } from '@/shared/components/ui';
 import { useAuthStore } from '@/features/auth/store/authStore';
 import { useApprovalsStore } from '../store';
 import type { ApprovalRequest } from '../types';
-import { errorMessage, formatRelative, humanize, isOpen, priorityTone, slaInfo, statusTone } from './approvalFormat';
+import { formatRelative, humanize, isOpen, priorityTone, slaInfo, statusTone } from './approvalFormat';
 
 export interface ApprovalQueueProps {
   rows: ApprovalRequest[];

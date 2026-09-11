@@ -11,7 +11,7 @@ import { useParams } from 'react-router-dom';
 import { ArrowRight, Database, Pause, Play, Plus, Square } from 'lucide-react';
 import {
   Button, EmptyState, ErrorState, FormField, FormModal, Input, LinkButton, PageHeader, Panel,
-  PipelineBreadcrumb, Skeleton, SkeletonText, StatusTag, Textarea, confirm, toast,
+  PipelineBreadcrumb, Skeleton, SkeletonText, StatusTag, Textarea, confirm, errorMessage, toast,
 } from '@/shared/components/ui';
 import { SessionStatusBadge } from '../components/SessionStatusBadge';
 import { QualityIndicator } from '../components/QualityIndicator';
@@ -38,7 +38,6 @@ const Robot3DViewer = lazy(() =>
   import('../../robots/components/visualization/Robot3DViewer').then((m) => ({ default: m.Robot3DViewer }))
 );
 
-const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const formatElapsed = (secs: number) => `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
 const BACK = { to: '/data-collection', label: 'Data collection' };
 
@@ -126,7 +125,7 @@ export function SessionDetailPage() {
       await fetchSession();
       toast.success('Episode discarded', { description: `Episode ${episodeIndex}` });
     } catch (err) {
-      toast.error("Couldn't discard episode", { description: errMsg(err) });
+      toast.error("Couldn't discard episode", { description: errorMessage(err) });
     }
   }, [session, storeDiscardEpisode, fetchSession]);
 
@@ -134,7 +133,7 @@ export function SessionDetailPage() {
 
   const run = async (kind: 'start' | 'pause' | 'end', act: () => Promise<unknown>, ok: string, fail: string) => {
     setPending(kind);
-    try { await act(); toast.success(ok); } catch (err) { toast.error(fail, { description: errMsg(err) }); } finally { setPending(null); }
+    try { await act(); toast.success(ok); } catch (err) { toast.error(fail, { description: errorMessage(err) }); } finally { setPending(null); }
   };
 
   const handleStart = async () => {
@@ -201,7 +200,7 @@ export function SessionDetailPage() {
       await annotateSession(annotationText.trim());
       toast.success('Task updated', { description: annotationText.trim() });
       setAnnotateOpen(false);
-    } catch (err) { setModalError(errMsg(err)); } finally { setSaving(false); }
+    } catch (err) { setModalError(errorMessage(err)); } finally { setSaving(false); }
   };
 
   const handleExport = async () => {
@@ -210,7 +209,7 @@ export function SessionDetailPage() {
       await exportSession({ datasetName: exportName.trim() || undefined });
       toast.success('Dataset created', { description: exportName.trim() || undefined });
       setExportOpen(false); setExportName('');
-    } catch (err) { setModalError(errMsg(err)); } finally { setSaving(false); }
+    } catch (err) { setModalError(errorMessage(err)); } finally { setSaving(false); }
   };
 
   if (!session) {

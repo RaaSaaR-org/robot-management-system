@@ -9,7 +9,7 @@
 import { useCallback, useId, useState, type FormEvent } from 'react';
 import { Send, Sparkles, X } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
-import { Button, Input, ToggleChip, toast } from '@/shared/components/ui';
+import { Button, Input, ToggleChip, errorMessage, toast } from '@/shared/components/ui';
 import { useCommand, useSimulation } from '../hooks';
 import { CommandPreview } from './CommandPreview';
 import { CommandConfirmation } from './CommandConfirmation';
@@ -77,7 +77,7 @@ export function CommandBar({ robotId, robotName, className }: CommandBarProps) {
     } catch (err) {
       setShowConfirmation(false);
       toast.error("Couldn't send command", {
-        description: err instanceof Error ? err.message : String(err),
+        description: errorMessage(err),
       });
     }
   }, [executeCommand, robotId, robotName]);
