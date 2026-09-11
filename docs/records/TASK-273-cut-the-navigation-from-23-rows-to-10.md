@@ -145,7 +145,45 @@ choice without weakening the word on the page.
   the task body lists every view of every demoted page, and
   `CockpitPerceptionPanel` keeps its G1-family/H1 gate.
 
+## Planning addendum — 2026-09-12, `/plan`
+
+The decisions above stand unchanged. Planning read the pages the epic describes
+and had to settle two **mechanism** questions the spec left implicit. They are
+recorded here rather than edited into D1–D8.
+
+### D9: Missions is a rail, not a page with tabs
+
+The target navigation called Missions a page with tabs `Patrol · Guide ·
+Automations`. Reading the pages made that the wrong mechanism: `PatrolPage` owns
+tabs `Routes · Runs` and `TourPage` owns `Tours · Visits`, so three Missions tabs
+would stack two tab rows above each other — precisely what D3 rejected when it
+chose "a rail one level above the page's own tab bar". Missions therefore uses
+the same rail as Skill Training.
+
+**Rejected — one Missions page with three tabs:** it forces the three pages to be
+extracted from their routes, re-homed under one component, and to give up either
+their own tab bars or a second tab row. It also puts three live subscriptions
+(`usePatrolEvents`, `useTourEvents`, `useProcessWebSocket`) behind a tab click.
+
+**Rejected — flattening to five tabs (`Routes · Runs · Tours · Visits ·
+Automations`):** it loses the grouping that made the owner put the three
+together in the first place.
+
+The user-visible result is the one the directive asked for: one row for the three,
+the three reachable one click below it.
+
+### D10: `PipelineBreadcrumb` retires from the pages the Build rail covers
+
+The rail's first stop is `Overview` (`/pipeline`) and it lists every sibling
+stage, so the "3/5 · Train stage · Pipeline overview" chip says a weaker version
+of the same thing directly underneath it. It is removed from the six rail-covered
+pages and **kept on `Deployments`**, which is a row of its own with no rail above
+it and therefore still needs a tie back to the pipeline.
+
+**Rejected — keeping the chip everywhere:** two near-identical horizontal strips
+stacked on the same page is the visual noise this epic exists to remove.
+
 ## Hand-off
 
-`/plan` on TASK-273 — six slices are suggested in the task body; the epic carries
-no size of its own.
+`/plan` split TASK-273 into TASK-275 … TASK-280. TASK-275 is the only unblocked
+child; the other five depend on it. `/implement` takes them in that order.

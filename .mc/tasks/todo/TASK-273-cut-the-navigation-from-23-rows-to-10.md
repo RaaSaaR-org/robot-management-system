@@ -98,9 +98,9 @@ Second-level rails and tabs:
 
 | Row | Second level |
 | --- | ------------ |
-| Fleet | tabs `Map · Robots · Sites` |
-| Missions | tabs `Patrol · Guide · Automations` |
-| Skill Training | rail `Collect · Datasets · Train · Models · Learning` |
+| Fleet | tabs `Map · Robots · Sites` — [[TASK-276]] |
+| Missions | rail `Patrol · Guide · Automations` — [[TASK-277]] |
+| Skill Training | rail `Overview · Collect · Datasets · Train · Models · Learning` — [[TASK-278]] |
 
 Out of the sidebar entirely:
 
@@ -156,20 +156,28 @@ Key files:
 - `app/src/features/pipeline/pages/PipelinePage.tsx` — the stage rail's host
 - `app/src/features/settings/pages/SettingsPage.tsx` — fourth tab `Updates`
 
-### Suggested slicing for `/plan`
+### Children (planned 2026-09-12)
 
-1. **The nav model + shell** — `navigation.ts` with rails and tabs, `NavList`,
-   `Sidebar`, `MobileNav`, `TopBar` help icon, `UserMenu`, `OrganizationSwitcher`,
-   contract tests. No page moves yet.
-2. **Operate** — Sites into `Fleet` as a third tab; Control Center row unchanged.
-3. **Automate** — the Missions page (Patrol · Guide · Automations tabs), editors
-   and run details left as full routes.
-4. **Build** — the Skill Training stage rail over Collect · Datasets · Train ·
-   Models · Learning; Deployments and Marketplace keep their rows.
-5. **Settings and redirects** — Updates as a Settings tab, every retired route
-   redirected, `/pipeline` deep links preserved.
-6. **⌘K palette** — client-side fuzzy find over every row, rail item and tab in
-   the nav model. Depends on slice 1.
+| Task | Slice | spe | Depends on |
+| ---- | ----- | --- | ---------- |
+| [[TASK-275]] | The nav model learns rails, tabs and the verb groups; `SectionRail` in the shell; page eyebrows follow. No row removed. | 3 | — |
+| [[TASK-276]] | Digital Twin becomes Fleet's `Sites` tab. | 3 | [[TASK-275]] |
+| [[TASK-277]] | Patrol · Guide · Automations collapse into one `Missions` row with a rail. | 2 | [[TASK-275]] |
+| [[TASK-278]] | The five build stages move behind `Skill Training`'s rail. | 3 | [[TASK-275]] |
+| [[TASK-279]] | Docs, Settings, Updates, Organizations and Team leave the sidebar — this is the slice that reaches 10 rows. | 5 | [[TASK-275]] |
+| [[TASK-280]] | The ⌘K palette over every row, rail item and tab, with the guard test. | 5 | [[TASK-275]] |
+
+Two mechanism decisions were taken during planning, after reading the pages, and
+are recorded in the decision record as D9 and D10:
+
+- **Missions is a rail, not a page with tabs.** `PatrolPage` owns `Routes · Runs`
+  and `TourPage` owns `Tours · Visits`, so three Missions tabs would stack two tab
+  rows — the thing this epic rejected. As a rail, all three keep their routes,
+  their `?tab=` state, their live subscriptions and their sub-routes, and the
+  slice costs a model edit instead of a refactor.
+- **`PipelineBreadcrumb` retires from the pages the Build rail covers.** The rail
+  offers Overview and every sibling stage; the chip is a weaker second copy of it.
+  It stays on `Deployments`, which has no rail above it.
 
 ## Acceptance Criteria
 
