@@ -12,9 +12,11 @@ import { memo, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import type { TwinZoneDTO } from '../types/twin.types';
 import { TWIN_ZONE_COLORS } from '../store/twinZoneStore';
+import { cssColor } from '../utils/cssColor';
 
+/** Server colour (data) → type colour → the primary token as a last resort. */
 function zoneColor(zone: TwinZoneDTO): string {
-  return zone.color || TWIN_ZONE_COLORS[zone.type] || '#2A5FFF';
+  return zone.color || TWIN_ZONE_COLORS[zone.type] || cssColor('--color-primary');
 }
 
 const ZoneVolume = memo(function ZoneVolume({

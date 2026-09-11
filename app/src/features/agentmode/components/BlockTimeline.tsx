@@ -7,7 +7,8 @@
  */
 
 import { memo, useMemo, type ReactNode } from 'react';
-import { cn } from '@/shared/utils';
+import { StatusTag } from '@/shared/components/ui';
+import { cn } from '@/shared/utils/cn';
 import {
   useAgentModeStore,
   selectPlan,
@@ -71,8 +72,8 @@ const PLANNING_TICK_MS = 1_000;
 const RAIL_STICKY = 'sticky top-14 z-20';
 
 /**
- * `.glass-card` sets `overflow: hidden` (src/index.css), and on THIS card that
- * is a safety bug, not a rounding detail.
+ * A panel that clips (`overflow: hidden`) is, on THIS strip, a safety bug and
+ * not a rounding detail.
  *
  * The rail is a flex row that ends in STOPP. Anything wider than the card would
  * be silently cut off at the right edge — with no scrollbar, because `hidden`
@@ -120,13 +121,13 @@ function BlockChip({
       className={cn(
         'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs whitespace-nowrap',
         variant === 'current'
-          ? 'bg-cobalt-500/15 text-cobalt-400 border border-cobalt-500/40'
-          : 'glass-subtle text-theme-tertiary'
+          ? 'border border-primary/30 bg-primary/10 text-primary'
+          : 'border border-line-subtle bg-inset text-ink-tertiary'
       )}
     >
       <span aria-hidden="true">{blockKindGlyph(block.kind)}</span>
       <span className="font-medium">{blockKindLabel(block.kind)}</span>
-      {params && <span className="opacity-70 hidden sm:inline">{params}</span>}
+      {params && <span className="hidden opacity-80 sm:inline">{params}</span>}
       {variant === 'current' && (
         <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
       )}
@@ -183,7 +184,7 @@ export const BlockTimeline = memo(function BlockTimeline({
       data-testid="agent-block-timeline"
       data-plan-status={plan?.status ?? 'none'}
       className={cn(
-        'glass-card px-3 py-1.5',
+        'rounded-panel border border-line bg-panel px-3 py-1.5',
         // One 44px line whenever the content fits; `min-h-11` and NOT `h-11`,
         // because a fixed height turns "too much content" into "content nobody
         // can see" the moment anything wraps.
@@ -225,14 +226,9 @@ export const BlockTimeline = memo(function BlockTimeline({
         )}
       >
         {status && (
-          <span
-            className={cn(
-              'px-2 py-0.5 rounded-full text-[10px] font-medium whitespace-nowrap shrink-0',
-              status.className
-            )}
-          >
+          <StatusTag tone={status.tone} dot={status.pulse} pulse={status.pulse} className="shrink-0">
             {status.label}
-          </span>
+          </StatusTag>
         )}
 
         {/* How long it has been planning. Deliberately NOT in a live region:
@@ -242,7 +238,7 @@ export const BlockTimeline = memo(function BlockTimeline({
         {planningMs !== null && (
           <span
             data-testid="agent-planning-elapsed"
-            className="card-meta tabular-nums whitespace-nowrap shrink-0"
+            className="shrink-0 whitespace-nowrap text-xs tabular-nums text-ink-muted"
           >
             {formatDuration(planningMs)}
           </span>
@@ -251,19 +247,19 @@ export const BlockTimeline = memo(function BlockTimeline({
         {currentBlock ? (
           <BlockChip block={currentBlock} variant="current" />
         ) : (
-          <span className="card-meta whitespace-nowrap">
+          <span className="whitespace-nowrap text-xs text-ink-muted">
             {plan ? 'No block running' : 'No active plan'}
           </span>
         )}
 
-        {shown.length > 0 && <span className="card-meta shrink-0">→</span>}
+        {shown.length > 0 && <span aria-hidden="true" className="shrink-0 text-xs text-ink-muted">→</span>}
 
         {shown.map((block) => (
           <BlockChip key={block.id} block={block} variant="upcoming" />
         ))}
 
         {overflow > 0 && (
-          <span className="card-meta whitespace-nowrap shrink-0">+{overflow} more</span>
+          <span className="shrink-0 whitespace-nowrap text-xs text-ink-muted">+{overflow} more</span>
         )}
       </div>
 
@@ -285,11 +281,11 @@ export const BlockTimeline = memo(function BlockTimeline({
           // while the block group is on a row of its own; from `sm` the elastic
           // middle does that job and the margin is dropped again.
           'order-2 ml-auto sm:order-3 sm:ml-0',
-          'rounded-brand font-bold text-xs tracking-wider',
-          'bg-red-600 text-white transition-all duration-150',
-          'hover:bg-red-700 active:scale-95 focus:outline-none focus:ring-2 focus:ring-red-500/50',
-          'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-red-600',
-          estopActive && 'bg-red-800 animate-pulse'
+          'rounded-control text-xs font-semibold tracking-wider',
+          'bg-stop text-on-stop transition-colors duration-150 hover:bg-stop/90',
+          'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stop',
+          'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-stop',
+          estopActive && 'outline-2 outline-offset-2 outline-stop/50'
         )}
       >
         STOPP

@@ -10,7 +10,7 @@
 import { memo } from 'react';
 import { Brain } from 'lucide-react';
 import { cn } from '@/shared/utils';
-import { EmptyState } from '@/shared/components/ui';
+import { EmptyState, StatusTag } from '@/shared/components/ui';
 import { Tooltip } from '@/shared/components/ui/Tooltip';
 import { useAgentModeStore, selectMemory, selectSelf } from '../store/agentmodeStore';
 import type { AgentMemoryDigest, AgentSelfState } from '../types/agentmode.types';
@@ -99,25 +99,25 @@ function BudgetMeter({ digest }: { digest: AgentMemoryDigest }) {
   return (
     <div data-testid="agent-memory-budget" data-ratio={ratio.toFixed(2)}>
       <div className="flex items-center gap-2">
-        <span className="card-meta">Budget</span>
-        <span className="ml-auto card-meta tabular-nums">
+        <span className="text-xs text-ink-muted">Budget</span>
+        <span className="ml-auto text-xs text-ink-muted tabular-nums">
           {formatBytes(digest.memoryBytes)}
           {max > 0 && ` / ${formatBytes(max)}`}
         </span>
       </div>
       {max > 0 && (
-        <div className="mt-1 h-1.5 rounded-full bg-theme-elevated overflow-hidden">
+        <div className="mt-1 h-1.5 rounded-full bg-inset overflow-hidden">
           <div
             className={cn(
               'h-full rounded-full transition-all duration-300',
-              tight ? 'bg-amber-500' : 'bg-cobalt-500'
+              tight ? 'bg-signal-unknown' : 'bg-primary'
             )}
             style={{ width: `${Math.max(2, ratio * 100)}%` }}
           />
         </div>
       )}
       {tight && (
-        <p className="card-meta mt-1 text-amber-600 dark:text-amber-400">
+        <p className="mt-1 text-xs text-signal-unknown">
           Near the cap — the robot drops its oldest lines to make room.
         </p>
       )}
@@ -143,13 +143,13 @@ function RetentionRow({ retention }: { retention: AgentMemoryDigest['retention']
         data-retention-source="unknown"
         className="flex items-center gap-2"
       >
-        <span className="card-meta">Retention</span>
+        <span className="text-xs text-ink-muted">Retention</span>
         <Tooltip
           className="ml-auto"
           side="left"
           content="The robot has not been told what governs its journal. Unknown is not 'kept forever' and not 'kept for nothing' — it is unanswered."
         >
-          <span className="card-meta">unknown</span>
+          <span className="text-xs text-ink-muted">unknown</span>
         </Tooltip>
       </div>
     );
@@ -164,8 +164,8 @@ function RetentionRow({ retention }: { retention: AgentMemoryDigest['retention']
       data-legal-hold={String(retention.legalHold)}
       className="flex flex-wrap items-center gap-x-2 gap-y-1"
     >
-      <span className="card-meta">Retention</span>
-      <span className="ml-auto card-meta tabular-nums">{retention.retentionDays} d</span>
+      <span className="text-xs text-ink-muted">Retention</span>
+      <span className="ml-auto text-xs text-ink-muted tabular-nums">{retention.retentionDays} d</span>
       <Tooltip
         side="left"
         content={
@@ -174,23 +174,13 @@ function RetentionRow({ retention }: { retention: AgentMemoryDigest['retention']
             : "The platform's retention policy, honoured by the robot."
         }
       >
-        <span
-          className={cn(
-            'px-1.5 py-0.5 rounded-full text-[10px] font-medium',
-            fallback
-              ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-              : 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-400'
-          )}
-        >
-          {retention.source}
+        <span>
+          <StatusTag tone={fallback ? 'warning' : 'info'}>{retention.source}</StatusTag>
         </span>
       </Tooltip>
       {retention.legalHold && (
-        <span
-          data-testid="agent-memory-legal-hold"
-          className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-500/15 text-red-600 dark:text-red-400"
-        >
-          legal hold
+        <span data-testid="agent-memory-legal-hold">
+          <StatusTag tone="danger">Legal hold</StatusTag>
         </span>
       )}
     </div>
@@ -224,14 +214,14 @@ export const MemoryPanel = memo(function MemoryPanel({
       data-testid="agent-memory-panel"
       className={cn(
         'flex flex-col overflow-hidden',
-        headerless ? 'flex-1 min-h-0' : 'glass-card',
+        headerless ? 'flex-1 min-h-0' : 'rounded-panel border border-line bg-panel',
         className
       )}
     >
       {!headerless && (
-        <div className="shrink-0 flex items-center gap-2 px-3 py-2.5 border-b border-glass-subtle">
-          <span className="card-title">Durable memory</span>
-          <span className="ml-auto card-meta tabular-nums">
+        <div className="shrink-0 flex items-center gap-2 px-3 py-2.5 border-b border-line-subtle">
+          <span className="text-sm font-semibold text-ink-primary">Durable memory</span>
+          <span className="ml-auto text-xs text-ink-muted tabular-nums">
             {entries === null ? '—' : `${entries} ${entries === 1 ? 'entry' : 'entries'}`}
           </span>
         </div>
@@ -253,14 +243,14 @@ export const MemoryPanel = memo(function MemoryPanel({
         )}
 
         {entries === 0 && placeNotes > 0 && (
-          <p data-testid="agent-memory-places-only" className="card-meta">
+          <p data-testid="agent-memory-places-only" className="text-xs text-ink-muted">
             Nothing in MEMORY.md yet — what this robot has written down so far belongs to
             single places, listed below.
           </p>
         )}
 
         {entries !== null && entries > 0 && !digest && (
-          <p data-testid="agent-memory-digest-missing" className="card-meta">
+          <p data-testid="agent-memory-digest-missing" className="text-xs text-ink-muted">
             {entries} {entries === 1 ? 'entry' : 'entries'} — from the robot&apos;s own state
             report. The byte budget, the place notes and the retention rule need the memory
             digest, which has not reached this console.
@@ -278,9 +268,9 @@ export const MemoryPanel = memo(function MemoryPanel({
                 side="top"
                 content="Day files on the robot's disk, pruned by the retention rule above."
               >
-                <span className="card-meta">Journal</span>
+                <span className="text-xs text-ink-muted">Journal</span>
               </Tooltip>
-              <span data-testid="agent-memory-journal" className="ml-auto card-meta tabular-nums">
+              <span data-testid="agent-memory-journal" className="ml-auto text-xs text-ink-muted tabular-nums">
                 {digest.journalDays.length}{' '}
                 {digest.journalDays.length === 1 ? 'day' : 'days'}
                 {digest.journalDays.length > 0 && ` · since ${digest.journalDays[0]}`}
@@ -289,16 +279,16 @@ export const MemoryPanel = memo(function MemoryPanel({
 
             {digest.places.length > 0 && (
               <div className="space-y-1.5">
-                <span className="card-meta">Place notes</span>
+                <span className="text-xs text-ink-muted">Place notes</span>
                 <ul className="space-y-1">
                   {digest.places.map((place) => (
                     <li
                       key={place.id}
                       data-testid="agent-memory-place"
-                      className="glass-subtle px-2.5 py-1.5 flex items-center gap-2"
+                      className="rounded-control bg-inset px-2.5 py-1.5 flex items-center gap-2"
                     >
-                      <span className="card-value truncate">{place.id}</span>
-                      <span className="ml-auto card-meta tabular-nums shrink-0">
+                      <span className="text-sm font-medium text-ink-primary truncate">{place.id}</span>
+                      <span className="ml-auto text-xs text-ink-muted tabular-nums shrink-0">
                         {place.entries} · {formatBytes(place.bytes)}
                       </span>
                     </li>

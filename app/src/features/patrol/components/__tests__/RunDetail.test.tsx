@@ -9,8 +9,16 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { confirm } from '@/shared/components/ui';
 import { renderWithProviders } from '@/test/utils';
 import { RunDetail } from '../RunDetail';
+
+// The kit's confirm() opens a ConfirmDialog; each test decides the answer.
+vi.mock('@/shared/components/ui', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/shared/components/ui')>()),
+  confirm: vi.fn(),
+}));
+const confirmMock = vi.mocked(confirm);
 import { usePatrolStore } from '../../store/patrolStore';
 import { patrolApi } from '../../api/patrolApi';
 import type { PatrolFinding, PatrolRoute, PatrolRun } from '../../types/patrol.types';
@@ -29,6 +37,12 @@ vi.mock('../../api/patrolApi', () => ({
   photoKeyBasename: (k: string) => k.split('/').pop(),
 }));
 const api = vi.mocked(patrolApi);
+
+/** "This is normal" and "Escalate" live in the finding's RowActions menu. */
+function findingMenuItem(name: string): HTMLElement {
+  fireEvent.click(screen.getByRole('button', { name: /more actions for/i }));
+  return screen.getByRole('menuitem', { name });
+}
 
 const route: PatrolRoute = {
   id: 'route-1', name: 'Night round', robotId: 'g1', twinId: null,
@@ -67,6 +81,8 @@ beforeEach(() => {
   api.getBaseline.mockResolvedValue({ runId: 'run-base', window: 'night', photos: { 'cp-a': 'cp-a.jpg', 'cp-b': 'cp-b.jpg' } });
   api.fetchPhotoUrl.mockResolvedValue('blob:photo');
   Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() });
+  // The operator says yes unless a test says otherwise.
+  confirmMock.mockResolvedValue(true);
 });
 
 describe('RunDetail', () => {
@@ -74,7 +90,10 @@ describe('RunDetail', () => {
     renderWithProviders(<RunDetail runId="run-1" robotNames={{ g1: 'Alpha' }} />, { withAuth: false });
     const detail = await screen.findByTestId('patrol-run-detail');
     expect(detail).toHaveTextContent('Night round');
-    expect(detail).toHaveTextContent('Patrol · scheduled · window night');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Night round');
+    expect(detail).toHaveTextContent('Patrol run ·');
+    expect(detail).toHaveTextContent('scheduled');
+    expect(detail).toHaveTextContent('night');
     expect(detail).toHaveTextContent('Alpha');
 
     const legs = screen.getAllByTestId('patrol-leg');
@@ -112,16 +131,17 @@ describe('RunDetail', () => {
     await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'acknowledged'));
     // Acknowledged: Acknowledge is spent, the other two remain.
     expect(screen.getByTestId('patrol-finding-ack')).toBeDisabled();
-    expect(screen.getByTestId('patrol-finding-normal')).not.toBeDisabled();
+    const normal = findingMenuItem('This is normal');
+    expect(normal).not.toBeDisabled();
 
-    fireEvent.click(screen.getByTestId('patrol-finding-normal'));
+    fireEvent.click(normal);
     await waitFor(() => expect(api.markFindingNormal).toHaveBeenCalledWith('f-1'));
     await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'dismissed_normal'));
     // Marked normal: that verdict is spent, but escalating stays possible — a
     // mis-clicked "normal" on a person in the hallway must be correctable, and
     // the server accepts the transition from any status.
-    expect(screen.getByTestId('patrol-finding-normal')).toBeDisabled();
-    expect(screen.getByTestId('patrol-finding-escalate')).not.toBeDisabled();
+    expect(findingMenuItem('This is normal')).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Escalate' })).not.toBeDisabled();
     // The robot took the lesson: no warning.
     expect(screen.queryByTestId('patrol-finding-robot-not-notified')).not.toBeInTheDocument();
   });
@@ -132,14 +152,14 @@ describe('RunDetail', () => {
     renderWithProviders(<RunDetail runId="run-1" />, { withAuth: false });
     await screen.findAllByTestId('patrol-finding');
 
-    fireEvent.click(screen.getByTestId('patrol-finding-normal'));
+    fireEvent.click(findingMenuItem('This is normal'));
     await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'dismissed_normal'));
 
-    fireEvent.click(screen.getByTestId('patrol-finding-escalate'));
+    fireEvent.click(findingMenuItem('Escalate'));
     await waitFor(() => expect(api.escalateFinding).toHaveBeenCalledWith('f-1'));
     await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'escalated'));
-    expect(screen.getByTestId('patrol-finding-escalate')).toBeDisabled();
-    expect(screen.getByTestId('patrol-finding-normal')).not.toBeDisabled();
+    expect(findingMenuItem('Escalate')).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'This is normal' })).not.toBeDisabled();
   });
 
   it('This is normal tells the operator when the robot could not be taught (robotNotified: false)', async () => {
@@ -148,18 +168,25 @@ describe('RunDetail', () => {
     await screen.findAllByTestId('patrol-finding');
     expect(screen.queryByTestId('patrol-finding-robot-not-notified')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('patrol-finding-normal'));
+    fireEvent.click(findingMenuItem('This is normal'));
     await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'dismissed_normal'));
     const note = await screen.findByTestId('patrol-finding-robot-not-notified');
     expect(note).toHaveTextContent(/robot was offline/i);
     expect(note).toHaveTextContent(/baseline was not updated/i);
   });
 
-  it('Escalate marks the finding escalated', async () => {
+  it('Escalate asks first, then marks the finding escalated', async () => {
     api.escalateFinding.mockResolvedValue({ ...finding, status: 'escalated' });
     renderWithProviders(<RunDetail runId="run-1" />, { withAuth: false });
     await screen.findAllByTestId('patrol-finding');
-    fireEvent.click(screen.getByTestId('patrol-finding-escalate'));
+
+    // Declining the confirm changes nothing.
+    confirmMock.mockResolvedValueOnce(false);
+    fireEvent.click(findingMenuItem('Escalate'));
+    await waitFor(() => expect(confirmMock).toHaveBeenCalled());
+    expect(api.escalateFinding).not.toHaveBeenCalled();
+
+    fireEvent.click(findingMenuItem('Escalate'));
     await waitFor(() => expect(api.escalateFinding).toHaveBeenCalledWith('f-1'));
     await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'escalated'));
   });
@@ -171,7 +198,9 @@ describe('RunDetail', () => {
     expect(btn).not.toBeDisabled();
     fireEvent.click(btn);
     await waitFor(() => expect(api.promoteRun).toHaveBeenCalledWith('run-1'));
-    await waitFor(() => expect(screen.getByTestId('patrol-run-detail')).toHaveTextContent('Run promoted'));
+    expect(confirmMock).toHaveBeenCalled();
+    // The baseline is re-read so the page can show this run as the new reference.
+    await waitFor(() => expect(api.getBaseline).toHaveBeenCalledTimes(2));
   });
 
   it('when this run already IS the baseline it says so, does not compare it with itself, and cannot be promoted again', async () => {
@@ -196,7 +225,7 @@ describe('RunDetail', () => {
     expect(screen.getByTestId('patrol-run-promote')).toBeDisabled();
   });
 
-  it('a blind checkpoint says it was not inspected, and a done run with blind legs shows its reason in amber', async () => {
+  it('a blind checkpoint says it was not inspected, and a done run with blind legs flags its reason for attention', async () => {
     // The robot reached the kitchen but the capture and the checklist both
     // failed: patrol.ts leaves the leg 'done' and writes the run's reason.
     // Rendered like any other done leg, that reads as "nothing wrong here".
@@ -228,7 +257,8 @@ describe('RunDetail', () => {
     // not as ordinary metadata.
     const reason = screen.getByTestId('patrol-run-reason');
     expect(reason).toHaveTextContent('1 checkpoint(s) not inspected');
-    expect(reason.className).toMatch(/amber/);
+    expect(reason).toHaveAttribute('data-attention', 'true');
+    expect(reason.className).toMatch(/signal-unknown/);
   });
 
   it('a baseline run raises no findings and shows no baseline column fetch', async () => {

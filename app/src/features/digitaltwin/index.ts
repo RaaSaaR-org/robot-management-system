@@ -12,7 +12,6 @@ export type { TwinBackdropKind } from './components/TwinBackdrop';
 export { ZoneVolumes } from './components/ZoneVolumes';
 export { ZoneAuthoringOverlay } from './components/ZoneAuthoringOverlay';
 export { ZoneLegend } from './components/ZoneLegend';
-export { TwinLifecycleStepper } from './components/TwinLifecycleStepper';
 export { TwinZoneFormModal } from './components/TwinZoneFormModal';
 export { ExportPanel } from './components/ExportPanel';
 export { useOccupancyImage } from './utils/occupancy';

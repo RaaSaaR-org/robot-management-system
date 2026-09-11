@@ -131,7 +131,7 @@ function recordingContext() {
 }
 
 describe('drawMap — the occupancy grid orientation (TASK-206/207)', () => {
-  const view = { widthPx: 300, heightPx: 300, rangeM: 3, orientation: 'north' as const, occupiedColor: '#000' };
+  const view = { widthPx: 300, heightPx: 300, rangeM: 3, orientation: 'north' as const, occupiedColor: 'rgb(0, 0, 0)' };
 
   /**
    * Cell index = row*width+col with row = floor((y-originY)/res): image row 0 is
@@ -157,7 +157,7 @@ describe('drawMap — the occupancy grid orientation (TASK-206/207)', () => {
 });
 
 describe('drawMap — the planned route (TASK-208)', () => {
-  const view = { widthPx: 300, heightPx: 300, rangeM: 3, orientation: 'north' as const, occupiedColor: '#000' };
+  const view = { widthPx: 300, heightPx: 300, rangeM: 3, orientation: 'north' as const, occupiedColor: 'rgb(0, 0, 0)' };
 
   it('draws the polyline through every waypoint and a ring on the goal when planned', () => {
     const ctx = recordingContext();
@@ -236,7 +236,11 @@ describe('RobotMapPanel', () => {
       robotMapError: 'ECONNREFUSED',
     });
     render(<RobotMapPanel robotId="r1" />);
-    expect(screen.getByTestId('agent-map-empty')).toHaveTextContent('Map unavailable: ECONNREFUSED');
+    const empty = screen.getByTestId('agent-map-empty');
+    expect(empty).toHaveTextContent('Map not available.');
+    // A transport error reads as one calm sentence; the raw error stays on hover.
+    expect(empty).toHaveTextContent('The robot is not reachable.');
+    expect(empty.querySelector('[title="ECONNREFUSED"]')).not.toBeNull();
   });
 
   it('keeps the last map when a later read fails, and marks it stale', () => {
@@ -268,7 +272,8 @@ describe('RobotMapPanel', () => {
     });
     render(<RobotMapPanel robotId="r1" />);
     const empty = screen.getByTestId('agent-map-empty');
-    expect(empty).toHaveTextContent('Map unavailable: the server has no agent endpoint registered for this robot');
+    expect(empty).toHaveTextContent('Map not available.');
+    expect(empty).toHaveTextContent('the server has no agent endpoint registered for this robot');
     expect(empty).not.toHaveTextContent('AGENT_MAP_ENABLED');
   });
 

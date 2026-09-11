@@ -157,7 +157,7 @@ function FreshnessClause({
         data-live={String(live)}
         className={cn(
           'tabular-nums',
-          stale ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-theme-muted'
+          stale ? 'text-signal-unknown font-medium' : 'text-ink-muted'
         )}
       >
         · {stale && !live ? 'cached · ' : ''}
@@ -194,7 +194,7 @@ function UnknownAgeClause({ self }: { self: AgentSelfState }) {
         data-testid="agent-self-freshness"
         data-stale="true"
         data-live="false"
-        className="tabular-nums text-amber-600 dark:text-amber-400 font-medium"
+        className="tabular-nums text-signal-unknown font-medium"
       >
         · cached · age unknown
       </span>
@@ -238,7 +238,7 @@ export const SelfHeader = memo(function SelfHeader({ robotId, className }: SelfH
     <>
       <p
         data-testid="agent-self-header"
-        className={cn('card-meta flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0', className)}
+        className={cn('text-xs text-ink-muted flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0', className)}
       >
         {self ? (
           <>
@@ -256,10 +256,10 @@ export const SelfHeader = memo(function SelfHeader({ robotId, className }: SelfH
               aria-expanded={detailsOpen}
               title="Identity, snapshot and the full condition checklist"
               className={cn(
-                'inline-flex items-center gap-1 rounded-brand px-1 -mx-1 min-w-0 max-w-[14rem]',
-                'text-theme-secondary font-medium hover:text-theme-primary transition-colors',
+                'inline-flex items-center gap-1 rounded-control px-1 -mx-1 min-w-0 max-w-[14rem]',
+                'text-ink-secondary font-medium hover:text-ink-primary transition-colors',
                 'pointer-coarse:min-h-11',
-                'focus:outline-none focus:ring-2 focus:ring-cobalt-500/40'
+                'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary'
               )}
             >
               {/* An operator-chosen name has no length limit. It ellipsises
@@ -269,7 +269,7 @@ export const SelfHeader = memo(function SelfHeader({ robotId, className }: SelfH
                 {self.emoji ? `${self.emoji} ` : ''}
                 {self.name}
               </span>
-              <ChevronDownIcon className="w-3 h-3 shrink-0 text-theme-muted" />
+              <ChevronDownIcon className="w-3 h-3 shrink-0 text-ink-muted" />
             </button>
             {/* SIBLING of the name button, never nested inside it: a button
                 within a button is invalid markup and leaves keyboard and
@@ -291,10 +291,10 @@ export const SelfHeader = memo(function SelfHeader({ robotId, className }: SelfH
                     : 'Select a robot first'
                 }
                 className={cn(
-                  'text-amber-600 dark:text-amber-400 underline underline-offset-2',
-                  'rounded-brand px-1 -mx-1 pointer-coarse:min-h-11 pointer-coarse:px-2',
-                  'hover:text-amber-700 dark:hover:text-amber-300',
-                  'focus:outline-none focus:ring-2 focus:ring-amber-500/40',
+                  'text-signal-unknown underline underline-offset-2',
+                  'rounded-control px-1 -mx-1 pointer-coarse:min-h-11 pointer-coarse:px-2',
+                  'hover:opacity-80',
+                  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
                   'disabled:no-underline disabled:cursor-not-allowed disabled:opacity-60'
                 )}
               >
@@ -304,7 +304,7 @@ export const SelfHeader = memo(function SelfHeader({ robotId, className }: SelfH
             {crash && (
               <span
                 data-testid="agent-self-crash"
-                className="text-amber-600 dark:text-amber-400 font-medium"
+                className="text-signal-unknown font-medium"
               >
                 · {crash}
               </span>
@@ -321,7 +321,7 @@ export const SelfHeader = memo(function SelfHeader({ robotId, className }: SelfH
               <span
                 data-testid="agent-self-superseded"
                 title={`This snapshot was pushed by boot ${self.bootId ?? 'unknown'}, but the robot last answered from a different one.`}
-                className="text-amber-600 dark:text-amber-400 font-medium"
+                className="text-signal-unknown font-medium"
               >
                 · from a different process than last answered
               </span>
@@ -346,14 +346,14 @@ export const SelfHeader = memo(function SelfHeader({ robotId, className }: SelfH
             aria-expanded={detailsOpen}
             title="Identity, snapshot and the full condition checklist"
             className={cn(
-              'inline-flex items-center gap-1 rounded-brand px-1 -mx-1',
-              'text-theme-secondary font-medium hover:text-theme-primary transition-colors',
+              'inline-flex items-center gap-1 rounded-control px-1 -mx-1',
+              'text-ink-secondary font-medium hover:text-ink-primary transition-colors',
               'pointer-coarse:min-h-11',
-              'focus:outline-none focus:ring-2 focus:ring-cobalt-500/40'
+              'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary'
             )}
           >
             Robot details
-            <ChevronDownIcon className="w-3 h-3 shrink-0 text-theme-muted" />
+            <ChevronDownIcon className="w-3 h-3 shrink-0 text-ink-muted" />
           </button>
         )}
       </p>

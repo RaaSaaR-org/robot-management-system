@@ -31,7 +31,7 @@ for (const destination of destinations) {
     expect(errors).toEqual([]);
 
     if (destination === '/sites') {
-      await expect(page.getByText('No sites yet. Start a scan above.')).toBeVisible();
+      await expect(page.getByText('No sites yet', { exact: true })).toBeVisible();
     }
     if (destination === '/updates') {
       await expect(page.getByText('No update packages yet', { exact: true })).toBeVisible();

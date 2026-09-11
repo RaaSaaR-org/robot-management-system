@@ -1,9 +1,9 @@
 /**
  * @file TwinZoneFormModal.tsx
- * @description Modal form for creating/editing an L2 twin zone — name, type
- *   (keepout | workcell | charging | speed | room), color, and the floor/ceiling
+ * @description FormModal for creating/editing an L2 twin zone — name, type
+ *   (keepout | workcell | charging | speed | room), colour, and the floor/ceiling
  *   heights (minZ/maxZ). The polygon itself is captured by the authoring
- *   overlay; this modal just attaches metadata. Cloned from the fleet zone form.
+ *   overlay; this modal just attaches metadata. Toasts the result.
  *
  *   TASK-200: a `room` (and a `keepout`, which is a place the robot must NOT
  *   stand in) also carries a `placeType` in `metadata` — the vocabulary the
@@ -13,19 +13,14 @@
  * @feature digitaltwin
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { Modal, Button, Input } from '@/shared/components/ui';
+import { useEffect, useState } from 'react';
+import { FormField, FormModal, Input, Select, toast } from '@/shared/components/ui';
 import { useTwinZoneStore, TWIN_ZONE_COLORS } from '../store/twinZoneStore';
 import { TWIN_PLACE_TYPES } from '../types/twin.types';
 import type { TwinZoneDTO, TwinZoneType, TwinPlaceType, TwinPoint } from '../types/twin.types';
+import { ZONE_TYPE_LABELS } from './ZoneLegend';
 
-const TYPE_OPTIONS: { value: TwinZoneType; label: string }[] = [
-  { value: 'keepout', label: 'Keep-out' },
-  { value: 'workcell', label: 'Work cell' },
-  { value: 'charging', label: 'Charging' },
-  { value: 'speed', label: 'Speed limit' },
-  { value: 'room', label: 'Room / place' },
-];
+const TYPE_OPTIONS = (Object.keys(ZONE_TYPE_LABELS) as TwinZoneType[]).map((value) => ({ value, label: ZONE_TYPE_LABELS[value] }));
 
 /** Zone types that become entries in the robot's place graph. */
 const PLACE_BEARING_TYPES: ReadonlySet<TwinZoneType> = new Set<TwinZoneType>(['room', 'keepout']);
@@ -41,6 +36,7 @@ const PLACE_TYPE_LABELS: Record<TwinPlaceType, string> = {
   office: 'Office',
   unknown: 'Unclassified',
 };
+const PLACE_OPTIONS = TWIN_PLACE_TYPES.map((t) => ({ value: t, label: PLACE_TYPE_LABELS[t] }));
 
 interface FormData {
   name: string;
@@ -51,21 +47,12 @@ interface FormData {
   maxZ: string;
 }
 
-const DEFAULT_FORM: FormData = {
-  name: '',
-  type: 'keepout',
-  placeType: 'unknown',
-  color: '',
-  minZ: '0',
-  maxZ: '2',
-};
+const DEFAULT_FORM: FormData = { name: '', type: 'keepout', placeType: 'unknown', color: '', minZ: '0', maxZ: '2' };
 
 /** Read `metadata.placeType` back out of a saved zone, defaulting honestly. */
 function readPlaceType(zone: TwinZoneDTO): TwinPlaceType {
   const raw = zone.metadata?.placeType;
-  return typeof raw === 'string' && (TWIN_PLACE_TYPES as readonly string[]).includes(raw)
-    ? (raw as TwinPlaceType)
-    : 'unknown';
+  return typeof raw === 'string' && (TWIN_PLACE_TYPES as readonly string[]).includes(raw) ? (raw as TwinPlaceType) : 'unknown';
 }
 
 export interface TwinZoneFormModalProps {
@@ -82,167 +69,124 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
   const editingZone = useTwinZoneStore((s) => s.editingZone) as TwinZoneDTO | null;
   const pendingPolygon = useTwinZoneStore((s) => s.pendingPolygon) as TwinPoint[] | null;
   const isLoading = useTwinZoneStore((s) => s.isLoading);
-  const error = useTwinZoneStore((s) => s.error);
   const createZone = useTwinZoneStore((s) => s.createZone);
   const updateZone = useTwinZoneStore((s) => s.updateZone);
   const closeFormModal = useTwinZoneStore((s) => s.closeFormModal);
 
   const [form, setForm] = useState<FormData>(DEFAULT_FORM);
-  const [nameError, setNameError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
 
   useEffect(() => {
     if (!showFormModal) return;
-    if (editingZone) {
-      setForm({
-        name: editingZone.name,
-        type: editingZone.type,
-        placeType: readPlaceType(editingZone),
-        color: editingZone.color ?? '',
-        minZ: String(editingZone.minZ),
-        maxZ: String(editingZone.maxZ),
-      });
-    } else {
-      setForm(DEFAULT_FORM);
-    }
-    setNameError(null);
+    setForm(
+      editingZone
+        ? {
+            name: editingZone.name,
+            type: editingZone.type,
+            placeType: readPlaceType(editingZone),
+            color: editingZone.color ?? '',
+            minZ: String(editingZone.minZ),
+            maxZ: String(editingZone.maxZ),
+          }
+        : DEFAULT_FORM,
+    );
+    setNameError(undefined);
+    setFormError(undefined);
   }, [showFormModal, editingZone]);
 
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!form.name.trim()) {
-        setNameError('Name is required');
-        return;
-      }
-      const minZ = parseFloat(form.minZ);
-      const maxZ = parseFloat(form.maxZ);
-      // Merge, never replace: `metadata` also carries keys this form knows
-      // nothing about (speedLimit, placeId, floor), and clobbering them here
-      // would silently re-floor a place on every unrelated colour edit.
-      const metadata: Record<string, unknown> = { ...(editingZone?.metadata ?? {}) };
-      if (PLACE_BEARING_TYPES.has(form.type)) metadata.placeType = form.placeType;
-      else delete metadata.placeType;
+  const handleSubmit = async () => {
+    const name = form.name.trim();
+    if (!name) {
+      setNameError('Give the zone a name.');
+      return;
+    }
+    const minZ = parseFloat(form.minZ);
+    const maxZ = parseFloat(form.maxZ);
+    // Merge, never replace: `metadata` also carries keys this form knows
+    // nothing about (speedLimit, placeId, floor), and clobbering them here
+    // would silently re-floor a place on every unrelated colour edit.
+    const metadata: Record<string, unknown> = { ...(editingZone?.metadata ?? {}) };
+    if (PLACE_BEARING_TYPES.has(form.type)) metadata.placeType = form.placeType;
+    else delete metadata.placeType;
 
-      const body = {
-        name: form.name.trim(),
-        type: form.type,
-        color: form.color || undefined,
-        minZ: Number.isFinite(minZ) ? minZ : 0,
-        maxZ: Number.isFinite(maxZ) ? maxZ : 2,
-        metadata,
-      };
+    const body = {
+      name,
+      type: form.type,
+      color: form.color || undefined,
+      minZ: Number.isFinite(minZ) ? minZ : 0,
+      maxZ: Number.isFinite(maxZ) ? maxZ : 2,
+      metadata,
+    };
 
-      if (editingZone) {
-        await updateZone(editingZone.id, body);
-      } else if (pendingPolygon && pendingPolygon.length >= 3) {
-        await createZone({ ...body, points: pendingPolygon });
-      }
-    },
-    [form, editingZone, pendingPolygon, createZone, updateZone],
-  );
+    setFormError(undefined);
+    if (editingZone) {
+      const saved = await updateZone(editingZone.id, body);
+      if (saved) toast.success('Zone updated', { description: name });
+      else setFormError(useTwinZoneStore.getState().error ?? "Couldn't update the zone.");
+    } else if (pendingPolygon && pendingPolygon.length >= 3) {
+      const saved = await createZone({ ...body, points: pendingPolygon });
+      if (saved) toast.success('Zone created', { description: name });
+      else setFormError(useTwinZoneStore.getState().error ?? "Couldn't create the zone.");
+    }
+  };
 
-  const previewColor = form.color || TWIN_ZONE_COLORS[form.type] || '#2A5FFF';
+  // Zone colours are data (the 3D volumes and the legend use the same
+  // palette); the picker needs a concrete colour value to show.
+  const previewColor = form.color || TWIN_ZONE_COLORS[form.type] || TWIN_ZONE_COLORS.room;
 
   return (
-    <Modal isOpen={showFormModal} onClose={closeFormModal} title={editingZone ? 'Edit zone' : 'New zone'}>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-theme-secondary mb-1">Name</label>
-          <Input
-            value={form.name}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, name: e.target.value }));
-              if (nameError) setNameError(null);
-            }}
-            placeholder="Zone name"
-            error={nameError ?? undefined}
-          />
-        </div>
+    <FormModal
+      isOpen={showFormModal}
+      onClose={closeFormModal}
+      title={editingZone ? `Edit ${editingZone.name}` : 'New zone'}
+      description={!editingZone && pendingPolygon ? `${pendingPolygon.length} vertices captured on the floor plan.` : undefined}
+      submitLabel={editingZone ? 'Save changes' : 'Create zone'}
+      submittingLabel={editingZone ? 'Saving…' : 'Creating…'}
+      isSubmitting={isLoading}
+      error={formError}
+      onSubmit={handleSubmit}
+      noValidate
+    >
+      <FormField label="Name" required error={nameError}>
+        <Input
+          value={form.name}
+          onChange={(e) => {
+            setForm((f) => ({ ...f, name: e.target.value }));
+            if (nameError) setNameError(undefined);
+          }}
+          placeholder="e.g. Loading dock"
+        />
+      </FormField>
 
-        <div>
-          <label className="block text-sm font-medium text-theme-secondary mb-1">Type</label>
-          <select
-            value={form.type}
-            onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as TwinZoneType }))}
-            className="w-full px-3 py-2 section-secondary border border-theme rounded-brand text-theme-primary focus:border-cobalt focus:outline-none focus:ring-1 focus:ring-cobalt"
-          >
-            {TYPE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </div>
+      <FormField label="Type">
+        <Select options={TYPE_OPTIONS} value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as TwinZoneType }))} />
+      </FormField>
 
-        {PLACE_BEARING_TYPES.has(form.type) && (
-          <div>
-            <label className="block text-sm font-medium text-theme-secondary mb-1">Place type</label>
-            <select
-              value={form.placeType}
-              onChange={(e) => setForm((f) => ({ ...f, placeType: e.target.value as TwinPlaceType }))}
-              className="w-full px-3 py-2 section-secondary border border-theme rounded-brand text-theme-primary focus:border-cobalt focus:outline-none focus:ring-1 focus:ring-cobalt"
-            >
-              {TWIN_PLACE_TYPES.map((t) => (
-                <option key={t} value={t}>{PLACE_TYPE_LABELS[t]}</option>
-              ))}
-            </select>
-            <p className="mt-1 text-xs text-theme-tertiary">
-              How the robot names this region out loud. Rooms and keep-outs are published to the
-              robot as its place graph.
-            </p>
-          </div>
-        )}
+      {PLACE_BEARING_TYPES.has(form.type) && (
+        <FormField label="Place type" hint="How the robot names this region out loud. Rooms and keep-outs are published to the robot as its place graph.">
+          <Select options={PLACE_OPTIONS} value={form.placeType} onChange={(e) => setForm((f) => ({ ...f, placeType: e.target.value as TwinPlaceType }))} />
+        </FormField>
+      )}
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-theme-secondary mb-1">Floor Z (m)</label>
-            <Input
-              type="number"
-              step="0.1"
-              value={form.minZ}
-              onChange={(e) => setForm((f) => ({ ...f, minZ: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-theme-secondary mb-1">Ceiling Z (m)</label>
-            <Input
-              type="number"
-              step="0.1"
-              value={form.maxZ}
-              onChange={(e) => setForm((f) => ({ ...f, maxZ: e.target.value }))}
-            />
-          </div>
-        </div>
+      <div className="grid grid-cols-2 gap-4">
+        <FormField label="Floor height" aside="m">
+          <Input type="number" step="0.1" value={form.minZ} onChange={(e) => setForm((f) => ({ ...f, minZ: e.target.value }))} />
+        </FormField>
+        <FormField label="Ceiling height" aside="m">
+          <Input type="number" step="0.1" value={form.maxZ} onChange={(e) => setForm((f) => ({ ...f, maxZ: e.target.value }))} />
+        </FormField>
+      </div>
 
-        <div>
-          <label className="block text-sm font-medium text-theme-secondary mb-1">Color</label>
-          <div className="flex items-center gap-3">
-            <input
-              type="color"
-              value={previewColor}
-              onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))}
-              className="h-9 w-12 rounded-brand border border-theme section-secondary"
-              aria-label="Zone color"
-            />
-            <span className="text-xs text-theme-tertiary">Defaults to the type color when unset.</span>
-          </div>
-        </div>
-
-        {!editingZone && pendingPolygon && (
-          <p className="text-xs text-theme-tertiary">{pendingPolygon.length} vertices captured.</p>
-        )}
-
-        {error && (
-          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-            <p className="text-red-400 text-sm">{error}</p>
-          </div>
-        )}
-
-        <div className="flex justify-end gap-3 pt-2">
-          <Button variant="secondary" onClick={closeFormModal} disabled={isLoading}>Cancel</Button>
-          <Button type="submit" disabled={isLoading}>
-            {isLoading ? 'Saving…' : editingZone ? 'Update zone' : 'Create zone'}
-          </Button>
-        </div>
-      </form>
-    </Modal>
+      <FormField label="Colour" hint="Defaults to the type colour when unset.">
+        <input
+          type="color"
+          value={previewColor}
+          onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))}
+          className="h-9 w-12 cursor-pointer rounded-control border border-line bg-field"
+          aria-label="Zone colour"
+        />
+      </FormField>
+    </FormModal>
   );
 }

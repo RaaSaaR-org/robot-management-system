@@ -1,11 +1,13 @@
 /**
  * @file BlockCard.tsx
- * @description Card for a single agent block: kind, params, status, duration, reasoning
+ * @description One block of a plan as an inset panel: kind, params, status,
+ *              duration, reasoning, result or error.
  * @feature agentmode
  */
 
 import { memo } from 'react';
-import { cn } from '@/shared/utils';
+import { StatusTag } from '@/shared/components/ui';
+import { cn } from '@/shared/utils/cn';
 import {
   blockDurationMs,
   blockKindGlyph,
@@ -26,6 +28,18 @@ export interface BlockCardProps {
 }
 
 /**
+ * The label a `demo` block carries. Its MODE is known before it runs, so the
+ * words follow the block's status: a pending `execute` demo labelled "Ran the
+ * skill" is the claim the narrate/execute split exists to prevent.
+ */
+function demoLabel(mode: 'execute' | 'narrate', status: AgentBlock['status']): string {
+  if (mode === 'narrate') return 'Described only — not executed';
+  if (status === 'done') return 'Ran the skill';
+  if (status === 'failed') return 'Tried to run the skill';
+  return 'Running the skill';
+}
+
+/**
  * One block of a plan. Durations are only shown once the block actually
  * finished — a running block has no honest duration to report.
  */
@@ -33,14 +47,11 @@ export const BlockCard = memo(function BlockCard({ block, index, className }: Bl
   const status = blockStatusStyle(block.status);
   const params = formatBlockParams(block);
   const duration = block.finishedAt ? blockDurationMs(block) : null;
-  // Host mode (TASK-213): a `present` block is one part of an authored talk
-  // track, and where the robot is in that track is what tells an operator it is
-  // mid-explanation rather than stuck. A `demo` block's mode is louder still —
-  // `narrate` means the robot DESCRIBED the skill, and the card has to say so in
-  // words, because a "Done" pill next to "Demo" otherwise reads as a grasp that
-  // happened.
+  // Host mode (TASK-213): where the robot is in an authored talk track tells an
+  // operator it is mid-explanation rather than stuck.
   const chunk = presentProgress(block);
   const demo = demoMode(block);
+  const running = block.status === 'running';
 
   return (
     <div
@@ -48,87 +59,67 @@ export const BlockCard = memo(function BlockCard({ block, index, className }: Bl
       data-block-kind={block.kind}
       data-block-status={block.status}
       className={cn(
-        'glass-card p-3 flex items-start gap-3',
-        block.status === 'running' && 'border-cobalt-500/60',
+        'flex items-start gap-3 rounded-control border bg-inset p-3',
+        running ? 'border-primary/40' : 'border-line-subtle',
         (block.status === 'skipped' || block.status === 'pending') && 'opacity-70',
         className
       )}
     >
       <div
-        className={cn(
-          'glass-subtle w-8 h-8 flex items-center justify-center shrink-0 text-sm leading-none',
-          block.status === 'running' ? 'text-cobalt-400' : 'text-theme-tertiary'
-        )}
         aria-hidden="true"
+        className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-line-subtle bg-panel text-sm leading-none',
+          running ? 'text-primary' : 'text-ink-tertiary'
+        )}
       >
         {blockKindGlyph(block.kind)}
       </div>
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           {typeof index === 'number' && (
-            <span className="card-meta tabular-nums">{index + 1}.</span>
+            <span className="text-xs tabular-nums text-ink-muted">{index + 1}.</span>
           )}
-          <span className="card-value">{blockKindLabel(block.kind)}</span>
+          <span className="text-sm font-medium text-ink-primary">{blockKindLabel(block.kind)}</span>
           {chunk && (
             <span
-              className="glass-subtle rounded-full px-2 py-0.5 text-[10px] font-mono tabular-nums text-theme-secondary whitespace-nowrap"
               data-testid="agent-block-chunk"
+              className="whitespace-nowrap text-xs tabular-nums text-ink-secondary"
             >
               part {chunk.chunk} of {chunk.of}
             </span>
           )}
-          {/* `demo` is the block's MODE, which is known before it runs — so the
-              label has to follow the block's status, not the mode alone. A
-              pending `execute` demo badged "Ran the skill" is the same class of
-              claim the narrate/execute split exists to prevent. */}
           {demo && (
             <span
-              className={cn(
-                'rounded-full px-2 py-0.5 text-[10px] font-medium whitespace-nowrap',
-                demo === 'execute' ? 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300' : 'glass-subtle text-theme-secondary'
-              )}
               data-testid="agent-block-demo-mode"
+              className={cn(
+                'whitespace-nowrap text-xs font-medium',
+                demo === 'execute' ? 'text-signal-estimated' : 'text-ink-secondary'
+              )}
             >
-              {demo === 'execute'
-                ? block.status === 'done'
-                  ? 'Ran the skill'
-                  : block.status === 'failed'
-                    ? 'Tried to run the skill'
-                    : 'Running the skill'
-                : 'Described only — not executed'}
+              {demoLabel(demo, block.status)}
             </span>
           )}
-          {params && <span className="card-meta">{params}</span>}
+          {params && <span className="min-w-0 text-xs text-ink-tertiary">{params}</span>}
 
           <span className="ml-auto flex items-center gap-2">
             {duration !== null && (
-              <span className="card-meta tabular-nums">{formatDuration(duration)}</span>
+              <span className="text-xs tabular-nums text-ink-muted">{formatDuration(duration)}</span>
             )}
-            <span
-              className={cn(
-                'px-2 py-0.5 rounded-full text-[10px] font-medium whitespace-nowrap',
-                status.className
-              )}
-            >
-              {status.pulse && (
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse mr-1 align-middle" />
-              )}
+            <StatusTag tone={status.tone} dot={status.pulse} pulse={status.pulse}>
               {status.label}
-            </span>
+            </StatusTag>
           </span>
         </div>
 
-        {block.reasoning && <p className="card-meta mt-1 leading-snug">{block.reasoning}</p>}
-
-        {block.result && (
-          <p className="text-xs text-turquoise-700 dark:text-turquoise-400 mt-1 leading-snug">
-            {block.result}
-          </p>
+        {block.reasoning && (
+          <p className="mt-1 text-xs leading-snug text-ink-tertiary">{block.reasoning}</p>
         )}
-
+        {block.result && (
+          <p className="mt-1 text-xs leading-snug text-signal-measured">{block.result}</p>
+        )}
         {block.error && (
-          <p className="text-xs text-red-600 dark:text-red-400 mt-1 leading-snug">{block.error}</p>
+          <p className="mt-1 text-xs leading-snug text-signal-stopped">{block.error}</p>
         )}
       </div>
     </div>

@@ -1,16 +1,15 @@
 /**
  * @file RunDetailPage.tsx
- * @description /tour/runs/:runId — one visit: the stop timeline and the Q&A
- *              transcript; stays live over the WebSocket while the tour runs.
+ * @description /tour/runs/:runId — one visit: questions, facts to add and the
+ *              stop timeline; stays live over the WebSocket while the tour
+ *              runs. RunDetail renders the page header because it owns the run.
  * @feature tour
  */
 
 import { memo, useEffect, useMemo } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
-import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
-import { PATROL_MOTION, PATROL_PANEL } from '@/features/patrol/components/patrolUi';
 import { useTourEvents } from '../hooks/useTourEvents';
 import { RunDetail } from '../components/RunDetail';
 
@@ -35,18 +34,8 @@ export const RunDetailPage = memo(function RunDetailPage({ className }: RunDetai
   }, [robots]);
 
   return (
-    <div className={cn('min-h-screen', className)} data-testid="tour-run-page">
-      <div className="mx-auto max-w-6xl px-4 py-6 sm:py-8 flex flex-col gap-5 min-w-0">
-        <PageHeader
-          title="Visit"
-          subtitle={
-            <Link to="/tour" className={cn('text-cobalt-600 dark:text-cobalt-400 hover:underline', PATROL_MOTION)}>
-              ← All tours and visits
-            </Link>
-          }
-        />
-        {runId ? <RunDetail runId={runId} robotNames={robotNames} /> : <div className={cn(PATROL_PANEL, 'card-meta')}>No visit selected.</div>}
-      </div>
+    <div className={cn('min-w-0', className)} data-testid="tour-run-page">
+      <RunDetail runId={runId ?? ''} robotNames={robotNames} />
     </div>
   );
 });

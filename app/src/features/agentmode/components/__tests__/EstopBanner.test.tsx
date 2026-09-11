@@ -167,7 +167,7 @@ describe('EstopBanner', () => {
 
       const banner = screen.getByTestId('agent-state-unknown-banner');
       expect(banner).toBeVisible();
-      expect(screen.getByTestId('agent-state-unknown-title')).toHaveTextContent(/UNKNOWN/);
+      expect(screen.getByTestId('agent-state-unknown-title')).toHaveTextContent(/unknown/i);
       expect(screen.getByTestId('agent-state-unknown-detail')).toHaveTextContent(
         /the robot agent could not be reached/
       );
@@ -533,7 +533,7 @@ describe('EstopBanner', () => {
       const banner = screen.getByTestId('agent-error-banner');
       expect(banner.className).not.toMatch(/border-red/);
       // Neutral dot: no element inside this notice may carry the alarm red.
-      expect(banner.querySelector('.bg-red-500')).toBeNull();
+      expect(banner.querySelector('.bg-stop, [class*="bg-red"]')).toBeNull();
       // It still says whose failure it is, so it cannot be misread as the
       // robot's — and the message itself keeps the red.
       expect(banner).toHaveTextContent('Last request failed');
@@ -560,6 +560,6 @@ describe('EstopBanner', () => {
     expect(screen.getAllByRole('checkbox', { name: /details/i })).toHaveLength(2);
     // …but distinguishable, which is the whole point.
     expect(screen.getByRole('checkbox', { name: /Base damped/i })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /E-Stop state UNKNOWN/i })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /E-Stop state unknown/i })).toBeInTheDocument();
   });
 });

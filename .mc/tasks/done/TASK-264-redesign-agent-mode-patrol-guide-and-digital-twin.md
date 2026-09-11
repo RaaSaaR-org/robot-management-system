@@ -3,7 +3,7 @@ id: "TASK-264"
 aliases: []
 title: "Redesign Agent Mode, patrol, guide and digital twin"
 slug: "redesign-agent-mode-patrol-guide-and-digital-twin"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
