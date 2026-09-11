@@ -1,6 +1,6 @@
 /**
  * @file MarketplaceStarRating.tsx
- * @description Star rating display component
+ * @description Star rating display (read-only) in token colours
  * @feature marketplace
  */
 
@@ -14,7 +14,7 @@ export interface MarketplaceStarRatingProps {
   className?: string;
 }
 
-const SIZE_MAP = { sm: 12, md: 16 };
+const SIZE_CLASS = { sm: 'h-3 w-3', md: 'h-4 w-4' };
 
 export function MarketplaceStarRating({
   rating,
@@ -23,26 +23,27 @@ export function MarketplaceStarRating({
   className,
 }: MarketplaceStarRatingProps) {
   const filled = Math.round(rating);
-  const iconSize = SIZE_MAP[size];
 
   return (
-    <span className={cn('inline-flex items-center gap-0.5', className)}>
+    <span
+      className={cn('inline-flex items-center gap-0.5', className)}
+      aria-label={`Rated ${rating.toFixed(1)} out of 5`}
+    >
       {[1, 2, 3, 4, 5].map((i) => (
         <Star
           key={i}
-          size={iconSize}
-          className={cn(
-            i <= filled
-              ? 'text-cobalt-500 dark:text-cobalt-300 fill-current'
-              : 'text-theme-muted'
-          )}
+          aria-hidden="true"
+          strokeWidth={1.75}
+          className={cn(SIZE_CLASS[size], i <= filled ? 'fill-current text-primary' : 'text-ink-muted')}
         />
       ))}
       {showNumber && (
-        <span className={cn(
-          'ml-1 font-medium text-theme-secondary',
-          size === 'sm' ? 'text-xs' : 'text-sm'
-        )}>
+        <span
+          className={cn(
+            'ml-1 font-medium tabular-nums text-ink-secondary',
+            size === 'sm' ? 'text-xs' : 'text-sm'
+          )}
+        >
           {rating.toFixed(1)}
         </span>
       )}

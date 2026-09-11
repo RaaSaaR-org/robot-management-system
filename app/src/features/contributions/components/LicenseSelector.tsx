@@ -102,8 +102,8 @@ export function LicenseSelector({
             className={cn(
               'relative flex flex-col p-4 rounded-lg border-2 text-left transition-all',
               isSelected
-                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                ? 'border-primary bg-primary/10 '
+                : 'border-line hover:border-line-strong '
             )}
           >
             {/* Selected Checkmark */}
@@ -119,16 +119,16 @@ export function LicenseSelector({
                 className={cn(
                   'p-2 rounded-lg',
                   isSelected
-                    ? 'bg-primary-100 dark:bg-primary-800'
-                    : 'bg-gray-100 dark:bg-gray-800'
+                    ? 'bg-primary/10 '
+                    : 'bg-inset '
                 )}
               >
                 <Icon
                   size={20}
                   className={cn(
                     isSelected
-                      ? 'text-primary-600 dark:text-primary-400'
-                      : 'text-gray-500 dark:text-gray-400'
+                      ? 'text-primary '
+                      : 'text-ink-tertiary '
                   )}
                 />
               </div>
@@ -137,8 +137,8 @@ export function LicenseSelector({
                   className={cn(
                     'font-medium',
                     isSelected
-                      ? 'text-primary-900 dark:text-primary-100'
-                      : 'text-gray-900 dark:text-gray-100'
+                      ? 'text-ink-primary '
+                      : 'text-ink-primary '
                   )}
                 >
                   {LICENSE_TYPE_LABELS[licenseType]}
@@ -147,8 +147,8 @@ export function LicenseSelector({
                   className={cn(
                     'text-sm font-medium',
                     isSelected
-                      ? 'text-primary-600 dark:text-primary-400'
-                      : 'text-gray-500 dark:text-gray-400'
+                      ? 'text-primary '
+                      : 'text-ink-tertiary '
                   )}
                 >
                   {config.creditMultiplier} credits
@@ -157,7 +157,7 @@ export function LicenseSelector({
             </div>
 
             {/* Description */}
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+            <p className="text-sm text-ink-secondary mb-3">
               {LICENSE_TYPE_DESCRIPTIONS[licenseType]}
             </p>
 
@@ -166,15 +166,15 @@ export function LicenseSelector({
               {config.features.map((feature, idx) => (
                 <li
                   key={idx}
-                  className="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-400"
+                  className="flex items-start gap-2 text-sm text-ink-secondary"
                 >
                   <Check
                     size={14}
                     className={cn(
                       'mt-0.5 flex-shrink-0',
                       isSelected
-                        ? 'text-primary-500'
-                        : 'text-gray-400 dark:text-gray-500'
+                        ? 'text-primary'
+                        : 'text-ink-muted '
                     )}
                   />
                   <span>{feature}</span>

@@ -46,19 +46,19 @@ export function ContributionCard({
     <div
       onClick={onClick}
       className={cn(
-        'bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700',
+        'bg-panel rounded-lg border border-line ',
         'p-4 transition-all',
-        onClick && 'cursor-pointer hover:shadow-md hover:border-primary-300 dark:hover:border-primary-600',
+        onClick && 'cursor-pointer hover:shadow-md hover:border-primary/40 ',
         className
       )}
     >
       {/* Header */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1 min-w-0">
-          <h3 className="font-medium text-gray-900 dark:text-gray-100 truncate">
+          <h3 className="font-medium text-ink-primary truncate">
             {contribution.metadata.description}
           </h3>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+          <p className="text-sm text-ink-tertiary mt-0.5">
             {contribution.metadata.robotType}
           </p>
         </div>
@@ -67,12 +67,12 @@ export function ContributionCard({
 
       {/* Stats Grid */}
       <div className="grid grid-cols-2 gap-3 mb-3">
-        <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-          <FileStack size={16} className="text-gray-400" />
+        <div className="flex items-center gap-2 text-sm text-ink-secondary">
+          <FileStack size={16} className="text-ink-muted" />
           <span>{contribution.trajectoryCount.toLocaleString(UI_DATE_LOCALE)} trajectories</span>
         </div>
-        <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-          <Database size={16} className="text-gray-400" />
+        <div className="flex items-center gap-2 text-sm text-ink-secondary">
+          <Database size={16} className="text-ink-muted" />
           <span>{LICENSE_TYPE_LABELS[contribution.licenseType].replace(' License', '')}</span>
         </div>
       </div>
@@ -82,31 +82,31 @@ export function ContributionCard({
         {contribution.metadata.taskCategories.slice(0, 3).map((cat) => (
           <span
             key={cat}
-            className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded"
+            className="px-2 py-0.5 text-xs bg-inset text-ink-secondary rounded"
           >
             {cat}
           </span>
         ))}
         {contribution.metadata.taskCategories.length > 3 && (
-          <span className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 rounded">
+          <span className="px-2 py-0.5 text-xs bg-inset text-ink-tertiary rounded">
             +{contribution.metadata.taskCategories.length - 3}
           </span>
         )}
       </div>
 
       {/* Footer */}
-      <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-700">
-        <div className="flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400">
+      <div className="flex items-center justify-between pt-3 border-t border-line-subtle">
+        <div className="flex items-center gap-1.5 text-sm text-ink-tertiary">
           <Calendar size={14} />
           <span>{formatDate(contribution.createdAt)}</span>
         </div>
         {contribution.creditsAwarded ? (
-          <div className="flex items-center gap-1.5 text-sm font-medium text-green-600 dark:text-green-400">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-signal-measured">
             <Award size={14} />
             <span>{formatCredits(contribution.creditsAwarded)} credits</span>
           </div>
         ) : contribution.qualityScore ? (
-          <div className="text-sm text-gray-500 dark:text-gray-400">
+          <div className="text-sm text-ink-tertiary">
             Quality: {contribution.qualityScore}%
           </div>
         ) : null}
