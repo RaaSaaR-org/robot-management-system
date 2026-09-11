@@ -5,11 +5,10 @@
  */
 
 import type { ReactNode } from 'react';
-import { Input, SkeletonRows, StatusTag } from '@/shared/components/ui';
+import { ChoiceCard, ChoiceCardGroup, Input, SkeletonRows, StatusTag, choiceSurface } from '@/shared/components/ui';
 import type { SimScene } from '@/features/simulation/types';
 import type { BaseModel, Dataset, FineTuneMethod, InitFromSelection, WeightsSource } from '../../../types';
 import { InitFromModelPicker } from '../../InitFromModelPicker';
-import { ChoiceCard, choiceSurface } from '../ChoiceCard';
 import { BASE_MODEL_OPTIONS, FINE_TUNE_OPTIONS, GPU_OPTIONS, PRIORITY_OPTIONS, type FormState } from './wizardModel';
 
 type Patch = (patch: Partial<FormState>) => void;
@@ -30,10 +29,10 @@ export function StepSection({ title, description, children }: { title: string; d
 export function TypeStep({ form, patch }: { form: FormState; patch: Patch }) {
   return (
     <StepSection title="What do you want to train?" description="Supervised fine-tunes a VLA on recorded datasets. Sim-RL trains a control policy in a simulation scene.">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="group" aria-label="Training type">
+      <ChoiceCardGroup label="Training type" className="gap-3">
         <ChoiceCard data-testid="wizard-kind-supervised" selected={form.kind === 'supervised'} onSelect={() => patch({ kind: 'supervised' })} title="Supervised fine-tune" description="Fine-tune a VLA model (SmolVLA, Pi0, …) on a validated dataset." />
         <ChoiceCard data-testid="wizard-kind-sim_rl" selected={form.kind === 'sim_rl'} onSelect={() => patch({ kind: 'sim_rl' })} title="Sim-RL policy" aside={<StatusTag tone="sim" size="sm">Beta</StatusTag>} description="Train a navigation or locomotion policy for a robot in a simulation scene." />
-      </div>
+      </ChoiceCardGroup>
     </StepSection>
   );
 }
@@ -120,27 +119,27 @@ export function ModelStep(props: {
   return (
     <div className="flex flex-col gap-6">
       <StepSection title="Base model" description="The architecture to train. Continuing an existing model keeps its architecture.">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="group" aria-label="Base model">
+        <ChoiceCardGroup label="Base model">
           {BASE_MODEL_OPTIONS.map((m) => (
             <ChoiceCard key={m.value} selected={form.baseModel === m.value} onSelect={() => props.onBaseModel(m.value)} title={m.label} description={m.description} />
           ))}
-        </div>
+        </ChoiceCardGroup>
       </StepSection>
       <StepSection title="Starting weights" description="Start from the foundation model, or continue a model that already exists.">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="group" aria-label="Starting weights">
+        <ChoiceCardGroup label="Starting weights">
           <ChoiceCard data-testid="weights-source-foundation" selected={form.weightsSource === 'foundation'} onSelect={() => props.onWeightsSource('foundation')} title="Foundation model" description={`Train from the published ${label} weights.`} />
           <ChoiceCard data-testid="weights-source-existing" selected={form.weightsSource === 'existing'} onSelect={() => props.onWeightsSource('existing')} title="Continue from an existing model" description="A registered model, or one of its epoch checkpoints." />
-        </div>
+        </ChoiceCardGroup>
         {form.weightsSource === 'existing' && (
           <InitFromModelPicker baseModel={form.baseModel} baseModelLabel={label} value={form.initFrom} onChange={props.onInitFrom} />
         )}
       </StepSection>
       <StepSection title="Fine-tuning method">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label="Fine-tuning method">
+        <ChoiceCardGroup label="Fine-tuning method" columns={3}>
           {FINE_TUNE_OPTIONS.map((m) => (
             <ChoiceCard key={m.value} selected={form.fineTuneMethod === m.value} onSelect={() => props.onMethod(m.value)} title={m.label} description={m.description} />
           ))}
-        </div>
+        </ChoiceCardGroup>
       </StepSection>
     </div>
   );
@@ -150,18 +149,19 @@ export function ResourcesStep({ form, patch }: { form: FormState; patch: Patch }
   return (
     <div className="flex flex-col gap-6">
       <StepSection title="GPU" description="Prefer a GPU type, or take any available worker.">
-        <div className="grid grid-cols-3 gap-2" role="group" aria-label="GPU preference">
+        {/* Short labels: three across even on phones. */}
+        <ChoiceCardGroup label="GPU preference" columns={3} className="grid-cols-3">
           {GPU_OPTIONS.map((o) => (
             <ChoiceCard key={o.value} selected={form.gpuType === o.value} onSelect={() => patch({ gpuType: o.value })} title={o.label} />
           ))}
-        </div>
+        </ChoiceCardGroup>
       </StepSection>
       <StepSection title="Priority" description="Higher priority jobs are scheduled first.">
-        <div className="grid grid-cols-3 gap-2" role="group" aria-label="Priority">
+        <ChoiceCardGroup label="Priority" columns={3} className="grid-cols-3">
           {PRIORITY_OPTIONS.map((o) => (
             <ChoiceCard key={o.value} selected={form.priority === o.value} onSelect={() => patch({ priority: o.value })} title={o.label} />
           ))}
-        </div>
+        </ChoiceCardGroup>
       </StepSection>
     </div>
   );
