@@ -18,7 +18,7 @@ for (const destination of destinations) {
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await page.goto('./#/dashboard');
-    await expect(page.getByRole('heading', { name: 'Fleet Dashboard', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
 
     // Use the actual sidebar link: full page reloads would hide the root-unmount
     // regression, because a reload creates a fresh React root.
@@ -47,7 +47,7 @@ for (const destination of destinations) {
     }
 
     await page.locator('aside a[href="#/dashboard"]:visible').click();
-    await expect(page.getByRole('heading', { name: 'Fleet Dashboard', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
     expect(errors).toEqual([]);
   });
 }
@@ -62,6 +62,6 @@ test('model registry renders and remains usable after loading models', async ({ 
   expect(errors).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath('models.png'), fullPage: true });
   await page.locator('aside a[href="#/dashboard"]:visible').click();
-  await expect(page.getByRole('heading', { name: 'Fleet Dashboard', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });

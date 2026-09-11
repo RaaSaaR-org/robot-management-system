@@ -1,25 +1,19 @@
 /**
  * @file CommandHistory.tsx
- * @description Command history list component
+ * @description Past commands of one robot as compact rows (status, text,
+ *              action, relative time) with search, in a kit Panel.
  * @feature command
- * @dependencies @/shared/utils/cn, @/shared/components/ui, @/features/command/hooks
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { History, Search } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
-import { Card } from '@/shared/components/ui/Card';
-import { Badge } from '@/shared/components/ui/Badge';
-import { Input } from '@/shared/components/ui/Input';
-import { Spinner } from '@/shared/components/ui/Spinner';
+import { Button, EmptyState, Panel, SearchInput, SkeletonRows, StatusTag } from '@/shared/components/ui';
+import { formatDateTime, formatTimeAgo } from '@/shared/utils/format';
 import { useRobotCommandHistory } from '../hooks/useCommand';
 import type { CommandHistoryEntry } from '../types/command.types';
-import { HISTORY_STATUS_LABELS, HISTORY_STATUS_COLORS } from '../types/command.types';
+import { HISTORY_STATUS_LABELS, HISTORY_STATUS_TONE, commandTypeLabel } from '../types/command.types';
 import { COMMAND_TYPE_LABELS } from '@/features/robots/types';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
-
-// ============================================================================
-// TYPES
-// ============================================================================
 
 export interface CommandHistoryProps {
   /** Robot ID to show history for */
@@ -32,201 +26,104 @@ export interface CommandHistoryProps {
   className?: string;
 }
 
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-interface HistoryItemProps {
-  entry: CommandHistoryEntry;
-  onSelect?: () => void;
-}
-
-function HistoryItem({ entry, onSelect }: HistoryItemProps) {
+function HistoryRow({ entry, onSelect }: { entry: CommandHistoryEntry; onSelect?: () => void }) {
   const { originalText, interpretation, status, createdAt } = entry;
-  const commandLabel = COMMAND_TYPE_LABELS[interpretation.commandType] || interpretation.commandType;
-  const statusLabel = HISTORY_STATUS_LABELS[status];
-  const statusColor = HISTORY_STATUS_COLORS[status];
-
-  const formattedTime = useMemo(() => {
-    const date = new Date(createdAt);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString(UI_DATE_LOCALE);
-  }, [createdAt]);
-
+  const body = (
+    <>
+      <div className="flex items-start justify-between gap-3">
+        <span className="line-clamp-2 min-w-0 text-sm text-ink-primary">{originalText}</span>
+        <StatusTag tone={HISTORY_STATUS_TONE[status]} size="sm" className="flex-shrink-0">
+          {HISTORY_STATUS_LABELS[status]}
+        </StatusTag>
+      </div>
+      <div className="flex items-center justify-between gap-3 text-[13px] text-ink-tertiary">
+        <span>{commandTypeLabel(interpretation.commandType, COMMAND_TYPE_LABELS)}</span>
+        <time dateTime={createdAt} title={formatDateTime(createdAt)} className="tabular-nums">
+          {formatTimeAgo(createdAt)}
+        </time>
+      </div>
+    </>
+  );
+  const rowClass = 'flex w-full flex-col gap-1 px-5 py-3 text-left';
   return (
-    <button
-      onClick={onSelect}
-      disabled={!onSelect}
-      className={cn(
-        'w-full text-left p-3 rounded-lg transition-colors',
-        'bg-theme-elevated hover:bg-theme-card',
-        'focus:outline-none focus:ring-2 focus:ring-cobalt-500',
-        !onSelect && 'cursor-default'
+    <li>
+      {onSelect ? (
+        <button
+          type="button"
+          onClick={onSelect}
+          className={cn(
+            rowClass,
+            'transition-colors hover:bg-ink-primary/[0.035] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary'
+          )}
+        >
+          {body}
+        </button>
+      ) : (
+        <div className={rowClass}>{body}</div>
       )}
-    >
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <span className="text-sm font-medium text-theme-primary line-clamp-2">
-          {originalText}
-        </span>
-        <Badge variant={statusColor} className="flex-shrink-0">
-          {statusLabel}
-        </Badge>
-      </div>
-      <div className="flex items-center justify-between text-xs text-theme-tertiary">
-        <span>{commandLabel}</span>
-        <span>{formattedTime}</span>
-      </div>
-    </button>
+    </li>
   );
 }
-
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center py-8 text-center">
-      <svg
-        className="w-12 h-12 text-theme-tertiary mb-3"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={1.5}
-          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-        />
-      </svg>
-      <p className="text-sm text-theme-tertiary">No command history yet</p>
-      <p className="text-xs text-theme-tertiary mt-1">
-        Commands you execute will appear here
-      </p>
-    </div>
-  );
-}
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
 
 /**
- * Command history list component.
- * Shows past commands for a robot with search/filter capability.
+ * Command history for one robot.
  *
  * @example
  * ```tsx
- * function RobotHistory({ robotId }: { robotId: string }) {
- *   const handleSelect = (entry: CommandHistoryEntry) => {
- *     // Pre-fill command bar with selected command
- *     setCommandText(entry.originalText);
- *   };
- *
- *   return (
- *     <CommandHistory
- *       robotId={robotId}
- *       onCommandSelect={handleSelect}
- *       maxHeight="300px"
- *     />
- *   );
- * }
+ * <CommandHistory robotId={robotId} onCommandSelect={(e) => setText(e.originalText)} maxHeight="300px" />
  * ```
  */
-export function CommandHistory({
-  robotId,
-  maxHeight = '400px',
-  onCommandSelect,
-  className,
-}: CommandHistoryProps) {
+export function CommandHistory({ robotId, maxHeight = '400px', onCommandSelect, className }: CommandHistoryProps) {
   const { history, isLoading } = useRobotCommandHistory(robotId);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [query, setQuery] = useState('');
 
-  // Filter history by search query
-  const filteredHistory = useMemo(() => {
-    if (!searchQuery.trim()) return history;
-
-    const query = searchQuery.toLowerCase();
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return history;
     return history.filter(
-      (entry) =>
-        entry.originalText.toLowerCase().includes(query) ||
-        entry.interpretation.commandType.toLowerCase().includes(query)
+      (e) => e.originalText.toLowerCase().includes(q) || e.interpretation.commandType.toLowerCase().includes(q)
     );
-  }, [history, searchQuery]);
-
-  const handleSelect = useCallback(
-    (entry: CommandHistoryEntry) => {
-      onCommandSelect?.(entry);
-    },
-    [onCommandSelect]
-  );
+  }, [history, query]);
 
   return (
-    <Card className={cn('p-4', className)}>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-theme-primary">Command History</h3>
-        {history.length > 0 && (
-          <span className="text-xs text-theme-tertiary">
-            {filteredHistory.length} of {history.length}
-          </span>
-        )}
-      </div>
-
-      {/* Search */}
+    <Panel className={className}>
+      <Panel.Header
+        title="Command history"
+        description={history.length > 0 ? `${filtered.length} of ${history.length}` : undefined}
+      />
       {history.length > 0 && (
-        <div className="mb-4">
-          <Input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search commands..."
-            size="sm"
-            fullWidth
-            leftIcon={
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-            }
-          />
+        <div className="px-5 pb-3">
+          <SearchInput value={query} onChange={setQuery} placeholder="Search commands" size="sm" />
         </div>
       )}
-
-      {/* Content */}
-      {isLoading ? (
-        <div className="flex items-center justify-center py-8">
-          <Spinner size="md" />
+      {isLoading && history.length === 0 ? (
+        <div className="px-5 pb-5">
+          <SkeletonRows rows={3} columns={2} dense />
         </div>
       ) : history.length === 0 ? (
-        <EmptyState />
-      ) : filteredHistory.length === 0 ? (
-        <div className="text-center py-8">
-          <p className="text-sm text-theme-tertiary">No commands match your search</p>
-        </div>
+        <Panel.Body>
+          <EmptyState size="sm" icon={<History />} title="No commands yet" description="Commands you execute appear here." />
+        </Panel.Body>
+      ) : filtered.length === 0 ? (
+        <Panel.Body>
+          <EmptyState
+            size="sm"
+            icon={<Search />}
+            title="No commands match"
+            action={<Button variant="secondary" size="sm" onClick={() => setQuery('')}>Clear search</Button>}
+          />
+        </Panel.Body>
       ) : (
-        <div
-          className="space-y-2 overflow-y-auto"
-          style={{ maxHeight }}
-        >
-          {filteredHistory.map((entry) => (
-            <HistoryItem
+        <ul className="divide-y divide-line-subtle overflow-y-auto border-t border-line-subtle" style={{ maxHeight }}>
+          {filtered.map((entry) => (
+            <HistoryRow
               key={entry.id}
               entry={entry}
-              onSelect={onCommandSelect ? () => handleSelect(entry) : undefined}
+              onSelect={onCommandSelect ? () => onCommandSelect(entry) : undefined}
             />
           ))}
-        </div>
+        </ul>
       )}
-    </Card>
+    </Panel>
   );
 }

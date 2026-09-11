@@ -1,204 +1,164 @@
 /**
  * @file IncidentList.tsx
- * @description Scrollable list displaying all incidents
+ * @description Incidents as a DataTable (number, title, severity, status, type,
+ *              detected) with a server-pagination footer and all four states
  * @feature incidents
- * @dependencies @/shared/utils/cn, @/features/incidents/hooks
  */
 
-import { Button } from '@/shared/components/ui/Button';
-import { Spinner } from '@/shared/components/ui/Spinner';
+import { useMemo, type ReactNode } from 'react';
+import { Plus, Search, ShieldCheck } from 'lucide-react';
+import { Button, DataTable, EmptyState, type DataTableColumn } from '@/shared/components/ui';
+import { formatDateTime, formatTimeAgo } from '@/shared/utils/format';
 import { useIncidents } from '../hooks/useIncidents';
-import { IncidentCard } from './IncidentCard';
+import { SeverityBadge } from './SeverityBadge';
+import { StatusBadge } from './StatusBadge';
+import { PaginationFooter } from './PaginationFooter';
+import { humanizeMachineText } from '../utils/humanize';
 import type { Incident } from '../types/incidents.types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { INCIDENT_TYPE_LABELS, SEVERITY_PRIORITY } from '../types/incidents.types';
 
 export interface IncidentListProps {
-  /** Maximum height of the list */
-  maxHeight?: string;
-  /** Filter to show only open incidents */
+  /** Show only incidents that are not closed */
   showOnlyOpen?: boolean;
-  /** Click handler for incident card */
+  /** Free-text filter over number, title and description */
+  query?: string;
+  /** Whether the host has filters set (for the filtered-empty state) */
+  hasFilters?: boolean;
+  /** Clears the host's filters */
+  onClearFilters?: () => void;
+  /** Row click */
   onIncidentClick?: (incident: Incident) => void;
+  /** Opens the report modal (empty state action) */
+  onReport?: () => void;
   /** Additional class names */
   className?: string;
 }
 
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center py-8 text-center">
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="48"
-        height="48"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="text-theme-tertiary mb-3"
-      >
-        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
-        <path d="m9 12 2 2 4-4" />
-      </svg>
-      <p className="text-sm text-theme-secondary">No incidents</p>
-      <p className="text-xs text-theme-tertiary mt-1">All systems operating normally</p>
-    </div>
-  );
+function detected(iso: string): string {
+  const hours = (Date.now() - new Date(iso).getTime()) / 3600000;
+  return hours < 24 ? formatTimeAgo(iso) : formatDateTime(iso, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function LoadingState() {
-  return (
-    <div className="flex flex-col items-center justify-center py-8">
-      <Spinner size="md" />
-      <p className="text-sm text-theme-secondary mt-3">Loading incidents...</p>
-    </div>
-  );
-}
-
-function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-8 text-center">
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="48"
-        height="48"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="text-red-500 mb-3"
-      >
-        <circle cx="12" cy="12" r="10" />
-        <line x1="12" y1="8" x2="12" y2="12" />
-        <line x1="12" y1="16" x2="12.01" y2="16" />
-      </svg>
-      <p className="text-sm text-theme-secondary">{error}</p>
-      <Button variant="secondary" size="sm" className="mt-3" onClick={onRetry}>
-        Retry
-      </Button>
-    </div>
-  );
-}
-
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
+const columns: DataTableColumn<Incident>[] = [
+  {
+    key: 'incidentNumber',
+    header: 'Number',
+    hideBelow: 'sm',
+    sortable: true,
+    cell: (i) => <span className="whitespace-nowrap text-[13px] tabular-nums text-ink-tertiary">{i.incidentNumber}</span>,
+  },
+  {
+    key: 'title',
+    header: 'Incident',
+    cell: (i) => (
+      <div className="min-w-0 max-w-[56ch]">
+        <div className="break-words text-sm font-medium text-ink-primary">{i.title}</div>
+        <p className="line-clamp-1 text-[13px] text-ink-tertiary">{humanizeMachineText(i.description).summary}</p>
+      </div>
+    ),
+  },
+  {
+    key: 'severity',
+    header: 'Severity',
+    hideBelow: 'sm',
+    sortable: true,
+    sortValue: (i) => SEVERITY_PRIORITY[i.severity],
+    cell: (i) => <SeverityBadge severity={i.severity} />,
+  },
+  { key: 'status', header: 'Status', sortable: true, cell: (i) => <StatusBadge status={i.status} /> },
+  {
+    key: 'type',
+    header: 'Type',
+    hideBelow: 'md',
+    cell: (i) => <span className="text-[13px] text-ink-secondary">{INCIDENT_TYPE_LABELS[i.type]}</span>,
+  },
+  {
+    key: 'detectedAt',
+    header: 'Detected',
+    align: 'right',
+    hideBelow: 'md',
+    sortable: true,
+    sortValue: (i) => new Date(i.detectedAt),
+    cell: (i) => <span className="whitespace-nowrap text-[13px] tabular-nums text-ink-tertiary">{detected(i.detectedAt)}</span>,
+  },
+];
 
 /**
- * Scrollable list displaying all incidents.
- *
- * @example
- * ```tsx
- * function IncidentsPanel() {
- *   const navigate = useNavigate();
- *
- *   return (
- *     <div>
- *       <h2>Incidents</h2>
- *       <IncidentList
- *         maxHeight="400px"
- *         showOnlyOpen
- *         onIncidentClick={(i) => navigate(`/incidents/${i.id}`)}
- *       />
- *     </div>
- *   );
- * }
- * ```
+ * Incident table; the host owns the toolbar. Put it in `<Panel padding="none">`.
  */
 export function IncidentList({
-  maxHeight = '600px',
   showOnlyOpen = false,
+  query = '',
+  hasFilters = false,
+  onClearFilters,
   onIncidentClick,
+  onReport,
   className,
 }: IncidentListProps) {
-  const { incidents, openIncidents, isLoading, error, pagination, nextPage, prevPage, fetchIncidents } =
-    useIncidents();
+  const { incidents, isLoading, error, pagination, nextPage, prevPage, fetchIncidents } = useIncidents(false);
 
-  const displayIncidents = showOnlyOpen ? openIncidents : incidents;
-
-  if (isLoading && incidents.length === 0) {
-    return (
-      <div className={className}>
-        <LoadingState />
-      </div>
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return incidents.filter(
+      (i) =>
+        (!showOnlyOpen || i.status !== 'closed') &&
+        (!q || [i.incidentNumber, i.title, i.description].some((s) => s.toLowerCase().includes(q)))
     );
-  }
+  }, [incidents, showOnlyOpen, query]);
 
-  if (error) {
-    return (
-      <div className={className}>
-        <ErrorState error={error} onRetry={() => fetchIncidents(1)} />
-      </div>
+  const filtered = hasFilters || Boolean(query.trim());
+  let empty: ReactNode;
+  if (filtered) {
+    empty = (
+      <EmptyState
+        icon={<Search />}
+        title="No incidents match"
+        description="Try another search, or clear the filters."
+        action={onClearFilters && <Button variant="secondary" onClick={onClearFilters}>Clear filters</Button>}
+      />
     );
-  }
-
-  if (displayIncidents.length === 0) {
-    return (
-      <div className={className}>
-        <EmptyState />
-      </div>
+  } else {
+    empty = (
+      <EmptyState
+        icon={<ShieldCheck />}
+        title={showOnlyOpen ? 'No open incidents' : 'No incidents yet'}
+        description="Incidents are opened automatically from safety events, or reported by hand."
+        action={
+          onReport && (
+            <Button leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} onClick={onReport}>
+              Report incident
+            </Button>
+          )
+        }
+      />
     );
   }
 
   return (
     <div className={className}>
-      {/* List */}
-      <div
-        className="space-y-3 overflow-y-auto"
-        style={{ maxHeight }}
-      >
-        {displayIncidents.map((incident) => (
-          <IncidentCard
-            key={incident.id}
-            incident={incident}
-            onClick={onIncidentClick}
-          />
-        ))}
-      </div>
-
-      {/* Pagination */}
+      <DataTable
+        caption="Incidents"
+        columns={columns}
+        rows={rows}
+        getRowId={(i) => i.id}
+        defaultSort={{ key: 'detectedAt', direction: 'desc' }}
+        onRowClick={onIncidentClick}
+        isLoading={isLoading}
+        error={incidents.length === 0 ? error : null}
+        errorTitle="Couldn't load incidents"
+        onRetry={() => void fetchIncidents(1)}
+        empty={empty}
+      />
       {pagination.totalPages > 1 && (
-        <div className="flex items-center justify-between mt-4 pt-4 border-t border-theme-base">
-          <span className="text-sm text-theme-secondary">
-            Page {pagination.page} of {pagination.totalPages}
-          </span>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={prevPage}
-              disabled={pagination.page <= 1 || isLoading}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={nextPage}
-              disabled={pagination.page >= pagination.totalPages || isLoading}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Loading overlay for pagination */}
-      {isLoading && incidents.length > 0 && (
-        <div className="flex items-center justify-center py-2 mt-2">
-          <Spinner size="sm" />
-          <span className="text-xs text-theme-tertiary ml-2">Loading...</span>
-        </div>
+        <PaginationFooter
+          page={pagination.page}
+          totalPages={pagination.totalPages}
+          total={pagination.total}
+          noun="incident"
+          onPrev={prevPage}
+          onNext={nextPage}
+          isLoading={isLoading}
+        />
       )}
     </div>
   );

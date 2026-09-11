@@ -1,16 +1,15 @@
 /**
  * @file FleetPage.tsx
- * @description Fleet management page with map and zone configuration
+ * @description Fleet: where every robot is (map) and the zones they work in,
+ *   with zone create/draw/edit/delete; the Robots tab embeds the robot list.
  * @feature fleet
- * @dependencies @/features/fleet/components, @/features/fleet/hooks, @/features/robots/hooks
+ * @dependencies @/shared/components/ui, @/features/fleet/components, @/features/fleet/hooks, @/features/robots
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { cn } from '@/shared/utils/cn';
-import { Button } from '@/shared/components/ui/Button';
-import { PageHeader } from '@/shared/components/ui/PageHeader';
-import { Tabs } from '@/shared/components/ui/Tabs';
+import { PenSquare, Plus, X } from 'lucide-react';
+import { Button, PageHeader, Panel, Tabs } from '@/shared/components/ui';
 import { FleetMap } from '../components/FleetMap';
 import { ZoneConfigPanel } from '../components/ZoneConfigPanel';
 import { ZoneFormModal } from '../components/ZoneFormModal';
@@ -19,229 +18,182 @@ import { useRobots } from '@/features/robots/hooks/useRobots';
 import { RobotsPage } from '@/features/robots/pages/RobotsPage';
 import type { Zone, ZoneBounds, RobotMapMarker } from '../types/fleet.types';
 
-type FleetTab = 'list' | 'map';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+const TABS = [
+  { id: 'map', label: 'Map' },
+  { id: 'list', label: 'Robots' },
+] as const;
+type FleetTab = (typeof TABS)[number]['id'];
 
 export interface FleetPageProps {
   /** Additional class names */
   className?: string;
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
-
 /**
- * FleetPage - Main page for fleet management with map and zone configuration.
- *
- * Features:
- * - Interactive fleet map with robot positions
- * - Zone management panel
- * - Zone creation/editing modals
- * - Real-time robot tracking
- *
- * @example
- * ```tsx
- * function App() {
- *   return (
- *     <Routes>
- *       <Route path="/fleet" element={<FleetPage />} />
- *     </Routes>
- *   );
- * }
- * ```
+ * Fleet page. Tab state lives in ?tab= (default `map`), so the legacy
+ * /robots → /fleet?tab=list redirect lands on the Robots tab.
  */
 export function FleetPage({ className }: FleetPageProps) {
   const navigate = useNavigate();
-
-  // Tab state synced via ?tab= so /robots → /fleet?tab=list redirect
-  // lands on the right tab.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab: FleetTab = searchParams.get('tab') === 'list' ? 'list' : 'map';
-  const setActiveTab = (id: FleetTab) => {
-    const next = new URLSearchParams(searchParams);
-    if (id === 'map') next.delete('tab');
-    else next.set('tab', id);
-    setSearchParams(next, { replace: true });
-  };
+  const [params, setParams] = useSearchParams();
+  const tab: FleetTab = params.get('tab') === 'list' ? 'list' : 'map';
+  const setTab = (id: string) =>
+    setParams(
+      (p) => {
+        if (id === 'map') p.delete('tab');
+        else p.set('tab', id);
+        return p;
+      },
+      { replace: true },
+    );
 
   const [selectedFloor, setSelectedFloor] = useState('1');
-  const [showZonePanel, setShowZonePanel] = useState(false);
-  const [showZoneModal, setShowZoneModal] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
   const [editingZone, setEditingZone] = useState<Zone | null>(null);
   const [drawnBounds, setDrawnBounds] = useState<ZoneBounds | null>(null);
 
-  // Hooks - useZones auto-fetches on mount
-  const { zones, selectedZone, selectZone, refresh: refreshZones, setCurrentFloor } = useZones();
-  const { editorMode, setEditorMode, editingZone: storeEditingZone, showFormModal } = useZoneEditor();
+  const { zones, selectedZone, selectZone, setCurrentFloor } = useZones();
+  const { editorMode, setEditorMode } = useZoneEditor();
   const { robots, fetchRobots } = useRobots();
+  const drawing = editorMode === 'draw';
 
-  // Fetch robots on mount
   useEffect(() => {
     fetchRobots();
   }, [fetchRobots]);
 
-  // Sync floor with zone store
   useEffect(() => {
     setCurrentFloor(selectedFloor);
   }, [selectedFloor, setCurrentFloor]);
 
-  // Sync modal state with store
+  // Esc cancels drawing; leaving the map tab or the page does too.
   useEffect(() => {
-    if (showFormModal && storeEditingZone) {
-      setEditingZone(storeEditingZone);
-      setShowZoneModal(true);
-    }
-  }, [showFormModal, storeEditingZone]);
+    if (!drawing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setEditorMode('view');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawing, setEditorMode]);
+  useEffect(() => {
+    if (tab !== 'map') setEditorMode('view');
+  }, [tab, setEditorMode]);
+  useEffect(() => () => setEditorMode('view'), [setEditorMode]);
 
-  // Transform robots to map markers
-  const robotMarkers: RobotMapMarker[] = robots.map((robot) => ({
-    robotId: robot.id,
-    name: robot.name,
-    status: robot.status,
-    batteryLevel: robot.batteryLevel,
-    position: {
-      x: robot.location.x,
-      y: robot.location.y,
-    },
-    floor: robot.location.floor || '1',
-    currentTask: robot.currentTaskName,
-    metadata: robot.metadata,
-  }));
-
-  // Handle robot click - navigate to detail
-  const handleRobotClick = useCallback(
-    (robotId: string) => {
-      navigate(`/robots/${robotId}`);
-    },
-    [navigate]
+  const robotMarkers: RobotMapMarker[] = useMemo(
+    () =>
+      robots.map((robot) => ({
+        robotId: robot.id,
+        name: robot.name,
+        status: robot.status,
+        batteryLevel: robot.batteryLevel,
+        position: { x: robot.location.x, y: robot.location.y },
+        floor: robot.location.floor || '1',
+        currentTask: robot.currentTaskName,
+        metadata: robot.metadata,
+      })),
+    [robots],
   );
 
-  // "Open robot's map" — the map the ROBOT built, on the Agent Mode page.
-  const handleRobotMapClick = useCallback(
-    (robotId: string) => {
-      navigate(`/agent?robot=${encodeURIComponent(robotId)}&tab=map`);
+  const openCreate = useCallback(() => {
+    setEditorMode('view');
+    setEditingZone(null);
+    setDrawnBounds(null);
+    setFormOpen(true);
+  }, [setEditorMode]);
+
+  const openEdit = useCallback((zone: Zone) => {
+    setEditingZone(zone);
+    setDrawnBounds(null);
+    setFormOpen(true);
+  }, []);
+
+  const handleZoneDrawn = useCallback(
+    (bounds: ZoneBounds) => {
+      setEditorMode('view');
+      setEditingZone(null);
+      setDrawnBounds(bounds);
+      setFormOpen(true);
     },
-    [navigate]
+    [setEditorMode],
   );
 
-  // Handle zone modal close
-  const handleModalClose = useCallback(() => {
-    setShowZoneModal(false);
+  const closeForm = useCallback(() => {
+    setFormOpen(false);
     setEditingZone(null);
     setDrawnBounds(null);
   }, []);
 
-  // Handle zone saved
-  const handleZoneSaved = useCallback(() => {
-    refreshZones();
-    handleModalClose();
-  }, [refreshZones, handleModalClose]);
-
-  // Toggle draw mode
-  const handleToggleDrawMode = useCallback(() => {
-    setEditorMode(editorMode === 'draw' ? 'view' : 'draw');
-  }, [editorMode, setEditorMode]);
-
-  // Handle zone drawn from map editor
-  const handleZoneDrawn = useCallback(
-    (bounds: ZoneBounds) => {
-      setDrawnBounds(bounds);
-      setEditingZone(null);
-      setShowZoneModal(true);
-      setEditorMode('view'); // Exit draw mode after drawing
-    },
-    [setEditorMode]
-  );
-
-  // Handle zone edit from map
-  const handleEditZone = useCallback((zone: Zone) => {
-    setEditingZone(zone);
-    setShowZoneModal(true);
-  }, []);
+  const headerActions =
+    tab === 'map' ? (
+      <>
+        <Button
+          variant="secondary"
+          leftIcon={drawing ? <X className="h-4 w-4" /> : <PenSquare className="h-4 w-4" />}
+          onClick={() => setEditorMode(drawing ? 'view' : 'draw')}
+          aria-pressed={drawing}
+        >
+          {drawing ? 'Cancel drawing' : 'Draw zone'}
+        </Button>
+        <Button leftIcon={<Plus className="h-4 w-4" />} onClick={openCreate}>
+          New zone
+        </Button>
+      </>
+    ) : undefined;
 
   return (
-    <div className={cn('min-h-screen', className)}>
-      <div className="mx-auto max-w-7xl px-4 py-8">
-        <PageHeader
-          className="mb-8"
-          title="Fleet Management"
-          subtitle="Monitor robots and manage facility zones"
-          actions={
-            activeTab === 'map' && (
-              <>
-                <Button
-                  variant={showZonePanel ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => setShowZonePanel(!showZonePanel)}
-                >
-                  {showZonePanel ? 'Hide Zones' : 'Manage Zones'}
-                </Button>
-                <Button
-                  variant={editorMode === 'draw' ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={handleToggleDrawMode}
-                >
-                  {editorMode === 'draw' ? 'Exit Draw Mode' : 'Draw Zone'}
-                </Button>
-              </>
-            )
-          }
-        />
+    <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'}>
+      <PageHeader
+        eyebrow="Operate"
+        title="Fleet"
+        description="Where every robot is, and the zones they work in."
+        actions={headerActions}
+      />
 
-        <Tabs
-          activeTab={activeTab}
-          onTabChange={(id) => setActiveTab(id as FleetTab)}
-          tabs={[
-            {
-              id: 'map',
-              label: 'Map',
-              content: (
-                <div className="flex gap-6">
-                  <div className={cn('flex-1', showZonePanel && 'max-w-[calc(100%-320px)]')}>
-                    <FleetMap
-                      robots={robotMarkers}
-                      zones={zones}
-                      selectedFloor={selectedFloor}
-                      onFloorChange={setSelectedFloor}
-                      onRobotClick={handleRobotClick}
-                      onRobotMapClick={handleRobotMapClick}
-                      editorMode={editorMode}
-                      selectedZoneId={selectedZone?.id || null}
-                      onSelectZone={selectZone}
-                      onEditZone={handleEditZone}
-                      onZoneDrawn={handleZoneDrawn}
-                    />
-                  </div>
-                  {showZonePanel && (
-                    <div className="w-80 shrink-0">
-                      <ZoneConfigPanel />
-                    </div>
-                  )}
-                </div>
-              ),
-            },
-            {
-              id: 'list',
-              label: 'List',
-              content: <RobotsPage />,
-            },
-          ]}
-        />
+      <Tabs tabs={TABS.map(({ id, label }) => ({ id, label }))} activeTab={tab} onTabChange={setTab} />
 
-        {/* Zone Form Modal */}
-        <ZoneFormModal
-          isOpen={showZoneModal}
-          zone={editingZone}
-          defaultBounds={drawnBounds || undefined}
-          currentFloor={selectedFloor}
-          onClose={handleModalClose}
-          onSuccess={handleZoneSaved}
-        />
-      </div>
+      {tab === 'map' && (
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+          <div className="flex flex-col gap-3 xl:col-span-2">
+            {drawing && (
+              <div
+                role="status"
+                className="flex items-center justify-between gap-3 rounded-control border border-primary/30 bg-primary/10 px-4 py-2 text-[13px] text-ink-primary"
+              >
+                <span>Drag on the map to draw the zone. Esc cancels.</span>
+                <Button variant="ghost" size="sm" onClick={() => setEditorMode('view')}>
+                  Cancel
+                </Button>
+              </div>
+            )}
+            <Panel padding="none">
+              <FleetMap
+                robots={robotMarkers}
+                zones={zones}
+                selectedFloor={selectedFloor}
+                onFloorChange={setSelectedFloor}
+                onRobotClick={(id) => navigate(`/robots/${id}`)}
+                onRobotMapClick={(id) => navigate(`/agent?robot=${encodeURIComponent(id)}&tab=map`)}
+                editorMode={editorMode}
+                selectedZoneId={selectedZone?.id || null}
+                onSelectZone={selectZone}
+                onEditZone={openEdit}
+                onZoneDrawn={handleZoneDrawn}
+              />
+            </Panel>
+          </div>
+          <ZoneConfigPanel onEditZone={openEdit} onCreateZone={openCreate} />
+        </div>
+      )}
+
+      {tab === 'list' && <RobotsPage />}
+
+      <ZoneFormModal
+        isOpen={formOpen}
+        zone={editingZone}
+        defaultBounds={drawnBounds || undefined}
+        currentFloor={selectedFloor}
+        onClose={closeForm}
+      />
     </div>
   );
 }
