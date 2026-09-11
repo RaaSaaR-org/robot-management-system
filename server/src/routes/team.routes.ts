@@ -63,7 +63,10 @@ teamRoutes.get('/', async (req: AuthenticatedRequest, res: Response) => {
     const members = await teamService.list(tenantId);
     res.json({ members });
   } catch (error) {
-    sendFailure(res, error, 500);
+    // Reads keep the plain 500 they always had. The Prisma mapping is for the
+    // write paths: a "record not found" answered by a *collection* endpoint
+    // would put the UI in an empty not-found state over a server fault.
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
 

@@ -215,13 +215,19 @@ describe('createApprovalRequest', () => {
     expect(result).toBe(request);
     expect(approvalRequestRepository.create).toHaveBeenCalledOnce();
     expect(alertService.createAlert).toHaveBeenCalledWith(
-      expect.objectContaining({ severity: 'warning', title: 'New Approval Required' })
+      expect.objectContaining({
+        severity: 'warning',
+        title: 'New Approval Required',
+        dismissable: true,
+      })
     );
     expect(events).toContain('approval_request_created');
   });
 
-  it('keeps warning severity even for urgent priority', async () => {
-    vi.mocked(approvalRequestRepository.create).mockResolvedValue(makeRequest());
+  it('keeps warning severity for urgent priority, but still requires acknowledgement', async () => {
+    vi.mocked(approvalRequestRepository.create).mockResolvedValue(
+      makeRequest({ priority: 'urgent' })
+    );
 
     await service.createApprovalRequest({
       entityType: 'safety_parameter_modification',
@@ -231,8 +237,11 @@ describe('createApprovalRequest', () => {
       priority: 'urgent',
     });
 
+    // The colour drops to warning, but the alert still cannot be dismissed without
+    // acknowledgement: severity and dismissability are set independently, so the
+    // colour fix cannot quietly cancel the human-oversight requirement.
     expect(alertService.createAlert).toHaveBeenCalledWith(
-      expect.objectContaining({ severity: 'warning' })
+      expect.objectContaining({ severity: 'warning', dismissable: false })
     );
   });
 

@@ -6,7 +6,7 @@
  * @feature robots
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Bot, WifiOff } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
@@ -20,25 +20,8 @@ import {
   CockpitCommandDock,
 } from '../components/cockpit';
 import { ProvenanceTag, RobotStatusTag, provenanceOf } from '../components/common';
-import { isRobotAvailable, type Robot, type RobotType } from '../types/robots.types';
-
-/** Map a robot's model/metadata to a viewer embodiment. */
-function resolveRobotType(robot: Robot | null): RobotType {
-  const hint = `${robot?.model ?? ''} ${(robot?.metadata?.robotType as string) ?? ''}`.toLowerCase();
-  // G1 EDU (Dex3-1 three-finger hands) before the plain-G1 substring match
-  if (hint.includes('g1_edu') || hint.includes('g1-edu') || hint.includes('g1 edu') || hint.includes('dex3')) {
-    return 'g1_edu';
-  }
-  if (hint.includes('g1')) return 'g1';
-  if (hint.includes('h1')) return 'h1';
-  if (hint.includes('so-101') || hint.includes('so101')) return 'so101';
-  return 'generic';
-}
-
-/** True for the Unitree G1 family (plain G1 and G1 EDU). */
-function isG1Family(type: RobotType): boolean {
-  return type === 'g1' || type === 'g1_edu';
-}
+import { isRobotAvailable, type Robot } from '../types/robots.types';
+import { isG1Family, pickCockpitRobot, resolveRobotType } from './cockpitPick';
 
 const DESCRIPTION = 'Live view and controls for one robot.';
 const VIEWER_HEIGHT = 'h-[280px] sm:h-[320px] lg:h-[440px]';
@@ -81,23 +64,23 @@ function RobotCockpitPageInner() {
   // stale/phantom default (e.g. an "online" robot whose agent is unreachable).
   const [skip, setSkip] = useState<Set<string>>(new Set());
 
-  // Bind to the routed robot, else auto-pick the most recently active robot —
-  // preferring a G1. `lastSeen` is the live signal (a connected agent heartbeats
-  // continuously), which list-level `status` lags behind, so recency lands us on
-  // the robot that's actually streaming rather than a stale phantom.
+  // The auto-pick currently on screen. Held across renders because `status`
+  // changes under the operator, and re-ranking on every tick would rebind the
+  // console to a robot they never selected — see `pickCockpitRobot`.
+  const heldRef = useRef<string | null>(null);
+
+  // Bind to the routed robot, else auto-pick one.
   const robot = useMemo<Robot | null>(() => {
     if (!robots.length) return null;
     if (id) return robots.find((r) => r.id === id) ?? null;
-    const byRecency = [...robots].sort((a, b) => (b.lastSeen ?? '').localeCompare(a.lastSeen ?? ''));
-    const pool = byRecency.filter((r) => !skip.has(r.id));
-    const fromPool = pool.length ? pool : byRecency;
-    // Reachability outranks embodiment: a G1 that is offline still loses to a
-    // robot that is actually streaming, so the preference never parks the page
-    // on a dead default and makes the operator wait out the self-heal timer.
-    const reachable = fromPool.filter(isRobotAvailable);
-    const ranked = reachable.length ? reachable : fromPool;
-    return ranked.find((r) => isG1Family(resolveRobotType(r))) ?? ranked[0];
+    return pickCockpitRobot(robots, skip, heldRef.current);
   }, [robots, id, skip]);
+
+  // Record the pick after commit so the next status tick holds it rather than
+  // re-ranking. Only the id-less route auto-picks; a routed robot is the choice.
+  useEffect(() => {
+    if (!id) heldRef.current = robot?.id ?? null;
+  }, [id, robot]);
 
   const robotId = robot?.id ?? '';
   const robotType = resolveRobotType(robot);

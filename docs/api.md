@@ -243,6 +243,7 @@ Findings arrive through `POST /api/robots/:id/agent-mode/events` (`agent:patrol:
 | `/api/embodiments` | Embodiment configuration |
 | `/api/teleoperation` | VLA data collection |
 | `/api/federated` | Federated learning |
+| `/api/federated/secure` | Secure aggregation (masked gradient submission) |
 | `/api/contributions` | Data contribution portal |
 | `/api/evaluation` | Model evaluation |
 | `/api/storage` | Object storage (RustFS/S3) |

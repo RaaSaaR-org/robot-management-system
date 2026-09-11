@@ -252,6 +252,7 @@ server/src/
 | POST   | `/api/processes/:id/start`              | Start process instance   |
 | GET    | `/api/processes/instances/list`         | List instances           |
 | GET    | `/api/processes/instances/:id`          | Get instance             |
+| PUT    | `/api/processes/instances/:id/start`    | Start a pending instance |
 | PUT    | `/api/processes/instances/:id/pause`    | Pause instance           |
 | PUT    | `/api/processes/instances/:id/resume`   | Resume instance          |
 | PUT    | `/api/processes/instances/:id/cancel`   | Cancel instance          |
@@ -357,6 +358,7 @@ Photos: `PatrolPhotoStore` — S3 bucket `patrol-photos` when RustFS is configur
 - `/api/active-learning` — Active learning strategies
 - `/api/synthetic` — Synthetic data generation
 - `/api/federated` — Federated learning
+- `/api/federated/secure` — Secure aggregation (its own prefix: both routers define `POST /rounds/:id/aggregate`, and sharing a prefix let one shadow the other)
 - `/api/contributions` — Data contribution portal
 - `/api/training-docs` — Training data documentation
 

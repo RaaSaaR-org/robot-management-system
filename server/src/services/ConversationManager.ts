@@ -451,6 +451,10 @@ export class ConversationManager {
         contextId: conversationId,
         taskId,
         timestamp: new Date().toISOString(),
+        // The only failure path that used to persist error-shaped text without
+        // saying so, which left the client guessing from the wording. Every
+        // failure this service writes now carries the flag.
+        metadata: { error: true },
       };
 
       // Save to database

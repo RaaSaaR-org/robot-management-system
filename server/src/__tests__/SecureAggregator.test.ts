@@ -431,6 +431,10 @@ describe('Aggregation Routes', () => {
         .post('/api/federated/rounds/some-round/aggregate')
         .send({});
 
+      // The path must still be served. Without this, a remount that dropped the
+      // federated router entirely would satisfy the assertion below for the
+      // wrong reason — by proving only that nothing answers here at all.
+      expect(res.status).not.toBe(404);
       // The secure handler's signature rejection — its presence would mean this
       // path reached secure aggregation instead of the federated lifecycle.
       expect(String(res.body?.error ?? '')).not.toContain('expectedParticipants');

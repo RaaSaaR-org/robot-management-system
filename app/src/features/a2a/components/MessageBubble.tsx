@@ -13,7 +13,7 @@ import { OrchestrationChainSummary } from './OrchestrationChainSummary';
 import { FormRenderer, CompletedFormCard } from './FormRenderer';
 import { useA2AStore } from '../store';
 import type { A2AMessage, A2APart, FormSchema } from '../types';
-import { isTextPart, isFilePart, isDataPart, isFileWithBytes, isFormData, isErrorText, formatErrorText, getMessageText } from '../types';
+import { isTextPart, isFilePart, isDataPart, isFileWithBytes, isFormData, formatErrorText, getMessageText } from '../types';
 
 interface MessageBubbleProps {
   message: A2AMessage;
@@ -113,12 +113,13 @@ export const MessageBubble = memo(function MessageBubble({ message, pendingStatu
       }
     | undefined;
 
-  // A failed turn is not an answer. The server marks it `metadata.error`
-  // (ConversationManager); rows written without it are still recognisable by
-  // their error-shaped text. Either way the raw provider text is detail, not
-  // the reply.
+  // A failed turn is not an answer: the raw provider text is detail, not the
+  // reply. Trust only the server's `metadata.error` flag — every failure path in
+  // ConversationManager sets it. Sniffing the wording instead would repaint real
+  // answers as outages, since a fleet assistant legitimately says things like
+  // "Error rate is 2%" or "the arm reached [180 deg]".
   const text = getMessageText(message);
-  const isFailure = !isUser && (meta.error === true || isErrorText(text));
+  const isFailure = !isUser && meta.error === true;
   const failureDetail = isFailure ? formatErrorText(text).replace(/^Task failed:\s*/i, '') : '';
 
   return (

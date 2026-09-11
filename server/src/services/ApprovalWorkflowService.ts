@@ -124,6 +124,11 @@ export class ApprovalWorkflowService {
         // A pending human review needs attention, but it is never an emergency:
         // `critical` renders in the red reserved for safety states like an E-stop.
         severity: 'warning',
+        // Whether an alert must be acknowledged is a separate axis from what colour
+        // it wears, but the repository derives `dismissable` from severity. Leaving
+        // it implicit would let the colour fix quietly cancel the acknowledgement an
+        // urgent review carries, so it is stated here, on the resolved priority.
+        dismissable: request.priority !== 'urgent' && request.priority !== 'critical',
         title: 'New Approval Required',
         message: `${input.entityType.replace(/_/g, ' ')} approval request (${request.requestNumber}) requires ${firstStep.approverRole} review. SLA: ${request.slaHours}h`,
         source: 'system',
