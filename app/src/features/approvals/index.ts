@@ -22,7 +22,7 @@ export { useApprovalsStore } from './store';
 export { useApprovals, usePendingApprovals, useApprovalMetrics } from './hooks';
 
 // Components
-export { SLAIndicator, ApprovalCard, ApprovalQueue } from './components';
+export { SLAIndicator, ApprovalQueue, ApprovalDetailModal, RejectApprovalModal } from './components';
 
 // Pages
 export { ApprovalsPage } from './pages';
