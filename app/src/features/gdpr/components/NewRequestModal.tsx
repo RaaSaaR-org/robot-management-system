@@ -5,8 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
-import { errorMessage } from './errorMessage';
+import { FormField, FormModal, Input, Select, Textarea, errorMessage, toast } from '@/shared/components/ui';
 import { useGDPRStore } from '../store';
 import {
   RESTRICTION_REASON_LABELS,
