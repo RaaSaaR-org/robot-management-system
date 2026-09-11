@@ -129,19 +129,19 @@ export const SAFETY_STATUS_COLORS: Record<
   { primary: string; secondary: string; bg: string }
 > = {
   safe: {
-    primary: '#22c55e', // green-500
-    secondary: '#4ade80', // green-400
-    bg: 'rgba(34, 197, 94, 0.2)',
+    primary: 'var(--signal-measured)',
+    secondary: 'var(--signal-measured)',
+    bg: 'color-mix(in srgb, var(--signal-measured) 15%, transparent)',
   },
   caution: {
-    primary: '#eab308', // yellow-500
-    secondary: '#facc15', // yellow-400
-    bg: 'rgba(234, 179, 8, 0.2)',
+    primary: 'var(--signal-unknown)',
+    secondary: 'var(--signal-unknown)',
+    bg: 'color-mix(in srgb, var(--signal-unknown) 15%, transparent)',
   },
   dangerous: {
-    primary: '#ef4444', // red-500
-    secondary: '#f87171', // red-400
-    bg: 'rgba(239, 68, 68, 0.2)',
+    primary: 'var(--signal-stopped)',
+    secondary: 'var(--signal-stopped)',
+    bg: 'color-mix(in srgb, var(--signal-stopped) 15%, transparent)',
   },
 };
 

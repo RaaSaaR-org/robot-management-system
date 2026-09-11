@@ -177,26 +177,52 @@ export const SAFETY_CLASSIFICATION_LABELS: Record<SafetyClassification, string> 
   dangerous: 'Dangerous',
 };
 
-/** Safety classification colors (Tailwind classes) */
+/** Signal token classes (docs/brand.md): measured = fine, unknown = caution, stopped = fault */
+const SIGNAL_CLASSES = {
+  measured: {
+    bg: 'bg-signal-measured/10',
+    text: 'text-signal-measured',
+    border: 'border-signal-measured/30',
+  },
+  unknown: {
+    bg: 'bg-signal-unknown/10',
+    text: 'text-signal-unknown',
+    border: 'border-signal-unknown/30',
+  },
+  stopped: {
+    bg: 'bg-signal-stopped/10',
+    text: 'text-signal-stopped',
+    border: 'border-signal-stopped/30',
+  },
+} as const;
+
+/** Safety classification colors (token classes) */
 export const SAFETY_CLASSIFICATION_COLORS: Record<
   SafetyClassification,
   { bg: string; text: string; border: string }
 > = {
-  safe: {
-    bg: 'bg-green-100 dark:bg-green-900/20',
-    text: 'text-green-800 dark:text-green-200',
-    border: 'border-green-200 dark:border-green-800',
-  },
-  caution: {
-    bg: 'bg-yellow-100 dark:bg-yellow-900/20',
-    text: 'text-yellow-800 dark:text-yellow-200',
-    border: 'border-yellow-200 dark:border-yellow-800',
-  },
-  dangerous: {
-    bg: 'bg-red-100 dark:bg-red-900/20',
-    text: 'text-red-800 dark:text-red-200',
-    border: 'border-red-200 dark:border-red-800',
-  },
+  safe: SIGNAL_CLASSES.measured,
+  caution: SIGNAL_CLASSES.unknown,
+  dangerous: SIGNAL_CLASSES.stopped,
+};
+
+/** Safety classification → kit StatusTag tone */
+export const SAFETY_CLASSIFICATION_TONE: Record<SafetyClassification, 'live' | 'gated' | 'stopped'> = {
+  safe: 'live',
+  caution: 'gated',
+  dangerous: 'stopped',
+};
+
+/** History status → kit StatusTag tone */
+export const HISTORY_STATUS_TONE: Record<
+  CommandHistoryStatus,
+  'success' | 'info' | 'warning' | 'danger' | 'neutral'
+> = {
+  interpreted: 'info',
+  confirmed: 'warning',
+  executed: 'success',
+  cancelled: 'neutral',
+  failed: 'danger',
 };
 
 /** History status labels */
@@ -250,23 +276,11 @@ export function getConfidenceColors(confidence: number): {
   const level = getConfidenceLevel(confidence);
   switch (level) {
     case 'high':
-      return {
-        bg: 'bg-green-100 dark:bg-green-900/20',
-        text: 'text-green-800 dark:text-green-200',
-        border: 'border-green-200 dark:border-green-800',
-      };
+      return SIGNAL_CLASSES.measured;
     case 'medium':
-      return {
-        bg: 'bg-yellow-100 dark:bg-yellow-900/20',
-        text: 'text-yellow-800 dark:text-yellow-200',
-        border: 'border-yellow-200 dark:border-yellow-800',
-      };
+      return SIGNAL_CLASSES.unknown;
     case 'low':
-      return {
-        bg: 'bg-red-100 dark:bg-red-900/20',
-        text: 'text-red-800 dark:text-red-200',
-        border: 'border-red-200 dark:border-red-800',
-      };
+      return SIGNAL_CLASSES.stopped;
   }
 }
 
@@ -275,4 +289,11 @@ export function getConfidenceColors(confidence: number): {
  */
 export function formatConfidence(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
+}
+
+/** Sentence-case label of a command type; unknown types ("navigation") are humanized */
+export function commandTypeLabel(type: string, labels: Record<string, string>): string {
+  const known = labels[type];
+  const text = known ?? type.replace(/[_-]+/g, ' ');
+  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
 }
