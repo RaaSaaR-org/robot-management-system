@@ -3,7 +3,7 @@ id: "TASK-261"
 aliases: []
 title: "Move the app onto the landing design system"
 slug: "move-the-app-onto-the-landing-design-system"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []

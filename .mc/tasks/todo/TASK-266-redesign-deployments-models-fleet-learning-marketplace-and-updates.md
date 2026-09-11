@@ -3,7 +3,7 @@ id: "TASK-266"
 aliases: []
 title: "Redesign deployments, models, fleet learning, marketplace and updates"
 slug: "redesign-deployments-models-fleet-learning-marketplace-and-updates"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []

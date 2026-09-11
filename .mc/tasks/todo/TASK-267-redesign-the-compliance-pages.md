@@ -3,7 +3,7 @@ id: "TASK-267"
 aliases: []
 title: "Redesign the compliance pages"
 slug: "redesign-the-compliance-pages"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []

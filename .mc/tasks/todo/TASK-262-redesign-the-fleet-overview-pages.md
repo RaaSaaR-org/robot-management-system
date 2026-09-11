@@ -3,7 +3,7 @@ id: "TASK-262"
 aliases: []
 title: "Redesign the fleet overview pages"
 slug: "redesign-the-fleet-overview-pages"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []
