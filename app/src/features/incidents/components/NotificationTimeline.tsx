@@ -6,7 +6,7 @@
  */
 
 import { BellOff, FileText, Send } from 'lucide-react';
-import { Button, EmptyState, StatusTag } from '@/shared/components/ui';
+import { Button, EmptyState, StatusTag, statusTone } from '@/shared/components/ui';
 import { formatDateTime } from '@/shared/utils/format';
 import type { IncidentNotification, NotificationStatus } from '../types/incidents.types';
 import {
@@ -15,7 +15,6 @@ import {
   NOTIFICATION_TYPE_LABELS,
   NOTIFICATION_STATUS_LABELS,
 } from '../types/incidents.types';
-import { NOTIFICATION_STATUS_TONE } from '../utils/tones';
 
 export interface NotificationTimelineProps {
   /** Notification list */
@@ -52,7 +51,7 @@ function NotificationRow({ notification: n, onMarkSent, onGenerateContent }: {
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium text-ink-primary">{AUTHORITY_LABELS[n.authority]}</span>
-          <StatusTag tone={NOTIFICATION_STATUS_TONE[status]} dot>
+          <StatusTag tone={statusTone(status)} dot>
             {NOTIFICATION_STATUS_LABELS[status]}
           </StatusTag>
         </div>

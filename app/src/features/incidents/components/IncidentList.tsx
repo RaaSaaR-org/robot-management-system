@@ -12,7 +12,6 @@ import { formatDateTime, formatTimeAgo } from '@/shared/utils/format';
 import { useIncidents } from '../hooks/useIncidents';
 import { SeverityBadge } from './SeverityBadge';
 import { StatusBadge } from './StatusBadge';
-import { PaginationFooter } from './PaginationFooter';
 import { humanizeMachineText } from '../utils/humanize';
 import type { Incident } from '../types/incidents.types';
 import { INCIDENT_TYPE_LABELS, SEVERITY_PRIORITY } from '../types/incidents.types';
@@ -95,7 +94,7 @@ export function IncidentList({
   onReport,
   className,
 }: IncidentListProps) {
-  const { incidents, isLoading, error, pagination, nextPage, prevPage, fetchIncidents } = useIncidents(false);
+  const { incidents, isLoading, error, pagination, goToPage, fetchIncidents } = useIncidents(false);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -148,18 +147,14 @@ export function IncidentList({
         errorTitle="Couldn't load incidents"
         onRetry={() => void fetchIncidents(1)}
         empty={empty}
+        pagination={{
+          page: pagination.page,
+          totalPages: pagination.totalPages,
+          total: pagination.total,
+          noun: 'incident',
+          onPageChange: goToPage,
+        }}
       />
-      {pagination.totalPages > 1 && (
-        <PaginationFooter
-          page={pagination.page}
-          totalPages={pagination.totalPages}
-          total={pagination.total}
-          noun="incident"
-          onPrev={prevPage}
-          onNext={nextPage}
-          isLoading={isLoading}
-        />
-      )}
     </div>
   );
 }

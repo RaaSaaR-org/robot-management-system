@@ -9,15 +9,10 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ArrowRight, Pencil } from 'lucide-react';
 import {
-  Button,
-  ErrorState,
-  Modal,
-  PageHeader,
-  Panel,
-  RowActions,
-  SkeletonText,
-  confirm,
-  toast,
+  Button, ErrorState, Modal,
+  PageHeader, Panel, RowActions,
+  SkeletonText, confirm,
+  errorMessage, toast,
   type RowActionItem,
 } from '@/shared/components/ui';
 import { SeverityBadge } from '../components/SeverityBadge';
@@ -32,10 +27,6 @@ import type { IncidentNotification } from '../types/incidents.types';
 import { AUTHORITY_LABELS, INCIDENT_STATUS_LABELS, INCIDENT_TYPE_LABELS, REGULATION_LABELS } from '../types/incidents.types';
 
 const BACK = { to: '/alerts?tab=incidents', label: 'Incidents' };
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /** Detail page for one incident. */
 export function IncidentDetailPage() {

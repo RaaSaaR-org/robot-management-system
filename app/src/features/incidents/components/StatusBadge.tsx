@@ -4,10 +4,9 @@
  * @feature incidents
  */
 
-import { StatusTag } from '@/shared/components/ui';
+import { StatusTag, statusTone } from '@/shared/components/ui';
 import type { IncidentStatus } from '../types/incidents.types';
 import { INCIDENT_STATUS_LABELS } from '../types/incidents.types';
-import { INCIDENT_STATUS_TONE } from '../utils/tones';
 
 export interface StatusBadgeProps {
   /** Incident status */
@@ -29,7 +28,7 @@ export interface StatusBadgeProps {
 export function StatusBadge({ status, size = 'sm', showDot = true, className }: StatusBadgeProps) {
   return (
     <StatusTag
-      tone={INCIDENT_STATUS_TONE[status]}
+      tone={statusTone(status)}
       size={size === 'sm' ? 'sm' : 'md'}
       dot={showDot}
       className={className}

@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
+import { FormField, FormModal, Input, Select, Textarea, errorMessage, toast } from '@/shared/components/ui';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import { useIncidentsStore } from '../store/incidentsStore';
 import type { Incident, IncidentSeverity, IncidentType } from '../types/incidents.types';
@@ -110,7 +110,7 @@ export function ReportIncidentModal({ isOpen, onClose, incident = null }: Report
         navigate(`/incidents/${created.id}`);
       }
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : String(err));
+      setFormError(errorMessage(err));
     } finally {
       setSaving(false);
     }
