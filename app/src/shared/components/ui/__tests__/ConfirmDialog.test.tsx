@@ -19,6 +19,13 @@ describe('ConfirmDialog', () => {
     expect(dialog).toHaveAccessibleDescription('Runs stop.');
   });
 
+  it('renders a single dialog element: the alertdialog, with no dialog around it', () => {
+    render(<ConfirmDialog isOpen onClose={() => {}} onConfirm={() => {}} title="Delete Dock A?" tone="danger" />);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal]')).toHaveLength(1);
+    expect(screen.getByRole('alertdialog')).toHaveAttribute('aria-modal', 'true');
+  });
+
   it('labels the confirm button Delete for danger and Confirm otherwise', () => {
     const { rerender } = render(
       <ConfirmDialog isOpen onClose={() => {}} onConfirm={() => {}} title="Delete?" tone="danger" />,
@@ -144,6 +151,20 @@ describe('confirm()', () => {
     await screen.findByRole('alertdialog', { name: 'Only once?' });
     expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Confirm' }));
+    await expect(result).resolves.toBe(true);
+  });
+
+  it('passes testId to the dialog and its buttons', async () => {
+    const user = userEvent.setup();
+    render(<ConfirmHost />);
+    let result: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      result = confirm({ title: 'Delete zone?', tone: 'danger', testId: 'delete-zone' });
+    });
+    const dialog = await screen.findByTestId('delete-zone');
+    expect(dialog).toBe(screen.getByRole('alertdialog', { name: 'Delete zone?' }));
+    expect(screen.getByTestId('delete-zone-cancel')).toHaveTextContent('Cancel');
+    await user.click(screen.getByTestId('delete-zone-confirm'));
     await expect(result).resolves.toBe(true);
   });
 

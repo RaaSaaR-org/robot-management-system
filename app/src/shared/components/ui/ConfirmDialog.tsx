@@ -28,6 +28,8 @@ export interface ConfirmDialogProps {
   tone?: 'danger' | 'default';
   /** Controlled loading state of the confirm button */
   isLoading?: boolean;
+  /** `data-testid` on the dialog; the buttons get `‹testId›-confirm` / `‹testId›-cancel` */
+  testId?: string;
 }
 
 /**
@@ -54,6 +56,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   tone = 'default',
   isLoading,
+  testId,
 }: ConfirmDialogProps) {
   const [pending, setPending] = useState(false);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -80,13 +83,21 @@ export function ConfirmDialog({
       closeOnBackdrop={!loading}
       closeOnEscape={!loading}
       initialFocusRef={tone === 'danger' ? cancelRef : confirmRef}
+      testId={testId}
       footer={
         <>
-          <Button ref={cancelRef} variant="ghost" onClick={onClose} disabled={loading}>
+          <Button
+            ref={cancelRef}
+            variant="ghost"
+            onClick={onClose}
+            disabled={loading}
+            data-testid={testId ? `${testId}-cancel` : undefined}
+          >
             {cancelLabel}
           </Button>
           <Button
             ref={confirmRef}
+            data-testid={testId ? `${testId}-confirm` : undefined}
             variant={tone === 'danger' ? 'danger' : 'primary'}
             onClick={handleConfirm}
             isLoading={loading}
@@ -120,6 +131,7 @@ export function ConfirmHost() {
       confirmLabel={current.confirmLabel}
       cancelLabel={current.cancelLabel}
       tone={current.tone}
+      testId={current.testId}
     />
   );
 }

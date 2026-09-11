@@ -41,6 +41,7 @@ export interface StatTileProps {
   /** Show a skeleton in place of the value */
   isLoading?: boolean;
   className?: string;
+  'data-testid'?: string;
 }
 
 const TREND_ICON = { up: ArrowUpRight, down: ArrowDownRight, flat: ArrowRight } as const;
@@ -69,13 +70,14 @@ export function StatTile({
   progress,
   isLoading = false,
   className,
+  'data-testid': testId,
 }: StatTileProps) {
   const resolved = tone ? baseTone(tone) : null;
   const TrendIcon = trend ? TREND_ICON[trend.direction] : null;
   const pct = progress === undefined ? null : Math.min(100, Math.max(0, progress));
 
   return (
-    <div className={cn('flex min-w-0 flex-col rounded-panel border border-line bg-panel p-4', className)}>
+    <div data-testid={testId} className={cn('flex min-w-0 flex-col rounded-panel border border-line bg-panel p-4', className)}>
       <div className="flex items-start justify-between gap-2">
         {/* Wraps rather than truncates: two-up tiles at 390px are narrow. */}
         <div className={cn(labelCaps, 'min-w-0 break-words leading-4')}>{label}</div>

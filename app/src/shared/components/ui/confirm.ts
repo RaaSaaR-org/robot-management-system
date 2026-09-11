@@ -22,6 +22,8 @@ export interface ConfirmOptions {
   cancelLabel?: string;
   /** `danger` → red confirm button, focus starts on Cancel */
   tone?: 'danger' | 'default';
+  /** `data-testid` on the dialog; its buttons get `‹testId›-confirm` / `‹testId›-cancel` */
+  testId?: string;
 }
 
 export interface ConfirmRequest extends ConfirmOptions {

@@ -71,6 +71,12 @@ describe('FormModal', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it('puts submitTestId and cancelTestId on the footer buttons', () => {
+    renderForm({ submitTestId: 'route-submit', cancelTestId: 'route-cancel' });
+    expect(screen.getByTestId('route-submit')).toBe(screen.getByRole('button', { name: 'Create route' }));
+    expect(screen.getByTestId('route-cancel')).toBe(screen.getByRole('button', { name: 'Cancel' }));
+  });
+
   it('does not submit when submitDisabled', async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderForm({ submitDisabled: true });

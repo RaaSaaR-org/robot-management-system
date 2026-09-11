@@ -36,6 +36,10 @@ export interface FormModalProps {
   closeOnBackdrop?: boolean;
   /** Skip native constraint validation (when you validate yourself) */
   noValidate?: boolean;
+  /** `data-testid` on the submit button */
+  submitTestId?: string;
+  /** `data-testid` on the cancel button */
+  cancelTestId?: string;
   children: ReactNode;
 }
 
@@ -71,6 +75,8 @@ export function FormModal({
   size = 'md',
   closeOnBackdrop = false,
   noValidate,
+  submitTestId,
+  cancelTestId,
   children,
 }: FormModalProps) {
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -92,11 +98,12 @@ export function FormModal({
       noValidate={noValidate}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={isSubmitting}>
+          <Button variant="ghost" onClick={onClose} disabled={isSubmitting} data-testid={cancelTestId}>
             {cancelLabel}
           </Button>
           <Button
             type="submit"
+            data-testid={submitTestId}
             variant={submitVariant}
             isLoading={isSubmitting}
             loadingText={submittingLabel ?? submitLabel}
