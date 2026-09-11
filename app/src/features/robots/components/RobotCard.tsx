@@ -1,232 +1,122 @@
 /**
  * @file RobotCard.tsx
- * @description Card component displaying robot summary information
+ * @description Robot summary card for the fleet list grid: name link, model, status,
+ *   battery, place, task and last seen, with row actions.
  * @feature robots
- * @dependencies @/shared/components/ui, @/features/robots/types
  */
 
-import { Card } from '@/shared/components/ui';
+import type { MouseEvent } from 'react';
+import { Link } from 'react-router-dom';
+import { Panel, RowActions, type RowActionItem } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
-import { RobotStatusBadge } from './RobotStatusBadge';
-import { type Robot, formatRobotLocation, getBatteryCategory } from '../types/robots.types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { formatTimeAgo } from '@/shared/utils/format';
+import { RobotStatusTag } from './common/RobotStatusTag';
+import { Readout, type ReadoutTone } from './common/Readout';
+import type { Robot } from '../types/robots.types';
 
 export interface RobotCardProps {
   /** Robot data */
   robot: Robot;
-  /** Click handler */
+  /** Click handler (opens the robot) */
   onClick?: () => void;
+  /** Row actions shown in the kebab menu */
+  actions?: RowActionItem[];
   /** Whether this card is selected */
   selected?: boolean;
-  /** Compact mode for list views */
+  /** Compact mode: header and status only */
   compact?: boolean;
   /** Additional class names */
   className?: string;
 }
 
-// ============================================================================
-// BATTERY ICON COMPONENT
-// ============================================================================
-
-function BatteryIcon({ level, className }: { level: number; className?: string }) {
-  const category = getBatteryCategory(level) ?? 'full';
-  const fillWidth = Math.max(0, Math.min(100, level));
-
-  const colorClass = {
-    critical: 'fill-red-500',
-    low: 'fill-orange-500',
-    medium: 'fill-yellow-500',
-    high: 'fill-green-500',
-    full: 'fill-green-500',
-  }[category];
-
-  return (
-    <svg
-      className={cn('h-5 w-5', className)}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      aria-label={`Battery ${level}%`}
-    >
-      {/* Battery outline */}
-      <rect x="2" y="7" width="18" height="10" rx="2" className="stroke-current" />
-      {/* Battery terminal */}
-      <rect x="20" y="10" width="2" height="4" rx="0.5" className="fill-current" />
-      {/* Battery fill */}
-      <rect
-        x="3.5"
-        y="8.5"
-        width={`${(fillWidth / 100) * 15}`}
-        height="7"
-        rx="1"
-        className={cn('transition-all duration-300', colorClass)}
-      />
-    </svg>
-  );
+/** Zone and floor, or "Place unknown". */
+export function robotPlace(robot: Robot): string {
+  const loc = robot.location;
+  const parts: string[] = [];
+  if (loc?.zone) parts.push(loc.zone);
+  if (loc?.floor) parts.push(`Floor ${loc.floor}`);
+  return parts.length ? parts.join(' · ') : 'Place unknown';
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+/** Battery value, unit and tone. Offline robots show the last report, untoned. */
+export function robotBattery(robot: Robot): {
+  value: string | null;
+  unit?: string;
+  tone?: ReadoutTone;
+  hint?: string;
+} {
+  if (robot.batteryLevel === null || robot.metadata?.powerSource === 'ac_powered') {
+    return { value: 'AC', hint: 'Mains powered' };
+  }
+  const level = Math.round(robot.batteryLevel);
+  if (robot.status === 'offline') return { value: String(level), unit: '%', hint: 'Last reported' };
+  const tone: ReadoutTone | undefined = level < 10 ? 'stopped' : level < 20 ? 'estimated' : undefined;
+  return { value: String(level), unit: '%', tone };
+}
 
-/**
- * Card component for displaying robot summary information.
- *
- * @example
- * ```tsx
- * // Basic usage
- * <RobotCard robot={robot} onClick={() => selectRobot(robot.id)} />
- *
- * // Selected state
- * <RobotCard robot={robot} selected={true} />
- *
- * // Compact mode
- * <RobotCard robot={robot} compact />
- * ```
- */
-export function RobotCard({
-  robot,
-  onClick,
-  selected = false,
-  compact = false,
-  className,
-}: RobotCardProps) {
-  const isAcPowered = robot.metadata?.powerSource === 'ac_powered' || robot.batteryLevel === null;
-  const batteryCategory = isAcPowered ? null : getBatteryCategory(robot.batteryLevel);
-  const needsAttention = robot.status === 'error' || batteryCategory === 'critical';
+/** Last seen as relative time, or "—". */
+export function robotLastSeen(robot: Robot): string {
+  if (!robot.lastSeen) return '—';
+  const ago = formatTimeAgo(robot.lastSeen);
+  return ago === 'Just now' ? 'just now' : ago;
+}
+
+/** A robot in the fleet list grid. */
+export function RobotCard({ robot, onClick, actions, selected = false, compact = false, className }: RobotCardProps) {
+  const battery = robotBattery(robot);
+  const stop = (e: MouseEvent) => e.stopPropagation();
 
   return (
-    <Card
-      interactive={!!onClick}
-      className={cn(
-        // Glass selection state with softer ring
-        selected && 'ring-2 ring-cobalt-400/50 border-cobalt-400/30',
-        // Attention state with subtle red border
-        needsAttention && !selected && 'border-red-400/30',
-        className
-      )}
+    <Panel
+      interactive={Boolean(onClick)}
       onClick={onClick}
-      role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onKeyDown={
-        onClick
-          ? (e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onClick();
-              }
-            }
-          : undefined
-      }
-      aria-pressed={onClick ? selected : undefined}
+      padding="sm"
+      data-testid="robot-card"
+      aria-current={selected || undefined}
+      className={cn('flex flex-col gap-4', selected && 'border-primary', className)}
     >
-      {/* Header: Icon + Name + Status */}
-      <div className="flex items-center gap-4">
-        {/* Robot icon in glass container */}
-        <div className="glass-subtle p-3 rounded-xl shrink-0">
-          <svg
-            className="h-6 w-6 text-cobalt-400"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            aria-hidden="true"
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <Link
+            to={`/robots/${robot.id}`}
+            onClick={stop}
+            className="block truncate text-sm font-semibold text-ink-primary hover:text-primary"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"
-            />
-          </svg>
+            {robot.name}
+          </Link>
+          <div className="truncate text-[13px] text-ink-tertiary">{robot.model}</div>
         </div>
-
-        {/* Name and model */}
-        <div className="flex-1 min-w-0">
-          <h3 className="card-title truncate">{robot.name}</h3>
-          <p className="card-meta">{robot.model}</p>
-        </div>
-
-        {/* Status badge */}
-        <RobotStatusBadge status={robot.status} showPulse />
+        {actions && actions.length > 0 && (
+          <RowActions items={actions} label={`Actions for ${robot.name}`} />
+        )}
       </div>
 
-      {/* Full mode: Separator + Metrics */}
+      <div className="flex items-end justify-between gap-3">
+        <RobotStatusTag status={robot.status} />
+        {!compact && (
+          <Readout
+            label="Battery"
+            value={battery.value}
+            unit={battery.unit}
+            tone={battery.tone}
+            className="items-end text-right"
+          />
+        )}
+      </div>
+
       {!compact && (
-        <>
-          {/* Glass separator */}
-          <div className="my-4 h-px bg-glass-subtle" />
-
-          {/* Bottom metrics row */}
-          <div className="flex items-center justify-between">
-            {/* Battery indicator */}
-            <div className="flex items-center gap-2">
-              {isAcPowered ? (
-                <>
-                  <svg className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  <span className="text-sm font-medium text-green-500">AC</span>
-                </>
-              ) : (
-                <>
-                  <BatteryIcon level={robot.batteryLevel ?? 0} className="h-4 w-4" />
-                  <span
-                    className={cn(
-                      'text-sm font-medium',
-                      batteryCategory === 'critical' && 'text-red-400',
-                      batteryCategory === 'low' && 'text-orange-400',
-                      batteryCategory !== 'critical' && batteryCategory !== 'low' && 'text-theme-secondary'
-                    )}
-                  >
-                    {robot.batteryLevel ?? 0}%
-                  </span>
-                </>
-              )}
-            </div>
-
-            {/* Location */}
-            <span className="card-meta">
-              {formatRobotLocation(robot.location)}
+        <div className="flex flex-col gap-1 border-t border-line-subtle pt-3 text-[13px] text-ink-tertiary">
+          <div className="flex items-center justify-between gap-3">
+            <span className="truncate">{robotPlace(robot)}</span>
+            <span className="shrink-0">
+              {robot.status === 'offline' ? `Seen ${robotLastSeen(robot)}` : robotLastSeen(robot)}
             </span>
           </div>
-
-          {/* Current Task (if any) */}
           {robot.currentTaskName && (
-            <div className="mt-3 flex items-center gap-2">
-              <span className="card-label">Task</span>
-              <span className="card-meta truncate flex-1 text-right">
-                {robot.currentTaskName}
-              </span>
-            </div>
+            <span className="truncate text-ink-secondary">Task: {robot.currentTaskName}</span>
           )}
-        </>
-      )}
-
-      {/* Compact mode: inline metrics */}
-      {compact && (
-        <div className="flex items-center gap-4 ml-auto">
-          <div className="flex items-center gap-1.5">
-            {isAcPowered ? (
-              <>
-                <svg className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                <span className="card-meta text-green-500">AC</span>
-              </>
-            ) : (
-              <>
-                <BatteryIcon level={robot.batteryLevel ?? 0} className="h-4 w-4" />
-                <span className="card-meta">{robot.batteryLevel ?? 0}%</span>
-              </>
-            )}
-          </div>
-          <span className="card-meta">{formatRobotLocation(robot.location)}</span>
         </div>
       )}
-    </Card>
+    </Panel>
   );
 }

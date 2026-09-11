@@ -1,115 +1,95 @@
 /**
  * @file AddRobotDialog.tsx
- * @description Dialog for adding a new robot via URL
+ * @description Register robot FormModal: the robot joins the fleet from its agent URL.
+ *   Exported as RegisterRobotModal (and AddRobotDialog for compatibility).
  * @feature robots
  */
 
-import { memo, useState, type FormEvent } from 'react';
-import { Modal } from '@/shared/components/ui/Modal';
-import { Button } from '@/shared/components/ui/Button';
-import { Input } from '@/shared/components/ui/Input';
-import { Spinner } from '@/shared/components/ui/Spinner';
+import { useEffect, useState } from 'react';
+import { FormField, FormModal, Input, toast } from '@/shared/components/ui';
 import { useRobotsStore } from '../store/robotsStore';
 import type { Robot } from '../types/robots.types';
 
-interface AddRobotDialogProps {
+export interface RegisterRobotModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: (robot: Robot) => void;
 }
 
-/**
- * Add robot dialog component
- */
-export const AddRobotDialog = memo(function AddRobotDialog({
-  isOpen,
-  onClose,
-  onSuccess,
-}: AddRobotDialogProps) {
-  const [url, setUrl] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+/** FormModal that registers a robot by its agent URL. */
+export function RegisterRobotModal({ isOpen, onClose, onSuccess }: RegisterRobotModalProps) {
   const registerRobot = useRobotsStore((s) => s.registerRobot);
+  const clearError = useRobotsStore((s) => s.clearError);
+  const [url, setUrl] = useState('');
+  const [urlError, setUrlError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
+  const [saving, setSaving] = useState(false);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!url.trim()) return;
+  useEffect(() => {
+    if (!isOpen) return;
+    setUrl('');
+    setUrlError(undefined);
+    setFormError(undefined);
+  }, [isOpen]);
 
-    setIsLoading(true);
-    setError(null);
-
+  const handleSubmit = async () => {
+    const value = url.trim();
+    if (!value) {
+      setUrlError('Enter the agent URL.');
+      return;
+    }
+    setSaving(true);
+    setUrlError(undefined);
+    setFormError(undefined);
     try {
-      const robot = await registerRobot(url.trim());
-      setUrl('');
+      const robot = await registerRobot(value);
+      toast.success('Robot registered', { description: robot.name });
       onSuccess?.(robot);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add robot');
+      // The modal shows the failure itself; don't leave it in the list's error state.
+      clearError();
+      const detail = err instanceof Error ? err.message : String(err);
+      const generic = !detail || /unexpected error/i.test(detail);
+      setFormError(
+        `Couldn't register the robot. Check that its agent is running at ${value}.` +
+          (generic ? '' : ` (${detail})`),
+      );
     } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleClose = () => {
-    if (!isLoading) {
-      setUrl('');
-      setError(null);
-      onClose();
+      setSaving(false);
     }
   };
 
   return (
-    <Modal
+    <FormModal
       isOpen={isOpen}
-      onClose={handleClose}
-      title="Add Robot"
+      onClose={onClose}
+      title="Register robot"
+      description="Add a robot to the fleet by pointing at its running agent."
+      submitLabel="Register robot"
+      submittingLabel="Registering…"
+      isSubmitting={saving}
+      error={formError}
+      onSubmit={handleSubmit}
+      noValidate
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label
-            htmlFor="robot-url"
-            className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
-          >
-            Robot URL
-          </label>
-          <Input
-            id="robot-url"
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="http://localhost:41243"
-            disabled={isLoading}
-            className="w-full"
-          />
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            Enter the base URL of the robot agent. The robot will self-register
-            and provide its capabilities via the A2A protocol.
-          </p>
-        </div>
-
-        {error && (
-          <div className="p-3 bg-red-50/50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg text-sm border border-red-100 dark:border-red-900/30">
-            {error}
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={handleClose}
-            disabled={isLoading}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            disabled={!url.trim() || isLoading}
-          >
-            {isLoading ? <Spinner size="sm" /> : 'Add Robot'}
-          </Button>
-        </div>
-      </form>
-    </Modal>
+      <FormField
+        label="Agent URL"
+        required
+        error={urlError}
+        hint="The base URL of the robot agent, e.g. http://localhost:41243. The robot registers itself and reports its capabilities over A2A."
+      >
+        <Input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="http://localhost:41243"
+          autoComplete="off"
+        />
+      </FormField>
+    </FormModal>
   );
-});
+}
+
+/** @deprecated Use RegisterRobotModal. */
+export const AddRobotDialog = RegisterRobotModal;

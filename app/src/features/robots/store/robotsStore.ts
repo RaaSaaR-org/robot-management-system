@@ -438,8 +438,9 @@ export const selectSelectedRobot = (state: RobotsStore) =>
  */
 function getErrorMessage(error: unknown): string {
   if (error && typeof error === 'object') {
-    // Check for API error format
-    if ('code' in error && typeof error.code === 'string') {
+    // Check for API error format. The API client stamps UNKNOWN_ERROR on every
+    // error without a server code, so that one must not hide the real message.
+    if ('code' in error && typeof error.code === 'string' && error.code !== 'UNKNOWN_ERROR') {
       const code = error.code as RobotErrorCode;
       if (code in ERROR_MESSAGES) {
         return ERROR_MESSAGES[code];
