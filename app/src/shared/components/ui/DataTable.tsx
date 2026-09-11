@@ -3,7 +3,8 @@
  * @description The list of records, identical on every page: column defs with
  *              cell renderers, alignment, width, client-side sort (aria-sort),
  *              clickable rows (Enter works), a RowActions kebab per row, and
- *              built-in loading / error / empty states. Lives inside
+ *              built-in loading / error / empty states, and an optional
+ *              server-paging footer (the kit Pager). Lives inside
  *              <Panel padding="none">; scrolls sideways inside it on narrow
  *              screens so the page never does.
  * @feature shared
@@ -15,6 +16,7 @@ import { cn } from '@/shared/utils/cn';
 import { EmptyState } from './EmptyState';
 import { ErrorState } from './ErrorState';
 import { RowActions, type RowActionItem } from './DropdownMenu';
+import { Pager, type PagerProps } from './Pager';
 import { Skeleton } from './Skeleton';
 import { focusRing, focusRingInset } from './styles';
 
@@ -48,6 +50,17 @@ export interface DataTableColumn<T> {
   className?: string;
 }
 
+/** Server paging for the table footer: the kit Pager's props. `disabled` defaults to `isLoading`. */
+export type DataTablePagination = Omit<PagerProps, 'className'>;
+
+/** Extra attributes for one row's <tr> (test ids, data-* hooks, a title). */
+export interface DataTableRowProps {
+  'data-testid'?: string;
+  title?: string;
+  'aria-label'?: string;
+  [dataAttribute: `data-${string}`]: string | number | boolean | undefined;
+}
+
 export interface DataTableProps<T> {
   columns: DataTableColumn<T>[];
   rows: T[];
@@ -79,6 +92,10 @@ export interface DataTableProps<T> {
   skeletonRows?: number;
   /** Extra classes per row */
   rowClassName?: (row: T) => string | undefined;
+  /** Extra attributes per row, e.g. `(r) => ({ 'data-testid': `route-row-${r.id}` })` */
+  rowProps?: (row: T) => DataTableRowProps;
+  /** Server paging: renders the kit Pager in the table footer ("Page 2 of 7", Previous / Next) */
+  pagination?: DataTablePagination;
   className?: string;
 }
 
@@ -174,6 +191,8 @@ export function DataTable<T>({
   onSortChange,
   skeletonRows = 5,
   rowClassName,
+  rowProps,
+  pagination,
   className,
 }: DataTableProps<T>) {
   const [internalSort, setInternalSort] = useState<DataTableSort | null>(defaultSort ?? null);
@@ -209,8 +228,23 @@ export function DataTable<T>({
 
   const showSkeleton = isLoading && rows.length === 0;
 
+  // The footer pager. It stays under an empty page too, so a page emptied by a
+  // delete can still be left. Outside the scroll area, so it never scrolls away.
+  const pager = pagination ? (
+    <Pager
+      {...pagination}
+      disabled={pagination.disabled ?? isLoading}
+      className="border-t border-line-subtle px-4 py-3"
+    />
+  ) : null;
+
   if (!showSkeleton && rows.length === 0) {
-    return <div className={className}>{empty ?? <EmptyState size="sm" title="Nothing here yet" />}</div>;
+    return (
+      <div className={className}>
+        {empty ?? <EmptyState size="sm" title="Nothing here yet" />}
+        {pager}
+      </div>
+    );
   }
 
   const cellPad = dense ? 'px-4 py-2' : 'px-4 py-3';
@@ -231,7 +265,7 @@ export function DataTable<T>({
     }
   };
 
-  return (
+  const table = (
     <div className={cn('w-full overflow-x-auto', className)}>
       <table className="w-full border-collapse text-left" aria-busy={showSkeleton || undefined}>
         {caption && <caption className="sr-only">{caption}</caption>}
@@ -304,6 +338,7 @@ export function DataTable<T>({
                 const clickable = Boolean(onRowClick);
                 return (
                   <tr
+                    {...rowProps?.(row)}
                     key={id}
                     data-row-id={id}
                     tabIndex={clickable ? 0 : undefined}
@@ -352,5 +387,13 @@ export function DataTable<T>({
         </p>
       )}
     </div>
+  );
+
+  if (!pager) return table;
+  return (
+    <>
+      {table}
+      {pager}
+    </>
   );
 }

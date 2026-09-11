@@ -96,4 +96,14 @@ export { chartColors, chartTheme, chartSeriesColor } from './chartColors';
 
 // Data
 export { DataTable } from './DataTable';
-export type { DataTableProps, DataTableColumn, DataTableSort, SortDirection, SortValue } from './DataTable';
+export type {
+  DataTableProps,
+  DataTableColumn,
+  DataTableSort,
+  DataTablePagination,
+  DataTableRowProps,
+  SortDirection,
+  SortValue,
+} from './DataTable';
+export { Pager } from './Pager';
+export type { PagerProps } from './Pager';
