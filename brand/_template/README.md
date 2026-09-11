@@ -56,8 +56,6 @@ onPrimary: '#1a0d00',
 
 - The hover shade of primary buttons is derived from `DEFAULT` (lighter for a
   light fill, darker for a dark one).
-- The legacy `cobalt-*` / `turquoise-*` utilities are aliases of these slots,
-  so older code follows your brand too.
 - The stock mint uses a deeper green in the light theme; a brand `DEFAULT` is
   used as given in both themes, so pick one that works on dark and light
   surfaces (or set `onPrimary` explicitly).
