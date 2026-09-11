@@ -6,10 +6,9 @@
  */
 
 import { useEffect, useState } from 'react';
-import { FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
+import { FormField, FormModal, Input, Select, Textarea, errorMessage, toast } from '@/shared/components/ui';
 import { useComplianceStore } from '../store';
 import type { RopaEntry, RopaEntryInput } from '../types';
-import { errorMessage } from './complianceFormat';
 
 export const LEGAL_BASIS_OPTIONS = [
   { value: 'consent', label: 'Consent (Art. 6(1)(a))' },

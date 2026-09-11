@@ -1,45 +1,30 @@
 /**
  * @file complianceFormat.ts
- * @description Shared formatting for the compliance sections: status and
- *              severity tones for StatusTag, date and relative-date strings,
- *              and humanised event-type labels.
+ * @description Shared formatting for the compliance sections: tones for the
+ *              compliance-only status words, date and relative-date strings,
+ *              and humanised event-type labels. Severities and the shared
+ *              status words (closed, in_progress, overdue …) come from the
+ *              kit's statusTone().
  * @feature compliance
  */
 
-import type { StatusToneName } from '@/shared/components/ui';
+import { statusTone, type StatusToneName } from '@/shared/components/ui';
 import type { ComplianceEventType, ComplianceSeverity } from '../types';
 
-/** Severity → tone, the mapping every compliance section uses. */
-export function severityTone(severity: string | null | undefined): StatusToneName {
-  switch (severity) {
-    case 'critical':
-    case 'high':
-    case 'error':
-      return 'danger';
-    case 'medium':
-    case 'warning':
-      return 'warning';
-    case 'low':
-    case 'info':
-      return 'info';
-    default:
-      return 'neutral';
-  }
-}
-
+/**
+ * Compliance-only vocabulary the kit does not know, plus `active`, which here
+ * is a legal hold in force (needs attention), not a healthy running thing.
+ */
 const DOMAIN_TONES: Record<string, StatusToneName> = {
   compliant: 'success',
   valid: 'success',
   current: 'success',
-  closed: 'success',
   verified: 'success',
-  in_progress: 'info',
   open: 'warning',
   at_risk: 'warning',
   due_soon: 'warning',
   expiring_soon: 'warning',
   review_needed: 'warning',
-  overdue: 'danger',
   expired: 'danger',
   update_required: 'danger',
   broken: 'danger',
@@ -52,7 +37,7 @@ const DOMAIN_TONES: Record<string, StatusToneName> = {
 /** Tone for a compliance-domain status (deadline, gap, document, inspection …). */
 export function complianceTone(status: string | null | undefined): StatusToneName {
   if (!status) return 'neutral';
-  return DOMAIN_TONES[status] ?? 'neutral';
+  return DOMAIN_TONES[status] ?? statusTone(status);
 }
 
 /** Readable label for a domain status: `not_applicable` → "Not applicable". */
@@ -116,9 +101,4 @@ export function formatRelative(iso: string | null | undefined): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
-}
-
-/** Error → message string for toasts and form errors. */
-export function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

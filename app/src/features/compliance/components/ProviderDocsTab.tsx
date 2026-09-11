@@ -8,14 +8,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ExternalLink, FileText, Plus, Search, Trash2 } from 'lucide-react';
 import {
-  Button, DataTable, EmptyState, KeyValueList, Modal, Panel, Select, StatusTag, Toolbar, confirm, toast,
-  type DataTableColumn,
+  Button, DataTable, EmptyState, KeyValueList, Modal, Panel, Select, StatusTag, Toolbar, confirm,
+  errorMessage, toast, type DataTableColumn,
 } from '@/shared/components/ui';
 import { useComplianceStore } from '../store';
 import { complianceApi } from '../api';
 import { DocumentTypeCategories, DocumentTypeLabels, type DocumentType, type ProviderDocumentation } from '../types';
 import { ProviderDocFormModal } from './ProviderDocFormModal';
-import { errorMessage, formatDate } from './complianceFormat';
+import { formatDate } from './complianceFormat';
 
 export interface ProviderDocsTabProps {
   className?: string;

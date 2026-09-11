@@ -5,9 +5,9 @@
  * @feature compliance
  */
 
-import { DataTable, StatusTag, type DataTableColumn } from '@/shared/components/ui';
+import { DataTable, StatusTag, type DataTableColumn, type DataTablePagination } from '@/shared/components/ui';
 import type { ComplianceLog } from '../types';
-import { eventTypeLabel, formatDateTime, humanize, severityTone } from './complianceFormat';
+import { eventTypeLabel, formatDateTime } from './complianceFormat';
 
 export interface ComplianceLogListProps {
   logs: ComplianceLog[];
@@ -16,6 +16,8 @@ export interface ComplianceLogListProps {
   error?: string | null;
   onRetry?: () => void;
   empty?: React.ReactNode;
+  /** Server paging, rendered in the table footer */
+  pagination?: DataTablePagination;
   className?: string;
 }
 
@@ -25,7 +27,7 @@ const COLUMNS: DataTableColumn<ComplianceLog>[] = [
     cell: (l) => <span className="whitespace-nowrap text-[13px] text-ink-tertiary">{formatDateTime(l.timestamp)}</span>,
   },
   { key: 'eventType', header: 'Event', sortable: true, hideBelow: 'sm', cell: (l) => <span className="whitespace-nowrap text-ink-secondary">{eventTypeLabel(l.eventType)}</span> },
-  { key: 'severity', header: 'Severity', sortable: true, cell: (l) => <StatusTag tone={severityTone(l.severity)}>{humanize(l.severity)}</StatusTag> },
+  { key: 'severity', header: 'Severity', sortable: true, cell: (l) => <StatusTag status={l.severity} /> },
   {
     key: 'description', header: 'Description', sortValue: (l) => l.payload.description ?? '',
     cell: (l) => (
@@ -41,7 +43,7 @@ const COLUMNS: DataTableColumn<ComplianceLog>[] = [
 ];
 
 /** Server-paginated audit log table (sorting applies to the current page). */
-export function ComplianceLogList({ logs, onSelect, isLoading, error, onRetry, empty, className }: ComplianceLogListProps) {
+export function ComplianceLogList({ logs, onSelect, isLoading, error, onRetry, empty, pagination, className }: ComplianceLogListProps) {
   return (
     <DataTable
       className={className}
@@ -55,6 +57,7 @@ export function ComplianceLogList({ logs, onSelect, isLoading, error, onRetry, e
       errorTitle="Couldn't load the audit log"
       onRetry={onRetry}
       empty={empty}
+      pagination={pagination}
       dense
     />
   );

@@ -8,11 +8,11 @@
 import { useEffect, useState } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 import {
-  Button, DataTable, FormField, FormModal, Input, Panel, StatRow, StatTile, confirm, toast, type DataTableColumn,
+  Button, DataTable, FormField, FormModal, Input, Panel, StatRow, StatTile, confirm, errorMessage, toast, type DataTableColumn,
 } from '@/shared/components/ui';
 import { useComplianceStore } from '../store';
 import type { ComplianceEventType } from '../types';
-import { EVENT_TYPE_LABELS, errorMessage } from './complianceFormat';
+import { EVENT_TYPE_LABELS } from './complianceFormat';
 
 export interface RetentionSettingsProps {
   className?: string;
