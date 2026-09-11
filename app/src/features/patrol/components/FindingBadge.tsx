@@ -8,7 +8,7 @@
  */
 
 import { memo } from 'react';
-import { StatusTag, type StatusTagTone } from '@/shared/components/ui';
+import { StatusTag, statusTone, type StatusTagTone } from '@/shared/components/ui';
 import type {
   PatrolFinding,
   PatrolFindingSeverity,
@@ -23,20 +23,10 @@ import {
   PATROL_RUN_STATUS_LABELS,
 } from '../types/patrol.types';
 
-const SEVERITY_TONE: Record<PatrolFindingSeverity, StatusTagTone> = {
-  high: 'danger',
-  medium: 'warning',
-  low: 'neutral',
-};
-
-const RUN_TONE: Record<PatrolRunStatus, StatusTagTone> = {
-  running: 'live',
-  done: 'success',
-  aborted: 'warning',
-  failed: 'danger',
-  skipped: 'neutral',
-};
-
+// Severity and run status tones come from the kit's statusTone(). Legs and the
+// finding lifecycle keep their own maps: there a pending leg is calm (neutral,
+// not amber), a running leg is in progress (info), and an acknowledged finding
+// is parked (neutral), not a success.
 const LEG_TONE: Record<PatrolLegStatus, StatusTagTone> = {
   pending: 'neutral',
   running: 'info',
@@ -73,7 +63,7 @@ export const FindingBadge = memo(function FindingBadge({ severity, type, classNa
   const label = PATROL_FINDING_SEVERITY_LABELS[severity] ?? severity;
   return (
     <StatusTag
-      tone={SEVERITY_TONE[severity] ?? 'neutral'}
+      tone={statusTone(severity)}
       className={className}
       data-severity={severity}
       data-testid="patrol-finding-badge"
@@ -91,7 +81,7 @@ export interface RunStatusChipProps {
 /** Run status tag; the running one pulses. */
 export const RunStatusChip = memo(function RunStatusChip({ status, className }: RunStatusChipProps) {
   return (
-    <StatusTag tone={RUN_TONE[status] ?? 'neutral'} dot pulse={status === 'running'} className={className} data-status={status}>
+    <StatusTag tone={statusTone(status)} dot pulse={status === 'running'} className={className} data-status={status}>
       {PATROL_RUN_STATUS_LABELS[status] ?? status}
     </StatusTag>
   );
