@@ -3,7 +3,7 @@ id: "TASK-269"
 aliases: []
 title: "Retire the legacy styles and guard the design system"
 slug: "retire-the-legacy-styles-and-guard-the-design-system"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []
