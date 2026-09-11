@@ -1,6 +1,7 @@
 /**
  * @file Spinner.tsx
- * @description Loading indicator component with size and color variants
+ * @description Small inline loading indicator. For content areas use Skeleton;
+ *              the spinner is for short inline waits (a button, a cell).
  * @feature shared
  * @dependencies shared/utils/cn
  */
@@ -12,7 +13,8 @@ import { cn } from '@/shared/utils/cn';
 // ============================================================================
 
 export type SpinnerSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
-export type SpinnerColor = 'current' | 'cobalt' | 'turquoise' | 'white';
+/** `cobalt`/`turquoise`/`white` are legacy names: they map to primary/accent/current. */
+export type SpinnerColor = 'current' | 'primary' | 'accent' | 'cobalt' | 'turquoise' | 'white';
 
 export interface SpinnerProps {
   /** Spinner size */
@@ -39,9 +41,12 @@ const sizeStyles: Record<SpinnerSize, string> = {
 
 const colorStyles: Record<SpinnerColor, string> = {
   current: 'border-current border-t-transparent',
-  cobalt: 'border-cobalt border-t-transparent',
-  turquoise: 'border-turquoise border-t-transparent',
-  white: 'border-white border-t-transparent',
+  primary: 'border-primary border-t-transparent',
+  accent: 'border-accent border-t-transparent',
+  cobalt: 'border-primary border-t-transparent',
+  turquoise: 'border-accent border-t-transparent',
+  // "white" was only ever used on coloured fills; the fill's own text colour is right there.
+  white: 'border-current border-t-transparent',
 };
 
 // ============================================================================
@@ -49,29 +54,24 @@ const colorStyles: Record<SpinnerColor, string> = {
 // ============================================================================
 
 /**
- * A loading spinner component with customizable size and color.
+ * A loading spinner.
  *
  * @example
  * ```tsx
- * <Spinner size="md" color="cobalt" />
- * <Spinner size="lg" color="turquoise" label="Loading robots..." />
+ * <Spinner size="sm" />
+ * <Spinner size="lg" color="primary" label="Loading robots…" />
  * ```
  */
-export function Spinner({
-  size = 'md',
-  color = 'current',
-  label = 'Loading...',
-  className,
-}: SpinnerProps) {
+export function Spinner({ size = 'md', color = 'current', label = 'Loading...', className }: SpinnerProps) {
   return (
     <div
       role="status"
       aria-label={label}
       className={cn(
-        'inline-block animate-spin rounded-full',
+        'inline-block shrink-0 rounded-full motion-safe:animate-spin',
         sizeStyles[size],
         colorStyles[color],
-        className
+        className,
       )}
     >
       <span className="sr-only">{label}</span>

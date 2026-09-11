@@ -6,10 +6,7 @@
  */
 
 import { cn } from '@/shared/utils/cn';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { focusRing } from './styles';
 
 export interface MenuButtonProps {
   /** Whether the menu is currently open */
@@ -22,28 +19,16 @@ export interface MenuButtonProps {
   label?: string;
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
-
 /**
- * Animated hamburger menu button that transforms into an X when open.
+ * Hamburger button that turns into an X when open.
  *
  * @example
  * ```tsx
- * <MenuButton
- *   isOpen={menuOpen}
- *   onClick={() => setMenuOpen(!menuOpen)}
- *   label="Toggle menu"
- * />
+ * <MenuButton isOpen={menuOpen} onClick={() => setMenuOpen(!menuOpen)} label="Toggle menu" />
  * ```
  */
-export function MenuButton({
-  isOpen,
-  onClick,
-  className,
-  label = 'Toggle navigation menu',
-}: MenuButtonProps) {
+export function MenuButton({ isOpen, onClick, className, label = 'Toggle navigation menu' }: MenuButtonProps) {
+  const line = 'h-0.5 w-full rounded-full bg-current transition-all duration-200 ease-[var(--ease-instrument)]';
   return (
     <button
       type="button"
@@ -51,35 +36,16 @@ export function MenuButton({
       aria-label={label}
       aria-expanded={isOpen}
       className={cn(
-        'relative flex h-10 w-10 items-center justify-center rounded-lg',
-        'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover',
-        'transition-colors duration-200',
-        'focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:ring-offset-2',
-        className
+        'relative flex h-10 w-10 items-center justify-center rounded-control',
+        'text-ink-secondary transition-colors duration-150 hover:bg-raised hover:text-ink-primary',
+        focusRing,
+        className,
       )}
     >
       <div className="flex h-4 w-5 flex-col justify-between">
-        {/* Top line */}
-        <span
-          className={cn(
-            'h-0.5 w-full bg-current rounded-full transition-all duration-300',
-            isOpen && 'translate-y-1.5 rotate-45'
-          )}
-        />
-        {/* Middle line */}
-        <span
-          className={cn(
-            'h-0.5 w-full bg-current rounded-full transition-all duration-300',
-            isOpen && 'opacity-0 scale-x-0'
-          )}
-        />
-        {/* Bottom line */}
-        <span
-          className={cn(
-            'h-0.5 w-full bg-current rounded-full transition-all duration-300',
-            isOpen && '-translate-y-1.5 -rotate-45'
-          )}
-        />
+        <span className={cn(line, isOpen && 'translate-y-1.5 rotate-45')} />
+        <span className={cn(line, isOpen && 'scale-x-0 opacity-0')} />
+        <span className={cn(line, isOpen && '-translate-y-1.5 -rotate-45')} />
       </div>
     </button>
   );

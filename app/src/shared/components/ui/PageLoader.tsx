@@ -8,10 +8,6 @@
 import { Spinner } from './Spinner';
 import { cn } from '@/shared/utils/cn';
 
-// ============================================================================
-// TYPES
-// ============================================================================
-
 export interface PageLoaderProps {
   /** Custom message to display */
   message?: string;
@@ -19,33 +15,19 @@ export interface PageLoaderProps {
   className?: string;
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
-
 /**
- * Full-page loading indicator used as Suspense fallback for lazy-loaded routes.
+ * Suspense fallback for lazy routes.
  *
  * @example
  * ```tsx
- * <Suspense fallback={<PageLoader />}>
- *   <LazyRoute />
- * </Suspense>
+ * <Suspense fallback={<PageLoader />}><LazyRoute /></Suspense>
  * ```
  */
 export function PageLoader({ message, className }: PageLoaderProps) {
   return (
-    <div
-      className={cn(
-        'flex min-h-[50vh] flex-col items-center justify-center gap-4',
-        'bg-theme-primary',
-        className
-      )}
-    >
-      <Spinner size="lg" color="cobalt" label={message || 'Loading page...'} />
-      {message && (
-        <p className="text-sm text-theme-tertiary animate-pulse">{message}</p>
-      )}
+    <div className={cn('flex min-h-[50vh] flex-col items-center justify-center gap-4', className)}>
+      <Spinner size="lg" color="primary" label={message || 'Loading page...'} />
+      {message && <p className="text-sm text-ink-tertiary">{message}</p>}
     </div>
   );
 }
