@@ -58,6 +58,7 @@ The design contract (tokens, type, page anatomy, CRUD pattern, kit, shell, testi
 | [[TASK-266]] | Deployments, models, fleet learning, marketplace, updates |
 | [[TASK-267]] | Compliance and its tabs (audit, oversight, approvals, explainability, GDPR) |
 | [[TASK-268]] | Auth, account, settings, organizations, team, A2A chat, automations, docs, 404 |
+| [[TASK-271]] | Close the kit gaps the page groups found: pager, status map, error text, toasts, test ids |
 | [[TASK-269]] | Retire the legacy styles and guard the new ones in the gate |
 
 TASK-262 to TASK-268 depend only on TASK-261 and run in parallel. TASK-269 lands last.
