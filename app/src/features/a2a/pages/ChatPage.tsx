@@ -1,140 +1,62 @@
 /**
  * @file ChatPage.tsx
- * @description Main A2A chat interface with conversation management
+ * @description Agent chat: talk to one robot agent directly, or let the orchestrator route
  * @feature a2a
  */
 
-import { memo, useState, useCallback } from 'react';
-import { MessageSquare } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Bot, List, MessageSquare, Plus } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { cn } from '@/shared/utils';
-import { Button } from '@/shared/components/ui/Button';
-import { Spinner } from '@/shared/components/ui/Spinner';
-import { ConversationPanel } from '../components/ConversationPanel';
-import { ConversationSelector } from '../components/ConversationSelector';
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  LinkButton,
+  Modal,
+  PageHeader,
+  Panel,
+  SegmentedControl,
+  Select,
+  Spinner,
+  StatusTag,
+  confirm,
+  toast,
+} from '@/shared/components/ui';
+import { getErrorMessage } from '@/shared/utils/error';
+import { A2ATabs } from '../components/A2ATabs';
 import { ConversationList } from '../components/ConversationList';
-import { AgentSelector } from '../components/AgentSelector';
-import { ModeSwitcher } from '../components/ModeSwitcher';
-import { RegisterAgentDialog } from '../components/RegisterAgentDialog';
-import { A2ALayout } from '../components/A2ALayout';
+import { ConversationPanel } from '../components/ConversationPanel';
 import { useA2A } from '../hooks/useA2A';
 import { useA2AStream } from '../hooks/useA2AStream';
-import { useIsMobile } from '@/shared/hooks/useMediaQuery';
-import type { A2AAgentCard } from '../types';
+import type { A2AChatMode, A2AConversation } from '../types';
 
-// ============================================================================
-// ICONS
-// ============================================================================
-
-function MenuIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-    </svg>
-  );
-}
-
-function CloseIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-    </svg>
-  );
-}
-
-// ============================================================================
-// MOBILE CONVERSATION DRAWER
-// ============================================================================
-
-interface ConversationDrawerProps {
-  isOpen: boolean;
-  onClose: () => void;
-  conversations: ReturnType<typeof useA2A>['conversations'];
-  currentId: string | null;
-  onSelect: (id: string | null) => void;
-  onDelete: (id: string) => Promise<void>;
-  onNew: () => void;
-}
-
-const ConversationDrawer = memo(function ConversationDrawer({
-  isOpen,
-  onClose,
-  conversations,
-  currentId,
-  onSelect,
-  onDelete,
-  onNew,
-}: ConversationDrawerProps) {
-  if (!isOpen) return null;
-
-  return (
-    <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/30 z-40 animate-in fade-in duration-200"
-        onClick={onClose}
-      />
-      {/* Drawer */}
-      <div className="fixed inset-y-0 left-0 w-[85vw] max-w-xs z-50 glass-elevated animate-in slide-in-from-left duration-200">
-        <div className="flex items-center justify-between p-4 border-b border-glass-subtle">
-          <h2 className="font-semibold text-theme-primary">Conversations</h2>
-          <button
-            onClick={onClose}
-            aria-label="Close conversations"
-            className="p-2 rounded-brand hover:bg-theme-hover transition-colors"
-          >
-            <CloseIcon className="w-5 h-5 text-theme-tertiary" />
-          </button>
-        </div>
-        <div className="overflow-y-auto h-[calc(100%-65px)]">
-          <ConversationList
-            conversations={conversations}
-            selectedId={currentId}
-            onSelect={(id) => {
-              onSelect(id);
-              onClose();
-            }}
-            onDelete={onDelete}
-            onNew={onNew}
-          />
-        </div>
-      </div>
-    </>
-  );
-});
-
-// ============================================================================
-// CHAT PAGE
-// ============================================================================
+const icon = 'h-4 w-4';
 
 /**
- * Main A2A chat page - demo guard + inner component to respect Rules of Hooks
+ * Agent chat page — demo guard + inner component (Rules of Hooks).
  */
-export const ChatPage = memo(function ChatPage() {
+export function ChatPage() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
       <DemoFeaturePlaceholder
-        featureName="A2A Robot Chat"
-        icon={<MessageSquare className="w-12 h-12" />}
-        description="Real-time A2A communication with your robot fleet using natural language commands and structured agent protocols."
+        featureName="Agent chat"
+        icon={<MessageSquare className="h-12 w-12" />}
+        description="Talk to a robot agent directly over A2A, or let the orchestrator pick the right one."
         capabilities={[
-          'Send natural language commands to any robot',
-          'Monitor robot responses and status updates in real-time',
-          'Create automated task sequences via agent dialogue',
-          'Integrate with external AI agents via A2A protocol',
+          'Send natural-language commands to any registered robot agent',
+          'Follow replies and task status as they stream in',
+          'Let the orchestrator route a request to the best agent',
+          'Answer forms an agent asks you to fill in',
         ]}
         docsSlug="architecture"
       />
     );
   }
+  return <ChatWorkspace />;
+}
 
-  return <ChatPageInner />;
-});
-
-/**
- * Inner chat page component with hooks - only rendered when not in demo mode
- */
-const ChatPageInner = memo(function ChatPageInner() {
+function ChatWorkspace() {
   const {
     conversations,
     currentConversation,
@@ -146,142 +68,182 @@ const ChatPageInner = memo(function ChatPageInner() {
     createConversation,
     selectConversation,
     deleteConversation,
-    registerAgent,
     clearError,
+    refresh,
     setChatMode,
   } = useA2A();
-
-  // WebSocket connection
   const { isConnected } = useA2AStream();
+  const [params, setParams] = useSearchParams();
+  const [agentName, setAgentName] = useState<string>(() => params.get('agent') ?? '');
+  const [listOpen, setListOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
 
-  const isMobile = useIsMobile();
+  // "Start chat" from an agent lands here with ?agent=; switch to direct mode once.
+  useEffect(() => {
+    const fromUrl = params.get('agent');
+    if (!fromUrl) return;
+    setAgentName(fromUrl);
+    setChatMode('direct');
+    setParams((p) => { p.delete('agent'); return p; }, { replace: true });
+  }, [params, setParams, setChatMode]);
 
-  // UI state
-  const [showRegisterDialog, setShowRegisterDialog] = useState(false);
-  const [selectedAgent, setSelectedAgent] = useState<A2AAgentCard | undefined>();
-  const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
+  // Default to the first agent when none is chosen yet.
+  useEffect(() => {
+    if (!agentName && registeredAgents.length > 0) setAgentName(registeredAgents[0].name);
+  }, [agentName, registeredAgents]);
 
-  const handleNewConversation = useCallback(async () => {
+  const selectedAgent = useMemo(() => registeredAgents.find((a) => a.name === agentName), [registeredAgents, agentName]);
+
+  const newConversation = useCallback(async () => {
+    setCreating(true);
     try {
-      await createConversation(undefined, `Chat ${conversations.length + 1}`);
-    } catch {
-      // Error handled by store
+      const c = await createConversation(undefined, `Chat ${conversations.length + 1}`);
+      toast.success('Conversation created', { description: c.name });
+      setListOpen(false);
+    } catch (err) {
+      toast.error("Couldn't create conversation", { description: getErrorMessage(err) });
+    } finally {
+      setCreating(false);
     }
   }, [createConversation, conversations.length]);
 
-  const handleRegisterAgent = useCallback(
-    async (url: string) => {
-      await registerAgent(url);
+  const askDelete = useCallback(
+    async (c: A2AConversation) => {
+      const ok = await confirm({
+        title: `Delete ${c.name || 'this conversation'}?`,
+        description: 'Its messages are removed. Tasks the agents already ran are kept.',
+        tone: 'danger',
+      });
+      if (!ok) return;
+      try {
+        await deleteConversation(c.conversationId);
+        toast.success('Conversation deleted', { description: c.name });
+      } catch (err) {
+        clearError();
+        toast.error("Couldn't delete conversation", { description: getErrorMessage(err) });
+      }
     },
-    [registerAgent]
+    [deleteConversation, clearError],
   );
 
-  const handleSelectAgent = useCallback((agent: A2AAgentCard) => {
-    setSelectedAgent(agent);
-  }, []);
+  const list = (
+    <ConversationList
+      className="h-full"
+      conversations={conversations}
+      selectedId={currentConversation?.conversationId ?? null}
+      onSelect={(id) => {
+        selectConversation(id);
+        setListOpen(false);
+      }}
+      onDelete={(c) => void askDelete(c)}
+      onNew={() => void newConversation()}
+    />
+  );
 
-  return (
-    <A2ALayout>
-      <div className="flex flex-col h-full overflow-hidden">
-        {/* Header — flex-wrap so the mode toolbar drops to its own row instead
-            of clipping mid-word on narrow (390px) screens */}
-        <header className="flex-shrink-0 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 min-h-14 px-4 py-2 border-b border-glass-subtle glass-elevated">
-          {/* Left: Menu (mobile) + Conversation selector */}
-          <div className="flex items-center gap-2">
-            {isMobile && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConversationDrawerOpen(true)}
-                aria-label="Open conversations"
-                className="p-2"
-              >
-                <MenuIcon className="w-5 h-5" />
-              </Button>
-            )}
+  const newButton = (
+    <Button leftIcon={<Plus className={icon} strokeWidth={1.75} />} onClick={() => void newConversation()} isLoading={creating}>
+      New conversation
+    </Button>
+  );
 
-            <ConversationSelector
-              conversations={conversations}
-              current={currentConversation}
-              onSelect={selectConversation}
-              onNew={handleNewConversation}
-            />
-          </div>
-
-          {/* Center: Mode switcher + Agent selector (direct mode) */}
-          <div className="flex items-center gap-3">
-            <ModeSwitcher mode={chatMode} onChange={setChatMode} />
-            {chatMode === 'direct' && (
-              <AgentSelector
-                agents={registeredAgents}
-                selected={selectedAgent}
-                onSelect={handleSelectAgent}
-                onRegister={() => setShowRegisterDialog(true)}
-              />
-            )}
-          </div>
-
-          {/* Right: Connection status */}
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 glass-subtle px-2.5 py-1 rounded-full">
-              <span
-                className={cn(
-                  'w-2 h-2 rounded-full transition-colors',
-                  isConnected ? 'bg-accent-500' : 'bg-gray-400'
-                )}
-              />
-              <span className="text-xs text-theme-secondary hidden sm:inline">
-                {isConnected ? 'Connected' : 'Disconnected'}
-              </span>
-            </div>
-          </div>
-        </header>
-
-        {/* Error banner */}
-        {error && (
-          <div className="px-4 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 flex items-center justify-between text-sm">
-            <span>{error}</span>
-            <Button variant="ghost" size="sm" onClick={clearError}>
-              Dismiss
-            </Button>
-          </div>
-        )}
-
-        {/* Chat Area */}
-        <div className="flex-1 overflow-hidden">
-          {isLoading && !currentConversation ? (
-            <div className="flex items-center justify-center h-full">
-              <Spinner size="lg" />
-            </div>
-          ) : (
-            <ConversationPanel
-              conversationId={currentConversation?.conversationId || null}
-              targetAgent={chatMode === 'direct' ? selectedAgent : undefined}
-              chatMode={chatMode}
-              onNewConversation={handleNewConversation}
-              activeTasks={activeTasks}
-            />
-          )}
-        </div>
-
-        {/* Mobile Conversation Drawer */}
-        <ConversationDrawer
-          isOpen={conversationDrawerOpen}
-          onClose={() => setConversationDrawerOpen(false)}
-          conversations={conversations}
-          currentId={currentConversation?.conversationId || null}
-          onSelect={selectConversation}
-          onDelete={deleteConversation}
-          onNew={handleNewConversation}
-        />
-
-        {/* Register agent dialog */}
-        <RegisterAgentDialog
-          isOpen={showRegisterDialog}
-          onClose={() => setShowRegisterDialog(false)}
-          onRegister={handleRegisterAgent}
+  let chatBody;
+  if (isLoading && !currentConversation && conversations.length === 0) {
+    chatBody = (
+      <div className="flex h-full items-center justify-center gap-2 text-sm text-ink-tertiary">
+        <Spinner size="sm" color="current" /> Loading conversations…
+      </div>
+    );
+  } else if (error && conversations.length === 0) {
+    chatBody = (
+      <div className="flex h-full items-center justify-center p-6">
+        <ErrorState size="sm" title="Couldn't load the chat" message={error} onRetry={() => { clearError(); void refresh(); }} />
+      </div>
+    );
+  } else if (chatMode === 'direct' && registeredAgents.length === 0) {
+    chatBody = (
+      <div className="flex h-full items-center justify-center p-6">
+        <EmptyState
+          icon={<Bot />}
+          title="No agents registered"
+          description="Register a robot agent first, or switch to Orchestrate."
+          action={<LinkButton to="/a2a/agents" variant="secondary">Go to agents</LinkButton>}
         />
       </div>
-    </A2ALayout>
+    );
+  } else {
+    chatBody = (
+      <ConversationPanel
+        conversationId={currentConversation?.conversationId ?? null}
+        targetAgent={chatMode === 'direct' ? selectedAgent : undefined}
+        chatMode={chatMode}
+        onNewConversation={() => void newConversation()}
+        activeTasks={activeTasks}
+      />
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Operate"
+        title="Agent chat"
+        description="Talk to a robot agent directly, or let the orchestrator pick one."
+        meta={isConnected ? <StatusTag status="connected" dot /> : <StatusTag status="offline" dot />}
+        actions={newButton}
+      />
+      <A2ATabs />
+
+      <div className="grid min-h-[520px] grid-cols-1 gap-4 lg:h-[calc(100vh-18rem)] lg:grid-cols-[280px_1fr]">
+        <Panel padding="none" className="hidden min-h-0 flex-col lg:flex">
+          <div className="border-b border-line-subtle px-4 py-3 text-sm font-semibold text-ink-primary">Conversations</div>
+          <div className="min-h-0 flex-1">{list}</div>
+        </Panel>
+
+        <Panel padding="none" className="flex h-[70vh] min-h-[520px] flex-col lg:h-auto">
+          <div className="flex flex-wrap items-center gap-2 border-b border-line-subtle px-3 py-2.5">
+            <Button
+              variant="secondary"
+              size="sm"
+              className="lg:hidden"
+              leftIcon={<List className={icon} strokeWidth={1.75} />}
+              onClick={() => setListOpen(true)}
+            >
+              Conversations
+            </Button>
+            <div className="min-w-0 truncate text-sm font-medium text-ink-primary max-lg:hidden">
+              {currentConversation?.name ?? 'No conversation open'}
+            </div>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <SegmentedControl<A2AChatMode>
+                label="Mode"
+                size="sm"
+                options={[
+                  { value: 'direct', label: 'Direct', title: 'Talk to one agent' },
+                  { value: 'orchestration', label: 'Orchestrate', title: 'The orchestrator picks the agent' },
+                ]}
+                value={chatMode}
+                onChange={setChatMode}
+              />
+              {chatMode === 'direct' && registeredAgents.length > 0 && (
+                <Select
+                  aria-label="Agent"
+                  size="sm"
+                  fullWidth={false}
+                  className="w-48 sm:w-56"
+                  options={registeredAgents.map((a) => ({ value: a.name, label: a.name }))}
+                  value={agentName}
+                  onChange={(e) => setAgentName(e.target.value)}
+                />
+              )}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1">{chatBody}</div>
+        </Panel>
+      </div>
+
+      <Modal isOpen={listOpen} onClose={() => setListOpen(false)} title="Conversations" size="md" bodyClassName="p-0">
+        <div className="h-[60vh]">{list}</div>
+      </Modal>
+    </div>
   );
-});
+}

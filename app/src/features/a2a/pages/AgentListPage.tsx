@@ -1,233 +1,186 @@
 /**
  * @file AgentListPage.tsx
- * @description Agent list page showing all registered A2A agents
+ * @description Agents: the A2A agents this server knows, register and unregister them
  * @feature a2a
  */
 
-import { memo, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { cn } from '@/shared/utils';
-import { Button } from '@/shared/components/ui/Button';
-import { Badge } from '@/shared/components/ui/Badge';
-import { Card } from '@/shared/components/ui/Card';
-import { PageHeader } from '@/shared/components/ui/PageHeader';
+import { Bot, ExternalLink, MessageSquare, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  Panel,
+  SearchInput,
+  SkeletonRows,
+  Toolbar,
+  confirm,
+  toast,
+} from '@/shared/components/ui';
+import { getErrorMessage } from '@/shared/utils/error';
+import { A2ATabs } from '../components/A2ATabs';
+import { AgentCard } from '../components/AgentCard';
 import { RegisterAgentDialog } from '../components/RegisterAgentDialog';
-import { A2ALayout } from '../components/A2ALayout';
-import { useA2A } from '../hooks/useA2A';
+import { useA2AStore } from '../store';
 import type { A2AAgentCard } from '../types';
 
-// ============================================================================
-// ICONS
-// ============================================================================
-
-function PlusIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-    </svg>
-  );
-}
-
-function RobotIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"
-      />
-    </svg>
-  );
-}
-
-function ChevronRightIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-    </svg>
-  );
-}
-
-// ============================================================================
-// AGENT CARD COMPONENT
-// ============================================================================
-
-interface AgentGridCardProps {
-  agent: A2AAgentCard;
-  onClick: () => void;
-}
-
-const AgentGridCard = memo(function AgentGridCard({ agent, onClick }: AgentGridCardProps) {
-  const capabilities = agent.capabilities || {};
-  const skillCount = agent.skills?.length || 0;
-
-  return (
-    <Card
-      variant="glass"
-      className={cn(
-        'group cursor-pointer transition-all duration-200',
-        'hover:shadow-lg hover:scale-[1.02]',
-        'active:scale-[0.98]'
-      )}
-      onClick={onClick}
-    >
-      <div className="p-4">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="flex-shrink-0 w-10 h-10 rounded-brand bg-cobalt-100 dark:bg-cobalt-900/30 flex items-center justify-center">
-              <RobotIcon className="w-5 h-5 text-cobalt-600 dark:text-cobalt-400" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="font-semibold text-theme-primary truncate">
-                {agent.name}
-              </h3>
-              {agent.provider?.organization && (
-                <p className="text-xs text-theme-tertiary truncate">
-                  {agent.provider.organization}
-                </p>
-              )}
-            </div>
-          </div>
-          <ChevronRightIcon className="w-5 h-5 text-theme-muted group-hover:text-theme-secondary flex-shrink-0 transition-colors" />
-        </div>
-
-        {/* Description */}
-        <p className="text-sm text-theme-secondary line-clamp-2 mb-3 min-h-[2.5rem]">
-          {agent.description}
-        </p>
-
-        {/* Capabilities & Skills */}
-        <div className="flex flex-wrap gap-1.5">
-          {capabilities.streaming && (
-            <Badge variant="info" size="sm">Streaming</Badge>
-          )}
-          {capabilities.pushNotifications && (
-            <Badge variant="info" size="sm">Push</Badge>
-          )}
-          {capabilities.stateTransitionHistory && (
-            <Badge variant="info" size="sm">History</Badge>
-          )}
-          {skillCount > 0 && (
-            <Badge variant="default" size="sm">
-              {skillCount} {skillCount === 1 ? 'skill' : 'skills'}
-            </Badge>
-          )}
-        </div>
-
-        {/* Version */}
-        {agent.version && (
-          <p className="text-xs text-theme-muted mt-3">v{agent.version}</p>
-        )}
-      </div>
-    </Card>
-  );
-});
-
-// ============================================================================
-// EMPTY STATE
-// ============================================================================
-
-const EmptyState = memo(function EmptyState({ onRegister }: { onRegister: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-20 px-4">
-      <div className="glass-subtle rounded-full p-6 mb-4">
-        <RobotIcon className="h-10 w-10 text-theme-muted" />
-      </div>
-      <h3 className="text-lg font-semibold text-theme-primary mb-2">
-        No agents registered
-      </h3>
-      <p className="text-theme-tertiary text-center max-w-sm mb-6">
-        Register an A2A agent to start communicating. Agents can be hosted locally or remotely.
-      </p>
-      <Button variant="primary" onClick={onRegister} className="gap-2">
-        <PlusIcon className="w-4 h-4" />
-        Register Agent
-      </Button>
-    </div>
-  );
-});
-
-// ============================================================================
-// AGENT LIST PAGE
-// ============================================================================
+const icon = 'h-4 w-4';
 
 /**
- * Agent list page - shows all registered agents in a grid
+ * Card grid of registered agents (recipe 1, visual-entity variant).
  */
-export const AgentListPage = memo(function AgentListPage() {
-  const { registeredAgents, registerAgent } = useA2A();
+export function AgentListPage() {
   const navigate = useNavigate();
-  const [showRegisterDialog, setShowRegisterDialog] = useState(false);
+  const agents = useA2AStore((s) => s.registeredAgents);
+  const fetchAgents = useA2AStore((s) => s.fetchAgents);
+  const registerAgent = useA2AStore((s) => s.registerAgent);
+  const unregisterAgent = useA2AStore((s) => s.unregisterAgent);
 
-  const handleAgentClick = useCallback(
-    (agent: A2AAgentCard) => {
-      // Use URL-encoded name for the route
-      navigate(`/a2a/agents/${encodeURIComponent(agent.name)}`);
-    },
-    [navigate]
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>(agents.length ? 'ready' : 'loading');
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState('');
+  const [registerOpen, setRegisterOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    useA2AStore.setState({ error: null });
+    await fetchAgents();
+    const err = useA2AStore.getState().error;
+    setLoadError(err);
+    setStatus(err ? 'error' : 'ready');
+  }, [fetchAgents]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const refresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return agents;
+    return agents.filter((a) => a.name.toLowerCase().includes(q) || a.description?.toLowerCase().includes(q));
+  }, [agents, query]);
+
+  const open = (a: A2AAgentCard) => navigate(`/a2a/agents/${encodeURIComponent(a.name)}`);
+
+  const askUnregister = async (a: A2AAgentCard) => {
+    const ok = await confirm({
+      title: `Unregister ${a.name}?`,
+      description: 'The server stops routing tasks to it. The robot itself keeps running.',
+      confirmLabel: 'Unregister',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await unregisterAgent(a.name);
+      toast.success('Agent unregistered', { description: a.name });
+    } catch (err) {
+      toast.error("Couldn't unregister agent", { description: getErrorMessage(err) });
+    }
+  };
+
+  const registerButton = (
+    <Button leftIcon={<Plus className={icon} strokeWidth={1.75} />} onClick={() => setRegisterOpen(true)}>
+      Register agent
+    </Button>
   );
 
-  const handleRegisterAgent = useCallback(
-    async (url: string) => {
-      await registerAgent(url);
-    },
-    [registerAgent]
-  );
+  let body;
+  if (status === 'loading' && agents.length === 0) {
+    body = (
+      <Panel>
+        <SkeletonRows rows={3} columns={3} />
+      </Panel>
+    );
+  } else if (status === 'error' && agents.length === 0) {
+    body = (
+      <Panel>
+        <ErrorState title="Couldn't load agents" message={loadError ?? undefined} onRetry={() => void load()} />
+      </Panel>
+    );
+  } else if (agents.length === 0) {
+    body = (
+      <Panel>
+        <EmptyState
+          icon={<Bot />}
+          title="No agents registered"
+          description="Register a robot agent by its URL to chat with it and hand it tasks."
+          action={registerButton}
+        />
+      </Panel>
+    );
+  } else if (filtered.length === 0) {
+    body = (
+      <Panel>
+        <EmptyState
+          icon={<Search />}
+          title="No agents match"
+          description="Try another name, or clear the search."
+          action={<Button variant="secondary" onClick={() => setQuery('')}>Clear filters</Button>}
+        />
+      </Panel>
+    );
+  } else {
+    body = (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {filtered.map((a) => (
+          <AgentCard
+            key={a.name}
+            agent={a}
+            onOpen={() => open(a)}
+            actions={[
+              { label: 'Open', icon: <ExternalLink />, onSelect: () => open(a) },
+              {
+                label: 'Start chat',
+                icon: <MessageSquare />,
+                onSelect: () => navigate(`/a2a?agent=${encodeURIComponent(a.name)}`),
+              },
+              {
+                label: 'Unregister',
+                icon: <Trash2 />,
+                tone: 'danger',
+                separatorBefore: true,
+                onSelect: () => void askUnregister(a),
+              },
+            ]}
+          />
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <A2ALayout>
-      <div className="flex flex-col h-full overflow-hidden">
-        {/* Header */}
-        <div className="flex-shrink-0 px-4 md:px-6 py-4 border-b border-glass-subtle">
-          <PageHeader
-            title="Agents"
-            meta={
-              <Badge variant="default" size="sm">
-                {registeredAgents.length}
-              </Badge>
-            }
-            actions={
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => setShowRegisterDialog(true)}
-                className="gap-1.5"
-              >
-                <PlusIcon className="w-4 h-4" />
-                <span className="hidden sm:inline">Register Agent</span>
-                <span className="sm:hidden">Add</span>
-              </Button>
-            }
-          />
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto">
-          {registeredAgents.length === 0 ? (
-            <EmptyState onRegister={() => setShowRegisterDialog(true)} />
-          ) : (
-            <div className="p-4 md:p-6">
-              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-                {registeredAgents.map((agent) => (
-                  <AgentGridCard
-                    key={agent.name}
-                    agent={agent}
-                    onClick={() => handleAgentClick(agent)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Register Dialog */}
-        <RegisterAgentDialog
-          isOpen={showRegisterDialog}
-          onClose={() => setShowRegisterDialog(false)}
-          onRegister={handleRegisterAgent}
-        />
-      </div>
-    </A2ALayout>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Operate"
+        title="Agents"
+        description="Robot agents this server can talk to over A2A."
+        actions={registerButton}
+      />
+      <A2ATabs />
+      <Toolbar
+        search={<SearchInput value={query} onChange={setQuery} placeholder="Search agents" />}
+        actions={
+          <Button
+            variant="ghost"
+            iconOnly
+            aria-label="Refresh agents"
+            onClick={() => void refresh()}
+            disabled={refreshing}
+          >
+            <RefreshCw className={refreshing ? `${icon} animate-spin` : icon} strokeWidth={1.75} />
+          </Button>
+        }
+      />
+      {body}
+      <RegisterAgentDialog isOpen={registerOpen} onClose={() => setRegisterOpen(false)} onRegister={registerAgent} />
+    </div>
   );
-});
+}

@@ -1,111 +1,96 @@
 /**
  * @file RegisterAgentDialog.tsx
- * @description Dialog for registering a new A2A agent
+ * @description FormModal for registering a new A2A agent by its URL
  * @feature a2a
  */
 
-import { memo, useState, type FormEvent } from 'react';
-import { Modal } from '@/shared/components/ui/Modal';
-import { Button } from '@/shared/components/ui/Button';
-import { Input } from '@/shared/components/ui/Input';
-import { Spinner } from '@/shared/components/ui/Spinner';
+import { useEffect, useState } from 'react';
+import { FormField, FormModal, Input, toast } from '@/shared/components/ui';
+import { getErrorMessage } from '@/shared/utils/error';
 
 interface RegisterAgentDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onRegister: (url: string) => Promise<void>;
+  onRegister: (url: string) => Promise<unknown>;
 }
 
 /**
- * Register agent dialog component
+ * Register agent dialog: one URL field, field-level validation, form-level server error.
  */
-export const RegisterAgentDialog = memo(function RegisterAgentDialog({
-  isOpen,
-  onClose,
-  onRegister,
-}: RegisterAgentDialogProps) {
+export function RegisterAgentDialog({ isOpen, onClose, onRegister }: RegisterAgentDialogProps) {
   const [url, setUrl] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [urlError, setUrlError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
+  const [saving, setSaving] = useState(false);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!url.trim()) return;
+  useEffect(() => {
+    if (!isOpen) return;
+    setUrl('');
+    setUrlError(undefined);
+    setFormError(undefined);
+  }, [isOpen]);
 
-    setIsLoading(true);
-    setError(null);
-
+  const handleSubmit = async () => {
+    const value = url.trim();
+    if (!value) {
+      setUrlError('Enter the agent URL.');
+      return;
+    }
+    if (!/^https?:\/\/\S+$/i.test(value)) {
+      setUrlError('Use a full URL, starting with http:// or https://.');
+      return;
+    }
+    setSaving(true);
+    setFormError(undefined);
     try {
-      await onRegister(url.trim());
-      setUrl('');
+      const result = await onRegister(value);
+      const name =
+        result && typeof result === 'object' && 'name' in result ? String(result.name) : value;
+      toast.success('Agent registered', { description: name });
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to register agent');
+      const message = getErrorMessage(err, '');
+      setFormError(
+        message && message !== 'Error'
+          ? message
+          : "Couldn't reach an A2A agent at this URL. Check that the agent is running and the address is right.",
+      );
     } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleClose = () => {
-    if (!isLoading) {
-      setUrl('');
-      setError(null);
-      onClose();
+      setSaving(false);
     }
   };
 
   return (
-    <Modal
+    <FormModal
       isOpen={isOpen}
-      onClose={handleClose}
-      title="Register A2A Agent"
+      onClose={onClose}
+      title="Register agent"
+      description="Add a robot agent the server can talk to over A2A."
+      submitLabel="Register agent"
+      submittingLabel="Registering…"
+      isSubmitting={saving}
+      error={formError}
+      onSubmit={handleSubmit}
+      noValidate
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label
-            htmlFor="agent-url"
-            className="block text-sm font-medium text-theme-secondary mb-1"
-          >
-            Agent URL
-          </label>
-          <Input
-            id="agent-url"
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://example.com"
-            disabled={isLoading}
-            className="w-full"
-          />
-          <p className="text-xs text-theme-tertiary mt-1">
-            Enter the base URL of the A2A agent. The agent card will be fetched from
-            /.well-known/a2a/agent_card.json
-          </p>
-        </div>
-
-        {error && (
-          <div className="p-3 bg-red-50/50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg text-sm border border-red-100 dark:border-red-900/30">
-            {error}
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={handleClose}
-            disabled={isLoading}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            disabled={!url.trim() || isLoading}
-          >
-            {isLoading ? <Spinner size="sm" /> : 'Register'}
-          </Button>
-        </div>
-      </form>
-    </Modal>
+      <FormField
+        label="Agent URL"
+        required
+        error={urlError}
+        hint="The server reads the agent card from /.well-known/agent.json at this address."
+      >
+        <Input
+          type="url"
+          value={url}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            if (urlError) setUrlError(undefined);
+          }}
+          placeholder="http://localhost:41243"
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </FormField>
+    </FormModal>
   );
-});
+}

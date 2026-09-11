@@ -1,255 +1,194 @@
 /**
  * @file TaskListPage.tsx
- * @description Task list page with filters for A2A tasks
+ * @description Agent tasks: work handed to agents over A2A, filterable, with a detail modal
  * @feature a2a
  */
 
-import { memo, useState, useMemo } from 'react';
-import { cn } from '@/shared/utils';
-import { Button } from '@/shared/components/ui/Button';
-import { Badge } from '@/shared/components/ui/Badge';
-import { PageHeader } from '@/shared/components/ui/PageHeader';
-import { TaskStatusCard } from '../components/TaskStatusCard';
-import { A2ALayout } from '../components/A2ALayout';
-import { useA2A } from '../hooks/useA2A';
-import { getEffectiveTaskState } from '../types';
-import type { A2ATaskState } from '../types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ClipboardList, MessageSquare, RefreshCw, Search } from 'lucide-react';
+import {
+  Button,
+  DataTable,
+  EmptyState,
+  LinkButton,
+  PageHeader,
+  Panel,
+  SearchInput,
+  SegmentedControl,
+  Toolbar,
+  type DataTableColumn,
+} from '@/shared/components/ui';
+import { formatTimeAgo } from '@/shared/utils';
+import { A2ATabs } from '../components/A2ATabs';
+import { TaskDetailModal } from '../components/TaskDetailModal';
+import { TaskStatusBadge } from '../components/TaskStatusBadge';
+import { useA2AStore } from '../store';
+import { getEffectiveTaskState, getMessageText } from '../types';
+import type { A2ATask, A2ATaskState } from '../types';
 
 type TaskFilter = 'all' | 'active' | 'completed' | 'failed';
 
-// ============================================================================
-// ICONS
-// ============================================================================
+const FILTER_STATES: Record<Exclude<TaskFilter, 'all'>, A2ATaskState[]> = {
+  active: ['submitted', 'working', 'input_required'],
+  completed: ['completed'],
+  failed: ['failed', 'canceled'],
+};
 
-function ClipboardIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
-      />
-    </svg>
-  );
+function taskText(t: A2ATask): string {
+  const first = t.history?.find((m) => m.role === 'user');
+  const msg = first ?? t.status.message;
+  return msg ? getMessageText(msg).replace(/\s+/g, ' ').trim() : '';
 }
 
-function RefreshIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-      />
-    </svg>
-  );
+function taskAgent(t: A2ATask): string {
+  const agentMsg = t.history?.find((m) => m.role === 'agent') ?? t.status.message;
+  const name = (agentMsg?.metadata as Record<string, unknown> | undefined)?.agentName;
+  return typeof name === 'string' ? name : '';
 }
 
-// ============================================================================
-// FILTER BAR
-// ============================================================================
-
-interface FilterBarProps {
-  current: TaskFilter;
-  onChange: (filter: TaskFilter) => void;
-  counts: Record<TaskFilter, number>;
+function taskUpdated(t: A2ATask): string | undefined {
+  return t.status.timestamp ?? t.updatedAt ?? t.createdAt;
 }
 
-const FilterBar = memo(function FilterBar({ current, onChange, counts }: FilterBarProps) {
-  const filters: { id: TaskFilter; label: string }[] = [
-    { id: 'all', label: 'All' },
-    { id: 'active', label: 'Active' },
-    { id: 'completed', label: 'Completed' },
-    { id: 'failed', label: 'Failed' },
-  ];
-
-  return (
-    <div className="flex gap-1 p-1 glass-subtle rounded-brand w-fit">
-      {filters.map((filter) => (
-        <button
-          key={filter.id}
-          onClick={() => onChange(filter.id)}
-          className={cn(
-            'px-3 py-1.5 text-sm font-medium rounded-brand transition-colors flex items-center gap-1.5',
-            current === filter.id
-              ? 'bg-cobalt-500/10 border border-cobalt-500/30 text-cobalt-500 dark:text-cobalt-300'
-              : 'border border-transparent text-theme-secondary hover:text-theme-primary'
-          )}
-        >
-          {filter.label}
-          {counts[filter.id] > 0 && (
-            <span
-              className={cn(
-                'min-w-[1.25rem] h-5 px-1.5 rounded-full text-xs flex items-center justify-center',
-                current === filter.id
-                  ? 'bg-cobalt-100 dark:bg-cobalt-900/50 text-cobalt-700 dark:text-cobalt-300'
-                  : 'bg-gray-200 dark:bg-gray-700 text-theme-secondary'
-              )}
-            >
-              {counts[filter.id]}
-            </span>
-          )}
-        </button>
-      ))}
-    </div>
-  );
-});
-
-// ============================================================================
-// EMPTY STATE
-// ============================================================================
-
-const EmptyState = memo(function EmptyState({ filter }: { filter: TaskFilter }) {
-  const messages: Record<TaskFilter, { title: string; description: string }> = {
-    all: {
-      title: 'No tasks yet',
-      description: 'Tasks will appear here when you interact with agents.',
-    },
-    active: {
-      title: 'No active tasks',
-      description: 'All tasks are either completed or failed.',
-    },
-    completed: {
-      title: 'No completed tasks',
-      description: 'Tasks that complete successfully will appear here.',
-    },
-    failed: {
-      title: 'No failed tasks',
-      description: 'Tasks that fail will appear here.',
-    },
-  };
-
-  const { title, description } = messages[filter];
-
-  return (
-    <div className="flex flex-col items-center justify-center py-20 px-4">
-      <div className="glass-subtle rounded-full p-6 mb-4">
-        <ClipboardIcon className="h-10 w-10 text-theme-muted" />
+const columns: DataTableColumn<A2ATask>[] = [
+  {
+    key: 'task',
+    header: 'Task',
+    cell: (t) => (
+      <div className="flex min-w-0 items-baseline gap-2">
+        <code className="shrink-0 font-mono text-xs text-ink-tertiary">{t.id.slice(0, 8)}</code>
+        <span className="block max-w-[26rem] truncate text-ink-primary">{taskText(t) || 'No message'}</span>
       </div>
-      <h3 className="text-lg font-semibold text-theme-primary mb-2">
-        {title}
-      </h3>
-      <p className="text-theme-tertiary text-center max-w-sm">
-        {description}
-      </p>
-    </div>
-  );
-});
-
-// ============================================================================
-// TASK LIST PAGE
-// ============================================================================
-
-const ACTIVE_STATES: A2ATaskState[] = ['submitted', 'working', 'input_required'];
-const COMPLETED_STATES: A2ATaskState[] = ['completed'];
-const FAILED_STATES: A2ATaskState[] = ['failed', 'canceled'];
+    ),
+  },
+  { key: 'agent', header: 'Agent', hideBelow: 'md', sortable: true, sortValue: taskAgent, cell: (t) => taskAgent(t) || null },
+  {
+    key: 'state',
+    header: 'State',
+    sortable: true,
+    sortValue: (t) => getEffectiveTaskState(t),
+    cell: (t) => <TaskStatusBadge state={getEffectiveTaskState(t)} />,
+  },
+  {
+    key: 'updated',
+    header: 'Updated',
+    align: 'right',
+    sortable: true,
+    hideBelow: 'sm',
+    sortValue: (t) => new Date(taskUpdated(t) ?? 0),
+    cell: (t) => {
+      const u = taskUpdated(t);
+      return u ? <span className="whitespace-nowrap text-ink-tertiary">{formatTimeAgo(u)}</span> : null;
+    },
+  },
+];
 
 /**
- * Task list page - shows all tasks with filtering
+ * Task list (recipe 1). Tasks are created from chat, so there is no primary here.
  */
-export const TaskListPage = memo(function TaskListPage() {
-  const { tasks, refresh } = useA2A();
+export function TaskListPage() {
+  const tasks = useA2AStore((s) => s.tasks);
+  const fetchTasks = useA2AStore((s) => s.fetchTasks);
+  const fetchAgents = useA2AStore((s) => s.fetchAgents);
+  const [loading, setLoading] = useState(tasks.length === 0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<TaskFilter>('all');
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selected, setSelected] = useState<A2ATask | null>(null);
 
-  // Compute filtered tasks — getEffectiveTaskState downgrades "completed" rows
-  // carrying error-shaped results to failed, so the Failed filter matches them
-  const filteredTasks = useMemo(() => {
-    switch (filter) {
-      case 'active':
-        return tasks.filter((t) => ACTIVE_STATES.includes(getEffectiveTaskState(t)));
-      case 'completed':
-        return tasks.filter((t) => COMPLETED_STATES.includes(getEffectiveTaskState(t)));
-      case 'failed':
-        return tasks.filter((t) => FAILED_STATES.includes(getEffectiveTaskState(t)));
-      default:
-        return tasks;
-    }
-  }, [tasks, filter]);
+  const load = useCallback(async () => {
+    setLoading(true);
+    useA2AStore.setState({ error: null });
+    await fetchTasks();
+    setLoadError(useA2AStore.getState().error);
+    setLoading(false);
+  }, [fetchTasks]);
 
-  // Compute counts for filter badges
-  const counts = useMemo(
-    () => ({
-      all: tasks.length,
-      active: tasks.filter((t) => ACTIVE_STATES.includes(getEffectiveTaskState(t))).length,
-      completed: tasks.filter((t) => COMPLETED_STATES.includes(getEffectiveTaskState(t))).length,
-      failed: tasks.filter((t) => FAILED_STATES.includes(getEffectiveTaskState(t))).length,
-    }),
-    [tasks]
-  );
+  useEffect(() => {
+    void load();
+    void fetchAgents();
+  }, [load, fetchAgents]);
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    try {
-      await refresh();
-    } finally {
-      setIsRefreshing(false);
-    }
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return tasks.filter((t) => {
+      if (filter !== 'all' && !FILTER_STATES[filter].includes(getEffectiveTaskState(t))) return false;
+      if (!q) return true;
+      return [t.id, taskText(t), taskAgent(t)].some((s) => s.toLowerCase().includes(q));
+    });
+  }, [tasks, query, filter]);
+
+  const hasFilters = Boolean(query) || filter !== 'all';
+  const clear = () => {
+    setQuery('');
+    setFilter('all');
   };
 
-  // Sort tasks by most recent first
-  const sortedTasks = useMemo(
-    () =>
-      [...filteredTasks].sort((a, b) => {
-        const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime();
-        const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime();
-        return dateB - dateA;
-      }),
-    [filteredTasks]
-  );
-
   return (
-    <A2ALayout>
-      <div className="flex flex-col h-full overflow-hidden">
-        {/* Header */}
-        <div className="flex-shrink-0 px-4 md:px-6 py-4 border-b border-glass-subtle">
-          <PageHeader
-            title="Tasks"
-            meta={
-              <Badge variant="default" size="sm">
-                {tasks.length}
-              </Badge>
-            }
-            actions={
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-                aria-label="Refresh tasks"
-                className="gap-1.5"
-              >
-                <RefreshIcon
-                  className={cn('w-4 h-4', isRefreshing && 'animate-spin')}
-                />
-                <span className="hidden sm:inline">Refresh</span>
-              </Button>
-            }
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Operate"
+        title="Agent tasks"
+        description="Work handed to agents over A2A, newest first."
+        actions={
+          <Button variant="ghost" leftIcon={<RefreshCw className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void load()} disabled={loading}>
+            Refresh
+          </Button>
+        }
+      />
+      <A2ATabs />
+      <Toolbar
+        search={<SearchInput value={query} onChange={setQuery} placeholder="Search tasks" />}
+        filters={
+          <SegmentedControl<TaskFilter>
+            label="State"
+            options={[
+              { value: 'all', label: 'All' },
+              { value: 'active', label: 'Active' },
+              { value: 'completed', label: 'Completed' },
+              { value: 'failed', label: 'Failed' },
+            ]}
+            value={filter}
+            onChange={setFilter}
           />
-        </div>
-
-        {/* Filter Bar */}
-        <div className="flex-shrink-0 px-4 md:px-6 py-3 border-b border-glass-subtle overflow-x-auto">
-          <FilterBar current={filter} onChange={setFilter} counts={counts} />
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto">
-          {sortedTasks.length === 0 ? (
-            <EmptyState filter={filter} />
-          ) : (
-            <div className="p-4 md:p-6 space-y-3 max-w-3xl mx-auto">
-              {sortedTasks.map((task) => (
-                <TaskStatusCard key={task.id} task={task} />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </A2ALayout>
+        }
+      />
+      <Panel padding="none">
+        <DataTable
+          caption="Agent tasks"
+          columns={columns}
+          rows={filtered}
+          getRowId={(t) => t.id}
+          defaultSort={{ key: 'updated', direction: 'desc' }}
+          onRowClick={setSelected}
+          isLoading={loading}
+          error={tasks.length === 0 ? loadError : null}
+          errorTitle="Couldn't load tasks"
+          onRetry={() => void load()}
+          empty={
+            hasFilters ? (
+              <EmptyState
+                icon={<Search />}
+                title="No tasks match"
+                description="Try another search or state, or clear the filters."
+                action={<Button variant="secondary" onClick={clear}>Clear filters</Button>}
+              />
+            ) : (
+              <EmptyState
+                icon={<ClipboardList />}
+                title="No agent tasks yet"
+                description="A task appears here when you send an agent a message in chat."
+                action={
+                  <LinkButton to="/a2a" variant="secondary" leftIcon={<MessageSquare className="h-4 w-4" strokeWidth={1.75} />}>
+                    Open chat
+                  </LinkButton>
+                }
+              />
+            )
+          }
+        />
+      </Panel>
+      <TaskDetailModal task={selected} onClose={() => setSelected(null)} />
+    </div>
   );
-});
+}

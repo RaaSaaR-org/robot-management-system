@@ -39,18 +39,18 @@ export { useA2AStream, useA2AHeartbeat } from './hooks/useA2AStream';
 
 // Components
 export {
+  A2ATabs,
   MessageBubble,
   ConversationPanel,
   ConversationList,
-  TaskStatusCard,
   TaskStatusBadge,
+  TaskDetailModal,
   AgentCard,
-  AgentListItem,
-  AgentList,
   RegisterAgentDialog,
   FormRenderer,
   CompletedFormCard,
   EventList,
+  EventDetailModal,
 } from './components';
 
 // Pages
