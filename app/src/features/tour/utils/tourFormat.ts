@@ -129,17 +129,17 @@ export interface ChipStyle {
 }
 
 /**
- * `declined` is turquoise-neutral, not amber: the visitor said no to the offer,
+ * `declined` is neutral, not a warning: the visitor said no to the offer,
  * which is a normal end of a greeting and must not read as something to fix.
  */
 const RUN_STATUS_STYLES: Record<TourRunStatus, ChipStyle> = {
-  running: { label: TOUR_RUN_STATUS_LABELS.running, className: 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300', pulse: true },
-  done: { label: TOUR_RUN_STATUS_LABELS.done, className: 'bg-turquoise-500/15 text-turquoise-700 dark:text-turquoise-400' },
-  declined: { label: TOUR_RUN_STATUS_LABELS.declined, className: 'glass-subtle text-theme-secondary' },
-  abandoned: { label: TOUR_RUN_STATUS_LABELS.abandoned, className: 'glass-subtle text-theme-muted' },
-  aborted: { label: TOUR_RUN_STATUS_LABELS.aborted, className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
-  failed: { label: TOUR_RUN_STATUS_LABELS.failed, className: 'bg-red-500/15 text-red-600 dark:text-red-400' },
-  skipped: { label: TOUR_RUN_STATUS_LABELS.skipped, className: 'glass-subtle text-theme-muted' },
+  running: { label: TOUR_RUN_STATUS_LABELS.running, className: 'bg-primary/10 text-primary', pulse: true },
+  done: { label: TOUR_RUN_STATUS_LABELS.done, className: 'bg-signal-measured/15 text-signal-measured' },
+  declined: { label: TOUR_RUN_STATUS_LABELS.declined, className: 'bg-inset text-ink-secondary' },
+  abandoned: { label: TOUR_RUN_STATUS_LABELS.abandoned, className: 'bg-inset text-ink-muted' },
+  aborted: { label: TOUR_RUN_STATUS_LABELS.aborted, className: 'bg-signal-unknown/15 text-signal-unknown' },
+  failed: { label: TOUR_RUN_STATUS_LABELS.failed, className: 'bg-signal-stopped/15 text-signal-stopped' },
+  skipped: { label: TOUR_RUN_STATUS_LABELS.skipped, className: 'bg-inset text-ink-muted' },
 };
 
 /** Pill styling for a tour run status. */
@@ -148,11 +148,11 @@ export function runStatusStyle(status: TourRunStatus): ChipStyle {
 }
 
 const LEG_STATUS_STYLES: Record<TourLegStatus, ChipStyle> = {
-  pending: { label: 'Pending', className: 'glass-subtle text-theme-tertiary' },
-  running: { label: 'Running', className: 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300', pulse: true },
-  done: { label: 'Done', className: 'bg-turquoise-500/15 text-turquoise-700 dark:text-turquoise-400' },
-  failed: { label: 'Failed', className: 'bg-red-500/15 text-red-600 dark:text-red-400' },
-  skipped: { label: 'Skipped', className: 'glass-subtle text-theme-muted' },
+  pending: { label: 'Pending', className: 'bg-inset text-ink-tertiary' },
+  running: { label: 'Running', className: 'bg-primary/10 text-primary', pulse: true },
+  done: { label: 'Done', className: 'bg-signal-measured/15 text-signal-measured' },
+  failed: { label: 'Failed', className: 'bg-signal-stopped/15 text-signal-stopped' },
+  skipped: { label: 'Skipped', className: 'bg-inset text-ink-muted' },
 };
 
 /** Pill styling for a stop's leg status. */
@@ -167,10 +167,10 @@ export function legStatusStyle(status: TourLegStatus): ChipStyle {
  * to say anything at all.
  */
 const TURN_ANSWER_STYLES: Record<TourTurnAnswer, ChipStyle> = {
-  grounded: { label: TOUR_TURN_ANSWER_LABELS.grounded, className: 'bg-turquoise-500/15 text-turquoise-700 dark:text-turquoise-400' },
-  from_camera: { label: TOUR_TURN_ANSWER_LABELS.from_camera, className: 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300' },
-  declined: { label: TOUR_TURN_ANSWER_LABELS.declined, className: 'bg-amber-500/15 text-amber-700 dark:text-amber-400' },
-  unanswered: { label: TOUR_TURN_ANSWER_LABELS.unanswered, className: 'bg-red-500/15 text-red-600 dark:text-red-400' },
+  grounded: { label: TOUR_TURN_ANSWER_LABELS.grounded, className: 'bg-signal-measured/15 text-signal-measured' },
+  from_camera: { label: TOUR_TURN_ANSWER_LABELS.from_camera, className: 'bg-primary/10 text-primary' },
+  declined: { label: TOUR_TURN_ANSWER_LABELS.declined, className: 'bg-signal-unknown/15 text-signal-unknown' },
+  unanswered: { label: TOUR_TURN_ANSWER_LABELS.unanswered, className: 'bg-signal-stopped/15 text-signal-stopped' },
 };
 
 /** Pill styling for how a visitor's question was answered. */

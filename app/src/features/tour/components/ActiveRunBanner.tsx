@@ -1,26 +1,17 @@
 /**
  * @file ActiveRunBanner.tsx
- * @description The /tour page's live rail: one glowing card per running tour
- *              (fed by `agent:tour:*` events) with the stops as a numbered
- *              stepper, the headline of the stop the robot is standing at, an
- *              elapsed clock, the question count and an End tour button.
- *              Renders nothing when no tour is running.
+ * @description The tours in progress above the tabs on /tour: one highlighted
+ *              panel per running visit (fed by `agent:tour:*` events) with the
+ *              stops as a stepper, the current stop, an elapsed clock and "End
+ *              tour". Renders nothing when no tour is running. Mirrors patrol.
  * @feature tour
  */
 
 import { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { cn } from '@/shared/utils/cn';
-import { Button } from '@/shared/components/ui/Button';
-import {
-  PATROL_FADE_IN,
-  PATROL_GLOW_LIVE,
-  PATROL_LIVE_BORDER,
-  PATROL_MICRO,
-  PATROL_MONO,
-  RoutePath,
-  StatusDot,
-} from '@/features/patrol/components/patrolUi';
+import { Square } from 'lucide-react';
+import { Button, Panel } from '@/shared/components/ui';
+import { RoutePath, RunStatusTag, formatElapsed } from '@/features/patrol/components/opsUi';
 import type { TourRun } from '../types/tour.types';
 import { currentLeg, currentStopText, runProgressText } from '../utils/tourFormat';
 
@@ -29,18 +20,6 @@ export interface ActiveRunBannerProps {
   robotNames: Record<string, string>;
   onAbort: (run: TourRun) => void;
   className?: string;
-}
-
-/** `mm:ss` (or `h:mm:ss` past an hour) since `iso`; never negative. */
-function formatElapsed(iso: string, now: number): string {
-  const started = Date.parse(iso);
-  const total = Number.isFinite(started) ? Math.max(0, Math.floor((now - started) / 1000)) : 0;
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const mm = String(m).padStart(2, '0');
-  const ss = String(s).padStart(2, '0');
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
 /** Ticks once a second while mounted (only mounted while a tour is running). */
@@ -66,50 +45,36 @@ const ActiveRunCard = memo(function ActiveRunCard({
 }) {
   const current = currentLeg(run);
   // Shared with the Agent Mode rail's tour chip — see `currentStopText`.
-  const stopText = currentStopText(
-    current ? { index: current.index + 1, name: current.name || current.placeId } : null
-  );
+  const stopText = currentStopText(current ? { index: current.index + 1, name: current.name || current.placeId } : null);
   const legs = run.legs.map((l) => ({ index: l.index, label: l.name || l.placeId, status: l.status }));
   return (
-    <div
-      className={cn(
-        'glass-elevated rounded-brand-lg px-4 py-3 grid gap-3 sm:grid-cols-[auto_1fr_auto] items-center min-w-0',
-        PATROL_LIVE_BORDER,
-        PATROL_GLOW_LIVE,
-        PATROL_FADE_IN
-      )}
-    >
-      <div className="flex items-center gap-2 shrink-0">
-        <StatusDot tone="primary" pulse />
-        <span className={cn(PATROL_MICRO, 'text-cobalt-700 dark:text-cobalt-300')}>With a visitor</span>
+    <Panel variant="highlight" padding="sm" className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <RunStatusTag status="running" />
+            <Link to={`/tour/runs/${encodeURIComponent(run.runId)}`} className="min-w-0 truncate text-sm font-semibold text-ink-primary hover:text-primary">
+              {run.routeName || run.routeId}
+            </Link>
+          </div>
+          {/* The stop's headline, not its index: it is what the operator can match against what the robot is saying. */}
+          <span className="text-[13px] text-ink-secondary" data-testid="tour-banner-stop">
+            {robotNames[run.robotId] ?? run.robotId}
+            {stopText ? ` · ${stopText}` : ' · walking'} · {runProgressText(run)}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          {/* Ticks every second — kept out of the live region so it is not announced 60× a minute. */}
+          <span className="text-sm tabular-nums text-ink-primary" title="Elapsed" aria-hidden="true">
+            {formatElapsed(run.startedAt, now)}
+          </span>
+          <Button variant="secondary" size="sm" leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />} data-testid="tour-abort" onClick={() => onAbort(run)}>
+            End tour
+          </Button>
+        </div>
       </div>
-
-      <div className="flex flex-col gap-1.5 min-w-0">
-        <Link
-          to={`/tour/runs/${encodeURIComponent(run.runId)}`}
-          className="font-display font-semibold text-theme-primary hover:text-cobalt-500 truncate transition-colors duration-200"
-        >
-          {run.routeName || run.routeId}
-        </Link>
-        {legs.length > 0 && <RoutePath size="sm" legs={legs} activeIndex={current?.index} className="max-w-md" />}
-        {/* The stop's headline, not its index: it is the thing the operator can
-            match against what the robot is saying out loud right now. */}
-        <span className="text-xs text-theme-secondary truncate" data-testid="tour-banner-stop">
-          {robotNames[run.robotId] ?? run.robotId}
-          {stopText ? ` · ${stopText}` : ' · walking'} · {runProgressText(run)}
-        </span>
-      </div>
-
-      <div className="flex items-center gap-3 sm:justify-end min-w-0">
-        {/* Ticks every second — kept out of the live region so it is not announced 60× a minute. */}
-        <span className={cn(PATROL_MONO, 'text-sm text-theme-primary')} title="Elapsed" aria-hidden="true">
-          {formatElapsed(run.startedAt, now)}
-        </span>
-        <Button size="sm" variant="destructive" className="flex-1 sm:flex-none min-h-9" data-testid="tour-abort" onClick={() => onAbort(run)}>
-          End tour
-        </Button>
-      </div>
-    </div>
+      {legs.length > 0 && <RoutePath size="md" legs={legs} activeIndex={current?.index} className="max-w-3xl" />}
+    </Panel>
   );
 });
 
@@ -117,7 +82,7 @@ const ActiveRunCard = memo(function ActiveRunCard({
 const ActiveRunRail = memo(function ActiveRunRail({ runs, robotNames, onAbort, className }: ActiveRunBannerProps) {
   const now = useClock();
   return (
-    <div className={cn('flex flex-col gap-2 min-w-0', className)} data-testid="tour-active-banner" role="status" aria-live="polite">
+    <div className={className ?? 'flex flex-col gap-3'} data-testid="tour-active-banner" role="status" aria-live="polite">
       {runs.map((run) => (
         <ActiveRunCard key={run.runId} run={run} robotNames={robotNames} onAbort={onAbort} now={now} />
       ))}
