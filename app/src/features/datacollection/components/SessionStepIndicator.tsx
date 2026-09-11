@@ -52,7 +52,7 @@ export function SessionStepIndicator({ session }: SessionStepIndicatorProps) {
                     isDone
                       ? 'bg-green-500/20 text-green-400'
                       : isActive
-                        ? 'bg-cobalt-500 text-white'
+                        ? 'bg-primary text-on-primary'
                         : 'bg-glass-subtle text-theme-muted'
                   }`}
                 >

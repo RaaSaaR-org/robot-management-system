@@ -308,7 +308,7 @@ export const PointCloudViewer = memo(function PointCloudViewer({
           className={`absolute top-2 right-2 text-[10px] font-semibold px-2 py-1 rounded uppercase tracking-wide ${
             frame.source === 'sim'
               ? 'bg-surface-900/80 text-theme-tertiary'
-              : 'bg-cobalt-500 text-white'
+              : 'bg-primary text-on-primary'
           }`}
           title={frame.sourceLabel ?? frame.source}
         >

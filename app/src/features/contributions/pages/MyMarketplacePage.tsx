@@ -88,7 +88,7 @@ export function MyMarketplacePage() {
           onClick={() => setTab('purchases')}
           className={cn(
             'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-            tab === 'purchases' ? 'bg-cobalt-500 text-white' : 'text-theme-secondary hover:text-theme-primary'
+            tab === 'purchases' ? 'bg-primary text-on-primary' : 'text-theme-secondary hover:text-theme-primary'
           )}
         >
           <ShoppingBag size={14} />
@@ -100,7 +100,7 @@ export function MyMarketplacePage() {
           onClick={() => setTab('listings')}
           className={cn(
             'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-            tab === 'listings' ? 'bg-cobalt-500 text-white' : 'text-theme-secondary hover:text-theme-primary'
+            tab === 'listings' ? 'bg-primary text-on-primary' : 'text-theme-secondary hover:text-theme-primary'
           )}
         >
           <Package size={14} />
@@ -196,7 +196,7 @@ export function MyMarketplacePage() {
             <button
               type="button"
               onClick={() => setShowPublishDialog(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-brand bg-cobalt-500 text-white text-sm font-medium hover:bg-cobalt-600 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 rounded-brand bg-primary text-on-primary text-sm font-medium hover:bg-primary-hover transition-colors"
             >
               <Plus size={14} />
               List a Skill or Dataset

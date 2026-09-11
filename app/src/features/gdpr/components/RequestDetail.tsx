@@ -160,7 +160,7 @@ export function RequestDetail({
           <button
             onClick={onDownload}
             disabled={isLoading}
-            className="px-4 py-2 bg-cobalt text-white rounded-lg hover:bg-cobalt-dark disabled:opacity-50"
+            className="px-4 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary-hover disabled:opacity-50"
           >
             Download Export
           </button>

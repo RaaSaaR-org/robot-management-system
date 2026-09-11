@@ -226,7 +226,7 @@ export function ContributionWizard({
                     isComplete
                       ? 'bg-green-500 text-white'
                       : isActive
-                      ? 'bg-primary-500 text-white'
+                      ? 'bg-primary text-on-primary'
                       : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
                   )}
                 >
@@ -484,7 +484,7 @@ export function ContributionWizard({
           <button
             onClick={handleNext}
             disabled={loading}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary-hover disabled:opacity-50"
           >
             {loading ? (
               <Loader2 size={18} className="animate-spin" />

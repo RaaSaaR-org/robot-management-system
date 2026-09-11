@@ -170,7 +170,7 @@ export function AlertFilters({ filters, onFiltersChange, className }: AlertFilte
                 className={cn(
                   'px-3 py-1.5 text-sm font-medium rounded-md border transition-colors',
                   isActive
-                    ? 'bg-primary-500 text-white border-primary-500'
+                    ? 'bg-primary text-on-primary border-primary-500'
                     : 'bg-theme-elevated text-theme-secondary border-theme-border hover:bg-theme-surface'
                 )}
                 aria-pressed={isActive}
@@ -191,7 +191,7 @@ export function AlertFilters({ filters, onFiltersChange, className }: AlertFilte
             className={cn(
               'px-3 py-1.5 text-sm font-medium rounded-md border transition-colors',
               filters.acknowledged === undefined
-                ? 'bg-primary-500 text-white border-primary-500'
+                ? 'bg-primary text-on-primary border-primary-500'
                 : 'bg-theme-elevated text-theme-secondary border-theme-border hover:bg-theme-surface'
             )}
             aria-pressed={filters.acknowledged === undefined}
@@ -203,7 +203,7 @@ export function AlertFilters({ filters, onFiltersChange, className }: AlertFilte
             className={cn(
               'px-3 py-1.5 text-sm font-medium rounded-md border transition-colors',
               filters.acknowledged === false
-                ? 'bg-primary-500 text-white border-primary-500'
+                ? 'bg-primary text-on-primary border-primary-500'
                 : 'bg-theme-elevated text-theme-secondary border-theme-border hover:bg-theme-surface'
             )}
             aria-pressed={filters.acknowledged === false}
@@ -215,7 +215,7 @@ export function AlertFilters({ filters, onFiltersChange, className }: AlertFilte
             className={cn(
               'px-3 py-1.5 text-sm font-medium rounded-md border transition-colors',
               filters.acknowledged === true
-                ? 'bg-primary-500 text-white border-primary-500'
+                ? 'bg-primary text-on-primary border-primary-500'
                 : 'bg-theme-elevated text-theme-secondary border-theme-border hover:bg-theme-surface'
             )}
             aria-pressed={filters.acknowledged === true}

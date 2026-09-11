@@ -45,8 +45,8 @@ export function MarketplaceLicenseTierSelector({
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center gap-2">
                 {isSelected ? (
-                  <div className="w-4 h-4 rounded-full bg-cobalt-500 flex items-center justify-center">
-                    <Check size={10} className="text-white" />
+                  <div className="w-4 h-4 rounded-full bg-primary flex items-center justify-center">
+                    <Check size={10} className="text-on-primary" />
                   </div>
                 ) : (
                   <div className="w-4 h-4 rounded-full border border-theme-strong" />

@@ -241,7 +241,7 @@ export function GapAnalysisPanel({ className }: GapAnalysisPanelProps) {
           className={cn(
             'px-3 py-1 text-sm rounded-lg transition-colors',
             !gapFilters.severity
-              ? 'bg-primary-500 text-white'
+              ? 'bg-primary text-on-primary'
               : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
           )}
         >

@@ -117,7 +117,7 @@ export function MarketplaceListingCard({ listing, onClick }: MarketplaceListingC
           <span className="text-sm font-bold text-theme-primary">{formatCredits(listing.lowestPriceCredits)}</span>{' '}
           <span className="text-xs text-theme-tertiary">credits</span>
         </div>
-        <span className="px-3 py-1.5 rounded-brand bg-cobalt-500 text-white text-xs font-medium hover:bg-cobalt-600 transition-colors">
+        <span className="px-3 py-1.5 rounded-brand bg-primary text-on-primary text-xs font-medium hover:bg-primary-hover transition-colors">
           View
         </span>
       </div>

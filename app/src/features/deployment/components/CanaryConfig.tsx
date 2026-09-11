@@ -184,7 +184,7 @@ export function CanaryConfig({
                   index < currentStepIndex
                     ? 'bg-green-500 text-white'
                     : index === currentStepIndex
-                      ? 'bg-cobalt-500 text-white'
+                      ? 'bg-primary text-on-primary'
                       : 'bg-gray-200 dark:bg-gray-700 text-theme-secondary'
                 )}
               >

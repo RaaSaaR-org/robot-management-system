@@ -93,7 +93,7 @@ export function RoundDetailPage() {
           <p className="text-theme-secondary mb-4">{error}</p>
           <button
             onClick={handleBack}
-            className="px-4 py-2 bg-cobalt text-white rounded-brand hover:bg-cobalt-600"
+            className="px-4 py-2 bg-primary text-on-primary rounded-brand hover:bg-primary-hover"
           >
             Back to Fleet Learning
           </button>

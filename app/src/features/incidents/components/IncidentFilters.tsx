@@ -54,7 +54,7 @@ function FilterChip({ label, isActive, onClick }: FilterChipProps) {
       className={cn(
         'px-3 py-1.5 text-xs font-medium rounded-full transition-colors',
         isActive
-          ? 'bg-cobalt text-white'
+          ? 'bg-primary text-on-primary'
           : 'bg-theme-base text-theme-secondary hover:bg-theme-elevated hover:text-theme-primary'
       )}
     >
@@ -148,7 +148,7 @@ export function IncidentFilters({
           </svg>
           Filters
           {hasFilters && (
-            <span className="ml-1 px-1.5 py-0.5 text-xs bg-cobalt text-white rounded-full">
+            <span className="ml-1 px-1.5 py-0.5 text-xs bg-primary text-on-primary rounded-full">
               {(filters.type?.length ?? 0) + (filters.severity?.length ?? 0) + (filters.status?.length ?? 0)}
             </span>
           )}

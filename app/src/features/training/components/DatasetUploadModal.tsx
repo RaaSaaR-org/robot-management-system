@@ -358,7 +358,7 @@ export function DatasetUploadModal({
                 className={cn(
                   'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
                   step === s
-                    ? 'bg-cobalt-500 text-white'
+                    ? 'bg-primary text-on-primary'
                     : i < ['metadata', 'upload', 'validating', 'complete'].indexOf(step)
                       ? 'bg-green-500 text-white'
                       : 'bg-theme-secondary/20 text-theme-secondary'

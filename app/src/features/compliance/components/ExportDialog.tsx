@@ -160,7 +160,7 @@ export function ExportDialog({ isOpen, onClose }: ExportDialogProps) {
                   type="button"
                   className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
                     options.eventTypes?.includes(eventType)
-                      ? 'bg-primary-500 text-white'
+                      ? 'bg-primary text-on-primary'
                       : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
                   }`}
                   onClick={() => handleEventTypeToggle(eventType)}

@@ -183,7 +183,7 @@ export function RobotList({
                   className={cn(
                     'px-3 py-1.5 text-sm rounded-lg transition-all duration-200 whitespace-nowrap',
                     (status === 'all' && !currentStatus) || currentStatus === status
-                      ? 'bg-cobalt-500 text-white shadow-sm'
+                      ? 'bg-primary text-on-primary shadow-sm'
                       : 'text-theme-secondary hover:text-theme-primary hover:bg-white/5'
                   )}
                 >
@@ -199,7 +199,7 @@ export function RobotList({
                 className={cn(
                   'p-2 rounded-md transition-all duration-200',
                   viewMode === 'grid'
-                    ? 'bg-cobalt-500 text-white shadow-sm'
+                    ? 'bg-primary text-on-primary shadow-sm'
                     : 'text-theme-tertiary hover:text-theme-primary'
                 )}
                 aria-label="Grid view"
@@ -218,7 +218,7 @@ export function RobotList({
                 className={cn(
                   'p-2 rounded-md transition-all duration-200',
                   viewMode === 'list'
-                    ? 'bg-cobalt-500 text-white shadow-sm'
+                    ? 'bg-primary text-on-primary shadow-sm'
                     : 'text-theme-tertiary hover:text-theme-primary'
                 )}
                 aria-label="List view"

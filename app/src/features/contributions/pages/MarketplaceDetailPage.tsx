@@ -299,7 +299,7 @@ export function MarketplaceDetailPage() {
                   className={cn(
                     'w-full mt-4 py-2.5 rounded-brand text-sm font-medium transition-colors flex items-center justify-center gap-2',
                     canPurchase
-                      ? 'bg-cobalt-500 text-white hover:bg-cobalt-600'
+                      ? 'bg-primary text-on-primary hover:bg-primary-hover'
                       : 'bg-theme-elevated text-theme-muted cursor-not-allowed'
                   )}
                 >
@@ -485,7 +485,7 @@ function ReviewForm({ isSubmitting, onSubmit }: ReviewFormProps) {
           'px-4 py-2 rounded-brand text-sm font-medium transition-colors flex items-center gap-2',
           isSubmitting
             ? 'bg-theme-elevated text-theme-muted cursor-not-allowed'
-            : 'bg-cobalt-500 text-white hover:bg-cobalt-600'
+            : 'bg-primary text-on-primary hover:bg-primary-hover'
         )}
       >
         {isSubmitting && <Loader2 size={14} className="animate-spin" />}

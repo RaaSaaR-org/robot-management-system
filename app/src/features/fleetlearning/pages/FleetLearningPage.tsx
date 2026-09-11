@@ -110,7 +110,7 @@ export function FleetLearningPage() {
         actions={
           <button
             onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-cobalt text-white rounded-brand hover:bg-cobalt-600 transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-brand hover:bg-primary-hover transition-colors"
           >
             <Plus size={18} />
             New Round
@@ -202,7 +202,7 @@ export function FleetLearningPage() {
               action={
                 <button
                   onClick={() => setShowCreateModal(true)}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-cobalt text-white rounded-brand hover:bg-cobalt-600 transition-colors"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-brand hover:bg-primary-hover transition-colors"
                 >
                   <Plus size={18} />
                   Create First Round

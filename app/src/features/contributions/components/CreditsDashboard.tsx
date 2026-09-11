@@ -95,7 +95,7 @@ export function CreditsDashboard({
   return (
     <div className={cn('space-y-6', className)}>
       {/* Balance Card */}
-      <div className="bg-gradient-to-r from-primary-600 to-primary-700 rounded-xl p-6 text-white">
+      <div className="bg-gradient-to-r from-primary-700 to-primary-800 rounded-xl p-6 text-white">
         <div className="flex items-start justify-between mb-4">
           <div>
             <p className="text-primary-100 text-sm mb-1">Available Balance</p>

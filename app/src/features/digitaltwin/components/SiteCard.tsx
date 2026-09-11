@@ -25,9 +25,9 @@ export interface SiteCardProps {
 
 const STATUS_BADGE: Record<TwinStatus, { label: string; className: string }> = {
   draft: { label: 'Empty', className: 'bg-theme-secondary/20 text-theme-tertiary' },
-  recording: { label: 'Scanning', className: 'bg-turquoise text-black' },
-  processing: { label: 'Building', className: 'bg-cobalt-400 text-white' },
-  ready: { label: 'Scanned', className: 'bg-cobalt text-white' },
+  recording: { label: 'Scanning', className: 'bg-accent text-on-accent' },
+  processing: { label: 'Building', className: 'bg-primary text-on-primary' },
+  ready: { label: 'Scanned', className: 'bg-primary text-on-primary' },
   failed: { label: 'Failed', className: 'bg-red-500 text-white' },
 };
 

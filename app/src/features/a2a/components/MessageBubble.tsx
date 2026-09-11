@@ -190,7 +190,7 @@ export const MessageBubble = memo(function MessageBubble({
         className={cn(
           'max-w-[80%] rounded-2xl px-4 py-3',
           isUser
-            ? 'bg-primary-500 text-white rounded-br-md shadow-md'
+            ? 'bg-primary text-on-primary rounded-br-md shadow-md'
             : isOrchestrated
               ? 'glass-card border border-accent-200 dark:border-accent-800/50 text-theme-primary rounded-bl-md'
               : 'glass-card text-theme-primary rounded-bl-md',
