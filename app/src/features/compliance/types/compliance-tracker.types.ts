@@ -54,18 +54,18 @@ export type ComplianceStatus =
   | 'not_applicable';
 
 /**
- * Status labels with colors (light mode)
+ * Status labels and kit tones (rendered through StatusTag)
  */
 export const ComplianceStatusConfig: Record<
   ComplianceStatus,
-  { label: string; color: string; bgColor: string; textColor: string }
+  { label: string; tone: 'success' | 'info' | 'warning' | 'danger' | 'neutral' }
 > = {
-  compliant: { label: 'Compliant', color: 'text-green-600', bgColor: 'bg-green-900/20', textColor: 'text-green-400' },
-  in_progress: { label: 'In Progress', color: 'text-blue-600', bgColor: 'bg-blue-900/20', textColor: 'text-blue-400' },
-  at_risk: { label: 'At Risk', color: 'text-amber-600', bgColor: 'bg-amber-900/20', textColor: 'text-amber-400' },
-  overdue: { label: 'Overdue', color: 'text-red-600', bgColor: 'bg-red-900/20', textColor: 'text-red-400' },
-  not_started: { label: 'Not Started', color: 'text-theme-muted', bgColor: 'bg-gray-800/50', textColor: 'text-theme-tertiary' },
-  not_applicable: { label: 'N/A', color: 'text-theme-muted', bgColor: 'bg-gray-800/30', textColor: 'text-theme-muted' },
+  compliant: { label: 'Compliant', tone: 'success' },
+  in_progress: { label: 'In progress', tone: 'info' },
+  at_risk: { label: 'At risk', tone: 'warning' },
+  overdue: { label: 'Overdue', tone: 'danger' },
+  not_started: { label: 'Not started', tone: 'neutral' },
+  not_applicable: { label: 'N/A', tone: 'neutral' },
 };
 
 // Alias for backwards compatibility
@@ -183,12 +183,12 @@ export type GapSeverity = 'critical' | 'high' | 'medium' | 'low';
  */
 export const GapSeverityConfig: Record<
   GapSeverity,
-  { label: string; bgColor: string; textColor: string }
+  { label: string; tone: 'danger' | 'warning' | 'info' }
 > = {
-  critical: { label: 'Critical', bgColor: 'bg-red-900/20', textColor: 'text-red-400' },
-  high: { label: 'High', bgColor: 'bg-orange-900/20', textColor: 'text-orange-400' },
-  medium: { label: 'Medium', bgColor: 'bg-yellow-900/20', textColor: 'text-yellow-400' },
-  low: { label: 'Low', bgColor: 'bg-blue-900/20', textColor: 'text-blue-400' },
+  critical: { label: 'Critical', tone: 'danger' },
+  high: { label: 'High', tone: 'danger' },
+  medium: { label: 'Medium', tone: 'warning' },
+  low: { label: 'Low', tone: 'info' },
 };
 
 // Alias for uppercase constant naming convention
