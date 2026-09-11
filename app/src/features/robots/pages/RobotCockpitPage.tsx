@@ -1,19 +1,16 @@
 /**
  * @file RobotCockpitPage.tsx
- * @description Robot Control Center — a single-screen "cockpit" that fuses what
- *   the robot sees (camera + LiDAR), how it feels (live telemetry vitals) and how
- *   you act on it (quick commands, natural-language control, emergency stop) into
- *   one futuristic-but-legible view. Bound to a robot via `/robots/:id/cockpit`,
- *   or to the first available robot via `/control-center`.
+ * @description Control center: an operator console for one robot — view (model pose
+ *   or camera), LiDAR, vitals, and a sticky command dock with the emergency stop.
+ *   Bound via `/robots/:id/cockpit`, or auto-picks a robot on `/control-center`.
  * @feature robots
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ChevronLeft, Bot, ChevronDown, Wifi, WifiOff } from 'lucide-react';
+import { Bot, WifiOff } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Spinner } from '@/shared/components/ui';
-import { cn } from '@/shared/utils/cn';
+import { EmptyState, LinkButton, PageHeader, Panel, Select, Skeleton } from '@/shared/components/ui';
 import { useRobots } from '../hooks/useRobots';
 import { useTelemetryStream } from '../hooks/useTelemetryStream';
 import {
@@ -22,12 +19,8 @@ import {
   CockpitVitals,
   CockpitCommandDock,
 } from '../components/cockpit';
-import {
-  ROBOT_STATUS_LABELS,
-  isRobotAvailable,
-  type Robot,
-  type RobotType,
-} from '../types/robots.types';
+import { ProvenanceTag, RobotStatusTag, provenanceOf } from '../components/common';
+import { isRobotAvailable, type Robot, type RobotType } from '../types/robots.types';
 
 /** Map a robot's model/metadata to a viewer embodiment. */
 function resolveRobotType(robot: Robot | null): RobotType {
@@ -47,20 +40,15 @@ function isG1Family(type: RobotType): boolean {
   return type === 'g1' || type === 'g1_edu';
 }
 
-const STATUS_DOT: Record<string, string> = {
-  online: 'bg-[#18E4C3]',
-  busy: 'bg-[#2A5FFF]',
-  charging: 'bg-amber-400',
-  error: 'bg-red-500',
-  protective_stop: 'bg-red-500',
-  maintenance: 'bg-amber-400',
-  offline: 'bg-theme-tertiary',
-};
+const DESCRIPTION = 'Live view and controls for one robot.';
+const VIEWER_HEIGHT = 'h-[280px] sm:h-[320px] lg:h-[440px]';
 
 export function RobotCockpitPage() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
-      <DemoFeaturePlaceholder
+      <div className="space-y-6">
+        <PageHeader eyebrow="Operate" title="Control center" description={DESCRIPTION} />
+        <DemoFeaturePlaceholder
         featureName="Robot Control Center"
         icon={<Bot className="h-12 w-12" />}
         description="A single-screen cockpit to see what a robot sees and control it: live camera and LiDAR perception, real-time vitals, quick commands, natural-language control and an emergency stop."
@@ -71,7 +59,8 @@ export function RobotCockpitPage() {
           'Quick commands, natural-language control and emergency stop',
         ]}
         docsSlug="architecture"
-      />
+        />
+      </div>
     );
   }
 
@@ -129,23 +118,37 @@ function RobotCockpitPageInner() {
     return () => window.clearTimeout(t);
   }, [id, robotId, isLive, skip]);
 
+  const back = id ? { to: `/robots/${id}`, label: 'Robot' } : { to: '/fleet?tab=list', label: 'Fleet' };
+
   // ── Loading / empty ──
   if (isLoading && !robots.length) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <Spinner size="lg" />
+      <div className="flex flex-col gap-6">
+        <PageHeader eyebrow="Operate" back={back} title="Control center" description={DESCRIPTION} />
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <Panel className="lg:col-span-2"><Skeleton className={VIEWER_HEIGHT + ' w-full'} /></Panel>
+          <Panel><Skeleton className={VIEWER_HEIGHT + ' w-full'} /></Panel>
+        </div>
       </div>
     );
   }
 
   if (!robot) {
     return (
-      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 text-center">
-        <Bot className="h-12 w-12 text-theme-tertiary/50" />
-        <h1 className="text-xl font-semibold text-theme-primary">No robots to pilot</h1>
-        <p className="max-w-sm text-sm text-theme-secondary">
-          Register a robot first — the Control Center binds to a live robot to stream its camera, LiDAR and telemetry.
-        </p>
+      <div className="flex flex-col gap-6">
+        <PageHeader eyebrow="Operate" back={back} title="Control center" description={DESCRIPTION} />
+        <Panel>
+          <EmptyState
+            icon={<Bot />}
+            title={id ? 'Robot not found' : 'No robots to control'}
+            description={
+              id
+                ? `No robot with the ID ${id} is registered. Pick one from the fleet.`
+                : 'Register a robot first. The control center binds to a live robot to stream its camera, LiDAR and telemetry.'
+            }
+            action={<LinkButton to="/fleet?tab=list">Go to fleet</LinkButton>}
+          />
+        </Panel>
       </div>
     );
   }
@@ -153,64 +156,53 @@ function RobotCockpitPageInner() {
   // Telemetry live (data arriving) means we can drive it, regardless of the
   // list's lagging status field.
   const canExecute = isLive || isRobotAvailable(robot);
-  const statusDot = STATUS_DOT[robot.status] ?? 'bg-theme-tertiary';
+  const provenance = provenanceOf(telemetry);
 
   return (
-    <div className="flex min-h-[calc(100vh-7rem)] flex-col gap-3">
-      {/* ── Header ── */}
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/fleet')}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-theme text-theme-secondary transition-colors hover:bg-theme-elevated hover:text-theme-primary"
-            aria-label="Back to fleet"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-theme-primary">{robot.name}</h1>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-theme px-2 py-0.5 text-[11px] text-theme-secondary">
-                <span className={cn('h-1.5 w-1.5 rounded-full', statusDot)} />
-                {ROBOT_STATUS_LABELS[robot.status] ?? robot.status}
-              </span>
-            </div>
-            <p className="font-mono text-xs text-theme-tertiary">{robot.model}</p>
-          </div>
-        </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Operate"
+        back={back}
+        title={robot.name}
+        description={DESCRIPTION}
+        meta={
+          <>
+            <RobotStatusTag status={robot.status} />
+            <ProvenanceTag source={provenance} />
+          </>
+        }
+        actions={
+          <Select
+            aria-label="Robot"
+            fullWidth={false}
+            className="w-full sm:w-64"
+            value={robot.id}
+            options={robots.map((r) => ({ value: r.id, label: r.name }))}
+            onChange={(e) => navigate(`/robots/${e.target.value}/cockpit`)}
+          />
+        }
+      />
 
-        <div className="flex items-center gap-3">
-          {/* telemetry link */}
-          <span className={cn('flex items-center gap-1.5 font-mono text-[11px]', isLive ? 'text-[#18E4C3]' : 'text-theme-tertiary')}>
-            {isLive ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
-            {isLive ? 'TELEMETRY LIVE' : 'TELEMETRY DOWN'}
+      {!isLive && (
+        <Panel variant="inset" padding="sm" className="flex items-center gap-3 text-sm text-ink-secondary">
+          <WifiOff className="h-4 w-4 shrink-0 text-ink-tertiary" strokeWidth={1.75} />
+          <span>
+            {robot.status === 'offline'
+              ? `${robot.name} is offline. Start its robot agent to see live telemetry and send commands.`
+              : `No telemetry from ${robot.name} yet. Values appear as soon as its agent streams.`}
           </span>
+        </Panel>
+      )}
 
-          {/* robot switcher */}
-          <div className="relative">
-            <select
-              value={robot.id}
-              onChange={(e) => navigate(`/robots/${e.target.value}/cockpit`)}
-              className="appearance-none rounded-lg border border-theme bg-theme-primary py-2 pl-3 pr-9 text-sm text-theme-primary focus:border-[#2A5FFF]/60 focus:outline-none"
-              aria-label="Select robot"
-            >
-              {robots.map((r) => (
-                <option key={r.id} value={r.id}>{r.name} — {r.model}</option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-tertiary" />
-          </div>
-        </div>
-      </header>
-
-      {/* ── Viewport + Perception ── */}
-      <div className="grid flex-1 gap-3 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <CockpitViewport
+          key={robotId}
           robotId={robotId}
           robotType={robotType}
           jointStates={telemetry?.jointStates}
           telemetryConnected={isLive}
-          className="min-h-[320px] lg:col-span-2 lg:min-h-[440px]"
+          className="lg:col-span-2"
+          bodyClassName={VIEWER_HEIGHT}
         />
         <CockpitPerceptionPanel
           robotId={robotId}
@@ -218,14 +210,13 @@ function RobotCockpitPageInner() {
           jointStates={telemetry?.jointStates}
           supported={supportsPerception}
           enabled={supportsPerception && isLive}
-          className="min-h-[320px] lg:min-h-[440px]"
+          provenance={provenance}
+          bodyClassName={VIEWER_HEIGHT}
         />
       </div>
 
-      {/* ── Vitals ── */}
       <CockpitVitals telemetry={telemetry} connected={isLive} lastUpdate={lastUpdate} />
 
-      {/* ── Command dock ── */}
       <CockpitCommandDock robotId={robotId} robotName={robot.name} canExecute={canExecute} />
     </div>
   );
