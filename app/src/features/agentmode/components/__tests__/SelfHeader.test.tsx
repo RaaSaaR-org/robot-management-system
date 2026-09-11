@@ -173,7 +173,7 @@ describe('SelfHeader', () => {
 
     const crash = screen.getByTestId('agent-self-crash');
     expect(crash).toHaveTextContent('recovered from crash in AISLE-3');
-    expect(crash.className).toMatch(/amber/);
+    expect(crash.className).toMatch(/signal-unknown/);
   });
 
   it('does not call a clean shutdown a crash', () => {
@@ -227,7 +227,7 @@ describe('SelfHeader', () => {
       expect(freshness).toHaveAttribute('data-stale', 'false');
       expect(freshness).toHaveTextContent(/just now|s ago/);
       // Quiet: a badge that always warns is a badge nobody reads.
-      expect(freshness.className).not.toMatch(/amber/);
+      expect(freshness.className).not.toMatch(/signal-unknown/);
     });
 
     it('calls an old mirror read cached, visibly', () => {
@@ -243,7 +243,7 @@ describe('SelfHeader', () => {
       expect(freshness).toHaveAttribute('data-live', 'false');
       expect(freshness).toHaveTextContent(/cached/);
       expect(freshness).toHaveTextContent(/5 min ago/);
-      expect(freshness.className).toMatch(/amber/);
+      expect(freshness.className).toMatch(/signal-unknown/);
     });
 
     it('says nothing at all before the first snapshot is stamped', () => {
@@ -275,7 +275,7 @@ describe('SelfHeader', () => {
       expect(freshness).toHaveAttribute('data-live', 'false');
       expect(freshness).toHaveTextContent(/cached/);
       expect(freshness).not.toHaveTextContent(/just now/);
-      expect(freshness.className).toMatch(/amber/);
+      expect(freshness.className).toMatch(/signal-unknown/);
     });
 
     it('renders a mirror read the server could not date as an unknown age', () => {
@@ -293,7 +293,7 @@ describe('SelfHeader', () => {
       expect(freshness).toHaveAttribute('data-stale', 'true');
       expect(freshness).toHaveTextContent(/age unknown/);
       expect(freshness).not.toHaveTextContent(/just now/);
-      expect(freshness.className).toMatch(/amber/);
+      expect(freshness.className).toMatch(/signal-unknown/);
     });
   });
 
@@ -313,7 +313,7 @@ describe('SelfHeader', () => {
 
       const badge = screen.getByTestId('agent-self-superseded');
       expect(badge).toHaveTextContent(/different process/);
-      expect(badge.className).toMatch(/amber/);
+      expect(badge.className).toMatch(/signal-unknown/);
     });
 
     it('stays quiet while the mirror agrees with the process that answered', () => {

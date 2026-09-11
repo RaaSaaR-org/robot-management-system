@@ -4,6 +4,7 @@
  * @feature agentmode
  */
 
+import type { Tone } from '@/shared/components/ui';
 import type {
   AgentBlock,
   AgentBlockKind,
@@ -266,57 +267,36 @@ export function demoMode(block: AgentBlock): 'execute' | 'narrate' | null {
 // STATUS
 // ============================================================================
 
-interface StatusStyle {
+/** A status as the kit's `StatusTag` renders it: a label and a signal tone. */
+export interface StatusStyle {
   label: string;
-  className: string;
+  tone: Tone;
   pulse?: boolean;
 }
 
 const BLOCK_STATUS_STYLES: Record<AgentBlockStatus, StatusStyle> = {
-  pending: {
-    label: 'Pending',
-    className: 'glass-subtle text-theme-tertiary',
-  },
-  running: {
-    label: 'Running',
-    className: 'bg-cobalt-500/15 text-cobalt-400',
-    pulse: true,
-  },
-  done: {
-    label: 'Done',
-    className: 'bg-turquoise-500/15 text-turquoise-600 dark:text-turquoise-400',
-  },
-  failed: {
-    label: 'Failed',
-    className: 'bg-red-500/15 text-red-600 dark:text-red-400',
-  },
-  skipped: {
-    label: 'Skipped',
-    className: 'glass-subtle text-theme-muted',
-  },
-  aborted: {
-    label: 'Aborted',
-    className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-  },
+  pending: { label: 'Pending', tone: 'neutral' },
+  running: { label: 'Running', tone: 'info', pulse: true },
+  done: { label: 'Done', tone: 'success' },
+  failed: { label: 'Failed', tone: 'danger' },
+  skipped: { label: 'Skipped', tone: 'neutral' },
+  aborted: { label: 'Aborted', tone: 'warning' },
 };
 
-/** Pill styling for a block status. */
+/** Tag styling for a block status. */
 export function blockStatusStyle(status: AgentBlockStatus): StatusStyle {
   return BLOCK_STATUS_STYLES[status] ?? BLOCK_STATUS_STYLES.pending;
 }
 
 const PLAN_STATUS_STYLES: Record<AgentPlanStatus, StatusStyle> = {
-  planning: { label: 'Planning', className: 'glass-subtle text-theme-tertiary', pulse: true },
-  running: { label: 'Running', className: 'bg-cobalt-500/15 text-cobalt-400', pulse: true },
-  done: {
-    label: 'Done',
-    className: 'bg-turquoise-500/15 text-turquoise-600 dark:text-turquoise-400',
-  },
-  failed: { label: 'Failed', className: 'bg-red-500/15 text-red-600 dark:text-red-400' },
-  aborted: { label: 'Aborted', className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
+  planning: { label: 'Planning', tone: 'neutral', pulse: true },
+  running: { label: 'Running', tone: 'info', pulse: true },
+  done: { label: 'Done', tone: 'success' },
+  failed: { label: 'Failed', tone: 'danger' },
+  aborted: { label: 'Aborted', tone: 'warning' },
 };
 
-/** Pill styling for a plan status. */
+/** Tag styling for a plan status. */
 export function planStatusStyle(status: AgentPlanStatus): StatusStyle {
   return PLAN_STATUS_STYLES[status] ?? PLAN_STATUS_STYLES.planning;
 }

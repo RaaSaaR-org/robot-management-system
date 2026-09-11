@@ -7,6 +7,7 @@
  */
 
 import { memo, useMemo } from 'react';
+import { StatusTag } from '@/shared/components/ui';
 import { cn } from '@/shared/utils';
 import {
   useAgentModeStore,
@@ -77,15 +78,18 @@ export const AgentModeToggle = memo(function AgentModeToggle({
   return (
     <div className={cn('flex items-center gap-2.5', className)}>
       {showOwner && (
-        <span
-          data-testid="agent-control-owner"
-          className={cn(
-            'glass-subtle px-2 py-0.5 rounded-full text-[10px] font-medium whitespace-nowrap',
-            stateUnknown ? 'text-amber-600 dark:text-amber-400' : 'text-theme-tertiary'
-          )}
-        >
-          {stateUnknown ? 'Unknown' : (OWNER_LABEL[controlOwner] ?? controlOwner)}
-        </span>
+        // While the robot is unreachable the visible "Agent Mode unknown" label
+        // already says it; a second "Unknown" pill beside it was the same fact
+        // twice. The owner stays in the DOM for screen readers.
+        stateUnknown ? (
+          <span data-testid="agent-control-owner" className="sr-only">
+            Control owner: Unknown
+          </span>
+        ) : (
+          <span data-testid="agent-control-owner" className="whitespace-nowrap">
+            <StatusTag tone="info">{OWNER_LABEL[controlOwner] ?? controlOwner}</StatusTag>
+          </span>
+        )
       )}
 
       <button
@@ -113,23 +117,25 @@ export const AgentModeToggle = memo(function AgentModeToggle({
         onClick={() => robotId && void actions.toggle(robotId, !enabled)}
         className={cn(
           'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-200',
-          'focus:outline-none focus:ring-2 focus:ring-cobalt-500/40',
+          'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
           stateUnknown
-            ? 'bg-amber-500/15 border border-dashed border-amber-500/60'
+            ? 'border border-dashed border-line-strong bg-inset'
             : enabled
-              ? 'bg-cobalt-500'
-              : 'bg-gray-300 dark:bg-gray-700',
+              ? 'bg-primary'
+              : 'border border-line-strong bg-inset',
           disabled && 'opacity-60 cursor-not-allowed'
         )}
       >
         <span
           className={cn(
             'inline-block h-4 w-4 rounded-full shadow transition-transform duration-200',
-            // Parked mid-track and amber: neither end of the switch, which is
+            // Parked mid-track and muted: neither end of the switch, which is
             // the point — it reads as "no answer", not as "off".
             stateUnknown
-              ? 'bg-amber-500 translate-x-3'
-              : cn('bg-white', enabled ? 'translate-x-6' : 'translate-x-1')
+              ? 'bg-ink-muted translate-x-3'
+              : enabled
+                ? 'bg-canvas translate-x-6'
+                : 'bg-ink-tertiary translate-x-1'
           )}
         />
       </button>
@@ -145,7 +151,7 @@ export const AgentModeToggle = memo(function AgentModeToggle({
         data-testid="agent-mode-label"
         className={cn(
           'text-xs font-medium whitespace-nowrap',
-          stateUnknown ? 'text-amber-600 dark:text-amber-400' : 'sr-only'
+          stateUnknown ? 'text-ink-muted' : 'sr-only'
         )}
       >
         Agent Mode {stateUnknown ? 'unknown' : enabled ? 'on' : 'off'}

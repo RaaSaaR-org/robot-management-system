@@ -8,8 +8,8 @@
  */
 
 import { memo, useCallback, useMemo, useState } from 'react';
-import { cn } from '@/shared/utils';
-import { Tooltip } from '@/shared/components/ui/Tooltip';
+import { cn } from '@/shared/utils/cn';
+import { Button, StatusTag, Tooltip, panelClasses } from '@/shared/components/ui';
 // The voice channel belongs to the robots feature (it is per-robot hardware and
 // has its own tab there). Agent Mode consumes it rather than owning a second
 // copy: one SSE relay, one store, so the mic state shown here can never
@@ -107,7 +107,7 @@ function InlineMicButton({
   active?: boolean;
   muted?: boolean;
   onClick?: () => void;
-  /** A true-right-now condition marker. Amber, and only when it is true. */
+  /** A true-right-now condition marker, only when it is true. */
   dot?: boolean;
 }) {
   return (
@@ -122,17 +122,17 @@ function InlineMicButton({
         className={cn(
           // 36px in the composer; 44px on coarse pointers (WCAG 2.5.5).
           'relative h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11',
-          'rounded-brand flex items-center justify-center shrink-0 border transition-colors',
-          'focus:outline-none focus:ring-2 focus:ring-cobalt-500/40',
+          'rounded-control flex items-center justify-center shrink-0 border transition-colors',
+          'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
           active
-            ? 'bg-primary text-on-primary border-cobalt-500 hover:bg-primary-hover'
-            : 'glass-subtle text-theme-secondary border-glass-subtle hover:text-theme-primary',
+            ? 'bg-primary text-on-primary border-primary hover:bg-primary-hover'
+            : 'bg-inset text-ink-secondary border-line hover:text-ink-primary',
           'disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none'
         )}
       >
         <MicIcon className="w-4 h-4" muted={muted} />
         {dot && (
-          <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-amber-500" />
+          <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-signal-unknown" />
         )}
       </button>
     </Tooltip>
@@ -193,7 +193,7 @@ export const AgentVoiceBar = memo(function AgentVoiceBar({
           // Rendered at EVERY width. It used to be `hidden sm:inline-flex`, and
           // the operator most likely to need it is the one standing next to the
           // robot with a phone: below 640px the only remaining signal was that
-          // the mic button is cobalt, which is also its colour when the mic is
+          // the mic button is filled, which is also its colour when the mic is
           // merely open and idle. "Listening", "thinking" and "speaking" then
           // had nowhere left to be said — `agent-voice-last` is gone from this
           // variant by design. It is a small pill and the composer row wraps.
@@ -239,10 +239,10 @@ export const AgentVoiceBar = memo(function AgentVoiceBar({
   return (
     <div
       data-testid="agent-voice-bar"
-      className={cn('glass-card px-4 py-2.5 flex items-center gap-3 flex-wrap', className)}
+      className={cn(panelClasses({ padding: 'sm' }), 'flex flex-wrap items-center gap-3', className)}
     >
-      <span className="text-sm font-medium text-theme-primary flex items-center gap-2">
-        <MicIcon className="w-4 h-4 text-theme-secondary" muted={!available || voice.paused} />
+      <span className="text-sm font-medium text-ink-primary flex items-center gap-2">
+        <MicIcon className="w-4 h-4 text-ink-secondary" muted={!available || voice.paused} />
         Talk to the robot
       </span>
 
@@ -250,41 +250,32 @@ export const AgentVoiceBar = memo(function AgentVoiceBar({
         <>
           <VoiceStateBadge state={voice.pipelineState} />
           {canHear ? (
-            <button
-              type="button"
+            <Button
+              size="sm"
+              variant={voice.paused ? 'primary' : 'secondary'}
               onClick={() => void toggleMic()}
               disabled={busy}
               data-testid="agent-voice-mic-toggle"
-              className={cn(
-                'px-3 py-1.5 rounded-brand text-xs font-medium border transition-colors',
-                'disabled:opacity-50 disabled:cursor-not-allowed',
-                voice.paused
-                  ? 'bg-primary text-on-primary border-cobalt-500 hover:bg-primary-hover'
-                  : 'glass-subtle text-theme-secondary border-glass-subtle hover:text-theme-primary'
-              )}
             >
               {voice.paused ? 'Open the microphone' : 'Mute the microphone'}
-            </button>
+            </Button>
           ) : (
-            <span
-              data-testid="agent-voice-deaf"
-              className="px-2.5 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-xs font-medium text-amber-600 dark:text-amber-300"
-            >
-              No microphone — it can speak, not listen
+            <span data-testid="agent-voice-deaf">
+              <StatusTag tone="warning">No microphone — it can speak, not listen</StatusTag>
             </span>
           )}
 
           {/* The heard/said readout is a lossier second copy of the transcript,
               which already renders heard commands as user messages carrying
               `agent-spoken-marker` — hence no testid of its own any more. */}
-          <div className="card-meta flex-1 min-w-[12rem] truncate">
+          <div className="flex-1 min-w-0 truncate text-xs text-ink-muted sm:min-w-[12rem]">
             {heard ? (
               <>
-                <span className="text-theme-secondary">heard:</span> “{heard}”
+                <span className="text-ink-secondary">heard:</span> “{heard}”
                 {said && (
                   <>
                     {' · '}
-                    <span className="text-theme-secondary">said:</span> “{said}”
+                    <span className="text-ink-secondary">said:</span> “{said}”
                   </>
                 )}
               </>
@@ -296,7 +287,7 @@ export const AgentVoiceBar = memo(function AgentVoiceBar({
           </div>
         </>
       ) : (
-        <span className="card-meta" data-testid="agent-voice-unavailable">
+        <span className="text-xs text-ink-muted" data-testid="agent-voice-unavailable">
           {robotId ? UNREACHABLE_COPY : 'No robot bound.'}
         </span>
       )}

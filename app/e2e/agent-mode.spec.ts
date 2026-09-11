@@ -72,7 +72,7 @@ test.describe('Agent Mode page', () => {
   });
 
   /**
-   * The rail's `.glass-card` sets `overflow: hidden`. With a wide identity
+   * The rail's panel sets `overflow: hidden`. With a wide identity
    * group beside it, STOPP was pushed past the card's right edge and clipped —
    * invisible AND unclickable, with no scrollbar to get it back, at the two
    * widths a laptop and a phone actually use. `toBeInViewport` is the assertion

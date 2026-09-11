@@ -38,9 +38,30 @@ const DEFAULT_RANGE_INDEX = 1;
 /** Keep-out names are drawn only when there is room for them (px per metre). */
 const KEEPOUT_LABEL_MIN_PX_PER_M = 40;
 
-/** Cobalt / turquoise from the brand palette; keep-out is the twin's own token. */
-const COLOR_SELF = '#2A5FFF';
-const COLOR_PEER = '#18E4C3';
+/**
+ * A theme colour for the canvas, read from the CSS custom property at draw
+ * time (a canvas cannot resolve `var(--…)` itself). The fallback is only for
+ * environments without computed styles (tests, SSR).
+ */
+function themeColor(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+/**
+ * Why the map is missing, as the operator reads it. A transport failure (the
+ * robot agent is down, the proxy answered 502) is one calm sentence; any other
+ * reason is shown as the server gave it. The raw error stays on hover.
+ */
+function describeMapError(error: string | null | undefined): string {
+  if (!error) return 'The robot did not answer.';
+  return /connection refused|econnrefused|unreachable|bad gateway|\b502\b|failed to fetch|network error/i.test(error)
+    ? 'The robot is not reachable. Start the robot agent to see its map.'
+    : error;
+}
+
+/** The robot itself: the primary; peers: the accent; keep-out is the twin's own token. */
 const COLOR_KEEPOUT = TWIN_ZONE_COLORS.keepout;
 /** Free cells: cobalt at ~10 % — faint on purpose, so occupied and unknown carry the picture. */
 const FREE_RGBA: [number, number, number, number] = [42, 95, 255, 26];
@@ -170,6 +191,8 @@ export function drawMap(
   gridImage: HTMLCanvasElement | null,
 ): void {
   const { widthPx, heightPx, rangeM, orientation } = view;
+  const COLOR_SELF = themeColor('--color-primary', 'rgb(42, 95, 255)');
+  const COLOR_PEER = themeColor('--color-accent', 'rgb(24, 228, 195)');
   ctx.clearRect(0, 0, widthPx, heightPx);
   const pxPerM = Math.min(widthPx, heightPx) / (2 * rangeM);
   // Centre on the robot when it has a pose, else on the grid's centre, else origin.
@@ -225,8 +248,10 @@ export function drawMap(
   for (const p of map.peers) {
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.footprintRadiusM, 0, Math.PI * 2);
-    ctx.fillStyle = `${COLOR_PEER}66`;
+    ctx.fillStyle = COLOR_PEER;
+    ctx.globalAlpha = 0.4;
     ctx.fill();
+    ctx.globalAlpha = 1;
     ctx.lineWidth = 2 / pxPerM;
     ctx.strokeStyle = COLOR_PEER;
     ctx.stroke();
@@ -239,7 +264,7 @@ export function drawMap(
     }
   }
 
-  // The navigator's planned route (TASK-208): a cobalt polyline from the robot
+  // The navigator's planned route (TASK-208): a primary polyline from the robot
   // to where the plan ends, and a ring on the goal. Only when planned — a
   // "by sight" navigation has no line to draw, and drawing one would be a claim.
   const nav = map.nav ?? null;
@@ -549,7 +574,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
 
   return (
     <div className={cn('flex flex-col min-h-0 flex-1', className)} data-testid="agent-map-panel">
-      <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-glass-subtle">
+      <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-line-subtle">
         <SegmentedControl<MapView>
           label="Map view"
           value={view}
@@ -576,19 +601,19 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
               <button
                 type="button"
                 aria-label="Zoom out"
-                className="glass-subtle px-2 py-0.5 text-xs rounded-brand disabled:opacity-40"
+                className="inline-flex h-8 min-w-8 items-center justify-center rounded-control border border-line bg-panel px-2.5 text-xs text-ink-secondary hover:text-ink-primary disabled:opacity-40"
                 disabled={rangeIndex >= RANGES_M.length - 1}
                 onClick={() => setRangeIndex((i) => Math.min(RANGES_M.length - 1, i + 1))}
               >
                 −
               </button>
-              <span className="card-meta tabular-nums w-10 text-center" data-testid="agent-map-range">
+              <span className="text-xs text-ink-muted tabular-nums w-10 text-center" data-testid="agent-map-range">
                 ±{rangeM} m
               </span>
               <button
                 type="button"
                 aria-label="Zoom in"
-                className="glass-subtle px-2 py-0.5 text-xs rounded-brand disabled:opacity-40"
+                className="inline-flex h-8 min-w-8 items-center justify-center rounded-control border border-line bg-panel px-2.5 text-xs text-ink-secondary hover:text-ink-primary disabled:opacity-40"
                 disabled={rangeIndex <= 0}
                 onClick={() => setRangeIndex((i) => Math.max(0, i - 1))}
               >
@@ -616,7 +641,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
               aria-haspopup="menu"
               aria-expanded={exportOpen}
               title="Download the map (PGM+YAML for ROS map_server, PNG, JSON) or the point cloud (PCD, PLY)"
-              className="glass-subtle px-2 py-0.5 text-xs rounded-brand disabled:opacity-40"
+              className="inline-flex h-8 min-w-8 items-center justify-center rounded-control border border-line bg-panel px-2.5 text-xs text-ink-secondary hover:text-ink-primary disabled:opacity-40"
               disabled={!map?.grid && !cloudAvailable}
               onClick={() => setExportOpen((o) => !o)}
             >
@@ -629,9 +654,9 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
                 ref={menuRef}
                 onKeyDown={onMenuKeyDown}
                 data-testid="agent-map-export-menu"
-                className="absolute right-0 top-full mt-1 z-20 min-w-[11rem] rounded-brand border border-glass-subtle glass-elevated shadow-lg py-1 text-xs"
+                className="absolute right-0 top-full mt-1 z-20 min-w-[11rem] rounded-control border border-line-subtle bg-raised shadow-lg py-1 text-xs"
               >
-                <p className="px-3 pt-1 pb-0.5 card-meta text-[10px] uppercase tracking-wide">2D map</p>
+                <p className="px-3 pt-1 pb-0.5 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-muted">2D map</p>
                 {(
                   [
                     ['pgm', 'PGM + YAML (ROS map_server)'],
@@ -645,7 +670,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
                     role="menuitem"
                     // Roving tabindex: inside a menu, Tab exits — the arrows move.
                     tabIndex={-1}
-                    className="block w-full text-left px-3 py-1.5 text-theme-primary hover:bg-theme-hover disabled:opacity-40"
+                    className="block w-full text-left px-3 py-1.5 text-ink-primary hover:bg-inset disabled:opacity-40"
                     disabled={!map?.grid || (format !== 'json' && !gridHasRaster)}
                     title={!gridHasRaster && format !== 'json' ? 'The robot has not integrated anything into its map yet' : undefined}
                     onClick={() => void runExport(format)}
@@ -653,7 +678,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
                     {label}
                   </button>
                 ))}
-                <p className="px-3 pt-1.5 pb-0.5 card-meta text-[10px] uppercase tracking-wide border-t border-glass-subtle mt-1">3D point cloud</p>
+                <p className="px-3 pt-1.5 pb-0.5 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-muted border-t border-line-subtle mt-1">3D point cloud</p>
                 {(
                   [
                     ['pcd', 'PCD (CloudCompare, Open3D, PCL)'],
@@ -665,7 +690,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
                     type="button"
                     role="menuitem"
                     tabIndex={-1}
-                    className="block w-full text-left px-3 py-1.5 text-theme-primary hover:bg-theme-hover disabled:opacity-40"
+                    className="block w-full text-left px-3 py-1.5 text-ink-primary hover:bg-inset disabled:opacity-40"
                     // NOT gated on the 3-D view having been opened: the export
                     // fetches the full cloud itself (`max=0`), and a robot with
                     // no cloud answers with the note below. Disabling it here
@@ -688,7 +713,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
         </div>
       </div>
       {exportNote && (
-        <p className="shrink-0 px-3 py-1 text-[11px] text-amber-600 dark:text-amber-400" role="status" data-testid="agent-map-export-note">
+        <p className="shrink-0 px-3 py-1 text-xs text-signal-unknown" role="status" data-testid="agent-map-export-note">
           {exportNote}
         </p>
       )}
@@ -703,7 +728,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
               data-testid="agent-map-canvas"
               role="img"
               aria-label={`Occupancy map: ${map.grid?.knownCells ?? 0} known cells, ${map.peers.length} peers`}
-              className="absolute inset-0 w-full h-full text-theme-primary"
+              className="absolute inset-0 w-full h-full text-ink-primary"
               style={{ width: size.w || undefined, height: size.h || undefined }}
             />
             {project && <RouteOverlay robotId={robotId} project={project} widthPx={size.w} heightPx={size.h} />}
@@ -718,7 +743,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
             {(!map.grid || map.grid.knownCells === 0) && (
               <p
                 data-testid="agent-map-empty"
-                className="absolute inset-x-0 bottom-8 text-center card-meta px-4"
+                className="absolute inset-x-0 bottom-8 text-center text-xs text-ink-muted px-4"
               >
                 No scan integrated yet — the map fills in as the robot looks and walks.
               </p>
@@ -732,7 +757,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
                 side="left"
                 className="absolute right-2 bottom-2"
               >
-                <span className="card-meta text-[11px]" data-testid="agent-map-unregistered">
+                <span className="text-xs text-ink-muted" data-testid="agent-map-unregistered">
                   keep-outs not shown
                 </span>
               </Tooltip>
@@ -740,11 +765,18 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
           </>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center p-4 text-center" data-testid="agent-map-empty">
-            <p className="card-meta max-w-[26ch]">
+            <p className="text-xs text-ink-muted max-w-[26ch]">
               {status === 'disabled'
                 ? 'This robot does not publish a map (AGENT_MAP_ENABLED).'
                 : status === 'unavailable'
-                  ? `Map unavailable: ${error ?? 'the robot did not answer'}.`
+                  ? (
+                    <>
+                      Map not available.
+                      <span className="mt-1 block break-words text-ink-tertiary" title={error ?? undefined}>
+                        {describeMapError(error)}
+                      </span>
+                    </>
+                  )
                   : robotId
                     ? 'Reading the robot’s map…'
                     : 'No robot selected.'}
@@ -755,7 +787,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
 
       {map && (
         <div
-          className={cn('shrink-0 px-3 py-1.5 border-t border-glass-subtle card-meta text-[11px] tabular-nums truncate')}
+          className={cn('shrink-0 px-3 py-1.5 border-t border-line-subtle text-xs text-ink-muted text-[11px] tabular-nums truncate')}
           data-testid="agent-map-footer"
           title={stale ? `Last read failed: ${error ?? 'unknown'} — showing the last map.` : footer}
         >

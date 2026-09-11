@@ -202,7 +202,7 @@ describe('KnowledgePanel', () => {
     expect(screen.getByTestId('agent-scene-panel')).toBeVisible();
     expect(screen.queryByTestId('agent-memory-panel')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /memory/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /memory/i }));
 
     expect(screen.getByTestId('agent-memory-panel')).toBeVisible();
     expect(screen.queryByTestId('agent-scene-panel')).toBeNull();
