@@ -1,206 +1,116 @@
 /**
  * @file ExportDialog.tsx
- * @description Dialog for exporting compliance logs to JSON
+ * @description "Export log" form: date range, event types and decryption,
+ *              then downloads the signed JSON export and toasts the result.
  * @feature compliance
  */
 
-import { useState } from 'react';
-import { Modal } from '@/shared/components/ui/Modal';
-import { Button } from '@/shared/components/ui/Button';
+import { useEffect, useState } from 'react';
+import {
+  Checkbox, FormField, FormModal, Input, Select, ToggleChip, toast,
+} from '@/shared/components/ui';
 import { useComplianceStore } from '../store';
-import type { ComplianceEventType, ExportOptions } from '../types';
-
-// Event type labels
-const EVENT_TYPE_LABELS: Record<ComplianceEventType, string> = {
-  ai_decision: 'AI Decisions',
-  safety_action: 'Safety Actions',
-  command_execution: 'Command Executions',
-  system_event: 'System Events',
-  access_audit: 'Access Audits',
-};
+import type { ComplianceEventType } from '../types';
+import { EVENT_TYPE_OPTIONS, errorMessage } from './complianceFormat';
 
 export interface ExportDialogProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-/**
- * Dialog for exporting compliance logs
- */
+function download(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** Export of the audit log for regulators and auditors. */
 export function ExportDialog({ isOpen, onClose }: ExportDialogProps) {
-  const { isExporting, exportLogs, error } = useComplianceStore();
+  const exportLogs = useComplianceStore((s) => s.exportLogs);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [types, setTypes] = useState<ComplianceEventType[]>([]);
+  const [decrypted, setDecrypted] = useState(false);
+  const [rangeError, setRangeError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
+  const [exporting, setExporting] = useState(false);
 
-  const [options, setOptions] = useState<ExportOptions>({
-    startDate: '',
-    endDate: '',
-    eventTypes: [],
-    robotIds: [],
-    sessionIds: [],
-    includeDecrypted: false,
-  });
+  useEffect(() => {
+    if (!isOpen) return;
+    setStartDate(''); setEndDate(''); setTypes([]); setDecrypted(false);
+    setRangeError(undefined); setFormError(undefined);
+  }, [isOpen]);
 
-  const [exportSuccess, setExportSuccess] = useState<{ filename: string; count: number } | null>(null);
+  const toggle = (t: ComplianceEventType) =>
+    setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
-  const handleEventTypeToggle = (eventType: ComplianceEventType) => {
-    setOptions((prev) => ({
-      ...prev,
-      eventTypes: prev.eventTypes?.includes(eventType)
-        ? prev.eventTypes.filter((t) => t !== eventType)
-        : [...(prev.eventTypes || []), eventType],
-    }));
-  };
-
-  const handleExport = async () => {
+  const submit = async () => {
+    if (startDate && endDate && startDate > endDate) { setRangeError('The start date is after the end date.'); return; }
+    setRangeError(undefined);
+    setExporting(true);
+    setFormError(undefined);
     try {
-      const result = await exportLogs(options);
-
-      // Create and download the JSON file
-      const blob = new Blob([JSON.stringify(result.data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = result.filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
-      setExportSuccess({ filename: result.filename, count: result.recordCount });
-
-      // Clear success message after 5 seconds
-      setTimeout(() => {
-        setExportSuccess(null);
-      }, 5000);
-    } catch {
-      // Error handled in store
+      const result = await exportLogs({
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+        eventTypes: types.length ? types : undefined,
+        includeDecrypted: decrypted,
+      });
+      download(result.filename, result.data);
+      toast.success('Export ready', { description: `${result.recordCount.toLocaleString()} entries · ${result.filename}` });
+      onClose();
+    } catch (err) {
+      setFormError(errorMessage(err));
+    } finally {
+      setExporting(false);
     }
   };
 
-  const handleClose = () => {
-    setExportSuccess(null);
-    setOptions({
-      startDate: '',
-      endDate: '',
-      eventTypes: [],
-      robotIds: [],
-      sessionIds: [],
-      includeDecrypted: false,
-    });
-    onClose();
-  };
-
   return (
-    <Modal
+    <FormModal
       isOpen={isOpen}
-      onClose={handleClose}
-      title="Export Compliance Logs"
-      size="lg"
-      footer={
-        <>
-          <Button variant="ghost" onClick={handleClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            onClick={handleExport}
-            disabled={isExporting}
-          >
-            {isExporting ? 'Exporting...' : 'Export to JSON'}
-          </Button>
-        </>
-      }
+      onClose={onClose}
+      title="Export log"
+      description="A JSON file with every matching entry and its hashes, ready for a regulator. The export itself is logged."
+      submitLabel="Export"
+      submittingLabel="Exporting…"
+      isSubmitting={exporting}
+      error={formError}
+      onSubmit={submit}
+      noValidate
     >
-      <div className="space-y-6">
-        {error && (
-          <div className="p-3 bg-red-900/30 border border-red-700/50 rounded-lg text-red-300 text-sm">
-            {error}
-          </div>
-        )}
-
-        {exportSuccess && (
-          <div className="p-3 bg-green-900/30 border border-green-700/50 rounded-lg text-green-300 text-sm">
-            Successfully exported {exportSuccess.count} logs to {exportSuccess.filename}
-          </div>
-        )}
-
-        {/* Date Range */}
-        <div>
-          <h4 className="font-medium text-theme-primary mb-3">Date Range</h4>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm text-theme-secondary mb-1">Start Date</label>
-              <input
-                type="date"
-                value={options.startDate || ''}
-                onChange={(e) => setOptions({ ...options, startDate: e.target.value })}
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-theme-primary focus:outline-none focus:border-primary-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-theme-secondary mb-1">End Date</label>
-              <input
-                type="date"
-                value={options.endDate || ''}
-                onChange={(e) => setOptions({ ...options, endDate: e.target.value })}
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-theme-primary focus:outline-none focus:border-primary-500"
-              />
-            </div>
-          </div>
-          <p className="text-xs text-theme-tertiary mt-1">Leave empty to export all dates</p>
-        </div>
-
-        {/* Event Types */}
-        <div>
-          <h4 className="font-medium text-theme-primary mb-3">Event Types</h4>
-          <div className="flex flex-wrap gap-2">
-            {(['ai_decision', 'safety_action', 'command_execution', 'system_event', 'access_audit'] as const).map(
-              (eventType) => (
-                <button
-                  key={eventType}
-                  type="button"
-                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                    options.eventTypes?.includes(eventType)
-                      ? 'bg-primary text-on-primary'
-                      : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
-                  }`}
-                  onClick={() => handleEventTypeToggle(eventType)}
-                >
-                  {EVENT_TYPE_LABELS[eventType]}
-                </button>
-              )
-            )}
-          </div>
-          <p className="text-xs text-theme-tertiary mt-1">Select specific types or leave empty for all</p>
-        </div>
-
-        {/* Include Decrypted Payloads */}
-        <div>
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={options.includeDecrypted}
-              onChange={(e) => setOptions({ ...options, includeDecrypted: e.target.checked })}
-              className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-primary-500 focus:ring-primary-500"
-            />
-            <div>
-              <span className="text-theme-primary">Include decrypted payloads</span>
-              <p className="text-xs text-theme-tertiary mt-0.5">
-                Decrypt and include full payload content. Use with caution for sensitive data.
-              </p>
-            </div>
-          </label>
-        </div>
-
-        {/* Info box */}
-        <div className="bg-blue-900/30 border border-blue-700/50 rounded-lg p-4">
-          <h5 className="font-medium text-blue-300 mb-2">Export Information</h5>
-          <ul className="text-blue-200/80 text-sm space-y-1">
-            <li>Exports include log metadata, timestamps, and hash chain data</li>
-            <li>Export activity is recorded in the compliance access log</li>
-            <li>JSON format is suitable for regulatory submission</li>
-          </ul>
-        </div>
+      <FormField label="Format">
+        <Select options={[{ value: 'json', label: 'JSON (with hash chain)' }]} value="json" onChange={() => undefined} />
+      </FormField>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <FormField label="From" aside="Optional" error={rangeError}>
+          <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+        </FormField>
+        <FormField label="To" aside="Optional">
+          <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+        </FormField>
       </div>
-    </Modal>
+      <FormField label="Event types" hint={types.length ? `${types.length} selected` : 'None selected exports every type.'}>
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Event types">
+          {EVENT_TYPE_OPTIONS.map((o) => (
+            <ToggleChip key={o.value} size="sm" active={types.includes(o.value)} onClick={() => toggle(o.value)}>
+              {o.label}
+            </ToggleChip>
+          ))}
+        </div>
+      </FormField>
+      <Checkbox
+        label="Include decrypted payloads"
+        description="Needs the right permission. Without it, payloads are exported as hashes only."
+        checked={decrypted}
+        onChange={(e) => setDecrypted(e.target.checked)}
+      />
+    </FormModal>
   );
 }

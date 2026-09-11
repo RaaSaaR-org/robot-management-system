@@ -275,13 +275,13 @@ export type GDPRStore = GDPRState & GDPRActions;
 // ============================================================================
 
 export const REQUEST_TYPE_LABELS: Record<GDPRRequestType, string> = {
-  access: 'Data Access',
+  access: 'Data access',
   rectification: 'Rectification',
   erasure: 'Erasure',
   restriction: 'Restriction',
-  portability: 'Data Portability',
+  portability: 'Data portability',
   objection: 'Objection',
-  adm_review: 'ADM Review',
+  adm_review: 'Automated decision review',
 };
 
 export const REQUEST_TYPE_DESCRIPTIONS: Record<GDPRRequestType, string> = {
@@ -315,11 +315,11 @@ export const REQUEST_STATUS_COLORS: Record<GDPRRequestStatus, string> = {
 };
 
 export const CONSENT_TYPE_LABELS: Record<ConsentType, string> = {
-  marketing: 'Marketing Communications',
-  analytics: 'Usage Analytics',
-  ai_processing: 'AI/ML Processing',
-  data_sharing: 'Data Sharing with Partners',
-  third_party: 'Third-Party Integrations',
+  marketing: 'Marketing communications',
+  analytics: 'Usage analytics',
+  ai_processing: 'AI/ML processing',
+  data_sharing: 'Data sharing with partners',
+  third_party: 'Third-party integrations',
 };
 
 export const CONSENT_TYPE_DESCRIPTIONS: Record<ConsentType, string> = {

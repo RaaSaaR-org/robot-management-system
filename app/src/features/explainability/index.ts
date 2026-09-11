@@ -39,16 +39,18 @@ export type {
 export {
   ConfidenceGauge,
   SafetyBadge,
-  DecisionViewer,
-  DecisionList,
+  DecisionTable,
+  DecisionModal,
+  Pager,
   PerformanceDashboard,
   DocumentationPortal,
 } from './components';
 export type {
   ConfidenceGaugeProps,
   SafetyBadgeProps,
-  DecisionViewerProps,
-  DecisionListProps,
+  DecisionTableProps,
+  DecisionModalProps,
+  PagerProps,
   PerformanceDashboardProps,
   DocumentationPortalProps,
 } from './components';

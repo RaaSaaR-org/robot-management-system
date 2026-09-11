@@ -1,305 +1,198 @@
 /**
  * @file GapAnalysisPanel.tsx
- * @description Panel displaying compliance gaps with filtering and remediation
+ * @description Gap analysis view: open and closed compliance gaps with
+ *              framework, severity and status filters, a detail modal and
+ *              a "Close gap" form.
  * @feature compliance
  */
 
-import { useEffect } from 'react';
-import { cn } from '@/shared/utils/cn';
-import { Card } from '@/shared/components/ui/Card';
-import { Button } from '@/shared/components/ui/Button';
+import { useEffect, useState } from 'react';
+import { CheckCircle2, ClipboardCheck } from 'lucide-react';
+import {
+  Button, FormField, FormModal, Input, KeyValueList, Modal, Select, StatusTag, toast, type DataTableColumn,
+} from '@/shared/components/ui';
 import { useComplianceTrackerStore } from '../store/complianceTrackerStore';
 import {
-  REGULATORY_FRAMEWORK_LABELS,
-  GAP_SEVERITY_CONFIG,
-  type RegulatoryFramework,
-  type GapSeverity,
+  GAP_SEVERITY_CONFIG, REGULATORY_FRAMEWORK_LABELS, type ComplianceGap, type GapSeverity, type RegulatoryFramework,
 } from '../types';
+import { ObligationTable } from './ObligationTable';
+import { complianceTone, errorMessage, formatDate, formatDays, humanize } from './complianceFormat';
 
 export interface GapAnalysisPanelProps {
   className?: string;
 }
 
-/**
- * Individual gap card
- */
-function GapCard({
-  gap,
-  onClose,
-}: {
-  gap: {
-    id: string;
-    framework: RegulatoryFramework;
-    requirement: string;
-    articleReference: string;
-    severity: GapSeverity;
-    description: string;
-    currentState: string;
-    targetState: string;
-    remediation: string;
-    estimatedEffort?: 'low' | 'medium' | 'high';
-    dueDate?: string;
-    daysUntilDue: number | null;
-    status: 'open' | 'in_progress' | 'closed';
-    assignedTo?: string;
-  };
-  onClose: () => void;
-}) {
-  const severityConfig = GAP_SEVERITY_CONFIG[gap.severity];
+type Gap = ComplianceGap & { daysUntilDue: number | null; status: 'open' | 'in_progress' | 'closed' };
 
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
+const FRAMEWORK_OPTIONS = (Object.keys(REGULATORY_FRAMEWORK_LABELS) as RegulatoryFramework[]).map((f) => ({
+  value: f, label: REGULATORY_FRAMEWORK_LABELS[f],
+}));
+const SEVERITY_OPTIONS = (Object.keys(GAP_SEVERITY_CONFIG) as GapSeverity[]).map((s) => ({ value: s, label: GAP_SEVERITY_CONFIG[s].label }));
+const STATUS_OPTIONS = [
+  { value: 'open', label: 'Open' },
+  { value: 'closed', label: 'Closed' },
+  { value: 'all', label: 'All' },
+];
 
-  const effortLabels = {
-    low: { text: 'Low Effort', color: 'text-green-400' },
-    medium: { text: 'Medium Effort', color: 'text-yellow-400' },
-    high: { text: 'High Effort', color: 'text-red-400' },
-  };
+export function GapAnalysisPanel({ className }: GapAnalysisPanelProps) {
+  const { gaps, gapFilters, isLoadingGaps, error, fetchGaps, fetchGapSummary, setGapFilters } = useComplianceTrackerStore();
+  const [detail, setDetail] = useState<Gap | null>(null);
+  const [closing, setClosing] = useState<Gap | null>(null);
+
+  useEffect(() => {
+    void fetchGaps();
+    void fetchGapSummary();
+  }, [fetchGaps, fetchGapSummary]);
+
+  const rows = gaps as Gap[];
+  const critical = rows.filter((g) => g.severity === 'critical' && g.status !== 'closed').length;
+  const open = rows.filter((g) => g.status !== 'closed').length;
+  const hasServerFilters = Boolean(gapFilters.framework || gapFilters.severity || (gapFilters.status && gapFilters.status !== 'open'));
+
+  const columns: DataTableColumn<Gap>[] = [
+    {
+      key: 'requirement', header: 'Requirement', sortable: true,
+      cell: (g) => (
+        <div className="min-w-0">
+          <div className="text-sm text-ink-primary">{g.requirement}</div>
+          <div className="text-[13px] text-ink-tertiary">{g.articleReference}</div>
+        </div>
+      ),
+    },
+    { key: 'framework', header: 'Framework', sortable: true, hideBelow: 'md', cell: (g) => REGULATORY_FRAMEWORK_LABELS[g.framework] ?? g.framework },
+    {
+      key: 'severity', header: 'Severity', sortable: true,
+      sortValue: (g) => ['low', 'medium', 'high', 'critical'].indexOf(g.severity),
+      cell: (g) => <StatusTag tone={GAP_SEVERITY_CONFIG[g.severity]?.tone ?? 'neutral'}>{GAP_SEVERITY_CONFIG[g.severity]?.label ?? g.severity}</StatusTag>,
+    },
+    { key: 'status', header: 'Status', sortable: true, cell: (g) => <StatusTag tone={complianceTone(g.status)}>{humanize(g.status)}</StatusTag> },
+    {
+      key: 'dueDate', header: 'Due', sortable: true, hideBelow: 'sm', sortValue: (g) => (g.dueDate ? new Date(g.dueDate) : null),
+      cell: (g) => (g.dueDate ? <span className="whitespace-nowrap text-[13px] text-ink-tertiary">{formatDate(g.dueDate)} · {formatDays(g.daysUntilDue)}</span> : null),
+    },
+  ];
 
   return (
-    <Card className="glass-card p-4">
-      {/* Header */}
-      <div className="flex items-start justify-between mb-3">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs font-medium text-primary-400 uppercase">
-              {REGULATORY_FRAMEWORK_LABELS[gap.framework]}
-            </span>
-            <span className="text-xs text-theme-tertiary">{gap.articleReference}</span>
+    <div className={className}>
+      <ObligationTable
+        noun="gaps"
+        title="Compliance gaps"
+        description={`${open} open · ${critical} critical`}
+        rows={rows}
+        columns={columns}
+        getRowId={(g) => g.id}
+        searchText={(g) => `${g.requirement} ${g.articleReference} ${g.description}`}
+        extraFilters={
+          <>
+            <Select aria-label="Framework" fullWidth={false} className="w-48" placeholder="All frameworks" options={FRAMEWORK_OPTIONS}
+              value={gapFilters.framework ?? ''} onChange={(e) => setGapFilters({ framework: (e.target.value || undefined) as RegulatoryFramework | undefined })} />
+            <Select aria-label="Severity" fullWidth={false} className="w-40" placeholder="All severities" options={SEVERITY_OPTIONS}
+              value={gapFilters.severity ?? ''} onChange={(e) => setGapFilters({ severity: (e.target.value || undefined) as GapSeverity | undefined })} />
+            <Select aria-label="Status" fullWidth={false} className="w-32" options={STATUS_OPTIONS}
+              value={gapFilters.status ?? 'open'} onChange={(e) => setGapFilters({ status: e.target.value as 'open' | 'closed' | 'all' })} />
+          </>
+        }
+        hasExtraFilters={hasServerFilters}
+        onClearExtraFilters={() => setGapFilters({ framework: undefined, severity: undefined, status: undefined })}
+        defaultSort={{ key: 'severity', direction: 'desc' }}
+        onRowClick={setDetail}
+        rowActions={(g) => [{ label: 'Close gap', icon: <CheckCircle2 />, disabled: g.status === 'closed', onSelect: () => setClosing(g) }]}
+        rowActionsLabel={(g) => `Actions for ${g.requirement}`}
+        isLoading={isLoadingGaps}
+        error={error}
+        onRetry={() => void fetchGaps()}
+        emptyIcon={<ClipboardCheck />}
+        emptyTitle="No open gaps"
+        emptyDescription="Gaps are requirements a framework asks for that the fleet does not meet yet. None are recorded."
+      />
+
+      <Modal
+        isOpen={Boolean(detail)}
+        onClose={() => setDetail(null)}
+        size="lg"
+        title={detail?.requirement}
+        description={detail ? `${REGULATORY_FRAMEWORK_LABELS[detail.framework] ?? detail.framework} · ${detail.articleReference}` : undefined}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDetail(null)}>Close</Button>
+            {detail && detail.status !== 'closed' && (
+              <Button onClick={() => { setClosing(detail); setDetail(null); }}>Close gap</Button>
+            )}
+          </>
+        }
+      >
+        {detail && (
+          <div className="flex flex-col gap-4">
+            <p className="max-w-[70ch] text-sm text-ink-secondary">{detail.description}</p>
+            <KeyValueList
+              items={[
+                { label: 'Severity', value: GAP_SEVERITY_CONFIG[detail.severity]?.label },
+                { label: 'Status', value: humanize(detail.status) },
+                { label: 'Current state', value: detail.currentState },
+                { label: 'Target state', value: detail.targetState },
+                { label: 'Remediation', value: detail.remediation },
+                { label: 'Effort', value: humanize(detail.estimatedEffort) },
+                { label: 'Assigned to', value: detail.assignedTo },
+                { label: 'Due', value: detail.dueDate ? formatDate(detail.dueDate) : undefined },
+              ]}
+            />
           </div>
-          <h4 className="font-medium text-theme-primary">{gap.requirement}</h4>
-        </div>
-        <span
-          className={cn(
-            'px-2 py-1 rounded text-xs font-medium flex-shrink-0',
-            severityConfig.bgColor,
-            severityConfig.textColor
-          )}
-        >
-          {severityConfig.label}
-        </span>
-      </div>
-
-      {/* Description */}
-      <p className="text-sm text-theme-tertiary mb-3">{gap.description}</p>
-
-      {/* Current vs Target State */}
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <div className="bg-red-900/20 rounded-lg p-3">
-          <div className="text-xs text-red-400 font-medium mb-1">Current State</div>
-          <p className="text-sm text-theme-secondary">{gap.currentState}</p>
-        </div>
-        <div className="bg-green-900/20 rounded-lg p-3">
-          <div className="text-xs text-green-400 font-medium mb-1">Target State</div>
-          <p className="text-sm text-theme-secondary">{gap.targetState}</p>
-        </div>
-      </div>
-
-      {/* Remediation */}
-      <div className="bg-gray-800/50 rounded-lg p-3 mb-3">
-        <div className="text-xs text-theme-tertiary font-medium mb-1">Remediation</div>
-        <p className="text-sm text-theme-secondary">{gap.remediation}</p>
-      </div>
-
-      {/* Footer */}
-      <div className="flex items-center justify-between text-xs">
-        <div className="flex items-center gap-4">
-          {gap.estimatedEffort && (
-            <span className={effortLabels[gap.estimatedEffort].color}>
-              {effortLabels[gap.estimatedEffort].text}
-            </span>
-          )}
-          {gap.dueDate && (
-            <span
-              className={cn(
-                gap.daysUntilDue !== null && gap.daysUntilDue < 0
-                  ? 'text-red-400'
-                  : gap.daysUntilDue !== null && gap.daysUntilDue < 30
-                    ? 'text-yellow-400'
-                    : 'text-theme-tertiary'
-              )}
-            >
-              Due: {formatDate(gap.dueDate)}
-            </span>
-          )}
-          {gap.assignedTo && (
-            <span className="text-theme-tertiary">Assigned: {gap.assignedTo}</span>
-          )}
-        </div>
-        {gap.status !== 'closed' && (
-          <Button variant="secondary" size="sm" onClick={onClose}>
-            Mark Closed
-          </Button>
         )}
-      </div>
-    </Card>
+      </Modal>
+
+      <CloseGapModal gap={closing} onClose={() => setClosing(null)} />
+    </div>
   );
 }
 
-/**
- * Gap Analysis Panel
- */
-export function GapAnalysisPanel({ className }: GapAnalysisPanelProps) {
-  const {
-    gaps,
-    gapSummary,
-    gapFilters,
-    isLoadingGaps,
-    fetchGaps,
-    fetchGapSummary,
-    setGapFilters,
-    closeGap,
-  } = useComplianceTrackerStore();
+function CloseGapModal({ gap, onClose }: { gap: Gap | null; onClose: () => void }) {
+  const closeGap = useComplianceTrackerStore((s) => s.closeGap);
+  const [closedBy, setClosedBy] = useState('');
+  const [fieldError, setFieldError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetchGaps();
-    fetchGapSummary();
-  }, [fetchGaps, fetchGapSummary]);
+    if (!gap) return;
+    setClosedBy('');
+    setFieldError(undefined);
+    setFormError(undefined);
+  }, [gap]);
 
-  const handleCloseGap = async (id: string) => {
-    // In production, you'd get the current user
-    await closeGap(id, 'system-user');
+  const handleSubmit = async () => {
+    if (!gap) return;
+    if (!closedBy.trim()) {
+      setFieldError('Name the person who verified the fix.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await closeGap(gap.id, closedBy.trim());
+      toast.success('Gap closed', { description: gap.requirement });
+      onClose();
+    } catch (err) {
+      setFormError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const frameworks: RegulatoryFramework[] = [
-    'ai_act',
-    'machinery_regulation',
-    'gdpr',
-    'nis2',
-    'cra',
-    'red',
-    'dguv',
-  ];
-
-  const severities: GapSeverity[] = ['critical', 'high', 'medium', 'low'];
-
-  // Filter open gaps only
-  const openGaps = gaps.filter((g) => g.status !== 'closed');
-
-  if (isLoadingGaps) {
-    return (
-      <Card className={cn('glass-card p-6', className)}>
-        <div className="animate-pulse space-y-4">
-          <div className="h-6 bg-gray-700 rounded w-1/3" />
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-48 bg-gray-700 rounded" />
-          ))}
-        </div>
-      </Card>
-    );
-  }
-
   return (
-    <div className={cn('space-y-4', className)}>
-      {/* Summary by Framework */}
-      {gapSummary && (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
-          {frameworks.map((fw) => {
-            const summary = gapSummary[fw];
-            if (!summary || summary.total === 0) return null;
-            return (
-              <Card
-                key={fw}
-                className={cn(
-                  'p-3 cursor-pointer transition-all',
-                  gapFilters.framework === fw
-                    ? 'bg-primary-500/20 border-primary-500/50'
-                    : 'bg-gray-800/50 hover:bg-gray-800'
-                )}
-                onClick={() =>
-                  setGapFilters({
-                    framework: gapFilters.framework === fw ? undefined : fw,
-                  })
-                }
-              >
-                <div className="text-xs font-medium text-theme-tertiary mb-1">
-                  {REGULATORY_FRAMEWORK_LABELS[fw]}
-                </div>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-lg font-bold text-theme-primary">{summary.total}</span>
-                  {summary.critical > 0 && (
-                    <span className="text-xs text-red-400">({summary.critical} crit)</span>
-                  )}
-                </div>
-              </Card>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Severity Filters */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-sm text-theme-tertiary">Severity:</span>
-        <button
-          type="button"
-          onClick={() => setGapFilters({ severity: undefined })}
-          className={cn(
-            'px-3 py-1 text-sm rounded-lg transition-colors',
-            !gapFilters.severity
-              ? 'bg-primary text-on-primary'
-              : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
-          )}
-        >
-          All
-        </button>
-        {severities.map((sev) => (
-          <button
-            key={sev}
-            type="button"
-            onClick={() =>
-              setGapFilters({
-                severity: gapFilters.severity === sev ? undefined : sev,
-              })
-            }
-            className={cn(
-              'px-3 py-1 text-sm rounded-lg transition-colors',
-              gapFilters.severity === sev
-                ? cn(GAP_SEVERITY_CONFIG[sev].bgColor, GAP_SEVERITY_CONFIG[sev].textColor)
-                : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
-            )}
-          >
-            {GAP_SEVERITY_CONFIG[sev].label}
-          </button>
-        ))}
-      </div>
-
-      {/* Gap List */}
-      {openGaps.length > 0 ? (
-        <div className="space-y-4">
-          {openGaps.map((gap) => (
-            <GapCard
-              key={gap.id}
-              gap={gap as any}
-              onClose={() => handleCloseGap(gap.id)}
-            />
-          ))}
-        </div>
-      ) : (
-        <Card className="glass-card p-6 text-center">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-green-900/20 flex items-center justify-center">
-            <svg
-              className="w-8 h-8 text-green-400"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-          </div>
-          <p className="text-theme-secondary">No open compliance gaps</p>
-          <p className="text-sm text-theme-tertiary mt-1">All identified gaps have been addressed</p>
-        </Card>
-      )}
-    </div>
+    <FormModal
+      isOpen={Boolean(gap)}
+      onClose={onClose}
+      title={gap ? `Close ${gap.requirement}?` : 'Close gap'}
+      description="Closing records that the requirement is now met. It counts toward the framework's score."
+      submitLabel="Close gap"
+      submittingLabel="Closing…"
+      isSubmitting={saving}
+      error={formError}
+      onSubmit={handleSubmit}
+      noValidate
+    >
+      <FormField label="Closed by" required error={fieldError} hint="Who verified that the gap is fixed. Recorded in the activity log.">
+        <Input value={closedBy} onChange={(e) => setClosedBy(e.target.value)} placeholder="e.g. Compliance officer" />
+      </FormField>
+    </FormModal>
   );
 }
