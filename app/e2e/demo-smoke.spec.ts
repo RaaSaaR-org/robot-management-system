@@ -58,7 +58,10 @@ test('model registry renders and remains usable after loading models', async ({ 
   await page.goto('./#/models');
   await expect(page.getByRole('heading', { name: 'Model Registry', exact: true })).toBeVisible();
   await page.waitForLoadState('networkidle');
-  await expect(page.getByRole('button', { name: 'Register model', exact: true })).toBeEnabled();
+  // The page header's primary action; an empty registry repeats it in the empty state.
+  await expect(
+    page.locator('header', { hasText: 'Model Registry' }).getByRole('button', { name: 'Register model', exact: true }),
+  ).toBeEnabled();
   expect(errors).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath('models.png'), fullPage: true });
   await page.locator('aside a[href="#/dashboard"]:visible').click();
