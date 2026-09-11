@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import { Bot, Gauge, Plus, Search, Trash2 } from 'lucide-react';
 import {
   Button, DataTable, EmptyState, ErrorState, Panel, SearchInput, SegmentedControl, Select,
-  SkeletonRows, Toolbar, confirm, toast, type DataTableColumn, type RowActionItem,
+  SkeletonRows, Toolbar, confirm, errorMessage, toast, type DataTableColumn, type RowActionItem,
 } from '@/shared/components/ui';
 import { useRobots } from '../hooks/useRobots';
 import { useRobotsStore } from '../store/robotsStore';
@@ -108,14 +108,7 @@ export function RobotList({ onRegister }: RobotListProps) {
     } catch (err) {
       // The toast reports it; the list keeps showing the robots.
       clearError();
-      toast.error("Couldn't unregister robot", {
-        description:
-          err instanceof Error
-            ? err.message
-            : err && typeof err === 'object' && 'message' in err
-              ? String((err as { message: unknown }).message)
-              : String(err),
-      });
+      toast.error("Couldn't unregister robot", { description: errorMessage(err) });
     }
   };
 

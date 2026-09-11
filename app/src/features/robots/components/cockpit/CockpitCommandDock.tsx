@@ -9,7 +9,7 @@
 import { memo, useCallback, useState, type FormEvent, type ReactNode } from 'react';
 import { Home, Send, Square, Zap } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
-import { Badge, Button, Input, StatusTag, confirm, toast, type Tone } from '@/shared/components/ui';
+import { Badge, Button, Input, StatusTag, confirm, errorMessage, toast, type Tone } from '@/shared/components/ui';
 import { EmergencyStopButton } from '../EmergencyStopButton';
 import { robotsApi } from '../../api/robotsApi';
 import { useCommand } from '@/features/command/hooks';
@@ -64,13 +64,6 @@ const QUICK_ACTS: QuickAct[] = [
   },
 ];
 
-/** Readable text for an API rejection (ApiError objects are not Error instances). */
-const errorText = (err: unknown): string => {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === 'object' && 'message' in err) return String((err as { message: unknown }).message);
-  return String(err);
-};
-
 export const CockpitCommandDock = memo(function CockpitCommandDock({
   robotId,
   robotName,
@@ -104,7 +97,7 @@ export const CockpitCommandDock = memo(function CockpitCommandDock({
         await robotsApi.sendCommand(robotId, { type: act.type, priority: act.type === 'stop' ? 'high' : 'normal' });
         toast.success(act.done, { description: robotName });
       } catch (err) {
-        toast.error(act.failed, { description: errorText(err) });
+        toast.error(act.failed, { description: errorMessage(err) });
       } finally {
         setPending(null);
       }
@@ -132,7 +125,7 @@ export const CockpitCommandDock = memo(function CockpitCommandDock({
       await executeCommand(robotId);
       toast.success('Command sent', { description: robotName });
     } catch (err) {
-      toast.error("Couldn't send the command", { description: errorText(err) });
+      toast.error("Couldn't send the command", { description: errorMessage(err) });
     }
   }, [interpretation, robotName, currentText, executeCommand, robotId]);
 

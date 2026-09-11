@@ -8,7 +8,7 @@
 
 import { useCallback, useState } from 'react';
 import { OctagonX } from 'lucide-react';
-import { Button, toast } from '@/shared/components/ui';
+import { Button, errorMessage, toast } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { robotsApi } from '../api/robotsApi';
 
@@ -27,13 +27,6 @@ export interface EmergencyStopButtonProps {
   fullWidth?: boolean;
   /** Additional class names */
   className?: string;
-}
-
-/** Readable text for an API rejection (ApiError objects are not Error instances). */
-function messageOf(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === 'object' && 'message' in err) return String((err as { message: unknown }).message);
-  return String(err);
 }
 
 /** One-press emergency stop in the stop color. */
@@ -55,7 +48,7 @@ export function EmergencyStopButton({
       toast.success('Emergency stop sent', { description: displayName });
     } catch (err) {
       toast.error("Couldn't send emergency stop", {
-        description: `${displayName}: ${messageOf(err)}`,
+        description: `${displayName}: ${errorMessage(err)}`,
       });
     } finally {
       setIsExecuting(false);

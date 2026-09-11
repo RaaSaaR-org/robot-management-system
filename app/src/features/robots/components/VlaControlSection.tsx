@@ -9,13 +9,10 @@
 import { useState, useCallback } from 'react';
 import { Play, Square } from 'lucide-react';
 import {
-  Button,
-  FormField,
-  Input,
-  Panel,
-  StatusTag,
-  confirm,
-  toast,
+  Button, FormField,
+  Input, Panel,
+  StatusTag, confirm,
+  errorMessage, toast,
 } from '@/shared/components/ui';
 import { useVlaStatus } from '../hooks/useVlaStatus';
 
@@ -60,7 +57,7 @@ export function VlaControlSection({ robotId }: VlaControlSectionProps) {
       setPromptInput('');
       toast.success('Skill started', { description: trimmed });
     } catch (err) {
-      toast.error("Couldn't start skill", { description: err instanceof Error ? err.message : String(err) });
+      toast.error("Couldn't start skill", { description: errorMessage(err) });
     }
   }, [promptInput, serverUrl, startVla]);
 
@@ -69,7 +66,7 @@ export function VlaControlSection({ robotId }: VlaControlSectionProps) {
       await stopVla();
       toast.success('Skill stopped');
     } catch (err) {
-      toast.error("Couldn't stop skill", { description: err instanceof Error ? err.message : String(err) });
+      toast.error("Couldn't stop skill", { description: errorMessage(err) });
     }
   }, [stopVla]);
 

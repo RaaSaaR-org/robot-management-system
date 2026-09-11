@@ -7,13 +7,10 @@
 import { useState, useCallback } from 'react';
 import { Download, Eye, ScanLine, Trash2, X } from 'lucide-react';
 import {
-  Button,
-  EmptyState,
-  Panel,
-  RowActions,
-  StatusTag,
-  confirm,
-  toast,
+  Button, EmptyState,
+  Panel, RowActions,
+  StatusTag, confirm,
+  errorMessage, toast,
 } from '@/shared/components/ui';
 import { PointCloudViewer } from './visualization';
 import { useRobotsStore } from '../store/robotsStore';
@@ -30,15 +27,6 @@ function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  // The API client rejects with plain {code, message} objects.
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
-    return error.message;
-  }
-  return String(error);
 }
 
 function scanName(scan: SensorScanSummary): string {
@@ -76,7 +64,7 @@ export function PointCloudGallery({ robotId }: PointCloudGalleryProps) {
         },
       });
     } catch (error) {
-      toast.error("Couldn't open scan", { description: errorText(error) });
+      toast.error("Couldn't open scan", { description: errorMessage(error) });
     } finally {
       setLoadingId(null);
     }
@@ -90,7 +78,7 @@ export function PointCloudGallery({ robotId }: PointCloudGalleryProps) {
         `${scan.sensorName}-${scan.id.slice(0, 8)}.pcd`,
       );
     } catch (error) {
-      toast.error("Couldn't download scan", { description: errorText(error) });
+      toast.error("Couldn't download scan", { description: errorMessage(error) });
     }
   }, []);
 
@@ -108,7 +96,7 @@ export function PointCloudGallery({ robotId }: PointCloudGalleryProps) {
         await fetchSensorScans(robotId);
         toast.success('Scan deleted', { description: scanName(scan) });
       } catch (error) {
-        toast.error("Couldn't delete scan", { description: errorText(error) });
+        toast.error("Couldn't delete scan", { description: errorMessage(error) });
       }
     },
     [robotId, selected, fetchSensorScans],

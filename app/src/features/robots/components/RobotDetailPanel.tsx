@@ -13,12 +13,10 @@ import { BatteryCharging, Gauge, Home, Trash2 } from 'lucide-react';
 import {
   ErrorState,
   LinkButton,
-  PageHeader,
-  Panel,
+  PageHeader, Panel,
   RowActions,
-  SkeletonText,
-  confirm,
-  toast,
+  SkeletonText, confirm,
+  errorMessage, toast,
 } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { RobotControlCenter } from './RobotControlCenter';
@@ -44,10 +42,6 @@ export interface RobotDetailPanelProps {
 
 const BACK = { to: '/fleet?tab=list', label: 'Fleet' };
 const ICON = 'h-4 w-4';
-
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 // ============================================================================
 // COMPONENT
@@ -93,7 +87,7 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
       await executeCommand(sendToCharge);
       toast.success('Sent to charge', { description: name });
     } catch (err) {
-      toast.error("Couldn't send to charge", { description: messageOf(err) });
+      toast.error("Couldn't send to charge", { description: errorMessage(err) });
     }
   }, [executeCommand, sendToCharge, name]);
 
@@ -108,7 +102,7 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
       await executeCommand(returnHome);
       toast.success('Sent home', { description: name });
     } catch (err) {
-      toast.error("Couldn't send home", { description: messageOf(err) });
+      toast.error("Couldn't send home", { description: errorMessage(err) });
     }
   }, [executeCommand, returnHome, name]);
 
@@ -126,7 +120,7 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
       toast.success('Robot unregistered', { description: name });
       navigate(BACK.to);
     } catch (err) {
-      toast.error("Couldn't unregister robot", { description: messageOf(err) });
+      toast.error("Couldn't unregister robot", { description: errorMessage(err) });
     }
   }, [navigate, robotId, name]);
 
