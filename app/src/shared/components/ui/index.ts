@@ -65,6 +65,7 @@ export type { ToastApi, ToastOptions, ToastItem, ToastTone } from './toast';
 export { Toaster } from './Toaster';
 export { FeedbackProvider, ToastProvider } from './FeedbackProvider';
 export type { FeedbackProviderProps } from './FeedbackProvider';
+export { errorMessage, ERROR_MESSAGE_FALLBACK } from './errorMessage';
 export { EmptyState } from './EmptyState';
 export type { EmptyStateProps } from './EmptyState';
 export { ErrorState } from './ErrorState';
