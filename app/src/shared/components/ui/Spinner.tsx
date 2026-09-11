@@ -13,7 +13,12 @@ import { cn } from '@/shared/utils/cn';
 // ============================================================================
 
 export type SpinnerSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
-/** `cobalt`/`turquoise`/`white` are legacy names: they map to primary/accent/current. */
+/**
+ * `current` · `primary` · `accent`.
+ * @deprecated values `cobalt` / `turquoise` / `white` map to primary / accent /
+ * current. They stay only while unmigrated code (auth, a2a, processes) still
+ * passes them; new code never does.
+ */
 export type SpinnerColor = 'current' | 'primary' | 'accent' | 'cobalt' | 'turquoise' | 'white';
 
 export interface SpinnerProps {

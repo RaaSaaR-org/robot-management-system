@@ -52,6 +52,8 @@ export { Switch } from './Switch';
 export type { SwitchProps } from './Switch';
 export { FormModal } from './FormModal';
 export type { FormModalProps } from './FormModal';
+export { ChoiceCard, ChoiceCardGroup, choiceSurface } from './ChoiceCard';
+export type { ChoiceCardProps, ChoiceCardGroupProps } from './ChoiceCard';
 
 // Feedback
 export { Modal } from './Modal';
@@ -94,6 +96,7 @@ export { Badge } from './Badge';
 export type { BadgeProps, BadgeVariant, BadgeSize } from './Badge';
 export type { Tone, BaseTone } from './styles';
 export { chartColors, chartTheme, chartSeriesColor } from './chartColors';
+export { cssColor, useCssColor } from './cssColor';
 
 // Data
 export { DataTable } from './DataTable';
@@ -108,3 +111,6 @@ export type {
 } from './DataTable';
 export { Pager } from './Pager';
 export type { PagerProps } from './Pager';
+
+// Class strings for the rare element that is not a kit component
+export { focusRing, focusRingInset } from './styles';
