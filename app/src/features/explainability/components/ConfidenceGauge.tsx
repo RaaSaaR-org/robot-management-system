@@ -1,67 +1,49 @@
 /**
  * @file ConfidenceGauge.tsx
- * @description Visual gauge for displaying AI confidence scores
+ * @description AI confidence as a kit StatusTag (compact) or ProgressBar (detail)
  * @feature explainability
  */
 
-import { cn } from '@/shared/utils/cn';
-import {
-  formatConfidence,
-  getConfidenceLevel,
-  CONFIDENCE_LEVEL_LABELS,
-  type ConfidenceLevel,
-} from '../types';
+import { ProgressBar, StatusTag, type StatusTagTone } from '@/shared/components/ui';
+import { formatConfidence } from '../types';
+
+/** Group-wide thresholds: ≥ 0.8 live, 0.5–0.8 gated, < 0.5 stopped. */
+export function confidenceTone(confidence: number): StatusTagTone {
+  if (confidence >= 0.8) return 'live';
+  if (confidence >= 0.5) return 'gated';
+  return 'stopped';
+}
+
+export function confidenceLabel(confidence: number): string {
+  if (confidence >= 0.8) return 'High';
+  if (confidence >= 0.5) return 'Medium';
+  return 'Low';
+}
+
+const BAR_VARIANT = { live: 'success', gated: 'warning', stopped: 'error' } as const;
 
 export interface ConfidenceGaugeProps {
   confidence: number;
-  size?: 'sm' | 'md' | 'lg';
-  showLabel?: boolean;
+  /** tag: a StatusTag with the percentage; bar: a labelled ProgressBar */
+  variant?: 'tag' | 'bar';
   className?: string;
 }
 
-const SIZE_CLASSES = {
-  sm: 'h-2',
-  md: 'h-3',
-  lg: 'h-4',
-};
-
-const CONFIDENCE_COLORS: Record<ConfidenceLevel, string> = {
-  high: 'bg-green-500',
-  medium: 'bg-yellow-500',
-  low: 'bg-red-500',
-};
-
-/**
- * Visual gauge component showing confidence level
- *
- * @example
- * ```tsx
- * <ConfidenceGauge confidence={0.85} showLabel />
- * ```
- */
-export function ConfidenceGauge({
-  confidence,
-  size = 'md',
-  showLabel = false,
-  className,
-}: ConfidenceGaugeProps) {
-  const level = getConfidenceLevel(confidence);
-  const percentage = Math.round(confidence * 100);
-
+export function ConfidenceGauge({ confidence, variant = 'tag', className }: ConfidenceGaugeProps) {
+  const tone = confidenceTone(confidence);
+  if (variant === 'bar') {
+    return (
+      <ProgressBar
+        className={className}
+        value={Math.round(confidence * 100)}
+        variant={BAR_VARIANT[tone as keyof typeof BAR_VARIANT]}
+        label={`${confidenceLabel(confidence)} confidence`}
+      />
+    );
+  }
   return (
-    <div className={cn('space-y-1', className)}>
-      {showLabel && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-theme-secondary">{CONFIDENCE_LEVEL_LABELS[level]}</span>
-          <span className="font-medium text-theme-primary">{formatConfidence(confidence)}</span>
-        </div>
-      )}
-      <div className={cn('w-full rounded-full bg-gray-700/50 overflow-hidden', SIZE_CLASSES[size])}>
-        <div
-          className={cn('h-full rounded-full transition-all duration-300', CONFIDENCE_COLORS[level])}
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
-    </div>
+    <StatusTag tone={tone} className={className}>
+      {formatConfidence(confidence)}
+    </StatusTag>
   );
 }
