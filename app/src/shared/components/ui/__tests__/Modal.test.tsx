@@ -80,6 +80,27 @@ describe('Modal', () => {
     expect(document.body.style.overflow).toBe('');
   });
 
+  it('prevents the page reload before calling onSubmit', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <Modal isOpen onClose={() => {}} title="Rename" onSubmit={onSubmit} footer={<Button type="submit">Save</Button>}>
+        <input aria-label="Name" />
+      </Modal>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit.mock.calls[0][0].defaultPrevented).toBe(true);
+    await user.type(screen.getByLabelText('Name'), 'x{Enter}');
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+    expect(onSubmit.mock.calls[1][0].defaultPrevented).toBe(true);
+  });
+
+  it('puts testId on the dialog panel', () => {
+    render(<Modal isOpen onClose={() => {}} title="Details" testId="details-dialog" />);
+    expect(screen.getByTestId('details-dialog')).toBe(screen.getByRole('dialog', { name: 'Details' }));
+  });
+
   it('only the top dialog reacts to Escape', async () => {
     const user = userEvent.setup();
     const outerClose = vi.fn();

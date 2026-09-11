@@ -62,10 +62,15 @@ export interface ModalProps {
   initialFocusRef?: RefObject<HTMLElement | null>;
   /** `alertdialog` for confirmations */
   role?: 'dialog' | 'alertdialog';
-  /** When set, the dialog panel is a <form> wrapping header, body and footer (used by FormModal) */
+  /**
+   * When set, the dialog panel is a <form> wrapping header, body and footer (used
+   * by FormModal). The default (a page reload) is prevented before it is called.
+   */
   onSubmit?: FormEventHandler<HTMLFormElement>;
   /** Disable native form validation when `onSubmit` is set */
   noValidate?: boolean;
+  /** `data-testid` on the dialog panel */
+  testId?: string;
 }
 
 // ============================================================================
@@ -167,6 +172,7 @@ export function Modal({
   role = 'dialog',
   onSubmit,
   noValidate,
+  testId,
 }: ModalProps) {
   const dialogId = useId();
   const depth = useContext(ModalDepthContext) + 1;
@@ -309,6 +315,7 @@ export function Modal({
     'aria-modal': true as const,
     'aria-labelledby': title ? titleId : undefined,
     'aria-describedby': description ? descriptionId : undefined,
+    'data-testid': testId,
     tabIndex: -1,
     className: cn(
       'relative flex max-h-[85vh] w-full flex-col outline-none',
@@ -331,7 +338,11 @@ export function Modal({
           ref={(node) => {
             panelRef.current = node;
           }}
-          onSubmit={onSubmit}
+          onSubmit={(event) => {
+            // A Modal used as a form must never reload the page.
+            event.preventDefault();
+            onSubmit(event);
+          }}
           noValidate={noValidate}
           {...panelProps}
         >
