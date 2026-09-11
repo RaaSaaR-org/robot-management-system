@@ -99,10 +99,6 @@ const ALLOWED: Record<string, { rules: string[]; reason: string }> = {
     rules: ['window.confirm'],
     reason: "the kit's confirm() falls back to window.confirm when no ConfirmHost is mounted (unit tests)",
   },
-  'shared/components/ui/Spinner.tsx': {
-    rules: ['cobalt/turquoise'],
-    reason: 'TEMPORARY: the legacy cobalt/turquoise colour names on Spinner; TASK-271 removes them',
-  },
 };
 
 const COMMENT = /^\s*(?:\/\/|\/\*|\*|\{\/\*)/;
