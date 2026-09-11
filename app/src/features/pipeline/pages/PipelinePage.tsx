@@ -1,20 +1,14 @@
 /**
  * @file PipelinePage.tsx
- * @description "Skill Training" overview page — 5-stage pipeline with next-step CTAs
+ * @description Pipeline overview: the five stages from demonstrations to a
+ *              deployed policy as one vertical stepper, with the next stage as
+ *              the header's primary action.
  * @feature pipeline
  */
 
-import { useEffect, useState, useCallback } from 'react';
-import {
-  Camera,
-  Database,
-  Brain,
-  FlaskConical,
-  Rocket,
-} from 'lucide-react';
-import { Card } from '@/shared/components/ui/Card';
-import { Spinner } from '@/shared/components/ui/Spinner';
-import { PageHeader } from '@/shared/components/ui/PageHeader';
+import { useCallback, useEffect, useState } from 'react';
+import { ArrowRight } from 'lucide-react';
+import { LinkButton, PageHeader, Panel, SkeletonRows } from '@/shared/components/ui';
 import { StageCard, type StageStatus } from '../components/StageCard';
 import { FirstRunWizard } from '../components/FirstRunWizard';
 import { datacollectionApi } from '@/features/datacollection/api/datacollectionApi';
@@ -24,14 +18,13 @@ import { simulationApi } from '@/features/simulation/api/simulationApi';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
-// TIME HELPERS
+// HELPERS
 // ============================================================================
 
 function formatRelativeTime(isoDate: string | Date | undefined | null): string {
   if (!isoDate) return '';
   const date = typeof isoDate === 'string' ? new Date(isoDate) : isoDate;
-  const diff = Date.now() - date.getTime();
-  const sec = Math.floor(diff / 1000);
+  const sec = Math.floor((Date.now() - date.getTime()) / 1000);
   if (sec < 60) return `${sec}s ago`;
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min}m ago`;
@@ -42,303 +35,233 @@ function formatRelativeTime(isoDate: string | Date | undefined | null): string {
   return date.toLocaleDateString(UI_DATE_LOCALE);
 }
 
-// ============================================================================
-// STAGE STATE SHAPE
-// ============================================================================
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const lastActivity = (at?: string | Date | null) => (at ? `Last activity ${formatRelativeTime(at)}` : '');
 
 interface StageState {
   status: StageStatus;
   statLine: string;
   hintLine: string;
+  loadError?: boolean;
 }
 
-interface PipelineState {
-  collect: StageState;
-  dataset: StageState;
-  train: StageState;
-  evaluate: StageState;
-  deploy: StageState;
-  totalRecords: number;
-}
+type StageKey = 'collect' | 'dataset' | 'train' | 'evaluate' | 'deploy';
 
-const EMPTY_STAGE: StageState = {
-  status: 'empty',
-  statLine: 'No records yet',
-  hintLine: '',
-};
+const EMPTY: StageState = { status: 'empty', statLine: 'Nothing yet', hintLine: '' };
+const FAILED: StageState = { status: 'empty', statLine: '', hintLine: '', loadError: true };
+
+/** Empty stage: ready when upstream work exists, else waiting on it. */
+const emptyStage = (hasUpstream: boolean, readyLine: string): StageState =>
+  hasUpstream ? { ...EMPTY, statLine: readyLine } : { ...EMPTY, status: 'blocked' };
+
+const pick = (running: number, done: number): StageStatus =>
+  running > 0 ? 'running' : done > 0 ? 'done' : 'active';
 
 // ============================================================================
-// DATA FETCHING — per-stage, isolated so one failure doesn't break others
+// DATA — one fetch per stage, isolated so one failure doesn't break others
 // ============================================================================
 
-async function fetchCollectStage(): Promise<StageState> {
+async function fetchCollect(): Promise<StageState> {
   try {
-    const resp = await datacollectionApi.listSessions({ limit: 10 });
-    const sessions = resp.sessions ?? [];
-    if (sessions.length === 0) return EMPTY_STAGE;
-    const recording = sessions.filter((s) => s.status === 'recording').length;
+    const sessions = (await datacollectionApi.listSessions({ limit: 10 })).sessions ?? [];
+    if (sessions.length === 0) return { ...EMPTY, statLine: 'No sessions yet' };
     const completed = sessions.filter((s) => s.status === 'completed').length;
-    const latest = sessions[0];
     return {
-      status: recording > 0 ? 'running' : completed > 0 ? 'done' : 'active',
-      statLine: `${sessions.length} session${sessions.length === 1 ? '' : 's'} · ${completed} completed`,
-      hintLine: latest ? `Last activity: ${formatRelativeTime(latest.updatedAt)}` : '',
+      status: pick(sessions.filter((s) => s.status === 'recording').length, completed),
+      statLine: `${plural(sessions.length, 'session')} · ${completed} completed`,
+      hintLine: lastActivity(sessions[0]?.updatedAt),
     };
-  } catch (err) {
-    console.error('[Pipeline] collect stage failed:', err);
-    return { status: 'empty', statLine: 'Could not load sessions', hintLine: '' };
+  } catch {
+    return FAILED;
   }
 }
 
-async function fetchDatasetStage(hasUpstream: boolean): Promise<StageState> {
+async function fetchDataset(): Promise<StageState> {
   try {
-    const resp = await trainingApi.listDatasets({ pageSize: 10 });
-    const datasets = resp.datasets ?? [];
-    if (datasets.length === 0) {
-      return hasUpstream
-        ? { ...EMPTY_STAGE, statLine: 'Ready to create a dataset' }
-        : { ...EMPTY_STAGE, status: 'blocked' };
-    }
+    const datasets = (await trainingApi.listDatasets({ pageSize: 10 })).datasets ?? [];
+    if (datasets.length === 0) return emptyStage(true, 'Ready to create a dataset');
     const ready = datasets.filter((d) => d.status === 'ready').length;
-    const processing = datasets.filter((d) =>
-      ['uploading', 'importing', 'validating'].includes(d.status)
-    ).length;
-    const latest = datasets[0];
+    const processing = datasets.filter((d) => ['uploading', 'importing', 'validating'].includes(d.status)).length;
     return {
-      status: processing > 0 ? 'running' : ready > 0 ? 'done' : 'active',
-      statLine: `${datasets.length} dataset${datasets.length === 1 ? '' : 's'} · ${ready} ready`,
-      hintLine: latest ? `Last activity: ${formatRelativeTime(latest.updatedAt)}` : '',
+      status: pick(processing, ready),
+      statLine: `${plural(datasets.length, 'dataset')} · ${ready} ready`,
+      hintLine: lastActivity(datasets[0]?.updatedAt),
     };
-  } catch (err) {
-    console.error('[Pipeline] dataset stage failed:', err);
-    return { status: 'empty', statLine: 'Could not load datasets', hintLine: '' };
+  } catch {
+    return FAILED;
   }
 }
 
-async function fetchTrainStage(hasUpstream: boolean): Promise<StageState> {
+async function fetchTrain(hasUpstream: boolean): Promise<StageState> {
   try {
-    const resp = await trainingApi.listTrainingJobs({ pageSize: 10 });
-    const jobs = resp.jobs ?? [];
-    if (jobs.length === 0) {
-      return hasUpstream
-        ? { ...EMPTY_STAGE, statLine: 'Ready to start training' }
-        : { ...EMPTY_STAGE, status: 'blocked' };
-    }
-    const running = jobs.filter((j) => ['running', 'queued'].includes(j.status)).length;
+    const jobs = (await trainingApi.listTrainingJobs({ pageSize: 10 })).jobs ?? [];
+    if (jobs.length === 0) return emptyStage(hasUpstream, 'Ready to train');
     const completed = jobs.filter((j) => j.status === 'completed').length;
-    const latest = jobs[0];
     return {
-      status: running > 0 ? 'running' : completed > 0 ? 'done' : 'active',
-      statLine: `${jobs.length} job${jobs.length === 1 ? '' : 's'} · ${completed} completed`,
-      hintLine: latest ? `Last activity: ${formatRelativeTime(latest.updatedAt)}` : '',
+      status: pick(jobs.filter((j) => ['running', 'queued'].includes(j.status)).length, completed),
+      statLine: `${plural(jobs.length, 'job')} · ${completed} completed`,
+      hintLine: lastActivity(jobs[0]?.updatedAt),
     };
-  } catch (err) {
-    console.error('[Pipeline] train stage failed:', err);
-    return { status: 'empty', statLine: 'Could not load jobs', hintLine: '' };
+  } catch {
+    return FAILED;
   }
 }
 
-async function fetchEvaluateStage(hasUpstream: boolean): Promise<StageState> {
+async function fetchEvaluate(hasUpstream: boolean): Promise<StageState> {
   try {
-    // Prefer sim runs over real-robot eval episodes for this pipeline view
-    const simJobs = await simulationApi.listJobs();
-    if (simJobs.length === 0) {
-      return hasUpstream
-        ? { ...EMPTY_STAGE, statLine: 'Ready to evaluate in simulation' }
-        : { ...EMPTY_STAGE, status: 'blocked' };
-    }
-    const running = simJobs.filter((j) => ['running', 'queued'].includes(j.status)).length;
-    const completed = simJobs.filter((j) => j.status === 'completed').length;
-    const latest = simJobs[0];
-    // Quality hint: best recent success rate
-    const withMetrics = simJobs.filter((j) => j.metrics?.successRate !== undefined);
-    const bestRate = withMetrics.length
-      ? Math.max(...withMetrics.map((j) => j.metrics!.successRate))
-      : null;
+    const runs = await simulationApi.listJobs();
+    if (runs.length === 0) return emptyStage(hasUpstream, 'Ready to evaluate in simulation');
+    const rates = runs.flatMap((j) => (j.metrics?.successRate !== undefined ? [j.metrics.successRate] : []));
+    const best = rates.length ? ` · best ${(Math.max(...rates) * 100).toFixed(0)}%` : '';
     return {
-      status: running > 0 ? 'running' : completed > 0 ? 'done' : 'active',
-      statLine: `${simJobs.length} sim run${simJobs.length === 1 ? '' : 's'}${
-        bestRate !== null ? ` · best ${(bestRate * 100).toFixed(0)}%` : ''
-      }`,
-      hintLine: latest ? `Last activity: ${formatRelativeTime(latest.updatedAt)}` : '',
+      status: pick(
+        runs.filter((j) => ['running', 'queued'].includes(j.status)).length,
+        runs.filter((j) => j.status === 'completed').length,
+      ),
+      statLine: `${plural(runs.length, 'sim run')}${best}`,
+      hintLine: lastActivity(runs[0]?.updatedAt),
     };
-  } catch (err) {
-    console.error('[Pipeline] evaluate stage failed:', err);
-    return { status: 'empty', statLine: 'Could not load sim runs', hintLine: '' };
+  } catch {
+    return FAILED;
   }
 }
 
-async function fetchDeployStage(hasUpstream: boolean): Promise<StageState> {
+async function fetchDeploy(hasUpstream: boolean): Promise<StageState> {
   try {
-    const resp = await deploymentApi.listDeployments({ pageSize: 10 });
-    const deployments = resp.deployments ?? [];
-    if (deployments.length === 0) {
-      return hasUpstream
-        ? { ...EMPTY_STAGE, statLine: 'Ready to deploy to fleet' }
-        : { ...EMPTY_STAGE, status: 'blocked' };
-    }
-    const active = deployments.filter((d) =>
-      ['deploying', 'canary'].includes(d.status)
-    ).length;
+    const deployments = (await deploymentApi.listDeployments({ pageSize: 10 })).deployments ?? [];
+    if (deployments.length === 0) return emptyStage(hasUpstream, 'Ready to deploy to the fleet');
     const production = deployments.filter((d) => d.status === 'production').length;
-    const latest = deployments[0];
     return {
-      status: active > 0 ? 'running' : production > 0 ? 'done' : 'active',
-      statLine: `${deployments.length} deployment${
-        deployments.length === 1 ? '' : 's'
-      } · ${production} in production`,
-      hintLine: latest ? `Last activity: ${formatRelativeTime(latest.updatedAt)}` : '',
+      status: pick(deployments.filter((d) => ['deploying', 'canary'].includes(d.status)).length, production),
+      statLine: `${plural(deployments.length, 'deployment')} · ${production} in production`,
+      hintLine: lastActivity(deployments[0]?.updatedAt),
     };
-  } catch (err) {
-    console.error('[Pipeline] deploy stage failed:', err);
-    return { status: 'empty', statLine: 'Could not load deployments', hintLine: '' };
+  } catch {
+    return FAILED;
   }
+}
+
+// ============================================================================
+// STAGES
+// ============================================================================
+
+interface StageDef {
+  key: StageKey;
+  title: string;
+  description: string;
+  href: string;
+  linkLabel: string;
+  nextLabel: string;
+  nextHref: string;
+}
+
+const STAGES: StageDef[] = [
+  { key: 'collect', title: 'Collect', description: 'Record teleoperated demonstrations of the task.',
+    href: '/data-collection', linkLabel: 'Open sessions', nextLabel: 'Start collecting', nextHref: '/data-collection/new' },
+  { key: 'dataset', title: 'Dataset', description: 'Package demonstrations as a LeRobot dataset, or import one from the Hub.',
+    href: '/datasets', linkLabel: 'Open datasets', nextLabel: 'Create dataset', nextHref: '/datasets' },
+  { key: 'train', title: 'Train', description: 'Fine-tune a base VLA model such as SmolVLA or pi0.5 on your dataset.',
+    href: '/training', linkLabel: 'Open training', nextLabel: 'Train a model', nextHref: '/training' },
+  { key: 'evaluate', title: 'Evaluate', description: 'Check that the model solves the task in simulation before it touches hardware.',
+    href: '/training?tab=simulation', linkLabel: 'Open evaluation', nextLabel: 'Run simulation', nextHref: '/training?tab=simulation' },
+  { key: 'deploy', title: 'Deploy', description: 'Canary-roll the model to the fleet with automatic rollback on regressions.',
+    href: '/deployments', linkLabel: 'Open deployments', nextLabel: 'Deploy model', nextHref: '/deployments' },
+];
+
+type PipelineState = Record<StageKey, StageState>;
+
+/** The stage to work on now: the first open stage after the last finished one. */
+function nextStageIndex(state: PipelineState): number {
+  const statuses = STAGES.map((s) => state[s.key].status);
+  const lastDone = statuses.lastIndexOf('done');
+  const after = statuses.findIndex((st, i) => i > lastDone && st !== 'done' && st !== 'blocked');
+  if (after >= 0) return after;
+  return statuses.findIndex((st) => st !== 'done' && st !== 'blocked');
 }
 
 // ============================================================================
 // PAGE
 // ============================================================================
 
+const TITLE = 'Pipeline';
+const DESCRIPTION = 'From demonstrations to a deployed policy, one stage at a time.';
+
 export function PipelinePage() {
-  const [loading, setLoading] = useState(true);
   const [state, setState] = useState<PipelineState | null>(null);
 
   const fetchAll = useCallback(async () => {
-    const collect = await fetchCollectStage();
-    const hasSessions = collect.status !== 'empty' && collect.status !== 'blocked';
-    // Datasets are not strictly downstream of sessions — you can upload directly.
-    // So datasets are never blocked by missing sessions; they stand alone.
-    const dataset = await fetchDatasetStage(true);
-    const hasDatasets = dataset.status !== 'empty' && dataset.status !== 'blocked';
-    const train = await fetchTrainStage(hasDatasets);
-    const hasTrainingDone = train.status === 'done' || train.status === 'active';
-    const evaluate = await fetchEvaluateStage(hasTrainingDone);
-    const hasEvalDone = evaluate.status === 'done';
-    const deploy = await fetchDeployStage(hasEvalDone);
-
-    const totalRecords =
-      (collect.status === 'empty' ? 0 : 1) +
-      (dataset.status === 'empty' ? 0 : 1) +
-      (train.status === 'empty' || train.status === 'blocked' ? 0 : 1) +
-      (evaluate.status === 'empty' || evaluate.status === 'blocked' ? 0 : 1) +
-      (deploy.status === 'empty' || deploy.status === 'blocked' ? 0 : 1);
-
-    setState({ collect, dataset, train, evaluate, deploy, totalRecords });
-    setLoading(false);
-
-    // Suppress unused warning — kept for future use
-    void hasSessions;
+    const [collect, dataset] = await Promise.all([fetchCollect(), fetchDataset()]);
+    const train = await fetchTrain(dataset.status !== 'empty' && dataset.status !== 'blocked');
+    const evaluate = await fetchEvaluate(train.status === 'done' || train.status === 'active');
+    const deploy = await fetchDeploy(evaluate.status === 'done');
+    setState({ collect, dataset, train, evaluate, deploy });
   }, []);
 
   useEffect(() => {
-    fetchAll();
-    // Poll every 10 seconds to reflect progress
-    const interval = setInterval(fetchAll, 10000);
+    void fetchAll();
+    // Silent refresh so running stages tick over without a reload.
+    const interval = setInterval(() => void fetchAll(), 10000);
     return () => clearInterval(interval);
   }, [fetchAll]);
 
-  if (loading) {
+  if (!state) {
     return (
-      <div className="flex items-center justify-center py-24">
-        <Spinner size="lg" color="cobalt" label="Loading pipeline…" />
+      <div className="flex flex-col gap-6">
+        <PageHeader eyebrow="Build" title={TITLE} description={DESCRIPTION} />
+        <Panel padding="none">
+          <SkeletonRows rows={5} columns={3} />
+        </Panel>
       </div>
     );
   }
 
-  if (!state) return null;
-
-  const showFirstRun = state.totalRecords === 0;
+  const nextIdx = nextStageIndex(state);
+  const next = nextIdx >= 0 ? STAGES[nextIdx] : null;
+  const nothingYet = STAGES.every((s) => ['empty', 'blocked'].includes(state[s.key].status));
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="flex flex-col gap-6">
       <PageHeader
-        title="Skill Training"
-        subtitle={
-          <>
-            End-to-end workflow to teach your robots a new skill — from demos to production.{' '}
-            <a href="/skills" className="text-cobalt-400 hover:underline">View existing skills →</a>
-          </>
+        eyebrow="Build"
+        title={TITLE}
+        description={DESCRIPTION}
+        actions={
+          next ? (
+            <LinkButton to={next.nextHref} rightIcon={<ArrowRight className="h-4 w-4" strokeWidth={1.75} />}>
+              {next.nextLabel}
+            </LinkButton>
+          ) : (
+            <LinkButton to="/deployments" variant="secondary">Open deployments</LinkButton>
+          )
         }
       />
 
-      {/* First-run wizard (only when fully empty) */}
-      {showFirstRun && <FirstRunWizard />}
+      {nothingYet && <FirstRunWizard />}
 
-      {/* Pipeline flow */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-        <StageCard
-          number={1}
-          title="Collect"
-          description="Record teleoperation demos of the task you want the robot to learn."
-          icon={<Camera className="w-5 h-5" />}
-          status={state.collect.status}
-          statLine={state.collect.statLine}
-          hintLine={state.collect.hintLine}
-          ctaLabel={
-            state.collect.status === 'empty' ? 'Record demos' : 'Open data collection'
-          }
-          ctaHref="/data-collection"
-          viewAllHref="/data-collection"
-        />
-        <StageCard
-          number={2}
-          title="Dataset"
-          description="Package demos into a LeRobot-format dataset, or import one from HuggingFace."
-          icon={<Database className="w-5 h-5" />}
-          status={state.dataset.status}
-          statLine={state.dataset.statLine}
-          hintLine={state.dataset.hintLine}
-          ctaLabel={state.dataset.status === 'empty' ? 'Create dataset' : 'Manage datasets'}
-          ctaHref="/datasets"
-          viewAllHref="/datasets"
-        />
-        <StageCard
-          number={3}
-          title="Train"
-          description="Fine-tune a base VLA model (SmolVLA, pi0.5) on your dataset."
-          icon={<Brain className="w-5 h-5" />}
-          status={state.train.status}
-          statLine={state.train.statLine}
-          hintLine={state.train.hintLine}
-          ctaLabel={state.train.status === 'empty' ? 'Start training' : 'View jobs'}
-          ctaHref="/training"
-          viewAllHref="/training"
-        />
-        <StageCard
-          number={4}
-          title="Evaluate"
-          description="Verify the model solves the task in simulation before touching hardware."
-          icon={<FlaskConical className="w-5 h-5" />}
-          status={state.evaluate.status}
-          statLine={state.evaluate.statLine}
-          hintLine={state.evaluate.hintLine}
-          ctaLabel={state.evaluate.status === 'empty' ? 'Run simulation' : 'View results'}
-          ctaHref="/simulation"
-          viewAllHref="/simulation"
-        />
-        <StageCard
-          number={5}
-          title="Deploy"
-          description="Canary-roll the model to the fleet with automatic rollback on regressions."
-          icon={<Rocket className="w-5 h-5" />}
-          status={state.deploy.status}
-          statLine={state.deploy.statLine}
-          hintLine={state.deploy.hintLine}
-          ctaLabel={state.deploy.status === 'empty' ? 'Deploy model' : 'View deployments'}
-          ctaHref="/deployments"
-          viewAllHref="/deployments"
-        />
-      </div>
-
-      {/* Footer hint */}
-      <Card variant="subtle">
-        <div className="flex items-center gap-3 px-4 py-3 text-sm">
-          <div className="text-theme-muted">
-            Pipeline refreshes every 10s · Each stage links to its full detail page for deeper work.
-          </div>
-        </div>
-      </Card>
+      <Panel padding="none">
+        <Panel.Header title="Stages" description="Each stage opens its own page." />
+        <ol className="divide-y divide-line-subtle">
+          {STAGES.map((stage, i) => {
+            const s = state[stage.key];
+            return (
+              <StageCard
+                key={stage.key}
+                number={i + 1}
+                title={stage.title}
+                description={stage.description}
+                status={s.status}
+                isNext={i === nextIdx}
+                statLine={s.statLine}
+                hintLine={s.hintLine}
+                ctaLabel={stage.linkLabel}
+                ctaHref={stage.href}
+                loadError={s.loadError}
+                onRetry={() => void fetchAll()}
+              />
+            );
+          })}
+        </ol>
+      </Panel>
     </div>
   );
 }
