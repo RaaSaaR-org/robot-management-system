@@ -9,11 +9,8 @@ import { useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Bot, Check, CheckCircle2, Search, Trash2 } from 'lucide-react';
 import {
-  Button,
-  DataTable,
-  EmptyState,
-  confirm,
-  toast,
+  Button, DataTable, EmptyState,
+  confirm, errorMessage, toast,
   type DataTableColumn,
   type RowActionItem,
 } from '@/shared/components/ui';
@@ -70,10 +67,6 @@ export function RobotRef({ sourceId, robotName }: { sourceId: string; robotName?
       {robotName}
     </Link>
   );
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /**

@@ -4,7 +4,7 @@
  * @feature alerts
  */
 
-import { StatusTag, type StatusToneName } from '@/shared/components/ui';
+import { StatusTag, statusTone } from '@/shared/components/ui';
 import type { AlertSeverity } from '../types/alerts.types';
 import { ALERT_SEVERITY_LABELS } from '../types/alerts.types';
 
@@ -18,14 +18,6 @@ export interface AlertSeverityBadgeProps {
   /** Additional class names */
   className?: string;
 }
-
-/** Severity → tone. `info` is not in the kit's status map, so it is explicit here. */
-export const ALERT_SEVERITY_TONE: Record<AlertSeverity, StatusToneName> = {
-  critical: 'danger',
-  error: 'danger',
-  warning: 'warning',
-  info: 'info',
-};
 
 /**
  * Displays alert severity as a StatusTag.
@@ -41,7 +33,7 @@ export function AlertSeverityBadge({
 }: AlertSeverityBadgeProps) {
   return (
     <StatusTag
-      tone={ALERT_SEVERITY_TONE[severity]}
+      tone={statusTone(severity)}
       size={size === 'sm' ? 'sm' : 'md'}
       dot={showDot}
       pulse={severity === 'critical'}
