@@ -18,7 +18,9 @@ const brand: BrandConfig = {
   // logo: 'logo.svg',
 
   // ── Primary Color (optional) ───────────────────────────────────────────
-  // Overrides cobalt blue. Provide a full scale or just DEFAULT + a few shades.
+  // Replaces the default mint (bg-primary, text-primary, primary-50..900).
+  // Provide a full scale or just DEFAULT + a few shades. DEFAULT is the fill
+  // of primary buttons in both themes; the hover shade is derived from it.
   // primaryColors: {
   //   DEFAULT: '#FF6700',
   //   '50':  '#FFF3E8',
@@ -32,9 +34,15 @@ const brand: BrandConfig = {
   //   '800': '#662900',
   //   '900': '#331400',
   // },
+  //
+  // Text on a primary fill. Leave it out and white or near-black is picked,
+  // whichever reads better on primaryColors.DEFAULT (orange gets dark text).
+  // onPrimary: '#1a0d00',
 
   // ── Accent Color (optional) ────────────────────────────────────────────
-  // Overrides turquoise. Same format as primaryColors.
+  // Replaces the default teal (accent-*). Same format as primaryColors;
+  // onAccent works like onPrimary. Signal colors (live, sim, unknown,
+  // stopped) are not brandable: they mean the same on every deployment.
   // accentColors: {
   //   DEFAULT: '#2DD4BF',
   //   '50':  '#F0FDFA',

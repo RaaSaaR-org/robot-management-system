@@ -9,25 +9,27 @@ import { useThemeStore, selectTheme } from '../themeStore';
 
 describe('themeStore', () => {
   beforeEach(() => {
-    useThemeStore.setState({ theme: 'system' });
+    useThemeStore.setState({ theme: 'dark' });
   });
 
-  it('starts with system theme', () => {
-    expect(useThemeStore.getState().theme).toBe('system');
+  it('starts with the dark theme', () => {
+    expect(useThemeStore.getInitialState().theme).toBe('dark');
   });
 
   it('setTheme sets an explicit theme', () => {
-    useThemeStore.getState().setTheme('dark');
-    expect(useThemeStore.getState().theme).toBe('dark');
-
     useThemeStore.getState().setTheme('light');
     expect(useThemeStore.getState().theme).toBe('light');
+
+    useThemeStore.getState().setTheme('system');
+    expect(useThemeStore.getState().theme).toBe('system');
+
+    useThemeStore.getState().setTheme('dark');
+    expect(useThemeStore.getState().theme).toBe('dark');
   });
 
   it('cycleTheme advances system -> light -> dark -> system', () => {
+    useThemeStore.setState({ theme: 'system' });
     const { cycleTheme } = useThemeStore.getState();
-
-    expect(useThemeStore.getState().theme).toBe('system');
 
     cycleTheme();
     expect(useThemeStore.getState().theme).toBe('light');
