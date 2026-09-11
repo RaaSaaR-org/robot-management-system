@@ -3,7 +3,7 @@ id: "TASK-268"
 aliases: []
 title: "Redesign the account, admin, chat and automation pages"
 slug: "redesign-the-account-admin-chat-and-automation-pages"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
