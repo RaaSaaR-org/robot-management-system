@@ -139,8 +139,11 @@ export class ProcessManager extends EventEmitter {
       processInstance: instance,
     });
 
-    // If not scheduled for later, begin execution
-    if (!request.scheduledAt || new Date(request.scheduledAt) <= new Date()) {
+    // If not scheduled for later, begin execution. `autoStart: false` creates
+    // the instance without dispatching anything: creating an automation must
+    // not send a robot anywhere until it is explicitly started.
+    const due = !request.scheduledAt || new Date(request.scheduledAt) <= new Date();
+    if (request.autoStart !== false && due) {
       await this.beginExecution(instance.id);
     }
 

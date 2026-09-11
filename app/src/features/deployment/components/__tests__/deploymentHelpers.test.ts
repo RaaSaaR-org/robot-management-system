@@ -32,6 +32,8 @@ function dep(status: Deployment['status'], trafficPercentage = 0) {
 describe('deploymentHelpers', () => {
   it('splits deployments into active and history', () => {
     expect(inScope(dep('canary'), 'active')).toBe(true);
+    expect(inScope(dep('production'), 'active')).toBe(true);
+    expect(inScope(dep('production'), 'history')).toBe(false);
     expect(inScope(dep('pending'), 'history')).toBe(false);
     expect(inScope(dep('rolled_back'), 'history')).toBe(true);
     expect(inScope(dep('failed'), 'all')).toBe(true);

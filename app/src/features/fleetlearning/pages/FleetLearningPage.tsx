@@ -57,13 +57,18 @@ export function FleetLearningPage() {
   const [creating, setCreating] = useState(false);
   const { createRound } = useCreateRound();
   const { modelVersions } = useModelVersionsAutoFetch();
+  // Keyed by model id, not by version: two models can carry the same version
+  // string, and identical option values collide as React keys and make the two
+  // entries indistinguishable. The round records the version, so the picked id
+  // is resolved back to one on submit.
   const modelOptions = useMemo(
-    () => modelVersions.map((v) => ({ value: v.version, label: `${v.name || `Model ${v.version}`} · v${v.version}` })),
+    () => modelVersions.map((v) => ({ value: v.id, label: `${v.name || `Model ${v.version}`} · v${v.version}` })),
     [modelVersions],
   );
 
   const handleCreate = async (data: CreateFederatedRoundRequest) => {
-    const round = await createRound(data);
+    const picked = modelVersions.find((v) => v.id === data.globalModelVersion);
+    const round = await createRound(picked ? { ...data, globalModelVersion: picked.version } : data);
     toast.success('Round created', { description: `Round ${shortRoundId(round.id)} · ${round.globalModelVersion}` });
     setCreating(false);
     navigate(`/fleet-learning/rounds/${round.id}`);

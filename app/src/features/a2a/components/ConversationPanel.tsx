@@ -169,7 +169,12 @@ export const ConversationPanel = memo(function ConversationPanel({
           ) : (
             <div className="flex flex-col gap-3">
               {messages.map((m) => (
-                <MessageBubble key={m.messageId} message={m} pendingStatus={pendingMessages[m.messageId]} />
+                <MessageBubble
+                  key={m.messageId}
+                  message={m}
+                  pendingStatus={pendingMessages[m.messageId]}
+                  defaultAgentName={targetAgent?.name}
+                />
               ))}
               {chatMode === 'orchestration' && orchSteps.length > 0 && <OrchestrationTimeline steps={orchSteps} />}
               {isSending && chatMode !== 'orchestration' && (

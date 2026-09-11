@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useEffect, useState, useMemo } from 'react';
+import { errorMessage } from '@/shared/components/ui';
 import { useA2AStore } from '../store';
 import type { A2AConversation, A2AMessage } from '../types';
 
@@ -61,7 +62,7 @@ export function useConversation(
     if (conversationId) {
       setIsLoading(true);
       fetchMessages(conversationId)
-        .catch((err) => setError(err instanceof Error ? err.message : 'Failed to fetch messages'))
+        .catch((err) => setError(errorMessage(err, 'Failed to fetch messages')))
         .finally(() => setIsLoading(false));
     }
   }, [conversationId, fetchMessages]);
@@ -84,7 +85,7 @@ export function useConversation(
         });
         // Messages are refreshed automatically by the store
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to send message');
+        setError(errorMessage(err, 'Failed to send message'));
         throw err;
       } finally {
         setIsSending(false);
@@ -102,7 +103,7 @@ export function useConversation(
     try {
       await fetchMessages(conversationId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh messages');
+      setError(errorMessage(err, 'Failed to refresh messages'));
     } finally {
       setIsLoading(false);
     }
@@ -144,7 +145,7 @@ export function useNewConversation(robotId?: string) {
         selectConversation(conversation.conversationId);
         return conversation;
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to create conversation');
+        setError(errorMessage(err, 'Failed to create conversation'));
         throw err;
       } finally {
         setIsCreating(false);

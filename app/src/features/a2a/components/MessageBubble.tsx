@@ -13,12 +13,14 @@ import { OrchestrationChainSummary } from './OrchestrationChainSummary';
 import { FormRenderer, CompletedFormCard } from './FormRenderer';
 import { useA2AStore } from '../store';
 import type { A2AMessage, A2APart, FormSchema } from '../types';
-import { isTextPart, isFilePart, isDataPart, isFileWithBytes, isFormData } from '../types';
+import { isTextPart, isFilePart, isDataPart, isFileWithBytes, isFormData, formatErrorText, getMessageText } from '../types';
 
 interface MessageBubbleProps {
   message: A2AMessage;
   /** Status of this message: 'pending' | 'sent' | 'failed' | undefined */
   pendingStatus?: 'pending' | 'sent' | 'failed';
+  /** Name for an agent message whose metadata carries none (direct chat). */
+  defaultAgentName?: string;
   className?: string;
 }
 
@@ -98,10 +100,10 @@ function MessagePart({ part, messageId, taskId }: MessagePartProps) {
 /**
  * Message bubble: yours on the right (mint tint), the agent's on the left (inset).
  */
-export const MessageBubble = memo(function MessageBubble({ message, pendingStatus, className }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, pendingStatus, defaultAgentName, className }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
-  const agentName = meta.agentName as string | undefined;
+  const agentName = (meta.agentName as string | undefined) ?? defaultAgentName;
   const isOrchestrated = Boolean(meta.orchestrated);
   const chain = meta.orchestrationChain as
     | {
@@ -110,6 +112,15 @@ export const MessageBubble = memo(function MessageBubble({ message, pendingStatu
         timings: { selectionMs: number; forwardingMs: number; totalMs: number };
       }
     | undefined;
+
+  // A failed turn is not an answer: the raw provider text is detail, not the
+  // reply. Trust only the server's `metadata.error` flag — every failure path in
+  // ConversationManager sets it. Sniffing the wording instead would repaint real
+  // answers as outages, since a fleet assistant legitimately says things like
+  // "Error rate is 2%" or "the arm reached [180 deg]".
+  const text = getMessageText(message);
+  const isFailure = !isUser && meta.error === true;
+  const failureDetail = isFailure ? formatErrorText(text).replace(/^Task failed:\s*/i, '') : '';
 
   return (
     <div className={cn('flex flex-col', isUser ? 'items-end' : 'items-start', className)}>
@@ -120,7 +131,11 @@ export const MessageBubble = memo(function MessageBubble({ message, pendingStatu
       <div
         className={cn(
           'max-w-[85%] rounded-panel px-4 py-2.5 text-sm text-ink-primary sm:max-w-[75%]',
-          isUser ? 'rounded-br-tag border border-primary/30 bg-primary/10' : 'rounded-bl-tag border border-line-subtle bg-inset',
+          isUser
+            ? 'rounded-br-tag border border-primary/30 bg-primary/10'
+            : isFailure
+              ? 'rounded-bl-tag border border-signal-stopped/30 bg-signal-stopped/10'
+              : 'rounded-bl-tag border border-line-subtle bg-inset',
           pendingStatus === 'pending' && 'opacity-70',
         )}
       >
@@ -131,11 +146,24 @@ export const MessageBubble = memo(function MessageBubble({ message, pendingStatu
           )}
         </div>
 
-        <div className="flex flex-col gap-1">
-          {message.parts.map((part, index) => (
-            <MessagePart key={index} part={part} messageId={message.messageId} taskId={message.taskId} />
-          ))}
-        </div>
+        {isFailure ? (
+          <div className="flex flex-col gap-1">
+            <p className="font-medium text-signal-stopped">
+              {agentName ? `${agentName}'s assistant is unavailable` : 'The assistant is unavailable'}
+            </p>
+            {failureDetail && (
+              <p className="text-xs break-words text-ink-tertiary" title={failureDetail}>
+                {failureDetail}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {message.parts.map((part, index) => (
+              <MessagePart key={index} part={part} messageId={message.messageId} taskId={message.taskId} />
+            ))}
+          </div>
+        )}
 
         {pendingStatus === 'pending' && (
           <div className="mt-2 flex items-center gap-2 text-xs text-ink-tertiary">

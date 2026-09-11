@@ -24,6 +24,7 @@ const {
     publishDefinition: vi.fn(),
     archiveDefinition: vi.fn(),
     startProcess: vi.fn(),
+    beginExecution: vi.fn(),
     listInstances: vi.fn(),
     getInstance: vi.fn(),
     pauseProcess: vi.fn(),
@@ -576,6 +577,42 @@ describe('Process Routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to get process instance');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // PUT /api/processes/instances/:id/start
+  // --------------------------------------------------------------------------
+
+  describe('PUT /api/processes/instances/:id/start', () => {
+    it('starts a pending process instance', async () => {
+      mockProcessManager.beginExecution.mockResolvedValue(true);
+      mockProcessManager.getInstance.mockResolvedValue({ ...SAMPLE_INSTANCE, status: 'in_progress' });
+
+      const response = await request(app).put('/api/processes/instances/inst-001/start');
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('in_progress');
+      expect(mockProcessManager.beginExecution).toHaveBeenCalledWith('inst-001');
+    });
+
+    it('returns 400 when the instance is not pending', async () => {
+      mockProcessManager.beginExecution.mockResolvedValue(false);
+
+      const response = await request(app).put('/api/processes/instances/inst-001/start');
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe('Cannot start process. It may not be pending.');
+      expect(mockProcessManager.getInstance).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 on service error', async () => {
+      mockProcessManager.beginExecution.mockRejectedValue(new Error('boom'));
+
+      const response = await request(app).put('/api/processes/instances/inst-001/start');
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Failed to start process instance');
     });
   });
 

@@ -139,6 +139,10 @@ export function useProcessWebSocket(options: UseProcessWebSocketOptions = {}) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isConnectedRef = useRef(false);
+  // A socket we close ourselves — cleanup, unmount, StrictMode's mount→unmount→
+  // mount — fires close and error events while it is still connecting. Those are
+  // expected: they must neither log an error nor schedule a reconnect.
+  const intentionalCloseRef = useRef(false);
 
   // Get store actions
   const updateProcessFromWebSocket = useTasksStore((s) => s.updateProcessFromWebSocket);
@@ -207,6 +211,7 @@ export function useProcessWebSocket(options: UseProcessWebSocketOptions = {}) {
 
     try {
       const ws = new WebSocket(url);
+      intentionalCloseRef.current = false;
 
       ws.onopen = () => {
         isConnectedRef.current = true;
@@ -216,6 +221,7 @@ export function useProcessWebSocket(options: UseProcessWebSocketOptions = {}) {
 
       ws.onclose = () => {
         isConnectedRef.current = false;
+        if (intentionalCloseRef.current || wsRef.current !== ws) return;
         wsRef.current = null;
 
         // Auto-reconnect
@@ -227,6 +233,9 @@ export function useProcessWebSocket(options: UseProcessWebSocketOptions = {}) {
       };
 
       ws.onerror = (error) => {
+        // A deliberately closed socket (cleanup/unmount or a superseded
+        // connection) fires an error event — don't log noise for it.
+        if (intentionalCloseRef.current || wsRef.current !== ws) return;
         console.error('[ProcessWebSocket] Error:', error);
       };
 
@@ -238,6 +247,8 @@ export function useProcessWebSocket(options: UseProcessWebSocketOptions = {}) {
 
   // Disconnect from WebSocket
   const disconnect = useCallback(() => {
+    intentionalCloseRef.current = true;
+
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;

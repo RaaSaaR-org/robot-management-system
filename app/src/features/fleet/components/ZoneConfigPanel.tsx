@@ -47,9 +47,11 @@ export function ZoneConfigPanel({ onEditZone, onCreateZone, className }: ZoneCon
   const { deleteZone } = useZoneManagement();
 
   const askDelete = async (zone: Zone) => {
+    const kind = ZONE_TYPE_LABEL[zone.type].toLowerCase();
+    const article = /^[aeiou]/.test(kind) ? 'an' : 'a';
     const ok = await confirm({
       title: `Delete ${zone.name}?`,
-      description: `Robots stop treating this area as a ${ZONE_TYPE_LABEL[zone.type].toLowerCase()} zone. This cannot be undone.`,
+      description: `Robots stop treating this area as ${article} ${kind} zone. This cannot be undone.`,
       tone: 'danger',
     });
     if (!ok) return;

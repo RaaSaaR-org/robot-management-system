@@ -7,6 +7,7 @@
 import { create } from 'zustand';
 import { devtools, } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { getErrorMessage } from '@/shared/utils';
 import { updatesApi } from '../api/updatesApi';
 import type {
   UpdatesStore,
@@ -48,7 +49,7 @@ export const useUpdatesStore = create<UpdatesStore>()(
           });
         } catch (error) {
           set((state) => {
-            state.error = error instanceof Error ? error.message : 'Failed to fetch packages';
+            state.error = getErrorMessage(error, 'Failed to fetch packages');
             state.isLoading = false;
           });
         }
@@ -67,7 +68,7 @@ export const useUpdatesStore = create<UpdatesStore>()(
           });
         } catch (error) {
           set((state) => {
-            state.error = error instanceof Error ? error.message : 'Failed to create package';
+            state.error = getErrorMessage(error, 'Failed to create package');
             state.isLoading = false;
           });
         }
@@ -84,7 +85,7 @@ export const useUpdatesStore = create<UpdatesStore>()(
           });
         } catch (error) {
           set((state) => {
-            state.error = error instanceof Error ? error.message : 'Failed to approve package';
+            state.error = getErrorMessage(error, 'Failed to approve package');
           });
         }
       },
@@ -97,7 +98,7 @@ export const useUpdatesStore = create<UpdatesStore>()(
           });
         } catch (error) {
           set((state) => {
-            state.error = error instanceof Error ? error.message : 'Failed to deploy package';
+            state.error = getErrorMessage(error, 'Failed to deploy package');
           });
         }
       },
@@ -110,7 +111,7 @@ export const useUpdatesStore = create<UpdatesStore>()(
           });
         } catch (error) {
           set((state) => {
-            state.error = error instanceof Error ? error.message : 'Failed to trigger rollback';
+            state.error = getErrorMessage(error, 'Failed to trigger rollback');
           });
         }
       },
@@ -128,7 +129,7 @@ export const useUpdatesStore = create<UpdatesStore>()(
           });
         } catch (error) {
           set((state) => {
-            state.error = error instanceof Error ? error.message : 'Failed to fetch deployments';
+            state.error = getErrorMessage(error, 'Failed to fetch deployments');
             state.isLoading = false;
           });
         }

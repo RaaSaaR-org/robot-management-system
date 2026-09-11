@@ -186,6 +186,11 @@ export interface StartProcessRequest {
   preferredRobotIds?: string[];
   scheduledAt?: string;
   inputData?: Record<string, unknown>;
+  /**
+   * Begin executing right away (default true). `false` creates the instance in
+   * `pending`, so no task reaches a robot until it is started explicitly.
+   */
+  autoStart?: boolean;
 }
 
 export interface ProcessInstanceActionRequest {

@@ -9,6 +9,7 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '../database/index.js';
+import { ensureDefaultTenant } from '../database/defaultTenant.js';
 import { complianceLogService } from './ComplianceLogService.js';
 import { generateToken, hashToken, timingSafeEqualHex } from '../utils/tokens.js';
 import { logger } from '../utils/logger.js';
@@ -221,6 +222,9 @@ export class ServiceAccountService {
 
     const slug = input.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const email = `${slug}@service.local`;
+
+    // Same FK as a human teammate: the organization must exist first.
+    await ensureDefaultTenant(input.tenantId);
 
     let created;
     try {

@@ -13,6 +13,7 @@ import {
   isProcessPauseable,
   isProcessResumeable,
   isProcessRetryable,
+  isProcessStartable,
   type Process,
   type ProcessAction,
   type ProcessPriority,
@@ -26,14 +27,22 @@ export function priorityTone(priority: ProcessPriority | string): StatusToneName
 }
 
 const ACT_COPY: Record<ProcessAction, { ok: string; fail: string }> = {
+  start: { ok: 'Automation started', fail: "Couldn't start automation" },
   pause: { ok: 'Automation paused', fail: "Couldn't pause automation" },
   resume: { ok: 'Automation resumed', fail: "Couldn't resume automation" },
   cancel: { ok: 'Automation cancelled', fail: "Couldn't cancel automation" },
   retry: { ok: 'Automation restarted', fail: "Couldn't retry automation" },
 };
 
-/** Asks first for the acts that stop or restart a robot; pause/resume just run. */
+/** Asks first for the acts that send, stop or restart a robot; pause/resume just run. */
 async function confirmAct(action: ProcessAction, task: Process): Promise<boolean> {
+  if (action === 'start') {
+    return confirm({
+      title: `Run ${task.name}?`,
+      description: 'A robot picks up the first step right away.',
+      confirmLabel: 'Run',
+    });
+  }
   if (action === 'cancel') {
     return confirm({
       title: `Cancel ${task.name}?`,
@@ -84,6 +93,9 @@ export function processActionItems(
   onAct: (action: ProcessAction, task: Process) => void,
 ): RowActionItem[] {
   const items: RowActionItem[] = [];
+  if (isProcessStartable(task)) {
+    items.push({ label: 'Run', icon: <Play className={iconCls} strokeWidth={1.75} />, onSelect: () => onAct('start', task) });
+  }
   if (isProcessPauseable(task)) {
     items.push({ label: 'Pause', icon: <Pause className={iconCls} strokeWidth={1.75} />, onSelect: () => onAct('pause', task) });
   }

@@ -36,7 +36,7 @@ import { authMiddleware } from '../middleware/auth.middleware.js';
 function createApp() {
   const app = express();
   app.use(express.json());
-  app.use('/api/federated', authMiddleware as any, aggregationRoutes);
+  app.use('/api/federated/secure', authMiddleware as any, aggregationRoutes);
   return app;
 }
 
@@ -49,10 +49,10 @@ describe('Aggregation Routes', () => {
   });
 
   // --------------------------------------------------------------------------
-  // POST /api/federated/rounds/:roundId/submit
+  // POST /api/federated/secure/rounds/:roundId/submit
   // --------------------------------------------------------------------------
 
-  describe('POST /api/federated/rounds/:roundId/submit', () => {
+  describe('POST /api/federated/secure/rounds/:roundId/submit', () => {
     const validBody = {
       robotId: 'robot-001',
       maskedGradients: [[1, 2], [3, 4]],
@@ -63,7 +63,7 @@ describe('Aggregation Routes', () => {
       mockSecureAggregator.collectUpdate.mockReturnValue(undefined);
 
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/submit')
+        .post('/api/federated/secure/rounds/round-1/submit')
         .send(validBody);
 
       expect(response.status).toBe(201);
@@ -84,7 +84,7 @@ describe('Aggregation Routes', () => {
 
     it('returns 400 when robotId is missing', async () => {
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/submit')
+        .post('/api/federated/secure/rounds/round-1/submit')
         .send({ maskedGradients: [[1]], participantCount: 1 });
 
       expect(response.status).toBe(400);
@@ -94,7 +94,7 @@ describe('Aggregation Routes', () => {
 
     it('returns 400 when robotId is not a string', async () => {
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/submit')
+        .post('/api/federated/secure/rounds/round-1/submit')
         .send({ robotId: 123, maskedGradients: [[1]], participantCount: 1 });
 
       expect(response.status).toBe(400);
@@ -103,7 +103,7 @@ describe('Aggregation Routes', () => {
 
     it('returns 400 when maskedGradients is not an array', async () => {
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/submit')
+        .post('/api/federated/secure/rounds/round-1/submit')
         .send({ robotId: 'robot-001', maskedGradients: 'nope', participantCount: 1 });
 
       expect(response.status).toBe(400);
@@ -112,7 +112,7 @@ describe('Aggregation Routes', () => {
 
     it('returns 400 when participantCount is not a positive number', async () => {
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/submit')
+        .post('/api/federated/secure/rounds/round-1/submit')
         .send({ robotId: 'robot-001', maskedGradients: [[1]], participantCount: 0 });
 
       expect(response.status).toBe(400);
@@ -127,7 +127,7 @@ describe('Aggregation Routes', () => {
       });
 
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/submit')
+        .post('/api/federated/secure/rounds/round-1/submit')
         .send(validBody);
 
       expect(response.status).toBe(409);
@@ -140,7 +140,7 @@ describe('Aggregation Routes', () => {
       });
 
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/submit')
+        .post('/api/federated/secure/rounds/round-1/submit')
         .send(validBody);
 
       expect(response.status).toBe(500);
@@ -149,10 +149,10 @@ describe('Aggregation Routes', () => {
   });
 
   // --------------------------------------------------------------------------
-  // GET /api/federated/rounds/:roundId/aggregation
+  // GET /api/federated/secure/rounds/:roundId/aggregation
   // --------------------------------------------------------------------------
 
-  describe('GET /api/federated/rounds/:roundId/aggregation', () => {
+  describe('GET /api/federated/secure/rounds/:roundId/aggregation', () => {
     it('returns aggregation status with result', async () => {
       const status = {
         roundId: 'round-1',
@@ -168,7 +168,7 @@ describe('Aggregation Routes', () => {
       mockSecureAggregator.getAggregationStatus.mockReturnValue(status);
       mockSecureAggregator.getResult.mockReturnValue(result);
 
-      const response = await request(app).get('/api/federated/rounds/round-1/aggregation');
+      const response = await request(app).get('/api/federated/secure/rounds/round-1/aggregation');
 
       expect(response.status).toBe(200);
       expect(response.body.roundId).toBe('round-1');
@@ -189,7 +189,7 @@ describe('Aggregation Routes', () => {
       mockSecureAggregator.getAggregationStatus.mockReturnValue(status);
       mockSecureAggregator.getResult.mockReturnValue(null);
 
-      const response = await request(app).get('/api/federated/rounds/round-1/aggregation');
+      const response = await request(app).get('/api/federated/secure/rounds/round-1/aggregation');
 
       expect(response.status).toBe(200);
       expect(response.body.aggregated).toBe(false);
@@ -201,7 +201,7 @@ describe('Aggregation Routes', () => {
         throw new Error('status failure');
       });
 
-      const response = await request(app).get('/api/federated/rounds/round-1/aggregation');
+      const response = await request(app).get('/api/federated/secure/rounds/round-1/aggregation');
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to get aggregation status: status failure');
@@ -209,10 +209,10 @@ describe('Aggregation Routes', () => {
   });
 
   // --------------------------------------------------------------------------
-  // POST /api/federated/rounds/:roundId/aggregate
+  // POST /api/federated/secure/rounds/:roundId/aggregate
   // --------------------------------------------------------------------------
 
-  describe('POST /api/federated/rounds/:roundId/aggregate', () => {
+  describe('POST /api/federated/secure/rounds/:roundId/aggregate', () => {
     it('triggers aggregation successfully', async () => {
       const result = {
         roundId: 'round-1',
@@ -222,7 +222,7 @@ describe('Aggregation Routes', () => {
       mockSecureAggregator.aggregate.mockReturnValue(result);
 
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/aggregate')
+        .post('/api/federated/secure/rounds/round-1/aggregate')
         .send({ expectedParticipants: 2 });
 
       expect(response.status).toBe(200);
@@ -233,7 +233,7 @@ describe('Aggregation Routes', () => {
 
     it('returns 400 when expectedParticipants is missing/invalid', async () => {
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/aggregate')
+        .post('/api/federated/secure/rounds/round-1/aggregate')
         .send({ expectedParticipants: 0 });
 
       expect(response.status).toBe(400);
@@ -249,7 +249,7 @@ describe('Aggregation Routes', () => {
       });
 
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/aggregate')
+        .post('/api/federated/secure/rounds/round-1/aggregate')
         .send({ expectedParticipants: 2 });
 
       expect(response.status).toBe(400);
@@ -262,7 +262,7 @@ describe('Aggregation Routes', () => {
       });
 
       const response = await request(app)
-        .post('/api/federated/rounds/round-1/aggregate')
+        .post('/api/federated/secure/rounds/round-1/aggregate')
         .send({ expectedParticipants: 2 });
 
       expect(response.status).toBe(500);

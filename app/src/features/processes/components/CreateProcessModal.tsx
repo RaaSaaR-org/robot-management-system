@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { Button, FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
+import { Button, Checkbox, FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
 import { useRobots } from '@/features/robots/hooks/useRobots';
 import { useTasks } from '../hooks/useTasks';
 import { PROCESS_PRIORITY_LABELS, type CreateProcessStep, type ProcessPriority } from '../types';
@@ -41,6 +41,7 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
   const [robotId, setRobotId] = useState(preselectedRobotId ?? '');
   const [priority, setPriority] = useState<ProcessPriority>('normal');
   const [steps, setSteps] = useState<CreateProcessStep[]>([]);
+  const [startNow, setStartNow] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -53,6 +54,7 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
     setRobotId(preselectedRobotId ?? '');
     setPriority('normal');
     setSteps([]);
+    setStartNow(false);
     setErrors({});
     setFormError(undefined);
     void fetchRobots();
@@ -85,8 +87,9 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
         robotId,
         priority,
         steps: steps.length > 0 ? steps.map((s) => ({ name: s.name.trim() })) : undefined,
+        startNow,
       });
-      toast.success('Automation created', { description: created.name });
+      toast.success(startNow ? 'Automation created and started' : 'Automation created', { description: created.name });
       onClose();
       onSuccess?.(created.id);
     } catch (err) {
@@ -176,6 +179,13 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
           </div>
         </div>
       </FormField>
+
+      <Checkbox
+        label="Run it now"
+        description="Off: the automation is created and waits until you press Run."
+        checked={startNow}
+        onChange={(e) => setStartNow(e.target.checked)}
+      />
     </FormModal>
   );
 }

@@ -19,6 +19,7 @@ import { randomInt } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../database/index.js';
+import { ensureDefaultTenant } from '../database/defaultTenant.js';
 import { complianceLogService } from './ComplianceLogService.js';
 import type { UserRole } from '../middleware/auth.middleware.js';
 
@@ -222,6 +223,11 @@ export class TeamService {
     }
 
     const passwordHash = await bcrypt.hash(tempPassword, 10);
+
+    // The organization has to exist before the User FK can point at it.
+    // Single-tenant and dev databases have never had a DEFAULT tenant row
+    // created for them, so the first teammate would fail on P2003.
+    await ensureDefaultTenant(input.tenantId);
 
     let created;
     try {

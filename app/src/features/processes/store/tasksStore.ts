@@ -200,6 +200,32 @@ export const useTasksStore = createStore<TasksStore>(
     },
 
     // --------------------------------------------------------------------------
+    // Start Task
+    // --------------------------------------------------------------------------
+    startTask: async (id: string) => {
+      set((state) => {
+        state.isExecuting = true;
+        state.error = null;
+      });
+
+      try {
+        const task = await tasksApi.startTask(id);
+        updateTaskInState(set, task);
+        set((state) => {
+          state.isExecuting = false;
+        });
+        return task;
+      } catch (error) {
+        const errorMessage = getErrorMessage(error);
+        set((state) => {
+          state.isExecuting = false;
+          state.error = errorMessage;
+        });
+        throw new Error(errorMessage);
+      }
+    },
+
+    // --------------------------------------------------------------------------
     // Pause Task
     // --------------------------------------------------------------------------
     pauseTask: async (id: string) => {

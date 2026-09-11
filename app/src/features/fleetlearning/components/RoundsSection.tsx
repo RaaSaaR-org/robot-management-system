@@ -66,8 +66,8 @@ export function RoundsSection({ newAction }: RoundsSectionProps) {
       key: 'id', header: 'Round',
       cell: (r) => (
         <div className="min-w-0 max-w-[14rem] sm:max-w-sm">
-          <div className="font-medium text-ink-primary">Round {shortRoundId(r.id)}</div>
-          <div className="truncate text-[13px] text-ink-tertiary">{r.globalModelVersion}</div>
+          <div className="truncate font-medium text-ink-primary">{r.globalModelVersion}</div>
+          <div className="text-[13px] text-ink-tertiary">Round {shortRoundId(r.id)}</div>
         </div>
       ),
     },
