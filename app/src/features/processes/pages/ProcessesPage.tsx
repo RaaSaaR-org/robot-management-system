@@ -17,7 +17,7 @@ export function ProcessesPage() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
       <DemoFeaturePlaceholder
-        eyebrow="Operate"
+        eyebrow="Automate"
         featureName="Automations"
         icon={<Workflow className="h-5 w-5" />}
         description="Multi-step jobs your robots run on their own, and how far they got."
@@ -50,7 +50,7 @@ function ProcessesPageInner() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        eyebrow="Operate"
+        eyebrow="Automate"
         title="Automations"
         description="Multi-step jobs your robots run, and how far they got."
         actions={newButton}

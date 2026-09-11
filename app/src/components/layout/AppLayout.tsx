@@ -13,6 +13,7 @@ import { useRobotWebSocket } from '@/features/robots/hooks/useRobotWebSocket';
 import { AlertBanner } from '@/features/alerts/components/AlertBanner';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
+import { SectionRail } from './SectionRail';
 import { MobileNav } from './MobileNav';
 import { ImpersonationBanner } from './ImpersonationBanner';
 
@@ -56,6 +57,8 @@ export function AppLayout({ children }: AppLayoutProps) {
             <ImpersonationBanner />
             {/* In-flow alarm banner: pushes content down instead of covering it */}
             <AlertBanner />
+            {/* The active row's second level, or nothing when it has no rail */}
+            <SectionRail />
             {children}
           </div>
         </main>

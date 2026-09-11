@@ -21,7 +21,7 @@ export interface PageHeaderProps {
   description?: ReactNode;
   /** Legacy alias of `description` */
   subtitle?: ReactNode;
-  /** Nav group label above the title: Overview · Operate · Build · Comply · System · Admin */
+  /** Nav group label above the title: Operate · Automate · Build · System · Admin */
   eyebrow?: ReactNode;
   /** Detail pages: renders "← label" linking back to the list */
   back?: { to: string; label: string };
@@ -38,7 +38,7 @@ export interface PageHeaderProps {
  * @example
  * ```tsx
  * <PageHeader
- *   eyebrow="Operate"
+ *   eyebrow="Automate"
  *   title="Patrol"
  *   description="Routes the robots walk, when they run and what they found."
  *   actions={<Button leftIcon={<Plus className="w-4 h-4" />}>New route</Button>}

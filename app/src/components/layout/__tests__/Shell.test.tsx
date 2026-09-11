@@ -42,9 +42,16 @@ function renderAt(path: string, ui: React.ReactElement) {
 describe('Sidebar', () => {
   it('renders static group eyebrows, no accordion toggles', () => {
     renderAt('/dashboard', <Sidebar />);
-    for (const label of ['Overview', 'Operate', 'Build', 'Comply', 'System']) {
+    for (const label of ['Operate', 'Automate', 'Build', 'System']) {
       expect(screen.getByRole('heading', { name: label })).toBeInTheDocument();
     }
+    // The bookend groups hold one row each and carry no eyebrow: no heading,
+    // and the section borrows the row's name so it is still a landmark.
+    for (const label of ['Overview', 'Comply', 'Dashboard', 'Compliance']) {
+      expect(screen.queryByRole('heading', { name: label })).toBeNull();
+    }
+    expect(screen.getByRole('region', { name: 'Dashboard' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Compliance' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Admin' })).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
   });
@@ -69,6 +76,10 @@ describe('Sidebar', () => {
     renderAt('/training', <Sidebar />);
     expect(screen.queryByRole('heading', { name: 'Build' })).toBeNull();
     expect(screen.getAllByRole('separator').length).toBeGreaterThan(0);
+    // Hairlines instead of eyebrows, but every group keeps a name — the
+    // unlabelled one included.
+    expect(screen.getByRole('region', { name: 'Dashboard' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Automate' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Training' })).toHaveAttribute('aria-current', 'page');
   });
 });

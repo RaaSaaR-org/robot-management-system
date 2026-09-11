@@ -3,7 +3,7 @@ id: "TASK-275"
 aliases: []
 title: "Give the nav model rails, tabs and verb groups"
 slug: "give-the-nav-model-rails-tabs-and-verb-groups"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []

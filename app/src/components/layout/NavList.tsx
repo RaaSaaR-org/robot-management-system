@@ -3,7 +3,8 @@
  * @description Renders the navigation groups for the sidebar (expanded or as a
  *              64px icon rail) and the mobile drawer. Static eyebrow labels,
  *              no accordions; in the rail the eyebrows become hairlines and
- *              every entry carries a tooltip.
+ *              every entry carries a tooltip. A group of one row carries no
+ *              eyebrow and is named after the row instead.
  * @feature layout
  */
 
@@ -100,16 +101,19 @@ export function NavList({ groups, variant, onNavigate }: NavListProps) {
     <div className={cn('flex flex-col', rail ? 'items-center gap-1' : 'gap-5')}>
       {groups.map((group, index) => {
         const headingId = `nav-group-${variant}-${group.id}`;
+        // A labelless group (one row, no eyebrow) renders no heading — and the
+        // rail renders none in any case. A <section> without an accessible
+        // name is not a landmark, so it borrows the name of its single row.
+        const heading = !rail && group.label !== undefined;
         return (
           <section
             key={group.id}
-            aria-labelledby={rail ? undefined : headingId}
-            aria-label={rail ? group.label : undefined}
+            aria-labelledby={heading ? headingId : undefined}
+            aria-label={heading ? undefined : (group.label ?? group.items[0]?.label)}
             className={cn('flex flex-col', rail ? 'items-center gap-1' : 'gap-0.5')}
           >
-            {rail ? (
-              index > 0 && <div role="separator" className="my-2 h-px w-8 bg-line" />
-            ) : (
+            {rail && index > 0 && <div role="separator" className="my-2 h-px w-8 bg-line" />}
+            {heading && (
               <h2
                 id={headingId}
                 className="mb-1 px-3 font-sans text-[11px] font-medium uppercase tracking-[0.12em] text-ink-muted"

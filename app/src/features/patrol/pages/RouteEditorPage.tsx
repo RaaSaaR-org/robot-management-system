@@ -100,7 +100,7 @@ export const RouteEditorPage = memo(function RouteEditorPage({ className }: Rout
   if (!isNew && !route) {
     return (
       <div className={root} data-testid="patrol-route-page">
-        <PageHeader eyebrow="Operate" back={BACK} title={loadError ? 'Route' : 'Loading…'} />
+        <PageHeader eyebrow="Automate" back={BACK} title={loadError ? 'Route' : 'Loading…'} />
         <Panel>
           {loadError ? <ErrorState title="Couldn't load this route" message={loadError} onRetry={() => void load()} /> : <SkeletonText lines={4} />}
         </Panel>
@@ -111,7 +111,7 @@ export const RouteEditorPage = memo(function RouteEditorPage({ className }: Rout
   return (
     <div className={root} data-testid="patrol-route-page">
       <PageHeader
-        eyebrow="Operate"
+        eyebrow="Automate"
         back={BACK}
         title={isNew ? 'New route' : route!.name}
         description={isNew ? 'A route is the ordered list of places a robot walks, with a schedule and a baseline of what is normal.' : undefined}

@@ -56,7 +56,6 @@ export function DashboardPage() {
 
   const header = (
     <PageHeader
-      eyebrow="Overview"
       title="Dashboard"
       description="Fleet state, the map and what needs you now."
       actions={

@@ -343,7 +343,7 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
     const loading = runId !== '' && (status === 'loading' || status === 'idle');
     return (
       <div className={cn('flex flex-col gap-6 min-w-0', className)} data-testid="patrol-run-detail">
-        <PageHeader eyebrow="Operate" back={back} title={loading ? 'Loading…' : 'Patrol run'} />
+        <PageHeader eyebrow="Automate" back={back} title={loading ? 'Loading…' : 'Patrol run'} />
         <Panel>
           {loading ? (
             <>
@@ -405,7 +405,7 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
   return (
     <div className={cn('flex flex-col gap-6 min-w-0', className)} data-testid="patrol-run-detail" data-run-id={run.runId}>
       <PageHeader
-        eyebrow="Operate"
+        eyebrow="Automate"
         back={back}
         title={routeName}
         description={`${kind} · ${formatWhen(run.startedAt)} · ${robotName}`}
