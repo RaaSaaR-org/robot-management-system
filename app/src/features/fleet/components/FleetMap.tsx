@@ -1,345 +1,36 @@
 /**
  * @file FleetMap.tsx
- * @description Futuristic SVG-based fleet map component for visualizing robot positions
+ * @description SVG fleet map: robots and zones on a facility grid, with a floor
+ *   switch and legend, marker clustering and a robot popover. Matte and
+ *   token-coloured; renders no title (the host Panel carries it).
  * @feature fleet
- * @dependencies @/shared/utils/cn, @/features/fleet/types
+ * @dependencies @/shared/utils/cn, @/features/fleet/types, @/features/fleet/utils
  */
 
 import { useState, useMemo, useCallback } from 'react';
 import { cn } from '@/shared/utils/cn';
-import type { FleetMapProps, RobotMapMarker, Zone } from '../types/fleet.types';
+import type { FleetMapProps, Zone } from '../types/fleet.types';
 import { MAP_CANVAS_SIZE, MOCK_ZONES } from '../types/fleet.types';
 import { RobotMarker } from './RobotMarker';
 import { ZoneEditor } from './ZoneEditor';
-import { clusterRobots } from '../utils/markerClustering';
-import { activateOnKey } from '../utils/svgButton';
-import type { Cluster } from '../utils/markerClustering';
+import { FleetMapPopover } from './FleetMapPopover';
+import { FleetMapToolbar } from './FleetMapToolbar';
+import { clusterRobots, type Cluster } from '../utils/markerClustering';
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const PADDING = 40;
-const SCALE = 10; // pixels per unit
+const PADDING = 72; // room for centred robot names at the map edge
+const SCALE = 10; // pixels per map unit
 
 // Cluster count bubbles are lifted above the actual cluster point so they
-// don't sit on top of zone labels / markers at that spot; a thin stem and an
-// anchor dot keep the badge visually tied to its position.
-const CLUSTER_BADGE_OFFSET = 28;
-
-// Status colors for legend (matching futuristic theme)
-const STATUS_COLORS = {
-  online: '#18E4C3',   // turquoise
-  busy: '#3b82f6',     // blue
-  charging: '#eab308', // yellow
-  error: '#ef4444',    // red
-  offline: '#6b7280',  // gray
-} as const;
-
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-/** SVG Definitions for gradients and filters */
-function SVGDefs() {
-  return (
-    <defs>
-      {/* Path gradient cobalt → turquoise */}
-      <linearGradient id="fleetPathGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" stopColor="#2A5FFF" />
-        <stop offset="100%" stopColor="#18E4C3" />
-      </linearGradient>
-
-      {/* Glow filter */}
-      <filter id="fleetGlow" x="-50%" y="-50%" width="200%" height="200%">
-        <feGaussianBlur stdDeviation="3" result="coloredBlur" />
-        <feMerge>
-          <feMergeNode in="coloredBlur" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-
-      {/* Subtle glow for zones */}
-      <filter id="zoneGlow" x="-20%" y="-20%" width="140%" height="140%">
-        <feGaussianBlur stdDeviation="2" result="blur" />
-        <feMerge>
-          <feMergeNode in="blur" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-
-      {/* Grid pattern */}
-      <pattern id="fleetGrid" width="32" height="32" patternUnits="userSpaceOnUse">
-        <path
-          d="M 32 0 L 0 0 0 32"
-          fill="none"
-          stroke="rgba(42, 95, 255, 0.2)"
-          strokeWidth="0.5"
-        />
-      </pattern>
-    </defs>
-  );
-}
-
-/** Animated grid background overlay */
-function AnimatedGrid() {
-  return (
-    <div
-      className="absolute inset-0 pointer-events-none"
-      style={{
-        backgroundImage:
-          'linear-gradient(to right, rgba(42, 95, 255, 0.12) 1px, transparent 1px), linear-gradient(to bottom, rgba(42, 95, 255, 0.12) 1px, transparent 1px)',
-        backgroundSize: '32px 32px',
-        animation: 'gridPulse 3s ease-in-out infinite',
-      }}
-    />
-  );
-}
-
-/** Scan line effect */
-function ScanLine() {
-  return (
-    <div
-      className="absolute inset-x-0 h-16 bg-gradient-to-b from-turquoise/15 via-turquoise/5 to-transparent pointer-events-none"
-      style={{ animation: 'scanLine 3s ease-in-out infinite' }}
-    />
-  );
-}
-
-/** Floor selector tabs */
-function FloorSelector({
-  floors,
-  selectedFloor,
-  onFloorChange,
-}: {
-  floors: string[];
-  selectedFloor: string;
-  onFloorChange: (floor: string) => void;
-}) {
-  return (
-    <div className="flex gap-1">
-      {floors.map((floor) => (
-        <button
-          key={floor}
-          onClick={() => onFloorChange(floor)}
-          className={cn(
-            'px-3 py-1 text-xs font-medium rounded-brand transition-all',
-            selectedFloor === floor
-              ? 'bg-primary text-on-primary'
-              : 'bg-surface-700/50 text-theme-tertiary hover:bg-surface-600/50 hover:text-theme-secondary'
-          )}
-        >
-          F{floor}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** Map legend with futuristic styling */
-function MapLegend() {
-  const statuses = [
-    { status: 'online', label: 'Online' },
-    { status: 'busy', label: 'Busy' },
-    { status: 'charging', label: 'Charging' },
-    { status: 'error', label: 'Error' },
-    { status: 'offline', label: 'Offline' },
-  ] as const;
-
-  return (
-    <div className="flex flex-wrap gap-3 text-xs">
-      {statuses.map(({ status, label }) => (
-        <div key={status} className="flex items-center gap-1.5">
-          <div
-            className="w-2 h-2 rounded-full"
-            style={{
-              backgroundColor: STATUS_COLORS[status],
-              boxShadow: `0 0 6px ${STATUS_COLORS[status]}60`,
-            }}
-          />
-          <span className="text-theme-muted">{label}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/** Robot info popup with dark theme */
-function RobotPopup({
-  robot,
-  position,
-  onClose,
-  onViewDetails,
-  onViewMap,
-}: {
-  robot: RobotMapMarker;
-  position: { x: number; y: number };
-  onClose: () => void;
-  onViewDetails: () => void;
-  /** "Open robot's map" — the robot-built occupancy map on `/agent` (TASK-207). */
-  onViewMap?: () => void;
-}) {
-  const statusColor = STATUS_COLORS[robot.status as keyof typeof STATUS_COLORS] || STATUS_COLORS.offline;
-  const height = onViewMap ? 119 : 95;
-
-  return (
-    <g transform={`translate(${position.x + 20}, ${position.y - 10})`}>
-      {/* Background with glow - expanded height for button */}
-      <rect
-        x="0"
-        y="0"
-        width="140"
-        height={height}
-        rx="8"
-        fill="rgba(15, 23, 42, 0.95)"
-        stroke="rgba(42, 95, 255, 0.3)"
-        strokeWidth="1"
-        filter="url(#zoneGlow)"
-      />
-      {/* Accent line */}
-      <rect x="0" y="0" width="3" height={height} rx="1.5" fill="url(#fleetPathGradient)" />
-
-      {/* Close button */}
-      <g
-        transform="translate(122, 8)"
-        className="cursor-pointer"
-        onClick={onClose}
-        onKeyDown={activateOnKey(onClose)}
-        role="button"
-        tabIndex={0}
-        aria-label="Close robot popup"
-        data-testid="fleet-close-popup"
-      >
-        <circle cx="6" cy="6" r="8" fill="rgba(255,255,255,0.1)" />
-        <path d="M4 4 L8 8 M8 4 L4 8" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" />
-      </g>
-
-      {/* Content */}
-      <text x="12" y="22" fontSize="11" fontWeight="600" fill="#f8fafc" fontFamily="monospace">
-        {robot.name}
-      </text>
-      <g transform="translate(12, 32)">
-        <circle cx="4" cy="4" r="3" fill={statusColor} style={{ filter: `drop-shadow(0 0 3px ${statusColor})` }} />
-        <text x="12" y="7" fontSize="9" fill="#94a3b8" fontFamily="monospace">
-          {robot.status.toUpperCase()}
-        </text>
-      </g>
-      <text x="12" y="56" fontSize="9" fill="#64748b" fontFamily="monospace">
-        BAT: {robot.batteryLevel}%
-      </text>
-      <rect
-        x="60"
-        y="49"
-        width="70"
-        height="4"
-        rx="2"
-        fill="rgba(255,255,255,0.1)"
-      />
-      <rect
-        x="60"
-        y="49"
-        width={Math.max(0, Math.min(70, (robot.batteryLevel ?? 100) * 0.7))}
-        height="4"
-        rx="2"
-        fill={(robot.batteryLevel ?? 100) > 20 ? '#18E4C3' : '#ef4444'}
-      />
-
-      {/* View Details Button */}
-      <g
-        transform="translate(12, 68)"
-        className="cursor-pointer"
-        onClick={onViewDetails}
-        onKeyDown={activateOnKey(onViewDetails)}
-        role="button"
-        tabIndex={0}
-        aria-label={`View ${robot.name} details`}
-        data-testid="fleet-view-details"
-      >
-        <rect
-          x="0"
-          y="0"
-          width="116"
-          height="20"
-          rx="4"
-          fill="#2A5FFF"
-          className="transition-all"
-          style={{ filter: 'drop-shadow(0 0 4px rgba(42, 95, 255, 0.5))' }}
-        />
-        <text
-          x="58"
-          y="14"
-          textAnchor="middle"
-          fontSize="9"
-          fontWeight="600"
-          fill="white"
-          fontFamily="monospace"
-        >
-          VIEW DETAILS →
-        </text>
-      </g>
-
-      {/* Open robot's map — what the robot itself has mapped, not this
-          operator map. */}
-      {onViewMap && (
-        <g
-          transform="translate(12, 92)"
-          className="cursor-pointer"
-          onClick={onViewMap}
-          onKeyDown={activateOnKey(onViewMap)}
-          role="button"
-          tabIndex={0}
-          aria-label={`Open ${robot.name}'s map`}
-          data-testid="fleet-open-robot-map"
-        >
-          <rect
-            x="0"
-            y="0"
-            width="116"
-            height="20"
-            rx="4"
-            fill="rgba(255,255,255,0.08)"
-            stroke="rgba(24, 228, 195, 0.6)"
-            strokeWidth="1"
-          />
-          <text
-            x="58"
-            y="14"
-            textAnchor="middle"
-            fontSize="9"
-            fontWeight="600"
-            fill="#18E4C3"
-            fontFamily="monospace"
-          >
-            OPEN ROBOT'S MAP →
-          </text>
-        </g>
-      )}
-    </g>
-  );
-}
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
+// don't sit on zone labels; a thin stem keeps the badge tied to its point.
+const CLUSTER_BADGE_OFFSET = 26;
 
 /**
- * Futuristic SVG-based fleet map showing robot positions on a facility grid.
+ * Fleet map showing robot positions on a facility grid.
  *
  * @example
  * ```tsx
- * function FleetOverview() {
- *   const { robotMarkers, floors } = useFleetStatus();
- *   const [floor, setFloor] = useState('1');
- *
- *   return (
- *     <FleetMap
- *       robots={robotMarkers}
- *       selectedFloor={floor}
- *       onFloorChange={setFloor}
- *       onRobotClick={(id) => navigate(`/robots/${id}`)}
- *     />
- *   );
- * }
+ * <FleetMap robots={robotMarkers} selectedFloor={floor} onFloorChange={setFloor}
+ *   onRobotClick={(id) => navigate(`/robots/${id}`)} />
  * ```
  */
 export function FleetMap({
@@ -349,7 +40,7 @@ export function FleetMap({
   onFloorChange,
   onRobotClick,
   onRobotMapClick,
-  editorMode: _editorMode = 'view', // ZoneEditor gets mode from store
+  editorMode: _editorMode = 'view', // ZoneEditor reads the mode from the store
   selectedZoneId = null,
   onSelectZone,
   onEditZone,
@@ -361,28 +52,15 @@ export function FleetMap({
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null);
   const [hoveredCluster, setHoveredCluster] = useState<Cluster | null>(null);
 
-  // Get unique floors from robots
   const floors = useMemo(() => {
-    const floorSet = new Set(robots.map((r) => r.floor));
+    const floorSet = new Set([...robots.map((r) => r.floor), ...zones.map((z) => z.floor)]);
     return Array.from(floorSet).sort();
-  }, [robots]);
+  }, [robots, zones]);
 
-  // Filter robots by selected floor
-  const filteredRobots = useMemo(() => {
-    return robots.filter((r) => r.floor === selectedFloor);
-  }, [robots, selectedFloor]);
+  const filteredRobots = useMemo(() => robots.filter((r) => r.floor === selectedFloor), [robots, selectedFloor]);
+  const filteredZones = useMemo(() => zones.filter((z) => z.floor === selectedFloor), [zones, selectedFloor]);
 
-  // Filter zones by selected floor
-  const filteredZones = useMemo(() => {
-    return zones.filter((z) => z.floor === selectedFloor);
-  }, [zones, selectedFloor]);
-
-  // Calculate bounds for positioning
   const bounds = useMemo(() => {
-    if (filteredRobots.length === 0 && filteredZones.length === 0) {
-      return { minX: 0, maxX: 50, minY: 0, maxY: 35 };
-    }
-
     const allX = [
       ...filteredRobots.map((r) => r.position.x),
       ...filteredZones.flatMap((z) => [z.bounds.x, z.bounds.x + z.bounds.width]),
@@ -391,7 +69,6 @@ export function FleetMap({
       ...filteredRobots.map((r) => r.position.y),
       ...filteredZones.flatMap((z) => [z.bounds.y, z.bounds.y + z.bounds.height]),
     ];
-
     return {
       minX: Math.min(...allX, 0),
       maxX: Math.max(...allX, 50),
@@ -400,290 +77,190 @@ export function FleetMap({
     };
   }, [filteredRobots, filteredZones]);
 
-  // Transform world coordinates to canvas coordinates
   const transformPoint = useCallback(
     (x: number, y: number) => ({
       x: PADDING + (x - bounds.minX) * SCALE,
       y: PADDING + (y - bounds.minY) * SCALE,
     }),
-    [bounds]
+    [bounds],
   );
 
-  // Get selected robot
-  const selectedRobot = useMemo(() => {
-    return filteredRobots.find((r) => r.robotId === selectedRobotId);
-  }, [filteredRobots, selectedRobotId]);
+  const viewWidth = Math.max((bounds.maxX - bounds.minX) * SCALE + PADDING * 2, MAP_CANVAS_SIZE.width);
+  const viewHeight = Math.max((bounds.maxY - bounds.minY) * SCALE + PADDING * 2, MAP_CANVAS_SIZE.height);
 
-  // Handle robot click - shows popup, navigation happens via "View Details" button
-  const handleRobotClick = useCallback(
-    (robotId: string) => {
-      if (selectedRobotId === robotId) {
-        setSelectedRobotId(null);
-      } else {
-        setSelectedRobotId(robotId);
-      }
-    },
-    [selectedRobotId]
+  const selectedRobot = useMemo(
+    () => filteredRobots.find((r) => r.robotId === selectedRobotId),
+    [filteredRobots, selectedRobotId],
   );
 
-  // Close popup
-  const handleClosePopup = useCallback(() => {
-    setSelectedRobotId(null);
+  // A marker click opens the popover; navigation happens from its buttons.
+  const handleRobotClick = useCallback((robotId: string) => {
+    setSelectedRobotId((current) => (current === robotId ? null : robotId));
   }, []);
 
-  // Canvas dimensions
-  const canvasWidth = (bounds.maxX - bounds.minX) * SCALE + PADDING * 2;
-  const canvasHeight = (bounds.maxY - bounds.minY) * SCALE + PADDING * 2;
-
-  // Count robots by status
-  const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const robot of filteredRobots) {
-      counts[robot.status] = (counts[robot.status] || 0) + 1;
-    }
-    return counts;
-  }, [filteredRobots]);
-
-  // Cluster nearby robots
   const clusters = useMemo(() => {
     const markers = filteredRobots.map((r) => {
       const pos = transformPoint(r.position.x, r.position.y);
-      return {
-        id: r.robotId,
-        x: pos.x,
-        y: pos.y,
-        name: r.name,
-        status: r.status,
-      };
+      return { id: r.robotId, x: pos.x, y: pos.y, name: r.name, status: r.status };
     });
     return clusterRobots(markers, clusterThreshold);
   }, [filteredRobots, transformPoint, clusterThreshold]);
 
-  // Set of robot IDs that are in multi-robot clusters (rendered as cluster badge)
   const clusteredRobotIds = useMemo(() => {
     const ids = new Set<string>();
     for (const cluster of clusters) {
-      if (cluster.robots.length > 1) {
-        for (const r of cluster.robots) {
-          ids.add(r.id);
-        }
-      }
+      if (cluster.robots.length > 1) cluster.robots.forEach((r) => ids.add(r.id));
     }
     return ids;
   }, [clusters]);
 
+  const popoverAnchor = selectedRobot
+    ? (() => {
+        const p = transformPoint(selectedRobot.position.x, selectedRobot.position.y);
+        return { x: p.x / viewWidth, y: p.y / viewHeight };
+      })()
+    : null;
+
   return (
-    <div className={cn('section-primary rounded-2xl border border-cobalt/20 overflow-hidden', className)}>
-      {/* Header */}
-      <div className="p-4 border-b border-cobalt/10 flex items-center justify-between flex-wrap gap-4">
-        <div className="flex items-center gap-4">
-          <h3 className="text-lg font-semibold text-theme-primary">Fleet Map</h3>
-          {/* Live indicator */}
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <div className="w-2 h-2 rounded-full bg-turquoise" />
-              <div className="absolute inset-0 w-2 h-2 rounded-full bg-turquoise animate-ping" />
-            </div>
-            <span className="text-turquoise text-xs font-medium uppercase tracking-wide">Live</span>
-          </div>
-          {floors.length > 1 && (
-            <FloorSelector
-              floors={floors.length > 0 ? floors : ['1', '2']}
-              selectedFloor={selectedFloor}
-              onFloorChange={onFloorChange}
-            />
+    <div className={cn('flex flex-col', className)}>
+      <FleetMapToolbar
+        floors={floors.length > 0 ? floors : [selectedFloor]}
+        selectedFloor={selectedFloor}
+        onFloorChange={onFloorChange}
+        robotCount={filteredRobots.length}
+      />
+
+      {/* A diagram may scroll sideways on phones: below ~560px the labels
+          would shrink under 10px, so the map keeps a minimum width. */}
+      <div className="overflow-x-auto bg-inset">
+      <div className="relative min-w-[560px]">
+        <svg
+          viewBox={`0 0 ${viewWidth} ${viewHeight}`}
+          className="block h-auto w-full"
+          role="group"
+          aria-label={`Fleet map, floor ${selectedFloor}`}
+        >
+          <defs>
+            <pattern id="fleetGrid" width="20" height="20" patternUnits="userSpaceOnUse">
+              <path d="M 20 0 L 0 0 0 20" fill="none" stroke="var(--border-color)" strokeWidth="0.5" opacity="0.6" />
+            </pattern>
+          </defs>
+
+          {floorPlanUrl && (
+            <image href={floorPlanUrl} x="0" y="0" width="100%" height="100%" opacity={0.3} preserveAspectRatio="xMidYMid slice" />
           )}
-        </div>
-        <MapLegend />
-      </div>
 
-      {/* Map canvas */}
-      <div className="relative overflow-hidden">
-        {/* Animated grid overlay */}
-        <AnimatedGrid />
+          <rect x="0" y="0" width="100%" height="100%" fill="url(#fleetGrid)" />
 
-        {/* Scan line effect */}
-        <ScanLine />
+          <ZoneEditor
+            zones={filteredZones as Zone[]}
+            scale={SCALE}
+            offset={{ x: PADDING - bounds.minX * SCALE, y: PADDING - bounds.minY * SCALE }}
+            selectedZoneId={selectedZoneId}
+            onSelectZone={onSelectZone || (() => {})}
+            onEditZone={onEditZone || (() => {})}
+            onZoneDrawn={onZoneDrawn || (() => {})}
+          />
 
-        {/* SVG Map */}
-        <div className="p-4 relative z-10">
-          <div className="section-primary rounded-xl border border-cobalt/20 overflow-hidden relative">
-            <svg
-              width="100%"
-              height="100%"
-              viewBox={`0 0 ${Math.max(canvasWidth, MAP_CANVAS_SIZE.width)} ${Math.max(canvasHeight, MAP_CANVAS_SIZE.height)}`}
-              className="min-h-[320px]"
-            >
-              <SVGDefs />
-
-              {/* Optional floor plan background */}
-              {floorPlanUrl && (
-                <image
-                  href={floorPlanUrl}
-                  x="0"
-                  y="0"
-                  width="100%"
-                  height="100%"
-                  opacity={0.3}
-                  preserveAspectRatio="xMidYMid slice"
-                />
-              )}
-
-              {/* Grid fill */}
-              <rect x="0" y="0" width="100%" height="100%" fill="url(#fleetGrid)" />
-
-              {/* Zone editor (handles both view and edit modes) */}
-              <ZoneEditor
-                zones={filteredZones as Zone[]}
-                scale={SCALE}
-                offset={{ x: PADDING - bounds.minX * SCALE, y: PADDING - bounds.minY * SCALE }}
-                selectedZoneId={selectedZoneId}
-                onSelectZone={onSelectZone || (() => {})}
-                onEditZone={onEditZone || (() => {})}
-                onZoneDrawn={onZoneDrawn || (() => {})}
+          {filteredRobots
+            .filter((robot) => !clusteredRobotIds.has(robot.robotId))
+            .map((robot) => (
+              <RobotMarker
+                key={robot.robotId}
+                robot={robot}
+                position={transformPoint(robot.position.x, robot.position.y)}
+                isSelected={robot.robotId === selectedRobotId}
+                onClick={() => handleRobotClick(robot.robotId)}
               />
+            ))}
 
-              {/* Robot markers (unclustered) */}
-              {filteredRobots
-                .filter((robot) => !clusteredRobotIds.has(robot.robotId))
-                .map((robot) => {
-                  const pos = transformPoint(robot.position.x, robot.position.y);
-                  return (
-                    <RobotMarker
-                      key={robot.robotId}
-                      robot={robot}
-                      position={pos}
-                      isSelected={robot.robotId === selectedRobotId}
-                      onClick={() => handleRobotClick(robot.robotId)}
-                    />
-                  );
-                })}
+          {clusters
+            .filter((c) => c.robots.length > 1)
+            .map((cluster) => (
+              <ClusterBadge
+                key={cluster.robots.map((r) => r.id).join('-')}
+                cluster={cluster}
+                isHovered={hoveredCluster === cluster}
+                onHover={setHoveredCluster}
+              />
+            ))}
+        </svg>
 
-              {/* Cluster badges */}
-              {clusters
-                .filter((c) => c.robots.length > 1)
-                .map((cluster) => {
-                  const key = cluster.robots.map((r) => r.id).join('-');
-                  const isHovered = hoveredCluster === cluster;
-                  return (
-                    <g
-                      key={key}
-                      transform={`translate(${cluster.x}, ${cluster.y})`}
-                      className="cursor-pointer"
-                      onMouseEnter={() => setHoveredCluster(cluster)}
-                      onMouseLeave={() => setHoveredCluster(null)}
-                    >
-                      {/* Anchor dot at the actual cluster point */}
-                      <circle cx="0" cy="0" r="2.5" fill="#18E4C3" opacity="0.9" />
-                      {/* Stem connecting the lifted badge to its point */}
-                      <line
-                        x1="0"
-                        y1="-3"
-                        x2="0"
-                        y2={-(CLUSTER_BADGE_OFFSET - 14)}
-                        stroke="#18E4C3"
-                        strokeWidth="1"
-                        opacity="0.6"
-                      />
-                      {/* Outer glow ring */}
-                      <circle
-                        cx="0"
-                        cy={-CLUSTER_BADGE_OFFSET}
-                        r={isHovered ? 22 : 18}
-                        fill="rgba(42, 95, 255, 0.15)"
-                        stroke="#2A5FFF"
-                        strokeWidth="1"
-                        style={{ transition: 'r 0.2s ease' }}
-                      />
-                      {/* Inner circle */}
-                      <circle
-                        cx="0"
-                        cy={-CLUSTER_BADGE_OFFSET}
-                        r="14"
-                        fill="rgba(15, 23, 42, 0.9)"
-                        stroke="#18E4C3"
-                        strokeWidth="1.5"
-                        filter="url(#fleetGlow)"
-                      />
-                      {/* Count text */}
-                      <text
-                        x="0"
-                        y={1 - CLUSTER_BADGE_OFFSET}
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        fontSize="11"
-                        fontWeight="700"
-                        fill="#18E4C3"
-                        fontFamily="monospace"
-                      >
-                        {cluster.robots.length}
-                      </text>
-
-                      {/* Hover tooltip with robot names */}
-                      {isHovered && (
-                        <g transform={`translate(24, ${-10 - CLUSTER_BADGE_OFFSET})`}>
-                          <rect
-                            x="0"
-                            y="0"
-                            width="130"
-                            height={cluster.robots.length * 16 + 12}
-                            rx="6"
-                            fill="rgba(15, 23, 42, 0.95)"
-                            stroke="rgba(42, 95, 255, 0.3)"
-                            strokeWidth="1"
-                          />
-                          {cluster.robots.map((r, i) => (
-                            <text
-                              key={r.id}
-                              x="8"
-                              y={16 + i * 16}
-                              fontSize="9"
-                              fill="#f8fafc"
-                              fontFamily="monospace"
-                            >
-                              {r.name}
-                            </text>
-                          ))}
-                        </g>
-                      )}
-                    </g>
-                  );
-                })}
-
-              {/* Selected robot popup */}
-              {selectedRobot && (
-                <RobotPopup
-                  robot={selectedRobot}
-                  position={transformPoint(selectedRobot.position.x, selectedRobot.position.y)}
-                  onClose={handleClosePopup}
-                  onViewDetails={() => {
-                    onRobotClick?.(selectedRobot.robotId);
-                  }}
-                  onViewMap={onRobotMapClick ? () => onRobotMapClick(selectedRobot.robotId) : undefined}
-                />
-              )}
-            </svg>
-
-            {/* Data overlay - bottom left */}
-            <div className="absolute bottom-3 left-3 flex flex-col gap-1 text-xs tabular-nums">
-              <div className="flex items-center gap-2">
-                <span className="text-theme-muted">Units</span>
-                <span className="text-turquoise font-medium">{filteredRobots.length}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-theme-muted">Active</span>
-                <span className="text-cobalt-300 font-medium">{statusCounts['busy'] || 0}</span>
-              </div>
-            </div>
-
-            {/* Floor indicator - bottom right */}
-            <div className="absolute bottom-3 right-3 text-xs">
-              <span className="text-theme-muted">Floor </span>
-              <span className="text-turquoise font-medium">{selectedFloor}</span>
-            </div>
-          </div>
-        </div>
+        {selectedRobot && popoverAnchor && (
+          <FleetMapPopover
+            robot={selectedRobot}
+            anchor={popoverAnchor}
+            onClose={() => setSelectedRobotId(null)}
+            onViewDetails={() => onRobotClick?.(selectedRobot.robotId)}
+            onViewMap={onRobotMapClick ? () => onRobotMapClick(selectedRobot.robotId) : undefined}
+          />
+        )}
+      </div>
       </div>
     </div>
+  );
+}
+
+/** Count bubble for robots too close together to draw one by one. */
+function ClusterBadge({
+  cluster,
+  isHovered,
+  onHover,
+}: {
+  cluster: Cluster;
+  isHovered: boolean;
+  onHover: (cluster: Cluster | null) => void;
+}) {
+  const names = cluster.robots.map((r) => r.name);
+  return (
+    <g
+      transform={`translate(${cluster.x}, ${cluster.y})`}
+      className="cursor-default"
+      onMouseEnter={() => onHover(cluster)}
+      onMouseLeave={() => onHover(null)}
+      role="img"
+      aria-label={`${names.length} robots: ${names.join(', ')}`}
+    >
+      <circle cx="0" cy="0" r="2.5" fill="var(--color-primary)" />
+      <line x1="0" y1="-3" x2="0" y2={-(CLUSTER_BADGE_OFFSET - 13)} stroke="var(--color-primary)" strokeWidth="1" opacity="0.6" />
+      <circle
+        cx="0"
+        cy={-CLUSTER_BADGE_OFFSET}
+        r="13"
+        fill="var(--bg-secondary)"
+        stroke="var(--color-primary)"
+        strokeWidth={isHovered ? 2 : 1.5}
+      />
+      <text
+        x="0"
+        y={1 - CLUSTER_BADGE_OFFSET}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fontSize="12"
+        fontWeight="600"
+        fill="var(--text-primary)"
+      >
+        {names.length}
+      </text>
+      {isHovered && (
+        <g transform={`translate(20, ${-10 - CLUSTER_BADGE_OFFSET})`}>
+          <rect
+            x="0"
+            y="0"
+            width="140"
+            height={names.length * 16 + 12}
+            rx="6"
+            fill="var(--bg-elevated)"
+            stroke="var(--border-color)"
+            strokeWidth="1"
+          />
+          {names.map((name, i) => (
+            <text key={cluster.robots[i].id} x="10" y={18 + i * 16} fontSize="11" fill="var(--text-primary)">
+              {name}
+            </text>
+          ))}
+        </g>
+      )}
+    </g>
   );
 }

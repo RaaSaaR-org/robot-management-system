@@ -1,27 +1,14 @@
 /**
  * @file RobotMarker.tsx
- * @description Futuristic robot marker component for fleet map with glow and pulse effects
+ * @description Robot marker on the fleet map: a status-coloured dot with the
+ *   robot's name in Inter. Matte — no glow, no radar sweep.
  * @feature fleet
- * @dependencies @/shared/utils/cn, @/features/fleet/types
+ * @dependencies @/features/fleet/types, @/features/fleet/utils
  */
 
 import type { RobotMarkerProps } from '../types/fleet.types';
-import { MAINTENANCE_COLOR } from '../types/fleet.types';
 import { activateOnKey } from '../utils/svgButton';
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-// Futuristic status colors with glow
-const STATUS_COLORS = {
-  online: '#18E4C3',   // turquoise
-  busy: '#3b82f6',     // blue
-  charging: '#eab308', // yellow
-  error: '#ef4444',    // red
-  maintenance: MAINTENANCE_COLOR,
-  offline: '#6b7280',  // gray
-} as const;
+import { robotStatusColor } from '../utils/mapColors';
 
 /**
  * Only truncate genuinely long names — real robot names like
@@ -29,29 +16,33 @@ const STATUS_COLORS = {
  */
 const MAX_LABEL_CHARS = 22;
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+/** True when the robot runs on a battery that is nearly flat. */
+function isLowBattery(robot: RobotMarkerProps['robot']): boolean {
+  return (
+    robot.metadata?.powerSource !== 'ac_powered' &&
+    robot.batteryLevel !== null &&
+    robot.batteryLevel < 20
+  );
+}
 
 /**
- * Futuristic robot marker icon for the fleet map.
- * Shows robot position with glow effects, pulse rings, and status-colored indicators.
+ * Robot marker icon for the fleet map. Keyboard-operable (Enter/Space).
  *
  * @example
  * ```tsx
- * <RobotMarker
- *   robot={robot}
- *   position={{ x: 100, y: 150 }}
- *   onClick={() => handleRobotClick(robot.robotId)}
- * />
+ * <RobotMarker robot={robot} position={{ x: 100, y: 150 }} onClick={() => select(robot.robotId)} />
  * ```
  */
 export function RobotMarker({ robot, position, isSelected, onClick }: RobotMarkerProps) {
-  const statusColor = STATUS_COLORS[robot.status as keyof typeof STATUS_COLORS] || STATUS_COLORS.offline;
+  const color = robotStatusColor(robot.status);
+  const label =
+    robot.name.length > MAX_LABEL_CHARS
+      ? `${robot.name.substring(0, MAX_LABEL_CHARS - 1)}…`
+      : robot.name;
 
   return (
     <g
-      className="cursor-pointer"
+      className="cursor-pointer outline-none"
       transform={`translate(${position.x}, ${position.y})`}
       onClick={onClick}
       onKeyDown={activateOnKey(() => onClick?.())}
@@ -59,137 +50,37 @@ export function RobotMarker({ robot, position, isSelected, onClick }: RobotMarke
       tabIndex={0}
       aria-label={`${robot.name} - ${robot.status}`}
     >
-      {/* Invisible hit area for 44px touch target */}
+      {/* Invisible hit area for a 44px touch target */}
       <circle cx="0" cy="0" r="22" fill="transparent" />
 
-      {/* Outer pulse rings - always visible but subtle */}
-      <circle
-        cx="0"
-        cy="0"
-        r="18"
-        fill="none"
-        stroke={statusColor}
-        strokeWidth="1"
-        opacity="0.3"
-        style={{ animation: 'pulseRing 2s ease-out infinite' }}
-      />
-      <circle
-        cx="0"
-        cy="0"
-        r="18"
-        fill="none"
-        stroke={statusColor}
-        strokeWidth="1"
-        opacity="0.2"
-        style={{ animation: 'pulseRing 2s ease-out infinite 0.5s' }}
-      />
-
-      {/* Selected/Error state - extra pulse */}
-      {(isSelected || robot.status === 'error') && (
-        <circle
-          cx="0"
-          cy="0"
-          r="22"
-          fill="none"
-          stroke={statusColor}
-          strokeWidth="2"
-          opacity="0.5"
-          className="animate-ping"
-        />
-      )}
-
-      {/* Radar sweep for selected robot */}
+      {/* Selection ring */}
       {isSelected && (
-        <g style={{ animation: 'radarSweep 2s linear infinite' }}>
-          <path
-            d="M 0 0 L 20 -12 A 24 24 0 0 1 20 12 Z"
-            fill={`${statusColor}20`}
-          />
-        </g>
+        <circle cx="0" cy="0" r="17" fill="none" stroke="var(--color-primary)" strokeWidth="2" />
       )}
 
-      {/* Glow background */}
-      <circle
-        cx="0"
-        cy="0"
-        r="14"
-        fill={`${statusColor}30`}
-        style={{ filter: 'blur(4px)' }}
-      />
+      {/* Body */}
+      <circle cx="0" cy="0" r="11" fill="var(--bg-secondary)" stroke={color} strokeWidth="2" />
+      <circle cx="0" cy="0" r="5.5" fill={color} />
 
-      {/* Outer ring with glow */}
-      <circle
-        cx="0"
-        cy="0"
-        r="12"
-        fill="rgba(15, 23, 42, 0.9)"
-        stroke={statusColor}
-        strokeWidth="2"
-        style={{ filter: `drop-shadow(0 0 4px ${statusColor})` }}
-      />
-
-      {/* Inner gradient circle */}
-      <circle
-        cx="0"
-        cy="0"
-        r="8"
-        fill={statusColor}
-        style={{ filter: `drop-shadow(0 0 3px ${statusColor})` }}
-      />
-
-      {/* Robot icon - minimal and clean */}
-      <g transform="translate(-4, -4)" fill="rgba(15, 23, 42, 0.9)">
-        <rect x="1" y="0" width="6" height="5" rx="1" />
-        <rect x="0" y="5" width="8" height="3" rx="0.5" />
-        <circle cx="2" cy="2" r="1" fill={statusColor} />
-        <circle cx="6" cy="2" r="1" fill={statusColor} />
-      </g>
-
-      {/* Robot name label */}
+      {/* Name */}
       <text
         x="0"
-        y="26"
+        y="28"
         textAnchor="middle"
-        fontSize="8"
-        fontFamily="monospace"
+        fontSize="11"
         fontWeight="500"
-        fill="#94a3b8"
-        style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
+        fill="var(--text-secondary)"
+        style={{ fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)' }}
       >
-        {robot.name.length > MAX_LABEL_CHARS
-          ? `${robot.name.substring(0, MAX_LABEL_CHARS - 1)}…`
-          : robot.name}
+        {label}
       </text>
 
-      {/* Battery indicator for low battery (skip for AC-powered) */}
-      {robot.metadata?.powerSource !== 'ac_powered' && robot.batteryLevel !== null && robot.batteryLevel < 20 && (
-        <g transform="translate(10, -14)">
-          {/* Glow background */}
-          <circle cx="6" cy="4" r="10" fill="#ef444430" style={{ filter: 'blur(3px)' }} />
-          {/* Battery icon */}
-          <rect
-            x="0"
-            y="0"
-            width="12"
-            height="8"
-            rx="2"
-            fill="#ef4444"
-            stroke="rgba(15, 23, 42, 0.9)"
-            strokeWidth="1"
-            style={{ filter: 'drop-shadow(0 0 4px #ef4444)' }}
-          />
-          <rect x="12" y="2" width="2" height="4" rx="0.5" fill="#ef4444" />
-          <text
-            x="6"
-            y="6"
-            textAnchor="middle"
-            fontSize="6"
-            fill="white"
-            fontWeight="bold"
-            fontFamily="monospace"
-          >
-            !
-          </text>
+      {/* Low battery badge (skipped for AC-powered robots) */}
+      {isLowBattery(robot) && (
+        <g transform="translate(8, -18)">
+          <rect x="0" y="0" width="14" height="9" rx="2" fill="var(--signal-stopped)" />
+          <rect x="14" y="2.5" width="2" height="4" rx="0.5" fill="var(--signal-stopped)" />
+          <title>Battery low</title>
         </g>
       )}
     </g>

@@ -6,6 +6,8 @@
 
 export { FleetStats } from './FleetStats';
 export { FleetMap } from './FleetMap';
+export { FleetMapPopover } from './FleetMapPopover';
+export { FleetMapToolbar } from './FleetMapToolbar';
 export { ZoneOverlay } from './ZoneOverlay';
 export { RobotMarker } from './RobotMarker';
 export { ZoneEditor } from './ZoneEditor';

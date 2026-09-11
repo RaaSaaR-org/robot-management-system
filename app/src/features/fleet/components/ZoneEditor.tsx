@@ -1,6 +1,7 @@
 /**
  * @file ZoneEditor.tsx
- * @description SVG-based zone editor for drawing and resizing zones on the map
+ * @description SVG zone editor: draws new zones by drag, selects and opens zones
+ *   for editing. Token colours, Inter labels.
  * @feature fleet
  * @dependencies @/features/fleet/hooks, @/features/fleet/types
  */
@@ -8,7 +9,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { useZoneEditor } from '../hooks';
 import type { Zone, ZoneBounds } from '../types/fleet.types';
-import { MAINTENANCE_COLOR, MAINTENANCE_COLOR_RGB } from '../types/fleet.types';
+import { zoneColor } from '../utils/mapColors';
 
 // ============================================================================
 // TYPES
@@ -48,12 +49,6 @@ interface DragState {
 const HANDLE_SIZE = 8;
 const MIN_ZONE_SIZE = 2; // Minimum zone size in map units
 
-const ZONE_COLORS: Record<string, { stroke: string; fill: string }> = {
-  operational: { stroke: '#2A5FFF', fill: 'rgba(42, 95, 255, 0.15)' },
-  restricted: { stroke: '#ef4444', fill: 'rgba(239, 68, 68, 0.15)' },
-  charging: { stroke: '#18E4C3', fill: 'rgba(24, 228, 195, 0.15)' },
-  maintenance: { stroke: MAINTENANCE_COLOR, fill: `rgba(${MAINTENANCE_COLOR_RGB}, 0.15)` },
-};
 
 // ============================================================================
 // SUB-COMPONENTS
@@ -73,8 +68,8 @@ function ResizeHandle({ x, y, cursor, onMouseDown }: ResizeHandleProps) {
       y={y - HANDLE_SIZE / 2}
       width={HANDLE_SIZE}
       height={HANDLE_SIZE}
-      fill="#2A5FFF"
-      stroke="#fff"
+      fill="var(--color-primary)"
+      stroke="var(--bg-secondary)"
       strokeWidth={1}
       style={{ cursor }}
       onMouseDown={onMouseDown}
@@ -99,7 +94,7 @@ function EditableZone({
   onSelect,
   onDoubleClick,
 }: EditableZoneProps) {
-  const colors = ZONE_COLORS[zone.type] || ZONE_COLORS.operational;
+  const color = zoneColor(zone.type, zone.color);
   const x = zone.bounds.x * scale + offset.x;
   const y = zone.bounds.y * scale + offset.y;
   const width = zone.bounds.width * scale;
@@ -112,10 +107,11 @@ function EditableZone({
         y={y}
         width={width}
         height={height}
-        fill={isSelected ? colors.fill : 'rgba(100, 100, 100, 0.1)'}
-        stroke={isSelected ? colors.stroke : '#666'}
+        fill={color}
+        fillOpacity={isSelected ? 0.16 : 0.06}
+        stroke={color}
+        strokeOpacity={isSelected ? 1 : 0.55}
         strokeWidth={isSelected ? 2 : 1}
-        strokeDasharray={isSelected ? 'none' : '4,4'}
         rx={4}
         style={{ cursor: 'pointer' }}
         onClick={(e) => {
@@ -132,9 +128,8 @@ function EditableZone({
         x={x + 6}
         y={y + 16}
         fontSize="12"
-        fontFamily="monospace"
-        fontWeight="500"
-        fill={isSelected ? colors.stroke : '#a0a0a0'}
+        fontWeight={isSelected ? 600 : 500}
+        fill={isSelected ? 'var(--text-primary)' : 'var(--text-secondary)'}
         style={{ pointerEvents: 'none' }}
       >
         {zone.name}
@@ -184,9 +179,20 @@ export function ZoneEditor({
       const svg = svgRef.current?.ownerSVGElement;
       if (!svg) return { x: 0, y: 0 };
 
-      const rect = svg.getBoundingClientRect();
-      const svgX = screenX - rect.left;
-      const svgY = screenY - rect.top;
+      // Map client pixels into SVG user units — the SVG is scaled to its
+      // container through viewBox, so raw client offsets are not user units.
+      const ctm = svg.getScreenCTM();
+      let svgX = screenX;
+      let svgY = screenY;
+      if (ctm) {
+        const pt = new DOMPoint(screenX, screenY).matrixTransform(ctm.inverse());
+        svgX = pt.x;
+        svgY = pt.y;
+      } else {
+        const rect = svg.getBoundingClientRect();
+        svgX = screenX - rect.left;
+        svgY = screenY - rect.top;
+      }
 
       return {
         x: Math.round((svgX - offset.x) / scale),
@@ -344,8 +350,9 @@ export function ZoneEditor({
           y={drawingBounds.y * scale + offset.y}
           width={drawingBounds.width * scale}
           height={drawingBounds.height * scale}
-          fill="rgba(42, 95, 255, 0.2)"
-          stroke="#2A5FFF"
+          fill="var(--color-primary)"
+          fillOpacity={0.14}
+          stroke="var(--color-primary)"
           strokeWidth={2}
           strokeDasharray="4,4"
           rx={4}
@@ -353,19 +360,6 @@ export function ZoneEditor({
         />
       )}
 
-      {/* Draw mode indicator */}
-      {editorMode === 'draw' && !dragState && (
-        <text
-          x={offset.x}
-          y={offset.y - 10}
-          fontSize="11"
-          fontFamily="monospace"
-          fill="#2A5FFF"
-          opacity={0.8}
-        >
-          Click and drag to draw a zone
-        </text>
-      )}
     </g>
   );
 }
