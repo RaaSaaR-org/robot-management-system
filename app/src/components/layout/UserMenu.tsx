@@ -1,26 +1,17 @@
 /**
  * @file UserMenu.tsx
- * @description TopBar user menu — clickable avatar that expands to
- * show the current user's identity, a link to the account page, and
- * sign out. Replaces the static avatar + name pair.
+ * @description Top bar user menu — the avatar opens a menu with the current
+ *              user's identity, a link to the account page and sign out.
  * @feature layout
  */
 
-import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth, LogoutButton } from '@/features/auth';
-
-const UserIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-  </svg>
-);
-
-const LogoutIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-  </svg>
-);
+import { ChevronDown, LogOut, UserRound } from 'lucide-react';
+import { useAuth } from '@/features/auth';
+import { Badge } from '@/shared/components/ui/Badge';
+import { focusRing } from '@/shared/components/ui/styles';
+import { cn } from '@/shared/utils/cn';
+import { topBarMenuItem, topBarMenuPanel, useTopBarMenu } from './useTopBarMenu';
 
 function humanRole(role: string | null | undefined): string {
   if (!role) return '';
@@ -29,100 +20,76 @@ function humanRole(role: string | null | undefined): string {
 }
 
 export function UserMenu() {
-  const { user } = useAuth();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(e: PointerEvent) {
-      if (!ref.current) return;
-      if (!ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false);
-    }
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  const { user, logout } = useAuth();
+  const menu = useTopBarMenu();
 
   const initial = user?.name?.trim().charAt(0).toUpperCase() || 'U';
   const name = user?.name || 'User';
   const email = user?.email || '';
 
+  const signOut = () => {
+    logout();
+    window.location.href =
+      import.meta.env.VITE_DEMO_MODE === 'true' ? import.meta.env.BASE_URL || '/' : '/';
+  };
+
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative" ref={menu.rootRef}>
       <button
+        ref={menu.triggerRef}
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-brand hover:bg-theme-hover transition-colors"
+        onClick={menu.toggle}
+        className={cn(
+          'flex h-9 items-center gap-2 rounded-control pl-1 pr-1 sm:pr-2 transition-colors duration-150 hover:bg-raised',
+          focusRing,
+        )}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={menu.open}
         aria-label="Open user menu"
       >
-        <div className="w-8 h-8 rounded-full bg-cobalt/20 flex items-center justify-center">
-          <span className="text-cobalt font-medium text-sm">{initial}</span>
-        </div>
-        <span className="hidden sm:block text-theme-primary text-sm font-medium max-w-[10rem] truncate">
-          {name}
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 text-[13px] font-semibold text-primary">
+          {initial}
         </span>
+        <span className="hidden max-w-[10rem] truncate text-sm font-medium text-ink-primary sm:block">{name}</span>
+        <ChevronDown className="hidden h-4 w-4 text-ink-muted sm:block" strokeWidth={1.75} aria-hidden="true" />
       </button>
 
-      {open && (
+      {menu.open && (
         <div
-          className="absolute right-0 mt-2 w-64 rounded-brand border border-theme bg-theme-card shadow-xl z-50 overflow-hidden"
+          ref={menu.menuRef}
           role="menu"
-          onClick={() => setOpen(false)}
+          aria-label="User menu"
+          onKeyDown={menu.onMenuKeyDown}
+          className={cn(topBarMenuPanel, 'w-64')}
         >
-          {/* Header — name/email/role */}
-          <div className="px-4 py-3 border-b border-theme">
-            <div className="text-sm font-semibold text-theme-primary truncate">
-              {name}
-            </div>
-            {email && (
-              <div className="text-xs text-theme-tertiary truncate mt-0.5">
-                {email}
-              </div>
-            )}
+          <div className="border-b border-line-subtle px-3.5 py-3">
+            <div className="truncate text-sm font-medium text-ink-primary">{name}</div>
+            {email && <div className="mt-0.5 truncate text-xs text-ink-tertiary">{email}</div>}
             {user?.role && (
-              <div className="inline-block mt-2 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider bg-brand/10 text-brand border border-brand/30">
+              <Badge variant="accent" size="sm" className="mt-2">
                 {humanRole(user.role)}
-              </div>
+              </Badge>
             )}
           </div>
 
-          {/* Actions */}
-          <div className="py-1">
+          <div className="p-1">
             <Link
               to="/account"
               role="menuitem"
-              className="flex items-center gap-2 px-4 py-2 text-sm text-theme-primary hover:bg-theme-hover"
+              tabIndex={-1}
+              onClick={() => menu.close(false)}
+              className={cn(topBarMenuItem, 'h-9')}
             >
-              <UserIcon />
+              <UserRound strokeWidth={1.75} aria-hidden="true" />
               <span>Account settings</span>
             </Link>
           </div>
 
-          <div className="border-t border-theme py-1">
-            <LogoutButton
-              variant="ghost"
-              size="sm"
-              onLogout={() => {
-                if (import.meta.env.VITE_DEMO_MODE === 'true') {
-                  window.location.href = import.meta.env.BASE_URL || '/';
-                } else {
-                  window.location.href = '/';
-                }
-              }}
-              className="w-full !justify-start gap-2 !px-4 !py-2 !text-sm !text-theme-primary hover:!bg-theme-hover !rounded-none"
-            >
-              <LogoutIcon />
+          <div className="border-t border-line-subtle p-1">
+            <button type="button" role="menuitem" tabIndex={-1} onClick={signOut} className={cn(topBarMenuItem, 'h-9')}>
+              <LogOut strokeWidth={1.75} aria-hidden="true" />
               <span>Sign out</span>
-            </LogoutButton>
+            </button>
           </div>
         </div>
       )}
