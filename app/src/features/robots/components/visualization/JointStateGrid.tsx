@@ -5,6 +5,8 @@
  */
 
 import { memo, useMemo } from 'react';
+import { Activity } from 'lucide-react';
+import { EmptyState } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { motorTempColor, motorTempTextClass } from '../../utils/temperature';
 import type { JointState } from '../../types/robots.types';
@@ -24,7 +26,7 @@ export interface JointStateGridProps {
    */
   positionUnit?: 'deg' | 'rad';
   /**
-   * `card` — one glass card per joint (default, used on 3D/session pages).
+   * `card` — one inset cell per joint (default, used on 3D/session pages).
    * `compact` — dense single-line rows grouped by body region (legs, torso,
    * arms, hands); scales to a 43-DOF humanoid without an inner scrollbar.
    */
@@ -60,23 +62,18 @@ function normalizePosition(degrees: number): number {
  */
 function getPositionColor(degrees: number): string {
   const absDeg = Math.abs(degrees);
-  if (absDeg < 30) return 'bg-green-500';
-  if (absDeg < 90) return 'bg-cobalt-500';
-  if (absDeg < 150) return 'bg-amber-500';
-  return 'bg-red-500';
+  if (absDeg < 30) return 'bg-signal-measured';
+  if (absDeg < 90) return 'bg-primary';
+  if (absDeg < 150) return 'bg-signal-unknown';
+  return 'bg-signal-stopped';
 }
 
 /**
  * Format joint name for display
  */
 function formatJointName(name: string): string {
-  return name
-    .replace(/_/g, ' ')
-    .replace(/joint$/i, '')
-    .trim()
-    .split(' ')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
+  const words = name.replace(/_/g, ' ').replace(/joint$/i, '').trim().toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 // ============================================================================
@@ -101,16 +98,16 @@ function jointRegion(name: string): JointRegion {
   const side = n.includes('right') ? 'Right' : n.includes('left') ? 'Left' : '';
   const sideOrder = side === 'Right' ? 1 : 0;
   if (/hand|thumb|index|middle|finger|gripper/.test(n)) {
-    return { label: `${side} Hand`.trim(), order: 60 + sideOrder };
+    return { label: `${side} hand`.trim(), order: 60 + sideOrder };
   }
   if (/hip|knee|ankle/.test(n)) {
-    return { label: `${side} Leg`.trim(), order: 10 + sideOrder };
+    return { label: `${side} leg`.trim(), order: 10 + sideOrder };
   }
   if (/waist|torso/.test(n)) {
     return { label: 'Torso', order: 30 };
   }
   if (/shoulder|elbow|wrist/.test(n)) {
-    return { label: `${side} Arm`.trim(), order: 40 + sideOrder };
+    return { label: `${side} arm`.trim(), order: 40 + sideOrder };
   }
   return { label: 'Joints', order: 90 };
 }
@@ -118,12 +115,11 @@ function jointRegion(name: string): JointRegion {
 /** Strip the side prefix when the section heading already carries it. */
 function compactJointLabel(name: string, sectionLabel: string): string {
   const pretty = formatJointName(name);
-  const side = sectionLabel.startsWith('Left') ? 'Left ' : sectionLabel.startsWith('Right') ? 'Right ' : '';
-  const stripped = side && pretty.startsWith(side) ? pretty.slice(side.length) : pretty;
-  // "Hand Thumb 0" → "Thumb 0" inside a "Left Hand" section
-  return sectionLabel.endsWith('Hand') && stripped.startsWith('Hand ')
-    ? stripped.slice(5)
-    : stripped;
+  const side = sectionLabel.startsWith('Left') ? 'left ' : sectionLabel.startsWith('Right') ? 'right ' : '';
+  let stripped = side && pretty.toLowerCase().startsWith(side) ? pretty.slice(side.length) : pretty;
+  // "hand thumb 0" → "thumb 0" inside a "Left hand" section
+  if (sectionLabel.endsWith('hand') && stripped.toLowerCase().startsWith('hand ')) stripped = stripped.slice(5);
+  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
 }
 
 // ============================================================================
@@ -142,21 +138,21 @@ const JointItem = memo(function JointItem({ joint, positionUnit }: JointItemProp
   const colorClass = getPositionColor(degrees);
 
   return (
-    <div className="glass-subtle p-3 rounded-lg space-y-2">
+    <div className="flex flex-col gap-2 rounded-control border border-line-subtle bg-inset p-3">
       {/* Joint name */}
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium text-theme-secondary truncate">
+        <span className="truncate text-xs font-medium text-ink-secondary">
           {formatJointName(joint.name)}
         </span>
         <span className="flex items-center gap-2 shrink-0">
           {joint.velocity !== undefined && Math.abs(joint.velocity) > 0.01 && (
-            <span className="text-[10px] text-theme-tertiary">
+            <span className="text-[11px] tabular-nums text-ink-tertiary">
               {joint.velocity > 0 ? '+' : ''}{joint.velocity.toFixed(2)} {positionUnit}/s
             </span>
           )}
           {joint.temperature !== undefined && (
             <span
-              className={cn('flex items-center gap-1 text-[10px] font-mono', motorTempTextClass(joint.temperature))}
+              className={cn('flex items-center gap-1 text-[11px] tabular-nums', motorTempTextClass(joint.temperature))}
               title={`Motor temperature: ${joint.temperature.toFixed(1)}°C`}
             >
               <span
@@ -172,23 +168,22 @@ const JointItem = memo(function JointItem({ joint, positionUnit }: JointItemProp
 
       {/* Position bar */}
       <div className="relative">
-        <div className="h-2 bg-surface-600 rounded-full overflow-hidden">
+        <div className="h-1.5 overflow-hidden rounded-full bg-line-subtle">
           <div
-            className={cn('h-full rounded-full transition-all duration-150', colorClass)}
+            className={cn('h-full rounded-full transition-[width] duration-150', colorClass)}
             style={{ width: `${percentage}%` }}
           />
         </div>
         {/* Center line indicator */}
-        <div className="absolute top-0 left-1/2 w-px h-2 bg-theme-tertiary/50 transform -translate-x-1/2" />
+        <div className="absolute left-1/2 top-0 h-1.5 w-px -translate-x-1/2 bg-line-strong" />
       </div>
 
       {/* Position value */}
       <div className="flex items-center justify-between text-xs">
-        <span className="font-mono text-theme-primary">
-          {degrees.toFixed(1)}°
-        </span>
-        <span className="font-mono text-theme-tertiary">
-          {radians.toFixed(3)} rad
+        <span className="font-semibold tabular-nums text-ink-primary">{degrees.toFixed(1)}°</span>
+        <span className="tabular-nums text-ink-tertiary">
+          {radians.toFixed(3)}
+          <span className="ml-0.5">rad</span>
         </span>
       </div>
     </div>
@@ -220,35 +215,35 @@ const CompactJointRow = memo(function CompactJointRow({ joint, label, positionUn
         joint.velocity !== undefined ? ` · ${joint.velocity.toFixed(2)} ${positionUnit}/s` : ''
       }`}
     >
-      <span className="flex w-[7.5rem] shrink-0 items-center gap-1.5 text-xs text-theme-secondary">
+      <span className="flex w-[7.5rem] shrink-0 items-center gap-1.5 text-xs text-ink-secondary">
         <span
           className={cn(
             'h-1.5 w-1.5 shrink-0 rounded-full',
-            isMoving ? 'bg-cobalt-400 animate-pulse' : 'bg-surface-600'
+            isMoving ? 'bg-primary' : 'bg-line-strong'
           )}
           aria-hidden="true"
         />
         <span className="truncate">{label}</span>
       </span>
 
-      <div className="relative h-1.5 flex-1 rounded-full bg-surface-600">
+      <div className="relative h-1.5 min-w-0 flex-1 rounded-full bg-line-subtle">
         <div
           className={cn(
-            'absolute top-0 h-full rounded-full transition-all duration-150',
+            'absolute top-0 h-full rounded-full transition-[width] duration-150',
             colorClass
           )}
           style={degrees >= 0 ? { left: '50%', width: `${halfPct}%` } : { right: '50%', width: `${halfPct}%` }}
         />
-        <div className="absolute top-1/2 left-1/2 h-2.5 w-px -translate-x-1/2 -translate-y-1/2 bg-theme-tertiary/50" />
+        <div className="absolute top-1/2 left-1/2 h-2.5 w-px -translate-x-1/2 -translate-y-1/2 bg-line-strong" />
       </div>
 
-      <span className="w-14 shrink-0 text-right font-mono text-xs text-theme-primary">
+      <span className="w-14 shrink-0 text-right text-xs font-medium tabular-nums text-ink-primary">
         {degrees.toFixed(1)}°
       </span>
       <span className="w-9 shrink-0 text-right">
         {joint.temperature !== undefined && (
           <span
-            className={cn('font-mono text-[10px]', motorTempTextClass(joint.temperature))}
+            className={cn('text-[11px] tabular-nums', motorTempTextClass(joint.temperature))}
             title={`Motor temperature: ${joint.temperature.toFixed(1)}°C`}
           >
             {joint.temperature.toFixed(0)}°C
@@ -296,27 +291,13 @@ export const JointStateGrid = memo(function JointStateGrid({
 
   if (jointStates.length === 0) {
     return (
-      <div className={cn('flex flex-col items-center justify-center py-8 text-center', className)}>
-        <div className="glass-subtle rounded-2xl p-4 mb-3">
-          <svg
-            className="h-8 w-8 text-theme-tertiary"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"
-            />
-          </svg>
-        </div>
-        <p className="text-theme-secondary font-medium">No joint data available</p>
-        <p className="text-sm text-theme-tertiary mt-1">
-          Connect to robot for real-time joint states
-        </p>
-      </div>
+      <EmptyState
+        size="sm"
+        icon={<Activity />}
+        title="No joint data yet"
+        description="Joint states appear once the robot agent streams telemetry."
+        className={className}
+      />
     );
   }
 
@@ -327,15 +308,15 @@ export const JointStateGrid = memo(function JointStateGrid({
     return (
       <div className={cn('space-y-4', className)}>
         <div className="flex items-center justify-between text-sm">
-          <span className="text-theme-secondary">{jointStates.length} joints</span>
-          <span className="text-theme-tertiary">{movingCount} moving</span>
+          <span className="tabular-nums text-ink-secondary">{jointStates.length} joints</span>
+          <span className="tabular-nums text-ink-tertiary">{movingCount} moving</span>
         </div>
 
         <div className="grid grid-cols-1 gap-x-8 gap-y-4 md:grid-cols-2 2xl:grid-cols-3 items-start">
           {sections.map(({ region, joints }) => (
             <section key={region.label}>
               {showHeadings && (
-                <h3 className="mb-1 flex items-baseline gap-2 border-b border-glass-subtle pb-1 text-xs font-semibold uppercase tracking-wide text-theme-tertiary">
+                <h3 className="mb-1.5 flex items-baseline gap-2 border-b border-line-subtle pb-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-ink-tertiary">
                   {region.label}
                   <span className="font-normal normal-case tracking-normal">{joints.length} joints</span>
                 </h3>
@@ -359,12 +340,8 @@ export const JointStateGrid = memo(function JointStateGrid({
     <div className={cn('space-y-4', className)}>
       {/* Summary stats */}
       <div className="flex items-center justify-between text-sm">
-        <span className="text-theme-secondary">
-          {jointStates.length} joints
-        </span>
-        <span className="text-theme-tertiary">
-          {movingCount} moving
-        </span>
+        <span className="tabular-nums text-ink-secondary">{jointStates.length} joints</span>
+        <span className="tabular-nums text-ink-tertiary">{movingCount} moving</span>
       </div>
 
       {/* Joint grid */}

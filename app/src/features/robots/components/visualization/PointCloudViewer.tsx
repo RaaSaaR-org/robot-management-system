@@ -12,8 +12,10 @@ import { OrbitControls, Grid, Center } from '@react-three/drei';
 import * as THREE from 'three';
 import { RobotModel } from './RobotModel';
 import type { RobotType, JointState, PointCloudFrame } from '../../types/robots.types';
+import { StatusTag } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
-import { brandColors } from '@/brand';
+import { readCssColor } from '../common/readCssColor';
+import { ViewerGuard } from './ViewerGuard';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
@@ -195,15 +197,16 @@ function PoseMarker({ pose, floorY }: { pose: { x: number; y: number; yawDeg: nu
   }, []);
   useEffect(() => () => geometry.dispose(), [geometry]);
   const yaw = (pose.yawDeg * Math.PI) / 180;
+  const color = readCssColor('--color-primary', 'white');
   // Robotics z-up → three.js y-up: (x, y, z) → (x, z, -y).
   return (
     <group position={[pose.x, floorY + 0.05, -pose.y]} rotation={[-Math.PI / 2, 0, 0]}>
       <mesh geometry={geometry} rotation={[0, 0, yaw]}>
-        <meshBasicMaterial color="#2A5FFF" side={THREE.DoubleSide} />
+        <meshBasicMaterial color={color} side={THREE.DoubleSide} />
       </mesh>
       <mesh rotation={[0, 0, yaw]}>
         <ringGeometry args={[0.32, 0.36, 32]} />
-        <meshBasicMaterial color="#2A5FFF" side={THREE.DoubleSide} transparent opacity={0.6} />
+        <meshBasicMaterial color={color} side={THREE.DoubleSide} transparent opacity={0.6} />
       </mesh>
     </group>
   );
@@ -227,7 +230,9 @@ export const PointCloudViewer = memo(function PointCloudViewer({
   orbitTarget,
   label,
 }: PointCloudViewerProps) {
-  const colors = brandColors();
+  const background = readCssColor('--bg-tertiary', 'black');
+  const cellColor = readCssColor('--border-color-strong', 'gray');
+  const sectionColor = readCssColor('--color-primary', 'white');
   const floorY = showRobotModel ? -0.75 : 0;
 
   const displayFrame = useMemo(() => {
@@ -239,21 +244,22 @@ export const PointCloudViewer = memo(function PointCloudViewer({
   const clippedCount = frame && displayFrame ? frame.pointCount - displayFrame.pointCount : 0;
 
   return (
-    <div className={cn('relative w-full h-full min-h-[300px] rounded-lg overflow-hidden', className)}>
+    <div className={cn('relative h-full min-h-[300px] w-full overflow-hidden rounded-control', className)}>
+      <ViewerGuard
+        className="rounded-none"
+        description="This browser could not start WebGL, so the point cloud cannot be drawn. Scans can still be captured and downloaded."
+      >
       <Canvas
         camera={{
           position: orbitTarget ? [orbitTarget[0] + 6, orbitTarget[2] + 7, -orbitTarget[1] + 6] : [3, 2.2, 3],
           fov: 50,
         }}
         gl={{ antialias: true }}
-        style={{
-          background: `linear-gradient(180deg, var(--bg-secondary, #1E1F24) 0%, var(--bg-tertiary, #0C1440) 100%)`,
-        }}
+        style={{ background }}
       >
         <Suspense fallback={null}>
-          <ambientLight intensity={0.7} color="#ffffff" />
-          <directionalLight position={[5, 10, 5]} intensity={1.4} color="#ffffff" />
-          <pointLight position={[-3, 3, -3]} intensity={0.8} color={colors.accent} distance={14} />
+          <ambientLight intensity={0.7} color="white" />
+          <directionalLight position={[5, 10, 5]} intensity={1.4} color="white" />
 
           {displayFrame && displayFrame.pointCount > 0 && (
             <PointCloudPoints frame={displayFrame} colorMode={colorMode} pointSize={pointSize} floorY={floorY} />
@@ -271,10 +277,10 @@ export const PointCloudViewer = memo(function PointCloudViewer({
             args={[16, 16]}
             cellSize={0.5}
             cellThickness={0.5}
-            cellColor={colors.primary}
+            cellColor={cellColor}
             sectionSize={2}
             sectionThickness={1}
-            sectionColor={colors.accent}
+            sectionColor={sectionColor}
             fadeDistance={20}
             position={[0, floorY, 0]}
           />
@@ -290,33 +296,25 @@ export const PointCloudViewer = memo(function PointCloudViewer({
           />
         </Suspense>
       </Canvas>
+      </ViewerGuard>
 
       {/* Overlay info */}
-      <div className="absolute bottom-2 left-2 text-xs text-theme-tertiary bg-surface-900/80 px-2 py-1 rounded font-mono">
+      <div className="absolute bottom-2 left-2 rounded-tag border border-line bg-panel px-2 py-1 text-xs tabular-nums text-ink-secondary">
         {frame && displayFrame
-          ? `${(label ?? frame.sensor.replace(/_/g, ' ')).toUpperCase()} · ${
+          ? `${label ?? frame.sensor.replace(/_/g, ' ')} · ${
               clippedCount > 0
-                ? `${displayFrame.pointCount.toLocaleString(UI_DATE_LOCALE)} of ${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} pts · clipped`
-                : `${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} pts`
+                ? `${displayFrame.pointCount.toLocaleString(UI_DATE_LOCALE)} of ${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} points (clipped)`
+                : `${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} points`
             }`
-          : 'Awaiting scan…'}
+          : 'Waiting for a scan…'}
       </div>
 
-      {/* Provenance badge: REAL recorded / LIVE hardware vs. simulated */}
+      {/* Provenance: live hardware / recorded vs. simulated */}
       {frame?.source && (
-        <div
-          className={`absolute top-2 right-2 text-[10px] font-semibold px-2 py-1 rounded uppercase tracking-wide ${
-            frame.source === 'sim'
-              ? 'bg-surface-900/80 text-theme-tertiary'
-              : 'bg-primary text-on-primary'
-          }`}
-          title={frame.sourceLabel ?? frame.source}
-        >
-          {frame.source === 'sim'
-            ? 'Simulated'
-            : frame.source === 'hardware'
-              ? 'Live sensor'
-              : `Real data${frame.sourceLabel ? ` · ${frame.sourceLabel}` : ''}`}
+        <div className="absolute right-2 top-2" title={frame.sourceLabel ?? frame.source}>
+          <StatusTag tone={frame.source === 'sim' ? 'sim' : frame.source === 'hardware' ? 'live' : 'neutral'}>
+            {frame.source === 'sim' ? 'Sim' : frame.source === 'hardware' ? 'Live sensor' : 'Recorded'}
+          </StatusTag>
         </div>
       )}
     </div>

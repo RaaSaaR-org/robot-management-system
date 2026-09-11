@@ -11,7 +11,7 @@ import URDFLoader, { URDFRobot } from 'urdf-loader';
 import { normalizeRobotType, type RobotType, type JointState } from '../../types/robots.types';
 import { getFastTelemetry } from '../../store/telemetryLive';
 import { tickMotion, isFollowingRoot } from '../../motion/motionPlayback';
-import { brandColors } from '@/brand';
+import { readCssColor } from '../common/readCssColor';
 
 // ============================================================================
 // TYPES
@@ -144,6 +144,8 @@ interface JointDefinition {
   axis: 'x' | 'y' | 'z';
 }
 
+// The SO-101's physical livery (yellow printed parts, black servos) — real
+// object colors, not UI colors, so they stay literal.
 const SO101_JOINTS: JointDefinition[] = [
   { name: 'base', position: [0, 0, 0], size: [0.1, 0.05, 0.1], color: '#f5c518', axis: 'z' },
   { name: 'shoulder_pan', position: [0, 0.06, 0], size: [0.06, 0.08, 0.06], color: '#1a1a1a', axis: 'z' },
@@ -157,10 +159,17 @@ const SO101_JOINTS: JointDefinition[] = [
   { name: 'gripper_right', position: [-0.02, 0.59, 0], size: [0.01, 0.04, 0.02], color: '#f5c518', axis: 'z' },
 ];
 
+// Generic robots have no physical livery — draw them in the theme's ink/line tones.
 const GENERIC_JOINTS: JointDefinition[] = [
-  { name: 'base', position: [0, 0, 0], size: [0.3, 0.15, 0.2], color: '#4a5568', axis: 'y' },
-  { name: 'body', position: [0, 0.2, 0], size: [0.25, 0.3, 0.15], color: '#2d3748', axis: 'y' },
+  { name: 'base', position: [0, 0, 0], size: [0.3, 0.15, 0.2], color: 'var(--text-muted)', axis: 'y' },
+  { name: 'body', position: [0, 0.2, 0], size: [0.25, 0.3, 0.15], color: 'var(--border-color-strong)', axis: 'y' },
 ];
+
+/** Resolve a `var(--x)` joint color to a literal for three.js; physical colors pass through. */
+function materialColor(color: string): string {
+  const m = /^var\((--[\w-]+)\)$/.exec(color);
+  return m ? readCssColor(m[1], 'gray') : color;
+}
 
 // ============================================================================
 // URDF MODEL COMPONENT
@@ -287,11 +296,11 @@ function URDFModel({
           // Apply bright metallic material with strong glow (visible on dark bg)
           const newMat = new THREE.MeshStandardMaterial({
             name: 'RobotCustomMaterial',
-            color: 0xc8d0dc,           // Light silver-gray (bright)
+            color: new THREE.Color(readCssColor('--text-secondary', 'silver')),
             metalness: 0.5,
-            roughness: 0.35,
-            emissive: new THREE.Color(brandColors().accent),
-            emissiveIntensity: 0.35,   // Stronger glow
+            roughness: 0.4,
+            emissive: new THREE.Color(readCssColor('--color-primary', 'white')),
+            emissiveIntensity: 0.12,   // A faint mint lift so the body reads on the dark ground
             side: THREE.DoubleSide,
           });
           mesh.material = newMat;
@@ -315,7 +324,7 @@ function URDFModel({
       <group ref={groupRef}>
         <mesh>
           <boxGeometry args={[0.5, 1.5, 0.3]} />
-          <meshStandardMaterial color="#ef4444" wireframe />
+          <meshStandardMaterial color={readCssColor('--signal-stopped', 'red')} wireframe />
         </mesh>
       </group>
     );
@@ -327,7 +336,7 @@ function URDFModel({
       <group ref={groupRef}>
         <mesh>
           <boxGeometry args={[0.5, 1.5, 0.3]} />
-          <meshStandardMaterial color="#4a5568" wireframe />
+          <meshStandardMaterial color={readCssColor('--text-muted', 'gray')} wireframe />
         </mesh>
       </group>
     );
@@ -409,7 +418,7 @@ function ProceduralModel({
         >
           <boxGeometry args={joint.size} />
           <meshStandardMaterial
-            color={joint.color}
+            color={materialColor(joint.color)}
             metalness={0.3}
             roughness={0.7}
           />

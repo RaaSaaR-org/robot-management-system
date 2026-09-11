@@ -10,8 +10,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createXRStore } from '@react-three/xr';
 import * as THREE from 'three';
-import { Badge, Button } from '@/shared/components/ui';
-import { brandColors } from '@/brand';
+import { Badge, Button, Panel, StatusTag } from '@/shared/components/ui';
 import { safetyApi } from '@/features/safety/api/safetyApi';
 import { normalizeRobotType, type JointState } from '../../../types/robots.types';
 import type { TeleopTabProps } from '../types';
@@ -83,10 +82,16 @@ function meterLink(
 }
 
 
-const LINK_TONE: Record<LinkState, string> = {
-  live: 'bg-green-500',
-  stale: 'bg-amber-500',
-  lost: 'bg-red-500',
+const LINK_TONE: Record<LinkState, 'live' | 'gated' | 'stopped'> = {
+  live: 'live',
+  stale: 'gated',
+  lost: 'stopped',
+};
+
+const LINK_LABEL: Record<LinkState, string> = {
+  live: 'Link live',
+  stale: 'Link stale',
+  lost: 'Link lost',
 };
 
 /** What the trigger actually does on THIS robot — see `endEffectorMode`. */
@@ -259,7 +264,7 @@ export function VRTeleopModalBody({
    * Whether tracked hands drive the wrists and fingers. Off by default, and
    * that is TASK-216's decision rather than an oversight: `xr_teleoperate`'s
    * own hand-tracking path is where its Quest 3 WebSocket-drop bug lives
-   * (issue #296) while controller mode keeps working, so controllers stay the
+   * (issue 296) while controller mode keeps working, so controllers stay the
    * reliable default and hands are opt-in.
    */
   const [handTracking, setHandTracking] = useState(false);
@@ -709,10 +714,6 @@ export function VRTeleopModalBody({
   );
 
   const targets = useMemo(() => headsetTargets(window.location), []);
-  // The key chips take the brand primary rather than a hard-coded cobalt class,
-  // so a white-labelled deployment does not end up with one stray blue in an
-  // otherwise re-themed dialog. `26` is 15% alpha on the same hex.
-  const keyTint = useMemo(() => brandColors().primary, []);
 
   return (
     // Scrolls on its own. `Modal` caps size="full" at max-h-[calc(100vh-2rem)]
@@ -720,26 +721,27 @@ export function VRTeleopModalBody({
     // the mapping grid and the Close button below a 55vh canvas were unreachable
     // on a laptop. 9rem is the modal's own 2rem inset plus its header (~3.5rem)
     // and this body's 2rem of vertical padding, with a little to spare.
-    <div className="max-h-[calc(100vh-9rem)] overflow-y-auto space-y-4">
+    <div className="flex max-h-[calc(100vh-9rem)] flex-col gap-4 overflow-y-auto">
       {/* Status + actions */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="flex items-center gap-2">
-            <span className={`inline-block h-2 w-2 rounded-full ${LINK_TONE[meters.link]}`} />
-            <span className="text-xs font-medium text-theme-primary">
-              {status === 'open' ? `LINK ${meters.link.toUpperCase()}` : `SOCKET ${status.toUpperCase()}`}
-            </span>
-          </span>
-          <span className="text-xs text-theme-secondary">
+          {status === 'open' ? (
+            <StatusTag tone={LINK_TONE[meters.link]} dot pulse={meters.link === 'live'}>
+              {LINK_LABEL[meters.link]}
+            </StatusTag>
+          ) : (
+            <StatusTag tone="neutral" dot>{`Socket ${status}`}</StatusTag>
+          )}
+          <span className="text-xs text-ink-secondary">
             {status === 'open'
               ? `${(robotType || 'g1').toUpperCase()} · ${joints.length} DOF · ${inVr ? 'in VR' : 'simulation'}`
               : 'Reconnecting…'}
           </span>
-          <span className="text-xs text-theme-tertiary" data-testid="vr-rtt">
-            RTT {meters.rttMs === null ? '--' : `${Math.round(meters.rttMs)}ms`}
+          <span className="text-xs tabular-nums text-ink-tertiary" data-testid="vr-rtt">
+            RTT {meters.rttMs === null ? '—' : `${Math.round(meters.rttMs)} ms`}
           </span>
-          <span className="text-xs text-theme-tertiary" data-testid="vr-stream">
-            {estopLatched ? 'Stream held (E-Stop)' : shouldStream({ estopLatched, status }) ? 'Stream armed' : 'Stream idle'}
+          <span className="text-xs text-ink-tertiary" data-testid="vr-stream">
+            {estopLatched ? 'Stream held (E-stop)' : shouldStream({ estopLatched, status }) ? 'Stream armed' : 'Stream idle'}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -798,24 +800,26 @@ export function VRTeleopModalBody({
           {/* `destructive`, and always enabled: a stop the operator has to first
               get a link for is not a stop. `estopSequence` writes to the socket
               if there is one and raises the fleet alert over REST either way. */}
-          <Button variant="destructive" size="sm" onClick={onStopButton}>STOP</Button>
+          <Button size="sm" className="bg-stop text-on-stop hover:bg-stop/90" onClick={onStopButton}>
+            Emergency stop
+          </Button>
         </div>
       </div>
 
       {/* E-Stop banner. Latched is a state the operator has to be able to leave
           without putting the headset back on — see `resetEstop`. */}
       {estopLatched && (
-        <div className="rounded-lg border border-red-500/50 bg-red-500/10 p-3" role="alert">
+        <Panel variant="inset" padding="sm" className="border-signal-stopped/50" role="alert">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-red-600 dark:text-red-400">E-STOP LATCHED</p>
-              <p className="mt-0.5 text-xs text-theme-secondary">{estopNote ?? ESTOP_REASON}</p>
+              <p className="text-sm font-semibold text-signal-stopped">E-stop latched</p>
+              <p className="mt-0.5 text-xs text-ink-secondary">{estopNote ?? ESTOP_REASON}</p>
             </div>
-            <Button variant="outline" size="sm" disabled={resetting} onClick={() => void resetEstop()}>
-              {resetting ? 'Resetting…' : 'Reset E-Stop'}
+            <Button variant="secondary" size="sm" disabled={resetting} onClick={() => void resetEstop()}>
+              {resetting ? 'Resetting…' : 'Reset E-stop'}
             </Button>
           </div>
-        </div>
+        </Panel>
       )}
 
       {/* Damped base. A SEPARATE banner from the E-Stop, and shown while the
@@ -825,22 +829,24 @@ export function VRTeleopModalBody({
           whose legs will not. Amber rather than red — it is not a stop, and the
           operator can go on manipulating. */}
       {baseDamped && (
-        <div
-          className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-3"
+        <Panel
+          variant="inset"
+          padding="sm"
+          className="border-signal-unknown/50"
           role="status"
           data-testid="vr-base-damped"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">BASE DAMPED</p>
-              <p className="mt-0.5 text-xs text-theme-secondary">
+              <p className="text-sm font-semibold text-signal-unknown">Base damped</p>
+              <p className="mt-0.5 text-xs text-ink-secondary">
                 {standNote
                   ?? 'The legs are in a damped FSM and will ignore every walk command — silently, because the '
                     + 'sidecar still acknowledges them. The arms are unaffected.'}
               </p>
             </div>
             <Button
-              variant="outline"
+              variant="secondary"
               size="sm"
               disabled={standing || estopLatched}
               data-testid="vr-stand-base"
@@ -852,7 +858,7 @@ export function VRTeleopModalBody({
               {standing ? 'Standing…' : 'Stand'}
             </Button>
           </div>
-        </div>
+        </Panel>
       )}
 
       {/* Whatever the agent refused, in its own words. `code` is sticky for the
@@ -863,18 +869,18 @@ export function VRTeleopModalBody({
             <li
               key={e.code}
               title={e.at}
-              className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2"
+              className="flex items-start gap-2 rounded-control border border-line bg-inset px-3 py-2"
             >
               <Badge variant="warning" size="sm">{e.code}</Badge>
-              <span className="text-xs text-theme-secondary">{e.message}</span>
+              <span className="text-xs text-ink-secondary">{e.message}</span>
             </li>
           ))}
         </ul>
       )}
 
       {control?.preempted && (
-        <p className="text-[11px] text-theme-tertiary">
-          Teleop took control from <span className="font-medium text-theme-secondary">{control.preempted}</span>.
+        <p className="text-xs text-ink-tertiary">
+          Teleop took control from <span className="font-medium text-ink-secondary">{control.preempted}</span>.
         </p>
       )}
 
@@ -887,7 +893,7 @@ export function VRTeleopModalBody({
       />
 
       {/* 3D preview */}
-      <div className="h-[55vh] min-h-80 w-full overflow-hidden rounded-lg">
+      <div className="h-[55vh] min-h-80 w-full overflow-hidden rounded-control border border-line">
         <VrScene
           store={xrStore}
           robotId={robot.id}
@@ -915,24 +921,21 @@ export function VRTeleopModalBody({
       {/* Controller mapping */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         {controlGroups(trigger, Boolean(onNextEpisode), retargetMode, handTracking).map((group) => (
-          <div key={group.id} className="rounded-lg border border-theme-subtle bg-theme-secondary p-3">
-            <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-theme-tertiary">
+          <Panel key={group.id} variant="inset" padding="sm">
+            <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em] text-ink-tertiary">
               {group.title}
             </p>
             <ul className="space-y-1.5">
               {group.rows.map((row) => (
                 <li key={row.id} className="flex items-start gap-2.5">
-                  <span
-                    className="mt-px shrink-0 rounded-md px-2 py-0.5 font-mono text-[11px] font-semibold"
-                    style={{ backgroundColor: `${keyTint}26`, color: keyTint }}
-                  >
+                  <kbd className="mt-px shrink-0 rounded-tag border border-line bg-inset px-1.5 py-0.5 font-mono text-xs text-ink-primary">
                     {row.keys}
-                  </span>
-                  <span className="text-xs leading-relaxed text-theme-secondary">{row.label}</span>
+                  </kbd>
+                  <span className="text-xs leading-relaxed text-ink-secondary">{row.label}</span>
                 </li>
               ))}
             </ul>
-          </div>
+          </Panel>
         ))}
       </div>
 
@@ -967,7 +970,7 @@ function XrAvailabilityBlock({
 }) {
   if (EMULATOR_ACTIVE) {
     return (
-      <p className="text-[11px] text-theme-tertiary">
+      <p className="text-xs text-ink-tertiary">
         Dev mode: the WebXR emulator simulates a Meta Quest in this tab — “Enter VR” works without a headset.
       </p>
     );
@@ -976,14 +979,14 @@ function XrAvailabilityBlock({
   if (availability === 'ready') {
     if (sessionSupported === false) {
       return (
-        <p className="text-xs text-theme-secondary">
-          <span className="font-medium text-theme-primary">WebXR is available, but no VR device is connected.</span>{' '}
+        <p className="text-xs text-ink-secondary">
+          <span className="font-medium text-ink-primary">WebXR is available, but no VR device is connected.</span>{' '}
           The preview below mirrors the robot pose; connect a headset to this browser to enter VR.
         </p>
       );
     }
     return (
-      <p className="text-xs text-theme-secondary">
+      <p className="text-xs text-ink-secondary">
         {sessionSupported === null
           ? 'Checking for an immersive-VR device…'
           : 'Headset detected — press Enter VR.'}
@@ -997,22 +1000,22 @@ function XrAvailabilityBlock({
       : 'This browser has no WebXR. Open the page inside the headset instead.';
 
   return (
-    <div className="space-y-2 rounded-lg border border-theme-subtle bg-theme-secondary p-3">
-      <p className="text-xs leading-relaxed text-theme-secondary">
-        <span className="font-medium text-theme-primary">Headset required.</span> {headline} The live
+    <Panel variant="inset" padding="sm" className="flex flex-col gap-2">
+      <p className="text-xs leading-relaxed text-ink-secondary">
+        <span className="font-medium text-ink-primary">Headset required.</span> {headline} The live
         preview below mirrors the robot pose in the meantime.
       </p>
       {targets.map((target) => (
-        <div key={target.id} className="space-y-1 rounded-md border border-theme-subtle p-2">
+        <div key={target.id} className="flex flex-col gap-1 rounded-control border border-line-subtle p-2">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-theme-primary">
+            <span className="text-xs font-semibold text-ink-primary">
               {target.label}
             </span>
             {target.insecure && <Badge variant="warning" size="sm">no WebXR</Badge>}
           </div>
           {target.command && (
             <div className="flex items-center gap-2">
-              <code className="flex-1 truncate rounded bg-black/20 px-2 py-1 font-mono text-[11px] text-theme-secondary">
+              <code className="min-w-0 flex-1 truncate rounded-tag bg-panel px-2 py-1 font-mono text-xs text-ink-secondary">
                 {target.command}
               </code>
               <Button variant="ghost" size="sm" onClick={() => onCopy(`${target.id}-cmd`, target.command ?? '')}>
@@ -1021,16 +1024,16 @@ function XrAvailabilityBlock({
             </div>
           )}
           <div className="flex items-center gap-2">
-            <code className="flex-1 truncate rounded bg-black/20 px-2 py-1 font-mono text-[11px] text-theme-secondary">
+            <code className="min-w-0 flex-1 truncate rounded-tag bg-panel px-2 py-1 font-mono text-xs text-ink-secondary">
               {target.url}
             </code>
             <Button variant="ghost" size="sm" onClick={() => onCopy(target.id, target.url)}>
               {copied === target.id ? 'Copied' : 'Copy URL'}
             </Button>
           </div>
-          <p className="text-[11px] leading-relaxed text-theme-tertiary">{target.note}</p>
+          <p className="text-xs leading-relaxed text-ink-tertiary">{target.note}</p>
         </div>
       ))}
-    </div>
+    </Panel>
   );
 }

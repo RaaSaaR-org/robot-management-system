@@ -21,19 +21,19 @@ export interface HudLine {
 /**
  * HUD palette.
  *
- * Literal hex rather than the brand tokens on purpose: `@/brand` re-exports a
- * React provider, and pulling React into this module would cost it the one
- * property that makes it worth having — that every line the operator reads can
- * be asserted in a unit test. The values are the app's own status colours
- * (Tailwind green-400 / amber-400 / red-400), which is what the rest of the
- * fleet UI already uses for live / degraded / stopped.
+ * CSS named colours rather than theme tokens on purpose. The HUD is drawn on
+ * dark canvas plates inside the headset, so it keeps its dark-ground contrast
+ * whatever theme the page is in (a light-theme token would put dark green on a
+ * dark plate), and `@/brand` would pull React into this module, which exists so
+ * every line the operator reads can be asserted in a unit test. The hues mirror
+ * the signal set: measured (ok), unknown (warn), stopped (bad).
  */
 export const HUD_COLORS = {
-  ok: '#4ADE80',
-  warn: '#FBBF24',
-  bad: '#F87171',
-  text: '#E5E7EB',
-  dim: '#9CA3AF',
+  ok: 'palegreen',
+  warn: 'khaki',
+  bad: 'salmon',
+  text: 'gainsboro',
+  dim: 'darkgray',
 } as const;
 
 /**

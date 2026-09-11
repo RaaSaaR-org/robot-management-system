@@ -11,49 +11,34 @@ export const MOTOR_TEMP_CRITICAL_C = 75;
 /** Lower anchor of the color scale — everything below is fully "ok" */
 export const MOTOR_TEMP_OK_C = 35;
 
-type Rgb = [number, number, number];
-
-// Status stops (green-500 → yellow-500 → red-500 — the codebase's status hues)
-const OK_RGB: Rgb = [34, 197, 94];
-const WARN_RGB: Rgb = [234, 179, 8];
-const CRIT_RGB: Rgb = [239, 68, 68];
-
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
-function mix(a: Rgb, b: Rgb, t: number): Rgb {
-  return [
-    Math.round(lerp(a[0], b[0], t)),
-    Math.round(lerp(a[1], b[1], t)),
-    Math.round(lerp(a[2], b[2], t)),
-  ];
-}
-
 /**
- * Data-driven fill color for a motor temperature: ok-green below 35°C,
- * blending to warning-yellow at 60°C and critical-red at 75°C+.
+ * Data-driven fill color for a motor temperature, built from the signal
+ * tokens: measured (ok) below 35°C, blending to unknown (warm) at 60°C and
+ * stopped (hot) at 75°C+. Returns a CSS `color-mix()` string for inline styles.
  *
  * @param tempC - Motor temperature in °C
  * @param alpha - Fill opacity (default 1)
  */
 export function motorTempColor(tempC: number, alpha = 1): string {
-  let rgb: Rgb;
+  let base: string;
   if (tempC <= MOTOR_TEMP_OK_C) {
-    rgb = OK_RGB;
+    base = 'var(--signal-measured)';
   } else if (tempC < MOTOR_TEMP_WARNING_C) {
-    rgb = mix(OK_RGB, WARN_RGB, (tempC - MOTOR_TEMP_OK_C) / (MOTOR_TEMP_WARNING_C - MOTOR_TEMP_OK_C));
+    const t = Math.round(((tempC - MOTOR_TEMP_OK_C) / (MOTOR_TEMP_WARNING_C - MOTOR_TEMP_OK_C)) * 100);
+    base = `color-mix(in oklab, var(--signal-unknown) ${t}%, var(--signal-measured))`;
   } else if (tempC < MOTOR_TEMP_CRITICAL_C) {
-    rgb = mix(WARN_RGB, CRIT_RGB, (tempC - MOTOR_TEMP_WARNING_C) / (MOTOR_TEMP_CRITICAL_C - MOTOR_TEMP_WARNING_C));
+    const t = Math.round(((tempC - MOTOR_TEMP_WARNING_C) / (MOTOR_TEMP_CRITICAL_C - MOTOR_TEMP_WARNING_C)) * 100);
+    base = `color-mix(in oklab, var(--signal-stopped) ${t}%, var(--signal-unknown))`;
   } else {
-    rgb = CRIT_RGB;
+    base = 'var(--signal-stopped)';
   }
-  return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
+  if (alpha >= 1) return base;
+  return `color-mix(in oklab, ${base} ${Math.round(alpha * 100)}%, transparent)`;
 }
 
-/** Tailwind text class for a motor temperature value (same ≥60°C warning scale) */
+/** Text class for a motor temperature value (same ≥60°C warning scale) */
 export function motorTempTextClass(tempC: number): string {
-  if (tempC >= MOTOR_TEMP_CRITICAL_C) return 'text-red-600 dark:text-red-400';
-  if (tempC >= MOTOR_TEMP_WARNING_C) return 'text-yellow-600 dark:text-yellow-400';
-  return 'text-theme-secondary';
+  if (tempC >= MOTOR_TEMP_CRITICAL_C) return 'text-signal-stopped';
+  if (tempC >= MOTOR_TEMP_WARNING_C) return 'text-signal-unknown';
+  return 'text-ink-secondary';
 }

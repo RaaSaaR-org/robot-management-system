@@ -171,7 +171,7 @@ describe('VRTeleopModalBody — E-Stop', () => {
     setSession(true);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'STOP' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Emergency stop' }));
     });
 
     // The stop frame is what actually halts a walking robot, and it goes out on
@@ -187,7 +187,7 @@ describe('VRTeleopModalBody — E-Stop', () => {
     expect(triggerRobotEStop).toHaveBeenCalledWith('robot-1', expect.objectContaining({
       reason: expect.stringContaining('E-Stop'),
     }));
-    expect(screen.getByText('E-STOP LATCHED')).toBeInTheDocument();
+    expect(screen.getByText('E-stop latched')).toBeInTheDocument();
   });
 
   it('offers a reset that does not require the headset, and clears the latch', async () => {
@@ -195,14 +195,14 @@ describe('VRTeleopModalBody — E-Stop', () => {
     openLink();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'STOP' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Emergency stop' }));
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Reset E-Stop' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reset E-stop' }));
     });
 
     expect(resetRobotEStop).toHaveBeenCalledWith('robot-1');
-    expect(screen.queryByText('E-STOP LATCHED')).not.toBeInTheDocument();
+    expect(screen.queryByText('E-stop latched')).not.toBeInTheDocument();
   });
 });
 
@@ -271,7 +271,7 @@ describe('VRTeleopModalBody — agent messages', () => {
 
     act(() => socket.deliver({ type: 'estop', active: true, reason: 'Fleet console stop' }));
 
-    expect(screen.getByText('E-STOP LATCHED')).toBeInTheDocument();
+    expect(screen.getByText('E-stop latched')).toBeInTheDocument();
     expect(screen.getByText('Fleet console stop')).toBeInTheDocument();
   });
 
@@ -285,11 +285,11 @@ describe('VRTeleopModalBody — agent messages', () => {
     const socket = openLink();
 
     act(() => socket.deliver({ type: 'estop', active: true, reason: 'Fleet console stop' }));
-    expect(screen.getByText('E-STOP LATCHED')).toBeInTheDocument();
+    expect(screen.getByText('E-stop latched')).toBeInTheDocument();
 
     act(() => socket.deliver({ type: 'estop', active: false, reason: null }));
 
-    expect(screen.queryByText('E-STOP LATCHED')).not.toBeInTheDocument();
+    expect(screen.queryByText('E-stop latched')).not.toBeInTheDocument();
     expect(screen.getByTestId('vr-stream')).toHaveTextContent('Stream armed');
   });
 
@@ -303,7 +303,7 @@ describe('VRTeleopModalBody — agent messages', () => {
       message: 'an emergency stop is latched — reset it before driving',
       at: '2026-08-22T00:00:00.000Z',
     }));
-    expect(screen.getByText('E-STOP LATCHED')).toBeInTheDocument();
+    expect(screen.getByText('E-stop latched')).toBeInTheDocument();
 
     act(() => socket.deliver({ type: 'estop', active: false, reason: null }));
 
@@ -328,10 +328,10 @@ describe('VRTeleopModalBody — agent messages', () => {
       at: '2026-08-22T00:00:00.000Z',
     }));
 
-    expect(screen.getByText('E-STOP LATCHED')).toBeInTheDocument();
-    expect(screen.getByTestId('vr-stream')).toHaveTextContent('Stream held (E-Stop)');
+    expect(screen.getByText('E-stop latched')).toBeInTheDocument();
+    expect(screen.getByTestId('vr-stream')).toHaveTextContent('Stream held (E-stop)');
     // And the reset is reachable without the headset, as for any other latch.
-    expect(screen.getByRole('button', { name: 'Reset E-Stop' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reset E-stop' })).toBeInTheDocument();
   });
 });
 
@@ -433,7 +433,7 @@ describe('VRTeleopModalBody — a damped base', () => {
     expect(screen.queryByTestId('vr-base-damped')).not.toBeInTheDocument();
 
     act(() => { socket.deliver({ type: 'base', damped: true, fsmId: 1 }); });
-    expect(screen.getByTestId('vr-base-damped')).toHaveTextContent('BASE DAMPED');
+    expect(screen.getByTestId('vr-base-damped')).toHaveTextContent('Base damped');
 
     act(() => { socket.deliver({ type: 'base', damped: false, fsmId: 500 }); });
     expect(screen.queryByTestId('vr-base-damped')).not.toBeInTheDocument();

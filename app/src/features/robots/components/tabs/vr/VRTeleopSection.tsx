@@ -14,7 +14,8 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { Card, Button, Modal } from '@/shared/components/ui';
+import { Glasses } from 'lucide-react';
+import { Button, Modal, Panel, StatusTag } from '@/shared/components/ui';
 import type { TeleopTabProps } from '../types';
 import { EMULATOR_ACTIVE } from './vrConstants';
 import { resolveXrAvailability, type XrAvailability } from './vrAvailability';
@@ -23,15 +24,6 @@ import { VRTeleopModalBody } from './VRTeleopModal';
 // ============================================================================
 // LAUNCHER — compact card shown in the Teleop tab
 // ============================================================================
-
-/** Small headset glyph for the launcher card. */
-function HeadsetIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3 11a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v3a2 2 0 0 1-2 2h-1.6a2 2 0 0 1-1.6-.8l-.9-1.2a1.5 1.5 0 0 0-1.2-.6h-3.4a1.5 1.5 0 0 0-1.2.6l-.9 1.2a2 2 0 0 1-1.6.8H5a2 2 0 0 1-2-2v-3Z" />
-    </svg>
-  );
-}
 
 /** One line each, matching the three states `resolveXrAvailability` tells apart. */
 const AVAILABILITY_HINT: Record<XrAvailability, string> = {
@@ -99,27 +91,36 @@ export function VRTeleopSection({ robot, onNextEpisode, recording }: VRTeleopSec
 
   return (
     <>
-      <Card className="p-4">
-        <div className="flex items-center gap-4">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-400">
-            <HeadsetIcon className="h-6 w-6" />
+      <Panel>
+        <Panel.Header
+          title="VR teleop (Meta Quest)"
+          description="Drive the robot's arms with Quest controllers over WebXR."
+          actions={
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<Glasses className="h-4 w-4" strokeWidth={1.75} />}
+              onClick={() => setOpen(true)}
+            >
+              Launch VR
+            </Button>
+          }
+        />
+        <Panel.Body>
+          <div className="flex flex-wrap items-center gap-3">
+            <StatusTag tone={EMULATOR_ACTIVE || (availability === 'ready' && sessionSupported) ? 'live' : 'neutral'} dot>
+              {EMULATOR_ACTIVE
+                ? 'Emulator'
+                : availability === 'ready' && sessionSupported
+                  ? 'Headset ready'
+                  : 'No headset'}
+            </StatusTag>
+            <p className="text-[13px] text-ink-secondary">{hint}</p>
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-theme-primary">VR Teleop</h3>
-              <span className="rounded-full bg-theme-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-theme-tertiary">
-                Meta Quest
-              </span>
-            </div>
-            <p className="mt-0.5 text-xs text-theme-secondary">{hint}</p>
-          </div>
-          <Button variant="primary" size="sm" onClick={() => setOpen(true)} className="shrink-0">
-            Launch VR
-          </Button>
-        </div>
-      </Card>
+        </Panel.Body>
+      </Panel>
 
-      <Modal isOpen={open} onClose={() => setOpen(false)} title="VR Teleop (Meta Quest)" size="full">
+      <Modal isOpen={open} onClose={() => setOpen(false)} title="VR teleop (Meta Quest)" size="full">
         <VRTeleopModalBody
           robot={robot}
           availability={availability}

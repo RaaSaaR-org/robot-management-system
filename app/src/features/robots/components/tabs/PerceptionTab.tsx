@@ -1,14 +1,22 @@
 /**
  * @file PerceptionTab.tsx
  * @description Perception tab — live point cloud with the robot inside its own
- *              scan, a standalone toggle, color/size controls, capture + download,
- *              and a recorded-scan gallery.
+ *              scan, view controls, capture + download, and the recorded scans.
  * @feature robots
  */
 
 import { Suspense, lazy, useEffect, useState, useCallback } from 'react';
-import { Card, Badge, Button, ToggleChip } from '@/shared/components/ui';
-import { Tooltip } from '@/shared/components/ui/Tooltip';
+import { Download, Radar, ScanLine } from 'lucide-react';
+import {
+  Button,
+  EmptyState,
+  Panel,
+  SegmentedControl,
+  StatusTag,
+  ToggleChip,
+  Tooltip,
+  toast,
+} from '@/shared/components/ui';
 import { Robot3DViewerFallback } from '../visualization';
 import { PointCloudGallery } from '../PointCloudGallery';
 import { usePointCloudStream } from '../../hooks/usePointCloudStream';
@@ -31,6 +39,9 @@ const PointCloudViewer = lazy(() =>
  */
 const IDLE_SENSOR_POINT_THRESHOLD = 50;
 
+/** Embodiments that carry no depth camera or LiDAR at all. */
+const NO_PERCEPTION: RobotType[] = ['so101'];
+
 function normalizeRobotType(raw?: string): RobotType {
   const t = (raw ?? 'generic').toLowerCase();
   if (t.startsWith('g1_edu') || t.startsWith('g1-edu')) return 'g1_edu';
@@ -40,42 +51,58 @@ function normalizeRobotType(raw?: string): RobotType {
   return 'generic';
 }
 
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  // The API client rejects with plain {code, message} objects.
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+  return String(error);
+}
+
+const COLOR_OPTIONS: { value: PointCloudColorMode; label: string }[] = [
+  { value: 'height', label: 'Height' },
+  { value: 'intensity', label: 'Intensity' },
+];
+
 export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps) {
-  const { frame, isConnected, lastUpdate } = usePointCloudStream(robotId, { enabled: true });
+  const { frame: streamFrame, isConnected, lastUpdate } = usePointCloudStream(robotId, { enabled: true });
+  // A frame without points (the demo mocks answer the snapshot route with a
+  // stub) is treated as no frame, so the panel shows its calm empty state.
+  const frame =
+    streamFrame && typeof streamFrame.pointCount === 'number' && streamFrame.positions != null
+      ? streamFrame
+      : null;
   const fetchSensorScans = useRobotsStore((s) => s.fetchSensorScans);
 
   const [showRobotModel, setShowRobotModel] = useState(true);
   const [colorMode, setColorMode] = useState<PointCloudColorMode>('height');
   const [pointSize, setPointSize] = useState(0.025);
-  // Default ON: clips stray far returns above room height and below-floor
-  // reflections (through windows / glancing angles) so the room stays tight
-  // around the robot.
+  // Default ON: clips stray far returns above room height and below-floor reflections.
   const [hideCeiling, setHideCeiling] = useState(true);
   const [capturing, setCapturing] = useState(false);
   // LiDAR power switch: target state while a switch is in flight (null = none).
-  // Kept pending until the point stream actually reflects the change, because
-  // the sensor takes a few seconds to spin up/down after the DDS write.
+  // Kept pending until the point stream reflects the change (spin-up takes seconds).
   const [lidarPending, setLidarPending] = useState<boolean | null>(null);
-  const [lidarError, setLidarError] = useState<string | null>(null);
 
-  // The stream itself is the source of truth for LiDAR power: a switched-off
-  // MID-360 still publishes 1-point heartbeats, a live one ~20k points.
+  // The stream is the source of truth for LiDAR power: a switched-off MID-360
+  // still publishes 1-point heartbeats, a live one ~20k points.
   const isHardwareLidar = frame?.source === 'hardware' && frame.sensorType === 'lidar';
   const lidarOn = isHardwareLidar && frame.pointCount >= IDLE_SENSOR_POINT_THRESHOLD;
+  const sensorIdle = frame?.source === 'hardware' && frame.pointCount < IDLE_SENSOR_POINT_THRESHOLD;
 
   const robotType = normalizeRobotType(
     (telemetry?.robotType as string | undefined) ?? (robot.metadata?.robotType as string | undefined),
   );
+  const unsupported = NO_PERCEPTION.includes(robotType) && !frame;
+  const isOffline = robot.status === 'offline';
 
-  // Load recorded scans on mount.
   useEffect(() => {
     void fetchSensorScans(robotId);
   }, [robotId, fetchSensorScans]);
 
   // Resolve the pending switch when the stream reflects it; give up after 45 s
-  // (e.g. the utlidar node ignored the command) so the button never sticks.
-  // 45 s because a cold MID-360 was observed to take >20 s from the ON command
-  // to the first dense frame (2026-07-17 live test).
+  // (a cold MID-360 was observed to take >20 s to its first dense frame).
   useEffect(() => {
     if (lidarPending === null) return;
     if (lidarOn === lidarPending) {
@@ -84,27 +111,25 @@ export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps)
     }
     const timeout = setTimeout(() => {
       setLidarPending(null);
-      setLidarError(
-        `LiDAR was commanded ${lidarPending ? 'ON' : 'OFF'} but the point stream did not follow within 45 s`,
-      );
+      toast.error(`Couldn't switch LiDAR ${lidarPending ? 'on' : 'off'}`, {
+        description: 'The point stream did not follow within 45 s.',
+      });
     }, 45_000);
     return () => clearTimeout(timeout);
   }, [lidarPending, lidarOn]);
 
   const handleLidarSwitch = useCallback(async () => {
     const target = !lidarOn;
-    setLidarError(null);
     setLidarPending(target);
     try {
       const result = await sensorScansApi.setLidarSwitch(robotId, target);
       if (!result.ok) {
         setLidarPending(null);
-        setLidarError(result.error ?? 'LiDAR switch failed');
+        toast.error(`Couldn't switch LiDAR ${target ? 'on' : 'off'}`, { description: result.error });
       }
     } catch (error) {
-      console.error('Failed to switch LiDAR:', error);
       setLidarPending(null);
-      setLidarError(error instanceof Error ? error.message : 'LiDAR switch failed');
+      toast.error(`Couldn't switch LiDAR ${target ? 'on' : 'off'}`, { description: errorText(error) });
     }
   }, [lidarOn, robotId]);
 
@@ -113,159 +138,160 @@ export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps)
     try {
       await sensorScansApi.captureScan(robotId);
       await fetchSensorScans(robotId);
+      toast.success('Scan captured', { description: robot.name });
     } catch (error) {
-      console.error('Failed to capture scan:', error);
+      toast.error("Couldn't capture scan", { description: errorText(error) });
     } finally {
       setCapturing(false);
     }
-  }, [robotId, fetchSensorScans]);
+  }, [robotId, robot.name, fetchSensorScans]);
 
   const handleDownloadLive = useCallback(() => {
     if (!frame) return;
     downloadBlob(frameToPcdBlob(frame), `${frame.sensor}-live.pcd`);
   }, [frame]);
 
-  return (
-    <div className="space-y-6">
-      <Card className="min-h-[440px]">
-        <Card.Header>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold text-theme-primary">Perception</h2>
-              {frame && (
-                <Badge variant="turquoise" size="sm">
-                  {frame.sensorType === 'lidar' ? 'LiDAR' : 'Depth'}
-                </Badge>
-              )}
-              {isConnected ? (
-                <span className="flex items-center gap-1.5 text-xs text-green-500 font-medium">
-                  <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" /> Live
-                </span>
-              ) : (
-                <span className="flex items-center gap-1.5 text-xs text-gray-400 font-medium">
-                  <span className="w-2 h-2 rounded-full bg-gray-500" /> Offline
-                </span>
-              )}
-              {frame?.source === 'sim' && (
-                <Tooltip content="Simulated point cloud — no hardware source">
-                  <span className="inline-flex items-center rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider cursor-default bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border border-yellow-500/25">
-                    SIM
-                  </span>
-                </Tooltip>
-              )}
-              {frame?.source === 'replay' && (
-                <Tooltip content={`Replayed recording${frame.sourceLabel ? ` — ${frame.sourceLabel}` : ''}`}>
-                  <span className="inline-flex items-center rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider cursor-default bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/25">
-                    REPLAY
-                  </span>
-                </Tooltip>
-              )}
-              {frame?.source === 'hardware' && frame.pointCount < IDLE_SENSOR_POINT_THRESHOLD && (
-                <Tooltip content={`The sensor is connected but returning heartbeat frames (${frame.pointCount} pt${frame.pointCount === 1 ? '' : 's'}) — the LiDAR is switched off. Use the "LiDAR on" button to start it.`}>
-                  <span className="inline-flex items-center rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider cursor-default bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25">
-                    Sensor idle
-                  </span>
-                </Tooltip>
-              )}
-              {frame && (
-                <span className="text-xs text-theme-tertiary tabular-nums">
-                  {frame.pointCount.toLocaleString(UI_DATE_LOCALE)} pts
-                </span>
-              )}
-            </div>
+  if (unsupported) {
+    return (
+      <Panel>
+        <Panel.Header title="Point cloud" />
+        <Panel.Body>
+          <EmptyState
+            icon={<Radar />}
+            title="LiDAR is not available for this robot"
+            description={`${robot.name} has no depth camera or LiDAR, so there is no point cloud to show.`}
+          />
+        </Panel.Body>
+      </Panel>
+    );
+  }
 
-            {/* Controls */}
-            <div className="flex flex-wrap items-center gap-2">
-              {isHardwareLidar && (
-                <Tooltip
-                  content={
-                    lidarOn
-                      ? 'Switch the MID-360 LiDAR off (rt/utlidar/switch — sensor only, no motion)'
-                      : 'Switch the MID-360 LiDAR on (rt/utlidar/switch — sensor only, no motion)'
-                  }
-                >
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleLidarSwitch}
-                    isLoading={lidarPending !== null}
-                    loadingText={lidarPending ? 'LiDAR starting…' : 'LiDAR stopping…'}
-                  >
-                    {lidarOn ? 'LiDAR off' : 'LiDAR on'}
-                  </Button>
-                </Tooltip>
-              )}
-              <ToggleChip active={showRobotModel} onClick={() => setShowRobotModel((v) => !v)}>
-                Robot model
-              </ToggleChip>
-              {frame?.sensorType === 'lidar' && (
-                <Tooltip content="Clip points above 2.2 m and below-floor reflections — keeps the view focused on walls and obstacles at robot height.">
+  return (
+    <div className="flex flex-col gap-6">
+      <Panel>
+        <Panel.Header
+          title="Point cloud"
+          description={
+            frame
+              ? `${frame.sensorType === 'lidar' ? 'LiDAR' : 'Depth camera'} · ${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} points`
+              : 'The robot inside its own scan.'
+          }
+          actions={
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                leftIcon={<Download className="h-4 w-4" strokeWidth={1.75} />}
+                onClick={handleDownloadLive}
+                disabled={!frame}
+              >
+                Download frame
+              </Button>
+              <Button
+                size="sm"
+                leftIcon={<ScanLine className="h-4 w-4" strokeWidth={1.75} />}
+                onClick={() => void handleCapture()}
+                isLoading={capturing}
+                loadingText="Capturing…"
+              >
+                Capture scan
+              </Button>
+            </>
+          }
+        />
+        <Panel.Body className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {isConnected ? (
+              <StatusTag tone="live" dot pulse>Live</StatusTag>
+            ) : (
+              <StatusTag tone="neutral" dot>No link</StatusTag>
+            )}
+            {frame?.source === 'sim' && <StatusTag tone="sim">Sim</StatusTag>}
+            {frame?.source === 'replay' && (
+              <Tooltip content={`Replayed recording${frame.sourceLabel ? ` — ${frame.sourceLabel}` : ''}`}>
+                <span><StatusTag tone="neutral">Replay</StatusTag></span>
+              </Tooltip>
+            )}
+            {sensorIdle && (
+              <Tooltip content="The sensor is connected but only sends heartbeat frames — the LiDAR is switched off.">
+                <span><StatusTag tone="gated">Sensor idle</StatusTag></span>
+              </Tooltip>
+            )}
+            <span className="mx-1 hidden h-5 w-px bg-line sm:block" aria-hidden="true" />
+            <ToggleChip active={showRobotModel} onClick={() => setShowRobotModel((v) => !v)}>
+              Robot model
+            </ToggleChip>
+            {frame?.sensorType === 'lidar' && (
+              <Tooltip content="Clip points above 2.2 m and below-floor reflections, keeping walls and obstacles at robot height.">
+                <span>
                   <ToggleChip active={hideCeiling} onClick={() => setHideCeiling((v) => !v)}>
                     Clip room
                   </ToggleChip>
-                </Tooltip>
-              )}
-              <ToggleChip
-                active={false}
-                onClick={() => setColorMode((m) => (m === 'height' ? 'intensity' : 'height'))}
+                </span>
+              </Tooltip>
+            )}
+            <SegmentedControl label="Color by" size="sm" options={COLOR_OPTIONS} value={colorMode} onChange={setColorMode} />
+            <label className="flex items-center gap-2 text-xs text-ink-tertiary">
+              Point size
+              <input
+                type="range"
+                min={0.01}
+                max={0.08}
+                step={0.005}
+                value={pointSize}
+                onChange={(e) => setPointSize(parseFloat(e.target.value))}
+                className="w-20 accent-[var(--color-primary)]"
+              />
+            </label>
+            {isHardwareLidar && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="sm:ml-auto"
+                onClick={() => void handleLidarSwitch()}
+                isLoading={lidarPending !== null}
+                loadingText={lidarPending ? 'Starting LiDAR…' : 'Stopping LiDAR…'}
               >
-                Color: {colorMode === 'height' ? 'Height' : 'Intensity'}
-              </ToggleChip>
-              <label className="flex items-center gap-1.5 text-xs text-theme-tertiary">
-                Size
-                <input
-                  type="range"
-                  min={0.01}
-                  max={0.08}
-                  step={0.005}
-                  value={pointSize}
-                  onChange={(e) => setPointSize(parseFloat(e.target.value))}
-                  className="w-20 accent-cobalt-500"
-                />
-              </label>
-              <Button size="sm" variant="ghost" onClick={handleDownloadLive} disabled={!frame}>
-                Download
+                {lidarOn ? 'Turn LiDAR off' : 'Turn LiDAR on'}
               </Button>
-              <Button size="sm" variant="primary" onClick={handleCapture} isLoading={capturing} loadingText="Capturing…">
-                Capture scan
-              </Button>
-            </div>
-          </div>
-          {lidarError && (
-            <p className="mt-2 text-xs text-red-500">{lidarError}</p>
-          )}
-        </Card.Header>
-        <Card.Body className="p-0 h-[380px]">
-          <Suspense fallback={<Robot3DViewerFallback />}>
-            <PointCloudViewer
-              frame={frame}
-              robotType={robotType}
-              jointStates={telemetry?.jointStates}
-              robotId={robotId}
-              showRobotModel={showRobotModel}
-              colorMode={colorMode}
-              pointSize={pointSize}
-              hideCeiling={frame?.sensorType === 'lidar' && hideCeiling}
-            />
-          </Suspense>
-        </Card.Body>
-      </Card>
-
-      <Card>
-        <Card.Header>
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-theme-primary">Recorded Scans</h2>
-            {lastUpdate && (
-              <span className="text-xs text-theme-tertiary">
-                Live updated {lastUpdate.toLocaleTimeString(UI_DATE_LOCALE)}
-              </span>
             )}
           </div>
-        </Card.Header>
-        <Card.Body>
+          <div className="h-[280px] sm:h-[380px]">
+            {!frame && isOffline ? (
+              <EmptyState
+                className="h-full"
+                icon={<Radar />}
+                title="No point cloud yet"
+                description={`${robot.name} is offline. Start its robot agent to see live telemetry and send commands.`}
+              />
+            ) : (
+              <Suspense fallback={<Robot3DViewerFallback className="h-full min-h-0" />}>
+                <PointCloudViewer
+                  frame={frame}
+                  robotType={robotType}
+                  jointStates={telemetry?.jointStates}
+                  robotId={robotId}
+                  showRobotModel={showRobotModel}
+                  colorMode={colorMode}
+                  pointSize={pointSize}
+                  hideCeiling={frame?.sensorType === 'lidar' && hideCeiling}
+                  className="min-h-0"
+                />
+              </Suspense>
+            )}
+          </div>
+        </Panel.Body>
+      </Panel>
+
+      <Panel>
+        <Panel.Header
+          title="Recorded scans"
+          description={lastUpdate ? `Live view updated ${lastUpdate.toLocaleTimeString(UI_DATE_LOCALE)}` : undefined}
+        />
+        <Panel.Body>
           <PointCloudGallery robotId={robotId} />
-        </Card.Body>
-      </Card>
+        </Panel.Body>
+      </Panel>
     </div>
   );
 }
