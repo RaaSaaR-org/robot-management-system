@@ -1,149 +1,99 @@
 /**
  * @file SafetyStatusDashboard.tsx
- * @description Dashboard showing real-time safety status for the fleet
+ * @description Real-time safety status for the fleet: a stat row, one row per
+ *              robot (E-stop state, mode, speed, connection) and the recent
+ *              safety events. `compact` renders a single status strip.
  * @feature safety
  */
 
-import { useMemo } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
-import { Badge } from '@/shared/components/ui/Badge';
+import {
+  EmptyState,
+  KeyValueList,
+  Panel,
+  SkeletonRows,
+  StatRow,
+  StatTile,
+  StatusTag,
+  type Tone,
+} from '@/shared/components/ui';
+import { formatDateTime, formatTimeAgo } from '@/shared/utils/format';
 import { useSafetyOverview } from '../hooks/useSafety';
 import { FleetEmergencyStopButton } from './FleetEmergencyStopButton';
 import {
-  ESTOP_STATUS_LABELS,
   OPERATING_MODE_LABELS,
+  type EStopEvent,
+  type EStopStatus,
   type RobotSafetyStatus,
 } from '../types/safety.types';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
+const ESTOP_TONE: Record<EStopStatus, Tone> = { armed: 'live', triggered: 'stopped', resetting: 'gated' };
+const ESTOP_LABEL: Record<EStopStatus, string> = { armed: 'Armed', triggered: 'Stopped', resetting: 'Resetting' };
+const SCOPE_TONE: Record<EStopEvent['scope'], Tone> = { fleet: 'stopped', zone: 'gated', robot: 'gated' };
 
-interface StatusIndicatorProps {
-  label: string;
-  value: string | number;
-  status?: 'good' | 'warning' | 'error' | 'neutral';
-  className?: string;
-}
-
-function StatusIndicator({ label, value, status = 'neutral', className }: StatusIndicatorProps) {
-  const statusColors = {
-    good: 'text-green-500',
-    warning: 'text-yellow-500',
-    error: 'text-red-500',
-    neutral: 'text-theme-secondary',
-  };
-
+function RobotSafetyRow({ robot }: { robot: RobotSafetyStatus }) {
+  const nearLimit = robot.currentSpeed > robot.activeSpeedLimit * 0.9;
   return (
-    <div className={cn('flex flex-col', className)}>
-      <span className="text-xs text-theme-muted uppercase tracking-wide">{label}</span>
-      <span className={cn('text-lg font-semibold', statusColors[status])}>{value}</span>
-    </div>
+    <li className="flex flex-col gap-3 px-5 py-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="min-w-0 truncate text-sm font-semibold text-ink-primary">{robot.robotName}</span>
+        <StatusTag tone={ESTOP_TONE[robot.status]} dot>
+          {ESTOP_LABEL[robot.status]}
+        </StatusTag>
+        {!robot.systemHealthy && <StatusTag tone="gated">Degraded</StatusTag>}
+        {robot.warnings.map((w) => (
+          <StatusTag key={w} tone="warning" size="sm">
+            {w}
+          </StatusTag>
+        ))}
+      </div>
+      <KeyValueList
+        columns={3}
+        items={[
+          { label: 'Mode', value: OPERATING_MODE_LABELS[robot.operatingMode] },
+          {
+            label: 'Speed',
+            value: (
+              <span className={cn('tabular-nums', nearLimit && 'text-signal-unknown')}>
+                {robot.currentSpeed.toFixed(0)} / {robot.activeSpeedLimit} mm/s
+              </span>
+            ),
+          },
+          {
+            label: 'Connection',
+            value: <StatusTag status={robot.serverConnected ? 'connected' : 'offline'} size="sm" />,
+          },
+        ]}
+      />
+      {robot.reason && robot.status === 'triggered' && (
+        <p className="text-[13px] text-signal-stopped">Reason: {robot.reason}</p>
+      )}
+    </li>
   );
 }
 
-interface RobotSafetyCardProps {
-  robot: RobotSafetyStatus;
-}
-
-function RobotSafetyCard({ robot }: RobotSafetyCardProps) {
-  const statusVariant = useMemo(() => {
-    if (robot.status === 'triggered') return 'error';
-    if (!robot.systemHealthy) return 'warning';
-    return 'default';
-  }, [robot.status, robot.systemHealthy]);
-
-  const statusBg = useMemo(() => {
-    if (robot.status === 'triggered') return 'bg-red-100 dark:bg-red-900/20 border-red-200 dark:border-red-800';
-    if (!robot.systemHealthy) return 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800';
-    return 'bg-theme-elevated border-theme-subtle';
-  }, [robot.status, robot.systemHealthy]);
-
+function SafetyEventRow({ event }: { event: EStopEvent }) {
+  const n = event.affectedRobots.length;
   return (
-    <div className={cn('p-4 rounded-lg border', statusBg)}>
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h4 className="font-semibold text-theme-primary truncate">
-              {robot.robotName}
-            </h4>
-            <Badge variant={statusVariant}>
-              {ESTOP_STATUS_LABELS[robot.status]}
-            </Badge>
-          </div>
-
-          <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-            <div>
-              <span className="text-theme-muted">Mode:</span>{' '}
-              <span className="text-theme-secondary">
-                {OPERATING_MODE_LABELS[robot.operatingMode]}
-              </span>
-            </div>
-            <div>
-              <span className="text-theme-muted">Speed:</span>{' '}
-              <span
-                className={cn(
-                  robot.currentSpeed > robot.activeSpeedLimit * 0.9
-                    ? 'text-yellow-500'
-                    : 'text-theme-secondary'
-                )}
-              >
-                {robot.currentSpeed.toFixed(0)} mm/s
-              </span>
-            </div>
-            <div>
-              <span className="text-theme-muted">Limit:</span>{' '}
-              <span className="text-theme-secondary">{robot.activeSpeedLimit} mm/s</span>
-            </div>
-            <div>
-              <span className="text-theme-muted">Connection:</span>{' '}
-              <span
-                className={robot.serverConnected ? 'text-green-500' : 'text-red-500'}
-              >
-                {robot.serverConnected ? 'Connected' : 'Disconnected'}
-              </span>
-            </div>
-          </div>
-
-          {robot.warnings.length > 0 && (
-            <div className="mt-2">
-              {robot.warnings.map((warning, i) => (
-                <span
-                  key={i}
-                  className="inline-block mr-2 px-2 py-0.5 text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 rounded"
-                >
-                  {warning}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {robot.reason && robot.status === 'triggered' && (
-            <p className="mt-2 text-sm text-red-600 dark:text-red-400">
-              Reason: {robot.reason}
-            </p>
-          )}
-        </div>
-
-        {/* Health indicator */}
-        <div className="flex-shrink-0">
-          <div
-            className={cn(
-              'w-3 h-3 rounded-full',
-              robot.systemHealthy ? 'bg-green-500' : 'bg-red-500',
-              robot.status === 'triggered' && 'animate-pulse'
-            )}
-          />
+    <li className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 px-5 py-3">
+      <div className="flex min-w-0 items-start gap-3">
+        <StatusTag tone={SCOPE_TONE[event.scope]} className="mt-0.5 capitalize">
+          {event.scope}
+        </StatusTag>
+        <div className="min-w-0">
+          <p className="text-sm text-ink-primary">{event.reason}</p>
+          <p className="text-[13px] text-ink-tertiary">
+            {n} robot{n === 1 ? '' : 's'} affected
+          </p>
         </div>
       </div>
-    </div>
+      <time className="text-[13px] tabular-nums text-ink-tertiary" dateTime={event.triggeredAt} title={formatDateTime(event.triggeredAt)}>
+        {formatTimeAgo(event.triggeredAt)}
+      </time>
+    </li>
   );
 }
-
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
 
 export interface SafetyStatusDashboardProps {
   /** Additional class names */
@@ -153,161 +103,79 @@ export interface SafetyStatusDashboardProps {
 }
 
 /**
- * Dashboard component showing real-time safety status for the fleet.
- * Displays E-stop status, operating modes, speed limits, and warnings.
+ * Real-time safety status for the fleet: E-stop state, operating modes,
+ * speed limits and warnings.
  */
-export function SafetyStatusDashboard({
-  className,
-  compact = false,
-}: SafetyStatusDashboardProps) {
-  const {
-    fleetStatus,
-    hasTriggeredEStop,
-    triggeredCount,
-    systemHealthy,
-    totalRobots,
-    onlineRobots,
-    recentEvents,
-  } = useSafetyOverview();
+export function SafetyStatusDashboard({ className, compact = false }: SafetyStatusDashboardProps) {
+  const { fleetStatus, hasTriggeredEStop, triggeredCount, systemHealthy, totalRobots, onlineRobots, recentEvents } =
+    useSafetyOverview();
 
   if (!fleetStatus) {
     return (
-      <div className={cn('p-4 text-center text-theme-muted', className)}>
-        Loading safety status...
-      </div>
+      <Panel padding="sm" className={className} aria-busy="true" aria-label="Loading safety status">
+        <SkeletonRows rows={compact ? 1 : 3} columns={3} dense />
+      </Panel>
     );
   }
 
   if (compact) {
     return (
-      <div
-        className={cn(
-          'flex items-center justify-between gap-4 p-3 rounded-lg border',
-          hasTriggeredEStop
-            ? 'bg-red-100 dark:bg-red-900/20 border-red-300 dark:border-red-700'
-            : 'bg-theme-elevated border-theme-subtle',
-          className
-        )}
-      >
-        <div className="flex items-center gap-4">
-          <div
-            className={cn(
-              'w-4 h-4 rounded-full',
-              systemHealthy ? 'bg-green-500' : 'bg-red-500',
-              hasTriggeredEStop && 'animate-pulse'
-            )}
-          />
-          <div>
-            <span className="font-medium text-theme-primary">
-              {hasTriggeredEStop
-                ? `E-STOP ACTIVE (${triggeredCount})`
-                : 'System Normal'}
-            </span>
-            <span className="ml-2 text-sm text-theme-muted">
-              {onlineRobots}/{totalRobots} online
-            </span>
-          </div>
+      <Panel padding="sm" className={cn('flex flex-wrap items-center justify-between gap-3', className)}>
+        <div className="flex flex-wrap items-center gap-3">
+          {hasTriggeredEStop ? (
+            <StatusTag tone="stopped" dot>{`E-stop active · ${triggeredCount}`}</StatusTag>
+          ) : (
+            <StatusTag tone={systemHealthy ? 'live' : 'gated'} dot>
+              {systemHealthy ? 'Safety normal' : 'Needs a look'}
+            </StatusTag>
+          )}
+          <span className="text-[13px] tabular-nums text-ink-tertiary">
+            {onlineRobots} of {totalRobots} robots connected
+          </span>
         </div>
         <FleetEmergencyStopButton size="sm" />
-      </div>
+      </Panel>
     );
   }
 
   return (
-    <div className={cn('space-y-6', className)}>
-      {/* Header with fleet controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold text-theme-primary">
-            Safety Status
-          </h2>
-          <p className="text-sm text-theme-secondary">
-            Real-time monitoring of fleet safety systems
-          </p>
-        </div>
-        <FleetEmergencyStopButton size="lg" />
-      </div>
+    <div className={cn('flex flex-col gap-6', className)}>
+      <StatRow columns={4}>
+        <StatTile label="System" value={systemHealthy ? 'Normal' : 'Alert'} tone={systemHealthy ? 'live' : 'stopped'} />
+        <StatTile label="E-stops active" value={triggeredCount} tone={triggeredCount > 0 ? 'stopped' : 'live'} />
+        <StatTile label="Robots connected" value={onlineRobots} unit={`/ ${totalRobots}`} tone={onlineRobots === totalRobots ? 'live' : 'gated'} />
+        <StatTile label="Last update" value={new Date(fleetStatus.timestamp).toLocaleTimeString()} hint="Refreshes every 5 s" />
+      </StatRow>
 
-      {/* Status summary */}
-      <div
-        className={cn(
-          'grid grid-cols-2 sm:grid-cols-4 gap-4 p-4 rounded-lg border',
-          hasTriggeredEStop
-            ? 'bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800'
-            : 'bg-theme-elevated border-theme-subtle'
-        )}
-      >
-        <StatusIndicator
-          label="System Status"
-          value={systemHealthy ? 'Normal' : 'Alert'}
-          status={systemHealthy ? 'good' : 'error'}
-        />
-        <StatusIndicator
-          label="E-Stops Active"
-          value={triggeredCount}
-          status={triggeredCount > 0 ? 'error' : 'good'}
-        />
-        <StatusIndicator
-          label="Robots Online"
-          value={`${onlineRobots}/${totalRobots}`}
-          status={onlineRobots === totalRobots ? 'good' : 'warning'}
-        />
-        <StatusIndicator
-          label="Last Update"
-          value={new Date(fleetStatus.timestamp).toLocaleTimeString(UI_DATE_LOCALE)}
-          status="neutral"
-        />
-      </div>
-
-      {/* Robot list */}
-      <div className="space-y-3">
-        <h3 className="text-lg font-medium text-theme-primary">Robot Safety Status</h3>
+      <Panel>
+        <Panel.Header title="Robot safety" description="E-stop state, mode and speed limit per robot." actions={<FleetEmergencyStopButton size="md" />} />
         {fleetStatus.robots.length === 0 ? (
-          <p className="text-theme-muted text-center py-8">
-            No robots registered
-          </p>
+          <Panel.Body>
+            <EmptyState size="sm" icon={<ShieldCheck />} title="No robots registered" description="Robots appear here once their agent connects." />
+          </Panel.Body>
         ) : (
-          <div className="space-y-2">
+          <ul className="divide-y divide-line-subtle">
             {fleetStatus.robots.map((robot) => (
-              <RobotSafetyCard key={robot.robotId} robot={robot} />
+              <RobotSafetyRow key={robot.robotId} robot={robot} />
             ))}
-          </div>
+          </ul>
         )}
-      </div>
+      </Panel>
 
-      {/* Recent events */}
-      {recentEvents.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-lg font-medium text-theme-primary">Recent Safety Events</h3>
-          <div className="space-y-2">
+      <Panel>
+        <Panel.Header title="Recent safety events" />
+        {recentEvents.length === 0 ? (
+          <Panel.Body>
+            <EmptyState size="sm" icon={<ShieldCheck />} title="No safety events" description="Every E-stop, fleet, zone or robot, is logged here." />
+          </Panel.Body>
+        ) : (
+          <ul className="divide-y divide-line-subtle">
             {recentEvents.map((event) => (
-              <div
-                key={event.id}
-                className="flex items-center justify-between p-3 rounded-lg bg-theme-elevated border border-theme-subtle"
-              >
-                <div className="flex items-center gap-3">
-                  <Badge
-                    variant={event.scope === 'fleet' ? 'error' : 'warning'}
-                  >
-                    {event.scope.toUpperCase()}
-                  </Badge>
-                  <div>
-                    <p className="text-sm font-medium text-theme-primary">
-                      {event.reason}
-                    </p>
-                    <p className="text-xs text-theme-muted">
-                      {event.affectedRobots.length} robot(s) affected
-                    </p>
-                  </div>
-                </div>
-                <span className="text-xs text-theme-muted">
-                  {new Date(event.triggeredAt).toLocaleString(UI_DATE_LOCALE)}
-                </span>
-              </div>
+              <SafetyEventRow key={event.id} event={event} />
             ))}
-          </div>
-        </div>
-      )}
+          </ul>
+        )}
+      </Panel>
     </div>
   );
 }
