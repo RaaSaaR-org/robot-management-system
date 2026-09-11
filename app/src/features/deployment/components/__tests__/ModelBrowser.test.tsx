@@ -1,12 +1,13 @@
 /**
  * @file ModelBrowser.test.tsx
- * @description Tests for the model browser's skill grouping — a model with no
- *              skill must read as unlinked, never as an error (TASK-238)
+ * @description Tests for the model registry table's skill column — a model
+ *              with no skill must read as unlinked, never as an error
+ *              (TASK-238, TASK-266)
  * @feature deployment
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { ModelBrowser } from '../ModelBrowser';
 import { useDeploymentStore } from '../../store';
 import type { ModelVersion, SkillDefinition } from '../../types';
@@ -41,9 +42,14 @@ function makeSkill(overrides: Partial<SkillDefinition> = {}): SkillDefinition {
   } as SkillDefinition;
 }
 
-describe('ModelBrowser skill grouping', () => {
+/** The body rows of the table (the header row excluded). */
+function bodyRows(): HTMLElement[] {
+  return screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('columnheader').length === 0);
+}
+
+describe('ModelBrowser skill column', () => {
   beforeEach(() => {
-    // The browser resolves skill names from the store; start each case empty.
+    // The table resolves skill names from the store; start each case empty.
     useDeploymentStore.setState({ skills: [] });
   });
 
@@ -51,10 +57,11 @@ describe('ModelBrowser skill grouping', () => {
     render(<ModelBrowser modelVersions={[makeVersion()]} />);
 
     expect(screen.queryByText(/Unknown Skill/i)).not.toBeInTheDocument();
-    expect(screen.getByText('Not linked to a skill')).toBeInTheDocument();
+    const [row] = bodyRows();
+    expect(within(row).getByText('Not linked to a skill')).toBeInTheDocument();
   });
 
-  it('groups every skill-less model under one unlinked heading', () => {
+  it('marks every skill-less model as unlinked, one row each', () => {
     render(
       <ModelBrowser
         modelVersions={[
@@ -64,8 +71,9 @@ describe('ModelBrowser skill grouping', () => {
       />
     );
 
-    expect(screen.getAllByText('Not linked to a skill')).toHaveLength(1);
-    expect(screen.getByText('2 version(s)')).toBeInTheDocument();
+    const rows = bodyRows();
+    expect(rows).toHaveLength(2);
+    rows.forEach((row) => expect(within(row).getByText('Not linked to a skill')).toBeInTheDocument());
   });
 
   it('names the skill from the store when the list endpoint omits the relation', () => {
@@ -73,18 +81,20 @@ describe('ModelBrowser skill grouping', () => {
 
     render(<ModelBrowser modelVersions={[makeVersion({ skillId: 'skill-1' })]} />);
 
-    expect(screen.getByText('Pick and place')).toBeInTheDocument();
-    expect(screen.queryByText('Not linked to a skill')).not.toBeInTheDocument();
+    const [row] = bodyRows();
+    expect(within(row).getByText('Pick and place')).toBeInTheDocument();
+    expect(within(row).queryByText('Not linked to a skill')).not.toBeInTheDocument();
   });
 
-  it('falls back to the skill id, not the unlinked heading, for an unresolvable skill', () => {
+  it('falls back to the skill id, not the unlinked label, for an unresolvable skill', () => {
     render(<ModelBrowser modelVersions={[makeVersion({ skillId: 'skill-deleted-0001' })]} />);
 
-    expect(screen.getByText('Skill skill-de')).toBeInTheDocument();
-    expect(screen.queryByText('Not linked to a skill')).not.toBeInTheDocument();
+    const [row] = bodyRows();
+    expect(within(row).getByText('Skill skill-de')).toBeInTheDocument();
+    expect(within(row).queryByText('Not linked to a skill')).not.toBeInTheDocument();
   });
 
-  it('sorts the unlinked group after the named skills', () => {
+  it('sorts unlinked models after the named skills', () => {
     useDeploymentStore.setState({ skills: [makeSkill({ id: 'skill-1', name: 'Zip the bag' })] });
 
     render(
@@ -96,7 +106,50 @@ describe('ModelBrowser skill grouping', () => {
       />
     );
 
-    const headings = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
-    expect(headings).toEqual(['Zip the bag', 'Not linked to a skill']);
+    const rows = bodyRows();
+    expect(within(rows[0]).getByText('Zip the bag')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('Not linked to a skill')).toBeInTheDocument();
+  });
+
+  it('offers Deploy only for staging versions', () => {
+    render(
+      <ModelBrowser
+        modelVersions={[makeVersion({ deploymentStatus: 'production' })]}
+        onDeploy={() => undefined}
+        onCopyUri={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Actions for/ })).toBeInTheDocument();
+  });
+
+  it('offers Edit first and Archive last on a staging version', () => {
+    render(
+      <ModelBrowser
+        modelVersions={[makeVersion({ name: 'Staged model' })]}
+        onEdit={() => undefined}
+        onDeploy={() => undefined}
+        onCopyUri={() => undefined}
+        onArchive={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Staged model' }));
+    const items = screen.getAllByRole('menuitem').map((item) => item.textContent?.trim());
+    expect(items).toEqual(['Edit', 'Deploy', 'Copy artifact URI', 'Archive']);
+  });
+
+  it('does not offer Archive on a version that is already archived', () => {
+    render(
+      <ModelBrowser
+        modelVersions={[makeVersion({ name: 'Old model', deploymentStatus: 'archived' })]}
+        onEdit={() => undefined}
+        onArchive={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Old model' }));
+    expect(screen.getByRole('menuitem', { name: /Edit/ })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Archive/ })).not.toBeInTheDocument();
   });
 });

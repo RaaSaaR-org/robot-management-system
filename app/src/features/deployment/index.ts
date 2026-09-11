@@ -106,19 +106,13 @@ export * from './hooks';
 
 // Components - renamed exports to avoid conflicts with types
 export {
-  CanaryConfig as CanaryConfigWizard,
-  DeploymentCard,
+  DeploymentFormModal,
   DeploymentProgress,
-  DeploymentStatus as DeploymentStatusPanel,
-  DeploymentStatusBadge,
   ModelBrowser,
   ModelVersionCard,
-  RobotSelector,
-  RollbackConfirmation,
-  SkillBrowser,
-  SkillCard,
-  SkillEditor,
-  SkillStatusBadge,
+  RollbackFormModal,
+  RunSkillModal,
+  SkillFormModal,
 } from './components';
 
 // Pages

@@ -1,26 +1,25 @@
 /**
  * @file RunSkillModal.tsx
- * @description Modal for executing a skill on a selected robot. Calls
- * POST /api/skills/:id/execute via the deploymentApi. Added by TASK-143
- * to give users a one-click "Run on robot" surface from the Skill Library.
+ * @description FormModal that runs a skill on a robot. Calls POST /api/skills/:id/execute via
+ * deploymentApi, navigates to the robot's live execution view first (TASK-146) and broadcasts
+ * the result as a `skill:execution:result` window event. Export and props are stable —
+ * features/robots imports it.
  * @feature deployment
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Modal, Button, Badge, Card } from '@/shared/components/ui';
+import { FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
 import { useRobots } from '@/features/robots/hooks/useRobots';
 import { deploymentApi } from '../api/deploymentApi';
-import type { SkillDefinition, SkillExecutionResult, RolloutStrategy } from '../types';
+import type { RolloutStrategy, SkillDefinition } from '../types';
+import { errorMessage, schemaToParameters } from './deploymentHelpers';
 
-/**
- * Rollout strategy options (lerobot-rollout, TASK-179). Short descriptions
- * inline in the <select> so the tradeoff is visible without leaving the modal.
- */
+/** Rollout strategy options (lerobot-rollout, TASK-179). */
 const ROLLOUT_STRATEGIES: { value: RolloutStrategy; label: string }[] = [
   { value: 'default', label: 'Default — run the policy directly' },
   { value: 'sentry', label: 'Sentry — record the rollout' },
-  { value: 'highlight', label: 'Highlight — capture incident clip on failure' },
+  { value: 'highlight', label: 'Highlight — capture a clip on failure' },
   { value: 'dagger', label: 'DAgger — tag human corrections' },
 ];
 
@@ -33,205 +32,137 @@ export interface RunSkillModalProps {
 export function RunSkillModal({ isOpen, onClose, skill }: RunSkillModalProps) {
   const navigate = useNavigate();
   const { robots, fetchRobots } = useRobots();
-  const [robotId, setRobotId] = useState<string>('');
-  const [rolloutStrategy, setRolloutStrategy] = useState<RolloutStrategy>('default');
-  const [parametersJson, setParametersJson] = useState<string>('{}');
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<SkillExecutionResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [robotId, setRobotId] = useState('');
+  const [strategy, setStrategy] = useState<RolloutStrategy>('default');
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [json, setJson] = useState('{}');
+  const [errors, setErrors] = useState<{ robot?: string; params?: string }>({});
+
+  const params = useMemo(() => (skill ? schemaToParameters(skill.parametersSchema, skill.parameters) : []), [skill]);
 
   useEffect(() => {
-    if (isOpen) {
-      void fetchRobots();
-      setResult(null);
-      setError(null);
-    }
+    if (!isOpen) return;
+    void fetchRobots();
+    setRobotId('');
+    setStrategy('default');
+    setValues({});
+    setJson('{}');
+    setErrors({});
   }, [isOpen, fetchRobots]);
 
-  // Compatible robots: must be online and have all required capabilities
-  const compatibleRobots = useMemo(() => {
-    if (!skill) return [];
-    return robots.filter((r) => {
-      if (r.status !== 'online') return false;
-      const reqs = skill.requiredCapabilities ?? [];
-      return reqs.every((c) => r.capabilities?.includes(c));
+  // Every robot is listed; offline or incapable ones are disabled with the reason in the label.
+  const robotOptions = useMemo(() => {
+    const reqs = skill?.requiredCapabilities ?? [];
+    return robots.map((r) => {
+      const missing = reqs.filter((c) => !r.capabilities?.includes(c));
+      const offline = r.status === 'offline' || r.status === 'error';
+      const reason = offline ? ' (offline)' : missing.length ? ` (needs ${missing.join(', ')})` : '';
+      return { value: r.id, label: `${r.name}${reason}`, disabled: Boolean(reason) };
     });
   }, [robots, skill]);
 
-  // Pre-select the first compatible robot when the modal opens
-  useEffect(() => {
-    if (isOpen && compatibleRobots.length > 0 && !robotId) {
-      setRobotId(compatibleRobots[0].id);
-    }
-  }, [isOpen, compatibleRobots, robotId]);
+  const available = robotOptions.filter((o) => !o.disabled);
 
-  // Reset robot selection when modal closes
   useEffect(() => {
-    if (!isOpen) {
-      setRobotId('');
-      setRolloutStrategy('default');
-      setParametersJson('{}');
-    }
-  }, [isOpen]);
+    if (isOpen && !robotId && available.length > 0) setRobotId(available[0].value);
+  }, [isOpen, robotId, available]);
 
   if (!skill) return null;
 
-  const handleRun = async () => {
-    setError(null);
-    setResult(null);
-
-    if (!robotId) {
-      setError('Pick a robot first.');
-      return;
-    }
-
-    let parameters: Record<string, unknown> = {};
-    if (parametersJson.trim()) {
+  const collectParameters = (): Record<string, unknown> | string => {
+    if (params.length === 0) {
+      if (!json.trim()) return {};
       try {
-        parameters = JSON.parse(parametersJson);
+        return JSON.parse(json) as Record<string, unknown>;
       } catch {
-        setError('Parameters must be valid JSON.');
-        return;
+        return 'Parameters must be valid JSON.';
       }
     }
+    const out: Record<string, unknown> = {};
+    for (const p of params) {
+      const raw = values[p.name]?.trim() ?? '';
+      if (!raw) {
+        if (p.required) return `${p.name} is required.`;
+        continue;
+      }
+      if (p.type === 'number') out[p.name] = Number(raw);
+      else if (p.type === 'boolean') out[p.name] = raw === 'true';
+      else if (p.type === 'array' || p.type === 'object') {
+        try { out[p.name] = JSON.parse(raw); } catch { return `${p.name} must be valid JSON.`; }
+      } else out[p.name] = raw;
+    }
+    return out;
+  };
 
-    // TASK-146: navigate to the robot detail page in "executing" mode BEFORE
-    // dispatching the call. The closed-loop request can take 30+ seconds and
-    // the live execution panel is the place users want to be while it runs.
+  const handleSubmit = () => {
+    const parameters = collectParameters();
+    const next = { robot: robotId ? undefined : 'Choose an online robot.', params: typeof parameters === 'string' ? parameters : undefined };
+    setErrors(next);
+    if (next.robot || typeof parameters === 'string') return;
+
+    const robotName = robots.find((r) => r.id === robotId)?.name ?? robotId;
+    // TASK-146: go to the robot's live execution panel before dispatching — the call can take 30+ s.
     navigate(`/robots/${robotId}?executing=${encodeURIComponent(skill.id)}`);
     onClose();
+    toast.success('Skill started', { description: `${skill.name} on ${robotName}` });
 
-    // Fire-and-forget the execute call. The modal unmounts immediately after
-    // navigation, but the promise keeps running. When it resolves, broadcast
-    // the result on a window-level event so the AutonomousExecutionPanel on
-    // the robot detail page can flip its status.
-    setRunning(true);
-    try {
-      const r = await deploymentApi.executeSkill(skill.id, { robotId, parameters, rolloutStrategy });
-      window.dispatchEvent(
-        new CustomEvent('skill:execution:result', {
-          detail: { skillId: skill.id, robotId, result: r },
-        })
-      );
-      setResult(r);
-      if (r.status !== 'completed') {
-        setError(r.error ?? `Execution ${r.status}`);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to execute skill';
-      window.dispatchEvent(
-        new CustomEvent('skill:execution:result', {
-          detail: { skillId: skill.id, robotId, error: message },
-        })
-      );
-      setError(message);
-    } finally {
-      setRunning(false);
-    }
+    void deploymentApi
+      .executeSkill(skill.id, { robotId, parameters, rolloutStrategy: strategy })
+      .then((result) => {
+        window.dispatchEvent(new CustomEvent('skill:execution:result', { detail: { skillId: skill.id, robotId, result } }));
+        if (result.status !== 'completed') {
+          toast.error("Couldn't finish the skill", { description: result.error ?? `Execution ${result.status}` });
+        }
+      })
+      .catch((err: unknown) => {
+        const message = errorMessage(err);
+        window.dispatchEvent(new CustomEvent('skill:execution:result', { detail: { skillId: skill.id, robotId, error: message } }));
+        toast.error("Couldn't run the skill", { description: message });
+      });
   };
 
   return (
-    <Modal
+    <FormModal
       isOpen={isOpen}
       onClose={onClose}
-      title={`Run "${skill.name}" on a robot`}
-      size="md"
-      footer={
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={running}>
-            Close
-          </Button>
-          <Button variant="primary" onClick={handleRun} disabled={running || !robotId}>
-            {running ? 'Running…' : 'Run now'}
-          </Button>
-        </div>
-      }
+      title={`Run ${skill.name}`}
+      description={`v${skill.version}${skill.requiredCapabilities.length ? ` · needs ${skill.requiredCapabilities.join(', ')}` : ''}`}
+      submitLabel="Run skill"
+      submitDisabled={available.length === 0}
+      onSubmit={handleSubmit}
+      noValidate
     >
-      <div className="space-y-4">
-        <div>
-          <p className="text-xs font-medium text-theme-secondary mb-1">Skill</p>
-          <p className="text-sm text-theme-primary">
-            {skill.name} <span className="text-theme-tertiary">v{skill.version}</span>
-          </p>
-          {skill.requiredCapabilities && skill.requiredCapabilities.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1">
-              {skill.requiredCapabilities.map((cap) => (
-                <Badge key={cap} variant="default" size="sm">
-                  {cap}
-                </Badge>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-theme-secondary mb-1">
-            Robot
-          </label>
-          {compatibleRobots.length === 0 ? (
-            <Card className="p-3 text-sm text-theme-secondary">
-              No compatible online robots. The skill requires{' '}
-              {skill.requiredCapabilities?.join(', ') || 'no capabilities'}.
-            </Card>
-          ) : (
-            <select
-              value={robotId}
-              onChange={(e) => setRobotId(e.target.value)}
-              className="w-full px-3 py-2 text-sm rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-theme-primary"
-            >
-              {compatibleRobots.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name} ({r.id}) — {r.location?.zone ?? 'unknown zone'}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-theme-secondary mb-1">
-            Rollout strategy
-          </label>
-          <select
-            value={rolloutStrategy}
-            onChange={(e) => setRolloutStrategy(e.target.value as RolloutStrategy)}
-            className="w-full px-3 py-2 text-sm rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-theme-primary"
-          >
-            {ROLLOUT_STRATEGIES.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-theme-secondary mb-1">
-            Parameters (JSON)
-          </label>
-          <textarea
-            value={parametersJson}
-            onChange={(e) => setParametersJson(e.target.value)}
-            rows={4}
-            className="w-full px-3 py-2 text-sm font-mono rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-theme-primary"
-            placeholder='{"target": "block_a"}'
-          />
-        </div>
-
-        {error && (
-          <Card className="p-3 bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800">
-            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-          </Card>
-        )}
-
-        {result && result.status === 'completed' && (
-          <Card className="p-3 bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800">
-            <p className="text-sm text-green-700 dark:text-green-400">
-              Skill executed successfully ({result.duration ?? 0}ms).
-            </p>
-          </Card>
-        )}
-      </div>
-    </Modal>
+      <FormField
+        label="Robot"
+        required
+        error={errors.robot}
+        hint={available.length === 0 ? 'No robot can run this now. Start the robot agent to run skills on it.' : undefined}
+      >
+        <Select placeholder="Choose a robot…" options={robotOptions} value={robotId} onChange={(e) => setRobotId(e.target.value)} />
+      </FormField>
+      <FormField label="Rollout strategy">
+        <Select options={ROLLOUT_STRATEGIES} value={strategy} onChange={(e) => setStrategy(e.target.value as RolloutStrategy)} />
+      </FormField>
+      {params.length > 0 ? (
+        params.map((p) => (
+          <FormField key={p.name} label={p.name} required={p.required} hint={p.description}
+            error={errors.params?.startsWith(p.name) ? errors.params : undefined}>
+            {p.type === 'boolean' ? (
+              <Select placeholder="—" options={[{ value: 'true', label: 'Yes' }, { value: 'false', label: 'No' }]}
+                value={values[p.name] ?? ''} onChange={(e) => setValues((v) => ({ ...v, [p.name]: e.target.value }))} />
+            ) : (
+              <Input type={p.type === 'number' ? 'number' : 'text'} value={values[p.name] ?? ''}
+                placeholder={p.type === 'array' ? '["a", "b"]' : p.type === 'object' ? '{"key": "value"}' : undefined}
+                onChange={(e) => setValues((v) => ({ ...v, [p.name]: e.target.value }))} />
+            )}
+          </FormField>
+        ))
+      ) : (
+        <FormField label="Parameters (JSON)" aside="Optional" error={errors.params}>
+          <Textarea rows={3} className="font-mono text-[13px]" value={json} onChange={(e) => setJson(e.target.value)}
+            placeholder='{"target": "apple"}' />
+        </FormField>
+      )}
+    </FormModal>
   );
 }

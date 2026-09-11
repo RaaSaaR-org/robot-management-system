@@ -4,20 +4,14 @@
  * @feature deployment
  */
 
-export { CanaryConfig } from './CanaryConfig';
-export type { CanaryConfigProps } from './CanaryConfig';
-
-export { DeploymentCard } from './DeploymentCard';
-export type { DeploymentCardProps } from './DeploymentCard';
+export { DeploymentFormModal } from './DeploymentFormModal';
+export type { DeploymentFormModalProps } from './DeploymentFormModal';
 
 export { DeploymentProgress } from './DeploymentProgress';
 export type { DeploymentProgressProps } from './DeploymentProgress';
 
-export { DeploymentStatus } from './DeploymentStatus';
-export type { DeploymentStatusProps } from './DeploymentStatus';
-
-export { DeploymentStatusBadge } from './DeploymentStatusBadge';
-export type { DeploymentStatusBadgeProps } from './DeploymentStatusBadge';
+export { DeploymentsSection } from './DeploymentsSection';
+export type { DeploymentsSectionProps } from './DeploymentsSection';
 
 export { ModelBrowser } from './ModelBrowser';
 export type { ModelBrowserProps } from './ModelBrowser';
@@ -25,20 +19,17 @@ export type { ModelBrowserProps } from './ModelBrowser';
 export { ModelVersionCard } from './ModelVersionCard';
 export type { ModelVersionCardProps } from './ModelVersionCard';
 
-export { RobotSelector } from './RobotSelector';
-export type { RobotSelectorProps } from './RobotSelector';
+export { RollbackFormModal } from './RollbackFormModal';
+export type { RollbackFormModalProps } from './RollbackFormModal';
 
-export { RollbackConfirmation } from './RollbackConfirmation';
-export type { RollbackConfirmationProps } from './RollbackConfirmation';
+export { RunSkillModal } from './RunSkillModal';
+export type { RunSkillModalProps } from './RunSkillModal';
 
-export { SkillBrowser } from './SkillBrowser';
-export type { SkillBrowserProps } from './SkillBrowser';
+export { SkillFormModal } from './SkillFormModal';
+export type { SkillFormModalProps } from './SkillFormModal';
 
-export { SkillCard } from './SkillCard';
-export type { SkillCardProps } from './SkillCard';
+export { SkillsSection } from './SkillsSection';
+export type { SkillsSectionProps } from './SkillsSection';
 
-export { SkillEditor } from './SkillEditor';
-export type { SkillEditorProps } from './SkillEditor';
-
-export { SkillStatusBadge } from './SkillStatusBadge';
-export type { SkillStatusBadgeProps } from './SkillStatusBadge';
+export { useDeploymentActs } from './useDeploymentActs';
+export type { DeploymentActs } from './useDeploymentActs';
