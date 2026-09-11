@@ -4,36 +4,16 @@
  * @feature docs
  *
  * Sits on top of @tailwindcss/typography (registered in index.css): the plugin
- * owns the vertical rhythm, this file owns the voice. Colour comes entirely
- * from the app's theme variables via the plugin's --tw-prose-* slots, so light
- * and dark follow ThemeProvider with no `prose-invert` and no second palette to
- * keep in sync. Headings use the same Archivo display face as the landing page
- * so a doc reads as part of the product, not as a README dropped into a frame.
+ * owns the vertical rhythm, this file owns the voice. Every colour is a theme
+ * token (var(--text-*), var(--border-*), var(--color-primary), var(--bg-*)), so
+ * light and dark follow ThemeProvider with no second palette. Headings use
+ * Archivo like the rest of the app; body is Inter; mono is only for code.
  */
 
-:root,
-:root.dark {
-  /* Cobalt 500 measures 3.2:1 on the dark surface — too low for running body
-     links. The lighter step is the readable one in dark, the darker step in
-     light. */
-  --docs-link: var(--color-cobalt-300);
-  --docs-link-hover: var(--color-cobalt-200);
-  --docs-code-fg: var(--color-turquoise-300);
-  --docs-code-bg: rgba(255, 255, 255, 0.07);
-  --docs-surface: rgba(255, 255, 255, 0.035);
-  --docs-surface-strong: rgba(255, 255, 255, 0.06);
-}
-
-:root.light {
-  --docs-link: var(--color-cobalt-600);
-  --docs-link-hover: var(--color-cobalt-700);
-  --docs-code-fg: var(--color-cobalt-700);
-  --docs-code-bg: rgba(12, 20, 64, 0.06);
-  --docs-surface: rgba(12, 20, 64, 0.025);
-  --docs-surface-strong: rgba(12, 20, 64, 0.045);
-}
-
 .docs-prose {
+  --docs-link: var(--color-primary);
+  --docs-code-bg: var(--bg-tertiary);
+
   --tw-prose-body: var(--text-secondary);
   --tw-prose-headings: var(--text-primary);
   --tw-prose-lead: var(--text-secondary);
@@ -43,7 +23,7 @@
   --tw-prose-bullets: var(--border-color-strong);
   --tw-prose-hr: var(--border-color);
   --tw-prose-quotes: var(--text-primary);
-  --tw-prose-quote-borders: var(--color-primary);
+  --tw-prose-quote-borders: var(--border-color-strong);
   --tw-prose-captions: var(--text-tertiary);
   --tw-prose-kbd: var(--text-primary);
   /* An RGB triplet, not a shadow — the plugin drops it into rgb(… / 10%). */
@@ -54,75 +34,73 @@
   --tw-prose-th-borders: var(--border-color-strong);
   --tw-prose-td-borders: var(--border-color);
 
-  font-size: 1rem;
-  line-height: 1.75;
-  max-width: none;
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  max-width: 70ch;
 }
 
 /* --------------------------------------------------------------------------
-   Headings — display face, stamped-label proportions
+   Headings — Archivo, the app's section scale
    -------------------------------------------------------------------------- */
 
-.docs-prose h1,
 .docs-prose h2,
 .docs-prose h3,
 .docs-prose h4 {
   font-family: var(--font-display);
+  font-weight: 600;
   text-wrap: balance;
   scroll-margin-top: 5rem;
 }
 
-.docs-prose h1 {
-  font-variation-settings: 'wdth' 110, 'wght' 700;
-  font-weight: 700;
-  font-size: clamp(2rem, 3.4vw, 2.5rem);
-  line-height: 1.08;
+/* A markdown `#` below the title (rare) — the page h1 lives in the PageHeader. */
+.docs-prose h2.docs-h1 {
+  font-size: 1.5rem;
   letter-spacing: -0.02em;
-  margin-top: 0;
-  margin-bottom: 1.25rem;
+  border-top: 0;
+  padding-top: 0;
 }
 
-/* A hairline above each h2 does the section-dividing work, so a long runbook
-   scans as a stack of plates instead of a scroll of text. */
+/* A hairline above each h2 does the section-dividing work. */
 .docs-prose h2 {
-  font-variation-settings: 'wdth' 106, 'wght' 650;
-  font-weight: 650;
-  font-size: 1.5rem;
-  line-height: 1.2;
-  letter-spacing: -0.012em;
-  margin-top: 3.25rem;
-  padding-top: 1.75rem;
-  border-top: 1px solid var(--border-color);
+  font-size: 1.25rem;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  margin-top: 2.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.docs-prose > h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .docs-prose h3 {
-  font-variation-settings: 'wdth' 104, 'wght' 600;
-  font-weight: 600;
-  font-size: 1.1875rem;
-  letter-spacing: -0.006em;
-  margin-top: 2.25rem;
+  font-size: 1.0625rem;
+  letter-spacing: -0.01em;
+  margin-top: 2rem;
 }
 
 .docs-prose h4 {
-  font-variation-settings: 'wdth' 102, 'wght' 600;
-  font-weight: 600;
-  font-size: 1rem;
-  margin-top: 1.75rem;
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  margin-top: 1.5rem;
 }
 
-/* The § handle only appears on hover, and never widens the heading line. */
+/* The # handle only appears on hover, and never widens the heading line. */
 .docs-heading-anchor {
   margin-left: 0.4rem;
-  font-family: var(--font-mono);
-  font-size: 0.7em;
+  font-size: 0.8em;
   font-weight: 400;
-  color: var(--text-tertiary);
+  color: var(--text-muted);
   text-decoration: none;
   opacity: 0;
-  transition: opacity 120ms var(--ease-instrument, ease);
+  transition: opacity 150ms var(--ease-instrument, ease);
 }
 
-.docs-prose :is(h1, h2, h3, h4):hover .docs-heading-anchor,
+.docs-prose :is(h2, h3, h4):hover .docs-heading-anchor,
 .docs-heading-anchor:focus-visible {
   opacity: 1;
 }
@@ -135,23 +113,21 @@
    Body, links, lists
    -------------------------------------------------------------------------- */
 
-/* The opening paragraph is the lede of the document. */
-.docs-prose > h1 + p {
-  font-size: 1.0625rem;
+.docs-prose > p:first-child {
+  font-size: 1rem;
   line-height: 1.65;
-  color: var(--text-secondary);
 }
 
 .docs-prose a {
   font-weight: 500;
-  text-decoration: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--docs-link) 35%, transparent);
-  transition: color 120ms ease, border-color 120ms ease;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--docs-link) 40%, transparent);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 150ms ease;
 }
 
 .docs-prose a:hover {
-  color: var(--docs-link-hover);
-  border-bottom-color: currentColor;
+  text-decoration-color: currentColor;
 }
 
 .docs-prose strong {
@@ -159,85 +135,81 @@
 }
 
 .docs-prose li::marker {
-  color: var(--text-tertiary);
+  color: var(--text-muted);
 }
 
 .docs-prose hr {
-  margin-block: 3rem;
+  margin-block: 2.5rem;
 }
 
 /* --------------------------------------------------------------------------
-   Inline code — a pill, never a wall
+   Inline code — mono, on the inset ground
    -------------------------------------------------------------------------- */
 
 .docs-inline-code {
   font-family: var(--font-mono);
   font-size: 0.8125em;
   font-weight: 500;
-  color: var(--docs-code-fg);
+  color: var(--text-primary);
   background-color: var(--docs-code-bg);
-  border-radius: 4px;
-  padding: 0.15em 0.4em;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
   /* Long identifiers (paths, env vars) must not push the column wider. */
   overflow-wrap: anywhere;
 }
 
-/* The plugin adds `\`` around inline code by default. */
+/* The plugin adds backticks around inline code by default. */
 .docs-prose code::before,
 .docs-prose code::after {
   content: none;
 }
 
-/* Headings and links keep their own colour when they contain code. */
-.docs-prose :is(h1, h2, h3, h4, a) .docs-inline-code {
+.docs-prose :is(h2, h3, h4, a) .docs-inline-code {
   color: inherit;
   font-size: 0.9em;
 }
 
 /* --------------------------------------------------------------------------
-   Tables — a data plate, header pinned in mono
+   Tables — border-line, inset head in the eyebrow style
    -------------------------------------------------------------------------- */
 
 .docs-table-scroll {
-  margin-block: 1.75rem;
+  margin-block: 1.5rem;
   overflow-x: auto;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-brand, 8px);
-  background-color: var(--docs-surface);
+  border-radius: 10px;
 }
 
 .docs-table-scroll table {
   width: 100%;
   margin: 0;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   line-height: 1.55;
 }
 
 .docs-table-scroll th {
-  font-family: var(--font-mono);
   font-size: 0.6875rem;
-  font-weight: 500;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--text-secondary);
-  background-color: var(--docs-surface-strong);
+  color: var(--text-tertiary);
+  background-color: var(--bg-tertiary);
   text-align: left;
   white-space: nowrap;
   padding: 0.625rem 0.875rem;
-  border-bottom: 1px solid var(--border-color-strong);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .docs-table-scroll td {
   padding: 0.625rem 0.875rem;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-subtle);
   vertical-align: top;
   color: var(--text-secondary);
 }
 
-/* In running text a long identifier has to break to keep the column intact; in
-   a cell it must not — a URL sliced into three lines is worse than scrolling
-   the plate sideways, which this wrapper already does. */
+/* In a cell a long identifier must not break; the wrapper scrolls instead. */
 .docs-table-scroll .docs-inline-code {
   overflow-wrap: normal;
   white-space: nowrap;
@@ -245,10 +217,6 @@
 
 .docs-table-scroll tr:last-child td {
   border-bottom: 0;
-}
-
-.docs-table-scroll tbody tr:hover td {
-  background-color: var(--docs-surface);
 }
 
 /* A table written with a deliberately blank header row is a spec plate, not a
@@ -270,12 +238,11 @@
 
 .docs-prose blockquote {
   font-style: normal;
+  font-weight: 400;
   font-size: 0.9375rem;
   color: var(--text-secondary);
-  background-color: var(--docs-surface);
-  border-left-width: 2px;
-  border-radius: 0 var(--radius-brand, 8px) var(--radius-brand, 8px) 0;
-  padding: 0.875rem 1.125rem;
+  border-left: 2px solid var(--border-color-strong);
+  padding: 0.25rem 0 0.25rem 1rem;
 }
 
 .docs-prose blockquote p:first-of-type::before,
@@ -283,11 +250,10 @@
   content: none;
 }
 
-/* max-width, not width: a screenshot fills the column, but a badge or an icon
-   keeps its own size instead of being blown up to match. */
+/* max-width, not width: a screenshot fills the column, a badge keeps its size. */
 .docs-prose img {
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-brand-lg, 16px);
+  border-radius: 14px;
   max-width: 100%;
   height: auto;
 }

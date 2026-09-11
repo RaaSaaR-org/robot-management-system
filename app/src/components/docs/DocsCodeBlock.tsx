@@ -56,18 +56,18 @@ export function DocsCodeBlock({ code, language }: DocsCodeBlockProps) {
   }, [code]);
 
   return (
-    <div className="not-prose my-6 overflow-hidden rounded-brand border border-theme section-tertiary">
-      <div className="flex items-center justify-between gap-3 border-b border-theme px-3 py-1.5">
-        <span className="font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-theme-tertiary">
+    <div className="not-prose my-6 overflow-hidden rounded-control border border-line bg-inset">
+      <div className="flex items-center justify-between gap-3 border-b border-line-subtle px-3 py-1.5">
+        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-tertiary">
           {label}
         </span>
         <button
           type="button"
           onClick={handleCopy}
           className={cn(
-            'flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[0.6875rem] uppercase tracking-[0.08em] transition-colors',
-            'text-theme-tertiary hover:bg-theme-hover hover:text-theme-primary',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+            'flex items-center gap-1.5 rounded-control px-2 py-1 text-xs font-medium transition-colors',
+            'text-ink-tertiary hover:bg-ink-primary/[0.05] hover:text-ink-primary',
+            'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
             copied && 'text-signal-measured',
           )}
           aria-label={copied ? 'Copied to clipboard' : 'Copy code to clipboard'}

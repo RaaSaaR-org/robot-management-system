@@ -5,34 +5,30 @@
  */
 
 import { useEffect, useState, type RefObject } from 'react';
+import { Eyebrow } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import type { DocHeading } from './docsMarkdown';
 
 interface DocsTocProps {
   /** Headings to list — already filtered to the depths worth showing */
   headings: DocHeading[];
-  /** The element that actually scrolls, so the observer has the right root */
+  /** The element holding the rendered article, where the headings live */
   scrollRef: RefObject<HTMLElement | null>;
   onSelect: (id: string) => void;
   className?: string;
 }
 
-/**
- * Right-hand contents rail. Highlights the section currently under the top of
- * the reading column.
- */
+/** Right-hand contents rail. Highlights the section under the top of the viewport. */
 export function DocsToc({ headings, scrollRef, onSelect, className }: DocsTocProps) {
   const activeId = useActiveHeading(headings, scrollRef);
 
   if (headings.length < 2) return null;
 
   return (
-    <nav className={cn('w-56 shrink-0', className)} aria-label="On this page">
-      <div className="sticky top-0 max-h-[calc(100vh-6rem)] overflow-y-auto py-8 pr-4">
-        <p className="mb-3 font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-theme-tertiary">
-          On this page
-        </p>
-        <ul className="space-y-0.5 border-l border-theme">
+    <nav className={cn('w-52 shrink-0', className)} aria-label="On this page">
+      <div className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto pb-6">
+        <Eyebrow className="mb-3 block">On this page</Eyebrow>
+        <ul className="flex flex-col border-l border-line">
           {headings.map((heading) => (
             <li key={heading.id}>
               <a
@@ -42,11 +38,12 @@ export function DocsToc({ headings, scrollRef, onSelect, className }: DocsTocPro
                   onSelect(heading.id);
                 }}
                 className={cn(
-                  '-ml-px block border-l py-1 text-sm leading-snug transition-colors',
-                  heading.depth >= 3 ? 'pl-6 text-[0.8125rem]' : 'pl-3',
+                  '-ml-px block border-l py-1 text-[13px] leading-snug transition-colors',
+                  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
+                  heading.depth >= 3 ? 'pl-6' : 'pl-3',
                   activeId === heading.id
-                    ? 'border-primary text-theme-primary'
-                    : 'border-transparent text-theme-tertiary hover:text-theme-primary',
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-ink-tertiary hover:text-ink-primary',
                 )}
               >
                 {heading.text}
@@ -60,25 +57,22 @@ export function DocsToc({ headings, scrollRef, onSelect, className }: DocsTocPro
 }
 
 /**
- * Tracks which heading is the current section.
- *
- * The reading column is its own scroll container, not the window, so the
- * observer is rooted on it; the bottom margin keeps the "current" heading the
- * one nearest the top of the viewport rather than whichever is merely visible.
+ * Tracks which heading is the current section. The page scrolls with the
+ * window, so the observer uses the viewport; the margins keep the "current"
+ * heading the one nearest the top, below the app's top bar.
  */
 function useActiveHeading(headings: DocHeading[], scrollRef: RefObject<HTMLElement | null>): string | null {
   const [activeId, setActiveId] = useState<string | null>(null);
   const ids = headings.map((h) => h.id).join('|');
 
   useEffect(() => {
-    const root = scrollRef.current;
-    if (!root || typeof IntersectionObserver === 'undefined') return;
+    const container = scrollRef.current;
+    if (!container || typeof IntersectionObserver === 'undefined') return;
 
     const idList = ids ? ids.split('|') : [];
     const elements = idList
-      .map((id) => root.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`))
+      .map((id) => container.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`))
       .filter((el): el is HTMLElement => el !== null);
-
     if (elements.length === 0) return;
 
     setActiveId(idList[0] ?? null);
@@ -93,7 +87,7 @@ function useActiveHeading(headings: DocHeading[], scrollRef: RefObject<HTMLEleme
         const first = idList.find((id) => visible.has(id));
         if (first) setActiveId(first);
       },
-      { root, rootMargin: '0px 0px -72% 0px', threshold: 0 },
+      { root: null, rootMargin: '-64px 0px -72% 0px', threshold: 0 },
     );
 
     elements.forEach((el) => observer.observe(el));
