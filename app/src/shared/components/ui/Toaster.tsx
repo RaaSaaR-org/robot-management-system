@@ -1,8 +1,10 @@
 /**
  * @file Toaster.tsx
- * @description Renders the toast queue: bottom-right stack (bottom, full width
- *              below 640px), matte raised cards, tone icon, close button.
- *              Polite live region; errors are role="alert". Mount once
+ * @description Renders the toast queue: bottom-right stack from 640px; below
+ *              that a full-width stack at the top, so a bottom sheet's footer
+ *              or a sticky dock stays reachable. Matte raised cards, tone
+ *              icon, close button. Polite live region; errors are
+ *              role="alert", every other tone role="status". Mount once
  *              (FeedbackProvider does); extra instances render nothing.
  * @feature shared
  */
@@ -33,7 +35,7 @@ function ToastCard({ item }: { item: ToastItem }) {
   const Icon = TONE_ICON[item.tone];
   return (
     <li
-      role={item.tone === 'error' ? 'alert' : undefined}
+      role={item.tone === 'error' ? 'alert' : 'status'}
       data-tone={item.tone}
       onMouseEnter={() => pauseToast(item.id)}
       onMouseLeave={() => resumeToast(item.id)}
@@ -92,7 +94,17 @@ export function Toaster() {
   if (!active || typeof document === 'undefined') return null;
 
   return createPortal(
-    <section aria-label="Notifications" className="pointer-events-none fixed inset-x-4 bottom-4 z-[80] sm:inset-x-auto sm:bottom-5 sm:right-5 sm:w-[22rem]">
+    <section
+      aria-label="Notifications"
+      data-placement="responsive"
+      className={cn(
+        'pointer-events-none fixed z-[80]',
+        // Phones: top, full width — bottom sheets and sticky docks own the bottom edge.
+        'inset-x-4 top-[max(0.75rem,env(safe-area-inset-top))]',
+        // From 640px: the bottom-right stack.
+        'sm:inset-x-auto sm:top-auto sm:bottom-5 sm:right-5 sm:w-[22rem]',
+      )}
+    >
       <ol aria-live="polite" aria-relevant="additions" className="flex flex-col gap-2">
         {toasts.map((item) => (
           <ToastCard key={item.id} item={item} />
