@@ -91,7 +91,12 @@ function RobotCockpitPageInner() {
     const byRecency = [...robots].sort((a, b) => (b.lastSeen ?? '').localeCompare(a.lastSeen ?? ''));
     const pool = byRecency.filter((r) => !skip.has(r.id));
     const fromPool = pool.length ? pool : byRecency;
-    return fromPool.find((r) => isG1Family(resolveRobotType(r))) ?? fromPool[0];
+    // Reachability outranks embodiment: a G1 that is offline still loses to a
+    // robot that is actually streaming, so the preference never parks the page
+    // on a dead default and makes the operator wait out the self-heal timer.
+    const reachable = fromPool.filter(isRobotAvailable);
+    const ranked = reachable.length ? reachable : fromPool;
+    return ranked.find((r) => isG1Family(resolveRobotType(r))) ?? ranked[0];
   }, [robots, id, skip]);
 
   const robotId = robot?.id ?? '';

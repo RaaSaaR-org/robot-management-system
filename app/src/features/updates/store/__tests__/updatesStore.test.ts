@@ -126,8 +126,8 @@ describe('updatesStore', () => {
       expect(state.packages).toEqual([]);
     });
 
-    it('uses fallback message for non-Error rejections', async () => {
-      vi.mocked(updatesApi.getPackages).mockRejectedValue('string failure');
+    it('uses fallback message for unreadable rejections', async () => {
+      vi.mocked(updatesApi.getPackages).mockRejectedValue({});
 
       await useUpdatesStore.getState().fetchPackages();
 
@@ -160,6 +160,23 @@ describe('updatesStore', () => {
       expect(state.error).toBe('create fail');
       expect(state.isLoading).toBe(false);
       expect(state.packages).toEqual([existing]);
+    });
+
+    it("keeps the server's reason instead of the generic fallback", async () => {
+      // The api client rejects with a plain `{ code, message, statusCode }`
+      // object, not an Error, so an `instanceof Error` check dropped the
+      // server's "must be semver" message on the floor.
+      vi.mocked(updatesApi.createPackage).mockRejectedValue({
+        code: 'UNKNOWN_ERROR',
+        message: 'Invalid version format: 1.4.0-beta. Must be semver (e.g. 1.2.3)',
+        statusCode: 400,
+      });
+
+      await useUpdatesStore.getState().createPackage({ version: '1.4.0-beta', changelog: 'x' });
+
+      expect(useUpdatesStore.getState().error).toBe(
+        'Invalid version format: 1.4.0-beta. Must be semver (e.g. 1.2.3)'
+      );
     });
   });
 

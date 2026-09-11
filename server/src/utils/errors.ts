@@ -4,6 +4,8 @@
  * @feature core
  */
 
+import { Prisma } from '@prisma/client';
+
 /**
  * Base application error with HTTP status code support
  */
@@ -281,6 +283,46 @@ export function wrapError(error: unknown, fallbackMessage: string = 'An error oc
   }
 
   return new InternalError(fallbackMessage);
+}
+
+/**
+ * Translate a Prisma failure into an AppError.
+ *
+ * A `PrismaClientKnownRequestError` stringifies to the query that failed, the
+ * source file and the line that ran it — that belongs in a log, never in a
+ * response. Each known code becomes a status plus one sentence the person
+ * reading the dialog can act on; an unrecognised code keeps its code in the
+ * error context (for logging) but not the dump.
+ *
+ * @param error - The caught error
+ * @returns An AppError, or null when the error did not come from Prisma
+ */
+export function prismaErrorToAppError(error: unknown): AppError | null {
+  if (error instanceof Prisma.PrismaClientValidationError) {
+    return new BadRequestError('The request does not match what the database expects.');
+  }
+
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) {
+    return null;
+  }
+
+  switch (error.code) {
+    case 'P2002':
+      return new ConflictError('That value is already taken. Choose a different one.', {
+        prismaCode: error.code,
+      });
+    case 'P2003':
+      return new BadRequestError(
+        'This refers to a record that does not exist. Reload the page and try again.',
+        { prismaCode: error.code }
+      );
+    case 'P2025':
+      return new NotFoundError('Record', undefined, { prismaCode: error.code });
+    default:
+      return new InternalError('The database refused this change.', {
+        prismaCode: error.code,
+      });
+  }
 }
 
 /**

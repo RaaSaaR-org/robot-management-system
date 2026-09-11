@@ -11,7 +11,7 @@ import type { MaskedUpdate } from '../services/SecureAggregator.js';
 export const aggregationRoutes = Router();
 
 /**
- * POST /api/federated/rounds/:roundId/submit
+ * POST /api/federated/secure/rounds/:roundId/submit
  * Robot submits a masked gradient update for a given round.
  */
 aggregationRoutes.post('/rounds/:roundId/submit', async (req: Request, res: Response) => {
@@ -60,7 +60,7 @@ aggregationRoutes.post('/rounds/:roundId/submit', async (req: Request, res: Resp
 });
 
 /**
- * GET /api/federated/rounds/:roundId/aggregation
+ * GET /api/federated/secure/rounds/:roundId/aggregation
  * Get the current aggregation status for a round.
  */
 aggregationRoutes.get('/rounds/:roundId/aggregation', async (req: Request, res: Response) => {
@@ -80,7 +80,7 @@ aggregationRoutes.get('/rounds/:roundId/aggregation', async (req: Request, res: 
 });
 
 /**
- * POST /api/federated/rounds/:roundId/aggregate
+ * POST /api/federated/secure/rounds/:roundId/aggregate
  * Trigger aggregation for a round. Protected — admin only in production.
  */
 aggregationRoutes.post('/rounds/:roundId/aggregate', async (req: Request, res: Response) => {

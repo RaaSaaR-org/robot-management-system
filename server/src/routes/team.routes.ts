@@ -18,6 +18,7 @@ import {
   TeamMemberNotFoundError,
   type AssignableRole,
 } from '../services/TeamService.js';
+import { prismaErrorToAppError } from '../utils/errors.js';
 
 export const teamRoutes = Router();
 
@@ -30,6 +31,21 @@ function resolveTenantId(req: AuthenticatedRequest): string | null {
 
 function resolveActorId(req: AuthenticatedRequest): string {
   return req.user?.id ?? 'unknown';
+}
+
+/**
+ * Last resort in a catch block. Prisma stringifies a failure as the query it
+ * tried to run plus the file and line that ran it, so it is mapped first —
+ * the owner adding a teammate must never read a database dump.
+ */
+function sendFailure(res: Response, error: unknown, fallbackStatus: number): void {
+  const prismaError = prismaErrorToAppError(error);
+  if (prismaError) {
+    res.status(prismaError.statusCode).json({ error: prismaError.message });
+    return;
+  }
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  res.status(fallbackStatus).json({ error: message });
 }
 
 // ============================================================================
@@ -47,8 +63,7 @@ teamRoutes.get('/', async (req: AuthenticatedRequest, res: Response) => {
     const members = await teamService.list(tenantId);
     res.json({ members });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 500);
   }
 });
 
@@ -95,8 +110,7 @@ teamRoutes.post('/', async (req: AuthenticatedRequest, res: Response) => {
     if (error instanceof InvalidRoleError) {
       return res.status(400).json({ error: error.message });
     }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 400);
   }
 });
 
@@ -157,8 +171,7 @@ teamRoutes.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
     if (error instanceof TeamMemberNotFoundError) {
       return res.status(404).json({ error: error.message });
     }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 400);
   }
 });
 
@@ -185,7 +198,6 @@ teamRoutes.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
     if (error instanceof TeamMemberNotFoundError) {
       return res.status(404).json({ error: error.message });
     }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 400);
   }
 });

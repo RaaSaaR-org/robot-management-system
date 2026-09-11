@@ -8,8 +8,14 @@
 import type { StatusToneName } from '@/shared/components/ui';
 import type { Deployment, DeploymentStatus, ModelVersion, SkillParameter } from '../types';
 
-/** Rollouts that are still moving: they show up under "Active". */
-export const ACTIVE_DEPLOYMENT_STATUSES: DeploymentStatus[] = ['pending', 'deploying', 'canary', 'rolling_back'];
+/** Rollouts that are still moving, plus the one serving traffic: they show up under "Active". */
+export const ACTIVE_DEPLOYMENT_STATUSES: DeploymentStatus[] = [
+  'pending',
+  'deploying',
+  'canary',
+  'production',
+  'rolling_back',
+];
 
 export type DeploymentScope = 'active' | 'history' | 'all';
 

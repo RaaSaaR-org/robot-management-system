@@ -77,6 +77,8 @@ export interface UseTaskReturn {
   error: string | null;
   /** Refresh task data */
   refresh: () => Promise<void>;
+  /** Start the task (created but never run) */
+  startTask: () => Promise<Task>;
   /** Pause the task */
   pauseTask: () => Promise<Task>;
   /** Resume the task */
@@ -286,6 +288,7 @@ export function useTask(id: string): UseTaskReturn {
   const taskFromList = useTasksStore(selectTaskById(id));
 
   const storeFetchTask = useTasksStore((state) => state.fetchTask);
+  const storeStartTask = useTasksStore((state) => state.startTask);
   const storePauseTask = useTasksStore((state) => state.pauseTask);
   const storeResumeTask = useTasksStore((state) => state.resumeTask);
   const storeCancelTask = useTasksStore((state) => state.cancelTask);
@@ -302,6 +305,10 @@ export function useTask(id: string): UseTaskReturn {
   const refresh = useCallback(async () => {
     await storeFetchTask(id);
   }, [id, storeFetchTask]);
+
+  const startTask = useCallback(async () => {
+    return storeStartTask(id);
+  }, [id, storeStartTask]);
 
   const pauseTask = useCallback(async () => {
     return storePauseTask(id);
@@ -326,12 +333,13 @@ export function useTask(id: string): UseTaskReturn {
       isExecuting,
       error,
       refresh,
+      startTask,
       pauseTask,
       resumeTask,
       cancelTask,
       retryTask,
     }),
-    [task, isLoading, isExecuting, error, refresh, pauseTask, resumeTask, cancelTask, retryTask]
+    [task, isLoading, isExecuting, error, refresh, startTask, pauseTask, resumeTask, cancelTask, retryTask]
   );
 }
 

@@ -29,6 +29,7 @@ import {
   isProcessPauseable,
   isProcessResumeable,
   isProcessRetryable,
+  isProcessStartable,
   type ProcessAction,
 } from '../types';
 import { TaskDetailSkeleton } from './TaskDetailSkeleton';
@@ -48,7 +49,7 @@ export interface TaskDetailPanelProps {
 const ICON = 'h-4 w-4';
 
 export function TaskDetailPanel({ taskId, backTo = '/processes', className }: TaskDetailPanelProps) {
-  const { task, isLoading, error, refresh, pauseTask, resumeTask, cancelTask, retryTask } = useTask(taskId);
+  const { task, isLoading, error, refresh, startTask, pauseTask, resumeTask, cancelTask, retryTask } = useTask(taskId);
   const { robots, fetchRobots } = useRobots();
   const [pending, setPending] = useState<ProcessAction | null>(null);
 
@@ -91,7 +92,7 @@ export function TaskDetailPanel({ taskId, backTo = '/processes', className }: Ta
   }
 
   const act = async (action: ProcessAction) => {
-    const run = { pause: pauseTask, resume: resumeTask, cancel: cancelTask, retry: retryTask }[action];
+    const run = { start: startTask, pause: pauseTask, resume: resumeTask, cancel: cancelTask, retry: retryTask }[action];
     try {
       // The spinner starts once the act is confirmed, not while the question is open.
       await runProcessAct(action, task, run, () => setPending(action));
@@ -101,13 +102,15 @@ export function TaskDetailPanel({ taskId, backTo = '/processes', className }: Ta
   };
 
   const busy = pending !== null;
-  const primary = isProcessPauseable(task)
-    ? { action: 'pause' as const, label: 'Pause', icon: <Pause className={ICON} strokeWidth={1.75} /> }
-    : isProcessResumeable(task)
-      ? { action: 'resume' as const, label: 'Resume', icon: <Play className={ICON} strokeWidth={1.75} /> }
-      : isProcessRetryable(task)
-        ? { action: 'retry' as const, label: 'Retry', icon: <RotateCcw className={ICON} strokeWidth={1.75} /> }
-        : null;
+  const primary = isProcessStartable(task)
+    ? { action: 'start' as const, label: 'Run', icon: <Play className={ICON} strokeWidth={1.75} /> }
+    : isProcessPauseable(task)
+      ? { action: 'pause' as const, label: 'Pause', icon: <Pause className={ICON} strokeWidth={1.75} /> }
+      : isProcessResumeable(task)
+        ? { action: 'resume' as const, label: 'Resume', icon: <Play className={ICON} strokeWidth={1.75} /> }
+        : isProcessRetryable(task)
+          ? { action: 'retry' as const, label: 'Retry', icon: <RotateCcw className={ICON} strokeWidth={1.75} /> }
+          : null;
 
   const doneSteps = task.steps.filter((s) => s.status === 'completed').length;
 

@@ -220,7 +220,7 @@ describe('createApprovalRequest', () => {
     expect(events).toContain('approval_request_created');
   });
 
-  it('uses critical severity for urgent priority', async () => {
+  it('keeps warning severity even for urgent priority', async () => {
     vi.mocked(approvalRequestRepository.create).mockResolvedValue(makeRequest());
 
     await service.createApprovalRequest({
@@ -232,7 +232,7 @@ describe('createApprovalRequest', () => {
     });
 
     expect(alertService.createAlert).toHaveBeenCalledWith(
-      expect.objectContaining({ severity: 'critical' })
+      expect.objectContaining({ severity: 'warning' })
     );
   });
 

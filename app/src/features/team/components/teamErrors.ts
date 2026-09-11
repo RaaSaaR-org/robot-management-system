@@ -4,12 +4,15 @@
  * @feature team
  */
 
+import { errorMessage } from '@/shared/components/ui';
+
+/**
+ * The kit's `errorMessage` (`@/shared/components/ui`) already reads this
+ * client's `{ code, message, statusCode }` rejections, and also unwraps a raw
+ * axios `response.data.error` — which is how the server reports a refused add.
+ */
 export function teamErrorMessage(err: unknown, fallback: string): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    const m = (err as { message: unknown }).message;
-    if (typeof m === 'string' && m) return m;
-  }
-  return fallback;
+  return errorMessage(err, fallback);
 }
 
 export const ROLE_OPTIONS = [

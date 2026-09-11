@@ -21,6 +21,7 @@
  */
 
 import { prisma } from './client.js';
+import { ensureDefaultTenant } from './defaultTenant.js';
 import { MULTI_TENANCY_ENABLED, DEFAULT_TENANT_ID } from '../config/features.js';
 import { logger } from '../utils/logger.js';
 
@@ -30,17 +31,9 @@ export async function seedDefaultTenant(): Promise<void> {
   }
 
   // Upsert DEFAULT tenant — id stays stable so the backfill below always
-  // targets the same row, even if a slug/name change lands later.
-  await prisma.tenant.upsert({
-    where: { id: DEFAULT_TENANT_ID },
-    create: {
-      id: DEFAULT_TENANT_ID,
-      slug: DEFAULT_TENANT_ID,
-      name: 'Default Organization',
-      settings: '{}',
-    },
-    update: {},
-  });
+  // targets the same row, even if a slug/name change lands later. Shared with
+  // the create paths that write rows pointing at it, so both agree on its shape.
+  await ensureDefaultTenant(DEFAULT_TENANT_ID);
 
   // Backfill each scoped model. `updateMany` with `where: { tenantId: null }`
   // is idempotent — subsequent boots see zero rows to update.

@@ -399,6 +399,27 @@ export function buildIdentityUpdate(current: Robot, reported: Robot): Partial<Ro
 // ============================================================================
 
 /**
+ * Re-throw a failed robot call behind `prefix`, keeping an `HttpClientError` an
+ * `HttpClientError`. Flattening it to a plain Error drops `isNetworkError()`,
+ * and that is what made an unreachable robot answer 500 instead of 502: the
+ * route was left string-matching a code the client never puts in the message
+ * ("Connection refused: <url>", not "ECONNREFUSED").
+ */
+function rethrowRobotCallError(prefix: string, error: unknown): never {
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  if (error instanceof HttpClientError) {
+    throw new HttpClientError(
+      `${prefix}: ${message}`,
+      error.statusCode,
+      error.url,
+      error,
+      error.responseBody
+    );
+  }
+  throw new Error(`${prefix}: ${message}`);
+}
+
+/**
  * RobotManager - manages robot registry and A2A connections with database persistence
  */
 export class RobotManager {
@@ -510,7 +531,7 @@ export class RobotManager {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error(`[RobotManager] Failed to register robot from ${baseUrl}:`, message);
-      throw new Error(`Failed to register robot: ${message}`);
+      rethrowRobotCallError('Failed to register robot', error);
     }
   }
 
@@ -808,9 +829,7 @@ export class RobotManager {
       const httpClient = new HttpClient(undefined, HTTP_TIMEOUTS.LONG);
       return await httpClient.post<RobotCommand>(registered.endpoints.command, command);
     } catch (error) {
-      const message = error instanceof HttpClientError ? error.message :
-        (error instanceof Error ? error.message : 'Unknown error');
-      throw new Error(`Failed to send command: ${message}`);
+      rethrowRobotCallError('Failed to send command', error);
     }
   }
 
@@ -831,9 +850,7 @@ export class RobotManager {
       const httpClient = new HttpClient(undefined, HTTP_TIMEOUTS.MEDIUM);
       return await httpClient.get<RobotTelemetry>(registered.endpoints.telemetry);
     } catch (error) {
-      const message = error instanceof HttpClientError ? error.message :
-        (error instanceof Error ? error.message : 'Unknown error');
-      throw new Error(`Failed to get telemetry: ${message}`);
+      rethrowRobotCallError('Failed to get telemetry', error);
     }
   }
 

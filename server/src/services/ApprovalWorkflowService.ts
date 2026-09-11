@@ -121,7 +121,9 @@ export class ApprovalWorkflowService {
     const firstStep = request.steps?.[0];
     if (firstStep) {
       await alertService.createAlert({
-        severity: input.priority === 'urgent' || input.priority === 'critical' ? 'critical' : 'warning',
+        // A pending human review needs attention, but it is never an emergency:
+        // `critical` renders in the red reserved for safety states like an E-stop.
+        severity: 'warning',
         title: 'New Approval Required',
         message: `${input.entityType.replace(/_/g, ' ')} approval request (${request.requestNumber}) requires ${firstStep.approverRole} review. SLA: ${request.slaHours}h`,
         source: 'system',

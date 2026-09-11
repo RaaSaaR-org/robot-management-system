@@ -78,11 +78,13 @@ export function TaskList({
 }: TaskListProps) {
   const { tasks, isLoading, error, filters, pagination, fetchTasks, setFilters, clearFilters, setPage, clearError } =
     useTasks();
+  const startTask = useTasksStore((s) => s.startTask);
   const pauseTask = useTasksStore((s) => s.pauseTask);
   const resumeTask = useTasksStore((s) => s.resumeTask);
   const cancelTask = useTasksStore((s) => s.cancelTask);
   const retryTask = useTasksStore((s) => s.retryTask);
   const acts: Record<ProcessAction, (id: string) => Promise<Process>> = {
+    start: startTask,
     pause: pauseTask,
     resume: resumeTask,
     cancel: cancelTask,
