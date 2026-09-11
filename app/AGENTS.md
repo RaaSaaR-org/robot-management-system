@@ -261,9 +261,9 @@ the shell and how to test a page. Read it before touching UI. The short form:
   status `text-signal-measured` · `-estimated` · `-unknown` · `-stopped`
   (tints via `/10`, `/30`); the STOP fill `bg-stop text-on-stop`.
 - **Never** raw hues (`green-500`, `red-400`, `blue-*`, `gray-*`, `slate-*` …),
-  hex literals, `cobalt-*` / `turquoise-*` (legacy aliases), or `dark:`
-  variants in new or migrated code — light is the same tokens with other
-  values. Dark is the default theme.
+  hex literals, `cobalt-*` / `turquoise-*`, or `dark:` variants — light is the
+  same tokens with other values. Dark is the default theme. The drift ratchet
+  fails on every one of these (see "Design-system guards" below).
 - **Text on a primary/accent fill is `text-on-primary` / `text-on-accent`,
   never `text-white`** (white on mint is 1.2:1). A fill that carries text is
   `bg-primary`, not a ramp shade — the ramps (`primary-50…900`) are for tints.
@@ -342,9 +342,29 @@ Content      Panel(s) · DataTable · card grid of Panel interactive
 - `ThemeProvider` puts `dark`/`light` on `<html>` from `themeStore` (default
   `dark`). `BrandProvider` writes a white-label brand's primary/accent slots and
   on-colors (`src/brand/brandVars.ts`); see `brand/_template/README.md`.
-- Legacy names (`cobalt-*`, `.glass*`, `.card`, `--glass-*`) still render —
-  mapped onto the matte tokens — until TASK-269 removes them. Do not add new
-  uses.
+- The legacy layer is gone (TASK-269): `cobalt-*` / `turquoise-*`, `.glass*`,
+  `.card*`, `.btn-*`, `.section-*`, `--glass-*` and the `*-theme-*` utilities
+  are no longer defined, so a class using one renders nothing.
+
+### Design-system guards
+
+Two tests keep the old visual language out; both are part of the gate
+(`docs/brand.md` §9).
+
+- **Drift ratchet** — `src/__tests__/design-drift.test.ts`, runs in
+  `npx vitest run`. Scans `src/` (except `components/landing`, `brand/`,
+  `mocks/` and tests) and fails on `cobalt`/`turquoise`, glass classes or
+  variables, `dark:`, raw Tailwind hues and greys, hex colours in TS/TSX,
+  `theme-*` utilities, `.btn-*`/`.section-*`/`.card-*`, backdrop blur,
+  `text-[8px]`/`text-[9px]` and `window.confirm`, naming file and line. Every
+  count is zero. Its `ALLOWED` map is the whole list of exceptions, each with a
+  reason; do not grow it to get a page through — use a token.
+- **Route smoke** — `e2e/app-routes.spec.ts`, runs in `npx playwright test`
+  against the demo build. Opens every in-shell route at 1440 and 390 and fails
+  on a page error, anything but one visible `h1`, horizontal overflow, visible
+  text under 10px, any `backdrop-filter`, or a dark ground that is not
+  `rgb(8, 15, 24)`. **A new route goes into its `ROUTES` list** (with a demo id
+  from `src/mocks` if it takes a parameter).
 
 ## Key Dependencies
 

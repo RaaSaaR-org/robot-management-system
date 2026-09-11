@@ -92,7 +92,7 @@ the dish — keep them tasteful and out of safety surfaces.
 ## 1. Tokens
 
 Dark is the default theme. Light is the same token set with other values;
-migrated code never uses `dark:` variants.
+code never uses `dark:` variants.
 
 | Role | CSS var | Utility | Dark | Light |
 |---|---|---|---|---|
@@ -127,15 +127,13 @@ modals lifting off the page — a drop shadow, never a glow).
 - **Text on a primary or accent fill is `text-on-primary` / `text-on-accent`,
   never `text-white`** — white on the mint is 1.2:1. Fills that carry text use
   the theme-aware `bg-primary` / `bg-accent`, not a fixed ramp shade.
-- The `primary-50…900` and `accent-50…900` ramps stay for tints
-  (`bg-primary/10`, `border-primary/30`). The legacy `cobalt-*` and
-  `turquoise-*` utilities are aliases of those ramps so an unmigrated line
-  already renders mint; migrated code writes `primary-*` / `accent-*`, never
-  `cobalt-*` / `turquoise-*`.
+- The `primary-50…900` and `accent-50…900` ramps are for tints
+  (`bg-primary/10`, `border-primary/30`). The old `cobalt-*` / `turquoise-*`
+  names no longer exist.
 - Opacity modifiers work on every token (`bg-signal-measured/10`,
   `border-signal-stopped/30`) — Tailwind resolves them with `color-mix`.
 - Raw Tailwind hues (`green-500`, `red-400`, `blue-*`, `gray-*`, `slate-*`,
-  `zinc-*` …) and hex literals are not used in migrated code. Status uses the
+  `zinc-*` …) and hex literals are not used (see §9). Status uses the
   signal tokens; neutrals use the ink/line/surface tokens. Charts take their
   series colors from the kit's `chartColors` (tokens), not literals.
 - New color tokens stay out of the `theme-` namespace, and a token name must
@@ -143,8 +141,8 @@ modals lifting off the page — a drop shadow, never a glow).
   into a ring-color setter, which is why `bg-inset` is a plain `@utility`.
 
 Radius: `rounded-panel` 14px (panels, modals), `rounded-control` 10px (buttons,
-inputs, insets, menus), `rounded-tag` 6px (tags, badges). The legacy
-`rounded-brand` / `rounded-brand-lg` are the same 10px / 14px. Motion: 150ms
+inputs, insets, menus), `rounded-tag` 6px (tags, badges). `rounded-brand`
+(10px) is the landing page's button radius only. Motion: 150ms
 `--ease-instrument`; nothing bounces; reduced motion respected.
 
 ### White-label
@@ -154,7 +152,7 @@ controls exactly two slots:
 
 - `primaryColors` / `accentColors` — a partial 50–900 scale plus `DEFAULT`.
   `BrandProvider` writes them over `--color-primary*` / `--color-accent*` on
-  `<html>`; the `cobalt-*` / `turquoise-*` aliases follow. A brand `DEFAULT`
+  `<html>`, and every `primary-*` / `accent-*` utility follows. A brand `DEFAULT`
   applies in both themes.
 - `onPrimary` / `onAccent` — optional. When omitted, white or `#0a2225` is
   chosen by WCAG contrast against the brand `DEFAULT` (an orange primary gets
@@ -274,7 +272,7 @@ the same barrel (`ButtonProps`, `DataTableColumn<T>`, …).
 | `Tabs` | `tabs: { id, label, icon?, content?, disabled?, count? }[]` · `activeTab` + `onTabChange` (controlled) or `defaultTab` · `variant` `default` · `pills` · `label` · `panelClassName`. Omit `content` to render the bar only (for `?tab=` pages) |
 | `Eyebrow` | `dash` (the landing's 22×2px lead-in) |
 | `Divider` | `orientation` `horizontal` · `vertical` · `label` · `strong` |
-| `Card` | legacy, kept so old pages compile: `variant` `default` · `glass` · `elevated` · `subtle` · `outlined` · `noPadding` · `interactive` · `Card.Header/Body/Footer`. New code uses `Panel` |
+| `Card` | legacy, kept so old pages compile: `variant` `default` · `elevated` · `subtle` · `outlined` · `noPadding` · `interactive` · `Card.Header/Body/Footer`. New code uses `Panel` |
 
 **Actions**
 
@@ -333,7 +331,7 @@ the same barrel (`ButtonProps`, `DataTableColumn<T>`, …).
 | `StatusTag` | `status` (a domain string; sets tone and label) or `tone` + `children` · `dot` · `pulse` · `size` `sm` · `md`. Tones (`Tone`): `success` · `info` · `warning` · `danger` · `neutral` · `accent`, plus the signal aliases `live` · `sim` · `gated` · `stopped` |
 | `statusTone(status)` | the map below; unknown strings fall back to `neutral` |
 | `humanizeStatus(status)`, `normalizeStatus(status)` | `'in_progress'` → "In progress", `'estop'` → "E-stop"; normalise to the lower-case underscore key |
-| `Badge` | kept for counts and labels: `variant` `default` · `neutral` · `success` · `warning` · `error` · `danger` · `info` · `accent` (legacy `cobalt` / `turquoise` → accent, `purple` → info) · `size` `sm` · `md` · `lg` · `pill` · `dot` · `dotPulse` |
+| `Badge` | kept for counts and labels: `variant` `default` · `neutral` · `success` · `warning` · `error` · `danger` · `info` · `accent` (older `purple` → info) · `size` `sm` · `md` · `lg` · `pill` · `dot` · `dotPulse` |
 | `chartColors` | CSS var strings: `primary` · `accent` · `measured` · `estimated` · `unknown` · `stopped` · `series[6]` · `grid` · `axis` · `tick` · `label` · `muted` · `surface` · `tooltipBg` · `tooltipBorder` · `tooltipText` |
 | `chartTheme` | recharts props to spread: `grid` · `xAxis` · `yAxis` · `tooltip` · `legend` |
 | `chartSeriesColor(i)` | the i-th categorical colour (wraps; red last) |
@@ -417,20 +415,28 @@ reads.
   checked against a before-screenshot of `/`; the landing is scoped under
   `.landing-page` and keeps its own tokens.
 
-## 9. Legacy layer (until TASK-269)
+## 9. Guards — the legacy layer is retired
 
-Unmigrated code still renders correctly because the old names are mapped onto
-the new language in `app/src/index.css`:
+The compatibility layer that kept unmigrated pages rendering is gone
+(TASK-269). `app/src/index.css` no longer defines the `cobalt-*` /
+`turquoise-*` aliases, the `--glass-*` variables, the `.glass*`, `.card*`,
+`.btn-*` and `.section-*` classes, or the `.text-theme-*` / `.bg-theme-*`
+utilities; a class that uses one of those names now renders nothing. The one
+safety net that stays is the `[data-app-shell]` rule that switches
+`backdrop-filter` off inside the shell and in body portals.
 
-| Legacy | Renders as |
-|---|---|
-| `bg-cobalt*`, `text-cobalt*`, `turquoise-*` | the primary / accent ramps (mint) |
-| `.glass`, `.glass-card`, `.card`, `bg-glass` | panel: `--bg-secondary` + `--border-color`, `rounded-panel` |
-| `.glass-elevated`, `bg-glass-elevated` | raised: `--bg-elevated` + `--shadow-raised` |
-| `.glass-subtle`, `bg-glass-subtle` | inset: `--bg-tertiary` + `--border-subtle`, `rounded-control` |
-| `.glass-card-interactive` | border turns `--border-color-strong` on hover; no lift |
-| `--glass-*` variables | aliases of the surface/line tokens; no blur exists |
-| `.btn-primary` / `.btn-secondary` | primary fill with on-primary text / bordered |
-| `backdrop-blur-*` utilities | switched off inside `[data-app-shell]` and body portals |
+Two guards in the gate keep the old language from coming back:
 
-New code never writes these names. TASK-269 removes them and adds a guard.
+| Guard | Runs in | Fails when |
+|---|---|---|
+| **Drift ratchet** — `app/src/__tests__/design-drift.test.ts` | `npx vitest run` | a line in `app/src` (except the landing page, brand configs, mocks and tests) uses a `cobalt`/`turquoise` name, a glass class or variable, a `dark:` variant, a raw Tailwind hue or grey, a hex colour in TS/TSX, a `theme-*` utility, a `.btn-*`/`.section-*`/`.card-*` class, backdrop blur, `text-[8px]`/`text-[9px]` or `window.confirm`. It names the file and line. |
+| **Route smoke** — `app/e2e/app-routes.spec.ts` | `npx playwright test` (demo build) | any app route, at 1440 and 390, throws a page error, has other than one visible `h1`, overflows horizontally, shows text under 10px, has an element with `backdrop-filter`, or the dark body ground is not `rgb(8, 15, 24)`. |
+
+- Every ratchet count is zero. The allowlist in the test is the whole list of
+  exceptions and each entry carries its reason; adding one needs a reason a
+  token cannot serve (a three.js material, server-stored zone data).
+- A new in-shell route goes into the smoke's `ROUTES` list, with a demo id
+  from `app/src/mocks` when the route takes a parameter.
+- Break a rule on purpose (`bg-cobalt-500` on a page) and the ratchet fails;
+  its self-check feeds such lines through the same matchers, so it cannot
+  silently match nothing.
