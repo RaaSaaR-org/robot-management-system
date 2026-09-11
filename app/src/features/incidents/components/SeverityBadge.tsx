@@ -1,23 +1,18 @@
 /**
  * @file SeverityBadge.tsx
- * @description Badge component displaying incident severity level
+ * @description Incident severity as the kit StatusTag (thin wrapper kept for callers)
  * @feature incidents
- * @dependencies @/shared/components/ui/Badge, @/features/incidents/types
  */
 
-import { Badge } from '@/shared/components/ui/Badge';
-import type { BadgeProps } from '@/shared/components/ui/Badge';
+import { StatusTag } from '@/shared/components/ui';
 import type { IncidentSeverity } from '../types/incidents.types';
 import { INCIDENT_SEVERITY_LABELS } from '../types/incidents.types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { INCIDENT_SEVERITY_TONE } from '../utils/tones';
 
 export interface SeverityBadgeProps {
-  /** Incident severity level */
+  /** Incident severity */
   severity: IncidentSeverity;
-  /** Size variant */
+  /** Size variant ('lg' renders as 'md') */
   size?: 'sm' | 'md' | 'lg';
   /** Show dot indicator */
   showDot?: boolean;
@@ -25,49 +20,21 @@ export interface SeverityBadgeProps {
   className?: string;
 }
 
-// ============================================================================
-// MAPPINGS
-// ============================================================================
-
-const SEVERITY_TO_VARIANT: Record<IncidentSeverity, BadgeProps['variant']> = {
-  critical: 'error',
-  high: 'error',
-  medium: 'warning',
-  low: 'info',
-};
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
-
 /**
- * Displays a badge indicating incident severity level.
+ * Displays incident severity as a StatusTag.
  *
  * @example
- * ```tsx
- * <SeverityBadge severity="critical" showDot />
- * <SeverityBadge severity="medium" size="sm" />
- * ```
+ * <SeverityBadge severity="high" />
  */
-export function SeverityBadge({
-  severity,
-  size = 'sm',
-  showDot = true,
-  className,
-}: SeverityBadgeProps) {
-  const variant = SEVERITY_TO_VARIANT[severity];
-  const label = INCIDENT_SEVERITY_LABELS[severity];
-  const shouldPulse = severity === 'critical';
-
+export function SeverityBadge({ severity, size = 'sm', showDot = false, className }: SeverityBadgeProps) {
   return (
-    <Badge
-      variant={variant}
-      size={size}
+    <StatusTag
+      tone={INCIDENT_SEVERITY_TONE[severity]}
+      size={size === 'sm' ? 'sm' : 'md'}
       dot={showDot}
-      dotPulse={shouldPulse}
       className={className}
     >
-      {label}
-    </Badge>
+      {INCIDENT_SEVERITY_LABELS[severity]}
+    </StatusTag>
   );
 }

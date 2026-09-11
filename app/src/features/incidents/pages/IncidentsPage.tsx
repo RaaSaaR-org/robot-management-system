@@ -1,214 +1,127 @@
 /**
  * @file IncidentsPage.tsx
- * @description Main page for incident management
+ * @description Regulatory incidents: state tiles, toolbar and the incident table.
+ *              Embedded as the Alerts page's Incidents tab (no header of its own).
  * @feature incidents
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Plus } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Tabs } from '@/shared/components/ui/Tabs';
-import { Button } from '@/shared/components/ui/Button';
-import { Spinner } from '@/shared/components/ui/Spinner';
+import {
+  Button,
+  InfoIcon,
+  PageHeader,
+  Panel,
+  SearchInput,
+  SegmentedControl,
+  StatRow,
+  StatTile,
+  Toolbar,
+} from '@/shared/components/ui';
 import { IncidentList } from '../components/IncidentList';
 import { IncidentFilters } from '../components/IncidentFilters';
-import { SeverityBadge } from '../components/SeverityBadge';
+import { ReportIncidentModal } from '../components/ReportIncidentModal';
 import { useIncidents, useIncidentDashboard } from '../hooks/useIncidents';
-import type { Incident, IncidentSeverity } from '../types/incidents.types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
-
-interface StatCardProps {
-  title: string;
-  value: number | string;
-  subtitle?: string;
-  variant?: 'default' | 'warning' | 'error';
-}
-
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-function StatCard({ title, value, subtitle, variant = 'default' }: StatCardProps) {
-  const bgColor = variant === 'error'
-    ? 'bg-red-500/10 border-red-500/30'
-    : variant === 'warning'
-    ? 'bg-yellow-500/10 border-yellow-500/30'
-    : 'bg-theme-elevated border-theme-base';
-
-  const textColor = variant === 'error'
-    ? 'text-red-500'
-    : variant === 'warning'
-    ? 'text-yellow-500'
-    : 'text-theme-primary';
-
-  return (
-    <div className={`p-4 rounded-lg border ${bgColor}`}>
-      <p className="text-xs text-theme-tertiary uppercase tracking-wide mb-1">{title}</p>
-      <p className={`text-2xl font-bold ${textColor}`}>{value}</p>
-      {subtitle && <p className="text-xs text-theme-secondary mt-1">{subtitle}</p>}
-    </div>
-  );
-}
-
-function DashboardContent() {
-  const { stats, isLoading, fetchStats } = useIncidentDashboard();
-
-  if (isLoading && !stats) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <Spinner size="lg" />
-      </div>
-    );
-  }
-
-  if (!stats) {
-    return (
-      <div className="flex flex-col items-center justify-center py-12">
-        <p className="text-theme-secondary">Failed to load dashboard</p>
-        <Button variant="secondary" size="sm" className="mt-3" onClick={fetchStats}>
-          Retry
-        </Button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* Summary Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard title="Total Incidents" value={stats.totalIncidents} />
-        <StatCard
-          title="Open Incidents"
-          value={stats.openIncidents}
-          variant={stats.openIncidents > 0 ? 'warning' : 'default'}
-        />
-        <StatCard
-          title="Overdue Notifications"
-          value={stats.overdueNotifications}
-          variant={stats.overdueNotifications > 0 ? 'error' : 'default'}
-        />
-        <StatCard
-          title="Pending Notifications"
-          value={stats.pendingNotifications}
-          subtitle={stats.pendingNotifications > 0 ? 'Awaiting action' : undefined}
-        />
-      </div>
-
-      {/* Severity Breakdown */}
-      <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-        <h3 className="font-medium text-theme-primary mb-4">By Severity</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {(Object.entries(stats.incidentsBySeverity) as [IncidentSeverity, number][]).map(
-            ([severity, count]) => (
-              <div key={severity} className="flex items-center justify-between p-3 bg-theme-base rounded-lg">
-                <SeverityBadge severity={severity} showDot={false} />
-                <span className="text-lg font-bold text-theme-primary">{count}</span>
-              </div>
-            )
-          )}
-        </div>
-      </div>
-
-      {/* Average Resolution Time */}
-      {stats.averageResolutionTimeHours !== null && (
-        <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-          <h3 className="font-medium text-theme-primary mb-2">Average Resolution Time</h3>
-          <p className="text-2xl font-bold text-cobalt">
-            {stats.averageResolutionTimeHours < 24
-              ? `${stats.averageResolutionTimeHours} hours`
-              : `${Math.round(stats.averageResolutionTimeHours / 24)} days`}
-          </p>
-        </div>
-      )}
-
-      {/* Recent Incidents */}
-      {stats.recentIncidents.length > 0 && (
-        <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-          <h3 className="font-medium text-theme-primary mb-4">Recent Incidents</h3>
-          <div className="space-y-2">
-            {stats.recentIncidents.slice(0, 5).map((incident) => (
-              <div
-                key={incident.id}
-                className="flex items-center justify-between p-2 bg-theme-base rounded"
-              >
-                <div className="flex items-center gap-2">
-                  <SeverityBadge severity={incident.severity} size="sm" />
-                  <span className="text-sm text-theme-primary truncate max-w-[200px]">
-                    {incident.title}
-                  </span>
-                </div>
-                <span className="text-xs text-theme-tertiary font-mono">
-                  {incident.incidentNumber}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AllIncidentsContent() {
-  const navigate = useNavigate();
-  const { filters, setFilters } = useIncidents(false);
-
-  const handleIncidentClick = (incident: Incident) => {
-    navigate(`/incidents/${incident.id}`);
-  };
-
-  return (
-    <div className="space-y-4">
-      <IncidentFilters filters={filters} onFiltersChange={setFilters} />
-      <IncidentList
-        maxHeight="calc(100vh - 400px)"
-        onIncidentClick={handleIncidentClick}
-      />
-    </div>
-  );
-}
-
-function OpenIncidentsContent() {
-  const navigate = useNavigate();
-
-  const handleIncidentClick = (incident: Incident) => {
-    navigate(`/incidents/${incident.id}`);
-  };
-
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-theme-secondary">
-        Incidents that require attention (not yet closed).
-      </p>
-      <IncidentList
-        maxHeight="calc(100vh - 350px)"
-        showOnlyOpen
-        onIncidentClick={handleIncidentClick}
-      />
-    </div>
-  );
-}
-
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
 
 export interface IncidentsPageProps {
   /**
-   * True when rendered inside another page (e.g. the Alerts page's Incidents
-   * tab). Hides the h1 header block so the host page keeps its single title.
+   * True when rendered inside another page (the Alerts page's Incidents tab):
+   * no PageHeader, and the host opens the report modal.
    */
   embedded?: boolean;
+  /** Opens the host's report modal (embedded mode) */
+  onReport?: () => void;
+}
+
+const DEADLINES =
+  'EU AI Act Art. 73: 2, 10 or 15 days · GDPR Art. 33: 72 h · NIS2 Art. 23: 24 h early warning, 72 h notification · CRA Art. 14: 24 h';
+
+function resolutionTime(hours: number | null | undefined): { value: string | number; unit?: string } {
+  if (hours === null || hours === undefined) return { value: '—' };
+  if (hours < 24) return { value: Math.round(hours * 10) / 10, unit: 'h' };
+  return { value: Math.round(hours / 24), unit: 'd' };
+}
+
+function IncidentsSection({ onReport }: { onReport: () => void }) {
+  const navigate = useNavigate();
+  const { filters, setFilters, fetchIncidents } = useIncidents(false);
+  const { stats, isLoading: statsLoading } = useIncidentDashboard();
+  const [query, setQuery] = useState('');
+  const [scope, setScope] = useState<'open' | 'all'>('open');
+
+  useEffect(() => {
+    void fetchIncidents(1);
+  }, [fetchIncidents]);
+
+  const hasFilters = Boolean(filters.severity?.length || filters.type?.length);
+  const resolution = resolutionTime(stats?.averageResolutionTimeHours);
+  const tilesLoading = statsLoading && !stats;
+  const open = stats?.openIncidents ?? 0;
+  const overdue = stats?.overdueNotifications ?? 0;
+
+  return (
+    <>
+      <StatRow columns={4}>
+        <StatTile label="Open incidents" value={open} tone={open > 0 ? 'gated' : 'neutral'} hint="Not yet closed" isLoading={tilesLoading} />
+        <StatTile
+          label="Overdue notifications"
+          value={overdue}
+          tone={overdue > 0 ? 'stopped' : 'neutral'}
+          hint={
+            <span className="inline-flex items-center gap-1">
+              Past the legal deadline
+              <InfoIcon content={DEADLINES} label="Notification deadlines" />
+            </span>
+          }
+          isLoading={tilesLoading}
+        />
+        <StatTile label="Pending notifications" value={stats?.pendingNotifications ?? 0} hint="Awaiting action" isLoading={tilesLoading} />
+        <StatTile label="Avg resolution" value={resolution.value} unit={resolution.unit} hint="Resolved incidents" isLoading={tilesLoading} />
+      </StatRow>
+
+      <Toolbar
+        search={<SearchInput value={query} onChange={setQuery} placeholder="Search incidents" />}
+        filters={
+          <>
+            <SegmentedControl
+              label="Show"
+              options={[
+                { value: 'open', label: 'Open' },
+                { value: 'all', label: 'All' },
+              ]}
+              value={scope}
+              onChange={(v) => setScope(v as 'open' | 'all')}
+            />
+            <IncidentFilters filters={filters} onFiltersChange={setFilters} />
+          </>
+        }
+      />
+
+      <Panel padding="none">
+        <IncidentList
+          showOnlyOpen={scope === 'open'}
+          query={query}
+          hasFilters={hasFilters}
+          onClearFilters={() => {
+            setQuery('');
+            setFilters({});
+          }}
+          onIncidentClick={(i) => navigate(`/incidents/${i.id}`)}
+          onReport={onReport}
+        />
+      </Panel>
+    </>
+  );
 }
 
 /**
- * Main page for incident management and regulatory reporting.
+ * Incident management and regulatory reporting.
  */
-export function IncidentsPage({ embedded = false }: IncidentsPageProps) {
+export function IncidentsPage({ embedded = false, onReport }: IncidentsPageProps) {
+  const [reportOpen, setReportOpen] = useState(false);
+
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
       <DemoFeaturePlaceholder
@@ -226,107 +139,24 @@ export function IncidentsPage({ embedded = false }: IncidentsPageProps) {
     );
   }
 
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const navigate = useNavigate();
-  const { fetchIncidents } = useIncidents(false);
+  const report = onReport ?? (() => setReportOpen(true));
 
-  // Initial fetch when component mounts
-  useEffect(() => {
-    fetchIncidents(1);
-  }, [fetchIncidents]);
-
-  const tabs = useMemo(
-    () => [
-      {
-        id: 'dashboard',
-        label: 'Dashboard',
-        content: <DashboardContent />,
-      },
-      {
-        id: 'open',
-        label: 'Open Incidents',
-        content: <OpenIncidentsContent />,
-      },
-      {
-        id: 'all',
-        label: 'All Incidents',
-        content: <AllIncidentsContent />,
-      },
-    ],
-    []
-  );
-
-  const reportIncidentButton = (
-    <Button
-      variant="primary"
-      onClick={() => navigate('/incidents/new')}
-    >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="mr-2"
-      >
-        <line x1="12" y1="5" x2="12" y2="19" />
-        <line x1="5" y1="12" x2="19" y2="12" />
-      </svg>
-      Report Incident
-    </Button>
-  );
+  if (embedded) return <IncidentsSection onReport={report} />;
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header — suppressed when embedded as a tab inside another page,
-          which already renders its own PageHeader/h1 */}
-      {embedded ? (
-        <div className="flex-shrink-0 px-6 pt-4 flex justify-end">
-          {reportIncidentButton}
-        </div>
-      ) : (
-        <header className="flex-shrink-0 px-6 py-4 border-b border-gray-700/50">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-theme-primary">Incident Management</h1>
-              <p className="text-theme-secondary mt-1">
-                Track and report incidents per EU AI Act, GDPR, NIS2 & CRA requirements
-              </p>
-            </div>
-            {reportIncidentButton}
-          </div>
-        </header>
-      )}
-
-      {/* Info Box */}
-      <div className="flex-shrink-0 px-6 pt-4">
-        <div className="bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700/50 rounded-lg p-4">
-          <h3 className="font-semibold text-blue-900 dark:text-blue-200 mb-2">Regulatory Compliance</h3>
-          <p className="text-blue-800 dark:text-blue-200 text-sm">
-            This system tracks incidents and manages notification deadlines for multiple regulations:
-          </p>
-          <ul className="text-blue-800 dark:text-blue-200 text-sm mt-2 space-y-1 ml-4 list-disc">
-            <li><strong className="text-blue-900 dark:text-blue-100">EU AI Act Art. 73</strong>: Serious incident reporting (2/10/15 days)</li>
-            <li><strong className="text-blue-900 dark:text-blue-100">GDPR Art. 33-34</strong>: Data breach notification (72 hours)</li>
-            <li><strong className="text-blue-900 dark:text-blue-100">NIS2 Art. 23</strong>: Cyber incident reporting (24h early warning, 72h notification)</li>
-            <li><strong className="text-blue-900 dark:text-blue-100">CRA Art. 14</strong>: Vulnerability disclosure (24 hours)</li>
-          </ul>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-hidden p-6">
-        <Tabs
-          tabs={tabs}
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          className="h-full"
-        />
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Operate"
+        title="Incidents"
+        description="Regulatory incidents and the notification deadlines they start."
+        actions={
+          <Button leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} onClick={report}>
+            Report incident
+          </Button>
+        }
+      />
+      <IncidentsSection onReport={report} />
+      <ReportIncidentModal isOpen={reportOpen} onClose={() => setReportOpen(false)} />
     </div>
   );
 }
