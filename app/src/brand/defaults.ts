@@ -43,11 +43,6 @@ export const ACCENT_SCALE: ColorScale = {
 /** The dark ink used on light fills (text-on-primary over the default mint). */
 export const DARK_ON_FILL = '#0a2225';
 
-/** @deprecated Legacy name for {@link PRIMARY_SCALE}. */
-export const COBALT_SCALE = PRIMARY_SCALE;
-/** @deprecated Legacy name for {@link ACCENT_SCALE}. */
-export const TURQUOISE_SCALE = ACCENT_SCALE;
-
 export const DEFAULT_BRAND: BrandConfig = {
   name: 'NeoDEM',
   nameExpansion: 'Neo Data & Execution Management',

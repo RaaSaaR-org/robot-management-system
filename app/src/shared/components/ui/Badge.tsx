@@ -2,8 +2,8 @@
  * @file Badge.tsx
  * @description Small label or count, on the same tones as StatusTag. For a
  *              status use StatusTag; Badge is for counts and neutral labels.
- *              Legacy variants map onto tones: default → neutral, error →
- *              danger, cobalt/turquoise → accent, purple → info.
+ *              Older variant names map onto tones: default → neutral,
+ *              error → danger, purple → info.
  * @feature shared
  * @dependencies shared/utils/cn
  */
@@ -25,8 +25,6 @@ export type BadgeVariant =
   | 'danger'
   | 'info'
   | 'accent'
-  | 'cobalt'
-  | 'turquoise'
   | 'purple';
 export type BadgeSize = 'sm' | 'md' | 'lg';
 
@@ -58,8 +56,6 @@ const VARIANT_TONE: Record<BadgeVariant, BaseTone> = {
   danger: 'danger',
   info: 'info',
   accent: 'accent',
-  cobalt: 'accent',
-  turquoise: 'accent',
   purple: 'info',
 };
 

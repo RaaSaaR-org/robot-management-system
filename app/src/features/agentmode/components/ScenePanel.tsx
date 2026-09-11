@@ -36,8 +36,8 @@ export interface ScenePanelProps {
  * walking into things, so the operator has to be able to read off the panel
  * which numbers the robot actually measured.
  *
- * - `'lidar'`      → plain value, cobalt: a real range out of the point cloud.
- * - `'fleet'`      → plain value, cobalt: another robot's own reported pose
+ * - `'lidar'`      → plain value, primary: a real range out of the point cloud.
+ * - `'fleet'`      → plain value, primary: another robot's own reported pose
  *                    (TASK-207) — a position, not a camera sighting.
  * - anything else  → `~` prefix, muted: the vision model's guess (0.94 m MAE
  *                    against known geometry), or an older agent that sent no

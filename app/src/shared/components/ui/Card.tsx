@@ -1,8 +1,8 @@
 /**
  * @file Card.tsx
  * @description Legacy container, kept so its ~340 call sites compile. It now
- *              renders the Panel surface: default/glass/elevated → default
- *              panel, subtle → inset, outlined → a hairline box without fill.
+ *              renders the Panel surface: default/elevated → default panel,
+ *              subtle → inset, outlined → a hairline box without fill.
  *              New code uses Panel.
  * @feature shared
  * @dependencies shared/utils/cn, shared/components/ui/Panel
@@ -17,7 +17,7 @@ import { focusRing } from './styles';
 // TYPES
 // ============================================================================
 
-export type CardVariant = 'default' | 'glass' | 'elevated' | 'subtle' | 'outlined';
+export type CardVariant = 'default' | 'elevated' | 'subtle' | 'outlined';
 
 export interface CardProps extends HTMLAttributes<HTMLDivElement> {
   /** Card content */

@@ -176,7 +176,7 @@ export const PlaceChip = memo(function PlaceChip({
       </Tooltip>
       {stale && (
         // A drifted place used to differ from a current one by TEXT COLOUR
-        // ALONE — muted instead of cobalt — with the word "stale" reachable
+        // ALONE — muted instead of primary — with the word "stale" reachable
         // only through a hover tooltip. That is the page's own invariant
         // failing in the direction of over-confidence: a colour-blind operator,
         // a washed-out projector or a screen reader all got a place name

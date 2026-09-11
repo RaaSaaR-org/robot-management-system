@@ -79,7 +79,7 @@ describe('brandColorVars', () => {
     expect(brandColorVars({ accentColors: { DEFAULT: '#2DD4BF' } })['--color-on-accent']).toBe(DARK_ON_FILL);
   });
 
-  it('never touches the signal colors or the legacy cobalt/turquoise names', () => {
+  it('writes only the primary/accent slots, never the signal colors', () => {
     const vars = brandColorVars({
       primaryColors: { DEFAULT: '#FF6700' },
       accentColors: { DEFAULT: '#2DD4BF' },

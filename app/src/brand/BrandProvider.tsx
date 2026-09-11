@@ -54,8 +54,8 @@ export function BrandProvider({ children }: { children: ReactNode }) {
   const theme = useThemeStore((s) => s.theme);
 
   // Apply the primary/accent slot overrides (these don't change with theme).
-  // The legacy cobalt-*/turquoise-* utilities alias these slots in index.css,
-  // so they follow the brand too.
+  // Every primary-* / accent-* utility reads these slots, so the whole app
+  // follows the brand.
   useEffect(() => {
     const root = document.documentElement.style;
     for (const [prop, value] of Object.entries(brandColorVars(brand))) {
