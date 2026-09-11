@@ -1,9 +1,10 @@
 /**
  * @file StatusBadge.tsx
- * @description Badge component showing request status
+ * @description GDPR request status as a kit StatusTag
  * @feature gdpr
  */
 
+import { StatusTag, type StatusTagTone } from '@/shared/components/ui';
 import type { GDPRRequestStatus } from '../types';
 import { REQUEST_STATUS_LABELS } from '../types';
 
@@ -12,25 +13,22 @@ export interface StatusBadgeProps {
   className?: string;
 }
 
-const STATUS_STYLES: Record<GDPRRequestStatus, string> = {
-  pending: 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400',
-  acknowledged: 'bg-blue-500/20 text-blue-600 dark:text-blue-400',
-  in_progress: 'bg-blue-500/20 text-blue-600 dark:text-blue-400',
-  awaiting_verification: 'bg-orange-500/20 text-orange-600 dark:text-orange-400',
-  completed: 'bg-green-500/20 text-green-600 dark:text-green-400',
-  rejected: 'bg-red-500/20 text-red-600 dark:text-red-400',
-  cancelled: 'bg-gray-500/20 text-gray-600 dark:text-gray-400',
+const TONES: Record<GDPRRequestStatus, StatusTagTone> = {
+  pending: 'gated',
+  acknowledged: 'info',
+  in_progress: 'info',
+  awaiting_verification: 'gated',
+  completed: 'live',
+  rejected: 'stopped',
+  cancelled: 'neutral',
 };
 
-export function StatusBadge({ status, className = '' }: StatusBadgeProps) {
-  const style = STATUS_STYLES[status] || 'bg-gray-500/20 text-gray-600 dark:text-gray-400';
-  const label = REQUEST_STATUS_LABELS[status] || status;
-
+/** Explicit tones: the kit map does not know acknowledged / awaiting_verification. */
+export function StatusBadge({ status, className }: StatusBadgeProps) {
+  const label = REQUEST_STATUS_LABELS[status] ?? status;
   return (
-    <span
-      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${style} ${className}`}
-    >
-      {label}
-    </span>
+    <StatusTag tone={TONES[status] ?? 'neutral'} className={className}>
+      {label.charAt(0) + label.slice(1).toLowerCase()}
+    </StatusTag>
   );
 }
