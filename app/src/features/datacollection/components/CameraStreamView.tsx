@@ -5,7 +5,9 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { VideoOff, Circle } from 'lucide-react';
+import { VideoOff } from 'lucide-react';
+import { Button, StatusTag } from '@/shared/components/ui';
+import { cn } from '@/shared/utils/cn';
 
 interface CameraStreamViewProps {
   robotId: string;
@@ -14,12 +16,19 @@ interface CameraStreamViewProps {
   className?: string;
   /** When true, shows "Recording" state instead of "offline" on error */
   isRecording?: boolean;
+  /** The robot is offline or unknown: show the offline state without requesting the stream */
+  offline?: boolean;
 }
 
-export function CameraStreamView({ robotId, cameraName, label, className, isRecording }: CameraStreamViewProps) {
-  const [hasError, setHasError] = useState(false);
+const FRAME =
+  'relative flex flex-col items-center justify-center gap-1.5 overflow-hidden rounded-control border border-line-subtle bg-inset p-3 text-center';
+
+export function CameraStreamView({ robotId, cameraName, label, className, isRecording, offline }: CameraStreamViewProps) {
+  const [streamError, setHasError] = useState(false);
+  const hasError = streamError || !!offline;
   const streamUrl = `/api/robots/${robotId}/camera/${cameraName}`;
   const retryRef = useRef<ReturnType<typeof setInterval>>(undefined);
+  const name = label ?? cameraName;
 
   // Auto-retry every 3s when recording stops (camera becomes available again)
   useEffect(() => {
@@ -32,45 +41,37 @@ export function CameraStreamView({ robotId, cameraName, label, className, isReco
   // Recording state — camera is busy but that's expected
   if (hasError && isRecording) {
     return (
-      <div className={`flex flex-col items-center justify-center bg-gray-900 rounded-lg ${className ?? ''}`}>
-        <div className="flex items-center gap-2 mb-2">
-          <Circle className="w-3 h-3 text-red-500 fill-red-500 animate-pulse" />
-          <span className="text-sm font-medium text-red-400">Recording</span>
-        </div>
-        <span className="text-xs text-gray-500 uppercase tracking-wide">{label ?? cameraName}</span>
-        <span className="text-[10px] text-gray-600 mt-1">Camera captured by recorder</span>
+      <div className={cn(FRAME, className)}>
+        <StatusTag status="recording" dot pulse>Recording</StatusTag>
+        <span className="text-[13px] font-medium text-ink-secondary">{name}</span>
+        <span className="text-xs text-ink-tertiary">Camera captured by the recorder</span>
       </div>
     );
   }
 
-  // Offline / error state
+  // Offline — a normal state, not an error
   if (hasError) {
     return (
-      <div className={`flex flex-col items-center justify-center bg-surface-800 rounded-lg ${className ?? ''}`}>
-        <VideoOff className="w-8 h-8 text-gray-500 mb-2" />
-        <span className="text-xs text-gray-500">{label ?? cameraName} offline</span>
-        <button
-          onClick={() => setHasError(false)}
-          className="mt-2 text-xs text-primary-400 hover:text-primary-300"
-        >
-          Retry
-        </button>
+      <div className={cn(FRAME, className)}>
+        <VideoOff className="h-4 w-4 text-ink-tertiary" strokeWidth={1.75} />
+        <span className="text-[13px] font-medium text-ink-secondary">{name} offline</span>
+        <span className="text-xs text-ink-tertiary">Start the robot agent to see this stream.</span>
+        {!offline && <Button variant="ghost" size="sm" onClick={() => setHasError(false)}>Retry</Button>}
       </div>
     );
   }
 
   return (
-    <div className={`relative overflow-hidden rounded-lg bg-black ${className ?? ''}`}>
+    <div className={cn('relative overflow-hidden rounded-control border border-line-subtle bg-inset', className)}>
       <img
         src={streamUrl}
-        alt={`${label ?? cameraName} camera`}
+        alt={`${name} camera`}
         onError={() => setHasError(true)}
-        className="w-full h-full object-contain"
+        className="h-full w-full object-contain"
       />
-      <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/60 rounded text-[10px] text-white font-medium uppercase tracking-wide">
-        {label ?? cameraName}
+      <div className="absolute left-2 top-2">
+        <StatusTag tone="live" dot>{name}</StatusTag>
       </div>
-      <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-green-500 animate-pulse" />
     </div>
   );
 }

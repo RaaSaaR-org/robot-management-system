@@ -1,15 +1,15 @@
 /**
  * @file EpisodePanel.tsx
  * @description Episode controls during recording: "Next episode" button
- *              (shortcut N), episode list with per-episode discard (custom
- *              confirm dialog — not window.confirm, so UI tests can drive it),
- *              and progress toward the session's episode target.
+ *              (shortcut N), episode list with per-episode discard (through
+ *              the kit's confirm dialog), and progress toward the session's
+ *              episode target.
  * @feature datacollection
  */
 
 import { useState } from 'react';
-import { SkipForward, Trash2, Film, Loader2 } from 'lucide-react';
-import { Card } from '@/shared/components/ui/Card';
+import { SkipForward, Trash2 } from 'lucide-react';
+import { Button, Panel, StatusTag, confirm } from '@/shared/components/ui';
 import type { EpisodeSummary } from '../types/datacollection.types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
@@ -32,15 +32,8 @@ function formatSeconds(s: number): string {
 }
 
 export function EpisodePanel({
-  episodes,
-  currentEpisode,
-  numEpisodes,
-  isRecording,
-  canDiscard,
-  onNextEpisode,
-  onDiscardEpisode,
+  episodes, currentEpisode, numEpisodes, isRecording, canDiscard, onNextEpisode, onDiscardEpisode,
 }: EpisodePanelProps) {
-  const [confirmIndex, setConfirmIndex] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   const handleNext = async () => {
@@ -52,148 +45,96 @@ export function EpisodePanel({
     }
   };
 
-  const handleConfirmDiscard = async () => {
-    if (confirmIndex === null) return;
-    setBusy(true);
-    try {
-      await onDiscardEpisode(confirmIndex);
-      setConfirmIndex(null);
-    } finally {
-      setBusy(false);
-    }
+  const askDiscard = async (index: number) => {
+    const ok = await confirm({
+      title: `Discard episode ${index}?`,
+      description: 'All frames of this episode are deleted. This cannot be undone.',
+      confirmLabel: 'Discard',
+      tone: 'danger',
+    });
+    if (ok) await onDiscardEpisode(index);
   };
 
   return (
-    <Card data-testid="episode-panel">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <Film className="w-4 h-4 text-turquoise-400" />
-          <h3 className="text-sm font-medium text-theme-secondary">Episodes</h3>
-        </div>
-        {isRecording && (
-          <button
+    <Panel data-testid="episode-panel">
+      <Panel.Header
+        title="Episodes"
+        actions={isRecording && (
+          <Button
+            size="sm"
+            variant="secondary"
             onClick={handleNext}
-            disabled={busy}
+            isLoading={busy}
             data-testid="episode-next"
             title="Finish the current episode and start the next one (shortcut: N)"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-brand text-xs font-medium bg-turquoise-500/15 text-turquoise-400 hover:bg-turquoise-500/25 border border-turquoise-500/20 transition-all disabled:opacity-50"
+            leftIcon={<SkipForward className="h-4 w-4" strokeWidth={1.75} />}
           >
-            {busy ? <Loader2 size={13} className="animate-spin" /> : <SkipForward size={13} />}
             Next episode
-            <kbd className="ml-1 px-1 rounded bg-black/20 font-mono text-[10px]">N</kbd>
-          </button>
+          </Button>
         )}
-      </div>
-
-      {/* Progress vs target */}
-      <p className="text-xs text-theme-muted mb-3" data-testid="episode-progress">
-        {isRecording ? (
-          <>
-            Recording episode{' '}
-            <span className="text-theme-primary font-semibold">{currentEpisode + 1}</span>
-            {numEpisodes ? <> of {numEpisodes}</> : null}
-          </>
-        ) : (
-          <>
-            {episodes.length} episode{episodes.length === 1 ? '' : 's'} recorded
-            {numEpisodes ? <> (target: {numEpisodes})</> : null}
-          </>
-        )}
-      </p>
-
-      {/* Episode list */}
-      {episodes.length === 0 ? (
-        <p className="text-xs text-theme-tertiary" data-testid="episode-empty">
-          No frames recorded yet — connect an input source and move the robot.
+      />
+      <Panel.Body className="flex flex-col gap-3">
+        <p className="text-[13px] text-ink-tertiary" data-testid="episode-progress">
+          {isRecording ? (
+            <>
+              Recording episode <span className="font-semibold text-ink-primary">{currentEpisode + 1}</span>
+              {numEpisodes ? <> of {numEpisodes}</> : null}
+              <span className="hidden sm:inline"> · press N for the next one</span>
+            </>
+          ) : (
+            <>
+              {episodes.length} episode{episodes.length === 1 ? '' : 's'} recorded
+              {numEpisodes ? <> (target: {numEpisodes})</> : null}
+            </>
+          )}
         </p>
-      ) : (
-        <ul className="space-y-1.5">
-          {episodes.map((ep) => (
-            <li
-              key={ep.episodeIndex}
-              data-testid={`episode-row-${ep.episodeIndex}`}
-              className="flex items-center justify-between gap-2 px-3 py-2 rounded-brand bg-glass-subtle text-xs"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <span className="font-mono font-semibold text-theme-primary shrink-0">
-                  Ep {ep.episodeIndex}
-                </span>
-                {isRecording && ep.episodeIndex === currentEpisode && (
-                  <span className="flex items-center gap-1 text-red-400 shrink-0">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                    live
-                  </span>
-                )}
-                <span className="text-theme-muted truncate">
-                  {ep.frameCount.toLocaleString(UI_DATE_LOCALE)} frames · {formatSeconds(ep.durationS)}
-                </span>
-                {/* Only when there ARE drops. "0 dropped" on every healthy
-                    episode teaches the operator to stop reading the line, which
-                    is exactly the line they need to notice on the one episode
-                    where the recorder could not keep up. Yellow, not the red
-                    this file uses for the live dot and the discard button: a
-                    frame the recorder missed is a degraded episode, not a
-                    destroyed one, and it must not read as the same event as the
-                    pulsing red "live" marker two spans to its left. */}
-                {typeof ep.droppedFrames === 'number' && ep.droppedFrames > 0 && (
-                  <span
-                    className="text-yellow-400 shrink-0"
-                    data-testid={`episode-dropped-${ep.episodeIndex}`}
-                  >
-                    · {ep.droppedFrames.toLocaleString(UI_DATE_LOCALE)} dropped
-                  </span>
-                )}
-              </div>
-              {canDiscard && (
-                <button
-                  onClick={() => setConfirmIndex(ep.episodeIndex)}
-                  data-testid={`episode-discard-${ep.episodeIndex}`}
-                  aria-label={`Discard episode ${ep.episodeIndex}`}
-                  className="p-1.5 rounded-brand text-theme-muted hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
-                >
-                  <Trash2 size={13} />
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
 
-      {/* Discard confirmation (custom dialog — window.confirm is untestable via Playwright MCP) */}
-      {confirmIndex !== null && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Discard episode ${confirmIndex}`}
-        >
-          <Card className="max-w-sm w-full mx-4" data-testid="discard-dialog">
-            <h3 className="text-base font-semibold text-theme-primary mb-2">
-              Discard episode {confirmIndex}?
-            </h3>
-            <p className="text-sm text-theme-muted mb-4">
-              All frames of this episode will be deleted. This cannot be undone.
-            </p>
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setConfirmIndex(null)}
-                data-testid="discard-cancel"
-                className="px-4 py-2 text-sm text-theme-secondary hover:text-theme-primary transition-colors"
+        {episodes.length === 0 ? (
+          <p className="text-[13px] text-ink-tertiary" data-testid="episode-empty">
+            No frames recorded yet. Connect an input source and move the robot.
+          </p>
+        ) : (
+          <ul className="flex flex-col divide-y divide-line-subtle rounded-control border border-line-subtle">
+            {episodes.map((ep) => (
+              <li
+                key={ep.episodeIndex}
+                data-testid={`episode-row-${ep.episodeIndex}`}
+                className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]"
               >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmDiscard}
-                disabled={busy}
-                data-testid="discard-confirm"
-                className="px-4 py-2 rounded-brand text-sm font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-all disabled:opacity-50"
-              >
-                {busy ? 'Discarding...' : 'Discard'}
-              </button>
-            </div>
-          </Card>
-        </div>
-      )}
-    </Card>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="shrink-0 font-medium text-ink-primary">Episode {ep.episodeIndex}</span>
+                  {isRecording && ep.episodeIndex === currentEpisode && (
+                    <StatusTag status="recording" dot pulse size="sm">Live</StatusTag>
+                  )}
+                  <span className="text-ink-tertiary">
+                    {ep.frameCount.toLocaleString(UI_DATE_LOCALE)} frames · {formatSeconds(ep.durationS)}
+                  </span>
+                  {/* Only when there ARE drops: "0 dropped" on every healthy
+                      episode teaches the operator to stop reading the line.
+                      Amber (degraded), never the red of a destroyed take. */}
+                  {typeof ep.droppedFrames === 'number' && ep.droppedFrames > 0 && (
+                    <span className="shrink-0 text-signal-estimated" data-testid={`episode-dropped-${ep.episodeIndex}`}>
+                      · {ep.droppedFrames.toLocaleString(UI_DATE_LOCALE)} dropped
+                    </span>
+                  )}
+                </div>
+                {canDiscard && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    iconOnly
+                    onClick={() => void askDiscard(ep.episodeIndex)}
+                    data-testid={`episode-discard-${ep.episodeIndex}`}
+                    aria-label={`Discard episode ${ep.episodeIndex}`}
+                  >
+                    <Trash2 className="h-4 w-4" strokeWidth={1.75} />
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel.Body>
+    </Panel>
   );
 }

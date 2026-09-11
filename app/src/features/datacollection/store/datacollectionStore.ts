@@ -608,6 +608,13 @@ function getErrorMessage(error: unknown): string {
   if (error && typeof error === 'object') {
     if ('code' in error && typeof error.code === 'string') {
       const code = error.code as DataCollectionErrorCode;
+      // The API client files every unclassified server error under
+      // UNKNOWN_ERROR but keeps the server's own text ("Cannot export
+      // session with no frames"); that text beats the generic one.
+      const serverText = 'message' in error && typeof error.message === 'string' ? error.message.trim() : '';
+      if (code === 'UNKNOWN_ERROR' && serverText) {
+        return serverText;
+      }
       if (code in ERROR_MESSAGES) {
         return ERROR_MESSAGES[code];
       }
