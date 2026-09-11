@@ -3,7 +3,7 @@ id: "TASK-271"
 aliases: []
 title: "Close the kit gaps the page redesign found"
 slug: "close-the-kit-gaps-the-page-redesign-found"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
