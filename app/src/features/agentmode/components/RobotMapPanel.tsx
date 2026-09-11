@@ -63,8 +63,8 @@ function describeMapError(error: string | null | undefined): string {
 
 /** The robot itself: the primary; peers: the accent; keep-out is the twin's own token. */
 const COLOR_KEEPOUT = TWIN_ZONE_COLORS.keepout;
-/** Free cells: cobalt at ~10 % — faint on purpose, so occupied and unknown carry the picture. */
-const FREE_RGBA: [number, number, number, number] = [42, 95, 255, 26];
+/** Free cells: the primary ramp (primary-500) at ~10 % — faint on purpose, so occupied and unknown carry the picture. */
+const FREE_RGBA: [number, number, number, number] = [71, 201, 160, 26];
 
 /**
  * Decode the wire grid to one RGBA byte per cell. Cell (0,0) is the lowest-y
@@ -191,8 +191,8 @@ export function drawMap(
   gridImage: HTMLCanvasElement | null,
 ): void {
   const { widthPx, heightPx, rangeM, orientation } = view;
-  const COLOR_SELF = themeColor('--color-primary', 'rgb(42, 95, 255)');
-  const COLOR_PEER = themeColor('--color-accent', 'rgb(24, 228, 195)');
+  const COLOR_SELF = themeColor('--color-primary', 'rgb(178, 248, 223)');
+  const COLOR_PEER = themeColor('--color-accent', 'rgb(169, 230, 216)');
   ctx.clearRect(0, 0, widthPx, heightPx);
   const pxPerM = Math.min(widthPx, heightPx) / (2 * rangeM);
   // Centre on the robot when it has a pose, else on the grid's centre, else origin.

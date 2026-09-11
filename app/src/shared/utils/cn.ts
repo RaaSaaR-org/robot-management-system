@@ -13,7 +13,7 @@ import { twMerge } from 'tailwind-merge';
  * Uses clsx for conditional class handling and tailwind-merge for conflict resolution.
  *
  * @example
- * cn('px-4 py-2', isActive && 'bg-cobalt', className)
+ * cn('px-4 py-2', isActive && 'bg-primary/10 text-primary', className)
  * cn('text-sm', 'text-lg') // => 'text-lg' (resolves conflict)
  */
 export function cn(...inputs: ClassValue[]): string {

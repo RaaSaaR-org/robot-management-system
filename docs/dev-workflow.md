@@ -26,16 +26,11 @@ Every file MUST start with:
 ```
 
 ### Brand Colors (Tailwind)
-```
-Primary: #2A5FFF (Cobalt Blue) → primary-500
-Accent: #18E4C3 (Turquoise) → accent-500
-Status:
-  - Online: #22c55e (green-500)
-  - Offline: #9ca3af (gray-400)
-  - Busy: #3b82f6 (blue-500)
-  - Error: #ef4444 (red-500)
-  - Charging: #eab308 (yellow-500)
-```
+
+Colors are tokens, never raw hues or hex: the primary/accent slots
+(`bg-primary`, `text-accent`), the surface/ink/line tokens and the signal
+colors for status. The table and the rules are in `docs/brand.md` §1; the drift
+ratchet (`app/src/__tests__/design-drift.test.ts`) fails on anything else.
 
 ## Implementation Order
 You MUST implement in this order:

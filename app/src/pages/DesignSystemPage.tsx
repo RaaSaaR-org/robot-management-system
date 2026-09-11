@@ -575,7 +575,7 @@ export function DesignSystemPage() {
             <Badge variant="error">Error</Badge>
             <Badge variant="info">Info</Badge>
             <Badge variant="accent">Accent</Badge>
-            <Badge variant="cobalt" pill>12</Badge>
+            <Badge variant="accent" pill>12</Badge>
             <Badge variant="purple" dot>Beta</Badge>
             <Badge variant="success" dot dotPulse size="sm">Streaming</Badge>
             <Badge variant="default" size="lg">Large</Badge>
@@ -637,7 +637,7 @@ export function DesignSystemPage() {
         </Panel>
 
         <Demo label="Legacy Card variants (render as panels)" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Card><p className="text-sm text-ink-secondary">default / glass / elevated</p></Card>
+          <Card><p className="text-sm text-ink-secondary">default / elevated</p></Card>
           <Card variant="subtle" className="p-4"><p className="text-sm text-ink-secondary">subtle → inset</p></Card>
           <Card variant="outlined"><p className="text-sm text-ink-secondary">outlined</p></Card>
           <Card>

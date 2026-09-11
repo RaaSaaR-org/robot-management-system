@@ -59,34 +59,6 @@
   --color-accent: #a9e6d8;
   --color-on-accent: #0a2225;
 
-  /* Legacy names. ~800 lines still say cobalt-* / turquoise-*; aliasing them to
-     the brand slots makes every unmigrated line render mint (and follow a
-     white-label brand) without touching it. Migrated code writes primary-* /
-     accent-*, never these. */
-  --color-cobalt: var(--color-primary);
-  --color-cobalt-50: var(--color-primary-50);
-  --color-cobalt-100: var(--color-primary-100);
-  --color-cobalt-200: var(--color-primary-200);
-  --color-cobalt-300: var(--color-primary-300);
-  --color-cobalt-400: var(--color-primary-400);
-  --color-cobalt-500: var(--color-primary-500);
-  --color-cobalt-600: var(--color-primary-600);
-  --color-cobalt-700: var(--color-primary-700);
-  --color-cobalt-800: var(--color-primary-800);
-  --color-cobalt-900: var(--color-primary-900);
-
-  --color-turquoise: var(--color-accent);
-  --color-turquoise-50: var(--color-accent-50);
-  --color-turquoise-100: var(--color-accent-100);
-  --color-turquoise-200: var(--color-accent-200);
-  --color-turquoise-300: var(--color-accent-300);
-  --color-turquoise-400: var(--color-accent-400);
-  --color-turquoise-500: var(--color-accent-500);
-  --color-turquoise-600: var(--color-accent-600);
-  --color-turquoise-700: var(--color-accent-700);
-  --color-turquoise-800: var(--color-accent-800);
-  --color-turquoise-900: var(--color-accent-900);
-
   /* Surfaces, lines and the fifth ink, as real color tokens so bg-panel/50,
      border-line-strong and friends all resolve. Values are per theme, below.
      There is deliberately no --color-inset: a color named `inset` also turns
@@ -108,28 +80,6 @@
 
 /* Custom theme configuration */
 @theme {
-  /* Legacy colors */
-  --color-slate-gray: #1E1F24;
-  --color-soft-white: #F7F9FB;
-  --color-steel-gray: #63687A;
-  --color-midnight-blue: #0C1440;
-  --color-neon-purple: #A97BFF;
-
-  /* Dark theme surface colors */
-  --color-surface-900: #0A0B0D;
-  --color-surface-800: #121316;
-  --color-surface-700: #1A1B1F;
-  --color-surface-600: #242529;
-  --color-surface-500: #2E2F34;
-  --color-surface-400: #3A3B40;
-
-  /* Light theme surface colors */
-  --color-surface-light-50: #FFFFFF;
-  --color-surface-light-100: #F7F9FB;
-  --color-surface-light-200: #EEF1F5;
-  --color-surface-light-300: #E4E7ED;
-  --color-surface-light-400: #D8DCE4;
-
   /* Font families */
   --font-sans: 'Inter Variable', 'Inter', 'Avenir', 'Helvetica', 'Arial', sans-serif;
   /* Code and machine output only (commands, logs). Labels and values are
@@ -141,28 +91,23 @@
   --font-display: 'Archivo Variable', 'Archivo', 'Inter Variable', 'Helvetica', sans-serif;
 
   /* Border radius. panel: panels and modals; control: buttons, inputs, insets,
-     menus; tag: tags and badges. brand/brand-lg are the legacy names for the
-     same two sizes. */
+     menus; tag: tags and badges. brand is the landing page's button radius
+     (lp-btn-*). */
   --radius-panel: 14px;
   --radius-control: 10px;
   --radius-tag: 6px;
   --radius-brand: 10px;
-  --radius-brand-lg: 14px;
 
   /* The three text colors as real Tailwind color tokens, so the utilities we
      never hand-wrote below — fill-*, stroke-*, decoration-* — resolve. Without
      them `fill-ink-primary` on an SVG <text> emitted no CSS at all and the
      lifecycle diagram's labels rendered black-on-black in dark mode.
 
-     The namespace is `ink-`, not `theme-`, and that is the whole point. A
-     @theme color token generates the ENTIRE utility family for its name, so
-     `--color-theme-secondary` would also mint bg-theme-secondary,
-     border-theme-secondary, bg-theme-surface and every /opacity variant of the
-     names hand-written further down. Those class names are already spelled out
-     in 47 files where they have always emitted nothing — switching them on
-     silently paints a text color into a background, and
-     `bg-theme-secondary text-theme-secondary` becomes #B8BBC2 on #B8BBC2.
-     Keep new color tokens out of the `theme-` namespace. */
+     The namespace is `ink-`, not `theme-`: a @theme color token generates the
+     ENTIRE utility family for its name, so `--color-theme-secondary` would
+     also mint bg-theme-secondary and friends, and a text color would paint
+     into a background. Keep new color tokens out of the `theme-` namespace;
+     the design-drift test bans the old theme-* utilities. */
   --color-ink-primary: var(--text-primary);
   --color-ink-secondary: var(--text-secondary);
   --color-ink-tertiary: var(--text-tertiary);
@@ -266,22 +211,6 @@
   --signal-stopped-fill: #c9302c;
 }
 
-/* Legacy glass variables. Still read by ~20 inline styles and arbitrary
-   classes (bg-[var(--glass-bg)], ...), so they survive as matte aliases of the
-   surface and line tokens until TASK-269 retires them. No blur exists any more. */
-:root {
-  --glass-bg: var(--bg-secondary);
-  --glass-bg-elevated: var(--bg-elevated);
-  --glass-bg-subtle: var(--bg-tertiary);
-  --glass-border: var(--border-color);
-  --glass-border-subtle: var(--border-subtle);
-  --glass-border-highlight: var(--border-color-strong);
-  --glass-shadow: none;
-  --glass-shadow-elevated: var(--shadow-raised);
-  --glass-shadow-subtle: none;
-  --glass-gradient-shine: none;
-}
-
 @layer base {
   html {
     font-family: var(--font-sans);
@@ -303,10 +232,12 @@
   }
 }
 
-/* Matte, not glass. Unmigrated components still carry backdrop-blur-*
-   utilities; inside the app shell and in anything portalled to <body> (modals,
-   toasts, menus) they are switched off here so no page renders frosted. The
-   landing page lives in #root outside the shell and is not affected. */
+/* Matte, not glass. Inside the app shell and in anything portalled to <body>
+   (modals, toasts, menus) backdrop-filter is switched off, whatever a component
+   or a third-party widget sets, so no page renders frosted. The design-drift
+   test keeps backdrop-blur-* out of the source; the route smoke checks the
+   rendered pages. The landing page lives in #root outside the shell and is not
+   affected. */
 [data-app-shell],
 [data-app-shell] *,
 [data-app-shell] *::before,
@@ -319,98 +250,6 @@ body > :not(#root) *::after {
   -webkit-backdrop-filter: none !important;
 }
 
-@layer components {
-  /* Button variants (legacy classes; new code uses the kit's <Button>). */
-  .btn-primary {
-    @apply bg-primary text-on-primary px-6 py-3 rounded-control font-medium transition-colors duration-150 hover:bg-primary-hover;
-  }
-
-  .btn-secondary {
-    @apply border px-6 py-3 rounded-control font-medium transition-colors duration-150;
-    border-color: var(--border-color-strong);
-    color: var(--text-primary);
-  }
-  .btn-secondary:hover {
-    background-color: var(--bg-elevated);
-  }
-
-  /* Legacy name — theme-aware: white-on-light was unreadable in light theme */
-  .btn-outline-white {
-    @apply border px-6 py-3 rounded-control font-medium transition-colors duration-150;
-    border-color: var(--border-color-strong);
-    color: var(--text-primary);
-  }
-  .btn-outline-white:hover {
-    background-color: var(--bg-elevated);
-  }
-
-  /* The .glass* family is legacy (~400 usages). The names stay until TASK-269
-     retires them, but they render as the matte surfaces of the design system:
-     a flat ground plus a line border, no blur, no shine, no lift. Mapping:
-       glass, glass-card, card  -> panel  (--bg-secondary, rounded-panel)
-       glass-elevated           -> raised (--bg-elevated, menus/modals)
-       glass-subtle             -> inset  (--bg-tertiary, rounded-control) */
-  .glass {
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-  }
-
-  .glass-card {
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-panel);
-    position: relative;
-    overflow: hidden;
-    transition: border-color 150ms var(--ease-instrument);
-  }
-
-  /* Interactive card: a clearer border on hover is the whole affordance. */
-  .glass-card-interactive {
-    @apply cursor-pointer;
-    transition: border-color 150ms var(--ease-instrument);
-  }
-
-  .glass-card-interactive:hover {
-    border-color: var(--border-color-strong);
-  }
-
-  .glass-elevated {
-    background-color: var(--bg-elevated);
-    border: 1px solid var(--border-color);
-    box-shadow: var(--shadow-raised);
-    border-radius: var(--radius-panel);
-  }
-
-  .glass-subtle {
-    background-color: var(--bg-tertiary);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-  }
-
-  /* Section backgrounds */
-  .section-primary {
-    background-color: var(--bg-primary);
-  }
-
-  .section-secondary {
-    background-color: var(--bg-secondary);
-  }
-
-  .section-tertiary {
-    background-color: var(--bg-tertiary);
-  }
-
-  /* Legacy card — a padded matte panel. Not interactive, so no hover state. */
-  .card {
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-panel);
-    @apply p-6;
-    position: relative;
-    overflow: hidden;
-  }
-}
-
 @layer utilities {
   /* Hide scrollbar for tab navigation */
   .scrollbar-hide {
@@ -421,115 +260,14 @@ body > :not(#root) *::after {
     display: none;
   }
 
-  /* Theme-aware text utilities */
-  .text-theme-primary {
-    color: var(--text-primary);
-  }
-
-  .text-theme-secondary {
-    color: var(--text-secondary);
-  }
-
-  .text-theme-tertiary {
-    color: var(--text-tertiary);
-  }
-
-  .text-theme-muted {
-    color: var(--text-muted);
-  }
-
-  /* Card typography hierarchy */
-  .card-title {
-    @apply text-base font-semibold;
-    color: var(--text-primary);
-  }
-
-  .card-subtitle {
-    @apply text-sm;
-    color: var(--text-secondary);
-  }
-
-  .card-label {
-    @apply text-xs font-medium uppercase tracking-wide;
-    color: var(--text-tertiary);
-  }
-
-  .card-value {
-    @apply text-sm font-medium;
-    color: var(--text-primary);
-  }
-
-  .card-meta {
-    @apply text-xs;
-    color: var(--text-muted);
-  }
-
-  /* Theme-aware borders */
-  .border-theme {
-    border-color: var(--border-color);
-  }
-
-  .border-theme-strong {
-    border-color: var(--border-color-strong);
-  }
-
-  /* Glass borders */
-  .border-glass {
-    border-color: var(--glass-border);
-  }
-
-  .border-glass-subtle {
-    border-color: var(--glass-border-subtle);
-  }
-
-  .border-glass-highlight {
-    border-color: var(--glass-border-highlight);
-  }
-
-  /* Theme-aware backgrounds */
-  .bg-theme-elevated {
-    background-color: var(--bg-elevated);
-  }
-
-  .bg-theme-card {
-    background-color: var(--bg-card);
-  }
-
-  /* Glass backgrounds */
-  .bg-glass {
-    background-color: var(--glass-bg);
-  }
-
-  .bg-glass-subtle {
-    background-color: var(--glass-bg-subtle);
-  }
-
-  .bg-glass-elevated {
-    background-color: var(--glass-bg-elevated);
-  }
-
   /* Sidebar and layout transitions */
   .sidebar-transition {
     @apply transition-[width,padding] duration-200 ease-in-out;
   }
 
-  /* Hover background for interactive elements */
-  .bg-theme-hover {
-    background-color: var(--bg-elevated);
-  }
-
-  .hover\:bg-theme-hover:hover {
-    background-color: var(--bg-elevated);
-  }
-
-  /* Theme primary background */
-  .bg-theme-primary {
-    background-color: var(--bg-primary);
-  }
-
   /* Markdown rendered onto a coloured surface — chat bubbles above all. The
      typography plugin ships its own greys, which paint dark body text onto the
-     cobalt user bubble; here the container's own text colour is the right one. */
+     primary user bubble; here the container's own text colour is the right one. */
   .prose-inherit {
     --tw-prose-body: inherit;
     --tw-prose-headings: inherit;
@@ -794,7 +532,7 @@ body > :not(#root) *::after {
   }
 
   /* Primary action. The brand primary is white-labelled at runtime, so white
-     text on the raw token is only legible by luck — the shipped cobalt passes
+     text on the raw token is only legible by luck — a dark blue brand passes
      at 5.0:1, an orange brand lands at 2.9:1. Mixing toward black first makes
      the button safe for any brand hue while still reading as the brand colour.
      Every white-on-primary surface on the landing page uses this. */

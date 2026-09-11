@@ -40,7 +40,7 @@ export interface BrandConfig {
   logo?: string;
   /**
    * Primary color scale -- replaces the default mint (bg-primary, text-primary,
-   * primary-50..900 and the legacy cobalt-* aliases). Partial: only override
+   * primary-50..900). Partial: only override
    * the shades you need. DEFAULT is the fill of primary buttons, links and the
    * focus ring, in both themes.
    */
@@ -51,7 +51,7 @@ export interface BrandConfig {
    * contrasts more with the primary DEFAULT.
    */
   onPrimary?: string;
-  /** Accent color scale -- replaces the default teal (accent-*, legacy turquoise-*). */
+  /** Accent color scale -- replaces the default teal (bg-accent, accent-50..900). */
   accentColors?: Partial<ColorScale>;
   /** Text/icon color on an accent fill (text-on-accent). Computed like onPrimary when omitted. */
   onAccent?: string;

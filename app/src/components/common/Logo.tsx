@@ -29,7 +29,7 @@ export function Logo({ showText = true, size = 'default', linkTo = '/' }: LogoPr
         {logoElement}
       </div>
       {showText && (
-        <span className={`text-theme-primary font-semibold ${textSize}`}>{brand.name}</span>
+        <span className={`text-ink-primary font-semibold ${textSize}`}>{brand.name}</span>
       )}
     </div>
   );
