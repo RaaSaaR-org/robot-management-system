@@ -5,10 +5,9 @@
  */
 
 import { useEffect, useState } from 'react';
-import { FormField, FormModal, Select, Textarea, toast } from '@/shared/components/ui';
+import { FormField, FormModal, Select, Textarea, errorMessage, toast } from '@/shared/components/ui';
 import type { ActivateManualModeInput } from '../types';
 import { MANUAL_SPEED_LIMITS } from '../types';
-import { errorMessage } from './oversightFormat';
 
 export interface ManualModeFormModalProps {
   isOpen: boolean;

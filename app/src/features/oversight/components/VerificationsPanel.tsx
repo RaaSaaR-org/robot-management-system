@@ -5,9 +5,9 @@
  */
 
 import { CalendarClock, Check, Clock } from 'lucide-react';
-import { DataTable, EmptyState, Panel, StatusTag, confirm, toast, type DataTableColumn } from '@/shared/components/ui';
+import { DataTable, EmptyState, Panel, StatusTag, confirm, errorMessage, toast, type DataTableColumn } from '@/shared/components/ui';
 import type { CompleteVerificationInput, DueVerification } from '../types';
-import { errorMessage, formatInterval } from './oversightFormat';
+import { formatInterval } from './oversightFormat';
 
 export interface VerificationsPanelProps {
   due: DueVerification[];
