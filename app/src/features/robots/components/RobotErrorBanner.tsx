@@ -8,8 +8,9 @@
  * @feature robots
  */
 
-import { useState } from 'react';
-import { cn } from '@/shared/utils';
+import { useState, type ReactNode } from 'react';
+import { AlertTriangle, ChevronDown, OctagonAlert, Wrench } from 'lucide-react';
+import { cn } from '@/shared/utils/cn';
 import type { Robot, RobotTelemetry } from '../types/robots.types';
 
 // ============================================================================
@@ -25,62 +26,23 @@ export interface RobotErrorBannerProps {
 
 type Severity = 'error' | 'warning' | 'maintenance';
 
-const SEVERITY_STYLES: Record<
-  Severity,
-  { wrap: string; icon: string; title: string; body: string }
-> = {
+/** Signal colors: stopped = fault, unknown = warning, estimated = maintenance. */
+const SEVERITY_STYLES: Record<Severity, { wrap: string; accent: string }> = {
   error: {
-    wrap: 'border-red-500/30 bg-red-500/10',
-    icon: 'text-red-400',
-    title: 'text-red-400',
-    body: 'text-red-300/80',
+    wrap: 'border-signal-stopped/30 bg-signal-stopped/10',
+    accent: 'text-signal-stopped',
   },
   warning: {
-    wrap: 'border-yellow-500/30 bg-yellow-500/10',
-    icon: 'text-yellow-400',
-    title: 'text-yellow-400',
-    body: 'text-yellow-300/80',
+    wrap: 'border-signal-unknown/30 bg-signal-unknown/10',
+    accent: 'text-signal-unknown',
   },
   maintenance: {
-    wrap: 'border-orange-500/30 bg-orange-500/10',
-    icon: 'text-orange-400',
-    title: 'text-orange-400',
-    body: 'text-orange-300/80',
+    wrap: 'border-signal-estimated/30 bg-signal-estimated/10',
+    accent: 'text-signal-estimated',
   },
 };
 
-// ============================================================================
-// ICONS
-// ============================================================================
-
-const WarningIcon = (
-  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-  </svg>
-);
-
-const MaintenanceIcon = (
-  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-  </svg>
-);
-
-const ChevronIcon = ({ open }: { open: boolean }) => (
-  <svg
-    className={cn('h-4 w-4 transition-transform duration-150', open && 'rotate-180')}
-    fill="none"
-    viewBox="0 0 24 24"
-    stroke="currentColor"
-    strokeWidth={2}
-  >
-    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-  </svg>
-);
-
-// ============================================================================
-// HELPERS
-// ============================================================================
+const ICON = 'h-4 w-4';
 
 /** Collapse a noisy message list to its unique, non-empty, trimmed entries. */
 function uniqueMessages(messages?: string[]): string[] {
@@ -96,51 +58,49 @@ interface AlertRowProps {
   severity: Severity;
   label: string;
   items: string[];
-  icon: React.ReactNode;
+  icon: ReactNode;
+  /** Render items as code (error codes) */
   mono?: boolean;
 }
 
 function AlertRow({ severity, label, items, icon, mono }: AlertRowProps) {
   const [open, setOpen] = useState(false);
   const styles = SEVERITY_STYLES[severity];
-  const count = items.length;
-  const extra = count - 1;
-  const canExpand = count > 1;
+  const extra = items.length - 1;
+  const canExpand = items.length > 1;
 
   return (
-    <div className={cn('rounded-xl border glass-subtle', styles.wrap)}>
+    <div className={cn('rounded-control border', styles.wrap)}>
       <button
         type="button"
         onClick={() => canExpand && setOpen((o) => !o)}
         aria-expanded={canExpand ? open : undefined}
         className={cn(
           'flex w-full items-center gap-3 px-4 py-2.5 text-left',
-          canExpand && 'cursor-pointer'
+          canExpand ? 'cursor-pointer' : 'cursor-default'
         )}
       >
-        <span className={cn('flex-shrink-0', styles.icon)}>{icon}</span>
-        <span className={cn('flex-shrink-0 text-sm font-semibold', styles.title)}>{label}</span>
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate text-sm',
-            styles.body,
-            mono && 'font-mono'
-          )}
-        >
+        <span className={cn('shrink-0', styles.accent)}>{icon}</span>
+        <span className={cn('shrink-0 text-sm font-semibold', styles.accent)}>{label}</span>
+        <span className={cn('min-w-0 flex-1 truncate text-sm text-ink-secondary', mono && 'font-mono')}>
           {items[0]}
         </span>
         {extra > 0 && (
-          <span className={cn('flex-shrink-0 text-xs font-medium', styles.body)}>
-            +{extra} more
-          </span>
+          <span className="shrink-0 text-xs font-medium text-ink-tertiary">+{extra} more</span>
         )}
-        {canExpand && <span className={cn('flex-shrink-0', styles.icon)}><ChevronIcon open={open} /></span>}
+        {canExpand && (
+          <ChevronDown
+            className={cn(ICON, 'shrink-0 transition-transform duration-150', styles.accent, open && 'rotate-180')}
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
+        )}
       </button>
 
       {open && canExpand && (
         <ul className="space-y-1 px-4 pb-3 pl-11">
           {items.map((item, i) => (
-            <li key={i} className={cn('text-sm', styles.body, mono && 'font-mono')}>
+            <li key={i} className={cn('text-sm text-ink-secondary', mono && 'font-mono')}>
               {item}
             </li>
           ))}
@@ -176,7 +136,7 @@ export function RobotErrorBanner({ robot, telemetry }: RobotErrorBannerProps) {
           severity="error"
           label={errors.length === 1 ? 'Error' : `${errors.length} Errors`}
           items={errors}
-          icon={WarningIcon}
+          icon={<OctagonAlert className={ICON} strokeWidth={1.75} />}
           mono
         />
       )}
@@ -185,7 +145,7 @@ export function RobotErrorBanner({ robot, telemetry }: RobotErrorBannerProps) {
           severity="warning"
           label={warnings.length === 1 ? 'Warning' : `${warnings.length} Warnings`}
           items={warnings}
-          icon={WarningIcon}
+          icon={<AlertTriangle className={ICON} strokeWidth={1.75} />}
         />
       )}
       {maintenanceReason && (
@@ -193,7 +153,7 @@ export function RobotErrorBanner({ robot, telemetry }: RobotErrorBannerProps) {
           severity="maintenance"
           label="Maintenance"
           items={[maintenanceReason]}
-          icon={MaintenanceIcon}
+          icon={<Wrench className={ICON} strokeWidth={1.75} />}
         />
       )}
     </div>

@@ -48,20 +48,20 @@ describe('RobotChatPanel', () => {
     render(<RobotChatPanel {...defaultProps} />);
     expect(screen.getByText('Chat with Atlas')).toBeInTheDocument();
     // Connection status from the header
-    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.getByText('Server linked')).toBeInTheDocument();
     expect(screen.getByTestId('conversation-panel')).toBeInTheDocument();
   });
 
   it('renders the header when showHeader is explicitly true', () => {
     render(<RobotChatPanel {...defaultProps} showHeader />);
     expect(screen.getByText('Chat with Atlas')).toBeInTheDocument();
-    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.getByText('Server linked')).toBeInTheDocument();
   });
 
   it('does NOT render the header when showHeader is false', () => {
     render(<RobotChatPanel {...defaultProps} showHeader={false} />);
     expect(screen.queryByText('Chat with Atlas')).not.toBeInTheDocument();
-    expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+    expect(screen.queryByText('Server linked')).not.toBeInTheDocument();
     // Body still renders
     expect(screen.getByTestId('conversation-panel')).toBeInTheDocument();
   });

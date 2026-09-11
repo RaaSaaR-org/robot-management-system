@@ -1,6 +1,6 @@
 /**
  * @file VoicePipelinePanel.tsx
- * @description Side panel of the voice tab: live pipeline state, mic pause /
+ * @description Right column of the voice tab: live pipeline state, mic pause /
  *              session-reset controls, robot speaker volume, component health
  *              (STT / TTS / agent / audio I/O), turn latency and a low-level
  *              mic activity log (discarded / wake-ignored / TTS events).
@@ -8,7 +8,9 @@
  */
 
 import { memo, useCallback, useEffect, useState } from 'react';
-import { cn } from '@/shared/utils';
+import { cn } from '@/shared/utils/cn';
+import { Button, Panel, StatusTag } from '@/shared/components/ui';
+import { Readout } from '../common';
 import { VoiceStateBadge } from './VoiceStateBadge';
 import type {
   VoiceHealth,
@@ -17,39 +19,24 @@ import type {
   VoiceStatus,
 } from '../../types/voice.types';
 
-// ============================================================================
-// SUBCOMPONENTS
-// ============================================================================
-
-function HealthChip({ label, ok }: { label: string; ok: boolean | null | undefined }) {
+function HealthTag({ label, ok }: { label: string; ok: boolean | null | undefined }) {
   return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-medium',
-        ok
-          ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-500 dark:text-emerald-300'
-          : 'bg-gray-500/10 border-gray-500/25 text-theme-tertiary'
-      )}
-      title={ok ? `${label}: ready` : `${label}: unavailable`}
-    >
-      <span className={cn('w-1 h-1 rounded-full', ok ? 'bg-emerald-400' : 'bg-gray-400')} />
-      {label}
+    <span title={ok ? `${label}: ready` : `${label}: unavailable`}>
+      <StatusTag tone={ok ? 'live' : 'neutral'} dot>
+        {label}
+      </StatusTag>
     </span>
   );
 }
 
-function formatLatency(seconds: number | undefined): string {
-  if (seconds === undefined) return '—';
-  return seconds >= 1 ? `${seconds.toFixed(1)} s` : `${Math.round(seconds * 1000)} ms`;
+function formatLatency(seconds: number | undefined): string | null {
+  if (seconds === undefined) return null;
+  return seconds >= 1 ? seconds.toFixed(1) : String(Math.round(seconds * 1000));
 }
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
 
 export interface VoicePipelinePanelProps {
   pipelineState: VoicePipelineState;
@@ -67,7 +54,7 @@ export interface VoicePipelinePanelProps {
   className?: string;
 }
 
-/** Right-hand pipeline/status panel of the voice tab. */
+/** Pipeline, component health and mic activity panels of the voice tab. */
 export const VoicePipelinePanel = memo(function VoicePipelinePanel({
   pipelineState,
   paused,
@@ -84,7 +71,6 @@ export const VoicePipelinePanel = memo(function VoicePipelinePanel({
 }: VoicePipelinePanelProps) {
   const [volume, setVolume] = useState<number | null>(null);
   const [isBusy, setIsBusy] = useState(false);
-
   const adapterUp = health?.adapter != null;
 
   // Volume lives on the audio adapter; fetch once it is reachable.
@@ -95,12 +81,8 @@ export const VoicePipelinePanel = memo(function VoicePipelinePanel({
     }
     let cancelled = false;
     onGetVolume()
-      .then((v) => {
-        if (!cancelled) setVolume(v);
-      })
-      .catch(() => {
-        if (!cancelled) setVolume(null);
-      });
+      .then((v) => !cancelled && setVolume(v))
+      .catch(() => !cancelled && setVolume(null));
     return () => {
       cancelled = true;
     };
@@ -109,7 +91,6 @@ export const VoicePipelinePanel = memo(function VoicePipelinePanel({
   const commitVolume = useCallback(
     (next: number) => {
       onSetVolume(next).catch(() => {
-        // Re-sync with the adapter on failure.
         onGetVolume().then(setVolume).catch(() => setVolume(null));
       });
     },
@@ -130,123 +111,111 @@ export const VoicePipelinePanel = memo(function VoicePipelinePanel({
   const service = health?.service ?? null;
   const turnMetrics = status?.metrics ?? {};
 
-  const actionButton =
-    'flex-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-theme text-theme-secondary ' +
-    'hover:text-theme-primary hover:bg-theme-elevated transition-colors duration-150 ' +
-    'disabled:opacity-50 disabled:cursor-not-allowed';
-
   return (
-    <div className={cn('flex flex-col gap-4', className)}>
-      {/* State + controls */}
-      <section className="flex flex-col gap-3 p-3 rounded-xl glass-subtle border border-theme">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-theme-tertiary">
-            Pipeline
-          </h3>
-          <VoiceStateBadge state={pipelineState} />
-        </div>
+    <div className={cn('flex min-w-0 flex-col gap-6', className)}>
+      <Panel>
+        <Panel.Header title="Pipeline" actions={<VoiceStateBadge state={pipelineState} />} />
+        <Panel.Body className="flex flex-col gap-4">
+          {micLoopDisabled && (
+            <p className="text-xs text-signal-unknown">Mic loop disabled — missing: {micLoopDisabled}</p>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              fullWidth
+              disabled={!available || isBusy}
+              onClick={() => void runAction(onToggleListen)}
+              data-testid="voice-listen-toggle"
+            >
+              {paused ? 'Resume mic' : 'Pause mic'}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              fullWidth
+              disabled={!available || isBusy}
+              onClick={() => void runAction(onResetSession)}
+              data-testid="voice-session-reset"
+            >
+              New session
+            </Button>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="w-14 shrink-0 text-xs text-ink-tertiary">Volume</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={volume ?? 0}
+              disabled={!adapterUp || volume === null}
+              onChange={(event) => setVolume(Number(event.target.value))}
+              onMouseUp={() => volume !== null && commitVolume(volume)}
+              onTouchEnd={() => volume !== null && commitVolume(volume)}
+              onKeyUp={(event) => {
+                if (volume !== null && (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End')) {
+                  commitVolume(volume);
+                }
+              }}
+              className="flex-1 accent-primary disabled:opacity-40"
+              aria-label="Robot speaker volume"
+            />
+            <span className="w-8 text-right text-xs tabular-nums text-ink-secondary">
+              {volume === null ? '—' : volume}
+            </span>
+          </div>
+        </Panel.Body>
+      </Panel>
 
-        {micLoopDisabled && (
-          <p className="text-[11px] text-amber-500 dark:text-amber-300">
-            Mic loop disabled — missing: {micLoopDisabled}
-          </p>
-        )}
+      <Panel>
+        <Panel.Header title="Components" />
+        <Panel.Body className="flex flex-col gap-4">
+          <div className="flex flex-wrap gap-1.5">
+            <HealthTag label="Mic" ok={service?.components.audio_in} />
+            <HealthTag label="Speaker" ok={service?.components.audio_out} />
+            <HealthTag label="STT" ok={service?.models_loaded.stt} />
+            <HealthTag label="TTS" ok={service?.models_loaded.tts} />
+            <HealthTag label="Agent" ok={service?.agent_reachable} />
+            <HealthTag label="Adapter" ok={adapterUp} />
+          </div>
+          {(turnMetrics.stt || turnMetrics.agent || turnMetrics.tts) && (
+            <div className="grid grid-cols-3 gap-3">
+              {(['stt', 'agent', 'tts'] as const).map((key) => {
+                const p50 = turnMetrics[key]?.p50;
+                return (
+                  <Readout
+                    key={key}
+                    label={`${key} p50`}
+                    value={formatLatency(p50)}
+                    unit={p50 === undefined ? undefined : p50 >= 1 ? 's' : 'ms'}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </Panel.Body>
+      </Panel>
 
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className={actionButton}
-            disabled={!available || isBusy}
-            onClick={() => void runAction(onToggleListen)}
-            data-testid="voice-listen-toggle"
-          >
-            {paused ? 'Resume mic' : 'Pause mic'}
-          </button>
-          <button
-            type="button"
-            className={actionButton}
-            disabled={!available || isBusy}
-            onClick={() => void runAction(onResetSession)}
-            data-testid="voice-session-reset"
-          >
-            New session
-          </button>
-        </div>
-
-        {/* Speaker volume (G1 audio adapter) */}
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] text-theme-tertiary w-14 shrink-0">Volume</span>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            step={5}
-            value={volume ?? 0}
-            disabled={!adapterUp || volume === null}
-            onChange={(event) => setVolume(Number(event.target.value))}
-            onMouseUp={() => volume !== null && commitVolume(volume)}
-            onTouchEnd={() => volume !== null && commitVolume(volume)}
-            onKeyUp={(event) => {
-              if (volume !== null && (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End')) {
-                commitVolume(volume);
-              }
-            }}
-            className="flex-1 accent-[#2A5FFF] disabled:opacity-40"
-            aria-label="Robot speaker volume"
-          />
-          <span className="text-[11px] text-theme-secondary tabular-nums w-8 text-right">
-            {volume === null ? '—' : `${volume}`}
-          </span>
-        </div>
-      </section>
-
-      {/* Component health */}
-      <section className="flex flex-col gap-2 p-3 rounded-xl glass-subtle border border-theme">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-theme-tertiary">
-          Components
-        </h3>
-        <div className="flex flex-wrap gap-1.5">
-          <HealthChip label="Mic" ok={service?.components.audio_in} />
-          <HealthChip label="Speaker" ok={service?.components.audio_out} />
-          <HealthChip label="STT" ok={service?.models_loaded.stt} />
-          <HealthChip label="TTS" ok={service?.models_loaded.tts} />
-          <HealthChip label="Agent" ok={service?.agent_reachable} />
-          <HealthChip label="Adapter" ok={adapterUp} />
-        </div>
-        {(turnMetrics.stt || turnMetrics.agent || turnMetrics.tts) && (
-          <dl className="grid grid-cols-3 gap-1 mt-1 text-center">
-            {(['stt', 'agent', 'tts'] as const).map((key) => (
-              <div key={key} className="rounded-lg bg-theme-elevated/50 px-1 py-1.5">
-                <dt className="text-[9px] uppercase tracking-wider text-theme-tertiary">{key} p50</dt>
-                <dd className="text-[11px] font-medium text-theme-secondary tabular-nums">
-                  {formatLatency(turnMetrics[key]?.p50)}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
-      </section>
-
-      {/* Low-level mic activity */}
-      <section className="flex flex-col gap-2 p-3 rounded-xl glass-subtle border border-theme min-h-0">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-theme-tertiary">
-          Mic activity
-        </h3>
-        {micActivity.length === 0 ? (
-          <p className="text-[11px] text-theme-tertiary">
-            Nothing yet — VAD segments, ignored utterances and TTS events show up here.
-          </p>
-        ) : (
-          <ul className="flex flex-col-reverse gap-1 overflow-y-auto max-h-40 pr-1">
-            {micActivity.map((item) => (
-              <li key={item.id} className="flex items-baseline gap-2 text-[11px]">
-                <span className="text-theme-tertiary tabular-nums shrink-0">{formatTime(item.ts)}</span>
-                <span className="text-theme-secondary">{item.label}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <Panel>
+        <Panel.Header title="Mic activity" />
+        <Panel.Body>
+          {micActivity.length === 0 ? (
+            <p className="text-xs text-ink-tertiary">
+              Nothing yet — VAD segments, ignored utterances and TTS events show up here.
+            </p>
+          ) : (
+            <ul className="flex max-h-40 flex-col-reverse gap-1 overflow-y-auto pr-1">
+              {micActivity.map((item) => (
+                <li key={item.id} className="flex items-baseline gap-2 text-xs">
+                  <span className="shrink-0 tabular-nums text-ink-tertiary">{formatTime(item.ts)}</span>
+                  <span className="text-ink-secondary">{item.label}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel.Body>
+      </Panel>
     </div>
   );
 });

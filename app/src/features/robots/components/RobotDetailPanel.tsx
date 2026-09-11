@@ -1,19 +1,33 @@
 /**
  * @file RobotDetailPanel.tsx
- * @description Comprehensive panel displaying robot details, telemetry, and controls
+ * @description The robot detail page: one PageHeader (name, model · zone, status +
+ *              telemetry provenance, control-center link, E-stop, more actions),
+ *              then the tabbed control center. Loading and not-found keep the
+ *              header so the page never jumps.
  * @feature robots
  */
 
-import { useState, useCallback } from 'react';
-import { Button } from '@/shared/components/ui';
-import { cn } from '@/shared/utils';
-import { RobotLoadingScreen } from './RobotLoadingScreen';
-import { RobotIdentityBar } from './RobotIdentityBar';
-import { RobotQuickStats } from './RobotQuickStats';
+import { useCallback, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { BatteryCharging, Gauge, Home, Trash2 } from 'lucide-react';
+import {
+  ErrorState,
+  LinkButton,
+  PageHeader,
+  Panel,
+  RowActions,
+  SkeletonText,
+  confirm,
+  toast,
+} from '@/shared/components/ui';
+import { cn } from '@/shared/utils/cn';
 import { RobotControlCenter } from './RobotControlCenter';
 import { AutonomousExecutionPanel } from './AutonomousExecutionPanel';
+import { EmergencyStopButton } from './EmergencyStopButton';
+import { RobotStatusTag, ProvenanceTag, provenanceOf } from './common';
 import { useRobot } from '../hooks/useRobots';
 import { useTelemetryStream } from '../hooks/useTelemetryStream';
+import { useRobotsStore } from '../store/robotsStore';
 import { useTasksByRobotId } from '@/features/processes/hooks/useTasks';
 import { isRobotAvailable } from '../types/robots.types';
 
@@ -24,27 +38,25 @@ import { isRobotAvailable } from '../types/robots.types';
 export interface RobotDetailPanelProps {
   /** Robot ID to display */
   robotId: string;
-  /** Callback when back button is clicked */
-  onBack?: () => void;
   /** Additional class names */
   className?: string;
+}
+
+const BACK = { to: '/fleet?tab=list', label: 'Fleet' };
+const ICON = 'h-4 w-4';
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 // ============================================================================
 // COMPONENT
 // ============================================================================
 
-export function RobotDetailPanel({ robotId, onBack, className }: RobotDetailPanelProps) {
-  const {
-    robot,
-    commandHistory,
-    isLoading,
-    error,
-    refresh,
-    sendToCharge,
-    returnHome,
-  } = useRobot(robotId);
-
+export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) {
+  const navigate = useNavigate();
+  const { robot, commandHistory, isLoading, error, refresh, sendToCharge, returnHome } =
+    useRobot(robotId);
   const {
     telemetry,
     status: telemetryStatus,
@@ -52,114 +64,171 @@ export function RobotDetailPanel({ robotId, onBack, className }: RobotDetailPane
     lastUpdate: telemetryLastUpdate,
     connect: reconnectTelemetry,
   } = useTelemetryStream(robotId);
-
   const robotTasks = useTasksByRobotId(robotId);
   const [isCommandLoading, setIsCommandLoading] = useState(false);
-  // Controls whether the loading screen is visible (hidden after it fades out)
-  const [isLoadingScreenHidden, setIsLoadingScreenHidden] = useState(false);
 
-  const executeCommand = useCallback(async (commandFn: () => Promise<unknown>) => {
-    setIsCommandLoading(true);
+  const executeCommand = useCallback(
+    async (commandFn: () => Promise<unknown>) => {
+      setIsCommandLoading(true);
+      try {
+        await commandFn();
+        await refresh();
+      } finally {
+        setIsCommandLoading(false);
+      }
+    },
+    [refresh]
+  );
+
+  const name = robot?.name ?? 'This robot';
+
+  const handleSendToCharge = useCallback(async () => {
+    const ok = await confirm({
+      title: `Send ${name} to charge?`,
+      description: `${name} leaves its current task and drives to the nearest dock.`,
+      confirmLabel: 'Send to charge',
+    });
+    if (!ok) return;
     try {
-      await commandFn();
-      await refresh();
-    } finally {
-      setIsCommandLoading(false);
+      await executeCommand(sendToCharge);
+      toast.success('Sent to charge', { description: name });
+    } catch (err) {
+      toast.error("Couldn't send to charge", { description: messageOf(err) });
     }
-  }, [refresh]);
+  }, [executeCommand, sendToCharge, name]);
 
-  const handleSendToCharge = useCallback(() => executeCommand(sendToCharge), [executeCommand, sendToCharge]);
-  const handleReturnHome = useCallback(() => executeCommand(returnHome), [executeCommand, returnHome]);
+  const handleReturnHome = useCallback(async () => {
+    const ok = await confirm({
+      title: `Send ${name} home?`,
+      description: `${name} leaves its current task and returns to its home position.`,
+      confirmLabel: 'Return home',
+    });
+    if (!ok) return;
+    try {
+      await executeCommand(returnHome);
+      toast.success('Sent home', { description: name });
+    } catch (err) {
+      toast.error("Couldn't send home", { description: messageOf(err) });
+    }
+  }, [executeCommand, returnHome, name]);
 
-  // Data is ready once we have the robot entity
-  const isDataLoaded = !!robot;
+  const handleUnregister = useCallback(async () => {
+    const ok = await confirm({
+      title: `Unregister ${name}?`,
+      description:
+        'The robot leaves the fleet and stops receiving tasks. Register its agent URL again to bring it back.',
+      confirmLabel: 'Unregister',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await useRobotsStore.getState().unregisterRobot(robotId);
+      toast.success('Robot unregistered', { description: name });
+      navigate(BACK.to);
+    } catch (err) {
+      toast.error("Couldn't unregister robot", { description: messageOf(err) });
+    }
+  }, [navigate, robotId, name]);
 
-  // Error state (no robot loaded and error)
-  if (error && !robot && !isLoading) {
+  // Not found / failed to load — keep the header and its way back.
+  if (!robot && error && !isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="rounded-full bg-red-100 p-4 dark:bg-red-900/30">
-          <svg className="h-8 w-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-            />
-          </svg>
-        </div>
-        <h3 className="mt-4 text-lg font-medium text-theme-primary">Robot not found</h3>
-        <p className="mt-1 text-sm text-theme-secondary">{error}</p>
-        {onBack && (
-          <Button variant="primary" size="sm" className="mt-4" onClick={onBack}>
-            Go Back
-          </Button>
-        )}
+      <div className={cn('flex flex-col gap-6', className)}>
+        <PageHeader eyebrow="Operate" back={BACK} title="Robot not found" />
+        <Panel>
+          <ErrorState
+            title="Couldn't load this robot"
+            message={`No robot with the id “${robotId}” is registered, or the server could not be reached. Check the id, or go back to the fleet.`}
+            onRetry={() => void refresh()}
+          />
+        </Panel>
       </div>
     );
   }
 
-  const canExecuteCommands = robot ? isRobotAvailable(robot) && !isCommandLoading : false;
+  // First load — the header with a skeleton, no overlay.
+  if (!robot) {
+    return (
+      <div className={cn('flex flex-col gap-6', className)} aria-busy="true">
+        <PageHeader eyebrow="Operate" back={BACK} title="Loading…" />
+        <Panel>
+          <SkeletonText lines={4} />
+        </Panel>
+      </div>
+    );
+  }
+
+  const canExecuteCommands = isRobotAvailable(robot) && !isCommandLoading;
 
   return (
-    <>
-      {/* Futuristic loading overlay — shown until robot data arrives, then fades out */}
-      {!isLoadingScreenHidden && (
-        <RobotLoadingScreen
-          robotId={robotId}
-          robotName={robot?.name}
-          isLoaded={isDataLoaded}
-          onHidden={() => setIsLoadingScreenHidden(true)}
-        />
-      )}
+    <div className={cn('flex flex-col gap-6', className)}>
+      <PageHeader
+        eyebrow="Operate"
+        back={BACK}
+        title={robot.name}
+        description={`${robot.model} · ${robot.location?.zone || 'Place unknown'}`}
+        meta={
+          <>
+            <RobotStatusTag status={robot.status} />
+            <ProvenanceTag source={provenanceOf(telemetry, isTelemetryConnected)} />
+          </>
+        }
+        actions={
+          <>
+            <LinkButton
+              to={`/robots/${robot.id}/cockpit`}
+              variant="secondary"
+              leftIcon={<Gauge className={ICON} strokeWidth={1.75} />}
+            >
+              Open control center
+            </LinkButton>
+            <EmergencyStopButton robotId={robot.id} robotName={robot.name} />
+            <RowActions
+              label="More actions"
+              items={[
+                {
+                  label: 'Send to charge',
+                  icon: <BatteryCharging className={ICON} strokeWidth={1.75} />,
+                  disabled: !canExecuteCommands,
+                  onSelect: () => void handleSendToCharge(),
+                },
+                {
+                  label: 'Return home',
+                  icon: <Home className={ICON} strokeWidth={1.75} />,
+                  disabled: !canExecuteCommands,
+                  onSelect: () => void handleReturnHome(),
+                },
+                {
+                  label: 'Unregister',
+                  icon: <Trash2 className={ICON} strokeWidth={1.75} />,
+                  tone: 'danger',
+                  separatorBefore: true,
+                  onSelect: () => void handleUnregister(),
+                },
+              ]}
+            />
+          </>
+        }
+      />
 
-      {/* Main content — rendered in background while loading screen is up, revealed after */}
-      {robot && (
-        <div
-          className={cn('flex flex-col gap-4 pb-24 lg:pb-6', className)}
-          style={
-            isDataLoaded && isLoadingScreenHidden
-              ? { animation: 'materialize 0.7s ease-out forwards' }
-              : { opacity: 0 }
-          }
-        >
-          {/* Identity bar */}
-          <RobotIdentityBar
-            robot={robot}
-            telemetry={telemetry}
-            isTelemetryConnected={isTelemetryConnected}
-            onBack={onBack}
-          />
+      {/* Only visible while ?executing=<skillId> is set */}
+      <AutonomousExecutionPanel robotId={robotId} />
 
-          {/* Quick stats strip */}
-          <RobotQuickStats
-            robot={robot}
-            telemetry={telemetry}
-            taskCount={robotTasks.length}
-            isTelemetryConnected={isTelemetryConnected}
-          />
-
-          {/* Autonomous execution panel — only visible when ?executing=<skillId> */}
-          <AutonomousExecutionPanel robotId={robotId} />
-
-          {/* Control center — view switcher + chat sidebar */}
-          <RobotControlCenter
-            robot={robot}
-            robotId={robotId}
-            telemetry={telemetry}
-            isTelemetryConnected={isTelemetryConnected}
-            telemetryLastUpdate={telemetryLastUpdate}
-            telemetryStatus={telemetryStatus}
-            onTelemetryRetry={reconnectTelemetry}
-            commandHistory={commandHistory}
-            isCommandLoading={isCommandLoading}
-            canExecuteCommands={canExecuteCommands}
-            tasks={robotTasks}
-            onSendToCharge={handleSendToCharge}
-            onReturnHome={handleReturnHome}
-          />
-        </div>
-      )}
-    </>
+      <RobotControlCenter
+        robot={robot}
+        robotId={robotId}
+        telemetry={telemetry}
+        isTelemetryConnected={isTelemetryConnected}
+        telemetryLastUpdate={telemetryLastUpdate}
+        telemetryStatus={telemetryStatus}
+        onTelemetryRetry={reconnectTelemetry}
+        commandHistory={commandHistory}
+        isCommandLoading={isCommandLoading}
+        canExecuteCommands={canExecuteCommands}
+        tasks={robotTasks}
+        onSendToCharge={handleSendToCharge}
+        onReturnHome={handleReturnHome}
+      />
+    </div>
   );
 }

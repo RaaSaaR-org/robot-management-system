@@ -5,12 +5,13 @@
  *              the robot microphone hears plus the agent's spoken replies, and
  *              control the voice pipeline (mic pause, session, volume). Backed
  *              by the TASK-181 voice service, relayed through the server; the
- *              tab degrades to a clear offline notice when the service is down.
+ *              tab degrades to a calm offline hint when the service is down.
  * @feature robots
  */
 
 import { memo, useCallback } from 'react';
-import { cn } from '@/shared/utils';
+import { MicOff } from 'lucide-react';
+import { Button, Panel } from '@/shared/components/ui';
 import { voiceApi } from '../../api/voiceApi';
 import { useVoiceChannel } from '../../hooks/useVoiceChannel';
 import { useVoiceStore } from '../../store/voiceStore';
@@ -59,65 +60,40 @@ export const VoiceTab = memo(function VoiceTab({ robot, robotId }: VoiceTabProps
   );
 
   return (
-    <div className="flex flex-col gap-4" data-testid="voice-tab">
-      {/* Offline notice — in-flow, keeps history visible underneath */}
+    <div className="flex flex-col gap-6" data-testid="voice-tab">
       {available === false && (
-        <div
-          role="alert"
-          className={cn(
-            'flex flex-wrap items-center gap-x-3 gap-y-1 p-3 rounded-xl',
-            'glass-subtle border border-amber-500/30 bg-amber-500/10'
-          )}
+        <Panel
+          variant="inset"
+          padding="sm"
+          role="status"
+          className="flex flex-wrap items-start gap-3"
           data-testid="voice-offline-banner"
         >
-          <svg
-            className="w-4 h-4 text-amber-500 dark:text-amber-300 shrink-0"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.8}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-            />
-          </svg>
-          <div className="flex-1 min-w-[220px]">
-            <p className="text-xs font-medium text-theme-primary">
+          <MicOff className="mt-0.5 h-4 w-4 shrink-0 text-ink-tertiary" strokeWidth={1.75} aria-hidden="true" />
+          <div className="min-w-[220px] flex-1 text-sm">
+            <p className="text-ink-secondary">
               Voice service offline — {robot.name} cannot speak or listen right now.
             </p>
-            <p className="text-[11px] text-theme-tertiary">
-              Start it next to the robot agent:{' '}
-              <code className="px-1 rounded bg-theme-elevated">python -m voice_service</code>{' '}
+            <p className="mt-0.5 text-xs text-ink-tertiary">
+              Start it next to the robot agent: <code className="font-mono">python -m voice_service</code>{' '}
               (see robot-agent/voice/README.md)
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void refreshHealth()}
-            className={cn(
-              'px-3 py-1.5 rounded-lg text-xs font-medium border border-theme',
-              'text-theme-secondary hover:text-theme-primary hover:bg-theme-elevated',
-              'transition-colors duration-150'
-            )}
-          >
+          <Button variant="secondary" size="sm" onClick={() => void refreshHealth()}>
             Retry
-          </button>
-        </div>
+          </Button>
+        </Panel>
       )}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-        {/* Conversation + composer */}
-        <div className="flex flex-col gap-3 min-w-0">
-          <VoiceConversation
-            entries={voice.entries}
-            className="h-[380px] xl:h-[440px] p-3 rounded-xl glass-subtle border border-theme"
-          />
-          <VoiceComposer onSay={handleSay} disabled={available === false} />
-        </div>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <Panel className="min-w-0 xl:col-span-2">
+          <Panel.Header title="Conversation" description="What the robot says, hears and replies." />
+          <Panel.Body className="flex flex-col gap-4">
+            <VoiceConversation entries={voice.entries} className="h-[320px] xl:h-[400px]" />
+            <VoiceComposer onSay={handleSay} disabled={available === false} />
+          </Panel.Body>
+        </Panel>
 
-        {/* Pipeline / status panel */}
         <VoicePipelinePanel
           pipelineState={voice.pipelineState}
           paused={voice.paused}
