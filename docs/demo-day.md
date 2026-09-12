@@ -31,7 +31,7 @@ Playwright owns its build and preview process and stops them after the run. It t
 
 1. Open Dashboard and explain that telemetry and robots are simulated browser fixtures.
 2. Visit Fleet, Control Center and Agent Mode. Demonstrate only the interactions exercised in the browser rehearsal; simulated completion does not prove physical motion.
-3. Open Digital Twin and Updates, then visit `http://localhost:4473/robot-management-system/#/models` for Model Registry (it has no sidebar entry). Empty states are expected with no scans, update packages or models registered in the demo.
+3. Open Fleet's Sites tab and Updates, then visit `http://localhost:4473/robot-management-system/#/models` for Model Registry (it has no sidebar entry). Empty states are expected with no scans, update packages or models registered in the demo.
 4. Walk through Skill Training and the lifecycle navigation. Backend-dependent pages may show a demo placeholder or prerequisites; do not promise a real training run from this browser build.
 5. Return to Dashboard through navigation after each segment. Open Docs for architecture and integration details.
 

@@ -102,7 +102,6 @@ export function DocsPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        eyebrow="System"
         title={content ? title : 'Doc not found'}
         description={
           content

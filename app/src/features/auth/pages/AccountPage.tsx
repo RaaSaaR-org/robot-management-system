@@ -20,7 +20,6 @@ export function AccountPage({ onPasswordChanged }: AccountPageProps) {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        eyebrow="System"
         title="Account"
         description="Your profile, password and sign-in security."
         actions={

@@ -1,12 +1,13 @@
 /**
  * @file FleetPage.tsx
  * @description Fleet: where every robot is (map) and the zones they work in,
- *   with zone create/draw/edit/delete; the Robots tab embeds the robot list.
+ *   with zone create/draw/edit/delete; the Robots tab embeds the robot list and
+ *   the Sites tab the gallery of rooms a robot has scanned in 3D.
  * @feature fleet
- * @dependencies @/shared/components/ui, @/features/fleet/components, @/features/fleet/hooks, @/features/robots
+ * @dependencies @/shared/components/ui, @/features/fleet/components, @/features/fleet/hooks, @/features/robots, @/features/digitaltwin
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PenSquare, Plus, X } from 'lucide-react';
 import { Button, PageHeader, Panel, Tabs } from '@/shared/components/ui';
@@ -17,11 +18,15 @@ import { ZoneFormModal } from '../components/ZoneFormModal';
 import { useZones, useZoneEditor } from '../hooks';
 import { useRobots } from '@/features/robots/hooks/useRobots';
 import { RobotsPage } from '@/features/robots/pages/RobotsPage';
+// By path, not through the feature barrel: that barrel re-exports the three.js
+// twin viewer, which has no business in the fleet chunk.
+import { SitesGallery } from '@/features/digitaltwin/components/SitesGallery';
 import type { Zone, ZoneBounds, RobotMapMarker } from '../types/fleet.types';
 
 const TABS = [
   { id: 'map', label: 'Map' },
   { id: 'list', label: 'Robots' },
+  { id: 'sites', label: 'Sites' },
 ] as const;
 type FleetTab = (typeof TABS)[number]['id'];
 
@@ -32,14 +37,16 @@ export interface FleetPageProps {
 
 /**
  * Fleet page. Tab state lives in ?tab= (default `map`), so the legacy
- * /robots → /fleet?tab=list redirect lands on the Robots tab.
+ * /robots → /fleet?tab=list and /sites → /fleet?tab=sites redirects land on the
+ * Robots and Sites tabs.
  */
 export function FleetPage({ className }: FleetPageProps) {
   const { can } = useAuth();
   const canManage = can('fleet:manage');
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const tab: FleetTab = params.get('tab') === 'list' ? 'list' : 'map';
+  const raw = params.get('tab');
+  const tab: FleetTab = TABS.some((t) => t.id === raw) ? (raw as FleetTab) : 'map';
   const setTab = (id: string) =>
     setParams(
       (p) => {
@@ -52,6 +59,9 @@ export function FleetPage({ className }: FleetPageProps) {
 
   const [selectedFloor, setSelectedFloor] = useState('1');
   const [formOpen, setFormOpen] = useState(false);
+  // The Sites tab's "New scan" button lives in this header, so the flag lives
+  // here too and the gallery renders the modal from it.
+  const [scanOpen, setScanOpen] = useState(false);
   const [editingZone, setEditingZone] = useState<Zone | null>(null);
   const [drawnBounds, setDrawnBounds] = useState<ZoneBounds | null>(null);
 
@@ -127,10 +137,13 @@ export function FleetPage({ className }: FleetPageProps) {
   }, []);
 
   // Zone writes need an owner role or higher; the server refuses them below
-  // that, so the buttons say so instead of producing a 403.
+  // that, so the buttons say so instead of producing a 403. New scan is not a
+  // zone write and stays as it was — the twin routes are not in this gate.
   const zoneWriteTitle = canManage ? undefined : 'An owner role or higher is required to manage zones';
-  const headerActions =
-    tab === 'map' ? (
+  // Every tab brings its own actions; the Robots tab has none in the header.
+  let headerActions: ReactNode;
+  if (tab === 'map') {
+    headerActions = (
       <>
         <Button
           variant="secondary"
@@ -146,14 +159,21 @@ export function FleetPage({ className }: FleetPageProps) {
           New zone
         </Button>
       </>
-    ) : undefined;
+    );
+  } else if (tab === 'sites') {
+    headerActions = (
+      <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => setScanOpen(true)}>
+        New scan
+      </Button>
+    );
+  }
 
   return (
     <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'}>
       <PageHeader
         eyebrow="Operate"
         title="Fleet"
-        description="Where every robot is, and the zones they work in."
+        description="Where every robot is, the zones they work in, and the rooms they have scanned."
         actions={headerActions}
       />
 
@@ -194,6 +214,8 @@ export function FleetPage({ className }: FleetPageProps) {
       )}
 
       {tab === 'list' && <RobotsPage />}
+
+      {tab === 'sites' && <SitesGallery newScanOpen={scanOpen} onNewScanOpenChange={setScanOpen} />}
 
       <ZoneFormModal
         isOpen={formOpen}

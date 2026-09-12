@@ -357,7 +357,6 @@ export function DesignSystemPage() {
       <ConfirmHost />
 
       <PageHeader
-        eyebrow="System"
         title="Design system"
         description="Every primitive of the NeoDEM kit in every variant and state — the reference pages are built from, and the page reviewers screenshot in dark and light."
         meta={<StatusTag tone="accent">Dev only</StatusTag>}

@@ -11,7 +11,7 @@ import { useParams } from 'react-router-dom';
 import { ArrowRight, Database, Pause, Play, Plus, Square } from 'lucide-react';
 import {
   Button, EmptyState, ErrorState, FormField, FormModal, Input, LinkButton, PageHeader, Panel,
-  PipelineBreadcrumb, Skeleton, SkeletonText, StatusTag, Textarea, confirm, errorMessage, toast,
+  Skeleton, SkeletonText, StatusTag, Textarea, confirm, errorMessage, toast,
 } from '@/shared/components/ui';
 import { SessionStatusBadge } from '../components/SessionStatusBadge';
 import { QualityIndicator } from '../components/QualityIndicator';
@@ -275,10 +275,7 @@ export function SessionDetailPage() {
         </>}
         actions={actions}
       >
-        <div className="flex flex-col gap-4">
-          <PipelineBreadcrumb stage="collect" />
-          <SessionStepIndicator session={session} />
-        </div>
+        <SessionStepIndicator session={session} />
       </PageHeader>
 
       {isLive && (

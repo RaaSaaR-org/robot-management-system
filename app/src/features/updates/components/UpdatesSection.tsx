@@ -1,7 +1,10 @@
 /**
- * @file UpdatesPage.tsx
- * @description Secure OTA updates: list signed packages, create, approve,
- *              deploy to a robot and roll back
+ * @file UpdatesSection.tsx
+ * @description Secure OTA updates, embedded as the "Updates" tab of
+ *   SettingsPage (which owns the page header): the signed package list with its
+ *   search and status filter, and the create / approve / deploy-to-robot /
+ *   roll-back modals. Updates stopped being a sidebar row in TASK-279 — they
+ *   are a system setting, not a place you navigate to.
  * @feature updates
  * @regulatory CRA Art. 13, MR Art. 10
  */
@@ -9,25 +12,38 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Eye, PackageSearch, Plus, Rocket, Search, Undo2 } from 'lucide-react';
 import {
-  Button, DataTable, EmptyState, PageHeader, Panel, SearchInput, Select, StatusTag, Toolbar,
+  Button, DataTable, EmptyState, Panel, SearchInput, Select, StatusTag, Toolbar,
   type DataTableColumn, type RowActionItem,
 } from '@/shared/components/ui';
 import { formatTimeAgo } from '@/shared/utils';
 import { useUpdatesStore, selectPackages, selectIsLoading } from '../store/updatesStore';
 import { UPDATE_STATUS_LABELS, type UpdatePackage, type UpdatePackageStatus } from '../types/updates.types';
-import { ApproveUpdateModal } from '../components/ApproveUpdateModal';
-import { DeployUpdateModal } from '../components/DeployUpdateModal';
-import { RollbackModal } from '../components/RollbackModal';
-import { NewPackageModal } from '../components/NewPackageModal';
-import { UpdateDetailsModal } from '../components/UpdateDetailsModal';
-import { firstLine, formatBytes } from '../components/updateActs';
+import { ApproveUpdateModal } from './ApproveUpdateModal';
+import { DeployUpdateModal } from './DeployUpdateModal';
+import { RollbackModal } from './RollbackModal';
+import { NewPackageModal } from './NewPackageModal';
+import { UpdateDetailsModal } from './UpdateDetailsModal';
+import { firstLine, formatBytes } from './updateActs';
 
 const STATUS_OPTIONS = (Object.keys(UPDATE_STATUS_LABELS) as UpdatePackageStatus[]).map((s) => ({
   value: s,
   label: UPDATE_STATUS_LABELS[s],
 }));
 
-export function UpdatesPage() {
+export interface UpdatesSectionProps {
+  /** Additional class names */
+  className?: string;
+  /**
+   * Whether the "New package" modal is open. The parent owns the flag because
+   * the button that opens it sits in SettingsPage's header, above this
+   * component; the section only offers it a second time from its empty state.
+   */
+  newPackageOpen: boolean;
+  onNewPackageOpenChange: (open: boolean) => void;
+}
+
+/** The package table with its four act modals. No PageHeader: SettingsPage renders it. */
+export function UpdatesSection({ className, newPackageOpen, onNewPackageOpenChange }: UpdatesSectionProps) {
   const packages = useUpdatesStore(selectPackages);
   const isLoading = useUpdatesStore(selectIsLoading);
   const fetchPackages = useUpdatesStore((s) => s.fetchPackages);
@@ -35,7 +51,6 @@ export function UpdatesPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('');
-  const [creating, setCreating] = useState(false);
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [approving, setApproving] = useState<UpdatePackage | null>(null);
   const [deploying, setDeploying] = useState<UpdatePackage | null>(null);
@@ -101,19 +116,8 @@ export function UpdatesPage() {
       : []),
   ];
 
-  const newButton = (
-    <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>New package</Button>
-  );
-
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        eyebrow="System"
-        title="Secure updates"
-        description="Signed over-the-air packages for the robot software. Every package is approved before it reaches a robot."
-        actions={newButton}
-      />
-
+    <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'}>
       <Toolbar
         search={<SearchInput value={query} onChange={setQuery} placeholder="Search packages" />}
         filters={
@@ -142,12 +146,16 @@ export function UpdatesPage() {
           ) : (
             <EmptyState icon={<PackageSearch />} title="No update packages yet"
               description="Packages appear here once they are created and signed. Approve one before it can reach a robot."
-              action={newButton} />
+              action={
+                <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => onNewPackageOpenChange(true)}>
+                  New package
+                </Button>
+              } />
           )}
         />
       </Panel>
 
-      <NewPackageModal isOpen={creating} onClose={() => setCreating(false)} />
+      <NewPackageModal isOpen={newPackageOpen} onClose={() => onNewPackageOpenChange(false)} />
       <UpdateDetailsModal pkg={details} onClose={() => setDetailsId(null)} />
       <ApproveUpdateModal pkg={approving} onClose={() => setApproving(null)} />
       <DeployUpdateModal pkg={deploying} onClose={() => setDeploying(null)} />

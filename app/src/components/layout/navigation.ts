@@ -1,35 +1,36 @@
 /**
  * @file navigation.ts
- * @description The app's navigation model: the six sidebar groups (Overview ·
- *              Operate · Build · Comply · System · Admin), their feature and
- *              role gates, and the rule that decides which entry is active for
- *              a URL (nested routes included). Sidebar and MobileNav both read
- *              it, so desktop and mobile can never drift apart.
+ * @description The app's navigation model: the sidebar groups (Dashboard ·
+ *              Operate · Automate · Build · Comply), the second level a row can
+ *              own (its rail, its tabs), the feature and role gates, and the
+ *              rule that decides which entry is active for a URL (nested routes
+ *              included). Sidebar, MobileNav and SectionRail all read it, so the
+ *              levels can never drift apart.
+ *
+ *              What is *not* here is deliberate: Updates, Docs, Settings,
+ *              Organizations and Team are chrome, not navigation, so they live
+ *              in the Settings tabs, the top bar and the two top-bar menus
+ *              instead (TASK-279). The ⌘K palette is what keeps them findable.
  * @feature layout
  */
 
 import {
   Bell,
-  BookOpen,
   Bot,
-  Box,
   Brain,
   BrainCircuit,
-  Building2,
-  CloudDownload,
   Cpu,
   Database,
   GraduationCap,
   Joystick,
   LayoutDashboard,
+  ListChecks,
   Network,
   Rocket,
   Route,
-  Settings,
   ShieldCheck,
   Speech,
   Store,
-  Users,
   Video,
   Workflow,
   type LucideIcon,
@@ -41,6 +42,21 @@ import type { UserRole } from '@/features/auth/types/auth.types';
 // ============================================================================
 // TYPES
 // ============================================================================
+
+/** One tab of a page, as the page's own `TABS` const declares it. */
+export interface NavTab {
+  /** The `?tab=` value. The first tab of a page omits the param. */
+  id: string;
+  label: string;
+}
+
+/** One entry of a row's second-level rail. Its own page, its own tabs. */
+export interface NavRailItem {
+  label: string;
+  path: string;
+  icon: LucideIcon;
+  tabs?: NavTab[];
+}
 
 export interface NavItem {
   label: string;
@@ -59,12 +75,20 @@ export interface NavItem {
   alsoActiveOn?: RegExp[];
   /** URLs under `path` that belong to another entry instead. */
   notActiveOn?: RegExp[];
+  /** Second-level rail rendered by `SectionRail` while this row is active. */
+  rail?: NavRailItem[];
+  /** This page's own tabs, when it has no rail. First tab = the bare path. */
+  tabs?: NavTab[];
 }
 
 export interface NavGroup {
   id: string;
-  /** Eyebrow label — also the page eyebrow of every page in the group */
-  label: string;
+  /**
+   * Eyebrow label — also the page eyebrow of every page in the group. Omitted
+   * for the bookend groups of one row: a label over a single row only repeats
+   * it, and its page then carries no eyebrow either.
+   */
+  label?: string;
   items: NavItem[];
   /**
    * Feature flag the group requires. When the flag is false, the group is
@@ -83,9 +107,10 @@ export interface NavGroup {
 // ============================================================================
 
 export const NAV_GROUPS: NavGroup[] = [
+  // The two bookend groups (dashboard, comply) carry no label: a single row
+  // needs no heading over it.
   {
-    id: 'overview',
-    label: 'Overview',
+    id: 'dashboard',
     items: [{ label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard }],
   },
   {
@@ -96,8 +121,14 @@ export const NAV_GROUPS: NavGroup[] = [
         label: 'Fleet',
         path: '/fleet',
         icon: Bot,
-        // A robot's detail page is reached from the fleet list.
-        alsoActiveOn: [/^\/robots\/[^/]+\/?$/],
+        // A robot's detail page is reached from the fleet list, and the twin
+        // viewer from the Sites tab — both keep this row lit (TASK-276).
+        alsoActiveOn: [/^\/robots\/[^/]+\/?$/, /^\/sites(\/|$)/],
+        tabs: [
+          { id: 'map', label: 'Map' },
+          { id: 'list', label: 'Robots' },
+          { id: 'sites', label: 'Sites' },
+        ],
       },
       {
         label: 'Control Center',
@@ -106,74 +137,169 @@ export const NAV_GROUPS: NavGroup[] = [
         // Opening a specific robot's cockpit is the same page.
         alsoActiveOn: [/^\/robots\/[^/]+\/cockpit\/?$/],
       },
-      { label: 'Agent Mode', path: '/agent', icon: BrainCircuit },
-      { label: 'Patrol', path: '/patrol', icon: Route },
-      // Host mode (TASK-213) — the robot with a person in front of it.
-      { label: 'Guide', path: '/tour', icon: Speech },
-      { label: 'Automations', path: '/processes', icon: Workflow },
       {
         label: 'Alerts',
         path: '/alerts',
         icon: Bell,
         // Incidents are a tab of Alerts; their detail route stays separate.
         alsoActiveOn: [/^\/incidents(\/|$)/],
+        tabs: [
+          { id: 'active', label: 'Active' },
+          { id: 'history', label: 'History' },
+          { id: 'incidents', label: 'Incidents' },
+        ],
       },
-      { label: 'Digital Twin', path: '/sites', icon: Box },
     ],
   },
+  // Automate — the work a robot does on its own, whether a human kicked it off
+  // (Agent Mode) or a schedule did.
+  {
+    id: 'automate',
+    label: 'Automate',
+    items: [
+      // Agent Mode keeps its own row beside Missions: it is the live console,
+      // and a rail click must never unmount the session running in it.
+      { label: 'Agent Mode', path: '/agent', icon: BrainCircuit },
+      // Patrol, Guide and Automations were three rows for one idea — work a
+      // robot does on its own (TASK-277). They are one row with a rail now,
+      // and a rail rather than tabs because two of the three pages own a tab
+      // bar already: Missions tabs above those would stack two tab rows.
+      {
+        label: 'Missions',
+        // The rail's first stop is the row's own page.
+        path: '/patrol',
+        icon: ListChecks,
+        // Guide and Automations sit outside /patrol, so the row claims their
+        // URLs too — which is also what keeps the rail on their editors and
+        // run details, since a row owns everything under the paths it matches.
+        alsoActiveOn: [/^\/tour(\/|$)/, /^\/processes(\/|$)/],
+        // No `tabs` on the row: its page is whatever stop the rail points at,
+        // so each stop declares the tabs of its own page.
+        rail: [
+          {
+            label: 'Patrol',
+            path: '/patrol',
+            icon: Route,
+            tabs: [
+              { id: 'routes', label: 'Routes' },
+              { id: 'runs', label: 'Runs' },
+            ],
+          },
+          // Host mode (TASK-213) — the robot with a person in front of it.
+          {
+            label: 'Guide',
+            path: '/tour',
+            icon: Speech,
+            tabs: [
+              { id: 'tours', label: 'Tours' },
+              { id: 'visits', label: 'Visits' },
+            ],
+          },
+          { label: 'Automations', path: '/processes', icon: Workflow },
+        ],
+      },
+    ],
+  },
+  // Build — everything that turns demonstrations into a policy a robot runs.
   {
     id: 'build',
     label: 'Build',
     items: [
-      // Pipeline overview — the entry point of the training workflow (TASK-143).
-      { label: 'Skill Training', path: '/pipeline', icon: GraduationCap },
-      // Pipeline stages in order: collect → dataset → train → models → deploy.
-      { label: 'Data Collection', path: '/data-collection', icon: Video },
-      { label: 'Datasets', path: '/datasets', icon: Database },
-      { label: 'Training', path: '/training', icon: Cpu },
-      // Model Registry (TASK-238).
-      { label: 'Models', path: '/models', icon: Brain },
-      { label: 'Deployments', path: '/deployments', icon: Rocket },
-      { label: 'Fleet Learning', path: '/fleet-learning', icon: Network },
+      // Skill Training was six rows for one workflow: the hub and the five
+      // stages the hub already steps through (TASK-278). It is one row with a
+      // rail now — a rail rather than tabs because three of the five stage
+      // pages own a tab bar already, and tabs above those would stack two tab
+      // rows.
+      {
+        label: 'Skill Training',
+        // The rail's first stop is the row's own page: the pipeline overview
+        // with its stepper and first-run wizard (TASK-143).
+        path: '/pipeline',
+        icon: GraduationCap,
+        // Every stage lives outside /pipeline, so the row claims their URLs
+        // too — which is also what keeps the rail on a recording session, an
+        // episode viewer or a round detail, since a row owns everything under
+        // the paths it matches. Anchored and segment-terminated on purpose:
+        // /fleet-learning is Skill Training's, /fleet stays Fleet's.
+        alsoActiveOn: [
+          /^\/data-collection(\/|$)/,
+          /^\/datasets(\/|$)/,
+          /^\/training(\/|$)/,
+          /^\/models(\/|$)/,
+          /^\/fleet-learning(\/|$)/,
+        ],
+        // No `tabs` on the row: its page is whatever stop the rail points at,
+        // so each stop declares the tabs of its own page.
+        rail: [
+          { label: 'Overview', path: '/pipeline', icon: GraduationCap },
+          // The stages in workflow order: collect → dataset → train → models.
+          {
+            label: 'Collect',
+            path: '/data-collection',
+            icon: Video,
+            tabs: [
+              { id: 'sessions', label: 'Sessions' },
+              { id: 'priorities', label: 'Priorities' },
+              { id: 'uncertainty', label: 'Uncertainty' },
+            ],
+          },
+          { label: 'Datasets', path: '/datasets', icon: Database },
+          {
+            label: 'Train',
+            path: '/training',
+            icon: Cpu,
+            tabs: [
+              { id: 'jobs', label: 'Jobs' },
+              { id: 'simulation', label: 'Simulation' },
+              { id: 'evaluation', label: 'Evaluation' },
+            ],
+          },
+          // Model Registry (TASK-238).
+          { label: 'Models', path: '/models', icon: Brain },
+          {
+            label: 'Learning',
+            path: '/fleet-learning',
+            icon: Network,
+            tabs: [
+              { id: 'rounds', label: 'Rounds' },
+              { id: 'convergence', label: 'Convergence' },
+              { id: 'privacy', label: 'Privacy' },
+              { id: 'rohe', label: 'ROHE' },
+            ],
+          },
+        ],
+      },
+      // Deployments keeps its own row: it is the seam where Build hands over
+      // to Operate, and the one stage a fleet operator reaches without ever
+      // opening the training workflow.
+      {
+        label: 'Deployments',
+        path: '/deployments',
+        icon: Rocket,
+        tabs: [
+          { id: 'deployments', label: 'Deployments' },
+          { id: 'skills', label: 'Skills' },
+        ],
+      },
       { label: 'Marketplace', path: '/marketplace', icon: Store },
     ],
   },
   {
     id: 'comply',
-    label: 'Comply',
-    items: [{ label: 'Compliance', path: '/compliance', icon: ShieldCheck }],
-  },
-  {
-    id: 'system',
-    label: 'System',
-    items: [
-      { label: 'Updates', path: '/updates', icon: CloudDownload },
-      { label: 'Docs', path: '/docs', icon: BookOpen },
-      { label: 'Settings', path: '/settings', icon: Settings },
-    ],
-  },
-  // Admin — only when multi-tenancy is on AND the user is an owner or a
-  // platform super-admin. Members and viewers never see the group.
-  {
-    id: 'admin',
-    label: 'Admin',
-    requiresFeature: 'multiTenancyEnabled',
-    requiresRole: ['super-admin', 'owner'],
     items: [
       {
-        label: 'Organizations',
-        path: '/organizations',
-        // Platform-level cross-tenant view — super-admin only.
-        requiresRole: ['super-admin'],
-        icon: Building2,
-      },
-      {
-        label: 'Team',
-        path: '/team',
-        // Owners manage their own tenant; super-admins reach any team via
-        // impersonation.
-        requiresRole: ['super-admin', 'owner'],
-        icon: Users,
+        label: 'Compliance',
+        path: '/compliance',
+        icon: ShieldCheck,
+        tabs: [
+          { id: 'overview', label: 'Overview' },
+          { id: 'obligations', label: 'Obligations' },
+          { id: 'audit', label: 'Audit trail' },
+          { id: 'explainability', label: 'Explainability' },
+          { id: 'oversight', label: 'Oversight' },
+          { id: 'approvals', label: 'Approvals' },
+          { id: 'privacy', label: 'Data privacy' },
+        ],
       },
     ],
   },
@@ -198,6 +324,84 @@ export function isNavItemActive(item: NavItem, pathname: string): boolean {
 }
 
 // ============================================================================
+// DESTINATIONS
+// ============================================================================
+
+export type NavDestinationKind = 'row' | 'rail' | 'tab';
+
+export interface NavDestination {
+  label: string;
+  /** Where clicking it goes, `?tab=` included when it is a tab. */
+  path: string;
+  kind: NavDestinationKind;
+  icon: LucideIcon;
+  /** The group's label, or undefined for the unlabelled bookend groups. */
+  group?: string;
+  /** The row this destination hangs under — its own label for a row. */
+  row: string;
+}
+
+/**
+ * The tabs of one page (a row's own, or a rail stop's) as destinations. Every
+ * page writes its first tab by *deleting* `?tab=`, so the first tab's URL is
+ * the bare path and only the later ones carry the param.
+ */
+function tabDestinations(owner: NavRailItem, group?: string): NavDestination[] {
+  return (owner.tabs ?? []).map((tab, index) => ({
+    label: tab.label,
+    path: index === 0 ? owner.path : `${owner.path}?tab=${tab.id}`,
+    kind: 'tab' as const,
+    // A tab borrows the icon of the page it belongs to — it has none of its own.
+    icon: owner.icon,
+    group,
+    row: owner.label,
+  }));
+}
+
+/**
+ * Every place the navigation can take you: each row, each rail item, each tab.
+ * The single enumeration — the palette reads this, so nothing declared in the
+ * model can become unreachable.
+ *
+ * Order is the model's own, top to bottom: the row, then either each rail stop
+ * followed by that stop's tabs, or (for a row without a rail) the row's own
+ * tabs. A page's first tab shares its owner's URL, by the convention above.
+ */
+export function navDestinations(groups: NavGroup[]): NavDestination[] {
+  const destinations: NavDestination[] = [];
+  for (const group of groups) {
+    for (const item of group.items) {
+      destinations.push({
+        label: item.label,
+        path: item.path,
+        kind: 'row',
+        icon: item.icon,
+        group: group.label,
+        row: item.label,
+      });
+      if (item.rail) {
+        // A row with a rail has no tabs of its own: its page is whatever stop
+        // the rail points at, so the tabs hang off the stops.
+        for (const stop of item.rail) {
+          destinations.push({
+            label: stop.label,
+            path: stop.path,
+            kind: 'rail',
+            icon: stop.icon,
+            group: group.label,
+            row: stop.label,
+          });
+          destinations.push(...tabDestinations(stop, group.label));
+        }
+      } else {
+        destinations.push(...tabDestinations(item, group.label));
+      }
+    }
+  }
+  return destinations;
+}
+
+// ============================================================================
 // GATES
 // ============================================================================
 
@@ -206,6 +410,12 @@ type FeatureFlags = Partial<Record<NonNullable<NavGroup['requiresFeature']>, boo
 /**
  * Apply the gates: feature flag first, then the group's role, then each item's
  * role. A group left with no visible items is dropped.
+ *
+ * No group in `NAV_GROUPS` declares a gate today — the one that did was Admin,
+ * and it moved into the organization switcher (TASK-279). The gates stay all
+ * the same: they are the model's only vocabulary for "not everyone sees this",
+ * the palette filters through them, and the next gated group should not have to
+ * reinvent them. Their unit tests use a fixture group for exactly that reason.
  */
 export function filterNavGroups(
   groups: NavGroup[],

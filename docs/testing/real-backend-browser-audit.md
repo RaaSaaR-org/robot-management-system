@@ -9,6 +9,22 @@ TASK-255 exercised NeoDEM through Playwright MCP with a production frontend buil
 - Zone form labels did not identify their inputs to accessibility tools. Shared input labels and validation messages now associate correctly, and the form respects light/dark theme colors.
 - A newly registered viewer could create zones and tours. Zone writes now require owner/super-admin; patrol/tour writes require member or above. The UI reflects these permissions while preserving read access. Route guards also cover robot command aliases and patrol photo uploads.
 
+## Since this audit
+
+The page redesign (#313, #314, #315) landed on `main` after the audit and
+rewrote the pages above, so two findings read differently today:
+
+- The zone form's label and validation fix is superseded: `ZoneFormModal` is the
+  kit's `FormModal` now, and `FormField` owns the label/error association for
+  every form in the app. The fix is no longer carried as a change of its own.
+- The role gate moved with the markup: the write verbs on the patrol and tour
+  route lists are row-menu items rather than buttons, both route editors carry
+  `readOnly` as one disabled `<fieldset>`, and zone create/draw live in the
+  Fleet page header. What a viewer can and cannot do is unchanged; where the
+  refusal is rendered is not.
+
+Everything above this section is the record as it stood on 2026-09-08.
+
 ## Browser coverage
 
 Twenty main navigation destinations loaded with the authenticated backend, without uncaught JavaScript errors or failed HTTP responses during the successful pass:

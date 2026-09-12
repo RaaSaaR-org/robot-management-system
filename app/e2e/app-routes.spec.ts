@@ -17,9 +17,10 @@ import { expect, test, type Page } from '@playwright/test';
 // /design-system (DEV builds only).
 const ROUTES = [
   // Overview + Operate
-  '/dashboard', '/fleet', '/fleet?tab=list', '/robots/demo-h1-001', '/robots/demo-g1-001/cockpit',
+  '/dashboard', '/fleet', '/fleet?tab=list', '/fleet?tab=sites',
+  '/robots/demo-h1-001', '/robots/demo-g1-001/cockpit',
   '/control-center', '/agent', '/patrol', '/patrol/routes/new', '/tour', '/tour/routes/new',
-  '/processes', '/alerts', '/alerts?tab=history', '/alerts?tab=incidents', '/sites', '/chat',
+  '/processes', '/alerts', '/alerts?tab=history', '/alerts?tab=incidents', '/chat',
   // Build
   '/pipeline', '/data-collection', '/data-collection/new', '/datasets',
   '/datasets/demo-g1-edu/episodes', '/training', '/training?tab=evaluation',
@@ -28,8 +29,10 @@ const ROUTES = [
   // Comply
   '/compliance', '/compliance?tab=explainability', '/compliance?tab=gdpr',
   '/compliance?tab=oversight', '/compliance?tab=approvals',
-  // System + Admin + account
-  '/updates', '/docs', '/docs/brand', '/settings', '/account', '/organizations', '/team',
+  // Out of the sidebar since TASK-279: the Settings tabs (Updates among them),
+  // the docs, the account page and the two administration pages.
+  '/docs', '/docs/brand', '/settings', '/settings?tab=updates', '/account',
+  '/organizations', '/team',
   // A2A
   '/a2a', '/a2a/agents', '/a2a/agents/Demo%20Agent', '/a2a/tasks', '/a2a/events',
   '/this-route-does-not-exist',

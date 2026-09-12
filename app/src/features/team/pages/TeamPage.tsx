@@ -68,7 +68,6 @@ export function TeamPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        eyebrow="Admin"
         title="Team"
         description="People and service accounts that can reach this organization."
         actions={tab === 'members' ? addTeammate : newServiceAccount}

@@ -108,7 +108,6 @@ export function OrganizationsPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        eyebrow="Admin"
         title="Organizations"
         description="Every tenant on this platform, with its users and robots."
         actions={

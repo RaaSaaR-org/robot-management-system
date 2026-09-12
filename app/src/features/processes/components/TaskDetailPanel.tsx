@@ -72,14 +72,14 @@ export function TaskDetailPanel({ taskId, backTo = '/processes', className }: Ta
     if (isLoading || !error) {
       return (
         <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'}>
-          <PageHeader eyebrow="Operate" back={back} title="Loading…" />
+          <PageHeader eyebrow="Automate" back={back} title="Loading…" />
           <TaskDetailSkeleton />
         </div>
       );
     }
     return (
       <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'}>
-        <PageHeader eyebrow="Operate" back={back} title="Automation not found" />
+        <PageHeader eyebrow="Automate" back={back} title="Automation not found" />
         <Panel>
           <ErrorState
             title="Couldn't load this automation"
@@ -117,7 +117,7 @@ export function TaskDetailPanel({ taskId, backTo = '/processes', className }: Ta
   return (
     <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'}>
       <PageHeader
-        eyebrow="Operate"
+        eyebrow="Automate"
         back={back}
         title={task.name}
         description={task.description}

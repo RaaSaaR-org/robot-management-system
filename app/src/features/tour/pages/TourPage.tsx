@@ -181,7 +181,7 @@ export const TourPage = memo(function TourPage({ className }: TourPageProps) {
   return (
     <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'} data-testid="tour-page">
       <PageHeader
-        eyebrow="Operate"
+        eyebrow="Automate"
         title="Guide"
         description="Tours the robot gives visitors, and the questions they asked."
         meta={<LiveTag connected={isConnected} data-testid="tour-live" />}

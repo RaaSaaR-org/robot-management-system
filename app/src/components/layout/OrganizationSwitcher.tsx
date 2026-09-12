@@ -6,14 +6,18 @@
  * choice is persisted in localStorage and every API request then carries
  * an `X-Impersonate-Tenant` header.
  *
- * Non-super-admin roles see the same pill but without the menu — they can
- * only ever be in their own organization. Hidden entirely when
- * multi-tenancy is off.
+ * It is also where the two administration pages live since TASK-279 — Team
+ * for owners and super-admins, Organizations for super-admins — which is why
+ * owners get a menu too, even though they can only ever be in their own
+ * organization. `App.tsx`'s route guards are what enforce access; this menu
+ * only hides what they would refuse. Members and viewers keep the static pill,
+ * and everyone loses it when multi-tenancy is off.
  * @feature layout
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Building2, Check, ChevronDown, LogOut } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Building2, Check, ChevronDown, LogOut, Users } from 'lucide-react';
 import { useFeatures } from '@/shared/hooks';
 import { useOrganizationsStore } from '@/features/organizations';
 import { useAuthStore, selectUserRole } from '@/features/auth/store/authStore';
@@ -30,6 +34,9 @@ export function OrganizationSwitcher() {
   const { multiTenancyEnabled } = useFeatures();
   const role = useAuthStore(selectUserRole);
   const isSuperAdmin = role === 'super-admin';
+  // Owners administer their own tenant, so they get the menu — without the
+  // tenant list, which only a platform super-admin may see.
+  const isAdmin = isSuperAdmin || role === 'owner';
 
   const current = useOrganizationsStore((s) => s.current);
   const currentLoaded = useOrganizationsStore((s) => s.currentLoaded);
@@ -89,7 +96,7 @@ export function OrganizationSwitcher() {
     <Building2 className={cn('h-4 w-4 shrink-0', impersonating ? 'text-signal-unknown' : 'text-accent')} strokeWidth={1.75} aria-hidden="true" />
   );
 
-  if (!isSuperAdmin) {
+  if (!isAdmin) {
     return (
       <span
         className={cn(pill, 'hidden sm:inline-flex border-line bg-panel text-ink-secondary')}
@@ -129,48 +136,61 @@ export function OrganizationSwitcher() {
         <div
           ref={menu.menuRef}
           role="menu"
-          aria-label="View as organization"
+          aria-label="Organization menu"
           onKeyDown={menu.onMenuKeyDown}
           className={cn(topBarMenuPanel, 'w-72')}
         >
           <div className="border-b border-line-subtle px-3.5 py-3">
-            <div className={labelCaps}>View as organization</div>
-            <p className="mt-1 text-xs leading-relaxed text-ink-tertiary">
-              Super-admin troubleshooting. Every API request scopes to the selected organization until you exit.
-            </p>
-          </div>
-
-          <div className="max-h-80 overflow-y-auto p-1">
-            {!listLoaded && listLoading && <div className="px-2.5 py-2 text-xs text-ink-tertiary">Loading…</div>}
-            {listLoaded && list.length === 0 && (
-              <div className="px-2.5 py-2 text-xs text-ink-tertiary">No organizations.</div>
+            {isSuperAdmin ? (
+              <>
+                <div className={labelCaps}>View as organization</div>
+                <p className="mt-1 text-xs leading-relaxed text-ink-tertiary">
+                  Super-admin troubleshooting. Every API request scopes to the selected organization until you exit.
+                </p>
+              </>
+            ) : (
+              // An owner never switches tenant, so the header names the one
+              // they are in instead of introducing a list they will not get.
+              <>
+                <div className={labelCaps}>Organization</div>
+                <div className="mt-1 truncate text-sm font-medium text-ink-primary">{label}</div>
+              </>
             )}
-            {list.map((org) => {
-              const isActive = org.id === current.id;
-              return (
-                <button
-                  key={org.id}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={isActive}
-                  tabIndex={-1}
-                  onClick={() => handleSwitch(org.id)}
-                  className={cn(topBarMenuItem, 'justify-between py-2')}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium text-ink-primary">{org.name}</span>
-                    <span className="block truncate text-xs text-ink-tertiary">
-                      {org.slug}
-                      {org.isDefault && ' · default'}
-                    </span>
-                  </span>
-                  {isActive && <Check className="text-primary" strokeWidth={1.75} aria-hidden="true" />}
-                </button>
-              );
-            })}
           </div>
 
-          {impersonating && (
+          {isSuperAdmin && (
+            <div className="max-h-80 overflow-y-auto p-1">
+              {!listLoaded && listLoading && <div className="px-2.5 py-2 text-xs text-ink-tertiary">Loading…</div>}
+              {listLoaded && list.length === 0 && (
+                <div className="px-2.5 py-2 text-xs text-ink-tertiary">No organizations.</div>
+              )}
+              {list.map((org) => {
+                const isActive = org.id === current.id;
+                return (
+                  <button
+                    key={org.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={isActive}
+                    tabIndex={-1}
+                    onClick={() => handleSwitch(org.id)}
+                    className={cn(topBarMenuItem, 'justify-between py-2')}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-ink-primary">{org.name}</span>
+                      <span className="block truncate text-xs text-ink-tertiary">
+                        {org.slug}
+                        {org.isDefault && ' · default'}
+                      </span>
+                    </span>
+                    {isActive && <Check className="text-primary" strokeWidth={1.75} aria-hidden="true" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {isSuperAdmin && impersonating && (
             <div className="border-t border-line-subtle p-1">
               <button
                 type="button"
@@ -184,6 +204,34 @@ export function OrganizationSwitcher() {
               </button>
             </div>
           )}
+
+          {/* The two pages the Admin sidebar group used to hold (TASK-279).
+              menu.close(false) closes without pulling focus back to the pill —
+              the right call when navigating away, as UserMenu does. */}
+          <div className="border-t border-line-subtle p-1">
+            <Link
+              to="/team"
+              role="menuitem"
+              tabIndex={-1}
+              onClick={() => menu.close(false)}
+              className={cn(topBarMenuItem, 'h-9')}
+            >
+              <Users strokeWidth={1.75} aria-hidden="true" />
+              <span>Team</span>
+            </Link>
+            {isSuperAdmin && (
+              <Link
+                to="/organizations"
+                role="menuitem"
+                tabIndex={-1}
+                onClick={() => menu.close(false)}
+                className={cn(topBarMenuItem, 'h-9')}
+              >
+                <Building2 strokeWidth={1.75} aria-hidden="true" />
+                <span>Organizations</span>
+              </Link>
+            )}
+          </div>
         </div>
       )}
     </div>

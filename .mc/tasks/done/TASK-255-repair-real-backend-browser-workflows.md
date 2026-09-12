@@ -2,13 +2,13 @@
 id: "TASK-255"
 title: "Repair real backend browser workflows"
 slug: "repair-real-backend-browser-workflows"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 tags: [browser, integration]
 spe: 8
 created: "2026-09-08"
-updated: "2026-09-08"
+updated: "2026-09-12"
 ---
 
 # Repair real backend browser workflows
