@@ -3,7 +3,7 @@ id: "TASK-306"
 aliases: []
 title: "Write the platform doc the landing page links into"
 slug: "write-the-platform-doc-the-landing-page-links-into"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []

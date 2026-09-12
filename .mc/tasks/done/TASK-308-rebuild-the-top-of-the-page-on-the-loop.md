@@ -3,7 +3,7 @@ id: "TASK-308"
 aliases: []
 title: "Rebuild the top of the page on the loop"
 slug: "rebuild-the-top-of-the-page-on-the-loop"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []

@@ -3,7 +3,7 @@ id: "TASK-309"
 aliases: []
 title: "Take the commands out of Run it and lock the page budget"
 slug: "take-the-commands-out-of-run-it-and-lock-the-page-budget"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
