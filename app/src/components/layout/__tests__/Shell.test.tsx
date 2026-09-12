@@ -42,7 +42,7 @@ function renderAt(path: string, ui: React.ReactElement) {
 describe('Sidebar', () => {
   it('renders static group eyebrows, no accordion toggles', () => {
     renderAt('/dashboard', <Sidebar />);
-    for (const label of ['Operate', 'Automate', 'Build', 'System']) {
+    for (const label of ['Operate', 'Automate', 'Build']) {
       expect(screen.getByRole('heading', { name: label })).toBeInTheDocument();
     }
     // The bookend groups hold one row each and carry no eyebrow: no heading,
@@ -52,8 +52,22 @@ describe('Sidebar', () => {
     }
     expect(screen.getByRole('region', { name: 'Dashboard' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Compliance' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Admin' })).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('is 10 rows, and offers nothing that moved into the chrome — for any role', () => {
+    // The strongest reach a role can have, so nothing is hidden by a gate
+    // rather than by being gone: System and Admin left the model in TASK-279.
+    flags.multiTenancyEnabled = true;
+    flags.role = 'super-admin';
+    renderAt('/dashboard', <Sidebar />);
+    expect(screen.getAllByRole('link')).toHaveLength(10);
+    for (const label of ['System', 'Admin']) {
+      expect(screen.queryByRole('heading', { name: label })).toBeNull();
+    }
+    for (const name of ['Updates', 'Docs', 'Settings', 'Team', 'Organizations']) {
+      expect(screen.queryByRole('link', { name })).toBeNull();
+    }
   });
 
   it('marks the owning entry current on a nested detail route', () => {
@@ -61,14 +75,6 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Fleet' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Fleet' }).className).toContain('bg-primary/10');
     expect(screen.getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current');
-  });
-
-  it('keeps the Admin gates: owners get Team only', () => {
-    flags.multiTenancyEnabled = true;
-    flags.role = 'owner';
-    renderAt('/dashboard', <Sidebar />);
-    expect(screen.getByRole('link', { name: 'Team' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Organizations' })).toBeNull();
   });
 
   it('collapses to an icon rail whose links keep their names', () => {

@@ -54,7 +54,6 @@ import {
   LazyMarketplacePage,
   LazyMarketplaceDetailPage,
   LazyMyMarketplacePage,
-  LazyUpdatesPage,
   LazyPipelinePage,
   LazyFleetLearningPage,
   LazyFleetLearningRoundDetailPage,
@@ -614,15 +613,8 @@ function App() {
             }
           />
 
-          {/* Updates - Secure OTA update management (CRA Art. 13, MR Art. 10) */}
-          <Route
-            path="/updates"
-            element={
-              <ProtectedAppRoute>
-                <LazyUpdatesPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Updates — now a Settings tab (TASK-279) */}
+          <Route path="/updates" element={<Navigate to="/settings?tab=updates" replace />} />
 
           {/* Agent Mode - local LLM plans and runs blocks on a robot (TASK-194) */}
           <Route

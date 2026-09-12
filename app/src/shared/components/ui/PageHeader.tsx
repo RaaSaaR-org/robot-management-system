@@ -21,7 +21,11 @@ export interface PageHeaderProps {
   description?: ReactNode;
   /** Legacy alias of `description` */
   subtitle?: ReactNode;
-  /** Nav group label above the title: Operate · Automate · Build · System · Admin */
+  /**
+   * Nav group label above the title: Operate · Automate · Build. A page whose
+   * group carries no label — and a page outside the sidebar altogether, like
+   * Settings or Docs since TASK-279 — passes none.
+   */
   eyebrow?: ReactNode;
   /** Detail pages: renders "← label" linking back to the list */
   back?: { to: string; label: string };

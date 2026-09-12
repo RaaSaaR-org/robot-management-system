@@ -1,22 +1,24 @@
 /**
  * @file navigation.ts
  * @description The app's navigation model: the sidebar groups (Dashboard ·
- *              Operate · Automate · Build · Comply · System · Admin), the
- *              second level a row can own (its rail, its tabs), the feature and
- *              role gates, and the rule that decides which entry is active for
- *              a URL (nested routes included). Sidebar, MobileNav and
- *              SectionRail all read it, so the levels can never drift apart.
+ *              Operate · Automate · Build · Comply), the second level a row can
+ *              own (its rail, its tabs), the feature and role gates, and the
+ *              rule that decides which entry is active for a URL (nested routes
+ *              included). Sidebar, MobileNav and SectionRail all read it, so the
+ *              levels can never drift apart.
+ *
+ *              What is *not* here is deliberate: Updates, Docs, Settings,
+ *              Organizations and Team are chrome, not navigation, so they live
+ *              in the Settings tabs, the top bar and the two top-bar menus
+ *              instead (TASK-279). The ⌘K palette is what keeps them findable.
  * @feature layout
  */
 
 import {
   Bell,
-  BookOpen,
   Bot,
   Brain,
   BrainCircuit,
-  Building2,
-  CloudDownload,
   Cpu,
   Database,
   GraduationCap,
@@ -26,11 +28,9 @@ import {
   Network,
   Rocket,
   Route,
-  Settings,
   ShieldCheck,
   Speech,
   Store,
-  Users,
   Video,
   Workflow,
   type LucideIcon,
@@ -303,40 +303,6 @@ export const NAV_GROUPS: NavGroup[] = [
       },
     ],
   },
-  {
-    id: 'system',
-    label: 'System',
-    items: [
-      { label: 'Updates', path: '/updates', icon: CloudDownload },
-      { label: 'Docs', path: '/docs', icon: BookOpen },
-      { label: 'Settings', path: '/settings', icon: Settings },
-    ],
-  },
-  // Admin — only when multi-tenancy is on AND the user is an owner or a
-  // platform super-admin. Members and viewers never see the group.
-  {
-    id: 'admin',
-    label: 'Admin',
-    requiresFeature: 'multiTenancyEnabled',
-    requiresRole: ['super-admin', 'owner'],
-    items: [
-      {
-        label: 'Organizations',
-        path: '/organizations',
-        // Platform-level cross-tenant view — super-admin only.
-        requiresRole: ['super-admin'],
-        icon: Building2,
-      },
-      {
-        label: 'Team',
-        path: '/team',
-        // Owners manage their own tenant; super-admins reach any team via
-        // impersonation.
-        requiresRole: ['super-admin', 'owner'],
-        icon: Users,
-      },
-    ],
-  },
 ];
 
 /** Every entry, flattened. Kept for older imports. */
@@ -444,6 +410,12 @@ type FeatureFlags = Partial<Record<NonNullable<NavGroup['requiresFeature']>, boo
 /**
  * Apply the gates: feature flag first, then the group's role, then each item's
  * role. A group left with no visible items is dropped.
+ *
+ * No group in `NAV_GROUPS` declares a gate today — the one that did was Admin,
+ * and it moved into the organization switcher (TASK-279). The gates stay all
+ * the same: they are the model's only vocabulary for "not everyone sees this",
+ * the palette filters through them, and the next gated group should not have to
+ * reinvent them. Their unit tests use a fixture group for exactly that reason.
  */
 export function filterNavGroups(
   groups: NavGroup[],

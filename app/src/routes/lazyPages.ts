@@ -227,13 +227,6 @@ export const LazyMyMarketplacePage = lazy(() =>
 );
 
 /**
- * Updates page - Secure OTA update management (CRA Art. 13, MR Art. 10)
- */
-export const LazyUpdatesPage = lazy(() =>
-  import('@/features/updates').then((m) => ({ default: m.UpdatesPage }))
-);
-
-/**
  * Pipeline page - unified training pipeline overview (TASK-134)
  */
 export const LazyPipelinePage = lazy(() =>

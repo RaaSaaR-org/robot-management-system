@@ -7,12 +7,13 @@
 import { expect, test } from '@playwright/test';
 
 // /tour and /processes are absent on purpose: they are stops on the Missions
-// rail now (TASK-277), not sidebar rows, so the walk below reaches them.
+// rail now (TASK-277), not sidebar rows, so the walk below reaches them. So are
+// /updates, /docs and /settings, which left the sidebar for the chrome in
+// TASK-279 — the test after this walk reaches those the way a user does.
 const destinations = [
   '/fleet', '/control-center', '/agent', '/alerts', '/patrol',
   '/pipeline', '/data-collection', '/datasets', '/training',
-  '/deployments', '/fleet-learning', '/marketplace', '/compliance', '/updates',
-  '/docs', '/settings',
+  '/deployments', '/fleet-learning', '/marketplace', '/compliance',
 ];
 
 for (const destination of destinations) {
@@ -32,16 +33,13 @@ for (const destination of destinations) {
     await expect(page.locator('main').getByRole('heading').first()).toBeVisible();
     expect(errors).toEqual([]);
 
-    if (destination === '/updates') {
-      await expect(page.getByText('No update packages yet', { exact: true })).toBeVisible();
-    }
     if (destination === '/pipeline') {
       // With no trained model, evaluation and deployment wait for upstream work.
       await expect(page.getByText('Complete previous step first')).toHaveCount(2);
       await expect(page.getByText('Could not load sim runs')).toHaveCount(0);
     }
 
-    if (['/updates', '/pipeline'].includes(destination)) {
+    if (destination === '/pipeline') {
       await page.screenshot({ path: testInfo.outputPath(`${destination.slice(1)}.png`), fullPage: true });
     }
 
@@ -67,6 +65,38 @@ test("Fleet's Sites tab lists the scanned rooms", async ({ page }, testInfo) => 
   await page.waitForLoadState('networkidle');
   expect(errors).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath('fleet-sites.png'), fullPage: true });
+});
+
+// Updates, Docs and Settings are chrome now (TASK-279): the update packages are
+// a Settings tab the user menu opens, and the docs are a help icon in the top
+// bar. Neither has a sidebar link left, so this is the only path to them.
+test('the top bar reaches Settings, its Updates tab and the docs', async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('./#/dashboard');
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Open user menu' }).click();
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click();
+  await expect(page).toHaveURL(/#\/settings$/);
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+
+  await page.getByRole('tab', { name: 'Updates', exact: true }).click();
+  await expect(page).toHaveURL(/#\/settings\?tab=updates$/);
+  await expect(page.getByText('No update packages yet', { exact: true })).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('settings-updates.png'), fullPage: true });
+
+  // The old sidebar row still answers, one redirect later.
+  await page.goto('./#/updates');
+  await expect(page).toHaveURL(/#\/settings\?tab=updates$/);
+
+  await page.getByRole('link', { name: 'Docs', exact: true }).click();
+  await expect(page).toHaveURL(/#\/docs(?:\/|$)/);
+  await expect(page.locator('main').getByRole('heading').first()).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  expect(errors).toEqual([]);
 });
 
 // Patrol, Guide and Automations are one Missions row now (TASK-277). Only

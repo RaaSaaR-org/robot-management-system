@@ -3,14 +3,15 @@
  * @description The app's top bar: matte canvas ground, hairline bottom edge,
  *              56px tall and sticky. Left: the sidebar toggle (md+) or the
  *              drawer button (mobile) and the logo. Right: organization
- *              switcher, theme toggle and user menu.
+ *              switcher, the docs help icon, theme toggle and user menu.
  * @feature layout
  */
 
-import { Moon, PanelLeftClose, PanelLeftOpen, Sun } from 'lucide-react';
+import { CircleHelp, Moon, PanelLeftClose, PanelLeftOpen, Sun } from 'lucide-react';
 import { Logo } from '@/components/common/Logo';
 import { useThemeStore } from '@/features/settings';
 import { useUIStore } from '@/features/settings/store/uiStore';
+import { LinkButton } from '@/shared/components/ui';
 import { Button } from '@/shared/components/ui/Button';
 import { MenuButton } from '@/shared/components/ui/MenuButton';
 import { useMediaQuery } from '@/shared/hooks/useMediaQuery';
@@ -39,6 +40,9 @@ export function TopBar() {
   const isDark = theme === 'system' ? systemPrefersDark : theme === 'dark';
   const themeLabel = isDark ? 'Switch to light mode' : 'Switch to dark mode';
   const sidebarLabel = sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  // Docs left the sidebar in TASK-279: reference material is help, and help
+  // belongs in the chrome — an icon, not a row competing with the fleet.
+  const docsLabel = 'Docs';
   const SidebarIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
 
   return (
@@ -69,6 +73,9 @@ export function TopBar() {
         <div className="flex items-center gap-1 sm:gap-2">
           {/* Only rendered when multi-tenancy is on */}
           <OrganizationSwitcher />
+          <LinkButton to="/docs" variant="ghost" iconOnly title={docsLabel} aria-label={docsLabel}>
+            <CircleHelp className="h-5 w-5" strokeWidth={1.75} />
+          </LinkButton>
           <Button
             variant="ghost"
             iconOnly

@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { Route, Workflow } from 'lucide-react';
+import { Building2, Route, Users, Workflow } from 'lucide-react';
 import {
   NAV_GROUPS,
   NAV_ITEMS,
@@ -19,6 +19,9 @@ import {
   navDestinations,
   type NavGroup,
 } from '../navigation';
+
+/** Labels of every entry the sidebar would offer — the row count, in other words. */
+const rowLabels = NAV_ITEMS.map((i) => i.label);
 
 // The pages of the Build group, as raw source. A rail stop and the
 // PipelineBreadcrumb say the same thing twice, so the chip left the pages the
@@ -56,31 +59,31 @@ const activeFor = (pathname: string) => NAV_ITEMS.filter((i) => isNavItemActive(
 
 describe('NAV_GROUPS', () => {
   it('follows the contract order, with Dashboard and Comply unlabelled', () => {
-    expect(NAV_GROUPS.map((g) => g.id)).toEqual([
-      'dashboard',
-      'operate',
-      'automate',
-      'build',
-      'comply',
-      'system',
-      'admin',
-    ]);
-    expect(NAV_GROUPS.map((g) => g.label)).toEqual([
-      undefined,
-      'Operate',
-      'Automate',
-      'Build',
-      undefined,
-      'System',
-      'Admin',
+    expect(NAV_GROUPS.map((g) => g.id)).toEqual(['dashboard', 'operate', 'automate', 'build', 'comply']);
+    expect(NAV_GROUPS.map((g) => g.label)).toEqual([undefined, 'Operate', 'Automate', 'Build', undefined]);
+  });
+
+  it('is down to the contract 10 rows, in contract order', () => {
+    expect(rowLabels).toEqual([
+      'Dashboard',
+      'Fleet',
+      'Control Center',
+      'Alerts',
+      'Agent Mode',
+      'Missions',
+      'Skill Training',
+      'Deployments',
+      'Marketplace',
+      'Compliance',
     ]);
   });
 
-  it('is down to 15 rows: two rails and a tab swallowed eight of them', () => {
-    expect(NAV_ITEMS).toHaveLength(15);
-    // Their pages are unchanged; only their rows are gone — the twin into a
-    // Fleet tab (TASK-276), Guide and Automations into the Missions rail
-    // (TASK-277), the five stages into the Skill Training rail (TASK-278).
+  it('keeps the pages of the thirteen rows it dropped, only not as rows', () => {
+    // The twin went into a Fleet tab (TASK-276), Guide and Automations into the
+    // Missions rail (TASK-277), the five stages into the Skill Training rail
+    // (TASK-278), and the last five into the chrome (TASK-279): Updates into
+    // Settings, Docs into the top bar, Settings into the user menu, and
+    // Organizations and Team into the organization switcher.
     const paths = NAV_ITEMS.map((i) => i.path);
     for (const gone of [
       '/sites',
@@ -91,9 +94,20 @@ describe('NAV_GROUPS', () => {
       '/training',
       '/models',
       '/fleet-learning',
+      '/updates',
+      '/docs',
+      '/settings',
+      '/organizations',
+      '/team',
     ]) {
       expect(paths).not.toContain(gone);
     }
+  });
+
+  it('leaves every shipped group ungated: the one gate the model had left with Admin', () => {
+    // The gates themselves stay in the model — see filterNavGroups below.
+    expect(NAV_GROUPS.filter((g) => g.requiresFeature || g.requiresRole)).toEqual([]);
+    expect(NAV_ITEMS.filter((i) => i.requiresRole)).toEqual([]);
   });
 
   it('is down to Agent Mode · Missions in Automate', () => {
@@ -132,7 +146,7 @@ describe('NAV_GROUPS', () => {
       'privacy',
     ]);
     expect(item('Deployments').tabs?.map((t) => t.label)).toEqual(['Deployments', 'Skills']);
-    for (const label of ['Dashboard', 'Control Center', 'Agent Mode', 'Marketplace', 'Docs']) {
+    for (const label of ['Dashboard', 'Control Center', 'Agent Mode', 'Marketplace']) {
       expect(item(label).tabs).toBeUndefined();
     }
     // A railed row declares no tabs: the tabs belong to the stops' pages.
@@ -228,7 +242,6 @@ describe('isNavItemActive', () => {
     ['/fleet-learning/rounds/1', 'Skill Training'],
     ['/marketplace/mine', 'Marketplace'],
     ['/deployments/dep-1', 'Deployments'],
-    ['/docs/architecture', 'Docs'],
   ])('%s → %s', (pathname, label) => {
     expect(activeFor(pathname)).toEqual([label]);
   });
@@ -247,6 +260,13 @@ describe('isNavItemActive', () => {
   it('marks nothing on a page outside the nav', () => {
     expect(activeFor('/account')).toEqual([]);
   });
+
+  it.each(['/docs', '/docs/architecture', '/settings', '/settings?tab=updates', '/updates', '/team', '/organizations'])(
+    'leaves the whole sidebar dark on %s — it is chrome, not navigation (TASK-279)',
+    (pathname) => {
+      expect(activeFor(pathname)).toEqual([]);
+    },
+  );
 });
 
 describe('navDestinations', () => {
@@ -390,26 +410,45 @@ describe('navDestinations', () => {
 });
 
 describe('filterNavGroups', () => {
+  // The gates outlived the group that used them: Admin moved into the
+  // organization switcher (TASK-279) and no shipped group declares a gate any
+  // more. They are tested against the fixture that group was, because that is
+  // the shape the next gated group — and the palette reading it — will have.
+  const ADMIN: NavGroup = {
+    id: 'admin',
+    label: 'Admin',
+    requiresFeature: 'multiTenancyEnabled',
+    requiresRole: ['super-admin', 'owner'],
+    items: [
+      { label: 'Organizations', path: '/organizations', icon: Building2, requiresRole: ['super-admin'] },
+      { label: 'Team', path: '/team', icon: Users, requiresRole: ['super-admin', 'owner'] },
+    ],
+  };
+  const gated = [...NAV_GROUPS, ADMIN];
   const labels = (groups: ReturnType<typeof filterNavGroups>) => groups.map((g) => g.label);
 
-  it('hides Admin while multi-tenancy is off, whatever the role', () => {
-    expect(labels(filterNavGroups(NAV_GROUPS, { multiTenancyEnabled: false }, 'super-admin'))).not.toContain('Admin');
+  it('hides a feature-gated group while the flag is off, whatever the role', () => {
+    expect(labels(filterNavGroups(gated, { multiTenancyEnabled: false }, 'super-admin'))).not.toContain('Admin');
   });
 
-  it('shows owners Team but not Organizations', () => {
-    const admin = filterNavGroups(NAV_GROUPS, { multiTenancyEnabled: true }, 'owner').find((g) => g.id === 'admin');
+  it('drops the items an owner may not see, keeping the group', () => {
+    const admin = filterNavGroups(gated, { multiTenancyEnabled: true }, 'owner').find((g) => g.id === 'admin');
     expect(admin?.items.map((i) => i.label)).toEqual(['Team']);
   });
 
-  it('shows super-admins both admin entries', () => {
-    const admin = filterNavGroups(NAV_GROUPS, { multiTenancyEnabled: true }, 'super-admin').find(
-      (g) => g.id === 'admin'
-    );
+  it('keeps every item for the role that may see them all', () => {
+    const admin = filterNavGroups(gated, { multiTenancyEnabled: true }, 'super-admin').find((g) => g.id === 'admin');
     expect(admin?.items.map((i) => i.label)).toEqual(['Organizations', 'Team']);
   });
 
-  it('hides Admin from members even with multi-tenancy on', () => {
-    expect(labels(filterNavGroups(NAV_GROUPS, { multiTenancyEnabled: true }, 'member'))).not.toContain('Admin');
+  it('hides a role-gated group from members even with the flag on', () => {
+    expect(labels(filterNavGroups(gated, { multiTenancyEnabled: true }, 'member'))).not.toContain('Admin');
+  });
+
+  it('passes the shipped model through untouched — nothing in it is gated', () => {
+    expect(filterNavGroups(NAV_GROUPS, { multiTenancyEnabled: false }, 'viewer').flatMap((g) => g.items)).toEqual(
+      NAV_ITEMS,
+    );
   });
 });
 

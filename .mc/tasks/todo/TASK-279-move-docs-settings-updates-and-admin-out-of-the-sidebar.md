@@ -3,7 +3,7 @@ id: "TASK-279"
 aliases: []
 title: "Move Docs, Settings, Updates and Admin out of the sidebar"
 slug: "move-docs-settings-updates-and-admin-out-of-the-sidebar"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []
