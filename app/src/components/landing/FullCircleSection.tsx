@@ -122,10 +122,10 @@ export const STAGES: Stage[] = [
  * build (see scrollToSection.ts). Three labels on one `#proof` target is
  * deliberate: the label says what the reader will see there.
  */
-type StageLink =
+export type StageLink =
   { kind: 'anchor'; href: string; label: string } | { kind: 'doc'; to: string; label: string };
 
-const STAGE_LINKS: Record<string, StageLink> = {
+export const STAGE_LINKS: Record<string, StageLink> = {
   collect: {
     kind: 'doc',
     to: '/docs/platform#the-data-engine',
