@@ -353,7 +353,9 @@ export class DigitalTwinService extends EventEmitter {
    *      twin still holds its full raw sweep when the user deletes it;
    *   3. the twin's SimScene row;
    *   4. the built artifacts (merged cloud, mesh, occupancy grids, roadmap,
-   *      MJCF scene) — customers' buildings, not derived scratch;
+   *      MJCF scene) — customers' buildings, not derived scratch. Strict for
+   *      the same reason as (2): `deleteTwinArtifact` tolerates an already-gone
+   *      blob (ENOENT) and rejects on anything else, aborting before step 5;
    *   5. the DigitalTwin row itself, letting ScanSession + TwinZone cascade.
    *
    * Multi-tenancy: with the flag off the tenant extension is a passthrough and

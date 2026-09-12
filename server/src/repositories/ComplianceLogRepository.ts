@@ -39,22 +39,36 @@ import type {
 
 /**
  * The order the hash chain was built in, and therefore the only order it can be
- * verified in. `timestamp` is not that order: it is non-unique (543 duplicate
- * values on the development database) and two logs written in the same
- * millisecond come back in an arbitrary order, which reads as a broken link.
+ * verified in. `seq` leads: it is the position each append claimed under the
+ * unique index, so for every row written since TASK-291 it *is* the chain.
+ * `timestamp` alone was never that order — it is non-unique (543 duplicate
+ * values on the development database), so two logs written in the same
+ * millisecond came back arbitrarily and one of them read as a broken link.
  *
  * `nulls` is stated explicitly because the providers disagree — SQLite sorts
  * NULLs first, PostgreSQL sorts them last — and `seq` is nullable for rows that
- * predate the backfill. `id` is the tie-break among those unnumbered rows.
+ * predate the backfill. Those rows fall back to `(timestamp, id)`, the order
+ * this task's migration declares canonical for history:
+ * `row_number() OVER (ORDER BY "timestamp","id")`.
+ *
+ * `timestamp` must come before `id`, and that is not cosmetic: `id` is
+ * `@default(uuid())`, a random v4. On a database whose history is still
+ * unnumbered the tie-break is the whole order, so an id-led one shuffles the
+ * legacy chain and reports nearly every link broken — a false tamper report,
+ * the exact harm this task exists to remove. `id` stays as the final tie-break
+ * because `timestamp` is not unique. For numbered rows both terms are dead
+ * weight: `seq` is unique, so nothing ever reaches them.
  */
 const CHAIN_ORDER_ASC: Prisma.ComplianceLogOrderByWithRelationInput[] = [
   { seq: { sort: 'asc', nulls: 'first' } },
+  { timestamp: 'asc' },
   { id: 'asc' },
 ];
 
 /** The same order reversed, for reading the chain head. */
 const CHAIN_ORDER_DESC: Prisma.ComplianceLogOrderByWithRelationInput[] = [
   { seq: { sort: 'desc', nulls: 'last' } },
+  { timestamp: 'desc' },
   { id: 'desc' },
 ];
 

@@ -423,8 +423,12 @@ export const viewerOrAbove = roleMiddleware(
 
 /**
  * The verbs `writeRoleGuard` inspects. Everything else — GET, HEAD, OPTIONS —
- * is a read and passes straight through, which is what keeps the
- * ticket-authenticated MJPEG stream on `/api/robots/:id/camera/:name` working.
+ * is a read and passes straight through.
+ *
+ * That alone does NOT keep the MJPEG stream on `/api/robots/:id/camera/:name`
+ * working for a viewer. The stream is a GET, but it is unreadable without a
+ * ticket, and the ticket is minted by a POST — so the mint has to be exempt
+ * too, and it is, in `POST_SHAPED_READS` below.
  */
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -481,11 +485,12 @@ export const SELF_SERVICE_WRITES: RegExp[] = [
  * cost, and keeping the exception list short matters more. This list is for the
  * ones where the opposite answer is already recorded as a product decision.
  *
- * The bar is strictly narrower than it looks: the handler must be a pure
- * function of its request body — no repository call, no tenant row, nothing
- * persisted — so that granting it to a viewer grants no more than a GET would.
- * Anything that reads data belongs on a GET; anything that writes belongs
- * behind the guard.
+ * The bar is strictly narrower than it looks, and it is about what the caller
+ * gains, not about the verb: the handler must persist nothing, and must hand a
+ * viewer no more than a GET they may already make. A pure function of the
+ * request body clears it outright; a handler that only reads clears it when the
+ * row it reads is one the same viewer can already fetch with a GET. Anything
+ * that creates, mutates or deletes belongs behind the guard.
  *
  * Keep every entry anchored, and keep the reason attached to it. A stale entry
  * fails `__tests__/write-route-authorization.test.ts`, which requires each one
@@ -499,7 +504,73 @@ export const POST_SHAPED_READS: RegExp[] = [
   // `field-operations-role-routing.test.ts` asserts a viewer gets 200 here —
   // that test is the recorded decision this entry honours.
   /^\/api\/patrol\/cron\/validate\/?$/,
+  // POST /api/robots/:id/camera/:name/ticket — the short-lived ticket the MJPEG
+  // stream is read with (`robot.routes.ts:277`). The stream itself is a GET this
+  // guard never touches, but an `<img>` cannot send an Authorization header, so
+  // the ticket is the only way to open it: refuse the mint and a viewer loses
+  // every camera, which is not the rule this guard is supposed to express.
+  // It persists nothing. One `getRegisteredRobot` lookup — the same row
+  // `GET /api/robots/:id` already serves the same viewer — then a signature over
+  // the caller's own identity, good for that one camera for two minutes
+  // (`security/cameraTicket.ts`) and authorising nothing else.
+  /^\/api\/robots\/[^/]+\/camera\/[^/]+\/ticket\/?$/,
 ];
+
+/**
+ * Halts a `viewer` may fire (TASK-282, TASK-284).
+ *
+ * The other two classes are about writes small enough to grant. This one is
+ * the opposite argument: stopping a robot is the one action a read-only
+ * operator must never be refused, because they are often the person who can
+ * see the hazard. Refusing the stop is the dangerous answer, not granting it.
+ *
+ * It is deliberately one-way — a viewer may stop, never start:
+ *
+ * - Clearing a stop is NOT here. `/api/safety/fleet/estop/reset` and
+ *   `/api/safety/robots/:id/estop/reset` put robots back in motion, which is an
+ *   operator decision. The `\/?$` anchors are what keep the `/reset` suffix out,
+ *   so keep them.
+ * - The zone and per-robot stops on `/api/safety` are not here either: no
+ *   shipped UI fires them (`RobotEmergencyStopButton` is exported and rendered
+ *   nowhere), and this list tracks the buttons a viewer actually has. Add one
+ *   only alongside a UI that needs it.
+ *
+ * A stale entry fails `__tests__/write-route-authorization.test.ts`, which
+ * requires each one to match a live route.
+ */
+export const SAFETY_HALT_WRITES: RegExp[] = [
+  // POST /api/safety/fleet/estop — `FleetEmergencyStopButton`, on the dashboard
+  // and the safety page (`safety.routes.ts:128`).
+  /^\/api\/safety\/fleet\/estop\/?$/,
+];
+
+/**
+ * The per-robot halt cannot be allowlisted by path, because it has none of its
+ * own: `POST /api/robots/:id/command` is the general command endpoint — move,
+ * pick up, charge, return home — and exempting the path would hand a viewer the
+ * controls. The halt is one command *type* on it, the one
+ * `robotsApi.emergencyStop` sends, so the body is what decides. The robot's
+ * `CommandExecutor` dispatches `emergency_stop` without reading the payload, so
+ * the type is the whole of the decision.
+ */
+const ROBOT_COMMAND_PATH = /^\/api\/robots\/[^/]+\/command\/?$/;
+const HALT_COMMAND_TYPES = new Set(['emergency_stop']);
+
+/**
+ * Is this request a halt a `viewer` may fire? Exported so the enumeration test
+ * classifies routes through the same predicate the guard enforces, rather than
+ * a second copy of the rule that can drift from it.
+ */
+export function isSafetyHalt(path: string, body: unknown): boolean {
+  if (SAFETY_HALT_WRITES.some((pattern) => pattern.test(path))) {
+    return true;
+  }
+  if (!ROBOT_COMMAND_PATH.test(path)) {
+    return false;
+  }
+  const type = (body as { type?: unknown } | undefined)?.type;
+  return typeof type === 'string' && HALT_COMMAND_TYPES.has(type);
+}
 
 /**
  * Require `member` or above for any write on the mount it guards (TASK-282).
@@ -537,6 +608,12 @@ export function writeRoleGuard(
   }
   // Registered as a write, performs none — see `POST_SHAPED_READS`.
   if (POST_SHAPED_READS.some((pattern) => pattern.test(path))) {
+    return next();
+  }
+  // A stop, which a read-only operator must not be refused — see
+  // `SAFETY_HALT_WRITES`. Body-sensitive: on the shared command endpoint only
+  // the emergency-stop type passes, and no `/reset` passes anywhere.
+  if (isSafetyHalt(path, req.body)) {
     return next();
   }
 

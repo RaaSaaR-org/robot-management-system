@@ -27,6 +27,11 @@ const mocks = vi.hoisted(() => ({
   simSceneDeleteByTwinId: vi.fn(),
   simSceneUpsertForTwin: vi.fn(),
   deleteTwinArtifact: vi.fn(),
+  getRustFSClient: vi.fn(),
+  isRustFSInitialized: vi.fn(() => false),
+  mkdir: vi.fn().mockResolvedValue(undefined),
+  writeFile: vi.fn().mockResolvedValue(undefined),
+  unlink: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../repositories/index.js', () => ({
@@ -68,8 +73,27 @@ vi.mock('../../storage/model-storage.js', () => ({
   },
 }));
 
+// The rustfs boundary and the filesystem, so the REAL model-storage can be
+// imported alongside its mock (below) without reaching an S3 client or a disk.
+vi.mock('../../storage/rustfs-client.js', () => ({
+  getRustFSClient: mocks.getRustFSClient,
+  isRustFSInitialized: mocks.isRustFSInitialized,
+}));
+
+vi.mock('fs', () => ({
+  promises: { mkdir: mocks.mkdir, writeFile: mocks.writeFile, unlink: mocks.unlink },
+  createReadStream: vi.fn(),
+}));
+
 import { DigitalTwinService } from '../DigitalTwinService.js';
 import type { DigitalTwinEvent } from '../../types/twin.types.js';
+
+// Whether a doomed artifact aborts the cascade is decided inside
+// modelStorage.deleteTwinArtifact, so the storage-strictness tests route the
+// mock at the real implementation instead of asserting against a stub.
+const realStorage = await vi.importActual<typeof import('../../storage/model-storage.js')>(
+  '../../storage/model-storage.js',
+);
 
 function makeSession(overrides: Record<string, unknown> = {}) {
   return {
@@ -416,6 +440,37 @@ describe('DigitalTwinService', () => {
       // A half-finished cascade must not look like a completed one.
       expect(mocks.dtDelete).not.toHaveBeenCalled();
       expect(mocks.deleteTwinArtifact).not.toHaveBeenCalled();
+    });
+
+    it('fails the delete and keeps the twin row when an artifact unlink rejects', async () => {
+      // Locally stored artifacts are absolute paths, and a failed unlink there
+      // must abort before step 5: dropping the row leaves the merged cloud on
+      // disk with the only index to it gone.
+      mocks.deleteTwinArtifact.mockImplementation((key: string) =>
+        realStorage.modelStorage.deleteTwinArtifact(key),
+      );
+      mocks.dtFindById.mockResolvedValue(makeTwin({ cloudKey: '/data/twins/twin-1/cloud.pcd' }));
+      mocks.unlink.mockRejectedValue(
+        Object.assign(new Error('EACCES: permission denied, unlink'), { code: 'EACCES' }),
+      );
+
+      await expect(service.deleteTwin('twin-1')).rejects.toThrow(/EACCES/);
+
+      expect(mocks.unlink).toHaveBeenCalledWith('/data/twins/twin-1/cloud.pcd');
+      expect(mocks.dtDelete).not.toHaveBeenCalled();
+    });
+
+    it('completes when a local artifact is already gone (ENOENT is not a failure)', async () => {
+      mocks.deleteTwinArtifact.mockImplementation((key: string) =>
+        realStorage.modelStorage.deleteTwinArtifact(key),
+      );
+      mocks.dtFindById.mockResolvedValue(makeTwin({ cloudKey: '/data/twins/twin-1/cloud.pcd' }));
+      mocks.unlink.mockRejectedValue(
+        Object.assign(new Error('ENOENT: no such file or directory, unlink'), { code: 'ENOENT' }),
+      );
+
+      await expect(service.deleteTwin('twin-1')).resolves.toBe(true);
+      expect(mocks.dtDelete).toHaveBeenCalledWith('twin-1');
     });
   });
 

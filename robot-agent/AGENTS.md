@@ -258,7 +258,8 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 
 - **Max queue size**: 5
 - **Priority order**: critical(4) > high(3) > normal(2) > low(1)
-- **Supported actions**: `move_to_location`, `pickup_object`, `drop_object`, `charge`, `return_home`, `wait`, `inspect`, `custom`
+- **Supported actions**: `move_to_location`, `pickup_object`, `drop_object`, `charge`, `return_home`, `wait` — the list is `IMPLEMENTED_ACTION_TYPES` in `src/robot/TaskQueue.ts`
+- **Refuses `inspect` and `custom`**: declared by the server, implemented by nobody. The task is accepted, then reported `failed` with `Action type '<type>' is not implemented by this robot agent` — it is never simulated as completed. Any action type outside the supported list (e.g. the server-only `execute_skill`) gets the same answer
 - **Rejects tasks** when robot is in `error` or `maintenance` state
 
 ## Key Endpoints

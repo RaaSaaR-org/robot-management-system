@@ -315,12 +315,20 @@ done for that specific slice. Declaring the tag in `app/AGENTS.md` and
 `server/AGENTS.md` remains a separate **spe 2** follow-up, deliberately not done
 here (`app/src` carries `@status` on 0 files, `server/src` on 3, all tests).
 
-### Not done here, and why
+### The `index.ts` CRA Art. 13 claim — reconciled here
 
-`robot-agent/src/index.ts:528` still reads `// Start secure OTA update checks
-(CRA Art. 13)` above a call whose result is discarded. That file is outside this
-task's file ownership in the current wave, so it was not edited. The exact change
-it needs: replace that comment with `// OTA update checks — @status unshipped:
-this polls and discards; no update can be delivered (TASK-302)` and drop the
-bare CRA Art. 13 claim, which the header of `SecureUpdateClient.ts` now carries
-with its caveat attached.
+`robot-agent/src/index.ts:528-530` no longer reads `// Start secure OTA update
+checks (CRA Art. 13)` above a call whose result is discarded. It now reads:
+
+```ts
+// OTA update checks — @status unshipped: this polls and discards; no update
+// can be delivered (TASK-302). See SecureUpdateClient.ts for the CRA Art. 13
+// claim and the caveat attached to it.
+```
+
+The bare Art. 13 claim is gone from the call site: the article is still named,
+but only as a pointer to the `SecureUpdateClient.ts` header, which carries it
+beside `@status unshipped` — the rule this package's AGENTS.md sets for a file
+that is both unshipped and `@regulatory`. Together with that header edit this
+satisfies acceptance criterion 4; nothing about the `index.ts` comment is left
+for a follow-up.

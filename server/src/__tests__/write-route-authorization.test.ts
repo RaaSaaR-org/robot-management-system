@@ -21,8 +21,14 @@ import request from 'supertest';
 import type { Test } from 'supertest';
 import jwt from 'jsonwebtoken';
 import { createApp, UNGUARDED_WRITE_MOUNTS } from '../app.js';
-import { POST_SHAPED_READS, SELF_SERVICE_WRITES } from '../middleware/auth.middleware.js';
+import {
+  POST_SHAPED_READS,
+  SAFETY_HALT_WRITES,
+  SELF_SERVICE_WRITES,
+  isSafetyHalt,
+} from '../middleware/auth.middleware.js';
 import { robotManager } from '../services/RobotManager.js';
+import { safetyService } from '../services/SafetyService.js';
 import { settingsService } from '../services/SettingsService.js';
 
 const app = createApp();
@@ -136,9 +142,20 @@ function isPostShapedRead(path: string): boolean {
   return POST_SHAPED_READS.some((pattern) => pattern.test(path));
 }
 
-/** Either of the two allowlists the guard consults. */
+/**
+ * A halt, classified the way the sweep below actually fires: with an empty
+ * body. `POST /api/safety/fleet/estop` is exempt on its path alone, so it
+ * cannot answer 403 and belongs in the halt class. `POST /api/robots/:id/command`
+ * is exempt only for an `emergency_stop` body, so with an empty one it stays
+ * enforced — which is exactly the behaviour that must not regress.
+ */
+function isHalt(path: string): boolean {
+  return isSafetyHalt(path, {});
+}
+
+/** Any of the three allowlists the guard consults. */
 function isExempt(path: string): boolean {
-  return isSelfService(path) || isPostShapedRead(path);
+  return isSelfService(path) || isPostShapedRead(path) || isHalt(path);
 }
 
 const unguardedWrites = writes.filter(onUnguardedMount);
@@ -149,6 +166,7 @@ const selfServiceWrites = guardedWrites.filter((entry) => isSelfService(concrete
 const postShapedReadWrites = guardedWrites.filter((entry) =>
   isPostShapedRead(concrete(entry.path))
 );
+const safetyHaltWrites = guardedWrites.filter((entry) => isHalt(concrete(entry.path)));
 // Everything else. No skip list: whatever lands here must answer 403 to a viewer.
 const enforcedWrites = guardedWrites.filter((entry) => !isExempt(concrete(entry.path)));
 
@@ -306,10 +324,28 @@ describe('self-service writes', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST-shaped reads', () => {
-  it('exempts the cron calculator and nothing else', () => {
-    expect(postShapedReadWrites.map((e) => `${e.method} ${e.path}`)).toEqual([
+  it('exempts the cron calculator and the camera ticket, and nothing else', () => {
+    expect(postShapedReadWrites.map((e) => `${e.method} ${e.path}`).sort()).toEqual([
       'POST /api/patrol/cron/validate',
+      'POST /api/robots/:id/camera/:name/ticket',
     ]);
+  });
+
+  it('lets a viewer mint a camera stream ticket', async () => {
+    // The stream itself is a GET this guard never touches, but it is unreadable
+    // without this ticket: refuse the mint and a viewer's cockpit answers "The
+    // server refused a stream ticket for this camera."
+    const lookup = vi
+      .spyOn(robotManager, 'getRegisteredRobot')
+      .mockResolvedValue({ baseUrl: 'http://robot:41243' } as never);
+    const result = await request(app)
+      .post('/api/robots/test-id/camera/head_camera/ticket')
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({});
+
+    expect(result.status).toBe(200);
+    expect(typeof result.body.ticket).toBe('string');
+    expect(lookup).toHaveBeenCalledWith('test-id');
   });
 
   it('lets a viewer validate a schedule', async () => {
@@ -325,6 +361,88 @@ describe('POST-shaped reads', () => {
   });
 
   it.each(POST_SHAPED_READS.map((pattern) => [String(pattern), pattern] as const))(
+    'entry %s still matches a live write route',
+    (_label, pattern) => {
+      const matched = writes.filter((entry) => pattern.test(concrete(entry.path)));
+      expect(matched.length).toBeGreaterThan(0);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Stops a viewer may fire — and the resumes they may not
+// ---------------------------------------------------------------------------
+
+describe('safety halts', () => {
+  it('lets a viewer stop one robot', async () => {
+    const sendCommand = vi
+      .spyOn(robotManager, 'sendCommand')
+      .mockResolvedValue({ id: 'cmd-estop' } as never);
+    const result = await request(app)
+      .post('/api/robots/test-id/command')
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({ type: 'emergency_stop', priority: 'critical' });
+
+    expect(result.status).toBe(200);
+    expect(sendCommand).toHaveBeenCalledWith(
+      'test-id',
+      expect.objectContaining({ type: 'emergency_stop' })
+    );
+  });
+
+  it('lets a viewer stop the fleet', async () => {
+    const trigger = vi
+      .spyOn(safetyService, 'triggerFleetEStop')
+      .mockResolvedValue({ triggered: 1, failed: 0 } as never);
+    const result = await request(app)
+      .post('/api/safety/fleet/estop')
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({ reason: 'Hazard on the floor' });
+
+    expect(result.status).toBe(200);
+    expect(trigger).toHaveBeenCalled();
+  });
+
+  it('does not let a viewer resume the fleet', async () => {
+    const reset = vi.spyOn(safetyService, 'resetFleetEStop');
+    const result = await request(app)
+      .post('/api/safety/fleet/estop/reset')
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({});
+
+    expect(result.status).toBe(403);
+    expect(result.body.error).toBe('Forbidden');
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it('does not let a viewer resume one robot', async () => {
+    const reset = vi.spyOn(safetyService, 'resetRobotEStop');
+    const result = await request(app)
+      .post('/api/safety/robots/test-id/estop/reset')
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({});
+
+    expect(result.status).toBe(403);
+    expect(result.body.error).toBe('Forbidden');
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it('opens the fleet stop by path and the command endpoint by body only', () => {
+    expect(safetyHaltWrites.map((e) => `${e.method} ${e.path}`)).toEqual([
+      'POST /api/safety/fleet/estop',
+    ]);
+    // The command endpoint drives the robot, so it stays in the enforced sweep:
+    // exempting it by path would let a viewer send `move`.
+    expect(enforcedWrites).toContainEqual({ method: 'POST', path: '/api/robots/:id/command' });
+    expect(isSafetyHalt('/api/robots/test-id/command', { type: 'emergency_stop' })).toBe(true);
+    expect(isSafetyHalt('/api/robots/test-id/command', { type: 'move' })).toBe(false);
+    expect(isSafetyHalt('/api/robots/test-id/command', {})).toBe(false);
+    // No reset, anywhere.
+    expect(isSafetyHalt('/api/safety/fleet/estop/reset', {})).toBe(false);
+    expect(isSafetyHalt('/api/safety/robots/test-id/estop/reset', {})).toBe(false);
+  });
+
+  it.each(SAFETY_HALT_WRITES.map((pattern) => [String(pattern), pattern] as const))(
     'entry %s still matches a live write route',
     (_label, pattern) => {
       const matched = writes.filter((entry) => pattern.test(concrete(entry.path)));
@@ -380,6 +498,7 @@ describe('write-route inventory', () => {
       enforcedWrites.length +
         selfServiceWrites.length +
         postShapedReadWrites.length +
+        safetyHaltWrites.length +
         unguardedWrites.length
     ).toBe(writes.length);
     expect(enforcedWrites.length).toBeGreaterThan(300);

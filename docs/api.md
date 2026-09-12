@@ -52,9 +52,12 @@ The rule is per **verb**, not per route: there is no separate tier for
 destructive actions. Unregistering a robot (`DELETE /api/robots/:id`) and
 sending it a motion command (`POST /api/robots/:id/command`) both need the same
 `member`. `GET`/`HEAD`/`OPTIONS` are untouched, so a viewer keeps full read
-access — including the ticket-authenticated camera stream.
+access — with one wrinkle: the camera stream is a `GET`, but nothing can read it
+without a ticket, and the ticket is minted by a `POST`. That mint is therefore
+exempt (class 3); without it a viewer's cockpit answers "The server refused a
+stream ticket for this camera."
 
-There are exactly three classes of exception, and nothing else.
+There are exactly four classes of exception, and nothing else.
 
 **1. Self-service writes** (`SELF_SERVICE_WRITES`), a user acting on their own
 account or their own personal data:
@@ -92,6 +95,20 @@ granting it to a viewer grants no more than a `GET` would:
 | Method | Path | Why |
 |--------|------|-----|
 | POST | `/api/patrol/cron/validate` | Returns the next five fire times for a cron expression. A viewer plans a schedule in the UI before asking a member to save it. |
+| POST | `/api/robots/:id/camera/:name/ticket` | Mints the two-minute, one-camera ticket the MJPEG stream is read with — an `<img>` cannot send an `Authorization` header, so the ticket is the only way to open a stream a viewer is allowed to watch. Persists nothing, and reads only the robot row `GET /api/robots/:id` already serves them. |
+
+**4. Halts** (`SAFETY_HALT_WRITES`), because a read-only operator who can see a
+hazard must be able to stop it:
+
+| Method | Path | Why |
+|--------|------|-----|
+| POST | `/api/safety/fleet/estop` | `FleetEmergencyStopButton`, on the dashboard and the safety page |
+| POST | `/api/robots/:id/command` | **Only** with an `emergency_stop` body — `EmergencyStopButton`. The endpoint itself stays `member`: any other command type from a viewer is still a 403, so this cannot be used to drive a robot |
+
+The class is one-way: a viewer may stop, never start. `POST
+/api/safety/fleet/estop/reset` and `POST /api/safety/robots/:id/estop/reset`
+put robots back in motion and stay `member`. The zone and per-robot stops under
+`/api/safety` stay `member` too — no shipped UI fires them.
 
 **Consequences worth knowing** (classified deliberately, not by oversight):
 
@@ -114,7 +131,10 @@ granting it to a viewer grants no more than a `GET` would:
 The inventory is enumerated from the live router stack in
 `server/src/__tests__/write-route-authorization.test.ts`, which is **fail
 closed**: all 349 write verbs must either refuse a viewer or fall into one of
-the three classes above. A new mount that forgets the guard fails CI.
+the four classes above. A new mount that forgets the guard fails CI.
+`POST /api/robots/:id/command` counts as enforced there and is proved separately:
+the sweep fires it with an empty body and demands the 403, and a named case
+fires the `emergency_stop` body and demands the stop goes through.
 
 ### Public
 

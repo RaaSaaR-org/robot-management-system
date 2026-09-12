@@ -7,8 +7,16 @@
 import { Router, type Request, type Response } from 'express';
 import { isaacLabClient } from '../services/IsaacLabClient.js';
 import type { IsaacLabJobConfig, IsaacLabJobFilter } from '../services/IsaacLabClient.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const isaacLabRoutes = Router();
+
+// IsaacLabClient's own sentences (IsaacLabClient.ts:449, :464, :483, :487),
+// matched by their shape rather than by substring. Prisma's P2025 message also
+// ends in "not found", and echoing that would put the failing query and the
+// absolute server path in the response.
+const JOB_NOT_FOUND = /^Job '[^']*' not found$/;
+const JOB_NOT_COMPLETED = /^Job '[^']*' is not completed/;
 
 // ============================================================================
 // JOB ROUTES
@@ -38,10 +46,12 @@ isaacLabRoutes.post('/jobs', async (req: Request, res: Response) => {
     res.status(201).json(job);
   } catch (error) {
     console.error('[isaac-lab.routes] submitJob error:', error);
+    // The circuit-breaker sentence is the client's own and names when the
+    // next attempt is due, so it stays readable.
     if (error instanceof Error && error.message.includes('Circuit breaker')) {
       return res.status(503).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to submit Isaac Lab job' });
+    sendFailure(res, error, 'Failed to submit Isaac Lab job', 500);
   }
 });
 
@@ -63,7 +73,7 @@ isaacLabRoutes.get('/jobs', async (req: Request, res: Response) => {
     res.json(jobs);
   } catch (error) {
     console.error('[isaac-lab.routes] listJobs error:', error);
-    res.status(500).json({ error: 'Failed to list Isaac Lab jobs' });
+    sendFailure(res, error, 'Failed to list Isaac Lab jobs', 500);
   }
 });
 
@@ -76,10 +86,10 @@ isaacLabRoutes.get('/jobs/:id', async (req: Request, res: Response) => {
     res.json(job);
   } catch (error) {
     console.error('[isaac-lab.routes] getJobStatus error:', error);
-    if (error instanceof Error && error.message.includes('not found')) {
+    if (error instanceof Error && JOB_NOT_FOUND.test(error.message)) {
       return res.status(404).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to get job status' });
+    sendFailure(res, error, 'Failed to get job status', 500);
   }
 });
 
@@ -92,10 +102,10 @@ isaacLabRoutes.delete('/jobs/:id', async (req: Request, res: Response) => {
     res.json(job);
   } catch (error) {
     console.error('[isaac-lab.routes] cancelJob error:', error);
-    if (error instanceof Error && error.message.includes('not found')) {
+    if (error instanceof Error && JOB_NOT_FOUND.test(error.message)) {
       return res.status(404).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to cancel job' });
+    sendFailure(res, error, 'Failed to cancel job', 500);
   }
 });
 
@@ -108,13 +118,13 @@ isaacLabRoutes.get('/jobs/:id/output', async (req: Request, res: Response) => {
     res.json(output);
   } catch (error) {
     console.error('[isaac-lab.routes] getJobOutput error:', error);
-    if (error instanceof Error && error.message.includes('not found')) {
+    if (error instanceof Error && JOB_NOT_FOUND.test(error.message)) {
       return res.status(404).json({ error: error.message });
     }
-    if (error instanceof Error && error.message.includes('not completed')) {
+    if (error instanceof Error && JOB_NOT_COMPLETED.test(error.message)) {
       return res.status(400).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to get job output' });
+    sendFailure(res, error, 'Failed to get job output', 500);
   }
 });
 
@@ -141,7 +151,7 @@ isaacLabRoutes.get('/health', async (_req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[isaac-lab.routes] healthCheck error:', error);
-    res.status(500).json({ error: 'Failed to check Isaac Lab health' });
+    sendFailure(res, error, 'Failed to check Isaac Lab health', 500);
   }
 });
 

@@ -58,10 +58,52 @@ import type {
   ComplianceEventType,
 } from '../../types/compliance.types.js';
 
-// The chain order the repository must use (TASK-291). `timestamp` is not it:
-// it is non-unique, so ties came back in arbitrary order and read as breaks.
-const CHAIN_ORDER_ASC = [{ seq: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }];
-const CHAIN_ORDER_DESC = [{ seq: { sort: 'desc', nulls: 'last' } }, { id: 'desc' }];
+// The chain order the repository must use (TASK-291). `seq` leads: `timestamp`
+// alone is non-unique, so ties came back in arbitrary order and read as breaks.
+// Rows that predate the backfill have no `seq` and fall back to
+// (timestamp, id) — timestamp FIRST, because `id` is a random uuid and an
+// id-led tie-break shuffles an unnumbered chain into false tamper reports.
+const CHAIN_ORDER_ASC = [
+  { seq: { sort: 'asc', nulls: 'first' } },
+  { timestamp: 'asc' },
+  { id: 'asc' },
+];
+const CHAIN_ORDER_DESC = [
+  { seq: { sort: 'desc', nulls: 'last' } },
+  { timestamp: 'desc' },
+  { id: 'desc' },
+];
+
+type OrderTerm = Record<string, string | { sort: string; nulls?: string }>;
+
+/**
+ * Sort fixture rows the way the database would for a given Prisma `orderBy`.
+ *
+ * Lets a chain-order regression be caught by the walk itself — feed the rows in
+ * a scrambled order and let the repository's own `orderBy` impose the chain —
+ * rather than only by asserting the shape of the query.
+ */
+function applyOrderBy<T extends Record<string, unknown>>(rows: T[], orderBy: OrderTerm[]): T[] {
+  const terms = orderBy.map((term) => {
+    const [field, spec] = Object.entries(term)[0];
+    return typeof spec === 'string'
+      ? { field, sort: spec, nulls: 'first' }
+      : { field, sort: spec.sort, nulls: spec.nulls ?? 'first' };
+  });
+
+  return [...rows].sort((a, b) => {
+    for (const { field, sort, nulls } of terms) {
+      const av = a[field] as string | number | Date | null;
+      const bv = b[field] as string | number | Date | null;
+      if (av === null && bv === null) continue;
+      if (av === null) return nulls === 'first' ? -1 : 1;
+      if (bv === null) return nulls === 'first' ? 1 : -1;
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      if (cmp !== 0) return sort === 'asc' ? cmp : -cmp;
+    }
+    return 0;
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Fixtures — build DB rows whose encrypted payload is produced by REAL encrypt()
@@ -579,6 +621,52 @@ describe('ComplianceLogRepository', () => {
       const result = await repo.verifyHashChain();
       expect(result.isValid).toBe(true);
       expect(result.brokenLinks).toEqual([]);
+    });
+
+    it('walks unnumbered legacy rows in timestamp order, not by their random uuid', async () => {
+      // Rows written before the backfill have seq = null, so the tie-break IS
+      // the whole order. `id` is @default(uuid()) — a random v4 — so an id-led
+      // tie-break returns an intact legacy chain shuffled and reports nearly
+      // every link broken: a false tamper report in the Art. 12 evidence chain.
+      const t1 = new Date('2026-01-01T00:00:00.000Z');
+      const t2 = new Date('2026-01-02T00:00:00.000Z');
+      const t3 = new Date('2026-01-03T00:00:00.000Z');
+
+      // Ids deliberately run opposite to the chain, as random uuids may.
+      const l1 = makeLogRow({
+        id: 'ffffffff-0000-4000-8000-000000000001',
+        seq: null,
+        previousHash: '',
+        timestamp: t1,
+      });
+      const l2 = makeLogRow({
+        id: '77777777-0000-4000-8000-000000000002',
+        seq: null,
+        previousHash: l1.currentHash,
+        timestamp: t2,
+        payload: { description: 'second', outputAction: 'stop' } as CompliancePayload,
+      });
+      const l3 = makeLogRow({
+        id: '00000000-0000-4000-8000-000000000003',
+        seq: null,
+        previousHash: l2.currentHash,
+        timestamp: t3,
+        payload: { description: 'third', outputAction: 'wait' } as CompliancePayload,
+      });
+
+      // Stored order is arbitrary; the query's orderBy has to impose the chain.
+      mockPrisma.complianceLog.findMany.mockImplementation(
+        ({ orderBy }: { orderBy: OrderTerm[] }) =>
+          Promise.resolve(applyOrderBy([l3, l1, l2], orderBy)),
+      );
+
+      const result = await repo.verifyHashChain();
+
+      expect(result.brokenLinks).toEqual([]);
+      expect(result.isValid).toBe(true);
+      expect(result.totalLogs).toBe(3);
+      expect(result.firstLogTimestamp).toEqual(t1);
+      expect(result.lastLogTimestamp).toEqual(t3);
     });
 
     it('flags a broken previousHash link', async () => {

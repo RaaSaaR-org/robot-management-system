@@ -69,7 +69,7 @@ describe('LogExportService', () => {
       // reproduce the chain in the order it was built.
       expect(prisma.complianceLog.findMany).toHaveBeenCalledWith({
         where: {},
-        orderBy: [{ seq: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
+        orderBy: [{ seq: { sort: 'asc', nulls: 'first' } }, { timestamp: 'asc' }, { id: 'asc' }],
       });
     });
 
@@ -121,7 +121,7 @@ describe('LogExportService', () => {
       // reproduce the chain in the order it was built.
       expect(prisma.complianceLog.findMany).toHaveBeenCalledWith({
         where: {},
-        orderBy: [{ seq: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
+        orderBy: [{ seq: { sort: 'asc', nulls: 'first' } }, { timestamp: 'asc' }, { id: 'asc' }],
       });
     });
   });
