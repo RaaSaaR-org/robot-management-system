@@ -28,6 +28,10 @@ test('the shortcut opens the palette and reaches a row from anywhere in the shel
 
 test('it reaches a tab of a page that lost its sidebar row', async ({ page }) => {
   await page.goto('./#/dashboard');
+  // Wait for the shell before pressing: the binding is a listener the mounted
+  // app installs, so a key sent to a blank document goes nowhere.
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+
   // Guide became a stop on the Missions rail in TASK-277, and its Visits tab
   // was never a row at all — the palette is the only way in by name.
   await page.keyboard.press(SHORTCUT);

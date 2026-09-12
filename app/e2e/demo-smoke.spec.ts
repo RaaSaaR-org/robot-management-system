@@ -6,14 +6,16 @@
  */
 import { expect, test } from '@playwright/test';
 
-// /tour and /processes are absent on purpose: they are stops on the Missions
-// rail now (TASK-277), not sidebar rows, so the walk below reaches them. So are
-// /updates, /docs and /settings, which left the sidebar for the chrome in
-// TASK-279 — the test after this walk reaches those the way a user does.
+// Every sidebar row except Dashboard, which the walk returns to each time. What
+// is absent is absent because it is no longer a row: /tour and /processes are
+// stops on the Missions rail (TASK-277), /data-collection, /datasets, /training,
+// /models and /fleet-learning are stops on the Skill Training rail (TASK-278),
+// and /updates, /docs and /settings left the sidebar for the chrome (TASK-279).
+// The three tests after this walk reach all of them the way a user does — the
+// walk shrank, the coverage did not.
 const destinations = [
   '/fleet', '/control-center', '/agent', '/alerts', '/patrol',
-  '/pipeline', '/data-collection', '/datasets', '/training',
-  '/deployments', '/fleet-learning', '/marketplace', '/compliance',
+  '/pipeline', '/deployments', '/marketplace', '/compliance',
 ];
 
 for (const destination of destinations) {
@@ -60,7 +62,11 @@ test("Fleet's Sites tab lists the scanned rooms", async ({ page }, testInfo) => 
 
   await page.getByRole('tab', { name: 'Sites', exact: true }).click();
   await expect(page).toHaveURL(/#\/fleet\?tab=sites/);
-  await expect(page.getByRole('button', { name: 'New scan', exact: true })).toBeEnabled();
+  // The page header's own action — scoped, because the empty state repeats the
+  // label under it, exactly as the model registry repeats "Register model".
+  await expect(
+    page.locator('main header').getByRole('button', { name: 'New scan', exact: true }),
+  ).toBeEnabled();
   await expect(page.getByText('No sites yet', { exact: true })).toBeVisible();
   await page.waitForLoadState('networkidle');
   expect(errors).toEqual([]);
@@ -139,6 +145,44 @@ test('the Missions rail reaches Guide and Automations, and holds on a route edit
   await page.waitForLoadState('networkidle');
   expect(errors).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath('missions-rail.png'), fullPage: true });
+});
+
+// The five build stages are stops on the Skill Training rail now (TASK-278), so
+// none of them is a sidebar destination any more. This walk is what the list
+// above gave up: every stage still renders, and the rail still carries the walk
+// one level down — reached the way a user reaches it.
+test('the Skill Training rail reaches every build stage', async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('./#/dashboard');
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+
+  await page.locator('aside a[href="#/pipeline"]:visible').click();
+  await expect(page.getByRole('heading', { name: 'Pipeline', exact: true })).toBeVisible();
+
+  const rail = page.getByRole('navigation', { name: 'Section' });
+  const stages = [
+    { label: 'Collect', path: '/data-collection' },
+    { label: 'Datasets', path: '/datasets' },
+    { label: 'Train', path: '/training' },
+    { label: 'Models', path: '/models' },
+    { label: 'Learning', path: '/fleet-learning' },
+    { label: 'Overview', path: '/pipeline' },
+  ];
+  for (const stage of stages) {
+    await rail.getByRole('link', { name: stage.label, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`#${stage.path}(?:\\?|/|$)`));
+    await expect(page.locator('main').getByRole('heading').first()).toBeVisible();
+    // The rail survives the navigation it performed: no stage is a dead end.
+    await expect(rail.getByRole('link', { name: stage.label, exact: true })).toHaveAttribute('aria-current', 'page');
+    await page.waitForLoadState('networkidle');
+    expect(errors).toEqual([]);
+  }
+
+  await page.screenshot({ path: testInfo.outputPath('skill-training-rail.png'), fullPage: true });
+  await page.locator('aside a[href="#/dashboard"]:visible').click();
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
 });
 
 test('model registry renders and remains usable after loading models', async ({ page }, testInfo) => {
