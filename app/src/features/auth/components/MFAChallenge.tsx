@@ -7,7 +7,7 @@
  */
 
 import { useState, type FormEvent } from 'react';
-import { Button, FormField, Input } from '@/shared/components/ui';
+import { Button, FormField, Input, errorMessage } from '@/shared/components/ui';
 import { authApi } from '../api/authApi';
 import type { LoginResponse } from '../types/auth.types';
 import { authLinkClass } from './AuthLayout';
@@ -42,7 +42,7 @@ export function MFAChallenge({ userId, mfaToken, onSuccess, onCancel }: MFAChall
         : await authApi.mfaUseRecoveryCode(userId, code, mfaToken);
       onSuccess(response);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid code');
+      setError(errorMessage(err, 'Invalid code'));
     } finally {
       setIsLoading(false);
     }

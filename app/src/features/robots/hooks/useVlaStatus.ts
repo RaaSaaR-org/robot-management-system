@@ -4,6 +4,7 @@
  * @feature robots
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiClient } from '@/api';
 
@@ -110,7 +111,7 @@ export function useVlaStatus(robotId: string): UseVlaStatusReturn {
       }
     } catch (err: unknown) {
       if (!mountedRef.current) return;
-      const msg = err instanceof Error ? err.message : 'Failed to start VLA';
+      const msg = getErrorMessage(err, 'Failed to start VLA');
       setError(msg);
       throw err;
     } finally {
@@ -129,7 +130,7 @@ export function useVlaStatus(robotId: string): UseVlaStatusReturn {
       }
     } catch (err: unknown) {
       if (!mountedRef.current) return;
-      const msg = err instanceof Error ? err.message : 'Failed to stop VLA';
+      const msg = getErrorMessage(err, 'Failed to stop VLA');
       setError(msg);
       throw err;
     } finally {

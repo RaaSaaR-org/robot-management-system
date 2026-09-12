@@ -16,10 +16,17 @@ const mocks = vi.hoisted(() => ({
   ssListClaimable: vi.fn(),
   ssListStuck: vi.fn(),
   ssListOrphanedRecording: vi.fn(),
+  ssListByTwin: vi.fn(),
   dtFindById: vi.fn(),
   dtUpdate: vi.fn(),
+  dtDelete: vi.fn(),
   scanListBySession: vi.fn(),
   pruneSessionFrames: vi.fn(),
+  listScansBySession: vi.fn(),
+  deleteScan: vi.fn(),
+  simSceneDeleteByTwinId: vi.fn(),
+  simSceneUpsertForTwin: vi.fn(),
+  deleteTwinArtifact: vi.fn(),
 }));
 
 vi.mock('../../repositories/index.js', () => ({
@@ -31,19 +38,33 @@ vi.mock('../../repositories/index.js', () => ({
     listClaimable: mocks.ssListClaimable,
     listStuck: mocks.ssListStuck,
     listOrphanedRecording: mocks.ssListOrphanedRecording,
+    listByTwin: mocks.ssListByTwin,
   },
   digitalTwinRepository: {
     findById: mocks.dtFindById,
     update: mocks.dtUpdate,
+    delete: mocks.dtDelete,
   },
   sensorScanRepository: {
     listBySession: mocks.scanListBySession,
+  },
+  simSceneRepository: {
+    deleteByTwinId: mocks.simSceneDeleteByTwinId,
+    upsertForTwin: mocks.simSceneUpsertForTwin,
   },
 }));
 
 vi.mock('../SensorScanService.js', () => ({
   sensorScanService: {
     pruneSessionFrames: mocks.pruneSessionFrames,
+    listScansBySession: mocks.listScansBySession,
+    deleteScan: mocks.deleteScan,
+  },
+}));
+
+vi.mock('../../storage/model-storage.js', () => ({
+  modelStorage: {
+    deleteTwinArtifact: mocks.deleteTwinArtifact,
   },
 }));
 
@@ -99,6 +120,13 @@ describe('DigitalTwinService', () => {
       makeTwin(patch),
     );
     mocks.pruneSessionFrames.mockResolvedValue(0);
+    // Deletion-cascade defaults: nothing to erase unless a test says otherwise.
+    mocks.ssListByTwin.mockResolvedValue([]);
+    mocks.listScansBySession.mockResolvedValue([]);
+    mocks.deleteScan.mockResolvedValue(true);
+    mocks.dtDelete.mockResolvedValue(true);
+    mocks.simSceneDeleteByTwinId.mockResolvedValue(undefined);
+    mocks.deleteTwinArtifact.mockResolvedValue(undefined);
     // CAS transitions succeed by default; tests that exercise a lost race
     // override these to false.
     mocks.ssCompleteIfProcessing.mockResolvedValue(true);
@@ -312,6 +340,82 @@ describe('DigitalTwinService', () => {
       expect(result).toEqual({ ok: false });
       expect(mocks.dtUpdate).not.toHaveBeenCalled();         // twin left 'ready'
       expect(events.some((e) => e.type === 'twin:failed')).toBe(false);
+    });
+  });
+
+  describe('deleteTwin', () => {
+    it('erases the scans, their blobs, the sim scene and the artifacts of a FAILED build', async () => {
+      // The failed-build case: failJob never prunes frames, so the full raw
+      // sweep is still there when the user deletes the twin in reaction.
+      mocks.dtFindById.mockResolvedValue(
+        makeTwin({
+          status: 'failed',
+          errorMessage: 'merge exploded',
+          cloudKey: 'twin-1/cloud.pcd',
+          meshKey: 'twin-1/mesh.glb',
+          occupancyPgmKey: null,
+          simSceneKey: 'twin-1/scene.mjcf.xml',
+        }),
+      );
+      mocks.ssListByTwin.mockResolvedValue([
+        makeSession({ id: 'session-1', status: 'failed' }),
+        makeSession({ id: 'session-2', status: 'failed' }),
+      ]);
+      mocks.listScansBySession.mockImplementation((sessionId: string) =>
+        Promise.resolve(
+          sessionId === 'session-1'
+            ? [{ id: 'scan-a' }, { id: 'scan-b' }]
+            : [{ id: 'scan-c' }],
+        ),
+      );
+
+      const result = await service.deleteTwin('twin-1');
+
+      expect(result).toBe(true);
+
+      // Scans were reached through the twin→session index, and each scan's
+      // blob + row deleted strictly (a blob failure must not be swallowed).
+      expect(mocks.ssListByTwin).toHaveBeenCalledWith('twin-1');
+      expect(mocks.deleteScan).toHaveBeenCalledTimes(3);
+      for (const id of ['scan-a', 'scan-b', 'scan-c']) {
+        expect(mocks.deleteScan).toHaveBeenCalledWith(id, { strictStorage: true });
+      }
+
+      // Sim scene and every non-null artifact key are gone.
+      expect(mocks.simSceneDeleteByTwinId).toHaveBeenCalledWith('twin-1');
+      expect(mocks.deleteTwinArtifact).toHaveBeenCalledWith('twin-1/cloud.pcd');
+      expect(mocks.deleteTwinArtifact).toHaveBeenCalledWith('twin-1/mesh.glb');
+      expect(mocks.deleteTwinArtifact).toHaveBeenCalledWith('twin-1/scene.mjcf.xml');
+      expect(mocks.deleteTwinArtifact).toHaveBeenCalledTimes(3); // null keys skipped
+
+      // The row goes last, so ScanSession only cascades once the scans that
+      // are indexed by it have been enumerated.
+      expect(mocks.dtDelete).toHaveBeenCalledWith('twin-1');
+      const scansAt = mocks.deleteScan.mock.invocationCallOrder[0];
+      const rowAt = mocks.dtDelete.mock.invocationCallOrder[0];
+      expect(scansAt).toBeLessThan(rowAt);
+    });
+
+    it('returns false without touching storage when the twin does not exist', async () => {
+      mocks.dtFindById.mockResolvedValue(null);
+
+      expect(await service.deleteTwin('nope')).toBe(false);
+      expect(mocks.ssListByTwin).not.toHaveBeenCalled();
+      expect(mocks.simSceneDeleteByTwinId).not.toHaveBeenCalled();
+      expect(mocks.dtDelete).not.toHaveBeenCalled();
+    });
+
+    it('propagates a blob-delete rejection instead of swallowing it, and keeps the row', async () => {
+      mocks.dtFindById.mockResolvedValue(makeTwin({ cloudKey: 'twin-1/cloud.pcd' }));
+      mocks.ssListByTwin.mockResolvedValue([makeSession()]);
+      mocks.listScansBySession.mockResolvedValue([{ id: 'scan-a' }]);
+      mocks.deleteScan.mockRejectedValue(new Error('bucket unreachable'));
+
+      await expect(service.deleteTwin('twin-1')).rejects.toThrow('bucket unreachable');
+
+      // A half-finished cascade must not look like a completed one.
+      expect(mocks.dtDelete).not.toHaveBeenCalled();
+      expect(mocks.deleteTwinArtifact).not.toHaveBeenCalled();
     });
   });
 

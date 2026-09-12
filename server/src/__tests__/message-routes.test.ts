@@ -114,7 +114,8 @@ describe('Message Routes', () => {
         .send({ conversationId: 'conv-1', message: 'hello' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to send message');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -173,7 +174,8 @@ describe('Message Routes', () => {
         .send({ conversationId: 'conv-2', message: 'route me' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('orchestrate failed');
+      expect(response.body.error).toBe('Failed to process orchestrated message');
+      expect(response.body.error).not.toContain('orchestrate failed');
     });
   });
 

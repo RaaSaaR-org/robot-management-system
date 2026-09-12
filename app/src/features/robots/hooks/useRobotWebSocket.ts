@@ -143,7 +143,12 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
 
           case 'safety:estop':
             if (data.event) {
-              useSafetyStore.getState().addEvent(data.event);
+              const safety = useSafetyStore.getState();
+              // Log it for the event list, then reduce it into the fleet state
+              // the Stop button renders off — a stop or reset raised by another
+              // client has to reach this console without a reload.
+              safety.addEvent(data.event);
+              safety.applyEStopEvent(data.event);
             }
             break;
 

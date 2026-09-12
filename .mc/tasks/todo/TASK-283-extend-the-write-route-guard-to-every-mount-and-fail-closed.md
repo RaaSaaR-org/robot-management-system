@@ -3,7 +3,7 @@ id: "TASK-283"
 aliases: []
 title: "Extend the write-route guard to every mount and fail closed"
 slug: "extend-the-write-route-guard-to-every-mount-and-fail-closed"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []

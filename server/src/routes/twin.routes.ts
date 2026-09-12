@@ -249,10 +249,15 @@ digitalTwinRoutes.get('/:id', async (req: Request, res: Response) => {
   }
 });
 
-/** DELETE /api/digital-twins/:id — delete a twin (cascades zones + sessions). */
+/**
+ * DELETE /api/digital-twins/:id — erase a twin and everything it owns: its raw
+ * scans + their point-cloud blobs, its sim scene, its built artifacts, then the
+ * row itself (zones + sessions cascade). A failure part-way through the cascade
+ * throws and is reported as 500 — never as a success over orphaned data.
+ */
 digitalTwinRoutes.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const ok = await digitalTwinRepository.delete(req.params.id);
+    const ok = await digitalTwinService.deleteTwin(req.params.id);
     if (!ok) return res.status(404).json({ error: 'Digital twin not found' });
     res.status(204).send();
   } catch (error) {

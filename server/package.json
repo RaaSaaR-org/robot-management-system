@@ -18,6 +18,7 @@
     "seed:synthetic": "tsx src/scripts/seed-synthetic-demo.ts",
     "seed:marketplace": "tsx src/scripts/seed-marketplace-demo.ts",
     "seed:tour": "tsx src/database/seeds/tour-zema.seed.ts",
+    "backfill:compliance-seq": "tsx src/scripts/backfill-compliance-seq.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

@@ -3,7 +3,7 @@ id: "TASK-288"
 aliases: []
 title: "Tenant-qualify the zone name and floor constraint"
 slug: "tenant-qualify-the-zone-name-and-floor-constraint"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []

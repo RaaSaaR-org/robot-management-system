@@ -79,6 +79,23 @@ step "Server unit tests"
 step "App unit tests"
 (cd "$REPO_ROOT/app" && npm test) || { echo "  app vitest FAILED"; FAILURES=$((FAILURES + 1)); }
 
+# ------------------------------------- 2b. Error-contract ratchet (TASK-297)
+# app/src/api/client.ts rejects with a plain object, never an Error, so an
+# `instanceof Error` branch in a store silently discards the server's sentence.
+# getErrorMessage()/errorMessage() handle both shapes; authStore's use is a
+# sentinel comparison, not message extraction, so it is allowed.
+step "App store error-contract ratchet"
+RATCHET_HITS="$(grep -rln 'instanceof Error' "$REPO_ROOT"/app/src/features/*/store \
+  --include='*.ts' --include='*.tsx' 2>/dev/null \
+  | grep -v '__tests__' | grep -v '/authStore\.ts$' || true)"
+if [ -n "$RATCHET_HITS" ]; then
+  echo "  instanceof Error in a feature store — use getErrorMessage()/errorMessage():"
+  echo "$RATCHET_HITS" | sed 's/^/    /'
+  FAILURES=$((FAILURES + 1))
+else
+  ok "no instanceof Error in app/src/features/*/store"
+fi
+
 step "Robot agent unit tests"
 (cd "$REPO_ROOT/robot-agent" && npm test) || { echo "  robot-agent vitest FAILED"; FAILURES=$((FAILURES + 1)); }
 fi  # PYTHON_ONLY

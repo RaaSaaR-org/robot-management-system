@@ -53,6 +53,16 @@ export const ApprovalStatuses: ApprovalStatus[] = [
   'cancelled',
 ];
 
+/**
+ * Statuses a human can still act on — the one client-side definition of "open"
+ * (TASK-290). `escalated` is open: escalation is the SLA-breach path, so a
+ * breached request stays in the queue and in the overdue count.
+ *
+ * Mirrors OPEN_APPROVAL_STATUSES in server/src/types/approval.types.ts; the two
+ * lists are pinned together by server/src/__tests__/approval-open-statuses.test.ts.
+ */
+export const OPEN_APPROVAL_STATUSES: ApprovalStatus[] = ['pending', 'in_progress', 'escalated'];
+
 export type ApprovalStepStatus = 'pending' | 'awaiting' | 'approved' | 'rejected' | 'skipped';
 
 export type ApproverRole = 'supervisor' | 'manager' | 'safety_officer' | 'admin';
@@ -253,7 +263,8 @@ export interface CreateApprovalRequestInput {
 
 export interface ProcessApprovalInput {
   decision: ApprovalDecision;
-  decidedBy: string;
+  // No `decidedBy`: the server takes the deciding user from the authenticated
+  // session and refuses a body that names one (TASK-289).
   decisionNotes?: string;
   reviewDurationSec?: number;
   competenceVerified?: boolean;

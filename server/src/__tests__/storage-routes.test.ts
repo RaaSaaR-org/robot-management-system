@@ -175,7 +175,8 @@ describe('Storage Routes', () => {
       });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('File size exceeds limit');
+      expect(response.body.error).toBe('Failed to generate presigned URL');
+      expect(response.body.error).not.toContain('File size exceeds limit');
     });
   });
 

@@ -65,9 +65,11 @@ describe('LogExportService', () => {
 
       await service.exportToJson({});
 
+      // Chain order, not timestamp order (TASK-291) — an export has to
+      // reproduce the chain in the order it was built.
       expect(prisma.complianceLog.findMany).toHaveBeenCalledWith({
         where: {},
-        orderBy: { timestamp: 'asc' },
+        orderBy: [{ seq: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
       });
     });
 
@@ -115,9 +117,11 @@ describe('LogExportService', () => {
 
       await service.exportToJson({ eventTypes: [], robotIds: [], sessionIds: [] });
 
+      // Chain order, not timestamp order (TASK-291) — an export has to
+      // reproduce the chain in the order it was built.
       expect(prisma.complianceLog.findMany).toHaveBeenCalledWith({
         where: {},
-        orderBy: { timestamp: 'asc' },
+        orderBy: [{ seq: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
       });
     });
   });

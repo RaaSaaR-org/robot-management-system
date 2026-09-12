@@ -47,6 +47,7 @@ import {
   type RestrictionScope,
   type RestrictionReason,
 } from '../types/gdpr.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const gdprRoutes = Router();
 
@@ -117,9 +118,8 @@ gdprRoutes.post('/requests/erasure', async (req: Request, res: Response) => {
       message: 'Verification email will be sent. Please verify to proceed with erasure.',
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to create erasure request';
     console.error('Error creating erasure request:', error);
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to create erasure request', 400);
   }
 });
 
@@ -244,9 +244,8 @@ gdprRoutes.post('/requests/adm-review', async (req: Request, res: Response) => {
 
     res.status(201).json(request);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to create ADM review request';
     console.error('Error creating ADM review request:', error);
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to create ADM review request', 400);
   }
 });
 
@@ -301,9 +300,8 @@ gdprRoutes.delete('/requests/:id', async (req: Request, res: Response) => {
     const request = await gdprRequestService.cancelRequest(id, userId);
     res.json(request);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to cancel request';
     console.error('Error cancelling request:', error);
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to cancel request', 400);
   }
 });
 
@@ -348,9 +346,8 @@ gdprRoutes.get('/verify/:token', async (req: Request, res: Response) => {
       request,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Verification failed';
     console.error('Error verifying request:', error);
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Verification failed', 400);
   }
 });
 
@@ -610,9 +607,8 @@ gdprRoutes.post('/admin/requests/:id/execute-erasure', async (req: Request, res:
 
     res.json({ request, erasureResult });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to execute erasure';
     console.error('Error executing erasure:', error);
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to execute erasure', 400);
   }
 });
 

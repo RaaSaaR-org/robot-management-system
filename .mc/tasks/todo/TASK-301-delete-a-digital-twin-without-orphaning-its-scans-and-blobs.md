@@ -3,7 +3,7 @@ id: "TASK-301"
 aliases: []
 title: "Delete a digital twin without orphaning its scans and blobs"
 slug: "delete-a-digital-twin-without-orphaning-its-scans-and-blobs"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []

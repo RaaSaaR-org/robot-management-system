@@ -3,7 +3,7 @@ id: "TASK-289"
 aliases: []
 title: "Take the approval decision actor from the session, not the request body"
 slug: "take-the-approval-decision-actor-from-the-session-not-the-request-body"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []

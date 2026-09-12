@@ -20,6 +20,7 @@ import type {
 } from '../types/alerts.types';
 import { ALERT_SEVERITY_PRIORITY } from '../types/alerts.types';
 import { alertsApi } from '../api/alertsApi';
+import { getErrorMessage } from '@/shared/utils';
 
 // ============================================================================
 // HELPERS
@@ -45,13 +46,6 @@ function generateAlertId(): string {
  */
 function isLocalAlert(id: string): boolean {
   return id.startsWith(LOCAL_ID_PREFIX);
-}
-
-/**
- * Message for an alert action that the server refused or never received.
- */
-function actionErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
 }
 
 /**
@@ -212,7 +206,7 @@ export const useAlertsStore = create<AlertsStore>()(
             if (index !== -1) {
               state.alerts[index] = snapshot;
             }
-            state.error = actionErrorMessage(error, 'Failed to acknowledge alert');
+            state.error = getErrorMessage(error, 'Failed to acknowledge alert');
           });
         }
       },
@@ -241,7 +235,7 @@ export const useAlertsStore = create<AlertsStore>()(
             if (!state.alerts.some((a) => a.id === id)) {
               state.alerts = sortAlerts([...state.alerts, snapshot]);
             }
-            state.error = actionErrorMessage(error, 'Failed to dismiss alert');
+            state.error = getErrorMessage(error, 'Failed to dismiss alert');
           });
         }
       },
@@ -277,7 +271,7 @@ export const useAlertsStore = create<AlertsStore>()(
         } catch (error) {
           set((state) => {
             state.isLoading = false;
-            state.error = error instanceof Error ? error.message : 'Failed to fetch alerts';
+            state.error = getErrorMessage(error, 'Failed to fetch alerts');
           });
         }
       },

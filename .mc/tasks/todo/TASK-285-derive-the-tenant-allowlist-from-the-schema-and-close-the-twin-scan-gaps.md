@@ -3,7 +3,7 @@ id: "TASK-285"
 aliases: []
 title: "Derive the tenant allowlist from the schema and close the twin/scan gaps"
 slug: "derive-the-tenant-allowlist-from-the-schema-and-close-the-twin-scan-gaps"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []

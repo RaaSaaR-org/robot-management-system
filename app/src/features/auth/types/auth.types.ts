@@ -271,6 +271,14 @@ const OWNER_PERMISSIONS: Permission[] = [
 
 const MEMBER_PERMISSIONS: Permission[] = [
   'robots:read',
+  // TASK-284: members hold `robots:write` because the server lets them write.
+  // The destructive robot routes (register / unregister) are guarded by
+  // `memberOrAbove` — `server/src/middleware/auth.middleware.ts:411` — which
+  // admits super-admin, owner and member. This entry is that guard's client
+  // mirror: the two are intentionally paired, so narrowing one without the
+  // other makes the UI hide a control the API would have accepted (or offer
+  // one it refuses). Change both, or neither.
+  'robots:write',
   'robots:command',
   'tasks:read',
   'tasks:write',

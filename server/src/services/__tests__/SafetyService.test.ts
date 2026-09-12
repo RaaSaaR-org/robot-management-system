@@ -416,10 +416,106 @@ describe('event log and subscriptions', () => {
     await safetyService.triggerFleetEStop('sub test');
     expect(cb).toHaveBeenCalledTimes(1);
     expect(cb.mock.calls[0][0].reason).toBe('sub test');
+    expect(cb.mock.calls[0][0].scope).toBe('fleet');
+    expect(cb.mock.calls[0][0].action).toBe('trigger');
 
     unsubscribe();
     await safetyService.triggerFleetEStop('after unsub');
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  // Every transition has to reach the console, not just the two that always
+  // did. A reset that stays silent leaves a remote client offering "Resume
+  // fleet" on a fleet that is already armed.
+  it('notifies subscribers on a single-robot trigger', async () => {
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
+    httpPost.mockResolvedValue({ status: 'triggered' });
+    const cb = vi.fn();
+    const unsubscribe = safetyService.onEStopEvent(cb);
+
+    await safetyService.triggerRobotEStop('r1', 'obstacle', 'operator');
+    unsubscribe();
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    const event = cb.mock.calls[0][0];
+    expect(event.scope).toBe('robot');
+    expect(event.action).toBe('trigger');
+    expect(event.triggeredBy).toBe('operator');
+    expect(event.affectedRobots).toEqual(['r1']);
+    expect(event.result.robotId).toBe('r1');
+  });
+
+  it('notifies subscribers on a single-robot reset', async () => {
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
+    httpPost.mockResolvedValue({ status: 'armed' });
+    const cb = vi.fn();
+    const unsubscribe = safetyService.onEStopEvent(cb);
+
+    await safetyService.resetRobotEStop('r1');
+    unsubscribe();
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    const event = cb.mock.calls[0][0];
+    expect(event.scope).toBe('robot');
+    expect(event.action).toBe('reset');
+    expect(event.affectedRobots).toEqual(['r1']);
+  });
+
+  it('notifies subscribers on a fleet reset', async () => {
+    vi.mocked(robotManager.listRobots).mockResolvedValue([
+      makeRobot({ id: 'a', status: 'online' }),
+    ]);
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
+    httpPost.mockResolvedValue({ status: 'armed' });
+    const cb = vi.fn();
+    const unsubscribe = safetyService.onEStopEvent(cb);
+
+    await safetyService.resetFleetEStop();
+    unsubscribe();
+
+    const resetEvents = cb.mock.calls
+      .map((c) => c[0])
+      .filter((e) => e.scope === 'fleet');
+    expect(resetEvents).toHaveLength(1);
+    expect(resetEvents[0].action).toBe('reset');
+    expect(resetEvents[0].affectedRobots).toContain('a');
+  });
+
+  // A fleet or zone stop emits ONE aggregate event naming every affected
+  // robot — not one per robot, which would storm every subscriber
+  // (IncidentService opens an incident per event).
+  it('emits exactly one event for a fleet trigger covering many robots', async () => {
+    vi.mocked(robotManager.listRobots).mockResolvedValue([
+      makeRobot({ id: 'a', status: 'online' }),
+      makeRobot({ id: 'b', status: 'online' }),
+    ]);
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
+    httpPost.mockResolvedValue({ ok: true });
+    const cb = vi.fn();
+    const unsubscribe = safetyService.onEStopEvent(cb);
+
+    await safetyService.triggerFleetEStop('storm check', 'admin');
+    unsubscribe();
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb.mock.calls[0][0].affectedRobots).toEqual(['a', 'b']);
+  });
+
+  it('emits exactly one event for a fleet reset covering many robots', async () => {
+    vi.mocked(robotManager.listRobots).mockResolvedValue([
+      makeRobot({ id: 'a', status: 'online' }),
+      makeRobot({ id: 'b', status: 'online' }),
+    ]);
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
+    httpPost.mockResolvedValue({ status: 'armed' });
+    const cb = vi.fn();
+    const unsubscribe = safetyService.onEStopEvent(cb);
+
+    await safetyService.resetFleetEStop();
+    unsubscribe();
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb.mock.calls[0][0].action).toBe('reset');
   });
 
   it('isolates a throwing callback from other subscribers', async () => {

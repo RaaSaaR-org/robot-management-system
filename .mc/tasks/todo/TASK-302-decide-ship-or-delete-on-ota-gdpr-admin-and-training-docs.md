@@ -3,7 +3,7 @@ id: "TASK-302"
 aliases: []
 title: "Decide ship-or-delete on OTA, GDPR admin and training docs"
 slug: "decide-ship-or-delete-on-ota-gdpr-admin-and-training-docs"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -114,3 +114,213 @@ TASK-270 (open, spe 2) fixes the GDPR `'current-user'` placeholder. A GDPR admin
 A **delete** verdict for OTA would remove the Updates page (`app/src/App.tsx:57`/`:630`, `app/src/routes/lazyPages.ts:234`), whose sidebar row belongs to the parallel navigation session (TASK-273..280) — that removal is theirs to make, not this task's. Do not touch `app/src/components/layout/{Sidebar,NavList,MobileNav,navigation}.*` or `app/src/components/docs/DocsSidebar.tsx`.
 
 Nothing enforces `@status` today. Decide as part of the spike whether to add a grep-based inventory (`grep -rn '@status unshipped'`) to the acceptance criteria of the follow-ups, or to leave enforcement manual — and write the decision down either way.
+
+---
+
+## Verdicts
+
+All three verdicts are **not now**: marked `@status unshipped`, kept in the tree,
+nothing deleted. Deleting any of them is the repository owner's call, not this
+PR's — the costed delete option is recorded under each so that call can be made
+from evidence. Sizes use [`.claude/references/spe.md`](../../../.claude/references/spe.md)
+(8 = ceiling, ~150k context; nothing higher ships as a leaf).
+
+### 1. OTA delivery — **not now** (2026-09-12)
+
+**Rejected: ship.** Not delete either — the delete option is costed below and
+recommended against.
+
+Confirmed by reading the current files, after TASK-292 landed: the credential
+half is genuinely fixed (both fetches send `platformAuthHeaders()`, time out at
+10 s, and fail loudly on 401/403 naming `NEODEM_SERVICE_TOKEN`), but the delivery
+half is untouched and is the real defect. `SecureUpdateClient.downloadUpdate`
+fetches the package *metadata* and then builds the payload as
+``Buffer.from(`update-package-${info.version}`)`` behind a TODO, so the SHA-256
+comparison and the Ed25519 `verifySignature` immediately below it check a
+constant the client invented; `POST /api/updates` fabricates the identical
+constant when no `fileData` is posted, and the Updates UI posts none; and
+`UpdatePackage` (`server/prisma/schema.prisma:2723-2741`) has no artifact column
+to hold bytes in the first place. `UpdateService.deployToRobot` contains no
+`fetch`/`axios`/`agentUrl` at all — it writes an `UpdateDeployment` row, flips
+the package to `deployed` and emits an event — and `robot-agent`'s
+`rest-routes.ts` exposes no OTA endpoint for a push model to call. On the agent,
+`index.ts:53`/`:529`/`:581` use only `startPeriodicChecks`/`stopPeriodicChecks`;
+`downloadUpdate`, `applyUpdate` and `rollback` have **no production caller**, and
+`applyUpdate`'s install step is a `console.log`. So: an operator can create,
+sign, approve and "deploy" a package, and the fleet is never touched.
+
+*Ship cost.* Four slices, ~spe 13 of buildable work plus one that is not
+buildable here. (a) Artifact storage — an artifact column on `UpdatePackage`, a
+migration, and upload/presign/stream endpoints modelled on
+`server/src/storage/model-storage.ts`, which already has exactly this shape:
+**spe 5**. (b) A real client download — `response.arrayBuffer()`, checksum and
+signature over the received bytes, plus rewriting the two tests that currently
+encode the defect: **spe 3**. (c) A delivery channel — a new OTA route on the
+agent, a server-side push or an agent-side pull of assigned deployments, and a
+status callback so `UpdateDeployment.status` reflects the robot rather than the
+operator: **spe 5**. (d) The install itself — replacing binaries atomically with
+a working rollback on a real robot. This is **hardware-pending, not buildable
+now**: it cannot be proven on the simulator, and shipping a fake-verified
+installer is strictly worse than shipping none. Size it only once (a)–(c) exist.
+
+*Delete cost.* **spe 5** and irreversible: `update.routes.ts` (160 lines),
+`UpdateService.ts` (435), two Prisma models plus a migration, the agent client
+(371 lines) and its 12 tests, and the entire `app/src/features/updates` module
+(19 files) — a page that looks fully shipped, including the sidebar row, which
+belongs to the parallel navigation session (TASK-273..280) and is not this
+task's to remove. **Recommended against:** the signing, approval workflow and
+anti-rollback comparisons are correct and are the parts that are expensive to
+rebuild; only the transport is missing.
+
+*Test that mocks the broken seam.*
+`robot-agent/src/updates/__tests__/SecureUpdateClient.test.ts:119-152`
+("verifies signature during download") builds its fixture at **:123** as
+``Buffer.from(`update-package-${version}`)`` — byte-identical to what production
+fabricates — and the invalid-signature case at **:153-185** does the same at
+**:157**. Both assert only `result.buffer` is *defined*. **Implementing a real
+download breaks both.** They must be replaced by a `mockFetch` whose
+`arrayBuffer()` returns real package bytes, with the expected checksum computed
+in the test from those bytes independently of the client, plus a new case
+asserting that a byte-level tamper is rejected. Server side,
+`server/src/__tests__/update-routes.test.ts:12-30` mocks `updateService`
+wholesale (`deployToRobot: vi.fn()` at **:18**), and
+`server/src/services/__tests__/UpdateService.test.ts:10-25` mocks prisma and
+asserts row writes only (`approveUpdate` :137-179, `triggerRollback` :180-219);
+the replacement is an `UpdateService` test asserting an outbound HTTP call to the
+agent and a deployment status driven by its callback — a test that cannot pass
+against today's code.
+
+### 2. GDPR admin fulfilment — **not now** (2026-09-12)
+
+**Rejected: ship** (deferred to a planned child, not abandoned). **Delete is
+rejected outright**, not merely deferred.
+
+**Nothing to build server-side — this is not a server task.** `gdpr.routes.ts`
+covers list, acknowledge, start-processing, complete, reject, execute-erasure
+(**:580**), metrics, sla-report, overdue and nearing-deadline, and
+`GDPRRequestService.executeErasure` (**:832**) is the only path that deletes
+consents, pseudonymises logs and — via `RobotMemoryErasureService` — wipes robot
+memory workspaces, correctly suppressed by a legal hold. It works. The gap is
+**purely client**: `gdprApi.ts` implements eight admin operations and
+`gdprStore.ts` six admin actions, and a grep across all of `app/src` finds
+**zero** component references to any of them; `GDPRPortalPage.tsx` renders only
+`requests`, `consent` and `ropa`. `executeErasure` and `getRequestsNearingSLA`
+have no client code at all. Net effect: the Art. 12(3) one-month deadline is
+tracked by code no controller can see, and the one Art. 17 fleet-wide erasure
+path in the product is reachable only by hand-written HTTP.
+
+*Ship cost.* **spe 5**, one slice: an admin view in the existing Data Privacy
+section — queue table plus detail drawer with acknowledge / start / complete /
+reject / execute-erasure and an overdue tile — copying
+`app/src/features/approvals` (`ApprovalQueue` + `ApprovalDetailModal`) into the
+`SegmentedControl` shell `GDPRPortalPage.tsx` already has, plus the two missing
+client methods. The child **must carry `depends_on: ["[[TASK-270]]"]`**: the
+`'current-user'` placeholder would otherwise record every fulfilment action
+against a fake actor, which is worse than having no screen. Note for whoever
+plans it: TASK-283 deliberately left `/api/gdpr/admin/*` out of the self-service
+auth exemption, so the view needs member-or-above and must degrade honestly for
+a viewer.
+
+*Delete cost.* **spe 2** — strip the admin half of the store and API client
+(~150 lines) and the store tests; the subject-side portal is untouched. Cheap,
+and **recommended against**: it would discard the client half of a complete,
+correct fulfilment API and leave the platform with no path to meet Art. 12(3)
+in-product, to be rebuilt from scratch the first time a real controller uses
+this. The cost of keeping it is one honest marker, which this PR adds.
+
+*Test that mocks the broken seam.*
+`app/src/features/gdpr/store/__tests__/gdprStore.test.ts` mocks the entire
+`gdprApi` (`getAdminRequests` at **:34**) and then asserts all six admin actions
+in the `// --- admin ---` block at **:254-336** — green, against a store nothing
+renders. `server/src/__tests__/gdpr-routes.test.ts:12-36` mocks
+`gdprRequestService` including `executeErasure` (**:31**) and drives the admin
+routes from **:701**, with execute-erasure at **:896**. Both halves pass and
+nothing joins them. Replacement when shipping: a component test that renders the
+admin queue and drives the **real** store with only the api module mocked — the
+pattern is `app/src/features/updates/__tests__/UpdatesSection.test.tsx:14-27`,
+which mocks `updatesApi` one level below the store. (The Test Strategy above
+cites `UpdatesPage.test.tsx:10-21`; that file does not exist — `UpdatesSection`
+is the component, and the section-level test is the pattern to copy.)
+
+### 3. Training-data documentation (AI Act Art. 10/11) — **not now** (2026-09-12)
+
+**Rejected: delete**, and ship is deferred as too large for this spike to
+justify blind.
+
+Twelve route registrations in `training-docs.routes.ts` (`:30, 79, 102, 127,
+169, 192, 217, 279, 306, 351, 374, 399`), mounted at `server/src/app.ts:370`
+behind the standard protection, on a 941-line `TrainingDataDocService` with
+three Prisma models and a working PDF export. A grep for `training-docs`,
+`trainingDocs` or `biasAssessment` across `app/src` returns **nothing** — no
+api client, no store, no page. The only in-product writer is
+`TeleoperationService` → `recordProvenance`; every read path, every bias
+assessment and the export are reachable by hand-written HTTP only.
+
+*Ship cost.* **spe 8 at minimum — plan it as a split**, because a single leaf at
+the ceiling will degrade: a new feature module from zero (types, api client,
+store, page) covering three distinct surfaces — dataset provenance, training-data
+summaries with their update-due tracking, and bias assessments with their
+status workflow — plus a binary PDF download path the app has no existing
+pattern for. Realistically two children at **spe 5** (provenance + summaries;
+bias assessments + export). Costing this honestly is the main reason the verdict
+is "not now" rather than "ship": it is a feature, not a wiring fix, and it needs
+its own `/grill` to decide what a compliance officer actually needs on screen.
+
+*Delete cost.* **spe 5, high and irreversible**: a migration dropping three
+Prisma models (and the provenance rows teleoperation has already written),
+941 lines of service, 424 of routes, 41 tests, and the `recordProvenance` call
+site in `TeleoperationService`. Against that, "not now" costs one marker.
+**Recommended against deleting** — but with a caveat the owner should weigh:
+unreachable compliance code is a *liability*, not an asset, if anyone cites it
+as Art. 10/11 coverage. The marker and the `docs/api.md` entry added here are
+what keep it honest in the meantime.
+
+*Test that mocks the broken seam.*
+`server/src/__tests__/training-docs-routes.test.ts:11-13` replaces
+`TrainingDataDocService` with a fully mocked object and `:30-50` mounts the
+router directly behind a stub auth middleware; **41 tests pass with no client in
+existence.** They are not wrong, they are just testing a surface nobody calls.
+Replacement when shipping: an app-side feature test against a `trainingDocsApi`
+that does not exist yet, in the shape of
+`app/src/features/updates/__tests__/UpdatesSection.test.tsx`.
+
+### Product claims contradicted, and what happened to each
+
+All four named in the acceptance criteria are **corrected in this PR**; no
+follow-up is needed to make the docs honest.
+
+| Claim | Was | Now |
+|---|---|---|
+| `README.md:61` | "Ed25519-signed OTA packages" listed as a shipped Deploy capability | Says packages are signed and approved on the server but **nothing is delivered to a robot yet**, linking to Status & limitations |
+| `README.md:444` | Art. 17 erasure "reaches the fleet" | Kept (the server path is real and does reach the fleet) but qualified: triggering it is an API call, because the admin screen does not exist |
+| `README.md:443` | "Self-service portal covering 7 request types" | Qualified: the subject's side is shipped, the controller's fulfilment queue is API-only |
+| `docs/regulatory-compliance.md:252-256` (§6.3) | A requirements table readable as an implementation claim | Followed by a dated **Implementation status** block stating that none of §6.3 is met, item by item, with the file evidence |
+| `docs/api.md:328` | "`/api/updates` — OTA update management" | "OTA update **metadata**… delivery is not implemented" |
+| `docs/api.md` (missing) | `/api/training-docs` absent from the route table despite being mounted | Added, marked HTTP-only with no app client |
+
+`README.md`'s Status & limitations section now carries all three subsystems in
+one paragraph, so a reader planning around NeoDEM meets them before the source.
+
+### Enforcement of `@status`: manual, by grep — decided
+
+**Decision: leave enforcement manual; add the inventory grep to the acceptance
+criteria of each follow-up, not to CI.** A CI gate is the wrong tool here — the
+correct number of `unshipped` files is not zero, so a grep-based gate would have
+to carry a whitelist that itself goes stale, and it would fail the build every
+time someone honestly marks a new module. The value of the tag is that it is
+*read*, not that it is counted. Each follow-up that ships one of these
+subsystems therefore gets an AC of the form "`grep -rn '@status unshipped'` no
+longer lists `<file>`", which makes removing the marker part of the definition of
+done for that specific slice. Declaring the tag in `app/AGENTS.md` and
+`server/AGENTS.md` remains a separate **spe 2** follow-up, deliberately not done
+here (`app/src` carries `@status` on 0 files, `server/src` on 3, all tests).
+
+### Not done here, and why
+
+`robot-agent/src/index.ts:528` still reads `// Start secure OTA update checks
+(CRA Art. 13)` above a call whose result is discarded. That file is outside this
+task's file ownership in the current wave, so it was not edited. The exact change
+it needs: replace that comment with `// OTA update checks — @status unshipped:
+this polls and discards; no update can be delivered (TASK-302)` and drop the
+bare CRA Art. 13 claim, which the header of `SecureUpdateClient.ts` now carries
+with its caveat attached.

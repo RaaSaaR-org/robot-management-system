@@ -12,6 +12,7 @@ import type {
   OversightActionType,
   VerificationStatus,
 } from '../types/oversight.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const oversightRoutes = Router();
 
@@ -42,8 +43,7 @@ oversightRoutes.post('/robots/:id/manual-mode', async (req: Request, res: Respon
 
     res.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to activate manual mode';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to activate manual mode', 500);
   }
 });
 
@@ -68,8 +68,7 @@ oversightRoutes.delete('/robots/:id/manual-mode', async (req: Request, res: Resp
 
     res.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to deactivate manual mode';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to deactivate manual mode', 500);
   }
 });
 
@@ -90,8 +89,7 @@ oversightRoutes.get('/manual-sessions', async (req: Request, res: Response) => {
     const sessions = await oversightService.getManualSessionHistory(params);
     res.json(sessions);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get manual sessions';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get manual sessions', 500);
   }
 });
 
@@ -114,8 +112,7 @@ oversightRoutes.get('/verifications', async (req: Request, res: Response) => {
     const schedules = await oversightService.getVerificationSchedules(params);
     res.json(schedules);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get verification schedules';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get verification schedules', 500);
   }
 });
 
@@ -141,8 +138,7 @@ oversightRoutes.post('/verifications', async (req: Request, res: Response) => {
 
     res.status(201).json(schedule);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to create verification schedule';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to create verification schedule', 500);
   }
 });
 
@@ -154,8 +150,7 @@ oversightRoutes.get('/verifications/due', async (req: Request, res: Response) =>
     const dueVerifications = await oversightService.getDueVerifications();
     res.json(dueVerifications);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get due verifications';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get due verifications', 500);
   }
 });
 
@@ -183,8 +178,7 @@ oversightRoutes.post('/verifications/:id/complete', async (req: Request, res: Re
 
     res.status(201).json(completion);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to complete verification';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to complete verification', 500);
   }
 });
 
@@ -210,8 +204,7 @@ oversightRoutes.patch('/verifications/:id', async (req: Request, res: Response) 
 
     res.json(schedule);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to update verification schedule';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to update verification schedule', 500);
   }
 });
 
@@ -229,8 +222,7 @@ oversightRoutes.delete('/verifications/:id', async (req: Request, res: Response)
 
     res.json(schedule);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to deactivate verification schedule';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to deactivate verification schedule', 500);
   }
 });
 
@@ -278,8 +270,7 @@ oversightRoutes.get('/anomalies', async (req: Request, res: Response) => {
     const result = await oversightService.getAnomalies(params);
     res.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get anomalies';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get anomalies', 500);
   }
 });
 
@@ -292,8 +283,7 @@ oversightRoutes.get('/anomalies/active', async (req: Request, res: Response) => 
     const anomalies = await oversightService.getActiveAnomalies(robotId);
     res.json(anomalies);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get active anomalies';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get active anomalies', 500);
   }
 });
 
@@ -305,8 +295,7 @@ oversightRoutes.get('/anomalies/unacknowledged', async (req: Request, res: Respo
     const anomalies = await oversightService.getUnacknowledgedAnomalies();
     res.json(anomalies);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get unacknowledged anomalies';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get unacknowledged anomalies', 500);
   }
 });
 
@@ -325,8 +314,7 @@ oversightRoutes.post('/anomalies/:id/acknowledge', async (req: Request, res: Res
 
     res.json(anomaly);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to acknowledge anomaly';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to acknowledge anomaly', 500);
   }
 });
 
@@ -351,8 +339,7 @@ oversightRoutes.post('/anomalies/:id/resolve', async (req: Request, res: Respons
 
     res.json(anomaly);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to resolve anomaly';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to resolve anomaly', 500);
   }
 });
 
@@ -374,8 +361,7 @@ oversightRoutes.get('/robots/:id/capabilities', async (req: Request, res: Respon
 
     res.json(summary);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get robot capabilities';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get robot capabilities', 500);
   }
 });
 
@@ -387,8 +373,7 @@ oversightRoutes.get('/fleet/overview', async (req: Request, res: Response) => {
     const overview = await oversightService.getFleetCapabilitiesOverview();
     res.json(overview);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get fleet overview';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get fleet overview', 500);
   }
 });
 
@@ -430,8 +415,7 @@ oversightRoutes.get('/logs', async (req: Request, res: Response) => {
     const result = await oversightService.getOversightLogs(params);
     res.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get oversight logs';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get oversight logs', 500);
   }
 });
 
@@ -447,7 +431,6 @@ oversightRoutes.get('/dashboard', async (req: Request, res: Response) => {
     const stats = await oversightService.getDashboardStats();
     res.json(stats);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get dashboard stats';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get dashboard stats', 500);
   }
 });

@@ -1,0 +1,24 @@
+-- TASK-288: the zone name/floor constraint becomes per-tenant.
+--
+-- `Zone` carried a global `@@unique([name, floor])`. "Warehouse A", "Dock 1"
+-- and "Charging" are default zone names, so the second tenant to create its
+-- own fleet map collided with the first — and collided in the worst possible
+-- way. The duplicate pre-check in ZoneService went through a compound-unique
+-- `findUnique`, which the tenant-isolation extension can only post-filter to
+-- null (it cannot inject a tenant filter into a unique lookup at all). So
+-- validation saw no duplicate, passed, and the insert then raised P2002 as a
+-- bare 500. The repository now asks with `findFirst`, which the extension does
+-- scope, and this index is what makes the two agree.
+--
+-- Note the same trade TASK-287 recorded: `tenantId` is nullable and SQL treats
+-- NULLs as distinct inside a unique index, so with MULTI_TENANCY_ENABLED=false
+-- this index enforces nothing and the ZoneService pre-check is the only guard,
+-- leaving a narrow concurrent-duplicate race on single-tenant deployments.
+-- That is accepted here: zone names are operator-chosen through a single
+-- owner-only endpoint rather than machine-generated, so two racing inserts of
+-- the same name on the same floor is not a shape the product produces. The
+-- alternative — making `tenantId` NOT NULL — is rejected for the same reason
+-- as in TASK-287: it would demand a Tenant row for every insert on
+-- deployments that have no tenants.
+DROP INDEX "Zone_name_floor_key";
+CREATE UNIQUE INDEX "Zone_tenantId_name_floor_key" ON "Zone"("tenantId", "name", "floor");

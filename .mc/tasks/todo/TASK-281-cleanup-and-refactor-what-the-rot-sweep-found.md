@@ -3,7 +3,7 @@ id: "TASK-281"
 aliases: []
 title: "Cleanup and refactor — what the rot sweep found"
 slug: "cleanup-and-refactor-what-the-rot-sweep-found"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -397,11 +397,11 @@ digital-twin feature from opposite ends (routing vs. server isolation and storag
 - [ ] Concurrent compliance writes leave `verifyHashChain` valid — asserted by a `Promise.all` test.
 - [ ] A robot in a protective stop does not read as Online anywhere in the fleet console, and a remote E-Stop or reset changes the dashboard's fleet Stop button without a reload.
 - [ ] An unimplemented `actionType` marks the step failed, not completed; a process created in the UI carries a real action type.
-- [ ] No `error instanceof Error` remains in a `catch` under `app/src/features/**/store/**`, enforced by lint; one store test rejects with a plain `{code,message,statusCode}`.
+- [ ] No `error instanceof Error` remains in a `catch` under `app/src/features/*/store` (excluding `__tests__` and `authStore.ts`), enforced by the grep ratchet stage in `scripts/test-all.sh` — not by lint, which this repo does not have; one store test rejects with a plain `{code,message,statusCode}`.
 - [ ] No route handler puts raw `error.message` in a response body; a test throws a `PrismaClientKnownRequestError` through a handler and asserts no query text in the body.
 - [ ] A deliberate rollback and a deliberate cancel are distinguishable from a crash in the deployment history.
 - [ ] `/deployments` and `/alerts` → Incidents render an honest empty state in demo mode instead of white-screening.
-- [ ] Each of the four subsystems in slice 12 has a recorded verdict; the ones not being shipped say so in-code.
+- [ ] Each of the three subsystems left in slice 12 has a recorded verdict; the ones not being shipped say so in-code. (The fourth, twin deletion, left the spike for TASK-301 — see "Twin deletion came out of the spike" above.)
 
 ## Test Strategy
 

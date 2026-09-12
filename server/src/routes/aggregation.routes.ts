@@ -7,6 +7,7 @@
 import { Router, type Request, type Response } from 'express';
 import { secureAggregator } from '../services/SecureAggregator.js';
 import type { MaskedUpdate } from '../services/SecureAggregator.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const aggregationRoutes = Router();
 
@@ -53,9 +54,12 @@ aggregationRoutes.post('/rounds/:roundId/submit', async (req: Request, res: Resp
       robotId: body.robotId,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    const status = message.includes('already') ? 409 : 500;
-    res.status(status).json({ error: `Failed to submit update: ${message}` });
+    // "already submitted" is SecureAggregator's own sentence, so that one is
+    // echoed; every other failure answers with the fallback, unread.
+    if (error instanceof Error && error.message.includes('already')) {
+      return res.status(409).json({ error: `Failed to submit update: ${error.message}` });
+    }
+    sendFailure(res, error, 'Failed to submit update', 500);
   }
 });
 
@@ -74,8 +78,7 @@ aggregationRoutes.get('/rounds/:roundId/aggregation', async (req: Request, res: 
       result: result ?? undefined,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: `Failed to get aggregation status: ${message}` });
+    sendFailure(res, error, 'Failed to get aggregation status', 500);
   }
 });
 
@@ -100,8 +103,10 @@ aggregationRoutes.post('/rounds/:roundId/aggregate', async (req: Request, res: R
       result,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    const status = message.includes('No updates') ? 400 : 500;
-    res.status(status).json({ error: `Failed to aggregate: ${message}` });
+    // "No updates ..." is SecureAggregator's own sentence and stays readable.
+    if (error instanceof Error && error.message.includes('No updates')) {
+      return res.status(400).json({ error: `Failed to aggregate: ${error.message}` });
+    }
+    sendFailure(res, error, 'Failed to aggregate updates', 500);
   }
 });

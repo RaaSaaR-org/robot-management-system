@@ -27,7 +27,8 @@ import {
   type RollbackThresholds,
 } from '../types';
 import { CanaryStagesField, validateStages, type CanaryPresetKey } from './CanaryStagesField';
-import { errorMessage, modelName, strategyLabel } from './deploymentHelpers';
+import { modelName, strategyLabel } from './deploymentHelpers';
+import { errorMessage } from '@/shared/components/ui';
 
 export interface DeploymentFormModalProps {
   isOpen: boolean;

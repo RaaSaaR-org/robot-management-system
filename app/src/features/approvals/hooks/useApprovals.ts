@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useMemo } from 'react';
-import { useAuthStore } from '@/features/auth/store/authStore';
+import { isOpen } from '../components/approvalFormat';
 import { useApprovalsStore } from '../store';
 import type {
   ApprovalRequest,
@@ -79,11 +79,8 @@ export function useApprovals(options: UseApprovalsOptions = {}): UseApprovalsRet
   const total = useApprovalsStore((state) => state.approvalRequestsTotal);
   const page = useApprovalsStore((state) => state.approvalRequestsPage);
 
-  // Real actor identity from the auth store (dev auto-login keeps this
-  // populated when AUTH_DISABLED)
-  const user = useAuthStore((state) => state.user);
-  const actorId = user?.email ?? user?.id ?? 'unknown-reviewer';
-
+  // The actor is not sent: the server takes it from the authenticated session
+  // (TASK-289), so a client cannot attribute a decision to someone else.
   const storeFetchApprovals = useApprovalsStore((state) => state.fetchApprovalRequests);
   const storeProcessApproval = useApprovalsStore((state) => state.processApproval);
   const storeCancelApproval = useApprovalsStore((state) => state.cancelApprovalRequest);
@@ -97,7 +94,7 @@ export function useApprovals(options: UseApprovalsOptions = {}): UseApprovalsRet
 
   // Computed counts
   const pendingCount = useMemo(
-    () => approvals.filter((a) => a.status === 'pending' || a.status === 'in_progress').length,
+    () => approvals.filter((a) => isOpen(a.status)).length,
     [approvals]
   );
 
@@ -127,16 +124,16 @@ export function useApprovals(options: UseApprovalsOptions = {}): UseApprovalsRet
 
   const cancelApproval = useCallback(
     async (id: string, reason: string) => {
-      return storeCancelApproval(id, actorId, reason);
+      return storeCancelApproval(id, reason);
     },
-    [storeCancelApproval, actorId]
+    [storeCancelApproval]
   );
 
   const escalateApproval = useCallback(
     async (id: string, reason?: string) => {
-      return storeEscalateApproval(id, actorId, reason);
+      return storeEscalateApproval(id, reason);
     },
-    [storeEscalateApproval, actorId]
+    [storeEscalateApproval]
   );
 
   const refresh = useCallback(async () => {

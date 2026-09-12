@@ -7,11 +7,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import { Button, KeyValueList, Modal, SkeletonText, StatusTag, confirm, errorMessage, toast } from '@/shared/components/ui';
-import { useAuthStore } from '@/features/auth/store/authStore';
 import { useApprovalsStore } from '../store';
 import type { ApprovalRequest } from '../types';
 import { RejectApprovalModal } from './RejectApprovalModal';
-import { humanize, priorityTone, slaInfo, statusTone, stepTone } from './approvalFormat';
+import { humanize, isOpen, priorityTone, slaInfo, statusTone, stepTone } from './approvalFormat';
 
 export interface ApprovalDetailModalProps {
   /** The row that was clicked; the modal loads the full record by its id. */
@@ -28,8 +27,6 @@ export function ApprovalDetailModal({ request, onClose }: ApprovalDetailModalPro
   const selected = useApprovalsStore((s) => s.selectedRequest);
   const loading = useApprovalsStore((s) => s.selectedRequestLoading);
   const processApproval = useApprovalsStore((s) => s.processApproval);
-  const user = useAuthStore((s) => s.user);
-  const decidedBy = user?.email ?? user?.id ?? 'unknown-reviewer';
 
   const [approving, setApproving] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -46,7 +43,7 @@ export function ApprovalDetailModal({ request, onClose }: ApprovalDetailModalPro
   if (!approval) return null;
 
   const currentStep = approval.steps?.find((s) => s.status === 'awaiting');
-  const actionable = Boolean(currentStep) && (approval.status === 'pending' || approval.status === 'in_progress' || approval.status === 'escalated');
+  const actionable = Boolean(currentStep) && isOpen(approval.status);
   const sla = slaInfo(approval);
   const reviewSec = () => Math.max(1, Math.round((Date.now() - openedAt.current) / 1000));
 
@@ -66,7 +63,6 @@ export function ApprovalDetailModal({ request, onClose }: ApprovalDetailModalPro
     try {
       await processApproval(approval.id, currentStep.id, {
         decision: 'approve',
-        decidedBy,
         reviewDurationSec: reviewSec(),
         competenceVerified: true,
       });
@@ -83,7 +79,6 @@ export function ApprovalDetailModal({ request, onClose }: ApprovalDetailModalPro
     if (!currentStep) return;
     await processApproval(approval.id, currentStep.id, {
       decision: 'reject',
-      decidedBy,
       decisionNotes: reason,
       reviewDurationSec: reviewSec(),
       competenceVerified: true,

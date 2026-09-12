@@ -2,14 +2,38 @@
  * @file SecureUpdateClient.ts
  * @description Secure OTA update client with Ed25519 signature verification
  * @feature updates
- * @regulatory CRA Art. 13, MR Art. 10, Annex I
- * @status live
+ * @regulatory CRA Art. 13, MR Art. 10, Annex I — CLAIMED, NOT MET. The claim is
+ *   kept next to the status below rather than deleted, so the gap stays visible
+ *   to anyone auditing update-mechanism coverage.
+ * @status unshipped — this client cannot deliver an update. `downloadUpdate`
+ *   never fetches package bytes: it hashes a fabricated
+ *   `update-package-<version>` buffer (see the TODO above it), so the SHA-256
+ *   and Ed25519 checks below verify a constant the server fabricates the same
+ *   way (`server/src/routes/update.routes.ts`), and there is no artifact to
+ *   fetch anyway — `UpdatePackage` in `server/prisma/schema.prisma` has no
+ *   artifact column. `applyUpdate` logs an install instead of performing one.
+ *   Only `startPeriodicChecks` has a production caller (`src/index.ts`), and it
+ *   discards every result. Do not read this file as CRA Art. 13 coverage.
+ *   (TASK-302)
  */
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config/config.js';
+import {
+  SERVICE_TOKEN_ENV,
+  isAuthRejection,
+  platformAuthHeaders,
+  recordPlatformAuthRejection,
+} from '../utils/platform-auth.js';
+
+/** Why the platform refused us, in the words an operator can act on. */
+function credentialHint(): string {
+  return process.env[SERVICE_TOKEN_ENV]
+    ? `the configured ${SERVICE_TOKEN_ENV} was refused`
+    : `no ${SERVICE_TOKEN_ENV} is configured`;
+}
 
 // ============================================================================
 // TYPES
@@ -84,10 +108,24 @@ export class SecureUpdateClient {
    * Check for available updates from the server
    */
   async checkForUpdates(): Promise<UpdatePackageInfo[]> {
+    const url = `${this.serverUrl}/api/updates?status=approved`;
     try {
-      const response = await fetch(`${this.serverUrl}/api/updates?status=approved`);
+      const response = await fetch(url, {
+        headers: platformAuthHeaders(),
+        signal: AbortSignal.timeout(10_000),
+      });
       if (!response.ok) {
-        console.warn(`[SecureUpdateClient] Failed to check for updates: ${response.status}`);
+        if (isAuthRejection(response.status)) {
+          // Loud, and never a thrown error: this runs on a 4-hourly timer. A
+          // silent [] here is the robot reporting "no updates available"
+          // forever while the platform has been refusing it all along.
+          recordPlatformAuthRejection('SecureUpdateClient', response.status, url);
+          console.error(
+            `[SecureUpdateClient] Update check rejected: HTTP ${response.status} — ${credentialHint()}. No update can be found until that is fixed.`
+          );
+        } else {
+          console.warn(`[SecureUpdateClient] Failed to check for updates: ${response.status}`);
+        }
         return [];
       }
       const updates = (await response.json()) as UpdatePackageInfo[];
@@ -132,8 +170,20 @@ export class SecureUpdateClient {
    * Download an update package and verify its checksum
    */
   async downloadUpdate(updateId: string): Promise<{ buffer: Buffer; info: UpdatePackageInfo }> {
-    const response = await fetch(`${this.serverUrl}/api/updates/${updateId}`);
+    const url = `${this.serverUrl}/api/updates/${updateId}`;
+    const response = await fetch(url, {
+      headers: platformAuthHeaders(),
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!response.ok) {
+      // This one is caller-driven, so it keeps throwing — but it names the
+      // cause instead of leaving a bare status code for someone to guess at.
+      if (isAuthRejection(response.status)) {
+        recordPlatformAuthRejection('SecureUpdateClient', response.status, url);
+        throw new Error(
+          `Failed to download update info: HTTP ${response.status} — ${credentialHint()}`
+        );
+      }
       throw new Error(`Failed to download update info: ${response.status}`);
     }
     const info = (await response.json()) as UpdatePackageInfo;

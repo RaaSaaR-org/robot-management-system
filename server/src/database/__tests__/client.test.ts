@@ -2,7 +2,8 @@
  * @file client.test.ts
  * @description Unit tests for the tenant-isolation Prisma extension.
  * Tests verify per-operation behaviour for tenant-scoped models
- * (User, Robot, Dataset, TrainingJob) and passthrough for non-scoped models.
+ * (User, Robot, Dataset, TrainingJob, and one block per later wave) and
+ * passthrough for non-scoped models.
  * Uses a real SQLite temp DB with the full schema applied via `prisma db push`.
  * @feature multi-tenancy
  */
@@ -14,6 +15,9 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AsyncLocalStorage } from 'async_hooks';
+// The production allowlist — imported, never pasted (TASK-285): a model that
+// drifts out of it must be able to fail a test.
+import { TENANT_SCOPED_MODELS } from '../client.js';
 
 // ---------------------------------------------------------------------------
 // Shared test state
@@ -48,28 +52,6 @@ function buildTestPrisma(): PrismaClient {
   // pointing at our temp DB. This tests the exact same algorithm. The
   // integration tests additionally verify the real module import path.
   const getTenantId = () => currentTenantId;
-
-  const TENANT_SCOPED_MODELS = new Set<string>([
-    'User',
-    'Robot',
-    'Dataset',
-    'TrainingJob',
-    'Alert',
-    'Incident',
-    'RobotTask',
-    'RobotCommand',
-    'ProcessDefinition',
-    'ProcessInstance',
-    'ApprovalRequest',
-    'Event',
-    'ModelVersion',
-    'Deployment',
-    'SimulationJob',
-    'SyntheticJob',
-    'Zone',
-    'Conversation',
-    'ApiToken',
-  ]);
 
   const base = new PrismaClient({
     datasources: { db: { url: `file:${dbPath}` } },
@@ -244,6 +226,15 @@ beforeEach(async () => {
     datasources: { db: { url: `file:${dbPath}` } },
     log: [],
   });
+  // TASK-286 (sensorScan/vlaSession cascade with their robot, but be explicit
+  // — they must go before the robot delete below either way)
+  await raw.sensorScan.deleteMany();
+  await raw.vlaSession.deleteMany();
+  await raw.motionClip.deleteMany();
+  // TASK-285 (scanSession is cascade-deleted with its twin, but be explicit)
+  await raw.simScene.deleteMany();
+  await raw.scanSession.deleteMany();
+  await raw.digitalTwin.deleteMany();
   // Wave 3e
   await raw.apiToken.deleteMany();
   // Wave 3d
@@ -925,6 +916,367 @@ describe('tenant-isolation extension — Conversation (Wave 3d)', () => {
     await seedConversationRaw('c-b1', 'Chat B', TENANT_B);
     const found = await prisma.conversation.findUnique({ where: { id: 'c-b1' } });
     expect(found).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-285 model tests (DigitalTwin, ScanSession, SimScene)
+// ---------------------------------------------------------------------------
+
+async function seedDigitalTwinRaw(id: string, name: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.digitalTwin.create({ data: { id, name, tenantId } });
+  await raw.$disconnect();
+}
+
+async function seedScanSessionRaw(
+  id: string,
+  twinId: string,
+  status: string,
+  tenantId: string
+): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.scanSession.create({
+    data: { id, twinId, robotId: `robot-${tenantId}`, status, tenantId },
+  });
+  await raw.$disconnect();
+}
+
+async function seedSimSceneRaw(
+  id: string,
+  builtinEnvId: string,
+  name: string,
+  tenantId: string | null
+): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.simScene.create({
+    data: { id, name, source: 'builtin', builtinEnvId, tenantId },
+  });
+  await raw.$disconnect();
+}
+
+describe('tenant-isolation extension — DigitalTwin (TASK-285)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedDigitalTwinRaw('dt-a1', 'Warehouse A', TENANT_A);
+    await seedDigitalTwinRaw('dt-b1', 'Warehouse B', TENANT_B);
+
+    const twins = await prisma.digitalTwin.findMany();
+    expect(twins).toHaveLength(1);
+    expect(twins[0].id).toBe('dt-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const twin = await prisma.digitalTwin.create({ data: { name: 'New Twin' } });
+    expect(twin.tenantId).toBe(TENANT_A);
+  });
+
+  it('blocks cross-tenant findUnique', async () => {
+    await seedDigitalTwinRaw('dt-b1', 'Warehouse B', TENANT_B);
+    const found = await prisma.digitalTwin.findUnique({ where: { id: 'dt-b1' } });
+    expect(found).toBeNull();
+  });
+
+  it('denies a cross-tenant update and leaves the row untouched', async () => {
+    await seedDigitalTwinRaw('dt-b1', 'Warehouse B', TENANT_B);
+
+    await expect(
+      prisma.digitalTwin.update({ where: { id: 'dt-b1' }, data: { name: 'Hacked' } })
+    ).rejects.toThrow('[tenant-isolation]');
+
+    currentTenantId = undefined;
+    const row = await prisma.digitalTwin.findUnique({ where: { id: 'dt-b1' } });
+    expect(row!.name).toBe('Warehouse B');
+  });
+
+  it('denies a cross-tenant delete', async () => {
+    await seedDigitalTwinRaw('dt-b1', 'Warehouse B', TENANT_B);
+
+    await expect(
+      prisma.digitalTwin.delete({ where: { id: 'dt-b1' } })
+    ).rejects.toThrow('[tenant-isolation]');
+  });
+});
+
+describe('tenant-isolation extension — ScanSession (TASK-285)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedDigitalTwinRaw('dt-a1', 'Warehouse A', TENANT_A);
+    await seedDigitalTwinRaw('dt-b1', 'Warehouse B', TENANT_B);
+    await seedScanSessionRaw('ss-a1', 'dt-a1', 'recording', TENANT_A);
+    await seedScanSessionRaw('ss-b1', 'dt-b1', 'recording', TENANT_B);
+
+    const sessions = await prisma.scanSession.findMany();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].id).toBe('ss-a1');
+  });
+
+  it('blocks cross-tenant findUnique', async () => {
+    await seedDigitalTwinRaw('dt-b1', 'Warehouse B', TENANT_B);
+    await seedScanSessionRaw('ss-b1', 'dt-b1', 'recording', TENANT_B);
+
+    const found = await prisma.scanSession.findUnique({ where: { id: 'ss-b1' } });
+    expect(found).toBeNull();
+  });
+
+  it('updateMany returns count 0 for a foreign session (completeIfProcessing shape)', async () => {
+    await seedDigitalTwinRaw('dt-b1', 'Warehouse B', TENANT_B);
+    await seedScanSessionRaw('ss-b1', 'dt-b1', 'processing', TENANT_B);
+
+    const result = await prisma.scanSession.updateMany({
+      where: { id: 'ss-b1', status: 'processing' },
+      data: { status: 'complete' },
+    });
+    expect(result.count).toBe(0);
+
+    currentTenantId = undefined;
+    const row = await prisma.scanSession.findUnique({ where: { id: 'ss-b1' } });
+    expect(row!.status).toBe('processing');
+  });
+
+  it('updateMany still updates the caller tenant own session', async () => {
+    await seedDigitalTwinRaw('dt-a1', 'Warehouse A', TENANT_A);
+    await seedScanSessionRaw('ss-a1', 'dt-a1', 'processing', TENANT_A);
+
+    const result = await prisma.scanSession.updateMany({
+      where: { id: 'ss-a1', status: 'processing' },
+      data: { status: 'complete' },
+    });
+    expect(result.count).toBe(1);
+  });
+});
+
+describe('tenant-isolation extension — SimScene (TASK-285)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedSimSceneRaw('sc-a1', 'env_a', 'Scene A', TENANT_A);
+    await seedSimSceneRaw('sc-b1', 'env_b', 'Scene B', TENANT_B);
+
+    const scenes = await prisma.simScene.findMany();
+    expect(scenes).toHaveLength(1);
+    expect(scenes[0].id).toBe('sc-a1');
+  });
+
+  it('blocks cross-tenant findUnique', async () => {
+    await seedSimSceneRaw('sc-b1', 'env_b', 'Scene B', TENANT_B);
+    const found = await prisma.simScene.findUnique({ where: { id: 'sc-b1' } });
+    expect(found).toBeNull();
+  });
+
+  it('upsert over a row stamped with the caller tenant updates it in place', async () => {
+    await seedSimSceneRaw('sc-a1', 'so101_tabletop', 'Tabletop', TENANT_A);
+
+    await prisma.simScene.upsert({
+      where: { builtinEnvId: 'so101_tabletop' },
+      update: { name: 'Tabletop v2' },
+      create: { name: 'Tabletop', source: 'builtin', builtinEnvId: 'so101_tabletop' },
+    });
+
+    currentTenantId = undefined;
+    const rows = await prisma.simScene.findMany({
+      where: { builtinEnvId: 'so101_tabletop' },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe('Tabletop v2');
+  });
+
+  it('upsert over a NULL-tenant built-in row hits P2002 — why the seed stamps tenantId', async () => {
+    // The regression this task closes: `seedBuiltinScenes()` runs outside a
+    // request scope, so nothing stamps the row. A later in-request upsert
+    // carries `where.tenantId`, misses the null row, falls through to CREATE
+    // and violates the unique builtinEnvId. SimulationService now passes
+    // DEFAULT_TENANT_ID at seed time so this state cannot arise.
+    await seedSimSceneRaw('sc-null', 'so101_tabletop', 'Tabletop', null);
+
+    await expect(
+      prisma.simScene.upsert({
+        where: { builtinEnvId: 'so101_tabletop' },
+        update: { name: 'Tabletop v2' },
+        create: { name: 'Tabletop', source: 'builtin', builtinEnvId: 'so101_tabletop' },
+      })
+    ).rejects.toThrow();
+
+    currentTenantId = undefined;
+    const rows = await prisma.simScene.findMany({
+      where: { builtinEnvId: 'so101_tabletop' },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe('Tabletop');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-286 model tests (SensorScan, MotionClip, VlaSession)
+//
+// These three had no `tenantId` column at all before TASK-286, so no allowlist
+// entry could scope them. The column exists now; these cases prove the
+// extension actually acts on it for each of the three.
+// ---------------------------------------------------------------------------
+
+async function seedSensorScanRaw(id: string, robotId: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.sensorScan.create({
+    data: {
+      id,
+      robotId,
+      sensorName: 'lidar-front',
+      sensorType: 'lidar',
+      pointCount: 1000,
+      fileSize: 4096,
+      storageKey: `scans/${id}.pcd`,
+      tenantId,
+    },
+  });
+  await raw.$disconnect();
+}
+
+async function seedMotionClipRaw(id: string, name: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.motionClip.create({
+    data: { id, name, fps: 30, frameCount: 2, durationSec: 0.066, frames: '[]', tenantId },
+  });
+  await raw.$disconnect();
+}
+
+async function seedVlaSessionRaw(id: string, robotId: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.vlaSession.create({
+    data: { id, robotId, prompt: `prompt-${id}`, serverUrl: 'http://vla:8000', tenantId },
+  });
+  await raw.$disconnect();
+}
+
+describe('tenant-isolation extension — SensorScan (TASK-286)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedRobotRaw('r-a1', 'Alpha', TENANT_A);
+    await seedRobotRaw('r-b1', 'Bravo', TENANT_B);
+    await seedSensorScanRaw('sc-a1', 'r-a1', TENANT_A);
+    await seedSensorScanRaw('sc-b1', 'r-b1', TENANT_B);
+
+    const scans = await prisma.sensorScan.findMany();
+    expect(scans).toHaveLength(1);
+    expect(scans[0].id).toBe('sc-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    await seedRobotRaw('r-a1', 'Alpha', TENANT_A);
+    const scan = await prisma.sensorScan.create({
+      data: {
+        robotId: 'r-a1',
+        sensorName: 'lidar-front',
+        sensorType: 'lidar',
+        pointCount: 10,
+        fileSize: 64,
+        storageKey: 'scans/new.pcd',
+      },
+    });
+    expect(scan.tenantId).toBe(TENANT_A);
+  });
+
+  it('blocks cross-tenant findUnique', async () => {
+    await seedRobotRaw('r-b1', 'Bravo', TENANT_B);
+    await seedSensorScanRaw('sc-b1', 'r-b1', TENANT_B);
+
+    const found = await prisma.sensorScan.findUnique({ where: { id: 'sc-b1' } });
+    expect(found).toBeNull();
+  });
+
+  it('denies a cross-tenant delete and leaves the row in place', async () => {
+    await seedRobotRaw('r-b1', 'Bravo', TENANT_B);
+    await seedSensorScanRaw('sc-b1', 'r-b1', TENANT_B);
+
+    await expect(
+      prisma.sensorScan.delete({ where: { id: 'sc-b1' } })
+    ).rejects.toThrow('[tenant-isolation]');
+
+    currentTenantId = undefined;
+    const row = await prisma.sensorScan.findUnique({ where: { id: 'sc-b1' } });
+    expect(row).not.toBeNull();
+  });
+});
+
+describe('tenant-isolation extension — MotionClip (TASK-286)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedMotionClipRaw('mc-a1', 'Wave A', TENANT_A);
+    await seedMotionClipRaw('mc-b1', 'Wave B', TENANT_B);
+
+    const clips = await prisma.motionClip.findMany();
+    expect(clips).toHaveLength(1);
+    expect(clips[0].id).toBe('mc-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const clip = await prisma.motionClip.create({
+      data: { name: 'New Clip', fps: 30, frameCount: 1, durationSec: 0.033, frames: '[]' },
+    });
+    expect(clip.tenantId).toBe(TENANT_A);
+  });
+
+  it('blocks cross-tenant findUnique', async () => {
+    await seedMotionClipRaw('mc-b1', 'Wave B', TENANT_B);
+    const found = await prisma.motionClip.findUnique({ where: { id: 'mc-b1' } });
+    expect(found).toBeNull();
+  });
+
+  it('denies a cross-tenant update and leaves the row untouched', async () => {
+    await seedMotionClipRaw('mc-b1', 'Wave B', TENANT_B);
+
+    await expect(
+      prisma.motionClip.update({ where: { id: 'mc-b1' }, data: { name: 'Hacked' } })
+    ).rejects.toThrow('[tenant-isolation]');
+
+    currentTenantId = undefined;
+    const row = await prisma.motionClip.findUnique({ where: { id: 'mc-b1' } });
+    expect(row!.name).toBe('Wave B');
+  });
+});
+
+describe('tenant-isolation extension — VlaSession (TASK-286)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedRobotRaw('r-a1', 'Alpha', TENANT_A);
+    await seedRobotRaw('r-b1', 'Bravo', TENANT_B);
+    await seedVlaSessionRaw('vs-a1', 'r-a1', TENANT_A);
+    await seedVlaSessionRaw('vs-b1', 'r-b1', TENANT_B);
+
+    const sessions = await prisma.vlaSession.findMany();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].id).toBe('vs-a1');
+  });
+
+  it('scopes findFirst even when the robot belongs to the caller', async () => {
+    // The prompt is the operator's own words: a foreign session hanging off the
+    // caller's robot must not come back from a `where: { robotId }` lookup.
+    await seedRobotRaw('r-a1', 'Alpha', TENANT_A);
+    await seedVlaSessionRaw('vs-b-on-a', 'r-a1', TENANT_B);
+
+    const found = await prisma.vlaSession.findFirst({ where: { robotId: 'r-a1' } });
+    expect(found).toBeNull();
+  });
+
+  it('stamps tenantId on create', async () => {
+    await seedRobotRaw('r-a1', 'Alpha', TENANT_A);
+    const session = await prisma.vlaSession.create({
+      data: { robotId: 'r-a1', prompt: 'pick up the cube', serverUrl: 'http://vla:8000' },
+    });
+    expect(session.tenantId).toBe(TENANT_A);
+  });
+
+  it('blocks cross-tenant findUnique', async () => {
+    await seedRobotRaw('r-b1', 'Bravo', TENANT_B);
+    await seedVlaSessionRaw('vs-b1', 'r-b1', TENANT_B);
+
+    const found = await prisma.vlaSession.findUnique({ where: { id: 'vs-b1' } });
+    expect(found).toBeNull();
+  });
+
+  it('denies a cross-tenant update and leaves the row untouched', async () => {
+    await seedRobotRaw('r-b1', 'Bravo', TENANT_B);
+    await seedVlaSessionRaw('vs-b1', 'r-b1', TENANT_B);
+
+    await expect(
+      prisma.vlaSession.update({ where: { id: 'vs-b1' }, data: { status: 'stopped' } })
+    ).rejects.toThrow('[tenant-isolation]');
+
+    currentTenantId = undefined;
+    const row = await prisma.vlaSession.findUnique({ where: { id: 'vs-b1' } });
+    expect(row!.status).toBe('running');
   });
 });
 

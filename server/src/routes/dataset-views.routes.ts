@@ -26,6 +26,7 @@ import { Router, Request, Response } from 'express';
 import { datasetService } from '../services/DatasetService.js';
 import { DatasetViewError } from '../services/DatasetViewService.js';
 import { AppError } from '../utils/errors.js';
+import { sendFailure } from '../utils/routeErrors.js';
 import type { DatasetSelection } from '../types/dataset-view.types.js';
 
 export const datasetViewRoutes = Router();
@@ -54,9 +55,10 @@ function sendViewError(res: Response, error: unknown, fallback: string): void {
     });
     return;
   }
-  const message = error instanceof Error ? error.message : fallback;
   console.error(`[DatasetViewRoutes] ${fallback}:`, error);
-  res.status(400).json({ error: message, message, code: 'VIEW_ERROR' });
+  // The caught text is logged above, never echoed: a Prisma failure stringifies
+  // to the query it ran and the path of the file that ran it.
+  sendFailure(res, error, fallback, 400, { message: fallback, code: 'VIEW_ERROR' });
 }
 
 /** The name and description off a request body, or a 400's worth of reason. */

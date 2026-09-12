@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ApiRequestError } from '@/api/client';
 import {
   useZoneStore,
   selectZones,
@@ -110,12 +111,26 @@ describe('zoneStore', () => {
     expect(state.isLoading).toBe(false);
   });
 
-  it('fetchZones uses fallback message for non-Error rejection', async () => {
+  it('fetchZones surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
     mockedApi.getZones.mockRejectedValue('weird');
 
     await useZoneStore.getState().fetchZones();
 
-    expect(useZoneStore.getState().error).toBe('Failed to fetch zones');
+    expect(useZoneStore.getState().error).toBe('weird');
+  });
+
+  it('fetchZones surfaces the message of an ApiRequestError (the shape production rejects with)', async () => {
+    mockedApi.getZones.mockRejectedValue(
+      new ApiRequestError({
+        code: 'UNKNOWN_ERROR',
+        message: 'Zone service unavailable',
+        statusCode: 503,
+      })
+    );
+
+    await useZoneStore.getState().fetchZones();
+
+    expect(useZoneStore.getState().error).toBe('Zone service unavailable');
   });
 
   // --------------------------------------------------------------------------

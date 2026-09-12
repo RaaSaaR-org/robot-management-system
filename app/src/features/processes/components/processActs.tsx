@@ -7,7 +7,7 @@
  */
 
 import { Pause, Play, RotateCcw, XCircle } from 'lucide-react';
-import { confirm, toast, type RowActionItem, type StatusToneName } from '@/shared/components/ui';
+import { confirm, errorMessage, toast, type RowActionItem, type StatusToneName } from '@/shared/components/ui';
 import {
   isProcessCancellable,
   isProcessPauseable,
@@ -80,7 +80,7 @@ export async function runProcessAct(
     toast.success(ACT_COPY[action].ok, { description: task.name });
     return true;
   } catch (err) {
-    toast.error(ACT_COPY[action].fail, { description: err instanceof Error ? err.message : String(err) });
+    toast.error(ACT_COPY[action].fail, { description: errorMessage(err) });
     return false;
   }
 }

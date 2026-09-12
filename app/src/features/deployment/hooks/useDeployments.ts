@@ -14,6 +14,7 @@ import {
   selectDeploymentFilters,
   selectSelectedDeployment,
 } from '../store';
+import { isActiveDeployment } from '../components/deploymentHelpers';
 import type {
   Deployment,
   CreateDeploymentInput,
@@ -77,10 +78,10 @@ export function useDeployments(): UseDeploymentsReturn {
     [deployments]
   );
 
+  // Everything that is no longer moving. Derived from isActiveDeployment so a
+  // 'rolled_back' or 'cancelled' rollout is not silently dropped. (TASK-299)
   const completedDeployments = useMemo(
-    () => deployments.filter(
-      (d) => d.status === 'production' || d.status === 'failed'
-    ),
+    () => deployments.filter((d) => !isActiveDeployment(d)),
     [deployments]
   );
 

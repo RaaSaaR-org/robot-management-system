@@ -136,7 +136,8 @@ describe('Teleoperation Routes', () => {
         .send({ operatorId: 'operator-1', robotId: 'robot-1', type: 'gamepad' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Robot not found');
+      expect(response.body.error).toBe('Failed to create session');
+      expect(response.body.error).not.toContain('Robot not found');
     });
   });
 
@@ -294,7 +295,8 @@ describe('Teleoperation Routes', () => {
         .send({ notes: 'x' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Invalid field');
+      expect(response.body.error).toBe('Failed to update session');
+      expect(response.body.error).not.toContain('Invalid field');
     });
   });
 
@@ -353,7 +355,8 @@ describe('Teleoperation Routes', () => {
       const response = await request(app).post('/api/teleoperation/sessions/session-001/start');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Already recording');
+      expect(response.body.error).toBe('Failed to start session');
+      expect(response.body.error).not.toContain('Already recording');
     });
   });
 
@@ -378,7 +381,8 @@ describe('Teleoperation Routes', () => {
       const response = await request(app).post('/api/teleoperation/sessions/session-001/pause');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Not recording');
+      expect(response.body.error).toBe('Failed to pause session');
+      expect(response.body.error).not.toContain('Not recording');
     });
   });
 
@@ -403,7 +407,8 @@ describe('Teleoperation Routes', () => {
       const response = await request(app).post('/api/teleoperation/sessions/session-001/resume');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Not paused');
+      expect(response.body.error).toBe('Failed to resume session');
+      expect(response.body.error).not.toContain('Not paused');
     });
   });
 
@@ -428,7 +433,8 @@ describe('Teleoperation Routes', () => {
       const response = await request(app).post('/api/teleoperation/sessions/session-001/end');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Already ended');
+      expect(response.body.error).toBe('Failed to end session');
+      expect(response.body.error).not.toContain('Already ended');
     });
   });
 
@@ -492,7 +498,8 @@ describe('Teleoperation Routes', () => {
         .send(validFrame);
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Session not recording');
+      expect(response.body.error).toBe('Failed to record frame');
+      expect(response.body.error).not.toContain('Session not recording');
     });
   });
 
@@ -540,7 +547,8 @@ describe('Teleoperation Routes', () => {
         .send({ frames: [] });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Batch failed');
+      expect(response.body.error).toBe('Failed to record frames');
+      expect(response.body.error).not.toContain('Batch failed');
     });
   });
 
@@ -627,7 +635,8 @@ describe('Teleoperation Routes', () => {
         .send({ languageInstr: 'x' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Session not found');
+      expect(response.body.error).toBe('Failed to annotate session');
+      expect(response.body.error).not.toContain('Session not found');
     });
   });
 
@@ -671,7 +680,8 @@ describe('Teleoperation Routes', () => {
         .send({});
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Export failed');
+      expect(response.body.error).toBe('Failed to export session');
+      expect(response.body.error).not.toContain('Export failed');
     });
   });
 });

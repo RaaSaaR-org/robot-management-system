@@ -10,8 +10,25 @@ import {
   ZoneValidationError,
   type ZoneType,
 } from '../services/ZoneService.js';
+import { prismaErrorToAppError } from '../utils/errors.js';
 
 export const zoneRoutes = Router();
+
+/**
+ * Last resort in a write handler's catch block. The duplicate pre-check in
+ * ZoneService catches an ordinary collision as a 400, but two concurrent
+ * creates can still race past it into the tenant-qualified unique index
+ * (TASK-288). Prisma stringifies that failure as the query it tried to run
+ * plus the file and line that ran it, so it is mapped first: the caller gets a
+ * 409 and one sentence, never a database dump.
+ */
+function sendFailure(res: Response, error: unknown, fallbackMessage: string): void {
+  const prismaError = prismaErrorToAppError(error);
+  if (prismaError) {
+    return void res.status(prismaError.statusCode).json({ error: prismaError.message });
+  }
+  res.status(500).json({ error: fallbackMessage });
+}
 
 /**
  * GET / - List zones with optional filters and pagination
@@ -173,7 +190,7 @@ zoneRoutes.post('/', ownerOnly, async (req: Request, res: Response) => {
       });
     }
     console.error('Error creating zone:', error);
-    res.status(500).json({ error: 'Failed to create zone' });
+    sendFailure(res, error, 'Failed to create zone');
   }
 });
 
@@ -208,7 +225,7 @@ zoneRoutes.put('/:id', ownerOnly, async (req: Request, res: Response) => {
       });
     }
     console.error('Error updating zone:', error);
-    res.status(500).json({ error: 'Failed to update zone' });
+    sendFailure(res, error, 'Failed to update zone');
   }
 });
 

@@ -654,7 +654,10 @@ export class ApprovalWorkflowService {
     const overdue = await approvalRequestRepository.findOverdue();
 
     for (const request of overdue) {
-      // Only escalate if not already escalated recently
+      // Escalate each overdue request once. `findOverdue()` now returns
+      // escalated rows too (TASK-290: escalated is an open status), so this
+      // guard is what keeps them from being escalated again on every tick.
+      // Repeat/multi-level escalation is deliberately out of scope.
       if (request.status !== 'escalated') {
         // Get escalation rules for this entity type
         const rules = await escalationRuleRepository.findActiveForEntityType(

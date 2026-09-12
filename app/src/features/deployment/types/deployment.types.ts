@@ -8,6 +8,13 @@
 // ENUMS & CONSTANTS
 // ============================================================================
 
+/**
+ * The eight values the server can write. There is no 'completed': a rollout
+ * that finished successfully ends as 'production'. A withdrawal is
+ * 'rolled_back', a rollout called off before it started is 'cancelled', and
+ * 'failed' is reserved for a rollback that could not put every robot back.
+ * (TASK-299)
+ */
 export const DeploymentStatuses = [
   'pending',
   'deploying',
@@ -15,7 +22,6 @@ export const DeploymentStatuses = [
   'production',
   'rolling_back',
   'failed',
-  'completed',
   'rolled_back',
   'cancelled',
 ] as const;
@@ -58,7 +64,6 @@ export const DEPLOYMENT_STATUS_LABELS: Record<DeploymentStatus, string> = {
   production: 'Production',
   rolling_back: 'Rolling Back',
   failed: 'Failed',
-  completed: 'Completed',
   rolled_back: 'Rolled Back',
   cancelled: 'Cancelled',
 };
@@ -70,7 +75,6 @@ export const DEPLOYMENT_STATUS_COLORS: Record<DeploymentStatus, 'default' | 'inf
   production: 'success',
   rolling_back: 'warning',
   failed: 'error',
-  completed: 'success',
   rolled_back: 'warning',
   cancelled: 'default',
 };

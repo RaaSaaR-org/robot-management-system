@@ -144,7 +144,8 @@ describe('Aggregation Routes', () => {
         .send(validBody);
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('Failed to submit update: boom');
+      expect(response.body.error).toBe('Failed to submit update');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -204,7 +205,8 @@ describe('Aggregation Routes', () => {
       const response = await request(app).get('/api/federated/secure/rounds/round-1/aggregation');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('Failed to get aggregation status: status failure');
+      expect(response.body.error).toBe('Failed to get aggregation status');
+      expect(response.body.error).not.toContain('status failure');
     });
   });
 
@@ -266,7 +268,8 @@ describe('Aggregation Routes', () => {
         .send({ expectedParticipants: 2 });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('Failed to aggregate: math exploded');
+      expect(response.body.error).toBe('Failed to aggregate updates');
+      expect(response.body.error).not.toContain('math exploded');
     });
   });
 });

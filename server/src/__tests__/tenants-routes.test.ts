@@ -129,7 +129,8 @@ describe('Tenants Routes', () => {
       const response = await request(app).get('/api/tenants');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('DB error');
+      expect(response.body.error).toBe('Failed to list tenants');
+      expect(response.body.error).not.toContain('DB error');
     });
   });
 
@@ -164,7 +165,8 @@ describe('Tenants Routes', () => {
       const response = await request(app).get('/api/tenants/current');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to load the current tenant');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -215,7 +217,8 @@ describe('Tenants Routes', () => {
       const response = await request(app).post('/api/tenants').send({ name: 'Acme Corp' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('bad input');
+      expect(response.body.error).toBe('Failed to create the tenant');
+      expect(response.body.error).not.toContain('bad input');
     });
   });
 
@@ -301,7 +304,8 @@ describe('Tenants Routes', () => {
       const response = await request(app).post('/api/tenants/onboard').send(validBody);
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('onboard failed');
+      expect(response.body.error).toBe('Failed to onboard the tenant');
+      expect(response.body.error).not.toContain('onboard failed');
     });
   });
 
@@ -347,7 +351,8 @@ describe('Tenants Routes', () => {
         .send({ name: 'New Name' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('invalid');
+      expect(response.body.error).toBe('Failed to update the tenant');
+      expect(response.body.error).not.toContain('invalid');
     });
   });
 
@@ -391,7 +396,8 @@ describe('Tenants Routes', () => {
       const response = await request(app).delete('/api/tenants/default');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot delete default');
+      expect(response.body.error).toBe('Failed to delete the tenant');
+      expect(response.body.error).not.toContain('cannot delete default');
     });
   });
 });

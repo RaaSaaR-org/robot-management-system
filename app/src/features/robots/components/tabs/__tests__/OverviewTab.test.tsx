@@ -4,8 +4,11 @@
  * @feature robots
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { useAuthStore } from '@/features/auth/store/authStore';
+import { MOCK_USER } from '@/mocks/mockData';
+import type { UserRole } from '@/features/auth/types/auth.types';
 import type { Robot, RobotTelemetry } from '../../../types/robots.types';
 import type { OverviewTabProps } from '../types';
 
@@ -67,6 +70,20 @@ function makeProps(overrides: Partial<OverviewTabProps> = {}): OverviewTabProps 
   };
 }
 
+/** The hint the tab shows is role-dependent (TASK-284), so the role is state. */
+function signInAs(role: UserRole) {
+  useAuthStore.setState({
+    user: { ...MOCK_USER, role },
+    isAuthenticated: true,
+    isInitialized: true,
+  });
+}
+
+beforeEach(() => {
+  // A member holds `robots:command`, so the hints below are about the robot.
+  signInAs('member');
+});
+
 describe('OverviewTab', () => {
   it('renders the Quick actions section with Charge and Home buttons', () => {
     render(<OverviewTab {...makeProps()} />);
@@ -87,7 +104,7 @@ describe('OverviewTab', () => {
     expect(screen.getByRole('button', { name: /home/i })).toBeDisabled();
   });
 
-  it('shows the unavailable hint when the robot is not online/busy', () => {
+  it('shows the unavailable hint when a commanding role sees an offline robot', () => {
     render(
       <OverviewTab {...makeProps({ robot: makeRobot({ status: 'offline' }) })} />
     );
@@ -97,6 +114,29 @@ describe('OverviewTab', () => {
 
   it('hides the unavailable hint when the robot is available', () => {
     render(<OverviewTab {...makeProps({ robot: makeRobot({ status: 'online' }) })} />);
+    expect(screen.queryByText(/must be online to receive commands/i)).not.toBeInTheDocument();
+  });
+
+  it('blames the role, not the robot, when a viewer looks at a healthy robot', () => {
+    signInAs('viewer');
+    render(
+      <OverviewTab
+        {...makeProps({ robot: makeRobot({ status: 'online' }), canExecuteCommands: false })}
+      />
+    );
+    expect(screen.getByText(/watch this robot but not command it/i)).toBeInTheDocument();
+    expect(screen.queryByText(/must be online to receive commands/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the role hint for a viewer even when the robot is also offline', () => {
+    signInAs('viewer');
+    render(
+      <OverviewTab
+        {...makeProps({ robot: makeRobot({ status: 'offline' }), canExecuteCommands: false })}
+      />
+    );
+    // The role is the reason they cannot command it; the robot's state is not.
+    expect(screen.getByText(/watch this robot but not command it/i)).toBeInTheDocument();
     expect(screen.queryByText(/must be online to receive commands/i)).not.toBeInTheDocument();
   });
 

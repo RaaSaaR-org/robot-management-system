@@ -109,23 +109,22 @@ export const tasksApi = {
    * @returns Created process instance
    */
   async createTask(data: CreateTaskRequest): Promise<Task> {
-    // First create the process definition
-    // Server requires at least 1 step - create default if none provided
-    const stepTemplates = data.steps && data.steps.length > 0
-      ? data.steps.map((step, index) => ({
-          order: index + 1,
-          name: step.name,
-          description: step.description,
-          actionType: 'custom' as const,
-          actionConfig: {},
-        }))
-      : [{
-          order: 1,
-          name: data.name,
-          description: data.description || 'Execute process',
-          actionType: 'custom' as const,
-          actionConfig: {},
-        }];
+    // An automation with no steps used to get one invented `custom` step named
+    // after it — a step the agent has no code for, which it now refuses. There
+    // is nothing honest to send, so this fails before the request.
+    if (!data.steps || data.steps.length === 0) {
+      throw new Error('An automation needs at least one step');
+    }
+
+    // The action type the user picked travels verbatim. Hardcoding 'custom'
+    // here is what made every automation a row of fake completed steps.
+    const stepTemplates = data.steps.map((step, index) => ({
+      order: index + 1,
+      name: step.name,
+      description: step.description,
+      actionType: step.actionType,
+      actionConfig: step.actionConfig,
+    }));
 
     const definitionResponse = await apiClient.post<{ id: string }>(ENDPOINTS.definitions, {
       name: data.name,

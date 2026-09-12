@@ -25,6 +25,7 @@ import type {
   ProviderSummary,
   ProviderDocumentation,
 } from '../types';
+import { getErrorMessage } from '@/shared/utils';
 
 interface ComplianceState {
   // Data
@@ -200,7 +201,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch logs',
+        error: getErrorMessage(error, 'Failed to fetch logs'),
         isLoading: false,
       });
     }
@@ -213,7 +214,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ selectedLog: log, isLoadingLog: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch log',
+        error: getErrorMessage(error, 'Failed to fetch log'),
         isLoadingLog: false,
       });
     }
@@ -226,7 +227,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ integrityResult: result, isVerifying: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to verify integrity',
+        error: getErrorMessage(error, 'Failed to verify integrity'),
         isVerifying: false,
       });
     }
@@ -239,7 +240,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ metrics, isLoadingMetrics: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch metrics',
+        error: getErrorMessage(error, 'Failed to fetch metrics'),
         isLoadingMetrics: false,
       });
     }
@@ -287,7 +288,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ retentionPolicies: response.policies, isLoadingRetention: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch retention policies',
+        error: getErrorMessage(error, 'Failed to fetch retention policies'),
         isLoadingRetention: false,
       });
     }
@@ -300,7 +301,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ retentionStats: stats, isLoadingRetention: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch retention stats',
+        error: getErrorMessage(error, 'Failed to fetch retention stats'),
         isLoadingRetention: false,
       });
     }
@@ -318,7 +319,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       }));
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to set retention policy',
+        error: getErrorMessage(error, 'Failed to set retention policy'),
         isLoadingRetention: false,
       });
     }
@@ -334,7 +335,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       return result;
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to trigger cleanup',
+        error: getErrorMessage(error, 'Failed to trigger cleanup'),
         isCleaningUp: false,
       });
       throw error;
@@ -352,7 +353,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ legalHolds: response.holds, isLoadingLegalHolds: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch legal holds',
+        error: getErrorMessage(error, 'Failed to fetch legal holds'),
         isLoadingLegalHolds: false,
       });
     }
@@ -369,7 +370,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       return hold;
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to create legal hold',
+        error: getErrorMessage(error, 'Failed to create legal hold'),
         isLoadingLegalHolds: false,
       });
       throw error;
@@ -388,7 +389,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       }));
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to release legal hold',
+        error: getErrorMessage(error, 'Failed to release legal hold'),
         isLoadingLegalHolds: false,
       });
       throw error;
@@ -405,7 +406,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       }));
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to add logs to hold',
+        error: getErrorMessage(error, 'Failed to add logs to hold'),
         isLoadingLegalHolds: false,
       });
       throw error;
@@ -423,7 +424,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ ropaEntries: response.entries, isLoadingRopa: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch RoPA entries',
+        error: getErrorMessage(error, 'Failed to fetch RoPA entries'),
         isLoadingRopa: false,
       });
     }
@@ -436,7 +437,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ selectedRopaEntry: entry, isLoadingRopa: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch RoPA entry',
+        error: getErrorMessage(error, 'Failed to fetch RoPA entry'),
         isLoadingRopa: false,
       });
     }
@@ -453,7 +454,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       return entry;
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to create RoPA entry',
+        error: getErrorMessage(error, 'Failed to create RoPA entry'),
         isLoadingRopa: false,
       });
       throw error;
@@ -471,7 +472,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       }));
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to update RoPA entry',
+        error: getErrorMessage(error, 'Failed to update RoPA entry'),
         isLoadingRopa: false,
       });
       throw error;
@@ -489,7 +490,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       }));
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to delete RoPA entry',
+        error: getErrorMessage(error, 'Failed to delete RoPA entry'),
         isLoadingRopa: false,
       });
       throw error;
@@ -503,7 +504,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ ropaReport: report, isLoadingRopa: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to generate RoPA report',
+        error: getErrorMessage(error, 'Failed to generate RoPA report'),
         isLoadingRopa: false,
       });
     }
@@ -525,7 +526,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       return result;
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to export logs',
+        error: getErrorMessage(error, 'Failed to export logs'),
         isExporting: false,
       });
       throw error;
@@ -547,7 +548,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ providers: response.providers, isLoadingProviders: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch providers',
+        error: getErrorMessage(error, 'Failed to fetch providers'),
         isLoadingProviders: false,
       });
     }
@@ -560,7 +561,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ providerDocs: response.documentation, isLoadingProviders: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch provider docs',
+        error: getErrorMessage(error, 'Failed to fetch provider docs'),
         isLoadingProviders: false,
       });
     }
@@ -573,7 +574,7 @@ export const useComplianceStore = create<ComplianceState>((set, get) => ({
       set({ providerDocs: response.documentation, isLoadingProviders: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch documentation',
+        error: getErrorMessage(error, 'Failed to fetch documentation'),
         isLoadingProviders: false,
       });
     }

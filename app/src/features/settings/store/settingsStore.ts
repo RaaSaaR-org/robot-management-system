@@ -5,6 +5,7 @@
  */
 
 import { createStore } from '@/store';
+import { getErrorMessage } from '@/shared/utils';
 import { settingsApi } from '../api/settingsApi';
 import { useThemeStore } from './themeStore';
 import type { UserSettings, UpdateSettingsDto, ThemeValue } from '../types/settings.types';
@@ -65,7 +66,7 @@ export const useSettingsStore = createStore<SettingsStore>(
       } catch (error) {
         set((state) => {
           state.isLoading = false;
-          state.error = error instanceof Error ? error.message : 'Failed to fetch settings';
+          state.error = getErrorMessage(error, 'Failed to fetch settings');
         });
       }
     },
@@ -95,7 +96,7 @@ export const useSettingsStore = createStore<SettingsStore>(
         // Rollback on error
         set((state) => {
           state.settings = current;
-          state.error = error instanceof Error ? error.message : 'Failed to update setting';
+          state.error = getErrorMessage(error, 'Failed to update setting');
         });
       }
     },
@@ -123,7 +124,7 @@ export const useSettingsStore = createStore<SettingsStore>(
       } catch (error) {
         set((state) => {
           state.settings = current;
-          state.error = error instanceof Error ? error.message : 'Failed to update settings';
+          state.error = getErrorMessage(error, 'Failed to update settings');
         });
       }
     },
@@ -147,7 +148,7 @@ export const useSettingsStore = createStore<SettingsStore>(
       } catch (error) {
         set((state) => {
           state.isLoading = false;
-          state.error = error instanceof Error ? error.message : 'Failed to reset settings';
+          state.error = getErrorMessage(error, 'Failed to reset settings');
         });
       }
     },

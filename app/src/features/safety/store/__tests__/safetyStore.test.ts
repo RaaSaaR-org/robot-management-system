@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ApiRequestError } from '@/api/client';
 import {
   useSafetyStore,
   selectFleetStatus,
@@ -72,15 +73,18 @@ function makeFleetStatus(over: Partial<FleetSafetyStatus> = {}): FleetSafetyStat
   };
 }
 
-function makeEvent(id: string): EStopEvent {
+function makeEvent(id: string, over: Partial<EStopEvent> = {}): EStopEvent {
   return {
     id,
     scope: 'fleet',
+    // Trigger vs reset is explicit on the wire — never inferred from `reason`.
+    action: 'trigger',
     triggeredAt: '2024-01-01T00:00:00.000Z',
     triggeredBy: 'user',
     reason: 'r',
     affectedRobots: [],
     result: {} as never,
+    ...over,
   };
 }
 
@@ -144,12 +148,12 @@ describe('safetyStore', () => {
       expect(s.isLoadingFleetStatus).toBe(false);
     });
 
-    it('uses generic message for non-Error rejection', async () => {
+    it('surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
       mockApi.getFleetSafetyStatus.mockRejectedValue('x');
 
       await useSafetyStore.getState().fetchFleetStatus();
 
-      expect(useSafetyStore.getState().fleetStatusError).toBe('Failed to fetch fleet status');
+      expect(useSafetyStore.getState().fleetStatusError).toBe('x');
     });
   });
 
@@ -218,13 +222,22 @@ describe('safetyStore', () => {
     });
 
     it('records error, returns false, leaves isTriggering false on failure', async () => {
-      mockApi.triggerRobotEStop.mockRejectedValue(new Error('estop fail'));
+      // Reject with the shape production actually produces (the api client's
+      // ApiRequestError), not a hand-rolled `new Error` — that shape is the one
+      // the old store discarded, so a test using it proved nothing.
+      mockApi.triggerRobotEStop.mockRejectedValue(
+        new ApiRequestError({
+          code: 'UNKNOWN_ERROR',
+          message: 'Robot r1 is not connected',
+          statusCode: 503,
+        })
+      );
 
       const ok = await useSafetyStore.getState().triggerRobotEStop('r1', 'manual');
 
       const s = useSafetyStore.getState();
       expect(ok).toBe(false);
-      expect(s.lastActionError).toBe('estop fail');
+      expect(s.lastActionError).toBe('Robot r1 is not connected');
       expect(s.isTriggering).toBe(false);
       expect(mockApi.getFleetSafetyStatus).not.toHaveBeenCalled();
     });
@@ -377,6 +390,150 @@ describe('safetyStore', () => {
       expect(s.events[0].id).toBe('newest');
       // oldest (last) was popped
       expect(s.events.some((e) => e.id === 'e99')).toBe(false);
+    });
+  });
+
+  // The fleet Stop button renders off fleetStatus alone, fetched once on
+  // mount. These cases cover the seam that makes a stop or reset raised by
+  // ANOTHER client land here — state only, no component, so nothing remounts.
+  describe('applyEStopEvent', () => {
+    function stoppedFleet() {
+      return makeFleetStatus({
+        robots: [
+          makeRobotStatus({ robotId: 'r1', status: 'triggered' }),
+          makeRobotStatus({ robotId: 'r2', status: 'triggered' }),
+        ],
+        anyTriggered: true,
+        triggeredCount: 2,
+      });
+    }
+
+    function armedFleet() {
+      return makeFleetStatus({
+        robots: [
+          makeRobotStatus({ robotId: 'r1', status: 'armed' }),
+          makeRobotStatus({ robotId: 'r2', status: 'armed' }),
+        ],
+        anyTriggered: false,
+        triggeredCount: 0,
+      });
+    }
+
+    it('clears the stopped state on a remote fleet reset', () => {
+      // The dangerous direction: while this reads stopped, the console offers
+      // "Resume fleet" on a fleet that is already running.
+      mockApi.getFleetSafetyStatus.mockResolvedValue(armedFleet());
+      useSafetyStore.setState({ fleetStatus: stoppedFleet() });
+
+      useSafetyStore.getState().applyEStopEvent(
+        makeEvent('reset-1', {
+          scope: 'fleet',
+          action: 'reset',
+          affectedRobots: ['r1', 'r2'],
+        })
+      );
+
+      const s = useSafetyStore.getState();
+      expect(selectFleetHasTriggeredEStop(s)).toBe(false);
+      expect(selectTriggeredRobotCount(s)).toBe(0);
+      expect(s.fleetStatus?.robots.every((r) => r.status === 'armed')).toBe(true);
+    });
+
+    it('sets the stopped state on a remote fleet trigger', () => {
+      mockApi.getFleetSafetyStatus.mockResolvedValue(stoppedFleet());
+      useSafetyStore.setState({ fleetStatus: armedFleet() });
+
+      useSafetyStore.getState().applyEStopEvent(
+        makeEvent('trigger-1', {
+          scope: 'fleet',
+          action: 'trigger',
+          affectedRobots: ['r1', 'r2'],
+        })
+      );
+
+      const s = useSafetyStore.getState();
+      expect(selectFleetHasTriggeredEStop(s)).toBe(true);
+      expect(selectTriggeredRobotCount(s)).toBe(2);
+    });
+
+    it('reconciles with the authority by refetching fleet status', () => {
+      mockApi.getFleetSafetyStatus.mockResolvedValue(stoppedFleet());
+      useSafetyStore.setState({ fleetStatus: armedFleet() });
+
+      useSafetyStore.getState().applyEStopEvent(
+        makeEvent('trigger-2', { action: 'trigger', affectedRobots: ['r1'] })
+      );
+
+      expect(mockApi.getFleetSafetyStatus).toHaveBeenCalled();
+    });
+
+    it('shows a stop that arrives before any fleet status was fetched', () => {
+      mockApi.getFleetSafetyStatus.mockResolvedValue(stoppedFleet());
+      useSafetyStore.setState({ fleetStatus: null });
+
+      useSafetyStore.getState().applyEStopEvent(
+        makeEvent('trigger-3', {
+          scope: 'robot',
+          action: 'trigger',
+          affectedRobots: ['r1'],
+        })
+      );
+
+      const s = useSafetyStore.getState();
+      expect(selectFleetHasTriggeredEStop(s)).toBe(true);
+      expect(selectTriggeredRobotCount(s)).toBe(1);
+    });
+
+    it('leaves an unfetched fleet alone on a reset', () => {
+      mockApi.getFleetSafetyStatus.mockResolvedValue(armedFleet());
+      useSafetyStore.setState({ fleetStatus: null });
+
+      useSafetyStore.getState().applyEStopEvent(
+        makeEvent('reset-2', { scope: 'robot', action: 'reset', affectedRobots: ['r1'] })
+      );
+
+      const s = useSafetyStore.getState();
+      expect(s.fleetStatus).toBeNull();
+      expect(selectFleetHasTriggeredEStop(s)).toBe(false);
+    });
+
+    it('updates the robot status cache for the affected robots only', () => {
+      mockApi.getFleetSafetyStatus.mockResolvedValue(stoppedFleet());
+      const map = new Map<string, RobotSafetyStatus>();
+      map.set('r1', makeRobotStatus({ robotId: 'r1', status: 'armed' }));
+      map.set('r2', makeRobotStatus({ robotId: 'r2', status: 'armed' }));
+      useSafetyStore.setState({ robotStatuses: map, fleetStatus: armedFleet() });
+
+      useSafetyStore.getState().applyEStopEvent(
+        makeEvent('trigger-4', {
+          scope: 'robot',
+          action: 'trigger',
+          affectedRobots: ['r1'],
+        })
+      );
+
+      const s = useSafetyStore.getState();
+      expect(selectIsRobotEStopTriggered('r1')(s)).toBe(true);
+      expect(selectIsRobotEStopTriggered('r2')(s)).toBe(false);
+    });
+
+    it('drops the count back to zero when the last stopped robot resets', () => {
+      mockApi.getFleetSafetyStatus.mockResolvedValue(armedFleet());
+      useSafetyStore.setState({
+        fleetStatus: makeFleetStatus({
+          robots: [makeRobotStatus({ robotId: 'r1', status: 'triggered' })],
+          anyTriggered: true,
+          triggeredCount: 1,
+        }),
+      });
+
+      useSafetyStore.getState().applyEStopEvent(
+        makeEvent('reset-3', { scope: 'robot', action: 'reset', affectedRobots: ['r1'] })
+      );
+
+      const s = useSafetyStore.getState();
+      expect(selectTriggeredRobotCount(s)).toBe(0);
+      expect(selectFleetHasTriggeredEStop(s)).toBe(false);
     });
   });
 

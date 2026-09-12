@@ -3,7 +3,7 @@ id: "TASK-294"
 aliases: []
 title: "Report a latched stop as protective_stop end to end"
 slug: "report-a-latched-stop-as-protective-stop-end-to-end"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []

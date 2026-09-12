@@ -232,7 +232,8 @@ describe('Contributions Routes', () => {
         .send({ trajectoryCount: 5 });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('not found');
+      expect(response.body.error).toBe('Failed to upload data');
+      expect(response.body.error).not.toContain('not found');
     });
   });
 
@@ -259,7 +260,8 @@ describe('Contributions Routes', () => {
       const response = await request(app).post('/api/contributions/c1/submit');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('invalid state');
+      expect(response.body.error).toBe('Failed to submit for review');
+      expect(response.body.error).not.toContain('invalid state');
     });
   });
 
@@ -374,7 +376,8 @@ describe('Contributions Routes', () => {
         .send({ decision: 'accept' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot review');
+      expect(response.body.error).toBe('Failed to review contribution');
+      expect(response.body.error).not.toContain('cannot review');
     });
   });
 
@@ -418,7 +421,8 @@ describe('Contributions Routes', () => {
       const response = await request(app).post('/api/contributions/c1/revoke').send({});
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot revoke');
+      expect(response.body.error).toBe('Failed to revoke contribution');
+      expect(response.body.error).not.toContain('cannot revoke');
     });
   });
 
@@ -514,7 +518,8 @@ describe('Contributions Routes', () => {
         .send({ rewardId: 'reward-1' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('insufficient credits');
+      expect(response.body.error).toBe('Failed to redeem credits');
+      expect(response.body.error).not.toContain('insufficient credits');
     });
   });
 
@@ -844,7 +849,8 @@ describe('Contributions Routes', () => {
       const response = await request(app).put('/api/contributions/db/db-1/approve');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('already approved');
+      expect(response.body.error).toBe('Failed to approve contribution');
+      expect(response.body.error).not.toContain('already approved');
     });
   });
 

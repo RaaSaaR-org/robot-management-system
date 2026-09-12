@@ -5,7 +5,7 @@
  */
 
 import { useState, type ChangeEvent, type FormEvent } from 'react';
-import { Button, FormField, Input } from '@/shared/components/ui';
+import { Button, FormField, Input, errorMessage } from '@/shared/components/ui';
 import { useRegistration } from '../hooks/useRegistration';
 import { AuthFormError } from './AuthLayout';
 import { PASSWORD_HINT, validateNewPassword } from './passwordRules';
@@ -48,7 +48,7 @@ export function RegistrationForm({ onSuccess, onError }: RegistrationFormProps) 
       await register(values.email, values.password, values.name);
       onSuccess?.();
     } catch (err) {
-      onError?.(err instanceof Error ? err.message : 'Registration failed');
+      onError?.(errorMessage(err, 'Registration failed'));
     }
   };
 

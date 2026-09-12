@@ -202,7 +202,8 @@ describe('Training Routes', () => {
       });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('dataset not found');
+      expect(response.body.error).toBe('Failed to submit training job');
+      expect(response.body.error).not.toContain('dataset not found');
     });
 
     // ---- sim_rl jobs (TASK-172.C) ----
@@ -376,7 +377,8 @@ describe('Training Routes', () => {
       const response = await request(app).post('/api/training/jobs/job-001/cancel');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot cancel completed job');
+      expect(response.body.error).toBe('Failed to cancel training job');
+      expect(response.body.error).not.toContain('cannot cancel completed job');
     });
   });
 
@@ -410,7 +412,8 @@ describe('Training Routes', () => {
       const response = await request(app).post('/api/training/jobs/job-001/retry');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('job not in failed state');
+      expect(response.body.error).toBe('Failed to retry training job');
+      expect(response.body.error).not.toContain('job not in failed state');
     });
   });
 
@@ -484,7 +487,8 @@ describe('Training Routes', () => {
       const response = await request(app).get('/api/training/jobs/job-001/estimate');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot estimate');
+      expect(response.body.error).toBe('Failed to estimate duration');
+      expect(response.body.error).not.toContain('cannot estimate');
     });
   });
 

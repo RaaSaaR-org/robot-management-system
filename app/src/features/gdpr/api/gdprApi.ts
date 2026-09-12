@@ -171,6 +171,17 @@ export const gdprApi = {
 
   // ============================================================================
   // ADMIN ENDPOINTS
+  //
+  // @status unshipped — every method below works and every one is dead: no
+  // component in `app/src` calls them, and `GDPRPortalPage` renders only the
+  // subject-side requests / consent / RoPA views. The server half is complete
+  // and correct (`server/src/routes/gdpr.routes.ts`), so a controller can
+  // fulfil a data-subject request over HTTP by hand — but the product has no
+  // screen for the Art. 12(3) one-month deadline these endpoints track.
+  // `executeErasure` and `getRequestsNearingSLA` are not even declared here.
+  // Note also that `/api/gdpr/admin/*` is deliberately outside the
+  // self-service auth exemption (TASK-283), so it needs member-or-above.
+  // (TASK-302)
   // ============================================================================
 
   /**

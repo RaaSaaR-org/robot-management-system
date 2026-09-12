@@ -10,6 +10,7 @@ import { robotManager } from '../services/RobotManager.js';
 import { modelVersionRepository, skillDefinitionRepository } from '../repositories/index.js';
 import { HttpClient } from '../services/HttpClient.js';
 import { RewardTypes, type RewardType } from '../types/vla.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const evaluationRoutes = Router();
 
@@ -54,9 +55,7 @@ evaluationRoutes.post('/reward-model', async (req: Request, res: Response) => {
     res.status(201).json({ jobId });
   } catch (error) {
     console.error('[EvaluationRoutes] Error starting reward-model evaluation:', error);
-    const message =
-      error instanceof Error ? error.message : 'Failed to start reward-model evaluation';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to start reward-model evaluation', 400);
   }
 });
 
@@ -136,8 +135,7 @@ evaluationRoutes.post('/episodes', async (req: Request, res: Response) => {
     res.status(201).json({ episode, message: 'Evaluation episode recorded successfully' });
   } catch (error) {
     console.error('[EvaluationRoutes] Error recording episode:', error);
-    const message = error instanceof Error ? error.message : 'Failed to record evaluation episode';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to record evaluation episode', 400);
   }
 });
 
@@ -284,8 +282,7 @@ evaluationRoutes.post('/run-hardware', async (req: Request, res: Response) => {
     res.json({ summary });
   } catch (error) {
     console.error('[EvaluationRoutes] Error running hardware evaluation:', error);
-    const message = error instanceof Error ? error.message : 'Failed to run hardware evaluation';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to run hardware evaluation', 500);
   }
 });
 

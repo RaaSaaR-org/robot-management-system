@@ -131,7 +131,8 @@ describe('Service Account Routes', () => {
       const response = await request(app).get('/api/team/service-accounts');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('DB error');
+      expect(response.body.error).toBe('Failed to list service accounts');
+      expect(response.body.error).not.toContain('DB error');
     });
   });
 
@@ -222,7 +223,8 @@ describe('Service Account Routes', () => {
         .send({ name: 'CI Bot', role: 'member' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to create the service account');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -274,7 +276,8 @@ describe('Service Account Routes', () => {
       const response = await request(app).delete('/api/team/service-accounts/sa-1');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to delete the service account');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -305,7 +308,8 @@ describe('Service Account Routes', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('DB error');
+      expect(response.body.error).toBe('Failed to list tokens');
+      expect(response.body.error).not.toContain('DB error');
     });
   });
 
@@ -376,7 +380,8 @@ describe('Service Account Routes', () => {
         .send({ name: 'default' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to create the token');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -423,7 +428,8 @@ describe('Service Account Routes', () => {
       );
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to rotate the token');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -470,7 +476,8 @@ describe('Service Account Routes', () => {
       );
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to revoke the token');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 });

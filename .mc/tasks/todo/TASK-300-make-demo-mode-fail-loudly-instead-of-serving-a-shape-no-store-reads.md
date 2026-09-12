@@ -3,7 +3,7 @@ id: "TASK-300"
 aliases: []
 title: "Make demo mode fail loudly instead of serving a shape no store reads"
 slug: "make-demo-mode-fail-loudly-instead-of-serving-a-shape-no-store-reads"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []

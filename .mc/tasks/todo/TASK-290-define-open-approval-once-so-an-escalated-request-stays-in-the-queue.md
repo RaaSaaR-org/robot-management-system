@@ -3,7 +3,7 @@ id: "TASK-290"
 aliases: []
 title: "Define \"open approval\" once, so an escalated request stays in the queue"
 slug: "define-open-approval-once-so-an-escalated-request-stays-in-the-queue"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []

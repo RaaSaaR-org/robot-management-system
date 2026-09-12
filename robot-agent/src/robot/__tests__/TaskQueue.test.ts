@@ -8,8 +8,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TaskQueue, type CommandExecuteFn, type StateGetter, type StateUpdater, type ChangeNotifier } from '../TaskQueue.js';
 import type { SimulatedRobotState, PushedTask } from '../types.js';
 
-// Mock fetch for reportTaskStatus
-vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+// Mock fetch for reportTaskStatus — this is the seam every status report goes
+// through, so it is also how the tests read what the queue told the server.
+const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+vi.stubGlobal('fetch', fetchMock);
+
+/** The JSON body of one `fetch` call (`PUT .../status`). */
+function reportBody(call: unknown[]): {
+  status: string;
+  error?: string;
+  result?: { success: boolean; message?: string };
+} {
+  const init = call[1] as { body?: string };
+  return JSON.parse(String(init.body));
+}
 
 // Mock config
 vi.mock('../../config/config.js', () => ({
@@ -79,6 +91,82 @@ describe('TaskQueue', () => {
       stop: vi.fn().mockResolvedValue({ success: true, message: 'Stopped' }),
     };
     queue = new TaskQueue(stateGetter, stateUpdater, changeNotifier, commands);
+    fetchMock.mockClear();
+  });
+
+  /**
+   * These leave `state.status` as 'online' on purpose — every other test in this
+   * file sets it to 'busy' so nothing executes, which is exactly why the
+   * fallthrough that reported every unimplemented action as `completed` was
+   * never seen by a test.
+   */
+  describe('executeAction', () => {
+    /** Wait until the queue has reported the terminal status for one task. */
+    async function drain(): Promise<ReturnType<typeof reportBody>> {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      return reportBody(fetchMock.mock.calls[1]);
+    }
+
+    function expectNoCommandRan(): void {
+      expect(commands.moveTo).not.toHaveBeenCalled();
+      expect(commands.pickup).not.toHaveBeenCalled();
+      expect(commands.drop).not.toHaveBeenCalled();
+      expect(commands.goToCharge).not.toHaveBeenCalled();
+      expect(commands.returnHome).not.toHaveBeenCalled();
+    }
+
+    it.each(['custom', 'inspect'] as const)(
+      'reports %s as failed, naming the action type, and runs no command',
+      async (actionType) => {
+        await queue.accept(createMockTask({ actionType, actionConfig: {} }));
+
+        const body = await drain();
+        expect(body.status).toBe('failed');
+        expect(body.error).toContain(actionType);
+        expect(body.error).toContain('not implemented');
+        expectNoCommandRan();
+      }
+    );
+
+    it('refuses immediately instead of sleeping 2 seconds first', async () => {
+      const startedAt = Date.now();
+      await queue.accept(createMockTask({ actionType: 'custom', actionConfig: {} }));
+      await drain();
+
+      // The old fallthrough slept 2000 ms before claiming success.
+      expect(Date.now() - startedAt).toBeLessThan(500);
+    });
+
+    it('reports an action type outside the agent union as failed', async () => {
+      // `execute_skill` exists in the server's union only, and nothing on the
+      // wire is typed — it must fail, not fall through to success.
+      await queue.accept(
+        createMockTask({ actionType: 'execute_skill' as PushedTask['actionType'], actionConfig: {} })
+      );
+
+      const body = await drain();
+      expect(body.status).toBe('failed');
+      expect(body.error).toContain('execute_skill');
+      expectNoCommandRan();
+    });
+
+    it('still really waits and completes a wait task', async () => {
+      await queue.accept(createMockTask({ actionType: 'wait', actionConfig: { durationMs: 5 } }));
+
+      const body = await drain();
+      expect(body.status).toBe('completed');
+      expect(body.result?.message).toContain('5ms');
+    });
+
+    it('still delegates an implemented action to the command executor', async () => {
+      await queue.accept(
+        createMockTask({ actionType: 'move_to_location', actionConfig: { location: { x: 3, y: 4 } } })
+      );
+
+      const body = await drain();
+      expect(body.status).toBe('completed');
+      expect(commands.moveTo).toHaveBeenCalledWith({ x: 3, y: 4 });
+    });
   });
 
   describe('accept', () => {

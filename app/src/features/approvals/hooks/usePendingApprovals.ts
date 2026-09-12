@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo } from 'react';
 import { useApprovalsStore } from '../store';
+import { OPEN_APPROVAL_STATUSES } from '../types';
 import type { ApprovalRequest, ApproverRole, ApprovalQueueItem } from '../types';
 
 export interface UsePendingApprovalsOptions {
@@ -109,8 +110,8 @@ export function usePendingApprovals(
     } else if (userId) {
       await storeFetchPending(userId);
     } else {
-      // When neither role nor userId is provided, fetch all pending/in_progress approvals
-      await storeFetchApprovalRequests({ status: ['pending', 'in_progress'] });
+      // When neither role nor userId is provided, fetch everything still open
+      await storeFetchApprovalRequests({ status: OPEN_APPROVAL_STATUSES });
     }
   }, [storeFetchPending, storeFetchPendingByRole, storeFetchApprovalRequests, userId, role]);
 

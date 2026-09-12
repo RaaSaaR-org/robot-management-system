@@ -172,30 +172,24 @@ export const approvalsApi = {
   },
 
   /**
-   * Cancel an approval request
+   * Cancel an approval request.
+   *
+   * Sends no actor: the server reads it from the authenticated session and
+   * answers 400 to a body that names one (TASK-289).
    */
-  async cancelApprovalRequest(
-    id: string,
-    cancelledBy: string,
-    reason: string
-  ): Promise<ApprovalRequest> {
+  async cancelApprovalRequest(id: string, reason: string): Promise<ApprovalRequest> {
     const response = await apiClient.post<ApprovalRequest>(ENDPOINTS.cancel(id), {
-      cancelledBy,
       reason,
     });
     return response.data;
   },
 
   /**
-   * Manually escalate an approval request
+   * Manually escalate an approval request. Sends no actor — see
+   * `cancelApprovalRequest`.
    */
-  async escalateApprovalRequest(
-    id: string,
-    escalatedBy: string,
-    reason?: string
-  ): Promise<ApprovalRequest> {
+  async escalateApprovalRequest(id: string, reason?: string): Promise<ApprovalRequest> {
     const response = await apiClient.post<ApprovalRequest>(ENDPOINTS.escalate(id), {
-      escalatedBy,
       reason,
     });
     return response.data;

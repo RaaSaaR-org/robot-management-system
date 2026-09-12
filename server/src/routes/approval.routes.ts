@@ -10,6 +10,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { approvalWorkflowService } from '../services/ApprovalWorkflowService.js';
 import type {
   ApprovalEntityType,
@@ -19,6 +20,7 @@ import type {
   ApprovalDecision,
   DecisionContestStatus,
 } from '../types/approval.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const approvalRoutes = Router();
 
@@ -74,8 +76,7 @@ approvalRoutes.get('/', async (req: Request, res: Response) => {
     const result = await approvalWorkflowService.getApprovalRequests(filters, pageNum, limitNum);
     res.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get approval requests';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get approval requests', 500);
   }
 });
 
@@ -124,8 +125,7 @@ approvalRoutes.post('/', async (req: Request, res: Response) => {
 
     res.status(201).json(request);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to create approval request';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to create approval request', 500);
   }
 });
 
@@ -140,8 +140,7 @@ approvalRoutes.get('/pending/me', async (req: Request, res: Response) => {
     const requests = await approvalWorkflowService.getPendingApprovalsForUser(userId);
     res.json(requests);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get pending approvals';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get pending approvals', 500);
   }
 });
 
@@ -160,8 +159,7 @@ approvalRoutes.get('/pending/role/:role', async (req: Request, res: Response) =>
     const requests = await approvalWorkflowService.getPendingApprovalsByRole(role);
     res.json(requests);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get pending approvals by role';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get pending approvals by role', 500);
   }
 });
 
@@ -173,8 +171,7 @@ approvalRoutes.get('/overdue', async (req: Request, res: Response) => {
     const requests = await approvalWorkflowService.getOverdueApprovals();
     res.json(requests);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get overdue approvals';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get overdue approvals', 500);
   }
 });
 
@@ -191,8 +188,7 @@ approvalRoutes.get('/nearing-deadline', async (req: Request, res: Response) => {
     const requests = await approvalWorkflowService.getApprovalsNearingDeadline(withinHours);
     res.json(requests);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get approvals nearing deadline';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get approvals nearing deadline', 500);
   }
 });
 
@@ -201,14 +197,58 @@ approvalRoutes.get('/nearing-deadline', async (req: Request, res: Response) => {
 // ============================================================================
 
 /**
- * POST /approvals/:id/steps/:stepId/decide - Process an approval decision
- * Body: { decision, decidedBy, decisionNotes?, reviewDurationSec?, competenceVerified? }
+ * The actor of an oversight decision (EU AI Act Art. 14), taken from the
+ * authenticated session and never from the request body — a body-supplied
+ * actor lets any caller attribute their decision to a colleague.
+ *
+ * Persists the user **id**, not the email: `schema.prisma` documents
+ * `ApprovalStatusHistory.changedBy` as "User ID who made the change",
+ * `team.routes.ts` resolves its actor the same way, and emails are
+ * re-assignable while ids are the audit key.
+ *
+ * Returns null when the request carries no identity at all, which the three
+ * decision routes answer with a 401 rather than writing an unattributed record.
  */
-approvalRoutes.post('/:id/steps/:stepId/decide', async (req: Request, res: Response) => {
+function resolveActor(req: AuthenticatedRequest): string | null {
+  return req.user?.id ?? null;
+}
+
+/**
+ * 400 for a request that tries to name its own actor. Refusing loudly beats
+ * silently ignoring the field: a client that still sends one is a client that
+ * believes it is choosing who the audit trail blames.
+ */
+function rejectsBodyActor(req: Request, res: Response, field: string): boolean {
+  if (field in (req.body ?? {})) {
+    res.status(400).json({
+      error: `${field} is not accepted — the decision actor is taken from the authenticated session`,
+    });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 401 for a session with no identity. Never write an Art. 14 record without an
+ * actor — an unattributed oversight decision is not oversight.
+ */
+const UNAUTHENTICATED = { error: 'Unauthorized', message: 'Authentication required' } as const;
+
+/**
+ * POST /approvals/:id/steps/:stepId/decide - Process an approval decision
+ * Body: { decision, decisionNotes?, reviewDurationSec?, competenceVerified? }
+ * The deciding user comes from the session; a body `decidedBy` is refused.
+ */
+approvalRoutes.post('/:id/steps/:stepId/decide', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const approvalRequestId = req.params.id;
     const stepId = req.params.stepId;
-    const { decision, decidedBy, decisionNotes, reviewDurationSec, competenceVerified } = req.body;
+
+    if (rejectsBodyActor(req, res, 'decidedBy')) return;
+    const actor = resolveActor(req);
+    if (!actor) return res.status(401).json(UNAUTHENTICATED);
+
+    const { decision, decisionNotes, reviewDurationSec, competenceVerified } = req.body;
 
     const validDecisions: ApprovalDecision[] = ['approve', 'reject', 'defer', 'request_info'];
     if (!decision || !validDecisions.includes(decision)) {
@@ -217,15 +257,11 @@ approvalRoutes.post('/:id/steps/:stepId/decide', async (req: Request, res: Respo
       });
     }
 
-    if (!decidedBy) {
-      return res.status(400).json({ error: 'decidedBy is required' });
-    }
-
     const request = await approvalWorkflowService.processApproval({
       approvalRequestId,
       stepId,
       decision,
-      decidedBy,
+      decidedBy: actor,
       decisionNotes,
       reviewDurationSec,
       competenceVerified,
@@ -233,25 +269,30 @@ approvalRoutes.post('/:id/steps/:stepId/decide', async (req: Request, res: Respo
 
     res.json(request);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to process approval decision';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to process approval decision', 500);
   }
 });
 
 /**
  * POST /approvals/:id/cancel - Cancel an approval request
- * Body: { cancelledBy, reason }
+ * Body: { reason }
+ * The cancelling user comes from the session; a body `cancelledBy` is refused.
  */
-approvalRoutes.post('/:id/cancel', async (req: Request, res: Response) => {
+approvalRoutes.post('/:id/cancel', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const id = req.params.id;
-    const { cancelledBy, reason } = req.body;
 
-    if (!cancelledBy || !reason) {
-      return res.status(400).json({ error: 'cancelledBy and reason are required' });
+    if (rejectsBodyActor(req, res, 'cancelledBy')) return;
+    const actor = resolveActor(req);
+    if (!actor) return res.status(401).json(UNAUTHENTICATED);
+
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({ error: 'reason is required' });
     }
 
-    const request = await approvalWorkflowService.cancelApprovalRequest(id, cancelledBy, reason);
+    const request = await approvalWorkflowService.cancelApprovalRequest(id, actor, reason);
 
     if (!request) {
       return res.status(404).json({ error: 'Approval request not found' });
@@ -259,25 +300,26 @@ approvalRoutes.post('/:id/cancel', async (req: Request, res: Response) => {
 
     res.json(request);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to cancel approval request';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to cancel approval request', 500);
   }
 });
 
 /**
  * POST /approvals/:id/escalate - Manually escalate an approval request
- * Body: { escalatedBy, reason? }
+ * Body: { reason? }
+ * The escalating user comes from the session; a body `escalatedBy` is refused.
  */
-approvalRoutes.post('/:id/escalate', async (req: Request, res: Response) => {
+approvalRoutes.post('/:id/escalate', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const id = req.params.id;
-    const { escalatedBy, reason } = req.body;
 
-    if (!escalatedBy) {
-      return res.status(400).json({ error: 'escalatedBy is required' });
-    }
+    if (rejectsBodyActor(req, res, 'escalatedBy')) return;
+    const actor = resolveActor(req);
+    if (!actor) return res.status(401).json(UNAUTHENTICATED);
 
-    const request = await approvalWorkflowService.escalateRequest(id, escalatedBy, reason);
+    const { reason } = req.body;
+
+    const request = await approvalWorkflowService.escalateRequest(id, actor, reason);
 
     if (!request) {
       return res.status(404).json({ error: 'Approval request not found' });
@@ -285,8 +327,7 @@ approvalRoutes.post('/:id/escalate', async (req: Request, res: Response) => {
 
     res.json(request);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to escalate approval request';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to escalate approval request', 500);
   }
 });
 
@@ -316,8 +357,7 @@ approvalRoutes.post('/:id/viewpoint', async (req: Request, res: Response) => {
 
     res.status(201).json(viewpoint);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to submit viewpoint';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to submit viewpoint', 500);
   }
 });
 
@@ -335,8 +375,7 @@ approvalRoutes.get('/:id/viewpoint', async (req: Request, res: Response) => {
 
     res.json(viewpoint);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get viewpoint';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get viewpoint', 500);
   }
 });
 
@@ -366,8 +405,7 @@ approvalRoutes.post('/:id/viewpoint/acknowledge', async (req: Request, res: Resp
 
     res.json(viewpoint);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to acknowledge viewpoint';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to acknowledge viewpoint', 500);
   }
 });
 
@@ -398,8 +436,7 @@ approvalRoutes.post('/:id/viewpoint/respond', async (req: Request, res: Response
 
     res.json(viewpoint);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to respond to viewpoint';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to respond to viewpoint', 500);
   }
 });
 
@@ -430,8 +467,7 @@ approvalRoutes.post('/decisions/:decisionId/contest', async (req: Request, res: 
 
     res.status(201).json(contest);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to contest decision';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to contest decision', 500);
   }
 });
 
@@ -456,8 +492,7 @@ approvalRoutes.post('/decisions/:decisionId/request-intervention', async (req: R
 
     res.status(201).json(contest);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to request human intervention';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to request human intervention', 500);
   }
 });
 
@@ -487,8 +522,7 @@ approvalRoutes.get('/contests', async (req: Request, res: Response) => {
     const result = await approvalWorkflowService.getContests(filters, pageNum, limitNum);
     res.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get contests';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get contests', 500);
   }
 });
 
@@ -506,8 +540,7 @@ approvalRoutes.get('/contests/:id', async (req: Request, res: Response) => {
 
     res.json(contest);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get contest';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get contest', 500);
   }
 });
 
@@ -545,8 +578,7 @@ approvalRoutes.post('/contests/:id/review', async (req: Request, res: Response) 
 
     res.json(contest);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to process contest';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to process contest', 500);
   }
 });
 
@@ -562,8 +594,7 @@ approvalRoutes.get('/metrics', async (req: Request, res: Response) => {
     const metrics = await approvalWorkflowService.getMetrics();
     res.json(metrics);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get metrics';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get metrics', 500);
   }
 });
 
@@ -575,8 +606,7 @@ approvalRoutes.get('/sla-report', async (req: Request, res: Response) => {
     const report = await approvalWorkflowService.getSLAComplianceReport();
     res.json(report);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get SLA report';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get SLA report', 500);
   }
 });
 
@@ -588,8 +618,7 @@ approvalRoutes.get('/oversight-metrics', async (req: Request, res: Response) => 
     const metrics = await approvalWorkflowService.getMeaningfulOversightMetrics();
     res.json(metrics);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get oversight metrics';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get oversight metrics', 500);
   }
 });
 
@@ -615,7 +644,6 @@ approvalRoutes.get('/:id', async (req: Request, res: Response) => {
 
     res.json(request);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get approval request';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get approval request', 500);
   }
 });

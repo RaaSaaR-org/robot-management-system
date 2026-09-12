@@ -3,7 +3,7 @@ id: "TASK-298"
 aliases: []
 title: "Stop route handlers echoing raw caught error text"
 slug: "stop-route-handlers-echoing-raw-caught-error-text"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []

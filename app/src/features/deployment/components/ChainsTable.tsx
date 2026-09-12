@@ -19,7 +19,7 @@ import {
 } from '@/shared/components/ui';
 import { useDeploymentStore } from '../store';
 import type { SkillChain } from '../types';
-import { errorMessage } from './deploymentHelpers';
+import { errorMessage } from '@/shared/components/ui';
 
 export interface ChainsTableProps {
   chains: SkillChain[];

@@ -129,7 +129,8 @@ describe('Team Routes', () => {
       const response = await request(app).get('/api/team');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('DB error');
+      expect(response.body.error).toBe('Failed to list team members');
+      expect(response.body.error).not.toContain('DB error');
     });
   });
 
@@ -198,7 +199,8 @@ describe('Team Routes', () => {
         .send({ name: 'Mate', email: 'mate@example.com', role: 'member' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('DB connection lost');
+      expect(response.body.error).toBe('Failed to add the teammate');
+      expect(response.body.error).not.toContain('DB connection lost');
     });
   });
 
@@ -310,7 +312,8 @@ describe('Team Routes', () => {
         .send({ role: 'viewer' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to update the teammate');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -360,7 +363,8 @@ describe('Team Routes', () => {
       const response = await request(app).delete('/api/team/member-1');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to deactivate the teammate');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 });

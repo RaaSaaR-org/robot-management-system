@@ -337,7 +337,9 @@ Content      Panel(s) · DataTable · card grid of Panel interactive
   `if (await confirm({ title: 'Delete X?', tone: 'danger' }))`, never
   `window.confirm`. Error text is `errorMessage(err)`, never
   `err instanceof Error ? err.message : String(err)`: the API client rejects
-  with plain objects, so that prints "[object Object]". A server-paged table
+  with an `ApiRequestError` (a real `Error` carrying `code`/`statusCode`), but
+  a rejection can also be a raw axios error or a plain object, and only
+  `errorMessage(err)` digs the server's sentence out of all of them. A server-paged table
   passes `pagination` to `DataTable`; never build a pager. A status colour is
   `statusTone()` (it knows run, incident, notification, deployment and A2A
   states); keep a local map only where the word means something else there.

@@ -3,7 +3,7 @@ id: "TASK-296"
 aliases: []
 title: "Reject api errors as Error instances"
 slug: "reject-api-errors-as-error-instances"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []

@@ -11,6 +11,7 @@ import type {
   UpdateEmbodimentInput,
   EmbodimentQueryParams,
 } from '../types/embodiment.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const embodimentsRoutes = Router();
 
@@ -54,8 +55,7 @@ embodimentsRoutes.post('/', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[EmbodimentsRoutes] Error creating embodiment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to create embodiment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to create embodiment', 400);
   }
 });
 
@@ -82,8 +82,7 @@ embodimentsRoutes.get('/', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[EmbodimentsRoutes] Error listing embodiments:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list embodiments';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list embodiments', 500);
   }
 });
 
@@ -102,8 +101,7 @@ embodimentsRoutes.get('/:tag', async (req: Request, res: Response) => {
     res.json({ embodiment });
   } catch (error) {
     console.error('[EmbodimentsRoutes] Error getting embodiment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get embodiment';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get embodiment', 500);
   }
 });
 
@@ -127,8 +125,7 @@ embodimentsRoutes.put('/:tag', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[EmbodimentsRoutes] Error updating embodiment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to update embodiment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to update embodiment', 400);
   }
 });
 
@@ -148,8 +145,7 @@ embodimentsRoutes.delete('/:tag', async (req: Request, res: Response) => {
     res.json({ message: 'Embodiment deleted successfully' });
   } catch (error) {
     console.error('[EmbodimentsRoutes] Error deleting embodiment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to delete embodiment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to delete embodiment', 400);
   }
 });
 
@@ -177,8 +173,7 @@ embodimentsRoutes.post('/validate', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[EmbodimentsRoutes] Error validating config:', error);
-    const message = error instanceof Error ? error.message : 'Failed to validate config';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to validate config', 400);
   }
 });
 
@@ -206,8 +201,7 @@ embodimentsRoutes.post('/:tag/link', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[EmbodimentsRoutes] Error linking embodiment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to link embodiment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to link embodiment', 400);
   }
 });
 
@@ -226,8 +220,7 @@ embodimentsRoutes.post('/:tag/unlink', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[EmbodimentsRoutes] Error unlinking embodiment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to unlink embodiment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to unlink embodiment', 400);
   }
 });
 
@@ -255,7 +248,6 @@ embodimentsRoutes.get('/:tag/config', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[EmbodimentsRoutes] Error getting config:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get config';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get config', 500);
   }
 });

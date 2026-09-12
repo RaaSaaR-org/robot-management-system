@@ -16,6 +16,7 @@ import {
   SkeletonText,
   StatusTag,
   confirm,
+  errorMessage,
   toast,
 } from '@/shared/components/ui';
 import { evaluationApi } from '@/features/evaluation/api/evaluationApi';
@@ -32,7 +33,6 @@ import { EpisodeViewer, type PlaybackSpeed } from '../components/datasets/Episod
 import { CuratePanel } from '../components/datasets/CuratePanel';
 import { JointChartPanel, RewardCurvePanel } from '../components/datasets/TrajectoryPanels';
 import { AnnotationsPanel } from '../components/datasets/AnnotationsPanel';
-import { errText } from '../components/datasets/episodeFormat';
 import { formatDuration } from '../components/datasets/datasetFormat';
 import { useDatasetViews } from '../hooks/useDatasetViews';
 import { useTrainingJobs } from '../hooks/useTrainingJobs';
@@ -122,7 +122,7 @@ export function DatasetEpisodesPage() {
     setDatasetError(null);
     trainingApi.getDataset(datasetId)
       .then(setDataset)
-      .catch((err) => { setDataset(null); setDatasetError(errText(err)); });
+      .catch((err) => { setDataset(null); setDatasetError(errorMessage(err, 'unknown error')); });
   }, [datasetId, reloadKey]);
 
   const { views, isLoading: viewsLoading, error: viewsError, createView, deleteView, materializeView } =
@@ -159,7 +159,7 @@ export function DatasetEpisodesPage() {
         setEpisodes([]);
         const e = err as { detail?: unknown; details?: unknown } | null;
         const detail = e?.details ?? e?.detail;
-        setEpisodesError(typeof detail === 'string' ? `${errText(err)} — ${detail}` : errText(err));
+        setEpisodesError(typeof detail === 'string' ? `${errorMessage(err, 'unknown error')} — ${detail}` : errorMessage(err, 'unknown error'));
       })
       .finally(() => setEpisodesLoading(false));
   }, [datasetId, reloadKey]);
@@ -268,7 +268,7 @@ export function DatasetEpisodesPage() {
       await trainingApi.flagEpisode(datasetId, index, next);
     } catch (err) {
       setFlaggedMap((prev) => ({ ...prev, [index]: !next }));
-      toast.error(`Couldn't ${next ? 'flag' : 'unflag'} episode ${index}`, { description: errText(err) });
+      toast.error(`Couldn't ${next ? 'flag' : 'unflag'} episode ${index}`, { description: errorMessage(err, 'unknown error') });
     }
   }, [datasetId, flaggedMap]);
 
@@ -296,8 +296,8 @@ export function DatasetEpisodesPage() {
       recordOutcome('Deleted', await trainingApi.deleteEpisodes(datasetId, [target]));
       return true;
     } catch (err) {
-      setCurationMsg(`Delete failed: ${errText(err)}`);
-      toast.error("Couldn't delete episode", { description: errText(err) });
+      setCurationMsg(`Delete failed: ${errorMessage(err, 'unknown error')}`);
+      toast.error("Couldn't delete episode", { description: errorMessage(err, 'unknown error') });
       return false;
     } finally {
       setCurating(false);
@@ -311,8 +311,8 @@ export function DatasetEpisodesPage() {
     try {
       recordOutcome('Trimmed', await trainingApi.trimEpisode(datasetId, selectedEpisode, trimStart, trimEnd === '' ? null : Number(trimEnd)));
     } catch (err) {
-      setCurationMsg(`Trim failed: ${errText(err)}`);
-      toast.error("Couldn't trim episode", { description: errText(err) });
+      setCurationMsg(`Trim failed: ${errorMessage(err, 'unknown error')}`);
+      toast.error("Couldn't trim episode", { description: errorMessage(err, 'unknown error') });
     } finally {
       setCurating(false);
     }
@@ -329,7 +329,7 @@ export function DatasetEpisodesPage() {
       if (result.suggestions.length === 0) setSuggestMsg('No curation suggestions — episodes look clean.');
     } catch (err) {
       setSuggestions([]);
-      setSuggestMsg(`Suggest failed: ${errText(err)}`);
+      setSuggestMsg(`Suggest failed: ${errorMessage(err, 'unknown error')}`);
     } finally {
       setSuggesting(false);
     }
@@ -356,7 +356,7 @@ export function DatasetEpisodesPage() {
       const { jobId } = await trainingApi.startAnnotation(datasetId);
       toast.success('Annotation job queued', { description: `Job ${jobId.slice(0, 8)} — subtasks and VQA pairs appear here when it finishes.` });
     } catch (err) {
-      toast.error("Couldn't start annotation", { description: errText(err) });
+      toast.error("Couldn't start annotation", { description: errorMessage(err, 'unknown error') });
     } finally {
       setAnnotating(false);
     }

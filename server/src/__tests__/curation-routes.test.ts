@@ -530,7 +530,8 @@ describe('Curation Routes', () => {
         .send({ episodes: [0], datasetPath: '/tmp/ds-1' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('disk full');
+      expect(response.body.error).toBe('Failed to delete episodes');
+      expect(response.body.error).not.toContain('disk full');
     });
   });
 
@@ -627,7 +628,8 @@ describe('Curation Routes', () => {
         .send({ start: 0, datasetPath: '/tmp/ds-1' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('bad frames');
+      expect(response.body.error).toBe('Failed to trim episode');
+      expect(response.body.error).not.toContain('bad frames');
     });
   });
 
@@ -706,7 +708,8 @@ describe('Curation Routes', () => {
       const response = await request(app).post('/api/curation/ds-1/suggest').send({});
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to compute curation suggestions');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 });

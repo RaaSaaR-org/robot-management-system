@@ -15,6 +15,9 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AsyncLocalStorage } from 'async_hooks';
+// The production allowlist — imported, never pasted (TASK-285), so this
+// HTTP-level test moves with it.
+import { TENANT_SCOPED_MODELS } from '../database/client.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -40,13 +43,6 @@ function getTenantId(): string | undefined {
 }
 
 function buildTenantPrisma(base: PrismaClient): PrismaClient {
-  const TENANT_SCOPED_MODELS = new Set<string>([
-    'User',
-    'Robot',
-    'Dataset',
-    'TrainingJob',
-  ]);
-
   const extended = base.$extends({
     name: 'tenant-isolation',
     query: {

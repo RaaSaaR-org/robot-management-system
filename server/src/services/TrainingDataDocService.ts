@@ -2,6 +2,13 @@
  * @file TrainingDataDocService.ts
  * @description Service for EU AI Act GPAI training data documentation
  * @feature compliance
+ * @regulatory EU AI Act Art. 10, Art. 11 / Annex IV — see @status before
+ *   counting this as coverage.
+ * @status unshipped — the service works and is tested, but the only product
+ *   path into it is `TeleoperationService` → `recordProvenance`. Its summaries,
+ *   bias assessments, custody transfers and PDF export are reachable solely
+ *   through `../routes/training-docs.routes.ts`, which has no client anywhere
+ *   in `app/src`. Nothing here is wrong; nothing here is used. (TASK-302)
  */
 
 import { EventEmitter } from 'events';

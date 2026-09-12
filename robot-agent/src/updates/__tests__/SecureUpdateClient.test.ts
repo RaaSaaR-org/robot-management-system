@@ -32,16 +32,21 @@ vi.mock('../../config/config.js', () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+/** Every call to the platform carries this; see `utils/platform-auth.ts`. */
+const TOKEN = 'ndsa_test-update-token';
+
 describe('SecureUpdateClient', () => {
   let client: SecureUpdateClient;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('NEODEM_SERVICE_TOKEN', TOKEN);
     client = new SecureUpdateClient('test-robot-001', 'http://localhost:3001');
   });
 
   afterEach(() => {
     client.stopPeriodicChecks();
+    vi.unstubAllEnvs();
   });
 
   // --------------------------------------------------------------------------
@@ -60,8 +65,11 @@ describe('SecureUpdateClient', () => {
 
       const result = await client.checkForUpdates();
 
+      // URL *and* init: the single-argument form of this assertion passed only
+      // because the call carried no credential at all (TASK-292).
       expect(mockFetch).toHaveBeenCalledWith(
-        'http://localhost:3001/api/updates?status=approved'
+        'http://localhost:3001/api/updates?status=approved',
+        expect.objectContaining({ headers: { Authorization: `Bearer ${TOKEN}` } })
       );
       expect(result).toHaveLength(1);
       expect(result[0].version).toBe('1.1.0');

@@ -12,6 +12,45 @@ import type {
   PushedTask,
 } from './types.js';
 import { config } from '../config/config.js';
+import {
+  SERVICE_TOKEN_ENV,
+  isAuthRejection,
+  platformAuthHeaders,
+  recordPlatformAuthRejection,
+} from '../utils/platform-auth.js';
+
+/**
+ * The action types this agent actually executes.
+ *
+ * Everything else — `inspect`, `custom`, and the server-only members of the
+ * wider union such as `execute_skill` — is refused, not simulated. A branch
+ * that slept two seconds and reported `completed` turned a user's automation
+ * into a row of green ticks for work no robot did; a refusal is the only
+ * honest answer for an action there is no code for.
+ *
+ * The app keeps its own copy (`StepActionType` in
+ * `app/src/features/processes/types/process.types.ts`): separate package, no
+ * import path between them.
+ */
+export const IMPLEMENTED_ACTION_TYPES = [
+  'move_to_location',
+  'pickup_object',
+  'drop_object',
+  'wait',
+  'charge',
+  'return_home',
+] as const;
+
+/**
+ * The failure an unimplemented action type reports. Returned immediately — a
+ * refusal has nothing to wait for.
+ */
+function notImplemented(actionType: string): CommandResult {
+  return {
+    success: false,
+    message: `Action type '${actionType}' is not implemented by this robot agent`,
+  };
+}
 
 /**
  * Callback to get current state
@@ -189,15 +228,30 @@ export class TaskQueue {
     result?: { success: boolean; data?: Record<string, unknown>; message?: string },
     error?: string
   ): Promise<void> {
+    const url = `${config.serverUrl}/api/processes/tasks/${taskId}/status`;
     try {
-      const response = await fetch(`${config.serverUrl}/api/processes/tasks/${taskId}/status`, {
+      const response = await fetch(url, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...platformAuthHeaders() },
         body: JSON.stringify({ status, result, error }),
       });
 
       if (!response.ok) {
-        console.error(`[TaskQueue] Failed to report task ${taskId} status: HTTP ${response.status}`);
+        if (isAuthRejection(response.status)) {
+          // No retry queue here (that is separate work) — but the operator has
+          // to be told, because the server's row for this task stays
+          // `executing` forever and nothing else says why.
+          recordPlatformAuthRejection('TaskQueue', response.status, url);
+          console.error(
+            `[TaskQueue] Task ${taskId} status report rejected: HTTP ${response.status} — ${
+              process.env[SERVICE_TOKEN_ENV]
+                ? `the configured ${SERVICE_TOKEN_ENV} was refused (a fleet write needs a member service account)`
+                : `no ${SERVICE_TOKEN_ENV} is configured`
+            }. The server still shows this task as executing.`
+          );
+        } else {
+          console.error(`[TaskQueue] Failed to report task ${taskId} status: HTTP ${response.status}`);
+        }
       } else {
         console.log(`[TaskQueue] Reported task ${taskId} status: ${status}`);
       }
@@ -292,13 +346,24 @@ export class TaskQueue {
         return { success: true, message: `Waited ${duration}ms` };
       }
 
+      // Declared by the server, executed by nobody. Agent Mode's real inspect
+      // needs a patrol host and a checkpointId that a pushed task does not
+      // carry, so wiring it is separate work — until then it refuses.
       case 'inspect':
       case 'custom':
-      default:
-        // Simulate successful completion
-        console.log(`[TaskQueue] Simulating ${task.actionType} action`);
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        return { success: true, message: `Completed ${task.actionType}` };
+        return notImplemented(task.actionType);
     }
+
+    // Two guards, and they catch different things.
+    //
+    // Compile time: every member of `StepActionType` is handled above, so
+    // `task.actionType` narrows to `never` here. Adding a member to the union
+    // in `types.ts` breaks `npm run typecheck` on this line — there is no
+    // default branch left to quietly answer for it.
+    const unhandled: never = task.actionType;
+    // Run time: the server's union is wider than this one (it also carries
+    // `execute_skill`), and nothing on the wire is typed. A string outside the
+    // union lands here and is reported failed, never completed.
+    return notImplemented(String(unhandled));
   }
 }

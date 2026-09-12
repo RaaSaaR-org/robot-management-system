@@ -58,7 +58,7 @@ step between the stages — there is nothing to export *to*.
 |-------|-------------|
 | **Collect** | The data engine. Record demonstrations via teleoperation or VR into a true LeRobot v3.0 chunked dataset, scan a room with a LiDAR and get a digital twin, or have a world action model generate episodes when the robots cannot make enough. Curation trims and deletes episodes video-aware and returns a *new* revision with lineage, never touching the source. HuggingFace Hub sync both ways. |
 | **Train** | Queue SmolVLA LoRA fine-tuning jobs, reward models, annotation jobs. The trainer itself runs in a separate repo that polls this server for work. |
-| **Deploy** | Model registry, canary rollouts with per-stage health checks, one-click rollback, Ed25519-signed OTA packages. You always know which model version runs on which robot. |
+| **Deploy** | Model registry, canary rollouts with per-stage health checks, one-click rollback. You always know which model version runs on which robot. Firmware OTA is the exception and the one place we will not round up: packages are created, Ed25519-signed and approved on the server, but **nothing is delivered to a robot yet** — see [Status & limitations](#status--limitations). |
 | **Evaluate** | MuJoCo simulation jobs, per-episode reward scoring, success-rate and error breakdowns, model comparison. |
 | **Operate** | Fleet dashboard, natural-language control over the A2A protocol, real-time telemetry and 3D view, four layers of safety: fleet, zone, robot, and human approval. **Agent Mode** puts a local LLM on the robot and ships two complete use cases on top of it: scheduled **patrol** with baseline comparison and findings, and **host mode**, the robot greeting and guiding a visitor. See [Agent Mode](#agent-mode-patrol-and-host-mode). |
 | **Comply** | Hash-chained tamper-evident audit logs with a `verify` endpoint (EU AI Act Art. 12), technical documentation per Annex IV, GDPR Art. 30 RoPA, a self-service portal for data-subject requests, legal holds and retention policies. |
@@ -440,8 +440,8 @@ Compliance is a first-class part of the product, not a report generator bolted o
 | **Tamper-evident audit log** | Hash-chained records with a `verify` endpoint — EU AI Act **Art. 12** record-keeping |
 | **Technical documentation** | Generated per AI Act **Annex IV** |
 | **Records of processing** | GDPR **Art. 30** RoPA management |
-| **Data-subject requests** | Self-service portal covering 7 request types |
-| **Right to erasure** | GDPR **Art. 17** erasure that reaches the fleet: it wipes the on-robot memory workspace on every reachable robot and reports honestly about the ones that were switched off |
+| **Data-subject requests** | Self-service portal covering 7 request types. The **subject's** side is the shipped one; the controller's fulfilment queue is API-only today (see [Status & limitations](#status--limitations)) |
+| **Right to erasure** | GDPR **Art. 17** erasure that reaches the fleet: it wipes the on-robot memory workspace on every reachable robot and reports honestly about the ones that were switched off. Legal holds suppress it. Triggering it is an API call — `POST /api/gdpr/admin/requests/:id/execute-erasure` — because the admin screen for it does not exist yet |
 | **Legal holds & retention** | Holds override retention; a background job enforces retention policies |
 | **Human oversight** | Multi-step approvals, escalation, contest and intervention flows |
 | **Explainability** | Decision records with reasoning chains |
@@ -629,6 +629,23 @@ development via `AUTH_DISABLED=true`; turn it on before you expose anything. NAT
 are optional, and the features that depend on them switch themselves off when they are missing.
 The closed-loop eval harness is not in this repo. There is no managed cloud — you run it
 yourself.
+
+Three subsystems are mounted, tested and green in CI while being unable to do the job their code
+claims — they are marked `@status unshipped` in their own file headers so nobody has to find this
+out by reading the source (TASK-302):
+
+- **Firmware OTA delivery.** Packages are created, Ed25519-signed, approved and their deployments
+  recorded, and the Updates UI drives all of that. What does not exist is delivery: no artifact is
+  stored, the robot's "download" hashes a fabricated constant, the install step is a log line, and
+  the server never contacts the robot. Treat the deployment history as a record of intent. This is
+  **not** CRA Art. 13 / MR Art. 10 update coverage.
+- **GDPR controller fulfilment.** The server side is complete — acknowledge, start, complete,
+  reject, execute-erasure, SLA and overdue reporting — and so is the API client, but no screen
+  calls any of it. A controller can meet the Art. 12(3) one-month deadline over HTTP; they cannot
+  do it in the product.
+- **AI Act Art. 10/11 training-data documentation.** Twelve endpoints, provenance, bias
+  assessments and a working PDF export, with no UI at all; only teleoperation provenance is
+  recorded automatically.
 
 Two partner slots are open: a public cloud host, and compute/inference/training credits.
 Reach us at **info@EmAI.dev**.

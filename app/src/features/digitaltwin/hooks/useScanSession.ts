@@ -16,6 +16,7 @@
  * @feature digitaltwin
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePointCloudStream } from '@/features/robots/hooks/usePointCloudStream';
 import { robotsApi } from '@/features/robots/api/robotsApi';
@@ -261,7 +262,7 @@ export function useScanSession(
           });
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to start scan');
+        setError(getErrorMessage(e, 'Failed to start scan'));
         setStatus('error');
       }
     },
@@ -285,7 +286,7 @@ export function useScanSession(
         setStatus((s) => (s === 'finalizing' ? 'done' : s));
       }, 8000);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to stop scan');
+      setError(getErrorMessage(e, 'Failed to stop scan'));
       setStatus('error');
     }
   }, [robotId, clearSweep]);

@@ -91,17 +91,8 @@ export function formatStageDuration(minutes: number): string {
 /** Number of canary stages whose traffic share has been reached. */
 export function reachedStages(d: Pick<Deployment, 'canaryConfig' | 'trafficPercentage' | 'status'>): number {
   const stages = d.canaryConfig?.stages ?? [];
-  if (d.status === 'production' || d.status === 'completed') return stages.length;
+  if (d.status === 'production') return stages.length;
   return stages.filter((s) => d.trafficPercentage >= s.percentage && d.trafficPercentage > 0).length;
-}
-
-/** Readable text for an Error, the API client's `{ message }` rejection, or anything else. */
-export function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string' && err.message) {
-    return err.message;
-  }
-  return typeof err === 'string' ? err : 'Something went wrong. Try again.';
 }
 
 // ---------------------------------------------------------------------------

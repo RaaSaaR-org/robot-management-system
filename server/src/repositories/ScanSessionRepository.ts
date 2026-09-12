@@ -104,6 +104,25 @@ export class ScanSessionRepository {
   }
 
   /**
+   * Every sweep recorded for one digital twin, newest-first.
+   *
+   * This is the ONLY index from a twin to its raw scans: `SensorScan.sessionId`
+   * is a plain FK with no Prisma relation, so once the twin row is deleted (and
+   * its `ScanSession` rows cascade away) there is no way left to find the scans
+   * or their blobs. The delete cascade therefore enumerates through here FIRST.
+   *
+   * Under multi-tenancy the isolation extension injects `tenantId` into this
+   * `findMany`, so a cascade can only ever reach sessions of its own tenant.
+   */
+  async listByTwin(twinId: string): Promise<ScanSessionRecord[]> {
+    const rows = await prisma.scanSession.findMany({
+      where: { twinId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map(dbToDomain);
+  }
+
+  /**
    * Sessions a sidecar may claim: oldest-first 'processing' sessions with no
    * fresh heartbeat (either never claimed, or the previous worker went stale).
    * The `freshSince` cutoff lets the caller skip sessions another worker is

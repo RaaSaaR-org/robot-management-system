@@ -21,7 +21,7 @@ model Robot {
   id              String   @id @default(uuid())
   name            String
   model           String
-  serialNumber    String?  @unique
+  serialNumber    String?
   status          String   @default("offline") // RobotStatus enum as string
   batteryLevel    Int?     @default(100) // null = no battery / AC-powered
   location        String   @default("{}") // JSON: RobotLocation
@@ -63,6 +63,9 @@ model Robot {
   vlaSessions        VlaSession[]
   sensorScans        SensorScan[]
 
+  // TASK-287: a serial number is unique WITHIN a tenant, not across the
+  // platform — two operators may legitimately run the same hardware serial.
+  @@unique([tenantId, serialNumber])
   @@index([status])
   @@index([a2aEnabled])
   @@index([tenantId, updatedAt])
@@ -105,12 +108,18 @@ model SensorScan {
   poseQw         Float    @default(1)
   metadata       String? // JSON: Record<string, unknown>
   capturedAt     DateTime @default(now())
+  // Tenant ownership (TASK-286). Nullable so single-tenant deployments keep
+  // working; backfilled to the DEFAULT tenant — in pages, because this table
+  // grows one row per LiDAR frame.
+  tenantId       String?
 
-  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  robot  Robot   @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
 
   @@index([robotId, capturedAt])
   @@index([capturedAt])
   @@index([sessionId, frameIndex])
+  @@index([tenantId, capturedAt])
 }
 
 // ============================================================================
@@ -141,8 +150,15 @@ model MotionClip {
   // MotionClipRepository.listAll().
   frames       String
   createdAt    DateTime @default(now())
+  // Tenant ownership (TASK-286). This is the only column on the row that says
+  // who owns the clip — a MotionClip has no robot, user or session to infer an
+  // owner from, so ownership unrecorded here is ownership lost.
+  tenantId     String?
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
 
   @@index([createdAt])
+  @@index([tenantId, createdAt])
 }
 
 // ============================================================================
@@ -498,7 +514,9 @@ model Zone {
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
-  @@unique([name, floor])
+  // Tenant-qualified (TASK-288): "Warehouse A" on floor 1 is a default zone
+  // name, so a global unique made the second tenant to create one collide.
+  @@unique([tenantId, name, floor])
   @@index([floor])
   @@index([type])
   @@index([tenantId, createdAt])
@@ -921,6 +939,15 @@ model ComplianceLog {
   previousHash String // Hash of previous log entry (empty string for first entry)
   currentHash  String // SHA-256(previousHash + timestamp + payloadHash + eventType)
 
+  // Chain position (TASK-291). Assigned by the application inside the same
+  // transaction that reads the chain head; the UNIQUE index is what actually
+  // serializes concurrent appends — the loser of a race gets P2002 and retries
+  // against a freshly read head. NOT @default(autoincrement()): Prisma rejects
+  // autoincrement on a non-id field (P1012) on both sqlite and postgresql.
+  // Nullable so the column could land on rows that predate the backfill; every
+  // row written after this migration carries a value.
+  seq Int? @unique
+
   // Link to AI Explainability system
   decisionId String?
   decision   Decision? @relation(fields: [decisionId], references: [id], onDelete: SetNull)
@@ -1167,12 +1194,36 @@ model ADMReviewQueue {
 }
 
 // ============================================================================
+// NUMBER ALLOCATION (TASK-287)
+// ============================================================================
+
+/// One counter per numbering series, tenant and calendar year. Replaces the
+/// read-the-max-and-add-one generators that issued incident and approval
+/// numbers: a string `orderBy` sorted 'INC-2026-999' above 'INC-2026-1000', and
+/// a tenant-scoped read against a globally unique column could only ever
+/// recompute a number another tenant already held.
+///
+/// Deliberately NOT tenant-scoped in the Prisma extension
+/// (server/src/database/client.ts): there is no `tenantId` column to stamp —
+/// the tenant is the `tenantKey` half of the primary key, which also lets the
+/// counter work outside any tenant scope under the key 'default'.
+model NumberSequence {
+  scope     String // 'incident' | 'approval'
+  tenantKey String // tenantId, or 'default' outside any tenant scope
+  year      Int
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@id([scope, tenantKey, year])
+}
+
+// ============================================================================
 // INCIDENT REPORTING (EU AI Act Art. 73, GDPR Art. 33-34, NIS2 Art. 23, CRA Art. 14)
 // ============================================================================
 
 model Incident {
   id             String @id @default(uuid())
-  incidentNumber String @unique // INC-2026-001 format
+  incidentNumber String // INC-2026-001 format — unique per tenant, see @@unique below
 
   // Classification
   type     String // 'safety' | 'security' | 'data_breach' | 'ai_malfunction' | 'vulnerability'
@@ -1217,6 +1268,10 @@ model Incident {
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
+  // TASK-287: the number is allocated per tenant by NumberSequence, so the
+  // constraint has to be per tenant too — otherwise tenant B's INC-2026-001
+  // collides with tenant A's and no retry can ever resolve it.
+  @@unique([tenantId, incidentNumber])
   @@index([type])
   @@index([severity])
   @@index([status])
@@ -1383,7 +1438,7 @@ model AnomalyRecord {
 // Approval Request - represents a single approval needing human review
 model ApprovalRequest {
   id              String    @id @default(uuid())
-  requestNumber   String    @unique // APR-2026-001 format
+  requestNumber   String // APR-2026-001 format — unique per tenant, see @@unique below
   entityType      String // 'performance_evaluation' | 'shift_change' | 'disciplinary_action' | 'safety_parameter_modification' | 'software_update'
   entityId        String
   entityData      String    @default("{}") // JSON snapshot of entity at request time
@@ -1414,6 +1469,9 @@ model ApprovalRequest {
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
+  // TASK-287: see the note on Incident.incidentNumber — the number is issued
+  // per tenant, so the constraint that guards it must be per tenant too.
+  @@unique([tenantId, requestNumber])
   @@index([status])
   @@index([priority])
   @@index([entityType])
@@ -2549,7 +2607,7 @@ model Deployment {
   trafficPercentage  Int       @default(0) // 0-100
   canaryConfig       String    @default("{}") // JSON: { stages, durations, thresholds }
   rollbackThresholds String    @default("{}") // JSON: { errorRate, latencyP99, failureRate }
-  status             String    @default("pending") // 'pending' | 'deploying' | 'canary' | 'production' | 'rolling_back' | 'failed'
+  status             String    @default("pending") // 'pending' | 'deploying' | 'canary' | 'production' | 'rolling_back' | 'failed' | 'rolled_back' | 'cancelled'
   deployedRobotIds   String    @default("[]") // JSON: Robots successfully deployed
   failedRobotIds     String    @default("[]") // JSON: Robots that failed deployment
   startedAt          DateTime?
@@ -2868,9 +2926,15 @@ model VlaSession {
   status    String    @default("running") // "running" | "stopped" | "error"
   errorMsg  String?
   createdAt DateTime  @default(now())
+  // Tenant ownership (TASK-286). `prompt` is the operator's own words, so these
+  // rows are tenant data in the strongest sense.
+  tenantId  String?
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
 
   @@index([robotId])
   @@index([startedAt])
+  @@index([tenantId, startedAt])
 }
 
 // ============================================================================
@@ -3097,6 +3161,11 @@ model Tenant {
   // Relations (TASK-213 host mode)
   tourRoutes TourRoute[]
   tourRuns   TourRun[]
+
+  // Relations (TASK-286 perception & VLA)
+  sensorScans SensorScan[]
+  motionClips MotionClip[]
+  vlaSessions VlaSession[]
 
   @@index([slug])
 }

@@ -14,6 +14,7 @@ import type {
   RollbackRequest,
 } from '../types/deployment.types.js';
 import type { DeploymentStatus, DeploymentStrategy } from '../types/vla.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const deploymentsRoutes = Router();
 
@@ -38,8 +39,7 @@ deploymentsRoutes.post('/', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DeploymentsRoutes] Error creating deployment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to create deployment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to create deployment', 400);
   }
 });
 
@@ -81,8 +81,7 @@ deploymentsRoutes.get('/', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DeploymentsRoutes] Error listing deployments:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list deployments';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list deployments', 500);
   }
 });
 
@@ -100,8 +99,7 @@ deploymentsRoutes.get('/active', async (_req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DeploymentsRoutes] Error getting active deployments:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get active deployments';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get active deployments', 500);
   }
 });
 
@@ -161,8 +159,7 @@ deploymentsRoutes.get('/:id', async (req: Request, res: Response) => {
     res.json(response);
   } catch (error) {
     console.error('[DeploymentsRoutes] Error getting deployment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get deployment';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get deployment', 500);
   }
 });
 
@@ -188,8 +185,7 @@ deploymentsRoutes.get('/:id/metrics', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DeploymentsRoutes] Error getting metrics:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get metrics';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get metrics', 500);
   }
 });
 
@@ -212,8 +208,7 @@ deploymentsRoutes.post('/:id/start', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DeploymentsRoutes] Error starting deployment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to start deployment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to start deployment', 400);
   }
 });
 
@@ -233,8 +228,7 @@ deploymentsRoutes.post('/:id/progress', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DeploymentsRoutes] Error progressing deployment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to progress deployment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to progress deployment', 400);
   }
 });
 
@@ -257,8 +251,7 @@ deploymentsRoutes.post('/:id/promote', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DeploymentsRoutes] Error promoting deployment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to promote deployment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to promote deployment', 400);
   }
 });
 
@@ -277,7 +270,7 @@ deploymentsRoutes.post('/:id/rollback', async (req: Request, res: Response) => {
 
     const deployment = await deploymentService.rollback(id, reason);
 
-    // Stop monitoring (deployment failed)
+    // Stop monitoring (rollout withdrawn)
     deploymentMetricsService.stopMonitoring(id);
 
     res.json({
@@ -287,8 +280,7 @@ deploymentsRoutes.post('/:id/rollback', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DeploymentsRoutes] Error rolling back deployment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to rollback deployment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to rollback deployment', 400);
   }
 });
 
@@ -311,7 +303,6 @@ deploymentsRoutes.post('/:id/cancel', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DeploymentsRoutes] Error cancelling deployment:', error);
-    const message = error instanceof Error ? error.message : 'Failed to cancel deployment';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to cancel deployment', 400);
   }
 });

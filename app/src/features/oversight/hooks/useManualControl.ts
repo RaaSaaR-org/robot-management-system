@@ -4,6 +4,7 @@
  * @feature oversight
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   useOversightStore,
@@ -74,7 +75,7 @@ export function useManualControl(options: UseManualControlOptions = {}): UseManu
         const response = await storeActivate(input);
         return response;
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to activate manual mode';
+        const message = getErrorMessage(err, 'Failed to activate manual mode');
         setError(message);
         throw err;
       } finally {
@@ -92,7 +93,7 @@ export function useManualControl(options: UseManualControlOptions = {}): UseManu
       try {
         await storeDeactivate(id);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to deactivate manual mode';
+        const message = getErrorMessage(err, 'Failed to deactivate manual mode');
         setError(message);
         throw err;
       } finally {

@@ -1,6 +1,7 @@
 /**
  * @file episodeFormat.ts
- * @description Small helpers for the episode browser: clock time, score tone, API error text
+ * @description Small helpers for the episode browser: clock time and score tone.
+ *   Error text comes from the shared `errorMessage()` in `@/shared/components/ui`.
  * @feature training
  */
 
@@ -19,17 +20,4 @@ export function scoreTone(score: number): StatusTagTone {
   if (score > 0.7) return 'success';
   if (score > 0.4) return 'warning';
   return 'danger';
-}
-
-/**
- * A displayable message from a failed API call. The axios client rejects with
- * a plain ApiError object ({ code, message }), not an Error — an instanceof
- * check alone would swallow the server's structured curation errors.
- */
-export function errText(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
-    return (err as { message: string }).message;
-  }
-  return 'unknown error';
 }

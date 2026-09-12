@@ -6,6 +6,7 @@
 
 import { enableMapSet } from 'immer';
 import { createStore } from '@/store/createStore';
+import { getErrorMessage } from '@/shared/utils';
 import { safetyApi } from '../api/safetyApi';
 import type {
   RobotSafetyStatus,
@@ -64,6 +65,7 @@ interface SafetyActions {
   // Events
   fetchEvents: (limit?: number) => Promise<void>;
   addEvent: (event: EStopEvent) => void;
+  applyEStopEvent: (event: EStopEvent) => void;
 
   // Heartbeats
   startHeartbeats: (intervalMs?: number) => Promise<boolean>;
@@ -112,7 +114,7 @@ export const useSafetyStore = createStore<SafetyStore>(
           }
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch fleet status';
+        const message = getErrorMessage(error, 'Failed to fetch fleet status');
         set((state) => {
           state.fleetStatusError = message;
           state.isLoadingFleetStatus = false;
@@ -168,7 +170,7 @@ export const useSafetyStore = createStore<SafetyStore>(
         get().fetchFleetStatus();
         return true;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to trigger E-stop';
+        const message = getErrorMessage(error, 'Failed to trigger E-stop');
         set((state) => {
           state.isTriggering = false;
           state.lastActionError = message;
@@ -195,7 +197,7 @@ export const useSafetyStore = createStore<SafetyStore>(
         get().fetchFleetStatus();
         return true;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to reset E-stop';
+        const message = getErrorMessage(error, 'Failed to reset E-stop');
         set((state) => {
           state.isResetting = false;
           state.lastActionError = message;
@@ -224,7 +226,7 @@ export const useSafetyStore = createStore<SafetyStore>(
         get().fetchFleetStatus();
         return true;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to trigger fleet E-stop';
+        const message = getErrorMessage(error, 'Failed to trigger fleet E-stop');
         set((state) => {
           state.isTriggering = false;
           state.lastActionError = message;
@@ -250,7 +252,7 @@ export const useSafetyStore = createStore<SafetyStore>(
         get().fetchFleetStatus();
         return true;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to reset fleet E-stop';
+        const message = getErrorMessage(error, 'Failed to reset fleet E-stop');
         set((state) => {
           state.isResetting = false;
           state.lastActionError = message;
@@ -279,7 +281,7 @@ export const useSafetyStore = createStore<SafetyStore>(
         get().fetchFleetStatus();
         return true;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to trigger zone E-stop';
+        const message = getErrorMessage(error, 'Failed to trigger zone E-stop');
         set((state) => {
           state.isTriggering = false;
           state.lastActionError = message;
@@ -315,6 +317,70 @@ export const useSafetyStore = createStore<SafetyStore>(
           state.events.pop();
         }
       });
+    },
+
+    /**
+     * Reduce a broadcast E-stop event into the state the fleet Stop button
+     * reads, so a stop or reset from another client lands without a reload.
+     *
+     * Optimistic, then reconciled: the local apply makes the button honest on
+     * the next render, and `fetchFleetStatus()` re-reads the authority — the
+     * same refetch-after-mutation shape the E-stop actions above use.
+     */
+    applyEStopEvent: (event: EStopEvent) => {
+      const triggered = event.action === 'trigger';
+      const nextStatus = triggered ? 'triggered' : 'armed';
+      const affected = new Set(event.affectedRobots);
+
+      set((state) => {
+        // Robot status cache
+        for (const robotId of affected) {
+          const cached = state.robotStatuses.get(robotId);
+          if (cached) {
+            cached.status = nextStatus;
+          }
+        }
+
+        const fleet = state.fleetStatus;
+
+        // Nothing fetched yet: a stop still has to show. A reset needs no
+        // synthetic entry — the selectors already default to "not stopped".
+        if (!fleet) {
+          if (triggered) {
+            state.fleetStatus = {
+              timestamp: event.triggeredAt,
+              robots: [],
+              anyTriggered: true,
+              triggeredCount: Math.max(affected.size, 1),
+            };
+          }
+          return;
+        }
+
+        for (const robot of fleet.robots) {
+          // A fleet-scoped event settles every robot, not only those named.
+          if (event.scope === 'fleet' || affected.has(robot.robotId)) {
+            robot.status = nextStatus;
+          }
+        }
+
+        fleet.timestamp = event.triggeredAt;
+
+        if (fleet.robots.length > 0) {
+          fleet.triggeredCount = fleet.robots.filter((r) => r.status === 'triggered').length;
+        } else if (triggered) {
+          fleet.triggeredCount = Math.max(fleet.triggeredCount, affected.size, 1);
+        } else if (event.scope === 'fleet') {
+          fleet.triggeredCount = 0;
+        } else {
+          fleet.triggeredCount = Math.max(0, fleet.triggeredCount - Math.max(affected.size, 1));
+        }
+
+        fleet.anyTriggered = fleet.triggeredCount > 0;
+      });
+
+      // Reconcile with the authority
+      void get().fetchFleetStatus();
     },
 
     // Heartbeat actions

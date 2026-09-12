@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ApiRequestError } from '@/api/client';
 import { useApprovalsStore } from '../approvalsStore';
 import type { ApprovalRequest, DecisionContest } from '../../types';
 
@@ -126,12 +127,28 @@ describe('approvalsStore', () => {
       expect(s.approvalRequestsLoading).toBe(false);
     });
 
-    it('uses generic message for non-Error rejection', async () => {
+    it('surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
       mockApi.getApprovalRequests.mockRejectedValue('nope');
 
       await useApprovalsStore.getState().fetchApprovalRequests();
 
-      expect(useApprovalsStore.getState().approvalRequestsError).toBe('Failed to fetch approvals');
+      expect(useApprovalsStore.getState().approvalRequestsError).toBe('nope');
+    });
+
+    it('surfaces the message of an ApiRequestError (the shape production rejects with)', async () => {
+      mockApi.getApprovalRequests.mockRejectedValue(
+        new ApiRequestError({
+          code: 'UNKNOWN_ERROR',
+          message: 'Approval service unavailable',
+          statusCode: 503,
+        })
+      );
+
+      await useApprovalsStore.getState().fetchApprovalRequests();
+
+      expect(useApprovalsStore.getState().approvalRequestsError).toBe(
+        'Approval service unavailable'
+      );
     });
   });
 
@@ -313,6 +330,30 @@ describe('approvalsStore', () => {
 
       expect(useApprovalsStore.getState().pendingApprovals.map((r) => r.id)).toEqual(['pr']);
     });
+
+    it('keeps an escalated request in pending', async () => {
+      // Escalation is the SLA-breach path, not a decision: the request still
+      // needs a human, so it stays in the queue (TASK-290).
+      const req = makeRequest({ id: 'pr', status: 'pending' });
+      useApprovalsStore.setState({ approvalRequests: [req], pendingApprovals: [req] });
+      mockApi.processApproval.mockResolvedValue(makeRequest({ id: 'pr', status: 'escalated' }));
+
+      await useApprovalsStore.getState().processApproval('pr', 'step-1', {} as never);
+
+      const s = useApprovalsStore.getState();
+      expect(s.pendingApprovals.map((r) => r.id)).toEqual(['pr']);
+      expect(s.approvalRequests[0].status).toBe('escalated');
+    });
+
+    it('drops a rejected request from pending', async () => {
+      const req = makeRequest({ id: 'pr', status: 'pending' });
+      useApprovalsStore.setState({ approvalRequests: [req], pendingApprovals: [req] });
+      mockApi.processApproval.mockResolvedValue(makeRequest({ id: 'pr', status: 'rejected' }));
+
+      await useApprovalsStore.getState().processApproval('pr', 'step-1', {} as never);
+
+      expect(useApprovalsStore.getState().pendingApprovals).toEqual([]);
+    });
   });
 
   describe('cancelApprovalRequest', () => {
@@ -325,9 +366,10 @@ describe('approvalsStore', () => {
       });
       mockApi.cancelApprovalRequest.mockResolvedValue(makeRequest({ id: 'cr', status: 'cancelled' }));
 
-      await useApprovalsStore.getState().cancelApprovalRequest('cr', 'me', 'reason');
+      // No actor argument: the server takes it from the session (TASK-289).
+      await useApprovalsStore.getState().cancelApprovalRequest('cr', 'reason');
 
-      expect(mockApi.cancelApprovalRequest).toHaveBeenCalledWith('cr', 'me', 'reason');
+      expect(mockApi.cancelApprovalRequest).toHaveBeenCalledWith('cr', 'reason');
       const s = useApprovalsStore.getState();
       expect(s.approvalRequests[0].status).toBe('cancelled');
       expect(s.pendingApprovals).toEqual([]);
@@ -341,9 +383,9 @@ describe('approvalsStore', () => {
       useApprovalsStore.setState({ approvalRequests: [req], selectedRequest: req });
       mockApi.escalateApprovalRequest.mockResolvedValue(makeRequest({ id: 'er', status: 'escalated' }));
 
-      const result = await useApprovalsStore.getState().escalateApprovalRequest('er', 'me', 'why');
+      const result = await useApprovalsStore.getState().escalateApprovalRequest('er', 'why');
 
-      expect(mockApi.escalateApprovalRequest).toHaveBeenCalledWith('er', 'me', 'why');
+      expect(mockApi.escalateApprovalRequest).toHaveBeenCalledWith('er', 'why');
       expect(result.status).toBe('escalated');
       const s = useApprovalsStore.getState();
       expect(s.approvalRequests[0].status).toBe('escalated');

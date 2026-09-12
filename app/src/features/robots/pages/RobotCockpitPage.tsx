@@ -11,6 +11,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Bot, WifiOff } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { EmptyState, LinkButton, PageHeader, Panel, Select, Skeleton } from '@/shared/components/ui';
+import { usePermission } from '@/features/auth/hooks/useAuth';
 import { useRobots } from '../hooks/useRobots';
 import { useTelemetryStream } from '../hooks/useTelemetryStream';
 import {
@@ -54,6 +55,9 @@ function RobotCockpitPageInner() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { robots, isLoading, fetchRobots } = useRobots();
+  // Above the early returns: the cockpit's own equivalent of the detail panel's
+  // command gate. A role without `robots:command` gets the console read-only.
+  const canCommand = usePermission('robots:command');
 
   useEffect(() => {
     void fetchRobots();
@@ -143,7 +147,7 @@ function RobotCockpitPageInner() {
 
   // Telemetry live (data arriving) means we can drive it, regardless of the
   // list's lagging status field.
-  const canExecute = isLive || isRobotAvailable(robot);
+  const canExecute = canCommand && (isLive || isRobotAvailable(robot));
   const provenance = provenanceOf(telemetry);
 
   return (

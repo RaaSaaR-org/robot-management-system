@@ -13,6 +13,12 @@
 
 import type { OdometryFrame } from '../hardware/HardwareClient.js';
 import type { DynamicObstacle } from './occupancy-map.js';
+import {
+  SERVICE_TOKEN_ENV,
+  isAuthRejection,
+  platformAuthHeaders,
+  recordPlatformAuthRejection,
+} from '../utils/platform-auth.js';
 
 /** One other robot, as the server reports it. */
 export interface FleetPeer {
@@ -231,9 +237,19 @@ export class PeerTracker {
   async pollOnce(): Promise<void> {
     if (!this.enabled || this.inFlight) return;
     this.inFlight = true;
+    let authRejected = false;
     try {
-      const res = await this.fetchImpl(this.url, { signal: AbortSignal.timeout(this.timeoutMs) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await this.fetchImpl(this.url, {
+        headers: platformAuthHeaders(),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      if (!res.ok) {
+        if (isAuthRejection(res.status)) {
+          authRejected = true;
+          recordPlatformAuthRejection('PeerTracker', res.status, this.url);
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
       const body = (await res.json()) as unknown;
       const raw =
         typeof body === 'object' && body !== null && Array.isArray((body as { peers?: unknown }).peers)
@@ -246,7 +262,19 @@ export class PeerTracker {
       const why = err instanceof Error ? err.message : String(err);
       this.lastError = why;
       const t = this.now();
-      if (t - this.lastErrorLogMs > 60_000) {
+      if (authRejected) {
+        // Bypasses the 60 s throttle on purpose: a refused credential is not
+        // the flaky-network case the throttle exists for. It will not heal on
+        // its own, and the first poll after a restart is the one an operator
+        // reads.
+        console.error(
+          `[Peers] poll rejected: ${why} — ${
+            process.env[SERVICE_TOKEN_ENV]
+              ? `the configured ${SERVICE_TOKEN_ENV} was refused`
+              : `no ${SERVICE_TOKEN_ENV} is configured`
+          }. This robot cannot see its peers.`
+        );
+      } else if (t - this.lastErrorLogMs > 60_000) {
         this.lastErrorLogMs = t;
         this.log(`[Peers] poll failed: ${why} — keeping the last set until it expires`);
       }

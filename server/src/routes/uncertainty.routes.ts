@@ -7,6 +7,7 @@
 import { Router, type Request, type Response } from 'express';
 import { ensembleUncertainty } from '../services/EnsembleUncertainty.js';
 import type { UncertaintyEpisode } from '../types/uncertainty.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const uncertaintyRoutes = Router();
 
@@ -29,8 +30,7 @@ uncertaintyRoutes.post('/rank', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: `Failed to rank episodes: ${message}` });
+    sendFailure(res, error, 'Failed to rank episodes', 500);
   }
 });
 
@@ -50,8 +50,7 @@ uncertaintyRoutes.post('/jsd', async (req: Request, res: Response) => {
     const jsd = ensembleUncertainty.computeJSD(predictions);
     res.json({ jsd });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: `Failed to compute JSD: ${message}` });
+    sendFailure(res, error, 'Failed to compute JSD', 500);
   }
 });
 
@@ -71,7 +70,6 @@ uncertaintyRoutes.post('/mcdropout', async (req: Request, res: Response) => {
     const result = ensembleUncertainty.computeMCDropout(predictions);
     res.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: `Failed to compute MC Dropout: ${message}` });
+    sendFailure(res, error, 'Failed to compute MC Dropout', 500);
   }
 });

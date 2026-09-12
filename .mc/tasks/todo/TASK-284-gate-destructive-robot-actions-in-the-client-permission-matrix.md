@@ -3,7 +3,7 @@ id: "TASK-284"
 aliases: []
 title: "Gate destructive robot actions in the client permission matrix"
 slug: "gate-destructive-robot-actions-in-the-client-permission-matrix"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []

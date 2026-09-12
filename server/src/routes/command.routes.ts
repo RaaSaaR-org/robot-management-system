@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from 'express';
 import { commandInterpreter } from '../services/CommandInterpreter.js';
 import { commandRepository } from '../repositories/index.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const commandRoutes = Router();
 
@@ -41,9 +42,11 @@ commandRoutes.post('/interpret', async (req: Request, res: Response) => {
     res.json(interpretation);
   } catch (error) {
     console.error('Error interpreting command:', error);
-    res.status(500).json({
-      error: 'Failed to interpret command',
-      message: error instanceof Error ? error.message : 'Unknown error',
+    // `message` stays in the body because the command UI reads it, but it now
+    // carries the same operator-facing sentence as `error` — never the caught
+    // text, which on a Prisma fault is the whole failing query.
+    sendFailure(res, error, 'Failed to interpret command', 500, {
+      message: 'Failed to interpret command',
     });
   }
 });

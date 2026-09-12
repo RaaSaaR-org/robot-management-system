@@ -3,7 +3,7 @@ id: "TASK-287"
 aliases: []
 title: "Replace the incident and approval number generators with an atomic counter"
 slug: "replace-the-incident-and-approval-number-generators-with-an-atomic-counter"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []

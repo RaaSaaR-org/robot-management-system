@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ApiRequestError } from '@/api/client';
 import {
   useIncidentsStore,
   selectIncidents,
@@ -161,12 +162,26 @@ describe('incidentsStore', () => {
       expect(s.isLoading).toBe(false);
     });
 
-    it('uses a generic error message for non-Error rejections', async () => {
+    it('surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
       mockApi.getIncidents.mockRejectedValue('nope');
 
       await useIncidentsStore.getState().fetchIncidents();
 
-      expect(useIncidentsStore.getState().error).toBe('Failed to fetch incidents');
+      expect(useIncidentsStore.getState().error).toBe('nope');
+    });
+
+    it('surfaces the message of an ApiRequestError (the shape production rejects with)', async () => {
+      mockApi.getIncidents.mockRejectedValue(
+        new ApiRequestError({
+          code: 'UNKNOWN_ERROR',
+          message: 'Incident service unavailable',
+          statusCode: 503,
+        })
+      );
+
+      await useIncidentsStore.getState().fetchIncidents();
+
+      expect(useIncidentsStore.getState().error).toBe('Incident service unavailable');
     });
   });
 

@@ -3,7 +3,7 @@ id: "TASK-295"
 aliases: []
 title: "Broadcast every E-stop transition and reduce it in the fleet console"
 slug: "broadcast-every-e-stop-transition-and-reduce-it-in-the-fleet-console"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
