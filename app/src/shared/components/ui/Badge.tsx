@@ -1,18 +1,31 @@
 /**
  * @file Badge.tsx
- * @description Status indicator badges with color variants
+ * @description Small label or count, on the same tones as StatusTag. For a
+ *              status use StatusTag; Badge is for counts and neutral labels.
+ *              Older variant names map onto tones: default → neutral,
+ *              error → danger, purple → info.
  * @feature shared
  * @dependencies shared/utils/cn
  */
 
 import type { HTMLAttributes, ReactNode } from 'react';
 import { cn } from '@/shared/utils/cn';
+import { toneFill, toneTag, type BaseTone } from './styles';
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-export type BadgeVariant = 'default' | 'success' | 'warning' | 'error' | 'info' | 'cobalt' | 'turquoise' | 'purple';
+export type BadgeVariant =
+  | 'default'
+  | 'neutral'
+  | 'success'
+  | 'warning'
+  | 'error'
+  | 'danger'
+  | 'info'
+  | 'accent'
+  | 'purple';
 export type BadgeSize = 'sm' | 'md' | 'lg';
 
 export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
@@ -34,39 +47,28 @@ export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
 // CONSTANTS
 // ============================================================================
 
-// Glass-compatible badge styles with translucent backgrounds and subtle borders
-const variantStyles: Record<BadgeVariant, string> = {
-  default: 'bg-gray-500/10 text-gray-600 dark:text-gray-300 border border-gray-500/20',
-  success: 'bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20',
-  warning: 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border border-yellow-500/20',
-  error: 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20',
-  info: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20',
-  cobalt: 'bg-cobalt-500/10 text-cobalt-600 dark:text-cobalt-400 border border-cobalt-500/20',
-  turquoise: 'bg-turquoise-500/10 text-turquoise-600 dark:text-turquoise-400 border border-turquoise-500/20',
-  purple: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20',
-};
-
-const dotColors: Record<BadgeVariant, string> = {
-  default: 'bg-gray-500',
-  success: 'bg-green-500',
-  warning: 'bg-yellow-500',
-  error: 'bg-red-500',
-  info: 'bg-blue-500',
-  cobalt: 'bg-cobalt-500',
-  turquoise: 'bg-turquoise-500',
-  purple: 'bg-purple-500',
+const VARIANT_TONE: Record<BadgeVariant, BaseTone> = {
+  default: 'neutral',
+  neutral: 'neutral',
+  success: 'success',
+  warning: 'warning',
+  error: 'danger',
+  danger: 'danger',
+  info: 'info',
+  accent: 'accent',
+  purple: 'info',
 };
 
 const sizeStyles: Record<BadgeSize, string> = {
-  sm: 'px-1.5 py-0.5 text-xs',
-  md: 'px-2 py-1 text-xs',
-  lg: 'px-2.5 py-1.5 text-sm',
+  sm: 'px-1.5 py-px text-[11px] leading-4',
+  md: 'px-2 py-0.5 text-xs leading-4',
+  lg: 'px-2.5 py-1 text-[13px] leading-4',
 };
 
 const dotSizeStyles: Record<BadgeSize, string> = {
   sm: 'w-1.5 h-1.5',
-  md: 'w-2 h-2',
-  lg: 'w-2.5 h-2.5',
+  md: 'w-1.5 h-1.5',
+  lg: 'w-2 h-2',
 };
 
 // ============================================================================
@@ -74,13 +76,11 @@ const dotSizeStyles: Record<BadgeSize, string> = {
 // ============================================================================
 
 /**
- * A badge component for displaying status, labels, or counts with various styles.
- *
  * @example
  * ```tsx
- * <Badge variant="success">Active</Badge>
- * <Badge variant="error" dot dotPulse>Error</Badge>
- * <Badge variant="cobalt" pill>3</Badge>
+ * <Badge>Beta</Badge>
+ * <Badge variant="accent" pill>3</Badge>
+ * <Badge variant="warning" dot>Stale</Badge>
  * ```
  */
 export function Badge({
@@ -93,25 +93,21 @@ export function Badge({
   className,
   ...props
 }: BadgeProps) {
+  const tone = VARIANT_TONE[variant] ?? 'neutral';
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 font-medium',
-        variantStyles[variant],
+        'inline-flex items-center gap-1.5 whitespace-nowrap border font-medium tabular-nums',
+        toneTag[tone],
         sizeStyles[size],
-        pill ? 'rounded-full' : 'rounded-brand',
-        className
+        pill ? 'rounded-full' : 'rounded-tag',
+        className,
       )}
       {...props}
     >
       {dot && (
         <span
-          className={cn(
-            'rounded-full',
-            dotSizeStyles[size],
-            dotColors[variant],
-            dotPulse && 'motion-safe:animate-pulse'
-          )}
+          className={cn('shrink-0 rounded-full', dotSizeStyles[size], toneFill[tone], dotPulse && 'motion-safe:animate-pulse')}
           aria-hidden="true"
         />
       )}

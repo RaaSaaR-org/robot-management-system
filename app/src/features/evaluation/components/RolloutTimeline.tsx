@@ -1,9 +1,10 @@
 /**
  * @file RolloutTimeline.tsx
- * @description Timeline list of recent evaluation rollouts
+ * @description The most recent evaluation rollouts: task, model, robot, result and when
  * @feature evaluation
  */
 
+import { StatusTag } from '@/shared/components/ui';
 import type { EvaluationEpisode } from '../types';
 
 export interface RolloutTimelineProps {
@@ -12,69 +13,40 @@ export interface RolloutTimelineProps {
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 60) return `${minutes}m ago`;
+function timeAgo(iso: string): string {
+  const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
 }
+
+const humanError = (e: string) => e.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
 export function RolloutTimeline({ episodes, maxItems = 10 }: RolloutTimelineProps) {
   const recent = episodes.slice(0, maxItems);
-
   if (recent.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-48 bg-theme-secondary/10 rounded-lg">
-        <p className="text-theme-secondary">No recent rollouts</p>
-      </div>
-    );
+    return <p className="py-6 text-center text-sm text-ink-tertiary">No rollouts in this period.</p>;
   }
 
   return (
-    <div className="space-y-2">
+    <ul className="flex flex-col divide-y divide-line-subtle">
       {recent.map((ep) => (
-        <div
-          key={ep.id}
-          className="flex items-center gap-3 px-4 py-3 rounded-lg border border-theme section-primary"
-        >
-          {/* Status indicator */}
-          <div
-            className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-              ep.success ? 'bg-green-500' : 'bg-red-500'
-            }`}
-          />
-
-          {/* Task info */}
-          <div className="flex-1 min-w-0">
-            <p className="text-sm text-theme-primary truncate">{ep.taskPrompt}</p>
-            <p className="text-xs text-theme-tertiary">
-              {ep.modelVersion} &middot; {ep.robot?.name ?? ep.robotId}
+        <li key={ep.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-3 first:pt-0 last:pb-0">
+          <StatusTag tone={ep.success ? 'success' : 'danger'} dot>{ep.success ? 'Success' : 'Failed'}</StatusTag>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm text-ink-primary">{ep.taskPrompt}</p>
+            <p className="truncate text-xs text-ink-tertiary">
+              {ep.modelVersion} · {ep.robot?.name ?? ep.robotId}
+              {ep.errorType ? ` · ${humanError(ep.errorType)}` : ''}
             </p>
           </div>
-
-          {/* Duration */}
-          <span className="text-xs font-mono text-theme-secondary shrink-0">
-            {formatDuration(ep.durationMs)}
-          </span>
-
-          {/* Error type badge */}
-          {ep.errorType && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-500 shrink-0">
-              {ep.errorType}
-            </span>
-          )}
-
-          {/* Time ago */}
-          <span className="text-xs text-theme-tertiary shrink-0">{timeAgo(ep.createdAt)}</span>
-        </div>
+          <span className="shrink-0 text-xs tabular-nums text-ink-secondary">{formatDuration(ep.durationMs)}</span>
+          <span className="shrink-0 text-xs text-ink-tertiary">{timeAgo(ep.createdAt)}</span>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }

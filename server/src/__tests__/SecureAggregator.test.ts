@@ -334,10 +334,10 @@ describe('SecureAggregator', () => {
 describe('Aggregation Routes', () => {
   const app = createApp();
 
-  describe('POST /api/federated/rounds/:roundId/submit', () => {
+  describe('POST /api/federated/secure/rounds/:roundId/submit', () => {
     it('accepts a valid masked update (201)', async () => {
       const res = await request(app)
-        .post('/api/federated/rounds/test-round/submit')
+        .post('/api/federated/secure/rounds/test-round/submit')
         .send({
           robotId: 'route-test-r1',
           maskedGradients: [[1, 2], [3, 4]],
@@ -350,7 +350,7 @@ describe('Aggregation Routes', () => {
 
     it('rejects missing robotId (400)', async () => {
       const res = await request(app)
-        .post('/api/federated/rounds/test-round/submit')
+        .post('/api/federated/secure/rounds/test-round/submit')
         .send({
           maskedGradients: [[1]],
           participantCount: 1,
@@ -362,7 +362,7 @@ describe('Aggregation Routes', () => {
 
     it('rejects missing maskedGradients (400)', async () => {
       const res = await request(app)
-        .post('/api/federated/rounds/test-round/submit')
+        .post('/api/federated/secure/rounds/test-round/submit')
         .send({
           robotId: 'r1',
           participantCount: 1,
@@ -374,7 +374,7 @@ describe('Aggregation Routes', () => {
 
     it('rejects invalid participantCount (400)', async () => {
       const res = await request(app)
-        .post('/api/federated/rounds/test-round/submit')
+        .post('/api/federated/secure/rounds/test-round/submit')
         .send({
           robotId: 'r1',
           maskedGradients: [[1]],
@@ -386,10 +386,10 @@ describe('Aggregation Routes', () => {
     });
   });
 
-  describe('GET /api/federated/rounds/:roundId/aggregation', () => {
+  describe('GET /api/federated/secure/rounds/:roundId/aggregation', () => {
     it('returns status for a round (200)', async () => {
       const res = await request(app)
-        .get('/api/federated/rounds/status-round/aggregation');
+        .get('/api/federated/secure/rounds/status-round/aggregation');
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('roundId', 'status-round');
@@ -398,10 +398,10 @@ describe('Aggregation Routes', () => {
     });
   });
 
-  describe('POST /api/federated/rounds/:roundId/aggregate', () => {
+  describe('POST /api/federated/secure/rounds/:roundId/aggregate', () => {
     it('rejects missing expectedParticipants (400)', async () => {
       const res = await request(app)
-        .post('/api/federated/rounds/agg-round/aggregate')
+        .post('/api/federated/secure/rounds/agg-round/aggregate')
         .send({});
 
       expect(res.status).toBe(400);
@@ -410,11 +410,34 @@ describe('Aggregation Routes', () => {
 
     it('rejects when no updates collected (400)', async () => {
       const res = await request(app)
-        .post('/api/federated/rounds/empty-agg/aggregate')
+        .post('/api/federated/secure/rounds/empty-agg/aggregate')
         .send({ expectedParticipants: 3 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('No updates');
+    });
+  });
+
+  // Regression: this router and federatedRoutes both define
+  // POST /rounds/:id/aggregate. While they shared the /api/federated prefix the
+  // secure handler silently swallowed the ordinary round-completion endpoint,
+  // answering it with "expectedParticipants is required" so no federated round
+  // could ever be finalised. They mount on separate prefixes now. Asserted
+  // against the real createApp() so a remount that reintroduces the collision
+  // fails here rather than in someone's browser.
+  describe('federated round completion is not shadowed by secure aggregation', () => {
+    it('does not answer POST /api/federated/rounds/:id/aggregate from the secure handler', async () => {
+      const res = await request(app)
+        .post('/api/federated/rounds/some-round/aggregate')
+        .send({});
+
+      // The path must still be served. Without this, a remount that dropped the
+      // federated router entirely would satisfy the assertion below for the
+      // wrong reason — by proving only that nothing answers here at all.
+      expect(res.status).not.toBe(404);
+      // The secure handler's signature rejection — its presence would mean this
+      // path reached secure aggregation instead of the federated lifecycle.
+      expect(String(res.body?.error ?? '')).not.toContain('expectedParticipants');
     });
   });
 });

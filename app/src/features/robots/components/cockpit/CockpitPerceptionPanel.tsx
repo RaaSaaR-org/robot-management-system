@@ -1,27 +1,33 @@
 /**
  * @file CockpitPerceptionPanel.tsx
- * @description LiDAR / depth perception panel for the cockpit. Streams point-cloud
- *   frames (synthetic in sim, live hardware on a real G1) and renders them in the
- *   shared Three.js viewer with the robot model standing inside its own scan.
+ * @description The control center's LiDAR panel. Streams point-cloud frames
+ *   (synthetic in sim, live on a real G1) into the shared point-cloud viewer, and
+ *   explains calmly when the robot has no sensor or no telemetry link.
  * @feature robots
  */
 
 import { memo } from 'react';
 import { Radar } from 'lucide-react';
+import { EmptyState, Panel } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { PointCloudViewer } from '../visualization/PointCloudViewer';
 import { usePointCloudStream } from '../../hooks/usePointCloudStream';
+import { ProvenanceTag, type ProvenanceSource } from '../common/ProvenanceTag';
 import type { JointState, RobotType } from '../../types/robots.types';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface CockpitPerceptionPanelProps {
   robotId: string;
   robotType: RobotType;
   jointStates?: JointState[];
-  /** Whether this embodiment carries a depth/LiDAR sensor (G1 family). */
+  /** Whether this embodiment carries a depth/LiDAR sensor. */
   supported: boolean;
   /** Stream the cloud now (telemetry is live). Off → no polling, no 404 churn. */
   enabled?: boolean;
+  /** Provenance of the robot's telemetry, shown in the header. */
+  provenance?: ProvenanceSource;
+  /** Height classes for the viewer body. */
+  bodyClassName?: string;
   className?: string;
 }
 
@@ -31,56 +37,58 @@ export const CockpitPerceptionPanel = memo(function CockpitPerceptionPanel({
   jointStates,
   supported,
   enabled = supported,
+  provenance = 'none',
+  bodyClassName,
   className,
 }: CockpitPerceptionPanelProps) {
-  const { frame, isConnected } = usePointCloudStream(robotId, { enabled });
+  const { frame } = usePointCloudStream(robotId, { enabled });
+
+  const description = !supported
+    ? 'No depth sensor on this robot.'
+    : enabled
+      ? frame
+        ? `${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} points in the latest scan`
+        : 'Waiting for the first scan…'
+      : 'Starts when telemetry arrives.';
 
   return (
-    <div
-      className={cn(
-        'relative flex flex-col overflow-hidden rounded-2xl border border-[#A97BFF]/20 bg-[#06070A]',
-        className,
-      )}
-    >
-      <div className="flex items-center justify-between px-4 py-2.5">
-        <div className="flex items-center gap-2">
-          <Radar className={cn('h-4 w-4 text-[#A97BFF]', enabled && isConnected && 'animate-pulse')} />
-          <span className="font-mono text-xs uppercase tracking-wider text-theme-secondary">Perception · LiDAR</span>
-        </div>
-        {supported && enabled && (
-          <span className="font-mono text-[10px] text-theme-tertiary">
-            {frame ? `${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} pts` : 'scanning…'}
-          </span>
-        )}
-      </div>
-
-      <div className="relative flex-1 min-h-[220px]">
+    <Panel className={cn('flex flex-col', className)}>
+      <Panel.Header
+        title="LiDAR"
+        description={description}
+        actions={supported ? <ProvenanceTag source={enabled ? provenance : 'none'} /> : undefined}
+      />
+      <div className={cn('relative p-3', bodyClassName)}>
         {!supported ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-            <Radar className="h-8 w-8 text-theme-tertiary/40" />
-            <p className="max-w-[16rem] text-xs text-theme-tertiary">
-              No depth or LiDAR sensor on this embodiment. Perception is available on the Unitree G1.
-            </p>
-          </div>
-        ) : !enabled ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-            <Radar className="h-8 w-8 text-theme-tertiary/40" />
-            <p className="max-w-[16rem] text-xs text-theme-tertiary">
-              Awaiting telemetry link — the LiDAR stream starts when the robot is online.
-            </p>
-          </div>
-        ) : (
-          <PointCloudViewer
-            frame={frame}
-            robotType={robotType}
-            jointStates={jointStates}
-            showRobotModel={false}
-            pointSize={0.045}
-            colorMode="height"
+          <EmptyState
+            size="sm"
+            icon={<Radar />}
+            title="Not available for this robot"
+            description="Perception needs a depth or LiDAR sensor. The Unitree G1 and H1 carry one."
             className="h-full"
           />
+        ) : !enabled ? (
+          <EmptyState
+            size="sm"
+            icon={<Radar />}
+            title="Awaiting telemetry"
+            description="The LiDAR stream starts when the robot is online and streaming."
+            className="h-full"
+          />
+        ) : (
+          <div className="h-full overflow-hidden rounded-control bg-inset">
+            <PointCloudViewer
+              frame={frame}
+              robotType={robotType}
+              jointStates={jointStates}
+              showRobotModel={false}
+              pointSize={0.045}
+              colorMode="height"
+              className="h-full"
+            />
+          </div>
         )}
       </div>
-    </div>
+    </Panel>
   );
 });

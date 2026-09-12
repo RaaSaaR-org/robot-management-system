@@ -17,6 +17,7 @@ import {
   DuplicateTokenNameError,
   type AssignableServiceRole,
 } from '../services/ServiceAccountService.js';
+import { prismaErrorToAppError } from '../utils/errors.js';
 
 export const serviceAccountRoutes = Router();
 
@@ -28,6 +29,21 @@ function resolveTenantId(req: AuthenticatedRequest): string | null {
 
 function resolveActorId(req: AuthenticatedRequest): string {
   return req.user?.id ?? 'unknown';
+}
+
+/**
+ * Last resort in a catch block. Prisma stringifies a failure as the query it
+ * tried to run plus the file and line that ran it, so it is mapped first —
+ * the owner creating a service account must never read a database dump.
+ */
+function sendFailure(res: Response, error: unknown, fallbackStatus: number): void {
+  const prismaError = prismaErrorToAppError(error);
+  if (prismaError) {
+    res.status(prismaError.statusCode).json({ error: prismaError.message });
+    return;
+  }
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  res.status(fallbackStatus).json({ error: message });
 }
 
 // ============================================================================
@@ -43,8 +59,10 @@ serviceAccountRoutes.get('/', async (req: AuthenticatedRequest, res: Response) =
     const accounts = await serviceAccountService.list(tenantId);
     res.json({ accounts });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    // Reads keep the plain 500 they always had. The Prisma mapping is for the
+    // write paths: a "record not found" answered by a *collection* endpoint
+    // would put the UI in an empty not-found state over a server fault.
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
 
@@ -79,8 +97,7 @@ serviceAccountRoutes.post('/', async (req: AuthenticatedRequest, res: Response) 
     if (error instanceof DuplicateNameError) {
       return res.status(409).json({ error: error.message });
     }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 400);
   }
 });
 
@@ -106,8 +123,7 @@ serviceAccountRoutes.delete('/:id', async (req: AuthenticatedRequest, res: Respo
     if (error instanceof ServiceAccountNotFoundError) {
       return res.status(404).json({ error: error.message });
     }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 400);
   }
 });
 
@@ -120,8 +136,7 @@ serviceAccountRoutes.get('/:id/tokens', async (req: AuthenticatedRequest, res: R
     const tokens = await serviceAccountService.listTokens(req.params.id);
     res.json({ tokens });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 500);
   }
 });
 
@@ -154,8 +169,7 @@ serviceAccountRoutes.post('/:id/tokens', async (req: AuthenticatedRequest, res: 
     if (error instanceof DuplicateTokenNameError) {
       return res.status(409).json({ error: error.message });
     }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 400);
   }
 });
 
@@ -178,8 +192,7 @@ serviceAccountRoutes.post(
       if (error instanceof TokenNotFoundError) {
         return res.status(404).json({ error: error.message });
       }
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 400);
     }
   }
 );
@@ -203,8 +216,7 @@ serviceAccountRoutes.delete(
       if (error instanceof TokenNotFoundError) {
         return res.status(404).json({ error: error.message });
       }
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 400);
     }
   }
 );

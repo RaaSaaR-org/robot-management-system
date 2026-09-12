@@ -1,387 +1,184 @@
 /**
  * @file IncidentDetailPage.tsx
- * @description Detail page for viewing a single incident
+ * @description One incident: move it through its lifecycle, meet its
+ *              notification deadlines, read what happened
  * @feature incidents
  */
 
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { UI_DATE_LOCALE, formatDateTime } from '@/shared/utils/format';
-import { Button } from '@/shared/components/ui/Button';
-import { Modal } from '@/shared/components/ui/Modal';
-import { Spinner } from '@/shared/components/ui/Spinner';
+import { useState } from 'react';
+import { useParams } from 'react-router-dom';
+import { ArrowRight, Pencil } from 'lucide-react';
+import {
+  Button, ErrorState, Modal,
+  PageHeader, Panel, RowActions,
+  SkeletonText, confirm,
+  errorMessage, toast,
+  type RowActionItem,
+} from '@/shared/components/ui';
 import { SeverityBadge } from '../components/SeverityBadge';
 import { StatusBadge } from '../components/StatusBadge';
-import { NotificationTimeline } from '../components/NotificationTimeline';
-import { IncidentClipPlayer } from '../components/IncidentClipPlayer';
+import { IncidentDetailBody } from '../components/IncidentDetailBody';
+import { ReportIncidentModal } from '../components/ReportIncidentModal';
 import { useIncident } from '../hooks/useIncidents';
-import {
-  INCIDENT_TYPE_LABELS,
-  INCIDENT_STATUS_LABELS,
-} from '../types/incidents.types';
-import type { IncidentStatus } from '../types/incidents.types';
+import { useIncidentsStore } from '../store/incidentsStore';
+import { humanizeMachineText } from '../utils/humanize';
+import { OTHER_TRANSITIONS, PRIMARY_TRANSITION, type IncidentTransition } from '../utils/tones';
+import type { IncidentNotification } from '../types/incidents.types';
+import { AUTHORITY_LABELS, INCIDENT_STATUS_LABELS, INCIDENT_TYPE_LABELS, REGULATION_LABELS } from '../types/incidents.types';
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
+const BACK = { to: '/alerts?tab=incidents', label: 'Incidents' };
 
-const STATUS_TRANSITIONS: Record<IncidentStatus, IncidentStatus[]> = {
-  detected: ['investigating'],
-  investigating: ['contained', 'resolved'],
-  contained: ['resolved'],
-  resolved: ['closed', 'investigating'],
-  closed: [],
-};
-
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-/** Absolute date/time via the shared fixed-English-locale formatter */
-function formatDate(isoString: string | null): string {
-  return formatDateTime(isoString);
-}
-
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
-
-/**
- * Detail page for viewing and managing a single incident.
- */
+/** Detail page for one incident. */
 export function IncidentDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-  const {
-    incident,
-    isLoading,
-    fetchIncident,
-    update,
-    markNotificationSent,
-    generateNotificationContent,
-  } = useIncident(id);
+  const { incident, isLoading, fetchIncident, update, markNotificationSent, generateNotificationContent } = useIncident(id);
+  const [pending, setPending] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [generated, setGenerated] = useState<{ title: string; text: string } | null>(null);
 
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [generatedContent, setGeneratedContent] = useState<string | null>(null);
-  const [contentCopied, setContentCopied] = useState(false);
+  const current = incident && incident.id === id ? incident : null;
 
-  // Fetch incident on mount
-  useEffect(() => {
-    if (id) {
-      fetchIncident(id);
-    }
-  }, [id, fetchIncident]);
+  if (!current && isLoading) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader eyebrow="Operate" back={BACK} title="Loading…" />
+        <Panel>
+          <SkeletonText lines={4} />
+        </Panel>
+      </div>
+    );
+  }
 
-  const handleStatusChange = async (newStatus: IncidentStatus) => {
-    setIsUpdating(true);
+  if (!current) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader eyebrow="Operate" back={BACK} title="Incident" />
+        <Panel>
+          <ErrorState
+            title="Couldn't load this incident"
+            message="It may have been deleted, or the server is not reachable."
+            onRetry={id ? () => void fetchIncident(id) : undefined}
+          />
+        </Panel>
+      </div>
+    );
+  }
+
+  const text = humanizeMachineText(current.description);
+
+  const transition = async (t: IncidentTransition) => {
+    const ok = await confirm({
+      title: `${t.verb} ${current.incidentNumber}?`,
+      description: 'The status changes for everyone and the change is logged for the regulator.',
+      confirmLabel: t.verb,
+    });
+    if (!ok) return;
+    setPending(true);
     try {
-      await update({ status: newStatus });
+      const updated = await update({ status: t.to });
+      if (!updated) throw new Error('The server did not accept the change.');
+      toast.success('Incident updated', { description: `Now ${INCIDENT_STATUS_LABELS[t.to].toLowerCase()}` });
+    } catch (err) {
+      toast.error("Couldn't update incident", { description: errorMessage(err) });
     } finally {
-      setIsUpdating(false);
+      setPending(false);
     }
   };
 
-  const handleMarkNotificationSent = async (notificationId: string) => {
-    await markNotificationSent(notificationId);
-  };
-
-  const handleGenerateContent = async (notificationId: string) => {
-    const content = await generateNotificationContent(notificationId);
-    if (content) {
-      setContentCopied(false);
-      setGeneratedContent(content);
+  const askMarkSent = async (n: IncidentNotification) => {
+    const ok = await confirm({
+      title: `Mark ${REGULATION_LABELS[n.regulation]} notification as sent?`,
+      description: 'Record that the authority was notified. This is logged and cannot be undone.',
+      confirmLabel: 'Mark sent',
+    });
+    if (!ok) return;
+    await markNotificationSent(n.id);
+    const fresh = useIncidentsStore.getState().selectedIncident?.notifications?.find((x) => x.id === n.id);
+    if (fresh && (fresh.status === 'sent' || fresh.status === 'acknowledged')) {
+      toast.success('Notification marked sent', { description: AUTHORITY_LABELS[n.authority] });
+    } else {
+      toast.error("Couldn't mark the notification as sent");
     }
   };
 
-  const handleCloseGeneratedContent = () => {
-    setGeneratedContent(null);
-    setContentCopied(false);
+  const generate = async (n: IncidentNotification) => {
+    const content = await generateNotificationContent(n.id);
+    if (content) setGenerated({ title: `${AUTHORITY_LABELS[n.authority]} notification`, text: content });
+    else toast.error("Couldn't generate the notification text");
   };
 
-  const handleCopyGeneratedContent = async () => {
-    if (!generatedContent) return;
+  const copy = async () => {
+    if (!generated) return;
     try {
-      await navigator.clipboard.writeText(generatedContent);
-      setContentCopied(true);
+      await navigator.clipboard.writeText(generated.text);
+      toast.success('Copied');
     } catch {
-      // Clipboard API unavailable (e.g. insecure context) — leave the text
-      // selectable in the modal so the user can copy manually.
-      setContentCopied(false);
+      toast.error("Couldn't copy", { description: 'Select the text and copy it by hand.' });
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <Spinner size="lg" />
-      </div>
-    );
-  }
-
-  if (!incident) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center">
-        <p className="text-theme-secondary mb-4">Incident not found</p>
-        <Button variant="secondary" onClick={() => navigate('/incidents')}>
-          Back to Incidents
-        </Button>
-      </div>
-    );
-  }
-
-  const availableTransitions = STATUS_TRANSITIONS[incident.status];
+  const primary = PRIMARY_TRANSITION[current.status];
+  const others: RowActionItem[] = (OTHER_TRANSITIONS[current.status] ?? []).map((t) => ({
+    label: t.verb,
+    onSelect: () => void transition(t),
+  }));
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <header className="flex-shrink-0 px-6 py-4 border-b border-gray-700/50">
-        <div className="flex items-center gap-4 mb-2">
-          <Button variant="ghost" size="sm" onClick={() => navigate('/incidents')}>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="mr-1"
-            >
-              <path d="m15 18-6-6 6-6" />
-            </svg>
-            Back
-          </Button>
-          <span className="text-sm font-mono text-theme-tertiary">
-            {incident.incidentNumber}
-          </span>
-        </div>
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <SeverityBadge severity={incident.severity} />
-              <StatusBadge status={incident.status} />
-              <span className="text-sm text-theme-tertiary">
-                {INCIDENT_TYPE_LABELS[incident.type]}
-              </span>
-            </div>
-            <h1 className="text-xl font-bold text-theme-primary">{incident.title}</h1>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Operate"
+        back={BACK}
+        title={current.title}
+        description={text.summary}
+        meta={
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[13px] tabular-nums text-ink-tertiary">{current.incidentNumber}</span>
+            <SeverityBadge severity={current.severity} />
+            <StatusBadge status={current.status} />
+            <span className="text-[13px] text-ink-tertiary">{INCIDENT_TYPE_LABELS[current.type]}</span>
           </div>
-
-          {/* Status Actions */}
-          {availableTransitions.length > 0 && (
-            <div className="flex items-center gap-2">
-              {availableTransitions.map((nextStatus) => (
-                <Button
-                  key={nextStatus}
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => handleStatusChange(nextStatus)}
-                  isLoading={isUpdating}
-                >
-                  Mark as {INCIDENT_STATUS_LABELS[nextStatus]}
-                </Button>
-              ))}
-            </div>
-          )}
-        </div>
-      </header>
-
-      {/* Content */}
-      <div className="flex-1 overflow-auto p-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Details */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Description */}
-            <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-              <h3 className="font-medium text-theme-primary mb-2">Description</h3>
-              <p className="text-theme-secondary whitespace-pre-wrap">
-                {incident.description}
-              </p>
-            </div>
-
-            {/* Rollout clip (highlight strategy, TASK-179) */}
-            {incident.clipKey && (
-              <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-                <h3 className="font-medium text-theme-primary mb-2">Rollout clip</h3>
-                <p className="text-xs text-theme-tertiary mb-3">
-                  Frames captured by the robot around the failure (highlight strategy).
-                </p>
-                <IncidentClipPlayer incidentId={incident.id} />
-              </div>
+        }
+        actions={
+          <>
+            <Button variant="secondary" leftIcon={<Pencil className="h-4 w-4" strokeWidth={1.75} />} onClick={() => setEditOpen(true)}>
+              Edit details
+            </Button>
+            {primary && (
+              <Button
+                isLoading={pending}
+                rightIcon={<ArrowRight className="h-4 w-4" strokeWidth={1.75} />}
+                onClick={() => void transition(primary)}
+              >
+                {primary.verb}
+              </Button>
             )}
-
-            {/* Root Cause & Resolution */}
-            {(incident.rootCause || incident.resolution) && (
-              <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-                {incident.rootCause && (
-                  <div className="mb-4">
-                    <h3 className="font-medium text-theme-primary mb-2">Root Cause</h3>
-                    <p className="text-theme-secondary whitespace-pre-wrap">
-                      {incident.rootCause}
-                    </p>
-                  </div>
-                )}
-                {incident.resolution && (
-                  <div>
-                    <h3 className="font-medium text-theme-primary mb-2">Resolution</h3>
-                    <p className="text-theme-secondary whitespace-pre-wrap">
-                      {incident.resolution}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Risk Assessment */}
-            {incident.riskScore !== null && (
-              <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-                <h3 className="font-medium text-theme-primary mb-3">Risk Assessment</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-xs text-theme-tertiary mb-1">Risk Score</p>
-                    <p className="text-2xl font-bold text-theme-primary">
-                      {incident.riskScore}/100
-                    </p>
-                  </div>
-                  {incident.affectedDataSubjects !== null && (
-                    <div>
-                      <p className="text-xs text-theme-tertiary mb-1">Affected Data Subjects</p>
-                      <p className="text-2xl font-bold text-theme-primary">
-                        {incident.affectedDataSubjects.toLocaleString(UI_DATE_LOCALE)}
-                      </p>
-                    </div>
-                  )}
-                </div>
-                {incident.dataCategories.length > 0 && (
-                  <div className="mt-4">
-                    <p className="text-xs text-theme-tertiary mb-2">Data Categories</p>
-                    <div className="flex flex-wrap gap-2">
-                      {incident.dataCategories.map((cat) => (
-                        <span
-                          key={cat}
-                          className="px-2 py-1 text-xs bg-theme-base rounded text-theme-secondary"
-                        >
-                          {cat}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Notification Timeline */}
-            <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-              <h3 className="font-medium text-theme-primary mb-4">Notification Timeline</h3>
-              <NotificationTimeline
-                notifications={incident.notifications || []}
-                onMarkSent={handleMarkNotificationSent}
-                onGenerateContent={handleGenerateContent}
-              />
-            </div>
-          </div>
-
-          {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Timestamps */}
-            <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-              <h3 className="font-medium text-theme-primary mb-3">Timeline</h3>
-              <div className="space-y-3">
-                <div>
-                  <p className="text-xs text-theme-tertiary">Detected</p>
-                  <p className="text-sm text-theme-primary">{formatDate(incident.detectedAt)}</p>
-                </div>
-                {incident.containedAt && (
-                  <div>
-                    <p className="text-xs text-theme-tertiary">Contained</p>
-                    <p className="text-sm text-theme-primary">{formatDate(incident.containedAt)}</p>
-                  </div>
-                )}
-                {incident.resolvedAt && (
-                  <div>
-                    <p className="text-xs text-theme-tertiary">Resolved</p>
-                    <p className="text-sm text-theme-primary">{formatDate(incident.resolvedAt)}</p>
-                  </div>
-                )}
-                {incident.closedAt && (
-                  <div>
-                    <p className="text-xs text-theme-tertiary">Closed</p>
-                    <p className="text-sm text-theme-primary">{formatDate(incident.closedAt)}</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Metadata */}
-            <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-              <h3 className="font-medium text-theme-primary mb-3">Details</h3>
-              <div className="space-y-3">
-                {incident.robotId && (
-                  <div>
-                    <p className="text-xs text-theme-tertiary">Associated Robot</p>
-                    <p className="text-sm text-theme-primary font-mono">{incident.robotId}</p>
-                  </div>
-                )}
-                {incident.createdBy && (
-                  <div>
-                    <p className="text-xs text-theme-tertiary">Created By</p>
-                    <p className="text-sm text-theme-primary">{incident.createdBy}</p>
-                  </div>
-                )}
-                <div>
-                  <p className="text-xs text-theme-tertiary">Last Updated</p>
-                  <p className="text-sm text-theme-primary">{formatDate(incident.updatedAt)}</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Evidence Links */}
-            {(incident.complianceLogIds.length > 0 || incident.alertIds.length > 0) && (
-              <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
-                <h3 className="font-medium text-theme-primary mb-3">Linked Evidence</h3>
-                {incident.complianceLogIds.length > 0 && (
-                  <div className="mb-3">
-                    <p className="text-xs text-theme-tertiary mb-1">Compliance Logs</p>
-                    <p className="text-sm text-theme-secondary">
-                      {incident.complianceLogIds.length} log{incident.complianceLogIds.length !== 1 ? 's' : ''} linked
-                    </p>
-                  </div>
-                )}
-                {incident.alertIds.length > 0 && (
-                  <div>
-                    <p className="text-xs text-theme-tertiary mb-1">Alerts</p>
-                    <p className="text-sm text-theme-secondary">
-                      {incident.alertIds.length} alert{incident.alertIds.length !== 1 ? 's' : ''} linked
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Generated notification content (replaces the old console.log + alert()) */}
+            {others.length > 0 && <RowActions label="More actions" items={others} />}
+          </>
+        }
+      />
+      <IncidentDetailBody
+        incident={current}
+        summary={text.summary}
+        raw={text.raw}
+        onMarkSent={(n) => void askMarkSent(n)}
+        onGenerate={(n) => void generate(n)}
+      />
+      <ReportIncidentModal isOpen={editOpen} onClose={() => setEditOpen(false)} incident={current} />
       <Modal
-        isOpen={generatedContent !== null}
-        onClose={handleCloseGeneratedContent}
-        title="Generated Notification Content"
+        isOpen={generated !== null}
+        onClose={() => setGenerated(null)}
+        title="Notification text"
+        description={generated?.title}
         size="lg"
         footer={
           <>
-            <Button variant="ghost" onClick={handleCloseGeneratedContent}>
-              Close
-            </Button>
-            <Button variant="primary" onClick={handleCopyGeneratedContent}>
-              {contentCopied ? 'Copied' : 'Copy to clipboard'}
-            </Button>
+            <Button variant="ghost" onClick={() => setGenerated(null)}>Close</Button>
+            <Button onClick={() => void copy()}>Copy to clipboard</Button>
           </>
         }
       >
-        <pre className="whitespace-pre-wrap break-words font-sans text-sm text-theme-primary bg-theme-base rounded-lg p-4 max-h-[60vh] overflow-y-auto">
-          {generatedContent}
+        <pre className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-inset p-4 font-sans text-sm text-ink-primary">
+          {generated?.text}
         </pre>
       </Modal>
     </div>

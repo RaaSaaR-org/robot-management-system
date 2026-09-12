@@ -268,6 +268,14 @@ export const LazyDocsPage = lazy(() =>
 );
 
 /**
+ * Design system showcase - every kit primitive in every state (dev builds only;
+ * `null` in production so the chunk is never emitted)
+ */
+export const LazyDesignSystemPage = import.meta.env.DEV
+  ? lazy(() => import('@/pages/DesignSystemPage').then((m) => ({ default: m.DesignSystemPage })))
+  : null;
+
+/**
  * Settings page - User preferences and app configuration (TASK-014)
  */
 export const LazySettingsPage = lazy(() =>

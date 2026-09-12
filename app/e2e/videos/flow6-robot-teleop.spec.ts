@@ -15,8 +15,8 @@ test('Flow 6: Robot Teleoperation & 3D Viewer', async ({ page }) => {
   // Scene 3: Scroll telemetry
   await smoothScroll(page, 300, 2500);
 
-  // Scene 4: 3D tab
-  await smoothClick(page, '[role="tab"]:has-text("3D")');
+  // Scene 4: Telemetry tab
+  await smoothClick(page, '[role="tab"]:has-text("Telemetry")');
   await scenePause(page, 4000);
 
   // Scene 5: Joint state

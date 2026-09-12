@@ -84,7 +84,7 @@ describe('BlockTimeline', () => {
   /**
    * THE CLIPPING REGRESSION.
    *
-   * `.glass-card` sets `overflow: hidden`, and the rail is a flex row that ends
+   * The old card class set `overflow: hidden`, and the rail is a flex row that ends
    * in STOPP. With the root left as a clipper, a `leading` group too wide for
    * the card pushed the emergency stop past the right edge, where it was
    * invisible AND unclickable — no scrollbar, because `hidden` is not `auto`,
@@ -100,7 +100,7 @@ describe('BlockTimeline', () => {
       render(<BlockTimeline onStop={() => {}} />);
 
       const rail = screen.getByTestId('agent-block-timeline');
-      // Explicitly overrides `.glass-card { overflow: hidden }`.
+      // Explicitly overrides a panel's `overflow: hidden`.
       expect(rail).toHaveClass('overflow-visible');
       expect(rail).not.toHaveClass('overflow-hidden');
       // A FIXED height is the vertical version of the same bug: content that

@@ -26,7 +26,9 @@ interface ListResponse {
 export const teamApi = {
   async list(): Promise<TeamMember[]> {
     const response = await apiClient.get<ListResponse>(ENDPOINTS.list);
-    return response.data.members;
+    // A payload without the list (the demo build's catch-all mock, a proxy's
+    // error page) is an empty list, not a crash of the whole page.
+    return response.data.members ?? [];
   },
 
   async add(input: AddTeamMemberInput): Promise<AddTeamMemberResult> {

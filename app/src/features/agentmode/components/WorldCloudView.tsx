@@ -113,7 +113,7 @@ export const WorldCloudView = memo(function WorldCloudView({ robotId, className,
   if (!built || !cloud) {
     return (
       <div className={cn('absolute inset-0 flex items-center justify-center p-4 text-center', className)} data-testid="agent-cloud-empty">
-        <p className="card-meta max-w-[28ch]">
+        <p className="max-w-[28ch] text-xs text-ink-muted">
           {status === 'disabled'
             ? error?.includes('no cloud yet')
               ? 'No cloud yet — points arrive as the robot looks and walks.'
@@ -140,7 +140,7 @@ export const WorldCloudView = memo(function WorldCloudView({ robotId, className,
         className="rounded-none min-h-0"
       />
       <div
-        className="absolute top-2 right-2 text-[10px] font-mono glass-elevated text-theme-primary px-2 py-1 rounded"
+        className="absolute top-2 right-2 rounded-control border border-line-subtle bg-panel px-2 py-1 text-xs tabular-nums text-ink-secondary"
         data-testid="agent-cloud-stats"
         title="Points kept by the robot (one per voxel) · frames integrated · voxel size"
       >

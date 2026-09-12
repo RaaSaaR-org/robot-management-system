@@ -1,88 +1,80 @@
 /**
  * @file ConsentManager.tsx
- * @description Component for managing all user consents
+ * @description Consent preferences as one panel of kit Switch rows; toast on every change
  * @feature gdpr
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { ErrorState, Panel, SkeletonRows, Switch, errorMessage, toast } from '@/shared/components/ui';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import type { UserConsent, ConsentType } from '../types';
-import { ConsentTypes } from '../types';
-import { ConsentToggle } from './ConsentToggle';
+import { ConsentTypes, CONSENT_TYPE_LABELS, CONSENT_TYPE_DESCRIPTIONS } from '../types';
 
 export interface ConsentManagerProps {
   consents: UserConsent[];
-  onToggle: (type: ConsentType, granted: boolean) => void;
+  /** Persists the change; must reject on failure so the row reverts */
+  onToggle: (type: ConsentType, granted: boolean) => Promise<void>;
   onLoad: () => void;
   isLoading?: boolean;
-  isUpdating?: boolean;
-  className?: string;
+  error?: string | null;
 }
 
-export function ConsentManager({
-  consents,
-  onToggle,
-  onLoad,
-  isLoading = false,
-  isUpdating = false,
-  className = '',
-}: ConsentManagerProps) {
+function meta(consent: UserConsent | undefined, granted: boolean): string | null {
+  const at = granted ? consent?.grantedAt : consent?.revokedAt;
+  if (!at) return null;
+  return `${granted ? 'Granted' : 'Withdrawn'} ${new Date(at).toLocaleDateString(UI_DATE_LOCALE)}`;
+}
+
+export function ConsentManager({ consents, onToggle, onLoad, isLoading = false, error }: ConsentManagerProps) {
+  const [pending, setPending] = useState<Partial<Record<ConsentType, boolean>>>({});
+
   useEffect(() => {
     onLoad();
   }, [onLoad]);
 
-  const getConsentForType = (type: ConsentType): UserConsent | null => {
-    return consents.find((c) => c.consentType === type) || null;
+  const change = async (type: ConsentType, granted: boolean) => {
+    setPending((p) => ({ ...p, [type]: granted })); // optimistic
+    try {
+      await onToggle(type, granted);
+      toast.success(granted ? 'Consent updated' : 'Consent withdrawn', { description: CONSENT_TYPE_LABELS[type] });
+    } catch (err) {
+      toast.error("Couldn't update consent", { description: errorMessage(err) });
+    } finally {
+      setPending((p) => { const next = { ...p }; delete next[type]; return next; }); // revert to the stored value
+    }
   };
 
-  if (isLoading) {
-    return (
-      <div className={`space-y-3 ${className}`}>
-        {[1, 2, 3, 4, 5].map((i) => (
-          <div
-            key={i}
-            className="p-4 section-secondary rounded-lg border border-theme animate-pulse"
-          >
-            <div className="flex justify-between items-start">
-              <div className="flex-1">
-                <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-1/3 mb-2" />
-                <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-2/3" />
-              </div>
-              <div className="h-6 w-11 bg-gray-300 dark:bg-gray-600 rounded-full" />
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
   return (
-    <div className={className}>
-      <div className="mb-4">
-        <h3 className="text-lg font-medium text-theme-primary">Consent Preferences</h3>
-        <p className="text-sm text-theme-secondary mt-1">
-          Manage how your data is processed. You can change these settings at any time.
-        </p>
-      </div>
-
-      <div className="space-y-3">
-        {ConsentTypes.map((type) => (
-          <ConsentToggle
-            key={type}
-            type={type}
-            consent={getConsentForType(type)}
-            onToggle={onToggle}
-            disabled={isUpdating}
-          />
-        ))}
-      </div>
-
-      <div className="mt-4 p-3 bg-cobalt/10 rounded-lg border border-cobalt/20">
-        <p className="text-sm text-theme-secondary">
-          <strong className="text-theme-primary">Note:</strong> Some data processing may be required for the service to
-          function. You can request information about mandatory processing in the Data
-          Access section.
-        </p>
-      </div>
-    </div>
+    <Panel>
+      <Panel.Header title="Consent" description="How your data may be processed. You can change this at any time." />
+      {isLoading && consents.length === 0 ? (
+        <Panel.Body><SkeletonRows rows={5} columns={2} /></Panel.Body>
+      ) : error && consents.length === 0 ? (
+        <Panel.Body><ErrorState title="Couldn't load consents" message={error} onRetry={onLoad} /></Panel.Body>
+      ) : (
+        <ul className="divide-y divide-line-subtle">
+          {ConsentTypes.map((type) => {
+            const consent = consents.find((c) => c.consentType === type);
+            const granted = pending[type] ?? consent?.granted ?? false;
+            const when = meta(consent, consent?.granted ?? false);
+            return (
+              <li key={type} className="flex items-start justify-between gap-4 px-5 py-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink-primary">{CONSENT_TYPE_LABELS[type]}</div>
+                  <div className="text-[13px] text-ink-secondary">{CONSENT_TYPE_DESCRIPTIONS[type]}</div>
+                  {when && <div className="mt-1 text-xs text-ink-tertiary">{when}</div>}
+                </div>
+                <Switch
+                  checked={granted}
+                  disabled={type in pending}
+                  onCheckedChange={(v) => void change(type, v)}
+                  aria-label={CONSENT_TYPE_LABELS[type]}
+                />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Panel>
   );
 }

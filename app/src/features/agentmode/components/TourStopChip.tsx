@@ -74,13 +74,13 @@ export const TourStopChip = memo(function TourStopChip({ className }: TourStopCh
       // long headline has to give way inside the `leading` group rather than
       // push the rail's stop button towards the right edge.
       className={cn(
-        'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-brand glass-subtle min-w-0',
+        'inline-flex items-center gap-1.5 rounded-control border border-line-subtle bg-inset px-2.5 py-1.5 min-w-0',
         className
       )}
       title={prose}
     >
       <span aria-hidden="true">{blockKindGlyph('tour')}</span>
-      <span className="card-value truncate min-w-0 text-cobalt-600 dark:text-cobalt-400">
+      <span className="min-w-0 truncate text-sm font-medium text-primary">
         {stopText ?? route}
       </span>
       <span className="sr-only">{unsaid}</span>

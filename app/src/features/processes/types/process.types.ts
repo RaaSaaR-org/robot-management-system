@@ -33,7 +33,7 @@ export type ProcessStepStatus =
   | 'skipped';
 
 /** Process action commands */
-export type ProcessAction = 'pause' | 'resume' | 'cancel' | 'retry';
+export type ProcessAction = 'start' | 'pause' | 'resume' | 'cancel' | 'retry';
 
 // ============================================================================
 // PROCESS STEP ENTITY
@@ -98,6 +98,8 @@ export interface CreateProcessRequest {
   robotId: string;
   priority?: ProcessPriority;
   steps?: CreateProcessStep[];
+  /** Run it as soon as it exists. Off by default: creating is not running. */
+  startNow?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -200,6 +202,8 @@ export interface ProcessesActions {
   clearFilters: () => void;
   /** Set page number */
   setPage: (page: number) => void;
+  /** Start a process that was created but never run */
+  startTask: (id: string) => Promise<Process>;
   /** Pause a process */
   pauseTask: (id: string) => Promise<Process>;
   /** Resume a paused process */
@@ -335,6 +339,13 @@ export function isProcessPauseable(process: Process): boolean {
  */
 export function isProcessResumeable(process: Process): boolean {
   return process.status === 'paused';
+}
+
+/**
+ * Check if a process was created but never run
+ */
+export function isProcessStartable(process: Process): boolean {
+  return process.status === 'pending';
 }
 
 /**

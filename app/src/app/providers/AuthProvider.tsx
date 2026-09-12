@@ -136,14 +136,14 @@ export function AuthProvider({
 
     return (
       <div
-        className="flex min-h-screen items-center justify-center bg-theme-card"
+        className="flex min-h-screen items-center justify-center bg-canvas"
         role="status"
         aria-busy="true"
         aria-label="Loading authentication"
       >
         <div className="flex flex-col items-center gap-4">
-          <Spinner size="lg" color="cobalt" />
-          <p className="text-theme-secondary text-sm">Loading...</p>
+          <Spinner size="lg" color="primary" />
+          <p className="text-sm text-ink-secondary">Loading…</p>
         </div>
       </div>
     );

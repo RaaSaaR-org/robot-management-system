@@ -1,11 +1,25 @@
 /**
  * @file DemoFeaturePlaceholder.tsx
- * @description Placeholder component for features disabled in demo mode
+ * @description Calm "not in the demo" page for features that need a real server:
+ *              a PageHeader (the page's only h1) and one panel listing what the
+ *              feature does in a real deployment.
  * @feature demo
  */
 
-import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import {
+  cloneElement,
+  isValidElement,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+  type RefObject,
+} from 'react';
+import { useLocation } from 'react-router-dom';
+import { BookOpen, Check } from 'lucide-react';
+import { LinkButton, PageHeader, Panel, StatusTag } from '@/shared/components/ui';
+import { NAV_GROUPS, isNavItemActive } from '@/components/layout/navigation';
 
 // ============================================================================
 // TYPES
@@ -17,6 +31,45 @@ export interface DemoFeaturePlaceholderProps {
   description: string;
   capabilities: string[];
   docsSlug?: string;
+  /**
+   * Navigation group shown above the title. Defaults to the sidebar group that
+   * owns the current route (e.g. "Comply" on /compliance), else "Operate".
+   */
+  eyebrow?: string;
+}
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+/** The sidebar group label for a pathname, so the eyebrow matches the nav. */
+function navGroupFor(pathname: string): string | undefined {
+  return NAV_GROUPS.find((g) => g.items.some((item) => isNavItemActive(item, pathname)))?.label;
+}
+
+/**
+ * True when the page around the placeholder already has an h1 — it is a tab of
+ * another page (Alerts > Incidents). Then it renders as a panel instead of a
+ * page, so the page keeps exactly one h1. Measured before the first paint.
+ */
+function useEmbeddedInPage(ref: RefObject<HTMLElement | null>): boolean {
+  const [embedded, setEmbedded] = useState(false);
+  useLayoutEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const scope = root.closest('main') ?? document.body;
+    setEmbedded(Array.from(scope.querySelectorAll('h1')).some((h) => !root.contains(h)));
+  }, [ref]);
+  return embedded;
+}
+
+/** Normalises whatever icon a page passes (often w-12 h-12) to the 20px tile size. */
+function tileIcon(icon: ReactNode): ReactNode {
+  if (!isValidElement(icon)) return icon;
+  return cloneElement(icon as ReactElement<{ className?: string; strokeWidth?: number }>, {
+    className: 'h-5 w-5',
+    strokeWidth: 1.75,
+  });
 }
 
 // ============================================================================
@@ -29,69 +82,71 @@ export function DemoFeaturePlaceholder({
   description,
   capabilities,
   docsSlug,
+  eyebrow,
 }: DemoFeaturePlaceholderProps) {
+  const { pathname } = useLocation();
+  const group = eyebrow ?? navGroupFor(pathname) ?? 'Operate';
+  const rootRef = useRef<HTMLDivElement>(null);
+  const embedded = useEmbeddedInPage(rootRef);
+  const docsTo = docsSlug ? `/docs/${docsSlug}` : '/docs';
+  const docsIcon = <BookOpen className="h-4 w-4" strokeWidth={1.75} />;
+  // data-demo-badge lets marketing screenshots hide the tag.
+  const demoTag = (
+    <span data-demo-badge>
+      <StatusTag tone="gated">Not in the demo</StatusTag>
+    </span>
+  );
+
   return (
-    <div className="flex items-center justify-center min-h-[calc(100vh-3.5rem)] p-4">
-      <div className="max-w-[600px] w-full text-center">
-        {/* Icon */}
-        <div className="flex justify-center mb-6 text-theme-secondary opacity-60">
-          {icon}
-        </div>
+    <div ref={rootRef} className="flex flex-col gap-6">
+      {!embedded && (
+        <PageHeader
+          eyebrow={group}
+          title={featureName}
+          description={description}
+          meta={demoTag}
+          actions={
+            <LinkButton to={docsTo} leftIcon={docsIcon}>
+              Read the docs
+            </LinkButton>
+          }
+        />
+      )}
 
-        {/* Feature name */}
-        <h2 className="text-2xl font-bold text-theme-primary mb-3">{featureName}</h2>
-
-        {/* Demo badge — hidden in marketing screenshots via data-demo-badge */}
-        <span
-          data-demo-badge
-          className="inline-block px-3 py-1 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 mb-4"
-        >
-          Demo &mdash; Not Available
-        </span>
-
-        {/* Description */}
-        <p className="text-theme-secondary mb-6 leading-relaxed">{description}</p>
-
-        {/* Capabilities */}
-        <ul className="text-left space-y-2 mb-8 mx-auto max-w-md">
-          {capabilities.map((cap) => (
-            <li key={cap} className="flex items-start gap-2 text-theme-secondary text-sm">
-              <svg
-                className="w-4 h-4 mt-0.5 flex-shrink-0 text-cobalt"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+      <Panel className="max-w-3xl">
+        <Panel.Header
+          title={embedded ? featureName : 'What it does in a real deployment'}
+          description={embedded ? description : undefined}
+          actions={
+            embedded ? (
+              <>
+                {demoTag}
+                <LinkButton to={docsTo} variant="secondary" size="sm" leftIcon={docsIcon}>
+                  Read the docs
+                </LinkButton>
+              </>
+            ) : (
+              <span
+                aria-hidden="true"
+                className="flex h-10 w-10 items-center justify-center rounded-control border border-line bg-inset text-ink-tertiary"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-              {cap}
-            </li>
-          ))}
-        </ul>
-
-        {/* Buttons */}
-        <div className="flex items-center justify-center gap-3">
-          <Link
-            to={docsSlug ? `/docs/${docsSlug}` : '/docs'}
-            className="px-4 py-2 text-sm font-medium rounded-brand bg-cobalt text-white hover:bg-cobalt-600 transition-colors"
-          >
-            View Docs
-          </Link>
-          <a
-            href="https://github.com/RaaSaaR-org/robot-management-system"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-4 py-2 text-sm font-medium rounded-brand border border-theme text-theme-secondary hover:text-theme-primary hover:bg-theme-card transition-colors"
-          >
-            Learn More
-          </a>
-        </div>
-      </div>
+                {tileIcon(icon)}
+              </span>
+            )
+          }
+        />
+        <Panel.Body className="flex flex-col gap-4">
+          <ul className="flex flex-col gap-2.5">
+            {capabilities.map((cap) => (
+              <li key={cap} className="flex items-start gap-2.5 text-sm text-ink-secondary">
+                <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
+                <span>{cap}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[13px] text-ink-tertiary">Run NeoDEM against a real server to use it.</p>
+        </Panel.Body>
+      </Panel>
     </div>
   );
 }

@@ -4,17 +4,11 @@
  * @feature fleetlearning
  */
 
-export { RoundStatusBadge } from './RoundStatusBadge';
-export type { RoundStatusBadgeProps } from './RoundStatusBadge';
-
-export { ParticipantStatusBadge } from './ParticipantStatusBadge';
-export type { ParticipantStatusBadgeProps } from './ParticipantStatusBadge';
-
-export { FederatedRoundCard } from './FederatedRoundCard';
-export type { FederatedRoundCardProps } from './FederatedRoundCard';
+export { RoundsSection, shortRoundId } from './RoundsSection';
+export type { RoundsSectionProps } from './RoundsSection';
 
 export { ParticipantList } from './ParticipantList';
-export type { ParticipantListProps, ParticipantRowProps } from './ParticipantList';
+export type { ParticipantListProps } from './ParticipantList';
 
 export { ConvergenceChart } from './ConvergenceChart';
 export type { ConvergenceChartProps } from './ConvergenceChart';

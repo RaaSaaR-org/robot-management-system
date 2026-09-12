@@ -1,14 +1,16 @@
 /**
  * @file ConversationPanel.tsx
- * @description Full-screen chat interface with bottom-to-top messages
+ * @description Messages of one conversation plus the composer, bottom-anchored
  * @feature a2a
  */
 
-import { memo, useRef, useEffect, useState, useCallback, useMemo, type FormEvent, type KeyboardEvent } from 'react';
-import { cn } from '@/shared/utils';
-import { Button } from '@/shared/components/ui/Button';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { MessageSquare, Plus, SendHorizontal } from 'lucide-react';
+import { Button, EmptyState, Spinner, StatusTag, Textarea } from '@/shared/components/ui';
+import { cn } from '@/shared/utils/cn';
 import { MessageBubble } from './MessageBubble';
 import { OrchestrationTimeline } from './OrchestrationTimeline';
+import { TaskStatusBadge } from './TaskStatusBadge';
 import { useConversation } from '../hooks';
 import { useA2AStore, selectPendingMessages } from '../store';
 import type { A2AAgentCard, A2ATask, A2AChatMode } from '../types';
@@ -22,65 +24,10 @@ interface ConversationPanelProps {
   activeTasks?: A2ATask[];
 }
 
-// Icons
-function SendIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-      />
-    </svg>
-  );
-}
-
-function PlusIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-    </svg>
-  );
-}
-
-function ChatIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-      />
-    </svg>
-  );
-}
+type OrchPhase = 'analyzing' | 'selecting' | 'forwarding' | 'waiting';
 
 /**
- * Task status badge for inline display
- */
-function TaskBadge({ state }: { state: string }) {
-  const stateConfig: Record<string, { bg: string; text: string; label: string; pulse?: boolean }> = {
-    submitted: { bg: 'glass-subtle', text: 'text-primary-600 dark:text-primary-400', label: 'Submitted' },
-    working: { bg: 'bg-primary-100/50 dark:bg-primary-900/30', text: 'text-primary-600 dark:text-primary-400', label: 'Working', pulse: true },
-    input_required: { bg: 'bg-amber-100/50 dark:bg-amber-900/30', text: 'text-amber-600 dark:text-amber-400', label: 'Input Required', pulse: true },
-    completed: { bg: 'bg-green-100/50 dark:bg-green-900/30', text: 'text-green-600 dark:text-green-400', label: 'Done' },
-    failed: { bg: 'bg-red-100/50 dark:bg-red-900/30', text: 'text-red-600 dark:text-red-400', label: 'Failed' },
-  };
-
-  const config = stateConfig[state] || stateConfig.submitted;
-
-  return (
-    <span className={cn('px-2.5 py-1 rounded-full text-xs font-medium transition-all', config.bg, config.text)}>
-      {config.pulse && (
-        <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse mr-1.5" />
-      )}
-      {config.label}
-    </span>
-  );
-}
-
-/**
- * Full-screen conversation panel with chat interface
+ * Conversation panel: scrollable messages, active task tags, composer.
  */
 export const ConversationPanel = memo(function ConversationPanel({
   conversationId,
@@ -90,219 +37,150 @@ export const ConversationPanel = memo(function ConversationPanel({
   onNewConversation,
   activeTasks = [],
 }: ConversationPanelProps) {
-  const {
-    messages,
-    isLoading,
-    isSending,
-    error,
-    sendMessage,
-  } = useConversation(conversationId);
-
+  const { messages, isLoading, isSending, error, sendMessage } = useConversation(conversationId);
   const pendingMessages = useA2AStore(selectPendingMessages);
 
   const [inputValue, setInputValue] = useState('');
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Optimistic orchestration timeline — shows animated steps while waiting for response
-  type OrchPhase = 'analyzing' | 'selecting' | 'forwarding' | 'waiting';
+  // Optimistic orchestration timeline while waiting for the routed answer
   const [orchPhase, setOrchPhase] = useState<OrchPhase | null>(null);
-  const orchTimerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const orchTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const prevAgentCount = useRef(0);
 
-  // Clear orchestration when a new AGENT message arrives (not user messages)
-  const prevAgentMessageCountRef = useRef(0);
   useEffect(() => {
-    const agentMsgCount = messages.filter((m) => m.role === 'agent').length;
-    if (agentMsgCount > prevAgentMessageCountRef.current && orchPhase !== null) {
+    const agentCount = messages.filter((m) => m.role === 'agent').length;
+    if (agentCount > prevAgentCount.current && orchPhase !== null) {
       setOrchPhase(null);
-      orchTimerRef.current.forEach(clearTimeout);
-      orchTimerRef.current = [];
+      orchTimers.current.forEach(clearTimeout);
+      orchTimers.current = [];
     }
-    prevAgentMessageCountRef.current = agentMsgCount;
+    prevAgentCount.current = agentCount;
   }, [messages, orchPhase]);
 
-  // Start orchestration animation on send
-  const handleOrchestrationStart = useCallback(() => {
+  const startOrchestration = useCallback(() => {
     if (chatMode !== 'orchestration') return;
-    orchTimerRef.current.forEach(clearTimeout);
-    orchTimerRef.current = [];
+    orchTimers.current.forEach(clearTimeout);
+    orchTimers.current = [
+      setTimeout(() => setOrchPhase('selecting'), 1200),
+      setTimeout(() => setOrchPhase('forwarding'), 2800),
+      setTimeout(() => setOrchPhase('waiting'), 4000),
+    ];
     setOrchPhase('analyzing');
-    // Stagger the phases for a realistic feel
-    orchTimerRef.current.push(setTimeout(() => setOrchPhase('selecting'), 1200));
-    orchTimerRef.current.push(setTimeout(() => setOrchPhase('forwarding'), 2800));
-    orchTimerRef.current.push(setTimeout(() => setOrchPhase('waiting'), 4000));
   }, [chatMode]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => orchTimerRef.current.forEach(clearTimeout);
-  }, []);
+  useEffect(() => () => orchTimers.current.forEach(clearTimeout), []);
 
-  // Extract agent name from the last orchestrated response for the timeline
   const lastOrchAgent = useMemo(() => {
     if (orchPhase === null) return undefined;
-    // Check the latest agent message for metadata
     for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role === 'agent' && (m.metadata as Record<string, unknown>)?.orchestrated) {
-        return (m.metadata as Record<string, unknown>)?.agentName as string | undefined;
-      }
+      const meta = messages[i].metadata as Record<string, unknown> | undefined;
+      if (messages[i].role === 'agent' && meta?.orchestrated) return meta.agentName as string | undefined;
     }
     return undefined;
   }, [messages, orchPhase]);
 
-  // Check if any tasks require input
-  const hasInputRequired = useMemo(
-    () => activeTasks.some((t) => t.status.state === 'input_required'),
-    [activeTasks]
-  );
-
-  // Check if user can send messages
-  // In direct mode: need a target agent
-  // In orchestration mode: always can send (host agent routes)
+  const hasInputRequired = activeTasks.some((t) => t.status.state === 'input_required');
   const canSend = chatMode === 'orchestration' || !!targetAgent;
+  const placeholder =
+    chatMode === 'orchestration'
+      ? 'Message the fleet — the orchestrator picks the agent'
+      : targetAgent
+        ? `Message ${targetAgent.name}`
+        : 'Choose an agent to start';
 
-  // Get placeholder text based on mode
-  const getPlaceholder = () => {
-    if (chatMode === 'orchestration') {
-      return 'Message all robots (AI will route to the right one)...';
-    }
-    if (targetAgent) {
-      return `Message ${targetAgent.name}...`;
-    }
-    return 'Select a robot to start chatting...';
-  };
-
-  // Scroll to bottom when messages change
   useEffect(() => {
-    if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-    }
+    if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
   }, [messages]);
 
-  // Focus input when conversation changes
   useEffect(() => {
     inputRef.current?.focus();
   }, [conversationId]);
 
-  // Auto-resize textarea (capped at 96px to keep input fixed)
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInputValue(e.target.value);
-    // Reset height to auto to get the correct scrollHeight
-    e.target.style.height = 'auto';
-    // Set height to scrollHeight, but cap at 96px (max-h-24)
-    e.target.style.height = `${Math.min(e.target.scrollHeight, 96)}px`;
+  const resize = (el: HTMLTextAreaElement) => {
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!inputValue.trim() || isSending) return;
-
-    const message = inputValue.trim();
+    const text = inputValue.trim();
+    if (!text || isSending || !canSend) return;
     setInputValue('');
-    handleOrchestrationStart();
-    // Reset textarea height
-    if (inputRef.current) {
-      inputRef.current.style.height = 'auto';
-    }
-
+    if (inputRef.current) inputRef.current.style.height = 'auto';
+    startOrchestration();
     try {
-      await sendMessage(message, targetAgent?.url);
+      await sendMessage(text, targetAgent?.url);
     } catch {
-      // Error is handled by the hook
+      // the hook keeps the error
     }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit(e as unknown as FormEvent);
+      void handleSubmit(e as unknown as FormEvent);
     }
   };
 
-  // No conversation selected
   if (!conversationId) {
     return (
-      <div className={cn('flex flex-col items-center justify-center h-full p-8', className)}>
-        <div className="text-center max-w-md">
-          <div className="glass-subtle w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center">
-            <ChatIcon className="w-8 h-8 text-theme-muted" />
-          </div>
-          <h2 className="text-xl font-semibold text-theme-primary mb-2">
-            No conversation selected
-          </h2>
-          <p className="text-theme-tertiary mb-6">
-            Start a new conversation to begin chatting
-          </p>
-          {onNewConversation && (
-            <Button onClick={onNewConversation} variant="primary" className="gap-2">
-              <PlusIcon className="w-4 h-4" />
-              Start New Conversation
-            </Button>
-          )}
-        </div>
+      <div className={cn('flex h-full items-center justify-center p-6', className)}>
+        <EmptyState
+          icon={<MessageSquare />}
+          title="No conversation open"
+          description="Start one to talk to an agent."
+          action={
+            onNewConversation && (
+              <Button leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} onClick={onNewConversation}>
+                New conversation
+              </Button>
+            )
+          }
+        />
       </div>
     );
   }
 
+  const orchSteps =
+    orchPhase === null
+      ? []
+      : [
+          { step: 'analyzing' as const },
+          ...(orchPhase !== 'analyzing' ? [{ step: 'agent_selected' as const, agentName: lastOrchAgent }] : []),
+          ...(orchPhase === 'forwarding' || orchPhase === 'waiting'
+            ? [{ step: 'forwarding' as const, agentName: lastOrchAgent }]
+            : []),
+        ];
+
   return (
-    <div className={cn('flex flex-col h-full overflow-hidden', className)}>
-      {/* Messages area - scrollable, bottom-anchored */}
-      <div
-        ref={messagesContainerRef}
-        className="flex-1 min-h-0 overflow-y-auto flex flex-col-reverse"
-      >
-        <div className="px-3 py-4">
+    <div className={cn('flex h-full min-h-0 flex-col', className)}>
+      <div ref={messagesRef} className="flex min-h-0 flex-1 flex-col-reverse overflow-y-auto">
+        <div className="px-4 py-4">
           {isLoading && messages.length === 0 ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="flex items-center gap-2 text-theme-muted">
-                <div className="flex gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-                </div>
-                <span className="text-xs">Loading...</span>
-              </div>
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-ink-tertiary">
+              <Spinner size="sm" color="current" /> Loading messages…
             </div>
           ) : messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-theme-muted">
-              <ChatIcon className="w-8 h-8 mb-2 opacity-50" />
-              <p className="text-xs">No messages yet</p>
-              <p className="text-[10px] mt-0.5 opacity-70">Send a message to start the conversation</p>
+            <div className="py-8 text-center text-sm text-ink-tertiary">
+              No messages yet. {canSend ? 'Say hello below.' : 'Choose an agent, then write below.'}
             </div>
           ) : (
-            <div className="space-y-3">
-              {messages.map((message) => (
+            <div className="flex flex-col gap-3">
+              {messages.map((m) => (
                 <MessageBubble
-                  key={message.messageId}
-                  message={message}
-                  pendingStatus={pendingMessages[message.messageId]}
+                  key={m.messageId}
+                  message={m}
+                  pendingStatus={pendingMessages[m.messageId]}
+                  defaultAgentName={targetAgent?.name}
                 />
               ))}
-
-              {/* Orchestration timeline — shown during orchestrated message routing */}
-              {chatMode === 'orchestration' && orchPhase !== null && (
-                <OrchestrationTimeline
-                  steps={[
-                    ...(orchPhase ? [{ step: 'analyzing' as const, agentCount: 1 }] : []),
-                    ...(['selecting', 'forwarding', 'waiting'].includes(orchPhase) ? [{ step: 'agent_selected' as const, agentName: lastOrchAgent || 'Selecting...' }] : []),
-                    ...(['forwarding', 'waiting'].includes(orchPhase) ? [{ step: 'forwarding' as const, agentName: lastOrchAgent }] : []),
-                  ]}
-                />
-              )}
-
-              {/* Typing indicator — shown while waiting for agent response (direct mode only) */}
+              {chatMode === 'orchestration' && orchSteps.length > 0 && <OrchestrationTimeline steps={orchSteps} />}
               {isSending && chatMode !== 'orchestration' && (
-                <div className="flex justify-start">
-                  <div className="glass-card rounded-2xl rounded-bl-md px-4 py-3">
-                    <div className="text-xs text-theme-tertiary mb-1">Agent</div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-                      <span className="text-xs text-theme-muted ml-1.5">Thinking...</span>
-                    </div>
-                  </div>
+                <div className="flex items-center gap-2 self-start rounded-panel border border-line-subtle bg-inset px-4 py-2.5 text-xs text-ink-tertiary">
+                  <Spinner size="xs" color="current" />
+                  {targetAgent?.name ?? 'Agent'} is thinking…
                 </div>
               )}
             </div>
@@ -310,86 +188,46 @@ export const ConversationPanel = memo(function ConversationPanel({
         </div>
       </div>
 
-      {/* Bottom section */}
-      <div className="flex-shrink-0 border-t border-glass-subtle">
-        {/* Active tasks inline */}
-        {activeTasks.length > 0 && (
-          <div className="flex items-center gap-2 px-3 py-1.5 overflow-x-auto border-b border-gray-100 dark:border-gray-700/50">
-            <span className="text-[10px] text-theme-muted flex-shrink-0">Active:</span>
-            {activeTasks.slice(0, 3).map((task) => (
-              <TaskBadge key={task.id} state={task.status.state} />
+      <div className="flex-shrink-0 border-t border-line-subtle">
+        {(activeTasks.length > 0 || hasInputRequired) && (
+          <div className="flex items-center gap-2 overflow-x-auto border-b border-line-subtle px-4 py-2">
+            <span className="flex-shrink-0 text-xs text-ink-muted">Active tasks</span>
+            {activeTasks.slice(0, 3).map((t) => (
+              <TaskStatusBadge key={t.id} state={t.status.state} />
             ))}
-            {activeTasks.length > 3 && (
-              <span className="text-[10px] text-theme-muted">+{activeTasks.length - 3}</span>
-            )}
+            {activeTasks.length > 3 && <span className="text-xs text-ink-muted">+{activeTasks.length - 3}</span>}
+            {hasInputRequired && <StatusTag tone="warning">Input required</StatusTag>}
           </div>
         )}
-
-        {/* Input required banner */}
-        {hasInputRequired && (
-          <div className="px-3 py-1.5 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 text-xs flex items-center gap-1.5">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-            <span>Input required</span>
-          </div>
-        )}
-
-        {/* Error message */}
         {error && (
-          <div className="px-3 py-1.5 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-xs">
+          <p role="alert" className="border-b border-line-subtle px-4 py-2 text-[13px] text-signal-stopped">
             {error}
-          </div>
+          </p>
         )}
-
-        {/* Input form */}
-        <form onSubmit={handleSubmit} className="px-3 py-2.5">
-          <div className="flex items-end gap-2">
-            <div className="flex-1 relative">
-              <textarea
-                ref={inputRef}
-                value={inputValue}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                placeholder={getPlaceholder()}
-                disabled={isSending || !canSend}
-                rows={1}
-                className={cn(
-                  'w-full resize-none rounded-xl border border-glass-subtle',
-                  'glass-subtle px-3 py-2.5 text-sm',
-                  'focus:ring-2 focus:ring-cobalt-500/40 focus:border-cobalt-500/50 focus:outline-none',
-                  'placeholder:text-gray-400 dark:placeholder:text-gray-500',
-                  'text-theme-primary',
-                  'transition-all duration-200',
-                  'min-h-[40px] max-h-20 overflow-y-auto',
-                  !canSend && 'opacity-50 cursor-not-allowed'
-                )}
-                style={{ height: 'auto', maxHeight: '80px' }}
-              />
-            </div>
-            <button
-              type="submit"
-              aria-label="Send message"
-              disabled={!inputValue.trim() || isSending || !canSend}
-              className={cn(
-                'h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0',
-                'transition-all duration-150',
-                inputValue.trim() && canSend && !isSending
-                  ? 'bg-cobalt-500 hover:bg-cobalt-600 text-white shadow-md shadow-cobalt-500/25 active:scale-95'
-                  : isSending
-                    ? 'bg-cobalt-500/60 text-white'
-                    : 'bg-gray-200 dark:bg-gray-700 text-theme-muted'
-              )}
-            >
-              {isSending ? (
-                <div className="flex gap-0.5">
-                  <span className="w-1 h-1 rounded-full bg-white animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <span className="w-1 h-1 rounded-full bg-white animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <span className="w-1 h-1 rounded-full bg-white animate-bounce" style={{ animationDelay: '300ms' }} />
-                </div>
-              ) : (
-                <SendIcon className="w-4 h-4" />
-              )}
-            </button>
-          </div>
+        <form onSubmit={handleSubmit} className="flex items-end gap-2 p-3">
+          <Textarea
+            ref={inputRef}
+            rows={1}
+            value={inputValue}
+            onChange={(e) => {
+              setInputValue(e.target.value);
+              resize(e.target);
+            }}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            aria-label="Message"
+            disabled={isSending || !canSend}
+            className="max-h-32 min-h-[38px] flex-1 resize-none"
+          />
+          <Button
+            type="submit"
+            iconOnly
+            aria-label="Send message"
+            isLoading={isSending}
+            disabled={!inputValue.trim() || isSending || !canSend}
+          >
+            <SendHorizontal className="h-4 w-4" strokeWidth={1.75} />
+          </Button>
         </form>
       </div>
     </div>

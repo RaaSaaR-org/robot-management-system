@@ -160,30 +160,29 @@ export function ModelLayerSection() {
 
           <div>
             <h2 id="models-heading" className="lp-display lp-h2">
-              Any brain.
+              Choose the intelligence.
               <br />
-              No vendor login.
+              Keep the ownership.
             </h2>
 
             <p className="lp-lede mt-5">
-              The model layer is a socket, not a supplier. Vision-language-action models and world
-              action models plug into the same place, train on the same data and ship through the
-              same staged rollout — so which brain you run stays a technical decision rather than a
-              five-year commercial one. The weights are yours, and {brand.name} never asks a third
-              party for permission to run one.
+              Train models that turn instructions into actions. Generate new experience with world
+              models. {brand.name} brings both into the same workspace, with open datasets and
+              weights you control. Choose the model for the job, with each integration&rsquo;s
+              readiness shown below.
             </p>
 
             <div className="mt-12 grid gap-12 lg:grid-cols-2 lg:gap-x-14">
               <ModelTable
                 kicker="VLA · the policy that acts"
                 title="Vision-language-action"
-                blurb="Sees the scene, reads the instruction, decides the next move. Six to choose from; two run the whole circle today."
+                blurb="See the scene, understand the instruction and choose the next move. Compare the supported models and how far each integration has been tested."
                 rows={POLICIES}
               />
               <ModelTable
                 kicker="WAM · the model that imagines"
                 title="World action models"
-                blurb="Generates the experience instead of recording it. Show it a situation, tell it what the robot does, and it imagines what happens next — as training data, when a real robot cannot make enough of it."
+                blurb="Generate training experience from a scene and an action. Every generated episode is marked synthetic, so you can distinguish it from a real recording."
                 rows={WORLD_MODELS}
               />
             </div>
@@ -201,7 +200,7 @@ export function ModelLayerSection() {
               <p className="lp-key normal-case tracking-normal">No vendor login</p>
 
               <h3 className="lp-h3 mt-2" style={{ fontSize: '1.25rem' }}>
-                What that actually buys you
+                Your platform, data and models
               </h3>
 
               <div className="mt-4 grid gap-x-10 gap-y-4 sm:grid-cols-2">

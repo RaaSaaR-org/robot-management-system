@@ -1,141 +1,121 @@
 /**
  * @file InfoTab.tsx
- * @description Info tab showing robot capabilities, details, and A2A agent info
+ * @description Details tab of the robot detail page: identity, capabilities,
+ *              metadata and the A2A agent, each as a Panel.
  * @feature robots
  */
 
-import { Link } from 'react-router-dom';
-import { Card, Button, Badge } from '@/shared/components/ui';
+import { MessageSquare } from 'lucide-react';
+import { Badge, KeyValueList, LinkButton, Panel, StatusTag } from '@/shared/components/ui';
 import { formatDateTime } from '@/shared/utils/format';
 import type { InfoTabProps } from './types';
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+const METADATA_LABELS: Record<string, string> = {
+  robotType: 'Robot type',
+  robotClass: 'Class',
+  class: 'Class',
+  payload: 'Payload',
+  maxPayloadKg: 'Payload (kg)',
+  powerSource: 'Power source',
+  description: 'Description',
+};
+
+function humanizeKey(key: string): string {
+  const spaced = key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+}
+
+function metadataValue(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).replace(/_/g, ' ');
+  }
+  return null; // nested objects are not details a person reads
+}
 
 export function InfoTab({ robot }: InfoTabProps) {
+  const metadata = Object.entries(robot.metadata ?? {})
+    .map(([key, value]) => ({ key, label: METADATA_LABELS[key] ?? humanizeKey(key), value: metadataValue(value) }))
+    .filter((item): item is { key: string; label: string; value: string } => item.value !== null);
+  const hasAgent = Boolean(robot.a2aEnabled || robot.a2aAgentUrl || robot.capabilities.includes('a2a'));
+
   return (
-    <div className="space-y-6">
-      {/* Capabilities */}
-      <Card>
-        <Card.Header>
-          <h2 className="text-lg font-semibold text-theme-primary">Capabilities</h2>
-        </Card.Header>
-        <Card.Body>
-          <div className="flex flex-wrap gap-2">
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+      <Panel>
+        <Panel.Header title="Identity" />
+        <Panel.Body>
+          <KeyValueList
+            items={[
+              { label: 'Robot ID', value: robot.id, mono: true },
+              { label: 'Model', value: robot.model },
+              { label: 'Serial number', value: robot.serialNumber, mono: true },
+              { label: 'Firmware', value: robot.firmware },
+              { label: 'IP address', value: robot.ipAddress, mono: true },
+              { label: 'Zone', value: robot.location?.zone || 'Place unknown' },
+              {
+                label: 'Registered',
+                value: formatDateTime(robot.createdAt, { year: 'numeric', month: 'short', day: 'numeric' }),
+              },
+              { label: 'Last updated', value: formatDateTime(robot.updatedAt) },
+            ]}
+          />
+        </Panel.Body>
+      </Panel>
+
+      <div className="flex flex-col gap-6">
+        <Panel>
+          <Panel.Header title="Capabilities" />
+          <Panel.Body>
             {robot.capabilities.length > 0 ? (
-              robot.capabilities.map((cap) => (
-                <Badge key={cap} variant="cobalt" size="md">
-                  {cap}
-                </Badge>
-              ))
+              <div className="flex flex-wrap gap-2">
+                {robot.capabilities.map((cap) => (
+                  <Badge key={cap} variant="neutral">{cap}</Badge>
+                ))}
+              </div>
             ) : (
-              <p className="text-theme-tertiary">No capabilities listed</p>
+              <p className="text-sm text-ink-tertiary">No capabilities reported.</p>
             )}
-          </div>
-        </Card.Body>
-      </Card>
+          </Panel.Body>
+        </Panel>
 
-      {/* Robot Information */}
-      <Card>
-        <Card.Header>
-          <h2 className="text-lg font-semibold text-theme-primary">Robot Details</h2>
-        </Card.Header>
-        <Card.Body>
-          <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            <div className="glass-subtle p-3 rounded-xl">
-              <dt className="card-label">Robot ID</dt>
-              <dd className="font-mono text-sm text-theme-primary mt-1 truncate">{robot.id}</dd>
-            </div>
-            {robot.serialNumber && (
-              <div className="glass-subtle p-3 rounded-xl">
-                <dt className="card-label">Serial Number</dt>
-                <dd className="font-mono text-sm text-theme-primary mt-1">{robot.serialNumber}</dd>
+        {hasAgent && (
+          <Panel>
+            <Panel.Header
+              title="A2A agent"
+              description={`${robot.name} can talk to other A2A-compatible agents.`}
+              actions={
+                <StatusTag tone={robot.a2aEnabled ? 'live' : 'neutral'}>
+                  {robot.a2aEnabled ? 'Enabled' : 'Available'}
+                </StatusTag>
+              }
+            />
+            <Panel.Body className="flex flex-col gap-4">
+              <KeyValueList columns={1} items={[{ label: 'Agent URL', value: robot.a2aAgentUrl, mono: true }]} />
+              <div className="flex flex-wrap gap-2">
+                <LinkButton
+                  to={`/a2a?robotId=${robot.id}`}
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={<MessageSquare className="h-4 w-4" strokeWidth={1.75} />}
+                >
+                  Start A2A conversation
+                </LinkButton>
+                <LinkButton to="/a2a" variant="ghost" size="sm">
+                  View all agents
+                </LinkButton>
               </div>
-            )}
-            {robot.firmware && (
-              <div className="glass-subtle p-3 rounded-xl">
-                <dt className="card-label">Firmware</dt>
-                <dd className="text-sm text-theme-primary mt-1">{robot.firmware}</dd>
-              </div>
-            )}
-            {robot.ipAddress && (
-              <div className="glass-subtle p-3 rounded-xl">
-                <dt className="card-label">IP Address</dt>
-                <dd className="font-mono text-sm text-theme-primary mt-1">{robot.ipAddress}</dd>
-              </div>
-            )}
-            <div className="glass-subtle p-3 rounded-xl">
-              <dt className="card-label">Created</dt>
-              <dd className="text-sm text-theme-primary mt-1">{formatDateTime(robot.createdAt, { year: 'numeric', month: 'short', day: 'numeric' })}</dd>
-            </div>
-            <div className="glass-subtle p-3 rounded-xl">
-              <dt className="card-label">Last Updated</dt>
-              <dd className="text-sm text-theme-primary mt-1">{formatDateTime(robot.updatedAt)}</dd>
-            </div>
-          </dl>
-        </Card.Body>
-      </Card>
+            </Panel.Body>
+          </Panel>
+        )}
+      </div>
 
-      {/* A2A Agent Section */}
-      {(robot.a2aEnabled || robot.capabilities.includes('a2a')) && (
-        <Card>
-          <Card.Header>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-gradient-to-br from-purple-500/20 to-cobalt-500/20">
-                  <svg className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                  </svg>
-                </div>
-                <h2 className="text-lg font-semibold text-theme-primary">A2A Agent</h2>
-              </div>
-              <Badge variant={robot.a2aEnabled ? 'success' : 'default'} size="sm">
-                {robot.a2aEnabled ? 'Enabled' : 'Available'}
-              </Badge>
-            </div>
-          </Card.Header>
-          <Card.Body>
-            <div className="space-y-4">
-              <div className="glass-subtle p-4 rounded-xl">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 p-3 rounded-xl bg-gradient-to-br from-purple-500/10 to-cobalt-500/10">
-                    <svg className="h-8 w-8 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
-                    </svg>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-theme-primary">{robot.name} Agent</h3>
-                    <p className="text-sm text-theme-secondary mt-1">
-                      This robot can communicate with other A2A-compatible agents.
-                    </p>
-                    {robot.a2aAgentUrl && (
-                      <p className="text-xs font-mono text-theme-tertiary mt-2 truncate">
-                        {robot.a2aAgentUrl}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-3">
-                <Link to={`/a2a?robotId=${robot.id}`} className="flex-1">
-                  <Button variant="secondary" fullWidth>
-                    <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                    Start A2A Conversation
-                  </Button>
-                </Link>
-                <Link to="/a2a" className="flex-1">
-                  <Button variant="outline" fullWidth>
-                    View All Agents
-                  </Button>
-                </Link>
-              </div>
-            </div>
-          </Card.Body>
-        </Card>
+      {metadata.length > 0 && (
+        <Panel className="xl:col-span-2">
+          <Panel.Header title="Metadata" />
+          <Panel.Body>
+            <KeyValueList columns={3} items={metadata} />
+          </Panel.Body>
+        </Panel>
       )}
     </div>
   );

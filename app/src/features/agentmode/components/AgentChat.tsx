@@ -16,7 +16,9 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
-import { cn } from '@/shared/utils';
+import { Mic, SendHorizontal } from 'lucide-react';
+import { Button, Eyebrow, Panel, Textarea } from '@/shared/components/ui';
+import { cn } from '@/shared/utils/cn';
 import {
   useAgentModeStore,
   selectMessages,
@@ -78,26 +80,6 @@ const SUGGESTIONS = [
   'greet the person in the room',
 ];
 
-function SendIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-    </svg>
-  );
-}
-
-function MicIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M12 15a3 3 0 003-3V6a3 3 0 10-6 0v6a3 3 0 003 3zm7-3a7 7 0 01-14 0m7 7v3"
-      />
-    </svg>
-  );
-}
-
 /**
  * What the acknowledgement bubble says once the plan it announced has moved on.
  *
@@ -132,12 +114,12 @@ function MessageRow({ message, plan }: { message: AgentChatMessage; plan: AgentP
       <div
         data-testid={isUser ? 'agent-user-message' : 'agent-agent-message'}
         className={cn(
-          'max-w-[85%] px-3.5 py-2.5 rounded-brand-lg text-sm leading-snug whitespace-pre-wrap',
+          'max-w-[85%] rounded-control px-3.5 py-2.5 text-sm leading-snug whitespace-pre-wrap',
           isUser
-            ? 'bg-cobalt-500 text-white rounded-br-md'
+            ? 'bg-primary/15 text-ink-primary border border-primary/30'
             : message.isError
-              ? 'bg-red-500/10 text-red-600 dark:text-red-400 rounded-bl-md border border-red-500/30'
-              : 'glass-card text-theme-primary rounded-bl-md'
+              ? 'border border-signal-stopped/40 bg-signal-stopped/10 text-signal-stopped'
+              : 'bg-inset text-ink-primary border border-line-subtle'
         )}
       >
         {ackTextFor(message, plan)}
@@ -149,9 +131,9 @@ function MessageRow({ message, plan }: { message: AgentChatMessage; plan: AgentP
       {message.spokenLanguage && (
         <span
           data-testid="agent-spoken-marker"
-          className="card-meta mt-1 inline-flex items-center gap-1"
+          className="mt-1 inline-flex items-center gap-1 text-xs text-ink-muted"
         >
-          <MicIcon className="w-3 h-3" />
+          <Mic className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
           heard · {message.spokenLanguage.toUpperCase()}
         </span>
       )}
@@ -165,7 +147,7 @@ function MessageRow({ message, plan }: { message: AgentChatMessage; plan: AgentP
               not hidden here — it is the whole point of showing it. */}
           {movesFromWhereItStands(plan) && (
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="card-meta">starting from</span>
+              <Eyebrow>Starting from</Eyebrow>
               {/* `testId={null}`: the status rail owns `agent-scene-place`, and
                   two elements answering one selector is an ambiguity, not a
                   second guarantee. */}
@@ -320,31 +302,35 @@ export const AgentChat = memo(function AgentChat({
         ? 'E-Stop latched — reset it to send commands'
         : 'Tell the robot what to do, e.g. "walk to the table with the hat"';
 
+  const canSubmit = Boolean(inputValue.trim()) && canSend && !isSending;
+
   return (
-    <div
+    <Panel
+      as="section"
       data-testid="agent-chat"
-      className={cn('glass-card flex flex-col overflow-hidden', className)}
+      className={cn('flex min-w-0 flex-col overflow-hidden', className)}
     >
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-3 py-4">
+      <Panel.Header title="Conversation" borderless />
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
         {rows.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center gap-3 py-8">
-            <p className="text-theme-secondary text-sm">
-              Say what the robot should do. The local planner turns it into blocks and
-              runs them one by one.
+          <div className="flex h-full flex-col items-center justify-center gap-4 py-8 text-center">
+            <p className="max-w-sm text-sm text-ink-secondary">
+              Say what the robot should do. The local planner turns it into blocks and runs them
+              one by one.
             </p>
             <div className="flex flex-wrap justify-center gap-2">
               {SUGGESTIONS.map((suggestion) => (
-                <button
+                <Button
                   key={suggestion}
-                  type="button"
+                  variant="secondary"
+                  size="sm"
                   onClick={() => {
                     setInputValue(suggestion);
                     inputRef.current?.focus();
                   }}
-                  className="glass-subtle px-3 py-1.5 text-xs text-theme-secondary hover:text-theme-primary transition-colors"
                 >
                   {suggestion}
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -353,8 +339,8 @@ export const AgentChat = memo(function AgentChat({
             {rows.map((message) => (
               <Fragment key={message.id}>
                 {message.id === restoredFirstId && (
-                  <p className="card-meta text-center" data-testid="agent-chat-restored">
-                    read from the robot — this console was not open when it ran
+                  <p className="text-center text-xs text-ink-muted" data-testid="agent-chat-restored">
+                    Read from the robot — this console was not open when it ran.
                   </p>
                 )}
                 <MessageRow
@@ -370,20 +356,15 @@ export const AgentChat = memo(function AgentChat({
 
             {isPlanning && (
               <div className="flex justify-start">
-                <div className="glass-card rounded-brand-lg px-3.5 py-2.5 flex items-center gap-1.5">
-                  <span
-                    className="w-1.5 h-1.5 rounded-full bg-cobalt-500 animate-bounce"
-                    style={{ animationDelay: '0ms' }}
-                  />
-                  <span
-                    className="w-1.5 h-1.5 rounded-full bg-cobalt-500 animate-bounce"
-                    style={{ animationDelay: '150ms' }}
-                  />
-                  <span
-                    className="w-1.5 h-1.5 rounded-full bg-cobalt-500 animate-bounce"
-                    style={{ animationDelay: '300ms' }}
-                  />
-                  <span className="text-xs text-theme-muted ml-1.5">Planning…</span>
+                <div className="flex items-center gap-1.5 rounded-control border border-line-subtle bg-inset px-3.5 py-2.5">
+                  {[0, 150, 300].map((delay) => (
+                    <span
+                      key={delay}
+                      className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary"
+                      style={{ animationDelay: `${delay}ms` }}
+                    />
+                  ))}
+                  <span className="ml-1.5 text-xs text-ink-muted">Planning…</span>
                 </div>
               </div>
             )}
@@ -391,25 +372,22 @@ export const AgentChat = memo(function AgentChat({
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="shrink-0 border-t border-glass-subtle px-3 py-2.5">
-        {/* Amber, and only while it is TRUE — the page reserves this colour for
-            conditions that hold right now. Sits above the textarea rather than
-            in a page footer: an operator who never scrolls that far still meets
-            it in the moment they are about to act on stale data. */}
+      <form onSubmit={handleSubmit} className="shrink-0 border-t border-line-subtle px-5 py-3">
+        {/* One short neutral hint, only while it is true. The condition stack
+            above the page carries the full story; this line qualifies the act
+            of typing, right where the operator is about to act on old data. */}
         {stateUnknown && (
-          <p
-            data-testid="agent-state-unknown-note"
-            className="h-6 flex items-center text-xs text-amber-600 dark:text-amber-400"
-          >
-            not answering — everything shown is the last thing this console heard.
+          <p data-testid="agent-state-unknown-note" className="mb-2 text-xs text-ink-muted">
+            Commands wait until the robot answers.
           </p>
         )}
 
         <div className="flex items-end gap-2">
           {composerLeading}
-          <textarea
+          <Textarea
             ref={inputRef}
             data-testid="agent-command-input"
+            aria-label="Command"
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
@@ -417,35 +395,25 @@ export const AgentChat = memo(function AgentChat({
             disabled={!canSend || isSending}
             rows={1}
             className={cn(
-              'flex-1 resize-none rounded-brand border border-glass-subtle glass-subtle',
-              'px-3 py-2.5 text-sm text-theme-primary transition-all duration-200',
-              'focus:ring-2 focus:ring-cobalt-500/40 focus:border-cobalt-500/50 focus:outline-none',
-              // `truncate` on the placeholder pseudo-element only — long copy must
-              // ellipsize on narrow (mobile) widths instead of wrapping a second
-              // line that the collapsed 40px height then clips mid-character.
-              'placeholder:text-gray-400 dark:placeholder:text-gray-500 placeholder:truncate',
-              'min-h-[40px] max-h-24 overflow-y-auto',
-              !canSend && 'opacity-50 cursor-not-allowed'
+              'min-h-10 max-h-24 flex-1 resize-none overflow-y-auto',
+              // `truncate` on the placeholder only — long copy ellipsizes on a
+              // phone instead of wrapping into a line the 40px height clips.
+              'placeholder:truncate'
             )}
           />
-          <button
+          <Button
             type="submit"
             data-testid="agent-send-button"
             aria-label="Send command"
-            disabled={!inputValue.trim() || !canSend || isSending}
-            className={cn(
-              // 44x44 touch target on coarse pointers (WCAG 2.5.5).
-              'h-10 w-10 pointer-coarse:h-11 pointer-coarse:w-11',
-              'rounded-brand flex items-center justify-center shrink-0 transition-all duration-150',
-              inputValue.trim() && canSend && !isSending
-                ? 'bg-cobalt-500 hover:bg-cobalt-600 text-white active:scale-95'
-                : 'bg-gray-200 dark:bg-gray-700 text-theme-muted'
-            )}
+            disabled={!canSubmit}
+            leftIcon={<SendHorizontal className="h-4 w-4" strokeWidth={1.75} />}
+            // 44px touch target on coarse pointers (WCAG 2.5.5).
+            className="h-10 shrink-0 pointer-coarse:h-11 pointer-coarse:min-w-11"
           >
-            <SendIcon className="w-4 h-4" />
-          </button>
+            Send
+          </Button>
         </div>
       </form>
-    </div>
+    </Panel>
   );
 });

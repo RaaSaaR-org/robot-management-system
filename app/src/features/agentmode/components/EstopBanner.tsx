@@ -11,7 +11,9 @@
  */
 
 import { Fragment, memo, useId, useState, type ReactNode } from 'react';
-import { cn } from '@/shared/utils';
+import { ChevronDown } from 'lucide-react';
+import { Button, StatusTag } from '@/shared/components/ui';
+import { cn } from '@/shared/utils/cn';
 import {
   useAgentModeStore,
   selectDamped,
@@ -49,7 +51,7 @@ export interface EstopBannerProps {
 interface BannerCopy {
   title: string;
   detail: string;
-  /** Ring/dot colour classes — amber while unverified, red once it is real. */
+  /** Colour classes — estimated (violet) while unverified, the STOP fill once it is real. */
   accent: string;
   dot: string;
   border: string;
@@ -92,9 +94,9 @@ function copyFor(
         'It is not answering now, so whether it is still stopped cannot be verified ' +
         'from here. The robot confirmed this stop while it was still reachable. ' +
         'Commands from this console stay refused.',
-      accent: 'text-amber-600 dark:text-amber-400',
-      dot: 'bg-amber-500',
-      border: 'border-amber-500/50',
+      accent: 'text-signal-estimated',
+      dot: 'bg-signal-estimated',
+      border: 'border-signal-estimated/40',
     };
   }
 
@@ -105,9 +107,9 @@ function copyFor(
         detail:
           'Sent to the robot — not confirmed yet. Do not assume it has stopped. ' +
           'Commands from this console are already refused.',
-        accent: 'text-amber-600 dark:text-amber-400',
-        dot: 'bg-amber-500',
-        border: 'border-amber-500/50',
+        accent: 'text-signal-estimated',
+        dot: 'bg-signal-estimated',
+        border: 'border-signal-estimated/40',
       };
     case 'failed':
       return {
@@ -117,9 +119,9 @@ function copyFor(
             'Use the hardware E-Stop. This console keeps refusing commands.'
           : 'The stop request never reached the robot — it may still be moving. ' +
             'Use the hardware E-Stop. This console keeps refusing commands.',
-        accent: 'text-red-600 dark:text-red-400',
-        dot: 'bg-red-500',
-        border: 'border-red-500',
+        accent: 'text-on-stop',
+        dot: 'bg-on-stop',
+        border: 'border-stop bg-stop text-on-stop',
       };
     case 'unconfirmed':
       return {
@@ -129,9 +131,9 @@ function copyFor(
             'it may still be moving. Use the hardware E-Stop. This console keeps refusing commands.'
           : 'The stop latched in software, but the robot did not confirm StopMove/Damp — ' +
             'it may still be moving. Use the hardware E-Stop. This console keeps refusing commands.',
-        accent: 'text-red-600 dark:text-red-400',
-        dot: 'bg-red-500',
-        border: 'border-red-500',
+        accent: 'text-on-stop',
+        dot: 'bg-on-stop',
+        border: 'border-stop bg-stop text-on-stop',
       };
     // `idle` is unreachable while the latch is set (every path that sets it also
     // sets a status), but a latch reported by the agent is an acknowledged one.
@@ -145,9 +147,9 @@ function copyFor(
             `The robot's safety monitor stopped it${reason ? ` (${reason})` : ''}. ` +
             'Commands are refused until the latch is cleared — Reset E-Stop clears the ' +
             "safety monitor's latch and Agent Mode's together.",
-          accent: 'text-red-600 dark:text-red-400',
-          dot: 'bg-red-500',
-          border: 'border-red-500/40',
+          accent: 'text-on-stop',
+          dot: 'bg-on-stop',
+          border: 'border-stop bg-stop text-on-stop',
         };
       }
       return {
@@ -155,9 +157,9 @@ function copyFor(
         detail:
           `The robot confirmed the stop${reason ? ` (${reason})` : ''}: it is stopped and damped. ` +
           'Commands are refused until the latch is cleared.',
-        accent: 'text-red-600 dark:text-red-400',
-        dot: 'bg-red-500',
-        border: 'border-red-500/40',
+        accent: 'text-on-stop',
+        dot: 'bg-on-stop',
+        border: 'border-stop bg-stop text-on-stop',
       };
   }
 }
@@ -174,9 +176,10 @@ function copyFor(
  * the robot's state file to unstick a refusal to move, and that person needs the
  * button in one click, not in two.
  */
-const SAFETY_BUTTON =
-  'ml-auto btn-secondary !px-3 !py-1.5 !text-xs ' +
-  'pointer-coarse:min-h-11 pointer-coarse:!px-5 pointer-coarse:!text-sm';
+const SAFETY_BUTTON = 'ml-auto shrink-0 pointer-coarse:min-h-11 pointer-coarse:px-5';
+
+/** The reset control sitting on the STOP fill: outlined in the on-stop colour. */
+const ON_STOP_BUTTON = 'border-on-stop/60 bg-transparent text-on-stop hover:bg-on-stop/10';
 
 /**
  * One notice is one line, and the line collapses in a fixed order.
@@ -189,18 +192,11 @@ const SAFETY_BUTTON =
  * an expanded detail grows downwards.
  */
 const NOTICE_ROW =
-  'glass-card px-3 py-2 flex flex-wrap items-start gap-x-3 gap-y-1.5';
+  'rounded-control border border-line bg-panel px-4 py-2.5 flex flex-wrap items-start gap-x-3 gap-y-1.5';
 
 /** Aligns the 8px dot with the centre of the first 20px text line. */
 const NOTICE_DOT = 'mt-1.5 inline-block w-2 h-2 rounded-full shrink-0';
 
-function ChevronIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-    </svg>
-  );
-}
 
 /**
  * The disclosure that un-clamps a notice's detail.
@@ -238,8 +234,8 @@ function DisclosureToggle({
     <label
       className={cn(
         'shrink-0 ml-auto sm:ml-0 inline-flex items-center gap-1 cursor-pointer select-none',
-        'rounded-brand px-2 py-1 text-[11px] text-theme-tertiary hover:text-theme-secondary',
-        'transition-colors focus-within:ring-2 focus-within:ring-cobalt-500/40',
+        'rounded-control px-2 py-1 text-xs opacity-80 hover:opacity-100',
+        'transition-opacity focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary',
         'pointer-coarse:min-h-11 pointer-coarse:px-3'
       )}
     >
@@ -253,7 +249,11 @@ function DisclosureToggle({
         onChange={(event) => onChange(event.target.checked)}
       />
       Details
-      <ChevronIcon className={cn('w-3 h-3 transition-transform', expanded && 'rotate-180')} />
+      <ChevronDown
+        aria-hidden="true"
+        strokeWidth={1.75}
+        className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
+      />
     </label>
   );
 }
@@ -264,8 +264,10 @@ interface NoticeProps {
   dataAttrs?: Record<string, string>;
   role: 'status' | 'alert';
   ariaLive?: 'polite';
-  /** Dot colour, e.g. `bg-amber-500`. */
-  dot: string;
+  /** Dot colour, e.g. `bg-signal-unknown`. */
+  dot?: string;
+  /** Replaces the dot, e.g. a StatusTag. */
+  marker?: ReactNode;
   /** Extra classes for the card itself (border, background). */
   card?: string;
   /** Title colour. */
@@ -301,6 +303,7 @@ function Notice({
   role,
   ariaLive,
   dot,
+  marker,
   card,
   accent,
   title,
@@ -324,7 +327,7 @@ function Notice({
       aria-live={ariaLive}
       className={cn(NOTICE_ROW, card)}
     >
-      <span className={cn(NOTICE_DOT, dot)} />
+      {marker ?? <span aria-hidden="true" className={cn(NOTICE_DOT, dot)} />}
       {title !== undefined && (
         <span
           data-testid={titleTestId}
@@ -344,7 +347,8 @@ function Notice({
         id={detailId}
         data-testid={detailTestId}
         className={cn(
-          'card-meta leading-5 min-w-0 basis-full sm:basis-0 sm:flex-1',
+          'text-sm leading-5 min-w-0 basis-full sm:basis-0 sm:flex-1',
+          detailClassName ? undefined : 'text-ink-tertiary',
           detailClassName,
           !open && 'line-clamp-1'
         )}
@@ -379,15 +383,15 @@ function DampedNotice({ fsmId }: { fsmId: number | null }) {
       testId="agent-damped-banner"
       dataAttrs={{ 'data-fsm-id': String(fsmId ?? '') }}
       role="status"
-      dot="bg-amber-500"
-      card="border-amber-500/50 bg-amber-500/5"
-      accent="text-amber-600 dark:text-amber-400"
+      dot="bg-signal-unknown"
+      card="border-signal-unknown/30 bg-signal-unknown/5"
+      accent="text-signal-unknown"
       title="Base damped — the robot cannot move"
       detail={
         <>
           Walk, turn and go-to blocks are accepted and do nothing — send a{' '}
-          <span className="text-theme-secondary">posture</span> block with pose{' '}
-          <span className="text-theme-secondary">stand</span>. The base sits in a
+          <span className="font-medium text-ink-primary">posture</span> block with pose{' '}
+          <span className="font-medium text-ink-primary">stand</span>. The base sits in a
           non-locomoting FSM
           {fsmId === null ? '' : ` (FSM ${fsmId})`}; clearing the E-Stop latch does not re-arm
           the base.
@@ -406,10 +410,10 @@ function DampedNotice({ fsmId }: { fsmId: number | null }) {
  * This notice exists because the alternative is worse than an empty page: with
  * no state, `enabled` and `estopActive` fall back to `false`, and the console
  * then tells an operator "Agent Mode off, E-Stop clear" about a robot nobody
- * can reach. So it says the one true thing instead — we do not know — and says
- * it in the ordinary amber the damped and recovered notices use.
+ * can reach. So it says the one true thing instead — we do not know — as one
+ * calm inset line with an Offline tag.
  *
- * Amber and `role="status"`, deliberately not red and not `alert`: an offline
+ * Neutral and `role="status"`, deliberately not red, not amber and not `alert`: an offline
  * robot is a normal, frequent condition, and an alarm that fires every time
  * someone opens the page while the agent is down is an alarm nobody reads by
  * the time it matters. The severity lives in the words.
@@ -424,19 +428,22 @@ function UnknownStateNotice({ reason }: { reason: string | null }) {
       testId="agent-state-unknown-banner"
       role="status"
       ariaLive="polite"
-      dot="bg-amber-500"
-      card="border-amber-500/50 bg-amber-500/5"
-      accent="text-amber-600 dark:text-amber-400"
-      title="Robot not reachable — E-Stop state UNKNOWN"
+      marker={
+        <span className="shrink-0">
+          <StatusTag status="offline" dot />
+        </span>
+      }
+      card="bg-inset border-line-subtle"
+      accent="text-ink-primary"
+      title="Robot not reachable — E-Stop state unknown"
       titleTestId="agent-state-unknown-title"
       detail={
         <>
-          This is <span className="text-amber-600 dark:text-amber-400">not</span> &ldquo;E-Stop
-          clear&rdquo; — use the hardware E-Stop if it has to stop; STOPP here still tries, and
-          reports what it gets back. This console could not ask the robot for its state
-          {reason ? `: ${reason}` : '.'} Whether Agent Mode is on, what it is doing and whether
-          its E-Stop is latched are all unknown. Everything else on this page is the last thing
-          this console heard, not what the robot is doing now.
+          Start the robot agent to see live state — STOPP still sends. This is not &ldquo;E-Stop
+          clear&rdquo;: use the hardware E-Stop if it has to stop. This console could not ask the
+          robot for its state{reason ? `: ${reason}` : '.'} Whether Agent Mode is on, what it is
+          doing and whether its E-Stop is latched are all unknown; everything else on this page is
+          the last thing this console heard.
         </>
       }
       detailTestId="agent-state-unknown-detail"
@@ -486,9 +493,9 @@ function RecoveredNotice({
         'data-estop-latched': String(recovered.estopLatched),
       }}
       role="alert"
-      dot="bg-amber-500"
-      card="border-amber-500/50 bg-amber-500/5"
-      accent="text-amber-600 dark:text-amber-400"
+      dot="bg-signal-unknown"
+      card="border-signal-unknown/30 bg-signal-unknown/5"
+      accent="text-signal-unknown"
       title={title}
       titleTestId="agent-recovered-title"
       detail={
@@ -507,14 +514,15 @@ function RecoveredNotice({
       }
       detailTestId="agent-recovered-detail"
       action={
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           data-testid="agent-recovered-reset"
           onClick={onReset}
           className={SAFETY_BUTTON}
         >
           {recovered.estopLatched ? 'Reset E-Stop & acknowledge' : 'Acknowledge'}
-        </button>
+        </Button>
       }
     />
   );
@@ -545,6 +553,8 @@ function EstopNotice({
     stateUnknown || status === 'requesting' || status === 'unconfirmed' || status === 'failed';
   // A stop that is not confirmed on the hardware is an alarm, not a status.
   const alarm = status === 'failed' || status === 'unconfirmed';
+  // Every copy except the estimated (violet) ones paints the STOP fill.
+  const onStopFill = copy.accent === 'text-on-stop';
 
   return (
     <Notice
@@ -552,7 +562,7 @@ function EstopNotice({
       dataAttrs={{ 'data-estop-status': status, 'data-estop-source': source ?? '' }}
       role={alarm ? 'alert' : 'status'}
       dot={cn(copy.dot, status !== 'acknowledged' && 'animate-pulse')}
-      card={cn(copy.border, alarm && 'bg-red-500/10')}
+      card={copy.border}
       accent={copy.accent}
       title={copy.title}
       titleTestId="agent-estop-title"
@@ -563,14 +573,15 @@ function EstopNotice({
       // An unconfirmed stop is the one state where the tail is an instruction.
       alwaysExpanded={alarm}
       action={
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           data-testid="agent-estop-reset"
           onClick={onReset}
-          className={SAFETY_BUTTON}
+          className={cn(SAFETY_BUTTON, onStopFill && ON_STOP_BUTTON)}
         >
           Reset E-Stop
-        </button>
+        </Button>
       }
     />
   );
@@ -595,20 +606,21 @@ function ErrorNotice({ error, onDismiss }: { error: string; onDismiss?: () => vo
     <Notice
       testId="agent-error-banner"
       role="status"
-      dot="bg-theme-tertiary"
-      accent="text-theme-secondary"
+      dot="bg-ink-muted"
+      accent="text-ink-secondary"
       title="Last request failed"
-      detail={<span className="text-red-600 dark:text-red-400">{error}</span>}
+      detail={<span className="text-signal-stopped">{error}</span>}
       action={
         onDismiss ? (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={onDismiss}
             aria-label="Dismiss error"
-            className="ml-auto shrink-0 card-meta px-2 py-1 hover:text-theme-primary transition-colors"
+            className="ml-auto shrink-0"
           >
             Dismiss
-          </button>
+          </Button>
         ) : undefined
       }
     />

@@ -5,8 +5,9 @@
  */
 
 import { createContext, useEffect, useMemo, type ReactNode } from 'react';
-import type { ColorScale, ThemeSurfaceOverrides } from './types';
+import type { ThemeSurfaceOverrides } from './types';
 import { resolveBrand, type ResolvedBrand } from './resolve';
+import { brandColorVars } from './brandVars';
 import { useThemeStore } from '@/features/settings/store/themeStore';
 
 // Load custom.css if it exists in the brand/ folder
@@ -14,32 +15,6 @@ const customCssModules = import.meta.glob('../../../brand/custom.css', { eager: 
 void customCssModules; // side-effect import only
 
 export const BrandContext = createContext<ResolvedBrand>(resolveBrand());
-
-const COLOR_SHADES = ['DEFAULT', '50', '100', '200', '300', '400', '500', '600', '700', '800', '900'] as const;
-
-function applyColorScale(
-  root: CSSStyleDeclaration,
-  prefix: string,
-  brandColors: Partial<ColorScale> | undefined,
-) {
-  if (!brandColors) return;
-
-  for (const shade of COLOR_SHADES) {
-    const value = brandColors[shade];
-    if (value) {
-      const prop = shade === 'DEFAULT' ? `--color-${prefix}` : `--color-${prefix}-${shade}`;
-      root.setProperty(prop, value);
-    }
-  }
-
-  // If DEFAULT is set but 500 isn't, sync them (500 is the Tailwind default shade)
-  if (brandColors.DEFAULT && !brandColors['500']) {
-    root.setProperty(`--color-${prefix}-500`, brandColors.DEFAULT);
-  }
-  if (brandColors['500'] && !brandColors.DEFAULT) {
-    root.setProperty(`--color-${prefix}`, brandColors['500']);
-  }
-}
 
 const SURFACE_VAR_MAP: Record<keyof ThemeSurfaceOverrides, string> = {
   bgPrimary: '--bg-primary',
@@ -78,11 +53,14 @@ export function BrandProvider({ children }: { children: ReactNode }) {
   const brand = useMemo(() => resolveBrand(), []);
   const theme = useThemeStore((s) => s.theme);
 
-  // Apply color scale overrides (these don't change with theme)
+  // Apply the primary/accent slot overrides (these don't change with theme).
+  // Every primary-* / accent-* utility reads these slots, so the whole app
+  // follows the brand.
   useEffect(() => {
     const root = document.documentElement.style;
-    applyColorScale(root, 'cobalt', brand.primaryColors);
-    applyColorScale(root, 'turquoise', brand.accentColors);
+    for (const [prop, value] of Object.entries(brandColorVars(brand))) {
+      root.setProperty(prop, value);
+    }
   }, [brand]);
 
   // Apply surface overrides (theme-dependent)

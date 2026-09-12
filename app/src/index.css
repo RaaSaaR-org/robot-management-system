@@ -7,115 +7,107 @@
    See main.tsx for why they are self-hosted at all. */
 @import "tailwindcss";
 
+/* Typography plugin. v4 does not read tailwind.config.js unless it is pulled in
+   with @config, so registering the plugin there registered nothing: every
+   `prose` class in the app emitted zero CSS and the rendered markdown in /docs
+   and in the A2A chat came out as one unstyled 16px block. Loaded here it is
+   actually part of the build. The reading styles that sit on top of it live in
+   components/docs/docs-prose.css. */
+@plugin "@tailwindcss/typography";
+
 /* Enable class-based dark mode for Tailwind v4 (matches ThemeProvider .dark/.light on :root) */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Brand slots. `static` so every variable is emitted whether or not a utility
+   uses it: BrandProvider writes these at runtime and a few 3D/SVG components
+   read them as raw var() strings, which Tailwind's scanner cannot see.
+
+   The brand owns exactly two slots, primary and accent. BrandProvider writes a
+   white-label brand's scale over --color-primary-* / --color-accent-* (and the
+   DEFAULT, hover and on-* values) as inline styles on <html>. Signal colors
+   are deliberately NOT here — see the signal note further down. */
+@theme static {
+  /* Primary — the landing mint. The ramp is for tints (bg-primary/10,
+     border-primary-300/40); fills, links and focus take the DEFAULT, which is
+     theme-aware: #b2f8df on the dark canvas, #0f7a60 on light (set under
+     :root.light below) so white text and links clear AA there. */
+  --color-primary-50: #effef9;
+  --color-primary-100: #d9fff1;
+  --color-primary-200: #b2f8df;
+  --color-primary-300: #8eeccb;
+  --color-primary-400: #6bdcb6;
+  --color-primary-500: #47c9a0;
+  --color-primary-600: #2fa585;
+  --color-primary-700: #22806a;
+  --color-primary-800: #1a5e50;
+  --color-primary-900: #123f37;
+  --color-primary: #b2f8df;
+  --color-primary-hover: #d9fff1;
+  /* Text and icons on a primary fill. Never text-white: white on mint is 1.2:1. */
+  --color-on-primary: #0a2225;
+
+  --color-accent-50: #eefbf8;
+  --color-accent-100: #d6f5ee;
+  --color-accent-200: #a9e6d8;
+  --color-accent-300: #7fd4c3;
+  --color-accent-400: #56bfad;
+  --color-accent-500: #3aa695;
+  --color-accent-600: #2b877a;
+  --color-accent-700: #226b61;
+  --color-accent-800: #1a514a;
+  --color-accent-900: #123833;
+  --color-accent: #a9e6d8;
+  --color-on-accent: #0a2225;
+
+  /* Surfaces, lines and the fifth ink, as real color tokens so bg-panel/50,
+     border-line-strong and friends all resolve. Values are per theme, below.
+     There is deliberately no --color-inset: a color named `inset` also turns
+     the static `ring-inset` utility into a ring-color setter (verified against
+     4.1.18). bg-inset is a plain @utility further down instead. */
+  --color-canvas: var(--bg-primary);
+  --color-panel: var(--bg-secondary);
+  --color-raised: var(--bg-elevated);
+  --color-field: var(--bg-card);
+  --color-line: var(--border-color);
+  --color-line-subtle: var(--border-subtle);
+  --color-line-strong: var(--border-color-strong);
+  --color-ink-muted: var(--text-muted);
+
+  /* The one saturated red on screen: E-stop buttons and alarm banners. */
+  --color-stop: var(--signal-stopped-fill);
+  --color-on-stop: #ffffff;
+}
+
 /* Custom theme configuration */
 @theme {
-  /* Primary Palette (from brand.md) */
-  --color-cobalt-50: #E8EDFF;
-  --color-cobalt-100: #D1DBFF;
-  --color-cobalt-200: #A3B7FF;
-  --color-cobalt-300: #7593FF;
-  --color-cobalt-400: #476FFF;
-  --color-cobalt-500: #2A5FFF;
-  --color-cobalt-600: #0042E6;
-  --color-cobalt-700: #0032B3;
-  --color-cobalt-800: #002280;
-  --color-cobalt-900: #00124D;
-  --color-cobalt: #2A5FFF;
-
-  --color-turquoise-50: #E6FCF8;
-  --color-turquoise-100: #CCF9F1;
-  --color-turquoise-200: #99F3E3;
-  --color-turquoise-300: #66EDD5;
-  --color-turquoise-400: #33E7C7;
-  --color-turquoise-500: #18E4C3;
-  --color-turquoise-600: #12B89C;
-  --color-turquoise-700: #0D8B76;
-  --color-turquoise-800: #095E4F;
-  --color-turquoise-900: #043129;
-  --color-turquoise: #18E4C3;
-
-  /* Semantic brand aliases.
-     `primary` = the brand primary (cobalt slot), `accent` = the brand accent
-     (turquoise slot). Defined as var() references so they automatically inherit
-     BrandProvider's runtime white-label overrides of --color-cobalt-* /
-     --color-turquoise-* — a custom brand recolors primary/accent for free.
-     Without these, the primary / accent utilities (used in ~30 files for
-     selection and focus states) emit no color and render invisible. */
-  --color-primary: var(--color-cobalt);
-  --color-primary-50: var(--color-cobalt-50);
-  --color-primary-100: var(--color-cobalt-100);
-  --color-primary-200: var(--color-cobalt-200);
-  --color-primary-300: var(--color-cobalt-300);
-  --color-primary-400: var(--color-cobalt-400);
-  --color-primary-500: var(--color-cobalt-500);
-  --color-primary-600: var(--color-cobalt-600);
-  --color-primary-700: var(--color-cobalt-700);
-  --color-primary-800: var(--color-cobalt-800);
-  --color-primary-900: var(--color-cobalt-900);
-
-  --color-accent: var(--color-turquoise);
-  --color-accent-50: var(--color-turquoise-50);
-  --color-accent-100: var(--color-turquoise-100);
-  --color-accent-200: var(--color-turquoise-200);
-  --color-accent-300: var(--color-turquoise-300);
-  --color-accent-400: var(--color-turquoise-400);
-  --color-accent-500: var(--color-turquoise-500);
-  --color-accent-600: var(--color-turquoise-600);
-  --color-accent-700: var(--color-turquoise-700);
-  --color-accent-800: var(--color-turquoise-800);
-  --color-accent-900: var(--color-turquoise-900);
-
-  /* Legacy colors */
-  --color-slate-gray: #1E1F24;
-  --color-soft-white: #F7F9FB;
-  --color-steel-gray: #63687A;
-  --color-midnight-blue: #0C1440;
-  --color-neon-purple: #A97BFF;
-
-  /* Dark theme surface colors */
-  --color-surface-900: #0A0B0D;
-  --color-surface-800: #121316;
-  --color-surface-700: #1A1B1F;
-  --color-surface-600: #242529;
-  --color-surface-500: #2E2F34;
-  --color-surface-400: #3A3B40;
-
-  /* Light theme surface colors */
-  --color-surface-light-50: #FFFFFF;
-  --color-surface-light-100: #F7F9FB;
-  --color-surface-light-200: #EEF1F5;
-  --color-surface-light-300: #E4E7ED;
-  --color-surface-light-400: #D8DCE4;
-
   /* Font families */
   --font-sans: 'Inter Variable', 'Inter', 'Avenir', 'Helvetica', 'Arial', sans-serif;
+  /* Code and machine output only (commands, logs). Labels and values are
+     normal text and take --font-sans. */
   --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
   /* Display face — Archivo variable (wdth axis). Used only for headlines and
      readout values; the expanded width is what makes it read as equipment
      labelling rather than another grotesk. */
   --font-display: 'Archivo Variable', 'Archivo', 'Inter Variable', 'Helvetica', sans-serif;
 
-  /* Border radius */
-  --radius-brand: 8px;
-  --radius-brand-lg: 16px;
+  /* Border radius. panel: panels and modals; control: buttons, inputs, insets,
+     menus; tag: tags and badges. brand is the landing page's button radius
+     (lp-btn-*). */
+  --radius-panel: 14px;
+  --radius-control: 10px;
+  --radius-tag: 6px;
+  --radius-brand: 10px;
 
   /* The three text colors as real Tailwind color tokens, so the utilities we
      never hand-wrote below — fill-*, stroke-*, decoration-* — resolve. Without
      them `fill-ink-primary` on an SVG <text> emitted no CSS at all and the
      lifecycle diagram's labels rendered black-on-black in dark mode.
 
-     The namespace is `ink-`, not `theme-`, and that is the whole point. A
-     @theme color token generates the ENTIRE utility family for its name, so
-     `--color-theme-secondary` would also mint bg-theme-secondary,
-     border-theme-secondary, bg-theme-surface and every /opacity variant of the
-     names hand-written further down. Those class names are already spelled out
-     in 47 files where they have always emitted nothing — switching them on
-     silently paints a text color into a background, and
-     `bg-theme-secondary text-theme-secondary` becomes #B8BBC2 on #B8BBC2.
-     Keep new color tokens out of the `theme-` namespace. */
+     The namespace is `ink-`, not `theme-`: a @theme color token generates the
+     ENTIRE utility family for its name, so `--color-theme-secondary` would
+     also mint bg-theme-secondary and friends, and a text color would paint
+     into a background. Keep new color tokens out of the `theme-` namespace;
+     the design-drift test bans the old theme-* utilities. */
   --color-ink-primary: var(--text-primary);
   --color-ink-secondary: var(--text-secondary);
   --color-ink-tertiary: var(--text-tertiary);
@@ -131,102 +123,92 @@
   --ease-instrument: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-/* CSS Custom Properties for theme switching */
+/* Theme values — the token table in docs/brand.md. Dark is the default and is
+   the landing page's ground; light is the same set with other values. The var
+   names are old (~3,500 usages); the utilities in @theme give them the new
+   role names: canvas = --bg-primary, panel = --bg-secondary, inset =
+   --bg-tertiary, raised = --bg-elevated, field = --bg-card. */
 :root,
 :root.dark {
-  /* Dark theme (default) */
-  --bg-primary: #121316;
-  --bg-secondary: #1A1B1F;
-  --bg-tertiary: #0A0B0D;
-  --bg-elevated: #242529;
-  --bg-card: #2E2F34;
+  color-scheme: dark;
 
-  --text-primary: #F7F9FB;
-  --text-secondary: #B8BBC2;
-  --text-tertiary: #8A8D96;
-  --text-muted: #63687A;
+  --bg-primary: #080f18;
+  --bg-secondary: #101d2c;
+  --bg-tertiary: #0b1522;
+  --bg-elevated: #192a3c;
+  --bg-card: #0d1826;
 
-  --border-color: rgba(255, 255, 255, 0.1);
-  --border-color-strong: rgba(255, 255, 255, 0.2);
+  --text-primary: #f1f5fc;
+  --text-secondary: #b2c3d5;
+  --text-tertiary: #9aafc5;
+  --text-muted: #8499b0;
+
+  --border-subtle: #1a2a3c;
+  --border-color: #243649;
+  --border-color-strong: #3b546c;
+
+  /* Start of the highlight panel's gradient:
+     linear-gradient(135deg, var(--panel-highlight-from), var(--bg-secondary)). */
+  --panel-highlight-from: #162638;
+  /* The only shadow in the system: menus, popovers and modals lifting off the
+     page. A drop shadow, never a glow. */
+  --shadow-raised: 0 12px 32px rgba(0, 0, 0, 0.45);
 
   /* Signal states — dark.
      These are a language, not branding: "unknown" and "stopped" have to mean
      the same thing on every white-label deployment, so none of them ride
-     --color-primary/--color-accent. That also keeps the Sim tag from rendering
-     in the identical hue as the primary call-to-action, which is what happened
-     when `estimated` was aliased to the brand primary.
+     --color-primary/--color-accent, and BrandProvider never writes them.
      Amber, not red, for unknown: missing data is not a fault, and the two must
-     never look alike on a safety surface. `estimated` is deliberately neutral —
-     "simulated" is a provenance note, not a warning. */
-  --signal-measured: #2FC7A9;
-  --signal-estimated: var(--text-secondary);
-  --signal-unknown: #D9A441;
-  --signal-stopped: #FF6B6B;
-
-  /* Glass System */
-  --glass-bg: rgba(18, 19, 22, 0.75);
-  --glass-bg-elevated: rgba(30, 31, 36, 0.85);
-  --glass-bg-subtle: rgba(18, 19, 22, 0.50);
-  --glass-blur: 16px;
-  --glass-blur-strong: 24px;
-
-  /* Glass Borders */
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-border-subtle: rgba(255, 255, 255, 0.05);
-  --glass-border-highlight: rgba(255, 255, 255, 0.15);
-
-  /* Glass Shadows */
-  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-  --glass-shadow-elevated: 0 16px 48px rgba(0, 0, 0, 0.4);
-  --glass-shadow-subtle: 0 4px 16px rgba(0, 0, 0, 0.2);
-
-  /* Glass Gradient */
-  --glass-gradient-shine: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, transparent 50%);
+     never look alike on a safety surface. `estimated` (Sim) is a violet that
+     cannot be mistaken for the mint primary — "simulated" is a provenance
+     note, not a warning. --signal-stopped is the red for text and borders;
+     --signal-stopped-fill is the saturated STOP fill (bg-stop), and it is the
+     only saturated red on screen. */
+  --signal-measured: #a7e8d3;
+  --signal-estimated: #c5b9ef;
+  --signal-unknown: #e9c39c;
+  --signal-stopped: #ff9b9b;
+  --signal-stopped-fill: #e5484d;
 }
 
 /* Light theme via class */
 :root.light {
-  --bg-primary: #F7F9FB;
-  --bg-secondary: #EEF1F5;
-  --bg-tertiary: #E4E7ED;
-  --bg-elevated: #FFFFFF;
-  --bg-card: #FFFFFF;
+  color-scheme: light;
 
-  --text-primary: #1E1F24;
-  --text-secondary: #3D3E44;
-  --text-tertiary: #63687A;
-  --text-muted: #8A8D96;
+  --bg-primary: #f5f7fa;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #eef2f6;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
 
-  --border-color: rgba(0, 0, 0, 0.08);
-  --border-color-strong: rgba(0, 0, 0, 0.15);
+  --text-primary: #0f1b2a;
+  --text-secondary: #3a4b5e;
+  --text-tertiary: #566a80;
+  --text-muted: #6b7f94;
 
-  /* Signal states — light. Each is calibrated against --bg-tertiary (#E4E7ED),
-     the darkest surface any of them lands on, not against the page background,
-     so they still clear 4.5:1 inside a tinted panel row. */
-  --signal-measured: #0A6E5C;
-  --signal-estimated: var(--text-secondary);
-  --signal-unknown: #7A5510;
-  --signal-stopped: #B02020;
+  --border-subtle: #e3e8ee;
+  --border-color: #d5dde6;
+  --border-color-strong: #b4c1ce;
 
-  /* Glass System - Light */
-  --glass-bg: rgba(255, 255, 255, 0.75);
-  --glass-bg-elevated: rgba(255, 255, 255, 0.90);
-  --glass-bg-subtle: rgba(255, 255, 255, 0.50);
-  --glass-blur: 16px;
-  --glass-blur-strong: 24px;
+  --panel-highlight-from: #eef7f3;
+  --shadow-raised: 0 8px 24px rgba(15, 27, 42, 0.12);
 
-  /* Glass Borders - Light */
-  --glass-border: rgba(0, 0, 0, 0.06);
-  --glass-border-subtle: rgba(0, 0, 0, 0.04);
-  --glass-border-highlight: rgba(0, 0, 0, 0.12);
+  /* The mint is a dark-canvas color; on white it is a deeper green that
+     carries white text and passes AA as link text. The ramps stay as they are. */
+  --color-primary: #0f7a60;
+  --color-primary-hover: #0b6650;
+  --color-on-primary: #ffffff;
+  --color-accent: #0e7c6b;
+  --color-on-accent: #ffffff;
 
-  /* Glass Shadows - Light */
-  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
-  --glass-shadow-elevated: 0 16px 48px rgba(0, 0, 0, 0.12);
-  --glass-shadow-subtle: 0 4px 16px rgba(0, 0, 0, 0.05);
-
-  /* Glass Gradient - Light */
-  --glass-gradient-shine: linear-gradient(135deg, rgba(255, 255, 255, 0.5) 0%, transparent 50%);
+  /* Signal states — light. Each is calibrated against --bg-tertiary, the
+     darkest surface any of them lands on, not against the page background, so
+     they still clear 4.5:1 inside a tinted panel row. */
+  --signal-measured: #0a6e5c;
+  --signal-estimated: #5b4bb0;
+  --signal-unknown: #7a5510;
+  --signal-stopped: #b02020;
+  --signal-stopped-fill: #c9302c;
 }
 
 @layer base {
@@ -238,120 +220,34 @@
   body {
     background-color: var(--bg-primary);
     color: var(--text-primary);
+    font-family: var(--font-sans);
+  }
+
+  /* Headlines in the app take the landing's display face. Scoped to the shell
+     and to dialogs portalled to <body> so the landing page keeps its own
+     (it sets lp-display explicitly). Any font-* utility still wins. */
+  [data-app-shell] :where(h1, h2),
+  body > :not(#root) :where(h1, h2) {
+    font-family: var(--font-display);
   }
 }
 
-@layer components {
-  /* Button variants */
-  .btn-primary {
-    @apply bg-cobalt text-white px-6 py-3 rounded-brand font-medium transition-all duration-200 hover:bg-cobalt-600 hover:shadow-lg;
-  }
-
-  .btn-secondary {
-    @apply border-2 border-cobalt text-cobalt px-6 py-3 rounded-brand font-medium transition-all duration-200 hover:bg-cobalt hover:text-white;
-  }
-
-  /* Legacy name — now theme-aware: white-on-light was unreadable in light theme */
-  .btn-outline-white {
-    @apply border-2 px-6 py-3 rounded-brand font-medium transition-all duration-200;
-    border-color: var(--border-color-strong);
-    color: var(--text-primary);
-  }
-  .btn-outline-white:hover {
-    background-color: var(--bg-elevated);
-  }
-
-  /* Theme-aware glass effect (legacy) */
-  .glass {
-    background-color: var(--glass-bg);
-    backdrop-filter: blur(var(--glass-blur));
-    -webkit-backdrop-filter: blur(var(--glass-blur));
-    border: 1px solid var(--glass-border);
-  }
-
-  /* Glass Card - Primary glassmorphism card */
-  .glass-card {
-    background-color: var(--glass-bg);
-    backdrop-filter: blur(var(--glass-blur));
-    -webkit-backdrop-filter: blur(var(--glass-blur));
-    border: 1px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    @apply rounded-brand-lg transition-all duration-300;
-    position: relative;
-    overflow: hidden;
-  }
-
-  .glass-card::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: var(--glass-gradient-shine);
-    pointer-events: none;
-    border-radius: inherit;
-  }
-
-  /* Interactive glass card */
-  .glass-card-interactive {
-    @apply cursor-pointer;
-  }
-
-  .glass-card-interactive:hover {
-    border-color: var(--glass-border-highlight);
-    box-shadow: var(--glass-shadow-elevated);
-    transform: translateY(-2px);
-  }
-
-  .glass-card-interactive:active {
-    transform: translateY(0);
-  }
-
-  /* Glass Elevated - For modals, dropdowns, popovers */
-  .glass-elevated {
-    background-color: var(--glass-bg-elevated);
-    backdrop-filter: blur(var(--glass-blur-strong));
-    -webkit-backdrop-filter: blur(var(--glass-blur-strong));
-    border: 1px solid var(--glass-border-highlight);
-    box-shadow: var(--glass-shadow-elevated);
-    @apply rounded-brand-lg;
-  }
-
-  /* Glass Subtle - For nested elements, icon containers */
-  .glass-subtle {
-    background-color: var(--glass-bg-subtle);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border: 1px solid var(--glass-border-subtle);
-    @apply rounded-brand;
-  }
-
-  /* Section backgrounds */
-  .section-primary {
-    background-color: var(--bg-primary);
-  }
-
-  .section-secondary {
-    background-color: var(--bg-secondary);
-  }
-
-  .section-tertiary {
-    background-color: var(--bg-tertiary);
-  }
-
-  /* Theme-aware card (legacy - now uses glass) */
-  .card {
-    background-color: var(--glass-bg);
-    backdrop-filter: blur(var(--glass-blur));
-    -webkit-backdrop-filter: blur(var(--glass-blur));
-    border: 1px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    @apply rounded-brand-lg transition-all duration-300 p-6;
-    position: relative;
-    overflow: hidden;
-  }
-
-  .card:hover {
-    border-color: var(--glass-border-highlight);
-  }
+/* Matte, not glass. Inside the app shell and in anything portalled to <body>
+   (modals, toasts, menus) backdrop-filter is switched off, whatever a component
+   or a third-party widget sets, so no page renders frosted. The design-drift
+   test keeps backdrop-blur-* out of the source; the route smoke checks the
+   rendered pages. The landing page lives in #root outside the shell and is not
+   affected. */
+[data-app-shell],
+[data-app-shell] *,
+[data-app-shell] *::before,
+[data-app-shell] *::after,
+body > :not(#root),
+body > :not(#root) *,
+body > :not(#root) *::before,
+body > :not(#root) *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 @layer utilities {
@@ -364,110 +260,28 @@
     display: none;
   }
 
-  /* Theme-aware text utilities */
-  .text-theme-primary {
-    color: var(--text-primary);
-  }
-
-  .text-theme-secondary {
-    color: var(--text-secondary);
-  }
-
-  .text-theme-tertiary {
-    color: var(--text-tertiary);
-  }
-
-  .text-theme-muted {
-    color: var(--text-muted);
-  }
-
-  /* Card typography hierarchy */
-  .card-title {
-    @apply text-base font-semibold;
-    color: var(--text-primary);
-  }
-
-  .card-subtitle {
-    @apply text-sm;
-    color: var(--text-secondary);
-  }
-
-  .card-label {
-    @apply text-xs font-medium uppercase tracking-wide;
-    color: var(--text-tertiary);
-  }
-
-  .card-value {
-    @apply text-sm font-medium;
-    color: var(--text-primary);
-  }
-
-  .card-meta {
-    @apply text-xs;
-    color: var(--text-muted);
-  }
-
-  /* Theme-aware borders */
-  .border-theme {
-    border-color: var(--border-color);
-  }
-
-  .border-theme-strong {
-    border-color: var(--border-color-strong);
-  }
-
-  /* Glass borders */
-  .border-glass {
-    border-color: var(--glass-border);
-  }
-
-  .border-glass-subtle {
-    border-color: var(--glass-border-subtle);
-  }
-
-  .border-glass-highlight {
-    border-color: var(--glass-border-highlight);
-  }
-
-  /* Theme-aware backgrounds */
-  .bg-theme-elevated {
-    background-color: var(--bg-elevated);
-  }
-
-  .bg-theme-card {
-    background-color: var(--bg-card);
-  }
-
-  /* Glass backgrounds */
-  .bg-glass {
-    background-color: var(--glass-bg);
-  }
-
-  .bg-glass-subtle {
-    background-color: var(--glass-bg-subtle);
-  }
-
-  .bg-glass-elevated {
-    background-color: var(--glass-bg-elevated);
-  }
-
   /* Sidebar and layout transitions */
   .sidebar-transition {
     @apply transition-[width,padding] duration-200 ease-in-out;
   }
 
-  /* Hover background for interactive elements */
-  .bg-theme-hover {
-    background-color: var(--bg-elevated);
-  }
-
-  .hover\:bg-theme-hover:hover {
-    background-color: var(--bg-elevated);
-  }
-
-  /* Theme primary background */
-  .bg-theme-primary {
-    background-color: var(--bg-primary);
+  /* Markdown rendered onto a coloured surface — chat bubbles above all. The
+     typography plugin ships its own greys, which paint dark body text onto the
+     primary user bubble; here the container's own text colour is the right one. */
+  .prose-inherit {
+    --tw-prose-body: inherit;
+    --tw-prose-headings: inherit;
+    --tw-prose-lead: inherit;
+    --tw-prose-links: inherit;
+    --tw-prose-bold: inherit;
+    --tw-prose-code: inherit;
+    --tw-prose-quotes: inherit;
+    --tw-prose-counters: currentColor;
+    --tw-prose-bullets: currentColor;
+    --tw-prose-hr: currentColor;
+    --tw-prose-quote-borders: currentColor;
+    --tw-prose-th-borders: currentColor;
+    --tw-prose-td-borders: currentColor;
   }
 }
 
@@ -527,7 +341,7 @@
     flex-wrap: wrap;
     align-items: baseline;
     gap: 0.75rem;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 0.6875rem;
     letter-spacing: 0.14em;
     text-transform: uppercase;
@@ -556,7 +370,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 0.625rem;
     font-weight: 600;
     letter-spacing: 0.12em;
@@ -622,12 +436,13 @@
     max-width: 62ch;
   }
 
-  /* Mono readout label — units, field names, keys. Uppercase only.
+  /* Readout label — units, field names, keys. Uppercase only. Set in the body
+     face like every other normal text; mono is reserved for code.
      --text-secondary, not --text-muted: at 11px this carries real content
      (field names, provenance lines, footer column headings) and muted measures
      2.4:1 on the dark surface. */
   .lp-key {
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 0.6875rem;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -649,7 +464,7 @@
   }
 
   .lp-value {
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 0.8125rem;
     font-weight: 500;
     color: var(--text-primary);
@@ -717,7 +532,7 @@
   }
 
   /* Primary action. The brand primary is white-labelled at runtime, so white
-     text on the raw token is only legible by luck — the shipped cobalt passes
+     text on the raw token is only legible by luck — a dark blue brand passes
      at 5.0:1, an orange brand lands at 2.9:1. Mixing toward black first makes
      the button safe for any brand hue while still reading as the brand colour.
      Every white-on-primary surface on the landing page uses this. */
@@ -787,6 +602,17 @@
     --tw-ring-color: var(--text-primary);
     --tw-ring-offset-color: var(--bg-primary);
   }
+  /* In the app the ring is the primary (design contract §7). The landing page
+     keeps its own focus treatment. */
+  *:focus-visible:not(.landing-page *) {
+    --tw-ring-color: var(--color-primary);
+  }
+}
+
+/* The inset surface (sidebar, table head, a panel inside a panel). A plain
+   utility, not a --color-inset token — see the note in @theme. */
+@utility bg-inset {
+  background-color: var(--bg-tertiary);
 }
 
 /* Reduced motion. The page previously ran 30+ SMIL animators, blur filters

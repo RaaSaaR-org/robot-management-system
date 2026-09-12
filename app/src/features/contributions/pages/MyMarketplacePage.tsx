@@ -1,315 +1,187 @@
 /**
  * @file MyMarketplacePage.tsx
- * @description User's purchases and listings in the marketplace
+ * @description My marketplace: licenses you bought and listings you published, as tabs in the URL
  * @feature marketplace
  */
 
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Download, ExternalLink, Package, Plus, ShoppingBag } from 'lucide-react';
 import {
-  ArrowLeft, Download, ShoppingBag, Package, Plus, ExternalLink,
-  AlertTriangle, RefreshCw,
-} from 'lucide-react';
-import { cn } from '@/shared/utils/cn';
-import { PageHeader } from '@/shared/components/ui/PageHeader';
-import { EmptyState } from '@/shared/components/ui/EmptyState';
-import { TierBadge } from '../components/TierBadge';
+  Badge, Button, DataTable, EmptyState, LinkButton, PageHeader, Panel, StatusTag, Tabs,
+  type DataTableColumn,
+} from '@/shared/components/ui';
+import { formatTimeAgo, UI_DATE_LOCALE } from '@/shared/utils/format';
 import { CreditBalance } from '../components/CreditBalance';
 import { MarketplaceDownloadModal } from '../components/MarketplaceDownloadModal';
 import { MarketplacePublishDialog } from '../components/MarketplacePublishDialog';
+import { MarketplaceStarRating } from '../components/MarketplaceStarRating';
+import { listingTypeLabel } from '../components/marketplaceUi';
 import { formatCredits } from '../types/contributions.types';
-import { LICENSE_TIER_LABELS } from '../types/marketplace.types';
-import type { MarketplaceListing } from '../types/marketplace.types';
+import {
+  LICENSE_TIER_LABELS,
+  type MarketplaceListing,
+  type MarketplacePurchase,
+  type MyMarketplaceListing,
+} from '../types/marketplace.types';
 import { useMyMarketplace } from '../hooks/marketplace';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
-type Tab = 'purchases' | 'listings';
+const TAB_IDS = ['purchases', 'listings'] as const;
+type TabId = (typeof TAB_IDS)[number];
 
 export function MyMarketplacePage() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<Tab>('purchases');
-  const [downloadListing, setDownloadListing] = useState<MarketplaceListing | null>(null);
-  const [showPublishDialog, setShowPublishDialog] = useState(false);
-  const {
-    purchases,
-    myListings,
-    creditBalance,
-    isLoading,
-    error,
-    createListing,
-    isCreatingListing,
-    refetch,
-  } = useMyMarketplace();
+  const [params, setParams] = useSearchParams();
+  const tab: TabId = TAB_IDS.includes(params.get('tab') as TabId) ? (params.get('tab') as TabId) : 'purchases';
+  const setTab = (id: string) =>
+    setParams((p) => { if (id === TAB_IDS[0]) p.delete('tab'); else p.set('tab', id); return p; }, { replace: true });
 
-  const showSkeleton = isLoading && purchases.length === 0 && myListings.length === 0;
+  const [downloadListing, setDownloadListing] = useState<MarketplaceListing | null>(null);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const { purchases, myListings, creditBalance, isLoading, error, createListing, isCreatingListing, refetch } =
+    useMyMarketplace();
+
+  const openListing = (id: string) => navigate(`/marketplace/${id}`);
+  const publishButton = (
+    <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => setPublishOpen(true)}>Publish listing</Button>
+  );
+
+  const purchaseColumns: DataTableColumn<MarketplacePurchase>[] = [
+    {
+      key: 'title', header: 'Listing', sortable: true, sortValue: (p) => p.listing.title,
+      cell: (p) => <ListingCell listing={p.listing} />,
+    },
+    {
+      key: 'tier', header: 'License', sortable: true, hideBelow: 'sm', sortValue: (p) => p.licenseTier,
+      cell: (p) => <Badge variant="neutral" size="sm">{LICENSE_TIER_LABELS[p.licenseTier]}</Badge>,
+    },
+    {
+      key: 'credits', header: 'Credits', align: 'right', sortable: true, hideBelow: 'sm',
+      sortValue: (p) => p.creditsSpent, cell: (p) => <span className="tabular-nums">{formatCredits(p.creditsSpent)}</span>,
+    },
+    {
+      key: 'purchasedAt', header: 'Purchased', align: 'right', sortable: true, hideBelow: 'md',
+      sortValue: (p) => new Date(p.purchasedAt), cell: (p) => formatTimeAgo(p.purchasedAt),
+    },
+  ];
+
+  const listingColumns: DataTableColumn<MyMarketplaceListing>[] = [
+    {
+      key: 'title', header: 'Title', sortable: true, sortValue: (m) => m.listing.title,
+      cell: (m) => <span className="font-medium text-ink-primary">{m.listing.title}</span>,
+    },
+    { key: 'type', header: 'Type', sortable: true, sortValue: (m) => m.listing.type, hideBelow: 'sm', cell: (m) => listingTypeLabel(m.listing) },
+    { key: 'status', header: 'Status', sortable: true, sortValue: (m) => m.status, cell: (m) => <StatusTag status={m.status} /> },
+    {
+      key: 'downloads', header: 'Downloads', align: 'right', sortable: true, hideBelow: 'sm', sortValue: (m) => m.totalDownloads,
+      cell: (m) => <span className="tabular-nums">{m.totalDownloads.toLocaleString(UI_DATE_LOCALE)}</span>,
+    },
+    {
+      key: 'rating', header: 'Rating', sortable: true, hideBelow: 'sm', sortValue: (m) => m.listing.rating,
+      cell: (m) => (m.listing.reviewCount > 0 ? <MarketplaceStarRating rating={m.listing.rating} /> : null),
+    },
+    {
+      key: 'revenue', header: 'Revenue', align: 'right', sortable: true, hideBelow: 'md', sortValue: (m) => m.totalRevenue,
+      cell: (m) => <span className="tabular-nums">{formatCredits(m.totalRevenue)} credits</span>,
+    },
+  ];
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-6">
-      {/* Back */}
-      <button
-        type="button"
-        onClick={() => navigate('/marketplace')}
-        className="flex items-center gap-2 text-sm text-theme-secondary hover:text-theme-primary mb-6 transition-colors"
-      >
-        <ArrowLeft size={16} />
-        Back to Marketplace
-      </button>
-
+    <div className="flex flex-col gap-6">
       <PageHeader
-        title="My Marketplace"
-        subtitle="Your purchased licenses and published listings"
-        actions={<CreditBalance totalCredits={creditBalance ?? 0} />}
-        className="mb-6"
+        eyebrow="Build"
+        back={{ to: '/marketplace', label: 'Marketplace' }}
+        title="My marketplace"
+        description="What you licensed and what you published."
+        meta={creditBalance != null ? <CreditBalance totalCredits={creditBalance} /> : undefined}
+        actions={tab === 'listings' ? publishButton : undefined}
       />
 
-      {/* Error banner */}
-      {error && (
-        <div className="flex items-center gap-3 p-4 mb-6 rounded-xl bg-red-500/10 border border-red-500/30">
-          <AlertTriangle size={18} className="text-red-400 shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-red-400">Failed to load your marketplace data</p>
-            <p className="text-xs text-theme-secondary truncate">{error}</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => refetch()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-brand bg-theme-elevated border border-theme text-sm text-theme-secondary hover:text-theme-primary transition-colors shrink-0"
-          >
-            <RefreshCw size={14} />
-            Retry
-          </button>
-        </div>
+      <Tabs
+        tabs={[
+          { id: 'purchases', label: 'Purchases', count: purchases.length },
+          { id: 'listings', label: 'Listings', count: myListings.length },
+        ]}
+        activeTab={tab}
+        onTabChange={setTab}
+      />
+
+      {tab === 'purchases' && (
+        <Panel padding="none">
+          <DataTable
+            caption="Purchased licenses"
+            columns={purchaseColumns}
+            rows={purchases}
+            getRowId={(p) => p.id}
+            defaultSort={{ key: 'purchasedAt', direction: 'desc' }}
+            onRowClick={(p) => openListing(p.listingId)}
+            rowActions={(p) => [
+              { label: 'Open', icon: <ExternalLink />, onSelect: () => openListing(p.listingId) },
+              { label: 'Download', icon: <Download />, onSelect: () => setDownloadListing(p.listing) },
+            ]}
+            rowActionsLabel={(p) => `Actions for ${p.listing.title}`}
+            isLoading={isLoading}
+            error={purchases.length === 0 ? error : null}
+            errorTitle="Couldn't load your purchases"
+            onRetry={() => void refetch()}
+            empty={
+              <EmptyState
+                icon={<ShoppingBag />}
+                title="No purchases yet"
+                description="Licenses you buy in the marketplace show up here, ready to download."
+                action={<LinkButton to="/marketplace" variant="secondary">Browse the marketplace</LinkButton>}
+              />
+            }
+          />
+        </Panel>
       )}
 
-      {/* Tabs */}
-      <div className="flex items-center gap-1 bg-theme-elevated rounded-brand p-1 mb-6 w-fit">
-        <button
-          type="button"
-          onClick={() => setTab('purchases')}
-          className={cn(
-            'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-            tab === 'purchases' ? 'bg-cobalt-500 text-white' : 'text-theme-secondary hover:text-theme-primary'
-          )}
-        >
-          <ShoppingBag size={14} />
-          My Purchases
-          <span className="text-xs opacity-60">{purchases.length}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab('listings')}
-          className={cn(
-            'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-            tab === 'listings' ? 'bg-cobalt-500 text-white' : 'text-theme-secondary hover:text-theme-primary'
-          )}
-        >
-          <Package size={14} />
-          My Listings
-          <span className="text-xs opacity-60">{myListings.length}</span>
-        </button>
-      </div>
-
-      {/* Loading skeleton (shared for both tabs) */}
-      {showSkeleton && (
-        <div className="space-y-3 animate-pulse" aria-busy="true" aria-label="Loading">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-4 p-4 rounded-xl bg-theme-card border border-theme">
-              <div className="w-10 h-10 rounded-lg bg-theme-elevated shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="h-4 w-1/3 rounded bg-theme-elevated mb-2" />
-                <div className="h-3 w-1/2 rounded bg-theme-elevated" />
-              </div>
-              <div className="w-24 h-9 rounded-brand bg-theme-elevated shrink-0" />
-            </div>
-          ))}
-        </div>
+      {tab === 'listings' && (
+        <Panel padding="none">
+          <DataTable
+            caption="Your listings"
+            columns={listingColumns}
+            rows={myListings}
+            getRowId={(m) => m.listing.id}
+            defaultSort={{ key: 'title', direction: 'asc' }}
+            onRowClick={(m) => openListing(m.listing.id)}
+            rowActions={(m) => [{ label: 'Open', icon: <ExternalLink />, onSelect: () => openListing(m.listing.id) }]}
+            rowActionsLabel={(m) => `Actions for ${m.listing.title}`}
+            isLoading={isLoading}
+            error={myListings.length === 0 ? error : null}
+            errorTitle="Couldn't load your listings"
+            onRetry={() => void refetch()}
+            empty={
+              <EmptyState
+                icon={<Package />}
+                title="No listings yet"
+                description="Publish a skill or dataset to share it with other teams."
+                action={publishButton}
+              />
+            }
+          />
+        </Panel>
       )}
 
-      {/* Purchases */}
-      {!showSkeleton && tab === 'purchases' && (
-        <div className="space-y-3">
-          {purchases.map((purchase) => (
-            <div
-              key={purchase.id}
-              className="flex items-center gap-4 p-4 rounded-xl bg-theme-card border border-theme"
-            >
-              <div className={cn(
-                'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
-                purchase.listing.type === 'skill'
-                  ? 'bg-cobalt-500/10 text-cobalt-500 dark:text-cobalt-300'
-                  : 'bg-teal-500/15 text-teal-400'
-              )}>
-                {purchase.listing.type === 'skill' ? <Package size={20} /> : <Download size={20} />}
-              </div>
-              <div className="flex-1 min-w-0">
-                <button
-                  type="button"
-                  onClick={() => navigate(`/marketplace/${purchase.listingId}`)}
-                  className="text-sm font-medium text-theme-primary hover:text-cobalt-500 dark:hover:text-cobalt-300 transition-colors flex items-center gap-1"
-                >
-                  {purchase.listing.title}
-                  <ExternalLink size={10} />
-                </button>
-                <div className="flex items-center gap-3 text-xs text-theme-tertiary mt-0.5">
-                  <span>{purchase.listing.type === 'skill' ? 'Skill' : 'Dataset'}</span>
-                  <span>{LICENSE_TIER_LABELS[purchase.licenseTier]} license</span>
-                  <span>{formatCredits(purchase.creditsSpent)} credits</span>
-                  <span>{formatDate(purchase.purchasedAt)}</span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDownloadListing(purchase.listing)}
-                className="px-4 py-2 rounded-brand bg-emerald-600/20 text-emerald-400 text-sm font-medium hover:bg-emerald-600/30 transition-colors flex items-center gap-1.5 shrink-0"
-              >
-                <Download size={14} />
-                Download
-              </button>
-            </div>
-          ))}
-
-          {purchases.length === 0 && (
-            <EmptyState
-              icon={<ShoppingBag className="w-10 h-10" />}
-              title="No purchases yet"
-              action={
-                <button
-                  type="button"
-                  onClick={() => navigate('/marketplace')}
-                  className="text-sm text-cobalt-500 dark:text-cobalt-300 hover:underline"
-                >
-                  Browse the Marketplace
-                </button>
-              }
-            />
-          )}
-        </div>
-      )}
-
-      {/* My Listings */}
-      {!showSkeleton && tab === 'listings' && (
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-sm text-theme-secondary">
-              {myListings.length} {myListings.length === 1 ? 'listing' : 'listings'}
-            </p>
-            <button
-              type="button"
-              onClick={() => setShowPublishDialog(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-brand bg-cobalt-500 text-white text-sm font-medium hover:bg-cobalt-600 transition-colors"
-            >
-              <Plus size={14} />
-              List a Skill or Dataset
-            </button>
-          </div>
-
-          {myListings.length === 0 ? (
-            <EmptyState
-              icon={<Package className="w-10 h-10" />}
-              title="You haven't listed anything yet"
-              action={
-                <button
-                  type="button"
-                  onClick={() => setShowPublishDialog(true)}
-                  className="text-sm text-cobalt-500 dark:text-cobalt-300 hover:underline"
-                >
-                  Publish your first skill or dataset
-                </button>
-              }
-            />
-          ) : (
-            <div className="rounded-xl border border-theme overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-theme-elevated">
-                    <th className="text-left px-4 py-3 text-xs font-medium text-theme-tertiary uppercase tracking-wide">Listing</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-theme-tertiary uppercase tracking-wide">Type</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-theme-tertiary uppercase tracking-wide">Status</th>
-                    <th className="text-right px-4 py-3 text-xs font-medium text-theme-tertiary uppercase tracking-wide">Downloads</th>
-                    <th className="text-right px-4 py-3 text-xs font-medium text-theme-tertiary uppercase tracking-wide">Revenue</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {myListings.map((item) => (
-                    <tr key={item.listing.id} className="border-t border-theme">
-                      <td className="px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/marketplace/${item.listing.id}`)}
-                          className="text-theme-primary hover:text-cobalt-500 dark:hover:text-cobalt-300 transition-colors font-medium flex items-center gap-1"
-                        >
-                          {item.listing.title}
-                          <ExternalLink size={10} />
-                        </button>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <TierBadge tier={item.listing.seller.tier} size="sm" showLabel={false} />
-                          <span className="text-xs text-theme-tertiary">{item.listing.seller.displayName}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={cn(
-                          'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
-                          item.listing.type === 'skill'
-                            ? 'bg-cobalt-500/10 text-cobalt-500 dark:text-cobalt-300'
-                            : 'bg-teal-500/15 text-teal-400'
-                        )}>
-                          {item.listing.type === 'skill' ? 'Skill' : 'Dataset'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={cn(
-                          'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
-                          item.status === 'active'
-                            ? 'bg-emerald-500/15 text-emerald-400'
-                            : item.status === 'pending_review'
-                              ? 'bg-amber-500/15 text-amber-400'
-                              : 'bg-theme-elevated text-theme-tertiary'
-                        )}>
-                          {item.status === 'active' ? 'Active' : item.status === 'pending_review' ? 'In Review' : 'Draft'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right text-theme-secondary">
-                        {item.totalDownloads.toLocaleString(UI_DATE_LOCALE)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium text-theme-primary">
-                        {formatCredits(item.totalRevenue)} cr
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Download Modal */}
       {downloadListing && (
-        <MarketplaceDownloadModal
-          listing={downloadListing}
-          open={!!downloadListing}
-          onClose={() => setDownloadListing(null)}
-        />
+        <MarketplaceDownloadModal listing={downloadListing} open onClose={() => setDownloadListing(null)} />
       )}
 
-      {/* Publish Dialog */}
       <MarketplacePublishDialog
-        open={showPublishDialog}
-        onClose={() => setShowPublishDialog(false)}
-        onSubmit={async (input) => {
-          await createListing(input);
-        }}
+        open={publishOpen}
+        onClose={() => setPublishOpen(false)}
+        onSubmit={async (input) => { await createListing(input); }}
         isSubmitting={isCreatingListing}
       />
     </div>
   );
 }
 
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-function formatDate(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(UI_DATE_LOCALE);
+function ListingCell({ listing }: { listing: MarketplaceListing }) {
+  return (
+    <div className="min-w-0">
+      <div className="truncate font-medium text-ink-primary">{listing.title}</div>
+      <div className="text-[13px] text-ink-tertiary">{listingTypeLabel(listing)}</div>
+    </div>
+  );
 }

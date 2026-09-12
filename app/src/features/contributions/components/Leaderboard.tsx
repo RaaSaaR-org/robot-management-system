@@ -29,11 +29,11 @@ export interface LeaderboardProps {
 function getRankIcon(rank: number) {
   switch (rank) {
     case 1:
-      return <Trophy className="w-6 h-6 text-yellow-500" />;
+      return <Trophy className="w-6 h-6 text-signal-unknown" />;
     case 2:
-      return <Medal className="w-6 h-6 text-gray-400" />;
+      return <Medal className="w-6 h-6 text-ink-muted" />;
     case 3:
-      return <Award className="w-6 h-6 text-amber-600" />;
+      return <Award className="w-6 h-6 text-signal-unknown" />;
     default:
       return null;
   }
@@ -42,13 +42,13 @@ function getRankIcon(rank: number) {
 function getRankBgClass(rank: number): string {
   switch (rank) {
     case 1:
-      return 'bg-gradient-to-r from-yellow-50 to-amber-50 dark:from-yellow-900/20 dark:to-amber-900/20 border-yellow-200 dark:border-yellow-800';
+      return 'bg-inset border-signal-unknown/30 ';
     case 2:
-      return 'bg-gradient-to-r from-gray-50 to-slate-50 dark:from-gray-800/50 dark:to-slate-800/50 border-gray-200 dark:border-gray-700';
+      return 'bg-inset border-line ';
     case 3:
-      return 'bg-gradient-to-r from-primary-50 to-accent-50 dark:from-primary-900/20 dark:to-accent-900/20 border-primary-200 dark:border-primary-800';
+      return 'bg-inset border-primary/40 ';
     default:
-      return 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700';
+      return 'bg-panel border-line ';
   }
 }
 
@@ -68,7 +68,7 @@ export function Leaderboard({
         {Array.from({ length: 5 }).map((_, i) => (
           <div
             key={i}
-            className="h-16 bg-gray-100 dark:bg-gray-800 rounded-lg animate-pulse"
+            className="h-16 bg-inset rounded-lg animate-pulse"
           />
         ))}
       </div>
@@ -79,7 +79,7 @@ export function Leaderboard({
     return (
       <div
         className={cn(
-          'flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400',
+          'flex flex-col items-center justify-center py-12 text-ink-tertiary ',
           className
         )}
       >
@@ -94,16 +94,16 @@ export function Leaderboard({
     <div className={cn('space-y-3', className)}>
       {/* Current User Banner (if not in top 10) */}
       {currentUserStats && currentUserStats.rank > 10 && (
-        <div className="mb-4 p-4 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800 rounded-lg">
+        <div className="mb-4 p-4 bg-primary/10 border border-primary/40 rounded-lg">
           <div className="flex items-center gap-4">
-            <div className="flex items-center justify-center w-10 h-10 bg-primary-100 dark:bg-primary-800 rounded-full">
-              <User className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+            <div className="flex items-center justify-center w-10 h-10 bg-primary/10 rounded-full">
+              <User className="w-5 h-5 text-primary" />
             </div>
             <div className="flex-1">
-              <p className="font-medium text-primary-900 dark:text-primary-100">
+              <p className="font-medium text-ink-primary">
                 Your Rank: #{currentUserStats.rank}
               </p>
-              <p className="text-sm text-primary-600 dark:text-primary-400">
+              <p className="text-sm text-primary">
                 {formatCredits(currentUserStats.totalCredits)} credits
               </p>
             </div>
@@ -123,13 +123,13 @@ export function Leaderboard({
             className={cn(
               'flex items-center gap-4 p-4 rounded-lg border transition-all',
               getRankBgClass(entry.rank),
-              isCurrentUser && 'ring-2 ring-primary-500'
+              isCurrentUser && 'ring-2 ring-primary'
             )}
           >
             {/* Rank */}
             <div className="flex items-center justify-center w-10 h-10">
               {rankIcon || (
-                <span className="text-lg font-bold text-gray-400 dark:text-gray-500">
+                <span className="text-lg font-bold text-ink-muted">
                   {entry.rank}
                 </span>
               )}
@@ -138,16 +138,16 @@ export function Leaderboard({
             {/* User Info */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <p className="font-medium text-gray-900 dark:text-gray-100 truncate">
+                <p className="font-medium text-ink-primary truncate">
                   {entry.displayName || `User ${entry.userId.slice(0, 8)}`}
                 </p>
                 {isCurrentUser && (
-                  <span className="px-2 py-0.5 text-xs bg-primary-100 dark:bg-primary-800 text-primary-700 dark:text-primary-300 rounded">
+                  <span className="px-2 py-0.5 text-xs bg-primary/10 text-primary rounded">
                     You
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
+              <div className="flex items-center gap-3 text-sm text-ink-tertiary">
                 <span>{entry.totalContributions} contributions</span>
                 <span>{entry.totalTrajectories.toLocaleString(UI_DATE_LOCALE)} trajectories</span>
                 <span>Quality: {entry.averageQuality.toFixed(0)}%</span>
@@ -158,10 +158,10 @@ export function Leaderboard({
             <div className="flex items-center gap-4">
               <TierBadge tier={entry.tier} size="sm" />
               <div className="text-right">
-                <p className="font-semibold text-gray-900 dark:text-gray-100">
+                <p className="font-semibold text-ink-primary">
                   {formatCredits(entry.totalCredits)}
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">credits</p>
+                <p className="text-xs text-ink-tertiary">credits</p>
               </div>
             </div>
           </div>

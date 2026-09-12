@@ -4,23 +4,23 @@
  * @feature gdpr
  */
 
-export { SLABadge } from './SLABadge';
+export { SLABadge, slaState } from './SLABadge';
 export type { SLABadgeProps } from './SLABadge';
 
 export { StatusBadge } from './StatusBadge';
 export type { StatusBadgeProps } from './StatusBadge';
 
-export { RequestTypeCard } from './RequestTypeCard';
-export type { RequestTypeCardProps } from './RequestTypeCard';
+export { RequestTypeCard, RequestTypePicker, RIGHTS } from './RequestTypeCard';
+export type { RequestTypeCardProps, RequestTypePickerProps } from './RequestTypeCard';
 
-export { RequestList } from './RequestList';
-export type { RequestListProps } from './RequestList';
+export { RequestTable } from './RequestTable';
+export type { RequestTableProps } from './RequestTable';
 
-export { ConsentToggle } from './ConsentToggle';
-export type { ConsentToggleProps } from './ConsentToggle';
+export { RequestDetailModal } from './RequestDetailModal';
+export type { RequestDetailModalProps } from './RequestDetailModal';
+
+export { NewRequestModal } from './NewRequestModal';
+export type { NewRequestModalProps } from './NewRequestModal';
 
 export { ConsentManager } from './ConsentManager';
 export type { ConsentManagerProps } from './ConsentManager';
-
-export { RequestDetail } from './RequestDetail';
-export type { RequestDetailProps } from './RequestDetail';

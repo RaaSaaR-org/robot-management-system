@@ -1,239 +1,206 @@
 /**
  * @file ModelBrowser.tsx
- * @description Browser for model versions grouped by skill with filtering
+ * @description Model registry table: search, status / source / skill filters,
+ *              row click opens the details, row actions deploy or copy the URI
  * @feature deployment
  */
 
-import { useState, useMemo } from 'react';
-import { Card, Input, Badge } from '@/shared/components/ui';
-import { cn } from '@/shared/utils';
+import { useMemo, useState, type ReactNode } from 'react';
+import { Archive, Boxes, Copy, Pencil, Rocket, Search } from 'lucide-react';
+import {
+  Badge, Button, DataTable, EmptyState, Panel, SearchInput, Select, StatusTag, Toolbar,
+  type DataTableColumn, type RowActionItem,
+} from '@/shared/components/ui';
+import { cn, formatTimeAgo } from '@/shared/utils';
 import { useDeploymentStore, selectSkills } from '../store';
+import { MODEL_SOURCE_KIND_LABELS, ModelSourceKinds } from '../types';
 import type { ModelVersion } from '../types';
-import { ModelVersionCard } from './ModelVersionCard';
+import { getModelDisplayName, resolveSkillName, UNLINKED_SKILL_LABEL } from './models/modelDisplay';
 
 export interface ModelBrowserProps {
   modelVersions: ModelVersion[];
-  selectedVersionId?: string;
+  /** Opens the details of a version (row click). */
   onSelectVersion?: (version: ModelVersion) => void;
+  /** Deploys a staging version; offered as a row action when given. */
+  onDeploy?: (version: ModelVersion) => void;
+  /** Copies the artifact URI; offered as a row action when given. */
+  onCopyUri?: (version: ModelVersion) => void;
+  /** Opens the edit form (name, skill link); offered as a row action when given. */
+  onEdit?: (version: ModelVersion) => void;
+  /** Archives a staging version; offered last, as the menu's destructive act. */
+  onArchive?: (version: ModelVersion) => void;
   isLoading?: boolean;
+  /** Primary action of the empty state. */
+  emptyAction?: ReactNode;
+  /** @deprecated rows are no longer "selected"; kept for API compatibility. */
+  selectedVersionId?: string;
   className?: string;
 }
 
-type StatusFilter = 'all' | 'staging' | 'production' | 'archived';
+const UNLINKED_FILTER = '__unlinked__';
 
-/**
- * Map key for the group holding every version with no skill. Skill ids are
- * cuids, so this cannot collide with a real one. (TASK-238)
- */
-const UNLINKED_GROUP_KEY = '__unlinked__';
+const STATUS_OPTIONS = [
+  { value: 'staging', label: 'Staging' },
+  { value: 'canary', label: 'Canary' },
+  { value: 'production', label: 'Production' },
+  { value: 'archived', label: 'Archived' },
+];
 
-/**
- * Heading for that group. A model registered from outside carries no skill
- * until someone links it, and a training job whose dataset had no skill
- * produces one too — that is the normal state of a fresh registry, not a
- * lookup failure, so it must not read like one ("Unknown Skill"). The wording
- * matches the "No skill" option in the register modal. (TASK-238)
- */
-const UNLINKED_GROUP_NAME = 'Not linked to a skill';
-
-interface GroupedVersions {
-  /** `UNLINKED_GROUP_KEY` for the skill-less group. */
-  groupKey: string;
-  skillName: string;
-  /** True for the skill-less group, which sorts last and explains itself. */
-  isUnlinked: boolean;
-  versions: ModelVersion[];
-}
+const SOURCE_OPTIONS = ModelSourceKinds.map((kind) => ({ value: kind, label: MODEL_SOURCE_KIND_LABELS[kind] }));
 
 export function ModelBrowser({
-  modelVersions,
-  selectedVersionId,
-  onSelectVersion,
-  isLoading = false,
-  className,
+  modelVersions, onSelectVersion, onDeploy, onCopyUri, onEdit, onArchive, isLoading = false, emptyAction, className,
 }: ModelBrowserProps) {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('');
+  const [source, setSource] = useState('');
+  const [skill, setSkill] = useState('');
 
-  // `GET /api/models/versions` returns the skill id but not the relation, so a
-  // heading taken from `version.skill` alone would be missing for every linked
-  // model too. ModelsPage loads the skills into the store; resolve names from
-  // there rather than issuing a request per group. (TASK-238)
+  // `GET /api/models/versions` returns the skill id but not the relation, so
+  // names are resolved from the skills ModelsPage loads into the store.
   const skills = useDeploymentStore(selectSkills);
-  const skillNamesById = useMemo(() => {
-    const byId = new Map<string, string>();
-    skills.forEach((skill) => byId.set(skill.id, skill.name));
-    return byId;
-  }, [skills]);
+  const skillNamesById = useMemo(() => new Map(skills.map((s) => [s.id, s.name])), [skills]);
+  const byId = useMemo(() => new Map(modelVersions.map((v) => [v.id, v])), [modelVersions]);
 
-  // Filter versions
-  const filteredVersions = useMemo(() => {
-    return modelVersions.filter((version) => {
-      // Status filter
-      if (statusFilter !== 'all' && version.deploymentStatus !== statusFilter) {
-        return false;
-      }
-
-      // Search filter
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase();
-        const skillName = version.skill?.name?.toLowerCase() || '';
-        const versionStr = version.version.toLowerCase();
-        return skillName.includes(query) || versionStr.includes(query);
-      }
-
-      return true;
+  const skillOptions = useMemo(() => {
+    const names = new Map<string, string>();
+    modelVersions.forEach((v) => {
+      const name = resolveSkillName(v, skillNamesById);
+      if (name) names.set(v.skillId, name);
     });
-  }, [modelVersions, statusFilter, searchQuery]);
+    const linked = Array.from(names, ([value, label]) => ({ value, label }));
+    linked.sort((a, b) => a.label.localeCompare(b.label));
+    return [...linked, { value: UNLINKED_FILTER, label: UNLINKED_SKILL_LABEL }];
+  }, [modelVersions, skillNamesById]);
 
-  // Group by skill
-  const groupedVersions = useMemo(() => {
-    const groups = new Map<string, GroupedVersions>();
-
-    filteredVersions.forEach((version) => {
-      // A version can be skill-less in two ways depending on the endpoint:
-      // `null` from the registry, `''` from an older payload. Both are the
-      // same thing to a reader, so they share one group.
-      const skillId = version.skillId;
-      const isUnlinked = !skillId;
-      const groupKey = isUnlinked ? UNLINKED_GROUP_KEY : skillId;
-      // A skill that is linked but neither hydrated nor in the store (deleted,
-      // or the list has not loaded) is still a real link — say so by id
-      // instead of claiming the model has no skill.
-      const skillName = isUnlinked
-        ? UNLINKED_GROUP_NAME
-        : version.skill?.name ?? skillNamesById.get(skillId) ?? `Skill ${skillId.slice(0, 8)}`;
-
-      if (!groups.has(groupKey)) {
-        groups.set(groupKey, {
-          groupKey,
-          skillName,
-          isUnlinked,
-          versions: [],
-        });
-      }
-
-      groups.get(groupKey)!.versions.push(version);
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return modelVersions.filter((v) => {
+      if (status && v.deploymentStatus !== status) return false;
+      if (source && v.sourceKind !== source) return false;
+      if (skill === UNLINKED_FILTER && v.skillId) return false;
+      if (skill && skill !== UNLINKED_FILTER && v.skillId !== skill) return false;
+      if (!q) return true;
+      const text = [getModelDisplayName(v), v.version, resolveSkillName(v, skillNamesById) ?? ''].join(' ');
+      return text.toLowerCase().includes(q);
     });
+  }, [modelVersions, query, status, source, skill, skillNamesById]);
 
-    // Sort versions within each group by version number (descending)
-    groups.forEach((group) => {
-      group.versions.sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }));
-    });
+  const hasFilters = Boolean(query || status || source || skill);
+  const clearFilters = () => {
+    setQuery('');
+    setStatus('');
+    setSource('');
+    setSkill('');
+  };
 
-    // Skills alphabetically, and the skill-less group last — it is a holding
-    // area, not a skill, so it does not belong in the alphabet.
-    return Array.from(groups.values()).sort((a, b) => {
-      if (a.isUnlinked !== b.isUnlinked) return a.isUnlinked ? 1 : -1;
-      return a.skillName.localeCompare(b.skillName);
-    });
-  }, [filteredVersions, skillNamesById]);
+  const parentName = (v: ModelVersion): string | null => {
+    if (!v.parentModelVersionId) return null;
+    const parent = v.parent ?? byId.get(v.parentModelVersionId);
+    return parent ? getModelDisplayName(parent) : `Model ${v.parentModelVersionId.slice(0, 8)}`;
+  };
 
-  const statusCounts = useMemo(() => {
-    return modelVersions.reduce(
-      (acc, v) => {
-        acc[v.deploymentStatus] = (acc[v.deploymentStatus] || 0) + 1;
-        return acc;
+  const columns: DataTableColumn<ModelVersion>[] = [
+    {
+      key: 'name', header: 'Name', sortable: true,
+      sortValue: (v) => getModelDisplayName(v).toLowerCase(),
+      cell: (v) => (
+        <div className="min-w-0 max-w-[16rem] sm:max-w-sm">
+          <div className="truncate font-medium text-ink-primary">{getModelDisplayName(v)}</div>
+          <div className="truncate text-[13px] text-ink-tertiary">v{v.version}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'skill', header: 'Skill', sortable: true, hideBelow: 'md',
+      // Unlinked versions sort last: the table puts empty values at the end.
+      sortValue: (v) => resolveSkillName(v, skillNamesById)?.toLowerCase() ?? null,
+      cell: (v) => {
+        const name = resolveSkillName(v, skillNamesById);
+        return name
+          ? <span className="text-ink-primary">{name}</span>
+          : <span className="text-ink-tertiary">{UNLINKED_SKILL_LABEL}</span>;
       },
-      {} as Record<string, number>
-    );
-  }, [modelVersions]);
+    },
+    {
+      key: 'source', header: 'Source', sortable: true, hideBelow: 'sm',
+      sortValue: (v) => v.sourceKind ?? null,
+      cell: (v) => (v.sourceKind
+        ? <Badge variant="neutral" size="sm">{MODEL_SOURCE_KIND_LABELS[v.sourceKind]}</Badge>
+        : null),
+    },
+    {
+      key: 'status', header: 'Status', sortable: true, sortValue: (v) => v.deploymentStatus,
+      cell: (v) => <StatusTag status={v.deploymentStatus} dot />,
+    },
+    {
+      key: 'parent', header: 'Derived from', hideBelow: 'lg',
+      cell: (v) => {
+        const name = parentName(v);
+        return name ? <span className="text-ink-secondary">{name}</span> : null;
+      },
+    },
+    {
+      key: 'createdAt', header: 'Created', align: 'right', sortable: true, hideBelow: 'md',
+      sortValue: (v) => new Date(v.createdAt),
+      cell: (v) => <span className="text-ink-secondary">{formatTimeAgo(v.createdAt)}</span>,
+    },
+  ];
+
+  // Order: Edit, the other verbs, then the destructive act last (a model version has no delete;
+  // archiving a staging version is how it leaves the deploy list).
+  const rowActions = onDeploy || onCopyUri || onEdit || onArchive
+    ? (v: ModelVersion): RowActionItem[] => {
+        const items: RowActionItem[] = [];
+        if (onEdit) items.push({ label: 'Edit', icon: <Pencil />, onSelect: () => onEdit(v) });
+        if (onDeploy && v.deploymentStatus === 'staging') {
+          items.push({ label: 'Deploy', icon: <Rocket />, onSelect: () => onDeploy(v) });
+        }
+        if (onCopyUri) items.push({ label: 'Copy artifact URI', icon: <Copy />, onSelect: () => onCopyUri(v) });
+        if (onArchive && v.deploymentStatus === 'staging') {
+          items.push({ label: 'Archive', icon: <Archive />, tone: 'danger', separatorBefore: true, onSelect: () => onArchive(v) });
+        }
+        return items;
+      }
+    : undefined;
 
   return (
-    <div className={cn('space-y-4', className)}>
-      {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="flex-1">
-          <Input
-            placeholder="Search skills or versions..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full"
-          />
-        </div>
+    <div className={cn('flex flex-col gap-4', className)}>
+      <Toolbar
+        search={<SearchInput value={query} onChange={setQuery} placeholder="Search models" />}
+        filters={
+          <>
+            <Select aria-label="Status" fullWidth={false} className="w-40" placeholder="All statuses"
+              options={STATUS_OPTIONS} value={status} onChange={(e) => setStatus(e.target.value)} />
+            <Select aria-label="Source" fullWidth={false} className="w-40" placeholder="All sources"
+              options={SOURCE_OPTIONS} value={source} onChange={(e) => setSource(e.target.value)} />
+            <Select aria-label="Skill" fullWidth={false} className="w-48" placeholder="All skills"
+              options={skillOptions} value={skill} onChange={(e) => setSkill(e.target.value)} />
+          </>
+        }
+      />
 
-        <div className="flex gap-2">
-          {(['all', 'staging', 'production', 'archived'] as StatusFilter[]).map((status) => (
-            <button
-              key={status}
-              onClick={() => setStatusFilter(status)}
-              className={cn(
-                'px-3 py-1.5 text-sm rounded-md transition-colors',
-                statusFilter === status
-                  ? 'bg-cobalt-500 text-white'
-                  : 'bg-gray-100 dark:bg-gray-800 text-theme-secondary hover:bg-gray-200 dark:hover:bg-gray-700'
-              )}
-            >
-              {status.charAt(0).toUpperCase() + status.slice(1)}
-              {status !== 'all' && statusCounts[status] ? ` (${statusCounts[status]})` : ''}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Loading state */}
-      {isLoading && (
-        <div className="flex justify-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cobalt-500" />
-        </div>
-      )}
-
-      {/* Empty state */}
-      {!isLoading && filteredVersions.length === 0 && (
-        <Card className="text-center py-12">
-          <svg
-            className="w-12 h-12 mx-auto text-theme-tertiary mb-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-            />
-          </svg>
-          <p className="text-theme-secondary">
-            {searchQuery || statusFilter !== 'all'
-              ? 'No model versions match your filters'
-              : 'No model versions available'}
-          </p>
-        </Card>
-      )}
-
-      {/* Grouped versions */}
-      {!isLoading && groupedVersions.length > 0 && (
-        <div className="space-y-6">
-          {groupedVersions.map((group) => (
-            <div key={group.groupKey} className="space-y-3">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="font-semibold text-theme-primary">{group.skillName}</h3>
-                <Badge variant="default" size="sm">
-                  {group.versions.length} version(s)
-                </Badge>
-                {group.isUnlinked && (
-                  <span className="text-xs text-theme-secondary">
-                    Link one to a skill to run it from the Skill Library.
-                  </span>
-                )}
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {group.versions.map((version) => (
-                  <ModelVersionCard
-                    key={version.id}
-                    version={version}
-                    selected={selectedVersionId === version.id}
-                    onClick={() => onSelectVersion?.(version)}
-                    compact
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <Panel padding="none">
+        <DataTable
+          caption="Model versions"
+          columns={columns}
+          rows={filtered}
+          getRowId={(v) => v.id}
+          defaultSort={{ key: 'skill', direction: 'asc' }}
+          onRowClick={onSelectVersion}
+          rowActions={rowActions}
+          rowActionsLabel={(v) => `Actions for ${getModelDisplayName(v)}`}
+          isLoading={isLoading}
+          empty={hasFilters ? (
+            <EmptyState icon={<Search />} title="No models match" description="Try another name, or clear the filters."
+              action={<Button variant="secondary" onClick={clearFilters}>Clear filters</Button>} />
+          ) : (
+            <EmptyState icon={<Boxes />} title="No models yet"
+              description="Models arrive from training runs, or register one trained elsewhere."
+              action={emptyAction} />
+          )}
+        />
+      </Panel>
     </div>
   );
 }

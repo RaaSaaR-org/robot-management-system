@@ -68,9 +68,9 @@ function makeProps(overrides: Partial<OverviewTabProps> = {}): OverviewTabProps 
 }
 
 describe('OverviewTab', () => {
-  it('renders the Quick Actions section with Charge and Home buttons', () => {
+  it('renders the Quick actions section with Charge and Home buttons', () => {
     render(<OverviewTab {...makeProps()} />);
-    expect(screen.getByText('Quick Actions')).toBeInTheDocument();
+    expect(screen.getByText('Quick actions')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /charge/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /home/i })).toBeInTheDocument();
   });
@@ -109,21 +109,39 @@ describe('OverviewTab', () => {
         })}
       />
     );
-    expect(screen.getByText('H1')).toBeInTheDocument();
+    // StatusTag uppercases through CSS, so the DOM keeps the reported casing.
+    expect(screen.getByText(/^h1$/i)).toBeInTheDocument();
   });
 
   it('falls back to the generic robot type when none provided', () => {
     render(<OverviewTab {...makeProps({ telemetry: makeTelemetry(), robot: makeRobot() })} />);
-    expect(screen.getByText('GENERIC')).toBeInTheDocument();
+    expect(screen.getByText(/^generic$/i)).toBeInTheDocument();
   });
 
-  it('shows Live status when telemetry is connected', () => {
-    render(<OverviewTab {...makeProps({ isTelemetryConnected: true })} />);
+  it('shows a machine robot type as words, not an identifier', () => {
+    render(
+      <OverviewTab {...makeProps({ telemetry: makeTelemetry({ robotType: 'g1_edu' }), robot: makeRobot() })} />
+    );
+    expect(screen.getByText('g1 edu')).toBeInTheDocument();
+    expect(screen.queryByText(/g1_edu/i)).not.toBeInTheDocument();
+  });
+
+  it('shows Live provenance for a hardware telemetry frame', () => {
+    render(
+      <OverviewTab
+        {...makeProps({ isTelemetryConnected: true, telemetry: makeTelemetry({ hardwareConnected: true }) })}
+      />
+    );
     expect(screen.getByText('Live')).toBeInTheDocument();
   });
 
-  it('shows Offline status when telemetry is disconnected', () => {
-    render(<OverviewTab {...makeProps({ isTelemetryConnected: false })} />);
-    expect(screen.getByText('Offline')).toBeInTheDocument();
+  it('shows Sim provenance for a simulated telemetry frame', () => {
+    render(<OverviewTab {...makeProps({ isTelemetryConnected: true })} />);
+    expect(screen.getByText('Sim')).toBeInTheDocument();
+  });
+
+  it('shows No telemetry when no frame has arrived', () => {
+    render(<OverviewTab {...makeProps({ isTelemetryConnected: false, telemetry: null })} />);
+    expect(screen.getByText('No telemetry')).toBeInTheDocument();
   });
 });

@@ -1,85 +1,57 @@
 # AGENTS.md - Robots Feature
 
-Robot management and monitoring feature.
+Robot list, robot detail, and the control center (operator console). Built on the
+shared UI kit (`@/shared/components/ui`) and the contract in `docs/brand.md` —
+read `app/AGENTS.md` first.
 
-## Purpose
+## Routes
 
-Displays robot fleet status, enables robot control, and shows real-time telemetry data.
+| Route | Page | Notes |
+|-------|------|-------|
+| `/fleet?tab=list` | `RobotsPage` (rendered by the fleet page's List tab) | Toolbar: search, status filter, Grid/Table toggle (localStorage `robots.view`), primary "Register robot" |
+| `/robots/:id` | `RobotDetailPage` | Header + tabs in the URL: `?tab=overview` (default, omitted), `telemetry`, `perception`, `motion`, `teleop`, `voice`, `chat`, `activity`, `details` |
+| `/robots/:id/cockpit`, `/control-center` | `RobotCockpitPage` | Control center; `/control-center` auto-picks the most recently seen robot (prefers G1) and self-heals past robots that never stream. Demo mode renders `DemoFeaturePlaceholder` |
 
 ## Structure
 
 ```
 robots/
-├── api/
-│   └── robotsApi.ts         # API calls
-├── components/
-│   ├── RobotCard.tsx            # Robot summary card
-│   ├── RobotList.tsx            # Robot grid/list
-│   ├── RobotDetail.tsx          # Detailed robot view
-│   ├── TelemetryDisplay.tsx     # Real-time telemetry
-│   ├── BatteryIndicator.tsx     # Battery status
-│   └── StatusBadge.tsx          # Status indicator
-├── hooks/
-│   └── useRobotWebSocket.ts     # WebSocket telemetry hook
-├── pages/
-│   └── RobotsPage.tsx           # Main robots page
-├── store/
-│   └── robotsStore.ts           # Zustand store
-├── types/
-│   └── robots.types.ts          # TypeScript types
-└── index.ts
+├── api/            # robotsApi, cameraApi — REST calls
+├── hooks/          # useRobots, useRobot, useTelemetryStream, useRobotCameras, …
+├── store/          # Zustand stores (robots, telemetry, voice)
+├── types/          # robots.types.ts (Robot, RobotStatus, RobotTelemetry, …)
+├── pages/          # RobotsPage, RobotDetailPage, RobotCockpitPage
+└── components/
+    ├── common/         # shared building blocks — use these, never hand-roll
+    ├── cockpit/        # control center: Viewport, PerceptionPanel, Vitals, CommandDock
+    ├── tabs/           # one file per detail tab; every tab uses the same Panel structure
+    ├── telemetry/      # battery, IMU, motor temperatures, sparklines
+    ├── visualization/  # Robot3DViewer, PointCloudViewer (WebGL), joint grids
+    ├── voice/          # voice pipeline UI
+    ├── RobotList.tsx / RobotCard.tsx   # the list (grid of cards or DataTable)
+    ├── AddRobotDialog.tsx              # exports RegisterRobotModal (FormModal)
+    └── EmergencyStopButton.tsx
 ```
 
-## Key Components
+## Shared rules (components/common/)
 
-| Component | Purpose |
-|-----------|---------|
-| `RobotsPage` | Main page with robot list |
-| `RobotCard` | Summary card showing status, battery, location |
-| `RobotDetail` | Full robot details with telemetry |
-| `TelemetryDisplay` | Real-time sensor data |
+- **Robot status** → `RobotStatusTag` only (`RobotStatusBadge` is a legacy wrapper around it). Never a hand-made colored dot.
+- **Telemetry provenance** → `ProvenanceTag` with `provenanceOf(telemetry)`: Live / Sim / Stale / No telemetry.
+- **Numeric readouts** → `Readout` (Inter, `tabular-nums`, unit in ink-tertiary, missing value "—"). Mono is for IDs, URLs and code (`commandType`), never for values or labels.
+- **3D / camera surfaces that cannot render** → `ViewerUnavailable` (calm panel; headless Chromium has no WebGL — that must never crash the page).
+- **three.js / canvas colors** → `readCssColor('--token')`; no hex in source.
 
-## Key Types
+## Acts and CRUD
 
-```typescript
-interface Robot {
-  id: string;
-  name: string;
-  model: string;
-  status: 'online' | 'offline' | 'busy' | 'charging' | 'error';
-  battery: number;
-  position: { x: number; y: number; zone: string };
-  lastSeen: string;
-}
+- Register: "Register robot" → `RegisterRobotModal` (FormModal, Agent URL required) → toast "Robot registered". `POST /api/robots/register` fetches the agent card, so the agent must be reachable.
+- Unregister: card/row menu "Unregister" (danger, last) → `confirm()` "Unregister {name}?" → `DELETE /api/robots/:id` → toast.
+- Robot-moving acts (return home, charge, stop task, run an interpreted command, skills, motions) → `confirm()` with the consequence, then a toast. Harmless toggles never confirm.
+- **E-stop never confirms**: `EmergencyStopButton` fires on one press (`bg-stop`), toasts the result, and is always reachable — in the control center it lives in the sticky command dock.
 
-interface Telemetry {
-  robotId: string;
-  timestamp: string;
-  battery: number;
-  position: Position;
-  velocity: number;
-  sensors: SensorData;
-}
-```
+## Offline states
 
-## WebSocket Integration
+Robots without a running agent are the normal case in dev. Offline copy: "{name} is offline. Start its robot agent to see live telemetry and send commands." Empty values show "—", unknown places "Place unknown". Offline must look deliberate, not broken.
 
-Uses `useRobotWebSocket` hook for real-time telemetry:
+## Tests
 
-```typescript
-const { telemetry, isConnected } = useRobotWebSocket(robotId);
-```
-
-## Store Actions
-
-- `fetchRobots()` - Load all robots
-- `fetchRobot(id)` - Load single robot
-- `updateTelemetry(data)` - Update from WebSocket
-- `sendCommand(robotId, command)` - Send command to robot
-
-## API Endpoints Used
-
-- `GET /api/robots` - List robots
-- `GET /api/robots/:id` - Robot details
-- `POST /api/robots/:id/command` - Send command
-- `ws://server/api/a2a/ws` - Telemetry stream
+`npx vitest run src/features/robots` — keep `data-testid`s (`robot-card`, `motion-*`, `voice-*`, `vr-*`) and the `a[href*="/robots/"]` name link on each card; e2e specs depend on them.

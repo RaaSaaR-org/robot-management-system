@@ -129,6 +129,18 @@ describe('tasksStore', () => {
     expect(useTasksStore.getState().error).toBe('An unexpected error occurred');
   });
 
+  it("fetchTasks shows the server's message when the client only knows UNKNOWN_ERROR", async () => {
+    vi.mocked(tasksApi.listTasks).mockRejectedValue({
+      code: 'UNKNOWN_ERROR',
+      message: 'Process instance not found',
+      statusCode: 404,
+    });
+
+    await useTasksStore.getState().fetchTasks();
+
+    expect(useTasksStore.getState().error).toBe('Process instance not found');
+  });
+
   // --- fetchTask ---
 
   it('fetchTask sets detail and updates matching list entry', async () => {

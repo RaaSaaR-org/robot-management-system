@@ -341,8 +341,13 @@ export function createApp(): Express {
   app.use('/api/synthetic-cosmos', authMiddleware, cosmosSyntheticRoutes);
 
   // Secure aggregation routes (protected) - Masked gradient aggregation (TASK-071)
-  // Registered before general federated routes so secure-aggregation endpoints take precedence
-  app.use('/api/federated', authMiddleware, aggregationRoutes);
+  // Mounted on its own prefix, NOT on /api/federated: both routers define
+  // POST /rounds/:id/aggregate, and sharing a prefix let whichever mounted first
+  // swallow the other. Secure aggregation won, so the ordinary round-completion
+  // endpoint answered every call with its "expectedParticipants is required"
+  // 400 and no federated round could ever be finalised. Each router mounts its
+  // own path so neither can shadow the other again.
+  app.use('/api/federated/secure', authMiddleware, aggregationRoutes);
 
   // Federated learning routes (protected) - Fleet learning infrastructure
   app.use('/api/federated', authMiddleware, federatedRoutes);

@@ -261,6 +261,25 @@ processRoutes.get('/instances/:id', async (req: Request, res: Response) => {
 });
 
 /**
+ * PUT /process-instances/:id/start - Begin executing a pending instance
+ *
+ * The explicit run step for an instance created with `autoStart: false`.
+ */
+processRoutes.put('/instances/:id/start', async (req: Request, res: Response) => {
+  try {
+    const started = await processManager.beginExecution(req.params.id);
+    if (!started) {
+      return res.status(400).json({ error: 'Cannot start process. It may not be pending.' });
+    }
+    const instance = await processManager.getInstance(req.params.id);
+    res.json(instance);
+  } catch (error) {
+    console.error('Error starting process instance:', error);
+    res.status(500).json({ error: 'Failed to start process instance' });
+  }
+});
+
+/**
  * PUT /process-instances/:id/pause - Pause a process instance
  */
 processRoutes.put('/instances/:id/pause', async (req: Request, res: Response) => {

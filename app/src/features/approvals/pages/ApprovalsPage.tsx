@@ -1,127 +1,143 @@
 /**
  * @file ApprovalsPage.tsx
- * @description Main page for human approval workflows
+ * @description Approvals section of the compliance page: the human-in-the-loop decision queue
  * @feature approvals
  */
 
-import { useState, useEffect } from 'react';
-import { FileCheck, BarChart3, AlertTriangle, Users } from 'lucide-react';
-import { cn } from '@/shared/utils/cn';
-import { ApprovalQueue, ApprovalDetailPanel } from '../components';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { Button, SearchInput, Select, StatRow, StatTile, Toolbar } from '@/shared/components/ui';
+import { ApprovalDetailModal, ApprovalQueue } from '../components';
+import { OPEN_STATUSES } from '../components/approvalFormat';
+import { useApprovalMetrics } from '../hooks';
 import { useApprovalsStore } from '../store';
+import type { ApprovalPriority, ApprovalRequest, ApprovalStatus } from '../types';
 
-type TabType = 'queue' | 'metrics' | 'contests' | 'worker-portal';
+type StatusFilter = 'open' | 'approved' | 'rejected' | 'cancelled' | 'all';
 
-const tabs: { id: TabType; label: string; icon: typeof FileCheck }[] = [
-  { id: 'queue', label: 'Approval Queue', icon: FileCheck },
-  { id: 'metrics', label: 'Metrics & SLA', icon: BarChart3 },
-  { id: 'contests', label: 'Contests', icon: AlertTriangle },
-  { id: 'worker-portal', label: 'Worker Portal', icon: Users },
+const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
+  { value: 'open', label: 'Pending' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'cancelled', label: 'Cancelled' },
+  { value: 'all', label: 'All statuses' },
 ];
 
+const PRIORITY_OPTIONS: { value: ApprovalPriority; label: string }[] = [
+  { value: 'urgent', label: 'Urgent' },
+  { value: 'critical', label: 'Critical' },
+  { value: 'high', label: 'High' },
+  { value: 'normal', label: 'Normal' },
+  { value: 'low', label: 'Low' },
+];
+
+function statusesFor(filter: StatusFilter): ApprovalStatus[] | undefined {
+  if (filter === 'open') return OPEN_STATUSES;
+  if (filter === 'all') return undefined;
+  return [filter];
+}
+
 export function ApprovalsPage() {
-  const [activeTab, setActiveTab] = useState<TabType>('queue');
-  const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null);
+  const rows = useApprovalsStore((s) => s.approvalRequests);
+  const isLoading = useApprovalsStore((s) => s.approvalRequestsLoading);
+  const error = useApprovalsStore((s) => s.approvalRequestsError);
+  const fetchRequests = useApprovalsStore((s) => s.fetchApprovalRequests);
+  const { metrics, fetchMetrics } = useApprovalMetrics();
 
-  // Get selected approval from store
-  const selectedRequest = useApprovalsStore((state) => state.selectedRequest);
-  const selectRequest = useApprovalsStore((state) => state.selectRequest);
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState<StatusFilter>('open');
+  const [priority, setPriority] = useState('');
+  const [open, setOpen] = useState<ApprovalRequest | null>(null);
 
-  // Load selected approval when ID changes
+  const load = useCallback(async () => {
+    // `status` is always passed explicitly so a stale store filter never leaks in.
+    await Promise.all([fetchRequests({ status: statusesFor(status), limit: 100 }), fetchMetrics()]);
+  }, [fetchRequests, fetchMetrics, status]);
+
   useEffect(() => {
-    if (selectedApprovalId) {
-      selectRequest(selectedApprovalId);
-    } else {
-      selectRequest(null);
-    }
-  }, [selectedApprovalId, selectRequest]);
+    void load();
+  }, [load]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return rows.filter(
+      (r) =>
+        (!priority || r.priority === priority) &&
+        (!q ||
+          r.requestNumber.toLowerCase().includes(q) ||
+          r.requestReason.toLowerCase().includes(q) ||
+          r.entityId.toLowerCase().includes(q) ||
+          r.entityType.toLowerCase().includes(q))
+    );
+  }, [rows, query, priority]);
+
+  const hasFilters = Boolean(query || priority || status !== 'open');
+  const clearFilters = () => {
+    setQuery('');
+    setPriority('');
+    setStatus('open');
+  };
+
+  const pending = metrics ? metrics.pendingRequests + metrics.inProgressRequests : 0;
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Section header — rendered as an embedded tab inside CompliancePage,
-          which owns the page-level h1, so this stays a demoted h2 */}
-      <div className="px-6 py-4 border-b border-theme-subtle bg-theme-surface">
-        <h2 className="text-lg font-semibold text-theme-primary">Human Approval Workflows</h2>
-        <p className="text-sm text-theme-muted mt-1">
-          GDPR Art. 22 & AI Act Art. 14 compliance - Review automated decisions with meaningful oversight
-        </p>
-      </div>
+    <div className="flex flex-col gap-4">
+      <Toolbar
+        search={<SearchInput value={query} onChange={setQuery} placeholder="Search requests" aria-label="Search requests" />}
+        filters={
+          <>
+            <Select
+              aria-label="Status"
+              fullWidth={false}
+              className="w-40"
+              options={STATUS_OPTIONS}
+              value={status}
+              onChange={(e) => setStatus(e.target.value as StatusFilter)}
+            />
+            <Select
+              aria-label="Priority"
+              fullWidth={false}
+              className="w-40"
+              placeholder="All priorities"
+              options={PRIORITY_OPTIONS}
+              value={priority}
+              onChange={(e) => setPriority(e.target.value)}
+            />
+          </>
+        }
+        actions={
+          <Button variant="ghost" iconOnly aria-label="Refresh" onClick={() => void load()} disabled={isLoading}>
+            <RefreshCw className="h-4 w-4" strokeWidth={1.75} />
+          </Button>
+        }
+      />
 
-      {/* Tabs */}
-      <div className="px-6 border-b border-theme-subtle bg-theme-surface">
-        <nav className="flex gap-6">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={cn(
-                  'flex items-center gap-2 py-3 border-b-2 text-sm font-medium transition-colors',
-                  activeTab === tab.id
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-theme-secondary hover:text-theme-primary'
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {tab.label}
-              </button>
-            );
-          })}
-        </nav>
-      </div>
+      {metrics && (
+        <StatRow columns={4}>
+          <StatTile label="Pending" value={pending} tone={pending > 0 ? 'info' : 'neutral'} hint="Waiting for a decision" />
+          <StatTile label="Overdue" value={metrics.overdueRequests} tone={metrics.overdueRequests > 0 ? 'stopped' : 'neutral'} hint="Past their SLA deadline" />
+          <StatTile label="Nearing SLA" value={metrics.nearingDeadlineRequests} tone={metrics.nearingDeadlineRequests > 0 ? 'gated' : 'neutral'} hint="Deadline within 4 h" />
+          <StatTile label="Avg decision time" value={metrics.avgResponseTimeHours.toFixed(1)} unit="h" hint="Across decided requests" />
+        </StatRow>
+      )}
 
-      {/* Content */}
-      <div className="flex-1 overflow-hidden flex">
-        {activeTab === 'queue' && (
-          <div className="flex-1 flex">
-            <div className={cn('flex-1 p-6 overflow-hidden', selectedRequest && 'w-1/2')}>
-              <ApprovalQueue
-                onSelectApproval={setSelectedApprovalId}
-                className="h-full"
-              />
-            </div>
-            {selectedRequest && (
-              <div className="w-1/2 border-l border-theme-subtle">
-                <ApprovalDetailPanel
-                  approval={selectedRequest}
-                  onClose={() => setSelectedApprovalId(null)}
-                />
-              </div>
-            )}
-          </div>
-        )}
+      <ApprovalQueue
+        rows={filtered}
+        isLoading={isLoading}
+        error={error}
+        onRetry={() => void load()}
+        onOpen={setOpen}
+        hasFilters={hasFilters}
+        onClearFilters={clearFilters}
+      />
 
-        {activeTab === 'metrics' && (
-          <div className="flex-1 flex items-center justify-center p-6 text-theme-secondary">
-            <div className="text-center">
-              <BarChart3 className="h-12 w-12 mx-auto mb-4 text-theme-muted" />
-              <p className="text-lg font-medium text-theme-primary">Metrics & SLA Dashboard</p>
-              <p className="text-sm">Coming soon - SLA compliance, oversight metrics</p>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'contests' && (
-          <div className="flex-1 flex items-center justify-center p-6 text-theme-secondary">
-            <div className="text-center">
-              <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-theme-muted" />
-              <p className="text-lg font-medium text-theme-primary">Decision Contests</p>
-              <p className="text-sm">Coming soon - Worker right to contest automated decisions</p>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'worker-portal' && (
-          <div className="flex-1 flex items-center justify-center p-6 text-theme-secondary">
-            <div className="text-center">
-              <Users className="h-12 w-12 mx-auto mb-4 text-theme-muted" />
-              <p className="text-lg font-medium text-theme-primary">Worker Self-Service Portal</p>
-              <p className="text-sm">Coming soon - Submit viewpoints, request human intervention</p>
-            </div>
-          </div>
-        )}
-      </div>
+      <ApprovalDetailModal
+        request={open}
+        onClose={() => {
+          setOpen(null);
+          void load();
+        }}
+      />
     </div>
   );
 }

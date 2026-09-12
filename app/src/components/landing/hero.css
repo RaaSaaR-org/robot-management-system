@@ -1,0 +1,550 @@
+/** @file hero.css — A transforming Physical AI exhibit and stationary safety illustration. */
+.field-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  padding: 112px 0 25px;
+  background: #080f18;
+  color: #f1f5fc;
+}
+.field-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 76% 40%, #16423d33, transparent 48%);
+}
+.field-content {
+  position: relative;
+}
+.field-layout {
+  position: relative;
+  min-height: 568px;
+  display: flex;
+  align-items: center;
+}
+.field-copy {
+  position: relative;
+  z-index: 2;
+  padding: 36px 0 50px;
+  max-width: 610px;
+  pointer-events: none;
+}
+.field-copy a {
+  pointer-events: auto;
+}
+.field-kicker,
+.field-footnote,
+.hero-scene-heading,
+.hero-scene-caption,
+.hero-callout > span {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+}
+.field-kicker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #c0d5db;
+}
+.field-kicker > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #b2f8df;
+  box-shadow: 0 0 14px #b2f8df80;
+}
+.field-content h1 {
+  font-family: var(--font-display, 'Archivo Variable', sans-serif);
+  font-size: clamp(64px, 6.3vw, 91px);
+  font-weight: 560;
+  line-height: 1.02;
+  letter-spacing: -0.065em;
+  margin: 30px 0 27px;
+  color: #f1f5fc;
+}
+.field-content h1 > span {
+  color: #b2f8df;
+  background: linear-gradient(115deg, #e6fff5, #b2f8df 48%, #75bba9);
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.field-lede {
+  font-size: 15px;
+  line-height: 1.85;
+  color: #a7bacb;
+  max-width: 358px;
+}
+.field-lede::first-line {
+  color: #e0e9ef;
+}
+.field-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 27px;
+}
+.field-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 13px;
+  font-size: 13px;
+  min-height: 46px;
+  transition:
+    background 180ms,
+    color 180ms,
+    box-shadow 180ms;
+}
+.field-primary {
+  padding: 0 20px;
+  border: 1px solid #d2ffec80;
+  border-radius: 10px;
+  background: #b2f8df;
+  color: #0a2225;
+  font-weight: 600;
+  box-shadow: 0 0 30px #8ee9c710;
+}
+.field-primary svg {
+  transition: transform 180ms;
+}
+.field-primary:hover {
+  background: #d9fff1 !important;
+  color: #0a2225 !important;
+  box-shadow: 0 0 30px #8ee9c72b;
+}
+.field-primary:hover svg {
+  transform: translate(2px, -2px);
+}
+.field-actions a:last-child {
+  color: #b7c7d3;
+}
+.field-actions a:last-child:hover {
+  color: #fff;
+}
+.field-principles {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #8098aa;
+  font-size: 12px;
+  margin-top: 17px;
+}
+.field-principles i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #557d78;
+}
+.hero-universe {
+  position: absolute;
+  top: -40px;
+  bottom: -15px;
+  left: 40%;
+  width: 68%;
+  z-index: 1;
+}
+.hero-artwork {
+  position: absolute;
+  inset: -6px -70px -20px -70px;
+  pointer-events: none;
+}
+.hero-universe-canvas {
+  position: absolute;
+  inset: 0;
+  mask-image: radial-gradient(
+    ellipse at 50% 49%,
+    #000 36%,
+    #000d 54%,
+    transparent 73%
+  );
+}
+.hero-universe-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 1.2s ease;
+}
+.hero-universe.is-ready canvas {
+  opacity: 1;
+}
+.hero-universe-fallback {
+  position: absolute;
+  inset: 0;
+  opacity: 1;
+  transition: opacity 700ms;
+  mask-image: radial-gradient(
+    ellipse at 50% 49%,
+    #000 36%,
+    #000d 54%,
+    transparent 73%
+  );
+}
+.hero-universe-fallback img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.hero-universe.is-ready .hero-universe-fallback {
+  opacity: 0;
+}
+.hero-universe-shade {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, #080f18 0%, #080f1850 15%, transparent 30%),
+    linear-gradient(0deg, #080f18, transparent 18%);
+}
+.hero-scene-heading {
+  position: absolute;
+  /* Above the halo's apex, so the ring never strikes through the label. */
+  top: 12px;
+  left: 20%;
+  right: 10%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #7f9d9a;
+  font-size: 10px;
+}
+.hero-scene-cross {
+  font-size: 21px;
+  color: #b2f8df;
+  font-weight: 300;
+}
+.hero-scene-edition {
+  margin-left: auto;
+  color: #617c87;
+}
+.hero-callout {
+  position: absolute;
+  pointer-events: none;
+}
+.hero-callout > span {
+  font-size: 10px;
+  color: #8abbb1;
+}
+.hero-callout strong {
+  display: block;
+  font-weight: 400;
+  font-size: 12px;
+  color: #b5c6d0;
+  margin-top: 5px;
+}
+.hero-callout i {
+  display: block;
+  width: 90px;
+  height: 25px;
+  margin-top: 10px;
+  border-top: 1px solid #77a79c50;
+  border-right: 1px solid #77a79c50;
+  transform: skewX(35deg);
+  transform-origin: top left;
+}
+.hero-callout-world {
+  top: 32%;
+  left: 10%;
+}
+.hero-callout-model {
+  top: 56%;
+  right: 4%;
+}
+.hero-callout-model i {
+  transform: skewX(-35deg);
+  border-left: 1px solid #77a79c50;
+  border-right: 0;
+}
+.hero-scene-caption {
+  position: absolute;
+  bottom: 39px;
+  left: 24%;
+  right: 10%;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  color: #a3bcbf;
+  font-size: 10px;
+}
+.hero-scene-caption > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+.hero-scene-caption i {
+  width: 4px;
+  height: 4px;
+  border: 1px solid #b2f8df;
+  transform: rotate(45deg);
+}
+.hero-scene-state {
+  color: #7c9f9a;
+  margin-left: auto;
+}
+.field-footnote {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  border-top: 1px solid #ffffff0d;
+  padding-top: 19px;
+  color: #8098aa;
+  font-size: 10px;
+}
+.field-footnote > span:last-child {
+  font-weight: 400;
+  letter-spacing: 0;
+  font-size: 11px;
+  text-align: right;
+}
+@media (min-width: 1600px) {
+  .field-hero {
+    padding-top: 144px;
+  }
+  .field-layout {
+    min-height: 615px;
+  }
+  .hero-universe {
+    left: 41%;
+    width: 72%;
+  }
+}
+/* The exhibit bleeds past the container, which puts a 4% right anchor beyond
+   the viewport on laptop widths and clips the callout. */
+@media (max-width: 1360px) and (min-width: 1101px) {
+  .hero-callout-model {
+    right: 9%;
+  }
+}
+@media (max-width: 1100px) and (min-width: 901px) {
+  .field-content h1 {
+    font-size: clamp(59px, 6.6vw, 73px);
+  }
+  .field-copy {
+    max-width: 480px;
+  }
+  .hero-universe {
+    left: 38%;
+    width: 74%;
+  }
+  .hero-callout-world {
+    left: 19%;
+    top: 24%;
+  }
+  .hero-callout-model {
+    right: 22%;
+    top: 67%;
+  }
+  .hero-scene-heading,
+  .hero-scene-caption {
+    right: 20%;
+  }
+  .hero-callout strong {
+    display: none;
+  }
+  .hero-scene-state {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .field-hero::before {
+    background: none;
+  }
+  .field-hero {
+    padding-top: 105px;
+  }
+  .field-layout {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    min-height: 0;
+  }
+  .field-copy {
+    padding: 0;
+    max-width: 100%;
+  }
+  .field-kicker {
+    font-size: 10px;
+    letter-spacing: 0.05em;
+  }
+  .field-content h1 {
+    font-size: clamp(44px, 10.5vw, 70px);
+    margin: 25px 0 22px;
+  }
+  .field-lede {
+    font-size: 14px;
+    max-width: 355px;
+  }
+  .field-actions {
+    margin-top: 22px;
+    gap: 4px;
+  }
+  .field-principles {
+    margin-top: 12px;
+  }
+  .hero-universe {
+    position: relative;
+    top: auto;
+    bottom: auto;
+    left: auto;
+    width: 100%;
+    height: 445px;
+    margin-top: 7px;
+  }
+  .hero-artwork {
+    inset: 0 -95px -8px;
+  }
+  .hero-universe-shade {
+    background: linear-gradient(
+      0deg,
+      #080f18,
+      transparent 18%,
+      transparent 88%,
+      #080f18
+    );
+  }
+  .hero-scene-heading {
+    top: 12px;
+    left: 2%;
+    right: 2%;
+  }
+  .hero-callout-world {
+    left: 0;
+    top: 31%;
+  }
+  .hero-callout-model {
+    right: 0;
+    top: 62%;
+  }
+  /* Two short lines keep the labels clear of the twin on a phone. */
+  .hero-callout > span {
+    display: block;
+    max-width: 86px;
+    line-height: 1.5;
+  }
+  .hero-callout-model {
+    text-align: right;
+  }
+  .hero-callout-model i {
+    margin-left: auto;
+  }
+  .hero-callout strong {
+    display: none;
+  }
+  .hero-callout i {
+    width: 35px;
+    height: 15px;
+  }
+  .hero-scene-caption {
+    left: 3%;
+    right: 2%;
+    bottom: 16px;
+    gap: 10px;
+  }
+  .field-footnote {
+    flex-direction: column;
+    gap: 8px;
+    line-height: 1.7;
+    padding-top: 16px;
+  }
+  .field-footnote > span:last-child {
+    text-align: left;
+  }
+}
+/* At readable sizes the decorative second labels no longer share a phone row. */
+@media (max-width: 480px) {
+  .hero-scene-edition,
+  .hero-scene-state {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .field-hero * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+.safety-exhibit {
+  margin-top: 42px;
+  display: grid;
+  grid-template-columns: 0.8fr 1.2fr;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+.safety-illustration {
+  position: relative;
+  background: radial-gradient(ellipse at 50% 40%, #243742, #0a131f 75%);
+  color: #f3c78a;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  min-height: 390px;
+}
+.safety-robot {
+  display: block;
+  width: 100%;
+  max-height: 470px;
+}
+.safety-illustration-label {
+  position: absolute;
+  top: 22px;
+  left: 22px;
+  color: #c0ced9;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+}
+.safety-stop-distance {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  right: 24px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: end;
+  border-top: 1px solid #f3c78a40;
+  padding-top: 12px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: #c4b8a6;
+}
+.safety-stop-distance strong {
+  color: #f3d09c;
+  font-size: 27px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.safety-evidence {
+  min-width: 0;
+  padding: 28px;
+}
+.safety-evidence > p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin-top: 16px;
+}
+@media (max-width: 900px) {
+  .safety-exhibit {
+    grid-template-columns: 1fr;
+  }
+  .safety-illustration {
+    min-height: 340px;
+  }
+  .safety-robot {
+    max-height: 380px;
+  }
+  .safety-evidence {
+    padding: 16px;
+  }
+}

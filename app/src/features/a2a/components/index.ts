@@ -4,23 +4,16 @@
  * @feature a2a
  */
 
+export { A2ATabs } from './A2ATabs';
 export { MessageBubble } from './MessageBubble';
 export { ConversationPanel } from './ConversationPanel';
 export { FormRenderer, CompletedFormCard } from './FormRenderer';
 export { ConversationList } from './ConversationList';
-export { TaskStatusCard, TaskStatusBadge } from './TaskStatusCard';
-export { AgentCard, AgentListItem } from './AgentCard';
-export { AgentList } from './AgentList';
+export { TaskStatusBadge } from './TaskStatusBadge';
+export { TaskDetailModal } from './TaskDetailModal';
+export { AgentCard } from './AgentCard';
 export { RegisterAgentDialog } from './RegisterAgentDialog';
-export { SidebarDrawer } from './SidebarDrawer';
-export { TaskDrawer } from './TaskDrawer';
-export { AgentSelector } from './AgentSelector';
-export { ConversationSelector } from './ConversationSelector';
-export { ModeSwitcher } from './ModeSwitcher';
-export { EventList } from './EventList';
-// Navigation components
-export { A2ALayout } from './A2ALayout';
-export { A2ASideNav } from './A2ASideNav';
-export { A2ABottomNav } from './A2ABottomNav';
-export { A2A_NAV_ITEMS, type A2ANavItem } from './A2ANavItems';
-export { ChatIcon, AgentsIcon, TasksIcon, EventsIcon, SettingsIcon } from './A2ANavItems';
+export { EventList, eventSummary } from './EventList';
+export { EventDetailModal } from './EventDetailModal';
+export { OrchestrationTimeline } from './OrchestrationTimeline';
+export { OrchestrationChainSummary } from './OrchestrationChainSummary';

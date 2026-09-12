@@ -1,40 +1,38 @@
 /**
  * @file RunDetail.tsx
- * @description One patrol run: header (route, mode, origin, status, reason,
- *              times), the leg timeline, baseline-vs-current photo pairs per
- *              checkpoint, and the findings with Acknowledge / This is normal /
- *              Escalate. "Promote to baseline" makes this run the reference.
+ * @description One patrol run as a detail page: header (route, date, robot,
+ *              status; Promote to baseline, Abort run), the findings to triage
+ *              (Acknowledge / This is normal / Escalate), the checkpoints with
+ *              their baseline-vs-current photo pairs, and a Details panel.
  * @feature patrol
  */
 
-import { useAuth } from '@/features/auth/hooks/useAuth';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { AlertTriangle, Check, CircleSlash, Flag, ShieldCheck, Square } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
-import { Button } from '@/shared/components/ui/Button';
-import { ProgressBar } from '@/shared/components/ui/ProgressBar';
-import { SegmentedControl } from '@/shared/components/ui/SegmentedControl';
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  KeyValueList,
+  PageHeader,
+  Panel,
+  ProgressBar,
+  RowActions,
+  SegmentedControl,
+  SkeletonText,
+  confirm,
+  toast,
+} from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import type { PatrolFinding, PatrolLeg } from '../types/patrol.types';
 import { PATROL_RUN_MODE_LABELS } from '../types/patrol.types';
 import { usePatrolStore, selectFindingsForRun, selectRouteById, selectRunById } from '../store/patrolStore';
 import { FindingBadge, FindingStatusChip, LegStatusChip, RunStatusChip } from './FindingBadge';
 import { PhotoPair } from './PhotoPair';
+import { describeRunReason } from './opsUi';
 import { formatWhen, sortFindings } from '../utils/patrolFormat';
-import {
-  LEG_NODE,
-  PATROL_ATTENTION_TEXT,
-  PATROL_FADE_IN,
-  PATROL_FOCUS,
-  PATROL_GLOW_LIVE,
-  PATROL_INSET,
-  PATROL_MICRO,
-  PATROL_MONO,
-  PATROL_MOTION,
-  PATROL_PANEL,
-  PATROL_STICKY_RAIL,
-  SEVERITY_RAIL,
-  SectionHeader,
-} from './patrolUi';
 
 export interface RunDetailProps {
   runId: string;
@@ -42,6 +40,12 @@ export interface RunDetailProps {
   robotNames?: Record<string, string>;
   className?: string;
 }
+
+const ICON = 'h-4 w-4';
+const INSET_ROW = 'rounded-control border border-line-subtle bg-inset p-4';
+/** A line that needs the operator's attention — warning signal, never red. */
+const ATTENTION = 'text-signal-unknown';
+const NOTE = 'text-xs break-words min-w-0 border-l-2 border-signal-unknown/40 pl-2';
 
 const INSPECTION_TEXT: Record<NonNullable<PatrolLeg['inspection']>, string> = {
   unchanged: 'unchanged (hash gate)',
@@ -73,11 +77,11 @@ function blindReasonText(leg: PatrolLeg): string {
   return missing.join(' and ') || 'nothing was captured';
 }
 
-/** Colour of the inspection verdict: turquoise = same as baseline, amber = changed, else muted. */
+/** Colour of the inspection verdict: measured = same as baseline, estimated = changed, else muted. */
 function inspectionClass(inspection: PatrolLeg['inspection']): string {
-  if (inspection === 'same' || inspection === 'unchanged') return 'text-turquoise-700 dark:text-turquoise-400';
-  if (inspection === 'changed') return PATROL_ATTENTION_TEXT;
-  return 'text-theme-tertiary';
+  if (inspection === 'same' || inspection === 'unchanged') return 'text-signal-measured';
+  if (inspection === 'changed') return ATTENTION;
+  return 'text-ink-tertiary';
 }
 
 /** `mm:ss` / `h:mm:ss` between two ISO times; '—' when the end is unknown. */
@@ -92,6 +96,10 @@ function formatDuration(startedAt: string, finishedAt?: string | null): string {
   const mm = String(m).padStart(2, '0');
   const ss = String(sec).padStart(2, '0');
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
 }
 
 const PHOTO_MODES = [
@@ -109,9 +117,9 @@ interface FindingRowProps {
   busy: boolean;
   /** `false` when "This is normal" reached the server but not the robot. */
   robotNotified?: boolean;
-  onAck: (id: string) => void;
-  onNormal: (id: string) => void;
-  onEscalate: (id: string) => void;
+  onAck: (f: PatrolFinding) => void;
+  onNormal: (f: PatrolFinding) => void;
+  onEscalate: (f: PatrolFinding) => void;
 }
 
 const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAck, onNormal, onEscalate }: FindingRowProps) {
@@ -126,16 +134,17 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
   const isNormal = finding.status === 'dismissed_normal';
   const isEscalated = finding.status === 'escalated';
   const confidencePct = Math.round(finding.confidence * 100);
+  const meta = [
+    finding.place ? `in ${finding.place}` : 'place unknown',
+    `checkpoint ${finding.legIndex + 1}`,
+    finding.source.replace(/_/g, ' '),
+    finding.model ?? null,
+    ev.observations ? plural(ev.observations, 'observation', 'observations') : null,
+  ].filter(Boolean);
   return (
     <li
       id={`finding-${finding.id}`}
-      className={cn(
-        PATROL_INSET,
-        SEVERITY_RAIL[finding.severity],
-        PATROL_MOTION,
-        PATROL_FADE_IN,
-        'flex flex-col gap-2 scroll-mt-24 target:ring-2 target:ring-cobalt-500/40',
-      )}
+      className={cn(INSET_ROW, 'flex flex-col gap-2 scroll-mt-24 target:outline-2 target:outline-primary')}
       data-testid="patrol-finding"
       data-finding-id={finding.id}
       data-severity={finding.severity}
@@ -144,78 +153,69 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
       <div className="flex flex-wrap items-center gap-2 min-w-0">
         <FindingBadge severity={finding.severity} type={finding.type} />
         <FindingStatusChip status={finding.status} />
-        <span className={cn(PATROL_MONO, 'ml-auto')}>{formatWhen(finding.at)}</span>
+        <span className="ml-auto text-xs text-ink-tertiary tabular-nums">{formatWhen(finding.at)}</span>
       </div>
-      <p className="text-sm font-medium text-theme-primary break-words">{finding.summary}</p>
-      <p className={cn(PATROL_MONO, 'break-words')}>
-        {finding.place ? `in ${finding.place}` : 'place unknown'} · leg {finding.legIndex + 1} · {finding.source.replace(/_/g, ' ')}
-        {finding.model ? ` · ${finding.model}` : ''} · confidence {confidencePct}%
-        {ev.observations ? ` · ${ev.observations} observations` : ''}
-      </p>
-      <div className="flex items-center gap-2" title={`confidence ${confidencePct}%`}>
-        <span className={PATROL_MICRO}>Confidence</span>
-        <ProgressBar value={confidencePct} showValue={false} variant="default" className="w-12 [&>div]:h-1" />
+      <p className="text-sm font-medium text-ink-primary break-words">{finding.summary}</p>
+      <p className="text-[13px] text-ink-tertiary break-words">{meta.join(' · ')}</p>
+      <div className="flex items-center gap-2" title={`Confidence ${confidencePct}%`}>
+        <span className="text-xs text-ink-tertiary">Confidence</span>
+        <ProgressBar value={confidencePct} showValue={false} size="sm" className="w-16" />
+        <span className="text-xs text-ink-secondary tabular-nums">{confidencePct}%</span>
       </div>
       {ev.checklistDiff && ev.checklistDiff.length > 0 && (
         <ul className="flex flex-wrap gap-1.5 min-w-0">
           {ev.checklistDiff.map((d) => (
-            <li key={d.item} className="glass-subtle rounded-brand px-2 py-0.5 text-xs font-mono text-theme-secondary break-words min-w-0">
-              <span className="font-medium text-theme-primary">{d.item}</span>: {d.baseline} → {d.current}
+            <li key={d.item} className="rounded-tag border border-line-subtle bg-panel px-2 py-0.5 text-xs text-ink-secondary break-words min-w-0">
+              <span className="font-medium text-ink-primary">{d.item}</span>: {d.baseline} → {d.current}
             </li>
           ))}
         </ul>
       )}
       {ev.labels && (ev.labels.added.length > 0 || ev.labels.missing.length > 0) && (
-        <p className="flex flex-wrap gap-1.5 text-xs text-theme-secondary break-words min-w-0">
-          {ev.labels.added.length > 0 && <span className="glass-subtle rounded-brand px-2 py-0.5 font-mono">new: {ev.labels.added.join(', ')} </span>}
-          {ev.labels.missing.length > 0 && <span className="glass-subtle rounded-brand px-2 py-0.5 font-mono">missing: {ev.labels.missing.join(', ')}</span>}
+        <p className="flex flex-wrap gap-1.5 text-xs text-ink-secondary break-words min-w-0">
+          {ev.labels.added.length > 0 && <span className="rounded-tag border border-line-subtle bg-panel px-2 py-0.5">new: {ev.labels.added.join(', ')}</span>}
+          {ev.labels.missing.length > 0 && <span className="rounded-tag border border-line-subtle bg-panel px-2 py-0.5">missing: {ev.labels.missing.join(', ')}</span>}
         </p>
       )}
       {ev.blob && (
-        <p className="text-xs text-theme-secondary tabular-nums">
-          blob {ev.blob.areaM2.toFixed(2)} m² at ({ev.blob.x.toFixed(1)}, {ev.blob.y.toFixed(1)})
+        <p className="text-xs text-ink-secondary tabular-nums">
+          Blob {ev.blob.areaM2.toFixed(2)} m² at ({ev.blob.x.toFixed(1)}, {ev.blob.y.toFixed(1)})
         </p>
       )}
-      {finding.status === 'dismissed_normal' && robotNotified === false && (
-        <p
-          className={cn(PATROL_ATTENTION_TEXT, 'text-xs break-words min-w-0 border-l-2 border-l-amber-500/60 pl-2')}
-          role="status"
-          data-testid="patrol-finding-robot-not-notified"
-        >
+      {isNormal && robotNotified === false && (
+        <p className={cn(NOTE, ATTENTION)} role="status" data-testid="patrol-finding-robot-not-notified">
           Marked normal here — the robot was offline, so its baseline was not updated. It will flag this again until it is taught.
         </p>
       )}
-      <div className="flex flex-wrap gap-1.5 sm:justify-end [&>button]:flex-1 sm:[&>button]:flex-none">
+      <div className="flex items-center justify-end gap-1.5">
         <Button
           size="sm"
-          variant="outline"
+          variant="secondary"
+          leftIcon={<Check className={ICON} strokeWidth={1.75} />}
           data-testid="patrol-finding-ack"
           disabled={!canWrite || busy || finding.status !== 'open'}
-          onClick={() => onAck(finding.id)}
+          isLoading={busy}
+          onClick={() => onAck(finding)}
         >
           Acknowledge
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="text-turquoise-700 dark:text-turquoise-400 border-turquoise-500/40"
-          data-testid="patrol-finding-normal"
-          disabled={!canWrite || busy || isNormal}
-          title="Dismiss and teach the baseline that this is normal"
-          onClick={() => onNormal(finding.id)}
-        >
-          This is normal
-        </Button>
-        <Button
-          size="sm"
-          variant="destructive"
-          data-testid="patrol-finding-escalate"
-          disabled={!canWrite || busy || isEscalated}
-          title={isEscalated ? 'Already escalated — an incident exists' : 'Open an incident for this finding'}
-          onClick={() => onEscalate(finding.id)}
-        >
-          Escalate
-        </Button>
+        <RowActions
+          label={`More actions for ${finding.summary}`}
+          items={[
+            {
+              label: 'This is normal',
+              icon: <ShieldCheck />,
+              disabled: !canWrite || busy || isNormal,
+              onSelect: () => onNormal(finding),
+            },
+            {
+              label: 'Escalate',
+              icon: <Flag />,
+              disabled: !canWrite || busy || isEscalated,
+              onSelect: () => onEscalate(finding),
+            },
+          ]}
+        />
       </div>
     </li>
   );
@@ -224,6 +224,10 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
 // ============================================================================
 // COMPONENT
 // ============================================================================
+
+function errorText(fallback: string): { description: string } {
+  return { description: usePatrolStore.getState().error ?? fallback };
+}
 
 export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, className }: RunDetailProps) {
   const { can } = useAuth();
@@ -241,16 +245,17 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
   const fetchRoute = usePatrolStore((s) => s.fetchRoute);
   const fetchBaseline = usePatrolStore((s) => s.fetchBaseline);
   const promoteRun = usePatrolStore((s) => s.promoteRun);
+  const abortRun = usePatrolStore((s) => s.abortRun);
   const acknowledgeFinding = usePatrolStore((s) => s.acknowledgeFinding);
   const markFindingNormal = usePatrolStore((s) => s.markFindingNormal);
   const escalateFinding = usePatrolStore((s) => s.escalateFinding);
 
-  const [note, setNote] = useState<string | null>(null);
   const [promoting, setPromoting] = useState(false);
+  const [aborting, setAborting] = useState(false);
   const [photoMode, setPhotoMode] = useState<PhotoMode>('side');
 
   useEffect(() => {
-    void fetchRun(runId);
+    if (runId) void fetchRun(runId);
   }, [runId, fetchRun]);
 
   useEffect(() => {
@@ -275,44 +280,89 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
     return m;
   }, [route]);
 
+  const routeName = run ? run.routeName || route?.name || run.routeId : '';
+
   const handlePromote = useCallback(async () => {
     if (!run) return;
+    const ok = await confirm({
+      title: 'Make this run the baseline?',
+      description: `Future runs of ${routeName} in the ${run.window ?? 'default'} window compare their photos to this run.`,
+      confirmLabel: 'Promote to baseline',
+    });
+    if (!ok) return;
     setPromoting(true);
-    const ok = await promoteRun(run.runId);
+    const done = await promoteRun(run.runId);
     setPromoting(false);
-    setNote(ok ? `Run promoted — it is now the baseline for the ${run.window ?? 'default'} window.` : 'Promote failed.');
-    if (ok) void fetchBaseline(run.routeId, run.window);
-  }, [run, promoteRun, fetchBaseline]);
+    if (done) {
+      toast.success('Baseline updated', { description: `This run is now the baseline for the ${run.window ?? 'default'} window.` });
+      void fetchBaseline(run.routeId, run.window);
+    } else {
+      toast.error("Couldn't promote the run", errorText('The server refused the request.'));
+    }
+  }, [run, routeName, promoteRun, fetchBaseline]);
 
-  const scrollToPhoto = useCallback((index: number) => {
-    const el = document.getElementById(`patrol-photo-${index}`);
-    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, []);
+  const handleAbort = useCallback(async () => {
+    if (!run) return;
+    const ok = await confirm({
+      title: `Abort the run on ${routeName}?`,
+      description: 'The robot stops walking the route and returns control. Checkpoints not reached stay uninspected.',
+      confirmLabel: 'Abort run',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    setAborting(true);
+    const done = await abortRun(run.routeId, run.robotId);
+    setAborting(false);
+    if (done) {
+      toast.success('Run aborted');
+      void fetchRun(run.runId);
+    } else {
+      toast.error("Couldn't abort the run", errorText('The robot did not confirm the abort.'));
+    }
+  }, [run, routeName, abortRun, fetchRun]);
+
+  const handleAck = useCallback(async (f: PatrolFinding) => {
+    if (await acknowledgeFinding(f.id)) toast.success('Finding acknowledged', { description: f.summary });
+    else toast.error("Couldn't acknowledge the finding", errorText('The server refused the request.'));
+  }, [acknowledgeFinding]);
+
+  const handleNormal = useCallback(async (f: PatrolFinding) => {
+    if (await markFindingNormal(f.id)) toast.success('Marked as normal', { description: f.summary });
+    else toast.error("Couldn't mark the finding as normal", errorText('The server refused the request.'));
+  }, [markFindingNormal]);
+
+  const handleEscalate = useCallback(async (f: PatrolFinding) => {
+    const ok = await confirm({
+      title: 'Escalate this finding?',
+      description: 'An alert is raised for the on-call operator.',
+      confirmLabel: 'Escalate',
+    });
+    if (!ok) return;
+    if (await escalateFinding(f.id)) toast.success('Finding escalated', { description: f.summary });
+    else toast.error("Couldn't escalate the finding", errorText('The server refused the request.'));
+  }, [escalateFinding]);
+
+  const back = { to: '/patrol', label: 'Patrol' };
 
   if (!run) {
-    const loading = status === 'loading' || status === 'idle';
+    const loading = runId !== '' && (status === 'loading' || status === 'idle');
     return (
-      <div className={cn('flex flex-col gap-4 lg:grid lg:grid-cols-[300px_minmax(0,1fr)] lg:gap-5 min-w-0', className)} data-testid="patrol-run-detail">
-        {loading ? (
-          <>
-            <div className="flex flex-col gap-4" aria-hidden="true">
-              <div className="glass-card rounded-brand-lg animate-pulse h-56" />
-              <div className="glass-card rounded-brand-lg animate-pulse h-40" />
-            </div>
-            <div className="flex flex-col gap-4">
-              <div className="glass-card rounded-brand-lg animate-pulse h-48" aria-hidden="true" />
-              <div className="glass-card rounded-brand-lg animate-pulse h-64" aria-hidden="true" />
-              <p className="sr-only" role="status">
-                Loading run…
-              </p>
-            </div>
-          </>
-        ) : (
-          <div className={cn(PATROL_PANEL, 'lg:col-span-2 text-center card-meta')}>
-            This run could not be loaded.
-            {error && status === 'error' && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
-          </div>
-        )}
+      <div className={cn('flex flex-col gap-6 min-w-0', className)} data-testid="patrol-run-detail">
+        <PageHeader eyebrow="Operate" back={back} title={loading ? 'Loading…' : 'Patrol run'} />
+        <Panel>
+          {loading ? (
+            <>
+              <SkeletonText lines={4} />
+              <p className="sr-only" role="status">Loading run…</p>
+            </>
+          ) : (
+            <ErrorState
+              title="Couldn't load this run"
+              message={(status === 'error' && error) || 'The run does not exist or is no longer on the robot.'}
+              onRetry={runId ? () => void fetchRun(runId) : undefined}
+            />
+          )}
+        </Panel>
       </div>
     );
   }
@@ -323,175 +373,59 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
   // says so.
   const baselineIsThisRun = run.mode !== 'baseline' && baseline?.runId === run.runId;
   const canPromote = run.mode !== 'baseline' && run.status === 'done' && !baselineIsThisRun;
-  const photoLegs = run.legs.filter((leg) => {
-    const cp = checkpointsById.get(leg.checkpointId);
-    return Boolean(leg.photoKey) || Boolean(leg.photoDropped) || (cp ? cp.capture : true);
-  });
-
-  const photoIndexes = new Set(photoLegs.map((l) => l.index));
-  const blindLegCount = run.legs.filter(isBlindLeg).length;
-  const evidenceFirst = sorted.length > 0;
-  const routeName = run.routeName || route?.name || run.routeId;
-
-  const findingsPanel = (
-    <section className={cn(PATROL_PANEL, 'flex flex-col gap-3')} data-testid="patrol-findings">
-      <SectionHeader as="h3" title="Findings" count={sorted.length} />
-      {sorted.length === 0 ? (
-        <p className="card-meta text-xs">
-          {run.mode === 'baseline' ? 'A baseline run records what is normal; it raises no findings.' : 'Nothing that is not normal was found.'}
-        </p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {sorted.map((f) => (
-            <FindingRow
-              key={f.id}
-              finding={f}
-              busy={busyFindingId === f.id}
-              robotNotified={findingRobotNotified[f.id]}
-              onAck={(id) => void acknowledgeFinding(id)}
-              onNormal={(id) => void markFindingNormal(id)}
-              onEscalate={(id) => void escalateFinding(id)}
-            />
-          ))}
-        </ul>
-      )}
-    </section>
+  const photoIndexes = new Set(
+    run.legs
+      .filter((leg) => {
+        const cp = checkpointsById.get(leg.checkpointId);
+        return Boolean(leg.photoKey) || Boolean(leg.photoDropped) || (cp ? cp.capture : true);
+      })
+      .map((l) => l.index),
   );
+  const blindLegCount = run.legs.filter(isBlindLeg).length;
+  // A `done` run carries a reason only when something went wrong anyway
+  // ("N checkpoint(s) not inspected") — muting it there hid the one line that
+  // says the patrol was partly blind.
+  const reasonNeedsAttention = run.status !== 'done' || blindLegCount > 0;
+  const robotName = robotNames[run.robotId] ?? run.robotId;
+  const kind = run.mode === 'baseline' ? 'Baseline run' : 'Patrol run';
 
-  const photosPanel =
-    photoLegs.length > 0 ? (
-      <section className={cn(PATROL_PANEL, 'flex flex-col gap-3')}>
-        <SectionHeader
-          as="h3"
-          title="Control photos"
-          count={photoLegs.length}
-          actions={
-            baselineIsThisRun ? (
-              <span className="text-[11px] font-medium text-turquoise-700 dark:text-turquoise-400" data-testid="patrol-run-is-baseline">
-                This run is the route's baseline{run.window ? ` for the ${run.window} window` : ''}
-              </span>
-            ) : run.mode !== 'baseline' ? (
-              <SegmentedControl options={[...PHOTO_MODES]} value={photoMode} onChange={setPhotoMode} label="Photo comparison mode" />
-            ) : undefined
-          }
-        />
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {photoLegs.map((leg) => {
-            const changed = leg.inspection === 'changed';
-            const blind = isBlindLeg(leg);
-            const n = leg.findingIds.length;
-            return (
-              <div
-                key={`photo-${leg.index}`}
-                id={`patrol-photo-${leg.index}`}
-                className={cn(PATROL_INSET, PATROL_FADE_IN, 'scroll-mt-24 flex flex-col gap-2', (changed || blind) && 'ring-1 ring-amber-500/40')}
-              >
-                <div className="flex flex-wrap items-center gap-2 min-w-0">
-                  <span className="text-sm font-medium text-theme-primary truncate">
-                    <span className={cn(PATROL_MONO, 'text-theme-tertiary')}>{leg.index + 1}</span> · {leg.name || leg.placeId}
-                  </span>
-                  {leg.inspection && (
-                    <span className={cn('ml-auto text-[11px] font-medium whitespace-nowrap', inspectionClass(leg.inspection))}>
-                      {INSPECTION_TEXT[leg.inspection]}
-                      {changed && n > 0 ? ` · ${n} ${n === 1 ? 'finding' : 'findings'}` : ''}
-                    </span>
-                  )}
-                </div>
-                <PhotoPair
-                  robotId={run.robotId}
-                  checkpointName={leg.name || leg.placeId}
-                  currentRunId={run.runId}
-                  currentKey={leg.photoKey ?? null}
-                  currentDropped={leg.photoDropped ?? null}
-                  baselineRunId={run.mode === 'baseline' || baselineIsThisRun ? null : (baseline?.runId ?? null)}
-                  baselineRobotId={baseline?.robotId ?? run.robotId}
-                  baselineKey={run.mode === 'baseline' || baselineIsThisRun ? null : (baseline?.photos?.[leg.checkpointId] ?? null)}
-                  baselineMissingText={baselineIsThisRun ? 'this run is the baseline' : undefined}
-                  mode={photoMode}
-                />
-                {blind && (
-                  <p
-                    className={cn(PATROL_ATTENTION_TEXT, 'text-xs break-words min-w-0 border-l-2 border-l-amber-500/60 pl-2')}
-                    data-testid="patrol-photo-blind"
-                  >
-                    Not inspected — no control photo or checklist answer here, so this checkpoint was never compared with the baseline.
-                  </p>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </section>
-    ) : null;
+  const details = [
+    { label: 'Route', value: <Link to={`/patrol/routes/${encodeURIComponent(run.routeId)}`} className="text-primary hover:underline">{routeName}</Link> },
+    {
+      label: 'Robot',
+      value: run.robotId ? (
+        <Link to={`/agent?robot=${encodeURIComponent(run.robotId)}`} className="text-primary hover:underline" title="Open in Agent Mode">{robotName}</Link>
+      ) : null,
+    },
+    { label: 'Mode', value: PATROL_RUN_MODE_LABELS[run.mode] },
+    { label: 'Origin', value: run.origin },
+    { label: 'Window', value: run.window },
+    { label: 'Started', value: <span className="tabular-nums">{formatWhen(run.startedAt)}</span> },
+    { label: 'Finished', value: <span className="tabular-nums">{run.finishedAt ? formatWhen(run.finishedAt) : run.status === 'running' ? 'Still running' : null}</span> },
+    { label: 'Duration', value: <span className="tabular-nums">{formatDuration(run.startedAt, run.finishedAt)}</span> },
+    { label: 'Findings', value: <span className="tabular-nums">{plural(run.findingCount, 'finding', 'findings')}</span> },
+    { label: 'Run ID', value: run.runId, mono: true },
+  ];
 
   return (
-    <div className={cn('flex flex-col gap-4 lg:grid lg:grid-cols-[300px_minmax(0,1fr)] lg:gap-5 min-w-0', className)} data-testid="patrol-run-detail" data-run-id={run.runId}>
-      {/* Left rail: header + leg timeline */}
-      <aside className={cn(PATROL_STICKY_RAIL, 'flex flex-col gap-4 min-w-0')}>
-        <header className={cn(PATROL_PANEL, 'flex flex-col gap-3', run.status === 'running' && PATROL_GLOW_LIVE)}>
-          <div className="flex flex-wrap items-center gap-2 min-w-0">
-            <RunStatusChip status={run.status} />
-            {run.robotId && (
-              <Link to={`/agent?robot=${encodeURIComponent(run.robotId)}`} className={cn('ml-auto text-xs text-cobalt-600 dark:text-cobalt-400 hover:underline', PATROL_MOTION)}>
-                Agent Mode
-              </Link>
-            )}
-          </div>
-          <div className="min-w-0">
-            <h2 className="font-display text-lg font-semibold leading-tight text-theme-primary break-words">
-              <Link to={`/patrol/routes/${encodeURIComponent(run.routeId)}`} className={cn('hover:text-cobalt-500', PATROL_MOTION)}>
-                {routeName}
-              </Link>
-            </h2>
-            <p className="text-xs text-theme-secondary break-words">
-              {PATROL_RUN_MODE_LABELS[run.mode]} · {run.origin}
-              {run.window ? ` · window ${run.window}` : ''}
-            </p>
-          </div>
-          {run.reason && (
-            <p
-              // A `done` run carries a reason only when something went wrong
-              // anyway ("N checkpoint(s) not inspected") — muting it there hid
-              // the one line that says the patrol was partly blind.
-              className={cn('text-sm break-words', run.status !== 'done' || blindLegCount > 0 ? PATROL_ATTENTION_TEXT : 'text-theme-secondary')}
-              data-testid="patrol-run-reason"
-            >
-              {run.reason}
-            </p>
-          )}
-          <dl className="grid grid-cols-2 lg:grid-cols-[auto_1fr] gap-x-3 gap-y-1 min-w-0">
-            <dt className={PATROL_MICRO}>Mode</dt>
-            <dd className={cn(PATROL_MONO, 'truncate')}>{PATROL_RUN_MODE_LABELS[run.mode]}</dd>
-            <dt className={PATROL_MICRO}>Origin</dt>
-            <dd className={cn(PATROL_MONO, 'truncate')}>{run.origin}</dd>
-            <dt className={PATROL_MICRO}>Window</dt>
-            <dd className={cn(PATROL_MONO, 'truncate')}>{run.window ?? '—'}</dd>
-            <dt className={PATROL_MICRO}>Robot</dt>
-            <dd className={cn(PATROL_MONO, 'truncate')}>{robotNames[run.robotId] ?? run.robotId}</dd>
-            <dt className={PATROL_MICRO}>Started</dt>
-            <dd className={cn(PATROL_MONO, 'truncate')}>{formatWhen(run.startedAt)}</dd>
-            <dt className={PATROL_MICRO}>Finished</dt>
-            <dd className={cn(PATROL_MONO, 'truncate', run.status === 'running' && 'text-cobalt-700 dark:text-cobalt-300')}>
-              {run.finishedAt ? formatWhen(run.finishedAt) : run.status === 'running' ? 'running' : '—'}
-            </dd>
-            <dt className={PATROL_MICRO}>Duration</dt>
-            <dd className={cn(PATROL_MONO, 'truncate')}>{formatDuration(run.startedAt, run.finishedAt)}</dd>
-            <dt className={PATROL_MICRO}>Findings</dt>
-            <dd className={cn(PATROL_MONO, 'truncate', run.findingCount > 0 && cn(PATROL_ATTENTION_TEXT, 'font-semibold'))}>
-              {run.findingCount} {run.findingCount === 1 ? 'finding' : 'findings'}
-            </dd>
-          </dl>
-          <div className="flex flex-col gap-2 pt-1 border-t border-glass-subtle">
-            {note && (
-              <span className="text-xs text-theme-secondary break-words" role="status">
-                {note}
-              </span>
+    <div className={cn('flex flex-col gap-6 min-w-0', className)} data-testid="patrol-run-detail" data-run-id={run.runId}>
+      <PageHeader
+        eyebrow="Operate"
+        back={back}
+        title={routeName}
+        description={`${kind} · ${formatWhen(run.startedAt)} · ${robotName}`}
+        meta={<RunStatusChip status={run.status} />}
+        actions={
+          <>
+            {run.status === 'running' && (
+              <Button variant="secondary" leftIcon={<Square className={ICON} strokeWidth={1.75} />} disabled={!canWrite} isLoading={aborting} onClick={() => void handleAbort()}>
+                Abort run
+              </Button>
             )}
             <Button
-              size="sm"
-              variant="outline"
-              fullWidth
+              variant="secondary"
               data-testid="patrol-run-promote"
+              leftIcon={baselineIsThisRun ? <Check className={ICON} strokeWidth={1.75} /> : undefined}
               disabled={!canWrite || !canPromote || promoting}
               isLoading={promoting}
               title={
@@ -505,95 +439,149 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
             >
               {baselineIsThisRun ? 'Current baseline' : 'Promote to baseline'}
             </Button>
-          </div>
-        </header>
-
-        {/* Legs */}
-        <section className={cn(PATROL_PANEL, 'flex flex-col gap-3')}>
-          <SectionHeader as="h3" title="Legs" count={run.legs.length} />
-          {run.legs.length === 0 ? (
-            <p className="card-meta text-xs">No legs — the run was refused before the robot moved.</p>
-          ) : (
-            <ol className="relative flex flex-col gap-2.5 before:absolute before:left-[11px] before:top-3 before:bottom-3 before:w-px before:bg-[var(--glass-border-highlight)]">
-              {run.legs.map((leg) => {
-                const hasPhoto = photoIndexes.has(leg.index);
-                const blind = isBlindLeg(leg);
-                const n = leg.findingIds.length;
-                const time = leg.finishedAt ? formatWhen(leg.finishedAt) : leg.startedAt ? formatWhen(leg.startedAt) : '';
-                const body = (
-                  <>
-                    <span
-                      className={cn(
-                        'relative z-[1] shrink-0 w-6 h-6 rounded-full inline-flex items-center justify-center text-[11px] font-semibold tabular-nums',
-                        PATROL_MOTION,
-                        LEG_NODE[leg.status],
-                      )}
-                      aria-hidden="true"
-                    >
-                      {leg.index + 1}
-                    </span>
-                    <span className="flex-1 min-w-0 flex flex-col gap-0.5">
-                      <span className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
-                        <span className="text-sm font-medium text-theme-primary truncate">{leg.name || leg.placeId}</span>
-                        <LegStatusChip status={leg.status} />
-                        {time && <span className={cn(PATROL_MONO, 'ml-auto text-[11px]')}>{time}</span>}
-                      </span>
-                      <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] min-w-0">
-                        {leg.inspection && <span className={cn('font-medium', inspectionClass(leg.inspection))}>{INSPECTION_TEXT[leg.inspection]}</span>}
-                        {leg.photoDropped === 'person' && <span className="text-theme-tertiary">photo not stored (person)</span>}
-                        {n > 0 && (
-                          <span className={cn(PATROL_ATTENTION_TEXT, 'font-medium')}>
-                            {n} {n === 1 ? 'finding' : 'findings'}
-                          </span>
-                        )}
-                      </span>
-                      {leg.message && <span className="card-meta text-xs break-words">{leg.message}</span>}
-                      {blind && (
-                        <span
-                          className={cn(PATROL_ATTENTION_TEXT, 'text-xs break-words min-w-0 border-l-2 border-l-amber-500/60 pl-2')}
-                          data-testid="patrol-leg-blind"
-                        >
-                          Checkpoint not inspected — {blindReasonText(leg)}, so nothing here was compared with the baseline.
-                        </span>
-                      )}
-                    </span>
-                  </>
-                );
-                return (
-                  <li key={`${leg.index}-${leg.checkpointId}`} className="min-w-0" data-testid="patrol-leg" data-index={leg.index} data-status={leg.status}>
-                    {hasPhoto ? (
-                      <button
-                        type="button"
-                        onClick={() => scrollToPhoto(leg.index)}
-                        title={`Show the control photo of ${leg.name || leg.placeId}`}
-                        className={cn('w-full text-left flex items-start gap-2 rounded-brand -mx-1 px-1 py-0.5 hover:bg-theme-hover', PATROL_MOTION, PATROL_FOCUS)}
-                      >
-                        {body}
-                      </button>
-                    ) : (
-                      <div className="flex items-start gap-2 py-0.5">{body}</div>
-                    )}
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-        </section>
-      </aside>
-
-      {/* Right column: evidence first — findings lead when there are any, then the proof. */}
-      <div className="flex flex-col gap-4 min-w-0">
-        {evidenceFirst ? (
-          <>
-            {findingsPanel}
-            {photosPanel}
           </>
-        ) : (
-          <>
-            {photosPanel}
-            {findingsPanel}
-          </>
+        }
+      >
+        {run.reason && (
+          <p
+            className={cn('flex items-start gap-2 text-sm break-words', reasonNeedsAttention ? ATTENTION : 'text-ink-secondary')}
+            data-testid="patrol-run-reason"
+            data-attention={reasonNeedsAttention ? 'true' : 'false'}
+          >
+            {reasonNeedsAttention && <AlertTriangle className={cn(ICON, 'mt-0.5 shrink-0')} strokeWidth={1.75} aria-hidden="true" />}
+            <span title={run.reason}>{describeRunReason(run.reason)}</span>
+          </p>
         )}
+      </PageHeader>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3 min-w-0">
+        <div className="flex flex-col gap-6 min-w-0 xl:col-span-2">
+          <Panel data-testid="patrol-findings">
+            <Panel.Header
+              title="Findings"
+              description={sorted.length > 0 ? `${plural(sorted.length, 'finding', 'findings')} to triage` : undefined}
+            />
+            <Panel.Body>
+              {sorted.length === 0 ? (
+                run.mode === 'baseline' ? (
+                  <EmptyState size="sm" icon={<CircleSlash />} title="Baseline run" description="A baseline run records what is normal; it raises no findings." />
+                ) : (
+                  <EmptyState size="sm" icon={<ShieldCheck />} title="Nothing unusual" description="Every checkpoint matched its baseline." />
+                )
+              ) : (
+                <ul className="flex flex-col gap-3">
+                  {sorted.map((f) => (
+                    <FindingRow
+                      key={f.id}
+                      finding={f}
+                      busy={busyFindingId === f.id}
+                      robotNotified={findingRobotNotified[f.id]}
+                      onAck={(x) => void handleAck(x)}
+                      onNormal={(x) => void handleNormal(x)}
+                      onEscalate={(x) => void handleEscalate(x)}
+                    />
+                  ))}
+                </ul>
+              )}
+            </Panel.Body>
+          </Panel>
+
+          <Panel>
+            <Panel.Header
+              title="Checkpoints"
+              description={plural(run.legs.length, 'checkpoint', 'checkpoints')}
+              actions={
+                baselineIsThisRun ? (
+                  <span className="text-xs text-ink-secondary" data-testid="patrol-run-is-baseline">
+                    This run is the route's baseline{run.window ? ` for the ${run.window} window` : ''}
+                  </span>
+                ) : run.mode !== 'baseline' && photoIndexes.size > 0 ? (
+                  <SegmentedControl size="sm" options={[...PHOTO_MODES]} value={photoMode} onChange={setPhotoMode} label="Photo comparison mode" />
+                ) : undefined
+              }
+            />
+            <Panel.Body>
+              {run.legs.length === 0 ? (
+                <EmptyState size="sm" icon={<CircleSlash />} title="No checkpoints walked" description="The run was refused before the robot moved." />
+              ) : (
+                <ol className="flex flex-col gap-3">
+                  {run.legs.map((leg) => {
+                    const blind = isBlindLeg(leg);
+                    const n = leg.findingIds.length;
+                    const time = leg.finishedAt ? formatWhen(leg.finishedAt) : leg.startedAt ? formatWhen(leg.startedAt) : '';
+                    const name = leg.name || leg.placeId;
+                    return (
+                      <li
+                        key={`${leg.index}-${leg.checkpointId}`}
+                        id={`patrol-photo-${leg.index}`}
+                        className={cn(INSET_ROW, 'flex flex-col gap-3 min-w-0 scroll-mt-24')}
+                        data-testid="patrol-leg"
+                        data-index={leg.index}
+                        data-status={leg.status}
+                      >
+                        <div className="flex items-start gap-3 min-w-0">
+                          <span
+                            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line bg-panel text-xs font-semibold tabular-nums text-ink-secondary"
+                            aria-hidden="true"
+                          >
+                            {leg.index + 1}
+                          </span>
+                          <div className="flex min-w-0 flex-1 flex-col gap-1">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+                              <span className="text-sm font-medium text-ink-primary truncate">{name}</span>
+                              <LegStatusChip status={leg.status} />
+                              {time && <span className="ml-auto text-xs text-ink-tertiary tabular-nums">{time}</span>}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs min-w-0">
+                              {leg.inspection && <span className={cn('font-medium', inspectionClass(leg.inspection))}>{INSPECTION_TEXT[leg.inspection]}</span>}
+                              {leg.photoDropped === 'person' && <span className="text-ink-tertiary">photo not stored (person)</span>}
+                              {n > 0 && <span className={cn(ATTENTION, 'font-medium')}>{plural(n, 'finding', 'findings')}</span>}
+                            </div>
+                            {leg.message && <p className="text-xs text-ink-tertiary break-words">{leg.message}</p>}
+                            {blind && (
+                              <p className={cn(NOTE, ATTENTION)} data-testid="patrol-leg-blind">
+                                Checkpoint not inspected — {blindReasonText(leg)}, so nothing here was compared with the baseline.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        {photoIndexes.has(leg.index) && (
+                          <div className="flex flex-col gap-2">
+                            <PhotoPair
+                              robotId={run.robotId}
+                              checkpointName={name}
+                              currentRunId={run.runId}
+                              currentKey={leg.photoKey ?? null}
+                              currentDropped={leg.photoDropped ?? null}
+                              baselineRunId={run.mode === 'baseline' || baselineIsThisRun ? null : (baseline?.runId ?? null)}
+                              baselineRobotId={baseline?.robotId ?? run.robotId}
+                              baselineKey={run.mode === 'baseline' || baselineIsThisRun ? null : (baseline?.photos?.[leg.checkpointId] ?? null)}
+                              baselineMissingText={baselineIsThisRun ? 'this run is the baseline' : undefined}
+                              mode={photoMode}
+                              className="max-w-3xl"
+                            />
+                            {blind && (
+                              <p className={cn(NOTE, ATTENTION)} data-testid="patrol-photo-blind">
+                                Not inspected — no control photo or checklist answer here, so this checkpoint was never compared with the baseline.
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </Panel.Body>
+          </Panel>
+        </div>
+
+        <Panel className="self-start">
+          <Panel.Header title="Details" />
+          <Panel.Body>
+            <KeyValueList columns={1} items={details} />
+          </Panel.Body>
+        </Panel>
       </div>
     </div>
   );

@@ -1,267 +1,95 @@
 /**
  * @file ROHEDashboard.tsx
- * @description Dashboard component for Return on Human Effort (ROHE) metrics
+ * @description Return on Human Effort: how much the model improved per human
+ *              intervention, fleet-wide, per robot and per task
  * @feature fleetlearning
  */
 
-import { useMemo } from 'react';
-import { cn } from '@/shared/utils/cn';
-import { Users, TrendingUp, Bot, Target, Loader2, ArrowUpRight, ArrowDownRight } from 'lucide-react';
-import type { ROHEMetrics } from '../types/fleetlearning.types';
+import { TrendingUp } from 'lucide-react';
+import {
+  DataTable, EmptyState, ErrorState, Panel, SkeletonRows, StatRow, StatTile, type DataTableColumn,
+} from '@/shared/components/ui';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import type { ROHEMetrics } from '../types/fleetlearning.types';
 
 export interface ROHEDashboardProps {
   metrics: ROHEMetrics | null;
   isLoading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
+  /** Maps a robot id to its name. */
+  robotName?: (robotId: string) => string;
   className?: string;
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+interface Row {
+  id: string;
+  interventions: number;
+  improvement: number;
+  rohe: number;
+}
 
-export function ROHEDashboard({ metrics, isLoading = false, className }: ROHEDashboardProps) {
-  // Process metrics for display
-  const processedData = useMemo(() => {
-    if (!metrics) return null;
+const pct = (v: number) => `${v > 0 ? '+' : ''}${(v * 100).toFixed(1)} %`;
 
-    const robotEntries = Object.entries(metrics.byRobot)
-      .map(([robotId, data]) => ({
-        id: robotId,
-        ...data,
-      }))
-      .sort((a, b) => b.rohe - a.rohe);
+function breakdownColumns(header: string, name: (id: string) => string): DataTableColumn<Row>[] {
+  return [
+    { key: 'id', header, cell: (r) => <span className="font-medium text-ink-primary">{name(r.id)}</span> },
+    { key: 'interventions', header: 'Interventions', align: 'right', sortable: true, hideBelow: 'sm' },
+    {
+      key: 'improvement', header: 'Improvement', align: 'right', sortable: true,
+      cell: (r) => <span className={r.improvement < 0 ? 'text-signal-stopped' : 'text-ink-primary'}>{pct(r.improvement)}</span>,
+    },
+    { key: 'rohe', header: 'ROHE', align: 'right', sortable: true, cell: (r) => r.rohe.toFixed(4) },
+  ];
+}
 
-    const taskEntries = Object.entries(metrics.byTask)
-      .map(([task, data]) => ({
-        task,
-        ...data,
-      }))
-      .sort((a, b) => b.rohe - a.rohe);
+const toRows = (rec: ROHEMetrics['byRobot']): Row[] => Object.entries(rec).map(([id, d]) => ({ id, ...d }));
 
-    return {
-      robotEntries,
-      taskEntries,
-      topRobots: robotEntries.slice(0, 5),
-      topTasks: taskEntries.slice(0, 5),
-    };
-  }, [metrics]);
-
-  // Loading state
-  if (isLoading) {
+export function ROHEDashboard({ metrics, isLoading = false, error, onRetry, robotName, className }: ROHEDashboardProps) {
+  if (isLoading && !metrics) return <Panel className={className}><SkeletonRows rows={4} /></Panel>;
+  if (error && !metrics) {
+    return <Panel className={className}><ErrorState title="Couldn't load ROHE metrics" message={error} onRetry={onRetry} /></Panel>;
+  }
+  if (!metrics) {
     return (
-      <div
-        className={cn(
-          'flex items-center justify-center py-12 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700',
-          className
-        )}
-      >
-        <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
-      </div>
+      <Panel className={className}>
+        <EmptyState icon={<TrendingUp />} title="No ROHE metrics yet"
+          description="Interventions during rounds are counted here once robots report them." />
+      </Panel>
     );
   }
 
-  // Empty state
-  if (!metrics || !processedData) {
-    return (
-      <div
-        className={cn(
-          'flex flex-col items-center justify-center py-12 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700',
-          className
-        )}
-      >
-        <TrendingUp className="w-12 h-12 text-gray-300 dark:text-gray-600 mb-2" />
-        <p className="text-gray-500 dark:text-gray-400">No ROHE metrics available</p>
-      </div>
-    );
-  }
+  // An empty period comes back as the epoch; say nothing rather than "1/1/1970".
+  const hasPeriod = new Date(metrics.period.start).getTime() > 0;
+  const period = !hasPeriod ? 'No interventions recorded' : `${new Date(metrics.period.start).toLocaleDateString(UI_DATE_LOCALE)} – ${new Date(metrics.period.end).toLocaleDateString(UI_DATE_LOCALE)}`;
+  const robotRows = toRows(metrics.byRobot);
+  const taskRows = toRows(metrics.byTask);
 
   return (
-    <div className={cn('space-y-6', className)}>
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-              <Users className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Total Interventions</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                {metrics.totalInterventions.toLocaleString(UI_DATE_LOCALE)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
-              <TrendingUp className="w-5 h-5 text-green-600 dark:text-green-400" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Performance Gain</p>
-              <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                +{(metrics.performanceImprovement * 100).toFixed(1)}%
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
-              <Target className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">ROHE Score</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                {metrics.improvementPerIntervention.toFixed(3)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
-              <Bot className="w-5 h-5 text-primary-600 dark:text-primary-400" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Active Robots</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                {Object.keys(metrics.byRobot).length}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Breakdown Tables */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* By Robot */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-          <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-            <h3 className="font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-              <Bot className="w-4 h-4" />
-              ROHE by Robot
-            </h3>
-          </div>
-          <div className="divide-y divide-gray-200 dark:divide-gray-700">
-            {processedData.topRobots.map((robot, index) => (
-              <div
-                key={robot.id}
-                className="flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-500 dark:text-gray-400 w-6">
-                    #{index + 1}
-                  </span>
-                  <div>
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                      {robot.id.slice(0, 12)}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {robot.interventions} interventions
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                    {robot.rohe.toFixed(4)}
-                  </p>
-                  <p
-                    className={cn(
-                      'text-xs flex items-center justify-end gap-0.5',
-                      robot.improvement > 0
-                        ? 'text-green-600 dark:text-green-400'
-                        : 'text-red-600 dark:text-red-400'
-                    )}
-                  >
-                    {robot.improvement > 0 ? (
-                      <ArrowUpRight className="w-3 h-3" />
-                    ) : (
-                      <ArrowDownRight className="w-3 h-3" />
-                    )}
-                    {(robot.improvement * 100).toFixed(1)}%
-                  </p>
-                </div>
-              </div>
-            ))}
-            {processedData.robotEntries.length === 0 && (
-              <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-                No robot data available
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* By Task */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-          <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-            <h3 className="font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-              <Target className="w-4 h-4" />
-              ROHE by Task
-            </h3>
-          </div>
-          <div className="divide-y divide-gray-200 dark:divide-gray-700">
-            {processedData.topTasks.map((task, index) => (
-              <div
-                key={task.task}
-                className="flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-500 dark:text-gray-400 w-6">
-                    #{index + 1}
-                  </span>
-                  <div>
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                      {task.task}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {task.interventions} interventions
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                    {task.rohe.toFixed(4)}
-                  </p>
-                  <p
-                    className={cn(
-                      'text-xs flex items-center justify-end gap-0.5',
-                      task.improvement > 0
-                        ? 'text-green-600 dark:text-green-400'
-                        : 'text-red-600 dark:text-red-400'
-                    )}
-                  >
-                    {task.improvement > 0 ? (
-                      <ArrowUpRight className="w-3 h-3" />
-                    ) : (
-                      <ArrowDownRight className="w-3 h-3" />
-                    )}
-                    {(task.improvement * 100).toFixed(1)}%
-                  </p>
-                </div>
-              </div>
-            ))}
-            {processedData.taskEntries.length === 0 && (
-              <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-                No task data available
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Period indicator */}
-      <div className="text-center text-sm text-gray-500 dark:text-gray-400">
-        Data from {new Date(metrics.period.start).toLocaleDateString(UI_DATE_LOCALE)} to{' '}
-        {new Date(metrics.period.end).toLocaleDateString(UI_DATE_LOCALE)}
+    <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'}>
+      <StatRow columns={4}>
+        <StatTile label="Interventions" value={metrics.totalInterventions.toLocaleString(UI_DATE_LOCALE)} hint={period} />
+        <StatTile label="Performance gain" value={pct(metrics.performanceImprovement)}
+          tone={metrics.performanceImprovement > 0 ? 'live' : metrics.performanceImprovement < 0 ? 'stopped' : undefined}
+          hint="Across the period" />
+        <StatTile label="ROHE score" value={metrics.improvementPerIntervention.toFixed(3)} hint="Gain per intervention" />
+        <StatTile label="Robots" value={robotRows.length} hint="With interventions" />
+      </StatRow>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <Panel padding="none">
+          <Panel.Header title="By robot" />
+          <DataTable caption="ROHE by robot" rows={robotRows} getRowId={(r) => r.id}
+            columns={breakdownColumns('Robot', (id) => robotName?.(id) ?? id)}
+            defaultSort={{ key: 'rohe', direction: 'desc' }}
+            empty={<EmptyState size="sm" title="No robot data yet" />} />
+        </Panel>
+        <Panel padding="none">
+          <Panel.Header title="By task" />
+          <DataTable caption="ROHE by task" rows={taskRows} getRowId={(r) => r.id}
+            columns={breakdownColumns('Task', (id) => id)}
+            defaultSort={{ key: 'rohe', direction: 'desc' }}
+            empty={<EmptyState size="sm" title="No task data yet" />} />
+        </Panel>
       </div>
     </div>
   );

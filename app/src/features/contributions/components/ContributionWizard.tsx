@@ -209,9 +209,9 @@ export function ContributionWizard({
   const loading = isLoading || isSubmitting;
 
   return (
-    <div className={cn('bg-white dark:bg-gray-800 rounded-xl shadow-lg', className)}>
+    <div className={cn('bg-panel rounded-xl shadow-lg', className)}>
       {/* Progress Steps */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-line">
         {STEPS.map((step, index) => {
           const Icon = step.icon;
           const isActive = index === currentStep;
@@ -224,10 +224,10 @@ export function ContributionWizard({
                   className={cn(
                     'flex items-center justify-center w-8 h-8 rounded-full',
                     isComplete
-                      ? 'bg-green-500 text-white'
+                      ? 'bg-primary text-on-primary'
                       : isActive
-                      ? 'bg-primary-500 text-white'
-                      : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                      ? 'bg-primary text-on-primary'
+                      : 'bg-line text-ink-tertiary '
                   )}
                 >
                   {isComplete ? (
@@ -240,15 +240,15 @@ export function ContributionWizard({
                   className={cn(
                     'text-sm font-medium hidden sm:inline',
                     isActive
-                      ? 'text-gray-900 dark:text-gray-100'
-                      : 'text-gray-500 dark:text-gray-400'
+                      ? 'text-ink-primary '
+                      : 'text-ink-tertiary '
                   )}
                 >
                   {step.label}
                 </span>
               </div>
               {index < STEPS.length - 1 && (
-                <div className="w-8 sm:w-16 h-px bg-gray-200 dark:bg-gray-700 mx-2" />
+                <div className="w-8 sm:w-16 h-px bg-line mx-2" />
               )}
             </div>
           );
@@ -259,7 +259,7 @@ export function ContributionWizard({
       <div className="p-6">
         {/* Error Display */}
         {displayError && (
-          <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2 text-red-700 dark:text-red-400">
+          <div className="mb-4 p-3 bg-signal-stopped/10 border border-signal-stopped/30 rounded-lg flex items-center gap-2 text-signal-stopped">
             <AlertCircle size={16} />
             <span className="text-sm">{displayError}</span>
           </div>
@@ -268,12 +268,12 @@ export function ContributionWizard({
         {/* Step 1: Metadata */}
         {currentStep === 0 && (
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+            <h2 className="text-lg font-semibold text-ink-primary">
               Contribution Details
             </h2>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-ink-primary mb-1">
                 Robot Type *
               </label>
               <input
@@ -281,12 +281,12 @@ export function ContributionWizard({
                 value={data.metadata.robotType || ''}
                 onChange={(e) => updateMetadata({ robotType: e.target.value })}
                 placeholder="e.g., Franka Panda, UR5, Custom Arm"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                className="w-full px-3 py-2 border border-line-strong rounded-lg bg-panel text-ink-primary"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-ink-primary mb-1">
                 Task Categories * (select all that apply)
               </label>
               <div className="flex flex-wrap gap-2">
@@ -304,8 +304,8 @@ export function ContributionWizard({
                     className={cn(
                       'px-3 py-1.5 text-sm rounded-full border transition-colors',
                       data.metadata.taskCategories?.includes(cat)
-                        ? 'bg-primary-100 dark:bg-primary-900/30 border-primary-500 text-primary-700 dark:text-primary-300'
-                        : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-gray-400'
+                        ? 'bg-primary/10 border-primary text-primary '
+                        : 'bg-panel border-line-strong text-ink-primary hover:border-line-strong'
                     )}
                   >
                     {cat}
@@ -315,7 +315,7 @@ export function ContributionWizard({
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-ink-primary mb-1">
                 Collection Method *
               </label>
               <div className="grid grid-cols-2 gap-2">
@@ -327,14 +327,14 @@ export function ContributionWizard({
                     className={cn(
                       'p-3 text-left rounded-lg border transition-colors',
                       data.metadata.collectionMethod === method.value
-                        ? 'bg-primary-50 dark:bg-primary-900/20 border-primary-500'
-                        : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                        ? 'bg-primary/10 border-primary'
+                        : 'bg-panel border-line-strong hover:border-line-strong'
                     )}
                   >
-                    <p className="font-medium text-gray-900 dark:text-gray-100">
+                    <p className="font-medium text-ink-primary">
                       {method.label}
                     </p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                    <p className="text-sm text-ink-tertiary">
                       {method.description}
                     </p>
                   </button>
@@ -343,7 +343,7 @@ export function ContributionWizard({
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-ink-primary mb-1">
                 Description *
               </label>
               <textarea
@@ -351,12 +351,12 @@ export function ContributionWizard({
                 onChange={(e) => updateMetadata({ description: e.target.value })}
                 rows={3}
                 placeholder="Describe the data you're contributing..."
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                className="w-full px-3 py-2 border border-line-strong rounded-lg bg-panel text-ink-primary"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-ink-primary mb-1">
                 Environment (optional)
               </label>
               <input
@@ -364,7 +364,7 @@ export function ContributionWizard({
                 value={data.metadata.environment || ''}
                 onChange={(e) => updateMetadata({ environment: e.target.value })}
                 placeholder="e.g., Kitchen, Warehouse, Office"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                className="w-full px-3 py-2 border border-line-strong rounded-lg bg-panel text-ink-primary"
               />
             </div>
           </div>
@@ -373,10 +373,10 @@ export function ContributionWizard({
         {/* Step 2: License */}
         {currentStep === 1 && (
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+            <h2 className="text-lg font-semibold text-ink-primary">
               Select License Type
             </h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
+            <p className="text-sm text-ink-secondary">
               Choose how your data can be used. Different licenses offer different credit rewards.
             </p>
             <LicenseSelector
@@ -389,12 +389,12 @@ export function ContributionWizard({
         {/* Step 3: Upload */}
         {currentStep === 2 && (
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+            <h2 className="text-lg font-semibold text-ink-primary">
               Upload Data
             </h2>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-ink-primary mb-1">
                 Number of Trajectories *
               </label>
               <input
@@ -405,20 +405,20 @@ export function ContributionWizard({
                   updateData({ trajectoryCount: parseInt(e.target.value, 10) || undefined })
                 }
                 placeholder="Enter trajectory count"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                className="w-full px-3 py-2 border border-line-strong rounded-lg bg-panel text-ink-primary"
               />
-              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              <p className="mt-1 text-sm text-ink-tertiary">
                 Each trajectory earns credits based on your license type and data quality
               </p>
             </div>
 
             {/* Placeholder for file upload UI */}
-            <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center">
-              <Upload className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-              <p className="text-gray-600 dark:text-gray-400">
+            <div className="border-2 border-dashed border-line-strong rounded-lg p-8 text-center">
+              <Upload className="w-12 h-12 mx-auto mb-4 text-ink-muted" />
+              <p className="text-ink-secondary">
                 Data upload integration coming soon
               </p>
-              <p className="text-sm text-gray-500 dark:text-gray-500 mt-1">
+              <p className="text-sm text-ink-tertiary mt-1">
                 For now, enter the trajectory count manually
               </p>
             </div>
@@ -428,40 +428,40 @@ export function ContributionWizard({
         {/* Step 4: Submit */}
         {currentStep === 3 && (
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+            <h2 className="text-lg font-semibold text-ink-primary">
               Review & Submit
             </h2>
 
-            <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4 space-y-3">
+            <div className="bg-inset rounded-lg p-4 space-y-3">
               <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">Robot Type</span>
-                <span className="font-medium text-gray-900 dark:text-gray-100">
+                <span className="text-ink-secondary">Robot Type</span>
+                <span className="font-medium text-ink-primary">
                   {data.metadata.robotType}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">License</span>
-                <span className="font-medium text-gray-900 dark:text-gray-100 capitalize">
+                <span className="text-ink-secondary">License</span>
+                <span className="font-medium text-ink-primary capitalize">
                   {data.licenseType?.replace('_', ' ')}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">Trajectories</span>
-                <span className="font-medium text-gray-900 dark:text-gray-100">
+                <span className="text-ink-secondary">Trajectories</span>
+                <span className="font-medium text-ink-primary">
                   {data.trajectoryCount?.toLocaleString(UI_DATE_LOCALE)}
                 </span>
               </div>
               {data.estimatedCredits && (
-                <div className="flex justify-between pt-3 border-t border-gray-200 dark:border-gray-700">
-                  <span className="text-gray-600 dark:text-gray-400">Estimated Credits</span>
-                  <span className="font-semibold text-green-600 dark:text-green-400">
+                <div className="flex justify-between pt-3 border-t border-line">
+                  <span className="text-ink-secondary">Estimated Credits</span>
+                  <span className="font-semibold text-signal-measured">
                     {data.estimatedCredits.toLocaleString(UI_DATE_LOCALE)}
                   </span>
                 </div>
               )}
             </div>
 
-            <p className="text-sm text-gray-600 dark:text-gray-400">
+            <p className="text-sm text-ink-secondary">
               By submitting, you confirm that you have the rights to this data and agree to the
               selected license terms.
             </p>
@@ -470,11 +470,11 @@ export function ContributionWizard({
       </div>
 
       {/* Footer */}
-      <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700">
+      <div className="flex items-center justify-between px-6 py-4 border-t border-line">
         <button
           onClick={currentStep === 0 ? onCancel : handleBack}
           disabled={loading}
-          className="inline-flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 disabled:opacity-50"
+          className="inline-flex items-center gap-2 px-4 py-2 text-ink-primary hover:text-ink-primary disabled:opacity-50"
         >
           <ChevronLeft size={18} />
           {currentStep === 0 ? 'Cancel' : 'Back'}
@@ -484,7 +484,7 @@ export function ContributionWizard({
           <button
             onClick={handleNext}
             disabled={loading}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary-hover disabled:opacity-50"
           >
             {loading ? (
               <Loader2 size={18} className="animate-spin" />
@@ -499,7 +499,7 @@ export function ContributionWizard({
           <button
             onClick={handleSubmit}
             disabled={loading}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary-hover disabled:opacity-50"
           >
             {loading ? (
               <Loader2 size={18} className="animate-spin" />

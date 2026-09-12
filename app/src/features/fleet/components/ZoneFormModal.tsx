@@ -1,26 +1,25 @@
 /**
  * @file ZoneFormModal.tsx
- * @description Modal form for creating and editing zones
+ * @description Create and edit a zone: the kit FormModal with name, type,
+ *   floor, colour, description and bounds. Toasts on success; errors stay in
+ *   the modal.
  * @feature fleet
- * @dependencies @/shared/components/ui, @/features/fleet/hooks, @/features/fleet/types
+ * @dependencies @/shared/components/ui, @/features/fleet/hooks, @/features/fleet/utils
  */
 
-import { useState, useCallback, useEffect, useId } from 'react';
+import { useState, useEffect } from 'react';
+import { FormField, FormModal, Input, Select, Textarea, errorMessage, toast } from '@/shared/components/ui';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { Modal, Button, Input } from '@/shared/components/ui';
 import { useZoneManagement, useZoneEditor } from '../hooks';
-import type { Zone, ZoneType, ZoneBounds, CreateZoneRequest } from '../types/fleet.types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import type { Zone, ZoneType, ZoneBounds } from '../types/fleet.types';
+import { ZONE_COLOR_OPTIONS, ZONE_TYPE_LABEL } from '../utils/mapColors';
 
 export interface ZoneFormModalProps {
   /** Whether modal is open */
   isOpen: boolean;
   /** Zone being edited (null for create mode) */
   zone: Zone | null;
-  /** Default bounds for new zone */
+  /** Default bounds for a new zone (e.g. drawn on the map) */
   defaultBounds?: ZoneBounds;
   /** Current floor */
   currentFloor: string;
@@ -30,7 +29,7 @@ export interface ZoneFormModalProps {
   onSuccess?: (zone: Zone) => void;
 }
 
-interface FormData {
+interface FormState {
   name: string;
   type: ZoneType;
   floor: string;
@@ -42,303 +41,178 @@ interface FormData {
   description: string;
 }
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
+type FieldErrors = Partial<Record<keyof FormState, string>>;
 
-const ZONE_TYPE_OPTIONS: { value: ZoneType; label: string }[] = [
-  { value: 'operational', label: 'Operational' },
-  { value: 'restricted', label: 'Restricted' },
-  { value: 'charging', label: 'Charging' },
-  { value: 'maintenance', label: 'Maintenance' },
-];
+const TYPE_OPTIONS = (Object.keys(ZONE_TYPE_LABEL) as ZoneType[]).map((value) => ({
+  value,
+  label: ZONE_TYPE_LABEL[value],
+}));
 
-const DEFAULT_FORM_DATA: FormData = {
-  name: '',
-  type: 'operational',
-  floor: '1',
-  x: '0',
-  y: '0',
-  width: '10',
-  height: '10',
-  color: '',
-  description: '',
-};
+function initialState(zone: Zone | null, bounds: ZoneBounds | undefined, floor: string): FormState {
+  const b = zone?.bounds ?? bounds ?? { x: 0, y: 0, width: 10, height: 10 };
+  const knownColor = ZONE_COLOR_OPTIONS.some((o) => o.value === zone?.color);
+  return {
+    name: zone?.name ?? '',
+    type: zone?.type ?? 'operational',
+    floor: zone?.floor ?? floor,
+    x: String(b.x),
+    y: String(b.y),
+    width: String(b.width),
+    height: String(b.height),
+    // A legacy hex colour is kept as-is unless the user picks another one.
+    color: zone?.color && !knownColor ? zone.color : zone?.color ?? '',
+    description: zone?.description ?? '',
+  };
+}
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+function validate(form: FormState): FieldErrors {
+  const errors: FieldErrors = {};
+  if (!form.name.trim()) errors.name = 'Give the zone a name.';
+  if (!form.floor.trim()) errors.floor = 'Say which floor the zone is on.';
+  if (Number.isNaN(parseFloat(form.x))) errors.x = 'Enter a number.';
+  if (Number.isNaN(parseFloat(form.y))) errors.y = 'Enter a number.';
+  if (!(parseFloat(form.width) > 0)) errors.width = 'Must be above 0.';
+  if (!(parseFloat(form.height) > 0)) errors.height = 'Must be above 0.';
+  return errors;
+}
 
 /**
- * Modal form for creating and editing zones.
+ * Zone create/edit modal.
  *
  * @example
  * ```tsx
- * <ZoneFormModal
- *   isOpen={showModal}
- *   zone={editingZone}
- *   currentFloor="1"
- *   onClose={() => setShowModal(false)}
- *   onSuccess={(zone) => console.log('Saved:', zone)}
- * />
+ * <ZoneFormModal isOpen={open} zone={editing} currentFloor="1" onClose={close} />
  * ```
  */
-export function ZoneFormModal({
-  isOpen,
-  zone,
-  defaultBounds,
-  currentFloor,
-  onClose,
-  onSuccess,
-}: ZoneFormModalProps) {
-  const typeId = useId();
+export function ZoneFormModal({ isOpen, zone, defaultBounds, currentFloor, onClose, onSuccess }: ZoneFormModalProps) {
   const { can } = useAuth();
   const canManage = can('fleet:manage');
-  const { createZone, updateZone, isLoading, error } = useZoneManagement();
+  const { createZone, updateZone } = useZoneManagement();
   const { closeFormModal } = useZoneEditor();
-  const [formData, setFormData] = useState<FormData>(DEFAULT_FORM_DATA);
-  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const [form, setForm] = useState<FormState>(() => initialState(zone, defaultBounds, currentFloor));
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [formError, setFormError] = useState<string>();
+  const [saving, setSaving] = useState(false);
 
-  // Initialize form data when modal opens or zone changes
   useEffect(() => {
-    if (isOpen) {
-      if (zone) {
-        // Edit mode - populate from zone
-        setFormData({
-          name: zone.name,
-          type: zone.type,
-          floor: zone.floor,
-          x: String(zone.bounds.x),
-          y: String(zone.bounds.y),
-          width: String(zone.bounds.width),
-          height: String(zone.bounds.height),
-          color: zone.color || '',
-          description: zone.description || '',
-        });
-      } else if (defaultBounds) {
-        // Create mode with default bounds
-        setFormData({
-          ...DEFAULT_FORM_DATA,
-          floor: currentFloor,
-          x: String(defaultBounds.x),
-          y: String(defaultBounds.y),
-          width: String(defaultBounds.width),
-          height: String(defaultBounds.height),
-        });
-      } else {
-        // Create mode without bounds
-        setFormData({
-          ...DEFAULT_FORM_DATA,
-          floor: currentFloor,
-        });
-      }
-      setValidationErrors({});
-    }
+    if (!isOpen) return;
+    setForm(initialState(zone, defaultBounds, currentFloor));
+    setErrors({});
+    setFormError(undefined);
   }, [isOpen, zone, defaultBounds, currentFloor]);
 
-  const handleInputChange = useCallback(
-    (field: keyof FormData) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-      setFormData((prev) => ({
-        ...prev,
-        [field]: e.target.value,
-      }));
-      // Clear validation error for this field
-      if (validationErrors[field]) {
-        setValidationErrors((prev) => {
-          const updated = { ...prev };
-          delete updated[field];
-          return updated;
-        });
-      }
-    },
-    [validationErrors]
-  );
+  const set = (field: keyof FormState) => (e: { target: { value: string } }) => {
+    const value = e.target.value;
+    setForm((prev) => ({ ...prev, [field]: value }));
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: undefined }));
+  };
 
-  const validateForm = useCallback((): boolean => {
-    const errors: Record<string, string> = {};
-
-    if (!formData.name.trim()) {
-      errors.name = 'Name is required';
-    }
-
-    const x = parseFloat(formData.x);
-    const y = parseFloat(formData.y);
-    const width = parseFloat(formData.width);
-    const height = parseFloat(formData.height);
-
-    if (isNaN(x)) errors.x = 'X must be a number';
-    if (isNaN(y)) errors.y = 'Y must be a number';
-    if (isNaN(width) || width <= 0) errors.width = 'Width must be positive';
-    if (isNaN(height) || height <= 0) errors.height = 'Height must be positive';
-
-    setValidationErrors(errors);
-    return Object.keys(errors).length === 0;
-  }, [formData]);
-
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-
-      if (!canManage || !validateForm()) return;
-
-      const bounds: ZoneBounds = {
-        x: parseFloat(formData.x),
-        y: parseFloat(formData.y),
-        width: parseFloat(formData.width),
-        height: parseFloat(formData.height),
-      };
-
-      try {
-        let savedZone: Zone;
-
-        if (zone) {
-          // Update existing zone
-          const updated = await updateZone(zone.id, {
-            name: formData.name,
-            type: formData.type,
-            floor: formData.floor,
-            bounds,
-            color: formData.color || undefined,
-            description: formData.description || undefined,
-          });
-          if (!updated) throw new Error('Failed to update zone');
-          savedZone = updated;
-        } else {
-          // Create new zone
-          const request: CreateZoneRequest = {
-            name: formData.name,
-            type: formData.type,
-            floor: formData.floor,
-            bounds,
-            color: formData.color || undefined,
-            description: formData.description || undefined,
-          };
-          savedZone = await createZone(request);
-        }
-
-        onSuccess?.(savedZone);
-        handleClose();
-      } catch (err) {
-        console.error('Failed to save zone:', err);
-      }
-    },
-    [canManage, formData, zone, validateForm, createZone, updateZone, onSuccess]
-  );
-
-  const handleClose = useCallback(() => {
+  const handleClose = () => {
     closeFormModal();
     onClose();
-  }, [closeFormModal, onClose]);
+  };
+
+  const handleSubmit = async () => {
+    // The server refuses a zone write below owner. Nothing should be able to
+    // open this modal without the role, but a form that can still be submitted
+    // would turn that into an unexplained 403.
+    if (!canManage) {
+      setFormError('An owner role or higher is required to manage zones.');
+      return;
+    }
+    const nextErrors = validate(form);
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
+    const payload = {
+      name: form.name.trim(),
+      type: form.type,
+      floor: form.floor.trim(),
+      bounds: {
+        x: parseFloat(form.x),
+        y: parseFloat(form.y),
+        width: parseFloat(form.width),
+        height: parseFloat(form.height),
+      },
+      color: form.color || undefined,
+      description: form.description.trim() || undefined,
+    };
+
+    setSaving(true);
+    setFormError(undefined);
+    try {
+      let saved: Zone;
+      if (zone) {
+        const updated = await updateZone(zone.id, payload);
+        if (!updated) throw new Error('The server did not return the zone.');
+        saved = updated;
+        toast.success('Zone updated', { description: saved.name });
+      } else {
+        saved = await createZone(payload);
+        toast.success('Zone created', { description: saved.name });
+      }
+      onSuccess?.(saved);
+      handleClose();
+    } catch (err) {
+      setFormError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const colorOptions =
+    form.color && !ZONE_COLOR_OPTIONS.some((o) => o.value === form.color)
+      ? [...ZONE_COLOR_OPTIONS, { value: form.color, label: `Custom (${form.color})` }]
+      : ZONE_COLOR_OPTIONS;
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title={zone ? 'Edit Zone' : 'Create Zone'}>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {!canManage && <p role="status" className="text-sm text-theme-secondary">An owner role is required to manage zones.</p>}
-        {/* Name */}
-        <div>
-          <Input
-            label="Name"
-            value={formData.name}
-            onChange={handleInputChange('name')}
-            placeholder="Zone name"
-            error={validationErrors.name}
-          />
-        </div>
-
-        {/* Type */}
-        <div>
-          <label htmlFor={typeId} className="block text-sm font-medium text-theme-secondary mb-1">Type</label>
-          <select
-            id={typeId}
-            value={formData.type}
-            onChange={handleInputChange('type')}
-            className="w-full px-3 py-2 bg-theme-card border border-theme rounded-lg text-theme-primary focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-          >
-            {ZONE_TYPE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Floor */}
-        <div>
-          <Input
-            label="Floor"
-            value={formData.floor}
-            onChange={handleInputChange('floor')}
-            placeholder="Floor identifier"
-          />
-        </div>
-
-        {/* Bounds */}
+    <FormModal
+      isOpen={isOpen}
+      onClose={handleClose}
+      title={zone ? `Edit ${zone.name}` : 'New zone'}
+      description={zone ? undefined : 'An area robots treat by its type: work, charge, service or keep out.'}
+      submitLabel={zone ? 'Save changes' : 'Create zone'}
+      submittingLabel={zone ? 'Saving…' : 'Creating…'}
+      isSubmitting={saving}
+      submitDisabled={!canManage}
+      error={formError}
+      onSubmit={handleSubmit}
+      noValidate
+    >
+      <FormField label="Name" required error={errors.name}>
+        <Input value={form.name} onChange={set('name')} placeholder="e.g. Loading dock" />
+      </FormField>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <FormField label="Type">
+          <Select options={TYPE_OPTIONS} value={form.type} onChange={set('type')} />
+        </FormField>
+        <FormField label="Floor" required error={errors.floor}>
+          <Input value={form.floor} onChange={set('floor')} placeholder="1" />
+        </FormField>
+      </div>
+      <FormField label="Colour" hint="Leave on “By zone type” to colour the zone by what it is.">
+        <Select options={colorOptions} value={form.color} onChange={set('color')} />
+      </FormField>
+      <FormField label="Description" aside="Optional">
+        <Textarea rows={2} value={form.description} onChange={set('description')} />
+      </FormField>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-[13px] font-medium text-ink-secondary">Bounds (map units)</legend>
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <Input
-              label="X"
-              type="number"
-              value={formData.x}
-              onChange={handleInputChange('x')}
-              error={validationErrors.x}
-            />
-          </div>
-          <div>
-            <Input
-              label="Y"
-              type="number"
-              value={formData.y}
-              onChange={handleInputChange('y')}
-              error={validationErrors.y}
-            />
-          </div>
-          <div>
-            <Input
-              label="Width"
-              type="number"
-              value={formData.width}
-              onChange={handleInputChange('width')}
-              error={validationErrors.width}
-            />
-          </div>
-          <div>
-            <Input
-              label="Height"
-              type="number"
-              value={formData.height}
-              onChange={handleInputChange('height')}
-              error={validationErrors.height}
-            />
-          </div>
+          <FormField label="X" error={errors.x}>
+            <Input type="number" inputMode="decimal" value={form.x} onChange={set('x')} />
+          </FormField>
+          <FormField label="Y" error={errors.y}>
+            <Input type="number" inputMode="decimal" value={form.y} onChange={set('y')} />
+          </FormField>
+          <FormField label="Width" error={errors.width}>
+            <Input type="number" inputMode="decimal" min={0} value={form.width} onChange={set('width')} />
+          </FormField>
+          <FormField label="Height" error={errors.height}>
+            <Input type="number" inputMode="decimal" min={0} value={form.height} onChange={set('height')} />
+          </FormField>
         </div>
-
-        {/* Description */}
-        <div>
-          <Input
-            label="Description"
-            value={formData.description}
-            onChange={handleInputChange('description')}
-            placeholder="Optional description"
-          />
-        </div>
-
-        {/* Error display */}
-        {error && (
-          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-            <p className="text-red-400 text-sm">{error}</p>
-          </div>
-        )}
-
-        {/* Actions */}
-        <div className="flex justify-end gap-3 pt-4">
-          <Button type="button" variant="secondary" onClick={handleClose} disabled={isLoading}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={isLoading || !canManage}>
-            {isLoading ? 'Saving...' : zone ? 'Update Zone' : 'Create Zone'}
-          </Button>
-        </div>
-      </form>
-    </Modal>
+      </fieldset>
+    </FormModal>
   );
 }

@@ -24,9 +24,9 @@ describe('MFASetup', () => {
     vi.clearAllMocks();
   });
 
-  it('renders init step with "Start Setup" button', () => {
+  it('renders init step with "Start setup" button', () => {
     render(<MFASetup />);
-    expect(screen.getByText('Set up Two-Factor Authentication')).toBeInTheDocument();
+    expect(screen.getByText('Protect your account with a second step')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /start setup/i })).toBeInTheDocument();
   });
 
@@ -53,7 +53,7 @@ describe('MFASetup', () => {
     await user.click(screen.getByRole('button', { name: /start setup/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Configure Your Authenticator App')).toBeInTheDocument();
+      expect(screen.getByText('Add NeoDEM to your authenticator app')).toBeInTheDocument();
     });
     expect(screen.getByText('JBSWY3DPEHPK3PXP')).toBeInTheDocument();
     expect(screen.getByText(/otpauth:\/\/totp\//)).toBeInTheDocument();
@@ -108,7 +108,7 @@ describe('MFASetup', () => {
     await user.click(screen.getByRole('button', { name: /verify/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Save Your Recovery Codes')).toBeInTheDocument();
+      expect(screen.getByText('Save your recovery codes')).toBeInTheDocument();
     });
     expect(screen.getByText('ABCDEF1234')).toBeInTheDocument();
     expect(screen.getByText('GHIJKL5678')).toBeInTheDocument();

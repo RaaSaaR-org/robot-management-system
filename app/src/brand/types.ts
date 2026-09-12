@@ -38,10 +38,23 @@ export interface BrandConfig {
   copyright: string;
   /** Logo filename relative to brand/ folder (e.g., "logo.svg") */
   logo?: string;
-  /** Primary color scale -- overrides cobalt (blue). Partial: only override shades you need. */
+  /**
+   * Primary color scale -- replaces the default mint (bg-primary, text-primary,
+   * primary-50..900). Partial: only override
+   * the shades you need. DEFAULT is the fill of primary buttons, links and the
+   * focus ring, in both themes.
+   */
   primaryColors?: Partial<ColorScale>;
-  /** Accent color scale -- overrides turquoise. Partial: only override shades you need. */
+  /**
+   * Text/icon color on a primary fill (text-on-primary). Optional: when a brand
+   * sets primaryColors without it, white or #0a2225 is picked, whichever
+   * contrasts more with the primary DEFAULT.
+   */
+  onPrimary?: string;
+  /** Accent color scale -- replaces the default teal (bg-accent, accent-50..900). */
   accentColors?: Partial<ColorScale>;
+  /** Text/icon color on an accent fill (text-on-accent). Computed like onPrimary when omitted. */
+  onAccent?: string;
   /** Dark mode surface/text/border overrides */
   darkOverrides?: ThemeSurfaceOverrides;
   /** Light mode surface/text/border overrides */

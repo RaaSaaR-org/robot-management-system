@@ -1,352 +1,251 @@
 /**
  * @file RobotList.tsx
- * @description Grid/list display of robots with filtering and pagination
+ * @description The fleet's robot list: toolbar (search, status, view, register), a card
+ *   grid or a table, all four list states, pagination and unregister.
  * @feature robots
- * @dependencies @/shared/components/ui, @/features/robots/hooks
  */
 
-import { useState, useEffect } from 'react';
-import { Input, Button, Spinner, EmptyState } from '@/shared/components/ui';
-import { cn } from '@/shared/utils/cn';
-import { RobotCard } from './RobotCard';
-import { RobotStatusBadge } from './RobotStatusBadge';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Bot, Gauge, Plus, Search, Trash2 } from 'lucide-react';
+import {
+  Button, DataTable, EmptyState, ErrorState, Panel, SearchInput, SegmentedControl, Select,
+  SkeletonRows, Toolbar, confirm, errorMessage, toast, type DataTableColumn, type RowActionItem,
+} from '@/shared/components/ui';
 import { useRobots } from '../hooks/useRobots';
-import { type RobotStatus, ROBOT_STATUS_LABELS } from '../types/robots.types';
+import { useRobotsStore } from '../store/robotsStore';
+import { RobotCard, robotBattery, robotLastSeen, robotPlace } from './RobotCard';
+import { RobotStatusTag } from './common/RobotStatusTag';
+import type { Robot, RobotStatus } from '../types/robots.types';
 
-// ============================================================================
-// TYPES
-// ============================================================================
+type ViewMode = 'grid' | 'table';
+const VIEW_KEY = 'robots.view';
 
-export interface RobotListProps {
-  /** Callback when a robot is selected */
-  onSelectRobot?: (robotId: string) => void;
-  /** Currently selected robot ID */
-  selectedRobotId?: string | null;
-  /** Display mode */
-  viewMode?: 'grid' | 'list';
-  /** Show filter controls */
-  showFilters?: boolean;
-  /** Callback to add a robot (shows in empty state) */
-  onAddRobot?: () => void;
-  /** Additional class names */
-  className?: string;
-}
-
-// ============================================================================
-// STATUS FILTER OPTIONS
-// ============================================================================
-
-const STATUS_OPTIONS: (RobotStatus | 'all')[] = [
-  'all',
-  'online',
-  'busy',
-  'charging',
-  'offline',
-  'error',
-  'maintenance',
+const STATUS_OPTIONS: { value: RobotStatus; label: string }[] = [
+  { value: 'online', label: 'Online' },
+  { value: 'busy', label: 'Busy' },
+  { value: 'charging', label: 'Charging' },
+  { value: 'maintenance', label: 'Maintenance' },
+  { value: 'protective_stop', label: 'Protective stop' },
+  { value: 'error', label: 'Error' },
+  { value: 'offline', label: 'Offline' },
 ];
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+function readView(): ViewMode {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'table' ? 'table' : 'grid';
+  } catch {
+    return 'grid';
+  }
+}
 
-/**
- * Displays a filterable, paginated list or grid of robots.
- *
- * @example
- * ```tsx
- * function RobotsPage() {
- *   const navigate = useNavigate();
- *
- *   return (
- *     <RobotList
- *       onSelectRobot={(id) => navigate(`/robots/${id}`)}
- *       showFilters
- *     />
- *   );
- * }
- * ```
- */
-export function RobotList({
-  onSelectRobot,
-  selectedRobotId,
-  viewMode: initialViewMode = 'grid',
-  showFilters = true,
-  onAddRobot,
-  className,
-}: RobotListProps) {
-  const {
-    robots,
-    isLoading,
-    error,
-    filters,
-    pagination,
-    fetchRobots,
-    setFilters,
-    clearFilters,
-    setPage,
-  } = useRobots();
+export interface RobotListProps {
+  /** Opens the register modal (the list's primary action) */
+  onRegister: () => void;
+}
 
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>(initialViewMode);
-  const [searchValue, setSearchValue] = useState(filters.search ?? '');
+/** Robots in the fleet, as cards or a table. */
+export function RobotList({ onRegister }: RobotListProps) {
+  const navigate = useNavigate();
+  const { robots, isLoading, error, filters, pagination, fetchRobots, setFilters, clearFilters, setPage } =
+    useRobots();
+  const unregisterRobot = useRobotsStore((s) => s.unregisterRobot);
+  const clearError = useRobotsStore((s) => s.clearError);
+  const [view, setViewState] = useState<ViewMode>(readView);
+  const [search, setSearch] = useState(filters.search ?? '');
 
-  // Fetch robots on mount
   useEffect(() => {
-    fetchRobots();
+    void fetchRobots();
   }, [fetchRobots]);
 
-  // Debounced search
+  // Debounced search into the store filter (server-side search, as before).
   useEffect(() => {
-    const timeout = setTimeout(() => {
-      if (searchValue !== filters.search) {
-        setFilters({ search: searchValue || undefined });
-      }
+    const t = setTimeout(() => {
+      if ((search || undefined) !== filters.search) setFilters({ search: search || undefined });
     }, 300);
-    return () => clearTimeout(timeout);
-  }, [searchValue, filters.search, setFilters]);
+    return () => clearTimeout(t);
+  }, [search, filters.search, setFilters]);
 
-  const handleStatusFilter = (status: RobotStatus | 'all') => {
-    setFilters({ status: status === 'all' ? undefined : status });
+  const setView = (v: ViewMode) => {
+    setViewState(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* per-viewer convenience only */
+    }
   };
 
-  const currentStatus = filters.status as RobotStatus | undefined;
+  const status = typeof filters.status === 'string' ? filters.status : '';
+  const hasFilters = Boolean(status || filters.search || search);
+  const clearAll = () => {
+    setSearch('');
+    clearFilters();
+  };
 
-  // Loading state
-  if (isLoading && robots.length === 0) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Spinner size="lg" color="cobalt" label="Loading robots..." />
-      </div>
+  // The live server ignores ?search and ?status, so apply both here too; a
+  // server (or the demo mocks) that already filtered just passes through.
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return robots.filter(
+      (r) =>
+        (!status || r.status === status) &&
+        (!q || [r.name, r.model, r.serialNumber].some((v) => v?.toLowerCase().includes(q))),
     );
-  }
+  }, [robots, search, status]);
 
-  // Error state
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="rounded-full bg-red-100 p-4 dark:bg-red-900/30">
-          <svg
-            className="h-8 w-8 text-red-500"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-            />
-          </svg>
-        </div>
-        <h3 className="mt-4 text-lg font-medium text-theme-primary">Failed to load robots</h3>
-        <p className="mt-1 text-sm text-theme-secondary">{error}</p>
-        <Button variant="primary" size="sm" className="mt-4" onClick={() => fetchRobots()}>
-          Try Again
-        </Button>
-      </div>
-    );
-  }
+  const askUnregister = async (robot: Robot) => {
+    const ok = await confirm({
+      title: `Unregister ${robot.name}?`,
+      description:
+        'The robot leaves the fleet and stops receiving tasks. Register its agent URL again to bring it back.',
+      confirmLabel: 'Unregister',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await unregisterRobot(robot.id);
+      toast.success('Robot unregistered', { description: robot.name });
+    } catch (err) {
+      // The toast reports it; the list keeps showing the robots.
+      clearError();
+      toast.error("Couldn't unregister robot", { description: errorMessage(err) });
+    }
+  };
+
+  const actionsFor = (robot: Robot): RowActionItem[] => [
+    { label: 'Open control center', icon: <Gauge />, onSelect: () => navigate(`/robots/${robot.id}/cockpit`) },
+    { label: 'Unregister', icon: <Trash2 />, tone: 'danger', separatorBefore: true, onSelect: () => void askUnregister(robot) },
+  ];
+
+  const columns = useMemo<DataTableColumn<Robot>[]>(
+    () => [
+      {
+        key: 'name', header: 'Name', sortable: true,
+        cell: (r) => (
+          <div className="min-w-0">
+            <div className="truncate font-medium text-ink-primary">{r.name}</div>
+            <div className="truncate text-[13px] text-ink-tertiary">{r.model}</div>
+          </div>
+        ),
+      },
+      { key: 'status', header: 'Status', sortable: true, cell: (r) => <RobotStatusTag status={r.status} /> },
+      {
+        key: 'battery', header: 'Battery', align: 'right', sortable: true, hideBelow: 'sm',
+        sortValue: (r) => r.batteryLevel,
+        cell: (r) => {
+          const b = robotBattery(r);
+          return (
+            <span className="tabular-nums text-ink-secondary">
+              {b.value}
+              {b.unit && <span className="text-ink-tertiary">{b.unit}</span>}
+            </span>
+          );
+        },
+      },
+      { key: 'zone', header: 'Place', hideBelow: 'md', sortValue: robotPlace, cell: robotPlace },
+      { key: 'task', header: 'Task', hideBelow: 'lg', cell: (r) => r.currentTaskName ?? '—' },
+      {
+        key: 'lastSeen', header: 'Last seen', align: 'right', sortable: true, hideBelow: 'md',
+        sortValue: (r) => (r.lastSeen ? new Date(r.lastSeen) : null), cell: robotLastSeen,
+      },
+    ],
+    [],
+  );
+
+  const empty = hasFilters ? (
+    <EmptyState
+      icon={<Search />}
+      title="No robots match"
+      description="Try another name or status, or clear the filters."
+      action={<Button variant="secondary" onClick={clearAll}>Clear filters</Button>}
+    />
+  ) : (
+    <EmptyState
+      icon={<Bot />}
+      title="No robots yet"
+      description="A robot joins the fleet when you register its agent URL."
+      action={<Button leftIcon={<Plus className="h-4 w-4" />} onClick={onRegister}>Register robot</Button>}
+    />
+  );
 
   return (
-    <div className={cn('space-y-4', className)}>
-      {/* Filters */}
-      {showFilters && (
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          {/* Search */}
-          <div className="w-full sm:max-w-xs">
-            <Input
-              placeholder="Search robots..."
-              value={searchValue}
-              onChange={(e) => setSearchValue(e.target.value)}
-              leftIcon={
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                  />
-                </svg>
-              }
+    <div className="flex flex-col gap-4">
+      <Toolbar
+        search={<SearchInput value={search} onChange={setSearch} placeholder="Search robots" aria-label="Search robots" />}
+        filters={
+          <Select
+            aria-label="Status"
+            fullWidth={false}
+            className="w-44"
+            placeholder="All statuses"
+            options={STATUS_OPTIONS}
+            value={status}
+            onChange={(e) => setFilters({ status: (e.target.value || undefined) as RobotStatus | undefined })}
+          />
+        }
+        actions={
+          <>
+            <SegmentedControl
+              label="View"
+              options={[{ value: 'grid', label: 'Grid' }, { value: 'table', label: 'Table' }]}
+              value={view}
+              onChange={(v) => setView(v as ViewMode)}
             />
-          </div>
+            <Button leftIcon={<Plus className="h-4 w-4" />} onClick={onRegister}>Register robot</Button>
+          </>
+        }
+      />
 
-          {/* Status filter + View toggle */}
-          <div className="flex items-center gap-4 min-w-0 w-full sm:w-auto">
-            {/* Status filter - glass pill container */}
-            <div className="glass-subtle rounded-xl p-1 flex items-center gap-1 overflow-x-auto min-w-0" style={{ scrollbarWidth: 'none' }}>
-              {STATUS_OPTIONS.map((status) => (
-                <button
-                  key={status}
-                  onClick={() => handleStatusFilter(status)}
-                  className={cn(
-                    'px-3 py-1.5 text-sm rounded-lg transition-all duration-200 whitespace-nowrap',
-                    (status === 'all' && !currentStatus) || currentStatus === status
-                      ? 'bg-cobalt-500 text-white shadow-sm'
-                      : 'text-theme-secondary hover:text-theme-primary hover:bg-white/5'
-                  )}
-                >
-                  {status === 'all' ? 'All' : ROBOT_STATUS_LABELS[status]}
-                </button>
-              ))}
-            </div>
-
-            {/* View mode toggle - glass container */}
-            <div className="glass-subtle rounded-lg p-0.5 flex items-center">
-              <button
-                onClick={() => setViewMode('grid')}
-                className={cn(
-                  'p-2 rounded-md transition-all duration-200',
-                  viewMode === 'grid'
-                    ? 'bg-cobalt-500 text-white shadow-sm'
-                    : 'text-theme-tertiary hover:text-theme-primary'
-                )}
-                aria-label="Grid view"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
-                  />
-                </svg>
-              </button>
-              <button
-                onClick={() => setViewMode('list')}
-                className={cn(
-                  'p-2 rounded-md transition-all duration-200',
-                  viewMode === 'list'
-                    ? 'bg-cobalt-500 text-white shadow-sm'
-                    : 'text-theme-tertiary hover:text-theme-primary'
-                )}
-                aria-label="List view"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 6h16M4 12h16M4 18h16"
-                  />
-                </svg>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Active filters summary */}
-      {(currentStatus || filters.search) && (
-        <div className="flex items-center gap-2 text-sm">
-          <span className="card-meta">Filters:</span>
-          {currentStatus && (
-            <RobotStatusBadge status={currentStatus} size="sm" />
-          )}
-          {filters.search && (
-            <span className="px-2 py-0.5 glass-subtle rounded-lg text-theme-primary">
-              "{filters.search}"
-            </span>
-          )}
-          <button
-            onClick={clearFilters}
-            className="text-cobalt-400 hover:text-cobalt-300 ml-2 transition-colors"
-          >
-            Clear all
-          </button>
-        </div>
-      )}
-
-      {/* Robot list/grid */}
-      {robots.length === 0 ? (
-        <EmptyState
-          size="lg"
-          icon={
-            <svg
-              className="h-10 w-10"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"
-              />
-            </svg>
-          }
-          title={currentStatus || filters.search ? 'No robots found' : 'No robots connected'}
-          description={
-            currentStatus || filters.search
-              ? 'Try adjusting your filters'
-              : 'Add your first robot to get started'
-          }
-          action={
-            !currentStatus && !filters.search && onAddRobot ? (
-              <Button variant="primary" onClick={onAddRobot}>
-                Add Robot
-              </Button>
-            ) : undefined
-          }
-        />
+      {view === 'table' ? (
+        <Panel padding="none">
+          <DataTable
+            caption="Robots"
+            columns={columns}
+            rows={visible}
+            getRowId={(r) => r.id}
+            defaultSort={{ key: 'name', direction: 'asc' }}
+            onRowClick={(r) => navigate(`/robots/${r.id}`)}
+            rowActions={actionsFor}
+            rowActionsLabel={(r) => `Actions for ${r.name}`}
+            isLoading={isLoading && robots.length === 0}
+            error={error}
+            errorTitle="Couldn't load robots"
+            onRetry={() => void fetchRobots()}
+            empty={empty}
+          />
+        </Panel>
+      ) : isLoading && robots.length === 0 ? (
+        <Panel><SkeletonRows rows={4} /></Panel>
+      ) : error ? (
+        <Panel><ErrorState title="Couldn't load robots" message={error} onRetry={() => void fetchRobots()} /></Panel>
+      ) : visible.length === 0 ? (
+        <Panel>{empty}</Panel>
       ) : (
-        <div
-          className={cn(
-            viewMode === 'grid'
-              ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4'
-              : 'flex flex-col gap-3'
-          )}
-        >
-          {robots.map((robot) => (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {visible.map((robot) => (
             <RobotCard
               key={robot.id}
               robot={robot}
-              onClick={onSelectRobot ? () => onSelectRobot(robot.id) : undefined}
-              selected={selectedRobotId === robot.id}
-              compact={viewMode === 'list'}
+              onClick={() => navigate(`/robots/${robot.id}`)}
+              actions={actionsFor(robot)}
             />
           ))}
         </div>
       )}
 
-      {/* Pagination */}
       {pagination.totalPages > 1 && (
-        <div className="flex items-center justify-between border-t border-glass-subtle pt-4">
-          <p className="card-meta">
-            Showing {(pagination.page - 1) * pagination.pageSize + 1} to{' '}
-            {Math.min(pagination.page * pagination.pageSize, pagination.total)} of{' '}
-            {pagination.total} robots
-          </p>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={pagination.page <= 1}
-              onClick={() => setPage(pagination.page - 1)}
-            >
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[13px] text-ink-tertiary">
+            Page {pagination.page} of {pagination.totalPages}
+          </span>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="sm" disabled={pagination.page <= 1} onClick={() => setPage(pagination.page - 1)}>
               Previous
             </Button>
-            <span className="text-sm text-theme-secondary">
-              Page {pagination.page} of {pagination.totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={pagination.page >= pagination.totalPages}
-              onClick={() => setPage(pagination.page + 1)}
-            >
+            <Button variant="ghost" size="sm" disabled={pagination.page >= pagination.totalPages} onClick={() => setPage(pagination.page + 1)}>
               Next
             </Button>
           </div>
-        </div>
-      )}
-
-      {/* Loading overlay for subsequent fetches */}
-      {isLoading && robots.length > 0 && (
-        <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50">
-          <Spinner size="lg" color="cobalt" />
         </div>
       )}
     </div>

@@ -1,229 +1,175 @@
 /**
  * @file RetentionSettings.tsx
- * @description Retention policy management component
+ * @description Retention view: how long each event type is kept, what expires
+ *              soon, an edit form per event type and a confirmed manual cleanup.
  * @feature compliance
  */
 
 import { useEffect, useState } from 'react';
-import { Card } from '@/shared/components/ui/Card';
-import { Button } from '@/shared/components/ui/Button';
+import { Pencil, Trash2 } from 'lucide-react';
+import {
+  Button, DataTable, FormField, FormModal, Input, Panel, StatRow, StatTile, confirm, errorMessage, toast, type DataTableColumn,
+} from '@/shared/components/ui';
 import { useComplianceStore } from '../store';
 import type { ComplianceEventType } from '../types';
-
-// Human-readable labels for event types
-const EVENT_TYPE_LABELS: Record<ComplianceEventType, string> = {
-  ai_decision: 'AI Decisions',
-  safety_action: 'Safety Actions',
-  command_execution: 'Command Executions',
-  system_event: 'System Events',
-  access_audit: 'Access Audits',
-};
-
-// Descriptions for each event type
-const EVENT_TYPE_DESCRIPTIONS: Record<ComplianceEventType, string> = {
-  ai_decision: 'AI model decisions (EU AI Act requires 10 years)',
-  safety_action: 'Emergency stops, safety triggers',
-  command_execution: 'Robot commands and executions',
-  system_event: 'System startup, shutdown, errors',
-  access_audit: 'Log access and export records',
-};
+import { EVENT_TYPE_LABELS } from './complianceFormat';
 
 export interface RetentionSettingsProps {
   className?: string;
 }
 
-/**
- * Component for managing retention policies
- */
+const EVENT_TYPE_DESCRIPTIONS: Record<ComplianceEventType, string> = {
+  ai_decision: 'AI model decisions — the EU AI Act asks for 10 years',
+  safety_action: 'Emergency stops and safety triggers',
+  command_execution: 'Robot commands and their execution',
+  system_event: 'Startup, shutdown and system errors',
+  access_audit: 'Who read or exported the log',
+};
+
+const EVENT_TYPES = Object.keys(EVENT_TYPE_LABELS) as ComplianceEventType[];
+const DEFAULT_DAYS = 365;
+
+interface Row { eventType: ComplianceEventType; days: number; custom: boolean }
+
+function formatRetention(days: number): string {
+  if (days >= 365 && days % 365 === 0) {
+    const years = days / 365;
+    return `${years} year${years > 1 ? 's' : ''}`;
+  }
+  return `${days.toLocaleString()} days`;
+}
+
+/** Retention policies per event type plus the manual cleanup act. */
 export function RetentionSettings({ className }: RetentionSettingsProps) {
   const {
-    retentionPolicies,
-    retentionStats,
-    isLoadingRetention,
-    isCleaningUp,
-    error,
-    fetchRetentionPolicies,
-    fetchRetentionStats,
-    setRetentionPolicy,
-    triggerCleanup,
+    retentionPolicies, retentionStats, isLoadingRetention, isCleaningUp, error,
+    fetchRetentionPolicies, fetchRetentionStats, setRetentionPolicy, triggerCleanup,
   } = useComplianceStore();
+  const [editing, setEditing] = useState<Row | null>(null);
+  const [days, setDays] = useState('');
+  const [daysError, setDaysError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
+  const [saving, setSaving] = useState(false);
 
-  const [editingType, setEditingType] = useState<ComplianceEventType | null>(null);
-  const [editValue, setEditValue] = useState<number>(365);
-  const [cleanupResult, setCleanupResult] = useState<{ logsDeleted: number; logsSkipped: number } | null>(null);
-
-  // Fetch on mount
   useEffect(() => {
-    fetchRetentionPolicies();
-    fetchRetentionStats();
+    void fetchRetentionPolicies();
+    void fetchRetentionStats();
   }, [fetchRetentionPolicies, fetchRetentionStats]);
 
-  const getPolicyDays = (eventType: ComplianceEventType): number => {
-    const policy = retentionPolicies.find((p) => p.eventType === eventType);
-    return policy?.retentionDays ?? 365;
+  const rows: Row[] = EVENT_TYPES.map((eventType) => {
+    const p = retentionPolicies.find((x) => x.eventType === eventType);
+    return { eventType, days: p?.retentionDays ?? DEFAULT_DAYS, custom: Boolean(p) };
+  });
+
+  const openEdit = (r: Row) => {
+    setEditing(r);
+    setDays(String(r.days));
+    setDaysError(undefined);
+    setFormError(undefined);
   };
 
-  const handleEdit = (eventType: ComplianceEventType) => {
-    setEditingType(eventType);
-    setEditValue(getPolicyDays(eventType));
-  };
-
-  const handleSave = async () => {
-    if (!editingType) return;
-    await setRetentionPolicy(editingType, editValue);
-    setEditingType(null);
-  };
-
-  const handleCleanup = async () => {
+  const save = async () => {
+    if (!editing) return;
+    const n = Number(days);
+    if (!Number.isInteger(n) || n < 1 || n > 36500) { setDaysError('Enter a whole number of days between 1 and 36,500.'); return; }
+    setSaving(true);
+    setFormError(undefined);
+    let err: string | null = null;
     try {
-      const result = await triggerCleanup();
-      setCleanupResult(result);
-      setTimeout(() => setCleanupResult(null), 5000);
-    } catch {
-      // Error is handled in store
+      await setRetentionPolicy(editing.eventType, n);
+      err = useComplianceStore.getState().error;
+    } catch (e) {
+      err = errorMessage(e);
+    } finally {
+      setSaving(false);
+    }
+    if (err) { setFormError(err); return; }
+    toast.success('Retention updated', { description: `${EVENT_TYPE_LABELS[editing.eventType]}: ${formatRetention(n)}` });
+    setEditing(null);
+    void fetchRetentionStats();
+  };
+
+  const runCleanup = async () => {
+    const ok = await confirm({
+      title: 'Run retention cleanup now?',
+      description: 'Entries older than their retention period are deleted permanently. Entries under a legal hold are kept. This cannot be undone.',
+      confirmLabel: 'Run cleanup',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      const r = await triggerCleanup();
+      toast.success('Cleanup finished', { description: `${r.logsDeleted.toLocaleString()} deleted · ${r.logsSkipped.toLocaleString()} kept under legal hold` });
+      void fetchRetentionStats();
+    } catch (err) {
+      toast.error("Couldn't run the cleanup", { description: errorMessage(err) });
     }
   };
 
-  const formatDays = (days: number): string => {
-    if (days >= 365) {
-      const years = Math.floor(days / 365);
-      return `${years} year${years > 1 ? 's' : ''}`;
-    }
-    return `${days} days`;
-  };
+  const columns: DataTableColumn<Row>[] = [
+    { key: 'eventType', header: 'Event type', sortable: true, cell: (r) => (
+      <div className="min-w-0">
+        <div className="text-sm text-ink-primary">{EVENT_TYPE_LABELS[r.eventType]}</div>
+        <div className="text-[13px] text-ink-tertiary">{EVENT_TYPE_DESCRIPTIONS[r.eventType]}</div>
+      </div>
+    ) },
+    { key: 'days', header: 'Kept for', align: 'right', sortable: true, cell: (r) => (
+      <span className="whitespace-nowrap text-ink-secondary">{formatRetention(r.days)}{!r.custom && <span className="text-ink-tertiary"> · default</span>}</span>
+    ) },
+  ];
 
   return (
-    <div className={className}>
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold text-theme-primary mb-2">Retention Policies</h3>
-        <p className="text-theme-tertiary text-sm">
-          Configure how long compliance logs are retained before automatic deletion.
-          Logs under legal hold are never deleted.
-        </p>
-      </div>
-
-      {error && (
-        <div className="mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded-lg text-red-300 text-sm">
-          {error}
-        </div>
-      )}
-
-      {/* Retention Stats */}
+    <div className={className ? `flex flex-col gap-4 ${className}` : 'flex flex-col gap-4'}>
       {retentionStats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <Card className="glass-card p-4 text-center">
-            <div className="text-2xl font-bold text-theme-primary">{retentionStats.totalLogs}</div>
-            <div className="text-xs text-theme-tertiary">Total Logs</div>
-          </Card>
-          <Card className="glass-card p-4 text-center">
-            <div className="text-2xl font-bold text-yellow-400">{retentionStats.expiringWithin30Days}</div>
-            <div className="text-xs text-theme-tertiary">Expiring in 30 Days</div>
-          </Card>
-          <Card className="glass-card p-4 text-center">
-            <div className="text-2xl font-bold text-orange-400">{retentionStats.expiringWithin90Days}</div>
-            <div className="text-xs text-theme-tertiary">Expiring in 90 Days</div>
-          </Card>
-          <Card className="glass-card p-4 text-center">
-            <div className="text-2xl font-bold text-blue-400">{retentionStats.underLegalHold}</div>
-            <div className="text-xs text-theme-tertiary">Under Legal Hold</div>
-          </Card>
-        </div>
+        <StatRow columns={4}>
+          <StatTile label="Entries" value={retentionStats.totalLogs.toLocaleString()} hint="In the audit log" />
+          <StatTile label="Expire in 30 days" value={retentionStats.expiringWithin30Days.toLocaleString()} tone={retentionStats.expiringWithin30Days ? 'gated' : undefined} hint="Deleted by the next cleanups" />
+          <StatTile label="Expire in 90 days" value={retentionStats.expiringWithin90Days.toLocaleString()} hint="Including the 30-day ones" />
+          <StatTile label="Under legal hold" value={retentionStats.underLegalHold.toLocaleString()} hint="Never deleted while held" />
+        </StatRow>
       )}
 
-      {/* Policy Table */}
-      <Card className="glass-card overflow-hidden mb-6">
-        <table className="w-full">
-          <thead className="bg-gray-800/50">
-            <tr>
-              <th className="px-4 py-3 text-left text-sm font-medium text-theme-secondary">Event Type</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-theme-secondary">Description</th>
-              <th className="px-4 py-3 text-center text-sm font-medium text-theme-secondary">Retention</th>
-              <th className="px-4 py-3 text-right text-sm font-medium text-theme-secondary">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-700/50">
-            {(['ai_decision', 'safety_action', 'command_execution', 'system_event', 'access_audit'] as const).map(
-              (eventType) => (
-                <tr key={eventType} className="hover:bg-gray-800/30">
-                  <td className="px-4 py-3 text-sm text-theme-primary font-medium">
-                    {EVENT_TYPE_LABELS[eventType]}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-theme-tertiary">
-                    {EVENT_TYPE_DESCRIPTIONS[eventType]}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {editingType === eventType ? (
-                      <input
-                        type="number"
-                        min={1}
-                        max={36500}
-                        value={editValue}
-                        onChange={(e) => setEditValue(Number(e.target.value))}
-                        className="w-24 px-2 py-1 text-sm bg-gray-800 border border-gray-600 rounded text-theme-primary text-center"
-                      />
-                    ) : (
-                      <span className="text-sm text-theme-primary">{formatDays(getPolicyDays(eventType))}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {editingType === eventType ? (
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditingType(null)}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          onClick={handleSave}
-                          disabled={isLoadingRetention}
-                        >
-                          Save
-                        </Button>
-                      </div>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleEdit(eventType)}
-                      >
-                        Edit
-                      </Button>
-                    )}
-                  </td>
-                </tr>
-              )
-            )}
-          </tbody>
-        </table>
-      </Card>
+      <Panel padding="none">
+        <Panel.Header
+          title="Retention policies"
+          description="How long each event type is kept before cleanup deletes it."
+          actions={
+            <Button variant="secondary" leftIcon={<Trash2 className="h-4 w-4" strokeWidth={1.75} />} isLoading={isCleaningUp} onClick={() => void runCleanup()}>
+              Run cleanup
+            </Button>
+          }
+        />
+        <DataTable
+          caption="Retention policies"
+          columns={columns}
+          rows={rows}
+          getRowId={(r) => r.eventType}
+          isLoading={isLoadingRetention && retentionPolicies.length === 0}
+          error={retentionPolicies.length === 0 && !isLoadingRetention ? error : null}
+          errorTitle="Couldn't load retention policies"
+          onRetry={() => void fetchRetentionPolicies()}
+          onRowClick={openEdit}
+          rowActions={(r) => [{ label: 'Edit retention', icon: <Pencil />, onSelect: () => openEdit(r) }]}
+          rowActionsLabel={(r) => `Actions for ${EVENT_TYPE_LABELS[r.eventType]}`}
+        />
+      </Panel>
 
-      {/* Manual Cleanup */}
-      <Card className="glass-card p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h4 className="font-medium text-theme-primary">Manual Cleanup</h4>
-            <p className="text-sm text-theme-tertiary mt-1">
-              Trigger cleanup of expired logs immediately. Automatic cleanup runs daily.
-            </p>
-          </div>
-          <Button
-            variant="secondary"
-            onClick={handleCleanup}
-            disabled={isCleaningUp}
-          >
-            {isCleaningUp ? 'Cleaning...' : 'Run Cleanup'}
-          </Button>
-        </div>
-        {cleanupResult && (
-          <div className="mt-3 p-3 bg-green-900/30 border border-green-700/50 rounded-lg text-green-300 text-sm">
-            Cleanup complete: {cleanupResult.logsDeleted} logs deleted, {cleanupResult.logsSkipped} skipped (under hold)
-          </div>
-        )}
-      </Card>
+      <FormModal
+        isOpen={editing !== null}
+        onClose={() => setEditing(null)}
+        title={editing ? `Edit ${EVENT_TYPE_LABELS[editing.eventType].toLowerCase()} retention` : 'Edit retention'}
+        description="Cleanup deletes entries older than this. Entries under a legal hold are kept."
+        submitLabel="Save changes"
+        submittingLabel="Saving…"
+        isSubmitting={saving}
+        error={formError}
+        onSubmit={save}
+        noValidate
+      >
+        <FormField label="Keep for (days)" required error={daysError} hint="3,650 days = 10 years, the EU AI Act record-keeping period.">
+          <Input type="number" min={1} max={36500} value={days} onChange={(e) => setDays(e.target.value)} />
+        </FormField>
+      </FormModal>
     </div>
   );
 }

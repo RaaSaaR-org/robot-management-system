@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 // Mock the updatesApi
 vi.mock('../api/updatesApi', () => ({
@@ -75,7 +75,7 @@ describe('UpdatesPage', () => {
 
     render(<UpdatesPage />);
 
-    expect(screen.getByText('Secure Updates')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Secure updates' })).toBeInTheDocument();
     expect(screen.getByText('v1.1.0')).toBeInTheDocument();
     expect(screen.getByText('v1.2.0')).toBeInTheDocument();
     expect(screen.getByText('Bug fixes')).toBeInTheDocument();
@@ -107,8 +107,9 @@ describe('UpdatesPage', () => {
 
     render(<UpdatesPage />);
 
-    const approveButtons = screen.getAllByText('Approve');
-    expect(approveButtons.length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for v1.1.0' }));
+    expect(screen.getByRole('menuitem', { name: /Approve/ })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Deploy to robot/ })).not.toBeInTheDocument();
   });
 
   it('shows deploy button for approved updates', () => {
@@ -136,7 +137,8 @@ describe('UpdatesPage', () => {
 
     render(<UpdatesPage />);
 
-    const deployButtons = screen.getAllByText('Deploy');
-    expect(deployButtons.length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for v1.1.0' }));
+    expect(screen.getByRole('menuitem', { name: /Deploy to robot/ })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Approve/ })).not.toBeInTheDocument();
   });
 });

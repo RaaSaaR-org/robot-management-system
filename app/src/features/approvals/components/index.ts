@@ -1,4 +1,10 @@
+/**
+ * @file index.ts
+ * @description Approvals components barrel
+ * @feature approvals
+ */
+
 export { SLAIndicator } from './SLAIndicator';
-export { ApprovalCard } from './ApprovalCard';
 export { ApprovalQueue } from './ApprovalQueue';
-export { ApprovalDetailPanel } from './ApprovalDetailPanel';
+export { ApprovalDetailModal } from './ApprovalDetailModal';
+export { RejectApprovalModal } from './RejectApprovalModal';

@@ -47,7 +47,7 @@ export function parsePgmP5(buffer: ArrayBuffer): PgmImage {
 }
 
 // Value bands (ROS occupancy). Walls render bright so obstacles are crisp; the
-// navigable floor gets a faint turquoise wash; unknown is barely a haze so the
+// navigable floor gets a faint accent wash; unknown is barely a haze so the
 // (often sparse) unscanned cells don't read as speckle/noise.
 const OCCUPIED_MAX = 64;
 const FREE_MIN = 230;
@@ -67,7 +67,7 @@ export function pgmToDataUrl(img: PgmImage): string {
     if (v <= OCCUPIED_MAX) {
       r = 226; g = 232; b = 240; a = 255; // wall — bright slate-200
     } else if (v >= FREE_MIN) {
-      r = 45; g = 212; b = 191; a = 44; // free floor — faint turquoise
+      r = 86; g = 191; b = 173; a = 44; // free floor — faint accent-400
     } else {
       r = 71; g = 85; b = 105; a = 28; // unknown — barely-there haze
     }

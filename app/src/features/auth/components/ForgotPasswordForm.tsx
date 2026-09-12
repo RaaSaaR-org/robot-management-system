@@ -1,126 +1,69 @@
 /**
  * @file ForgotPasswordForm.tsx
- * @description Forgot password form component
+ * @description Forgot-password form: one email field, one primary submit. The page shows the sent state.
  * @feature auth
- * @dependencies @/shared/components/ui, @/features/auth/hooks
  */
 
-import { useState, type FormEvent, type ChangeEvent } from 'react';
-import { Input, Button } from '@/shared/components/ui';
-import { usePasswordReset } from '../hooks/usePasswordReset';
+import { useState, type FormEvent } from 'react';
+import { Button, FormField, Input } from '@/shared/components/ui';
+import { useAuthStore } from '../store/authStore';
+import { AuthFormError } from './AuthLayout';
 
 export interface ForgotPasswordFormProps {
-  /** Callback when reset is requested */
+  /** Called once the request went out (resetToken is only returned in dev) */
   onSuccess?: (resetToken?: string) => void;
+  /** Called with the address the link went to */
+  onRequested?: (email: string) => void;
   /** Callback on error */
   onError?: (error: string) => void;
 }
 
-/**
- * Forgot password form with email field.
- */
-export function ForgotPasswordForm({ onSuccess, onError }: ForgotPasswordFormProps) {
-  const { requestReset, isLoading, error, isResetRequested, clearError } =
-    usePasswordReset();
-
+export function ForgotPasswordForm({ onSuccess, onRequested, onError }: ForgotPasswordFormProps) {
+  // The store throws on failure (the usePasswordReset hook swallows it), so success only runs on success.
+  const requestReset = useAuthStore((s) => s.forgotPassword);
+  const isLoading = useAuthStore((s) => s.isLoading);
+  const error = useAuthStore((s) => s.error);
+  const clearError = useAuthStore((s) => s.clearError);
   const [email, setEmail] = useState('');
-  const [validationErrors, setValidationErrors] = useState<{
-    email?: string;
-  }>({});
-
-  const validate = (): boolean => {
-    const errors: typeof validationErrors = {};
-
-    if (!email.trim()) {
-      errors.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      errors.email = 'Please enter a valid email address';
-    }
-
-    setValidationErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
+  const [emailError, setEmailError] = useState<string>();
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     clearError();
-    setValidationErrors({});
-
-    if (!validate()) {
-      return;
-    }
-
+    if (!email.trim()) return setEmailError('Enter your email.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return setEmailError('Enter a valid email address.');
     try {
       const resetToken = await requestReset(email);
+      onRequested?.(email);
       onSuccess?.(resetToken);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Request failed';
-      onError?.(errorMessage);
+      onError?.(err instanceof Error ? err.message : 'Request failed');
     }
   };
-
-  const handleEmailChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setEmail(e.target.value);
-    if (validationErrors.email) {
-      setValidationErrors({});
-    }
-    if (error) {
-      clearError();
-    }
-  };
-
-  if (isResetRequested) {
-    return (
-      <div className="space-y-4 text-center">
-        <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400">
-          <h3 className="font-medium">Check your email</h3>
-          <p className="mt-1 text-sm">
-            If an account exists with <strong>{email}</strong>, you will receive password
-            reset instructions.
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6" noValidate>
-      <div className="text-center text-sm text-gray-600 dark:text-gray-400">
-        Enter your email address and we&apos;ll send you instructions to reset your
-        password.
-      </div>
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+      <FormField label="Email" error={emailError}>
+        <Input
+          id="forgot-email"
+          type="email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            setEmailError(undefined);
+            if (error) clearError();
+          }}
+          disabled={isLoading}
+          autoComplete="email"
+          required
+        />
+      </FormField>
 
-      <Input
-        id="forgot-email"
-        type="email"
-        label="Email"
-        placeholder="you@example.com"
-        value={email}
-        onChange={handleEmailChange}
-        error={validationErrors.email}
-        disabled={isLoading}
-        autoComplete="email"
-        required
-      />
+      {error && <AuthFormError>{error}</AuthFormError>}
 
-      {error && (
-        <div
-          role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
-        >
-          {error}
-        </div>
-      )}
-
-      <Button
-        type="submit"
-        variant="primary"
-        size="lg"
-        fullWidth
-        isLoading={isLoading}
-        disabled={isLoading}
-      >
-        {isLoading ? 'Sending...' : 'Send reset instructions'}
+      <Button type="submit" size="lg" fullWidth isLoading={isLoading} loadingText="Sending…">
+        Send reset link
       </Button>
     </form>
   );

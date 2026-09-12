@@ -1,11 +1,13 @@
 /**
  * @file TeleopTab.tsx
- * @description Teleoperation tab with keyboard control, leader arm teleop, and dataset recording
+ * @description Teleoperation tab — keyboard teleop and VR teleop (Meta Quest), one panel each
  * @feature robots
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Card, Button } from '@/shared/components/ui';
+import { Keyboard, Plug, Unplug } from 'lucide-react';
+import { Button, EmptyState, Panel, StatusTag, toast } from '@/shared/components/ui';
+import { cn } from '@/shared/utils/cn';
 import type { TeleopTabProps } from './types';
 import { VRTeleopSection } from './vr/VRTeleopSection';
 
@@ -21,28 +23,25 @@ interface TeleopJoint {
   defaultPosition: number;
 }
 
-/** Controls legend shown while connected (embodiment-agnostic). */
-const KEY_DISPLAY: Array<{ keys: string; label: string }> = [
-  { keys: '↑ / ↓', label: 'Select joint' },
-  { keys: '← / →', label: 'Move joint' },
-  { keys: 'H', label: 'Home' },
-  { keys: 'Space', label: 'Stop' },
+/** Controls legend (embodiment-agnostic). */
+const KEY_DISPLAY: Array<{ keys: string[]; label: string }> = [
+  { keys: ['↑', '↓'], label: 'Select joint' },
+  { keys: ['←', '→'], label: 'Move joint' },
+  { keys: ['H'], label: 'Home' },
+  { keys: ['Space'], label: 'Stop' },
 ];
 
-/** Turn a URDF-style joint name into a human label (e.g. `left_elbow_joint` → `Left Elbow`). */
+/** Turn a URDF-style joint name into a sentence-case label (`left_elbow_joint` → `Left elbow`). */
 function prettyJoint(name: string): string {
-  return name
-    .replace(/_joint$/, '')
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  const words = name.replace(/_joint$/, '').replace(/_/g, ' ').toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 function getAgentBaseUrl(robot: TeleopTabProps['robot']): string {
   if (robot.a2aAgentUrl) {
     return robot.a2aAgentUrl.replace(/\/$/, '');
   }
-  // 41243 is the robot agent's default port (robot-agent/src/config/config.ts);
-  // this fallback read 41245, a port nothing listens on.
+  // 41243 is the robot agent's default port (robot-agent/src/config/config.ts).
   return 'http://localhost:41243';
 }
 
@@ -52,12 +51,21 @@ function getWsBaseUrl(robot: TeleopTabProps['robot']): string {
   return getAgentBaseUrl(robot).replace(/^http/, 'ws');
 }
 
+function Kbd({ children }: { children: string }) {
+  return (
+    <kbd className="inline-flex min-w-6 items-center justify-center rounded-tag border border-line bg-inset px-1.5 py-0.5 font-mono text-xs text-ink-primary">
+      {children}
+    </kbd>
+  );
+}
+
 // ============================================================================
 // KEYBOARD TELEOP SECTION
 // ============================================================================
 
 export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'] }) {
   const [connected, setConnected] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [robotType, setRobotType] = useState('');
   const [joints, setJoints] = useState<TeleopJoint[]>([]);
   const [positions, setPositions] = useState<Record<string, number>>({});
@@ -73,12 +81,32 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
 
   const connect = useCallback(() => {
     const wsUrl = `${getWsBaseUrl(robot)}/ws/keyboard-teleop`;
+    let opened = false;
+    setConnecting(true);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => { setConnected(false); wsRef.current = null; };
-    ws.onerror = () => { setConnected(false); wsRef.current = null; };
+    ws.onopen = () => {
+      opened = true;
+      setConnecting(false);
+      setConnected(true);
+      toast.success('Keyboard teleop connected', { description: robot.name });
+    };
+    ws.onclose = () => {
+      setConnecting(false);
+      setConnected(false);
+      wsRef.current = null;
+    };
+    ws.onerror = () => {
+      setConnecting(false);
+      setConnected(false);
+      wsRef.current = null;
+      if (!opened) {
+        toast.error("Couldn't connect keyboard teleop", {
+          description: `${robot.name} did not answer. Start its robot agent and try again.`,
+        });
+      }
+    };
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
@@ -161,91 +189,107 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
   const selectedJoint = joints[selected];
 
   return (
-    <Card className="p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-semibold text-theme-primary">Keyboard Teleop</h3>
-          {connected && robotType && (
-            <p className="text-xs text-theme-secondary mt-0.5">
-              {robotType.toUpperCase()} · {joints.length} DOF · simulation
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`inline-block w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-400'}`} />
-          <span className="text-xs text-theme-secondary">{connected ? 'Connected' : 'Disconnected'}</span>
-        </div>
-      </div>
-
-      {!connected ? (
-        <Button variant="primary" size="sm" onClick={connect}>Connect</Button>
-      ) : (
-        <Button variant="ghost" size="sm" onClick={disconnect}>Disconnect</Button>
-      )}
-
-      {connected && (
-        <>
-          {/* Controls legend */}
-          <div className="grid grid-cols-2 gap-2">
-            {KEY_DISPLAY.map(({ keys, label }) => (
-              <div
-                key={keys}
-                className="flex items-center justify-between px-3 py-2 rounded-lg border text-xs border-theme-subtle bg-theme-secondary text-theme-secondary"
+    <Panel>
+      <Panel.Header
+        title="Keyboard teleop"
+        description={
+          connected && robotType
+            ? `${robotType.toUpperCase()} · ${joints.length} joints · simulation`
+            : 'Drive single joints of the simulated robot from the keyboard.'
+        }
+        actions={
+          <>
+            <StatusTag tone={connected ? 'live' : 'neutral'} dot pulse={connected}>
+              {connected ? 'Connected' : 'Not connected'}
+            </StatusTag>
+            {connected ? (
+              <Button variant="ghost" size="sm" leftIcon={<Unplug className="h-4 w-4" strokeWidth={1.75} />} onClick={disconnect}>
+                Disconnect
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                leftIcon={<Plug className="h-4 w-4" strokeWidth={1.75} />}
+                onClick={connect}
+                isLoading={connecting}
+                loadingText="Connecting…"
               >
-                <kbd className="font-mono font-medium">{keys}</kbd>
-                <span>{label}</span>
-              </div>
-            ))}
-          </div>
-
-          {selectedJoint && (
-            <div className="text-xs text-theme-secondary">
-              Selected:{' '}
-              <span className="text-theme-primary font-medium">{prettyJoint(selectedJoint.name)}</span>
-              {activeDir !== 0 && (
-                <span className="ml-2 text-cobalt-600 dark:text-cobalt-400">
-                  {activeDir > 0 ? '▲ moving +' : '▼ moving −'}
+                Connect
+              </Button>
+            )}
+          </>
+        }
+      />
+      <Panel.Body className="flex flex-col gap-4">
+        <Panel variant="inset" padding="sm">
+          <ul className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4" aria-label="Keyboard controls">
+            {KEY_DISPLAY.map(({ keys, label }) => (
+              <li key={label} className="flex items-center gap-2 text-[13px] text-ink-secondary">
+                <span className="flex gap-1">
+                  {keys.map((k) => <Kbd key={k}>{k}</Kbd>)}
                 </span>
-              )}
-            </div>
-          )}
+                {label}
+              </li>
+            ))}
+          </ul>
+        </Panel>
 
-          {/* Joint list — scrollable so it scales from SO-101 (6) to G1-EDU (43) */}
-          <div className="space-y-1 max-h-72 overflow-y-auto pr-1">
-            {joints.map((joint, i) => {
-              const pos = positions[joint.name] ?? joint.defaultPosition;
-              const range = joint.limitUpper - joint.limitLower;
-              const pct = range > 0 ? ((pos - joint.limitLower) / range) * 100 : 50;
-              const isSel = i === selected;
-              return (
-                <button
-                  key={joint.name}
-                  onClick={() => setSelected(i)}
-                  className={`w-full text-left px-3 py-1.5 rounded-lg border text-xs transition-colors ${
-                    isSel
-                      ? 'border-cobalt-500 bg-cobalt-50 dark:bg-cobalt-900/30'
-                      : 'border-theme-subtle bg-theme-secondary hover:border-cobalt-500/40'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className={isSel ? 'text-cobalt-600 dark:text-cobalt-400 font-medium' : 'text-theme-secondary'}>
-                      {prettyJoint(joint.name)}
-                    </span>
-                    <span className="font-mono text-theme-primary">{pos.toFixed(2)} rad</span>
-                  </div>
-                  <div className="mt-1 h-1 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
-                    <div
-                      className="h-full bg-cobalt-500"
-                      style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
-                    />
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </>
-      )}
-    </Card>
+        {!connected ? (
+          <EmptyState
+            size="sm"
+            icon={<Keyboard />}
+            title="Not connected"
+            description={`Connect to ${robot.name}'s robot agent to list its joints and drive them.`}
+          />
+        ) : (
+          <>
+            {selectedJoint && (
+              <p className="text-[13px] text-ink-secondary">
+                Selected <span className="font-medium text-ink-primary">{prettyJoint(selectedJoint.name)}</span>
+                {activeDir !== 0 && (
+                  <span className="ml-2 text-primary">{activeDir > 0 ? 'Moving +' : 'Moving −'}</span>
+                )}
+              </p>
+            )}
+
+            {/* Joint list — scrollable so it scales from SO-101 (6) to G1-EDU (43) */}
+            <div className="grid max-h-80 grid-cols-1 gap-1.5 overflow-y-auto pr-1 md:grid-cols-2">
+              {joints.map((joint, i) => {
+                const pos = positions[joint.name] ?? joint.defaultPosition;
+                const range = joint.limitUpper - joint.limitLower;
+                const pct = range > 0 ? ((pos - joint.limitLower) / range) * 100 : 50;
+                const isSel = i === selected;
+                return (
+                  <button
+                    key={joint.name}
+                    type="button"
+                    onClick={() => setSelected(i)}
+                    aria-pressed={isSel}
+                    className={cn(
+                      'w-full rounded-control border px-3 py-2 text-left text-xs transition-colors',
+                      isSel ? 'border-primary bg-primary/10' : 'border-line-subtle bg-inset hover:border-line-strong',
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={isSel ? 'font-medium text-ink-primary' : 'text-ink-secondary'}>
+                        {prettyJoint(joint.name)}
+                      </span>
+                      <span className="tabular-nums text-ink-primary">
+                        {pos.toFixed(2)}
+                        <span className="ml-0.5 text-ink-tertiary">rad</span>
+                      </span>
+                    </div>
+                    <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-line-subtle">
+                      <div className="h-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </Panel.Body>
+    </Panel>
   );
 }
 
@@ -253,17 +297,13 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
 // MAIN COMPONENT
 // ============================================================================
 
-// NOTE (TASK-117): the former `LeaderArmSection` and `RecordingSection` were
-// removed here. They polled `${agent}/api/v1/teleop/{start,stop,status}`, which
-// the robot-agent does not implement (every poll 404'd and flooded the console).
-// The canonical record/leader-teleop surface is the data-collection page
-// (`/data-collection/record/:sessionId`), driven server-side by
-// `TeleoperationService` → sidecar `lerobot-record`. This tab now hosts only the
-// live keyboard teleop, which drives the agent's simulated joint state directly.
+// NOTE (TASK-117): the canonical record/leader-teleop surface is the data-collection
+// page (`/data-collection/record/:sessionId`). This tab hosts only the live keyboard
+// teleop, which drives the agent's simulated joint state directly, and VR teleop.
 
 export function TeleopTab({ robot }: TeleopTabProps) {
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <KeyboardTeleopSection robot={robot} />
       <VRTeleopSection robot={robot} />
     </div>

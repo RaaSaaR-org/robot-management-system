@@ -64,16 +64,6 @@ export interface TasksTabProps extends TabCommonProps {
 export interface InfoTabProps extends TabCommonProps {}
 
 /**
- * Props for the Model3DTab component
- */
-export interface Model3DTabProps extends TabCommonProps {
-  /** Live telemetry data for joint states */
-  telemetry: RobotTelemetry | null;
-  /** Whether telemetry connection is active */
-  isTelemetryConnected: boolean;
-}
-
-/**
  * Props for the OverviewTab component — the default landing view that pairs the
  * 3D model with the robot's primary controls (VLA task + safe ops).
  */
@@ -122,3 +112,11 @@ export interface MotionTabProps extends TabCommonProps {
  * Props for the TeleopTab component
  */
 export interface TeleopTabProps extends TabCommonProps {}
+
+/**
+ * Props for the ActivityTab component (commands + tasks)
+ */
+export interface ActivityTabProps extends CommandsTabProps {
+  /** Tasks assigned to this robot */
+  tasks: Process[];
+}

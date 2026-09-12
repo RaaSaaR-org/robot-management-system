@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, act, waitFor } from '@testing-library/react';
+import { FeedbackProvider, dismissToast } from '@/shared/components/ui';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '@/test/utils';
 import { alertsApi } from '../../api/alertsApi';
@@ -70,6 +71,8 @@ const robot = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Toasts live in a module-level queue; one test's toast must not satisfy the next.
+  dismissToast();
   useAlertsStore.setState({ alerts: [], error: null });
   // A hard load starts with an empty, non-persistent robots store.
   useRobotsStore.setState({ robots: [] });
@@ -79,11 +82,23 @@ beforeEach(() => {
   });
 });
 
-/** Render the given component with `alerts` as the server's active list. */
+/**
+ * Render the given component with `alerts` as the server's active list. The
+ * feedback host is mounted so confirm dialogs and toasts (where failures now
+ * surface) render as they do in the shell.
+ */
 async function renderWith(ui: React.ReactElement, alerts: Alert[]) {
   vi.mocked(alertsApi.getActiveAlerts).mockResolvedValue(alerts);
-  renderWithProviders(ui, { withAuth: false, routerEntries: ['/alerts'] });
+  renderWithProviders(<FeedbackProvider>{ui}</FeedbackProvider>, { withAuth: false, routerEntries: ['/alerts'] });
   await screen.findByText(alerts[0].title);
+}
+
+/** Dismiss lives in the row menu and is confirmed: open menu → Dismiss → confirm. */
+async function dismissThroughMenu(title: string) {
+  await userEvent.click(screen.getByRole('button', { name: `Actions for ${title}` }));
+  await userEvent.click(await screen.findByRole('menuitem', { name: 'Dismiss' }));
+  // The menu has closed, so the only "Dismiss" button left is the dialog's.
+  await userEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
 }
 
 describe('AlertList acknowledge/dismiss reach the server', () => {
@@ -107,7 +122,8 @@ describe('AlertList acknowledge/dismiss reach the server', () => {
       await useAlertsStore.getState().fetchActiveAlerts();
     });
 
-    expect(screen.queryByText('Emergency stop engaged')).toBeNull();
+    // Scoped to the table: the success toast repeats the title.
+    expect(screen.queryByRole('cell', { name: /Emergency stop engaged/ })).toBeNull();
   });
 
   it('a rejected acknowledge rolls the row back and shows the reason', async () => {
@@ -128,10 +144,10 @@ describe('AlertList acknowledge/dismiss reach the server', () => {
     await renderWith(<AlertList />, [warning()]);
     vi.mocked(alertsApi.deleteAlert).mockResolvedValue(undefined);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Dismiss alert' }));
+    await dismissThroughMenu('Battery low');
 
     expect(alertsApi.deleteAlert).toHaveBeenCalledWith('a-2');
-    await waitFor(() => expect(screen.queryByText('Battery low')).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('cell', { name: /Battery low/ })).toBeNull());
   });
 
   it('a rejected dismiss puts the row back and shows the reason', async () => {
@@ -139,10 +155,10 @@ describe('AlertList acknowledge/dismiss reach the server', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.mocked(alertsApi.deleteAlert).mockRejectedValue(new Error('Delete failed'));
 
-    await userEvent.click(screen.getByRole('button', { name: 'Dismiss alert' }));
+    await dismissThroughMenu('Battery low');
 
     await screen.findByText('Delete failed');
-    expect(screen.getByText('Battery low')).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: /Battery low/ })).toBeInTheDocument();
     errSpy.mockRestore();
   });
 });

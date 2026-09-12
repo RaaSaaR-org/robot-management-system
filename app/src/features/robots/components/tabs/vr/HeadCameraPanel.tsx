@@ -12,7 +12,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState } from '@react-three/xr';
 import * as THREE from 'three';
-import { brandColors } from '@/brand';
+import { readCssColor } from '../../common/readCssColor';
 import { cameraStreamUrl, fetchCameraTicket } from '../../../api/cameraApi';
 import {
   initialLiveness,
@@ -71,7 +71,7 @@ const PANEL_TALL_M = PANEL_WIDTH_M * PANEL_ASPECT;
  * dead camera. It only ever looked fine because dev runs `AUTH_DISABLED=true`.
  *
  * So something must ride in the URL. It used to be the user's real access token
- * (PR #236, deliberately, as the smallest change that worked at all); it is now
+ * (PR 236, deliberately, as the smallest change that worked at all); it is now
  * a ticket good for this one camera for about two minutes and nothing else
  * (TASK-214). Every re-arm fetches a new one — a cached ticket would expire long
  * before a panel that has been stale for an hour stops trying.
@@ -314,7 +314,7 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     const surround = surroundRef.current;
     if (surround) {
       (surround.material as THREE.MeshBasicMaterial).color.set(
-        isStale ? HUD_COLORS.bad : brandColors().accent,
+        isStale ? HUD_COLORS.bad : readCssColor('--color-primary', 'white'),
       );
     }
     const badge = badgeRef.current;
@@ -390,7 +390,7 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
           exactly like a working camera. */}
       <mesh ref={surroundRef} position={[0, 0, -0.005]}>
         <planeGeometry args={[PANEL_WIDTH_M + 0.03, PANEL_TALL_M + 0.03]} />
-        <meshBasicMaterial color={brandColors().accent} />
+        <meshBasicMaterial color={readCssColor('--color-primary', 'white')} />
       </mesh>
       {badgePlate.texture && (
         <mesh

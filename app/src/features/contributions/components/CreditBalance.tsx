@@ -1,45 +1,23 @@
 /**
  * @file CreditBalance.tsx
- * @description Displays the user's current credit balance with trophy icon (TASK-065)
+ * @description The user's credit balance as a neutral badge (e.g. "1,200 credits")
  * @feature Data Contribution
  */
 
-import { cn } from '@/shared/utils/cn';
+import { Coins } from 'lucide-react';
+import { Badge } from '@/shared/components/ui';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
-
-// ============================================================================
-// TYPES
-// ============================================================================
 
 export interface CreditBalanceProps {
   totalCredits: number;
   className?: string;
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
-
 export function CreditBalance({ totalCredits, className }: CreditBalanceProps) {
   return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-2 px-4 py-2 rounded-lg',
-        'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800',
-        className
-      )}
-    >
-      <span className="text-xl" role="img" aria-label="Trophy">
-        🏆
-      </span>
-      <div>
-        <p className="text-xs font-medium text-amber-600 dark:text-amber-400 uppercase tracking-wide">
-          Credits
-        </p>
-        <p className="text-lg font-bold text-amber-900 dark:text-amber-100">
-          {totalCredits.toLocaleString(UI_DATE_LOCALE)}
-        </p>
-      </div>
-    </div>
+    <Badge variant="neutral" size="md" className={className}>
+      <Coins className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+      <span className="tabular-nums">{totalCredits.toLocaleString(UI_DATE_LOCALE)}</span> credits
+    </Badge>
   );
 }

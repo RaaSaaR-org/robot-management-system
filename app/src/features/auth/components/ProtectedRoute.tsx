@@ -7,7 +7,8 @@
  */
 
 import { type ReactNode } from 'react';
-import { Spinner } from '@/shared/components/ui';
+import { LockKeyhole, ShieldOff } from 'lucide-react';
+import { EmptyState, LinkButton, Spinner } from '@/shared/components/ui';
 import { useAuth } from '../hooks/useAuth';
 import type { UserRole, Permission } from '../types/auth.types';
 
@@ -50,69 +51,33 @@ function DefaultLoadingFallback() {
       aria-busy="true"
       aria-label="Checking authentication"
     >
-      <Spinner size="lg" color="cobalt" />
+      <Spinner size="lg" color="primary" />
     </div>
   );
 }
 
 function DefaultUnauthenticatedFallback() {
   return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center gap-4 p-8 text-center">
-      <div className="rounded-full bg-amber-100 p-4 dark:bg-amber-900/30">
-        <svg
-          className="h-8 w-8 text-amber-600 dark:text-amber-400"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M12 15v2m0 0v2m0-2h2m-2 0H10m4-6V8a4 4 0 00-8 0v3m12 0a2 2 0 01-2 2H6a2 2 0 01-2-2V8a6 6 0 1112 0v3z"
-          />
-        </svg>
-      </div>
-      <div>
-        <h2 className="text-lg font-semibold text-theme-primary">
-          Authentication Required
-        </h2>
-        <p className="mt-1 text-sm text-theme-secondary">
-          Please sign in to access this page.
-        </p>
-      </div>
+    <div className="flex min-h-[400px] items-center justify-center p-8">
+      <EmptyState
+        icon={<LockKeyhole />}
+        title="Sign in to see this page"
+        description="Your session ended or you haven't signed in yet."
+        action={<LinkButton to="/login">Sign in</LinkButton>}
+      />
     </div>
   );
 }
 
 function DefaultUnauthorizedFallback() {
   return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center gap-4 p-8 text-center">
-      <div className="rounded-full bg-red-100 p-4 dark:bg-red-900/30">
-        <svg
-          className="h-8 w-8 text-red-600 dark:text-red-400"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636m12.728 0A9 9 0 005.636 18.364"
-          />
-        </svg>
-      </div>
-      <div>
-        <h2 className="text-lg font-semibold text-theme-primary">
-          Access Denied
-        </h2>
-        <p className="mt-1 text-sm text-theme-secondary">
-          You don't have permission to access this page.
-        </p>
-      </div>
+    <div className="flex min-h-[400px] items-center justify-center p-8">
+      <EmptyState
+        icon={<ShieldOff />}
+        title="You don't have access to this page"
+        description="Ask an owner of your organization for a role that includes it."
+        action={<LinkButton to="/dashboard" variant="secondary">Back to dashboard</LinkButton>}
+      />
     </div>
   );
 }

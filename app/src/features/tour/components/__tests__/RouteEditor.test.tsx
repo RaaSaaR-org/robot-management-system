@@ -175,11 +175,26 @@ describe('RouteEditor', () => {
     expect(within(facts).getAllByTestId('tour-stop-facts-input')[0]).toHaveAttribute('maxlength', '200');
   });
 
-  it('blocks Save while the draft is incomplete and lists why', async () => {
+  it('a save attempt on an incomplete draft shows the problems at their fields and sends nothing', async () => {
     renderWithProviders(<RouteEditor robots={[]} onSaved={vi.fn()} />, { withAuth: false });
     await settle();
-    expect(screen.getByTestId('tour-route-save')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('tour-route-save'));
+    expect(await screen.findByTestId('tour-editor-problems')).toHaveTextContent(/Fix \d+ fields before saving/);
     expect(screen.getByTestId('tour-editor-problems')).toHaveTextContent('Add at least one stop.');
+    expect(screen.getByText('Give the tour a name.')).toBeInTheDocument();
+    expect(screen.getByTestId('tour-route-name')).toHaveAttribute('aria-invalid', 'true');
+    expect(api.createRoute).not.toHaveBeenCalled();
+  });
+
+  it('save posts the draft and reports the saved tour', async () => {
+    api.updateRoute.mockResolvedValue(route);
+    const onSaved = vi.fn();
+    renderWithProviders(<RouteEditor route={route} robots={[{ id: 'g1', name: 'Alpha' }]} onSaved={onSaved} />, { withAuth: false });
+    await settle();
+    fireEvent.change(screen.getByTestId('tour-route-name'), { target: { value: 'Renamed tour' } });
+    fireEvent.click(screen.getByTestId('tour-route-save'));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(route));
+    expect(api.updateRoute.mock.calls[0]![1]).toMatchObject({ name: 'Renamed tour' });
   });
 
   it('"Hear it" speaks what the visitor would hear — the kept chunks, not the raw field', async () => {
@@ -226,15 +241,19 @@ describe('RouteEditor', () => {
 });
 
 
-it('shows existing route values without allowing a read-only user to save or delete', async () => {
-  const onDelete = vi.fn();
-  renderWithProviders(<RouteEditor readOnly route={route} robots={[]} onSaved={vi.fn()} onDelete={onDelete} />, { withAuth: false });
+// A viewer reads the tour. Delete lives in the page header now, so this
+// asserts the editor itself: the values are there, and nothing can change them.
+// TourEditorPage owns disabling Delete for the same role.
+it('shows existing tour values without letting a read-only user change them', async () => {
+  renderWithProviders(<RouteEditor readOnly route={route} robots={[]} onSaved={vi.fn()} />, { withAuth: false });
   await settle();
-  expect(screen.getByTestId('tour-route-name')).toBeDisabled();
-  expect(screen.getByTestId('tour-route-save')).toBeDisabled();
-  expect(screen.getByTestId('tour-route-delete')).toBeDisabled();
-  fireEvent.click(screen.getByTestId('tour-route-save'));
-  fireEvent.click(screen.getByTestId('tour-route-delete'));
+  const name = screen.getByTestId('tour-route-name');
+  expect(name).toHaveValue(route.name);
+  // One disabled fieldset carries the form, so every control inside it is dead.
+  expect(name).toBeDisabled();
+  // Save is not offered at all, and no keyboard submit reaches the store.
+  expect(screen.queryByTestId('tour-route-save')).toBeNull();
+  fireEvent.submit(name.closest('form')!);
+  await settle();
   expect(api.updateRoute).not.toHaveBeenCalled();
-  expect(onDelete).not.toHaveBeenCalled();
 });

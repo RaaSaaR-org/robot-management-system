@@ -1,11 +1,17 @@
 /**
  * @file PointCloudGallery.tsx
- * @description Lists recorded point-cloud scans with view / download / delete.
+ * @description Recorded point-cloud scans as a card grid with view / download / delete.
  * @feature robots
  */
 
 import { useState, useCallback } from 'react';
-import { Button, Badge, Spinner, EmptyState } from '@/shared/components/ui';
+import { Download, Eye, ScanLine, Trash2, X } from 'lucide-react';
+import {
+  Button, EmptyState,
+  Panel, RowActions,
+  StatusTag, confirm,
+  errorMessage, toast,
+} from '@/shared/components/ui';
 import { PointCloudViewer } from './visualization';
 import { useRobotsStore } from '../store/robotsStore';
 import { sensorScansApi } from '../api/sensorScansApi';
@@ -23,13 +29,19 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function scanName(scan: SensorScanSummary): string {
+  return `${scan.sensorName} scan`;
+}
+
 export function PointCloudGallery({ robotId }: PointCloudGalleryProps) {
-  const scans = useRobotsStore((s) => s.sensorScans);
+  // The list endpoint may answer without a `scans` array (demo mocks do), so
+  // guard here rather than trusting the store to hold an array.
+  const storedScans = useRobotsStore((s) => s.sensorScans);
+  const scans: SensorScanSummary[] = Array.isArray(storedScans) ? storedScans : [];
   const fetchSensorScans = useRobotsStore((s) => s.fetchSensorScans);
 
   const [selected, setSelected] = useState<{ scan: SensorScanSummary; frame: PointCloudFrame } | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
 
   const handleView = useCallback(async (scan: SensorScanSummary) => {
     setLoadingId(scan.id);
@@ -52,35 +64,39 @@ export function PointCloudGallery({ robotId }: PointCloudGalleryProps) {
         },
       });
     } catch (error) {
-      console.error('Failed to load scan:', error);
+      toast.error("Couldn't open scan", { description: errorMessage(error) });
     } finally {
       setLoadingId(null);
     }
   }, []);
 
   const handleDownload = useCallback(async (scan: SensorScanSummary) => {
-    setBusyId(scan.id);
     try {
       const buffer = await sensorScansApi.downloadScan(scan.id);
-      downloadBlob(new Blob([buffer], { type: 'application/octet-stream' }), `${scan.sensorName}-${scan.id.slice(0, 8)}.pcd`);
+      downloadBlob(
+        new Blob([buffer], { type: 'application/octet-stream' }),
+        `${scan.sensorName}-${scan.id.slice(0, 8)}.pcd`,
+      );
     } catch (error) {
-      console.error('Failed to download scan:', error);
-    } finally {
-      setBusyId(null);
+      toast.error("Couldn't download scan", { description: errorMessage(error) });
     }
   }, []);
 
   const handleDelete = useCallback(
     async (scan: SensorScanSummary) => {
-      setBusyId(scan.id);
+      const ok = await confirm({
+        title: `Delete ${scanName(scan)}?`,
+        description: 'The recorded point cloud is removed from the server. The live view is not affected.',
+        tone: 'danger',
+      });
+      if (!ok) return;
       try {
         await sensorScansApi.deleteScan(scan.id);
         if (selected?.scan.id === scan.id) setSelected(null);
         await fetchSensorScans(robotId);
+        toast.success('Scan deleted', { description: scanName(scan) });
       } catch (error) {
-        console.error('Failed to delete scan:', error);
-      } finally {
-        setBusyId(null);
+        toast.error("Couldn't delete scan", { description: errorMessage(error) });
       }
     },
     [robotId, selected, fetchSensorScans],
@@ -90,63 +106,70 @@ export function PointCloudGallery({ robotId }: PointCloudGalleryProps) {
     return (
       <EmptyState
         size="sm"
+        icon={<ScanLine />}
         title="No recorded scans yet"
-        description="Capture one from the live view above."
+        description="Capture a scan from the live point cloud above."
       />
     );
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       {selected && (
-        <div className="relative h-[280px] rounded-lg overflow-hidden border border-[rgba(255,255,255,0.08)]">
+        <Panel variant="inset" padding="none" className="relative h-[280px]">
           <PointCloudViewer frame={selected.frame} showRobotModel={false} colorMode="height" />
-          <button
-            onClick={() => setSelected(null)}
-            className="absolute top-2 right-2 z-10 flex items-center justify-center w-7 h-7 rounded-lg bg-surface-900/80 text-theme-secondary hover:text-theme-primary"
-            aria-label="Close preview"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+          <div className="absolute right-2 top-2 z-10 flex items-center gap-2 rounded-control border border-line bg-panel py-1 pl-3 pr-1">
+            <span className="text-xs text-ink-secondary">{scanName(selected.scan)}</span>
+            <Button variant="ghost" size="sm" iconOnly aria-label="Close preview" onClick={() => setSelected(null)}>
+              <X className="h-4 w-4" strokeWidth={1.75} />
+            </Button>
+          </div>
+        </Panel>
       )}
 
-      <ul className="space-y-2">
+      <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {scans.map((scan) => (
-          <li
-            key={scan.id}
-            className="flex items-center justify-between gap-3 p-3 rounded-lg glass-subtle"
-          >
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-theme-primary truncate">{scan.sensorName}</span>
-                <Badge variant="cobalt" size="sm">
-                  {scan.sensorType === 'lidar' ? 'LiDAR' : 'Depth'}
-                </Badge>
+          <li key={scan.id}>
+            <Panel variant="inset" padding="sm" className="flex h-full flex-col gap-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-ink-primary">{scan.sensorName}</p>
+                  <p className="text-[13px] text-ink-tertiary">
+                    {new Date(scan.capturedAt).toLocaleString(UI_DATE_LOCALE)}
+                  </p>
+                </div>
+                <RowActions
+                  label={`Actions for ${scanName(scan)}`}
+                  items={[
+                    { label: 'Download', icon: <Download />, onSelect: () => void handleDownload(scan) },
+                    {
+                      label: 'Delete',
+                      icon: <Trash2 />,
+                      tone: 'danger',
+                      separatorBefore: true,
+                      onSelect: () => void handleDelete(scan),
+                    },
+                  ]}
+                />
               </div>
-              <p className="text-xs text-theme-tertiary">
-                {scan.pointCount.toLocaleString(UI_DATE_LOCALE)} pts · {formatBytes(scan.fileSize)} ·{' '}
-                {new Date(scan.capturedAt).toLocaleString(UI_DATE_LOCALE)}
-              </p>
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="flex flex-wrap items-center gap-2 text-xs tabular-nums text-ink-secondary">
+                <StatusTag tone="neutral">{scan.sensorType === 'lidar' ? 'LiDAR' : 'Depth'}</StatusTag>
+                <span>{scan.pointCount.toLocaleString(UI_DATE_LOCALE)} points</span>
+                <span className="text-ink-muted">·</span>
+                <span>{formatBytes(scan.fileSize)}</span>
+              </div>
               <Button
+                variant="secondary"
                 size="sm"
-                variant="outline"
-                onClick={() => handleView(scan)}
+                className="mt-auto self-start"
+                leftIcon={<Eye className="h-4 w-4" strokeWidth={1.75} />}
+                onClick={() => void handleView(scan)}
                 isLoading={loadingId === scan.id}
+                loadingText="Opening…"
               >
                 View
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => handleDownload(scan)} disabled={busyId === scan.id}>
-                Download
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => handleDelete(scan)} disabled={busyId === scan.id}>
-                {busyId === scan.id ? <Spinner size="sm" /> : 'Delete'}
-              </Button>
-            </div>
+            </Panel>
           </li>
         ))}
       </ul>

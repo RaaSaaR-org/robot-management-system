@@ -4,7 +4,7 @@
  * @feature training
  */
 
-import { Input } from '@/shared/components/ui';
+import { FormField, Input } from '@/shared/components/ui';
 import type { HyperparametersInput, FineTuneMethod } from '../types';
 
 export interface HyperparameterFormProps {
@@ -202,13 +202,13 @@ export function HyperparameterForm({
   );
 
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div className="flex flex-col gap-4">
+      <p className="rounded-control bg-inset px-3 py-2 text-[13px] text-ink-secondary">
+        {METHOD_HINTS[fineTuneMethod]}
+      </p>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {visibleFields.map((field) => (
-          <div key={field.name}>
-            <label className="block text-sm font-medium text-theme-primary mb-1">
-              {field.label}
-            </label>
+          <FormField key={field.name} label={field.label} hint={field.helpText}>
             <Input
               type="number"
               value={values[field.name] ?? ''}
@@ -217,36 +217,16 @@ export function HyperparameterForm({
               max={field.max}
               step={field.step}
               disabled={disabled}
-              className="w-full"
             />
-            {field.helpText && (
-              <p className="mt-1 text-xs text-theme-tertiary">{field.helpText}</p>
-            )}
-          </div>
+          </FormField>
         ))}
-      </div>
-
-      {/* Method-specific hints */}
-      <div className="p-3 bg-theme-secondary/10 rounded-lg text-sm">
-        {fineTuneMethod === 'lora' && (
-          <p className="text-theme-secondary">
-            <strong>LoRA:</strong> Parameter-efficient fine-tuning. Uses less GPU memory but may
-            require more epochs. Good for limited compute resources.
-          </p>
-        )}
-        {fineTuneMethod === 'full' && (
-          <p className="text-theme-secondary">
-            <strong>Full Fine-tuning:</strong> Updates all model parameters. Requires more GPU
-            memory but can achieve best performance. Use lower learning rates.
-          </p>
-        )}
-        {fineTuneMethod === 'frozen_backbone' && (
-          <p className="text-theme-secondary">
-            <strong>Frozen Backbone:</strong> Only trains the action head while keeping vision and
-            language encoders frozen. Fastest training but limited adaptation.
-          </p>
-        )}
       </div>
     </div>
   );
 }
+
+const METHOD_HINTS: Record<FineTuneMethod, string> = {
+  lora: 'LoRA trains small adapter matrices. It needs less GPU memory but may need more epochs.',
+  full: 'Full fine-tuning updates every parameter. It needs the most GPU memory; use a lower learning rate.',
+  frozen_backbone: 'Frozen backbone trains only the action head. It is the fastest, but adapts the least.',
+};

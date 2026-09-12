@@ -1,24 +1,21 @@
 /**
  * @file UncertaintyHeatmap.tsx
- * @description Heatmap visualization for model uncertainty by task/environment
+ * @description Uncertainty tab of /data-collection: a model's prediction
+ *              uncertainty by task category and environment, on tokens.
  * @feature datacollection
  */
 
+import { TrendingUp, TrendingDown, Minus, BarChart3 } from 'lucide-react';
+import {
+  EmptyState, Panel, ProgressBar, SkeletonRows, StatRow, StatTile, InfoIcon, type Tone,
+} from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
-import { TrendingUp, TrendingDown, Minus, AlertTriangle, BarChart3 } from 'lucide-react';
-import { Card } from '@/shared/components/ui/Card';
-import { Spinner } from '@/shared/components/ui/Spinner';
-import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { ModelSelector } from './ModelSelector';
 import { useUncertaintyAnalysis } from '../hooks/datacollection';
 import type { CategoryUncertainty } from '../types/datacollection.types';
 import { TREND_COLORS } from '../types/datacollection.types';
 import type { RegisteredModel } from '@/features/training/types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
-
-// ============================================================================
-// TYPES
-// ============================================================================
 
 export interface UncertaintyHeatmapProps {
   models: RegisteredModel[];
@@ -28,240 +25,124 @@ export interface UncertaintyHeatmapProps {
   className?: string;
 }
 
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-function getUncertaintyColor(uncertainty: number): string {
-  if (uncertainty >= 0.7) return 'bg-red-500';
-  if (uncertainty >= 0.5) return 'bg-orange-500';
-  if (uncertainty >= 0.3) return 'bg-yellow-500';
-  return 'bg-green-500';
+function uncertaintyBar(u: number): 'success' | 'warning' | 'error' {
+  if (u >= 0.7) return 'error';
+  if (u >= 0.3) return 'warning';
+  return 'success';
 }
 
-function getUncertaintyTextColor(uncertainty: number): string {
-  if (uncertainty >= 0.7) return 'text-red-400';
-  if (uncertainty >= 0.5) return 'text-orange-400';
-  if (uncertainty >= 0.3) return 'text-yellow-400';
-  return 'text-green-400';
+function uncertaintyTone(u: number): Tone {
+  if (u >= 0.7) return 'stopped';
+  if (u >= 0.3) return 'gated';
+  return 'live';
 }
 
-function getTrendIcon(trend: 'improving' | 'stable' | 'degrading') {
-  switch (trend) {
-    case 'improving':
-      return <TrendingDown className="w-4 h-4" />;
-    case 'degrading':
-      return <TrendingUp className="w-4 h-4" />;
-    default:
-      return <Minus className="w-4 h-4" />;
-  }
-}
+const TREND_ICON = { improving: TrendingDown, stable: Minus, degrading: TrendingUp } as const;
 
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-interface UncertaintyCellProps {
-  category: string;
-  data: CategoryUncertainty;
-  onClick?: () => void;
-}
-
-function UncertaintyCell({ category, data, onClick }: UncertaintyCellProps) {
+function UncertaintyCell({ category, data }: { category: string; data: CategoryUncertainty }) {
+  const Icon = TREND_ICON[data.recentTrend] ?? Minus;
   return (
-    <Card
-      interactive={!!onClick}
-      onClick={onClick}
-      className="!p-4"
-    >
-      <div className="flex items-start justify-between mb-2">
-        <h4 className="font-medium text-theme-primary truncate pr-2">
-          {category}
-        </h4>
-        <div className={cn('flex items-center gap-1', TREND_COLORS[data.recentTrend])}>
-          {getTrendIcon(data.recentTrend)}
-          <span className="text-xs capitalize">{data.recentTrend}</span>
-        </div>
+    <Panel padding="sm" className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="truncate text-sm font-semibold text-ink-primary">{category}</div>
+        <span className={cn('inline-flex shrink-0 items-center gap-1 text-xs capitalize', TREND_COLORS[data.recentTrend])}>
+          <Icon className="h-4 w-4" strokeWidth={1.75} />
+          {data.recentTrend}
+        </span>
       </div>
-
-      {/* Uncertainty Bar */}
-      <div className="mb-3">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs text-theme-muted">Uncertainty</span>
-          <span className={cn('text-sm font-semibold', getUncertaintyTextColor(data.meanUncertainty))}>
-            {(data.meanUncertainty * 100).toFixed(0)}%
-          </span>
-        </div>
-        <div className="h-3 bg-glass-subtle rounded-full overflow-hidden">
-          <div
-            className={cn('h-full rounded-full transition-all', getUncertaintyColor(data.meanUncertainty))}
-            style={{ width: `${data.meanUncertainty * 100}%` }}
-          />
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 gap-2 text-xs">
+      <ProgressBar value={data.meanUncertainty * 100} variant={uncertaintyBar(data.meanUncertainty)} size="sm" label="Uncertainty" />
+      <dl className="grid grid-cols-2 gap-2 text-xs">
         <div>
-          <p className="text-theme-muted">Samples</p>
-          <p className="font-medium text-theme-primary">
-            {data.sampleCount.toLocaleString(UI_DATE_LOCALE)}
-          </p>
+          <dt className="text-ink-tertiary">Samples</dt>
+          <dd className="font-medium tabular-nums text-ink-primary">{data.sampleCount.toLocaleString(UI_DATE_LOCALE)}</dd>
         </div>
         <div>
-          <p className="text-theme-muted">Confidence Range</p>
-          <p className="font-medium text-theme-primary">
-            {(data.minConfidence * 100).toFixed(0)}-{(data.maxConfidence * 100).toFixed(0)}%
-          </p>
+          <dt className="text-ink-tertiary">Confidence range</dt>
+          <dd className="font-medium tabular-nums text-ink-primary">
+            {(data.minConfidence * 100).toFixed(0)}–{(data.maxConfidence * 100).toFixed(0)}%
+          </dd>
         </div>
-      </div>
-    </Card>
+      </dl>
+    </Panel>
   );
 }
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
+function CategoryGrid({ title, entries }: { title: string; entries: [string, CategoryUncertainty][] }) {
+  if (entries.length === 0) return null;
+  return (
+    <Panel>
+      <Panel.Header title={title} />
+      <Panel.Body>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {entries.map(([category, data]) => <UncertaintyCell key={category} category={category} data={data} />)}
+        </div>
+      </Panel.Body>
+    </Panel>
+  );
+}
 
-export function UncertaintyHeatmap({
-  models,
-  selectedModelId,
-  onModelChange,
-  modelsLoading,
-  className,
-}: UncertaintyHeatmapProps) {
-  // Use the hook with the selected model, or empty string to skip fetch
+export function UncertaintyHeatmap({ models, selectedModelId, onModelChange, modelsLoading, className }: UncertaintyHeatmapProps) {
+  // An empty model id skips the fetch.
   const { analysis, isLoading } = useUncertaintyAnalysis(selectedModelId || '');
+  const noModels = !modelsLoading && models.length === 0;
+
+  let body: React.ReactNode;
+  if (!selectedModelId) {
+    body = (
+      <Panel>
+        <EmptyState
+          icon={<BarChart3 />}
+          title={noModels ? 'No model to analyse yet' : 'Choose a model'}
+          description={
+            noModels
+              ? 'Uncertainty comes from a trained model\'s predictions. Train and deploy a model, then come back here.'
+              : 'Pick a model to see where its predictions are least certain, by task and environment.'
+          }
+        />
+      </Panel>
+    );
+  } else if (isLoading) {
+    body = <Panel padding="none"><SkeletonRows rows={4} columns={3} /></Panel>;
+  } else if (!analysis) {
+    body = (
+      <Panel>
+        <EmptyState
+          icon={<BarChart3 />}
+          title="No uncertainty data"
+          description="This needs prediction logs from the model. Deploy it and run predictions to generate data."
+        />
+      </Panel>
+    );
+  } else {
+    body = (
+      <>
+        <StatRow columns={4}>
+          <StatTile
+            label="Overall uncertainty" value={(analysis.overallUncertainty * 100).toFixed(1)} unit="%"
+            tone={uncertaintyTone(analysis.overallUncertainty)}
+            hint={<span className="inline-flex items-center gap-1">Lower is better <InfoIcon content="Average prediction uncertainty across all task categories and environments." /></span>}
+          />
+          <StatTile label="Predictions" value={analysis.totalPredictions.toLocaleString(UI_DATE_LOCALE)} />
+          <StatTile
+            label="Highly uncertain" value={analysis.highUncertaintyCount.toLocaleString(UI_DATE_LOCALE)}
+            tone={analysis.highUncertaintyCount > 0 ? 'gated' : undefined}
+            hint={`Above the ${(analysis.highUncertaintyThreshold * 100).toFixed(0)}% threshold`}
+          />
+          <StatTile label="Threshold" value={(analysis.highUncertaintyThreshold * 100).toFixed(0)} unit="%" />
+        </StatRow>
+        <CategoryGrid title="By task category" entries={Object.entries(analysis.byTask)} />
+        <CategoryGrid title="By environment" entries={Object.entries(analysis.byEnvironment)} />
+        <p className="text-xs text-ink-tertiary">
+          Bars: under 30% is low, 30–70% needs attention, over 70% is critical.
+        </p>
+      </>
+    );
+  }
 
   return (
-    <div className={cn('space-y-6', className)}>
-      {/* Model Selector */}
-      <ModelSelector
-        models={models}
-        selectedModelId={selectedModelId}
-        onChange={onModelChange}
-        loading={modelsLoading}
-      />
-
-      {/* No model selected */}
-      {!selectedModelId && !modelsLoading && models.length > 0 && (
-        <Card variant="subtle" className="py-12">
-          <div className="flex flex-col items-center justify-center text-theme-muted">
-            <BarChart3 className="w-12 h-12 mb-4 opacity-30" />
-            <p className="text-sm font-medium text-theme-secondary">No model selected</p>
-            <p className="text-xs mt-1 max-w-sm text-center">
-              Select a model above to view uncertainty analysis across task categories and environments.
-            </p>
-          </div>
-        </Card>
-      )}
-
-      {isLoading && selectedModelId && (
-        <div className="flex items-center justify-center py-12">
-          <Spinner size="lg" color="cobalt" />
-        </div>
-      )}
-
-      {!isLoading && selectedModelId && !analysis && (
-        <Card variant="subtle" className="py-12">
-          <div className="flex flex-col items-center justify-center text-theme-muted">
-            <AlertTriangle className="w-12 h-12 mb-4 opacity-30" />
-            <p className="text-sm font-medium text-theme-secondary">No uncertainty data</p>
-            <p className="text-xs mt-1 max-w-sm text-center">
-              Uncertainty analysis requires prediction logs from the selected model.
-              Deploy the model and run predictions to generate data.
-            </p>
-          </div>
-        </Card>
-      )}
-
-      {!isLoading && analysis && (
-        <>
-          {/* Overall Stats */}
-          <Card className="!p-4">
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <p className="text-sm text-theme-muted">Overall Uncertainty</p>
-                  <InfoIcon content="Average prediction uncertainty across all task categories and environments. Lower is better." size={12} />
-                </div>
-                <p className={cn('text-2xl font-bold', getUncertaintyTextColor(analysis.overallUncertainty))}>
-                  {(analysis.overallUncertainty * 100).toFixed(1)}%
-                </p>
-              </div>
-              <div>
-                <p className="text-sm text-theme-muted">Total Predictions</p>
-                <p className="text-2xl font-bold text-theme-primary">
-                  {analysis.totalPredictions.toLocaleString(UI_DATE_LOCALE)}
-                </p>
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <p className="text-sm text-theme-muted">High Uncertainty</p>
-                  <InfoIcon content="Number of predictions where the model was highly uncertain (above threshold). These indicate areas needing more training data." size={12} />
-                </div>
-                <p className="text-2xl font-bold text-red-400">
-                  {analysis.highUncertaintyCount.toLocaleString(UI_DATE_LOCALE)}
-                </p>
-              </div>
-              <div>
-                <p className="text-sm text-theme-muted">Threshold</p>
-                <p className="text-2xl font-bold text-theme-primary">
-                  {(analysis.highUncertaintyThreshold * 100).toFixed(0)}%
-                </p>
-              </div>
-            </div>
-          </Card>
-
-          {/* By Task */}
-          {Object.entries(analysis.byTask).length > 0 && (
-            <div>
-              <h3 className="text-lg font-semibold text-theme-primary mb-3">
-                By Task Category
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {Object.entries(analysis.byTask).map(([category, data]) => (
-                  <UncertaintyCell key={category} category={category} data={data} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* By Environment */}
-          {Object.entries(analysis.byEnvironment).length > 0 && (
-            <div>
-              <h3 className="text-lg font-semibold text-theme-primary mb-3">
-                By Environment
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {Object.entries(analysis.byEnvironment).map(([category, data]) => (
-                  <UncertaintyCell key={category} category={category} data={data} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Legend */}
-          <div className="flex items-center justify-center gap-6 text-xs text-theme-muted">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded bg-green-500" />
-              <span>Low (&lt;30%)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded bg-yellow-500" />
-              <span>Medium (30-50%)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded bg-orange-500" />
-              <span>High (50-70%)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded bg-red-500" />
-              <span>Critical (&gt;70%)</span>
-            </div>
-          </div>
-        </>
-      )}
+    <div className={cn('flex flex-col gap-4', className)}>
+      <ModelSelector models={models} selectedModelId={selectedModelId} onChange={onModelChange} loading={modelsLoading} />
+      {body}
     </div>
   );
 }

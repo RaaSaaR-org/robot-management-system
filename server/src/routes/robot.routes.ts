@@ -46,7 +46,14 @@ robotRoutes.post('/register', async (req: Request, res: Response) => {
     // Don't leak internal error details - return generic message
     const internalMessage = error instanceof Error ? error.message : 'Unknown error';
     // Only expose specific expected errors
-    if (internalMessage.includes('ECONNREFUSED') || internalMessage.includes('fetch failed')) {
+    // This catch also covers agent-card resolution and repository work, so a
+    // plain Error carrying the raw code can still surface here: keep the string
+    // test as a fallback so the check only ever widens, never narrows.
+    if (
+      (error instanceof HttpClientError && error.isNetworkError()) ||
+      internalMessage.includes('ECONNREFUSED') ||
+      internalMessage.includes('fetch failed')
+    ) {
       return res.status(502).json({ error: 'Unable to connect to robot. Please check the URL and ensure the robot is online.' });
     }
     res.status(500).json({ error: 'Failed to register robot' });
@@ -158,7 +165,7 @@ robotRoutes.post('/:id/command', async (req: Request, res: Response) => {
     if (internalMessage.toLowerCase().includes('not found')) {
       return res.status(404).json({ error: 'Robot not found' });
     }
-    if (internalMessage.includes('ECONNREFUSED') || internalMessage.includes('timeout')) {
+    if (error instanceof HttpClientError && error.isNetworkError()) {
       return res.status(502).json({ error: 'Unable to communicate with robot' });
     }
 
@@ -181,7 +188,7 @@ robotRoutes.get('/:id/telemetry', async (req: Request, res: Response) => {
     if (internalMessage.toLowerCase().includes('not found')) {
       return res.status(404).json({ error: 'Robot not found' });
     }
-    if (internalMessage.includes('ECONNREFUSED') || internalMessage.includes('timeout')) {
+    if (error instanceof HttpClientError && error.isNetworkError()) {
       return res.status(502).json({ error: 'Unable to communicate with robot' });
     }
 

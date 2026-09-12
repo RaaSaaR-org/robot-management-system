@@ -1,44 +1,61 @@
 /**
  * @file DatasetsPage.tsx
- * @description Page for managing training datasets
+ * @description Dataset hub: list, filter, import, generate, push and delete LeRobot datasets
  * @feature training
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Database, Plus, Sparkles } from 'lucide-react';
+import {
+  ChevronDown,
+  CloudUpload,
+  Copy,
+  Database,
+  GitFork,
+  Layers,
+  Play,
+  Plus,
+  RotateCw,
+  Sparkles,
+  Trash2,
+  Upload,
+  Download,
+} from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Button, Modal, PageHeader } from '@/shared/components/ui';
-import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
+import {
+  Button,
+  DropdownMenu,
+  NextStepBanner,
+  PageHeader,
+  PipelineBreadcrumb,
+  Select,
+  confirm,
+  toast,
+  type RowActionItem,
+} from '@/shared/components/ui';
+import { getErrorMessage } from '@/shared/utils';
 import { DatasetList } from '../components/DatasetList';
 import { DatasetUploadModal } from '../components/DatasetUploadModal';
 import { HFDatasetBrowserModal } from '../components/HFDatasetBrowserModal';
 import { HFPushModal } from '../components/HFPushModal';
 import { GenerateSyntheticModal } from '../components/GenerateSyntheticModal';
-import { DatasetCompatibilityPanel } from '../components/DatasetCompatibilityPanel';
 import { CreateViewModal } from '../components/CreateViewModal';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
+import { CompatibilityModal } from '../components/datasets/CompatibilityModal';
 import { datasetViewsApi, trainingApi } from '../api';
 import { useDatasetsAutoFetch, useTrainingJobs } from '../hooks';
 import { useTrainingStore } from '../store';
+import { isDatasetView } from '../types';
 import type {
-  CompatibilityReport,
   CreateDatasetViewInput,
   Dataset,
-  DatasetQueryParams,
   RobotType,
   SubmitSimRlJobInput,
   SubmitTrainingJobInput,
 } from '../types';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
-import { getErrorMessage } from '@/shared/utils';
 
-/** What POST /api/datasets/compatibility accepts in one request. */
-const MAX_MIXTURE_MEMBERS = 8;
+type OpenModal = 'upload' | 'hf' | 'generate' | 'compat' | null;
 
-/**
- * Main page for dataset management
- */
 export function DatasetsPage() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
@@ -56,41 +73,23 @@ export function DatasetsPage() {
       />
     );
   }
+  return <DatasetsHub />;
+}
 
+function DatasetsHub() {
   const navigate = useNavigate();
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [isHFBrowserOpen, setIsHFBrowserOpen] = useState(false);
-  const [isGenerateOpen, setIsGenerateOpen] = useState(false);
+  const [modal, setModal] = useState<OpenModal>(null);
   const [pushDataset, setPushDataset] = useState<Dataset | null>(null);
-  const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
-  // Why the last delete or retry did not happen. Both used to go to
-  // console.error only: the operator clicked Delete, nothing moved, and the
-  // reason — including the 409 that names the training jobs still holding the
-  // dataset — was visible only with devtools open.
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<DatasetQueryParams>({});
-  const [showSyntheticOnly, setShowSyntheticOnly] = useState(false);
+  const [duplicateSource, setDuplicateSource] = useState<Dataset | null>(null);
+  const [wizardMixture, setWizardMixture] = useState<string[] | null>(null);
+  const [robotTypeId, setRobotTypeId] = useState('');
   const [robotTypes, setRobotTypes] = useState<RobotType[]>([]);
 
-  // Mixture selection: ids picked in the list, the report they produced, and
-  // the wizard they hand over to.
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  // The frozen view a "Duplicate" click wants forked again. A frozen view is
-  // what a finished run was trained on, so it is never edited in place.
-  const [duplicateSource, setDuplicateSource] = useState<Dataset | null>(null);
-  const [isCompatibilityOpen, setIsCompatibilityOpen] = useState(false);
-  const [report, setReport] = useState<CompatibilityReport | null>(null);
-  const [isWizardOpen, setIsWizardOpen] = useState(false);
-
-  const { datasets, isLoading, error, fetchDatasets, deleteDataset, retryImport } =
-    useDatasetsAutoFetch();
+  const { datasets, isLoading, error, fetchDatasets, deleteDataset, retryImport } = useDatasetsAutoFetch();
   const { submitJob } = useTrainingJobs();
   const setDatasetFilters = useTrainingStore((state) => state.setDatasetFilters);
 
-  // The robot-type filter used to offer "humanoid" / "mobile" / "arm" against a
-  // UUID column, so every option matched nothing and the list then said "No
-  // datasets yet" — a filter that looked like an empty database.
+  // Real robot types from the server; the list filters on their ids.
   useEffect(() => {
     let cancelled = false;
     void trainingApi
@@ -100,421 +99,209 @@ export function DatasetsPage() {
     return () => { cancelled = true; };
   }, []);
 
-  const syntheticCount = useMemo(
-    () => datasets.filter((d) => d.infoJson?._synthetic).length,
-    [datasets],
-  );
-  const readyDatasets = useMemo(
-    () => datasets.filter((d) => d.status === 'ready'),
-    [datasets],
-  );
-  const failedCount = useMemo(
-    () => datasets.filter((d) => d.status === 'failed').length,
-    [datasets],
-  );
-  const displayedDatasets = useMemo(
-    () => (showSyntheticOnly ? datasets.filter((d) => d.infoJson?._synthetic) : datasets),
-    [datasets, showSyntheticOnly],
-  );
+  const readyDatasets = useMemo(() => datasets.filter((d) => d.status === 'ready'), [datasets]);
+  const refresh = useCallback(() => { void fetchDatasets(robotTypeId ? { robotTypeId } : undefined); }, [fetchDatasets, robotTypeId]);
 
-  // Only the skills some dataset actually carries. The three hardcoded options
-  // this replaces were slugs matched against a UUID column.
-  const skillIds = useMemo(() => {
-    const seen = new Set<string>();
-    for (const dataset of datasets) {
-      if (dataset.skillId) seen.add(dataset.skillId);
-    }
-    return [...seen];
-  }, [datasets]);
-
-  const handleUploadSuccess = () => {
-    fetchDatasets();
+  const changeRobotType = (value: string) => {
+    setRobotTypeId(value);
+    const filters = { robotTypeId: value || undefined };
+    setDatasetFilters(filters);
+    void fetchDatasets(filters);
   };
 
-  const handleSelectDataset = (dataset: Dataset) => {
-    navigate(`/datasets/${dataset.id}/episodes`);
-  };
-
-  const handleDeleteClick = (dataset: Dataset) => {
-    setDatasetToDelete(dataset);
-  };
-
-  const handleConfirmDelete = async () => {
-    if (!datasetToDelete) return;
-    setIsDeleting(true);
-    setActionError(null);
-    try {
-      await deleteDataset(datasetToDelete.id);
-      setDatasetToDelete(null);
-    } catch (err) {
-      console.error('Failed to delete dataset:', err);
-      setActionError(getErrorMessage(err, 'Could not delete this dataset'));
-      setDatasetToDelete(null);
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
-  const handleRetryImport = useCallback(
-    async (dataset: Dataset) => {
-      setActionError(null);
-      try {
-        await retryImport(dataset.id);
-      } catch (err) {
-        console.error('Failed to retry import:', err);
-        setActionError(
-          getErrorMessage(err, `Could not restart the import of "${dataset.name}"`),
-        );
-      }
-    },
-    [retryImport],
-  );
-
-  const toggleSelection = useCallback((dataset: Dataset) => {
-    setSelectedIds((prev) => {
-      if (prev.includes(dataset.id)) return prev.filter((id) => id !== dataset.id);
-      // The compatibility endpoint takes at most eight. Refusing the ninth here
-      // is better than letting the report come back a 400.
-      if (prev.length >= MAX_MIXTURE_MEMBERS) return prev;
-      return [...prev, dataset.id];
+  const askDelete = async (d: Dataset) => {
+    const view = isDatasetView(d);
+    const ok = await confirm({
+      title: `Delete ${d.name}?`,
+      description: view
+        ? 'The view is removed. The dataset it selects from is kept.'
+        : 'Its files and episodes are removed. Training jobs that used it keep their results.',
+      tone: 'danger',
     });
-  }, []);
+    if (!ok) return;
+    try {
+      await deleteDataset(d.id);
+      toast.success(view ? 'View deleted' : 'Dataset deleted', { description: d.name });
+    } catch (err) {
+      toast.error(`Couldn't delete ${view ? 'view' : 'dataset'}`, { description: getErrorMessage(err, d.name) });
+    }
+  };
 
-  const handleSubmitJob = useCallback(
+  const retry = async (d: Dataset) => {
+    try {
+      await retryImport(d.id);
+      toast.success('Import restarted', { description: d.name });
+    } catch (err) {
+      toast.error("Couldn't restart the import", { description: getErrorMessage(err, d.name) });
+    }
+  };
+
+  const duplicate = (view: Dataset) => {
+    if (!view.parentDatasetId || !view.selection) {
+      toast.error("Couldn't duplicate view", {
+        description: `"${view.name}" does not carry the selection it was built from — open its parent dataset to fork it again.`,
+      });
+      return;
+    }
+    setDuplicateSource(view);
+  };
+
+  const rowActions = (d: Dataset): RowActionItem[] => {
+    const ready = d.status === 'ready';
+    const frozen = isDatasetView(d) && !!d.frozenAt;
+    const items: RowActionItem[] = [];
+    if (ready) {
+      items.push(
+        { label: 'Open episodes', icon: <Play />, onSelect: () => navigate(`/datasets/${d.id}/episodes`) },
+        { label: 'Train a model', icon: <Layers />, onSelect: () => setWizardMixture([d.id]) },
+        frozen
+          ? { label: 'Duplicate view', icon: <Copy />, onSelect: () => duplicate(d) }
+          : { label: 'Create view', icon: <GitFork />, onSelect: () => navigate(`/datasets/${d.id}/episodes`) },
+        { label: 'Push to Hugging Face', icon: <CloudUpload />, onSelect: () => setPushDataset(d) },
+      );
+    }
+    if (d.status === 'failed' && d.huggingFaceRepoId) {
+      items.push({ label: 'Retry import', icon: <RotateCw />, onSelect: () => void retry(d) });
+    }
+    if (!frozen) {
+      items.push({
+        label: 'Delete',
+        icon: <Trash2 />,
+        tone: 'danger',
+        separatorBefore: items.length > 0,
+        onSelect: () => void askDelete(d),
+      });
+    }
+    return items;
+  };
+
+  const submitWizard = useCallback(
     async (input: SubmitTrainingJobInput | SubmitSimRlJobInput) => {
       await submitJob(input);
-      setSelectedIds([]);
+      setWizardMixture(null);
+      toast.success('Training job created');
       navigate('/training');
     },
     [submitJob, navigate],
   );
 
-  // The parent of the view being duplicated, out of the list already loaded —
-  // it supplies the "of M episodes" total the dialog shows.
   const duplicateParent = useMemo(
-    () =>
-      datasets.find((d) => d.id === duplicateSource?.parentDatasetId)
-        ?? duplicateSource?.parent
-        ?? null,
+    () => datasets.find((d) => d.id === duplicateSource?.parentDatasetId) ?? duplicateSource?.parent ?? null,
     [datasets, duplicateSource],
   );
 
-  const handleDuplicateView = useCallback((view: Dataset) => {
-    setActionError(null);
-    // Both facts come off the row itself; without either there is nothing to
-    // copy, and saying so beats opening a dialog that cannot submit.
-    if (!view.parentDatasetId || !view.selection) {
-      setActionError(
-        `"${view.name}" does not carry the selection it was built from — open its parent dataset to fork it again`,
-      );
-      return;
-    }
-    setDuplicateSource(view);
-  }, []);
-
-  const handleCreateView = useCallback(
+  const createDuplicate = useCallback(
     async (input: CreateDatasetViewInput) => {
       const parentId = duplicateSource?.parentDatasetId;
       if (!parentId) throw new Error('No parent dataset to fork');
       const created = await datasetViewsApi.createView(parentId, input);
-      fetchDatasets();
+      toast.success('View created', { description: input.name });
+      refresh();
       return created;
     },
-    [duplicateSource, fetchDatasets],
+    [duplicateSource, refresh],
   );
 
-  const handleFilterChange = (key: keyof DatasetQueryParams, value: string) => {
-    const newFilters = { ...filters, [key]: value || undefined };
-    setFilters(newFilters);
-    setDatasetFilters(newFilters);
-    fetchDatasets(newFilters);
-  };
-
-  const filtersActive = !!filters.robotTypeId || !!filters.skillId || showSyntheticOnly;
+  const newMenu = (
+    <DropdownMenu
+      label="New dataset"
+      trigger={<Button leftIcon={<Plus className="h-4 w-4" />} rightIcon={<ChevronDown className="h-4 w-4" />}>New dataset</Button>}
+      items={[
+        { label: 'Upload files', icon: <Upload />, onSelect: () => setModal('upload') },
+        { label: 'Import from Hugging Face', icon: <Download />, onSelect: () => setModal('hf') },
+        { label: 'Generate synthetic', icon: <Sparkles />, onSelect: () => setModal('generate') },
+        { label: 'Check compatibility', icon: <Layers />, separatorBefore: true, onSelect: () => setModal('compat') },
+      ]}
+    />
+  );
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="flex flex-col gap-6">
       <PageHeader
+        eyebrow="Build"
         title="Datasets"
-        subtitle="Manage training datasets for VLA models"
-        actions={
-          <>
-            <PipelineBreadcrumb stage="dataset" />
-            <Button variant="ghost" onClick={() => setIsHFBrowserOpen(true)}>
-              Import from Hub
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => setIsGenerateOpen(true)}
-              leftIcon={<Sparkles className="h-4 w-4" />}
-            >
-              Generate Synthetic
-            </Button>
-            <Button onClick={() => setIsUploadModalOpen(true)} leftIcon={<Plus className="w-4 h-4" />}>
-              Upload Dataset
-            </Button>
-          </>
+        description="LeRobot datasets you collected, imported or generated — the input to training."
+        actions={newMenu}
+      >
+        <PipelineBreadcrumb stage="dataset" />
+      </PageHeader>
+
+      <DatasetList
+        datasets={datasets}
+        isLoading={isLoading}
+        error={error}
+        onRetry={refresh}
+        robotTypes={robotTypes}
+        onSelect={(d) => navigate(`/datasets/${d.id}/episodes`)}
+        rowActions={rowActions}
+        filtersActive={!!robotTypeId}
+        onClearFilters={() => changeRobotType('')}
+        emptyAction={newMenu}
+        extraFilters={
+          robotTypes.length > 0 && (
+            <Select
+              aria-label="Robot type"
+              fullWidth={false}
+              className="w-48"
+              placeholder="All robot types"
+              options={robotTypes.map((t) => ({ value: t.id, label: t.name }))}
+              value={robotTypeId}
+              onChange={(e) => changeRobotType(e.target.value)}
+            />
+          )
         }
       />
 
-      {/* An action the operator took that did not happen, and why. Separate
-          from `error` (which is the list failing to load) because this one is
-          answered by reading it, not by retrying the fetch. */}
-      {actionError && (
-        <div
-          className="p-4 bg-red-100 text-red-700 rounded-lg flex items-start justify-between gap-4"
-          data-testid="dataset-action-error"
-          role="alert"
-        >
-          <p className="text-sm">{actionError}</p>
-          <Button variant="ghost" size="sm" onClick={() => setActionError(null)}>
-            Dismiss
-          </Button>
-        </div>
+      {readyDatasets.length > 0 && (
+        <NextStepBanner
+          variant="subtle"
+          title="Train a policy"
+          description={`${readyDatasets.length} dataset${readyDatasets.length === 1 ? ' is' : 's are'} ready to train on.`}
+          ctaLabel="Open training"
+          ctaHref="/training"
+        />
       )}
 
-      {/* Error state */}
-      {error && (
-        <div className="p-4 bg-red-100 text-red-700 rounded-lg">
-          <p>{error}</p>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => fetchDatasets()}
-            className="mt-2"
-          >
-            Retry
-          </Button>
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3">
-        <select
-          value={filters.robotTypeId || ''}
-          onChange={(e) => handleFilterChange('robotTypeId', e.target.value)}
-          aria-label="Filter by robot type"
-          className="px-3 py-2 rounded-brand border border-theme-secondary/30 bg-theme-primary text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-cobalt-500"
-        >
-          <option value="">All Robot Types</option>
-          {robotTypes.map((type) => (
-            <option key={type.id} value={type.id}>{type.name}</option>
-          ))}
-        </select>
-        {skillIds.length > 0 && (
-          <select
-            value={filters.skillId || ''}
-            onChange={(e) => handleFilterChange('skillId', e.target.value)}
-            aria-label="Filter by skill"
-            className="px-3 py-2 rounded-brand border border-theme-secondary/30 bg-theme-primary text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-cobalt-500"
-          >
-            <option value="">All Skills</option>
-            {skillIds.map((skillId) => (
-              <option key={skillId} value={skillId}>{skillId}</option>
-            ))}
-          </select>
-        )}
-        {(syntheticCount > 0 || showSyntheticOnly) && (
-          <button
-            onClick={() => setShowSyntheticOnly((v) => !v)}
-            className={`flex items-center gap-1.5 rounded-brand border px-3 py-2 text-sm transition-colors ${
-              showSyntheticOnly
-                ? 'border-purple-500/50 bg-purple-500/10 text-purple-300'
-                : 'border-theme-secondary/30 text-theme-secondary hover:border-purple-500/40'
-            }`}
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            Synthetic only
-          </button>
-        )}
-      </div>
-
-      {/* Stats summary */}
-      {!isLoading && datasets.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <StatCard
-            label="Total Datasets"
-            value={datasets.length}
-          />
-          <StatCard
-            label="Ready"
-            value={readyDatasets.length}
-            color="green"
-          />
-          <StatCard
-            label="Failed"
-            value={failedCount}
-            color={failedCount > 0 ? 'red' : undefined}
-          />
-          <StatCard
-            label="Synthetic"
-            value={syntheticCount}
-            color="purple"
-          />
-          {/* Ready datasets only. A failed import keeps the frame count it read
-              out of the Hub's info.json while having downloaded nothing, and
-              171,625 of those frames do not exist on this disk. */}
-          <StatCard
-            label="Total Frames"
-            value={readyDatasets
-              .reduce((acc, d) => acc + d.totalFrames, 0)
-              .toLocaleString(UI_DATE_LOCALE)}
-          />
-        </div>
-      )}
-
-      {/* Dataset list */}
-      <DatasetList
-        datasets={displayedDatasets}
-        isLoading={isLoading}
-        filtersActive={filtersActive}
-        onSelect={handleSelectDataset}
-        onViewEpisodes={(dataset) => navigate(`/datasets/${dataset.id}/episodes`)}
-        onDelete={handleDeleteClick}
-        onRetryImport={handleRetryImport}
-        onDuplicateView={handleDuplicateView}
-        selectedIds={selectedIds}
-        onToggleSelection={toggleSelection}
-        onClearSelection={() => setSelectedIds([])}
-        onPrepareTraining={() => setIsCompatibilityOpen(true)}
-        maxSelection={MAX_MIXTURE_MEMBERS}
-      />
-
-      {/* Upload modal */}
-      <DatasetUploadModal
-        isOpen={isUploadModalOpen}
-        onClose={() => setIsUploadModalOpen(false)}
-        onSuccess={handleUploadSuccess}
-      />
-
-      {/* HuggingFace import modal */}
-      <HFDatasetBrowserModal
-        isOpen={isHFBrowserOpen}
-        onClose={() => setIsHFBrowserOpen(false)}
-        onSuccess={handleUploadSuccess}
-        existingDatasets={datasets}
-      />
-
-      {/* Cosmos 3 synthetic generation wizard */}
+      <DatasetUploadModal isOpen={modal === 'upload'} onClose={() => setModal(null)} onSuccess={refresh} robotTypes={robotTypes} />
+      <HFDatasetBrowserModal isOpen={modal === 'hf'} onClose={() => setModal(null)} onSuccess={refresh} existingDatasets={datasets} />
       <GenerateSyntheticModal
-        isOpen={isGenerateOpen}
-        onClose={() => setIsGenerateOpen(false)}
-        onSuccess={() => fetchDatasets()}
-        onViewDataset={(datasetId) => navigate(`/datasets/${datasetId}/episodes`)}
+        isOpen={modal === 'generate'}
+        onClose={() => setModal(null)}
+        onSuccess={refresh}
+        onViewDataset={(id) => navigate(`/datasets/${id}/episodes`)}
       />
-
-      {/* HuggingFace push modal */}
+      <CompatibilityModal
+        isOpen={modal === 'compat'}
+        onClose={() => setModal(null)}
+        datasets={readyDatasets}
+        onContinue={(ids) => { setModal(null); setWizardMixture(ids); }}
+      />
       {pushDataset && (
         <HFPushModal
-          isOpen={!!pushDataset}
+          isOpen
           onClose={() => setPushDataset(null)}
-          onSuccess={() => fetchDatasets()}
+          onSuccess={refresh}
           datasetId={pushDataset.id}
           datasetName={pushDataset.name}
         />
       )}
-
-      {/* Compatibility report for the current selection */}
-      <Modal
-        isOpen={isCompatibilityOpen}
-        onClose={() => setIsCompatibilityOpen(false)}
-        title="Can these be trained together?"
-        size="full"
-      >
-        <div className="space-y-4">
-          {isCompatibilityOpen && (
-            <DatasetCompatibilityPanel datasetIds={selectedIds} onReport={setReport} />
-          )}
-          <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" onClick={() => setIsCompatibilityOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!report || report.verdict === 'incompatible'}
-              onClick={() => { setIsCompatibilityOpen(false); setIsWizardOpen(true); }}
-            >
-              Continue
-            </Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Training wizard, pre-filled with the selection */}
       <TrainingJobWizard
-        isOpen={isWizardOpen}
-        onClose={() => setIsWizardOpen(false)}
-        onSubmit={handleSubmitJob}
+        isOpen={wizardMixture !== null}
+        onClose={() => setWizardMixture(null)}
+        onSubmit={submitWizard}
         datasets={datasets}
-        initialMixture={selectedIds.map((datasetId) => ({ datasetId, weight: 1 }))}
+        initialMixture={(wizardMixture ?? []).map((datasetId) => ({ datasetId, weight: 1 }))}
       />
-
-      {/* Fork a frozen view again, starting from the episodes it already holds */}
       {duplicateSource?.selection && (
         <CreateViewModal
-          isOpen={!!duplicateSource}
+          isOpen
           onClose={() => setDuplicateSource(null)}
           parentName={duplicateParent?.name ?? 'the parent dataset'}
-          parentEpisodeCount={
-            duplicateParent?.demonstrationCount ?? duplicateSource.selection.episodes.length
-          }
+          parentEpisodeCount={duplicateParent?.demonstrationCount ?? duplicateSource.selection.episodes.length}
           duplicateOf={{ name: duplicateSource.name, selection: duplicateSource.selection }}
-          onCreate={handleCreateView}
+          onCreate={createDuplicate}
         />
       )}
-
-      {/* Delete confirmation modal */}
-      <Modal
-        isOpen={!!datasetToDelete}
-        onClose={() => setDatasetToDelete(null)}
-        title="Delete Dataset"
-        size="sm"
-      >
-        <div className="space-y-4">
-          <p className="text-theme-secondary">
-            Are you sure you want to delete <span className="font-semibold text-theme-primary">{datasetToDelete?.name}</span>?
-          </p>
-          <p className="text-sm text-theme-tertiary">
-            This action cannot be undone. All associated data will be permanently removed.
-          </p>
-          <div className="flex justify-end gap-3 pt-4">
-            <Button variant="ghost" onClick={() => setDatasetToDelete(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleConfirmDelete} isLoading={isDeleting}>
-              Delete
-            </Button>
-          </div>
-        </div>
-      </Modal>
-    </div>
-  );
-}
-
-interface StatCardProps {
-  label: string;
-  value: string | number;
-  color?: 'green' | 'yellow' | 'red' | 'blue' | 'purple';
-}
-
-function StatCard({ label, value, color }: StatCardProps) {
-  const colorClasses = {
-    green: 'text-green-600',
-    yellow: 'text-yellow-600',
-    red: 'text-red-600',
-    blue: 'text-blue-600',
-    purple: 'text-purple-400',
-  };
-
-  return (
-    <div className="p-4 rounded-lg bg-theme-secondary/10">
-      <p className="text-sm text-theme-secondary">{label}</p>
-      <p
-        data-testid={`stat-${label}`}
-        className={`text-2xl font-bold mt-1 ${color ? colorClasses[color] : 'text-theme-primary'}`}
-      >
-        {value}
-      </p>
     </div>
   );
 }

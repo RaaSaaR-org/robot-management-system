@@ -1,13 +1,14 @@
 /**
  * @file ResetPasswordForm.tsx
- * @description Reset password form component with token validation
+ * @description Set a new password from a reset token; the page shows the done state
  * @feature auth
- * @dependencies @/shared/components/ui, @/features/auth/hooks
  */
 
-import { useState, type FormEvent, type ChangeEvent } from 'react';
-import { Input, Button } from '@/shared/components/ui';
-import { usePasswordReset } from '../hooks/usePasswordReset';
+import { useState, type FormEvent } from 'react';
+import { Button, FormField, Input } from '@/shared/components/ui';
+import { useAuthStore } from '../store/authStore';
+import { AuthFormError } from './AuthLayout';
+import { PASSWORD_HINT, validateNewPassword } from './passwordRules';
 
 export interface ResetPasswordFormProps {
   /** Password reset token from URL */
@@ -18,137 +19,70 @@ export interface ResetPasswordFormProps {
   onError?: (error: string) => void;
 }
 
-/**
- * Reset password form with new password fields.
- */
-export function ResetPasswordForm({ token, onSuccess, onError }: ResetPasswordFormProps) {
-  const { resetPassword, isLoading, error, isResetComplete, clearError } =
-    usePasswordReset();
+type FieldErrors = { password?: string; confirmPassword?: string };
 
+export function ResetPasswordForm({ token, onSuccess, onError }: ResetPasswordFormProps) {
+  // The store throws on failure (the usePasswordReset hook swallows it), so onSuccess only runs on success.
+  const resetPassword = useAuthStore((s) => s.resetPassword);
+  const isLoading = useAuthStore((s) => s.isLoading);
+  const error = useAuthStore((s) => s.error);
+  const clearError = useAuthStore((s) => s.clearError);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [validationErrors, setValidationErrors] = useState<{
-    password?: string;
-    confirmPassword?: string;
-  }>({});
-
-  const validate = (): boolean => {
-    const errors: typeof validationErrors = {};
-
-    if (!password) {
-      errors.password = 'Password is required';
-    } else if (password.length < 8) {
-      errors.password = 'Password must be at least 8 characters';
-    } else if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(password)) {
-      errors.password = 'Password must include uppercase, lowercase, and number';
-    }
-
-    if (!confirmPassword) {
-      errors.confirmPassword = 'Please confirm your password';
-    } else if (password !== confirmPassword) {
-      errors.confirmPassword = 'Passwords do not match';
-    }
-
-    setValidationErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
+  const [errors, setErrors] = useState<FieldErrors>({});
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     clearError();
-    setValidationErrors({});
-
-    if (!validate()) {
-      return;
-    }
-
+    const next: FieldErrors = {};
+    const pw = validateNewPassword(password);
+    if (pw) next.password = pw;
+    if (!confirmPassword) next.confirmPassword = 'Repeat the password.';
+    else if (password !== confirmPassword) next.confirmPassword = "Passwords don't match.";
+    setErrors(next);
+    if (Object.keys(next).length) return;
     try {
       await resetPassword(token, password);
       onSuccess?.();
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Reset failed';
-      onError?.(errorMessage);
+      onError?.(err instanceof Error ? err.message : 'Reset failed');
     }
   };
 
-  const handleFieldChange = (
-    setter: (value: string) => void,
-    field: keyof typeof validationErrors
-  ) => {
-    return (e: ChangeEvent<HTMLInputElement>) => {
-      setter(e.target.value);
-      if (validationErrors[field]) {
-        setValidationErrors((prev) => ({ ...prev, [field]: undefined }));
-      }
-      if (error) {
-        clearError();
-      }
-    };
+  const clear = (field: keyof FieldErrors) => {
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: undefined }));
+    if (error) clearError();
   };
 
-  if (isResetComplete) {
-    return (
-      <div className="space-y-4 text-center">
-        <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400">
-          <h3 className="font-medium">Password reset successful!</h3>
-          <p className="mt-1 text-sm">
-            Your password has been updated. You can now sign in with your new password.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <form onSubmit={handleSubmit} className="space-y-6" noValidate>
-      <div className="text-center text-sm text-gray-600 dark:text-gray-400">
-        Enter your new password below.
-      </div>
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+      <FormField label="New password" hint={PASSWORD_HINT} error={errors.password}>
+        <Input
+          id="reset-password"
+          type="password"
+          value={password}
+          onChange={(e) => { setPassword(e.target.value); clear('password'); }}
+          disabled={isLoading}
+          autoComplete="new-password"
+          required
+        />
+      </FormField>
+      <FormField label="Confirm new password" error={errors.confirmPassword}>
+        <Input
+          id="reset-confirm-password"
+          type="password"
+          value={confirmPassword}
+          onChange={(e) => { setConfirmPassword(e.target.value); clear('confirmPassword'); }}
+          disabled={isLoading}
+          autoComplete="new-password"
+          required
+        />
+      </FormField>
 
-      <Input
-        id="reset-password"
-        type="password"
-        label="New Password"
-        placeholder="Enter new password"
-        value={password}
-        onChange={handleFieldChange(setPassword, 'password')}
-        error={validationErrors.password}
-        disabled={isLoading}
-        autoComplete="new-password"
-        required
-      />
+      {error && <AuthFormError>{error}</AuthFormError>}
 
-      <Input
-        id="reset-confirm-password"
-        type="password"
-        label="Confirm New Password"
-        placeholder="Confirm new password"
-        value={confirmPassword}
-        onChange={handleFieldChange(setConfirmPassword, 'confirmPassword')}
-        error={validationErrors.confirmPassword}
-        disabled={isLoading}
-        autoComplete="new-password"
-        required
-      />
-
-      {error && (
-        <div
-          role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
-        >
-          {error}
-        </div>
-      )}
-
-      <Button
-        type="submit"
-        variant="primary"
-        size="lg"
-        fullWidth
-        isLoading={isLoading}
-        disabled={isLoading}
-      >
-        {isLoading ? 'Resetting...' : 'Reset password'}
+      <Button type="submit" size="lg" fullWidth isLoading={isLoading} loadingText="Saving…">
+        Set new password
       </Button>
     </form>
   );

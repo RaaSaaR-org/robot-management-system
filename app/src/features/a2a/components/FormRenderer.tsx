@@ -1,20 +1,14 @@
 /**
  * @file FormRenderer.tsx
- * @description Dynamic form renderer for A2A agent form requests
+ * @description Renders a form an agent asks the user to fill in, and its completed state
  * @feature a2a
  */
 
-import { memo, useState, useCallback } from 'react';
-import { cn } from '@/shared/utils';
-import { Button } from '@/shared/components/ui/Button';
-import { Card } from '@/shared/components/ui/Card';
-import { Input } from '@/shared/components/ui/Input';
+import { memo, useCallback, useState, type FormEvent } from 'react';
+import { Button, Checkbox, FormField, Input, Select } from '@/shared/components/ui';
+import { cn } from '@/shared/utils/cn';
 import type { FormSchema, FormElement } from '../types';
 import { parseFormSchema, getFormInstructions } from '../types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
 
 interface FormRendererProps {
   /** The form schema from agent DataPart */
@@ -23,262 +17,130 @@ interface FormRendererProps {
   messageId: string;
   /** The task ID this form is associated with (unused but kept for context) */
   taskId?: string;
-  /** Called when form is submitted with valid data */
   onSubmit: (data: Record<string, string>) => void;
-  /** Called when form is canceled */
   onCancel: () => void;
-  /** Whether the form is currently submitting */
   isSubmitting?: boolean;
-  /** Additional CSS classes */
   className?: string;
 }
-
-interface CompletedFormCardProps {
-  /** The form data that was submitted, or null if canceled */
-  data: Record<string, string> | null;
-  /** Additional CSS classes */
-  className?: string;
-}
-
-// ============================================================================
-// COMPLETED FORM CARD
-// ============================================================================
 
 /**
- * Displays a completed or canceled form as a read-only card
+ * Read-only card of a submitted (or canceled) agent form.
  */
 export const CompletedFormCard = memo(function CompletedFormCard({
   data,
   className,
-}: CompletedFormCardProps) {
-  if (data === null) {
-    return (
-      <Card
-        variant="glass"
-        className={cn('p-4', className)}
-      >
-        <p className="text-sm text-theme-tertiary italic">
-          Form canceled
-        </p>
-      </Card>
-    );
-  }
-
+}: {
+  data: Record<string, string> | null;
+  className?: string;
+}) {
   return (
-    <Card
-      variant="glass"
-      className={cn('p-4', className)}
-    >
-      <div className="space-y-1">
-        {Object.entries(data).map(([key, value]) => (
-          <div key={key} className="text-sm">
-            <span className="font-medium text-theme-secondary">
-              {key}:
-            </span>{' '}
-            <span className="text-theme-secondary">{value}</span>
-          </div>
-        ))}
-      </div>
-    </Card>
+    <div className={cn('rounded-control border border-line-subtle bg-panel px-3 py-2 text-sm', className)}>
+      {data === null ? (
+        <p className="text-ink-tertiary">Form canceled</p>
+      ) : (
+        <dl className="flex flex-col gap-0.5">
+          {Object.entries(data).map(([key, value]) => (
+            <div key={key} className="flex gap-1.5">
+              <dt className="text-ink-tertiary">{key}:</dt>
+              <dd className="text-ink-primary">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
   );
 });
 
-// ============================================================================
-// FORM RENDERER
-// ============================================================================
-
 /**
- * Renders an interactive form based on A2A form schema
+ * Interactive agent form built from kit fields.
  */
 export const FormRenderer = memo(function FormRenderer({
   schema,
   messageId,
-  taskId: _taskId,
   onSubmit,
   onCancel,
   isSubmitting = false,
   className,
 }: FormRendererProps) {
-  // Parse form schema into elements
   const elements = parseFormSchema(schema);
   const instructions = getFormInstructions(schema);
 
-  // Form state
-  const [formData, setFormData] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = {};
-    elements.forEach((el) => {
-      initial[el.name] = el.value;
-    });
-    return initial;
-  });
-
+  const [formData, setFormData] = useState<Record<string, string>>(() =>
+    Object.fromEntries(elements.map((el) => [el.name, el.value])),
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Handle field change
   const handleChange = useCallback((name: string, value: string) => {
     setFormData((prev) => ({ ...prev, [name]: value }));
-    // Clear error when user types
     setErrors((prev) => {
-      if (prev[name]) {
-        const { [name]: _, ...rest } = prev;
-        return rest;
-      }
-      return prev;
+      if (!prev[name]) return prev;
+      const next = { ...prev };
+      delete next[name];
+      return next;
     });
   }, []);
 
-  // Validate form
-  const validate = useCallback((): boolean => {
-    const newErrors: Record<string, string> = {};
-
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const next: Record<string, string> = {};
     elements.forEach((el) => {
-      if (el.required && !formData[el.name]?.trim()) {
-        newErrors[el.name] = `${el.label} is required`;
-      }
+      if (el.required && !formData[el.name]?.trim()) next[el.name] = `${el.label} is required.`;
     });
+    setErrors(next);
+    if (Object.keys(next).length === 0) onSubmit(formData);
+  };
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  }, [elements, formData]);
-
-  // Handle submit
-  const handleSubmit = useCallback(
-    (e: React.FormEvent) => {
-      e.preventDefault();
-      if (validate()) {
-        onSubmit(formData);
-      }
-    },
-    [formData, onSubmit, validate]
-  );
-
-  // Handle cancel
-  const handleCancel = useCallback(() => {
-    onCancel();
-  }, [onCancel]);
-
-  // Render form field based on type
-  const renderField = (element: FormElement) => {
-    const { name, label, type, required, description, options } = element;
-    const value = formData[name] || '';
-    const error = errors[name];
-
-    // Handle select/radio with options
-    if (options && options.length > 0) {
+  const renderField = (el: FormElement) => {
+    const value = formData[el.name] || '';
+    if (el.type === 'checkbox') {
       return (
-        <div key={name} className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-theme-secondary">
-            {label}
-            {required && <span className="text-red-500 ml-1">*</span>}
-          </label>
-          <select
-            value={value}
-            onChange={(e) => handleChange(name, e.target.value)}
-            disabled={isSubmitting}
-            className={cn(
-              'w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2.5',
-              'text-theme-primary',
-              'transition-colors duration-200',
-              'focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent',
-              error ? 'border-red-500' : 'border-gray-200 dark:border-gray-700'
-            )}
-          >
-            <option value="">Select...</option>
-            {options.map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
-          {error && (
-            <p className="text-sm text-red-500" role="alert">
-              {error}
-            </p>
-          )}
-          {description && !error && (
-            <p className="text-sm text-theme-tertiary">{description}</p>
-          )}
-        </div>
+        <Checkbox
+          key={el.name}
+          id={`${messageId}-${el.name}`}
+          label={el.label}
+          description={el.description}
+          checked={value === 'true'}
+          onChange={(e) => handleChange(el.name, e.target.checked ? 'true' : 'false')}
+          disabled={isSubmitting}
+        />
       );
     }
-
-    // Handle checkbox
-    if (type === 'checkbox') {
-      return (
-        <div key={name} className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id={`${messageId}-${name}`}
-            checked={value === 'true'}
-            onChange={(e) => handleChange(name, e.target.checked ? 'true' : 'false')}
-            disabled={isSubmitting}
-            className="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500"
-          />
-          <label
-            htmlFor={`${messageId}-${name}`}
-            className="text-sm text-theme-primary"
-          >
-            {label}
-            {required && <span className="text-red-500 ml-1">*</span>}
-          </label>
-        </div>
-      );
-    }
-
-    // Default input field
     return (
-      <Input
-        key={name}
-        label={label + (required ? ' *' : '')}
-        type={type}
-        value={value}
-        onChange={(e) => handleChange(name, e.target.value)}
-        error={error}
-        helperText={description}
-        disabled={isSubmitting}
-        fullWidth
-      />
+      <FormField key={el.name} label={el.label} required={el.required} error={errors[el.name]} hint={el.description}>
+        {el.options && el.options.length > 0 ? (
+          <Select
+            placeholder="Choose…"
+            options={el.options.map((o) => ({ value: o, label: o }))}
+            value={value}
+            onChange={(e) => handleChange(el.name, e.target.value)}
+            disabled={isSubmitting}
+          />
+        ) : (
+          <Input
+            type={el.type}
+            value={value}
+            onChange={(e) => handleChange(el.name, e.target.value)}
+            disabled={isSubmitting}
+          />
+        )}
+      </FormField>
     );
   };
 
   return (
     <form
       onSubmit={handleSubmit}
-      className={cn(
-        'glass-card rounded-brand p-4',
-        'transition-all duration-300',
-        className
-      )}
+      noValidate
+      className={cn('flex flex-col gap-4 rounded-control border border-line bg-panel p-4', className)}
     >
-      {/* Instructions */}
-      {instructions && (
-        <h4 className="text-base font-semibold text-theme-primary mb-4">
-          {instructions}
-        </h4>
-      )}
-
-      {/* Form fields */}
-      <div className="space-y-4">
-        {elements.map(renderField)}
-      </div>
-
-      {/* Actions */}
-      <div className="flex gap-3 mt-6">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={handleCancel}
-          disabled={isSubmitting}
-        >
+      {instructions && <p className="text-sm font-semibold text-ink-primary">{instructions}</p>}
+      {elements.map(renderField)}
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" onClick={onCancel} disabled={isSubmitting}>
           Cancel
         </Button>
-        <Button
-          type="submit"
-          variant="primary"
-          isLoading={isSubmitting}
-          loadingText="Submitting..."
-        >
-          Submit
+        <Button type="submit" isLoading={isSubmitting} loadingText="Sending…">
+          Send answer
         </Button>
       </div>
     </form>

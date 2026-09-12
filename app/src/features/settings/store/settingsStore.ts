@@ -53,15 +53,15 @@ export const useSettingsStore = createStore<SettingsStore>(
       });
 
       try {
-        const settings = await settingsApi.getSettings();
+        const settings = normalizeSettings(await settingsApi.getSettings());
         set((state) => {
           state.settings = settings;
           state.isLoading = false;
           state.isInitialized = true;
         });
-
-        // Sync theme with themeStore
-        syncTheme(settings.theme as ThemeValue);
+        // The theme belongs to this device (themeStore, also set from the top
+        // bar), so loading the server copy never overrides it. Picking a theme
+        // in Settings or resetting writes both.
       } catch (error) {
         set((state) => {
           state.isLoading = false;
@@ -84,7 +84,7 @@ export const useSettingsStore = createStore<SettingsStore>(
       try {
         const updated = await settingsApi.updateSettings({ [key]: value } as UpdateSettingsDto);
         set((state) => {
-          state.settings = updated;
+          state.settings = normalizeSettings(updated, { ...current, [key]: value });
         });
 
         // Sync theme if it changed
@@ -114,7 +114,7 @@ export const useSettingsStore = createStore<SettingsStore>(
       try {
         const updated = await settingsApi.updateSettings(data);
         set((state) => {
-          state.settings = updated;
+          state.settings = normalizeSettings(updated, { ...current, ...data });
         });
 
         if (data.theme) {
@@ -135,13 +135,15 @@ export const useSettingsStore = createStore<SettingsStore>(
       });
 
       try {
-        const settings = await settingsApi.resetSettings();
+        const settings = normalizeSettings(await settingsApi.resetSettings());
         set((state) => {
           state.settings = settings;
           state.isLoading = false;
         });
 
-        syncTheme(settings.theme as ThemeValue);
+        // The device goes back to the app default (dark), whatever an older
+        // database column default says.
+        syncTheme(DEFAULT_SETTINGS.theme);
       } catch (error) {
         set((state) => {
           state.isLoading = false;
@@ -165,10 +167,52 @@ export const useSettingsStore = createStore<SettingsStore>(
 // HELPERS
 // ============================================================================
 
-/** Sync theme setting with the themeStore */
+const THEME_VALUES: readonly ThemeValue[] = ['dark', 'light', 'system'];
+
+/** The values a user starts with; dark is the app default. Mirrors the server's schema defaults. */
+const DEFAULT_SETTINGS: UserSettings = {
+  id: '',
+  userId: '',
+  theme: 'dark',
+  language: 'en',
+  compactMode: false,
+  emailNotifications: true,
+  alertsEnabled: true,
+  maintenanceReminders: true,
+  weeklyDigest: false,
+  defaultDashboardView: 'fleet',
+  refreshIntervalSec: 30,
+  createdAt: '',
+  updatedAt: '',
+};
+
+function isThemeValue(value: unknown): value is ThemeValue {
+  return typeof value === 'string' && (THEME_VALUES as readonly string[]).includes(value);
+}
+
+/**
+ * Fill in every field the API left out, from `fallback` then the defaults.
+ * The demo's mock API answers /settings with an empty list, and an unknown
+ * theme must never reach the theme store.
+ */
+function normalizeSettings(raw: unknown, fallback: Partial<UserSettings> = {}): UserSettings {
+  const source = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof UserSettings, unknown>>;
+  const base: UserSettings = { ...DEFAULT_SETTINGS, ...fallback };
+  const result = { ...base } as Record<keyof UserSettings, unknown>;
+  for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof UserSettings)[]) {
+    const value = source[key];
+    if (value !== undefined && value !== null && typeof value === typeof DEFAULT_SETTINGS[key]) {
+      result[key] = value;
+    }
+  }
+  if (!isThemeValue(result.theme)) result.theme = base.theme;
+  return result as UserSettings;
+}
+
+/** Sync theme setting with the themeStore; ignores anything that is not a theme. */
 function syncTheme(theme: ThemeValue) {
-  const { setTheme } = useThemeStore.getState();
-  setTheme(theme);
+  if (!isThemeValue(theme)) return;
+  useThemeStore.getState().setTheme(theme);
 }
 
 // ============================================================================

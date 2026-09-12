@@ -6,14 +6,10 @@
  * @feature shared
  */
 
-import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '@/shared/utils/cn';
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
+import { LinkButton } from './LinkButton';
 
 export interface NextStepBannerProps {
   /** Short hint ("Done collecting demos?") */
@@ -26,11 +22,17 @@ export interface NextStepBannerProps {
   ctaHref: string;
   /** Optional icon to show on the left */
   icon?: ReactNode;
-  /** Visual variant */
+  /** default = panel · subtle = inset */
   variant?: 'default' | 'subtle';
   className?: string;
 }
 
+/**
+ * @example
+ * ```tsx
+ * <NextStepBanner title="Done collecting demos?" description="Turn them into a dataset." ctaLabel="Open datasets" ctaHref="/datasets" />
+ * ```
+ */
 export function NextStepBanner({
   title,
   description,
@@ -43,29 +45,31 @@ export function NextStepBanner({
   return (
     <div
       className={cn(
-        'flex items-center gap-4 px-4 py-3 rounded-brand-lg border',
-        variant === 'default'
-          ? 'bg-cobalt-500/5 border-cobalt-500/20'
-          : 'bg-glass-bg border-glass-subtle',
-        className
+        'flex flex-wrap items-center gap-x-4 gap-y-3 border px-4 py-3',
+        variant === 'default' ? 'rounded-panel border-line bg-panel' : 'rounded-control border-line-subtle bg-inset',
+        className,
       )}
     >
       {icon && (
-        <div className="p-2 rounded-brand bg-cobalt-500/10 shrink-0 text-cobalt-400">
+        <div
+          aria-hidden="true"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control bg-primary/10 text-primary [&_svg]:h-4 [&_svg]:w-4"
+        >
           {icon}
         </div>
       )}
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-semibold text-theme-primary">{title}</div>
-        <div className="text-xs text-theme-muted mt-0.5">{description}</div>
+      <div className="min-w-0 flex-[1_1_14rem]">
+        <div className="text-sm font-semibold text-ink-primary">{title}</div>
+        <div className="mt-0.5 text-[13px] text-ink-tertiary">{description}</div>
       </div>
-      <Link
+      <LinkButton
         to={ctaHref}
-        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-brand text-xs font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all shrink-0 whitespace-nowrap"
+        variant="secondary"
+        size="sm"
+        rightIcon={<ArrowRight className="h-3.5 w-3.5" strokeWidth={1.75} />}
       >
         {ctaLabel}
-        <ArrowRight className="w-3.5 h-3.5" />
-      </Link>
+      </LinkButton>
     </div>
   );
 }

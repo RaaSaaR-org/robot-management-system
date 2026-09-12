@@ -7,7 +7,7 @@
  * @feature digitaltwin
  */
 
-import { Suspense, memo, useEffect, useRef, type RefObject } from 'react';
+import { Suspense, memo, useEffect, useRef, useState, type RefObject } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -21,6 +21,18 @@ import { ZoneVolumes } from './ZoneVolumes';
 import { RobotPathTrail } from './RobotPathTrail';
 import { LivePoses } from './LivePoses';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { Button, useCssColor } from '@/shared/components/ui';
+
+/** Whether this browser can create a WebGL context (headless/locked-down browsers can't). */
+function detectWebGL(): boolean {
+  if (typeof document === 'undefined') return false;
+  try {
+    const canvas = document.createElement('canvas');
+    return Boolean(canvas.getContext('webgl2') ?? canvas.getContext('webgl'));
+  } catch {
+    return false;
+  }
+}
 
 export interface TwinViewerProps {
   cloud: AccumulatedCloud | null;
@@ -101,17 +113,30 @@ export const TwinViewer = memo(function TwinViewer({
   const colors = brandColors();
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const dims = twinDimensions(bounds);
+  // Axis gizmo in the signal tokens: x stopped, y measured, z estimated.
+  const axisX = useCssColor('--signal-stopped');
+  const axisY = useCssColor('--signal-measured');
+  const axisZ = useCssColor('--signal-estimated');
+  const [webgl] = useState(detectWebGL);
+
+  if (!webgl) {
+    return (
+      <div className={cn('flex h-full w-full items-center justify-center bg-inset p-6', className)} role="status">
+        <p className="max-w-sm text-center text-[13px] text-ink-tertiary">
+          This browser can't show the 3D view (WebGL is unavailable). The scan still records; use the Zones tab for the floor plan.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className={cn('relative w-full h-full min-h-[360px] rounded-lg overflow-hidden', className)}>
-      <Canvas
-        camera={{ position: [11, 9, 13], fov: 50 }}
-        gl={{ antialias: true }}
-        style={{ background: 'linear-gradient(180deg, var(--bg-secondary, #1E1F24) 0%, var(--bg-tertiary, #0C1440) 100%)' }}
-      >
+    // The canvas is transparent (r3f default alpha), so the inset surface token
+    // shows through as the viewport ground in both themes.
+    <div className={cn('relative h-full w-full overflow-hidden bg-inset', className)}>
+      <Canvas camera={{ position: [11, 9, 13], fov: 50 }} gl={{ antialias: true, alpha: true }}>
         <Suspense fallback={null}>
-          <ambientLight intensity={0.7} color="#ffffff" />
-          <directionalLight position={[8, 14, 6]} intensity={1.3} color="#ffffff" />
+          <ambientLight intensity={0.7} color="white" />
+          <directionalLight position={[8, 14, 6]} intensity={1.3} color="white" />
           <pointLight position={[-6, 6, -6]} intensity={0.6} color={colors.accent} distance={40} />
 
           {/* World-frame group (robotics z-up → three y-up). Backdrop, zones and
@@ -144,17 +169,16 @@ export const TwinViewer = memo(function TwinViewer({
 
           {/* Orientation gizmo (click an axis to snap the camera). */}
           <GizmoHelper alignment="top-right" margin={[56, 56]}>
-            <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" />
+            <GizmoViewport axisColors={[axisX, axisY, axisZ]} labelColor="white" />
           </GizmoHelper>
         </Suspense>
       </Canvas>
 
-      {/* Dimensions / point-count HUD — dark chip floats over the canvas in
-          both themes, so its text is fixed light rather than theme-driven. */}
-      <div className="absolute bottom-2 left-2 flex items-center gap-2 text-xs text-white/60 bg-surface-900/80 px-2 py-1 rounded font-mono">
+      {/* Dimensions / point-count HUD over the canvas. */}
+      <div className="absolute bottom-2 left-2 flex items-center gap-2 rounded-tag border border-line-subtle bg-panel px-2 py-1 text-xs tabular-nums text-ink-tertiary">
         {dims ? (
           <>
-            <span className="text-white/90">{dims.width.toFixed(1)} × {dims.length.toFixed(1)} m</span>
+            <span className="text-ink-primary">{dims.width.toFixed(1)} × {dims.length.toFixed(1)} m</span>
             <span>·</span>
             <span>{Math.round(dims.area)} m²</span>
             {cloud && <><span>·</span><span>{cloud.pointCount.toLocaleString(UI_DATE_LOCALE)} pts</span></>}
@@ -169,14 +193,15 @@ export const TwinViewer = memo(function TwinViewer({
       </div>
 
       {/* Reset camera. */}
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="sm"
         onClick={() => controlsRef.current?.reset()}
-        className="absolute bottom-2 right-2 text-xs text-white/80 bg-surface-900/80 hover:bg-surface-800 px-2 py-1 rounded border border-surface-700"
+        className="absolute bottom-2 right-2"
         title="Reset camera"
       >
         Reset view
-      </button>
+      </Button>
     </div>
   );
 });

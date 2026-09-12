@@ -1,60 +1,27 @@
 /**
  * @file RouteEditor.tsx
- * @description Create/edit a tour: name, robot, language, the greeting place,
- *              the three authored sentences (greeting, offer, farewell), the
- *              site card, and the ordered stops — each with a talk track (live
- *              character AND estimated-seconds counter, computed exactly as the
- *              robot chunks it), the facts it may answer from, and an optional
- *              VLA demo. Ops form on the left, sticky preview rail + save bar on
- *              the right; the stops are a vertical stepper of collapsible cards.
+ * @description Create/edit a tour as one form: Basics (name, robot, language,
+ *              greeting place, armed, greet on sight), Stops (a vertical
+ *              stepper of inset cards with talk track, facts and demo) and What
+ *              the robot says (welcome, offer, goodbye, site card), next to a
+ *              sticky Preview. Problems show at their fields after a save
+ *              attempt; the sticky footer holds Cancel and Save. The structural
+ *              twin of the patrol route editor.
  * @feature tour
  */
 
-import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { cn } from '@/shared/utils/cn';
-import { Button } from '@/shared/components/ui/Button';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Plus } from 'lucide-react';
+import { Button, FormField, Input, KeyValueList, Panel, Select, Switch, Textarea, toast } from '@/shared/components/ui';
 import { getErrorMessage } from '@/shared/utils/error';
 import { voiceApi } from '@/features/robots/api/voiceApi';
-import {
-  LEG_NODE,
-  PATROL_FADE_IN,
-  PATROL_FOCUS,
-  PATROL_MICRO,
-  PATROL_MONO,
-  PATROL_MOTION,
-  PATROL_PANEL,
-  PATROL_STICKY_RAIL,
-  RoutePath,
-  SectionHeader,
-  StatusDot,
-} from '@/features/patrol/components/patrolUi';
-import type {
-  SpokenLanguage,
-  TourPlace,
-  TourRoute,
-  TourRouteInput,
-  TourSkillOption,
-  TourStop,
-} from '../types/tour.types';
-import {
-  SpokenLanguages,
-  TOUR_DWELL_MAX_S,
-  TOUR_FACTS_MAX,
-  TOUR_FACT_MAX,
-  TOUR_HEADLINE_MAX,
-  TOUR_SITE_CARD_MAX,
-  TOUR_STOPS_MAX,
-  TOUR_TALK_TRACK_MAX,
-} from '../types/tour.types';
+import { RoutePath } from '@/features/patrol/components/opsUi';
+import type { SpokenLanguage, TourRoute, TourRouteInput, TourStop } from '../types/tour.types';
+import { SpokenLanguages, TOUR_FACTS_MAX, TOUR_FACT_MAX, TOUR_HEADLINE_MAX, TOUR_SITE_CARD_MAX, TOUR_STOPS_MAX, TOUR_TALK_TRACK_MAX } from '../types/tour.types';
 import { useTourStore, selectPlacesForRobot, selectSkills } from '../store/tourStore';
-import {
-  TOUR_STOP_SPEECH_CAP_S,
-  chunkTalkTrack,
-  estimateTourSeconds,
-  formatEstimate,
-  stopSpeechSeconds,
-  talkTrackTruncated,
-} from '../utils/tourFormat';
+import { chunkTalkTrack, estimateTourSeconds, formatEstimate } from '../utils/tourFormat';
+import { FactList } from './FactList';
+import { StopCard, type StopErrors } from './StopCard';
 
 // ============================================================================
 // TYPES
@@ -66,6 +33,11 @@ export interface RouteEditorRobot {
 }
 
 export interface RouteEditorProps {
+  /**
+   * Read a tour without being able to change it: every field is disabled and
+   * Save is gone. A viewer role gets this — the server refuses the write
+   * anyway, so offering the form would only produce a 403.
+   */
   readOnly?: boolean;
   /** Existing tour to edit; null/undefined = new tour. */
   route?: TourRoute | null;
@@ -74,7 +46,6 @@ export interface RouteEditorProps {
   defaultRobotId?: string | null;
   onSaved: (route: TourRoute) => void;
   onCancel?: () => void;
-  onDelete?: (route: TourRoute) => void;
   className?: string;
 }
 
@@ -94,14 +65,12 @@ export interface Draft {
 }
 
 // ============================================================================
-// HELPERS
+// HELPERS (pure)
 // ============================================================================
 
 const MANUAL = '__manual__';
 /** Default dwell, mirroring `AGENT_TOUR_DWELL_S` on the robot. */
 const DEFAULT_DWELL_S = 12;
-/** Default demo length when the skill library reports no timeout. */
-const DEFAULT_DEMO_SECONDS = 30;
 
 function newId(prefix: string): string {
   const rnd =
@@ -197,143 +166,63 @@ export function validateDraft(draft: Draft): string[] {
   return problems;
 }
 
-const INPUT = cn(
-  'glass-subtle w-full min-w-0 px-2.5 py-1.5 text-sm text-theme-primary rounded-brand border border-glass-subtle',
-  'focus:outline-none focus:ring-2 focus:ring-cobalt-500/40 focus:border-cobalt-500/40 disabled:opacity-50',
-  PATROL_MOTION
-);
-const LABEL = 'block text-xs font-medium text-theme-secondary mb-1';
-const ICON_BTN = cn(
-  'size-7 glass-subtle rounded-brand inline-flex items-center justify-center text-xs leading-none',
-  'hover:bg-theme-hover disabled:opacity-40 disabled:hover:bg-transparent',
-  PATROL_MOTION,
-  PATROL_FOCUS
-);
-const CHIP = cn(PATROL_MONO, 'glass-subtle rounded px-1.5 py-px text-[11px]');
-const NODE = 'relative z-10 shrink-0 w-6 h-6 rounded-full inline-flex items-center justify-center text-[11px] font-semibold tabular-nums';
-const STEPPER_LINE = 'relative before:absolute before:left-[11px] before:top-3 before:bottom-3 before:w-px before:bg-[var(--glass-border-highlight)]';
-
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-interface FactListProps {
-  /** Accessible prefix for every row ("Stop 2 fact"). */
-  label: string;
-  facts: string[];
-  max: number;
-  maxLength: number;
-  placeholder?: string;
-  onChange: (facts: string[]) => void;
-  testId: string;
+interface FieldErrors {
+  name?: string;
+  greetingPlaceId?: string;
+  greeting?: string;
+  offer?: string;
+  farewell?: string;
+  stops?: string;
+  siteCard?: string;
+  byStop: Record<number, StopErrors>;
 }
 
-/**
- * The editable fact list, shared by the site card and every stop. One component
- * for both because they are the same thing at two scopes: the ONLY ground the
- * robot may answer from. Adding is blocked at `max` rather than silently
- * truncated later — the operator has to see which fact did not fit.
- */
-const FactList = memo(function FactList({ label, facts, max, maxLength, placeholder, onChange, testId }: FactListProps) {
-  const full = facts.length >= max;
-  return (
-    <div className="flex flex-col gap-1.5 min-w-0" data-testid={testId}>
-      {facts.map((fact, i) => (
-        <div key={i} className="flex items-start gap-1.5 min-w-0">
-          <input
-            className={cn(INPUT, fact.length > maxLength && 'border-red-500/50')}
-            aria-label={`${label} ${i + 1}`}
-            data-testid={`${testId}-input`}
-            maxLength={maxLength}
-            value={fact}
-            placeholder={placeholder}
-            onChange={(e) => onChange(facts.map((f, j) => (j === i ? e.target.value : f)))}
-          />
-          <button
-            type="button"
-            className={cn(ICON_BTN, 'mt-0.5 text-red-600 dark:text-red-400 hover:bg-red-500/10')}
-            aria-label={`Remove ${label.toLowerCase()} ${i + 1}`}
-            onClick={() => onChange(facts.filter((_, j) => j !== i))}
-          >
-            ✕
-          </button>
-        </div>
-      ))}
-      <div className="flex items-center gap-2 flex-wrap">
-        <Button size="sm" variant="ghost" className="min-h-9" data-testid={`${testId}-add`} disabled={full} onClick={() => onChange([...facts, ''])}>
-          Add fact
-        </Button>
-        <span className={cn(PATROL_MONO, full && 'text-amber-700 dark:text-amber-400')}>
-          {facts.length}/{max}
-        </span>
-      </div>
-    </div>
-  );
-});
-
-function Fact({ label, children }: { label: string; children: ReactNode }): ReactNode {
-  return (
-    <>
-      <dt className={cn(PATROL_MICRO, 'pt-0.5')}>{label}</dt>
-      <dd className={cn(PATROL_MONO, 'min-w-0 break-words')}>{children}</dd>
-    </>
-  );
+/** Pure: sorts validateDraft's messages onto the fields they belong to. */
+function fieldErrors(problems: string[]): FieldErrors {
+  const out: FieldErrors = { byStop: {} };
+  for (const p of problems) {
+    const m = /[Ss]top (\d+)/.exec(p);
+    if (m && !p.startsWith('Add at least') && !p.startsWith('A tour may')) {
+      const i = Number(m[1]) - 1;
+      const e = (out.byStop[i] = out.byStop[i] ?? {});
+      if (p.includes('no place')) e.place = 'Choose or type a place.';
+      else if (p.includes('headline')) e.headline = p.includes('no headline') ? 'Give the stop a headline.' : p;
+      else if (p.includes('talk track')) e.talkTrack = p.includes('no talk track') ? 'Write what the robot says here.' : p;
+      else if (p.includes('demo')) e.demo = 'Choose a skill or No demo.';
+      else e.facts = p;
+    } else if (p.startsWith('Give the tour')) out.name = p;
+    else if (p.startsWith('Say where')) out.greetingPlaceId = p;
+    else if (p.startsWith('Write the welcome')) out.greeting = p;
+    else if (p.startsWith('Write the offer')) out.offer = p;
+    else if (p.startsWith('Write the goodbye')) out.farewell = p;
+    else if (p.startsWith('The site card')) out.siteCard = p;
+    else out.stops = p;
+  }
+  return out;
 }
 
-/**
- * The counter under a talk track. It reports what the ROBOT will do with the
- * text — how many `present` blocks it becomes and how long they take — using the
- * chunking mirrored from `host.ts`. A track whose tail falls past the per-stop
- * speech cap says so: silently dropping the last sentences of an authored
- * paragraph is the kind of surprise that only shows up in front of a visitor.
- */
-const TalkTrackMeter = memo(function TalkTrackMeter({ talkTrack, stopNumber }: { talkTrack: string; stopNumber: number }) {
-  const chunks = chunkTalkTrack(talkTrack);
-  const seconds = stopSpeechSeconds(talkTrack);
-  const truncated = talkTrackTruncated(talkTrack);
-  const overLength = talkTrack.length > TOUR_TALK_TRACK_MAX;
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0" aria-live="polite" data-testid="tour-talktrack-meter">
-      <span className={cn(PATROL_MONO, overLength && 'text-red-600 dark:text-red-400')} data-testid="tour-talktrack-chars">
-        {talkTrack.length}/{TOUR_TALK_TRACK_MAX} chars
-      </span>
-      <span className={cn(PATROL_MONO, 'text-theme-secondary')} data-testid="tour-talktrack-seconds">
-        ≈ {seconds.toFixed(1)} s in {chunks.length} {chunks.length === 1 ? 'part' : 'parts'}
-      </span>
-      <span className="sr-only">{`Stop ${stopNumber} talk track: about ${seconds.toFixed(1)} seconds in ${chunks.length} parts.`}</span>
-      {truncated && (
-        <span className="text-[11px] text-amber-700 dark:text-amber-400 break-words" data-testid="tour-talktrack-truncated">
-          Past the {TOUR_STOP_SPEECH_CAP_S} s cap — the robot stops after {chunks.length} {chunks.length === 1 ? 'part' : 'parts'} and the rest is not said.
-        </span>
-      )}
-    </div>
-  );
-});
+function countErrors(e: FieldErrors): number {
+  const top = [e.name, e.greetingPlaceId, e.greeting, e.offer, e.farewell, e.stops, e.siteCard].filter(Boolean).length;
+  return top + Object.values(e.byStop).reduce((n, s) => n + Object.values(s).filter(Boolean).length, 0);
+}
 
 // ============================================================================
 // COMPONENT
 // ============================================================================
 
-export const RouteEditor = memo(function RouteEditor({
-  readOnly = false,
-  route,
-  robots,
-  defaultRobotId,
-  onSaved,
-  onCancel,
-  onDelete,
-  className,
-}: RouteEditorProps) {
+export const RouteEditor = memo(function RouteEditor({ readOnly = false, route, robots, defaultRobotId, onSaved, onCancel, className }: RouteEditorProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFromRoute(route, defaultRobotId));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
   const [pickPlace, setPickPlace] = useState<string>('');
+  const [manualPlace, setManualPlace] = useState('');
   /** Result of the last "Hear it" — one line, shared by every stop. */
   const [previewNote, setPreviewNote] = useState<string | null>(null);
   const [previewingStopId, setPreviewingStopId] = useState<string | null>(null);
-  const [manualPlace, setManualPlace] = useState('');
   /** Stop ids whose details are folded away (inputs stay mounted). */
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(readOnly ? [] : route?.stops.map((s) => s.id) ?? []));
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(readOnly ? [] : (route?.stops.map((s) => s.id) ?? [])));
+  const formRef = useRef<HTMLFormElement>(null);
 
   const saveRoute = useTourStore((s) => s.saveRoute);
   const fetchPlaces = useTourStore((s) => s.fetchPlaces);
@@ -345,7 +234,9 @@ export const RouteEditor = memo(function RouteEditor({
   // Reset the draft when a different tour is opened.
   useEffect(() => {
     setDraft(draftFromRoute(route, defaultRobotId));
-    setCollapsed(new Set(readOnly ? [] : route?.stops.map((s) => s.id) ?? []));
+    setCollapsed(new Set(readOnly ? [] : (route?.stops.map((s) => s.id) ?? [])));
+    setSubmitted(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route?.id, readOnly]);
 
   useEffect(() => {
@@ -357,7 +248,6 @@ export const RouteEditor = memo(function RouteEditor({
   }, [fetchSkills]);
 
   const placeName = useCallback((id: string) => places?.find((p) => p.id === id)?.name ?? id, [places]);
-
   const update = useCallback((patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch })), []);
   const updateStop = useCallback((index: number, patch: Partial<TourStop>) => {
     setDraft((d) => ({ ...d, stops: d.stops.map((s, i) => (i === index ? { ...s, ...patch } : s)) }));
@@ -377,20 +267,14 @@ export const RouteEditor = memo(function RouteEditor({
       askToContinue: false,
     };
     setDraft((d) => ({ ...d, stops: [...d.stops, stop] }));
-    // A new stop opens: it has no talk track yet, which is the whole job.
-    setCollapsed((s) => {
-      const next = new Set(s);
-      next.delete(stop.id);
-      return next;
-    });
     if (pickPlace === MANUAL) setManualPlace('');
   }, [pickPlace, manualPlace, placeName]);
 
   /**
-   * Speak a stop's talk track through the robot's own voice service, exactly as
-   * a visitor would hear it: the KEPT chunks, joined — not the raw textarea, so
-   * a track past the speech cap sounds in the preview the way it will sound on
-   * the tour.
+   * Speak a stop's talk track through the robot's own voice service, chunk by
+   * chunk the way the runner says it — the KEPT chunks, so a track past the
+   * speech cap sounds in the preview the way it will on the tour, and no chunk
+   * exceeds the 500 characters `/voice/say` accepts.
    */
   const previewStop = useCallback(
     async (stop: TourStop) => {
@@ -398,30 +282,22 @@ export const RouteEditor = memo(function RouteEditor({
         setPreviewNote('Pick a robot to hear this on.');
         return;
       }
-      // Chunk by chunk, in order, the way the runner says it at the stop — not
-      // joined back into one string. `/voice/say` rejects anything over 500
-      // characters while a talk track may be TOUR_TALK_TRACK_MAX (600), so the
-      // joined form made the preview unreachable for content this very editor
-      // reports as within cap.
       const chunks = chunkTalkTrack(stop.talkTrack);
       if (chunks.length === 0) return;
       setPreviewingStopId(stop.id);
       setPreviewNote(null);
       try {
-        for (const chunk of chunks) {
-          await voiceApi.say(draft.robotId, chunk, draft.language);
-        }
+        for (const chunk of chunks) await voiceApi.say(draft.robotId, chunk, draft.language);
         const spokenChars = chunks.reduce((n, c) => n + c.length, 0);
         setPreviewNote(`Sent to the robot's speaker (${spokenChars} characters).`);
       } catch (err) {
-        // The voice service is a sidecar and is often simply not running; say
-        // so instead of leaving the author waiting for a sound that never comes.
+        // The voice service is a sidecar and often simply not running; say so.
         setPreviewNote(`Could not play it: ${getErrorMessage(err, 'the voice service did not answer')}`);
       } finally {
         setPreviewingStopId(null);
       }
     },
-    [draft.robotId, draft.language]
+    [draft.robotId, draft.language],
   );
 
   const toggleCollapsed = useCallback((id: string) => {
@@ -434,682 +310,261 @@ export const RouteEditor = memo(function RouteEditor({
   }, []);
 
   const problems = useMemo(() => validateDraft(draft), [draft]);
+  const errors = useMemo<FieldErrors>(() => (submitted ? fieldErrors(problems) : { byStop: {} }), [submitted, problems]);
+  const invalidCount = submitted ? countErrors(errors) : 0;
 
-  const handleSave = useCallback(async () => {
-    if (readOnly || problems.length > 0) return;
-    setSaving(true);
-    setSaveError(null);
-    const saved = await saveRoute(draftToInput(draft), route?.id ?? null);
-    setSaving(false);
-    if (saved) onSaved(saved);
-    else setSaveError(useTourStore.getState().error ?? 'Saving failed');
-  }, [readOnly, problems, saveRoute, draft, route?.id, onSaved]);
-
-  const placeOptions: TourPlace[] = places ?? [];
-  const robotLabel = robots.find((r) => r.id === draft.robotId)?.name ?? (draft.robotId || 'any robot');
-  const previewLegs = useMemo(
-    () => draft.stops.map((s, i) => ({ index: i, label: s.headline || s.placeId || '?', status: 'route' as const })),
-    [draft.stops]
+  const handleSubmit = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      if (readOnly) return;
+      setSubmitted(true);
+      if (problems.length > 0) {
+        requestAnimationFrame(() => formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
+        return;
+      }
+      setSaving(true);
+      setSaveError(null);
+      const saved = await saveRoute(draftToInput(draft), route?.id ?? null);
+      setSaving(false);
+      if (saved) {
+        onSaved(saved);
+        return;
+      }
+      const message = useTourStore.getState().error ?? 'Saving failed';
+      setSaveError(message);
+      toast.error(route ? "Couldn't update tour" : "Couldn't create tour", { description: message });
+    },
+    [readOnly, problems, saveRoute, draft, route, onSaved],
   );
+
+  const placeOptions = places ?? [];
+  const placesListId = placeOptions.length ? `tour-places-${draft.robotId}` : undefined;
+  const robotLabel = robots.find((r) => r.id === draft.robotId)?.name ?? (draft.robotId || 'Any robot');
+  const previewLegs = useMemo(() => draft.stops.map((s, i) => ({ index: i, label: s.headline || s.placeId || '?', status: 'route' as const })), [draft.stops]);
   const totalSeconds = useMemo(() => estimateTourSeconds(draft), [draft]);
-  const allCollapsed = draft.stops.length > 0 && draft.stops.every((s) => collapsed.has(s.id));
   const stopsFull = draft.stops.length >= TOUR_STOPS_MAX;
+  const placesMeta = draft.robotId
+    ? placesStatus === 'loading'
+      ? 'Reading places…'
+      : placesStatus === 'error' || (placesStatus === 'ok' && placeOptions.length === 0)
+        ? 'The robot lists no places — type a place id.'
+        : `${placeOptions.length} places known`
+    : 'Pick a robot to list its places, or type a place id.';
 
   return (
-    <>
-    <fieldset disabled={readOnly} className={cn('flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start min-w-0', className)} data-testid="tour-route-editor">
-      {/* ------------------------------------------------------------ left: form */}
-      <div className="flex flex-col gap-4 min-w-0">
-        {/* Tour */}
-        <section className={PATROL_PANEL}>
-          <SectionHeader as="h3" title="Tour" className="mb-3" />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="tour-route-name">
-                Tour name
-              </label>
-              <input
-                id="tour-route-name"
-                data-testid="tour-route-name"
-                className={INPUT}
-                value={draft.name}
-                onChange={(e) => update({ name: e.target.value })}
-                placeholder="ZeMA visitor tour"
-              />
-            </div>
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="tour-route-robot">
-                Robot
-              </label>
-              <select
-                id="tour-route-robot"
-                data-testid="tour-route-robot"
-                className={cn(INPUT, 'truncate')}
-                value={draft.robotId}
-                onChange={(e) => update({ robotId: e.target.value })}
-              >
-                <option value="">Any robot (choose at start)</option>
-                {robots.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="tour-route-language">
-                Language
-              </label>
-              <select
-                id="tour-route-language"
-                data-testid="tour-route-language"
-                className={INPUT}
-                value={draft.language}
-                onChange={(e) => update({ language: e.target.value as SpokenLanguage })}
-              >
-                {SpokenLanguages.map((lang) => (
-                  <option key={lang} value={lang}>
-                    {lang === 'de' ? 'German' : 'English'}
-                  </option>
-                ))}
-              </select>
-              {/* The visitor's own language still wins per turn; this is only
-                  the language the AUTHORED sentences are written in. */}
-              <p className="card-meta text-[11px] mt-1">The prepared sentences are in this language. A visitor who speaks the other one is answered in theirs.</p>
-            </div>
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="tour-greeting-place">
-                Greeting place (waits and returns here)
-              </label>
-              <input
-                id="tour-greeting-place"
-                data-testid="tour-greeting-place"
-                className={cn(INPUT, 'font-mono text-xs')}
-                list={placeOptions.length ? `tour-places-${draft.robotId}` : undefined}
-                value={draft.greetingPlaceId}
-                placeholder="STAGING"
-                onChange={(e) => update({ greetingPlaceId: e.target.value })}
-              />
-            </div>
-          </div>
-        </section>
-
-        {/* What the robot says */}
-        <section className={PATROL_PANEL}>
-          <SectionHeader
-            as="h3"
-            title="What the robot says"
-            className="mb-3"
-            meta="authored, said verbatim"
-          />
-          {/* The disclosure is not an input on purpose: the robot appends its
-              own AI-disclosure sentence to the greeting and no operator can
-              remove it (EU AI Act Art. 50). */}
-          <p className="card-meta text-xs mb-3">
-            The robot appends its AI disclosure to the welcome — that it is an AI-driven robot, that the conversation is processed by an AI, and that it records
-            no video or audio. That sentence cannot be edited away here.
-          </p>
-          <div className="flex flex-col gap-3">
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="tour-greeting">
-                Welcome
-              </label>
-              <textarea
-                id="tour-greeting"
-                data-testid="tour-greeting"
-                className={cn(INPUT, 'min-h-[3rem]')}
-                rows={2}
-                value={draft.greeting}
-                placeholder="Hallo! Willkommen am ZeMA."
-                onChange={(e) => update({ greeting: e.target.value })}
-              />
-            </div>
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="tour-offer">
-                Offer
-              </label>
-              <textarea
-                id="tour-offer"
-                data-testid="tour-offer"
-                className={cn(INPUT, 'min-h-[3rem]')}
-                rows={2}
-                value={draft.offer}
-                placeholder="Soll ich Ihnen alles zeigen? Das dauert etwa sechs Minuten."
-                onChange={(e) => update({ offer: e.target.value })}
-              />
-            </div>
-            <div className="min-w-0">
-              <label className={LABEL} htmlFor="tour-farewell">
-                Goodbye
-              </label>
-              <textarea
-                id="tour-farewell"
-                data-testid="tour-farewell"
-                className={cn(INPUT, 'min-h-[3rem]')}
-                rows={2}
-                value={draft.farewell}
-                placeholder="Danke für Ihren Besuch!"
-                onChange={(e) => update({ farewell: e.target.value })}
-              />
-            </div>
-            <div className="min-w-0">
-              <span className={LABEL}>Site card — facts true anywhere on this tour</span>
-              <p className="card-meta text-[11px] mb-1.5">What this site is, who runs it. The robot may answer from these at every stop.</p>
-              <FactList
-                label="Site fact"
-                facts={draft.siteCard}
-                max={TOUR_SITE_CARD_MAX}
-                maxLength={TOUR_FACT_MAX}
-                placeholder="ZeMA is a research centre for mechatronics and automation in Saarbrücken."
-                onChange={(siteCard) => update({ siteCard })}
-                testId="tour-sitecard"
-              />
-            </div>
-          </div>
-        </section>
-
-        {/* Stops */}
-        <section className={PATROL_PANEL}>
-          <SectionHeader
-            as="h3"
-            title="Stops"
-            count={draft.stops.length}
-            className="mb-3"
-            meta={
-              draft.robotId
-                ? placesStatus === 'loading'
-                  ? 'reading places…'
-                  : placesStatus === 'error' || (placesStatus === 'ok' && placeOptions.length === 0)
-                    ? 'no places from the robot — type a place id'
-                    : `${placeOptions.length} places known`
-                : 'pick a robot to list its places'
-            }
-            actions={
-              draft.stops.length > 1 ? (
-                <button
-                  type="button"
-                  className={cn('text-[11px] text-theme-tertiary hover:text-theme-primary rounded px-1', PATROL_MOTION, PATROL_FOCUS)}
-                  onClick={() => setCollapsed(allCollapsed ? new Set() : new Set(draft.stops.map((s) => s.id)))}
-                >
-                  {allCollapsed ? 'Expand all' : 'Collapse all'}
-                </button>
-              ) : undefined
-            }
-          />
-
-          {draft.stops.length === 0 && (
-            <p className="card-meta text-xs mb-3">No stops yet. Add places below in the order the robot should walk a visitor through them.</p>
-          )}
-
-          <ol className={cn('flex flex-col gap-2', STEPPER_LINE)}>
-            {draft.stops.map((stop, index) => {
-              const missing = !stop.placeId.trim() || !stop.talkTrack.trim();
-              const isOpen = missing || !collapsed.has(stop.id);
-              const detailsId = `tour-stop-details-${stop.id}`;
-              const chunkCount = chunkTalkTrack(stop.talkTrack).length;
-              return (
-                <li key={stop.id} className={cn('flex items-start gap-3 min-w-0', PATROL_FADE_IN)} data-testid="tour-stop" data-index={index}>
-                  <span className={cn(NODE, LEG_NODE.route, missing && 'ring-2 ring-amber-500/50')} aria-hidden="true">
-                    {index + 1}
-                  </span>
-
-                  <div
-                    className={cn(
-                      'glass-subtle rounded-brand p-3 flex-1 min-w-0 flex flex-col gap-2 border border-transparent',
-                      PATROL_MOTION,
-                      isOpen && 'border-glass-highlight',
-                      missing && 'border-l-[3px] border-l-amber-500'
-                    )}
-                  >
-                    {/* summary line + rail */}
-                    <div className="flex items-start gap-2 min-w-0">
-                      <button
-                        type="button"
-                        className={cn('flex-1 min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-left rounded', PATROL_FOCUS, !missing && 'cursor-pointer')}
-                        aria-expanded={isOpen}
-                        aria-controls={detailsId}
-                        aria-label={`Stop ${index + 1} details`}
-                        disabled={missing}
-                        onClick={() => toggleCollapsed(stop.id)}
-                      >
-                        <span className="text-sm font-medium text-theme-primary truncate max-w-full">
-                          {stop.headline || stop.placeId || <span className="text-theme-muted">unnamed</span>}
-                        </span>
-                        <span className={CHIP}>{stop.placeId || '—'}</span>
-                        <span className={CHIP}>
-                          {chunkCount} {chunkCount === 1 ? 'part' : 'parts'}
-                        </span>
-                        {stop.facts.filter((f) => f.trim()).length > 0 && <span className={CHIP}>{stop.facts.filter((f) => f.trim()).length} facts</span>}
-                        {stop.demo && <span className={cn(CHIP, 'text-cobalt-700 dark:text-cobalt-300')}>demo</span>}
-                        <span className={cn('ml-auto text-theme-tertiary text-[10px]', PATROL_MOTION, isOpen && 'rotate-180')} aria-hidden="true">
-                          ▼
-                        </span>
-                      </button>
-                      <div className={cn('shrink-0 flex gap-1', isOpen ? 'flex-col sm:flex-row' : 'flex-row')}>
-                        <button
-                          type="button"
-                          className={ICON_BTN}
-                          aria-label={`Move stop ${index + 1} up`}
-                          data-testid="tour-stop-up"
-                          disabled={index === 0}
-                          onClick={() => setDraft((d) => ({ ...d, stops: moveStop(d.stops, index, -1) }))}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className={ICON_BTN}
-                          aria-label={`Move stop ${index + 1} down`}
-                          data-testid="tour-stop-down"
-                          disabled={index === draft.stops.length - 1}
-                          onClick={() => setDraft((d) => ({ ...d, stops: moveStop(d.stops, index, 1) }))}
-                        >
-                          ↓
-                        </button>
-                        <button
-                          type="button"
-                          className={cn(ICON_BTN, 'text-red-600 dark:text-red-400 hover:bg-red-500/10')}
-                          aria-label={`Remove stop ${index + 1}`}
-                          data-testid="tour-stop-remove"
-                          onClick={() => setDraft((d) => ({ ...d, stops: d.stops.filter((_, i) => i !== index) }))}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* details — folded with `hidden`, never unmounted */}
-                    <div id={detailsId} className={cn('flex flex-col gap-2 min-w-0', !isOpen && 'hidden')}>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <div className="min-w-0">
-                          <label className={LABEL}>Headline</label>
-                          <input
-                            className={INPUT}
-                            aria-label={`Stop ${index + 1} headline`}
-                            data-testid="tour-stop-headline"
-                            maxLength={TOUR_HEADLINE_MAX}
-                            value={stop.headline}
-                            onChange={(e) => updateStop(index, { headline: e.target.value })}
-                          />
-                          <span className={cn(PATROL_MONO, 'mt-1 inline-block')}>
-                            {stop.headline.length}/{TOUR_HEADLINE_MAX}
-                          </span>
-                        </div>
-                        <div className="min-w-0">
-                          <label className={LABEL}>Place id</label>
-                          <input
-                            className={cn(INPUT, 'font-mono text-xs')}
-                            aria-label={`Stop ${index + 1} place id`}
-                            aria-invalid={!stop.placeId.trim() || undefined}
-                            list={placeOptions.length ? `tour-places-${draft.robotId}` : undefined}
-                            value={stop.placeId}
-                            onChange={(e) => updateStop(index, { placeId: e.target.value })}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="min-w-0">
-                        <label className={LABEL}>Talk track (said verbatim, in ≤2-sentence parts)</label>
-                        <textarea
-                          className={cn(INPUT, 'min-h-[5rem]')}
-                          rows={4}
-                          aria-label={`Stop ${index + 1} talk track`}
-                          data-testid="tour-stop-talktrack"
-                          maxLength={TOUR_TALK_TRACK_MAX}
-                          value={stop.talkTrack}
-                          placeholder="Hier ist meine Arbeitsstation. Ich lege einen Apfel auf den Teller — mit einem VLA-Modell, das wir selbst trainiert haben."
-                          onChange={(e) => updateStop(index, { talkTrack: e.target.value })}
-                        />
-                        <div className="flex flex-wrap items-center gap-2 min-w-0">
-                          <TalkTrackMeter talkTrack={stop.talkTrack} stopNumber={index + 1} />
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="min-h-9 ml-auto"
-                            data-testid="tour-stop-preview"
-                            aria-label={`Hear stop ${index + 1}`}
-                            disabled={!stop.talkTrack.trim() || previewingStopId === stop.id}
-                            isLoading={previewingStopId === stop.id}
-                            title={draft.robotId ? 'Say it through the robot speaker' : 'Pick a robot first'}
-                            onClick={() => void previewStop(stop)}
-                          >
-                            Hear it
-                          </Button>
-                        </div>
-                      </div>
-
-                      <div className="min-w-0">
-                        <label className={LABEL}>Facts — the only ground for answering a question here</label>
-                        <FactList
-                          label={`Stop ${index + 1} fact`}
-                          facts={stop.facts}
-                          max={TOUR_FACTS_MAX}
-                          maxLength={TOUR_FACT_MAX}
-                          placeholder="The model was trained on 120 demonstrations recorded on this robot."
-                          onChange={(facts) => updateStop(index, { facts })}
-                          testId="tour-stop-facts"
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
-                        <div className="min-w-0">
-                          <label className={LABEL}>Dwell (s)</label>
-                          {/* Capped at what the robot's `wait` block actually
-                              honours (TOUR_DWELL_MAX_S): a longer number here
-                              would be saved, shown in the duration estimate,
-                              and then silently clamped on the robot. */}
-                          <input
-                            type="number"
-                            min={0}
-                            max={TOUR_DWELL_MAX_S}
-                            className={cn(INPUT, 'font-mono text-xs')}
-                            aria-label={`Stop ${index + 1} dwell seconds`}
-                            value={stop.dwellS}
-                            onChange={(e) =>
-                              updateStop(index, {
-                                dwellS: Math.max(0, Math.min(TOUR_DWELL_MAX_S, Number(e.target.value) || 0)),
-                              })
-                            }
-                          />
-                        </div>
-                        <label className="col-span-2 inline-flex items-center gap-2 text-xs text-theme-secondary cursor-pointer select-none min-w-0">
-                          <input
-                            type="checkbox"
-                            className="accent-cobalt-500"
-                            aria-label={`Stop ${index + 1} ask to continue`}
-                            checked={stop.askToContinue}
-                            onChange={(e) => updateStop(index, { askToContinue: e.target.checked })}
-                          />
-                          Ask "shall we go on?" before walking to the next stop
-                        </label>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_7rem] gap-2 items-end">
-                        <div className="min-w-0">
-                          <label className={LABEL}>Demo skill (optional)</label>
-                          <select
-                            className={cn(INPUT, 'truncate')}
-                            aria-label={`Stop ${index + 1} demo skill`}
-                            data-testid="tour-stop-demo"
-                            value={stop.demo?.skillId ?? ''}
-                            onChange={(e) => {
-                              const chosen = e.target.value;
-                              // Re-selecting the stop's own unknown skill must
-                              // not wipe it: it is not in `skills`, so `find`
-                              // returns undefined and the branch below would
-                              // clear a demo the operator did not touch.
-                              if (chosen && stop.demo && chosen === stop.demo.skillId) return;
-                              const skill: TourSkillOption | undefined = skills.find((s) => s.id === chosen);
-                              updateStop(index, {
-                                demo: skill
-                                  ? {
-                                      skillId: skill.id,
-                                      skillName: skill.name,
-                                      modelVersionId: skill.linkedModelVersionId ?? null,
-                                      // Seeded from the skill's own timeout so the
-                                      // route's duration estimate starts honest.
-                                      expectSeconds: skill.timeout ?? DEFAULT_DEMO_SECONDS,
-                                    }
-                                  : null,
-                              });
-                            }}
-                          >
-                            <option value="">No demo</option>
-                            {/* A demo the skill library does not (or does not
-                                yet) list — a seeded route, a skill deleted
-                                since, or a library that failed to load. Without
-                                its own option the select falls back to "No
-                                demo", which tells the operator the stop has no
-                                demonstration while the draft still carries it
-                                and saves it straight back. Show it, and say
-                                that it is not in the library. */}
-                            {stop.demo && !skills.some((s) => s.id === stop.demo?.skillId) && (
-                              <option value={stop.demo.skillId}>
-                                {stop.demo.skillName || stop.demo.skillId} · not in the skill library
-                              </option>
-                            )}
-                            {skills.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name}
-                                {s.version ? ` · ${s.version}` : ''}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="min-w-0">
-                          <label className={LABEL}>Takes (s)</label>
-                          <input
-                            type="number"
-                            min={0}
-                            className={cn(INPUT, 'font-mono text-xs')}
-                            aria-label={`Stop ${index + 1} demo seconds`}
-                            disabled={!stop.demo}
-                            value={stop.demo?.expectSeconds ?? 0}
-                            onChange={(e) => updateStop(index, { demo: stop.demo ? { ...stop.demo, expectSeconds: Number(e.target.value) } : null })}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-
-            {/* ghost node: add the next stop */}
-            <li className="flex items-start gap-3 min-w-0">
-              <span className={cn(NODE, 'border border-dashed border-glass-highlight text-theme-tertiary bg-[var(--glass-bg)]')} aria-hidden="true">
-                +
-              </span>
-              <div className="flex-1 min-w-0 border border-dashed border-glass-highlight rounded-brand p-3">
-                <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
-                  <div className="flex-1 min-w-0">
-                    <label className={LABEL} htmlFor="tour-place-pick">
-                      Add stop at
-                    </label>
-                    <select
-                      id="tour-place-pick"
-                      data-testid="tour-place-pick"
-                      className={cn(INPUT, 'truncate')}
-                      value={pickPlace}
-                      onChange={(e) => setPickPlace(e.target.value)}
-                    >
-                      <option value="">Choose a place…</option>
-                      {placeOptions.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                          {p.placeType ? ` · ${p.placeType}` : ''}
-                        </option>
-                      ))}
-                      <option value={MANUAL}>Type a place id…</option>
-                    </select>
-                  </div>
-                  {pickPlace === MANUAL && (
-                    <div className="flex-1 min-w-0">
-                      <label className={LABEL} htmlFor="tour-place-manual">
-                        Place id
-                      </label>
-                      <input
-                        id="tour-place-manual"
-                        data-testid="tour-place-manual"
-                        className={cn(INPUT, 'font-mono text-xs')}
-                        value={manualPlace}
-                        placeholder="AISLE-1"
-                        onChange={(e) => setManualPlace(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            addStop();
-                          }
-                        }}
-                      />
-                    </div>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="min-h-9"
-                    data-testid="tour-stop-add"
-                    disabled={stopsFull || !pickPlace || (pickPlace === MANUAL && !manualPlace.trim())}
-                    title={stopsFull ? `A tour holds at most ${TOUR_STOPS_MAX} stops` : undefined}
-                    onClick={addStop}
-                  >
-                    Add stop
-                  </Button>
+    <form ref={formRef} onSubmit={(e) => void handleSubmit(e)} noValidate className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'} data-testid="tour-route-editor">
+      {/* One fieldset for the body: `disabled` propagates to every control in
+          it, so no field has to know about the role. min-w-0 because a
+          fieldset's intrinsic min-width would otherwise overflow the grid. */}
+      <fieldset disabled={readOnly} className="min-w-0">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3 xl:items-start">
+        <div className="flex min-w-0 flex-col gap-6 xl:col-span-2">
+          {/* Basics */}
+          <Panel>
+            <Panel.Header title="Basics" />
+            <Panel.Body className="flex flex-col gap-4">
+              {(invalidCount > 0 || saveError) && (
+                <div className="rounded-control border border-line-subtle bg-inset px-3 py-2 text-[13px] text-signal-stopped" role="alert" data-testid="tour-editor-problems">
+                  {saveError ?? `Fix ${invalidCount} field${invalidCount === 1 ? '' : 's'} before saving.`}
+                  {errors.stops && <span className="block">{errors.stops}</span>}
                 </div>
-                {stopsFull && <p className="card-meta text-[11px] mt-1.5">A tour holds at most {TOUR_STOPS_MAX} stops.</p>}
+              )}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField label="Name" required error={errors.name}>
+                  <Input data-testid="tour-route-name" value={draft.name} onChange={(e) => update({ name: e.target.value })} placeholder="ZeMA visitor tour" />
+                </FormField>
+                <FormField label="Robot" hint="Any robot: you choose one when you start the tour.">
+                  <Select
+                    data-testid="tour-route-robot"
+                    value={draft.robotId}
+                    onChange={(e) => update({ robotId: e.target.value })}
+                    options={[{ value: '', label: 'Any robot' }, ...robots.map((r) => ({ value: r.id, label: r.name }))]}
+                  />
+                </FormField>
+                {/* The visitor's own language still wins per turn; this is the language the AUTHORED sentences are in. */}
+                <FormField label="Language" hint="A visitor who speaks the other language is answered in theirs.">
+                  <Select
+                    data-testid="tour-route-language"
+                    value={draft.language}
+                    onChange={(e) => update({ language: e.target.value as SpokenLanguage })}
+                    options={SpokenLanguages.map((lang) => ({ value: lang, label: lang === 'de' ? 'German' : 'English' }))}
+                  />
+                </FormField>
+                <FormField label="Greeting place" required error={errors.greetingPlaceId} hint="Where the robot waits for visitors and returns to.">
+                  <Input data-testid="tour-greeting-place" className="font-mono" list={placesListId} value={draft.greetingPlaceId} placeholder="STAGING" onChange={(e) => update({ greetingPlaceId: e.target.value })} />
+                </FormField>
               </div>
-            </li>
-          </ol>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Switch data-testid="tour-route-enabled" label="Armed" description="The robot may give this tour." checked={draft.enabled} onCheckedChange={(enabled) => update({ enabled })} />
+                <Switch
+                  data-testid="tour-route-autogreet"
+                  label="Greet on sight"
+                  description="Offer this tour to a visitor the robot sees."
+                  checked={draft.autoGreet}
+                  onCheckedChange={(autoGreet) => update({ autoGreet })}
+                />
+              </div>
+              {/* An armed auto-greet on a disabled tour is silent; say so rather than let the operator believe the robot will speak. */}
+              {draft.autoGreet && !draft.enabled && (
+                <p className="text-[13px] text-ink-secondary" data-testid="tour-autogreet-inert">
+                  The tour is off — the robot will not offer it to anyone.
+                </p>
+              )}
+            </Panel.Body>
+          </Panel>
 
-          {placeOptions.length > 0 && (
-            <datalist id={`tour-places-${draft.robotId}`}>
-              {placeOptions.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </datalist>
-          )}
-        </section>
-      </div>
-
-      {/* ------------------------------------------------------ right: preview */}
-      <aside className={cn(PATROL_STICKY_RAIL, 'flex flex-col gap-4 min-w-0')}>
-        <section className={PATROL_PANEL}>
-          <SectionHeader
-            as="h3"
-            title="Preview"
-            className="mb-3"
-            actions={
-              <span className={cn(PATROL_MONO, 'inline-flex items-center gap-1.5')}>
-                <StatusDot tone={draft.enabled ? 'accent' : 'neutral'} />
-                {draft.enabled ? 'enabled' : 'disabled'}
-              </span>
-            }
-          />
-          {/* The stops as the same stepper the cards and the run detail draw. A
-              map preview is deliberately not here: the robot places a stop by
-              its place id, and a route with no run behind it has no poses to
-              draw honestly. */}
-          {previewLegs.length > 0 ? <RoutePath size="md" legs={previewLegs} className="mb-3" /> : <p className="card-meta text-xs mb-3">Add stops to see the path.</p>}
-          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5">
-            <Fact label="Robot">{robotLabel}</Fact>
-            <Fact label="Stops">{draft.stops.length}</Fact>
-            <Fact label="Takes">
-              <span data-testid="tour-preview-duration">{formatEstimate(totalSeconds)}</span>
-            </Fact>
-            <Fact label="Language">{draft.language === 'de' ? 'German' : 'English'}</Fact>
-            <Fact label="Waits at">{draft.greetingPlaceId.trim() || '—'}</Fact>
-            <Fact label="Site facts">{draft.siteCard.filter((f) => f.trim()).length}</Fact>
-          </dl>
-
-          <div className="mt-3 flex flex-col gap-2 pt-3 border-t border-glass-subtle">
-            <label className="inline-flex items-center gap-2.5 text-sm text-theme-secondary cursor-pointer select-none">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                data-testid="tour-route-enabled"
-                checked={draft.enabled}
-                onChange={(e) => update({ enabled: e.target.checked })}
-              />
-              <span
-                className={cn(
-                  'relative inline-block w-9 h-5 rounded-full shrink-0 bg-surface-light-300 dark:bg-surface-500',
-                  'peer-checked:bg-cobalt-500 peer-focus-visible:ring-2 peer-focus-visible:ring-cobalt-500/40',
-                  'after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4 after:rounded-full after:bg-white after:shadow-sm',
-                  'after:transition-transform after:duration-200 peer-checked:after:translate-x-4',
-                  PATROL_MOTION
+          {/* Stops */}
+          <Panel>
+            <Panel.Header title="Stops" description={placesMeta} />
+            <Panel.Body className="flex flex-col gap-4">
+              {draft.stops.length === 0 && (
+                <p className={errors.stops ? 'text-[13px] text-signal-stopped' : 'text-[13px] text-ink-tertiary'}>
+                  {errors.stops ?? 'No stops yet. Add places in the order the robot should walk a visitor through them.'}
+                </p>
+              )}
+              {draft.stops.length > 0 && (
+                <ol className="relative flex flex-col gap-3 before:absolute before:bottom-6 before:left-3 before:top-6 before:w-px before:bg-line">
+                  {draft.stops.map((stop, index) => (
+                    <StopCard
+                      key={stop.id}
+                      stop={stop}
+                      index={index}
+                      count={draft.stops.length}
+                      open={!stop.placeId.trim() || !stop.talkTrack.trim() || !collapsed.has(stop.id)}
+                      errors={errors.byStop[index]}
+                      placesListId={placesListId}
+                      skills={skills}
+                      previewing={previewingStopId === stop.id}
+                      onToggle={() => toggleCollapsed(stop.id)}
+                      onChange={(patch) => updateStop(index, patch)}
+                      onMove={(delta) => setDraft((d) => ({ ...d, stops: moveStop(d.stops, index, delta) }))}
+                      onRemove={() => setDraft((d) => ({ ...d, stops: d.stops.filter((_, i) => i !== index) }))}
+                      onPreview={() => void previewStop(stop)}
+                    />
+                  ))}
+                </ol>
+              )}
+              {previewNote && (
+                <p className="text-[13px] text-ink-secondary" role="status" data-testid="tour-preview-note">
+                  {previewNote}
+                </p>
+              )}
+              <div className="flex flex-col gap-3 border-t border-line-subtle pt-4 sm:flex-row sm:items-end">
+                <FormField label="Add stop at" className="min-w-0 flex-1" hint={stopsFull ? `A tour holds at most ${TOUR_STOPS_MAX} stops.` : undefined}>
+                  <Select
+                    data-testid="tour-place-pick"
+                    value={pickPlace}
+                    onChange={(e) => setPickPlace(e.target.value)}
+                    placeholder="Choose a place…"
+                    options={[...placeOptions.map((p) => ({ value: p.id, label: `${p.name}${p.placeType ? ` · ${p.placeType}` : ''}` })), { value: MANUAL, label: 'Type a place id…' }]}
+                  />
+                </FormField>
+                {pickPlace === MANUAL && (
+                  <FormField label="Place id" className="min-w-0 flex-1">
+                    <Input
+                      data-testid="tour-place-manual"
+                      className="font-mono"
+                      value={manualPlace}
+                      placeholder="AISLE-1"
+                      onChange={(e) => setManualPlace(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addStop();
+                        }
+                      }}
+                    />
+                  </FormField>
                 )}
-                aria-hidden="true"
-              />
-              Enabled
-            </label>
-            <label className="inline-flex items-center gap-2.5 text-sm text-theme-secondary cursor-pointer select-none">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                data-testid="tour-route-autogreet"
-                checked={draft.autoGreet}
-                onChange={(e) => update({ autoGreet: e.target.checked })}
-              />
-              <span
-                className={cn(
-                  'relative inline-block w-9 h-5 rounded-full shrink-0 bg-surface-light-300 dark:bg-surface-500',
-                  'peer-checked:bg-cobalt-500 peer-focus-visible:ring-2 peer-focus-visible:ring-cobalt-500/40',
-                  'after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4 after:rounded-full after:bg-white after:shadow-sm',
-                  'after:transition-transform after:duration-200 peer-checked:after:translate-x-4',
-                  PATROL_MOTION
-                )}
-                aria-hidden="true"
-              />
-              Offer this tour to a visitor it sees
-            </label>
-            {/* An armed auto-greet on a disabled tour is silent; say so rather
-                than letting the operator believe the robot will speak. */}
-            {draft.autoGreet && !draft.enabled && (
-              <p className="text-[11px] text-amber-700 dark:text-amber-400" data-testid="tour-autogreet-inert">
-                The tour is disabled — the robot will not offer it to anyone.
+                <Button
+                  variant="secondary"
+                  leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}
+                  data-testid="tour-stop-add"
+                  disabled={stopsFull || !pickPlace || (pickPlace === MANUAL && !manualPlace.trim())}
+                  onClick={addStop}
+                >
+                  Add stop
+                </Button>
+              </div>
+              {placesListId && (
+                <datalist id={placesListId}>
+                  {placeOptions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </datalist>
+              )}
+            </Panel.Body>
+          </Panel>
+
+          {/* What the robot says */}
+          <Panel>
+            <Panel.Header title="What the robot says" description="Authored, said verbatim." />
+            <Panel.Body className="flex flex-col gap-4">
+              {/* Not an input on purpose: the robot appends its own AI disclosure to the welcome (EU AI Act Art. 50). */}
+              <p className="text-[13px] text-ink-tertiary">
+                The robot appends its AI disclosure to the welcome — that it is an AI-driven robot, that the conversation is processed by an AI, and that it records no
+                video or audio. That sentence cannot be edited away here.
               </p>
-            )}
-          </div>
-        </section>
-
-        {/* save bar — fixed to the bottom on small screens */}
-        <div
-          className={cn(
-            'fixed bottom-0 inset-x-0 z-20 glass-elevated rounded-none border-t border-glass p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]',
-            'lg:static lg:z-auto lg:rounded-brand-lg lg:border-t-0 lg:p-4',
-            'flex flex-col gap-2 min-w-0'
-          )}
-        >
-          {previewNote && (
-            <p className="text-xs text-theme-secondary break-words" role="status" data-testid="tour-preview-note">
-              {previewNote}
-            </p>
-          )}
-          {(problems.length > 0 || saveError) && (
-            <ul className="text-xs text-amber-700 dark:text-amber-400 list-disc pl-4 max-h-24 overflow-y-auto" role="status" data-testid="tour-editor-problems">
-              {problems.map((p) => (
-                <li key={p}>{p}</li>
-              ))}
-              {saveError && <li className="text-red-600 dark:text-red-400">{saveError}</li>}
-            </ul>
-          )}
-          <div className="flex flex-wrap items-center gap-2 justify-end">
-            {route && onDelete && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="mr-auto min-h-9 text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
-                data-testid="tour-route-delete"
-                onClick={() => { if (!readOnly) onDelete(route); }}
-              >
-                Delete tour
-              </Button>
-            )}
-            {onCancel && !readOnly && (
-              <Button size="sm" variant="ghost" className="min-h-9" onClick={onCancel}>
-                Cancel
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="primary"
-              className={cn('min-h-9', PATROL_MOTION, 'hover:shadow-[0_0_20px_-4px_color-mix(in_srgb,var(--color-primary)_45%,transparent)]')}
-              data-testid="tour-route-save"
-              isLoading={saving}
-              disabled={saving || problems.length > 0}
-              onClick={() => void handleSave()}
-            >
-              {route ? 'Save tour' : 'Create tour'}
-            </Button>
-          </div>
+              <FormField label="Welcome" required error={errors.greeting}>
+                <Textarea data-testid="tour-greeting" rows={2} value={draft.greeting} placeholder="Hallo! Willkommen am ZeMA." onChange={(e) => update({ greeting: e.target.value })} />
+              </FormField>
+              <FormField label="Offer" required error={errors.offer}>
+                <Textarea data-testid="tour-offer" rows={2} value={draft.offer} placeholder="Soll ich Ihnen alles zeigen? Das dauert etwa sechs Minuten." onChange={(e) => update({ offer: e.target.value })} />
+              </FormField>
+              <FormField label="Goodbye" required error={errors.farewell}>
+                <Textarea data-testid="tour-farewell" rows={2} value={draft.farewell} placeholder="Danke für Ihren Besuch!" onChange={(e) => update({ farewell: e.target.value })} />
+              </FormField>
+              <FormField label="Site card" hint="Facts true anywhere on this tour — what this site is, who runs it." error={errors.siteCard}>
+                <FactList
+                  label="Site fact"
+                  facts={draft.siteCard}
+                  max={TOUR_SITE_CARD_MAX}
+                  maxLength={TOUR_FACT_MAX}
+                  placeholder="ZeMA is a research centre for mechatronics and automation in Saarbrücken."
+                  onChange={(siteCard) => update({ siteCard })}
+                  testId="tour-sitecard"
+                />
+              </FormField>
+            </Panel.Body>
+          </Panel>
         </div>
-      </aside>
-    </fieldset>
-    {readOnly && <div className="flex gap-2">
-      {onCancel && <Button size="sm" variant="ghost" onClick={onCancel}>Back to routes</Button>}
-    </div>}
-    </>
+
+        {/* Preview — the stops as the same stepper the table and the visit draw. No map: a stop is placed by its place id. */}
+        <Panel as="aside" className="xl:sticky xl:top-20">
+          <Panel.Header title="Preview" />
+          <Panel.Body className="flex flex-col gap-4">
+            {previewLegs.length > 0 ? <RoutePath size="md" legs={previewLegs} /> : <p className="text-[13px] text-ink-tertiary">Add stops to see the path.</p>}
+            <KeyValueList
+              columns={1}
+              items={[
+                { label: 'Robot', value: robotLabel },
+                { label: 'Stops', value: draft.stops.length },
+                { label: 'Takes', value: <span data-testid="tour-preview-duration">{formatEstimate(totalSeconds)}</span> },
+                { label: 'Language', value: draft.language === 'de' ? 'German' : 'English' },
+                { label: 'Waits at', value: draft.greetingPlaceId.trim() || '—' },
+                { label: 'Site facts', value: `${draft.siteCard.filter((f) => f.trim()).length} of ${TOUR_SITE_CARD_MAX}` },
+                { label: 'Limits', value: `${TOUR_STOPS_MAX} stops · ${TOUR_FACTS_MAX} facts per stop · ${TOUR_TALK_TRACK_MAX} characters per talk track` },
+              ]}
+            />
+          </Panel.Body>
+        </Panel>
+      </div>
+      </fieldset>
+
+      <div className="sticky bottom-0 z-10 -mx-4 flex justify-end gap-2 border-t border-line bg-canvas px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+        {onCancel && (
+          <Button variant="ghost" onClick={onCancel}>
+            {readOnly ? 'Back to tours' : 'Cancel'}
+          </Button>
+        )}
+        {!readOnly && (
+          <Button type="submit" data-testid="tour-route-save" isLoading={saving} disabled={saving}>
+            {route ? 'Save changes' : 'Create tour'}
+          </Button>
+        )}
+      </div>
+    </form>
   );
 });

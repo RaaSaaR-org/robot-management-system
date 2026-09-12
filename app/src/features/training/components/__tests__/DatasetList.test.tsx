@@ -1,13 +1,14 @@
 /**
  * @file DatasetList.test.tsx
  * @description The status filter's missing option, the difference between an
- *              empty list and a filtered one, and the mixture action bar.
+ *              empty list and a filtered one, and the mixture picker.
  * @feature training
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { DatasetList } from '../DatasetList';
+import { CompatibilityModal } from '../datasets/CompatibilityModal';
 import type { Dataset } from '../../types';
 
 vi.mock('../../api/trainingApi', () => ({
@@ -47,18 +48,18 @@ describe('the status filter', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Importing' }));
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'importing' } });
     expect(screen.getByText('Importing one')).toBeInTheDocument();
     expect(screen.queryByText('Ready one')).not.toBeInTheDocument();
   });
 });
 
-describe('an empty grid', () => {
+describe('an empty table', () => {
   it('says "no match" when a filter is what emptied it', () => {
     // Otherwise the page tells someone with eleven datasets to import their
     // first one.
     render(<DatasetList datasets={[]} filtersActive />);
-    expect(screen.getByText('No datasets match your filters.')).toBeInTheDocument();
+    expect(screen.getByText('No datasets match')).toBeInTheDocument();
     expect(screen.queryByText('No datasets yet')).not.toBeInTheDocument();
   });
 
@@ -69,35 +70,27 @@ describe('an empty grid', () => {
 });
 
 describe('mixture selection', () => {
-  it('shows no action bar until something is selected', () => {
-    render(<DatasetList datasets={[dataset()]} onToggleSelection={() => {}} selectedIds={[]} />);
-    expect(screen.queryByTestId('mixture-action-bar')).not.toBeInTheDocument();
+  const two = [dataset(), dataset({ id: 'ds2', name: 'G1 Dex3 ObjectPlacement' })];
+
+  it('cannot check compatibility until two are picked', () => {
+    render(<CompatibilityModal isOpen onClose={() => {}} datasets={two} onContinue={() => {}} />);
+    expect(screen.getByTestId('mixture-count')).toHaveTextContent('0 selected');
+    expect(screen.getByRole('button', { name: /^Check/ })).toBeDisabled();
   });
 
   it('counts the selection and offers the next step', () => {
-    const onPrepareTraining = vi.fn();
     render(
-      <DatasetList
-        datasets={[dataset(), dataset({ id: 'ds2', name: 'G1 Dex3 ObjectPlacement' })]}
-        onToggleSelection={() => {}}
-        onPrepareTraining={onPrepareTraining}
-        selectedIds={['ds1', 'ds2']}
-      />
+      <CompatibilityModal isOpen onClose={() => {}} datasets={two} initialIds={['ds1', 'ds2']} onContinue={() => {}} />
     );
-
-    expect(screen.getByTestId('mixture-action-bar')).toHaveTextContent('2 selected');
-    fireEvent.click(screen.getByRole('button', { name: 'Prepare training run' }));
-    expect(onPrepareTraining).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('mixture-count')).toHaveTextContent('2 selected');
+    expect(screen.getByRole('button', { name: 'Check 2 datasets' })).toBeEnabled();
   });
 
-  it('reports a click on a card checkbox as a selection', () => {
-    const onToggleSelection = vi.fn();
-    render(
-      <DatasetList datasets={[dataset()]} onToggleSelection={onToggleSelection} selectedIds={[]} />
-    );
+  it('reports a click on a checkbox as a selection', () => {
+    render(<CompatibilityModal isOpen onClose={() => {}} datasets={two} onContinue={() => {}} />);
     fireEvent.click(
       screen.getByRole('checkbox', { name: 'Select GR00T AppleToPlate for a training mixture' })
     );
-    expect(onToggleSelection).toHaveBeenCalledWith(expect.objectContaining({ id: 'ds1' }));
+    expect(screen.getByTestId('mixture-count')).toHaveTextContent('1 selected — pick another to compare them');
   });
 });

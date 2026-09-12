@@ -5,12 +5,13 @@
  */
 
 import { memo, useMemo } from 'react';
-import { Card, Tooltip } from '@/shared/components/ui';
+import { Panel, StatusTag, Tooltip } from '@/shared/components/ui';
 import { SimBadge } from '../SimBadge';
+import { Readout } from '../common';
 import {
+  MOTOR_TEMP_CRITICAL_C,
   MOTOR_TEMP_WARNING_C,
   motorTempColor,
-  motorTempTextClass,
 } from '../../utils/temperature';
 import type { RobotTelemetry } from '../../types/robots.types';
 
@@ -18,15 +19,10 @@ import type { RobotTelemetry } from '../../types/robots.types';
 // HELPERS
 // ============================================================================
 
-/** "left_shoulder_pitch_joint" → "Left Shoulder Pitch" */
+/** "left_shoulder_pitch_joint" → "Left shoulder pitch" */
 function formatJointName(name: string): string {
-  return name
-    .replace(/_/g, ' ')
-    .replace(/joint$/i, '')
-    .trim()
-    .split(' ')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
+  const words = name.replace(/_/g, ' ').replace(/joint$/i, '').trim().toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 // ============================================================================
@@ -59,52 +55,49 @@ export const MotorTemperatureStrip = memo(function MotorTemperatureStrip({
   const maxTemp = Math.max(...temps);
   const hotCount = temps.filter((t) => t >= MOTOR_TEMP_WARNING_C).length;
 
+  const maxTone = maxTemp >= MOTOR_TEMP_CRITICAL_C ? 'stopped' : maxTemp >= MOTOR_TEMP_WARNING_C ? 'unknown' : undefined;
+
   return (
-    <Card>
-      <Card.Header>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-theme-primary">Motor Temperatures</h2>
-            <SimBadge telemetry={telemetry} group="motorTemperatures" />
-          </div>
-          <span className="text-xs text-theme-tertiary">
-            max{' '}
-            <span className={`font-mono font-semibold ${motorTempTextClass(maxTemp)}`}>
-              {maxTemp.toFixed(0)}°C
-            </span>
+    <Panel>
+      <Panel.Header
+        title="Motor temperatures"
+        actions={
+          <>
             {hotCount > 0 && (
-              <span className="ml-2 text-yellow-600 dark:text-yellow-400">
-                {hotCount} ≥ {MOTOR_TEMP_WARNING_C}°C
-              </span>
+              <StatusTag tone="gated">
+                {hotCount} at {MOTOR_TEMP_WARNING_C}°C+
+              </StatusTag>
             )}
-          </span>
+            <SimBadge telemetry={telemetry} group="motorTemperatures" />
+          </>
+        }
+      />
+      <Panel.Body className="flex flex-col gap-4">
+        <div className="flex flex-wrap gap-x-8 gap-y-3">
+          <Readout label="Hottest motor" value={maxTemp.toFixed(0)} unit="°C" tone={maxTone} />
+          <Readout label="Motors" value={entries.length} />
         </div>
-      </Card.Header>
-      <Card.Body>
         <div className="flex flex-wrap gap-1" role="list" aria-label="Per-joint motor temperatures">
           {entries.map(([name, temp]) => (
             <Tooltip key={name} content={`${formatJointName(name)}: ${temp.toFixed(1)}°C`}>
               <div
                 role="listitem"
                 aria-label={`${formatJointName(name)}: ${temp.toFixed(1)} degrees Celsius`}
-                className="w-4 h-7 rounded-sm cursor-default transition-colors duration-300 hover:ring-1 hover:ring-[var(--border-color-strong)]"
+                className="h-7 w-4 cursor-default rounded-[3px] transition-colors duration-300 hover:outline hover:outline-1 hover:outline-[var(--border-color-strong)]"
                 style={{ backgroundColor: motorTempColor(temp, 0.85) }}
               />
             </Tooltip>
           ))}
         </div>
-        <div className="mt-3 flex items-center justify-between text-xs text-theme-tertiary">
-          <span>{entries.length} joints</span>
-          <span className="flex items-center gap-2">
-            <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: motorTempColor(30, 0.85) }} />
-            ok
-            <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: motorTempColor(60, 0.85) }} />
-            {MOTOR_TEMP_WARNING_C}°C
-            <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: motorTempColor(80, 0.85) }} />
-            hot
-          </span>
+        <div className="flex items-center gap-2 text-xs text-ink-tertiary" aria-hidden="true">
+          <span className="inline-block h-3 w-3 rounded-[3px]" style={{ backgroundColor: motorTempColor(30, 0.85) }} />
+          OK
+          <span className="ml-2 inline-block h-3 w-3 rounded-[3px]" style={{ backgroundColor: motorTempColor(60, 0.85) }} />
+          {MOTOR_TEMP_WARNING_C}°C
+          <span className="ml-2 inline-block h-3 w-3 rounded-[3px]" style={{ backgroundColor: motorTempColor(80, 0.85) }} />
+          Hot
         </div>
-      </Card.Body>
-    </Card>
+      </Panel.Body>
+    </Panel>
   );
 });

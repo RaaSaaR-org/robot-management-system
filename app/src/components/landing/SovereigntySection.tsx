@@ -76,15 +76,15 @@ export function SovereigntySection() {
 
           <div>
             <h2 id="sovereignty-heading" className="lp-display lp-h2">
-              No cloud key.
+              Your intelligence.
               <br />
-              No data leaving the building.
+              On your terms.
             </h2>
 
             <p className="lp-lede mt-5">
-              One setting moves the platform&rsquo;s AI onto a model running in your own building.
-              What it decides there is still on the record — and that record can be checked by
-              whoever you have to show it to.
+              Run the platform&rsquo;s AI on your own hardware with Ollama, or connect a cloud
+              provider you choose. Keep decisions traceable with audit records, human approvals
+              and tools for handling data rights.
             </p>
 
             {/* Asymmetric: the switch is narrow, the record is wide. */}
@@ -114,7 +114,6 @@ export function SovereigntySection() {
                       <span
                         className="block text-[0.8125rem]"
                         style={{
-                          fontFamily: 'var(--font-mono)',
                           fontWeight: provider.local ? 600 : 400,
                           color: provider.local
                             ? 'var(--color-signal-measured)'
@@ -143,9 +142,9 @@ export function SovereigntySection() {
 
               {/* ---- 2. The paper trail ------------------------------------ */}
               <div>
-                <h3 className="lp-h3">The paper trail</h3>
+                <h3 className="lp-h3">A record you can verify</h3>
                 <p className="lp-body mt-3 text-[0.875rem]">
-                  What is implemented today, and the article it answers to.
+                  Implemented controls mapped to the requirements they support.
                 </p>
 
                 <dl
@@ -186,17 +185,14 @@ export function SovereigntySection() {
               </h3>
 
               <p className="lp-body mt-3">
-                A note an operator left on a robot standing at a customer site is personal data,
-                and no amount of clearing the database will ever touch it. So a deletion request
-                doesn&rsquo;t stop at the database. It wipes what every reachable robot remembers,
-                strips the operator and site details from the robot&rsquo;s own identity card, and
-                counts both.
+                Deletion requests reach beyond the central database. The platform clears personal
+                information from reachable robots&rsquo; memory and removes operator and site
+                details from their identity cards, recording the result of both steps.
               </p>
 
               <p className="lp-body mt-3">
-                A robot that was switched off is reported as unreachable — never as erased. An
-                erasure that claims success while a note survives out on the floor is the one
-                answer a data-subject request must never get.
+                Offline robots are reported as unreachable, so an incomplete erasure stays visible
+                until it can be resolved.
               </p>
             </div>
           </div>

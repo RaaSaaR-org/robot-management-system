@@ -33,13 +33,13 @@ const STATUS_LABELS: Record<ContributionStatus, string> = {
 };
 
 const STATUS_COLORS: Record<ContributionStatus, string> = {
-  draft: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
-  uploaded: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-  validating: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300',
-  reviewing: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
-  accepted: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
-  rejected: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-  revoked: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
+  draft: 'bg-inset text-ink-primary ',
+  uploaded: 'bg-signal-estimated/10 text-signal-estimated ',
+  validating: 'bg-signal-unknown/10 text-signal-unknown ',
+  reviewing: 'bg-primary/10 text-primary ',
+  accepted: 'bg-signal-measured/10 text-signal-measured ',
+  rejected: 'bg-signal-stopped/10 text-signal-stopped ',
+  revoked: 'bg-signal-unknown/10 text-signal-unknown ',
 };
 
 const SIZE_CLASSES = {

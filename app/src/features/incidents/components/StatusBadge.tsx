@@ -1,23 +1,17 @@
 /**
  * @file StatusBadge.tsx
- * @description Badge component displaying incident status
+ * @description Incident lifecycle status as the kit StatusTag (thin wrapper kept for callers)
  * @feature incidents
- * @dependencies @/shared/components/ui/Badge, @/features/incidents/types
  */
 
-import { Badge } from '@/shared/components/ui/Badge';
-import type { BadgeProps } from '@/shared/components/ui/Badge';
+import { StatusTag, statusTone } from '@/shared/components/ui';
 import type { IncidentStatus } from '../types/incidents.types';
 import { INCIDENT_STATUS_LABELS } from '../types/incidents.types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
 
 export interface StatusBadgeProps {
   /** Incident status */
   status: IncidentStatus;
-  /** Size variant */
+  /** Size variant ('lg' renders as 'md') */
   size?: 'sm' | 'md' | 'lg';
   /** Show dot indicator */
   showDot?: boolean;
@@ -25,50 +19,21 @@ export interface StatusBadgeProps {
   className?: string;
 }
 
-// ============================================================================
-// MAPPINGS
-// ============================================================================
-
-const STATUS_TO_VARIANT: Record<IncidentStatus, BadgeProps['variant']> = {
-  detected: 'error',
-  investigating: 'warning',
-  contained: 'info',
-  resolved: 'success',
-  closed: 'default',
-};
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
-
 /**
- * Displays a badge indicating incident status.
+ * Displays incident status as a StatusTag.
  *
  * @example
- * ```tsx
  * <StatusBadge status="investigating" />
- * <StatusBadge status="resolved" size="lg" />
- * ```
  */
-export function StatusBadge({
-  status,
-  size = 'sm',
-  showDot = true,
-  className,
-}: StatusBadgeProps) {
-  const variant = STATUS_TO_VARIANT[status];
-  const label = INCIDENT_STATUS_LABELS[status];
-  const shouldPulse = status === 'detected' || status === 'investigating';
-
+export function StatusBadge({ status, size = 'sm', showDot = true, className }: StatusBadgeProps) {
   return (
-    <Badge
-      variant={variant}
-      size={size}
+    <StatusTag
+      tone={statusTone(status)}
+      size={size === 'sm' ? 'sm' : 'md'}
       dot={showDot}
-      dotPulse={shouldPulse}
       className={className}
     >
-      {label}
-    </Badge>
+      {INCIDENT_STATUS_LABELS[status]}
+    </StatusTag>
   );
 }

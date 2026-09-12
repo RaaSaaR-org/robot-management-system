@@ -1,12 +1,15 @@
 /**
  * @file Input.tsx
- * @description Text input component with label, error state, and icon support
+ * @description Text input on the kit's field look, with an optional built-in
+ *              label, helper text, error and icons. Inside a FormField, leave
+ *              `label`/`error` to the FormField.
  * @feature shared
  * @dependencies shared/utils/cn
  */
 
 import { forwardRef, type InputHTMLAttributes, type ReactNode, useId } from 'react';
 import { cn } from '@/shared/utils/cn';
+import { fieldBase, fieldError, fieldHint, fieldInvalid, fieldLabel, fieldSizes, fieldValid } from './styles';
 
 // ============================================================================
 // TYPES
@@ -21,11 +24,13 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   helperText?: string;
   /** Error message (shows error state when provided) */
   error?: string;
+  /** Error look without a message (FormField sets aria-invalid, which works too) */
+  invalid?: boolean;
   /** Icon to display on the left */
   leftIcon?: ReactNode;
   /** Icon to display on the right */
   rightIcon?: ReactNode;
-  /** Input size */
+  /** Input size: sm 32px · md 38px · lg 44px */
   size?: InputSize;
   /** Full width input */
   fullWidth?: boolean;
@@ -35,19 +40,10 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
 // CONSTANTS
 // ============================================================================
 
-const sizeStyles: Record<InputSize, { input: string; icon: string }> = {
-  sm: {
-    input: 'py-1.5 text-sm',
-    icon: 'w-4 h-4',
-  },
-  md: {
-    input: 'py-2.5',
-    icon: 'w-5 h-5',
-  },
-  lg: {
-    input: 'py-3 text-lg',
-    icon: 'w-6 h-6',
-  },
+const iconPad: Record<InputSize, { left: string; right: string; pos: string }> = {
+  sm: { left: 'pl-8', right: 'pr-8', pos: 'px-2.5' },
+  md: { left: 'pl-9', right: 'pr-9', pos: 'px-3' },
+  lg: { left: 'pl-10', right: 'pr-10', pos: 'px-3.5' },
 };
 
 // ============================================================================
@@ -55,129 +51,87 @@ const sizeStyles: Record<InputSize, { input: string; icon: string }> = {
 // ============================================================================
 
 /**
- * A text input component with optional label, icons, and error state.
- *
  * @example
  * ```tsx
- * <Input label="Email" placeholder="Enter your email" />
+ * <Input label="Email" placeholder="you@example.com" />
  * <Input label="Password" type="password" error="Password is required" />
- * <Input leftIcon={<SearchIcon />} placeholder="Search..." />
- * <Input label="Amount" rightIcon={<span>$</span>} />
+ * <Input leftIcon={<Search className="w-4 h-4" />} placeholder="Search…" />
  * ```
  */
-export const Input = forwardRef<HTMLInputElement, InputProps>(
-  function Input(
-    {
-      label,
-      helperText,
-      error,
-      leftIcon,
-      rightIcon,
-      size = 'md',
-      fullWidth = false,
-      disabled,
-      className,
-      id,
-      ...props
-    },
-    ref
-  ) {
-    // Generate unique IDs for accessibility
-    const generatedId = useId();
-    const inputId = id || generatedId;
-    const errorId = `${inputId}-error`;
-    const helperId = `${inputId}-helper`;
+export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
+  { label, helperText, error, invalid, leftIcon, rightIcon, size = 'md', fullWidth = false, disabled, className, id, ...props },
+  ref,
+) {
+  const generatedId = useId();
+  const inputId = id || generatedId;
+  const errorId = `${inputId}-error`;
+  const helperId = `${inputId}-helper`;
 
-    const hasError = Boolean(error);
+  const ariaInvalid = props['aria-invalid'];
+  const hasError = Boolean(error) || Boolean(invalid) || ariaInvalid === true || ariaInvalid === 'true';
 
-    return (
-      <div className={cn('flex flex-col gap-1.5', fullWidth && 'w-full')}>
-        {/* Label */}
-        {label && (
-          <label
-            htmlFor={inputId}
+  return (
+    <div className={cn('flex flex-col gap-1.5', fullWidth && 'w-full')}>
+      {label && (
+        <label htmlFor={inputId} className={cn(fieldLabel, disabled && 'opacity-50')}>
+          {label}
+        </label>
+      )}
+
+      <div className="relative">
+        {leftIcon && (
+          <div
             className={cn(
-              'text-sm font-medium text-theme-secondary',
-              disabled && 'opacity-50'
+              'pointer-events-none absolute inset-y-0 left-0 flex items-center text-ink-tertiary [&_svg]:h-4 [&_svg]:w-4',
+              iconPad[size].pos,
             )}
+            aria-hidden="true"
           >
-            {label}
-          </label>
+            {leftIcon}
+          </div>
         )}
 
-        {/* Input wrapper */}
-        <div className="relative">
-          {/* Left icon */}
-          {leftIcon && (
-            <div
-              className={cn(
-                'absolute left-3 top-1/2 -translate-y-1/2 text-theme-tertiary',
-                sizeStyles[size].icon
-              )}
-              aria-hidden="true"
-            >
-              {leftIcon}
-            </div>
+        <input
+          ref={ref}
+          id={inputId}
+          disabled={disabled}
+          aria-invalid={hasError || undefined}
+          aria-describedby={error ? errorId : helperText ? helperId : undefined}
+          className={cn(
+            fieldBase,
+            fieldSizes[size],
+            hasError ? fieldInvalid : fieldValid,
+            leftIcon && iconPad[size].left,
+            rightIcon && iconPad[size].right,
+            className,
           )}
+          {...props}
+        />
 
-          {/* Input field */}
-          <input
-            ref={ref}
-            id={inputId}
-            disabled={disabled}
-            aria-invalid={hasError}
-            aria-describedby={
-              hasError ? errorId : helperText ? helperId : undefined
-            }
+        {rightIcon && (
+          <div
             className={cn(
-              // Base styles
-              'w-full rounded-brand border bg-theme-card px-3',
-              'text-theme-primary placeholder:text-theme-tertiary',
-              'transition-colors duration-200',
-              'focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent',
-              // Size
-              sizeStyles[size].input,
-              // Icon padding
-              leftIcon && 'pl-10',
-              rightIcon && 'pr-10',
-              // States
-              hasError
-                ? 'border-red-500 focus:ring-red-500'
-                : 'border-theme',
-              disabled && 'opacity-50 cursor-not-allowed bg-theme-elevated',
-              className
+              'absolute inset-y-0 right-0 flex items-center text-ink-tertiary [&_svg]:h-4 [&_svg]:w-4',
+              iconPad[size].pos,
             )}
-            {...props}
-          />
-
-          {/* Right icon */}
-          {rightIcon && (
-            <div
-              className={cn(
-                'absolute right-3 top-1/2 -translate-y-1/2 text-theme-tertiary',
-                sizeStyles[size].icon
-              )}
-              aria-hidden="true"
-            >
-              {rightIcon}
-            </div>
-          )}
-        </div>
-
-        {/* Error message */}
-        {hasError && (
-          <p id={errorId} className="text-sm text-red-500" role="alert">
-            {error}
-          </p>
-        )}
-
-        {/* Helper text */}
-        {!hasError && helperText && (
-          <p id={helperId} className="text-sm text-theme-tertiary">
-            {helperText}
-          </p>
+            aria-hidden="true"
+          >
+            {rightIcon}
+          </div>
         )}
       </div>
-    );
-  }
-);
+
+      {error && (
+        <p id={errorId} className={fieldError} role="alert">
+          {error}
+        </p>
+      )}
+
+      {!error && helperText && (
+        <p id={helperId} className={fieldHint}>
+          {helperText}
+        </p>
+      )}
+    </div>
+  );
+});

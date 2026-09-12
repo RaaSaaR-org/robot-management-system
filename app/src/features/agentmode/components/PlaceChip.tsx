@@ -77,7 +77,7 @@ function FenceOffMarker() {
   return (
     <span
       data-testid="agent-geofence-off"
-      className="card-meta shrink-0 text-amber-600 dark:text-amber-400"
+      className="shrink-0 text-xs font-medium text-signal-unknown"
       title={FENCE_OFF_PROSE}
     >
       · fence off
@@ -93,7 +93,7 @@ function FenceOffMarker() {
  * not merely say something different: the failure this guards against is an
  * operator glancing at the page, seeing the last place the robot was in, and
  * walking to the wrong aisle. An unknown place is therefore muted and dashed, a
- * known one a solid cobalt chip — the same measured-vs-guessed distinction the
+ * known one a solid primary chip — the same measured-vs-guessed distinction the
  * scene panel's distance readout makes for distances.
  *
  * It renders in BOTH states and never returns null: an absent chip would read
@@ -120,13 +120,13 @@ export const PlaceChip = memo(function PlaceChip({
         data-testid={testId ?? undefined}
         data-place-known="no"
         className={cn(
-          'inline-flex items-center gap-2 px-2.5 py-1.5 rounded-brand',
-          'border border-dashed border-glass-subtle',
+          'inline-flex items-center gap-2 rounded-control px-2.5 py-1.5',
+          'border border-dashed border-line-strong',
           className
         )}
       >
         <Tooltip side="bottom" content={UNKNOWN_PROSE}>
-          <span className="card-meta">Place unknown</span>
+          <span className="text-xs text-ink-muted">Place unknown</span>
         </Tooltip>
         {/* The same sentence, unconditionally in the DOM. `Tooltip` only mounts
             its panel while the pointer is over the trigger, and the trigger is
@@ -149,7 +149,7 @@ export const PlaceChip = memo(function PlaceChip({
       data-place-id={resolved.id}
       data-place-confidence={resolved.confidence}
       className={cn(
-        'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-brand glass-subtle',
+        'inline-flex items-center gap-1.5 rounded-control border border-line-subtle bg-inset px-2.5 py-1.5',
         'min-w-0',
         className
       )}
@@ -167,8 +167,8 @@ export const PlaceChip = memo(function PlaceChip({
       >
         <span
           className={cn(
-            'card-value truncate min-w-0',
-            stale ? 'text-theme-muted' : 'text-cobalt-600 dark:text-cobalt-400'
+            'min-w-0 truncate text-sm font-medium',
+            stale ? 'text-ink-muted' : 'text-primary'
           )}
         >
           {resolved.name}
@@ -176,13 +176,13 @@ export const PlaceChip = memo(function PlaceChip({
       </Tooltip>
       {stale && (
         // A drifted place used to differ from a current one by TEXT COLOUR
-        // ALONE — muted instead of cobalt — with the word "stale" reachable
+        // ALONE — muted instead of primary — with the word "stale" reachable
         // only through a hover tooltip. That is the page's own invariant
         // failing in the direction of over-confidence: a colour-blind operator,
         // a washed-out projector or a screen reader all got a place name
         // presented as if the pose behind it were current. The word is
         // therefore visible text, and it survives both colour and clipping.
-        <span className="card-meta shrink-0" title={STALE_PROSE}>
+        <span className="shrink-0 text-xs text-ink-muted" title={STALE_PROSE}>
           · stale
         </span>
       )}

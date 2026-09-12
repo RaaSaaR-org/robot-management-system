@@ -13,7 +13,9 @@ import {
   Tooltip as RechartsTooltip,
   ReferenceLine,
 } from 'recharts';
-import { Card, Spinner } from '@/shared/components/ui';
+import { EmptyState, Panel, Skeleton, chartColors, chartTheme } from '@/shared/components/ui';
+import { LineChart as LineChartIcon } from 'lucide-react';
+import { Readout } from '../common';
 import { robotsApi } from '../../api/robotsApi';
 import { MOTOR_TEMP_WARNING_C } from '../../utils/temperature';
 import type { RobotTelemetry } from '../../types/robots.types';
@@ -85,13 +87,8 @@ function Sparkline({ label, unit, data, dataKey, color, warnAt, domain }: Sparkl
   }
 
   return (
-    <div className="glass-subtle p-3 rounded-lg">
-      <div className="flex items-baseline justify-between mb-1">
-        <span className="card-label">{label}</span>
-        <span className="font-mono text-sm font-semibold text-theme-primary">
-          {latest != null ? `${latest.toFixed(0)}${unit}` : '—'}
-        </span>
-      </div>
+    <div className="flex flex-col gap-2 rounded-control border border-line-subtle bg-inset p-3">
+      <Readout label={label} value={latest != null ? latest.toFixed(0) : null} unit={unit} />
       {points.length >= 2 ? (
         <div className="h-16 min-h-16 min-w-0">
           {/* initialDimension: Recharts measures -1×-1 on first mount before
@@ -109,7 +106,7 @@ function Sparkline({ label, unit, data, dataKey, color, warnAt, domain }: Sparkl
               {warnAt !== undefined && (
                 <ReferenceLine
                   y={warnAt}
-                  stroke="rgba(234,179,8,0.6)"
+                  stroke={chartColors.unknown}
                   strokeDasharray="4 3"
                   strokeWidth={1}
                   ifOverflow="hidden"
@@ -120,20 +117,13 @@ function Sparkline({ label, unit, data, dataKey, color, warnAt, domain }: Sparkl
                   value != null ? [`${Number(value).toFixed(1)}${unit}`, label] : ['—', label]
                 }
                 labelFormatter={(time) => new Date(String(time)).toLocaleTimeString(UI_DATE_LOCALE)}
-                contentStyle={{
-                  backgroundColor: 'var(--glass-bg)',
-                  border: '1px solid var(--glass-border)',
-                  borderRadius: '8px',
-                  fontSize: 12,
-                }}
-                labelStyle={{ color: 'var(--text-secondary)' }}
-                itemStyle={{ color: 'var(--text-primary)' }}
+                {...chartTheme.tooltip}
               />
               <Area
                 type="monotone"
                 dataKey={dataKey}
                 stroke={color}
-                strokeWidth={2}
+                strokeWidth={1.75}
                 fill={`url(#${gradientId})`}
                 dot={false}
                 activeDot={{ r: 3 }}
@@ -143,7 +133,7 @@ function Sparkline({ label, unit, data, dataKey, color, warnAt, domain }: Sparkl
           </ResponsiveContainer>
         </div>
       ) : (
-        <div className="h-16 flex items-center justify-center text-xs text-theme-muted">
+        <div className="flex h-16 items-center justify-center text-xs text-ink-muted">
           Not enough history yet
         </div>
       )}
@@ -204,47 +194,43 @@ export const TelemetryHistorySparklines = memo(function TelemetryHistorySparklin
   }, [robotId]);
 
   return (
-    <Card>
-      <Card.Header>
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-theme-primary">Last Hour</h2>
-          <span className="text-xs text-theme-tertiary">telemetry history</span>
-        </div>
-      </Card.Header>
-      <Card.Body>
+    <Panel>
+      <Panel.Header title="Last hour" description="Recorded telemetry for this robot." />
+      <Panel.Body>
         {points === null ? (
-          <div className="flex items-center justify-center py-6">
-            <Spinner size="sm" color="cobalt" label="Loading history..." />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-label="Loading history">
+            <Skeleton className="h-28 w-full" />
+            <Skeleton className="h-28 w-full" />
           </div>
         ) : points.length === 0 ? (
-          <div className="py-6 text-center">
-            <p className="text-sm text-theme-secondary">No history recorded yet</p>
-            <p className="text-xs text-theme-muted mt-1">
-              Sparklines appear once telemetry has been persisted for this robot
-            </p>
-          </div>
+          <EmptyState
+            size="sm"
+            icon={<LineChartIcon />}
+            title="No history yet"
+            description="History appears once telemetry has been recorded for this robot."
+          />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Sparkline
-              label="Battery SOC"
+              label="Battery"
               unit="%"
               data={points}
               dataKey="soc"
-              color="var(--color-cobalt-500)"
+              color={chartColors.primary}
               domain={[0, 100]}
             />
             <Sparkline
-              label="Max motor temp"
+              label="Hottest motor"
               unit="°C"
               data={points}
               dataKey="maxMotorTemp"
-              color="var(--color-turquoise-600)"
+              color={chartColors.series[1]}
               warnAt={MOTOR_TEMP_WARNING_C}
               domain={['auto', 'auto']}
             />
           </div>
         )}
-      </Card.Body>
-    </Card>
+      </Panel.Body>
+    </Panel>
   );
 });

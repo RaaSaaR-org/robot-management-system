@@ -109,10 +109,10 @@ describe('the comparison table', () => {
     );
     // Amber and red are for something that is wrong. Two different robots
     // trained as a mixture is the supported way to do it.
-    const verdictBox = screen.getByTestId('compatibility-verdict').closest('div.rounded-lg');
-    expect(verdictBox?.className).toContain('cobalt');
-    expect(verdictBox?.className).not.toContain('red');
-    expect(verdictBox?.className).not.toContain('amber');
+    const verdictBox = screen.getByTestId('compatibility-verdict').closest('[data-tone]');
+    expect(verdictBox).toHaveAttribute('data-tone', 'info');
+    expect(verdictBox?.className).not.toContain('stopped');
+    expect(verdictBox?.className).not.toContain('warning');
 
     await waitFor(() =>
       expect(onReport).toHaveBeenLastCalledWith(expect.objectContaining({ verdict: 'multi_embodiment' }))

@@ -3,7 +3,8 @@
  * @description The route editor: checkpoints are added in order and can be
  *              moved/removed; the cron field is validated on the server
  *              (debounced) and shows the next runs or the error; an invalid
- *              cron or an empty route blocks Save; save posts the draft.
+ *              cron blocks Save; problems show at their fields after a save
+ *              attempt; save posts the draft; VDA5050 export downloads.
  * @feature patrol
  */
 
@@ -13,6 +14,8 @@ import { RouteEditor, moveCheckpoint, draftToInput, validateDraft } from '../Rou
 import { usePatrolStore } from '../../store/patrolStore';
 import { patrolApi } from '../../api/patrolApi';
 import type { PatrolCheckpoint, PatrolRoute } from '../../types/patrol.types';
+import { exportRouteVda5050 } from '../../utils/routeExport';
+import { getToasts } from '@/shared/components/ui';
 
 vi.mock('../../api/patrolApi', () => ({
   patrolApi: {
@@ -162,34 +165,71 @@ describe('RouteEditor', () => {
     expect(body.timeWindows?.map((w) => w.id)).toEqual(['day', 'night']);
   });
 
-  it('exports VDA5050 for an existing route', async () => {
+  it('an empty name shows the error at the field and sends nothing', async () => {
+    render(<RouteEditor robots={ROBOTS} onSaved={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('patrol-route-save'));
+    });
+    expect(await screen.findByText('Give the route a name.')).toBeInTheDocument();
+    expect(screen.getByTestId('patrol-route-name')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByTestId('patrol-editor-problems')).toHaveTextContent('Fix 2 fields before saving.');
+    expect(api.createRoute).not.toHaveBeenCalled();
+  });
+
+  it('a checkpoint without a place is flagged at its place field', async () => {
     const route: PatrolRoute = {
-      id: 'route-1', name: 'Round', robotId: 'g1', twinId: null, checkpoints: [cp('a', 'hall')], cronExpression: null,
+      id: 'route-1', name: 'Round', robotId: null, twinId: null, checkpoints: [cp('a', '')], cronExpression: null,
       enabled: true, timeWindows: [], homePlaceId: null, createdAt: 'x', updatedAt: 'x',
     };
+    render(<RouteEditor route={route} robots={ROBOTS} onSaved={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('patrol-route-save'));
+    });
+    expect(await screen.findByText('Choose or type a place.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Checkpoint 1 place id')).toHaveAttribute('aria-invalid', 'true');
+    expect(api.updateRoute).not.toHaveBeenCalled();
+  });
+
+  it('exports VDA5050 for an existing route', async () => {
     api.exportVda5050.mockResolvedValue({ nodes: [], edges: [] });
     const createObjectURL = vi.fn(() => 'blob:x');
     const revokeObjectURL = vi.fn();
     Object.assign(URL, { createObjectURL, revokeObjectURL });
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    render(<RouteEditor route={route} robots={ROBOTS} onSaved={() => {}} />);
-    fireEvent.click(screen.getByTestId('patrol-export-vda5050'));
-    await waitFor(() => expect(api.exportVda5050).toHaveBeenCalledWith('route-1'));
-    await waitFor(() => expect(click).toHaveBeenCalled());
+    await expect(exportRouteVda5050({ id: 'route-1', name: 'Round' })).resolves.toBe(true);
+    expect(api.exportVda5050).toHaveBeenCalledWith('route-1');
+    expect(click).toHaveBeenCalled();
+    expect(getToasts().map((t) => t.title)).toContain('Route exported');
     click.mockRestore();
+  });
+
+  it('the preview sticks only on wide screens, so it is not shrink-to-fit on phones', () => {
+    render(<RouteEditor robots={ROBOTS} onSaved={() => {}} />);
+    const preview = screen.getByRole('complementary');
+    const tokens = preview.className.split(/\s+/);
+    // Below xl the preview stacks under the form; a bare sticky/self-start would
+    // pin or shrink it there (the old rail's phone bug).
+    expect(tokens).toContain('xl:sticky');
+    expect(tokens).not.toContain('sticky');
+    expect(tokens).not.toContain('self-start');
   });
 });
 
 
-it('shows existing route values without allowing a read-only user to save or delete', async () => {
-  const onDelete = vi.fn();
-  render(<RouteEditor readOnly route={{ id: 'read-route', name: 'Read route', robotId: null, twinId: null, checkpoints: [cp('hall', 'hall')], cronExpression: null, enabled: true, timeWindows: [], homePlaceId: null, createdAt: 'x', updatedAt: 'x' }} robots={[]} onSaved={vi.fn()} onDelete={onDelete} />);
+// A viewer reads the route. Delete and Export live in the page header now, so
+// this asserts the editor itself: the values are there, and nothing can change
+// them. RouteEditorPage owns disabling Delete for the same role.
+it('shows existing route values without letting a read-only user change them', async () => {
+  render(<RouteEditor readOnly route={{ id: 'read-route', name: 'Read route', robotId: null, twinId: null, checkpoints: [cp('hall', 'hall')], cronExpression: null, enabled: true, timeWindows: [], homePlaceId: null, createdAt: 'x', updatedAt: 'x' }} robots={[]} onSaved={vi.fn()} />);
   await act(async () => {});
-  expect(screen.getByTestId('patrol-route-name')).toBeDisabled();
-  expect(screen.getByTestId('patrol-route-save')).toBeDisabled();
-  expect(screen.getByTestId('patrol-route-delete')).toBeDisabled();
-  fireEvent.click(screen.getByTestId('patrol-route-save'));
-  fireEvent.click(screen.getByTestId('patrol-route-delete'));
+  const name = screen.getByTestId('patrol-route-name');
+  expect(name).toHaveValue('Read route');
+  // One disabled fieldset carries the form, so every control inside it is dead.
+  expect(name).toBeDisabled();
+  expect(screen.getByTestId('patrol-checkpoint-add')).toBeDisabled();
+  // Save is not offered at all, and no keyboard submit reaches the store.
+  expect(screen.queryByTestId('patrol-route-save')).toBeNull();
+  fireEvent.submit(name.closest('form')!);
+  await act(async () => {});
   expect(api.updateRoute).not.toHaveBeenCalled();
-  expect(onDelete).not.toHaveBeenCalled();
 });

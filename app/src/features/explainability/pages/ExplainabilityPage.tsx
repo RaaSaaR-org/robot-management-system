@@ -1,25 +1,45 @@
 /**
  * @file ExplainabilityPage.tsx
- * @description Main page for AI explainability feature
+ * @description Explainability section of /compliance: decisions, performance, documentation (?view=)
  * @feature explainability
  */
 
-import { useState, useEffect, useMemo } from 'react';
-import { Eye } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Eye, RefreshCw } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Tabs } from '@/shared/components/ui/Tabs';
-import { DecisionList } from '../components/DecisionList';
-import { DecisionViewer } from '../components/DecisionViewer';
+import { Button, SearchInput, SegmentedControl, Select, Toolbar } from '@/shared/components/ui';
+import { DecisionTable } from '../components/DecisionTable';
+import { DecisionModal } from '../components/DecisionModal';
 import { PerformanceDashboard } from '../components/PerformanceDashboard';
 import { DocumentationPortal } from '../components/DocumentationPortal';
 import { useDecisions } from '../hooks/useDecisions';
 import { useMetrics } from '../hooks/useMetrics';
 import { useDocumentation } from '../hooks/useDocumentation';
-import type { DecisionExplanation, MetricsPeriod } from '../types';
+import {
+  DECISION_TYPE_LABELS,
+  METRICS_PERIOD_LABELS,
+  type DecisionExplanation,
+  type DecisionType,
+  type MetricsPeriod,
+} from '../types';
 
-/**
- * Main page for AI Explainability (EU AI Act compliance)
- */
+type View = 'decisions' | 'performance' | 'documentation';
+const VIEWS: { value: View; label: string }[] = [
+  { value: 'decisions', label: 'Decisions' },
+  { value: 'performance', label: 'Performance' },
+  { value: 'documentation', label: 'Documentation' },
+];
+const TYPE_OPTIONS = (Object.keys(DECISION_TYPE_LABELS) as DecisionType[]).map((t) => ({
+  value: t,
+  label: DECISION_TYPE_LABELS[t],
+}));
+const PERIOD_OPTIONS = (Object.keys(METRICS_PERIOD_LABELS) as MetricsPeriod[]).map((p) => ({
+  value: p,
+  label: METRICS_PERIOD_LABELS[p],
+}));
+
+/** AI explainability (EU AI Act Art. 13/86), hosted as a tab section. */
 export function ExplainabilityPage() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
@@ -37,221 +57,97 @@ export function ExplainabilityPage() {
       />
     );
   }
+  return <ExplainabilitySection />;
+}
 
-  const [activeTab, setActiveTab] = useState('decisions');
-  const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
+function ExplainabilitySection() {
+  const [params, setParams] = useSearchParams();
+  const view = VIEWS.some((v) => v.value === params.get('view')) ? (params.get('view') as View) : VIEWS[0].value;
+  const setView = (v: View) =>
+    setParams((p) => { if (v === VIEWS[0].value) p.delete('view'); else p.set('view', v); return p; }, { replace: true });
 
-  const {
-    decisions,
-    selectedDecision,
-    formattedExplanation,
-    pagination,
-    isLoading: isLoadingDecisions,
-    isLoadingExplanation,
-    fetchDecisions,
-    selectDecision,
-    fetchExplanation,
-    clearSelection,
-  } = useDecisions({ autoFetch: true });
+  const [query, setQuery] = useState('');
+  const [decisionType, setDecisionType] = useState<DecisionType | ''>('');
+  const [period, setPeriod] = useState<MetricsPeriod>('weekly');
+  const [open, setOpen] = useState<DecisionExplanation | null>(null);
 
-  const {
-    metrics,
-    isLoading: isLoadingMetrics,
-    fetchMetrics,
-  } = useMetrics({ autoFetch: true });
+  const d = useDecisions({ autoFetch: true, decisionType: decisionType || undefined });
+  const m = useMetrics({ autoFetch: view === 'performance', period });
+  const doc = useDocumentation({ autoFetch: view === 'documentation' });
 
-  const {
-    documentation,
-    isLoading: isLoadingDocumentation,
-    fetchDocumentation,
-  } = useDocumentation({ autoFetch: true });
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return d.decisions;
+    return d.decisions.filter((x) =>
+      [x.inputFactors.userCommand, x.robotId, x.modelUsed].some((v) => v?.toLowerCase().includes(q)),
+    );
+  }, [d.decisions, query]);
 
-  // Fetch documentation when switching to that tab
-  useEffect(() => {
-    if (activeTab === 'documentation' && !documentation) {
-      fetchDocumentation();
-    }
-  }, [activeTab, documentation, fetchDocumentation]);
-
-  const handleSelectDecision = async (decision: DecisionExplanation) => {
-    setSelectedDecisionId(decision.id);
-    await selectDecision(decision.id);
+  const refresh = () => {
+    if (view === 'decisions') void d.fetchDecisions(d.pagination.page);
+    else if (view === 'performance') void m.fetchMetrics(period);
+    else void doc.fetchDocumentation();
   };
 
-  const handleLoadExplanation = async () => {
-    if (selectedDecisionId) {
-      await fetchExplanation(selectedDecisionId);
-    }
-  };
-
-  const handlePeriodChange = async (period: MetricsPeriod) => {
-    await fetchMetrics(period);
-  };
-
-  const handlePageChange = async (page: number) => {
-    await fetchDecisions(page);
-  };
-
-  const handleBackToList = () => {
-    setSelectedDecisionId(null);
-    clearSelection();
-  };
-
-  // Decisions Tab Content
-  const decisionsContent = (
-    <div className="h-full flex flex-col">
-      <p className="text-theme-tertiary text-sm mb-4">
-        Every command you send to a robot generates an AI decision. Select one to see the full reasoning process.
-      </p>
-      <div className="flex-1 flex gap-6">
-        {/* Decision List */}
-        <div className="w-80 flex-shrink-0 overflow-y-auto">
-          <DecisionList
-          decisions={decisions}
-          selectedId={selectedDecisionId ?? undefined}
-          onSelect={handleSelectDecision}
-          isLoading={isLoadingDecisions}
-        />
-        {/* Pagination */}
-        {pagination.totalPages > 1 && (
-          <div className="flex items-center justify-center gap-2 mt-4 pt-4 border-t border-gray-700/50">
-            <button
-              type="button"
-              className="px-3 py-1 text-sm rounded bg-gray-800 text-theme-secondary hover:bg-gray-700 disabled:opacity-50"
-              disabled={pagination.page <= 1}
-              onClick={() => handlePageChange(pagination.page - 1)}
-            >
-              Previous
-            </button>
-            <span className="text-sm text-theme-tertiary">
-              Page {pagination.page} of {pagination.totalPages}
-            </span>
-            <button
-              type="button"
-              className="px-3 py-1 text-sm rounded bg-gray-800 text-theme-secondary hover:bg-gray-700 disabled:opacity-50"
-              disabled={pagination.page >= pagination.totalPages}
-              onClick={() => handlePageChange(pagination.page + 1)}
-            >
-              Next
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Decision Viewer */}
-      <div className="flex-1 overflow-y-auto">
-        {selectedDecision ? (
-          <div>
-            <button
-              type="button"
-              className="text-sm text-primary-400 hover:text-primary-300 mb-4"
-              onClick={handleBackToList}
-            >
-              &larr; Back to list
-            </button>
-            <DecisionViewer
-              decision={selectedDecision}
-              explanation={formattedExplanation}
-              onLoadExplanation={handleLoadExplanation}
-              isLoadingExplanation={isLoadingExplanation}
-            />
-          </div>
-        ) : (
-          <div className="h-full flex items-center justify-center">
-            <p className="text-theme-tertiary">Select a decision to view details</p>
-          </div>
-        )}
-      </div>
-      </div>
+  const switcher = (
+    <div className="max-w-full overflow-x-auto">
+      <SegmentedControl label="Explainability view" size="sm" options={VIEWS} value={view} onChange={setView} />
     </div>
-  );
-
-  // Metrics Tab Content
-  const metricsContent = (
-    <div>
-      <p className="text-theme-tertiary text-sm mb-4">
-        Track how well the AI is performing. These metrics help identify if the system needs attention.
-      </p>
-      <PerformanceDashboard
-        metrics={metrics}
-        isLoading={isLoadingMetrics}
-        onPeriodChange={handlePeriodChange}
-      />
-    </div>
-  );
-
-  // Documentation Tab Content
-  const documentationContent = (
-    <div>
-      <p className="text-theme-tertiary text-sm mb-4">
-        Technical documentation about the AI system's capabilities, limitations, and compliance information.
-      </p>
-      <DocumentationPortal
-        documentation={documentation}
-        isLoading={isLoadingDocumentation}
-      />
-    </div>
-  );
-
-  // Tab configuration
-  const tabs = useMemo(
-    () => [
-      {
-        id: 'decisions',
-        label: 'Decisions',
-        content: decisionsContent,
-      },
-      {
-        id: 'metrics',
-        label: 'Performance',
-        content: metricsContent,
-      },
-      {
-        id: 'documentation',
-        label: 'Documentation',
-        content: documentationContent,
-      },
-    ],
-    [decisionsContent, metricsContent, documentationContent]
   );
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Section header — rendered as an embedded tab inside CompliancePage,
-          which owns the page-level h1, so this stays a demoted h2 */}
-      <header className="flex-shrink-0 px-6 py-4 border-b border-gray-700/50">
-        <h2 className="text-lg font-semibold text-theme-primary">AI Explainability</h2>
-        <p className="text-sm text-theme-secondary mt-1">
-          Transparency and decision explanations per EU AI Act
-        </p>
-      </header>
+    <div className="flex flex-col gap-4">
+      {switcher}
+      <Toolbar
+        search={view === 'decisions' ? <SearchInput value={query} onChange={setQuery} placeholder="Search command or robot" /> : undefined}
+        filters={
+          <>
+            {view === 'decisions' && (
+              <Select aria-label="Decision type" fullWidth={false} className="w-48" placeholder="All decision types"
+                options={TYPE_OPTIONS} value={decisionType} onChange={(e) => setDecisionType(e.target.value as DecisionType | '')} />
+            )}
+            {view === 'performance' && (
+              <Select aria-label="Period" fullWidth={false} className="w-40" options={PERIOD_OPTIONS} value={period}
+                onChange={(e) => { const p = e.target.value as MetricsPeriod; setPeriod(p); void m.fetchMetrics(p); }} />
+            )}
+          </>
+        }
+        actions={
+          <Button variant="ghost" size="sm" iconOnly aria-label="Refresh" onClick={refresh}>
+            <RefreshCw className="h-4 w-4" strokeWidth={1.75} />
+          </Button>
+        }
+      />
 
-      {/* Info Box */}
-      <div className="flex-shrink-0 px-6 pt-4">
-        <div className="bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700/50 rounded-lg p-4">
-          <h3 className="font-semibold text-blue-900 dark:text-blue-200 mb-2">What is AI Explainability?</h3>
-          <p className="text-blue-800 dark:text-blue-200 text-sm">
-            When AI makes decisions about robot actions, this page shows you exactly what happened and why.
-            Required by the EU AI Act for transparency, this helps you:
-          </p>
-          <ul className="text-blue-800 dark:text-blue-200 text-sm mt-2 space-y-1 ml-4 list-disc">
-            <li><strong className="text-blue-900 dark:text-blue-100">Understand</strong> how the AI interprets your commands</li>
-            <li><strong className="text-blue-900 dark:text-blue-100">Verify</strong> that decisions are safe and appropriate</li>
-            <li><strong className="text-blue-900 dark:text-blue-100">Monitor</strong> AI performance over time</li>
-            <li><strong className="text-blue-900 dark:text-blue-100">Audit</strong> past decisions for compliance</li>
-          </ul>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-hidden p-6">
-        <Tabs
-          tabs={tabs}
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          className="h-full"
+      {view === 'decisions' && (
+        <DecisionTable
+          rows={rows}
+          isLoading={d.isLoading}
+          error={d.decisions.length ? null : d.error}
+          onRetry={() => void d.fetchDecisions()}
+          onOpen={setOpen}
+          hasFilters={Boolean(query || decisionType)}
+          onClearFilters={() => { setQuery(''); setDecisionType(''); }}
+          page={d.pagination.page}
+          totalPages={d.pagination.totalPages}
+          total={d.pagination.total}
+          onPageChange={(p) => void d.fetchDecisions(p)}
         />
-      </div>
+      )}
+      {view === 'performance' && (
+        <PerformanceDashboard metrics={m.metrics} isLoading={m.isLoading} error={m.error} onRetry={() => void m.fetchMetrics(period)} />
+      )}
+      {view === 'documentation' && (
+        <DocumentationPortal documentation={doc.documentation} isLoading={doc.isLoading} error={doc.error} onRetry={() => void doc.fetchDocumentation()} />
+      )}
+
+      <DecisionModal
+        decision={open}
+        explanation={d.formattedExplanation}
+        isLoadingExplanation={d.isLoadingExplanation}
+        onLoadExplanation={d.fetchExplanation}
+        onClose={() => setOpen(null)}
+      />
     </div>
   );
 }

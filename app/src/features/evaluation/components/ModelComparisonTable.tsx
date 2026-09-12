@@ -1,9 +1,11 @@
 /**
  * @file ModelComparisonTable.tsx
- * @description Table comparing two model versions side-by-side
+ * @description Two model versions side by side: success rate, episodes, duration, top error
  * @feature evaluation
  */
 
+import { GitCompareArrows } from 'lucide-react';
+import { DataTable, EmptyState, SkeletonRows, StatusTag, type DataTableColumn } from '@/shared/components/ui';
 import type { ModelComparisonResult } from '../types';
 
 export interface ModelComparisonTableProps {
@@ -12,94 +14,51 @@ export interface ModelComparisonTableProps {
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+interface Row {
+  metric: string;
+  a: string;
+  b: string;
+  better: 'a' | 'b' | null;
 }
 
 export function ModelComparisonTable({ comparison, loading }: ModelComparisonTableProps) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-48 bg-theme-secondary/10 rounded-lg">
-        <p className="text-theme-secondary">Loading comparison...</p>
-      </div>
-    );
-  }
-
+  if (loading) return <SkeletonRows rows={4} columns={3} dense />;
   if (!comparison) {
     return (
-      <div className="flex items-center justify-center h-48 bg-theme-secondary/10 rounded-lg">
-        <p className="text-theme-secondary">Select two model versions to compare</p>
-      </div>
+      <EmptyState
+        size="sm"
+        icon={<GitCompareArrows />}
+        title="Nothing to compare yet"
+        description="A comparison appears once two model versions have evaluation episodes in this period."
+      />
     );
   }
 
-  const { versionA, versionB } = comparison;
-
-  const rows = [
-    {
-      label: 'Success Rate',
-      a: `${versionA.successRate.toFixed(1)}%`,
-      b: `${versionB.successRate.toFixed(1)}%`,
-      better: versionA.successRate > versionB.successRate ? 'a' : versionB.successRate > versionA.successRate ? 'b' : null,
-    },
-    {
-      label: 'Total Episodes',
-      a: String(versionA.totalEpisodes),
-      b: String(versionB.totalEpisodes),
-      better: null,
-    },
-    {
-      label: 'Avg Duration',
-      a: formatDuration(versionA.avgDurationMs),
-      b: formatDuration(versionB.avgDurationMs),
-      better: versionA.avgDurationMs < versionB.avgDurationMs ? 'a' : versionB.avgDurationMs < versionA.avgDurationMs ? 'b' : null,
-    },
-    {
-      label: 'Top Error',
-      a: versionA.errorBreakdown[0]?.errorType ?? 'none',
-      b: versionB.errorBreakdown[0]?.errorType ?? 'none',
-      better: null,
-    },
+  const { versionA: A, versionB: B } = comparison;
+  const rows: Row[] = [
+    { metric: 'Success rate', a: `${A.successRate.toFixed(1)}%`, b: `${B.successRate.toFixed(1)}%`, better: A.successRate > B.successRate ? 'a' : B.successRate > A.successRate ? 'b' : null },
+    { metric: 'Episodes', a: String(A.totalEpisodes), b: String(B.totalEpisodes), better: null },
+    { metric: 'Avg duration', a: formatDuration(A.avgDurationMs), b: formatDuration(B.avgDurationMs), better: A.avgDurationMs < B.avgDurationMs ? 'a' : B.avgDurationMs < A.avgDurationMs ? 'b' : null },
+    { metric: 'Top error', a: A.errorBreakdown[0]?.errorType ?? 'None', b: B.errorBreakdown[0]?.errorType ?? 'None', better: null },
   ];
 
-  return (
-    <div className="overflow-hidden rounded-lg border border-theme">
-      <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="section-secondary">
-            <th className="px-4 py-3 text-left text-theme-secondary font-medium">Metric</th>
-            <th className="px-4 py-3 text-center text-theme-secondary font-medium">
-              {versionA.modelVersion}
-            </th>
-            <th className="px-4 py-3 text-center text-theme-secondary font-medium">
-              {versionB.modelVersion}
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-theme">
-          {rows.map((row) => (
-            <tr key={row.label} className="section-primary">
-              <td className="px-4 py-3 text-theme-secondary">{row.label}</td>
-              <td
-                className={`px-4 py-3 text-center font-mono ${
-                  row.better === 'a' ? 'text-green-500 font-semibold' : 'text-theme-primary'
-                }`}
-              >
-                {row.a}
-              </td>
-              <td
-                className={`px-4 py-3 text-center font-mono ${
-                  row.better === 'b' ? 'text-green-500 font-semibold' : 'text-theme-primary'
-                }`}
-              >
-                {row.b}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      </div>
-    </div>
-  );
+  const cell = (side: 'a' | 'b') => (r: Row) =>
+    r.better === side ? (
+      <span className="inline-flex items-center gap-2 font-medium text-ink-primary">
+        {r[side]} <StatusTag tone="success" size="sm">Better</StatusTag>
+      </span>
+    ) : (
+      <span className="text-ink-secondary">{r[side]}</span>
+    );
+
+  const columns: DataTableColumn<Row>[] = [
+    { key: 'metric', header: 'Metric' },
+    { key: 'a', header: A.modelVersion, cell: cell('a') },
+    { key: 'b', header: B.modelVersion, cell: cell('b') },
+  ];
+
+  return <DataTable caption="Model comparison" columns={columns} rows={rows} getRowId={(r) => r.metric} dense />;
 }

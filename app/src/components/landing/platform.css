@@ -1,0 +1,288 @@
+/**
+ * @file platform.css
+ * @description Editorial platform introduction and connected workspace illustration.
+ * @feature landing
+ */
+.platform-section {
+  padding: clamp(5rem, 8vw, 8rem) 0;
+  background: #0c1521;
+  color: #edf3fa;
+  border-top: 1px solid #243244;
+}
+.platform-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #9ab4ca;
+  font: 500 11px/1.6 var(--font-sans);
+  letter-spacing: 0.13em;
+}
+.platform-eyebrow > span {
+  width: 22px;
+  height: 2px;
+  background: #a5ead8;
+}
+.platform-intro {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 64px;
+  align-items: end;
+  margin-top: 30px;
+}
+.platform-intro h2 {
+  font-size: clamp(3.5rem, 6.8vw, 6.3rem);
+  line-height: 1.02;
+  letter-spacing: -0.065em;
+}
+.platform-intro h2 span {
+  color: #a9e6d8;
+}
+.platform-definition {
+  padding-bottom: 4px;
+}
+.platform-definition p,
+.platform-team-copy p {
+  color: #aabbd0;
+  font-size: 15px;
+  line-height: 1.85;
+}
+.platform-definition .platform-lead {
+  color: #eef4fa;
+  font-size: 21px;
+  line-height: 1.45;
+  margin-bottom: 16px;
+  letter-spacing: -0.025em;
+}
+.platform-section a {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  margin-top: 18px;
+  color: #b6efdf;
+  font-size: 13px;
+}
+.platform-section a:hover {
+  color: white;
+}
+.platform-section a:focus-visible {
+  outline: 2px solid #b6efdf;
+  outline-offset: 5px;
+  border-radius: 3px;
+}
+.platform-blueprint {
+  position: relative;
+  margin-top: 60px;
+  padding: 25px 40px 24px;
+  border: 1px solid #304358;
+  border-radius: 24px;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 50% 55%, #1b3b44a0, transparent 60%),
+    linear-gradient(#87afc006 1px, transparent 1px),
+    linear-gradient(90deg, #87afc006 1px, transparent 1px), #0b1420;
+  background-size:
+    auto,
+    36px 36px,
+    36px 36px,
+    auto;
+}
+.platform-blueprint-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  color: #8fa7bd;
+  font: 500 10px/1.5 var(--font-sans);
+  letter-spacing: 0.1em;
+}
+.platform-inputs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 35px;
+}
+.platform-input {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #d5e4ef;
+  font-size: 14px;
+}
+.platform-input svg {
+  color: #9bb9c8;
+}
+.platform-connections {
+  height: 70px;
+  position: relative;
+  margin-top: 18px;
+}
+.platform-connections svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: #6a9eab;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.platform-connections i {
+  position: absolute;
+  top: 0;
+  left: 12.5%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #c3fff0;
+  box-shadow: 0 0 12px #9fffe2;
+  animation: platform-signal 4s ease-in-out infinite;
+}
+.platform-connections i:nth-of-type(2) {
+  left: 37.5%;
+  animation-delay: -1s;
+}
+.platform-connections i:nth-of-type(3) {
+  left: 62.5%;
+  animation-delay: -2s;
+}
+.platform-connections i:nth-of-type(4) {
+  left: 87.5%;
+  animation-delay: -3s;
+}
+@keyframes platform-signal {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(14px);
+  }
+}
+.platform-core {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  max-width: 620px;
+  padding: 28px;
+  margin: 0 auto;
+  border: 1px solid #79b8b2;
+  border-radius: 16px;
+  background: linear-gradient(120deg, #244448, #162b3e);
+  box-shadow:
+    0 0 55px #8cffe00a,
+    inset 0 1px #d0fff522;
+}
+.platform-core-symbol {
+  display: flex;
+  color: #b4f3df;
+}
+.platform-core strong {
+  font-size: clamp(28px, 3.5vw, 44px);
+  letter-spacing: -0.055em;
+}
+.platform-core-caption {
+  padding-left: 24px;
+  border-left: 1px solid #5a7d86;
+  color: #c0d6df;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.platform-outlet {
+  width: 1px;
+  height: 34px;
+  background: #6a9eab;
+  margin: auto;
+}
+.platform-embodiments {
+  text-align: center;
+}
+.platform-embodiments > span {
+  color: #e2edf5;
+  font-size: 17px;
+  letter-spacing: -0.025em;
+}
+.platform-embodiments p {
+  margin-top: 14px;
+  color: #a6bdd1;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.platform-embodiments b {
+  padding: 0 12px;
+  color: #688396;
+}
+.platform-embodiments small {
+  font-size: inherit;
+}
+.platform-readiness {
+  margin-top: 28px;
+  text-align: center;
+  color: #8ca3ba;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.platform-team {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 64px;
+  margin-top: 45px;
+  padding-top: 36px;
+  border-top: 1px solid #2a3a4d;
+}
+.platform-team h3 {
+  margin-top: 17px;
+  font-size: clamp(26px, 3vw, 36px);
+  line-height: 1.2;
+  letter-spacing: -0.04em;
+}
+.platform-team-copy {
+  padding-top: 3px;
+}
+@media (max-width: 760px) {
+  .platform-intro,
+  .platform-team {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 26px;
+  }
+  .platform-intro h2 {
+    font-size: clamp(3.3rem, 12vw, 5.2rem);
+  }
+  .platform-blueprint {
+    margin-top: 36px;
+    padding: 20px 14px;
+    border-radius: 18px;
+  }
+  .platform-blueprint-top span:last-child {
+    display: none;
+  }
+  .platform-input {
+    flex-direction: column;
+    gap: 10px;
+    font-size: 11px;
+    text-align: center;
+  }
+  .platform-core {
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 20px 14px;
+  }
+  .platform-core-caption {
+    width: 100%;
+    text-align: center;
+    padding: 0;
+    border: 0;
+  }
+  .platform-embodiments b {
+    padding: 0 4px;
+  }
+  .platform-team {
+    gap: 20px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .platform-connections i {
+    animation: none;
+  }
+}

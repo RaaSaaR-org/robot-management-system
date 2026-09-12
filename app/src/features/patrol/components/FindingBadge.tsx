@@ -1,13 +1,14 @@
 /**
  * @file FindingBadge.tsx
- * @description Small pills for patrol runs and findings: severity, finding
- *              type, run status, leg status. One renderer per value so the
- *              list, the detail and the map legend can never disagree.
+ * @description Status tags for patrol runs and findings: severity, finding
+ *              type, run status, leg status, finding lifecycle. One renderer
+ *              per value so the list, the detail and the map legend can never
+ *              disagree. All of them render the kit's StatusTag.
  * @feature patrol
  */
 
 import { memo } from 'react';
-import { cn } from '@/shared/utils/cn';
+import { StatusTag, statusTone, type StatusTagTone } from '@/shared/components/ui';
 import type {
   PatrolFinding,
   PatrolFindingSeverity,
@@ -16,16 +17,39 @@ import type {
   PatrolRunStatus,
 } from '../types/patrol.types';
 import {
+  PATROL_FINDING_SEVERITY_LABELS,
   PATROL_FINDING_STATUS_LABELS,
   PATROL_FINDING_TYPE_LABELS,
+  PATROL_RUN_STATUS_LABELS,
 } from '../types/patrol.types';
-import { legStatusStyle, runStatusStyle, severityStyle } from '../utils/patrolFormat';
-import { PATROL_MOTION } from './patrolUi';
 
-const PILL = cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', PATROL_MOTION);
+// Severity and run status tones come from the kit's statusTone(). Legs and the
+// finding lifecycle keep their own maps: there a pending leg is calm (neutral,
+// not amber), a running leg is in progress (info), and an acknowledged finding
+// is parked (neutral), not a success.
+const LEG_TONE: Record<PatrolLegStatus, StatusTagTone> = {
+  pending: 'neutral',
+  running: 'info',
+  done: 'success',
+  failed: 'danger',
+  skipped: 'neutral',
+};
 
-/** Low severity is neutral — cobalt is reserved for "running" / primary action. */
-const LOW_SEVERITY_OVERRIDE = 'bg-transparent text-theme-secondary dark:text-theme-secondary border border-glass-highlight';
+const LEG_LABEL: Record<PatrolLegStatus, string> = {
+  pending: 'Pending',
+  running: 'Running',
+  done: 'Done',
+  failed: 'Failed',
+  skipped: 'Skipped',
+};
+
+const FINDING_STATUS_TONE: Record<PatrolFindingStatus, StatusTagTone> = {
+  candidate: 'neutral',
+  open: 'info',
+  acknowledged: 'neutral',
+  dismissed_normal: 'success',
+  escalated: 'danger',
+};
 
 export interface FindingBadgeProps {
   severity: PatrolFindingSeverity;
@@ -34,18 +58,18 @@ export interface FindingBadgeProps {
   className?: string;
 }
 
-/** Severity pill (optionally "High · Person"). */
+/** Severity tag (optionally "High · Door open"). */
 export const FindingBadge = memo(function FindingBadge({ severity, type, className }: FindingBadgeProps) {
-  const style = severityStyle(severity);
+  const label = PATROL_FINDING_SEVERITY_LABELS[severity] ?? severity;
   return (
-    <span
-      className={cn(PILL, style.className, severity === 'low' && LOW_SEVERITY_OVERRIDE, className)}
+    <StatusTag
+      tone={statusTone(severity)}
+      className={className}
       data-severity={severity}
       data-testid="patrol-finding-badge"
     >
-      {style.label}
-      {type && <span className="opacity-80">· {PATROL_FINDING_TYPE_LABELS[type] ?? type}</span>}
-    </span>
+      {type ? `${label} · ${PATROL_FINDING_TYPE_LABELS[type] ?? type}` : label}
+    </StatusTag>
   );
 });
 
@@ -54,14 +78,12 @@ export interface RunStatusChipProps {
   className?: string;
 }
 
-/** Run status pill; the running one pulses. */
+/** Run status tag; the running one pulses. */
 export const RunStatusChip = memo(function RunStatusChip({ status, className }: RunStatusChipProps) {
-  const style = runStatusStyle(status);
   return (
-    <span className={cn(PILL, style.className, className)} data-status={status}>
-      {style.pulse && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" aria-hidden="true" />}
-      {style.label}
-    </span>
+    <StatusTag tone={statusTone(status)} dot pulse={status === 'running'} className={className} data-status={status}>
+      {PATROL_RUN_STATUS_LABELS[status] ?? status}
+    </StatusTag>
   );
 });
 
@@ -70,35 +92,32 @@ export interface LegStatusChipProps {
   className?: string;
 }
 
-/** Leg status pill. */
+/** Leg status tag. */
 export const LegStatusChip = memo(function LegStatusChip({ status, className }: LegStatusChipProps) {
-  const style = legStatusStyle(status);
   return (
-    <span className={cn(PILL, style.className, className)} data-status={status}>
-      {style.pulse && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" aria-hidden="true" />}
-      {style.label}
-    </span>
+    <StatusTag
+      tone={LEG_TONE[status] ?? 'neutral'}
+      size="sm"
+      dot={status === 'running'}
+      pulse={status === 'running'}
+      className={className}
+      data-status={status}
+    >
+      {LEG_LABEL[status] ?? status}
+    </StatusTag>
   );
 });
-
-const FINDING_STATUS_CLASS: Record<PatrolFindingStatus, string> = {
-  candidate: 'glass-subtle text-theme-muted',
-  open: 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300',
-  acknowledged: 'glass-subtle text-theme-secondary',
-  dismissed_normal: 'bg-turquoise-500/15 text-turquoise-700 dark:text-turquoise-400',
-  escalated: 'bg-red-500/15 text-red-600 dark:text-red-400',
-};
 
 export interface FindingStatusChipProps {
   status: PatrolFindingStatus;
   className?: string;
 }
 
-/** Finding lifecycle pill. */
+/** Finding lifecycle tag. */
 export const FindingStatusChip = memo(function FindingStatusChip({ status, className }: FindingStatusChipProps) {
   return (
-    <span className={cn(PILL, FINDING_STATUS_CLASS[status] ?? FINDING_STATUS_CLASS.open, className)} data-status={status}>
+    <StatusTag tone={FINDING_STATUS_TONE[status] ?? 'info'} className={className} data-status={status}>
       {PATROL_FINDING_STATUS_LABELS[status] ?? status}
-    </span>
+    </StatusTag>
   );
 });

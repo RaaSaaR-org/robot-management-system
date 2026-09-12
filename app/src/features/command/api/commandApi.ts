@@ -38,14 +38,15 @@ async function fetchNamedLocations(): Promise<Record<string, { x: number; y: num
   }
 
   try {
-    cachedLocations = await zoneApi.getNamedLocations();
+    // A server without named locations answers with an empty body; keep the old cache then.
+    cachedLocations = (await zoneApi.getNamedLocations()) ?? cachedLocations;
     lastLocationFetch = now;
   } catch (error) {
     console.warn('[commandApi] Failed to fetch named locations from server:', error);
-    if (!cachedLocations) {
-      // Return fallback home location if no cache available
-      cachedLocations = { home: { x: 0, y: 0, floor: '1', zone: 'Home Base' } };
-    }
+  }
+  if (!cachedLocations) {
+    // Fallback home location if the server gave us nothing
+    cachedLocations = { home: { x: 0, y: 0, floor: '1', zone: 'Home Base' } };
   }
 
   return Object.fromEntries(

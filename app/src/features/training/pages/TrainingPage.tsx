@@ -1,37 +1,27 @@
 /**
  * @file TrainingPage.tsx
- * @description Main page for VLA training management
+ * @description Training studio: train policies on datasets (Jobs), then evaluate them in simulation and on hardware
  * @feature training
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Brain, BarChart3, FlaskConical, Plus, Wrench } from 'lucide-react';
+import { Brain, Play, Plus } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Button, EmptyState, PageHeader, Tabs } from '@/shared/components/ui';
-import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
-import { TrainingJobList } from '../components/TrainingJobList';
+import { Button, PageHeader, PipelineBreadcrumb, Tabs } from '@/shared/components/ui';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
-import { TrainingProgressMonitor } from '../components/TrainingProgressMonitor';
-import { WorkerStatusPanel } from '../components/WorkerStatusPanel';
-import { QueueStatsDisplay } from '../components/QueueStatsDisplay';
-import {
-  useTrainingJobsAutoFetch,
-  useDatasetsAutoFetch,
-  useTrainingProgress,
-  useWorkersAutoFetch,
-  useQueueStatsAutoFetch,
-} from '../hooks';
-import type { TrainingJob } from '../types';
+import { JobsSection } from '../components/jobs/JobsSection';
+import { useDatasetsAutoFetch, useTrainingJobs } from '../hooks';
 import { SimulationPage } from '@/features/simulation/pages/SimulationPage';
 import { EvaluationDashboardPage } from '@/features/evaluation/pages/EvaluationDashboardPage';
 
-type OuterTab = 'jobs' | 'simulation' | 'evaluation';
-type InnerTab = 'active' | 'history';
+const TABS = [
+  { id: 'jobs', label: 'Jobs' },
+  { id: 'simulation', label: 'Simulation' },
+  { id: 'evaluation', label: 'Evaluation' },
+] as const;
+type TabId = (typeof TABS)[number]['id'];
 
-/**
- * Main training management page
- */
 export function TrainingPage() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
@@ -49,219 +39,73 @@ export function TrainingPage() {
       />
     );
   }
+  return <TrainingStudio />;
+}
 
-  const [isWizardOpen, setIsWizardOpen] = useState(false);
-  const [selectedJob, setSelectedJob] = useState<TrainingJob | null>(null);
-  const [activeTab, setActiveTab] = useState<InnerTab>('active');
+function TrainingStudio() {
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('tab');
+  const tab: TabId = TABS.some((t) => t.id === raw) ? (raw as TabId) : 'jobs';
+  const setTab = (id: string) =>
+    setParams(
+      (p) => {
+        const next = new URLSearchParams();
+        if (id !== 'jobs') next.set('tab', id);
+        // Section-local params (?job, ?view, ?run) do not survive a tab switch.
+        void p;
+        return next;
+      },
+      { replace: true }
+    );
 
-  // Outer tab state — Jobs / Simulation / Evaluation. Persist via ?tab=
-  // so deep links and the legacy /simulation /evaluation redirects in
-  // App.tsx land users on the right tab.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const tabParam = searchParams.get('tab');
-  const outerTab: OuterTab =
-    tabParam === 'simulation' || tabParam === 'evaluation' ? tabParam : 'jobs';
-  const setOuterTab = (id: OuterTab) => {
-    const next = new URLSearchParams(searchParams);
-    if (id === 'jobs') next.delete('tab');
-    else next.set('tab', id);
-    setSearchParams(next, { replace: true });
-  };
-
-  const { jobs, isLoading: jobsLoading, submitJob, cancelJob, retryJob } = useTrainingJobsAutoFetch();
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [simLaunchOpen, setSimLaunchOpen] = useState(false);
+  const [hwTestOpen, setHwTestOpen] = useState(false);
   const { datasets } = useDatasetsAutoFetch();
-  const { workers, isLoading: workersLoading, refresh: refreshWorkers } = useWorkersAutoFetch(10000);
-  const { queueStats, isLoading: queueLoading } = useQueueStatsAutoFetch(30000);
+  const { jobs, submitJob, fetchJobs } = useTrainingJobs();
+  const running = jobs.filter((j) => j.status === 'running').length;
 
-  // Connect to WebSocket for real-time progress
-  useTrainingProgress();
-
-  // Separate active and completed jobs
-  const activeJobs = jobs.filter((j) => ['pending', 'queued', 'running'].includes(j.status));
-  const historyJobs = jobs.filter((j) => ['completed', 'failed', 'cancelled'].includes(j.status));
-
-  // When the Active tab shows its empty state (with its own "Start Training"
-  // CTA), hide the header CTA so there is exactly one primary action visible.
-  const showJobsEmptyState = !jobsLoading && activeJobs.length === 0 && activeTab === 'active';
-
-  const handleSelectJob = (job: TrainingJob) => {
-    setSelectedJob(job);
-  };
-
-  const handleCancelJob = async (id: string) => {
-    await cancelJob(id);
-    if (selectedJob?.id === id) {
-      setSelectedJob(null);
-    }
-  };
-
-  const handleRetryJob = async (id: string) => {
-    await retryJob(id);
-  };
-
-  const handleSubmitJob = async (input: Parameters<typeof submitJob>[0]) => {
-    const job = await submitJob(input);
-    setSelectedJob(job);
-    setActiveTab('active');
-  };
-
-  // Auto-select first active job if none selected
-  useEffect(() => {
-    if (!selectedJob && activeJobs.length > 0) {
-      setSelectedJob(activeJobs[0]);
-    }
-  }, [selectedJob, activeJobs]);
-
-  // Update selected job when jobs refresh
-  useEffect(() => {
-    if (selectedJob) {
-      const updated = jobs.find((j) => j.id === selectedJob.id);
-      if (updated) {
-        setSelectedJob(updated);
-      }
-    }
-  }, [jobs, selectedJob]);
+  const primary =
+    tab === 'jobs' ? (
+      <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => setWizardOpen(true)}>New training job</Button>
+    ) : tab === 'simulation' ? (
+      <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => setSimLaunchOpen(true)}>New sim run</Button>
+    ) : (
+      <Button leftIcon={<Play className="h-4 w-4" />} onClick={() => setHwTestOpen(true)}>Run hardware test</Button>
+    );
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="flex flex-col gap-6">
       <PageHeader
+        eyebrow="Build"
         title="Training"
-        subtitle="Fine-tune VLA models on your robot datasets"
-        actions={
-          <>
-            <PipelineBreadcrumb stage="train" />
-            {outerTab === 'jobs' && !showJobsEmptyState && (
-              <Button onClick={() => setIsWizardOpen(true)} leftIcon={<Plus className="w-4 h-4" />}>
-                New Training Job
-              </Button>
-            )}
-          </>
-        }
-      />
+        description="Train policies on your datasets, then evaluate them in simulation and on hardware."
+        actions={primary}
+      >
+        <PipelineBreadcrumb stage={tab === 'jobs' ? 'train' : 'evaluate'} />
+      </PageHeader>
 
       <Tabs
-        activeTab={outerTab}
-        onTabChange={(id) => setOuterTab(id as OuterTab)}
-        tabs={[
-          {
-            id: 'jobs',
-            label: 'Jobs',
-            icon: <Wrench className="w-4 h-4" />,
-            content: renderJobsTab(),
-          },
-          {
-            id: 'simulation',
-            label: 'Simulation',
-            icon: <FlaskConical className="w-4 h-4" />,
-            content: <SimulationPage />,
-          },
-          {
-            id: 'evaluation',
-            label: 'Evaluation',
-            icon: <BarChart3 className="w-4 h-4" />,
-            content: <EvaluationDashboardPage />,
-          },
-        ]}
+        tabs={TABS.map(({ id, label }) => ({ id, label, count: id === 'jobs' && running > 0 ? running : undefined }))}
+        activeTab={tab}
+        onTabChange={setTab}
+      />
+
+      {tab === 'jobs' && <JobsSection onNew={() => setWizardOpen(true)} />}
+      {tab === 'simulation' && <SimulationPage launchOpen={simLaunchOpen} onLaunchOpenChange={setSimLaunchOpen} />}
+      {tab === 'evaluation' && <EvaluationDashboardPage testOpen={hwTestOpen} onTestOpenChange={setHwTestOpen} />}
+
+      <TrainingJobWizard
+        isOpen={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        onSubmit={async (input) => {
+          const job = await submitJob(input);
+          setParams((p) => { p.delete('tab'); p.set('job', job.id); return p; });
+          // The create response carries no dataset names; the list does.
+          void fetchJobs();
+        }}
+        datasets={datasets}
       />
     </div>
   );
-
-  // Jobs tab body — extracted so the outer Tabs config above stays
-  // short. Holds the original 2-column grid + Active/History sub-tabs.
-  function renderJobsTab() {
-    return (
-      <div className="space-y-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left column: Job list and tabs */}
-        <div className="lg:col-span-2 space-y-4">
-          <Tabs
-            activeTab={activeTab}
-            onTabChange={(id) => setActiveTab(id as InnerTab)}
-            tabs={[
-              {
-                id: 'active',
-                label: `Active (${activeJobs.length})`,
-                content: (
-                  <TrainingJobList
-                    jobs={activeJobs}
-                    isLoading={jobsLoading}
-                    hideEmpty
-                    selectedId={selectedJob?.id}
-                    onSelect={handleSelectJob}
-                    onCancel={handleCancelJob}
-                    showFilters={false}
-                  />
-                ),
-              },
-              {
-                id: 'history',
-                label: `History (${historyJobs.length})`,
-                content: (
-                  <TrainingJobList
-                    jobs={historyJobs}
-                    isLoading={jobsLoading}
-                    selectedId={selectedJob?.id}
-                    onSelect={handleSelectJob}
-                    onRetry={handleRetryJob}
-                    showFilters={true}
-                  />
-                ),
-              },
-            ]}
-          />
-
-          {showJobsEmptyState && (
-            <EmptyState
-              className="bg-theme-secondary/10 rounded-lg"
-              icon={<Brain className="w-10 h-10" />}
-              title="No Active Training Jobs"
-              description="Start a new training job to fine-tune a VLA model on your dataset."
-              action={
-                <Button onClick={() => setIsWizardOpen(true)} leftIcon={<Plus className="w-4 h-4" />}>
-                  Start Training
-                </Button>
-              }
-            />
-          )}
-        </div>
-
-        {/* Right column: worker status and queue stats */}
-        <div className="space-y-4">
-          <WorkerStatusPanel
-            workers={workers}
-            isLoading={workersLoading}
-            onRefresh={refreshWorkers}
-          />
-
-          <QueueStatsDisplay stats={queueStats} isLoading={queueLoading} />
-        </div>
-      </div>
-
-      {/* Selected job detail */}
-      {selectedJob && (
-        <div className="mt-6">
-          <TrainingProgressMonitor
-            job={selectedJob}
-            onCancel={
-              ['running', 'queued'].includes(selectedJob.status)
-                ? () => handleCancelJob(selectedJob.id)
-                : undefined
-            }
-            showLossCurve={true}
-          />
-        </div>
-      )}
-
-        {/* Training job wizard */}
-        <TrainingJobWizard
-          isOpen={isWizardOpen}
-          onClose={() => setIsWizardOpen(false)}
-          onSubmit={handleSubmitJob}
-          datasets={datasets}
-          isSubmitting={false}
-        />
-      </div>
-    );
-  }
 }

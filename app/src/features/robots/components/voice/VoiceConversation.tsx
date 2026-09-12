@@ -1,67 +1,24 @@
 /**
  * @file VoiceConversation.tsx
  * @description Scrollable voice conversation feed: messages typed for the robot
- *              to speak (right, accent), what the robot microphone heard (left,
- *              mic icon), agent replies spoken back (left, robot icon), plus
- *              error rows and session-reset dividers. Auto-follows the newest
- *              entry unless the user scrolled up.
+ *              to speak (right, primary tint), what the robot microphone heard
+ *              (left, dashed), agent replies spoken back (left), plus error rows
+ *              and session-reset dividers. Auto-follows the newest entry unless
+ *              the user scrolled up.
  * @feature robots
  */
 
 import { memo, useEffect, useRef } from 'react';
-import { cn } from '@/shared/utils';
+import { Bot, Mic, Volume2 } from 'lucide-react';
+import { cn } from '@/shared/utils/cn';
 import { EmptyState } from '@/shared/components/ui';
 import type { VoiceHistoryEntry } from '../../types/voice.types';
 
-// ============================================================================
-// ICONS
-// ============================================================================
-
-const MicIcon = (
-  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"
-    />
-  </svg>
-);
-
-const RobotIcon = (
-  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      d="M12 3v3m-6 3.75h12A2.25 2.25 0 0120.25 12v6A2.25 2.25 0 0118 20.25H6A2.25 2.25 0 013.75 18v-6A2.25 2.25 0 016 9.75zm2.25 4.5h.008v.008H8.25v-.008zm7.5 0h.008v.008h-.008v-.008z"
-    />
-  </svg>
-);
-
-const SpeakerIcon = (
-  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
-    />
-  </svg>
-);
-
-// ============================================================================
-// HELPERS
-// ============================================================================
+const META_ICON = 'h-3.5 w-3.5';
 
 function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
 
 export interface VoiceConversationProps {
   entries: VoiceHistoryEntry[];
@@ -76,12 +33,9 @@ export const VoiceConversation = memo(function VoiceConversation({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
 
-  // Auto-follow new entries, but respect a user who scrolled up to read.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el && stickToBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
+    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [entries]);
 
   const handleScroll = () => {
@@ -95,9 +49,9 @@ export const VoiceConversation = memo(function VoiceConversation({
       <div className={cn('flex items-center justify-center', className)}>
         <EmptyState
           size="sm"
-          icon={<span className="text-theme-tertiary [&>svg]:w-10 [&>svg]:h-10">{SpeakerIcon}</span>}
+          icon={<Volume2 />}
           title="No voice activity yet"
-          description="Type a message below and the robot will say it out loud. Anything the robot microphone hears shows up here too."
+          description="Type a message below and the robot says it out loud. Anything its microphone hears shows up here too."
         />
       </div>
     );
@@ -107,7 +61,7 @@ export const VoiceConversation = memo(function VoiceConversation({
     <div
       ref={scrollRef}
       onScroll={handleScroll}
-      className={cn('overflow-y-auto pr-1 flex flex-col gap-2', className)}
+      className={cn('flex flex-col gap-3 overflow-y-auto pr-1', className)}
       role="log"
       aria-label="Voice conversation history"
       data-testid="voice-conversation"
@@ -115,12 +69,10 @@ export const VoiceConversation = memo(function VoiceConversation({
       {entries.map((entry) => {
         if (entry.kind === 'reset') {
           return (
-            <div key={entry.id} className="flex items-center gap-2 my-1" aria-label="New session">
-              <div className="flex-1 h-px bg-theme-primary/10" />
-              <span className="text-[10px] uppercase tracking-wider text-theme-tertiary">
-                New session · {formatTime(entry.ts)}
-              </span>
-              <div className="flex-1 h-px bg-theme-primary/10" />
+            <div key={entry.id} className="my-1 flex items-center gap-2" aria-label="New session">
+              <div className="h-px flex-1 bg-line" />
+              <span className="text-[11px] text-ink-tertiary">New session · {formatTime(entry.ts)}</span>
+              <div className="h-px flex-1 bg-line" />
             </div>
           );
         }
@@ -129,10 +81,10 @@ export const VoiceConversation = memo(function VoiceConversation({
           return (
             <div
               key={entry.id}
-              className="self-start max-w-[85%] px-3 py-2 rounded-xl text-xs bg-red-500/10 border border-red-500/25 text-red-400"
+              className="max-w-[85%] self-start rounded-control border border-signal-stopped/30 bg-signal-stopped/10 px-3 py-2 text-xs text-signal-stopped"
             >
               {entry.text}
-              <span className="block mt-0.5 text-[10px] text-red-400/60">{formatTime(entry.ts)}</span>
+              <span className="mt-0.5 block text-[11px] text-ink-tertiary">{formatTime(entry.ts)}</span>
             </div>
           );
         }
@@ -140,19 +92,19 @@ export const VoiceConversation = memo(function VoiceConversation({
         const isTyped = entry.kind === 'typed';
         const meta =
           entry.kind === 'typed'
-            ? { icon: SpeakerIcon, label: 'Spoken by robot' }
+            ? { icon: <Volume2 className={META_ICON} strokeWidth={1.75} />, label: 'Spoken by robot' }
             : entry.kind === 'heard'
-              ? { icon: MicIcon, label: 'Robot heard' }
-              : { icon: RobotIcon, label: 'Robot replied' };
+              ? { icon: <Mic className={META_ICON} strokeWidth={1.75} />, label: 'Robot heard' }
+              : { icon: <Bot className={META_ICON} strokeWidth={1.75} />, label: 'Robot replied' };
 
         return (
           <div
             key={entry.id}
-            className={cn('flex flex-col max-w-[85%]', isTyped ? 'self-end items-end' : 'self-start items-start')}
+            className={cn('flex max-w-[85%] flex-col', isTyped ? 'items-end self-end' : 'items-start self-start')}
           >
             <div
               className={cn(
-                'flex items-center gap-1 mb-0.5 text-[10px] text-theme-tertiary',
+                'mb-1 flex items-center gap-1 text-[11px] text-ink-tertiary',
                 isTyped && 'flex-row-reverse'
               )}
             >
@@ -164,12 +116,12 @@ export const VoiceConversation = memo(function VoiceConversation({
             </div>
             <div
               className={cn(
-                'px-3 py-2 rounded-xl text-sm leading-relaxed whitespace-pre-wrap break-words',
+                'whitespace-pre-wrap break-words rounded-control border px-3 py-2 text-sm leading-relaxed',
                 isTyped
-                  ? 'bg-cobalt-500/15 border border-cobalt-500/30 text-theme-primary'
+                  ? 'border-primary/30 bg-primary/10 text-ink-primary'
                   : entry.kind === 'heard'
-                    ? 'glass-subtle border border-dashed border-theme text-theme-secondary italic'
-                    : 'glass-subtle border border-theme text-theme-primary'
+                    ? 'border-dashed border-line bg-inset italic text-ink-secondary'
+                    : 'border-line bg-inset text-ink-primary'
               )}
             >
               {entry.text}

@@ -75,12 +75,12 @@ export function IncidentClipPlayer({ incidentId }: IncidentClipPlayerProps) {
   }
 
   if (error || !clip) {
-    return <p className="text-sm text-theme-tertiary">{error ?? 'No clip available.'}</p>;
+    return <p className="text-sm text-ink-tertiary">{error ?? 'No clip available.'}</p>;
   }
 
   return (
     <div className="space-y-2">
-      <div className="rounded-lg overflow-hidden bg-black">
+      <div className="overflow-hidden rounded-control bg-inset">
         <img
           src={`data:image/jpeg;base64,${clip.frames[frameIndex]}`}
           alt={`Rollout clip frame ${frameIndex + 1} of ${clip.frames.length}`}
@@ -91,7 +91,8 @@ export function IncidentClipPlayer({ incidentId }: IncidentClipPlayerProps) {
       <div className="flex items-center gap-3">
         <button
           onClick={() => setPlaying((p) => !p)}
-          className="px-3 py-1 rounded text-xs font-medium bg-theme-base hover:bg-theme-base/70 text-theme-primary transition-colors"
+          type="button"
+          className="rounded-control border border-line bg-panel px-3 py-1 text-xs font-medium text-ink-primary transition-colors hover:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         >
           {playing ? 'Pause' : 'Play'}
         </button>
@@ -103,16 +104,16 @@ export function IncidentClipPlayer({ incidentId }: IncidentClipPlayerProps) {
           step={1}
           value={frameIndex}
           onChange={handleScrub}
-          className="flex-1 h-1 rounded-full appearance-none cursor-pointer bg-theme-base accent-primary-500"
+          className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-inset accent-primary"
           aria-label="Frame scrubber"
         />
 
-        <span className="text-xs font-mono tabular-nums text-theme-tertiary w-[72px] text-right">
+        <span className="w-[72px] text-right text-xs tabular-nums text-ink-tertiary">
           {frameIndex + 1} / {clip.frames.length}
         </span>
       </div>
 
-      <p className="text-xs text-theme-tertiary">
+      <p className="text-xs text-ink-tertiary">
         {clip.fps} fps · captured {formatDateTime(clip.capturedAt)}
       </p>
     </div>

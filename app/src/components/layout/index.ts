@@ -5,12 +5,19 @@
  */
 
 export { AppLayout } from './AppLayout';
-export { Sidebar, NAV_ITEMS } from './Sidebar';
+export { Sidebar } from './Sidebar';
 export type { SidebarProps } from './Sidebar';
 export { TopBar } from './TopBar';
 export { MobileNav } from './MobileNav';
 export type { MobileNavProps } from './MobileNav';
-export { DashboardLayout } from './DashboardLayout';
-export type { DashboardLayoutProps } from './DashboardLayout';
-export { AuthLayout } from './AuthLayout';
-export type { AuthLayoutProps } from './AuthLayout';
+export { NavList } from './NavList';
+export type { NavListProps, NavListVariant } from './NavList';
+export {
+  NAV_GROUPS,
+  NAV_ITEMS,
+  isNavItemActive,
+  filterNavGroups,
+  useVisibleNavGroups,
+  useVisibleNavItems,
+} from './navigation';
+export type { NavGroup, NavItem } from './navigation';

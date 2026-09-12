@@ -7,9 +7,9 @@
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
-import { cn } from '@/shared/utils';
+import { cn } from '@/shared/utils/cn';
 import { formatTimeAgo } from '@/shared/utils/format';
-import { Button, Modal } from '@/shared/components/ui';
+import { Button, Eyebrow, Modal } from '@/shared/components/ui';
 import {
   useAgentModeStore,
   selectSelf,
@@ -78,8 +78,8 @@ function formatClock(iso: string): string {
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="space-y-2">
-      <h3 className="card-title">{title}</h3>
+    <section className="space-y-3 rounded-control bg-inset p-4">
+      <Eyebrow>{title}</Eyebrow>
       <div className="space-y-1.5">{children}</div>
     </section>
   );
@@ -101,9 +101,9 @@ function Row({
 }) {
   return (
     <div className="flex items-start gap-3 text-sm">
-      <span className="card-meta shrink-0 w-32">{label}</span>
+      <span className="w-28 shrink-0 text-ink-muted sm:w-32">{label}</span>
       <span
-        className={cn('min-w-0 break-words', unset ? 'card-meta' : 'text-theme-secondary')}
+        className={cn('min-w-0 break-words', unset ? 'text-ink-muted' : 'text-ink-primary')}
       >
         {value}
       </span>
@@ -142,16 +142,16 @@ function ConditionChecklist({ conditions }: { conditions: readonly Condition[] }
     <ul className="space-y-1.5">
       {conditions.map((condition) => (
         <li key={condition.key} className="flex items-start gap-3 text-sm">
-          <span className="card-meta shrink-0 w-32">{CONDITION_LABELS[condition.key]}</span>
+          <span className="w-28 shrink-0 text-ink-muted sm:w-32">{CONDITION_LABELS[condition.key]}</span>
           <span
             className={cn(
               'min-w-0 break-words',
-              !condition.active && 'card-meta',
-              condition.active && condition.level >= 3 && 'text-red-600 dark:text-red-400',
+              !condition.active && 'text-ink-muted',
+              condition.active && condition.level >= 3 && 'text-signal-stopped',
               condition.active &&
                 condition.level === 2 &&
-                'text-amber-600 dark:text-amber-400',
-              condition.active && condition.level <= 1 && 'text-theme-secondary'
+                'text-signal-unknown',
+              condition.active && condition.level <= 1 && 'text-ink-secondary'
             )}
           >
             {condition.active
@@ -205,15 +205,14 @@ export function RobotDetailsDrawer({ isOpen, onClose, robotId }: RobotDetailsDra
         isOpen={isOpen}
         onClose={onClose}
         title={self ? `${self.emoji ? `${self.emoji} ` : ''}${self.name}` : 'Robot details'}
-        size="md"
+        size="lg"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={onClose}>
+            <Button variant="secondary" onClick={onClose}>
               Close
             </Button>
             <Button
               variant="primary"
-              size="sm"
               disabled={!robotId}
               onClick={() => {
                 // One dialog at a time: the naming form is itself a modal, and
@@ -228,12 +227,12 @@ export function RobotDetailsDrawer({ isOpen, onClose, robotId }: RobotDetailsDra
           </>
         }
       >
-        <div className="space-y-5">
+        <div className="flex flex-col gap-4">
           {!self ? (
             // Absent means the agent does not report a self — which is not the
             // same as a robot without an identity, and must not be filled in
             // with placeholders that would read as facts.
-            <p className="card-meta">
+            <p className="text-sm text-ink-muted">
               This robot has not reported who it is. That is not the same as a robot
               without an identity — one that genuinely has none says so and asks to be
               named.
@@ -268,7 +267,7 @@ export function RobotDetailsDrawer({ isOpen, onClose, robotId }: RobotDetailsDra
                     unset
                   />
                 )}
-                <p className="card-meta pt-1">Plans are ephemeral and never persisted.</p>
+                <p className="pt-1 text-xs text-ink-muted">Plans are ephemeral and never persisted.</p>
               </Section>
 
               <Section title="Snapshot">
@@ -307,7 +306,7 @@ export function RobotDetailsDrawer({ isOpen, onClose, robotId }: RobotDetailsDra
                   <Row
                     label="Process"
                     value={
-                      <span className="text-amber-600 dark:text-amber-400">
+                      <span className="text-signal-unknown">
                         Pushed by boot{' '}
                         <span className="font-mono text-xs">{self.bootId ?? 'unknown'}</span>,
                         but the robot last answered from{' '}
@@ -322,7 +321,7 @@ export function RobotDetailsDrawer({ isOpen, onClose, robotId }: RobotDetailsDra
           )}
 
           <Section title="Conditions">
-            <p className="card-meta">
+            <p className="text-sm text-ink-muted">
               All {conditions.length}, whether they are true or not — so a badge missing from
               the page can be read here as false rather than broken.
             </p>

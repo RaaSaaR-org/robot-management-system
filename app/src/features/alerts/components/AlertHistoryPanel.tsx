@@ -1,219 +1,152 @@
 /**
  * @file AlertHistoryPanel.tsx
- * @description Panel displaying alert history with pagination
+ * @description Alert history: Toolbar filters, a DataTable of past alerts and a
+ *              server-pagination footer, with loading, empty and filtered-empty states.
  * @feature alerts
- * @dependencies @/shared/utils/cn, @/features/alerts/hooks
  */
 
-import { BellOff } from 'lucide-react';
+import { useEffect } from 'react';
+import { History, Search } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
-import { formatDateTime } from '@/shared/utils/format';
-import { Button } from '@/shared/components/ui/Button';
-import { EmptyState } from '@/shared/components/ui/EmptyState';
+import {
+  Button,
+  DataTable,
+  EmptyState,
+  Panel,
+  StatusTag,
+  Toolbar,
+  type DataTableColumn,
+} from '@/shared/components/ui';
+import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import { useAlertHistory } from '../hooks/useAlerts';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
-import type { Alert, AlertSeverity } from '../types/alerts.types';
+import { AlertFilters, hasAlertFilters } from './AlertFilters';
+import { RobotRef, alertText, formatAlertTime } from './AlertList';
+import type { Alert } from '../types/alerts.types';
 import { ALERT_SOURCE_LABELS } from '../types/alerts.types';
-import { parseFindingLink, stripFindingLink } from '@/features/patrol/utils/patrolFormat';
-
-// ============================================================================
-// TYPES
-// ============================================================================
 
 export interface AlertHistoryPanelProps {
-  /** Maximum height of the list. When omitted, the list flows with the page (no inner scrollbar). */
-  maxHeight?: string;
-  /** Additional class names */
-  className?: string;
   /** Whether to auto-fetch on mount */
   autoFetch?: boolean;
+  /** Additional class names */
+  className?: string;
 }
-
-// ============================================================================
-// STYLES
-// ============================================================================
-
-const SEVERITY_BORDER_STYLES: Record<AlertSeverity, string> = {
-  critical: 'border-l-red-500',
-  error: 'border-l-red-400',
-  warning: 'border-l-yellow-400',
-  info: 'border-l-blue-400',
-};
-
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-/** Absolute date/time via the shared fixed-English-locale formatter */
-function formatTimestamp(isoString: string): string {
-  return formatDateTime(isoString);
-}
-
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-interface HistoryItemProps {
-  alert: Alert;
-}
-
-function HistoryItem({ alert }: HistoryItemProps) {
-  // TASK-212: keep the `[finding:<id> run:<runId>]` machine tag out of the
-  // prose. This compact list carries no link — AlertList/AlertBanner do.
-  const message = parseFindingLink(alert.message) ? stripFindingLink(alert.message) : alert.message;
-
-  return (
-    <div
-      className={cn(
-        'p-3 bg-theme-elevated rounded-lg border-l-4 transition-opacity',
-        SEVERITY_BORDER_STYLES[alert.severity],
-        alert.acknowledged && 'opacity-60'
-      )}
-    >
-      {/* Stack the timestamp below the text on narrow screens */}
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
-            <AlertSeverityBadge severity={alert.severity} size="sm" />
-            <span className="text-xs text-theme-tertiary">
-              {ALERT_SOURCE_LABELS[alert.source]}
-              {alert.sourceId && ` - ${alert.sourceId}`}
-            </span>
-          </div>
-          <h4 className="text-sm font-medium text-theme-primary truncate">{alert.title}</h4>
-          <p className="text-xs text-theme-secondary mt-0.5 line-clamp-2">{message}</p>
-        </div>
-        <div className="flex items-center gap-2 sm:flex-col sm:items-end sm:gap-1 flex-shrink-0">
-          <span className="text-xs text-theme-tertiary whitespace-nowrap">
-            {formatTimestamp(alert.timestamp)}
-          </span>
-          {alert.acknowledged && (
-            <span className="text-xs text-green-400 whitespace-nowrap">Acknowledged</span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface PaginationProps {
-  page: number;
-  totalPages: number;
-  total: number;
-  onPrev: () => void;
-  onNext: () => void;
-  isLoading: boolean;
-}
-
-function Pagination({ page, totalPages, total, onPrev, onNext, isLoading }: PaginationProps) {
-  return (
-    <div className="flex items-center justify-between pt-4 border-t border-theme-border">
-      <span className="text-sm text-theme-secondary">
-        {total} alert{total !== 1 ? 's' : ''} total
-      </span>
-      <div className="flex items-center gap-2">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={onPrev}
-          disabled={page <= 1 || isLoading}
-          aria-label="Previous page"
-        >
-          Previous
-        </Button>
-        <span className="text-sm text-theme-secondary px-2">
-          Page {page} of {Math.max(1, totalPages)}
-        </span>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={onNext}
-          disabled={page >= totalPages || isLoading}
-          aria-label="Next page"
-        >
-          Next
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
 
 /**
- * AlertHistoryPanel - Displays alert history with pagination
+ * AlertHistoryPanel - past alerts with filters and pagination.
  *
  * @example
- * ```tsx
- * function AlertsPage() {
- *   return (
- *     <div className="p-4">
- *       <h1>Alert History</h1>
- *       <AlertHistoryPanel maxHeight="500px" />
- *     </div>
- *   );
- * }
- * ```
+ * <AlertHistoryPanel autoFetch={tab === 'history'} />
  */
-export function AlertHistoryPanel({
-  maxHeight,
-  className,
-  autoFetch = true,
-}: AlertHistoryPanelProps) {
-  const { history, pagination, isLoading, nextPage, prevPage } = useAlertHistory(autoFetch);
+export function AlertHistoryPanel({ autoFetch = true, className }: AlertHistoryPanelProps) {
+  const { history, pagination, filters, setFilters, isLoading, goToPage } = useAlertHistory(autoFetch);
+  const robots = useRobotsStore(selectRobots);
+  const fetchRobots = useRobotsStore((state) => state.fetchRobots);
+  const filtered = hasAlertFilters(filters);
 
-  if (isLoading && history.length === 0) {
-    return (
-      <div className={cn('flex items-center justify-center py-12', className)}>
-        <div className="flex flex-col items-center gap-2">
-          <div className="animate-spin h-8 w-8 border-2 border-primary-500 border-t-transparent rounded-full" />
-          <span className="text-sm text-theme-secondary">Loading alerts...</span>
-        </div>
-      </div>
-    );
-  }
+  // Resolve robot names here too; nothing else on this tab loads the robot list.
+  useEffect(() => {
+    if (robots.length === 0) void fetchRobots();
+  }, [robots.length, fetchRobots]);
 
-  if (history.length === 0) {
-    return (
-      <EmptyState
-        className={className}
-        icon={<BellOff className="w-10 h-10" />}
-        title="No alerts found"
-        description="Alerts will appear here when they occur"
-      />
-    );
-  }
+  const columns: DataTableColumn<Alert>[] = [
+    {
+      key: 'severity',
+      header: 'Severity',
+      width: 120,
+      hideBelow: 'sm',
+      cell: (a) => <AlertSeverityBadge severity={a.severity} showDot={false} />,
+    },
+    {
+      key: 'title',
+      header: 'Alert',
+      cell: (a) => {
+        // TASK-212: the finding tag never shows in the prose; history carries no link.
+        const { title, message } = alertText(a);
+        return (
+          <div className="min-w-0 max-w-[60ch]">
+            <AlertSeverityBadge severity={a.severity} showDot={false} className="mb-1 sm:hidden" />
+            <div className="break-words text-sm font-medium text-ink-primary">{title}</div>
+            {message && <p className="line-clamp-2 break-words text-[13px] text-ink-tertiary">{message}</p>}
+          </div>
+        );
+      },
+    },
+    {
+      key: 'robot',
+      header: 'Source',
+      hideBelow: 'md',
+      cell: (a) =>
+        a.source === 'robot' && a.sourceId ? (
+          <RobotRef sourceId={a.sourceId} robotName={robots.find((r) => r.id === a.sourceId)?.name} />
+        ) : (
+          <span className="text-[13px] text-ink-tertiary">{ALERT_SOURCE_LABELS[a.source]}</span>
+        ),
+    },
+    {
+      key: 'timestamp',
+      header: 'Raised',
+      hideBelow: 'sm',
+      cell: (a) => (
+        <span className="whitespace-nowrap text-[13px] tabular-nums text-ink-tertiary">
+          {formatAlertTime(a.timestamp)}
+        </span>
+      ),
+    },
+    {
+      key: 'state',
+      header: 'State',
+      align: 'right',
+      cell: (a) =>
+        a.acknowledged ? <StatusTag tone="success">Acknowledged</StatusTag> : <StatusTag tone="neutral">Open</StatusTag>,
+    },
+  ];
 
   return (
-    <div className={cn('flex flex-col', className)}>
-      {/* History List */}
-      <div
-        className={cn('space-y-2', maxHeight && 'overflow-y-auto')}
-        style={maxHeight ? { maxHeight } : undefined}
-      >
-        {history.map((alert) => (
-          <HistoryItem key={alert.id} alert={alert} />
-        ))}
-      </div>
-
-      {/* Loading overlay */}
-      {isLoading && (
-        <div className="absolute inset-0 bg-theme-base/50 flex items-center justify-center">
-          <div className="animate-spin h-6 w-6 border-2 border-primary-500 border-t-transparent rounded-full" />
-        </div>
-      )}
-
-      {/* Pagination */}
-      <Pagination
-        page={pagination.page}
-        totalPages={pagination.totalPages}
-        total={pagination.total}
-        onPrev={prevPage}
-        onNext={nextPage}
-        isLoading={isLoading}
-      />
+    <div className={cn('flex flex-col gap-4', className)}>
+      <Toolbar filters={<AlertFilters filters={filters} onFiltersChange={setFilters} />} />
+      <Panel padding="none">
+        <DataTable
+          caption="Alert history"
+          columns={columns}
+          rows={history}
+          getRowId={(a) => a.id}
+          isLoading={isLoading}
+          // Once there is history the footer always shows, so the total is visible on one page too.
+          pagination={
+            history.length > 0
+              ? {
+                  page: pagination.page,
+                  totalPages: pagination.totalPages,
+                  total: pagination.total,
+                  noun: 'alert',
+                  showSinglePage: true,
+                  onPageChange: goToPage,
+                }
+              : undefined
+          }
+          empty={
+            filtered ? (
+              <EmptyState
+                icon={<Search />}
+                title="No alerts in this range"
+                description="Try another severity, source or date."
+                action={
+                  <Button variant="secondary" onClick={() => setFilters({})}>
+                    Clear filters
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon={<History />}
+                title="No alert history yet"
+                description="Alerts the fleet raises are kept here once they happen."
+              />
+            )
+          }
+        />
+      </Panel>
     </div>
   );
 }

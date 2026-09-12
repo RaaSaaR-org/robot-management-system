@@ -141,7 +141,7 @@ describe('PlaceChip', () => {
 
   /**
    * A drifted place used to differ from a current one by TEXT COLOUR ALONE —
-   * muted instead of cobalt — with the word only reachable through a hover
+   * muted instead of primary — with the word only reachable through a hover
    * tooltip that the 44px rail clipped away. WCAG 1.4.1, and the page's own
    * invariant failing towards over-confidence: the operator reads a place name
    * as if the pose behind it were current.

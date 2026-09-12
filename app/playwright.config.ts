@@ -58,6 +58,13 @@ export default defineConfig({
   // every spec left here asserts with `expect`, whose own 5 s timeout applies.
   forbidOnly: !!process.env.CI,
 
+  // One worker in CI. The landing hero and the robot viewers render WebGL in
+  // software (SwiftShader) there, and two of them on a 4-vCPU runner starve
+  // each other: the hero ran its 8 s cycle at ~0.4x and an unrelated robot
+  // detail screenshot hit the 30 s timeout. The hero cycle already dominates
+  // wall time, so serial costs little.
+  workers: process.env.CI ? 1 : undefined,
+
   use: {
     baseURL: `http://localhost:${previewPort}/robot-management-system/`,
     colorScheme: 'dark',

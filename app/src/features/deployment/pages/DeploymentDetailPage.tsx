@@ -1,432 +1,182 @@
 /**
  * @file DeploymentDetailPage.tsx
- * @description Detailed view of a single deployment
+ * @description One rollout: canary stage, robots and metrics, with start/promote/roll back/cancel
  * @feature deployment
  */
 
-import { useEffect, useState, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Button, Badge } from '@/shared/components/ui';
-import { UI_DATE_LOCALE, cn } from '@/shared/utils';
+import { useCallback, useEffect, useMemo } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ArrowUpCircle, Play, Undo2, XCircle } from 'lucide-react';
+import {
+  Button,
+  ErrorState,
+  PageHeader,
+  Panel,
+  RowActions,
+  SkeletonText,
+  StatRow,
+  StatTile,
+  StatusTag,
+  Tabs,
+  type RowActionItem,
+} from '@/shared/components/ui';
+import { formatDateTime } from '@/shared/utils';
+import { useRobots } from '@/features/robots/hooks/useRobots';
 import { useDeployment } from '../hooks/useDeployment';
 import { useDeploymentMetrics } from '../hooks/useDeploymentMetrics';
 import { useDeploymentProgress } from '../hooks/useDeploymentProgress';
+import { DeploymentMetricsPanel } from '../components/DeploymentMetricsPanel';
+import { DeploymentOverview } from '../components/DeploymentOverview';
+import { DeploymentProgress } from '../components/DeploymentProgress';
+import { useDeploymentActs } from '../components/useDeploymentActs';
 import {
-  DeploymentStatus,
-  DeploymentProgress,
-  RollbackConfirmation,
-  DeploymentStatusBadge,
-} from '../components';
+  canCancel,
+  canPromote,
+  canRollBack,
+  deploymentName,
+  deployToneFor,
+  isMoving,
+  reachedStages,
+  strategyLabel,
+} from '../components/deploymentHelpers';
 
-type TabValue = 'overview' | 'robots' | 'metrics' | 'events';
+const TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'robots', label: 'Robots' },
+  { id: 'metrics', label: 'Metrics' },
+] as const;
+type TabId = (typeof TABS)[number]['id'];
+
+const icon = 'h-4 w-4';
+const back = { to: '/deployments', label: 'Deployments' };
 
 export function DeploymentDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id = '' } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabValue>('overview');
-  const [showRollbackModal, setShowRollbackModal] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const tab: TabId = TABS.some((t) => t.id === params.get('tab')) ? (params.get('tab') as TabId) : 'overview';
+  const setTab = (next: string) =>
+    setParams((p) => { if (next === 'overview') p.delete('tab'); else p.set('tab', next); return p; }, { replace: true });
 
-  const { deployment, isLoading, error, fetchDeployment, promote, rollback, cancel } = useDeployment(
-    id!
-  );
-
-  const { metrics, isLoading: metricsLoading, startPolling, stopPolling } = useDeploymentMetrics(id!);
-
-  // Subscribe to real-time updates
+  const { deployment, isLoading, error, fetchDeployment } = useDeployment(id);
+  const { metrics, isLoading: metricsLoading, startPolling, stopPolling } = useDeploymentMetrics(id);
+  const { robots, fetchRobots } = useRobots();
   useDeploymentProgress();
 
-  // Fetch deployment on mount
+  const onChanged = useCallback(
+    (act: 'start' | 'promote' | 'rollback' | 'cancel') => {
+      if (act === 'cancel') navigate('/deployments');
+      else void fetchDeployment();
+    },
+    [fetchDeployment, navigate],
+  );
+  const acts = useDeploymentActs(onChanged);
+
   useEffect(() => {
-    if (id) {
-      fetchDeployment();
-    }
+    if (id) void fetchDeployment();
   }, [id, fetchDeployment]);
-
-  // Poll metrics when deployment is active
   useEffect(() => {
-    if (deployment && ['deploying', 'canary', 'production'].includes(deployment.status)) {
-      startPolling();
-      return () => stopPolling();
-    }
-  }, [deployment, startPolling, stopPolling]);
+    void fetchRobots();
+  }, [fetchRobots]);
 
-  const handleRollback = async (reason: string) => {
-    await rollback(reason);
-    setShowRollbackModal(false);
-  };
+  const polling = deployment ? ['deploying', 'canary', 'production'].includes(deployment.status) : false;
+  useEffect(() => {
+    if (!polling) return;
+    startPolling();
+    return () => stopPolling();
+  }, [polling, startPolling, stopPolling]);
 
-  const handlePromote = async () => {
-    await promote();
-  };
+  const robotNames = useMemo(() => Object.fromEntries(robots.map((r) => [r.id, r.name])), [robots]);
 
-  const handleCancel = async () => {
-    await cancel();
-    navigate('/deployments');
-  };
-
-  // Calculate current stage
-  const { currentStage, nextStageTime } = useMemo(() => {
-    if (!deployment || !deployment.canaryConfig) {
-      return { currentStage: 0, nextStageTime: undefined };
-    }
-
-    const stages = deployment.canaryConfig.stages;
-    let stage = 0;
-
-    for (let i = 0; i < stages.length; i++) {
-      if (deployment.trafficPercentage >= stages[i].percentage) {
-        stage = i + 1;
-      }
-    }
-
-    // Calculate next stage time (placeholder - would need backend tracking)
-    const nextTime = deployment.startedAt
-      ? new Date(new Date(deployment.startedAt).getTime() + 60 * 60 * 1000).toISOString()
-      : undefined;
-
-    return { currentStage: stage, nextStageTime: nextTime };
-  }, [deployment]);
-
-  if (isLoading) {
+  if (!deployment) {
     return (
-      <div className="p-6 flex justify-center py-24">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cobalt-500" />
+      <div className="flex flex-col gap-6">
+        <PageHeader eyebrow="Build" back={back} title={isLoading || !error ? 'Loading…' : 'Deployment'} />
+        <Panel>
+          {error ? (
+            <ErrorState title="Couldn't load this deployment" message={error} onRetry={() => void fetchDeployment()} />
+          ) : (
+            <SkeletonText lines={4} />
+          )}
+        </Panel>
       </div>
     );
   }
 
-  if (error || !deployment) {
-    return (
-      <div className="p-6">
-        <Card className="p-6 text-center">
-          <svg
-            className="w-12 h-12 mx-auto text-red-500 mb-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-          <p className="text-red-500 mb-4">{error || 'Deployment not found'}</p>
-          <Button variant="outline" onClick={() => navigate('/deployments')}>
-            Back to Deployments
-          </Button>
-        </Card>
-      </div>
-    );
-  }
+  const d = deployment;
+  const name = deploymentName(d);
+  const stages = d.canaryConfig?.stages.length ?? 0;
+  const version = d.modelVersion ? `v${d.modelVersion.version} · ` : '';
+  const description = `${version}${strategyLabel(d.strategy)} · ${
+    d.startedAt ? `started ${formatDateTime(d.startedAt)}` : 'not started'
+  }`;
+
+  const primary =
+    d.status === 'pending' ? (
+      <Button leftIcon={<Play className={icon} strokeWidth={1.75} />} onClick={() => void acts.start(d)}>Start rollout</Button>
+    ) : canPromote(d) ? (
+      <Button leftIcon={<ArrowUpCircle className={icon} strokeWidth={1.75} />} onClick={() => void acts.promote(d)}>Promote</Button>
+    ) : null;
+
+  const more: RowActionItem[] = [];
+  if (canRollBack(d)) more.push({ label: 'Roll back', icon: <Undo2 className={icon} />, onSelect: () => acts.openRollback(d) });
+  if (canCancel(d))
+    more.push({
+      label: 'Cancel deployment',
+      icon: <XCircle className={icon} />,
+      tone: 'danger',
+      separatorBefore: more.length > 0,
+      onSelect: () => void acts.cancel(d),
+    });
+
+  const failed = d.failedRobotIds.length;
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" onClick={() => navigate('/deployments')}>
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </Button>
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-theme-primary">
-                {deployment.modelVersion?.skill?.name || 'Deployment'}
-              </h1>
-              <DeploymentStatusBadge status={deployment.status} size="lg" />
-            </div>
-            <p className="text-sm text-theme-secondary mt-1">
-              Model v{deployment.modelVersion?.version} · Started{' '}
-              {deployment.startedAt
-                ? new Date(deployment.startedAt).toLocaleString(UI_DATE_LOCALE)
-                : 'Not started'}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex gap-2">
-          {deployment.status === 'canary' && (
-            <Button variant="primary" onClick={handlePromote}>
-              Promote to Production
-            </Button>
-          )}
-          {['deploying', 'canary', 'production'].includes(deployment.status) && (
-            <Button variant="destructive" onClick={() => setShowRollbackModal(true)}>
-              Rollback
-            </Button>
-          )}
-          {['pending', 'deploying', 'canary'].includes(deployment.status) && (
-            <Button variant="outline" onClick={handleCancel}>
-              Cancel
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Tab buttons */}
-      <div className="flex gap-2 border-b border-theme pb-2">
-        {(['overview', 'robots', 'metrics', 'events'] as TabValue[]).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors capitalize ${
-              activeTab === tab
-                ? 'text-cobalt-500 border-b-2 border-cobalt-500'
-                : 'text-theme-secondary hover:text-theme-primary'
-            }`}
-          >
-            {tab}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab content */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Main content */}
-        <div className="lg:col-span-2 space-y-6">
-          {activeTab === 'overview' && (
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Build"
+        back={back}
+        title={name}
+        description={description}
+        meta={<StatusTag status={d.status} tone={deployToneFor(d.status)} dot pulse={isMoving(d.status)} />}
+        actions={
+          primary || more.length > 0 ? (
             <>
-              <DeploymentStatus
-                deployment={deployment}
-                metrics={metrics}
-                currentStage={currentStage}
-                totalStages={deployment.canaryConfig?.stages.length || 0}
-                nextStageTime={nextStageTime}
-                onPromote={handlePromote}
-                onRollback={() => setShowRollbackModal(true)}
-                onCancel={handleCancel}
-              />
-
-              {/* Deployment info */}
-              <Card className="p-6 space-y-4">
-                <h3 className="font-semibold text-theme-primary">Deployment Details</h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span className="text-theme-secondary">Strategy</span>
-                    <p className="font-medium text-theme-primary capitalize">{deployment.strategy}</p>
-                  </div>
-                  <div>
-                    <span className="text-theme-secondary">Created</span>
-                    <p className="font-medium text-theme-primary">
-                      {new Date(deployment.createdAt).toLocaleString(UI_DATE_LOCALE)}
-                    </p>
-                  </div>
-                  {deployment.startedAt && (
-                    <div>
-                      <span className="text-theme-secondary">Started</span>
-                      <p className="font-medium text-theme-primary">
-                        {new Date(deployment.startedAt).toLocaleString(UI_DATE_LOCALE)}
-                      </p>
-                    </div>
-                  )}
-                  {deployment.completedAt && (
-                    <div>
-                      <span className="text-theme-secondary">Completed</span>
-                      <p className="font-medium text-theme-primary">
-                        {new Date(deployment.completedAt).toLocaleString(UI_DATE_LOCALE)}
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Rollback thresholds */}
-                {deployment.rollbackThresholds && (
-                  <>
-                    <h4 className="font-medium text-theme-primary pt-4 border-t border-theme">
-                      Rollback Thresholds
-                    </h4>
-                    <div className="grid grid-cols-3 gap-4 text-sm">
-                      <div>
-                        <span className="text-theme-secondary">Error Rate</span>
-                        <p className="font-medium text-theme-primary">
-                          {(deployment.rollbackThresholds.errorRate * 100).toFixed(1)}%
-                        </p>
-                      </div>
-                      <div>
-                        <span className="text-theme-secondary">P99 Latency</span>
-                        <p className="font-medium text-theme-primary">
-                          {deployment.rollbackThresholds.latencyP99}ms
-                        </p>
-                      </div>
-                      <div>
-                        <span className="text-theme-secondary">Failure Rate</span>
-                        <p className="font-medium text-theme-primary">
-                          {(deployment.rollbackThresholds.failureRate * 100).toFixed(1)}%
-                        </p>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </Card>
+              {primary}
+              {more.length > 0 && <RowActions label="More actions" items={more} />}
             </>
-          )}
-
-          {activeTab === 'robots' && <DeploymentProgress deployment={deployment} />}
-
-          {activeTab === 'metrics' && (
-            <Card className="p-6">
-              <h3 className="font-semibold text-theme-primary mb-4">Performance Metrics</h3>
-              {metricsLoading ? (
-                <div className="flex justify-center py-8">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-cobalt-500" />
-                </div>
-              ) : metrics ? (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4 text-center">
-                      <p className="text-3xl font-bold text-theme-primary">
-                        {(metrics.errorRate * 100).toFixed(2)}%
-                      </p>
-                      <p className="text-sm text-theme-secondary">Error Rate</p>
-                    </div>
-                    <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4 text-center">
-                      <p className="text-3xl font-bold text-theme-primary">
-                        {(metrics.taskSuccessRate * 100).toFixed(1)}%
-                      </p>
-                      <p className="text-sm text-theme-secondary">Task Success</p>
-                    </div>
-                  </div>
-
-                  <div>
-                    <h4 className="text-sm font-medium text-theme-primary mb-2">Latency Distribution</h4>
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-theme-secondary">P50</span>
-                        <span className="text-theme-primary">{metrics.latencyP50.toFixed(0)}ms</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-theme-secondary">P95</span>
-                        <span className="text-theme-primary">{metrics.latencyP95.toFixed(0)}ms</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-theme-secondary">P99</span>
-                        <span className="text-theme-primary">{metrics.latencyP99.toFixed(0)}ms</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="text-xs text-theme-tertiary text-center">
-                    Sample size: {metrics.sampleSize} requests
-                  </div>
-                </div>
-              ) : (
-                <p className="text-theme-secondary text-center py-8">
-                  No metrics available yet
-                </p>
-              )}
-            </Card>
-          )}
-
-          {activeTab === 'events' && (
-            <Card className="p-6">
-              <h3 className="font-semibold text-theme-primary mb-4">Deployment Events</h3>
-              <p className="text-theme-secondary text-center py-8">
-                Event timeline will be displayed here
-              </p>
-            </Card>
-          )}
-        </div>
-
-        {/* Sidebar */}
-        <div className="space-y-6">
-          {/* Quick stats */}
-          <Card className="p-4 space-y-4">
-            <h4 className="font-medium text-theme-primary">Quick Stats</h4>
-            <div className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-theme-secondary">Deployed</span>
-                <Badge variant="success">{deployment.deployedRobotIds.length}</Badge>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-theme-secondary">Failed</span>
-                <Badge variant={deployment.failedRobotIds.length > 0 ? 'error' : 'default'}>
-                  {deployment.failedRobotIds.length}
-                </Badge>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-theme-secondary">Traffic</span>
-                <span className="font-medium text-theme-primary">{deployment.trafficPercentage}%</span>
-              </div>
-            </div>
-          </Card>
-
-          {/* Canary stages */}
-          {deployment.canaryConfig && (
-            <Card className="p-4 space-y-4">
-              <h4 className="font-medium text-theme-primary">Canary Stages</h4>
-              <div className="space-y-2">
-                {deployment.canaryConfig.stages.map((stage, index) => (
-                  <div
-                    key={index}
-                    className={cn(
-                      'flex justify-between items-center p-2 rounded',
-                      index < currentStage
-                        ? 'bg-green-50 dark:bg-green-900/20'
-                        : index === currentStage
-                          ? 'bg-cobalt-50 dark:bg-cobalt-900/20'
-                          : 'bg-gray-50 dark:bg-gray-800/50'
-                    )}
-                  >
-                    <span className="text-sm text-theme-primary">
-                      Stage {index + 1}: {stage.percentage}%
-                    </span>
-                    {index < currentStage && (
-                      <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
-                    {index === currentStage && (
-                      <div className="w-2 h-2 rounded-full bg-cobalt-500 animate-pulse" />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
-
-          {/* Target filters */}
-          {!!(deployment.targetRobotTypes?.length || deployment.targetZones?.length) && (
-            <Card className="p-4 space-y-4">
-              <h4 className="font-medium text-theme-primary">Target Filters</h4>
-              {deployment.targetRobotTypes && deployment.targetRobotTypes.length > 0 && (
-                <div>
-                  <p className="text-xs text-theme-secondary mb-1">Robot Types</p>
-                  <div className="flex flex-wrap gap-1">
-                    {deployment.targetRobotTypes.map((type) => (
-                      <Badge key={type} variant="default" size="sm">
-                        {type}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {deployment.targetZones && deployment.targetZones.length > 0 && (
-                <div>
-                  <p className="text-xs text-theme-secondary mb-1">Zones</p>
-                  <div className="flex flex-wrap gap-1">
-                    {deployment.targetZones.map((zone) => (
-                      <Badge key={zone} variant="default" size="sm">
-                        {zone}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </Card>
-          )}
-        </div>
-      </div>
-
-      {/* Rollback confirmation */}
-      <RollbackConfirmation
-        deployment={deployment}
-        isOpen={showRollbackModal}
-        onClose={() => setShowRollbackModal(false)}
-        onConfirm={handleRollback}
+          ) : undefined
+        }
       />
+
+      <StatRow columns={4}>
+        <StatTile label="Traffic" value={d.trafficPercentage} unit="%" progress={d.trafficPercentage} hint="Share on the new model" />
+        <StatTile
+          label="Canary stage"
+          value={stages > 0 ? reachedStages(d) : '—'}
+          unit={stages > 0 ? `/ ${stages}` : undefined}
+          hint={stages > 0 ? 'Stages reached' : 'No canary stages'}
+        />
+        <StatTile label="Robots deployed" value={d.deployedRobotIds.length} tone="live" hint="Running the new model" />
+        <StatTile
+          label="Robots failed"
+          value={failed}
+          tone={failed > 0 ? 'stopped' : 'neutral'}
+          hint={failed > 0 ? 'See the Robots tab' : 'None so far'}
+        />
+      </StatRow>
+
+      <Tabs label="Deployment sections" tabs={TABS.map((t) => ({ id: t.id, label: t.label }))} activeTab={tab} onTabChange={setTab} />
+
+      {tab === 'overview' && <DeploymentOverview deployment={d} />}
+      {tab === 'robots' && (
+        <DeploymentProgress deployment={d} robotNames={robotNames} onRobotClick={(rid) => navigate(`/robots/${rid}`)} />
+      )}
+      {tab === 'metrics' && (
+        <DeploymentMetricsPanel metrics={metrics} thresholds={d.rollbackThresholds} isLoading={metricsLoading} />
+      )}
+
+      {acts.rollbackModal}
     </div>
   );
 }

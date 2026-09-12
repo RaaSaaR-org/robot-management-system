@@ -1,25 +1,33 @@
 /**
  * @file AutonomousExecutionPanel.tsx
- * @description Live execution panel shown on the Robot Detail page when a
- * skill is running on this robot. Reads `?executing=<skillId>` from the URL,
- * shows the live camera feed (reused from datacollection), an elapsed timer,
- * and an Abort button. Disappears when the run finishes or is aborted.
- *
- * Added by TASK-146 — pairs with `RunSkillModal` which navigates here after
- * dispatching `POST /api/skills/:id/execute`.
+ * @description Live execution panel shown on the robot detail page while a skill
+ * runs on this robot. Reads `?executing=<skillId>` from the URL, shows elapsed
+ * time and status, and lets the operator stop the skill. Added by TASK-146 —
+ * pairs with `RunSkillModal`, which navigates here after dispatching
+ * `POST /api/skills/:id/execute`.
  *
  * @feature robots
  */
 
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Activity, Square } from 'lucide-react';
-import { Button, Card } from '@/shared/components/ui';
+import { Square } from 'lucide-react';
+import { Button, Panel, StatusTag, toast, type Tone } from '@/shared/components/ui';
 import { deploymentApi } from '@/features/deployment/api/deploymentApi';
+import { Readout } from './common';
 
 export interface AutonomousExecutionPanelProps {
   robotId: string;
 }
+
+type RunStatus = 'running' | 'completed' | 'aborted' | 'error';
+
+const STATUS: Record<RunStatus, { label: string; tone: Tone }> = {
+  running: { label: 'Running', tone: 'live' },
+  completed: { label: 'Completed', tone: 'success' },
+  aborted: { label: 'Stopped', tone: 'gated' },
+  error: { label: 'Error', tone: 'stopped' },
+};
 
 export function AutonomousExecutionPanel({ robotId }: AutonomousExecutionPanelProps) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -28,20 +36,19 @@ export function AutonomousExecutionPanel({ robotId }: AutonomousExecutionPanelPr
   const [startedAt] = useState(() => Date.now());
   const [elapsed, setElapsed] = useState(0);
   const [aborting, setAborting] = useState(false);
-  const [status, setStatus] = useState<'running' | 'completed' | 'aborted' | 'error'>('running');
+  const [status, setStatus] = useState<RunStatus>('running');
   const [error, setError] = useState<string | null>(null);
   const [steps, setSteps] = useState<number | null>(null);
 
-  // Tick the elapsed counter every 200ms while the run is active.
+  // Tick the elapsed counter while the run is active.
   useEffect(() => {
     if (!skillId || status !== 'running') return;
     const t = setInterval(() => setElapsed(Date.now() - startedAt), 200);
     return () => clearInterval(t);
   }, [skillId, startedAt, status]);
 
-  // Listen for the modal's broadcast when the executeSkill promise resolves.
-  // The modal unmounts before its fetch completes, so this is the only way
-  // the panel hears about the final status.
+  // The modal unmounts before its fetch completes, so its broadcast is the only
+  // way this panel hears the final status.
   useEffect(() => {
     if (!skillId) return;
     const handler = (e: Event) => {
@@ -75,117 +82,77 @@ export function AutonomousExecutionPanel({ robotId }: AutonomousExecutionPanelPr
 
   if (!skillId) return null;
 
+  const closePanel = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('executing');
+    setSearchParams(next, { replace: true });
+  };
+
   const handleAbort = async () => {
     setAborting(true);
     setError(null);
     try {
       await deploymentApi.abortSkill(skillId, robotId);
       setStatus('aborted');
-      // Clear the query param so the panel closes after a beat.
-      setTimeout(() => {
-        const next = new URLSearchParams(searchParams);
-        next.delete('executing');
-        setSearchParams(next, { replace: true });
-      }, 800);
+      toast.success('Skill stopped');
+      setTimeout(closePanel, 800);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to abort';
+      const message = err instanceof Error ? err.message : 'Failed to stop';
       setError(message);
       setStatus('error');
+      toast.error("Couldn't stop skill", { description: message });
     } finally {
       setAborting(false);
     }
   };
 
-  const handleClose = () => {
-    const next = new URLSearchParams(searchParams);
-    next.delete('executing');
-    setSearchParams(next, { replace: true });
-  };
-
-  const seconds = (elapsed / 1000).toFixed(1);
+  const meta = STATUS[status];
 
   return (
-    <Card className="border-orange-300 dark:border-orange-700/60 bg-orange-50/40 dark:bg-orange-900/10">
-      <div className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-orange-500 animate-pulse" />
-            <h3 className="text-sm font-semibold text-theme-primary">
-              Autonomous execution
-            </h3>
-            <span className="text-xs text-theme-secondary">
-              skill <code className="font-mono">{skillId.slice(0, 8)}…</code>
-            </span>
-          </div>
-          {status === 'running' ? (
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={handleAbort}
-              disabled={aborting}
-              className="bg-red-600 hover:bg-red-700 text-white"
-            >
-              <Square className="w-3 h-3 mr-1.5 inline-block fill-current" />
-              {aborting ? 'Aborting…' : 'Abort'}
-            </Button>
-          ) : (
-            <Button variant="primary" size="sm" onClick={handleClose}>
-              Close
-            </Button>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 gap-3">
-          {/* No live camera tiles: VLARunner needs exclusive access to the
-              cameras on real hardware (V4L2 / picamera2 single-reader), and
-              an open MJPEG stream blocks it with EBUSY. Live execution video
-              streaming via shared frames in the sidecar is a follow-up. */}
-
-          {/* Stats column */}
-          <div className="flex flex-col justify-center gap-2 px-2">
-            <div>
-              <div className="text-xs text-theme-secondary uppercase tracking-wide">Elapsed</div>
-              <div className="text-2xl font-mono text-theme-primary">{seconds}s</div>
-            </div>
-            <div>
-              <div className="text-xs text-theme-secondary uppercase tracking-wide">Status</div>
-              <div
-                className={`text-sm font-medium ${
-                  status === 'running'
-                    ? 'text-orange-500'
-                    : status === 'completed'
-                      ? 'text-green-500'
-                      : status === 'aborted'
-                        ? 'text-yellow-500'
-                        : 'text-red-500'
-                }`}
+    <Panel variant="highlight">
+      <Panel.Header
+        title="Running skill"
+        description={
+          <>
+            Skill <code className="font-mono">{skillId.slice(0, 8)}…</code> runs closed-loop VLA
+            inference on the robot.
+          </>
+        }
+        actions={
+          <>
+            <StatusTag tone={meta.tone} dot pulse={status === 'running'}>
+              {meta.label}
+            </StatusTag>
+            {status === 'running' ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void handleAbort()}
+                isLoading={aborting}
+                loadingText="Stopping…"
+                leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />}
               >
-                {status === 'running'
-                  ? 'Running'
-                  : status === 'completed'
-                    ? 'Completed'
-                    : status === 'aborted'
-                      ? 'Aborted'
-                      : 'Error'}
-              </div>
-            </div>
-            {steps != null && (
-              <div>
-                <div className="text-xs text-theme-secondary uppercase tracking-wide">Steps</div>
-                <div className="text-sm font-mono text-theme-primary">{steps}</div>
-              </div>
+                Stop skill
+              </Button>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={closePanel}>
+                Close
+              </Button>
             )}
-            {error && (
-              <p className="text-xs text-red-600 dark:text-red-400 mt-1">{error}</p>
-            )}
-          </div>
+          </>
+        }
+      />
+      <Panel.Body className="flex flex-col gap-3">
+        <div className="flex flex-wrap gap-8">
+          <Readout label="Elapsed" value={(elapsed / 1000).toFixed(1)} unit="s" />
+          {steps != null && <Readout label="Steps" value={steps} />}
         </div>
-
-        <p className="text-xs text-theme-tertiary mt-3">
-          Closed-loop VLA inference is running on the robot. Watch the camera tiles for
-          live progress. Click Abort to stop immediately.
-        </p>
-      </div>
-    </Card>
+        {error && (
+          <p role="alert" className="text-xs text-signal-stopped">
+            {error}
+          </p>
+        )}
+      </Panel.Body>
+    </Panel>
   );
 }

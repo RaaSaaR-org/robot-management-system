@@ -31,6 +31,7 @@ const ENDPOINTS = {
   // Process instances (what users see as "Processes")
   instances: '/processes/instances/list',
   getInstance: (id: string) => `/processes/instances/${id}`,
+  startInstance: (id: string) => `/processes/instances/${id}/start`,
   pauseInstance: (id: string) => `/processes/instances/${id}/pause`,
   resumeInstance: (id: string) => `/processes/instances/${id}/resume`,
   cancelInstance: (id: string) => `/processes/instances/${id}/cancel`,
@@ -48,6 +49,9 @@ const ENDPOINTS = {
 function transformServerToFrontend(serverData: Record<string, unknown>): Task {
   return {
     ...serverData,
+    // Instances carry the definition's name as `processName`; without this the
+    // list and the detail page render an automation with no name.
+    name: (serverData.name as string | undefined) ?? (serverData.processName as string | undefined) ?? 'Untitled automation',
     // Map assignedRobotIds[0] to robotId for frontend compatibility
     robotId: Array.isArray(serverData.assignedRobotIds) && serverData.assignedRobotIds.length > 0
       ? serverData.assignedRobotIds[0]
@@ -99,7 +103,8 @@ export const tasksApi = {
 
   /**
    * Create a new process.
-   * Creates a process definition and starts it immediately.
+   * Creates a process definition and a run that waits: no task reaches a robot
+   * until the run is started, either by `startNow` or by the Run act later.
    * @param data - Process creation data
    * @returns Created process instance
    */
@@ -137,6 +142,9 @@ export const tasksApi = {
       {
         priority: data.priority,
         preferredRobotIds: data.robotId ? [data.robotId] : undefined,
+        // Creating an automation must not dispatch a robot: the run stays
+        // pending unless the form explicitly asked for it to run now.
+        autoStart: data.startNow === true,
       }
     );
 
@@ -172,6 +180,16 @@ export const tasksApi = {
     const response = await apiClient.put<Record<string, unknown>>(endpoint);
     const task = transformServerToFrontend(response.data);
     return { task, message: `Process ${action.action}d successfully` };
+  },
+
+  /**
+   * Start a process that was created but never run.
+   * @param taskId - Process ID
+   * @returns Updated process
+   */
+  async startTask(taskId: string): Promise<Task> {
+    const response = await apiClient.put<Record<string, unknown>>(ENDPOINTS.startInstance(taskId));
+    return transformServerToFrontend(response.data);
   },
 
   /**

@@ -266,9 +266,9 @@ export const TARGET_TYPE_LABELS: Record<CollectionTargetType, string> = {
 };
 
 export const TREND_COLORS: Record<'improving' | 'stable' | 'degrading', string> = {
-  improving: 'text-green-600 dark:text-green-400',
-  stable: 'text-gray-600 dark:text-gray-400',
-  degrading: 'text-red-600 dark:text-red-400',
+  improving: 'text-signal-measured',
+  stable: 'text-ink-tertiary',
+  degrading: 'text-signal-stopped',
 };
 
 // ============================================================================
@@ -520,10 +520,9 @@ export function formatDuration(seconds: number | null): string {
  * Get priority color based on score
  */
 export function getPriorityColor(score: number): string {
-  if (score >= 0.8) return 'text-red-600 dark:text-red-400';
-  if (score >= 0.6) return 'text-orange-600 dark:text-orange-400';
-  if (score >= 0.4) return 'text-yellow-600 dark:text-yellow-400';
-  return 'text-green-600 dark:text-green-400';
+  if (score >= 0.8) return 'text-signal-stopped';
+  if (score >= 0.4) return 'text-signal-estimated';
+  return 'text-ink-secondary';
 }
 
 /**

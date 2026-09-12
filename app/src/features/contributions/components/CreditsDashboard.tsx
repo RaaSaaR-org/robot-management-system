@@ -74,7 +74,7 @@ export function CreditsDashboard({
     return (
       <div
         className={cn(
-          'flex items-center justify-center p-8 text-gray-500 dark:text-gray-400',
+          'flex items-center justify-center p-8 text-ink-tertiary ',
           className
         )}
       >
@@ -95,28 +95,28 @@ export function CreditsDashboard({
   return (
     <div className={cn('space-y-6', className)}>
       {/* Balance Card */}
-      <div className="bg-gradient-to-r from-primary-600 to-primary-700 rounded-xl p-6 text-white">
+      <div className="rounded-panel border border-line bg-panel p-6 text-ink-primary">
         <div className="flex items-start justify-between mb-4">
           <div>
-            <p className="text-primary-100 text-sm mb-1">Available Balance</p>
-            <p className="text-4xl font-bold">{formatCredits(balance.available)}</p>
-            <p className="text-primary-200 text-sm mt-1">credits</p>
+            <p className="text-ink-secondary text-sm mb-1">Available Balance</p>
+            <p className="font-display text-4xl font-semibold tabular-nums">{formatCredits(balance.available)}</p>
+            <p className="text-ink-secondary text-sm mt-1">credits</p>
           </div>
           <div className="flex items-center gap-2">
-            <TierBadge tier={tier} className="bg-white/20 text-white" />
+            <TierBadge tier={tier} />
           </div>
         </div>
 
         {/* Tier Progress */}
         {nextThreshold && (
           <div className="mt-4">
-            <div className="flex justify-between text-xs text-primary-200 mb-1">
+            <div className="flex justify-between text-xs text-ink-secondary mb-1">
               <span>{formatCredits(balance.totalEarned)} earned</span>
               <span>{formatCredits(nextThreshold)} for next tier</span>
             </div>
-            <div className="h-2 bg-white/20 rounded-full overflow-hidden">
+            <div className="h-2 bg-inset rounded-full overflow-hidden">
               <div
-                className="h-full bg-white rounded-full transition-all"
+                className="h-full bg-primary rounded-full transition-all"
                 style={{ width: `${progressToNext}%` }}
               />
             </div>
@@ -124,17 +124,17 @@ export function CreditsDashboard({
         )}
 
         {/* Quick Stats */}
-        <div className="grid grid-cols-3 gap-4 mt-6 pt-4 border-t border-white/20">
+        <div className="grid grid-cols-3 gap-4 mt-6 pt-4 border-t border-line">
           <div>
-            <p className="text-primary-200 text-xs">Total Earned</p>
+            <p className="text-ink-secondary text-xs">Total Earned</p>
             <p className="font-semibold">{formatCredits(balance.totalEarned)}</p>
           </div>
           <div>
-            <p className="text-primary-200 text-xs">Redeemed</p>
+            <p className="text-ink-secondary text-xs">Redeemed</p>
             <p className="font-semibold">{formatCredits(balance.totalRedeemed)}</p>
           </div>
           <div>
-            <p className="text-primary-200 text-xs">Pending</p>
+            <p className="text-ink-secondary text-xs">Pending</p>
             <p className="font-semibold">{formatCredits(balance.pending)}</p>
           </div>
         </div>
@@ -142,14 +142,14 @@ export function CreditsDashboard({
 
       {/* Expiring Soon Warning */}
       {balance.expiringSoon > 0 && (
-        <div className="flex items-center gap-3 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-          <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-500" />
+        <div className="flex items-center gap-3 p-4 bg-signal-unknown/10 border border-signal-unknown/30 rounded-lg">
+          <AlertCircle className="w-5 h-5 text-signal-unknown" />
           <div className="flex-1">
-            <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+            <p className="text-sm font-medium text-signal-unknown">
               {formatCredits(balance.expiringSoon)} credits expiring soon
             </p>
             {balance.expirationDate && (
-              <p className="text-xs text-yellow-600 dark:text-yellow-400">
+              <p className="text-xs text-signal-unknown">
                 Expires on {formatDate(balance.expirationDate)}
               </p>
             )}
@@ -157,7 +157,7 @@ export function CreditsDashboard({
           {onRedeemClick && (
             <button
               onClick={onRedeemClick}
-              className="px-3 py-1.5 text-sm font-medium bg-yellow-600 text-white rounded-lg hover:bg-yellow-700"
+              className="px-3 py-1.5 text-sm font-medium bg-primary text-on-primary rounded-lg hover:bg-primary-hover"
             >
               Redeem Now
             </button>
@@ -166,23 +166,23 @@ export function CreditsDashboard({
       )}
 
       {/* Recent Activity */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+      <div className="bg-panel rounded-xl border border-line">
+        <div className="flex items-center justify-between p-4 border-b border-line">
           <div className="flex items-center gap-2">
-            <History className="w-5 h-5 text-gray-400" />
-            <h3 className="font-medium text-gray-900 dark:text-gray-100">
+            <History className="w-5 h-5 text-ink-muted" />
+            <h3 className="font-medium text-ink-primary">
               Credit History
             </h3>
           </div>
         </div>
 
         {history.length === 0 ? (
-          <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+          <div className="p-8 text-center text-ink-tertiary">
             <Coins className="w-8 h-8 mx-auto mb-2 opacity-50" />
             <p>No credit activity yet</p>
           </div>
         ) : (
-          <div className="divide-y divide-gray-100 dark:divide-gray-700">
+          <div className="divide-y divide-line-subtle">
             {history.slice(0, 10).map((credit) => (
               <div
                 key={credit.id}
@@ -193,21 +193,21 @@ export function CreditsDashboard({
                     className={cn(
                       'p-2 rounded-lg',
                       credit.amount > 0
-                        ? 'bg-green-100 dark:bg-green-900/30'
-                        : 'bg-red-100 dark:bg-red-900/30'
+                        ? 'bg-signal-measured/10 '
+                        : 'bg-signal-stopped/10 '
                     )}
                   >
                     {credit.amount > 0 ? (
-                      <TrendingUp className="w-4 h-4 text-green-600 dark:text-green-400" />
+                      <TrendingUp className="w-4 h-4 text-signal-measured" />
                     ) : (
-                      <TrendingDown className="w-4 h-4 text-red-600 dark:text-red-400" />
+                      <TrendingDown className="w-4 h-4 text-signal-stopped" />
                     )}
                   </div>
                   <div>
-                    <p className="font-medium text-gray-900 dark:text-gray-100">
+                    <p className="font-medium text-ink-primary">
                       {getCreditReasonLabel(credit.reason)}
                     </p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                    <p className="text-sm text-ink-tertiary">
                       {credit.description || formatDate(credit.awardedAt)}
                     </p>
                   </div>
@@ -216,8 +216,8 @@ export function CreditsDashboard({
                   className={cn(
                     'font-semibold',
                     credit.amount > 0
-                      ? 'text-green-600 dark:text-green-400'
-                      : 'text-red-600 dark:text-red-400'
+                      ? 'text-signal-measured '
+                      : 'text-signal-stopped '
                   )}
                 >
                   {credit.amount > 0 ? '+' : ''}

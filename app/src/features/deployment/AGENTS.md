@@ -9,19 +9,22 @@ deployment/
 ├── api/
 │   └── deploymentApi.ts     # API client for deployments, skills, chains
 ├── components/
-│   ├── CanaryConfig.tsx     # 5-step deployment wizard
-│   ├── DeploymentCard.tsx   # Deployment summary card
-│   ├── DeploymentProgress.tsx # Per-robot deployment grid
-│   ├── DeploymentStatus.tsx # Full deployment status with metrics
-│   ├── DeploymentStatusBadge.tsx # Status badge component
-│   ├── ModelBrowser.tsx     # Model version list grouped by skill
-│   ├── ModelVersionCard.tsx # Model version display card
-│   ├── RobotSelector.tsx    # Multi-select for robot types/zones
-│   ├── RollbackConfirmation.tsx # Rollback modal with reason
-│   ├── SkillBrowser.tsx     # Skill list with filters
-│   ├── SkillCard.tsx        # Skill summary card
-│   ├── SkillEditor.tsx      # Skill create/edit modal
-│   └── SkillStatusBadge.tsx # Skill status badge
+│   ├── DeploymentsSection.tsx   # Deployments tab: Toolbar (Active/History/All) + DataTable
+│   ├── DeploymentFormModal.tsx  # "New deployment" FormModal (model, strategy, stages, thresholds)
+│   ├── CanaryStagesField.tsx    # Canary stage editor used by the form
+│   ├── RollbackFormModal.tsx    # Danger FormModal with required reason
+│   ├── useDeploymentActs.tsx    # Start/promote/cancel confirms + rollback modal, shared by list and detail
+│   ├── deploymentHelpers.ts     # Pure helpers: tones, names, scopes, stage math, errorMessage
+│   ├── DeploymentOverview.tsx   # Detail Overview tab: canary stages + details
+│   ├── DeploymentProgress.tsx   # Detail Robots tab: DataTable of robots
+│   ├── DeploymentMetricsPanel.tsx # Detail Metrics tab
+│   ├── SkillsSection.tsx        # Skills tab: Toolbar, skills DataTable, ?view=chains
+│   ├── ChainsTable.tsx          # Chains view (Activate/Archive/Delete)
+│   ├── SkillFormModal.tsx       # New/Edit skill FormModal
+│   ├── SkillDetailsModal.tsx    # Skill details Modal (row click)
+│   ├── RunSkillModal.tsx        # Run on robot FormModal (features/robots imports it)
+│   ├── ModelBrowser.tsx         # Model version list (models slice)
+│   └── ModelVersionCard.tsx     # Model version card (features/training imports it)
 ├── hooks/
 │   ├── useDeployment.ts     # Single deployment operations
 │   ├── useDeploymentMetrics.ts # Metrics polling
@@ -33,7 +36,7 @@ deployment/
 ├── pages/
 │   ├── DeploymentDetailPage.tsx # Single deployment view
 │   ├── DeploymentsPage.tsx  # Deployment list/management
-│   └── SkillsPage.tsx       # Skills and chains management
+│   └── SkillsPage.tsx       # Redirect to /deployments?tab=skills (skills live in that tab)
 ├── store/
 │   └── deploymentStore.ts   # Zustand store with Immer
 ├── types/

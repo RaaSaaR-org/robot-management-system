@@ -1,12 +1,14 @@
 /**
  * @file RobotControlCenter.test.tsx
- * @description Tests for the robot detail layout: tab switching + chat drawer
+ * @description Tests for the robot detail body: kit tabs in the URL, chat tab,
+ *              offline hint and error banner
  * @feature robots
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { Robot, RobotTelemetry } from '../../types/robots.types';
 import type { RobotControlCenterProps } from '../RobotControlCenter';
 
@@ -14,18 +16,19 @@ import type { RobotControlCenterProps } from '../RobotControlCenter';
 vi.mock('../tabs', () => ({
   OverviewTab: () => <div data-testid="tab-overview" />,
   TelemetryTab: () => <div data-testid="tab-telemetry" />,
-  CommandsTab: () => <div data-testid="tab-commands" />,
-  TasksTab: () => <div data-testid="tab-tasks" />,
+  ActivityTab: () => <div data-testid="tab-activity" />,
   InfoTab: () => <div data-testid="tab-info" />,
   TeleopTab: () => <div data-testid="tab-teleop" />,
+  PerceptionTab: () => <div data-testid="tab-perception" />,
+  MotionTab: () => <div data-testid="tab-motion" />,
+  VoiceTab: () => <div data-testid="tab-voice" />,
+  ChatTab: ({ robot }: { robot: Robot }) => (
+    <section aria-label={`Chat with ${robot.name}`} data-testid="tab-chat" />
+  ),
 }));
 
-vi.mock('../RobotChatPanel', () => ({
-  RobotChatPanel: () => <div data-testid="robot-chat-panel" />,
-}));
-
-vi.mock('../RobotOfflineBanner', () => ({
-  RobotOfflineBanner: () => <div data-testid="offline-banner" />,
+vi.mock('../RobotQuickStats', () => ({
+  RobotQuickStats: () => <div data-testid="quick-stats" />,
 }));
 
 vi.mock('../RobotErrorBanner', () => ({
@@ -77,68 +80,89 @@ function makeProps(overrides: Partial<RobotControlCenterProps> = {}): RobotContr
   };
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{location.search}</div>;
+}
+
+function renderAt(props: RobotControlCenterProps, search = '') {
+  return render(
+    <MemoryRouter initialEntries={[`/robots/robot-1${search}`]}>
+      <RobotControlCenter {...props} />
+      <LocationProbe />
+    </MemoryRouter>
+  );
+}
+
 describe('RobotControlCenter', () => {
-  it('renders the Overview tab by default', () => {
-    render(<RobotControlCenter {...makeProps()} />);
+  it('renders the Overview tab and its stat row by default', () => {
+    renderAt(makeProps());
     expect(screen.getByTestId('tab-overview')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-stats')).toBeInTheDocument();
     expect(screen.queryByTestId('tab-telemetry')).not.toBeInTheDocument();
   });
 
-  it('switches the active view when a tab is selected', async () => {
+  it('switches the active view when a tab is selected and writes ?tab=', async () => {
     const user = userEvent.setup();
-    render(<RobotControlCenter {...makeProps()} />);
+    renderAt(makeProps());
 
-    // Desktop tablist has role=tab buttons (one set rendered)
     await user.click(screen.getByRole('tab', { name: /telemetry/i }));
     expect(screen.getByTestId('tab-telemetry')).toBeInTheDocument();
     expect(screen.queryByTestId('tab-overview')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('quick-stats')).not.toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('?tab=telemetry');
 
     await user.click(screen.getByRole('tab', { name: /teleop/i }));
     expect(screen.getByTestId('tab-teleop')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /overview/i }));
+    expect(screen.getByTestId('location')).toHaveTextContent(/^$/);
+  });
+
+  it('opens the tab named in the URL', () => {
+    renderAt(makeProps(), '?tab=details');
+    expect(screen.getByTestId('tab-info')).toBeInTheDocument();
   });
 
   it('marks the active tab with aria-selected', async () => {
     const user = userEvent.setup();
-    render(<RobotControlCenter {...makeProps()} />);
+    renderAt(makeProps());
 
-    const commandsTab = screen.getByRole('tab', { name: /commands/i });
-    expect(commandsTab).toHaveAttribute('aria-selected', 'false');
+    const activityTab = screen.getByRole('tab', { name: /activity/i });
+    expect(activityTab).toHaveAttribute('aria-selected', 'false');
 
-    await user.click(commandsTab);
-    expect(commandsTab).toHaveAttribute('aria-selected', 'true');
+    await user.click(activityTab);
+    expect(activityTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('tab-activity')).toBeInTheDocument();
   });
 
-  it('does not render the chat drawer until opened', () => {
-    render(<RobotControlCenter {...makeProps()} />);
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('robot-chat-panel')).not.toBeInTheDocument();
+  it('hides G1-only tabs for other robots and falls back to Overview', () => {
+    renderAt(makeProps({ robot: makeRobot({ model: 'H1' }) }), '?tab=voice');
+    expect(screen.queryByRole('tab', { name: /voice/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('tab-overview')).toBeInTheDocument();
   });
 
-  it('opens and closes the chat drawer', async () => {
+  it('opens the chat tab', async () => {
     const user = userEvent.setup();
-    render(<RobotControlCenter {...makeProps()} />);
+    renderAt(makeProps());
+    expect(screen.queryByTestId('tab-chat')).not.toBeInTheDocument();
 
-    // Two "Open chat" buttons exist (desktop + mobile FAB); the first is fine.
-    await user.click(screen.getAllByRole('button', { name: /open chat/i })[0]);
-
-    const dialog = screen.getByRole('dialog', { name: /chat with atlas/i });
-    expect(dialog).toBeInTheDocument();
-    expect(screen.getByTestId('robot-chat-panel')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: /close chat/i }));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: /chat/i }));
+    expect(screen.getByRole('region', { name: /chat with atlas/i })).toBeInTheDocument();
   });
 
-  it('shows the offline banner only for offline robots', () => {
-    const { rerender } = render(<RobotControlCenter {...makeProps()} />);
-    expect(screen.queryByTestId('offline-banner')).not.toBeInTheDocument();
+  it('shows the offline hint only for offline robots', () => {
+    const hint = /atlas is offline\. start its robot agent/i;
+    const { unmount } = renderAt(makeProps());
+    expect(screen.queryByText(hint)).not.toBeInTheDocument();
+    unmount();
 
-    rerender(<RobotControlCenter {...makeProps({ robot: makeRobot({ status: 'offline' }) })} />);
-    expect(screen.getByTestId('offline-banner')).toBeInTheDocument();
+    renderAt(makeProps({ robot: makeRobot({ status: 'offline' }) }));
+    expect(screen.getByText(hint)).toBeInTheDocument();
   });
 
   it('always renders the error banner', () => {
-    render(<RobotControlCenter {...makeProps()} />);
+    renderAt(makeProps());
     expect(screen.getByTestId('error-banner')).toBeInTheDocument();
   });
 });

@@ -1,27 +1,14 @@
 /**
  * @file SegmentedControl.tsx
- * @description Shared pill controls: SegmentedControl (single-select group) and
- *              ToggleChip (independent on/off pill). Replaces the per-feature
- *              hand-rolled filter/toggle buttons so active states and radii are
- *              identical everywhere (cobalt accent, brand radius).
+ * @description SegmentedControl (single-select segmented switch — view modes,
+ *              time ranges, filters) and ToggleChip (an independent on/off
+ *              chip). Same ground and active state as the pills Tabs.
  * @feature shared
  */
 
 import type { ReactNode } from 'react';
 import { cn } from '@/shared/utils/cn';
-
-// ============================================================================
-// SHARED PILL STYLES
-// ============================================================================
-
-const pillBase =
-  'px-2.5 py-1.5 rounded-brand text-xs font-medium transition-colors duration-150 whitespace-nowrap';
-
-const pillActive =
-  'text-cobalt-500 dark:text-cobalt-300 bg-cobalt-500/10 border border-cobalt-500/30';
-
-const pillInactive =
-  'text-theme-tertiary hover:text-theme-secondary hover:bg-theme-elevated border border-theme';
+import { focusRing } from './styles';
 
 // ============================================================================
 // SEGMENTED CONTROL (single-select)
@@ -32,6 +19,7 @@ export interface SegmentedOption<T extends string> {
   label: ReactNode;
   /** Optional tooltip */
   title?: string;
+  disabled?: boolean;
 }
 
 export interface SegmentedControlProps<T extends string> {
@@ -40,16 +28,17 @@ export interface SegmentedControlProps<T extends string> {
   onChange: (value: T) => void;
   /** Accessible name for the group */
   label?: string;
+  /** sm 32px · md 38px tall (default md, matching inputs) */
+  size?: 'sm' | 'md';
   className?: string;
 }
 
 /**
- * Single-select pill group.
- *
  * @example
  * ```tsx
  * <SegmentedControl
- *   options={[{ value: 'map', label: 'Map' }, { value: 'list', label: 'List' }]}
+ *   label="View"
+ *   options={[{ value: 'grid', label: 'Grid' }, { value: 'table', label: 'Table' }]}
  *   value={view}
  *   onChange={setView}
  * />
@@ -60,22 +49,43 @@ export function SegmentedControl<T extends string>({
   value,
   onChange,
   label,
+  size = 'md',
   className,
 }: SegmentedControlProps<T>) {
   return (
-    <div role="group" aria-label={label} className={cn('inline-flex items-center gap-1', className)}>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          title={option.title}
-          aria-pressed={value === option.value}
-          onClick={() => onChange(option.value)}
-          className={cn(pillBase, value === option.value ? pillActive : pillInactive)}
-        >
-          {option.label}
-        </button>
-      ))}
+    <div
+      role="group"
+      aria-label={label}
+      className={cn(
+        'inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-control border border-line-subtle bg-inset p-[2px] scrollbar-hide',
+        className,
+      )}
+    >
+      {options.map((option) => {
+        const active = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            title={option.title}
+            aria-pressed={active}
+            disabled={option.disabled}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[8px] font-medium',
+              'transition-colors duration-150 ease-[var(--ease-instrument)] disabled:cursor-not-allowed disabled:opacity-50',
+              '[&_svg]:h-4 [&_svg]:w-4',
+              focusRing,
+              size === 'sm' ? 'h-[26px] px-2.5 text-xs' : 'h-8 px-3 text-[13px]',
+              active
+                ? 'bg-raised text-ink-primary shadow-[0_1px_2px_rgba(0,0,0,0.18)]'
+                : 'text-ink-tertiary hover:text-ink-primary',
+            )}
+          >
+            {option.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -91,18 +101,20 @@ export interface ToggleChipProps {
   /** Optional tooltip */
   title?: string;
   disabled?: boolean;
+  /** sm 28px · md 32px (default sm) */
+  size?: 'sm' | 'md';
   className?: string;
 }
 
 /**
- * Independent on/off pill (e.g. "Robot model", "Clip room").
+ * Independent on/off chip (e.g. "Robot model", "Clip room").
  *
  * @example
  * ```tsx
- * <ToggleChip active={showModel} onClick={() => setShowModel(v => !v)}>Robot model</ToggleChip>
+ * <ToggleChip active={showModel} onClick={() => setShowModel((v) => !v)}>Robot model</ToggleChip>
  * ```
  */
-export function ToggleChip({ active, onClick, children, title, disabled, className }: ToggleChipProps) {
+export function ToggleChip({ active, onClick, children, title, disabled, size = 'sm', className }: ToggleChipProps) {
   return (
     <button
       type="button"
@@ -111,9 +123,14 @@ export function ToggleChip({ active, onClick, children, title, disabled, classNa
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        pillBase,
-        active ? pillActive : pillInactive,
-        disabled && 'opacity-50 cursor-not-allowed',
+        'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-control border font-medium',
+        'transition-colors duration-150 ease-[var(--ease-instrument)] [&_svg]:h-3.5 [&_svg]:w-3.5',
+        focusRing,
+        size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3 text-[13px]',
+        active
+          ? 'border-primary/40 bg-primary/10 text-primary'
+          : 'border-line text-ink-secondary hover:border-line-strong hover:text-ink-primary',
+        disabled && 'cursor-not-allowed opacity-50',
         className,
       )}
     >

@@ -1,414 +1,153 @@
 /**
  * @file ProviderDocsTab.tsx
- * @description Technical documentation management tab per regulatory requirements
+ * @description Technical docs view: provider documentation filtered by
+ *              provider and regulation, opened in a modal, added and deleted.
  * @feature compliance
- *
- * Covers EU AI Act Annex IV, MR Annex IV, CRA Annex V, RED Annex V
  */
 
-import { useEffect, useState } from 'react';
-import { Card } from '@/shared/components/ui/Card';
-import { Button } from '@/shared/components/ui/Button';
-import { Modal } from '@/shared/components/ui/Modal';
-import { Input } from '@/shared/components/ui/Input';
+import { useEffect, useMemo, useState } from 'react';
+import { ExternalLink, FileText, Plus, Search, Trash2 } from 'lucide-react';
+import {
+  Button, DataTable, EmptyState, KeyValueList, Modal, Panel, Select, StatusTag, Toolbar, confirm,
+  errorMessage, toast, type DataTableColumn,
+} from '@/shared/components/ui';
 import { useComplianceStore } from '../store';
-import type { ProviderDocumentation, ProviderDocInput, DocumentType } from '../types';
-import { DocumentTypeLabels, DocumentTypeCategories } from '../types';
 import { complianceApi } from '../api';
+import { DocumentTypeCategories, DocumentTypeLabels, type DocumentType, type ProviderDocumentation } from '../types';
+import { ProviderDocFormModal } from './ProviderDocFormModal';
+import { formatDate } from './complianceFormat';
 
 export interface ProviderDocsTabProps {
   className?: string;
 }
 
-type CategoryFilter = 'all' | 'general' | 'ai_act' | 'machinery' | 'cybersecurity' | 'conformity';
+type Category = keyof typeof DocumentTypeCategories;
 
-const CATEGORY_LABELS: Record<CategoryFilter, string> = {
-  all: 'All',
-  general: 'General',
-  ai_act: 'AI Act',
-  machinery: 'Machinery',
-  cybersecurity: 'Cybersecurity',
-  conformity: 'Conformity',
+const CATEGORY_LABELS: Record<string, string> = {
+  general: 'General', ai_act: 'AI Act', machinery: 'Machinery', cybersecurity: 'Cybersecurity', conformity: 'Conformity',
 };
 
-function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
-}
+const typeLabel = (t: string) => DocumentTypeLabels[t as DocumentType] ?? t;
+const isValid = (d: ProviderDocumentation) => !d.validTo || new Date(d.validTo) >= new Date();
 
-const EMPTY_FORM: ProviderDocInput = {
-  providerName: '',
-  modelVersion: '',
-  documentType: 'technical_doc',
-  documentUrl: '',
-  content: '',
-  validFrom: new Date().toISOString().split('T')[0],
-};
-
-/**
- * Tab component for technical documentation management
- */
 export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
-  const {
-    providers,
-    providerDocs,
-    isLoadingProviders,
-    error,
-    fetchProviders,
-    fetchAllDocumentation,
-  } = useComplianceStore();
+  const { providers, providerDocs, isLoadingProviders, error, fetchProviders, fetchAllDocumentation } = useComplianceStore();
+  const [provider, setProvider] = useState('');
+  const [category, setCategory] = useState('');
+  const [selected, setSelected] = useState<ProviderDocumentation | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
 
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showViewModal, setShowViewModal] = useState(false);
-  const [selectedDoc, setSelectedDoc] = useState<ProviderDocumentation | null>(null);
-  const [formData, setFormData] = useState<ProviderDocInput>(EMPTY_FORM);
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const reload = () => { void fetchProviders(); void fetchAllDocumentation(); };
+  useEffect(reload, [fetchProviders, fetchAllDocumentation]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch on mount
-  useEffect(() => {
-    fetchProviders();
-    fetchAllDocumentation();
-  }, [fetchProviders, fetchAllDocumentation]);
+  const rows = useMemo(() => providerDocs.filter((d) =>
+    (!provider || d.providerName === provider) &&
+    (!category || (DocumentTypeCategories[category as Category] as readonly string[]).includes(d.documentType))),
+  [providerDocs, provider, category]);
 
-  // Filter documents by category
-  const filteredDocs = providerDocs.filter((doc) => {
-    // Filter by provider
-    if (selectedProvider && doc.providerName !== selectedProvider) {
-      return false;
-    }
-
-    // Filter by category
-    if (categoryFilter === 'all') return true;
-
-    const categoryTypes = DocumentTypeCategories[categoryFilter] || [];
-    return (categoryTypes as readonly string[]).includes(doc.documentType);
-  });
-
-  const handleOpenCreate = () => {
-    setFormData(EMPTY_FORM);
-    setShowCreateModal(true);
-  };
-
-  const handleOpenView = (doc: ProviderDocumentation) => {
-    setSelectedDoc(doc);
-    setShowViewModal(true);
-  };
-
-  const handleSubmit = async () => {
-    setIsSubmitting(true);
+  const askDelete = async (d: ProviderDocumentation) => {
+    const ok = await confirm({
+      title: `Delete ${typeLabel(d.documentType)}?`,
+      description: `${d.providerName} ${d.modelVersion} loses this document from its technical file.`,
+      tone: 'danger',
+    });
+    if (!ok) return;
     try {
-      await complianceApi.addDocumentation(formData);
-      setShowCreateModal(false);
-      fetchAllDocumentation();
-      fetchProviders();
+      await complianceApi.deleteDocumentation(d.id);
+      toast.success('Document deleted', { description: typeLabel(d.documentType) });
+      setSelected(null);
+      reload();
     } catch (err) {
-      console.error('Failed to add documentation:', err);
-    } finally {
-      setIsSubmitting(false);
+      toast.error("Couldn't delete document", { description: errorMessage(err) });
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this document?')) return;
+  const columns: DataTableColumn<ProviderDocumentation>[] = [
+    { key: 'documentType', header: 'Document', sortable: true, sortValue: (d) => typeLabel(d.documentType), cell: (d) => (
+      <div className="min-w-[10rem]">
+        <div className="text-sm text-ink-primary">{typeLabel(d.documentType)}</div>
+        <div className="text-[13px] text-ink-tertiary">{d.providerName}</div>
+      </div>
+    ) },
+    { key: 'modelVersion', header: 'Version', sortable: true, hideBelow: 'sm', cell: (d) => <span className="font-mono text-[13px] text-ink-secondary">{d.modelVersion}</span> },
+    { key: 'validity', header: 'Status', sortValue: (d) => (isValid(d) ? 1 : 0), cell: (d) => <StatusTag tone={isValid(d) ? 'live' : 'stopped'}>{isValid(d) ? 'Valid' : 'Expired'}</StatusTag> },
+    { key: 'validFrom', header: 'Valid', align: 'right', sortable: true, hideBelow: 'md', sortValue: (d) => new Date(d.validFrom),
+      cell: (d) => <span className="whitespace-nowrap text-[13px] text-ink-tertiary">{formatDate(d.validFrom)}{d.validTo ? ` – ${formatDate(d.validTo)}` : ' onward'}</span> },
+  ];
 
-    try {
-      await complianceApi.deleteDocumentation(id);
-      fetchAllDocumentation();
-      fetchProviders();
-    } catch (err) {
-      console.error('Failed to delete documentation:', err);
-    }
-  };
-
-  const handleInputChange = (field: keyof ProviderDocInput, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-  };
+  const hasFilters = Boolean(provider || category);
+  const newButton = <Button leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} onClick={() => setFormOpen(true)}>New document</Button>;
 
   return (
-    <div className={className}>
-      {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-lg font-semibold text-theme-primary">
-              Technical Documentation
-            </h3>
-            <p className="text-sm text-theme-secondary">
-              Manage technical documentation per EU AI Act Annex IV, Machinery Regulation Annex IV,
-              and Cyber Resilience Act Annex V.
-            </p>
-          </div>
-          <Button onClick={handleOpenCreate}>Add Document</Button>
-        </div>
+    <div className={className ? `flex flex-col gap-4 ${className}` : 'flex flex-col gap-4'}>
+      <Toolbar
+        filters={
+          <>
+            <Select aria-label="Provider" fullWidth={false} className="w-44" placeholder="All providers"
+              options={providers.map((p) => ({ value: p.providerName, label: `${p.providerName} (${p.documentCount})` }))}
+              value={provider} onChange={(e) => setProvider(e.target.value)} />
+            <Select aria-label="Regulation" fullWidth={false} className="w-44" placeholder="All regulations"
+              options={Object.keys(DocumentTypeCategories).map((c) => ({ value: c, label: CATEGORY_LABELS[c] ?? c }))}
+              value={category} onChange={(e) => setCategory(e.target.value)} />
+          </>
+        }
+        actions={newButton}
+      />
+      <Panel padding="none">
+        <DataTable
+          caption="Technical documentation"
+          columns={columns}
+          rows={rows}
+          getRowId={(d) => d.id}
+          defaultSort={{ key: 'documentType', direction: 'asc' }}
+          onRowClick={setSelected}
+          rowActions={(d) => [{ label: 'Delete', icon: <Trash2 />, tone: 'danger', onSelect: () => void askDelete(d) }]}
+          rowActionsLabel={(d) => `Actions for ${typeLabel(d.documentType)}`}
+          isLoading={isLoadingProviders && providerDocs.length === 0}
+          error={providerDocs.length === 0 ? error : null}
+          errorTitle="Couldn't load technical documentation"
+          onRetry={reload}
+          empty={hasFilters ? (
+            <EmptyState icon={<Search />} title="No documents match" description="Try another provider or regulation."
+              action={<Button variant="secondary" onClick={() => { setProvider(''); setCategory(''); }}>Clear filters</Button>} />
+          ) : (
+            <EmptyState icon={<FileText />} title="No documents yet" description="Add model cards, risk files and declarations of conformity." action={newButton} />
+          )}
+        />
+      </Panel>
 
-        {/* Provider summary */}
-        <div className="flex items-center gap-2 text-sm text-theme-secondary mb-4">
-          <span>{providers.length} providers</span>
-          <span>•</span>
-          <span>{providerDocs.length} documents</span>
-        </div>
-
-        {/* Provider filter */}
-        <div className="flex flex-wrap gap-2 mb-4">
-          <Button
-            variant={selectedProvider === null ? 'primary' : 'ghost'}
-            size="sm"
-            onClick={() => setSelectedProvider(null)}
-          >
-            All Providers
-          </Button>
-          {providers.map((provider) => (
-            <Button
-              key={provider.providerName}
-              variant={selectedProvider === provider.providerName ? 'primary' : 'ghost'}
-              size="sm"
-              onClick={() => setSelectedProvider(provider.providerName)}
-            >
-              {provider.providerName} ({provider.documentCount})
-            </Button>
-          ))}
-        </div>
-
-        {/* Category filter */}
-        <div className="flex flex-wrap gap-2">
-          {(Object.keys(CATEGORY_LABELS) as CategoryFilter[]).map((category) => (
-            <Button
-              key={category}
-              variant={categoryFilter === category ? 'primary' : 'ghost'}
-              size="sm"
-              onClick={() => setCategoryFilter(category)}
-            >
-              {CATEGORY_LABELS[category]}
-            </Button>
-          ))}
-        </div>
-      </div>
-
-      {/* Error state */}
-      {error && (
-        <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg">
-          {error}
-        </div>
-      )}
-
-      {/* Loading state */}
-      {isLoadingProviders && (
-        <div className="flex items-center justify-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cobalt"></div>
-        </div>
-      )}
-
-      {/* Documents list */}
-      {!isLoadingProviders && filteredDocs.length === 0 && (
-        <Card className="p-8 text-center">
-          <p className="text-theme-tertiary">
-            {providerDocs.length === 0
-              ? 'No documentation found. Add your first document.'
-              : 'No documents match the selected filters.'}
-          </p>
-        </Card>
-      )}
-
-      {!isLoadingProviders && filteredDocs.length > 0 && (
-        <div className="space-y-3">
-          {filteredDocs.map((doc) => (
-            <Card key={doc.id} className="p-4">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleOpenView(doc)}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="px-2 py-0.5 text-xs font-medium rounded bg-cobalt/10 text-cobalt dark:bg-cobalt/20">
-                      {DocumentTypeLabels[doc.documentType as DocumentType] || doc.documentType}
-                    </span>
-                    <span className="text-xs text-theme-tertiary">
-                      {doc.providerName} v{doc.modelVersion}
-                    </span>
-                  </div>
-                  <p className="text-sm text-theme-secondary line-clamp-2">
-                    {doc.content.substring(0, 200)}
-                    {doc.content.length > 200 ? '...' : ''}
-                  </p>
-                  <div className="mt-2 flex items-center gap-4 text-xs text-theme-tertiary">
-                    <span>Valid from: {formatDate(doc.validFrom)}</span>
-                    {doc.validTo && <span>Valid to: {formatDate(doc.validTo)}</span>}
-                    <span>Updated: {formatDate(doc.updatedAt)}</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 ml-4">
-                  {doc.documentUrl && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => window.open(doc.documentUrl!, '_blank')}
-                    >
-                      Open URL
-                    </Button>
-                  )}
-                  <Button variant="ghost" size="sm" onClick={() => handleDelete(doc.id)}>
-                    Delete
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {/* View Document Modal */}
       <Modal
-        isOpen={showViewModal}
-        onClose={() => setShowViewModal(false)}
-        title={selectedDoc ? DocumentTypeLabels[selectedDoc.documentType as DocumentType] || selectedDoc.documentType : 'Document'}
-        size="xl"
+        isOpen={selected !== null}
+        onClose={() => setSelected(null)}
+        size="lg"
+        title={selected ? typeLabel(selected.documentType) : 'Document'}
+        description={selected ? `${selected.providerName} · ${selected.modelVersion}` : undefined}
+        footer={selected && (
+          <>
+            <Button variant="danger" leftIcon={<Trash2 className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void askDelete(selected)}>Delete</Button>
+            <Button variant="secondary" onClick={() => setSelected(null)}>Close</Button>
+          </>
+        )}
       >
-        {selectedDoc && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className="font-medium text-theme-secondary">Provider:</span>
-                <p className="text-theme-secondary">{selectedDoc.providerName}</p>
-              </div>
-              <div>
-                <span className="font-medium text-theme-secondary">Version:</span>
-                <p className="text-theme-secondary">{selectedDoc.modelVersion}</p>
-              </div>
-              <div>
-                <span className="font-medium text-theme-secondary">Valid From:</span>
-                <p className="text-theme-secondary">{formatDate(selectedDoc.validFrom)}</p>
-              </div>
-              <div>
-                <span className="font-medium text-theme-secondary">Valid To:</span>
-                <p className="text-theme-secondary">
-                  {selectedDoc.validTo ? formatDate(selectedDoc.validTo) : 'No expiry'}
-                </p>
-              </div>
-            </div>
-
-            {selectedDoc.documentUrl && (
-              <div>
-                <span className="font-medium text-theme-secondary">URL:</span>
-                <a
-                  href={selectedDoc.documentUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-cobalt hover:underline block"
-                >
-                  {selectedDoc.documentUrl}
-                </a>
-              </div>
+        {selected && (
+          <div className="flex flex-col gap-4">
+            <KeyValueList columns={3} items={[
+              { label: 'Valid from', value: formatDate(selected.validFrom) },
+              { label: 'Valid to', value: selected.validTo ? formatDate(selected.validTo) : 'Open-ended' },
+              { label: 'Updated', value: formatDate(selected.updatedAt) },
+            ]} />
+            {selected.documentUrl && (
+              <a href={selected.documentUrl} target="_blank" rel="noreferrer" className="inline-flex w-fit items-center gap-1.5 text-sm text-primary hover:underline">
+                Open source document <ExternalLink className="h-4 w-4" strokeWidth={1.75} />
+              </a>
             )}
-
-            <div>
-              <span className="font-medium text-theme-secondary">Content:</span>
-              <div className="mt-2 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg whitespace-pre-wrap text-sm font-mono overflow-auto max-h-96">
-                {selectedDoc.content}
-              </div>
+            <div className="max-h-96 overflow-auto rounded-control border border-line-subtle bg-inset p-4 text-sm leading-relaxed text-ink-secondary whitespace-pre-wrap">
+              {selected.content}
             </div>
           </div>
         )}
-        <div className="flex justify-end gap-3 mt-6">
-          <Button variant="ghost" onClick={() => setShowViewModal(false)}>
-            Close
-          </Button>
-        </div>
       </Modal>
-
-      {/* Create Document Modal */}
-      <Modal
-        isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
-        title="Add Technical Document"
-        size="lg"
-      >
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="Provider Name"
-              value={formData.providerName}
-              onChange={(e) => handleInputChange('providerName', e.target.value)}
-              placeholder="e.g., Your Company"
-              required
-            />
-            <Input
-              label="Version"
-              value={formData.modelVersion}
-              onChange={(e) => handleInputChange('modelVersion', e.target.value)}
-              placeholder="e.g., 1.0.0"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-theme-secondary mb-1">
-              Document Type
-            </label>
-            <select
-              value={formData.documentType}
-              onChange={(e) => handleInputChange('documentType', e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-theme-primary focus:ring-2 focus:ring-cobalt"
-            >
-              {Object.entries(DocumentTypeLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <Input
-            label="Document URL (optional)"
-            value={formData.documentUrl || ''}
-            onChange={(e) => handleInputChange('documentUrl', e.target.value)}
-            placeholder="https://..."
-          />
-
-          <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="Valid From"
-              type="date"
-              value={formData.validFrom}
-              onChange={(e) => handleInputChange('validFrom', e.target.value)}
-              required
-            />
-            <Input
-              label="Valid To (optional)"
-              type="date"
-              value={formData.validTo || ''}
-              onChange={(e) => handleInputChange('validTo', e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-theme-secondary mb-1">
-              Content
-            </label>
-            <textarea
-              value={formData.content}
-              onChange={(e) => handleInputChange('content', e.target.value)}
-              placeholder="Enter document content..."
-              rows={8}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-theme-primary focus:ring-2 focus:ring-cobalt font-mono text-sm"
-              required
-            />
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-3 mt-6">
-          <Button variant="ghost" onClick={() => setShowCreateModal(false)}>
-            Cancel
-          </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={isSubmitting || !formData.providerName || !formData.modelVersion || !formData.content}
-          >
-            {isSubmitting ? 'Adding...' : 'Add Document'}
-          </Button>
-        </div>
-      </Modal>
+      <ProviderDocFormModal isOpen={formOpen} onClose={() => setFormOpen(false)} onCreated={reload} />
     </div>
   );
 }

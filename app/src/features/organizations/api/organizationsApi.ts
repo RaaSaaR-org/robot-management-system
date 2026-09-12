@@ -39,7 +39,9 @@ interface ListResponse {
 export const organizationsApi = {
   async list(): Promise<Organization[]> {
     const response = await apiClient.get<ListResponse>(ENDPOINTS.list);
-    return response.data.tenants;
+    // A payload without the list (the demo build's catch-all mock, a proxy's
+    // error page) is an empty list, not a crash of the whole page.
+    return response.data.tenants ?? [];
   },
 
   async getCurrent(): Promise<Organization> {

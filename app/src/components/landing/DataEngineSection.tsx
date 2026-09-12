@@ -87,15 +87,13 @@ export function DataEngineSection() {
 
           <div>
             <h2 id="data-heading" className="lp-display lp-h2">
-              Your fleet is the dataset.
+              Turn experience into intelligence.
             </h2>
 
             <p className="lp-lede mt-5">
-              Data collection is not a phase you finish. Every demonstration someone teleoperates,
-              every room a robot scans, every shift a fleet works — it all lands in the same
-              versioned store, in the same open format, ready to train the next model.{' '}
-              {brand.name} treats the collecting as the engine, not the paperwork before the
-              interesting part.
+              Bring demonstrations, room scans and generated episodes into {brand.name}.
+              Check the quality, keep the useful takes and build a versioned dataset your next
+              model can learn from. One open format, with a clear record of where the data came from.
             </p>
 
             {/* The pipeline, as four numbered stops. Numbered because this one
@@ -121,7 +119,7 @@ export function DataEngineSection() {
               ))}
             </ol>
 
-            <p className="lp-key mt-12">Ways in</p>
+            <p className="lp-key mt-12">Five ways to build your dataset</p>
 
             <ul className="mt-3 border-b" role="list" style={{ borderColor: 'var(--border-color)' }}>
               {SOURCES.map((source) => (
@@ -157,20 +155,17 @@ export function DataEngineSection() {
               <p className="lp-key normal-case tracking-normal">Curation</p>
 
               <h3 className="lp-h3 mt-2" style={{ fontSize: '1.25rem' }}>
-                Editing a dataset never edits the dataset
+                Improve the data. Keep the original.
               </h3>
 
               <p className="lp-body mt-3">
-                Trimming a wobbly first second off forty episodes, or dropping the six where the
-                gripper missed, produces a <em>new version</em> — the original is left exactly as
-                it was recorded. The statistics recompute, the video is genuinely re-cut rather
-                than just re-labelled, and every model can name the exact version it learned from.
+                Trim a shaky start or remove a failed grasp to create a <em>new version</em>.
+                The original recording stays intact, statistics update and video is re-cut.
+                Every trained model can be traced to the exact dataset version it learned from.
               </p>
 
               <p className="lp-body mt-3">
-                That is what makes a data engine safe to run fast. You can throw away the wrong
-                episodes at three in the morning and still prove, a year later, what the training
-                set actually contained.
+                Experiment freely, compare revisions and return to the source whenever you need to.
               </p>
             </div>
           </div>

@@ -1,38 +1,47 @@
 /**
  * @file defaults.ts
- * @description Default brand config and color scales (current NeoDEM blue design)
+ * @description Default brand config and color scales (the landing mint design)
  * @feature brand
  */
 
 import type { BrandConfig, ColorScale } from './types';
 
-export const COBALT_SCALE: ColorScale = {
-  DEFAULT: '#2A5FFF',
-  '50': '#E8EDFF',
-  '100': '#D1DBFF',
-  '200': '#A3B7FF',
-  '300': '#7593FF',
-  '400': '#476FFF',
-  '500': '#2A5FFF',
-  '600': '#0042E6',
-  '700': '#0032B3',
-  '800': '#002280',
-  '900': '#00124D',
+/**
+ * The default primary slot: the landing mint. DEFAULT is the dark-theme fill;
+ * the light theme swaps it for a deeper green in index.css. A white-label brand
+ * replaces the whole slot.
+ */
+export const PRIMARY_SCALE: ColorScale = {
+  DEFAULT: '#b2f8df',
+  '50': '#effef9',
+  '100': '#d9fff1',
+  '200': '#b2f8df',
+  '300': '#8eeccb',
+  '400': '#6bdcb6',
+  '500': '#47c9a0',
+  '600': '#2fa585',
+  '700': '#22806a',
+  '800': '#1a5e50',
+  '900': '#123f37',
 };
 
-export const TURQUOISE_SCALE: ColorScale = {
-  DEFAULT: '#18E4C3',
-  '50': '#E6FCF8',
-  '100': '#CCF9F1',
-  '200': '#99F3E3',
-  '300': '#66EDD5',
-  '400': '#33E7C7',
-  '500': '#18E4C3',
-  '600': '#12B89C',
-  '700': '#0D8B76',
-  '800': '#095E4F',
-  '900': '#043129',
+/** The default accent slot, a quieter teal next to the mint. */
+export const ACCENT_SCALE: ColorScale = {
+  DEFAULT: '#a9e6d8',
+  '50': '#eefbf8',
+  '100': '#d6f5ee',
+  '200': '#a9e6d8',
+  '300': '#7fd4c3',
+  '400': '#56bfad',
+  '500': '#3aa695',
+  '600': '#2b877a',
+  '700': '#226b61',
+  '800': '#1a514a',
+  '900': '#123833',
 };
+
+/** The dark ink used on light fills (text-on-primary over the default mint). */
+export const DARK_ON_FILL = '#0a2225';
 
 export const DEFAULT_BRAND: BrandConfig = {
   name: 'NeoDEM',

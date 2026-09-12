@@ -1,161 +1,69 @@
 /**
  * @file LoginPage.tsx
- * @description Full-page login layout with branding
+ * @description Sign-in page on the shared AuthLayout; the MFA step renders in the same panel
  * @feature auth
- * @dependencies @/shared/components/ui, @/features/auth/components
  */
 
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Card } from '@/shared/components/ui';
-import { LoginForm } from '../components/LoginForm';
-import { useBrand } from '@/brand';
 import { useFeatures } from '@/shared/hooks';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { AuthLayout, authLinkClass } from '../components/AuthLayout';
+import { LoginForm, type MFAChallengeRequest } from '../components/LoginForm';
+import { MFAChallenge } from '../components/MFAChallenge';
+import { useAuthStore } from '../store/authStore';
 
 export interface LoginPageProps {
   /** Callback when login succeeds */
   onLoginSuccess?: () => void;
-  /** Logo component or image element */
-  logo?: React.ReactNode;
-  /** Application title */
+  /** Overrides the h1 */
   title?: string;
-  /** Tagline or description */
+  /** Overrides the sentence under the h1 */
   tagline?: string;
 }
 
-// ============================================================================
-// DEFAULT LOGO
-// ============================================================================
-
-function DefaultLogo() {
-  return (
-    <div className="flex items-center justify-center gap-3">
-      {/* Robot icon */}
-      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-cobalt-500 to-turquoise-500">
-        <svg
-          className="h-7 w-7 text-white"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"
-          />
-        </svg>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
-
-/**
- * Full-page login layout with centered form card and branding.
- *
- * @example
- * ```tsx
- * function App() {
- *   const navigate = useNavigate();
- *   return (
- *     <Routes>
- *       <Route
- *         path="/login"
- *         element={<LoginPage onLoginSuccess={() => navigate('/dashboard')} />}
- *       />
- *     </Routes>
- *   );
- * }
- * ```
- */
-export function LoginPage({
-  onLoginSuccess,
-  logo,
-  title,
-  tagline,
-}: LoginPageProps) {
-  const brand = useBrand();
+export function LoginPage({ onLoginSuccess, title, tagline }: LoginPageProps) {
   const { multiTenancyEnabled } = useFeatures();
-  const resolvedTitle = title ?? `Sign in to ${brand.name}`;
-  // TASK-164: keep the tagline neutral — no mention of tenants or
-  // workspaces. The user's tenant is implicit in their email address.
-  const resolvedTagline = tagline ?? 'Enter your email and password.';
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-theme-bg px-4 py-12">
-      {/* Background gradient decoration */}
-      <div
-        className="pointer-events-none fixed inset-0 overflow-hidden"
-        aria-hidden="true"
+  const completeMFALogin = useAuthStore((s) => s.completeMFALogin);
+  const [challenge, setChallenge] = useState<MFAChallengeRequest | null>(null);
+
+  if (challenge) {
+    return (
+      <AuthLayout
+        title="Two-step verification"
+        footer={
+          <button type="button" className={authLinkClass} onClick={() => setChallenge(null)}>
+            Back to sign in
+          </button>
+        }
       >
-        <div className="absolute -left-40 -top-40 h-80 w-80 rounded-full bg-cobalt-500/10 blur-3xl" />
-        <div className="absolute -bottom-40 -right-40 h-80 w-80 rounded-full bg-turquoise-500/10 blur-3xl" />
-      </div>
+        <MFAChallenge
+          userId={challenge.userId}
+          mfaToken={challenge.mfaToken}
+          onSuccess={(response) => {
+            completeMFALogin(response);
+            onLoginSuccess?.();
+          }}
+        />
+      </AuthLayout>
+    );
+  }
 
-      {/* Content */}
-      <div className="relative z-10 w-full max-w-md space-y-8">
-        {/* Header */}
-        <div className="text-center">
-          {/* Logo */}
-          <div className="mb-6">{logo ?? <DefaultLogo />}</div>
-
-          {/* Title */}
-          <h1 className="text-2xl font-bold tracking-tight text-theme-primary">
-            {resolvedTitle}
-          </h1>
-
-          {/* Tagline */}
-          {resolvedTagline && (
-            <p className="mt-2 text-sm text-theme-secondary">{resolvedTagline}</p>
-          )}
-        </div>
-
-        {/* Login Card */}
-        <Card variant="elevated" className="p-8">
-          <LoginForm onSuccess={onLoginSuccess} />
-
-          {/* Forgot password link */}
-          <div className="mt-6 text-center">
-            <Link
-              to="/forgot-password"
-              className="text-sm text-cobalt-600 hover:text-cobalt-700 dark:text-cobalt-400 dark:hover:text-cobalt-300"
-            >
-              Forgot your password?
-            </Link>
-          </div>
-
-          {/*
-            TASK-164: signup is invite-only when multi-tenancy is on, so
-            hide the "Create one" link — new users are added by their
-            organization owner via the Team page (TASK-163).
-          */}
-          {!multiTenancyEnabled && (
-            <div className="mt-4 text-center">
-              <span className="text-sm text-theme-secondary">
-                Don&apos;t have an account?{' '}
-                <Link
-                  to="/register"
-                  className="font-medium text-cobalt-600 hover:text-cobalt-700 dark:text-cobalt-400 dark:hover:text-cobalt-300"
-                >
-                  Create one
-                </Link>
-              </span>
-            </div>
-          )}
-        </Card>
-
-        {/* Footer */}
-        <p className="text-center text-xs text-theme-tertiary">
-          &copy; {new Date().getFullYear()} {brand.copyright}. All rights reserved.
-        </p>
-      </div>
-    </div>
+  return (
+    <AuthLayout
+      title={title ?? 'Sign in'}
+      // TASK-164: keep it neutral — the tenant is implicit in the email address.
+      description={tagline ?? 'Enter your email and password.'}
+      footer={
+        // TASK-164: sign-up is invite-only when multi-tenancy is on.
+        !multiTenancyEnabled && (
+          <span>
+            No account?{' '}
+            <Link to="/register" className={authLinkClass}>Create one</Link>
+          </span>
+        )
+      }
+    >
+      <LoginForm onSuccess={onLoginSuccess} onMfaRequired={setChallenge} />
+    </AuthLayout>
   );
 }

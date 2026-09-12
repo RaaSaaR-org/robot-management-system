@@ -36,8 +36,8 @@ export interface ScenePanelProps {
  * walking into things, so the operator has to be able to read off the panel
  * which numbers the robot actually measured.
  *
- * - `'lidar'`      → plain value, cobalt: a real range out of the point cloud.
- * - `'fleet'`      → plain value, cobalt: another robot's own reported pose
+ * - `'lidar'`      → plain value, primary: a real range out of the point cloud.
+ * - `'fleet'`      → plain value, primary: another robot's own reported pose
  *                    (TASK-207) — a position, not a camera sighting.
  * - anything else  → `~` prefix, muted: the vision model's guess (0.94 m MAE
  *                    against known geometry), or an older agent that sent no
@@ -54,7 +54,7 @@ function DistanceReadout({ entity }: { entity: SceneEntity }) {
       <span
         data-testid="agent-scene-distance"
         data-distance-source="none"
-        className="card-meta tabular-nums shrink-0"
+        className="text-xs text-ink-muted tabular-nums shrink-0"
       >
         — m
       </span>
@@ -80,7 +80,7 @@ function DistanceReadout({ entity }: { entity: SceneEntity }) {
         data-distance-source={measured ? distanceSource : (distanceSource ?? 'unknown')}
         className={cn(
           'text-xs tabular-nums',
-          measured ? 'font-medium text-cobalt-600 dark:text-cobalt-400' : 'card-meta'
+          measured ? 'font-medium text-primary' : 'text-xs text-ink-muted'
         )}
       >
         {measured ? '' : '~'}
@@ -130,7 +130,7 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
     >
       {/* Latest camera frame — rendered only when there is one to render. */}
       {frameSrc && (
-        <div className="rounded-brand overflow-hidden border border-glass-subtle bg-theme-elevated">
+        <div className="rounded-control overflow-hidden border border-line-subtle bg-inset">
           <img
             src={frameSrc}
             alt="Latest camera frame"
@@ -153,7 +153,7 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
         />
       ) : (
         /* Free-text current view from the VLM */
-        scene?.currentView && <p className="card-meta leading-snug">{scene.currentView}</p>
+        scene?.currentView && <p className="text-xs text-ink-muted leading-snug">{scene.currentView}</p>
       )}
 
       {/* A person in view changes what the robot may do next, so it is worth a
@@ -161,8 +161,8 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
           nothing is happening, and the scene's age rides along with the fact
           it qualifies rather than standing on its own. */}
       {scene?.personVisible && (
-        <div className="flex items-center gap-2 text-[11px] text-theme-muted">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-turquoise-500" />
+        <div className="flex items-center gap-2 text-xs text-ink-muted">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent" />
           <span>Person in view</span>
           <span className="ml-auto tabular-nums">{formatTimeAgo(scene.updatedAt)}</span>
         </div>
@@ -172,7 +172,7 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
       {forwardClearanceM !== null && (
         <div
           data-testid="agent-scene-clearance"
-          className="flex items-center gap-2 text-[11px] text-theme-muted"
+          className="flex items-center gap-2 text-xs text-ink-muted"
         >
           <Tooltip
             side="top"
@@ -180,7 +180,7 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
           >
             <span>Clear ahead</span>
           </Tooltip>
-          <span className="ml-auto tabular-nums font-medium text-cobalt-600 dark:text-cobalt-400">
+          <span className="ml-auto tabular-nums font-medium text-primary">
             {forwardClearanceM.toFixed(2)} m
           </span>
         </div>
@@ -190,7 +190,7 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
       {mapSummary && (
         <div
           data-testid="agent-scene-map"
-          className="flex items-center gap-2 text-[11px] text-theme-muted"
+          className="flex items-center gap-2 text-xs text-ink-muted"
         >
           <Tooltip
             side="top"
@@ -214,18 +214,18 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
           <li
             key={`${entity.label}-${entity.bearingDeg}`}
             data-testid="agent-scene-entity"
-            className="glass-subtle px-2.5 py-2"
+            className="rounded-control bg-inset px-2.5 py-2"
           >
             <div className="flex items-center gap-2">
-              <span className="card-value truncate">{entity.label}</span>
-              <span className="ml-auto card-meta tabular-nums shrink-0">
+              <span className="text-sm font-medium text-ink-primary truncate">{entity.label}</span>
+              <span className="ml-auto text-xs text-ink-muted tabular-nums shrink-0">
                 {formatBearing(entity.bearingDeg)}
               </span>
               <DistanceReadout entity={entity} />
             </div>
             <div className="flex items-center gap-2 mt-0.5">
-              {entity.note && <span className="card-meta truncate">{entity.note}</span>}
-              <span className="ml-auto card-meta tabular-nums shrink-0">
+              {entity.note && <span className="text-xs text-ink-muted truncate">{entity.note}</span>}
+              <span className="ml-auto text-xs text-ink-muted tabular-nums shrink-0">
                 {Math.round(entity.confidence * 100)}% · {formatTimeAgo(entity.lastSeen)}
               </span>
             </div>

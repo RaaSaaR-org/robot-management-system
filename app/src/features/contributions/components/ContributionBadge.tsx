@@ -25,19 +25,19 @@ export interface ContributionBadgeProps {
 const STATUS_CONFIG: Record<DbContributionStatus, { label: string; classes: string }> = {
   pending: {
     label: 'Pending',
-    classes: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300',
+    classes: 'bg-signal-unknown/10 text-signal-unknown ',
   },
   processing: {
     label: 'Processing',
-    classes: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+    classes: 'bg-signal-estimated/10 text-signal-estimated ',
   },
   approved: {
     label: 'Approved',
-    classes: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+    classes: 'bg-signal-measured/10 text-signal-measured ',
   },
   rejected: {
     label: 'Rejected',
-    classes: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+    classes: 'bg-signal-stopped/10 text-signal-stopped ',
   },
 };
 

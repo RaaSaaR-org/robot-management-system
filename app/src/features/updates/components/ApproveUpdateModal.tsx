@@ -1,74 +1,86 @@
 /**
  * @file ApproveUpdateModal.tsx
- * @description Modal dialog for approving an update package
+ * @description FormModal that approves a pending update package after the
+ *              approver has seen its changelog and signature
  * @feature updates
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { FormField, FormModal, Input, KeyValueList, toast } from '@/shared/components/ui';
+import { getErrorMessage } from '@/shared/utils';
+import { useAuthStore } from '@/features/auth/store/authStore';
+import { useUpdatesStore } from '../store/updatesStore';
 import type { UpdatePackage } from '../types/updates.types';
+import { runUpdateAct } from './updateActs';
 
 export interface ApproveUpdateModalProps {
-  pkg: UpdatePackage;
-  onApprove: (id: string, approverId: string) => void;
+  /** The package to approve; null keeps the modal closed. */
+  pkg: UpdatePackage | null;
   onClose: () => void;
 }
 
-export function ApproveUpdateModal({ pkg, onApprove, onClose }: ApproveUpdateModalProps) {
-  const [approverId, setApproverId] = useState('');
+export function ApproveUpdateModal({ pkg, onClose }: ApproveUpdateModalProps) {
+  const approvePackage = useUpdatesStore((s) => s.approvePackage);
+  const userName = useAuthStore((s) => s.user?.name ?? s.user?.email ?? '');
+  const [approver, setApprover] = useState('');
+  const [approverError, setApproverError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
+  const [saving, setSaving] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (approverId.trim()) {
-      onApprove(pkg.id, approverId.trim());
+  useEffect(() => {
+    if (!pkg) return;
+    setApprover(userName);
+    setApproverError(undefined);
+    setFormError(undefined);
+  }, [pkg, userName]);
+
+  const handleSubmit = async () => {
+    if (!pkg) return;
+    if (!approver.trim()) {
+      setApproverError('Say who approves this package.');
+      return;
+    }
+    setSaving(true);
+    setFormError(undefined);
+    try {
+      await runUpdateAct(() => approvePackage(pkg.id, approver.trim()));
+      toast.success('Update approved', { description: `v${pkg.version}` });
       onClose();
+    } catch (err) {
+      setFormError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="section-primary border border-theme rounded-brand p-6 w-full max-w-md">
-        <h2 className="text-lg font-semibold text-theme-primary mb-4">Approve Update v{pkg.version}</h2>
-
-        <div className="mb-4">
-          <h3 className="text-sm font-medium text-theme-secondary mb-1">Changelog</h3>
-          <p className="text-sm text-theme-tertiary">{pkg.changelog}</p>
-        </div>
-
-        <div className="mb-4">
-          <h3 className="text-sm font-medium text-theme-secondary mb-1">Signature Verification</h3>
-          <p className="text-xs text-green-500 font-mono">Ed25519 signature: {pkg.signature.slice(0, 24)}...</p>
-          <p className="text-xs text-theme-tertiary font-mono">SHA-256: {pkg.checksum}</p>
-        </div>
-
-        <form onSubmit={handleSubmit}>
-          <label className="block text-sm font-medium text-theme-secondary mb-1">
-            Approver ID
-          </label>
-          <input
-            type="text"
-            value={approverId}
-            onChange={(e) => setApproverId(e.target.value)}
-            placeholder="Enter your user ID"
-            className="w-full px-3 py-2 text-sm border border-theme rounded-brand section-secondary text-theme-primary mb-4"
+    <FormModal
+      isOpen={Boolean(pkg)}
+      onClose={onClose}
+      title={pkg ? `Approve v${pkg.version}?` : 'Approve update'}
+      description="Once approved, the package can be deployed to any robot. The approval is logged for compliance."
+      submitLabel="Approve update"
+      submittingLabel="Approving…"
+      isSubmitting={saving}
+      error={formError}
+      onSubmit={handleSubmit}
+      noValidate
+    >
+      {pkg && (
+        <>
+          <p className="whitespace-pre-line text-sm text-ink-secondary">{pkg.changelog}</p>
+          <KeyValueList
+            columns={1}
+            items={[
+              { label: 'Signature (Ed25519)', value: `${pkg.signature.slice(0, 32)}…`, mono: true },
+              { label: 'Checksum (SHA-256)', value: pkg.checksum, mono: true },
+            ]}
           />
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm text-theme-secondary hover:text-theme-primary transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!approverId.trim()}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-brand hover:bg-blue-700 disabled:opacity-50 transition-colors"
-            >
-              Approve
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        </>
+      )}
+      <FormField label="Approver" required error={approverError}>
+        <Input value={approver} onChange={(e) => setApprover(e.target.value)} placeholder="Your name or user ID" />
+      </FormField>
+    </FormModal>
   );
 }

@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState, type FormEvent } from 'react';
-import { Button, Input, Modal } from '@/shared/components/ui';
+import { Button, Input, Modal, toast } from '@/shared/components/ui';
 import { useAgentModeStore, selectIsSavingIdentity } from '../store/agentmodeStore';
 import type { AgentIdentityPatch, AgentSelfState } from '../types/agentmode.types';
 
@@ -96,8 +96,15 @@ export function IdentityDialog({ isOpen, onClose, robotId }: IdentityDialogProps
 
     setProblem(null);
     const ok = await useAgentModeStore.getState().submitIdentity(robotId, patch);
-    if (ok) onClose();
-    else setProblem('The robot refused the write — see the error above the timeline.');
+    if (ok) {
+      toast.success('Identity saved');
+      onClose();
+    } else {
+      setProblem('The robot refused the write — see the error above the timeline.');
+      toast.error("Couldn't save the identity", {
+        description: useAgentModeStore.getState().error ?? undefined,
+      });
+    }
   };
 
   return (
@@ -105,31 +112,30 @@ export function IdentityDialog({ isOpen, onClose, robotId }: IdentityDialogProps
       isOpen={isOpen}
       onClose={onClose}
       title="Name this robot"
-      size="sm"
+      description="Written to IDENTITY.md on the robot itself."
+      size="md"
       footer={
         <>
-          <Button variant="ghost" size="sm" onClick={onClose} data-testid="agent-identity-cancel">
+          <Button variant="secondary" onClick={onClose} data-testid="agent-identity-cancel">
             Cancel
           </Button>
           <Button
             variant="primary"
-            size="sm"
             type="submit"
             form="agent-identity-form"
             isLoading={isSaving}
-            loadingText="Writing…"
+            loadingText="Saving…"
             disabled={!robotId}
             data-testid="agent-identity-save"
           >
-            Write IDENTITY.md
+            Save changes
           </Button>
         </>
       }
     >
-      <form id="agent-identity-form" onSubmit={handleSubmit} className="space-y-3">
-        <p className="card-meta">
-          Written to <span className="text-theme-secondary">IDENTITY.md</span> on the robot
-          itself — it keeps the file, the fleet adopts what it reports. Operator and site are
+      <form id="agent-identity-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <p className="text-sm text-ink-muted">
+          The robot keeps the file; the fleet adopts what it reports. Operator and site are
           personal data and are blanked by a GDPR erasure.
         </p>
 
@@ -168,7 +174,7 @@ export function IdentityDialog({ isOpen, onClose, robotId }: IdentityDialogProps
         />
 
         {problem && (
-          <p data-testid="agent-identity-problem" className="text-sm text-red-600 dark:text-red-400">
+          <p data-testid="agent-identity-problem" role="alert" className="text-sm text-signal-stopped">
             {problem}
           </p>
         )}

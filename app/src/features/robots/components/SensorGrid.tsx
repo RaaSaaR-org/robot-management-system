@@ -2,9 +2,9 @@
  * @file SensorGrid.tsx
  * @description Grid display component for robot sensor readings
  * @feature robots
- * @dependencies @/shared/utils/cn
  */
 
+import { StatusTag } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 
 // ============================================================================
@@ -46,17 +46,17 @@ export interface SensorConfig {
 // ============================================================================
 
 const DEFAULT_SENSOR_CONFIG: SensorConfig = {
-  frontSonar: { label: 'Front Sonar', unit: 'cm', type: 'distance', max: 300 },
-  rearSonar: { label: 'Rear Sonar', unit: 'cm', type: 'distance', max: 300 },
-  leftBumper: { label: 'Left Bumper', type: 'boolean' },
-  rightBumper: { label: 'Right Bumper', type: 'boolean' },
-  cliffDetector: { label: 'Cliff Detector', type: 'boolean' },
+  frontSonar: { label: 'Front sonar', unit: 'cm', type: 'distance', max: 300 },
+  rearSonar: { label: 'Rear sonar', unit: 'cm', type: 'distance', max: 300 },
+  leftBumper: { label: 'Left bumper', type: 'boolean' },
+  rightBumper: { label: 'Right bumper', type: 'boolean' },
+  cliffDetector: { label: 'Cliff detector', type: 'boolean' },
   obstacleDetected: { label: 'Obstacle', type: 'boolean' },
   temperature: { label: 'Temperature', unit: '°C', type: 'number', warningThreshold: 50 },
   humidity: { label: 'Humidity', unit: '%', type: 'percentage', max: 100 },
   pressure: { label: 'Pressure', unit: 'hPa', type: 'number' },
   lidar: { label: 'LiDAR', unit: 'm', type: 'distance', max: 10 },
-  infrared: { label: 'IR Sensor', type: 'boolean' },
+  infrared: { label: 'IR sensor', type: 'boolean' },
 };
 
 // ============================================================================
@@ -70,11 +70,9 @@ function formatSensorLabel(key: string, config?: SensorConfig): string {
   if (DEFAULT_SENSOR_CONFIG[key]?.label) {
     return DEFAULT_SENSOR_CONFIG[key].label;
   }
-  // Convert camelCase to Title Case
-  return key
-    .replace(/([A-Z])/g, ' $1')
-    .replace(/^./, (str) => str.toUpperCase())
-    .trim();
+  // Convert camelCase to sentence case
+  const words = key.replace(/([A-Z])/g, ' $1').trim().toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 function getSensorConfig(key: string, config?: SensorConfig) {
@@ -94,6 +92,8 @@ function inferSensorType(
 // SUB-COMPONENTS
 // ============================================================================
 
+const CELL = 'rounded-control border border-line-subtle bg-inset';
+
 function BooleanSensor({
   label,
   value,
@@ -106,34 +106,11 @@ function BooleanSensor({
   const isTriggered = value === true;
 
   return (
-    <div
-      className={cn(
-        'flex items-center justify-between rounded-lg bg-theme-elevated',
-        compact ? 'p-2' : 'p-3'
-      )}
-    >
-      <span className={cn('text-theme-secondary', compact ? 'text-xs' : 'text-sm')}>
-        {label}
-      </span>
-      <div className="flex items-center gap-2">
-        <div
-          className={cn(
-            'rounded-full transition-colors',
-            compact ? 'w-2 h-2' : 'w-3 h-3',
-            isTriggered ? 'bg-red-500 animate-pulse' : 'bg-green-500'
-          )}
-        />
-        {!compact && (
-          <span
-            className={cn(
-              'text-sm font-medium',
-              isTriggered ? 'text-red-500' : 'text-green-500'
-            )}
-          >
-            {isTriggered ? 'Triggered' : 'OK'}
-          </span>
-        )}
-      </div>
+    <div className={cn('flex items-center justify-between gap-3', CELL, compact ? 'px-3 py-2' : 'px-3 py-2.5')}>
+      <span className={cn('text-ink-secondary', compact ? 'text-xs' : 'text-sm')}>{label}</span>
+      <StatusTag tone={isTriggered ? 'stopped' : 'live'} dot>
+        {isTriggered ? 'Triggered' : 'OK'}
+      </StatusTag>
     </div>
   );
 }
@@ -159,35 +136,27 @@ function NumericSensor({
   const percentage = max ? Math.min(100, (value / max) * 100) : undefined;
 
   return (
-    <div
-      className={cn(
-        'rounded-lg bg-theme-elevated',
-        compact ? 'p-2' : 'p-3'
-      )}
-    >
-      <div className="flex items-center justify-between">
-        <span className={cn('text-theme-secondary', compact ? 'text-xs' : 'text-sm')}>
-          {label}
-        </span>
+    <div className={cn(CELL, compact ? 'px-3 py-2' : 'px-3 py-2.5')}>
+      <div className="flex items-center justify-between gap-3">
+        <span className={cn('text-ink-secondary', compact ? 'text-xs' : 'text-sm')}>{label}</span>
         <span
           className={cn(
-            'font-medium',
+            'font-semibold tabular-nums',
             compact ? 'text-xs' : 'text-sm',
-            isWarning ? 'text-orange-500' : 'text-theme-primary'
+            isWarning ? 'text-signal-unknown' : 'text-ink-primary'
           )}
         >
-          {typeof value === 'number' ? value.toFixed(1) : value}
-          {unit && <span className="text-theme-tertiary ml-0.5">{unit}</span>}
+          {value.toFixed(1)}
+          {unit && <span className="ml-0.5 font-normal text-ink-tertiary">{unit}</span>}
         </span>
       </div>
 
-      {/* Progress bar for distance/percentage values */}
       {showProgress && percentage !== undefined && (
-        <div className="mt-2 h-1.5 bg-theme-elevated rounded-full overflow-hidden border border-theme">
+        <div className="mt-2 h-1 overflow-hidden rounded-full bg-line-subtle">
           <div
             className={cn(
-              'h-full transition-all duration-300 rounded-full',
-              isWarning ? 'bg-orange-500' : 'bg-cobalt-500'
+              'h-full rounded-full transition-[width] duration-300',
+              isWarning ? 'bg-signal-unknown' : 'bg-primary'
             )}
             style={{ width: `${percentage}%` }}
           />
@@ -207,18 +176,9 @@ function StringSensor({
   compact?: boolean;
 }) {
   return (
-    <div
-      className={cn(
-        'flex items-center justify-between rounded-lg bg-theme-elevated',
-        compact ? 'p-2' : 'p-3'
-      )}
-    >
-      <span className={cn('text-theme-secondary', compact ? 'text-xs' : 'text-sm')}>
-        {label}
-      </span>
-      <span className={cn('font-medium text-theme-primary', compact ? 'text-xs' : 'text-sm')}>
-        {value}
-      </span>
+    <div className={cn('flex items-center justify-between gap-3', CELL, compact ? 'px-3 py-2' : 'px-3 py-2.5')}>
+      <span className={cn('text-ink-secondary', compact ? 'text-xs' : 'text-sm')}>{label}</span>
+      <span className={cn('font-medium text-ink-primary', compact ? 'text-xs' : 'text-sm')}>{value}</span>
     </div>
   );
 }
@@ -255,8 +215,8 @@ export function SensorGrid({
 
   if (sensorEntries.length === 0) {
     return (
-      <div className={cn('text-sm text-theme-tertiary text-center py-4', className)}>
-        No sensor data available
+      <div className={cn('py-4 text-center text-sm text-ink-tertiary', className)}>
+        No sensor data yet
       </div>
     );
   }
@@ -351,7 +311,7 @@ export function SensorGroup({
 }: SensorGroupProps) {
   return (
     <div className={className}>
-      <h3 className={cn('font-medium text-theme-secondary mb-2', compact ? 'text-xs' : 'text-sm')}>
+      <h3 className={cn('mb-2 font-semibold text-ink-primary', compact ? 'text-xs' : 'text-sm')}>
         {title}
       </h3>
       <SensorGrid sensors={sensors} compact={compact} columns={columns} config={config} />

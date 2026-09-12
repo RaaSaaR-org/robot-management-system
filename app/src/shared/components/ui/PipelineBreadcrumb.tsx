@@ -1,16 +1,13 @@
 /**
  * @file PipelineBreadcrumb.tsx
- * @description Small "Step N of 5" pill linking back to the training pipeline
+ * @description Small "Step N of 5" chip linking back to the training pipeline
  * overview. Placed at the top of feature pages that are part of the pipeline.
  * @feature shared
  */
 
 import { Link } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { focusRing } from './styles';
 
 export type PipelineStage = 'collect' | 'dataset' | 'train' | 'evaluate' | 'deploy';
 
@@ -22,10 +19,6 @@ const STAGE_INFO: Record<PipelineStage, { number: number; label: string }> = {
   deploy: { number: 5, label: 'Deploy' },
 };
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
-
 export interface PipelineBreadcrumbProps {
   /** Which stage this page represents */
   stage: PipelineStage;
@@ -34,27 +27,29 @@ export interface PipelineBreadcrumbProps {
   className?: string;
 }
 
-export function PipelineBreadcrumb({
-  stage,
-  hideOnMobile = true,
-  className,
-}: PipelineBreadcrumbProps) {
+/**
+ * @example
+ * ```tsx
+ * <PipelineBreadcrumb stage="train" />
+ * ```
+ */
+export function PipelineBreadcrumb({ stage, hideOnMobile = true, className }: PipelineBreadcrumbProps) {
   const info = STAGE_INFO[stage];
   return (
     <Link
       to="/pipeline"
       className={cn(
-        'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-brand text-xs font-medium',
-        'bg-glass-subtle text-theme-muted hover:text-theme-primary hover:bg-glass-bg',
-        'border border-glass-subtle transition-all whitespace-nowrap',
+        'inline-flex w-fit items-center gap-1.5 whitespace-nowrap rounded-control border border-line bg-inset px-2.5 py-1 text-xs font-medium text-ink-tertiary',
+        'transition-colors duration-150 hover:border-line-strong hover:text-ink-primary',
+        focusRing,
         hideOnMobile && 'hidden sm:inline-flex',
-        className
+        className,
       )}
     >
-      <span className="text-cobalt-400 font-mono">{info.number}/5</span>
-      <span>·</span>
+      <span className="tabular-nums text-primary">{info.number}/5</span>
+      <span aria-hidden="true">·</span>
       <span>{info.label} stage</span>
-      <span className="text-theme-muted/70">· Pipeline overview</span>
+      <span className="text-ink-muted">· Pipeline overview</span>
     </Link>
   );
 }

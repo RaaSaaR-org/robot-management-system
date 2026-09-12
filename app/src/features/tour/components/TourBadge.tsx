@@ -1,39 +1,74 @@
 /**
  * @file TourBadge.tsx
- * @description Small pills for host mode: run status, stop (leg) status, how a
+ * @description Status tags for host mode: run status, stop (leg) status, how a
  *              visitor's question was answered, and the mode a stop's demo ran
  *              in. One renderer per value so the cards, the run detail and the
- *              banner can never disagree.
+ *              banner can never disagree. All of them render the kit's StatusTag.
  * @feature tour
  */
 
 import { memo } from 'react';
-import { cn } from '@/shared/utils/cn';
-// The visual vocabulary is patrol's (TASK-212) and stays shared on purpose:
-// tours and patrols sit next to each other in Operations, and an operator must
-// not have to learn two chip languages for the same five leg states.
-import { PATROL_MOTION } from '@/features/patrol/components/patrolUi';
+import { StatusTag, type StatusTagTone } from '@/shared/components/ui';
 import type { TourDemoMode, TourLegStatus, TourRunStatus, TourTurnAnswer } from '../types/tour.types';
-import { legStatusStyle, runStatusStyle, turnAnswerStyle } from '../utils/tourFormat';
+import { TOUR_RUN_STATUS_LABELS, TOUR_TURN_ANSWER_LABELS } from '../types/tour.types';
 
-const PILL = cn(
-  'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap',
-  PATROL_MOTION
-);
+/** `declined` is neutral: the visitor said no to the offer — a normal end. */
+const RUN_TONE: Record<TourRunStatus, StatusTagTone> = {
+  running: 'live',
+  done: 'success',
+  declined: 'neutral',
+  abandoned: 'neutral',
+  aborted: 'warning',
+  failed: 'danger',
+  skipped: 'neutral',
+};
+
+const LEG_TONE: Record<TourLegStatus, StatusTagTone> = {
+  pending: 'neutral',
+  running: 'info',
+  done: 'success',
+  failed: 'danger',
+  skipped: 'neutral',
+};
+
+const LEG_LABEL: Record<TourLegStatus, string> = {
+  pending: 'Pending',
+  running: 'Running',
+  done: 'Done',
+  failed: 'Failed',
+  skipped: 'Skipped',
+};
+
+/**
+ * `declined` is a warning — the operator's cue to add a fact; the robot did the
+ * right thing with facts it does not have. `unanswered` is neutral "Not
+ * answered": the robot never got an answer out.
+ */
+const ANSWER_TONE: Record<TourTurnAnswer, StatusTagTone> = {
+  grounded: 'success',
+  from_camera: 'info',
+  declined: 'warning',
+  unanswered: 'neutral',
+};
 
 export interface TourRunStatusChipProps {
   status: TourRunStatus;
   className?: string;
 }
 
-/** Run status pill; the running one pulses. */
+/** Run status tag; the running one pulses. */
 export const TourRunStatusChip = memo(function TourRunStatusChip({ status, className }: TourRunStatusChipProps) {
-  const style = runStatusStyle(status);
   return (
-    <span className={cn(PILL, style.className, className)} data-status={status} data-testid="tour-run-status">
-      {style.pulse && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" aria-hidden="true" />}
-      {style.label}
-    </span>
+    <StatusTag
+      tone={RUN_TONE[status] ?? 'neutral'}
+      dot
+      pulse={status === 'running'}
+      className={className}
+      data-status={status}
+      data-testid="tour-run-status"
+    >
+      {TOUR_RUN_STATUS_LABELS[status] ?? status}
+    </StatusTag>
   );
 });
 
@@ -42,14 +77,19 @@ export interface TourLegStatusChipProps {
   className?: string;
 }
 
-/** Stop status pill. */
+/** Stop status tag. */
 export const TourLegStatusChip = memo(function TourLegStatusChip({ status, className }: TourLegStatusChipProps) {
-  const style = legStatusStyle(status);
   return (
-    <span className={cn(PILL, style.className, className)} data-status={status}>
-      {style.pulse && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" aria-hidden="true" />}
-      {style.label}
-    </span>
+    <StatusTag
+      tone={LEG_TONE[status] ?? 'neutral'}
+      size="sm"
+      dot={status === 'running'}
+      pulse={status === 'running'}
+      className={className}
+      data-status={status}
+    >
+      {LEG_LABEL[status] ?? status}
+    </StatusTag>
   );
 });
 
@@ -64,11 +104,15 @@ export interface TurnAnswerBadgeProps {
  * it is never dressed up as an answer.
  */
 export const TurnAnswerBadge = memo(function TurnAnswerBadge({ answered, className }: TurnAnswerBadgeProps) {
-  const style = turnAnswerStyle(answered);
   return (
-    <span className={cn(PILL, style.className, className)} data-answered={answered} data-testid="tour-turn-answer">
-      {style.label}
-    </span>
+    <StatusTag
+      tone={ANSWER_TONE[answered] ?? 'neutral'}
+      className={className}
+      data-answered={answered}
+      data-testid="tour-turn-answer"
+    >
+      {TOUR_TURN_ANSWER_LABELS[answered] ?? answered}
+    </StatusTag>
   );
 });
 
@@ -84,18 +128,14 @@ export interface DemoModeBadgeProps {
  */
 export const DemoModeBadge = memo(function DemoModeBadge({ mode, className }: DemoModeBadgeProps) {
   return (
-    <span
-      className={cn(
-        PILL,
-        mode === 'execute'
-          ? 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300'
-          : 'glass-subtle text-theme-secondary',
-        className
-      )}
+    <StatusTag
+      tone={mode === 'execute' ? 'info' : 'neutral'}
+      size="sm"
+      className={className}
       data-mode={mode}
       data-testid="tour-demo-mode"
     >
       {mode === 'execute' ? 'Ran the skill' : 'Described only'}
-    </span>
+    </StatusTag>
   );
 });

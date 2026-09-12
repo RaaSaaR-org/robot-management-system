@@ -1,280 +1,103 @@
 /**
  * @file FleetLearningPage.tsx
- * @description Main page for fleet learning (federated learning) feature
+ * @description Fleet learning (federated learning): rounds, convergence,
+ *              privacy budgets and ROHE, one tab each in ?tab=
  * @feature fleetlearning
  */
 
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { cn } from '@/shared/utils/cn';
-import { PageHeader, EmptyState } from '@/shared/components/ui';
-import {
-  Network,
-  Plus,
-  Filter,
-  RefreshCw,
-  TrendingUp,
-  Shield,
-  Users,
-  Loader2,
-  AlertCircle,
-} from 'lucide-react';
-import { FederatedRoundCard } from '../components/FederatedRoundCard';
+import { useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Plus } from 'lucide-react';
+import { Button, PageHeader, Tabs, toast } from '@/shared/components/ui';
+import { useModelVersionsAutoFetch } from '@/features/deployment/hooks/useModelVersions';
+import { RoundsSection, shortRoundId } from '../components/RoundsSection';
 import { ConvergenceChart } from '../components/ConvergenceChart';
 import { PrivacyBudgetView } from '../components/PrivacyBudgetView';
 import { ROHEDashboard } from '../components/ROHEDashboard';
 import { CreateRoundModal } from '../components/CreateRoundModal';
-import {
-  useFederatedRounds,
-  useConvergenceData,
-  usePrivacyBudgets,
-  useROHEMetrics,
-  useCreateRound,
-} from '../hooks/fleetlearning';
-import type { FederatedRoundStatus, CreateFederatedRoundRequest } from '../types/fleetlearning.types';
+import { useRobotNames } from '../components/useRobotNames';
+import { useConvergenceData, useCreateRound, usePrivacyBudgets, useROHEMetrics } from '../hooks/fleetlearning';
+import { useFleetLearningStore } from '../store/fleetlearningStore';
+import type { CreateFederatedRoundRequest } from '../types/fleetlearning.types';
 
-// ============================================================================
-// TYPES
-// ============================================================================
+const TABS = [
+  { id: 'rounds', label: 'Rounds' },
+  { id: 'convergence', label: 'Convergence' },
+  { id: 'privacy', label: 'Privacy' },
+  { id: 'rohe', label: 'ROHE' },
+] as const;
+type TabId = (typeof TABS)[number]['id'];
 
-type TabType = 'rounds' | 'convergence' | 'privacy' | 'rohe';
+function ConvergenceTab() {
+  const { data, isLoading, error, fetchData } = useConvergenceData();
+  return <ConvergenceChart data={data} isLoading={isLoading} error={error} onRetry={() => void fetchData()} />;
+}
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+function PrivacyTab() {
+  const { budgets, isLoading, error, fetchBudgets } = usePrivacyBudgets();
+  const robotName = useRobotNames();
+  return <PrivacyBudgetView budgets={budgets} isLoading={isLoading} error={error} onRetry={() => void fetchBudgets()} robotName={robotName} />;
+}
+
+function RoheTab() {
+  const { metrics, isLoading, error, fetchMetrics } = useROHEMetrics();
+  const robotName = useRobotNames();
+  return <ROHEDashboard metrics={metrics} isLoading={isLoading} error={error} onRetry={() => void fetchMetrics()} robotName={robotName} />;
+}
 
 export function FleetLearningPage() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabType>('rounds');
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<FederatedRoundStatus | ''>('');
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('tab');
+  const tab: TabId = TABS.some((t) => t.id === raw) ? (raw as TabId) : 'rounds';
+  const setTab = (id: string) =>
+    setParams((p) => { if (id === 'rounds') p.delete('tab'); else p.set('tab', id); return p; }, { replace: true });
 
-  // Hooks
-  const {
-    rounds,
-    activeRounds,
-    pagination,
-    isLoading: roundsLoading,
-    error: roundsError,
-    fetchRounds,
-    setFilters,
-    clearFilters,
-    setPage,
-  } = useFederatedRounds();
+  const total = useFleetLearningStore((s) => s.pagination.total);
+  const [creating, setCreating] = useState(false);
+  const { createRound } = useCreateRound();
+  const { modelVersions } = useModelVersionsAutoFetch();
+  // Keyed by model id, not by version: two models can carry the same version
+  // string, and identical option values collide as React keys and make the two
+  // entries indistinguishable. The round records the version, so the picked id
+  // is resolved back to one on submit.
+  const modelOptions = useMemo(
+    () => modelVersions.map((v) => ({ value: v.id, label: `${v.name || `Model ${v.version}`} · v${v.version}` })),
+    [modelVersions],
+  );
 
-  const { data: convergenceData, isLoading: convergenceLoading, error: convergenceError } = useConvergenceData();
-  const { budgets, isLoading: budgetsLoading } = usePrivacyBudgets();
-  const { metrics: roheMetrics, isLoading: roheLoading } = useROHEMetrics();
-  const { createRound, isLoading: createLoading } = useCreateRound();
-
-  const handleRoundClick = (roundId: string) => {
-    navigate(`/fleet-learning/rounds/${roundId}`);
-  };
-
-  const handleCreateRound = async (data: CreateFederatedRoundRequest) => {
-    const round = await createRound(data);
-    setShowCreateModal(false);
+  const handleCreate = async (data: CreateFederatedRoundRequest) => {
+    const picked = modelVersions.find((v) => v.id === data.globalModelVersion);
+    const round = await createRound(picked ? { ...data, globalModelVersion: picked.version } : data);
+    toast.success('Round created', { description: `Round ${shortRoundId(round.id)} · ${round.globalModelVersion}` });
+    setCreating(false);
     navigate(`/fleet-learning/rounds/${round.id}`);
   };
 
-  const handleStatusFilterChange = (status: FederatedRoundStatus | '') => {
-    setStatusFilter(status);
-    if (status) {
-      setFilters({ status });
-    } else {
-      clearFilters();
-    }
-  };
-
-  const tabs = [
-    { id: 'rounds' as const, label: 'Rounds', icon: Network, count: rounds.length },
-    { id: 'convergence' as const, label: 'Convergence', icon: TrendingUp },
-    { id: 'privacy' as const, label: 'Privacy', icon: Shield },
-    { id: 'rohe' as const, label: 'ROHE', icon: Users },
-  ];
+  const newButton = (
+    <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>New round</Button>
+  );
 
   return (
-    <div className="container mx-auto px-4 py-6 max-w-7xl">
-      {/* Header */}
+    <div className="flex flex-col gap-6">
       <PageHeader
-        className="mb-6"
-        title="Fleet Learning"
-        subtitle="Federated learning across your robot fleet"
-        meta={
-          activeRounds.length > 0 ? (
-            <span className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-sm font-medium">
-              {activeRounds.length} active
-            </span>
-          ) : undefined
-        }
-        actions={
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-cobalt text-white rounded-brand hover:bg-cobalt-600 transition-colors"
-          >
-            <Plus size={18} />
-            New Round
-          </button>
-        }
+        eyebrow="Build"
+        title="Fleet learning"
+        description="Train one model across many robots without moving their data. Each round selects robots, trains locally and aggregates."
+        actions={tab === 'rounds' ? newButton : undefined}
       />
-
-      {/* Tabs */}
-      <div className="border-b border-theme mb-6">
-        <nav className="flex gap-4">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={cn(
-                'flex items-center gap-2 px-4 py-3 border-b-2 font-medium text-sm transition-colors',
-                activeTab === tab.id
-                  ? 'border-cobalt text-cobalt'
-                  : 'border-transparent text-theme-secondary hover:text-theme-primary'
-              )}
-            >
-              <tab.icon size={18} />
-              {tab.label}
-              {tab.count !== undefined && (
-                <span className="px-2 py-0.5 bg-theme-hover rounded-full text-xs">
-                  {tab.count}
-                </span>
-              )}
-            </button>
-          ))}
-        </nav>
-      </div>
-
-      {/* Tab Content */}
-      {activeTab === 'rounds' && (
-        <div>
-          {/* Filters */}
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <Filter className="w-4 h-4 text-theme-muted" />
-                <select
-                  value={statusFilter}
-                  onChange={(e) => handleStatusFilterChange(e.target.value as FederatedRoundStatus | '')}
-                  className="px-3 py-1.5 border border-theme rounded-brand section-secondary text-sm text-theme-secondary"
-                >
-                  <option value="">All Statuses</option>
-                  <option value="created">Created</option>
-                  <option value="selecting">Selecting</option>
-                  <option value="training">Training</option>
-                  <option value="aggregating">Aggregating</option>
-                  <option value="completed">Completed</option>
-                  <option value="failed">Failed</option>
-                </select>
-              </div>
-            </div>
-
-            <button
-              onClick={fetchRounds}
-              disabled={roundsLoading}
-              className="inline-flex items-center gap-2 px-3 py-1.5 text-theme-secondary hover:text-theme-primary transition-colors"
-            >
-              <RefreshCw size={16} className={roundsLoading ? 'animate-spin' : ''} />
-              Refresh
-            </button>
-          </div>
-
-          {/* Error */}
-          {roundsError && (
-            <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-3 text-red-700 dark:text-red-400">
-              <AlertCircle size={20} />
-              <span>{roundsError}</span>
-            </div>
-          )}
-
-          {/* Loading */}
-          {roundsLoading && rounds.length === 0 && (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
-            </div>
-          )}
-
-          {/* Empty State */}
-          {!roundsLoading && rounds.length === 0 && (
-            <EmptyState
-              icon={<Network className="w-10 h-10" />}
-              title="No Federated Rounds"
-              description="Start your first federated learning round to improve your models with fleet data."
-              action={
-                <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-cobalt text-white rounded-brand hover:bg-cobalt-600 transition-colors"
-                >
-                  <Plus size={18} />
-                  Create First Round
-                </button>
-              }
-            />
-          )}
-
-          {/* Rounds Grid */}
-          {rounds.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {rounds.map((round) => (
-                <FederatedRoundCard
-                  key={round.id}
-                  round={round}
-                  onClick={() => handleRoundClick(round.id)}
-                />
-              ))}
-            </div>
-          )}
-
-          {/* Pagination */}
-          {pagination.total > pagination.limit && (
-            <div className="flex items-center justify-center gap-2 mt-6">
-              <button
-                onClick={() => setPage(Math.max(0, pagination.offset - pagination.limit))}
-                disabled={pagination.offset === 0}
-                className="px-3 py-1.5 border border-theme rounded-brand text-sm text-theme-secondary disabled:opacity-50"
-              >
-                Previous
-              </button>
-              <span className="text-sm text-theme-tertiary">
-                {pagination.offset + 1}-{Math.min(pagination.offset + pagination.limit, pagination.total)} of{' '}
-                {pagination.total}
-              </span>
-              <button
-                onClick={() => setPage(pagination.offset + pagination.limit)}
-                disabled={pagination.offset + pagination.limit >= pagination.total}
-                className="px-3 py-1.5 border border-theme rounded-brand text-sm text-theme-secondary disabled:opacity-50"
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {activeTab === 'convergence' && (
-        <div>
-          <ConvergenceChart data={convergenceData} isLoading={convergenceLoading} error={convergenceError} height={400} />
-        </div>
-      )}
-
-      {activeTab === 'privacy' && (
-        <div>
-          <PrivacyBudgetView budgets={budgets} isLoading={budgetsLoading} />
-        </div>
-      )}
-
-      {activeTab === 'rohe' && (
-        <div>
-          <ROHEDashboard metrics={roheMetrics} isLoading={roheLoading} />
-        </div>
-      )}
-
-      {/* Create Modal */}
-      <CreateRoundModal
-        isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
-        onSubmit={handleCreateRound}
-        isLoading={createLoading}
+      <Tabs
+        label="Fleet learning sections"
+        tabs={TABS.map((t) => ({ id: t.id, label: t.label, ...(t.id === 'rounds' && total ? { count: total } : {}) }))}
+        activeTab={tab}
+        onTabChange={setTab}
       />
+      {tab === 'rounds' && <RoundsSection newAction={newButton} />}
+      {tab === 'convergence' && <ConvergenceTab />}
+      {tab === 'privacy' && <PrivacyTab />}
+      {tab === 'rohe' && <RoheTab />}
+
+      <CreateRoundModal isOpen={creating} onClose={() => setCreating(false)} onSubmit={handleCreate} availableModels={modelOptions} />
     </div>
   );
 }

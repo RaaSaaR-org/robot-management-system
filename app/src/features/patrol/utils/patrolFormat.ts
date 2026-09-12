@@ -25,11 +25,11 @@ export interface ChipStyle {
 }
 
 const RUN_STATUS_STYLES: Record<PatrolRunStatus, ChipStyle> = {
-  running: { label: 'Running', className: 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300', pulse: true },
-  done: { label: 'Done', className: 'bg-turquoise-500/15 text-turquoise-700 dark:text-turquoise-400' },
-  aborted: { label: 'Aborted', className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
-  failed: { label: 'Failed', className: 'bg-red-500/15 text-red-600 dark:text-red-400' },
-  skipped: { label: 'Skipped', className: 'glass-subtle text-theme-muted' },
+  running: { label: 'Running', className: 'bg-primary/10 text-primary', pulse: true },
+  done: { label: 'Done', className: 'bg-signal-measured/15 text-signal-measured' },
+  aborted: { label: 'Aborted', className: 'bg-signal-unknown/15 text-signal-unknown' },
+  failed: { label: 'Failed', className: 'bg-signal-stopped/15 text-signal-stopped' },
+  skipped: { label: 'Skipped', className: 'bg-inset text-ink-muted' },
 };
 
 /** Pill styling for a run status. */
@@ -38,11 +38,11 @@ export function runStatusStyle(status: PatrolRunStatus): ChipStyle {
 }
 
 const LEG_STATUS_STYLES: Record<PatrolLegStatus, ChipStyle> = {
-  pending: { label: 'Pending', className: 'glass-subtle text-theme-tertiary' },
-  running: { label: 'Running', className: 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300', pulse: true },
-  done: { label: 'Done', className: 'bg-turquoise-500/15 text-turquoise-700 dark:text-turquoise-400' },
-  failed: { label: 'Failed', className: 'bg-red-500/15 text-red-600 dark:text-red-400' },
-  skipped: { label: 'Skipped', className: 'glass-subtle text-theme-muted' },
+  pending: { label: 'Pending', className: 'bg-inset text-ink-tertiary' },
+  running: { label: 'Running', className: 'bg-primary/10 text-primary', pulse: true },
+  done: { label: 'Done', className: 'bg-signal-measured/15 text-signal-measured' },
+  failed: { label: 'Failed', className: 'bg-signal-stopped/15 text-signal-stopped' },
+  skipped: { label: 'Skipped', className: 'bg-inset text-ink-muted' },
 };
 
 /** Pill styling for a leg status. */
@@ -51,12 +51,12 @@ export function legStatusStyle(status: PatrolLegStatus): ChipStyle {
 }
 
 const SEVERITY_STYLES: Record<PatrolFindingSeverity, ChipStyle> = {
-  low: { label: 'Low', className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20' },
+  low: { label: 'Low', className: 'bg-inset text-ink-secondary border border-line' },
   medium: {
     label: 'Medium',
-    className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20',
+    className: 'bg-signal-unknown/10 text-signal-unknown border border-signal-unknown/30',
   },
-  high: { label: 'High', className: 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20' },
+  high: { label: 'High', className: 'bg-signal-stopped/10 text-signal-stopped border border-signal-stopped/30' },
 };
 
 /** Pill styling for a finding severity. */

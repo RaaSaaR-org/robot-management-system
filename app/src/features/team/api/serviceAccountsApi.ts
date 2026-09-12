@@ -19,7 +19,8 @@ const BASE = '/team/service-accounts';
 export const serviceAccountsApi = {
   async list(): Promise<ServiceAccount[]> {
     const res = await apiClient.get<{ accounts: ServiceAccount[] }>(BASE);
-    return res.data.accounts;
+    // A payload without the list is an empty list, not a crash of the page.
+    return res.data.accounts ?? [];
   },
 
   async create(input: CreateServiceAccountInput): Promise<ServiceAccount> {
@@ -35,7 +36,7 @@ export const serviceAccountsApi = {
     const res = await apiClient.get<{ tokens: ApiTokenSummary[] }>(
       `${BASE}/${serviceAccountId}/tokens`
     );
-    return res.data.tokens;
+    return res.data.tokens ?? [];
   },
 
   async createToken(

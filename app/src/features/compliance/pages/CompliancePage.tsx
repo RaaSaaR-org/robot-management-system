@@ -1,57 +1,94 @@
 /**
  * @file CompliancePage.tsx
- * @description Main page for compliance logging feature
+ * @description The compliance page: one header and seven tabs in the URL —
+ *              overview, obligations, audit trail, explainability, oversight,
+ *              approvals and data privacy.
  * @feature compliance
  */
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Shield } from 'lucide-react';
+import { Download, RefreshCw, Shield } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Tabs } from '@/shared/components/ui/Tabs';
-import { Button } from '@/shared/components/ui/Button';
-import { PageHeader } from '@/shared/components/ui/PageHeader';
-import { SegmentedControl } from '@/shared/components/ui/SegmentedControl';
-import { ComplianceLogList } from '../components/ComplianceLogList';
-import { ComplianceLogViewer } from '../components/ComplianceLogViewer';
-import { IntegrityStatus } from '../components/IntegrityStatus';
-import { RetentionSettings } from '../components/RetentionSettings';
-import { LegalHoldManager } from '../components/LegalHoldManager';
-import { ExportDialog } from '../components/ExportDialog';
-import { RopaTab } from '../components/RopaTab';
-import { ProviderDocsTab } from '../components/ProviderDocsTab';
-import { ComplianceDashboard } from '../components/ComplianceDashboard';
-import { RegulatoryTimeline } from '../components/RegulatoryTimeline';
-import { GapAnalysisPanel } from '../components/GapAnalysisPanel';
-import { DocumentExpiryList } from '../components/DocumentExpiryList';
-import { TrainingCompliancePanel } from '../components/TrainingCompliancePanel';
-import { InspectionSchedulePanel } from '../components/InspectionSchedulePanel';
-import { RiskAssessmentTracker } from '../components/RiskAssessmentTracker';
-import { useComplianceStore } from '../store';
-import type { ComplianceLog, ComplianceEventType } from '../types';
+import { Button, InfoIcon, PageHeader, Tabs } from '@/shared/components/ui';
 import { ExplainabilityPage } from '@/features/explainability/pages/ExplainabilityPage';
 import { OversightPage } from '@/features/oversight/pages/OversightPage';
 import { ApprovalsPage } from '@/features/approvals/pages/ApprovalsPage';
 import { GDPRPortalPage } from '@/features/gdpr/pages/GDPRPortalPage';
+import { ComplianceDashboard } from '../components/ComplianceDashboard';
+import { ObligationsSection } from '../components/ObligationsSection';
+import { AuditLogSection } from '../components/AuditLogSection';
+import { ExportDialog } from '../components/ExportDialog';
+import { useComplianceTrackerStore } from '../store/complianceTrackerStore';
+
+const TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'obligations', label: 'Obligations' },
+  { id: 'audit', label: 'Audit trail' },
+  { id: 'explainability', label: 'Explainability' },
+  { id: 'oversight', label: 'Oversight' },
+  { id: 'approvals', label: 'Approvals' },
+  { id: 'privacy', label: 'Data privacy' },
+] as const;
+
+type TabId = (typeof TABS)[number]['id'];
+
+/** Legacy ?tab= ids → the tab (and view) they live in now. */
+const TAB_ALIASES: Record<string, { tab: TabId; view?: string }> = {
+  dashboard: { tab: 'overview' },
+  logs: { tab: 'audit' },
+  integrity: { tab: 'audit', view: 'integrity' },
+  metrics: { tab: 'audit', view: 'metrics' },
+  settings: { tab: 'audit', view: 'retention' },
+  ropa: { tab: 'privacy', view: 'ropa' },
+  'technical-docs': { tab: 'obligations', view: 'technical-docs' },
+  gdpr: { tab: 'privacy' },
+};
+
+const DESCRIPTION = 'Audit trail, human oversight and data-protection records for the EU AI Act and GDPR.';
+
+const EXPLAINER =
+  'NeoDEM keeps a cryptographically chained, tamper-evident record of every AI decision, safety action and command. ' +
+  'Use it to audit decisions, verify that no entry was altered, meet the EU AI Act record-keeping duty (Art. 12) ' +
+  'and investigate incidents with a complete trail.';
+
+function Header({ actions }: { actions?: React.ReactNode }) {
+  return (
+    <PageHeader
+      eyebrow="Comply"
+      title="Compliance"
+      description={
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          {DESCRIPTION}
+          <InfoIcon content={EXPLAINER} label="About compliance logging" maxWidth={320} />
+        </span>
+      }
+      actions={actions}
+    />
+  );
+}
 
 /**
- * Main page for Compliance Logging (EU AI Act Art. 12, GDPR Art. 30)
+ * Compliance (EU AI Act Art. 12–14, GDPR Art. 15–30)
  */
 export function CompliancePage() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
-      <DemoFeaturePlaceholder
-        featureName="Compliance Center"
-        icon={<Shield className="w-12 h-12" />}
-        description="Ensure your robot fleet meets EU AI Act, ISO 10218, and industry-specific safety standards with automated compliance tracking."
-        capabilities={[
-          "Automated EU AI Act compliance checks",
-          "ISO 10218 safety standard monitoring",
-          "Audit trail for all robot decisions and actions",
-          "Generate compliance reports for regulators",
-        ]}
-        docsSlug="regulatory-compliance"
-      />
+      <div className="flex flex-col gap-6">
+        <Header />
+        <DemoFeaturePlaceholder
+          featureName="Compliance Center"
+          icon={<Shield className="w-12 h-12" />}
+          description="Ensure your robot fleet meets EU AI Act, ISO 10218, and industry-specific safety standards with automated compliance tracking."
+          capabilities={[
+            'Automated EU AI Act compliance checks',
+            'ISO 10218 safety standard monitoring',
+            'Audit trail for all robot decisions and actions',
+            'Generate compliance reports for regulators',
+          ]}
+          docsSlug="regulatory-compliance"
+        />
+      </div>
     );
   }
 
@@ -59,436 +96,79 @@ export function CompliancePage() {
 }
 
 function CompliancePageInner() {
-  // Outer tab state synced via ?tab= so legacy /explainability /oversight
-  // /approvals /gdpr redirects (App.tsx) land on the right tab.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get('tab') ?? 'dashboard';
-  const setActiveTab = (id: string) => {
-    const next = new URLSearchParams(searchParams);
-    if (id === 'dashboard') next.delete('tab');
-    else next.set('tab', id);
-    setSearchParams(next, { replace: true });
-  };
-  const [selectedLog, setSelectedLog] = useState<ComplianceLog | null>(null);
-  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const [exportOpen, setExportOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshAll = useComplianceTrackerStore((s) => s.refreshAll);
 
-  const {
-    logs,
-    integrityResult,
-    metrics,
-    page,
-    totalPages,
-    filters,
-    isLoading,
-    isVerifying,
-    isLoadingMetrics,
-    fetchLogs,
-    verifyIntegrity,
-    fetchMetrics,
-    setPage,
-    setFilters,
-    clearFilters,
-  } = useComplianceStore();
+  const rawTab = params.get('tab');
+  const alias = rawTab ? TAB_ALIASES[rawTab] : undefined;
 
-  // Fetch logs on mount
+  // Rewrite legacy ids once, so old links and redirects land on the new tab.
   useEffect(() => {
-    fetchLogs();
-  }, [fetchLogs]);
+    if (!alias) return;
+    setParams(
+      (p) => {
+        if (alias.tab === 'overview') p.delete('tab');
+        else p.set('tab', alias.tab);
+        if (alias.view) p.set('view', alias.view);
+        return p;
+      },
+      { replace: true },
+    );
+  }, [alias, setParams]);
 
-  // Fetch metrics when switching to metrics tab
-  useEffect(() => {
-    if (activeTab === 'metrics' && !metrics) {
-      fetchMetrics();
-    }
-  }, [activeTab, metrics, fetchMetrics]);
+  const tab: TabId = alias?.tab ?? (TABS.some((t) => t.id === rawTab) ? (rawTab as TabId) : 'overview');
 
-  const handleSelectLog = (log: ComplianceLog) => {
-    setSelectedLog(log);
-  };
+  const setTab = (id: string) =>
+    setParams(
+      (p) => {
+        if (id === TABS[0].id) p.delete('tab');
+        else p.set('tab', id);
+        p.delete('view');
+        return p;
+      },
+      { replace: true },
+    );
 
-  const handleBackToList = () => {
-    setSelectedLog(null);
-  };
-
-  const handleViewDecision = (decisionId: string) => {
-    // Switch to the embedded Explainability tab. The decisionId is no
-    // longer threaded through — the tab handles its own selection.
-    void decisionId;
-    setActiveTab('explainability');
-  };
-
-  const handlePageChange = (newPage: number) => {
-    setPage(newPage);
-  };
-
-  const handleEventTypeFilter = (eventType: ComplianceEventType | undefined) => {
-    if (eventType) {
-      setFilters({ eventType });
-    } else {
-      clearFilters();
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshAll();
+    } finally {
+      setRefreshing(false);
     }
   };
 
-  // Logs Tab Content
-  const logsContent = (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-theme-tertiary text-sm">
-          Every AI decision, safety action, and command execution is logged for regulatory compliance and audit trails.
-        </p>
-        <Button variant="secondary" onClick={() => setShowExportDialog(true)}>
-          Export Logs
-        </Button>
-      </div>
-
-      {/* Filter Buttons */}
-      <div className="flex gap-2 mb-4 flex-wrap">
-        <button
-          type="button"
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-            !filters.eventType
-              ? 'bg-primary-500 text-white'
-              : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
-          }`}
-          onClick={() => handleEventTypeFilter(undefined)}
-        >
-          All Events
-        </button>
-        {(['ai_decision', 'safety_action', 'command_execution', 'system_event'] as const).map(
-          (type) => (
-            <button
-              key={type}
-              type="button"
-              className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                filters.eventType === type
-                  ? 'bg-primary-500 text-white'
-                  : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
-              }`}
-              onClick={() => handleEventTypeFilter(type)}
-            >
-              {type.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
-            </button>
-          )
-        )}
-      </div>
-
-      <div className="flex-1 flex gap-6 overflow-hidden">
-        {/* Log List */}
-        <div className="w-96 flex-shrink-0 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-y-auto">
-            <ComplianceLogList
-              logs={logs}
-              selectedId={selectedLog?.id}
-              onSelect={handleSelectLog}
-              isLoading={isLoading}
-            />
-          </div>
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2 mt-4 pt-4 border-t border-gray-700/50">
-              <button
-                type="button"
-                className="px-3 py-1 text-sm rounded bg-gray-800 text-theme-secondary hover:bg-gray-700 disabled:opacity-50"
-                disabled={page <= 1}
-                onClick={() => handlePageChange(page - 1)}
-              >
-                Previous
-              </button>
-              <span className="text-sm text-theme-tertiary">
-                Page {page} of {totalPages}
-              </span>
-              <button
-                type="button"
-                className="px-3 py-1 text-sm rounded bg-gray-800 text-theme-secondary hover:bg-gray-700 disabled:opacity-50"
-                disabled={page >= totalPages}
-                onClick={() => handlePageChange(page + 1)}
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Log Viewer */}
-        <div className="flex-1 overflow-y-auto">
-          {selectedLog ? (
-            <div>
-              <button
-                type="button"
-                className="text-sm text-primary-400 hover:text-primary-300 mb-4"
-                onClick={handleBackToList}
-              >
-                &larr; Back to list
-              </button>
-              <ComplianceLogViewer
-                log={selectedLog}
-                onViewDecision={handleViewDecision}
-              />
-            </div>
-          ) : (
-            <div className="h-full flex items-center justify-center">
-              <p className="text-theme-tertiary">Select a log to view details</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-
-  // Integrity Tab Content
-  const integrityContent = (
-    <div>
-      <p className="text-theme-tertiary text-sm mb-4">
-        Verify the cryptographic hash chain to ensure no logs have been tampered with.
-        This is a key requirement for regulatory compliance.
-      </p>
-      <IntegrityStatus
-        result={integrityResult}
-        isVerifying={isVerifying}
-        onVerify={verifyIntegrity}
-      />
-    </div>
-  );
-
-  // Metrics Tab Content
-  const metricsContent = (
-    <div>
-      <p className="text-theme-tertiary text-sm mb-4">
-        Overview of compliance logging activity and event distribution.
-      </p>
-
-      {isLoadingMetrics ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="glass-card p-4 animate-pulse">
-              <div className="h-8 bg-gray-700 rounded mb-2" />
-              <div className="h-4 bg-gray-700 rounded w-1/2" />
-            </div>
-          ))}
-        </div>
-      ) : metrics ? (
-        <div className="space-y-6">
-          {/* Summary Stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="glass-card p-4 text-center">
-              <div className="text-3xl font-bold text-theme-primary">{metrics.totalLogs}</div>
-              <div className="text-sm text-theme-tertiary">Total Logs</div>
-            </div>
-            <div className="glass-card p-4 text-center">
-              <div className="text-3xl font-bold text-blue-400">{metrics.uniqueSessions}</div>
-              <div className="text-sm text-theme-tertiary">Sessions</div>
-            </div>
-            <div className="glass-card p-4 text-center">
-              <div className="text-3xl font-bold text-green-400">{metrics.uniqueRobots}</div>
-              <div className="text-sm text-theme-tertiary">Robots</div>
-            </div>
-            <div className="glass-card p-4 text-center">
-              <div className="text-3xl font-bold text-purple-400">
-                {metrics.eventTypeCounts.length}
-              </div>
-              <div className="text-sm text-theme-tertiary">Event Types</div>
-            </div>
-          </div>
-
-          {/* Event Type Breakdown */}
-          <div className="glass-card p-4">
-            <h4 className="font-medium text-theme-primary mb-4">Events by Type</h4>
-            <div className="space-y-3">
-              {metrics.eventTypeCounts.map((item) => (
-                <div key={item.eventType} className="flex items-center gap-4">
-                  <div className="w-32 text-sm text-theme-secondary">
-                    {item.eventType.replace(/_/g, ' ')}
-                  </div>
-                  <div className="flex-1 bg-gray-800 rounded-full h-4 overflow-hidden">
-                    <div
-                      className="h-full bg-primary-500 rounded-full"
-                      style={{
-                        width: `${(item.count / metrics.totalLogs) * 100}%`,
-                      }}
-                    />
-                  </div>
-                  <div className="w-16 text-right text-sm text-theme-primary">{item.count}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Severity Breakdown */}
-          <div className="glass-card p-4">
-            <h4 className="font-medium text-theme-primary mb-4">Events by Severity</h4>
-            <div className="grid grid-cols-5 gap-4">
-              {(['debug', 'info', 'warning', 'error', 'critical'] as const).map((severity) => (
-                <div key={severity} className="text-center p-3 bg-gray-800/50 rounded-lg">
-                  <div className="text-xl font-bold text-theme-primary">
-                    {metrics.severityCounts[severity] || 0}
-                  </div>
-                  <div className="text-xs text-theme-tertiary uppercase">{severity}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="glass-card p-6 text-center">
-          <p className="text-theme-tertiary">No metrics data available</p>
-        </div>
-      )}
-    </div>
-  );
-
-  // RoPA Tab Content
-  const ropaContent = <RopaTab />;
-
-  // Technical Docs Tab Content
-  const technicalDocsContent = <ProviderDocsTab />;
-
-  // Settings Tab Content
-  const settingsContent = (
-    <div className="space-y-8">
-      <RetentionSettings />
-      <div className="border-t border-theme pt-8">
-        <LegalHoldManager />
-      </div>
-    </div>
-  );
-
-  // Dashboard Tab Content - sub-tabs for different compliance areas
-  const [dashboardSubTab, setDashboardSubTab] = useState<
-    'overview' | 'deadlines' | 'gaps' | 'documents' | 'training' | 'inspections' | 'risk'
-  >('overview');
-
-  const dashboardContent = (
-    <div className="space-y-4">
-      {/* Sub-navigation */}
-      <SegmentedControl
-        label="Compliance dashboard sections"
-        className="flex-wrap"
-        options={[
-          { value: 'overview', label: 'Overview' },
-          { value: 'deadlines', label: 'Deadlines' },
-          { value: 'gaps', label: 'Gap Analysis' },
-          { value: 'documents', label: 'Documents' },
-          { value: 'training', label: 'Training' },
-          { value: 'inspections', label: 'Inspections' },
-          { value: 'risk', label: 'Risk Assessments' },
-        ]}
-        value={dashboardSubTab}
-        onChange={(v) => setDashboardSubTab(v)}
-      />
-
-      {/* Sub-tab content */}
-      <div className="overflow-y-auto">
-        {dashboardSubTab === 'overview' && <ComplianceDashboard />}
-        {dashboardSubTab === 'deadlines' && <RegulatoryTimeline />}
-        {dashboardSubTab === 'gaps' && <GapAnalysisPanel />}
-        {dashboardSubTab === 'documents' && <DocumentExpiryList />}
-        {dashboardSubTab === 'training' && <TrainingCompliancePanel />}
-        {dashboardSubTab === 'inspections' && <InspectionSchedulePanel />}
-        {dashboardSubTab === 'risk' && <RiskAssessmentTracker />}
-      </div>
-    </div>
-  );
-
-  // Tab configuration - no useMemo needed since content is JSX that changes each render
-  const tabs = [
-    {
-      id: 'dashboard',
-      label: 'Dashboard',
-      content: dashboardContent,
-    },
-    {
-      id: 'logs',
-      label: 'Audit Logs',
-      content: logsContent,
-    },
-    {
-      id: 'integrity',
-      label: 'Integrity',
-      content: integrityContent,
-    },
-    {
-      id: 'metrics',
-      label: 'Metrics',
-      content: metricsContent,
-    },
-    {
-      id: 'ropa',
-      label: 'RoPA',
-      content: ropaContent,
-    },
-    {
-      id: 'technical-docs',
-      label: 'Technical Docs',
-      content: technicalDocsContent,
-    },
-    {
-      id: 'settings',
-      label: 'Settings',
-      content: settingsContent,
-    },
-    {
-      id: 'explainability',
-      label: 'Explainability',
-      content: <ExplainabilityPage />,
-    },
-    {
-      id: 'oversight',
-      label: 'Oversight',
-      content: <OversightPage />,
-    },
-    {
-      id: 'approvals',
-      label: 'Approvals',
-      content: <ApprovalsPage />,
-    },
-    {
-      id: 'gdpr',
-      label: 'Data Privacy',
-      content: <GDPRPortalPage />,
-    },
-  ];
+  let actions: React.ReactNode = null;
+  if (tab === 'audit') {
+    actions = (
+      <Button variant="secondary" leftIcon={<Download className="w-4 h-4" strokeWidth={1.75} />} onClick={() => setExportOpen(true)}>
+        Export log
+      </Button>
+    );
+  } else if (tab === 'overview' || tab === 'obligations') {
+    actions = (
+      <Button variant="ghost" iconOnly aria-label="Refresh" isLoading={refreshing} onClick={() => void handleRefresh()}>
+        <RefreshCw className="w-4 h-4" strokeWidth={1.75} />
+      </Button>
+    );
+  }
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex-shrink-0 px-6 py-4 border-b border-glass-subtle">
-        <PageHeader
-          title="Compliance Logging"
-          subtitle="Tamper-evident audit trail per EU AI Act Art. 12 and GDPR Art. 30"
-        />
-      </div>
+    <div className="flex flex-col gap-6">
+      <Header actions={actions} />
+      <Tabs label="Compliance sections" tabs={TABS.map(({ id, label }) => ({ id, label }))} activeTab={tab} onTabChange={setTab} />
 
-      {/* Info Box */}
-      <div className="flex-shrink-0 px-6 pt-4">
-        <div className="bg-indigo-100 dark:bg-indigo-900/50 border border-indigo-300 dark:border-indigo-600/50 rounded-lg p-4">
-          <h3 className="font-semibold text-indigo-900 dark:text-indigo-200 mb-2">What is Compliance Logging?</h3>
-          <p className="text-indigo-800 dark:text-indigo-200 text-sm">
-            This system maintains a cryptographically secured, tamper-evident record of all AI decisions and robot actions.
-            Required by EU regulations, this helps you:
-          </p>
-          <ul className="text-indigo-800 dark:text-indigo-200 text-sm mt-2 space-y-1 ml-4 list-disc">
-            <li><strong className="text-indigo-900 dark:text-indigo-100">Audit</strong> every AI decision and command execution</li>
-            <li><strong className="text-indigo-900 dark:text-indigo-100">Verify</strong> log integrity using cryptographic hash chains</li>
-            <li><strong className="text-indigo-900 dark:text-indigo-100">Comply</strong> with EU AI Act record-keeping requirements</li>
-            <li><strong className="text-indigo-900 dark:text-indigo-100">Investigate</strong> incidents with complete audit trails</li>
-          </ul>
-        </div>
-      </div>
+      {tab === 'overview' && <ComplianceDashboard />}
+      {tab === 'obligations' && <ObligationsSection />}
+      {tab === 'audit' && <AuditLogSection onViewDecision={() => setTab('explainability')} />}
+      {tab === 'explainability' && <ExplainabilityPage />}
+      {tab === 'oversight' && <OversightPage />}
+      {tab === 'approvals' && <ApprovalsPage />}
+      {tab === 'privacy' && <GDPRPortalPage />}
 
-      {/* Content — the Tabs header wraps onto multiple rows so the last tab
-          ("Data Privacy") is never clipped at desktop widths. */}
-      <div className="flex-1 overflow-hidden p-6">
-        <Tabs
-          tabs={tabs}
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          className="h-full [&_[role=tablist]]:flex-wrap"
-        />
-      </div>
-
-      {/* Export Dialog */}
-      <ExportDialog isOpen={showExportDialog} onClose={() => setShowExportDialog(false)} />
+      <ExportDialog isOpen={exportOpen} onClose={() => setExportOpen(false)} />
     </div>
   );
 }

@@ -33,19 +33,21 @@ export {
   SLABadge,
   StatusBadge,
   RequestTypeCard,
-  RequestList,
-  ConsentToggle,
+  RequestTypePicker,
+  RequestTable,
+  RequestDetailModal,
+  NewRequestModal,
   ConsentManager,
-  RequestDetail,
 } from './components';
 export type {
   SLABadgeProps,
   StatusBadgeProps,
   RequestTypeCardProps,
-  RequestListProps,
-  ConsentToggleProps,
+  RequestTypePickerProps,
+  RequestTableProps,
+  RequestDetailModalProps,
+  NewRequestModalProps,
   ConsentManagerProps,
-  RequestDetailProps,
 } from './components';
 
 // Pages

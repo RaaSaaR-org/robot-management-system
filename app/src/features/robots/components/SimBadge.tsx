@@ -1,12 +1,11 @@
 /**
  * @file SimBadge.tsx
- * @description Subtle "SIM" pill marking telemetry field groups whose values are simulated
+ * @description "Sim" StatusTag marking telemetry field groups whose values are simulated
  * @feature robots
  */
 
 import { memo } from 'react';
-import { Tooltip } from '@/shared/components/ui/Tooltip';
-import { cn } from '@/shared/utils/cn';
+import { StatusTag, Tooltip } from '@/shared/components/ui';
 import type { RobotTelemetry, TelemetryFieldGroup } from '../types/robots.types';
 
 // ============================================================================
@@ -45,25 +44,17 @@ export interface SimBadgeProps {
 }
 
 /**
- * Small "SIM" pill shown next to a telemetry card/value when the underlying
- * field group is simulated rather than sourced from hardware. Renders nothing
- * when the data is real (or no frame exists yet).
+ * "Sim" tag shown next to a telemetry panel/value when the underlying field
+ * group is simulated rather than sourced from hardware. Renders nothing when
+ * the data is real (or no frame exists yet).
  */
 export const SimBadge = memo(function SimBadge({ telemetry, group, className }: SimBadgeProps) {
   if (!isSimulated(telemetry, group)) return null;
 
   return (
     <Tooltip content="Simulated data — no hardware source">
-      <span
-        className={cn(
-          'inline-flex items-center rounded-full px-1.5 py-px',
-          'text-[9px] font-semibold uppercase tracking-wider cursor-default',
-          'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border border-yellow-500/25',
-          className
-        )}
-        aria-label="Simulated data — no hardware source"
-      >
-        SIM
+      <span aria-label="Simulated data — no hardware source" className={className}>
+        <StatusTag tone="sim">Sim</StatusTag>
       </span>
     </Tooltip>
   );

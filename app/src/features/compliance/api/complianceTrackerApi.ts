@@ -93,6 +93,20 @@ interface InspectionSummary {
   nextInspection: InspectionScheduleWithDays | null;
 }
 
+/** A string[] that may arrive as a JSON-encoded string (SQLite stores arrays as text). */
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 // ============================================================================
 // API
 // ============================================================================
@@ -121,7 +135,13 @@ export const complianceTrackerApi = {
     const response = await apiClient.get<{ deadlines: RegulatoryDeadlineWithStatus[] }>(
       ENDPOINTS.deadlines
     );
-    return response.data.deadlines;
+    // The server stores the requirement lists as JSON strings; normalise them
+    // so `requirements.length` counts requirements, not characters.
+    return response.data.deadlines.map((d) => ({
+      ...d,
+      requirements: toStringArray(d.requirements),
+      completedRequirements: toStringArray(d.completedRequirements),
+    }));
   },
 
   /**

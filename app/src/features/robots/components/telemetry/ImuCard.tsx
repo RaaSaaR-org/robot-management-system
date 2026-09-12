@@ -5,8 +5,9 @@
  */
 
 import { memo } from 'react';
-import { Card } from '@/shared/components/ui';
+import { Panel } from '@/shared/components/ui';
 import { SimBadge } from '../SimBadge';
+import { Readout } from '../common';
 import type { RobotTelemetry } from '../../types/robots.types';
 
 // ============================================================================
@@ -35,7 +36,7 @@ function HorizonIndicator({ rollDeg, pitchDeg }: { rollDeg: number; pitchDeg: nu
   return (
     <svg
       viewBox="-40 -40 80 80"
-      className="w-20 h-20 shrink-0"
+      className="h-20 w-20 shrink-0"
       role="img"
       aria-label={`Attitude: roll ${rollDeg.toFixed(1)} degrees, pitch ${pitchDeg.toFixed(1)} degrees`}
     >
@@ -54,11 +55,11 @@ function HorizonIndicator({ rollDeg, pitchDeg }: { rollDeg: number; pitchDeg: nu
       />
       <g clipPath="url(#imu-horizon-clip)">
         {/* Sky */}
-        <rect x="-40" y="-40" width="80" height="80" className="fill-cobalt-500/15" />
+        <rect x="-40" y="-40" width="80" height="80" className="fill-[color-mix(in_oklab,var(--signal-estimated)_14%,transparent)]" />
         {/* Ground — rotates with roll, shifts with pitch */}
         <g transform={`rotate(${-rollDeg}) translate(0 ${pitchShift})`}>
-          <rect x="-60" y="0" width="120" height="80" className="fill-yellow-500/15" />
-          <line x1="-60" y1="0" x2="60" y2="0" className="stroke-turquoise-500" strokeWidth="1.5" />
+          <rect x="-60" y="0" width="120" height="80" className="fill-[color-mix(in_oklab,var(--signal-unknown)_14%,transparent)]" />
+          <line x1="-60" y1="0" x2="60" y2="0" className="stroke-[var(--color-primary)]" strokeWidth="1.5" />
         </g>
       </g>
       {/* Fixed aircraft reference */}
@@ -97,44 +98,33 @@ export const ImuCard = memo(function ImuCard({ telemetry }: ImuCardProps) {
   ];
 
   return (
-    <Card>
-      <Card.Header>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-theme-primary">IMU</h2>
-            <SimBadge telemetry={telemetry} group="imu" />
-          </div>
-          {imu.temperature != null && (
-            <span
-              className="text-xs text-theme-tertiary"
-              title="IMU die temperature — the sensor chip normally runs much hotter than the motors; this is not a motor temperature"
-            >
-              IMU temp {imu.temperature.toFixed(0)}°C
-            </span>
-          )}
-        </div>
-      </Card.Header>
-      <Card.Body>
-        <div className="flex items-center gap-4">
+    <Panel>
+      <Panel.Header title="IMU" actions={<SimBadge telemetry={telemetry} group="imu" />} />
+      <Panel.Body className="flex flex-col gap-4">
+        <div className="flex items-center gap-5">
           <HorizonIndicator rollDeg={rollDeg} pitchDeg={pitchDeg} />
-          <div className="flex-1 grid grid-cols-3 gap-2">
+          <div className="grid flex-1 grid-cols-3 gap-4">
             {axes.map(({ label, value }) => (
-              <div key={label} className="glass-subtle p-2.5 rounded-lg text-center">
-                <span className="card-label">{label}</span>
-                <p className="font-mono text-sm font-semibold text-theme-primary">
-                  {value.toFixed(1)}°
-                </p>
-              </div>
+              <Readout key={label} label={label} value={value.toFixed(1)} unit="°" />
             ))}
           </div>
         </div>
-        {gyroMag !== null && (
-          <div className="mt-3 pt-3 border-t border-glass-subtle flex items-center justify-between text-xs">
-            <span className="text-theme-secondary">Angular rate (gyro magnitude)</span>
-            <span className="font-mono text-theme-primary">{gyroMag.toFixed(3)} rad/s</span>
+        {(gyroMag !== null || imu.temperature != null) && (
+          <div className="grid grid-cols-2 gap-4 border-t border-line-subtle pt-4">
+            {gyroMag !== null && (
+              <Readout label="Angular rate" value={gyroMag.toFixed(3)} unit="rad/s" />
+            )}
+            {imu.temperature != null && (
+              <Readout
+                label="Sensor temperature"
+                value={imu.temperature.toFixed(0)}
+                unit="°C"
+                hint="IMU chip, not a motor"
+              />
+            )}
           </div>
         )}
-      </Card.Body>
-    </Card>
+      </Panel.Body>
+    </Panel>
   );
 });

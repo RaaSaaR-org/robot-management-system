@@ -28,7 +28,7 @@ describe('AgentChat', () => {
 
     const button = screen.getByTestId('agent-send-button');
     expect(button).toHaveClass('pointer-coarse:h-11');
-    expect(button).toHaveClass('pointer-coarse:w-11');
+    expect(button).toHaveClass('pointer-coarse:min-w-11');
   });
 });
 

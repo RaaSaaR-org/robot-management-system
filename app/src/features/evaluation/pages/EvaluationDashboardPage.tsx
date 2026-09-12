@@ -1,74 +1,44 @@
 /**
  * @file EvaluationDashboardPage.tsx
- * @description Evaluation dashboard — the missing link between Train → Deploy → Evaluate → Collect
+ * @description Evaluation section of /training: how models perform on hardware — success, errors, comparison, rollouts
  * @feature evaluation
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { BarChart3, Play } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BarChart3, Play, Rocket } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Button, EmptyState } from '@/shared/components/ui';
-import type { EvaluationPeriod, EvaluationEpisode, SuccessRateResult, ErrorBreakdownItem, ModelComparisonResult } from '../types';
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  NextStepBanner,
+  Panel,
+  Select,
+  SkeletonRows,
+  StatRow,
+  StatTile,
+  Toolbar,
+} from '@/shared/components/ui';
+import { getErrorMessage } from '@/shared/utils';
+import type { ErrorBreakdownItem, EvaluationEpisode, EvaluationPeriod, ModelComparisonResult, SuccessRateResult } from '../types';
 import { evaluationApi } from '../api';
 import { PeriodSelector } from '../components/PeriodSelector';
 import { SuccessRateChart } from '../components/SuccessRateChart';
-import { ErrorAnalysisPanel } from '../components/ErrorAnalysisPanel';
+import { ERROR_LABELS, ErrorAnalysisPanel } from '../components/ErrorAnalysisPanel';
 import { ModelComparisonTable } from '../components/ModelComparisonTable';
 import { RolloutTimeline } from '../components/RolloutTimeline';
 import { HardwareTestPanel } from '../components/HardwareTestPanel';
 import { RewardModelPanel } from '../components/RewardModelPanel';
 
-// ============================================================================
-// STAT CARD
-// ============================================================================
-
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-lg border border-theme section-primary p-5">
-      <p className="text-sm text-theme-secondary">{label}</p>
-      <p className="text-2xl font-bold text-theme-primary mt-1">{value}</p>
-      {sub && <p className="text-xs text-theme-tertiary mt-1">{sub}</p>}
-    </div>
-  );
+export interface EvaluationDashboardPageProps {
+  /** Controlled "Run hardware test" modal (the /training header owns the button). */
+  testOpen?: boolean;
+  onTestOpenChange?: (open: boolean) => void;
 }
 
-// ============================================================================
-// EMPTY STATE
-// ============================================================================
+const PERIOD_HINT: Record<EvaluationPeriod, string> = { '24h': 'Last 24 h', '7d': 'Last 7 days', '30d': 'Last 30 days' };
 
-/**
- * Shown when there are zero evaluation episodes for the selected period.
- * Explains the loop and CTAs to the HardwareTestPanel further down the page.
- * (TASK-144)
- */
-function NoEvaluationData({ onScrollToTest }: { onScrollToTest: () => void }) {
-  return (
-    <div className="rounded-lg border border-theme section-primary">
-      <EmptyState
-        icon={<BarChart3 className="w-10 h-10" />}
-        title="No evaluation data yet"
-        description="This dashboard fills up as you run real-robot evaluations. Each test runs N closed-loop episodes through the deployed VLA model and records per-episode results — success rate, error breakdown, model comparison, and recent rollouts."
-        action={
-          <div className="flex flex-col items-center">
-            <Button onClick={onScrollToTest}>
-              <Play className="w-4 h-4 mr-2" />
-              Run a hardware test
-            </Button>
-            <p className="text-xs text-theme-tertiary mt-3">
-              Need a robot online first? Check the Fleet page.
-            </p>
-          </div>
-        }
-      />
-    </div>
-  );
-}
-
-// ============================================================================
-// PAGE
-// ============================================================================
-
-export function EvaluationDashboardPage() {
+export function EvaluationDashboardPage(props: EvaluationDashboardPageProps) {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
       <DemoFeaturePlaceholder
@@ -85,161 +55,129 @@ export function EvaluationDashboardPage() {
       />
     );
   }
+  return <EvaluationSection {...props} />;
+}
 
+function EvaluationSection({ testOpen, onTestOpenChange }: EvaluationDashboardPageProps) {
   const [period, setPeriod] = useState<EvaluationPeriod>('7d');
+  const [model, setModel] = useState('');
   const [loading, setLoading] = useState(true);
-
-  // Data states
+  const [error, setError] = useState<string | null>(null);
   const [episodes, setEpisodes] = useState<EvaluationEpisode[]>([]);
   const [successRate, setSuccessRate] = useState<SuccessRateResult | null>(null);
   const [errors, setErrors] = useState<ErrorBreakdownItem[]>([]);
   const [comparison, setComparison] = useState<ModelComparisonResult | null>(null);
-  const [comparisonLoading, setComparisonLoading] = useState(false);
-
-  // Used by the empty-state CTA to scroll to the HardwareTestPanel below.
-  const hardwareTestRef = useRef<HTMLDivElement | null>(null);
-  const scrollToHardwareTest = useCallback(() => {
-    hardwareTestRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, []);
+  const [comparing, setComparing] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = testOpen ?? localOpen;
+  const setOpen = onTestOpenChange ?? setLocalOpen;
 
   const fetchData = useCallback(async (p: EvaluationPeriod, silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const [episodesRes, successRateRes, errorsRes] = await Promise.all([
+      const [eps, rate, errs] = await Promise.all([
         evaluationApi.listEpisodes({ period: p, limit: 50 }),
         evaluationApi.getSuccessRate({ period: p }),
         evaluationApi.getErrorBreakdown({ period: p }),
       ]);
-      setEpisodes(episodesRes.episodes);
-      setSuccessRate(successRateRes);
-      setErrors(errorsRes.errors);
-
-      // Auto-compare the two most common model versions
-      const modelCounts = new Map<string, number>();
-      for (const ep of episodesRes.episodes) {
-        modelCounts.set(ep.modelVersion, (modelCounts.get(ep.modelVersion) ?? 0) + 1);
-      }
-      const topModels = [...modelCounts.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .map(([mv]) => mv);
-
-      if (topModels.length >= 2) {
-        setComparisonLoading(true);
-        try {
-          const cmp = await evaluationApi.compareModels(topModels[0], topModels[1], p);
-          setComparison(cmp);
-        } catch {
-          setComparison(null);
-        }
-        setComparisonLoading(false);
+      setEpisodes(eps.episodes);
+      setSuccessRate(rate);
+      setErrors(errs.errors);
+      setError(null);
+      // Compare the two most common model versions.
+      const counts = new Map<string, number>();
+      for (const ep of eps.episodes) counts.set(ep.modelVersion, (counts.get(ep.modelVersion) ?? 0) + 1);
+      const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([mv]) => mv);
+      if (top.length >= 2) {
+        setComparing(true);
+        setComparison(await evaluationApi.compareModels(top[0], top[1], p).catch(() => null));
+        setComparing(false);
       } else {
         setComparison(null);
       }
     } catch (err) {
-      console.error('[EvaluationDashboard] Failed to fetch data:', err);
+      setError(getErrorMessage(err, 'The evaluation service did not answer'));
+    } finally {
+      if (!silent) setLoading(false);
     }
-    if (!silent) setLoading(false);
   }, []);
 
-  useEffect(() => {
-    fetchData(period);
-  }, [period, fetchData]);
+  useEffect(() => { void fetchData(period); }, [period, fetchData]);
 
-  const handlePeriodChange = (p: EvaluationPeriod) => {
-    setPeriod(p);
-  };
-
-  // Computed stats
-  const avgDurationMs = episodes.length > 0
-    ? Math.round(episodes.reduce((sum, e) => sum + e.durationMs, 0) / episodes.length)
-    : 0;
-
-  const formatDuration = (ms: number) => {
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
-  };
+  const models = useMemo(() => [...new Set(episodes.map((e) => e.modelVersion))].sort(), [episodes]);
+  const shown = useMemo(() => (model ? episodes.filter((e) => e.modelVersion === model) : episodes), [episodes, model]);
+  const shownRate = model && shown.length > 0 ? (shown.filter((e) => e.success).length / shown.length) * 100 : successRate?.successRate ?? 0;
+  const avgMs = shown.length > 0 ? Math.round(shown.reduce((s, e) => s + e.durationMs, 0) / shown.length) : 0;
+  const topError = errors[0];
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Section header — this page renders as a tab inside /training, so it
-          uses the standard section-heading style instead of a page h1. */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-theme-primary">Evaluation Dashboard</h2>
-          <p className="text-sm text-theme-secondary mt-1">
-            Track VLA model performance across evaluation rollouts
-          </p>
-        </div>
-        <PeriodSelector value={period} onChange={handlePeriodChange} />
-      </div>
+    <div className="flex flex-col gap-6">
+      <Toolbar
+        filters={
+          models.length > 1 ? (
+            <Select aria-label="Model" fullWidth={false} className="w-52" placeholder="All models" options={models.map((m) => ({ value: m, label: m }))} value={model} onChange={(e) => setModel(e.target.value)} />
+          ) : undefined
+        }
+        actions={<PeriodSelector value={period} onChange={setPeriod} />}
+      />
 
-      {/* Loading state */}
       {loading ? (
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cobalt" />
-        </div>
+        <Panel><SkeletonRows rows={4} columns={4} /></Panel>
+      ) : error ? (
+        <Panel><ErrorState title="Couldn't load evaluations" message={error} onRetry={() => void fetchData(period)} /></Panel>
+      ) : episodes.length === 0 ? (
+        <Panel>
+          <EmptyState
+            icon={<BarChart3 />}
+            title="No evaluations yet"
+            description="This section fills up as you run hardware tests: each test runs closed-loop episodes on a robot and records every result."
+            action={<Button leftIcon={<Play className="h-4 w-4" />} onClick={() => setOpen(true)}>Run hardware test</Button>}
+          />
+        </Panel>
       ) : (
         <>
-          {episodes.length === 0 ? (
-            // First-time / no-data state. The HardwareTestPanel below is
-            // still rendered so the CTA can scroll to it.
-            <NoEvaluationData onScrollToTest={scrollToHardwareTest} />
-          ) : (
-            <>
-              {/* Row 1: Stats Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <StatCard
-                  label="Success Rate"
-                  value={`${successRate?.successRate.toFixed(1) ?? '0'}%`}
-                  sub={`${successRate?.successfulEpisodes ?? 0} of ${successRate?.totalEpisodes ?? 0} episodes`}
-                />
-                <StatCard
-                  label="Total Episodes"
-                  value={String(successRate?.totalEpisodes ?? 0)}
-                  sub={`Last ${period}`}
-                />
-                <StatCard
-                  label="Avg Duration"
-                  value={formatDuration(avgDurationMs)}
-                  sub={`Across ${episodes.length} episodes`}
-                />
-              </div>
+          <StatRow columns={4}>
+            <StatTile label="Success rate" value={shownRate.toFixed(1)} unit="%" tone={shownRate >= 80 ? 'success' : shownRate >= 50 ? 'warning' : 'danger'} hint={model ? `${shown.length} episodes of ${model}` : `${successRate?.successfulEpisodes ?? 0} of ${successRate?.totalEpisodes ?? 0} episodes`} />
+            <StatTile label="Episodes" value={model ? shown.length : successRate?.totalEpisodes ?? 0} hint={PERIOD_HINT[period]} />
+            <StatTile label="Mean duration" value={avgMs < 1000 ? avgMs : (avgMs / 1000).toFixed(1)} unit={avgMs < 1000 ? 'ms' : 's'} hint={`Across ${shown.length} episodes`} />
+            <StatTile label="Top error" value={topError ? ERROR_LABELS[topError.errorType] ?? topError.errorType : 'None'} tone={topError ? 'warning' : 'success'} hint={topError ? `${topError.percentage.toFixed(0)}% of failures` : 'No failed episodes'} />
+          </StatRow>
 
-              {/* Row 2: Success Rate Chart */}
-              <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
-                <h2 className="text-lg font-semibold text-theme-primary mb-4">Success Rate Over Time</h2>
-                <SuccessRateChart episodes={episodes} height={300} />
-              </div>
+          <Panel>
+            <Panel.Header title="Success rate over time" />
+            <Panel.Body><SuccessRateChart episodes={shown} /></Panel.Body>
+          </Panel>
 
-              {/* Row 3: Error Analysis + Model Comparison */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
-                  <h2 className="text-lg font-semibold text-theme-primary mb-4">Error Analysis</h2>
-                  <ErrorAnalysisPanel errors={errors} height={300} />
-                </div>
-                <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
-                  <h2 className="text-lg font-semibold text-theme-primary mb-4">Model Comparison</h2>
-                  <ModelComparisonTable comparison={comparison} loading={comparisonLoading} />
-                </div>
-              </div>
-
-              {/* Row 4: Rollout Timeline */}
-              <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
-                <h2 className="text-lg font-semibold text-theme-primary mb-4">Recent Rollouts</h2>
-                <RolloutTimeline episodes={episodes} maxItems={10} />
-              </div>
-            </>
-          )}
-
-          {/* Hardware Test (TASK-146) — always mounted; empty-state CTA scrolls here */}
-          <div ref={hardwareTestRef}>
-            <HardwareTestPanel onComplete={() => fetchData(period, true)} />
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <Panel>
+              <Panel.Header title="Error analysis" description="Why episodes failed." />
+              <Panel.Body><ErrorAnalysisPanel errors={errors} /></Panel.Body>
+            </Panel>
+            <Panel>
+              <Panel.Header title="Model comparison" description="The two most-tested versions in this period." />
+              <Panel.Body><ModelComparisonTable comparison={comparison} loading={comparing} /></Panel.Body>
+            </Panel>
           </div>
 
-          {/* Reward-model evaluation (LeRobot 0.6.0, TASK-179) — offline episode
-              scoring via Robometer/TOPReward, independent of rollout episodes */}
-          <RewardModelPanel />
+          <Panel>
+            <Panel.Header title="Recent rollouts" />
+            <Panel.Body><RolloutTimeline episodes={shown} maxItems={10} /></Panel.Body>
+          </Panel>
         </>
+      )}
+
+      <HardwareTestPanel isOpen={open} onOpenChange={setOpen} onComplete={() => void fetchData(period, true)} />
+      <RewardModelPanel />
+
+      {!loading && episodes.length > 0 && (
+        <NextStepBanner
+          variant="subtle"
+          title="Deploy the model"
+          description="Roll a model that holds up on hardware out to the fleet as a canary."
+          ctaLabel="Open deployments"
+          ctaHref="/deployments"
+          icon={<Rocket className="h-4 w-4" />}
+        />
       )}
     </div>
   );

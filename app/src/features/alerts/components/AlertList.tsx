@@ -1,335 +1,274 @@
 /**
  * @file AlertList.tsx
- * @description Scrollable list displaying all alerts with actions
+ * @description Active alerts as a DataTable: severity, alert, robot, raised;
+ *              inline Acknowledge, row menu with Open robot and Dismiss (confirmed).
  * @feature alerts
- * @dependencies @/shared/utils/cn, @/features/alerts/hooks
  */
 
-import { useCallback, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { cn } from '@/shared/utils/cn';
+import { useEffect, useMemo } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Bot, Check, CheckCircle2, Search, Trash2 } from 'lucide-react';
+import {
+  Button, DataTable, EmptyState,
+  confirm, errorMessage, toast,
+  type DataTableColumn,
+  type RowActionItem,
+} from '@/shared/components/ui';
 import { formatDateTime, formatTimeAgo } from '@/shared/utils/format';
-import { Button } from '@/shared/components/ui/Button';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import { useAlerts } from '../hooks/useAlerts';
+import { useAlertsStore } from '../store/alertsStore';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
 import type { Alert, AlertSeverity } from '../types/alerts.types';
-import { ALERT_SOURCE_LABELS } from '../types/alerts.types';
+import { ALERT_SEVERITY_PRIORITY, ALERT_SOURCE_LABELS } from '../types/alerts.types';
 import { findingLinkPath, parseFindingLink, stripFindingLink } from '@/features/patrol/utils/patrolFormat';
 
-// ============================================================================
-// TYPES
-// ============================================================================
-
 export interface AlertListProps {
-  /** Maximum height of the list. When omitted, the list flows with the page (no inner scrollbar). */
-  maxHeight?: string;
   /** Whether to show acknowledged alerts */
   showAcknowledged?: boolean;
+  /** Free-text filter over title, message and robot */
+  query?: string;
+  /** Severity filter ('' = all) */
+  severity?: AlertSeverity | '';
+  /** Clears the host's filters (filtered-empty state) */
+  onClearFilters?: () => void;
   /** Additional class names */
   className?: string;
 }
 
-// ============================================================================
-// STYLES
-// ============================================================================
-
-const SEVERITY_BORDER_STYLES: Record<AlertSeverity, string> = {
-  critical: 'border-l-red-500',
-  error: 'border-l-red-400',
-  warning: 'border-l-yellow-400',
-  info: 'border-l-blue-400',
-};
-
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-function formatTimestamp(isoString: string): string {
+/** Relative for the last day, absolute beyond. */
+export function formatAlertTime(isoString: string): string {
   const diffHours = (Date.now() - new Date(isoString).getTime()) / 3600000;
-  // Relative for recent alerts, absolute (fixed English locale) beyond a day
   if (diffHours < 24) return formatTimeAgo(isoString);
-  return formatDateTime(isoString, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatDateTime(isoString, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-interface RobotRefProps {
-  /** Robot ID the alert references */
-  sourceId: string;
-  /** Resolved robot name, or undefined when the robot no longer exists */
-  robotName: string | undefined;
-}
-
-/**
- * Robot reference for an alert. Renders a linked chip when the robot still
- * exists; degrades to plain text when the referenced robot has been removed
- * (stale alerts must not render a broken chip/link).
- */
-function RobotRef({ sourceId, robotName }: RobotRefProps) {
-  if (!robotName) {
-    return <span className="text-xs text-theme-tertiary truncate">{sourceId}</span>;
-  }
-  return (
-    <Link
-      to={`/robots/${sourceId}`}
-      className="inline-flex max-w-full items-center px-1.5 py-0.5 rounded bg-theme-hover text-xs text-theme-secondary hover:text-theme-primary truncate"
-    >
-      {robotName}
-    </Link>
-  );
-}
-
-interface AlertItemProps {
-  alert: Alert;
-  /** Resolved name of the referenced robot, if it still exists */
-  robotName?: string;
-  onAcknowledge: (id: string) => void;
-  onDismiss: (id: string) => void;
-}
-
-function AlertItem({ alert, robotName, onAcknowledge, onDismiss }: AlertItemProps) {
-  const isCritical = alert.severity === 'critical';
-  const canDismiss = alert.dismissable && (alert.acknowledged || !isCritical);
-  // Degrade gracefully when the server sends a blank/broken title
+/** Title and prose of an alert, with the patrol finding link split out (TASK-212). */
+export function alertText(alert: Alert) {
   const title = alert.title?.trim() || ALERT_SOURCE_LABELS[alert.source] || 'Alert';
-  // TASK-212: a robot alert raised for a patrol finding carries
-  // `[finding:<id> run:<runId>]` in its message tail. Show it as a link into
-  // the run, and keep the machine tag out of the prose.
-  const findingLink = alert.source === 'robot' ? parseFindingLink(alert.message) ?? parseFindingLink(alert.title) : null;
+  const findingLink =
+    alert.source === 'robot' ? parseFindingLink(alert.message) ?? parseFindingLink(alert.title) : null;
   const findingPath = findingLink ? findingLinkPath(findingLink) : null;
-  const message = findingLink ? stripFindingLink(alert.message) : alert.message;
-  // A skipped-run alert carries a bare `[run:<id>]`: there is no finding to
-  // jump to, so promising one ("Open finding") sends the operator looking for
-  // something the run does not have. A tour run (TASK-213) is a visit.
+  const message = parseFindingLink(alert.message) ? stripFindingLink(alert.message) : alert.message;
+  // A skipped run has no finding; a tour run (TASK-213) is a visit.
   const linkLabel = findingLink?.findingId
     ? 'Open finding →'
     : findingLink?.kind === 'tour'
       ? 'Open visit →'
       : 'Open run →';
-
-  return (
-    <div
-      className={cn(
-        'p-3 bg-theme-elevated rounded-lg border-l-4 transition-opacity',
-        SEVERITY_BORDER_STYLES[alert.severity],
-        alert.acknowledged && 'opacity-60'
-      )}
-    >
-      {/* Stack actions below the text on narrow screens; side-by-side from sm up */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
-            <AlertSeverityBadge severity={alert.severity} size="sm" />
-            <span className="text-xs text-theme-tertiary">
-              {ALERT_SOURCE_LABELS[alert.source]}
-            </span>
-            {alert.source === 'robot' && alert.sourceId && (
-              <RobotRef sourceId={alert.sourceId} robotName={robotName} />
-            )}
-            <span className="text-xs text-theme-tertiary">
-              {formatTimestamp(alert.timestamp)}
-            </span>
-          </div>
-          <h4 className="font-medium text-theme-primary text-sm break-words">{title}</h4>
-          <p className="text-sm text-theme-secondary mt-0.5 break-words">{message}</p>
-          {findingPath && (
-            <Link
-              to={findingPath}
-              className="inline-flex items-center gap-1 mt-1 text-xs text-cobalt-500 hover:underline"
-              data-testid="alert-open-finding"
-            >
-              {linkLabel}
-            </Link>
-          )}
-          {alert.acknowledged && alert.acknowledgedAt && (
-            <p className="text-xs text-theme-tertiary mt-1">
-              Acknowledged {formatTimestamp(alert.acknowledgedAt)}
-            </p>
-          )}
-        </div>
-
-        <div className="flex items-center gap-1 flex-shrink-0 self-end sm:self-start">
-          {isCritical && !alert.acknowledged && (
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => onAcknowledge(alert.id)}
-            >
-              Acknowledge
-            </Button>
-          )}
-          {canDismiss && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => onDismiss(alert.id)}
-              aria-label="Dismiss alert"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M18 6 6 18" />
-                <path d="m6 6 12 12" />
-              </svg>
-            </Button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+  return { title, message, findingPath, linkLabel };
 }
 
-function EmptyState() {
+/** Robot name as a link while the robot exists; the raw id, unlinked, once it is gone. */
+export function RobotRef({ sourceId, robotName }: { sourceId: string; robotName?: string }) {
+  if (!robotName) return <span className="text-[13px] tabular-nums text-ink-tertiary">{sourceId}</span>;
   return (
-    <div className="flex flex-col items-center justify-center py-8 text-center">
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="48"
-        height="48"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="text-theme-tertiary mb-3"
-      >
-        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
-        <path d="m9 12 2 2 4-4" />
-      </svg>
-      <p className="text-sm text-theme-secondary">No alerts</p>
-      <p className="text-xs text-theme-tertiary mt-1">All systems operating normally</p>
-    </div>
+    <Link to={`/robots/${sourceId}`} className="text-[13px] text-ink-secondary hover:text-primary hover:underline">
+      {robotName}
+    </Link>
   );
 }
-
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
 
 /**
- * Scrollable list displaying all alerts with acknowledge and dismiss actions.
+ * Active alerts table. The host owns the toolbar and passes `query`/`severity`.
  *
  * @example
- * ```tsx
- * function AlertsPanel() {
- *   return (
- *     <div>
- *       <h2>Alerts</h2>
- *       <AlertList maxHeight="400px" showAcknowledged={false} />
- *     </div>
- *   );
- * }
- * ```
+ * <Panel padding="none"><AlertList showAcknowledged={false} query={q} severity={s} /></Panel>
  */
 export function AlertList({
-  maxHeight,
   showAcknowledged = true,
+  query = '',
+  severity = '',
+  onClearFilters,
   className,
 }: AlertListProps) {
-  const {
-    alerts,
-    unacknowledgedAlerts,
-    acknowledgeAlertAsync,
-    dismissAlert,
-    clearAcknowledged,
-    error,
-  } = useAlerts();
-  // Resolve robot names for alert robot chips; alerts referencing deleted
-  // robots degrade to plain text (see RobotRef).
+  const navigate = useNavigate();
+  const { alerts, unacknowledgedAlerts, acknowledgeAlertAsync, dismissAlert, fetchAlerts, isLoading, error } =
+    useAlerts();
   const robots = useRobotsStore(selectRobots);
   const fetchRobots = useRobotsStore((state) => state.fetchRobots);
 
-  // Nothing else on /alerts loads the robot list (the robot WebSocket only
-  // patches entries that are already there), so without this every robot chip
-  // would fall back to the raw ID and lose its link. Only on an empty store —
-  // pages that already loaded robots keep their list.
+  // Nothing else on /alerts loads the robot list; without it every robot
+  // falls back to its raw id and loses its link.
   useEffect(() => {
     if (robots.length === 0) void fetchRobots();
   }, [robots.length, fetchRobots]);
 
-  const displayAlerts = showAcknowledged ? alerts : unacknowledgedAlerts;
+  const robotName = (a: Alert) =>
+    a.source === 'robot' && a.sourceId ? robots.find((r) => r.id === a.sourceId)?.name : undefined;
 
-  // Both go through the server: a purely local acknowledge/dismiss looks like
-  // it worked and is undone by the very next fetch of /alerts/active.
-  const handleAcknowledge = useCallback(
-    (id: string) => {
-      void acknowledgeAlertAsync(id);
+  const source = showAcknowledged ? alerts : unacknowledgedAlerts;
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return source.filter((a) => {
+      if (severity && a.severity !== severity) return false;
+      if (!q) return true;
+      const name = robots.find((r) => r.id === a.sourceId)?.name ?? '';
+      return [a.title, a.message, a.sourceId ?? '', name].some((s) => s.toLowerCase().includes(q));
+    });
+  }, [source, query, severity, robots]);
+
+  // The store rolls a failed act back and records why; surface that as a toast.
+  const acknowledge = async (a: Alert) => {
+    await acknowledgeAlertAsync(a.id);
+    const failure = useAlertsStore.getState().error;
+    if (failure) toast.error("Couldn't acknowledge alert", { description: failure });
+    else toast.success('Alert acknowledged', { description: alertText(a).title });
+  };
+
+  const askDismiss = async (a: Alert) => {
+    const ok = await confirm({
+      title: 'Dismiss this alert?',
+      description: 'It is removed without being recorded as handled.',
+      tone: 'danger',
+      confirmLabel: 'Dismiss',
+    });
+    if (!ok) return;
+    try {
+      await dismissAlert(a.id);
+    } catch (err) {
+      toast.error("Couldn't dismiss alert", { description: errorMessage(err) });
+      return;
+    }
+    const failure = useAlertsStore.getState().error;
+    if (failure) toast.error("Couldn't dismiss alert", { description: failure });
+    else toast.success('Alert dismissed', { description: alertText(a).title });
+  };
+
+  const actionsFor = (a: Alert): RowActionItem[] => {
+    const items: RowActionItem[] = [];
+    if (!a.acknowledged) items.push({ label: 'Acknowledge', icon: <Check />, onSelect: () => void acknowledge(a) });
+    if (a.source === 'robot' && a.sourceId) {
+      const id = a.sourceId;
+      items.push({ label: 'Open robot', icon: <Bot />, onSelect: () => navigate(`/robots/${id}`) });
+    }
+    const canDismiss = a.dismissable && (a.acknowledged || a.severity !== 'critical');
+    if (canDismiss) {
+      items.push({
+        label: 'Dismiss',
+        icon: <Trash2 />,
+        tone: 'danger',
+        separatorBefore: items.length > 0,
+        onSelect: () => void askDismiss(a),
+      });
+    }
+    return items;
+  };
+
+  const columns: DataTableColumn<Alert>[] = [
+    {
+      key: 'severity',
+      header: 'Severity',
+      width: 120,
+      hideBelow: 'sm',
+      sortable: true,
+      sortValue: (a) => ALERT_SEVERITY_PRIORITY[a.severity],
+      cell: (a) => <AlertSeverityBadge severity={a.severity} />,
     },
-    [acknowledgeAlertAsync]
-  );
-
-  const handleDismiss = useCallback(
-    (id: string) => {
-      void dismissAlert(id);
+    {
+      key: 'title',
+      header: 'Alert',
+      cell: (a) => {
+        const { title, message, findingPath, linkLabel } = alertText(a);
+        return (
+          <div className="min-w-0 max-w-[60ch]">
+            {/* Phones hide the Severity column; the tag rides in the cell instead. */}
+            <AlertSeverityBadge severity={a.severity} className="mb-1 sm:hidden" />
+            <div className="break-words text-sm font-medium text-ink-primary">{title}</div>
+            {message && <p className="line-clamp-2 break-words text-[13px] text-ink-tertiary">{message}</p>}
+            {findingPath && (
+              <Link
+                to={findingPath}
+                className="text-[13px] text-primary hover:underline"
+                data-testid="alert-open-finding"
+              >
+                {linkLabel}
+              </Link>
+            )}
+          </div>
+        );
+      },
     },
-    [dismissAlert]
-  );
+    {
+      key: 'robot',
+      header: 'Robot',
+      hideBelow: 'md',
+      cell: (a) =>
+        a.source === 'robot' && a.sourceId ? (
+          <RobotRef sourceId={a.sourceId} robotName={robotName(a)} />
+        ) : (
+          <span className="text-[13px] text-ink-tertiary">{ALERT_SOURCE_LABELS[a.source]}</span>
+        ),
+    },
+    {
+      key: 'timestamp',
+      header: 'Raised',
+      hideBelow: 'sm',
+      sortable: true,
+      sortValue: (a) => new Date(a.timestamp),
+      cell: (a) => (
+        <span className="whitespace-nowrap text-[13px] tabular-nums text-ink-tertiary">
+          {formatAlertTime(a.timestamp)}
+        </span>
+      ),
+    },
+    {
+      key: 'act',
+      header: <span className="sr-only">Acknowledge</span>,
+      align: 'right',
+      cell: (a) =>
+        a.acknowledged ? null : (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label="Acknowledge"
+            leftIcon={<Check className="h-4 w-4" strokeWidth={1.75} />}
+            onClick={() => void acknowledge(a)}
+          >
+            <span className="hidden sm:inline">Acknowledge</span>
+          </Button>
+        ),
+    },
+  ];
 
-  // A failed acknowledge/dismiss rolls the row back; without this the row
-  // would just reappear with no reason given.
-  const errorStrip = error ? (
-    <div
-      role="alert"
-      className="mb-2 px-3 py-2 rounded-lg text-sm bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-900/40"
-    >
-      {error}
-    </div>
-  ) : null;
-
-  if (displayAlerts.length === 0) {
-    return (
-      <div className={className}>
-        {errorStrip}
-        <EmptyState />
-      </div>
-    );
-  }
+  const hasFilters = Boolean(query.trim() || severity);
 
   return (
-    <div className={className}>
-      {errorStrip}
-      {showAcknowledged && alerts.some((a) => a.acknowledged) && (
-        <div className="flex justify-end mb-2">
-          <Button size="sm" variant="ghost" onClick={clearAcknowledged}>
-            Clear acknowledged
-          </Button>
-        </div>
-      )}
-      <div
-        className={cn('space-y-2', maxHeight && 'overflow-y-auto')}
-        style={maxHeight ? { maxHeight } : undefined}
-      >
-        {displayAlerts.map((alert) => (
-          <AlertItem
-            key={alert.id}
-            alert={alert}
-            robotName={
-              alert.source === 'robot' && alert.sourceId
-                ? robots.find((r) => r.id === alert.sourceId)?.name
-                : undefined
+    <DataTable
+      className={className}
+      caption="Active alerts"
+      columns={columns}
+      rows={rows}
+      getRowId={(a) => a.id}
+      defaultSort={{ key: 'timestamp', direction: 'desc' }}
+      rowActions={actionsFor}
+      rowActionsLabel={(a) => `Actions for ${alertText(a).title}`}
+      isLoading={isLoading}
+      error={source.length === 0 ? error : null}
+      errorTitle="Couldn't load alerts"
+      onRetry={() => void fetchAlerts()}
+      empty={
+        hasFilters ? (
+          <EmptyState
+            icon={<Search />}
+            title="No alerts match"
+            description="Try another search, or clear the filters."
+            action={
+              onClearFilters && (
+                <Button variant="secondary" onClick={onClearFilters}>
+                  Clear filters
+                </Button>
+              )
             }
-            onAcknowledge={handleAcknowledge}
-            onDismiss={handleDismiss}
           />
-        ))}
-      </div>
-    </div>
+        ) : (
+          <EmptyState
+            icon={<CheckCircle2 />}
+            title="No active alerts"
+            description="Everything the fleet raised has been handled."
+          />
+        )
+      }
+    />
   );
 }

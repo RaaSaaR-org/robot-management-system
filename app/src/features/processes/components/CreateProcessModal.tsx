@@ -1,377 +1,191 @@
 /**
  * @file CreateProcessModal.tsx
- * @description Modal form for creating new processes
+ * @description FormModal "New automation": name, description, priority, robot and
+ *              repeatable steps. Toasts the result and hands the new id back.
  * @feature processes
- * @dependencies @/shared/components/ui, @/features/processes/hooks, @/features/robots/hooks
  */
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
-import { Modal, Input, Button, Spinner } from '@/shared/components/ui';
-import { cn } from '@/shared/utils/cn';
-import { useTasks } from '../hooks/useTasks';
+import { useEffect, useMemo, useState } from 'react';
+import { Plus, X } from 'lucide-react';
+import { Button, Checkbox, FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
 import { useRobots } from '@/features/robots/hooks/useRobots';
-import type { ProcessPriority, CreateProcessRequest, CreateProcessStep } from '../types';
-import { PROCESS_PRIORITY_LABELS } from '../types';
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { useTasks } from '../hooks/useTasks';
+import { PROCESS_PRIORITY_LABELS, type CreateProcessStep, type ProcessPriority } from '../types';
 
 export interface CreateProcessModalProps {
-  /** Control modal visibility */
   isOpen: boolean;
-  /** Callback when modal closes */
   onClose: () => void;
-  /** Callback when process is created successfully */
+  /** Called with the new automation's id after it was created */
   onSuccess?: (processId: string) => void;
-  /** Pre-selected robot ID (optional) */
+  /** Robot to preselect */
   preselectedRobotId?: string;
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+const PRIORITY_OPTIONS = (Object.keys(PROCESS_PRIORITY_LABELS) as ProcessPriority[]).map((p) => ({
+  value: p,
+  label: PROCESS_PRIORITY_LABELS[p],
+}));
 
-/**
- * Modal form for creating new processes.
- *
- * @example
- * ```tsx
- * const [showModal, setShowModal] = useState(false);
- *
- * <CreateProcessModal
- *   isOpen={showModal}
- *   onClose={() => setShowModal(false)}
- *   onSuccess={(processId) => navigate(`/processes/${processId}`)}
- * />
- * ```
- */
-export function CreateProcessModal({
-  isOpen,
-  onClose,
-  onSuccess,
-  preselectedRobotId,
-}: CreateProcessModalProps) {
-  const { createTask, isExecuting, error } = useTasks();
+interface FieldErrors {
+  name?: string;
+  robot?: string;
+  steps?: string;
+}
+
+export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobotId }: CreateProcessModalProps) {
+  const { createTask, clearError } = useTasks();
   const { robots, isLoading: robotsLoading, fetchRobots } = useRobots();
 
-  // Fetch robots when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      fetchRobots();
-    }
-  }, [isOpen, fetchRobots]);
-
-  // Form state
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [robotId, setRobotId] = useState(preselectedRobotId ?? '');
   const [priority, setPriority] = useState<ProcessPriority>('normal');
   const [steps, setSteps] = useState<CreateProcessStep[]>([]);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [startNow, setStartNow] = useState(false);
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [formError, setFormError] = useState<string>();
+  const [saving, setSaving] = useState(false);
 
-  // Priority options
-  const priorityOptions: ProcessPriority[] = ['low', 'normal', 'high', 'critical'];
-
-  // Available robots (online or busy)
-  const availableRobots = useMemo(
-    () => robots.filter((r) => r.status === 'online' || r.status === 'busy'),
-    [robots]
-  );
-
-  // Reset form to initial state
-  const resetForm = useCallback(() => {
+  // Reset whenever the modal opens
+  useEffect(() => {
+    if (!isOpen) return;
     setName('');
     setDescription('');
     setRobotId(preselectedRobotId ?? '');
     setPriority('normal');
     setSteps([]);
-    setFormError(null);
-  }, [preselectedRobotId]);
+    setStartNow(false);
+    setErrors({});
+    setFormError(undefined);
+    void fetchRobots();
+  }, [isOpen, preselectedRobotId, fetchRobots]);
 
-  // Handle adding a step
-  const addStep = useCallback(() => {
-    setSteps((prev) => [...prev, { name: '', description: '' }]);
-  }, []);
+  // Every robot is listed with its status: an automation can be queued for a
+  // robot that is offline now and runs once it comes back.
+  const robotOptions = useMemo(
+    () => robots.map((r) => ({ value: r.id, label: `${r.name} (${r.status})` })),
+    [robots],
+  );
+  const noneOnline = robots.length > 0 && !robots.some((r) => r.status === 'online' || r.status === 'busy');
 
-  // Handle removing a step
-  const removeStep = useCallback((index: number) => {
-    setSteps((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  const updateStep = (index: number, value: string) =>
+    setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, name: value } : s)));
 
-  // Handle updating a step
-  const updateStep = useCallback((index: number, field: 'name' | 'description', value: string) => {
-    setSteps((prev) => {
-      const newSteps = [...prev];
-      newSteps[index] = { ...newSteps[index], [field]: value };
-      return newSteps;
-    });
-  }, []);
+  const handleSubmit = async () => {
+    const next: FieldErrors = {};
+    if (!name.trim()) next.name = 'Give the automation a name.';
+    if (steps.some((s) => !s.name.trim())) next.steps = 'Name every step, or remove the empty ones.';
+    setErrors(next);
+    if (Object.keys(next).length > 0) return;
 
-  // Validate form
-  const validateForm = useCallback((): boolean => {
-    if (!name.trim()) {
-      setFormError('Process name is required');
-      return false;
-    }
-    if (!robotId) {
-      setFormError('Please select a robot');
-      return false;
-    }
-    // Validate steps have names
-    for (const step of steps) {
-      if (!step.name.trim()) {
-        setFormError('All steps must have a name');
-        return false;
-      }
-    }
-    setFormError(null);
-    return true;
-  }, [name, robotId, steps]);
-
-  // Handle form submission
-  const handleSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!validateForm()) return;
-
+    setSaving(true);
+    setFormError(undefined);
     try {
-      const data: CreateProcessRequest = {
+      const created = await createTask({
         name: name.trim(),
         description: description.trim() || undefined,
         robotId,
         priority,
-        steps: steps.length > 0 ? steps : undefined,
-      };
-
-      const process = await createTask(data);
-      resetForm();
-      onSuccess?.(process.id);
+        steps: steps.length > 0 ? steps.map((s) => ({ name: s.name.trim() })) : undefined,
+        startNow,
+      });
+      toast.success(startNow ? 'Automation created and started' : 'Automation created', { description: created.name });
       onClose();
-    } catch {
-      // Error is handled by the store
+      onSuccess?.(created.id);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : String(err));
+      clearError();
+    } finally {
+      setSaving(false);
     }
-  }, [validateForm, name, description, robotId, priority, steps, createTask, resetForm, onSuccess, onClose]);
-
-  // Handle close
-  const handleClose = useCallback(() => {
-    if (!isExecuting) {
-      onClose();
-    }
-  }, [isExecuting, onClose]);
+  };
 
   return (
-    <Modal
+    <FormModal
       isOpen={isOpen}
-      onClose={handleClose}
-      title="Create New Process"
+      onClose={onClose}
+      title="New automation"
+      description="A multi-step job one robot runs on its own."
+      submitLabel="Create automation"
+      submittingLabel="Creating…"
+      isSubmitting={saving}
+      error={formError}
+      onSubmit={handleSubmit}
       size="lg"
-      closeOnBackdrop={!isExecuting}
-      closeOnEscape={!isExecuting}
-      footer={
-        <div className="flex justify-end gap-3">
-          <Button variant="ghost" onClick={handleClose} disabled={isExecuting}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={handleSubmit} disabled={isExecuting}>
-            {isExecuting ? (
-              <>
-                <Spinner size="sm" className="mr-2" />
-                Creating...
-              </>
-            ) : (
-              'Create Process'
-            )}
-          </Button>
-        </div>
-      }
+      noValidate
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Error display */}
-        {(formError || error) && (
-          <div className="p-3 rounded-brand bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
-            {formError || error}
-          </div>
-        )}
-
-        {/* Process Name */}
-        <div>
-          <label htmlFor="process-name" className="block text-sm font-medium text-theme-primary mb-1">
-            Process Name <span className="text-red-500">*</span>
-          </label>
-          <Input
-            id="process-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Enter process name"
-            disabled={isExecuting}
+      <FormField label="Name" required error={errors.name}>
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Shelf scan, aisle 3" />
+      </FormField>
+      <FormField label="Description" aside="Optional">
+        <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+      </FormField>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <FormField
+          label="Robot"
+          aside="Optional"
+          error={errors.robot}
+          hint={noneOnline ? 'No robot is online right now; it runs when one comes back.' : 'Leave empty to let the fleet pick one.'}
+        >
+          <Select
+            placeholder={robotsLoading ? 'Loading robots…' : 'Any available robot'}
+            options={robotOptions}
+            value={robotId}
+            onChange={(e) => setRobotId(e.target.value)}
           />
-        </div>
+        </FormField>
+        <FormField label="Priority">
+          <Select options={PRIORITY_OPTIONS} value={priority} onChange={(e) => setPriority(e.target.value as ProcessPriority)} />
+        </FormField>
+      </div>
 
-        {/* Description */}
-        <div>
-          <label htmlFor="process-description" className="block text-sm font-medium text-theme-primary mb-1">
-            Description
-          </label>
-          <textarea
-            id="process-description"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Enter process description (optional)"
-            disabled={isExecuting}
-            rows={3}
-            className={cn(
-              'w-full px-3 py-2 rounded-brand border border-theme bg-theme-bg text-theme-primary',
-              'placeholder:text-theme-tertiary',
-              'focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-cobalt-500',
-              'disabled:opacity-50 disabled:cursor-not-allowed',
-              'resize-none'
-            )}
-          />
-        </div>
-
-        {/* Robot Selection */}
-        <div>
-          <label htmlFor="process-robot" className="block text-sm font-medium text-theme-primary mb-1">
-            Assign Robot <span className="text-red-500">*</span>
-          </label>
-          {robotsLoading ? (
-            <div className="flex items-center gap-2 text-sm text-theme-secondary py-2">
-              <Spinner size="sm" />
-              Loading robots...
-            </div>
-          ) : (
-            <select
-              id="process-robot"
-              value={robotId}
-              onChange={(e) => setRobotId(e.target.value)}
-              disabled={isExecuting}
-              className={cn(
-                'w-full px-3 py-2 rounded-brand border border-theme bg-theme-bg text-theme-primary',
-                'focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-cobalt-500',
-                'disabled:opacity-50 disabled:cursor-not-allowed'
-              )}
-            >
-              <option value="">Select a robot</option>
-              {availableRobots.length === 0 ? (
-                <option value="" disabled>
-                  No available robots
-                </option>
-              ) : (
-                availableRobots.map((robot) => (
-                  <option key={robot.id} value={robot.id}>
-                    {robot.name} ({robot.model}) - {robot.status}
-                  </option>
-                ))
-              )}
-            </select>
-          )}
-          {availableRobots.length === 0 && !robotsLoading && (
-            <p className="text-xs text-theme-tertiary mt-1">
-              No robots are currently available to be assigned processes
-            </p>
-          )}
-        </div>
-
-        {/* Priority */}
-        <div>
-          <label className="block text-sm font-medium text-theme-primary mb-1">Priority</label>
-          <div className="flex items-center gap-2">
-            {priorityOptions.map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPriority(p)}
-                disabled={isExecuting}
-                className={cn(
-                  'px-3 py-1.5 text-sm rounded-brand transition-colors',
-                  priority === p
-                    ? 'bg-cobalt-500 text-white'
-                    : 'bg-theme-elevated text-theme-secondary hover:text-theme-primary',
-                  'disabled:opacity-50 disabled:cursor-not-allowed'
-                )}
+      <FormField
+        label="Steps"
+        aside="Optional"
+        error={errors.steps}
+        hint={steps.length === 0 ? 'Without steps the automation runs as a single action.' : undefined}
+      >
+        <div className="flex flex-col gap-2">
+          {steps.map((step, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <span className="w-5 shrink-0 text-right text-[13px] text-ink-tertiary">{index + 1}.</span>
+              <Input
+                aria-label={`Step ${index + 1} name`}
+                value={step.name}
+                onChange={(e) => updateStep(index, e.target.value)}
+                placeholder="Step name"
+                invalid={Boolean(errors.steps) && !step.name.trim()}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
+                aria-label={`Remove step ${index + 1}`}
+                onClick={() => setSteps((prev) => prev.filter((_, i) => i !== index))}
               >
-                {PROCESS_PRIORITY_LABELS[p]}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Steps */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="block text-sm font-medium text-theme-primary">
-              Steps (Optional)
-            </label>
+                <X className="h-4 w-4" strokeWidth={1.75} />
+              </Button>
+            </div>
+          ))}
+          <div>
             <Button
-              type="button"
               variant="ghost"
               size="sm"
-              onClick={addStep}
-              disabled={isExecuting}
+              leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}
+              onClick={() => setSteps((prev) => [...prev, { name: '' }])}
             >
-              <svg className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 4v16m8-8H4"
-                />
-              </svg>
-              Add Step
+              Add step
             </Button>
           </div>
-
-          {steps.length === 0 ? (
-            <p className="text-sm text-theme-tertiary py-2">
-              No steps defined. The process will execute as a single action.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {steps.map((step, index) => (
-                <div
-                  key={index}
-                  className="p-3 rounded-brand border border-theme bg-theme-elevated"
-                >
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <span className="text-xs text-theme-tertiary">Step {index + 1}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeStep(index)}
-                      disabled={isExecuting}
-                      className="text-red-500 hover:text-red-600 disabled:opacity-50"
-                    >
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M6 18L18 6M6 6l12 12"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-                  <Input
-                    value={step.name}
-                    onChange={(e) => updateStep(index, 'name', e.target.value)}
-                    placeholder="Step name"
-                    disabled={isExecuting}
-                    size="sm"
-                    className="mb-2"
-                  />
-                  <Input
-                    value={step.description ?? ''}
-                    onChange={(e) => updateStep(index, 'description', e.target.value)}
-                    placeholder="Step description (optional)"
-                    disabled={isExecuting}
-                    size="sm"
-                  />
-                </div>
-              ))}
-            </div>
-          )}
         </div>
-      </form>
-    </Modal>
+      </FormField>
+
+      <Checkbox
+        label="Run it now"
+        description="Off: the automation is created and waits until you press Run."
+        checked={startNow}
+        onChange={(e) => setStartNow(e.target.checked)}
+      />
+    </FormModal>
   );
 }

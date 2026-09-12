@@ -1,8 +1,8 @@
 /**
  * @file TourPage.test.tsx
- * @description The /tour page: tour cards with stops, duration, auto-greet and
- *              language; the visit history; the active-run banner fed by live
- *              events; and a refused start shown as a notice, not an error.
+ * @description The /tour page: the tours table with stops, duration, auto-greet
+ *              and language; the Visits tab; Start tour through the start
+ *              dialog; the active-run banner fed by live events; results as toasts.
  * @feature tour
  */
 
@@ -10,8 +10,16 @@ import { useAuthStore } from '@/features/auth/store/authStore';
 import { MOCK_USER } from '@/mocks/mockData';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+import { getToasts, dismissToast, confirm } from '@/shared/components/ui';
 import { renderWithProviders } from '@/test/utils';
 import { TourPage } from '../../pages/TourPage';
+
+// The kit's confirm() opens a ConfirmDialog; here the operator always says yes.
+vi.mock('@/shared/components/ui', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/shared/components/ui')>()),
+  confirm: vi.fn(),
+}));
+const confirmMock = vi.mocked(confirm);
 import { useTourStore } from '../../store/tourStore';
 import { useRobotsStore } from '@/features/robots/store/robotsStore';
 import { tourApi } from '../../api/tourApi';
@@ -90,6 +98,8 @@ const run: TourRun = {
 beforeEach(() => {
   useAuthStore.setState({ user: { ...MOCK_USER, role: 'member' } });
   useTourStore.getState().reset();
+  dismissToast();
+  confirmMock.mockResolvedValue(true);
   vi.clearAllMocks();
   useRobotsStore.setState({
     robots: [
@@ -112,46 +122,71 @@ beforeEach(() => {
   api.listRuns.mockResolvedValue([run]);
 });
 
+
+const toastTitles = () => getToasts().map((t) => String(t.title));
+const openRowMenu = async (name = 'ZeMA visitor tour') => {
+  fireEvent.click(await screen.findByRole('button', { name: `Actions for ${name}` }));
+  return screen.findByRole('menu');
+};
+const startedTour = (over: Partial<TourRun> = {}): TourRun => ({
+  ...run, runId: 'run-3', status: 'running', finishedAt: null, startedAt: '2026-08-17T13:00:00.000Z', turns: [],
+  legs: [{ index: 0, stopId: 'stop-a', placeId: 'STAGING', name: 'Reception', status: 'running' }], ...over,
+});
+
 describe('TourPage', () => {
-  it('lists tours with stops, duration, language and auto-greet, plus the visit history', async () => {
+  it('lists tours with stops, duration, language and auto-greet; the Visits tab holds the history', async () => {
     renderWithProviders(<TourPage />, { withAuth: false });
-    const row = await screen.findByTestId('tour-route-row');
+    const cell = await screen.findByTestId('tour-route-row');
+    const row = cell.closest('tr')!;
     expect(row).toHaveTextContent('ZeMA visitor tour');
     expect(row).toHaveTextContent('Alpha');
-    expect(within(row).getByTestId('tour-route-stops')).toHaveTextContent('1');
+    expect(within(row).getByTestId('tour-route-stops')).toHaveTextContent('1 stop');
     expect(within(row).getByTestId('tour-route-duration')).toHaveTextContent(/about/);
-    expect(within(row).getByTestId('tour-route-autogreet')).toHaveTextContent('on');
+    expect(within(row).getByTestId('tour-route-autogreet')).toHaveTextContent('Greets on sight');
     expect(row).toHaveTextContent('German');
+    expect(screen.getByTestId('tour-page')).toBeInTheDocument();
+    expect(screen.getByTestId('tour-kpi-questions')).toHaveTextContent('1 the facts did not cover');
 
+    fireEvent.click(screen.getByRole('tab', { name: /Visits/ }));
     const runs = await screen.findAllByTestId('tour-run-row');
     expect(runs).toHaveLength(1);
     // The declined question is the number an operator acts on.
-    expect(runs[0]).toHaveTextContent('1 declined');
-    expect(screen.getByTestId('tour-page')).toBeInTheDocument();
-    expect(screen.getByTestId('tour-kpi-questions')).toHaveTextContent('1 the facts did not cover');
+    expect(runs[0]!.closest('tr')).toHaveTextContent('1 declined');
   });
 
-  it('opens the visit from anywhere in its row — the row highlights, so it has to be clickable', async () => {
-    renderWithProviders(<TourPage />, { withAuth: false });
-    const row = (await screen.findAllByTestId('tour-run-row'))[0]!;
+  it('opens the visit from anywhere in its row', async () => {
+    renderWithProviders(<TourPage />, { withAuth: false, routerEntries: ['/tour?tab=visits'] });
+    const row = (await screen.findAllByTestId('tour-run-row'))[0]!.closest('tr')!;
     expect(row).toHaveClass('cursor-pointer');
     fireEvent.click(within(row).getByText('visitor · de'));
     expect(navigateSpy).toHaveBeenCalledWith('/tour/runs/run-1');
-    expect(within(row).getByRole('link')).toHaveAttribute('href', '/tour/runs/run-1');
   });
 
-  it('Start tour starts the tour on its robot; a refusal is a notice, not an error', async () => {
+  it('a tour row opens its editor', async () => {
+    renderWithProviders(<TourPage />, { withAuth: false });
+    fireEvent.click(await screen.findByText('ZeMA visitor tour'));
+    expect(navigateSpy).toHaveBeenCalledWith('/tour/routes/route-1');
+  });
+
+  it('Start tour goes through the start dialog on the tour’s robot; the result is a toast', async () => {
     api.startRoute.mockResolvedValue({ accepted: false, reason: 'person_too_close', message: 'Please give me a little room and I will lead the way.' });
     renderWithProviders(<TourPage />, { withAuth: false });
-    await screen.findByTestId('tour-route-row');
-    fireEvent.click(screen.getByTestId('tour-start'));
+    let menu = await openRowMenu();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Start tour' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Start ZeMA visitor tour' });
+    expect(within(dialog).getByTestId('tour-start-robot')).toHaveValue('g1');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start tour' }));
     await waitFor(() => expect(api.startRoute).toHaveBeenCalledWith('route-1', 'g1'));
-    const notice = await screen.findByTestId('tour-start-result');
-    expect(notice).toHaveTextContent('Refused (person_too_close): Please give me a little room');
+    await waitFor(() => expect(toastTitles()).toContain('The robot refused the tour'));
+    expect(await within(dialog).findByText(/Refused \(person_too_close\): Please give me a little room/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
     api.startRoute.mockResolvedValue({ accepted: true, runId: 'run-2', message: 'started' });
-    fireEvent.click(screen.getByTestId('tour-start'));
-    await waitFor(() => expect(screen.getByTestId('tour-start-result')).toHaveTextContent('Tour started (run-2)'));
+    menu = await openRowMenu();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Start tour' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Start tour' }));
+    await waitFor(() => expect(toastTitles()).toContain('Tour started'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
   it('a live started event raises the banner with the current stop and swaps Start for End tour', async () => {
@@ -160,106 +195,53 @@ describe('TourPage', () => {
     await screen.findByTestId('tour-route-row');
     expect(screen.queryByTestId('tour-active-banner')).toBeNull();
     act(() => {
-      useTourStore.getState().applyEvent({
-        type: 'agent:tour:started',
-        robotId: 'g1',
-        timestamp: 'x',
-        tour: {
-          ...run,
-          runId: 'run-3',
-          status: 'running',
-          finishedAt: null,
-          startedAt: '2026-08-17T13:00:00.000Z',
-          turns: [],
-          legs: [{ index: 0, stopId: 'stop-a', placeId: 'STAGING', name: 'Reception', status: 'running' }],
-        },
-      });
+      useTourStore.getState().applyEvent({ type: 'agent:tour:started', robotId: 'g1', timestamp: 'x', tour: startedTour() });
     });
     const banner = await screen.findByTestId('tour-active-banner');
     expect(banner).toHaveTextContent('ZeMA visitor tour');
     expect(within(banner).getByTestId('tour-banner-stop')).toHaveTextContent('at stop 1: Reception');
-    expect(screen.queryByTestId('tour-start')).toBeNull();
-    fireEvent.click(screen.getAllByTestId('tour-abort')[0]);
+    const menu = await openRowMenu();
+    expect(within(menu).queryByRole('menuitem', { name: 'Start tour' })).toBeNull();
+    expect(within(menu).getByRole('menuitem', { name: 'End tour' })).toBeInTheDocument();
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    fireEvent.click(within(banner).getByTestId('tour-abort'));
     await waitFor(() => expect(api.abortRoute).toHaveBeenCalledWith('route-1', 'g1'));
+    expect(confirmMock).toHaveBeenCalled();
+    await waitFor(() => expect(toastTitles()).toContain('Tour ended'));
   });
 
   it('a live leg-start names the stop and highlights it in the stepper (TASK-222)', async () => {
-    // The event the robot only started sending in TASK-222: a `leg` snapshot
-    // taken as the leg BEGINS. Before it, every snapshot the banner saw was the
-    // one between legs, so this rendered "· walking" with no node ringed for
-    // almost the whole visit.
-    const threeStops = (...statuses: TourRun['legs'][number]['status'][]): TourRun => ({
-      ...run,
-      runId: 'run-4',
-      status: 'running',
-      finishedAt: null,
-      startedAt: '2026-08-17T13:00:00.000Z',
-      turns: [],
-      legs: statuses.map((status, index) => ({
-        index,
-        stopId: `stop-${index}`,
-        placeId: `PLACE-${index}`,
-        name: ['Reception', 'Workstation', 'Lab'][index],
-        status,
-      })),
-    });
+    const threeStops = (...statuses: TourRun['legs'][number]['status'][]): TourRun =>
+      startedTour({
+        runId: 'run-4',
+        legs: statuses.map((status, index) => ({ index, stopId: `stop-${index}`, placeId: `PLACE-${index}`, name: ['Reception', 'Workstation', 'Lab'][index], status })),
+      });
     renderWithProviders(<TourPage />, { withAuth: false });
     await screen.findByTestId('tour-route-row');
-
-    // Between legs: the generic fallback, and no stop marked as the current step.
     act(() => {
-      useTourStore.getState().applyEvent({
-        type: 'agent:tour:leg', robotId: 'g1', timestamp: 'x',
-        tour: threeStops('done', 'pending', 'pending'),
-      });
+      useTourStore.getState().applyEvent({ type: 'agent:tour:leg', robotId: 'g1', timestamp: 'x', tour: threeStops('done', 'pending', 'pending') });
     });
     const banner = await screen.findByTestId('tour-active-banner');
     expect(within(banner).getByTestId('tour-banner-stop')).toHaveTextContent('· walking');
     expect(within(banner).queryByRole('listitem', { current: 'step' })).toBeNull();
-
-    // The leg-start for stop 2 lands: same settled count, so it is not a
-    // downgrade, and the banner names the stop instead of the fallback.
     act(() => {
-      useTourStore.getState().applyEvent({
-        type: 'agent:tour:leg', robotId: 'g1', timestamp: 'x',
-        tour: threeStops('done', 'running', 'pending'),
-      });
+      useTourStore.getState().applyEvent({ type: 'agent:tour:leg', robotId: 'g1', timestamp: 'x', tour: threeStops('done', 'running', 'pending') });
     });
     const stop = within(banner).getByTestId('tour-banner-stop');
     expect(stop).toHaveTextContent('at stop 2: Workstation');
     expect(stop).not.toHaveTextContent('walking');
-    // …and `RoutePath` got a defined `activeIndex`: exactly one node is the
-    // current step, and it is stop 2's.
     const steps = within(banner).getAllByRole('listitem', { current: 'step' });
     expect(steps).toHaveLength(1);
     expect(steps[0]).toHaveTextContent('Leg 2 Workstation, running');
   });
 
   it('leg events re-render the banner in place without restarting its 1 s clock', async () => {
-    // TASK-222 doubles the leg events on the wire, and `selectActiveRuns`
-    // re-memoises on every one of them (a leg status is one character of its
-    // signature). That is deliberate — it is how the stop clause updates — but it
-    // must cost a RE-RENDER, not a REMOUNT: `useClock` opens its interval in a
-    // mount-only effect, so a remount would restart the elapsed timer mid-visit.
-    // `ActiveRunRail` only unmounts when the run count reaches zero, which a leg
-    // status change never does.
+    // A remount would restart the elapsed timer mid-visit; `ActiveRunRail` only
+    // unmounts when the run count reaches zero, which a leg change never does.
     const setSpy = vi.spyOn(globalThis, 'setInterval');
     const clearSpy = vi.spyOn(globalThis, 'clearInterval');
-    const legs = (...statuses: TourRun['legs'][number]['status'][]): TourRun => ({
-      ...run,
-      runId: 'run-5',
-      status: 'running',
-      finishedAt: null,
-      startedAt: '2026-08-17T13:00:00.000Z',
-      turns: [],
-      legs: statuses.map((status, index) => ({
-        index,
-        stopId: `stop-${index}`,
-        placeId: `PLACE-${index}`,
-        name: `Stop ${index}`,
-        status,
-      })),
-    });
+    const legs = (...statuses: TourRun['legs'][number]['status'][]): TourRun =>
+      startedTour({ runId: 'run-5', legs: statuses.map((status, index) => ({ index, stopId: `stop-${index}`, placeId: `PLACE-${index}`, name: `Stop ${index}`, status })) });
     try {
       renderWithProviders(<TourPage />, { withAuth: false });
       await screen.findByTestId('tour-route-row');
@@ -267,12 +249,8 @@ describe('TourPage', () => {
         useTourStore.getState().applyEvent({ type: 'agent:tour:started', robotId: 'g1', timestamp: 'x', tour: legs('pending', 'pending', 'pending') });
       });
       const banner = await screen.findByTestId('tour-active-banner');
-      // Baseline taken once the clock is running; other timers on the page make
-      // the absolute count meaningless, so the contract is that it does not GROW.
       const intervalsAtMount = setSpy.mock.calls.length;
       const clearsAtMount = clearSpy.mock.calls.length;
-
-      // A whole visit's worth of leg traffic: start, settle, start, settle…
       for (const statuses of [
         ['running', 'pending', 'pending'],
         ['done', 'pending', 'pending'],
@@ -284,10 +262,7 @@ describe('TourPage', () => {
           useTourStore.getState().applyEvent({ type: 'agent:tour:leg', robotId: 'g1', timestamp: 'x', tour: legs(...statuses) });
         });
       }
-
-      // The banner followed every one of them…
       expect(within(banner).getByTestId('tour-banner-stop')).toHaveTextContent('at stop 3: Stop 2');
-      // …and not one of them opened or tore down a timer.
       expect(setSpy.mock.calls.length).toBe(intervalsAtMount);
       expect(clearSpy.mock.calls.length).toBe(clearsAtMount);
     } finally {
@@ -296,27 +271,49 @@ describe('TourPage', () => {
     }
   });
 
-  it('says the history could not be read instead of "No tours yet"', async () => {
+  it('says the history could not be read instead of "No visits yet"', async () => {
     api.listRuns.mockRejectedValue(new Error('Network Error'));
-    renderWithProviders(<TourPage />, { withAuth: false });
-    const err = await screen.findByTestId('tour-runs-error');
-    expect(err).toHaveTextContent('Network Error');
-    expect(screen.queryByText(/No tours yet/i)).toBeNull();
-    // …and the tiles must not assert zeros they could not count.
+    renderWithProviders(<TourPage />, { withAuth: false, routerEntries: ['/tour?tab=visits'] });
+    expect(await screen.findByText("Couldn't load visits")).toBeInTheDocument();
+    expect(screen.getByText('Network Error')).toBeInTheDocument();
+    expect(screen.queryByText(/No visits yet/i)).toBeNull();
+    await screen.findByTestId('tour-kpi-runs');
     expect(screen.getByTestId('tour-kpi-runs')).toHaveTextContent('—');
-    expect(screen.getByTestId('tour-kpi-questions')).toHaveTextContent('history unavailable');
+    expect(screen.getByTestId('tour-kpi-questions')).toHaveTextContent('History unavailable');
   });
 
-  it('a failed refresh keeps the loaded tour cards on screen', async () => {
+  it('a failed refresh keeps the loaded tours on screen and warns once with a toast', async () => {
     renderWithProviders(<TourPage />, { withAuth: false });
     await screen.findByTestId('tour-route-row');
     act(() => {
       useTourStore.setState({ routesStatus: 'error', routesError: 'Network Error' });
     });
     expect(screen.getByTestId('tour-route-row')).toHaveTextContent('ZeMA visitor tour');
-    expect(screen.getByTestId('tour-start')).toBeInTheDocument();
-    expect(screen.queryByTestId('tour-routes-error')).toBeNull();
-    expect(screen.getByTestId('tour-routes-stale')).toHaveTextContent('Network Error');
+    expect(screen.queryByText("Couldn't load tours")).toBeNull();
+    const stale = getToasts().filter((t) => t.id === 'tour-stale');
+    expect(stale).toHaveLength(1);
+    expect(String(stale[0]!.description)).toContain('Network Error');
+  });
+
+  it('deletes a tour through the confirm and says so', async () => {
+    const del = vi.fn().mockResolvedValue(true);
+    renderWithProviders(<TourPage />, { withAuth: false });
+    await screen.findByTestId('tour-route-row');
+    useTourStore.setState({ deleteRoute: del as never });
+    const menu = await openRowMenu();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Delete' }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith('route-1'));
+    expect(confirmMock).toHaveBeenCalled();
+    await waitFor(() => expect(toastTitles()).toContain('Tour deleted'));
+  });
+
+  it('filters tours and offers Clear filters when nothing matches', async () => {
+    renderWithProviders(<TourPage />, { withAuth: false });
+    await screen.findByTestId('tour-route-row');
+    fireEvent.change(screen.getByPlaceholderText('Search tours'), { target: { value: 'zzz' } });
+    expect(await screen.findByText('No tours match')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(await screen.findByTestId('tour-route-row')).toBeInTheDocument();
   });
 
   it('offers a New tour link', async () => {
@@ -327,20 +324,34 @@ describe('TourPage', () => {
 });
 
 
-it('keeps routes readable for viewers but disables starting and aborting runs', async () => {
+it('keeps tours readable for viewers but disables starting and ending them', async () => {
   useAuthStore.setState({ user: { ...MOCK_USER, role: 'viewer' } });
   renderWithProviders(<TourPage />, { withAuth: false });
   await screen.findByTestId('tour-route-row');
   expect(screen.queryByTestId('tour-new-route')).not.toBeInTheDocument();
-  expect(screen.getByText(/Read-only access/)).toBeInTheDocument();
-  expect(screen.getByTestId('tour-start')).toBeDisabled();
-  fireEvent.click(screen.getByTestId('tour-start'));
-  expect(api.startRoute).not.toHaveBeenCalled();
-  act(() => { useTourStore.setState({ activeRunByRobot: { [run.robotId]: { ...run, status: 'running' } } }); });
-  await waitFor(() => expect(screen.getAllByTestId('tour-abort').length).toBeGreaterThan(0));
-  for (const button of screen.getAllByTestId('tour-abort')) {
-    expect(button).toBeDisabled();
-    fireEvent.click(button);
+  expect(screen.getByTestId('tour-read-only')).toHaveTextContent(/Read-only access/);
+
+  const menu = await openRowMenu();
+  for (const name of ['Start tour', 'Delete']) {
+    const item = within(menu).getByRole('menuitem', { name });
+    expect(item).toBeDisabled();
+    fireEvent.click(item);
   }
+  expect(api.startRoute).not.toHaveBeenCalled();
+  // Opening a tour is not a write, so Edit stays — the editor it opens is
+  // read-only for this role (see TourEditorPage).
+  expect(within(menu).getByRole('menuitem', { name: 'Edit' })).toBeEnabled();
+  fireEvent.keyDown(menu, { key: 'Escape' });
+
+  act(() => {
+    useTourStore.getState().applyEvent({ type: 'agent:tour:started', robotId: 'g1', timestamp: 'x', tour: startedTour() });
+  });
+  const banner = await screen.findByTestId('tour-active-banner');
+  const abort = within(banner).getByTestId('tour-abort');
+  expect(abort).toBeDisabled();
+  fireEvent.click(abort);
+  // The row's own verb swapped to End tour, and it is refused as well.
+  const live = await openRowMenu();
+  expect(within(live).getByRole('menuitem', { name: 'End tour' })).toBeDisabled();
   expect(api.abortRoute).not.toHaveBeenCalled();
 });
