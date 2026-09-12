@@ -1,9 +1,9 @@
 /**
  * @file navigation.test.ts
  * @description The nav model: group order and the two unlabelled bookends,
- *              the tabs each row declares, which entry is active for nested
- *              and foreign detail routes, the flattened destinations the
- *              palette reads, and the feature/role gates.
+ *              the tabs and the rail a row declares, which entry is active for
+ *              nested and foreign detail routes, the flattened destinations
+ *              the palette reads, and the feature/role gates.
  * @feature layout
  */
 
@@ -49,14 +49,18 @@ describe('NAV_GROUPS', () => {
     ]);
   });
 
-  it('is down to 22 rows: Digital Twin folded into Fleet as a tab', () => {
-    expect(NAV_ITEMS).toHaveLength(22);
+  it('is down to 20 rows: Digital Twin is a Fleet tab, Guide and Automations are rail stops', () => {
+    expect(NAV_ITEMS).toHaveLength(20);
+    // Their pages are unchanged; only their rows are gone.
     expect(NAV_ITEMS.map((i) => i.path)).not.toContain('/sites');
+    expect(NAV_ITEMS.map((i) => i.path)).not.toContain('/tour');
+    expect(NAV_ITEMS.map((i) => i.path)).not.toContain('/processes');
   });
 
-  it('puts the four automation rows in Automate, in order', () => {
+  it('is down to Agent Mode · Missions in Automate', () => {
     const automate = NAV_GROUPS.find((g) => g.id === 'automate')!;
-    expect(automate.items.map((i) => i.label)).toEqual(['Agent Mode', 'Patrol', 'Guide', 'Automations']);
+    expect(automate.items.map((i) => i.label)).toEqual(['Agent Mode', 'Missions']);
+    expect(item('Missions').path).toBe('/patrol');
   });
 
   it('keeps Operate at Fleet · Control Center · Alerts', () => {
@@ -93,13 +97,32 @@ describe('NAV_GROUPS', () => {
       'Privacy',
       'ROHE',
     ]);
-    for (const label of ['Dashboard', 'Control Center', 'Agent Mode', 'Automations', 'Datasets', 'Docs']) {
+    for (const label of ['Dashboard', 'Control Center', 'Agent Mode', 'Datasets', 'Docs']) {
       expect(item(label).tabs).toBeUndefined();
     }
+    // A railed row declares no tabs: the tabs belong to the stops' pages.
+    expect(item('Missions').tabs).toBeUndefined();
   });
 
-  it('declares no rail yet — the rows keep their pages in this slice', () => {
-    expect(NAV_ITEMS.filter((i) => i.rail)).toEqual([]);
+  it('gives Missions the only rail: Patrol · Guide · Automations, tabs and all', () => {
+    expect(NAV_ITEMS.filter((i) => i.rail).map((i) => i.label)).toEqual(['Missions']);
+    const rail = item('Missions').rail!;
+    expect(rail.map((stop) => [stop.label, stop.path])).toEqual([
+      ['Patrol', '/patrol'],
+      ['Guide', '/tour'],
+      ['Automations', '/processes'],
+    ]);
+    // Copied verbatim from PatrolPage's and TourPage's own TABS consts.
+    expect(rail[0].tabs).toEqual([
+      { id: 'routes', label: 'Routes' },
+      { id: 'runs', label: 'Runs' },
+    ]);
+    expect(rail[1].tabs).toEqual([
+      { id: 'tours', label: 'Tours' },
+      { id: 'visits', label: 'Visits' },
+    ]);
+    // ProcessesPage has no tab bar.
+    expect(rail[2].tabs).toBeUndefined();
   });
 });
 
@@ -109,9 +132,18 @@ describe('isNavItemActive', () => {
     ['/fleet', 'Fleet'],
     ['/robots/r-1', 'Fleet'],
     ['/robots/r-1/cockpit', 'Control Center'],
-    ['/patrol/routes/new', 'Patrol'],
-    ['/patrol/runs/run-1', 'Patrol'],
-    ['/tour/routes/abc', 'Guide'],
+    // The ten URLs the one Missions row owns — its own subtree plus the two
+    // it claims through alsoActiveOn.
+    ['/patrol', 'Missions'],
+    ['/patrol/routes/new', 'Missions'],
+    ['/patrol/routes/abc', 'Missions'],
+    ['/patrol/runs/run-1', 'Missions'],
+    ['/tour', 'Missions'],
+    ['/tour/routes/new', 'Missions'],
+    ['/tour/routes/abc', 'Missions'],
+    ['/tour/runs/run-1', 'Missions'],
+    ['/processes', 'Missions'],
+    ['/processes/p-1', 'Missions'],
     ['/incidents/i-1', 'Alerts'],
     // The twin viewer is still its own route, reached from Fleet's Sites tab.
     ['/sites/s-1', 'Fleet'],
@@ -128,6 +160,12 @@ describe('isNavItemActive', () => {
 
   it('is segment-aware: /fleet is not active on /fleet-learning', () => {
     expect(isNavItemActive(item('Fleet'), '/fleet-learning')).toBe(false);
+  });
+
+  it('leaves Agent Mode dark on every Missions URL', () => {
+    for (const pathname of ['/patrol', '/patrol/routes/new', '/tour', '/tour?tab=visits', '/processes/p-1']) {
+      expect(isNavItemActive(item('Agent Mode'), pathname)).toBe(false);
+    }
   });
 
   it('marks nothing on a page outside the nav', () => {
@@ -172,6 +210,30 @@ describe('navDestinations', () => {
     expect(paths).not.toContain('/fleet?tab=map');
     expect(paths).toContain('/compliance?tab=privacy');
     expect(paths).not.toContain('/compliance?tab=overview');
+  });
+
+  it('reaches all three Missions pages and both their later tabs', () => {
+    expect(paths).toContain('/patrol');
+    expect(paths).toContain('/patrol?tab=runs');
+    expect(paths).toContain('/tour');
+    expect(paths).toContain('/tour?tab=visits');
+    expect(paths).toContain('/processes');
+    expect(paths).not.toContain('/patrol?tab=routes');
+    expect(paths).not.toContain('/tour?tab=tours');
+  });
+
+  it("names the row Missions and the stops themselves, so the palette reads a page's own name", () => {
+    expect(destinations.filter((d) => d.path === '/patrol').map((d) => [d.kind, d.label])).toEqual([
+      ['row', 'Missions'],
+      ['rail', 'Patrol'],
+      ['tab', 'Routes'],
+    ]);
+    expect(destinations.find((d) => d.path === '/processes')).toMatchObject({
+      label: 'Automations',
+      kind: 'rail',
+      row: 'Automations',
+      group: 'Automate',
+    });
   });
 
   it("shares a page's URL between its row and its first tab — the palette dedupes on path", () => {

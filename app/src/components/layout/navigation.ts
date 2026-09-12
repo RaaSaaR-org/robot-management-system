@@ -22,6 +22,7 @@ import {
   GraduationCap,
   Joystick,
   LayoutDashboard,
+  ListChecks,
   Network,
   Rocket,
   Route,
@@ -156,27 +157,47 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'automate',
     label: 'Automate',
     items: [
+      // Agent Mode keeps its own row beside Missions: it is the live console,
+      // and a rail click must never unmount the session running in it.
       { label: 'Agent Mode', path: '/agent', icon: BrainCircuit },
+      // Patrol, Guide and Automations were three rows for one idea — work a
+      // robot does on its own (TASK-277). They are one row with a rail now,
+      // and a rail rather than tabs because two of the three pages own a tab
+      // bar already: Missions tabs above those would stack two tab rows.
       {
-        label: 'Patrol',
+        label: 'Missions',
+        // The rail's first stop is the row's own page.
         path: '/patrol',
-        icon: Route,
-        tabs: [
-          { id: 'routes', label: 'Routes' },
-          { id: 'runs', label: 'Runs' },
+        icon: ListChecks,
+        // Guide and Automations sit outside /patrol, so the row claims their
+        // URLs too — which is also what keeps the rail on their editors and
+        // run details, since a row owns everything under the paths it matches.
+        alsoActiveOn: [/^\/tour(\/|$)/, /^\/processes(\/|$)/],
+        // No `tabs` on the row: its page is whatever stop the rail points at,
+        // so each stop declares the tabs of its own page.
+        rail: [
+          {
+            label: 'Patrol',
+            path: '/patrol',
+            icon: Route,
+            tabs: [
+              { id: 'routes', label: 'Routes' },
+              { id: 'runs', label: 'Runs' },
+            ],
+          },
+          // Host mode (TASK-213) — the robot with a person in front of it.
+          {
+            label: 'Guide',
+            path: '/tour',
+            icon: Speech,
+            tabs: [
+              { id: 'tours', label: 'Tours' },
+              { id: 'visits', label: 'Visits' },
+            ],
+          },
+          { label: 'Automations', path: '/processes', icon: Workflow },
         ],
       },
-      // Host mode (TASK-213) — the robot with a person in front of it.
-      {
-        label: 'Guide',
-        path: '/tour',
-        icon: Speech,
-        tabs: [
-          { id: 'tours', label: 'Tours' },
-          { id: 'visits', label: 'Visits' },
-        ],
-      },
-      { label: 'Automations', path: '/processes', icon: Workflow },
     ],
   },
   {

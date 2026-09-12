@@ -103,7 +103,7 @@ describe('MobileNav', () => {
   it('closes when an entry is followed', async () => {
     const onClose = vi.fn();
     renderAt('/dashboard', <MobileNav isOpen onClose={onClose} />);
-    await userEvent.click(screen.getByRole('link', { name: 'Patrol' }));
+    await userEvent.click(screen.getByRole('link', { name: 'Missions' }));
     expect(onClose).toHaveBeenCalled();
   });
 

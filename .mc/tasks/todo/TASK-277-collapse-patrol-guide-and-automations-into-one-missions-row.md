@@ -3,7 +3,7 @@ id: "TASK-277"
 aliases: []
 title: "Collapse Patrol, Guide and Automations into one Missions row"
 slug: "collapse-patrol-guide-and-automations-into-one-missions-row"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []
