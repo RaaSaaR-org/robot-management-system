@@ -71,9 +71,9 @@ Five decisions carry the rest:
    fix has shipped.
 
 **`docs/platform.md` is the destination**, served by the in-app docs viewer under
-Getting Started (`CATEGORY_MAP['platform']`), with seven headings whose slugs are
-the anchors the page links into: Readiness at a glance · The data engine · Models
-· Safety · Ownership and the record · Install. It exists because there was
+Getting Started (`CATEGORY_MAP['platform']`), under a title and six sections whose
+slugs are the anchors the page links into: Readiness at a glance · The data engine
+· Models · Safety · Ownership and the record · Install. It exists because there was
 nowhere else for this material: `docs/vla-integration-guide.md`'s support table is
 three rows about *serving*, world models appear nowhere in `docs/`, and
 `docs/regulatory-compliance.md` is a 2027–2028 requirements matrix rather than a
@@ -147,7 +147,11 @@ guards hold the shape:
 - `landingClaims.test.ts` counts claims in shipped copy with comments stripped:
   GR00T exactly once, "all-in-one" never.
 
-The cost is that the page and the doc must now agree about maturity words: a rail
-tag reading `Gated` is what sends a reader to the doc, so `Live` / `Sim` /
-`Gated` are spelled the same in both and the six verdicts are asserted against
-`FullCircleSection.STAGES`.
+The cost is that the page and the doc must now agree about maturity words **by
+hand**: a rail tag reading `Gated` is what sends a reader to the doc, so `Live` /
+`Sim` / `Gated` are spelled the same in both, and the doc's readiness table
+restates the six verdicts that live in `FullCircleSection.STAGES`. Nothing
+asserts that the two still match — `landingAnchors.test.tsx` catches a renamed
+*heading*, not a changed verdict, so a stage that turns `Sim` into `Live` has to
+be edited in both places. Tying the table to `STAGES` in a test is the obvious
+next guard; it was not built here.
