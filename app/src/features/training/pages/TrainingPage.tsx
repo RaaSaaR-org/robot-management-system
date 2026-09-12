@@ -8,7 +8,7 @@ import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Brain, Play, Plus } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Button, PageHeader, PipelineBreadcrumb, Tabs } from '@/shared/components/ui';
+import { Button, PageHeader, Tabs } from '@/shared/components/ui';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
 import { JobsSection } from '../components/jobs/JobsSection';
 import { useDatasetsAutoFetch, useTrainingJobs } from '../hooks';
@@ -81,9 +81,7 @@ function TrainingStudio() {
         title="Training"
         description="Train policies on your datasets, then evaluate them in simulation and on hardware."
         actions={primary}
-      >
-        <PipelineBreadcrumb stage={tab === 'jobs' ? 'train' : 'evaluate'} />
-      </PageHeader>
+      />
 
       <Tabs
         tabs={TABS.map(({ id, label }) => ({ id, label, count: id === 'jobs' && running > 0 ? running : undefined }))}

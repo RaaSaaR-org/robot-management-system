@@ -4,3 +4,5 @@ export { RollbackModal } from './RollbackModal';
 export { NewPackageModal } from './NewPackageModal';
 export { UpdateDetailsModal } from './UpdateDetailsModal';
 export { DeploymentHistory } from './DeploymentHistory';
+export { UpdatesSection } from './UpdatesSection';
+export type { UpdatesSectionProps } from './UpdatesSection';

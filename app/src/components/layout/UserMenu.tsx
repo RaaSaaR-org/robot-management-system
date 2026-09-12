@@ -1,12 +1,15 @@
 /**
  * @file UserMenu.tsx
  * @description Top bar user menu — the avatar opens a menu with the current
- *              user's identity, a link to the account page and sign out.
+ *              user's identity, links to the account and settings pages, and
+ *              sign out. Settings moved here from the sidebar in TASK-279: it
+ *              is about the person using the app, like everything else in this
+ *              menu, not a place in the fleet.
  * @feature layout
  */
 
 import { Link } from 'react-router-dom';
-import { ChevronDown, LogOut, UserRound } from 'lucide-react';
+import { ChevronDown, LogOut, Settings, UserRound } from 'lucide-react';
 import { useAuth } from '@/features/auth';
 import { Badge } from '@/shared/components/ui/Badge';
 import { focusRing } from '@/shared/components/ui/styles';
@@ -82,6 +85,16 @@ export function UserMenu() {
             >
               <UserRound strokeWidth={1.75} aria-hidden="true" />
               <span>Account settings</span>
+            </Link>
+            <Link
+              to="/settings"
+              role="menuitem"
+              tabIndex={-1}
+              onClick={() => menu.close(false)}
+              className={cn(topBarMenuItem, 'h-9')}
+            >
+              <Settings strokeWidth={1.75} aria-hidden="true" />
+              <span>Settings</span>
             </Link>
           </div>
 

@@ -101,7 +101,7 @@ export const TourEditorPage = memo(function TourEditorPage({ className }: TourEd
   if (!isNew && !route) {
     return (
       <div className={root} data-testid="tour-route-page">
-        <PageHeader eyebrow="Operate" back={BACK} title={loadError ? 'Tour' : 'Loading…'} />
+        <PageHeader eyebrow="Automate" back={BACK} title={loadError ? 'Tour' : 'Loading…'} />
         <Panel>
           {loadError ? <ErrorState title="Couldn't load this tour" message={loadError} onRetry={() => void load()} /> : <SkeletonText lines={4} />}
         </Panel>
@@ -112,7 +112,7 @@ export const TourEditorPage = memo(function TourEditorPage({ className }: TourEd
   return (
     <div className={root} data-testid="tour-route-page">
       <PageHeader
-        eyebrow="Operate"
+        eyebrow="Automate"
         back={BACK}
         title={isNew ? 'New tour' : route!.name}
         description={isNew ? 'A tour is the ordered list of places the robot walks a visitor to, with what it says at each one.' : undefined}

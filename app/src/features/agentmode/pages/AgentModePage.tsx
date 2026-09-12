@@ -130,7 +130,7 @@ export function AgentModePage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        eyebrow="Operate"
+        eyebrow="Automate"
         title="Agent Mode"
         description="Talk to one robot, watch its plan run block by block, stop it at any time."
         meta={

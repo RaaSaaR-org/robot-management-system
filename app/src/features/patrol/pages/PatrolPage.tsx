@@ -182,7 +182,7 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
   return (
     <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'} data-testid="patrol-page">
       <PageHeader
-        eyebrow="Operate"
+        eyebrow="Automate"
         title="Patrol"
         description="Routes a robot walks on its own, with control photos and what was not normal."
         meta={<LiveTag connected={isConnected} data-testid="patrol-live" />}

@@ -12,7 +12,6 @@ import {
   ErrorState,
   PageHeader,
   Panel,
-  PipelineBreadcrumb,
   RowActions,
   SkeletonText,
   StatusTag,
@@ -480,9 +479,7 @@ export function DatasetEpisodesPage() {
             </>
           )
         }
-      >
-        <PipelineBreadcrumb stage="dataset" />
-      </PageHeader>
+      />
 
       {isView && dataset && (
         <ViewBanner

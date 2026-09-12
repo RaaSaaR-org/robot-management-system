@@ -54,7 +54,6 @@ import {
   LazyMarketplacePage,
   LazyMarketplaceDetailPage,
   LazyMyMarketplacePage,
-  LazyUpdatesPage,
   LazyPipelinePage,
   LazyFleetLearningPage,
   LazyFleetLearningRoundDetailPage,
@@ -63,7 +62,6 @@ import {
   LazySessionDetailPage,
   LazyDocsPage,
   LazyDesignSystemPage,
-  LazySitesGalleryPage,
   LazyTwinViewerPage,
   LazyNotFoundPage,
 } from './routes/lazyPages';
@@ -202,15 +200,8 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          {/* Digital Twin — room scanning + 3D twin viewer */}
-          <Route
-            path="/sites"
-            element={
-              <ProtectedAppRoute>
-                <LazySitesGalleryPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Digital Twin — merged into Fleet tabs (TASK-276). Viewer route stays. */}
+          <Route path="/sites" element={<Navigate to="/fleet?tab=sites" replace />} />
           <Route
             path="/sites/:siteId"
             element={
@@ -622,15 +613,8 @@ function App() {
             }
           />
 
-          {/* Updates - Secure OTA update management (CRA Art. 13, MR Art. 10) */}
-          <Route
-            path="/updates"
-            element={
-              <ProtectedAppRoute>
-                <LazyUpdatesPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Updates — now a Settings tab (TASK-279) */}
+          <Route path="/updates" element={<Navigate to="/settings?tab=updates" replace />} />
 
           {/* Agent Mode - local LLM plans and runs blocks on a robot (TASK-194) */}
           <Route

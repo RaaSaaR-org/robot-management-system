@@ -14,7 +14,7 @@ export function ProcessDetailPage() {
   if (!id) {
     return (
       <div className="flex flex-col gap-6">
-        <PageHeader eyebrow="Operate" back={{ to: '/processes', label: 'Automations' }} title="Automation not found" />
+        <PageHeader eyebrow="Automate" back={{ to: '/processes', label: 'Automations' }} title="Automation not found" />
         <Panel>
           <ErrorState title="No automation selected" message="The link has no automation ID." />
         </Panel>

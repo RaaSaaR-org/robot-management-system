@@ -404,7 +404,7 @@ A dev-only `/design-system` route renders every primitive in every state.
   `backdrop-filter` is switched off globally.
 - Sidebar groups (static eyebrow labels, no accordions): **Overview**
   (Dashboard) · **Operate** (Fleet, Control Center, Agent Mode, Patrol, Guide,
-  Automations, Alerts, Digital Twin) · **Build** (Skill Training, Data
+  Automations, Alerts) · **Build** (Skill Training, Data
   Collection, Datasets, Training, Models, Deployments, Fleet Learning,
   Marketplace) · **Comply** (Compliance) · **System** (Updates, Docs,
   Settings) · **Admin** (Organizations, Team — existing role/feature gates).

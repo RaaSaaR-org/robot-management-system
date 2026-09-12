@@ -1,18 +1,21 @@
 /**
  * @file AppLayout.tsx
  * @description The app shell: sticky top bar, the sidebar column (md+) or the
- *              mobile drawer, and the padded content column. The root carries
- *              `data-app-shell`, which switches off backdrop-filter for
- *              everything inside it and gives bare h1/h2 the display face.
+ *              mobile drawer, the padded content column — and the one ⌘K
+ *              palette for the whole shell. The root carries `data-app-shell`,
+ *              which switches off backdrop-filter for everything inside it and
+ *              gives bare h1/h2 the display face.
  * @feature layout
  */
 
-import { ReactNode } from 'react';
+import { ReactNode, useState } from 'react';
+import { CommandPalette, usePaletteHotkey } from '@/components/palette';
 import { useUIStore } from '@/features/settings/store/uiStore';
 import { useRobotWebSocket } from '@/features/robots/hooks/useRobotWebSocket';
 import { AlertBanner } from '@/features/alerts/components/AlertBanner';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
+import { SectionRail } from './SectionRail';
 import { MobileNav } from './MobileNav';
 import { ImpersonationBanner } from './ImpersonationBanner';
 
@@ -43,12 +46,17 @@ export function AppLayout({ children }: AppLayoutProps) {
   const mobileMenuOpen = useUIStore((state) => state.mobileMenuOpen);
   const setMobileMenuOpen = useUIStore((state) => state.setMobileMenuOpen);
 
+  // The palette is a property of the shell, not of any page: one instance, one
+  // piece of state, opened from the top bar or from ⌘K anywhere inside it.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  usePaletteHotkey(() => setPaletteOpen((open) => !open));
+
   // Real-time robot updates for every page in the shell
   useRobotWebSocket();
 
   return (
     <div data-app-shell className="min-h-screen bg-canvas text-ink-primary">
-      <TopBar />
+      <TopBar onOpenPalette={() => setPaletteOpen(true)} />
       <div className="flex">
         <Sidebar />
         <main className="min-w-0 flex-1">
@@ -56,11 +64,15 @@ export function AppLayout({ children }: AppLayoutProps) {
             <ImpersonationBanner />
             {/* In-flow alarm banner: pushes content down instead of covering it */}
             <AlertBanner />
+            {/* The active row's second level, or nothing when it has no rail */}
+            <SectionRail />
             {children}
           </div>
         </main>
       </div>
       <MobileNav isOpen={mobileMenuOpen} onClose={() => setMobileMenuOpen(false)} />
+      {/* Inside the router, so a chosen destination is a client navigation */}
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }

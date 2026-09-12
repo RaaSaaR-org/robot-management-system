@@ -55,7 +55,6 @@ const EXPLAINER =
 function Header({ actions }: { actions?: React.ReactNode }) {
   return (
     <PageHeader
-      eyebrow="Comply"
       title="Compliance"
       description={
         <span className="inline-flex flex-wrap items-center gap-1.5">

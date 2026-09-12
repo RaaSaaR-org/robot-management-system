@@ -27,7 +27,6 @@ import {
   DropdownMenu,
   NextStepBanner,
   PageHeader,
-  PipelineBreadcrumb,
   Select,
   confirm,
   toast,
@@ -222,9 +221,7 @@ function DatasetsHub() {
         title="Datasets"
         description="LeRobot datasets you collected, imported or generated — the input to training."
         actions={newMenu}
-      >
-        <PipelineBreadcrumb stage="dataset" />
-      </PageHeader>
+      />
 
       <DatasetList
         datasets={datasets}

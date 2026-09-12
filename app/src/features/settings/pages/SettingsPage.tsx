@@ -1,12 +1,15 @@
 /**
  * @file SettingsPage.tsx
- * @description Settings: appearance, notifications, dashboard — tabs in ?tab=, every control saves on change
+ * @description Settings: appearance, notifications, dashboard and the signed
+ *              update packages — tabs in ?tab=, every preference control saves
+ *              on change. Settings is chrome, not a sidebar row: the user menu
+ *              is what opens it (TASK-279).
  * @feature settings
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
-import { RotateCcw, UserRound } from 'lucide-react';
+import { Plus, RotateCcw, UserRound } from 'lucide-react';
 import {
   Button,
   ErrorState,
@@ -18,6 +21,7 @@ import {
   confirm,
   toast,
 } from '@/shared/components/ui';
+import { UpdatesSection } from '@/features/updates';
 import { AppearanceSection } from '../components/AppearanceSection';
 import { DashboardSection, NotificationsSection } from '../components/PreferenceSections';
 import { useSettings } from '../hooks/useSettings';
@@ -29,6 +33,8 @@ const TABS = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'dashboard', label: 'Dashboard' },
+  // Secure OTA updates were a sidebar row of their own until TASK-279.
+  { id: 'updates', label: 'Updates' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -46,6 +52,9 @@ export function SettingsPage() {
   const [params, setParams] = useSearchParams();
   const { settings, isLoading, error, fetchSettings, updateSetting, resetSettings } = useSettings();
   const setTheme = useThemeStore((s) => s.setTheme);
+  // The Updates tab's "New package" button lives in this header, so the flag
+  // lives here too and the section renders the modal from it.
+  const [newPackageOpen, setNewPackageOpen] = useState(false);
 
   useEffect(() => {
     void fetchSettings();
@@ -86,32 +95,45 @@ export function SettingsPage() {
     if (!toastIfFailed("Couldn't reset settings")) toast.success('Settings reset');
   };
 
+  // Each tab brings its own actions: the three preference tabs share the two
+  // that act on the preferences, the Updates tab offers the one act that
+  // creates something.
+  const headerActions: ReactNode =
+    tab === 'updates' ? (
+      <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => setNewPackageOpen(true)}>
+        New package
+      </Button>
+    ) : (
+      <>
+        <LinkButton to="/account" variant="ghost" leftIcon={<UserRound className="h-4 w-4" strokeWidth={1.75} />}>
+          Account and security
+        </LinkButton>
+        <Button
+          variant="ghost"
+          leftIcon={<RotateCcw className="h-4 w-4" strokeWidth={1.75} />}
+          disabled={!settings}
+          onClick={() => void askReset()}
+        >
+          Reset to defaults
+        </Button>
+      </>
+    );
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        eyebrow="System"
         title="Settings"
-        description="How NeoDEM looks and behaves for you."
-        actions={
-          <>
-            <LinkButton to="/account" variant="ghost" leftIcon={<UserRound className="h-4 w-4" strokeWidth={1.75} />}>
-              Account and security
-            </LinkButton>
-            <Button
-              variant="ghost"
-              leftIcon={<RotateCcw className="h-4 w-4" strokeWidth={1.75} />}
-              disabled={!settings}
-              onClick={() => void askReset()}
-            >
-              Reset to defaults
-            </Button>
-          </>
-        }
+        description="How NeoDEM looks and behaves for you, and the signed packages your robots run."
+        actions={headerActions}
       />
 
       <Tabs tabs={TABS.map(({ id, label }) => ({ id, label }))} activeTab={tab} onTabChange={setTab} label="Settings sections" />
 
-      {!settings ? (
+      {/* Update packages are not a user setting — they come from their own
+          store, so a failed settings fetch must not hide them. */}
+      {tab === 'updates' ? (
+        <UpdatesSection newPackageOpen={newPackageOpen} onNewPackageOpenChange={setNewPackageOpen} />
+      ) : !settings ? (
         error && !isLoading ? (
           <Panel>
             <ErrorState title="Couldn't load your settings" message={error} onRetry={() => void fetchSettings()} />
