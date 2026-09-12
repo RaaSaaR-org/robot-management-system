@@ -33,7 +33,7 @@ export const STAGES: Stage[] = [
       'Demonstrations, teleoperation and real LiDAR scans become versioned datasets in an open format.',
     bullets: [
       'Trim the wobbly takes and you get a new version; the original recording is never touched.',
-      'A scanner walked around our lab came back as a twin you can navigate and simulate in.',
+      'A scanner we walked around our lab came back as a twin you can navigate and simulate in.',
     ],
   },
   {

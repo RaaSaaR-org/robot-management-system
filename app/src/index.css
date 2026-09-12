@@ -471,13 +471,6 @@ body > :not(#root) *::after {
     font-variant-numeric: tabular-nums;
   }
 
-  /* Hairline rules do the dividing work that borders-on-cards used to. */
-  .lp-rule {
-    border: 0;
-    border-top: 1px solid var(--border-color);
-    margin: 0;
-  }
-
   /* A flat panel — no glass, no blur, no shadow. The product's chrome is
      glassy; the marketing page is deliberately matte so screenshots of the
      app read as the glossy thing on the page. */

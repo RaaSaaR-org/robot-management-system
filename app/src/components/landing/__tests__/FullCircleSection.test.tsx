@@ -83,6 +83,8 @@ describe('The Embodied Loop', () => {
 
   it('keeps every stage panel inside the intro prose budget', () => {
     STAGES.forEach((stage) => {
+      // A floor as well as a ceiling: two bullets is the cap, zero is not a pass.
+      expect(stage.bullets.length).toBeGreaterThan(0);
       expect(stage.bullets.length).toBeLessThanOrEqual(2);
       stage.bullets.forEach((bullet) => {
         expect(bullet.split(/\s+/).length).toBeLessThanOrEqual(18);

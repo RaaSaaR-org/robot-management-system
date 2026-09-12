@@ -27,7 +27,7 @@ stand:
 | ----- | ------- | -------------------------- |
 | Collect | `Live` | Versioned datasets in the open LeRobot format; a digital twin built from a real 240,000-point LiDAR capture of our own lab. |
 | Train | `Live` | Six selectable base models, fine-tuned without leaving the LeRobot format, on whichever GPU machine you point at it. |
-| Deploy | `Gated` | The registry, the staged rollout, the signed over-the-air update and the one-click rollback are all real. The bridge to a physical G1 refuses to move until it is armed twice, and never drives the legs. |
+| Deploy | `Gated` | The registry, the staged rollout and the one-click rollback are all real, and an update package is Ed25519-signed and recorded — but nothing is delivered to a robot yet. The bridge to a physical G1 refuses to move until it is armed twice, and never drives the legs. |
 | Evaluate | `Sim` | Scored attempt by attempt in simulation, including two traps a model is meant to fail. Nothing has been scored on physical hardware. |
 | Operate | `Sim` | Reading a real, powered G1 works today. Anything that moves one is still simulation. |
 | Comply | `Live` | A tamper-evident audit trail, records of processing, all seven data-subject request types, retention policies and legal holds. |
@@ -303,5 +303,6 @@ in the README.
 Training, model serving and twin reconstruction each live in their own
 repository. Clone this one and you can collect data and operate robots;
 fine-tuning, serving and building a twin want their neighbours cloned alongside
-it. All of them are MIT, all of them are linked from the README, and container
-images for the three services in this repository publish to the GitHub registry.
+it. The README's "Next door" table names each one and how it talks to this
+server, and container images for the three services in this repository publish
+to the GitHub registry.

@@ -17,12 +17,13 @@ const SOURCES = import.meta.glob<string>(['../*.tsx', '../../../pages/LandingPag
 
 /**
  * Claims are counted in shipped copy, not in the comments that explain the rule
- * — a comment naming GR00T is exactly how the rule stays readable. `//` is only
- * treated as a comment when it is not preceded by a colon, so the GitHub URLs in
- * the header and footer survive the strip.
+ * — a comment naming GR00T is exactly how the rule stays readable. Only a
+ * whole-line comment is stripped: a `//` that appears mid-line belongs to a URL
+ * or to copy, and cutting the rest of that line would hide shipped words from
+ * the count.
  */
 function strippedSource(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 }
 
 function occurrences(pattern: RegExp): { file: string; count: number }[] {

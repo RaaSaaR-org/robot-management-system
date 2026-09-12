@@ -1,9 +1,10 @@
 /**
  * @file landingAnchors.test.tsx
- * @description Guards every link the landing page offers: in-page anchors must
- *              resolve to a section the page actually renders, and every
- *              /docs/platform#… fragment must resolve to a heading the docs
- *              viewer will really produce.
+ * @description Guards every link the landing page offers — the three exported
+ *              link models plus the anchors written inline in JSX: in-page
+ *              anchors must resolve to a section the page actually renders, and
+ *              every /docs/platform#… fragment must resolve to a heading the
+ *              docs viewer will really produce.
  * @feature landing
  *
  * Nothing in the page itself prevents a link pointing at a section that no
@@ -79,16 +80,41 @@ const DOC_HEADING_IDS = new Set(
 
 describe('landing page anchors', () => {
   it('resolves every in-page anchor to a section the page renders', () => {
-    const ids = pageIds(renderPage());
-    const anchors = linkTargets().filter((entry) =>
-      entry.target.startsWith('#'),
+    const main = renderPage();
+    const ids = pageIds(main);
+
+    // Partition, never filter. A modelled link that is neither a docs route nor
+    // a `#…` anchor is precisely the defect this guard exists for, and
+    // `filter(startsWith('#'))` would drop those entries instead of failing on
+    // them: a nav href that lost its hash navigates to a relative path, which
+    // the demo build's HashRouter renders as NotFoundPage.
+    const inPage = linkTargets().filter(
+      (entry) => !entry.target.startsWith('/docs/platform#'),
     );
+    expect(
+      inPage
+        .filter((entry) => !entry.target.startsWith('#'))
+        .map((entry) => `${entry.source} → ${entry.target}`),
+    ).toEqual([]);
 
-    // If the nav model ever stops yielding anchors, the loop below would pass
-    // by iterating nothing.
-    expect(anchors.length).toBeGreaterThanOrEqual(NAV_ITEMS.length);
+    // Spelled out rather than derived from the models, so emptying one of them
+    // fails here instead of passing by iterating nothing: five nav rows, six
+    // footer rows under "On this page", three stage links that stay on the page.
+    expect(inPage.length).toBe(14);
 
-    const broken = anchors.filter((entry) => !ids.has(entry.target.slice(1)));
+    // The models are not the whole page — the hero and the platform lede write
+    // their `#circle` hrefs inline in JSX, so read the rendered anchors too.
+    const rendered = Array.from(main.querySelectorAll('a[href^="#"]')).map(
+      (anchor) => {
+        const href = anchor.getAttribute('href') ?? '';
+        return { source: `rendered <a> ${href}`, target: href };
+      },
+    );
+    expect(rendered.length).toBeGreaterThan(0);
+
+    const broken = [...inPage, ...rendered].filter(
+      (entry) => !ids.has(entry.target.slice(1)),
+    );
     expect(broken.map((entry) => `${entry.source} → ${entry.target}`)).toEqual(
       [],
     );
