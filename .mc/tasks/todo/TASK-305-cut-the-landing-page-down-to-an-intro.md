@@ -397,3 +397,26 @@ This is an epic — it is over the `spe` ceiling as one slice (fourteen files, a
 ~1,500-word doc, and a rewrite of roughly 2,000 words of copy across six
 components) and it splits cleanly with the doc first, since every section links
 into it.
+
+### Children
+
+Planned 2026-09-12. Four slices, in dependency order — the doc first, because every
+section links into it, and the page-level guards last, because the word budget and
+the anchor set are only true once every cut has landed.
+
+| Task | Slice | spe | effort | Blocked by |
+| ---- | ----- | --: | ------ | ---------- |
+| [[TASK-306]] | Write the platform doc the landing page links into | 5 | medium | — |
+| [[TASK-307]] | Give Proof an anchor and turn Sovereignty into Ownership | 3 | medium | [[TASK-306]] |
+| [[TASK-308]] | Rebuild the top of the page on the loop | 5 | high | [[TASK-306]], [[TASK-307]] |
+| [[TASK-309]] | Take the commands out of Run it and lock the page budget | 5 | medium | [[TASK-308]] |
+
+Section 4 (Proof) comes before section 3 (the loop) on purpose: the loop's remapped
+stage links need `#proof` to exist, and a slice must never leave a nav or stage link
+pointing at an id that is gone — `scrollToSection` fails silently on a missing
+target and the demo build's `HashRouter` then renders `NotFoundPage`.
+
+One redundancy is allowed to stand for exactly one commit: after [[TASK-307]] the
+Ownership lede and `ModelLayerSection`'s "No vendor login" panel say the same thing,
+until [[TASK-308]] deletes that file. It is noted in both children so it is not
+"fixed" out of turn.
