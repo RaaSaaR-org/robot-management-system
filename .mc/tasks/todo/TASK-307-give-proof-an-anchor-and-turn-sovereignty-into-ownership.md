@@ -3,7 +3,7 @@ id: "TASK-307"
 aliases: []
 title: "Give Proof an anchor and turn Sovereignty into Ownership"
 slug: "give-proof-an-anchor-and-turn-sovereignty-into-ownership"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
