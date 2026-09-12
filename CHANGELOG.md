@@ -3,6 +3,21 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.09.12.1] - 2026-09-12
+
+### Fixed
+
+- publish release images to a lowercase GHCR repository — v2026.09.12 tagged and cut its GitHub Release, but published none of its six container images (TASK-304) (#318)
+- cleanup and refactor — the defects the rot sweep confirmed: writes closed to `viewer` tokens, tenant scoping derived from the Prisma schema, concurrency-safe incident and approval numbering, a compliance hash chain serialized under concurrent writers, honest robot and process state, and no raw error text in responses (TASK-281 … TASK-302) (#320)
+
+### Changed
+
+- cut the landing page down to an intro for developers, AI engineers, CTOs and managers, with the platform detail moved into `docs/platform.md` (TASK-305 … TASK-309) (#321)
+
+### Maintenance
+
+- close the landing page epic and distil its spec into `docs/adr/ADR-305-cut-the-landing-page-down-to-an-intro.md` (TASK-305) (#322)
+
 ## [v2026.09.12] - 2026-09-12
 
 ### Added
