@@ -9,7 +9,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Headset } from 'lucide-react';
 import {
-  Button, FormField, Input, InfoIcon, PageHeader, Panel, PipelineBreadcrumb, Select, errorMessage, toast,
+  Button, FormField, Input, InfoIcon, PageHeader, Panel, Select, errorMessage, toast,
 } from '@/shared/components/ui';
 import { SessionTypeSelector } from '../components/SessionTypeSelector';
 import { useDataCollectionStore } from '../store/datacollectionStore';
@@ -89,9 +89,7 @@ export function NewSessionPage() {
         back={{ to: '/data-collection', label: 'Data collection' }}
         title="New session"
         description="Choose how you will teleoperate, the robot and the task to record."
-      >
-        <PipelineBreadcrumb stage="collect" />
-      </PageHeader>
+      />
 
       <Panel>
         <Panel.Header

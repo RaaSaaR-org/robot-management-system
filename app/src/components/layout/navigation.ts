@@ -200,36 +200,78 @@ export const NAV_GROUPS: NavGroup[] = [
       },
     ],
   },
+  // Build — everything that turns demonstrations into a policy a robot runs.
   {
     id: 'build',
     label: 'Build',
     items: [
-      // Pipeline overview — the entry point of the training workflow (TASK-143).
-      { label: 'Skill Training', path: '/pipeline', icon: GraduationCap },
-      // Pipeline stages in order: collect → dataset → train → models → deploy.
+      // Skill Training was six rows for one workflow: the hub and the five
+      // stages the hub already steps through (TASK-278). It is one row with a
+      // rail now — a rail rather than tabs because three of the five stage
+      // pages own a tab bar already, and tabs above those would stack two tab
+      // rows.
       {
-        label: 'Data Collection',
-        path: '/data-collection',
-        icon: Video,
-        tabs: [
-          { id: 'sessions', label: 'Sessions' },
-          { id: 'priorities', label: 'Priorities' },
-          { id: 'uncertainty', label: 'Uncertainty' },
+        label: 'Skill Training',
+        // The rail's first stop is the row's own page: the pipeline overview
+        // with its stepper and first-run wizard (TASK-143).
+        path: '/pipeline',
+        icon: GraduationCap,
+        // Every stage lives outside /pipeline, so the row claims their URLs
+        // too — which is also what keeps the rail on a recording session, an
+        // episode viewer or a round detail, since a row owns everything under
+        // the paths it matches. Anchored and segment-terminated on purpose:
+        // /fleet-learning is Skill Training's, /fleet stays Fleet's.
+        alsoActiveOn: [
+          /^\/data-collection(\/|$)/,
+          /^\/datasets(\/|$)/,
+          /^\/training(\/|$)/,
+          /^\/models(\/|$)/,
+          /^\/fleet-learning(\/|$)/,
+        ],
+        // No `tabs` on the row: its page is whatever stop the rail points at,
+        // so each stop declares the tabs of its own page.
+        rail: [
+          { label: 'Overview', path: '/pipeline', icon: GraduationCap },
+          // The stages in workflow order: collect → dataset → train → models.
+          {
+            label: 'Collect',
+            path: '/data-collection',
+            icon: Video,
+            tabs: [
+              { id: 'sessions', label: 'Sessions' },
+              { id: 'priorities', label: 'Priorities' },
+              { id: 'uncertainty', label: 'Uncertainty' },
+            ],
+          },
+          { label: 'Datasets', path: '/datasets', icon: Database },
+          {
+            label: 'Train',
+            path: '/training',
+            icon: Cpu,
+            tabs: [
+              { id: 'jobs', label: 'Jobs' },
+              { id: 'simulation', label: 'Simulation' },
+              { id: 'evaluation', label: 'Evaluation' },
+            ],
+          },
+          // Model Registry (TASK-238).
+          { label: 'Models', path: '/models', icon: Brain },
+          {
+            label: 'Learning',
+            path: '/fleet-learning',
+            icon: Network,
+            tabs: [
+              { id: 'rounds', label: 'Rounds' },
+              { id: 'convergence', label: 'Convergence' },
+              { id: 'privacy', label: 'Privacy' },
+              { id: 'rohe', label: 'ROHE' },
+            ],
+          },
         ],
       },
-      { label: 'Datasets', path: '/datasets', icon: Database },
-      {
-        label: 'Training',
-        path: '/training',
-        icon: Cpu,
-        tabs: [
-          { id: 'jobs', label: 'Jobs' },
-          { id: 'simulation', label: 'Simulation' },
-          { id: 'evaluation', label: 'Evaluation' },
-        ],
-      },
-      // Model Registry (TASK-238).
-      { label: 'Models', path: '/models', icon: Brain },
+      // Deployments keeps its own row: it is the seam where Build hands over
+      // to Operate, and the one stage a fleet operator reaches without ever
+      // opening the training workflow.
       {
         label: 'Deployments',
         path: '/deployments',
@@ -237,17 +279,6 @@ export const NAV_GROUPS: NavGroup[] = [
         tabs: [
           { id: 'deployments', label: 'Deployments' },
           { id: 'skills', label: 'Skills' },
-        ],
-      },
-      {
-        label: 'Fleet Learning',
-        path: '/fleet-learning',
-        icon: Network,
-        tabs: [
-          { id: 'rounds', label: 'Rounds' },
-          { id: 'convergence', label: 'Convergence' },
-          { id: 'privacy', label: 'Privacy' },
-          { id: 'rohe', label: 'ROHE' },
         ],
       },
       { label: 'Marketplace', path: '/marketplace', icon: Store },

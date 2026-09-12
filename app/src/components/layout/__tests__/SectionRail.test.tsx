@@ -1,9 +1,9 @@
 /**
  * @file SectionRail.test.tsx
  * @description The shell's second level: nothing at all for a row that
- *              declares no rail (still most of them), and — for the one row
- *              that does, Missions — the three stops on every URL it owns,
- *              with aria-current on the stop that owns that URL.
+ *              declares no rail (still most of them), and — for the two rows
+ *              that do, Missions and Skill Training — every stop on every URL
+ *              the row owns, with aria-current on the stop that owns that URL.
  * @feature layout
  */
 
@@ -26,7 +26,10 @@ vi.mock('../navigation', async (importOriginal) => {
 });
 
 /** The Missions rail, in model order (TASK-277). */
-const STOPS = ['Patrol', 'Guide', 'Automations'];
+const MISSION_STOPS = ['Patrol', 'Guide', 'Automations'];
+
+/** The Skill Training rail, in model order (TASK-278). */
+const STAGE_STOPS = ['Overview', 'Collect', 'Datasets', 'Train', 'Models', 'Learning'];
 
 beforeEach(() => {
   nav.groups = NAV_GROUPS;
@@ -40,8 +43,17 @@ function renderAt(path: string) {
   );
 }
 
+/** The whole rail, in order, with `aria-current` on `current` and nowhere else. */
+function expectRail(stops: string[], current: string) {
+  expect(screen.getAllByRole('link').map((l) => l.textContent)).toEqual(stops);
+  expect(screen.getByRole('link', { name: current })).toHaveAttribute('aria-current', 'page');
+  for (const other of stops.filter((stop) => stop !== current)) {
+    expect(screen.getByRole('link', { name: other })).not.toHaveAttribute('aria-current');
+  }
+}
+
 describe('SectionRail', () => {
-  it.each(['/dashboard', '/fleet', '/robots/r-1', '/compliance', '/account'])(
+  it.each(['/dashboard', '/fleet', '/robots/r-1', '/compliance', '/deployments', '/account'])(
     'renders nothing on %s — the row that owns it declares no rail',
     (path) => {
       renderAt(path);
@@ -71,11 +83,29 @@ describe('SectionRail', () => {
     ['/processes/p-1', 'Automations'],
   ])('shows Patrol · Guide · Automations on %s, current on %s', (path, current) => {
     renderAt(path);
-    expect(screen.getAllByRole('link').map((l) => l.textContent)).toEqual(STOPS);
-    expect(screen.getByRole('link', { name: current })).toHaveAttribute('aria-current', 'page');
-    for (const other of STOPS.filter((stop) => stop !== current)) {
-      expect(screen.getByRole('link', { name: other })).not.toHaveAttribute('aria-current');
-    }
+    expectRail(MISSION_STOPS, current);
+  });
+
+  // The same for the Skill Training row: its five stages live outside
+  // /pipeline, so the rail has to survive on every one of their URLs — a new
+  // session, a recording cockpit, an episode viewer, a round detail.
+  it.each([
+    ['/pipeline', 'Overview'],
+    ['/data-collection', 'Collect'],
+    ['/data-collection?tab=uncertainty', 'Collect'],
+    ['/data-collection/new', 'Collect'],
+    ['/data-collection/sess-1', 'Collect'],
+    ['/data-collection/record/sess-1', 'Collect'],
+    ['/datasets', 'Datasets'],
+    ['/datasets/d-1/episodes', 'Datasets'],
+    ['/training', 'Train'],
+    ['/training?tab=simulation', 'Train'],
+    ['/models', 'Models'],
+    ['/fleet-learning', 'Learning'],
+    ['/fleet-learning/rounds/r-1', 'Learning'],
+  ])('shows the six pipeline stages on %s, current on %s', (path, current) => {
+    renderAt(path);
+    expectRail(STAGE_STOPS, current);
   });
 
   it('raises the current stop out of the track', () => {

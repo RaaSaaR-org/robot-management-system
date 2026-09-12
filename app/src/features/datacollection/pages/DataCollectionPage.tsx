@@ -8,7 +8,7 @@
 import { useCallback, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Database, Plus } from 'lucide-react';
-import { LinkButton, NextStepBanner, PageHeader, PipelineBreadcrumb, Tabs } from '@/shared/components/ui';
+import { LinkButton, NextStepBanner, PageHeader, Tabs } from '@/shared/components/ui';
 import { SessionList } from '../components/SessionList';
 import { PriorityDashboard } from '../components/PriorityDashboard';
 import { UncertaintyHeatmap } from '../components/UncertaintyHeatmap';
@@ -57,9 +57,7 @@ export function DataCollectionPage() {
             New session
           </LinkButton>
         }
-      >
-        <PipelineBreadcrumb stage="collect" />
-      </PageHeader>
+      />
 
       <Tabs
         tabs={TABS.map((t) => ({ id: t.id, label: t.label, count: t.id === 'sessions' ? pagination.total || undefined : undefined }))}

@@ -3,7 +3,9 @@
  * @description The nav model: group order and the two unlabelled bookends,
  *              the tabs and the rail a row declares, which entry is active for
  *              nested and foreign detail routes, the flattened destinations
- *              the palette reads, and the feature/role gates.
+ *              the palette reads, the feature/role gates — and the one thing
+ *              the model implies about the pages: a page under a rail draws no
+ *              pipeline chip of its own.
  * @feature layout
  */
 
@@ -17,6 +19,31 @@ import {
   navDestinations,
   type NavGroup,
 } from '../navigation';
+
+// The pages of the Build group, as raw source. A rail stop and the
+// PipelineBreadcrumb say the same thing twice, so the chip left the pages the
+// Skill Training rail covers (TASK-278) — an absence no render of a single
+// page can prove, hence the source text. import.meta.glob rather than node:fs,
+// for the reason design-drift.test.ts gives: the app's tsconfig carries no Node
+// types, and Vite resolves the glob when it transforms this file.
+const BUILD_PAGES = import.meta.glob<string>(
+  [
+    '../../../features/datacollection/pages/DataCollectionPage.tsx',
+    '../../../features/datacollection/pages/NewSessionPage.tsx',
+    '../../../features/datacollection/pages/SessionDetailPage.tsx',
+    '../../../features/training/pages/DatasetsPage.tsx',
+    '../../../features/training/pages/DatasetEpisodesPage.tsx',
+    '../../../features/training/pages/TrainingPage.tsx',
+    '../../../features/deployment/pages/DeploymentsPage.tsx',
+  ],
+  { query: '?raw', import: 'default', eager: true },
+);
+
+const source = (file: string) => {
+  const key = Object.keys(BUILD_PAGES).find((k) => k.endsWith(`/${file}`));
+  if (!key) throw new Error(`no source for ${file}`);
+  return BUILD_PAGES[key];
+};
 
 const item = (label: string) => {
   const found = NAV_ITEMS.find((i) => i.label === label);
@@ -49,12 +76,24 @@ describe('NAV_GROUPS', () => {
     ]);
   });
 
-  it('is down to 20 rows: Digital Twin is a Fleet tab, Guide and Automations are rail stops', () => {
-    expect(NAV_ITEMS).toHaveLength(20);
-    // Their pages are unchanged; only their rows are gone.
-    expect(NAV_ITEMS.map((i) => i.path)).not.toContain('/sites');
-    expect(NAV_ITEMS.map((i) => i.path)).not.toContain('/tour');
-    expect(NAV_ITEMS.map((i) => i.path)).not.toContain('/processes');
+  it('is down to 15 rows: two rails and a tab swallowed eight of them', () => {
+    expect(NAV_ITEMS).toHaveLength(15);
+    // Their pages are unchanged; only their rows are gone — the twin into a
+    // Fleet tab (TASK-276), Guide and Automations into the Missions rail
+    // (TASK-277), the five stages into the Skill Training rail (TASK-278).
+    const paths = NAV_ITEMS.map((i) => i.path);
+    for (const gone of [
+      '/sites',
+      '/tour',
+      '/processes',
+      '/data-collection',
+      '/datasets',
+      '/training',
+      '/models',
+      '/fleet-learning',
+    ]) {
+      expect(paths).not.toContain(gone);
+    }
   });
 
   it('is down to Agent Mode · Missions in Automate', () => {
@@ -68,12 +107,13 @@ describe('NAV_GROUPS', () => {
     expect(operate.items.map((i) => i.label)).toEqual(['Fleet', 'Control Center', 'Alerts']);
   });
 
-  it('puts Models in Build between Training and Deployments', () => {
+  it('is down to Skill Training · Deployments · Marketplace in Build', () => {
     const build = NAV_GROUPS.find((g) => g.id === 'build')!;
-    const labels = build.items.map((i) => i.label);
-    expect(labels.indexOf('Models')).toBe(labels.indexOf('Training') + 1);
-    expect(labels[labels.indexOf('Models') + 1]).toBe('Deployments');
-    expect(item('Models').path).toBe('/models');
+    expect(build.items.map((i) => i.label)).toEqual(['Skill Training', 'Deployments', 'Marketplace']);
+    expect(item('Skill Training').path).toBe('/pipeline');
+    // Deployments keeps a row: it is the seam where Build hands over to
+    // Operate, so it hangs under no rail.
+    expect(item('Deployments').rail).toBeUndefined();
   });
 
   it("copies the pages' own tab ids and labels, and declares none for a page without a tab bar", () => {
@@ -91,21 +131,20 @@ describe('NAV_GROUPS', () => {
       'approvals',
       'privacy',
     ]);
-    expect(item('Fleet Learning').tabs?.map((t) => t.label)).toEqual([
-      'Rounds',
-      'Convergence',
-      'Privacy',
-      'ROHE',
-    ]);
-    for (const label of ['Dashboard', 'Control Center', 'Agent Mode', 'Datasets', 'Docs']) {
+    expect(item('Deployments').tabs?.map((t) => t.label)).toEqual(['Deployments', 'Skills']);
+    for (const label of ['Dashboard', 'Control Center', 'Agent Mode', 'Marketplace', 'Docs']) {
       expect(item(label).tabs).toBeUndefined();
     }
     // A railed row declares no tabs: the tabs belong to the stops' pages.
     expect(item('Missions').tabs).toBeUndefined();
+    expect(item('Skill Training').tabs).toBeUndefined();
   });
 
-  it('gives Missions the only rail: Patrol · Guide · Automations, tabs and all', () => {
-    expect(NAV_ITEMS.filter((i) => i.rail).map((i) => i.label)).toEqual(['Missions']);
+  it('declares a rail on exactly two rows', () => {
+    expect(NAV_ITEMS.filter((i) => i.rail).map((i) => i.label)).toEqual(['Missions', 'Skill Training']);
+  });
+
+  it('gives Missions the rail Patrol · Guide · Automations, tabs and all', () => {
     const rail = item('Missions').rail!;
     expect(rail.map((stop) => [stop.label, stop.path])).toEqual([
       ['Patrol', '/patrol'],
@@ -123,6 +162,32 @@ describe('NAV_GROUPS', () => {
     ]);
     // ProcessesPage has no tab bar.
     expect(rail[2].tabs).toBeUndefined();
+  });
+
+  it('gives Skill Training the six pipeline stops, tabs and all', () => {
+    const rail = item('Skill Training').rail!;
+    expect(rail.map((stop) => [stop.label, stop.path])).toEqual([
+      ['Overview', '/pipeline'],
+      ['Collect', '/data-collection'],
+      ['Datasets', '/datasets'],
+      ['Train', '/training'],
+      ['Models', '/models'],
+      ['Learning', '/fleet-learning'],
+    ]);
+    // Copied verbatim from each stage page's own TABS const.
+    expect(rail[1].tabs).toEqual([
+      { id: 'sessions', label: 'Sessions' },
+      { id: 'priorities', label: 'Priorities' },
+      { id: 'uncertainty', label: 'Uncertainty' },
+    ]);
+    expect(rail[3].tabs).toEqual([
+      { id: 'jobs', label: 'Jobs' },
+      { id: 'simulation', label: 'Simulation' },
+      { id: 'evaluation', label: 'Evaluation' },
+    ]);
+    expect(rail[5].tabs?.map((t) => t.label)).toEqual(['Rounds', 'Convergence', 'Privacy', 'ROHE']);
+    // The overview, the dataset list and the model registry own no tab bar.
+    for (const index of [0, 2, 4]) expect(rail[index].tabs).toBeUndefined();
   });
 });
 
@@ -148,9 +213,19 @@ describe('isNavItemActive', () => {
     // The twin viewer is still its own route, reached from Fleet's Sites tab.
     ['/sites/s-1', 'Fleet'],
     ['/sites', 'Fleet'],
-    ['/datasets/d-1/episodes', 'Datasets'],
-    ['/data-collection/new', 'Data Collection'],
-    ['/fleet-learning/rounds/1', 'Fleet Learning'],
+    // The eleven URLs the one Skill Training row owns: its own /pipeline plus
+    // the five stages it claims through alsoActiveOn, detail routes included.
+    ['/pipeline', 'Skill Training'],
+    ['/data-collection', 'Skill Training'],
+    ['/data-collection/new', 'Skill Training'],
+    ['/data-collection/sess-1', 'Skill Training'],
+    ['/data-collection/record/sess-1', 'Skill Training'],
+    ['/datasets', 'Skill Training'],
+    ['/datasets/d-1/episodes', 'Skill Training'],
+    ['/training', 'Skill Training'],
+    ['/models', 'Skill Training'],
+    ['/fleet-learning', 'Skill Training'],
+    ['/fleet-learning/rounds/1', 'Skill Training'],
     ['/marketplace/mine', 'Marketplace'],
     ['/deployments/dep-1', 'Deployments'],
     ['/docs/architecture', 'Docs'],
@@ -158,8 +233,9 @@ describe('isNavItemActive', () => {
     expect(activeFor(pathname)).toEqual([label]);
   });
 
-  it('is segment-aware: /fleet is not active on /fleet-learning', () => {
+  it('is segment-aware: /fleet is not active on /fleet-learning, and back', () => {
     expect(isNavItemActive(item('Fleet'), '/fleet-learning')).toBe(false);
+    expect(isNavItemActive(item('Skill Training'), '/fleet')).toBe(false);
   });
 
   it('leaves Agent Mode dark on every Missions URL', () => {
@@ -222,6 +298,26 @@ describe('navDestinations', () => {
     expect(paths).not.toContain('/tour?tab=tours');
   });
 
+  it('reaches every pipeline stage and every later stage tab', () => {
+    for (const path of [
+      '/pipeline',
+      '/data-collection',
+      '/data-collection?tab=priorities',
+      '/datasets',
+      '/training',
+      '/training?tab=simulation',
+      '/models',
+      '/fleet-learning',
+      '/fleet-learning?tab=privacy',
+    ]) {
+      expect(paths).toContain(path);
+    }
+    // A first tab is written by deleting the param, so it never appears.
+    expect(paths).not.toContain('/data-collection?tab=sessions');
+    expect(paths).not.toContain('/training?tab=jobs');
+    expect(paths).not.toContain('/fleet-learning?tab=rounds');
+  });
+
   it("names the row Missions and the stops themselves, so the palette reads a page's own name", () => {
     expect(destinations.filter((d) => d.path === '/patrol').map((d) => [d.kind, d.label])).toEqual([
       ['row', 'Missions'],
@@ -252,7 +348,7 @@ describe('navDestinations', () => {
     });
     expect(destinations.find((d) => d.path === '/patrol')?.group).toBe('Automate');
     expect(destinations.find((d) => d.path === '/training?tab=simulation')).toMatchObject({
-      row: 'Training',
+      row: 'Train',
       group: 'Build',
     });
   });
@@ -314,5 +410,22 @@ describe('filterNavGroups', () => {
 
   it('hides Admin from members even with multi-tenancy on', () => {
     expect(labels(filterNavGroups(NAV_GROUPS, { multiTenancyEnabled: true }, 'member'))).not.toContain('Admin');
+  });
+});
+
+describe('PipelineBreadcrumb', () => {
+  it.each([
+    'DataCollectionPage.tsx',
+    'NewSessionPage.tsx',
+    'SessionDetailPage.tsx',
+    'DatasetsPage.tsx',
+    'DatasetEpisodesPage.tsx',
+    'TrainingPage.tsx',
+  ])('is gone from %s — the rail above it already offers Overview and every sibling', (file) => {
+    expect(source(file)).not.toContain('PipelineBreadcrumb');
+  });
+
+  it('stays on DeploymentsPage, the one stage with no rail over it', () => {
+    expect(source('DeploymentsPage.tsx')).toContain('<PipelineBreadcrumb stage="deploy" />');
   });
 });

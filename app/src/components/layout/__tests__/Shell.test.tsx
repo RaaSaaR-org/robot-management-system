@@ -80,7 +80,9 @@ describe('Sidebar', () => {
     // unlabelled one included.
     expect(screen.getByRole('region', { name: 'Dashboard' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Automate' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Training' })).toHaveAttribute('aria-current', 'page');
+    // /training is a stop on the Skill Training rail now (TASK-278), so the
+    // sidebar lights the row that owns it, not a row of its own.
+    expect(screen.getByRole('link', { name: 'Skill Training' })).toHaveAttribute('aria-current', 'page');
   });
 });
 
