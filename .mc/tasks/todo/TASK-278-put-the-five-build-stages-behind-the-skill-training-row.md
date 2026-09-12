@@ -3,7 +3,7 @@ id: "TASK-278"
 aliases: []
 title: "Put the five build stages behind the Skill Training row"
 slug: "put-the-five-build-stages-behind-the-skill-training-row"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []

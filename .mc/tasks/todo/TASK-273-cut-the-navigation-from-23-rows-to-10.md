@@ -3,7 +3,7 @@ id: "TASK-273"
 aliases: []
 title: "Cut the navigation from 23 rows to 10"
 slug: "cut-the-navigation-from-23-rows-to-10"
-status: "todo"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
