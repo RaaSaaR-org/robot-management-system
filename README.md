@@ -32,7 +32,7 @@ is generated, and the UI labels simulated data as such. Rebuilt from `main` on e
 Physical Intelligence builds models (closed-source). NVIDIA Isaac simulates (cloud-only). No
 single platform connects it all — and none of them help you with EU AI Act record-keeping.
 
-**The solution:** NeoDEM is the integrating layer — an all-in-one platform, self-hosted, that
+**The solution:** NeoDEM is the integrating layer — a modular platform, self-hosted, that
 carries a robot's whole working life instead of one slice of it.
 
 The platform is hardware-agnostic. Development and go-to-market focus on **cognitive humanoids,

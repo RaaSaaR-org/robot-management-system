@@ -30,7 +30,7 @@
   margin-top: 30px;
 }
 .platform-intro h2 {
-  font-size: clamp(3.5rem, 6.8vw, 6.3rem);
+  font-size: clamp(2.75rem, 4.6vw, 4.25rem);
   line-height: 1.02;
   letter-spacing: -0.065em;
 }
@@ -40,8 +40,7 @@
 .platform-definition {
   padding-bottom: 4px;
 }
-.platform-definition p,
-.platform-team-copy p {
+.platform-definition p {
   color: #aabbd0;
   font-size: 15px;
   line-height: 1.85;
@@ -223,31 +222,13 @@
   font-size: 11px;
   line-height: 1.7;
 }
-.platform-team {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr;
-  gap: 64px;
-  margin-top: 45px;
-  padding-top: 36px;
-  border-top: 1px solid #2a3a4d;
-}
-.platform-team h3 {
-  margin-top: 17px;
-  font-size: clamp(26px, 3vw, 36px);
-  line-height: 1.2;
-  letter-spacing: -0.04em;
-}
-.platform-team-copy {
-  padding-top: 3px;
-}
 @media (max-width: 760px) {
-  .platform-intro,
-  .platform-team {
+  .platform-intro {
     grid-template-columns: minmax(0, 1fr);
     gap: 26px;
   }
   .platform-intro h2 {
-    font-size: clamp(3.3rem, 12vw, 5.2rem);
+    font-size: clamp(2.3rem, 8.5vw, 3.4rem);
   }
   .platform-blueprint {
     margin-top: 36px;
@@ -276,9 +257,6 @@
   }
   .platform-embodiments b {
     padding: 0 4px;
-  }
-  .platform-team {
-    gap: 20px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -13,7 +13,7 @@ import { scrollToSection } from './scrollToSection';
 const GITHUB_URL = 'https://github.com/RaaSaaR-org/robot-management-system';
 const CONTACT_EMAIL = 'info@EmAI.dev';
 
-interface FooterLink {
+export interface FooterLink {
   name: string;
   href: string;
   /** Opens in a new tab. */
@@ -26,15 +26,17 @@ interface FooterLink {
  * Every href here is checked against the repository. Notably there is no
  * LICENSE file committed, so "MIT License" points at the README section that
  * states the terms rather than at a 404 — the README says the same thing.
+ *
+ * Exported so landingAnchors.test.tsx resolves every one of these against the
+ * page and the platform doc instead of against a second copy of the list.
  */
-const footerLinks: Record<string, FooterLink[]> = {
+export const FOOTER_LINKS: Record<string, FooterLink[]> = {
   'On this page': [
+    { name: 'Platform', href: '#platform' },
     { name: 'Embodied Loop', href: '#circle' },
-    { name: 'Data engine', href: '#data' },
-    { name: 'Models', href: '#models' },
-    { name: 'Safety', href: '#safety' },
-    { name: 'Sovereignty', href: '#sovereignty' },
-    { name: 'Install', href: '#install' },
+    { name: 'Proof', href: '#proof' },
+    { name: 'Ownership', href: '#ownership' },
+    { name: 'Run it', href: '#install' },
     { name: 'Who builds it', href: '#who' },
   ],
   Source: [
@@ -72,8 +74,8 @@ export function Footer() {
               <Logo linkTo="" />
             </div>
             <p className="lp-body" style={{ fontSize: '0.875rem' }}>
-              The all-in-one Physical AI platform. Self-hosted, MIT-licensed, and honest about what
-              it does not know.
+              The modular Physical AI platform. Self-hosted, MIT-licensed, and honest about what it
+              does not know.
             </p>
             {brand.nameExpansion && (
               <p className="lp-note mt-3">
@@ -98,7 +100,7 @@ export function Footer() {
           </div>
 
           {/* Link columns */}
-          {Object.entries(footerLinks).map(([category, links]) => (
+          {Object.entries(FOOTER_LINKS).map(([category, links]) => (
             <div key={category}>
               <h2 className="lp-key mb-2">{category}</h2>
               <ul role="list">

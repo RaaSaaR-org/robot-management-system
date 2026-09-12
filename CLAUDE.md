@@ -411,6 +411,7 @@ Guidelines:
 
 | Document                         | Description                       |
 | -------------------------------- | --------------------------------- |
+| `docs/platform.md`               | What the platform does, how far each part is taken, how to install it |
 | `docs/architecture.md`           | Full system architecture          |
 | `docs/app-architecture.md`       | Frontend patterns (detailed)      |
 | `docs/api.md`                    | API reference                     |

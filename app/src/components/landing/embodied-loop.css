@@ -315,31 +315,6 @@
 .embodied-loop-link:hover {
   color: #fff;
 }
-.embodied-loop-return {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 25px;
-  border-top: 1px solid #293b50;
-  border-bottom: 1px solid #293b50;
-  padding: 24px 0;
-  margin-top: 52px;
-}
-.embodied-loop-return > span {
-  color: #aabfd7;
-  font: 500 11px/1.5 var(--font-sans);
-  letter-spacing: 0.1em;
-  flex-shrink: 0;
-}
-.embodied-loop-return p {
-  color: #dde7f4;
-  font-size: clamp(14px, 1.6vw, 20px);
-  letter-spacing: -0.02em;
-}
-.embodied-loop-return svg {
-  color: #a5e4d7;
-  flex-shrink: 0;
-}
 .embodied-loop-disclosure {
   max-width: 810px;
   margin: 24px auto 0;
@@ -435,16 +410,6 @@
     display: block;
     padding: 24px;
   }
-  .embodied-loop-return {
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-  .embodied-loop-return > span {
-    width: 100%;
-  }
-  .embodied-loop-return p {
-    max-width: calc(100% - 45px);
-  }
 }
 @media (max-width: 600px) {
   .embodied-loop {
@@ -463,9 +428,6 @@
     font-size: 11px;
     gap: 12px;
     margin-top: 14px;
-  }
-  .embodied-loop-return {
-    margin-top: 35px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

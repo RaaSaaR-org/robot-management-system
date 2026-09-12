@@ -4,14 +4,11 @@
  * @feature landing
  */
 
-import { scrollToSection } from '../components/landing/scrollToSection';
+import { Link } from 'react-router-dom';
 import { Header } from '../components/landing/Header';
 import { HeroSection } from '../components/landing/HeroSection';
 import { PlatformSection } from '../components/landing/PlatformSection';
 import { FullCircleSection } from '../components/landing/FullCircleSection';
-import { DataEngineSection } from '../components/landing/DataEngineSection';
-import { ModelLayerSection } from '../components/landing/ModelLayerSection';
-import { HonestySection } from '../components/landing/HonestySection';
 import { SovereigntySection } from '../components/landing/SovereigntySection';
 import { RunItSection } from '../components/landing/RunItSection';
 import { CommunitySection } from '../components/landing/CommunitySection';
@@ -28,9 +25,9 @@ export function LandingPage() {
         <HeroSection />
         <PlatformSection />
         <FullCircleSection />
-        <DataEngineSection />
-        <ModelLayerSection />
-        <section className="lp-section" aria-labelledby="landing-proof-heading">
+        {/* The page's one piece of evidence, and the only section whose anchor
+            is reached from the loop above — hence its own id. */}
+        <section id="proof" className="lp-section lp-anchor" aria-labelledby="landing-proof-heading">
           <div className="lp-container">
             <div>
               <p className="lp-key">FROM THE SIMULATOR / A LOGGED RUN</p>
@@ -43,19 +40,15 @@ export function LandingPage() {
                 A command to walk two metres. A rack in the way. Watch the safety layer stop the
                 robot — and refuse the next command.
               </p>
-              <p className="lp-body mt-5 max-w-3xl">
-                This replay comes from a logged warehouse simulation on 2 August 2026, using the
-                same controls as a real G1. The robot stopped 0.48 m from the rack; a second
-                approach stopped at 0.49 m. These are simulation results, not physical hardware
-                measurements.
-              </p>
-              <a
-                href="#safety"
-                onClick={(event) => scrollToSection(event, '#safety')}
+              {/* Where the run came from, and every other safety layer, is one
+                  link away in the doc — the exhibit's own labels carry what a
+                  reader needs to trust the number in front of them. */}
+              <Link
+                to="/docs/platform#safety"
                 className="lp-btn-secondary mt-7 inline-flex px-5 py-3 text-sm"
               >
-                Explore the safety layers ↓
-              </a>
+                Read how the safety layer works →
+              </Link>
             </div>
             <div className="safety-exhibit">
               <div className="safety-illustration">
@@ -80,7 +73,6 @@ export function LandingPage() {
             </div>
           </div>
         </section>
-        <HonestySection />
         <SovereigntySection />
         <RunItSection />
         <CommunitySection />

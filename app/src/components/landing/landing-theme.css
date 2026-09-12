@@ -188,9 +188,6 @@
 .landing-page .embodied-loop-crossing-shadow {
   stroke: var(--bg-primary);
 }
-.landing-page .platform-team h3 {
-  font-size: clamp(26px, 3vw, 36px);
-}
 .landing-page footer {
   background: var(--bg-secondary);
 }

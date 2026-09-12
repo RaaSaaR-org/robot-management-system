@@ -5,7 +5,8 @@
  */
 
 import { memo, useState, type CSSProperties } from 'react';
-import { ArrowRight, ArrowUpRight, Pause, Play } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ArrowUpRight, Pause, Play } from 'lucide-react';
 import { scrollToSection } from './scrollToSection';
 import './embodied-loop.css';
 
@@ -29,11 +30,10 @@ export const STAGES: Stage[] = [
     maturity: 'live',
     headline: 'Every episode, versioned.',
     summary:
-      'Demonstrations, teleoperation sessions and real LiDAR scans become versioned datasets.',
+      'Demonstrations, teleoperation and real LiDAR scans become versioned datasets in an open format.',
     bullets: [
-      'Trim the wobbly takes or drop the failed ones and you get a new version — the original recording is never touched, and every version knows where it came from.',
-      'Walk a scanner around a room and it comes back as a digital twin you can navigate and simulate in. Proven on a real scan of our own lab.',
-      'Teleoperation and VR sessions record straight into a training-ready dataset — no export step. In simulation so far.',
+      'Trim the wobbly takes and you get a new version; the original recording is never touched.',
+      'A scanner we walked around our lab came back as a twin you can navigate and simulate in.',
     ],
   },
   {
@@ -42,11 +42,18 @@ export const STAGES: Stage[] = [
     label: 'Train',
     maturity: 'live',
     headline: 'Your data, your model.',
-    summary: 'Fine-tune on your own data without leaving the LeRobot format.',
+    summary:
+      'Fine-tune on your own data, in the open LeRobot format, and sync with HuggingFace both ways.',
     bullets: [
-      'Your datasets stay in the open LeRobot format and sync with HuggingFace both ways — bring them in, take them out again.',
-      'Six base models to choose from, with different levels of readiness. SmolVLA has completed the simulation workflow; GR00T N1.7 trains natively.',
-      'The heavy lifting runs on whichever GPU box you point at it, so training never competes with the machine running your fleet.',
+      // Four vendors: HuggingFace, Physical Intelligence, Stanford and NVIDIA —
+      // the makers behind the six entries of `BaseModels` in
+      // server/src/types/vla.types.ts. pi0.5 is scaffolded in the sibling
+      // vla-server and is deliberately not counted: it is not selectable.
+      'Six base models from four vendors are selectable as the starting point for a run.',
+      // The page's single mention of NVIDIA's model, and the only claim about
+      // it: the training wizard lists it (wizard/wizardModel.ts), and SmolVLA
+      // is the one that has been through train, serve and evaluate here.
+      'GR00T N1.7 trains natively; SmolVLA has been fine-tuned, served and scored here end to end.',
     ],
   },
   {
@@ -54,15 +61,14 @@ export const STAGES: Stage[] = [
     index: 3,
     // Gated, not Live: the registry, canary and rollback paths are real, but the
     // only bridge to a real G1 refuses to move unless it is explicitly armed, so
-    // no model has ever been shipped to physical hardware. See the third bullet.
+    // no model has ever been shipped to physical hardware. See the second bullet.
     label: 'Deploy',
     maturity: 'gated',
     headline: 'Shipped like software.',
-    summary: 'Ship a model to a robot the way you would ship software.',
+    summary: 'A registry, staged rollouts and signed updates — with the last gate still shut.',
     bullets: [
-      'A model registry, staged rollouts with a health check at every step, and rollback in one click.',
-      'Updates go out over the air cryptographically signed, so a robot only ever installs what you actually shipped.',
-      'The bridge to a real G1 is deliberately locked. It rehearses without moving by default, takes two separate arming steps to go live, and never drives the legs.',
+      'A model registry, staged rollout with a health check at each step, rollback in one click.',
+      'Updates are cryptographically signed, and the bridge to a real G1 stays locked behind two arming steps.',
     ],
   },
   {
@@ -71,11 +77,11 @@ export const STAGES: Stage[] = [
     label: 'Evaluate',
     maturity: 'sim',
     headline: 'Scored, and second-guessed.',
-    summary: 'Score a model in simulation, and try to catch yourself being optimistic.',
+    summary:
+      'Every run scored attempt by attempt; the first traps we ran overturned a result we liked.',
     bullets: [
-      'Every run scored attempt by attempt: success rate, where it went wrong, and how it compares to the model it would replace.',
-      'Two built-in traps you are meant to fail. A do-nothing model that must score zero, and a run given the wrong instruction that must score worse. The first time we ran them, they overturned a result we liked.',
-      'A pick-and-place room for the G1 and its hands, mirroring the workflow NVIDIA ships for GR00T.',
+      'Success rate, where it went wrong, and how it compares to the model it would replace.',
+      'Two traps you are meant to fail: a do-nothing model must score zero, a misdirected run worse.',
     ],
   },
   {
@@ -86,9 +92,10 @@ export const STAGES: Stage[] = [
     headline: 'Plan first, permission second.',
     summary: 'A local model plans; the safety layer decides whether the plan gets to run.',
     bullets: [
-      'Say “geh zum Regal RACK-A” and the robot turns it into a plan you can read step by step before it walks a single one — over the same controls a real G1 uses.',
-      'A keep-out zone stopped a two-metre walk 0.48 m clear of the rack and refused the next command until it was cleared. Reproduced twice.',
-      'Reading a real, powered G1 works today. Anything that moves one is still simulation.',
+      'Say “geh zum Regal RACK-A” and read the plan step by step before the robot walks one.',
+      // "in simulation" is the qualifier that makes the number true; the Sim tag
+      // says the same thing, but a bullet quoting a measurement should carry it.
+      'An enforced keep-out zone stopped a two-metre walk 0.48 m clear of the rack, in simulation.',
     ],
   },
   {
@@ -97,22 +104,42 @@ export const STAGES: Stage[] = [
     label: 'Comply',
     maturity: 'live',
     headline: 'Provable, not asserted.',
-    summary: 'Record-keeping a regulator can check, and erasure that reaches the robot.',
+    summary:
+      'Record-keeping a regulator can check (EU AI Act Art. 12), and erasure that reaches the robot.',
     bullets: [
-      'An audit trail that cannot be edited quietly — alter one entry and the check fails and names it (EU AI Act Art. 12).',
-      'Records of processing, a self-service portal covering all seven kinds of data-subject request, legal holds and retention schedules.',
-      'A deletion request reaches the robots too: it wipes what they remember, and tells you which ones were switched off rather than counting them as done.',
+      'An audit trail that cannot be edited quietly — alter an entry and the check names it.',
+      'A deletion request wipes what the robots remember, and names the ones that were switched off.',
     ],
   },
 ];
 
-const STAGE_LINKS: Record<string, { href: string; label: string }> = {
-  collect: { href: '#data', label: 'Explore the data engine' },
-  train: { href: '#models', label: 'Explore model readiness' },
-  deploy: { href: '#safety', label: 'Explore the deployment gates' },
-  evaluate: { href: '#safety', label: 'See the simulation evidence' },
-  operate: { href: '#safety', label: 'Explore the safety layers' },
-  comply: { href: '#sovereignty', label: 'Explore ownership and control' },
+/**
+ * Where a stage panel sends a reader who wants more than two bullets. Two kinds,
+ * because the detail now lives in two places: the Proof section further down the
+ * page, and docs/platform.md. The union keeps the call site honest — no
+ * non-null assertion, and no `scrollToSection` on a route, which only handles
+ * `#…` and would let the browser follow a docs href out of the HashRouter demo
+ * build (see scrollToSection.ts). Three labels on one `#proof` target is
+ * deliberate: the label says what the reader will see there.
+ */
+export type StageLink =
+  { kind: 'anchor'; href: string; label: string } | { kind: 'doc'; to: string; label: string };
+
+export const STAGE_LINKS: Record<string, StageLink> = {
+  collect: {
+    kind: 'doc',
+    to: '/docs/platform#the-data-engine',
+    label: 'Read about the data engine',
+  },
+  train: { kind: 'doc', to: '/docs/platform#models', label: 'See which models are ready' },
+  deploy: { kind: 'anchor', href: '#proof', label: 'See the deployment gates hold' },
+  evaluate: { kind: 'anchor', href: '#proof', label: 'See the simulation evidence' },
+  operate: { kind: 'anchor', href: '#proof', label: 'Watch it stop' },
+  comply: {
+    kind: 'doc',
+    to: '/docs/platform#ownership-and-the-record',
+    label: 'Read about ownership and the record',
+  },
 };
 
 const READOUT_ID = 'fullcircle-readout';
@@ -293,22 +320,24 @@ export const FullCircleSection = memo(function FullCircleSection() {
                 <li key={bullet}>{bullet}</li>
               ))}
             </ul>
-            <a
-              className="embodied-loop-link"
-              href={link.href}
-              onClick={(event) => scrollToSection(event, link.href)}
-            >
-              {link.label}
-              <ArrowUpRight size={17} aria-hidden="true" />
-            </a>
+            {link.kind === 'doc' ? (
+              <Link className="embodied-loop-link" to={link.to}>
+                {link.label}
+                <ArrowUpRight size={17} aria-hidden="true" />
+              </Link>
+            ) : (
+              <a
+                className="embodied-loop-link"
+                href={link.href}
+                onClick={(event) => scrollToSection(event, link.href)}
+              >
+                {link.label}
+                <ArrowUpRight size={17} aria-hidden="true" />
+              </a>
+            )}
           </div>
         </div>
 
-        <div className="embodied-loop-return">
-          <span>THE RETURN PATH</span>
-          <p>What happens in the world becomes what you teach next.</p>
-          <ArrowRight size={24} aria-hidden="true" />
-        </div>
         <p className="embodied-loop-disclosure">
           One connected lifecycle. Different levels of readiness. <strong>Live</strong> means real
           hardware or real data; <strong>Sim</strong> means simulation only; <strong>Gated</strong>{' '}

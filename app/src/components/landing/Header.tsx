@@ -12,14 +12,16 @@ import { scrollToSection } from './scrollToSection';
 
 const GITHUB_URL = 'https://github.com/RaaSaaR-org/robot-management-system';
 
-/** Anchors here must match the section ids on the landing page. */
-const NAV_ITEMS: ReadonlyArray<{ label: string; href: string }> = [
+/**
+ * Anchors here must match the section ids on the landing page. Exported so
+ * landingAnchors.test.tsx checks the real nav model rather than a copy of it.
+ */
+export const NAV_ITEMS: ReadonlyArray<{ label: string; href: string }> = [
   { label: 'Platform', href: '#platform' },
   { label: 'Embodied Loop', href: '#circle' },
-  { label: 'Data', href: '#data' },
-  { label: 'Models', href: '#models' },
-  { label: 'Safety', href: '#safety' },
-  { label: 'Install', href: '#install' },
+  { label: 'Proof', href: '#proof' },
+  { label: 'Ownership', href: '#ownership' },
+  { label: 'Run it', href: '#install' },
 ];
 
 /** Opaque landing surface keeps navigation readable over the animated scenes. */

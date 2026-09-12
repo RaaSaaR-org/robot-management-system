@@ -51,6 +51,12 @@ describe('categoryFromSlug', () => {
     expect(categoryFromSlug('vla-integration-guide')).toBe('Robot Integration');
   });
 
+  it('files the product overview under Getting Started', () => {
+    // The landing page links straight into docs/platform.md, so an unmapped
+    // slug would strand the page a reader was sent to in Other.
+    expect(categoryFromSlug('platform')).toBe('Getting Started');
+  });
+
   it('derives a category from the subdirectory', () => {
     expect(categoryFromSlug('planning/prd')).toBe('Planning');
   });
@@ -64,6 +70,7 @@ describe('the loaded registry', () => {
   it('holds the docs/ tree', () => {
     expect(DOC_ENTRIES.length).toBeGreaterThan(10);
     expect(DOC_CONTENT.get('README')).toContain('# NeoDEM');
+    expect(DOC_CONTENT.get('platform')).toContain('## Readiness at a glance');
   });
 
   it('opens on the first entry, and README sorts ahead of the alphabetical list', () => {

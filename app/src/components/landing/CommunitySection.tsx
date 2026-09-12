@@ -27,7 +27,7 @@ const PARTIES: Party[] = [
     role: 'Steward · Saarbrücken, Germany',
     slot: 'filled',
     description:
-      'Sets direction, reviews what the crew ships, and maintains the open-source release. The day-to-day work — writing code, running the test suite, triaging issues, shipping fixes — runs on AI agents around the clock.',
+      'Sets direction, reviews what the crew ships, and maintains the open-source release.',
   },
   {
     key: 'cloud',
@@ -35,7 +35,7 @@ const PARTIES: Party[] = [
     role: 'Partner slot',
     slot: 'open',
     description:
-      'Help make the platform easier to try. Today it is self-hosted; a public hosting partner could let more teams explore it without setting up their own instance.',
+      'The platform is self-hosted today. A hosting partner would let teams try it without standing up their own instance.',
   },
   {
     key: 'compute',
@@ -43,7 +43,7 @@ const PARTIES: Party[] = [
     role: 'Partner slot',
     slot: 'open',
     description:
-      'Support more training and evaluation experiments with GPU time and inference credits, from SmolVLA fine-tuning to testing the next model.',
+      'GPU time and inference credits, for the fine-tuning and evaluation runs the project cannot fund alone.',
   },
 ];
 
@@ -68,9 +68,8 @@ export function CommunitySection() {
 
             <p className="lp-lede mt-5">
               {brand.name} is built by EmAI Robotics GmbH in Saarbrücken, Germany, with AI agents
-              contributing code, tests and fixes. People set the direction and review the work.
-              The platform is MIT-licensed and public. Bring your ideas, your hardware or your
-              next experiment.
+              writing code and tests around the clock; people set the direction and review the
+              work. MIT-licensed, public, and open to your hardware or your question.
             </p>
 
             {/* Ledger of roles. Filled and open are told apart by the tag and the
@@ -107,14 +106,10 @@ export function CommunitySection() {
               ))}
             </ul>
 
-            {/* Last block on the page. One line of finality and the contact action —
-                deliberately not a CTA band; the closing slab was cut for good reason. */}
-            <p className="lp-body mt-10">
-              Have a robot, a research question or a use case worth exploring? Let&rsquo;s build
-              the next step together. The code, the evidence and the open problems are public.
-            </p>
-
-            <div className="mt-6">
+            {/* Last block on the page: the contact action alone. The paragraph that
+                used to sit above it only restated the lede's invitation, and this is
+                deliberately not a CTA band — the closing slab was cut for good reason. */}
+            <div className="mt-10">
               <a
                 href={`mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(
                   `${brand.name} partner slot`,

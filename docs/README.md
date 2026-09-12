@@ -83,6 +83,7 @@ The robot agent uses `.env.so101` for SO-101 configuration (port 41245, robot ty
 
 | Document | Description |
 |----------|-------------|
+| [Platform](platform.md) | What each part does, how far it is taken, how to install it |
 | [Architecture](architecture.md) | Services, data flow, infrastructure |
 | [API Reference](api.md) | HTTP endpoints for all services |
 | [Agent Mode, patrol and host mode](agent-mode.md) | The on-robot local-LLM agent and its two use cases: what they do, how to switch them on, what they refuse |
