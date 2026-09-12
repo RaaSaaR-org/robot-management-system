@@ -9,8 +9,6 @@ import { Header } from '../components/landing/Header';
 import { HeroSection } from '../components/landing/HeroSection';
 import { PlatformSection } from '../components/landing/PlatformSection';
 import { FullCircleSection } from '../components/landing/FullCircleSection';
-import { DataEngineSection } from '../components/landing/DataEngineSection';
-import { ModelLayerSection } from '../components/landing/ModelLayerSection';
 import { SovereigntySection } from '../components/landing/SovereigntySection';
 import { RunItSection } from '../components/landing/RunItSection';
 import { CommunitySection } from '../components/landing/CommunitySection';
@@ -27,8 +25,6 @@ export function LandingPage() {
         <HeroSection />
         <PlatformSection />
         <FullCircleSection />
-        <DataEngineSection />
-        <ModelLayerSection />
         {/* The page's one piece of evidence, and the only section whose anchor
             is reached from the loop above — hence its own id. */}
         <section id="proof" className="lp-section lp-anchor" aria-labelledby="landing-proof-heading">

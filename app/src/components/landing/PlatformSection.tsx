@@ -1,11 +1,12 @@
 /**
  * @file PlatformSection.tsx
- * @description Introduces NeoDEM as a shared home for Physical AI and its expert-led team.
+ * @description Introduces NeoDEM as a modular platform for Physical AI, with the
+ *              blueprint of what connects to what.
  * @feature landing
  */
 
 import { memo } from 'react';
-import { ArrowDown, ArrowUpRight, Blocks, Cpu, Database, Radio } from 'lucide-react';
+import { ArrowDown, Blocks, Cpu, Database, Radio } from 'lucide-react';
 import { NeoDEMMark } from '@/components/common/NeoDEMMark';
 import { scrollToSection } from './scrollToSection';
 import './platform.css';
@@ -30,16 +31,22 @@ export const PlatformSection = memo(function PlatformSection() {
         </p>
         <div className="platform-intro">
           <h2 id="platform-heading" className="lp-display">
-            A home for
+            A modular platform for Physical AI,
             <br />
-            <span>Physical AI.</span>
+            <span>built for an open ecosystem.</span>
           </h2>
           <div className="platform-definition">
-            <p className="platform-lead">Big ideas deserve a life beyond the lab.</p>
+            {/* Modular is the accurate word, not a softer one: the inference and
+                training services live in sibling repositories, and NATS and
+                RustFS are optional — the features that need them switch
+                themselves off and say so. "Four vendors" counts the distinct
+                makers behind the six selectable base models (HuggingFace,
+                Physical Intelligence, Stanford, NVIDIA). */}
+            <p className="platform-lead">Modular, not monolithic.</p>
             <p>
-              NeoDEM is an open, all-in-one platform for building, deploying and managing Physical
-              AI. Bring your data, models and machines into one workspace — and turn what happens in
-              the real world into what gets better next.
+              NeoDEM connects your data, models and machines in one workspace. Datasets stay in the
+              open LeRobot format, base models come from four vendors, and training and inference
+              run as separate services.
             </p>
             <a href="#circle" onClick={(event) => scrollToSection(event, '#circle')}>
               Discover how it connects <ArrowDown size={17} aria-hidden="true" />
@@ -95,27 +102,6 @@ export const PlatformSection = memo(function PlatformSection() {
           <p className="platform-readiness" aria-hidden="true">
             A shared architecture. Integration readiness varies by hardware.
           </p>
-        </div>
-
-        <div className="platform-team">
-          <div>
-            <p className="platform-eyebrow">THE PEOPLE & AGENTS BEHIND IT</p>
-            <h3 className="lp-display">
-              Agentic by design.
-              <br />
-              Expert-led by choice.
-            </h3>
-          </div>
-          <div className="platform-team-copy">
-            <p>
-              Maintained by a fleet of AI agents, guided by experts in cloud infrastructure, app
-              development, robotics and AI. We bring these disciplines together to turn ambitious
-              ideas into a better home for Physical AI.
-            </p>
-            <a href="#circle" onClick={(event) => scrollToSection(event, '#circle')}>
-              Meet the Embodied Loop <ArrowUpRight size={18} aria-hidden="true" />
-            </a>
-          </div>
         </div>
       </div>
     </section>

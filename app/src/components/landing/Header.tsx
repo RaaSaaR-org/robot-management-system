@@ -16,8 +16,6 @@ const GITHUB_URL = 'https://github.com/RaaSaaR-org/robot-management-system';
 const NAV_ITEMS: ReadonlyArray<{ label: string; href: string }> = [
   { label: 'Platform', href: '#platform' },
   { label: 'Embodied Loop', href: '#circle' },
-  { label: 'Data', href: '#data' },
-  { label: 'Models', href: '#models' },
   { label: 'Proof', href: '#proof' },
   { label: 'Ownership', href: '#ownership' },
   { label: 'Install', href: '#install' },

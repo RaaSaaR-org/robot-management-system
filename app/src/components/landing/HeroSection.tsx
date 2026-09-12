@@ -19,7 +19,7 @@ export const HeroSection = memo(function HeroSection() {
         <div className="field-layout">
           <div className="field-copy">
             <p className="field-kicker">
-              <span /> {brand.name} / THE OPEN PHYSICAL AI PLATFORM
+              <span /> {brand.name} / MODULAR PLATFORM FOR PHYSICAL AI
             </p>
             <h1 id="hero-heading">
               Intelligence.

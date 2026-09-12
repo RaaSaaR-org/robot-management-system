@@ -29,9 +29,8 @@ interface FooterLink {
  */
 const footerLinks: Record<string, FooterLink[]> = {
   'On this page': [
+    { name: 'Platform', href: '#platform' },
     { name: 'Embodied Loop', href: '#circle' },
-    { name: 'Data engine', href: '#data' },
-    { name: 'Models', href: '#models' },
     { name: 'Proof', href: '#proof' },
     { name: 'Ownership', href: '#ownership' },
     { name: 'Install', href: '#install' },
@@ -72,8 +71,8 @@ export function Footer() {
               <Logo linkTo="" />
             </div>
             <p className="lp-body" style={{ fontSize: '0.875rem' }}>
-              The all-in-one Physical AI platform. Self-hosted, MIT-licensed, and honest about what
-              it does not know.
+              The modular Physical AI platform. Self-hosted, MIT-licensed, and honest about what it
+              does not know.
             </p>
             {brand.nameExpansion && (
               <p className="lp-note mt-3">
