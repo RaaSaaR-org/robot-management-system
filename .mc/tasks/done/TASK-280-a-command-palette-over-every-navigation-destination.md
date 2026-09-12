@@ -3,7 +3,7 @@ id: "TASK-280"
 aliases: []
 title: "A command palette over every navigation destination"
 slug: "a-command-palette-over-every-navigation-destination"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []

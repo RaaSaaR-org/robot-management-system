@@ -3,7 +3,7 @@ id: "TASK-276"
 aliases: []
 title: "Fold Digital Twin into Fleet as a Sites tab"
 slug: "fold-digital-twin-into-fleet-as-a-sites-tab"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
