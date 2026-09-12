@@ -3,7 +3,7 @@ id: "TASK-304"
 aliases: []
 title: "Publish release images to a lowercase GHCR repository"
 slug: "publish-release-images-to-a-lowercase-ghcr-repository"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
