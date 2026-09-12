@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses 
 
 ### Added
 
+- morph the hero across embodiments and unify the landing font (#305)
+- create a cinematic Three.js hero (#303)
+- dataset views — fork a dataset by selecting episodes, not by copying bytes (#293)
+- let a training run start from an existing model (#291)
+- make the model registry writable and give it a lineage (#288)
 - live camera stream for the real G1 (TASK-233) (#279)
 - odometry and the place graph now share one frame (TASK-228)
 - heading corrections can arc, because in-place left does nothing (TASK-228)
@@ -30,6 +35,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses 
 
 ### Fixed
 
+- repair real backend browser workflows (TASK-255) (#301)
+- fix the twelve defects the local test pass found (#316)
+- close the kit gaps the page redesign found (#315)
+- the docs viewer renders markdown as unstyled text (#304)
+- authenticate robot platform callbacks (#298)
+- prevent crashes across demo navigation and Model Registry (#297)
+- authenticate worker callbacks with their configured token (#296)
+- the e2e gate has never been green, and CI never ran the half of the suite that could tell (#295)
+- the CURATION_PYTHON recipe builds a venv that errors (#292)
+- a voice pack is its own axis, and a bad one no longer takes the service down (#290)
+- the manip bridge reports health it cannot know (#286)
 - run complete Python and isolated browser gates
 - the ground-truth frame carried the command in its velocity (TASK-231) (#289)
 - an arc is forward motion, and answers to what a walk answers to (PR #278 review)
@@ -53,8 +69,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses 
 - the robot agent image could not be built, on either architecture (#259)
 - the G1 sim was copying camera frames it then threw away (TASK-204) (#260)
 
+### Changed
+
+- cut the navigation from 23 rows to 10 (TASK-273) (#317)
+- retire the legacy styles and guard the design system (#314)
+- redesign the account, admin, chat and automation pages (#313)
+- redesign deployments, models, fleet learning, marketplace and updates (#312)
+- redesign the robot detail and control center (#311)
+- redesign Agent Mode, patrol, guide and digital twin (#310)
+- redesign the training pages (#309)
+- redesign the fleet overview pages (#308)
+- redesign the compliance pages (#307)
+- move the app onto the landing design system (#306)
+- reimagine the landing page (#302)
+
 ### Maintenance
 
+- document the demo day rehearsal and release checks (#299)
+- what running the workflow taught it (#285)
+- make the tracker tell the truth again (#284)
+- repair the five-skill workflow so it can actually run (#283)
+- track the Claude Code workflow files in git (#281)
+- remove the SCRAI workflow (#280)
 - close TASK-250
 - run the bench TASK-226 called its gate, and fix the three things stopping it (#294)
 - vla_skill is in the block list, not deferred from it (TASK-226) (#287)
