@@ -8,6 +8,7 @@ export { AppLayout } from './AppLayout';
 export { Sidebar } from './Sidebar';
 export type { SidebarProps } from './Sidebar';
 export { TopBar } from './TopBar';
+export type { TopBarProps } from './TopBar';
 export { MobileNav } from './MobileNav';
 export type { MobileNavProps } from './MobileNav';
 export { NavList } from './NavList';

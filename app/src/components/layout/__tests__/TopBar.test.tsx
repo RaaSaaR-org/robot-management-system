@@ -1,8 +1,10 @@
 /**
  * @file TopBar.test.tsx
- * @description The top bar's own controls: the docs help icon that replaced the
- *              sidebar's Docs row (TASK-279), and the theme toggle beside it —
- *              both icon-only, so both live or die by their accessible name.
+ * @description The top bar's own controls: the ⌘K search affordance the
+ *              navigation cut leans on (TASK-280), the docs help icon that
+ *              replaced the sidebar's Docs row (TASK-279), and the theme toggle
+ *              beside it — all icon-led, so they live or die by their
+ *              accessible name.
  * @feature layout
  */
 
@@ -27,15 +29,34 @@ beforeEach(() => {
   useUIStore.setState({ sidebarCollapsed: false, mobileMenuOpen: false });
 });
 
-function renderTopBar() {
+function renderTopBar(onOpenPalette: () => void = () => {}) {
   return render(
     <MemoryRouter initialEntries={['/dashboard']}>
-      <TopBar />
+      <TopBar onOpenPalette={onOpenPalette} />
     </MemoryRouter>,
   );
 }
 
 describe('TopBar', () => {
+  it('opens the palette from a search affordance that spells the shortcut out', async () => {
+    const onOpenPalette = vi.fn();
+    renderTopBar(onOpenPalette);
+    const search = screen.getByRole('button', { name: 'Search pages' });
+    // jsdom reports no platform, so the hint is the non-Apple spelling here.
+    expect(search).toHaveTextContent('Ctrl K');
+    expect(search).toHaveAttribute('title', 'Search pages (Ctrl K)');
+    await userEvent.click(search);
+    expect(onOpenPalette).toHaveBeenCalledTimes(1);
+  });
+
+  it('places the search affordance left of the docs icon', () => {
+    renderTopBar();
+    const position = screen
+      .getByRole('button', { name: 'Search pages' })
+      .compareDocumentPosition(screen.getByRole('link', { name: 'Docs' }));
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('links to the docs from a help icon with an accessible name', () => {
     renderTopBar();
     expect(screen.getByRole('link', { name: 'Docs' })).toHaveAttribute('href', '/docs');
