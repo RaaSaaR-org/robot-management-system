@@ -49,8 +49,9 @@ describe('NAV_GROUPS', () => {
     ]);
   });
 
-  it('still holds 23 rows — this slice regroups, it removes nothing', () => {
-    expect(NAV_ITEMS).toHaveLength(23);
+  it('is down to 22 rows: Digital Twin folded into Fleet as a tab', () => {
+    expect(NAV_ITEMS).toHaveLength(22);
+    expect(NAV_ITEMS.map((i) => i.path)).not.toContain('/sites');
   });
 
   it('puts the four automation rows in Automate, in order', () => {
@@ -58,9 +59,9 @@ describe('NAV_GROUPS', () => {
     expect(automate.items.map((i) => i.label)).toEqual(['Agent Mode', 'Patrol', 'Guide', 'Automations']);
   });
 
-  it('keeps Operate at Fleet · Control Center · Alerts · Digital Twin', () => {
+  it('keeps Operate at Fleet · Control Center · Alerts', () => {
     const operate = NAV_GROUPS.find((g) => g.id === 'operate')!;
-    expect(operate.items.map((i) => i.label)).toEqual(['Fleet', 'Control Center', 'Alerts', 'Digital Twin']);
+    expect(operate.items.map((i) => i.label)).toEqual(['Fleet', 'Control Center', 'Alerts']);
   });
 
   it('puts Models in Build between Training and Deployments', () => {
@@ -75,6 +76,7 @@ describe('NAV_GROUPS', () => {
     expect(item('Fleet').tabs).toEqual([
       { id: 'map', label: 'Map' },
       { id: 'list', label: 'Robots' },
+      { id: 'sites', label: 'Sites' },
     ]);
     expect(item('Compliance').tabs?.map((t) => t.id)).toEqual([
       'overview',
@@ -111,7 +113,9 @@ describe('isNavItemActive', () => {
     ['/patrol/runs/run-1', 'Patrol'],
     ['/tour/routes/abc', 'Guide'],
     ['/incidents/i-1', 'Alerts'],
-    ['/sites/s-1', 'Digital Twin'],
+    // The twin viewer is still its own route, reached from Fleet's Sites tab.
+    ['/sites/s-1', 'Fleet'],
+    ['/sites', 'Fleet'],
     ['/datasets/d-1/episodes', 'Datasets'],
     ['/data-collection/new', 'Data Collection'],
     ['/fleet-learning/rounds/1', 'Fleet Learning'],
@@ -164,6 +168,7 @@ describe('navDestinations', () => {
   it('writes the first tab as the bare path and every later tab as ?tab=id', () => {
     expect(paths).toContain('/fleet');
     expect(paths).toContain('/fleet?tab=list');
+    expect(paths).toContain('/fleet?tab=sites');
     expect(paths).not.toContain('/fleet?tab=map');
     expect(paths).toContain('/compliance?tab=privacy');
     expect(paths).not.toContain('/compliance?tab=overview');

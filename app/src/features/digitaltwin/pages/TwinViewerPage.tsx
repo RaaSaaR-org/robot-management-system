@@ -53,7 +53,9 @@ function normalizeRobotType(raw?: string): RobotType {
 const TAB_IDS = ['scan', 'zones'] as const;
 type Tab = (typeof TAB_IDS)[number];
 const VIEWPORT = 'h-[50vh] min-h-[300px] sm:h-[60vh] sm:min-h-[360px]';
-const BACK = { to: '/sites', label: 'Digital Twin' };
+// The gallery this viewer was opened from is Fleet's Sites tab (TASK-276).
+const SITES_TAB = '/fleet?tab=sites';
+const BACK = { to: SITES_TAB, label: 'Fleet' };
 
 export function TwinViewerPage() {
   const { siteId } = useParams<{ siteId: string }>();
@@ -189,7 +191,7 @@ export function TwinViewerPage() {
     try {
       await removeTwin(twin.id);
       toast.success('Site deleted', { description: twin.name });
-      navigate('/sites');
+      navigate(SITES_TAB);
     } catch (err) {
       toast.error("Couldn't delete site", { description: errorMessage(err, 'Delete failed') });
     }

@@ -17,9 +17,10 @@ import { expect, test, type Page } from '@playwright/test';
 // /design-system (DEV builds only).
 const ROUTES = [
   // Overview + Operate
-  '/dashboard', '/fleet', '/fleet?tab=list', '/robots/demo-h1-001', '/robots/demo-g1-001/cockpit',
+  '/dashboard', '/fleet', '/fleet?tab=list', '/fleet?tab=sites',
+  '/robots/demo-h1-001', '/robots/demo-g1-001/cockpit',
   '/control-center', '/agent', '/patrol', '/patrol/routes/new', '/tour', '/tour/routes/new',
-  '/processes', '/alerts', '/alerts?tab=history', '/alerts?tab=incidents', '/sites', '/chat',
+  '/processes', '/alerts', '/alerts?tab=history', '/alerts?tab=incidents', '/chat',
   // Build
   '/pipeline', '/data-collection', '/data-collection/new', '/datasets',
   '/datasets/demo-g1-edu/episodes', '/training', '/training?tab=evaluation',

@@ -63,7 +63,6 @@ import {
   LazySessionDetailPage,
   LazyDocsPage,
   LazyDesignSystemPage,
-  LazySitesGalleryPage,
   LazyTwinViewerPage,
   LazyNotFoundPage,
 } from './routes/lazyPages';
@@ -202,15 +201,8 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          {/* Digital Twin — room scanning + 3D twin viewer */}
-          <Route
-            path="/sites"
-            element={
-              <ProtectedAppRoute>
-                <LazySitesGalleryPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Digital Twin — merged into Fleet tabs (TASK-276). Viewer route stays. */}
+          <Route path="/sites" element={<Navigate to="/fleet?tab=sites" replace />} />
           <Route
             path="/sites/:siteId"
             element={

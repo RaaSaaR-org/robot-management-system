@@ -7,7 +7,7 @@
 import { expect, test } from '@playwright/test';
 
 const destinations = [
-  '/fleet', '/control-center', '/agent', '/sites', '/alerts', '/patrol', '/tour',
+  '/fleet', '/control-center', '/agent', '/alerts', '/patrol', '/tour',
   '/processes', '/pipeline', '/data-collection', '/datasets', '/training',
   '/deployments', '/fleet-learning', '/marketplace', '/compliance', '/updates',
   '/docs', '/settings',
@@ -30,9 +30,6 @@ for (const destination of destinations) {
     await expect(page.locator('main').getByRole('heading').first()).toBeVisible();
     expect(errors).toEqual([]);
 
-    if (destination === '/sites') {
-      await expect(page.getByText('No sites yet', { exact: true })).toBeVisible();
-    }
     if (destination === '/updates') {
       await expect(page.getByText('No update packages yet', { exact: true })).toBeVisible();
     }
@@ -42,7 +39,7 @@ for (const destination of destinations) {
       await expect(page.getByText('Could not load sim runs')).toHaveCount(0);
     }
 
-    if (['/sites', '/updates', '/pipeline'].includes(destination)) {
+    if (['/updates', '/pipeline'].includes(destination)) {
       await page.screenshot({ path: testInfo.outputPath(`${destination.slice(1)}.png`), fullPage: true });
     }
 
@@ -51,6 +48,24 @@ for (const destination of destinations) {
     expect(errors).toEqual([]);
   });
 }
+
+// The sites gallery is Fleet's Sites tab now (TASK-276), so it is no longer a
+// sidebar destination — it is reached the way a user reaches it, through the tab
+// bar, and the twin viewer it opens is still a route of its own.
+test("Fleet's Sites tab lists the scanned rooms", async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('./#/fleet');
+  await expect(page.getByRole('heading', { name: 'Fleet', exact: true })).toBeVisible();
+
+  await page.getByRole('tab', { name: 'Sites', exact: true }).click();
+  await expect(page).toHaveURL(/#\/fleet\?tab=sites/);
+  await expect(page.getByRole('button', { name: 'New scan', exact: true })).toBeEnabled();
+  await expect(page.getByText('No sites yet', { exact: true })).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('fleet-sites.png'), fullPage: true });
+});
 
 test('model registry renders and remains usable after loading models', async ({ page }, testInfo) => {
   const errors: string[] = [];

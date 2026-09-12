@@ -53,11 +53,9 @@ export const LazyFleetPage = lazy(() =>
 );
 
 /**
- * Digital Twin — sites gallery and the 3D twin viewer / room scanner
+ * Digital Twin — the 3D twin viewer / room scanner. The gallery it belongs to is
+ * Fleet's Sites tab now (TASK-276), so it ships inside the fleet chunk.
  */
-export const LazySitesGalleryPage = lazy(() =>
-  import('@/features/digitaltwin').then((m) => ({ default: m.SitesGalleryPage }))
-);
 export const LazyTwinViewerPage = lazy(() =>
   import('@/features/digitaltwin').then((m) => ({ default: m.TwinViewerPage }))
 );

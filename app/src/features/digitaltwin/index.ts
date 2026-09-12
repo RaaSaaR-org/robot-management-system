@@ -4,8 +4,11 @@
  * @feature digitaltwin
  */
 
-export { SitesGalleryPage } from './pages/SitesGalleryPage';
 export { TwinViewerPage } from './pages/TwinViewerPage';
+// The gallery is a tab of FleetPage now (TASK-276), so it is a component, not
+// a page. FleetPage imports it by path — this barrel pulls in three.js.
+export { SitesGallery } from './components/SitesGallery';
+export type { SitesGalleryProps } from './components/SitesGallery';
 export { TwinViewer } from './components/TwinViewer';
 export { TwinBackdrop } from './components/TwinBackdrop';
 export type { TwinBackdropKind } from './components/TwinBackdrop';

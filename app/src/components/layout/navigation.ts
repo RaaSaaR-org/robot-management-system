@@ -13,7 +13,6 @@ import {
   Bell,
   BookOpen,
   Bot,
-  Box,
   Brain,
   BrainCircuit,
   Building2,
@@ -121,11 +120,13 @@ export const NAV_GROUPS: NavGroup[] = [
         label: 'Fleet',
         path: '/fleet',
         icon: Bot,
-        // A robot's detail page is reached from the fleet list.
-        alsoActiveOn: [/^\/robots\/[^/]+\/?$/],
+        // A robot's detail page is reached from the fleet list, and the twin
+        // viewer from the Sites tab — both keep this row lit (TASK-276).
+        alsoActiveOn: [/^\/robots\/[^/]+\/?$/, /^\/sites(\/|$)/],
         tabs: [
           { id: 'map', label: 'Map' },
           { id: 'list', label: 'Robots' },
+          { id: 'sites', label: 'Sites' },
         ],
       },
       {
@@ -147,7 +148,6 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'incidents', label: 'Incidents' },
         ],
       },
-      { label: 'Digital Twin', path: '/sites', icon: Box },
     ],
   },
   // Automate — the work a robot does on its own, whether a human kicked it off
