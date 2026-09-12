@@ -44,6 +44,15 @@ export interface CommandPaletteProps {
   onClose: () => void;
 }
 
+/**
+ * A destination as the palette offers it: the model's, plus the labels of the
+ * destinations that were folded into it. An alias is searchable and shown in
+ * the trail — never the row's name, always a name the page also answers to.
+ */
+export interface PaletteDestination extends NavDestination {
+  aliases?: string[];
+}
+
 // ============================================================================
 // DESTINATIONS
 // ============================================================================
@@ -53,22 +62,34 @@ export interface CommandPaletteProps {
  * with its own first tab. That overlap is the model's convention, not a bug —
  * a page writes its first tab by *deleting* `?tab=`, so `/fleet` is both the
  * Fleet row and its Map tab — but two rows offering one URL would read as a
- * duplicate here. The first wins, which is the row: the name the sidebar uses.
+ * duplicate here. The first wins, which is the row — the name the sidebar uses
+ * — and the loser's label survives on it as an alias, so no word the model
+ * declares stops being searchable.
  */
-export function paletteDestinations(groups: NavGroup[]): NavDestination[] {
-  const seen = new Set<string>();
-  const offered: NavDestination[] = [];
+export function paletteDestinations(groups: NavGroup[]): PaletteDestination[] {
+  const byPath = new Map<string, PaletteDestination>();
+  const offered: PaletteDestination[] = [];
   for (const destination of navDestinations(groups)) {
-    if (seen.has(destination.path)) continue;
-    seen.add(destination.path);
-    offered.push(destination);
+    const kept = byPath.get(destination.path);
+    if (kept) {
+      // Dropping the duplicate must not drop its *word*: `/patrol` is the
+      // Missions row, the Patrol rail stop and its Routes tab all at once, and
+      // "patrol" is the name that page has answered to since before the cut.
+      if (destination.label !== kept.label && !kept.aliases?.includes(destination.label)) {
+        kept.aliases = [...(kept.aliases ?? []), destination.label];
+      }
+      continue;
+    }
+    const entry: PaletteDestination = { ...destination };
+    byPath.set(destination.path, entry);
+    offered.push(entry);
   }
   return offered;
 }
 
 /** The muted trail after a label: its row and its group, where they add a word. */
-function destinationTrail(destination: NavDestination): string {
-  return [destination.row, destination.group]
+function destinationTrail(destination: PaletteDestination): string {
+  return [destination.row, destination.group, ...(destination.aliases ?? [])]
     .filter((part): part is string => Boolean(part) && part !== destination.label)
     .join(' · ');
 }
@@ -89,13 +110,21 @@ function isSubsequence(needle: string, text: string): boolean {
 
 /** Where the hit was found. Lower sorts first, so a label beats a trail. */
 const PREFIX_HIT = 0;
-const LABEL_HIT = 1;
-const TRAIL_HIT = 2;
+const ALIAS_PREFIX_HIT = 1;
+const LABEL_HIT = 2;
+const ALIAS_HIT = 3;
+const TRAIL_HIT = 4;
 
-function rankOf(destination: NavDestination, needle: string): number | null {
+function rankOf(destination: PaletteDestination, needle: string): number | null {
   const label = destination.label.toLowerCase();
+  const aliases = destination.aliases?.map((alias) => alias.toLowerCase()) ?? [];
   if (label.startsWith(needle)) return PREFIX_HIT;
+  // An alias is a name of this page too, so it is ranked the way the label is:
+  // typing a page's whole name must beat another page's scattered letters —
+  // "map" is the Fleet map before it is the m-a-p buried in Marketplace.
+  if (aliases.some((alias) => alias.startsWith(needle))) return ALIAS_PREFIX_HIT;
   if (isSubsequence(needle, label)) return LABEL_HIT;
+  if (aliases.some((alias) => isSubsequence(needle, alias))) return ALIAS_HIT;
   // The row and the group are searchable too, so "automate" reaches every page
   // in that group and "guide" reaches the Visits tab hanging under Guide.
   const trail = `${label} ${destination.row} ${destination.group ?? ''}`.toLowerCase();
@@ -105,17 +134,23 @@ function rankOf(destination: NavDestination, needle: string): number | null {
 /**
  * The destinations matching `query`, best first. Case-insensitive subsequence,
  * so "dpmt" finds Deployments; an exact prefix on the label outranks a
- * subsequence, which outranks a hit found only in the row or the group. Inside
+ * subsequence, which outranks a hit on an alias, which outranks a hit found
+ * only in the row or the group. A prefix beats a subsequence at both levels,
+ * so a page's full name always wins over another page's scattered letters.
+ * Inside
  * one rank the model's own order survives — hence the explicit index tiebreak
  * rather than a sort that trusts its own stability.
  *
  * An empty query is not a filter: it lists everything, untouched.
  */
-export function matchDestinations(destinations: NavDestination[], query: string): NavDestination[] {
+export function matchDestinations(
+  destinations: PaletteDestination[],
+  query: string,
+): PaletteDestination[] {
   const needle = query.trim().toLowerCase();
   if (needle.length === 0) return [...destinations];
 
-  const hits: { destination: NavDestination; order: number; rank: number }[] = [];
+  const hits: { destination: PaletteDestination; order: number; rank: number }[] = [];
   destinations.forEach((destination, order) => {
     const rank = rankOf(destination, needle);
     if (rank !== null) hits.push({ destination, order, rank });
@@ -174,7 +209,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps): ReactEle
     setSelected((current) => (current + delta + results.length) % results.length);
   };
 
-  const go = (destination: NavDestination | undefined) => {
+  const go = (destination: PaletteDestination | undefined) => {
     if (!destination) return;
     // The `?tab=` a tab carries needs nothing else: every tabbed page reads the
     // param off the URL.

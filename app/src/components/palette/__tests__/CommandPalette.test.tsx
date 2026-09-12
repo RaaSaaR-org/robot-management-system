@@ -128,7 +128,9 @@ describe('CommandPalette', () => {
     // as its own page with the path back to it spelled out.
     expect(rows).toContain('Runs · Patrol · Automate');
     // A row does not repeat its own name at itself…
-    expect(rows).toContain('Fleet · Operate');
+    // Fleet's own first tab is the Map, and they share the URL `/fleet`, so the
+    // folded tab's name trails the row it was folded into (TASK-273 follow-up).
+    expect(rows).toContain('Fleet · Operate · Map');
     // …and a bookend group has no eyebrow to trail with.
     expect(rows).toContain('Dashboard');
   });
