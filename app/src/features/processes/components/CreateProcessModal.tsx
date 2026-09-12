@@ -1,16 +1,25 @@
 /**
  * @file CreateProcessModal.tsx
  * @description FormModal "New automation": name, description, priority, robot and
- *              repeatable steps. Toasts the result and hands the new id back.
+ *              steps, each an action the robot agent really executes plus the one
+ *              parameter that action needs. Toasts the result and hands the new id back.
  * @feature processes
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { Button, Checkbox, FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
+import { getErrorMessage } from '@/shared/utils';
 import { useRobots } from '@/features/robots/hooks/useRobots';
+import { useZones } from '@/features/fleet/hooks/useZones';
 import { useTasks } from '../hooks/useTasks';
-import { PROCESS_PRIORITY_LABELS, type CreateProcessStep, type ProcessPriority } from '../types';
+import {
+  PROCESS_PRIORITY_LABELS,
+  PROCESS_STEP_ACTION_LABELS,
+  type CreateProcessStep,
+  type ProcessPriority,
+  type StepActionType,
+} from '../types';
 
 export interface CreateProcessModalProps {
   isOpen: boolean;
@@ -26,21 +35,55 @@ const PRIORITY_OPTIONS = (Object.keys(PROCESS_PRIORITY_LABELS) as ProcessPriorit
   label: PROCESS_PRIORITY_LABELS[p],
 }));
 
-interface FieldErrors {
-  name?: string;
-  robot?: string;
-  steps?: string;
+const ACTION_OPTIONS = (Object.keys(PROCESS_STEP_ACTION_LABELS) as StepActionType[]).map((a) => ({
+  value: a,
+  label: PROCESS_STEP_ACTION_LABELS[a],
+}));
+
+/**
+ * A step being edited. `zoneId` is local to the form: the server is sent
+ * coordinates, because `TaskQueue` hands `actionConfig.location` to the robot's
+ * mover as a `RobotLocation` and a zone *name* has no x/y.
+ */
+interface StepDraft extends CreateProcessStep {
+  zoneId?: string;
+}
+
+const DEFAULT_ACTION: StepActionType = 'move_to_location';
+
+function newStep(): StepDraft {
+  return { name: '', actionType: DEFAULT_ACTION, actionConfig: {} };
+}
+
+/** The problem with a step, or undefined when it is ready to send. */
+function stepProblem(step: StepDraft): string | undefined {
+  if (!step.name.trim()) return 'Name every step, or remove the empty ones.';
+  switch (step.actionType) {
+    case 'move_to_location':
+      return step.actionConfig.location ? undefined : 'Pick a zone for every "Move to zone" step.';
+    case 'pickup_object':
+      return String(step.actionConfig.objectId ?? '').trim()
+        ? undefined
+        : 'Name the object for every "Pick up object" step.';
+    case 'wait': {
+      const ms = Number(step.actionConfig.durationMs ?? 0);
+      return Number.isFinite(ms) && ms > 0 ? undefined : 'Give every "Wait" step a duration in seconds.';
+    }
+    default:
+      return undefined;
+  }
 }
 
 export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobotId }: CreateProcessModalProps) {
   const { createTask, clearError } = useTasks();
   const { robots, isLoading: robotsLoading, fetchRobots } = useRobots();
+  const { zones, isLoading: zonesLoading } = useZones();
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [robotId, setRobotId] = useState(preselectedRobotId ?? '');
   const [priority, setPriority] = useState<ProcessPriority>('normal');
-  const [steps, setSteps] = useState<CreateProcessStep[]>([]);
+  const [steps, setSteps] = useState<StepDraft[]>([]);
   const [startNow, setStartNow] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string>();
@@ -68,13 +111,48 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
   );
   const noneOnline = robots.length > 0 && !robots.some((r) => r.status === 'online' || r.status === 'busy');
 
-  const updateStep = (index: number, value: string) =>
-    setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, name: value } : s)));
+  const zoneOptions = useMemo(
+    () => zones.map((z) => ({ value: z.id, label: `${z.name} · floor ${z.floor}` })),
+    [zones],
+  );
+
+  const patchStep = (index: number, patch: Partial<StepDraft>) =>
+    setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
+
+  /** Switching action type drops the previous action's parameters with it. */
+  const changeAction = (index: number, actionType: StepActionType) =>
+    patchStep(index, { actionType, actionConfig: {}, zoneId: undefined });
+
+  const selectZone = (index: number, zoneId: string) => {
+    const zone = zones.find((z) => z.id === zoneId);
+    if (!zone) {
+      patchStep(index, { zoneId: '', actionConfig: {} });
+      return;
+    }
+    // The zone's centre, derived exactly as the robot agent derives it
+    // (robot-agent/src/tools/navigation.ts).
+    patchStep(index, {
+      zoneId,
+      actionConfig: {
+        location: {
+          x: Math.round(zone.bounds.x + zone.bounds.width / 2),
+          y: Math.round(zone.bounds.y + zone.bounds.height / 2),
+          floor: zone.floor,
+          zone: zone.name,
+        },
+      },
+    });
+  };
 
   const handleSubmit = async () => {
     const next: FieldErrors = {};
     if (!name.trim()) next.name = 'Give the automation a name.';
-    if (steps.some((s) => !s.name.trim())) next.steps = 'Name every step, or remove the empty ones.';
+    if (steps.length === 0) {
+      next.steps = 'Add at least one step — an automation with no steps does nothing.';
+    } else {
+      const problem = steps.map(stepProblem).find(Boolean);
+      if (problem) next.steps = problem;
+    }
     setErrors(next);
     if (Object.keys(next).length > 0) return;
 
@@ -86,14 +164,18 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
         description: description.trim() || undefined,
         robotId,
         priority,
-        steps: steps.length > 0 ? steps.map((s) => ({ name: s.name.trim() })) : undefined,
+        steps: steps.map((s) => ({
+          name: s.name.trim(),
+          actionType: s.actionType,
+          actionConfig: s.actionConfig,
+        })),
         startNow,
       });
       toast.success(startNow ? 'Automation created and started' : 'Automation created', { description: created.name });
       onClose();
       onSuccess?.(created.id);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : String(err));
+      setFormError(getErrorMessage(err));
       clearError();
     } finally {
       setSaving(false);
@@ -141,38 +223,106 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
 
       <FormField
         label="Steps"
-        aside="Optional"
+        required
         error={errors.steps}
-        hint={steps.length === 0 ? 'Without steps the automation runs as a single action.' : undefined}
+        hint="Each step is one action the robot carries out, in order."
       >
-        <div className="flex flex-col gap-2">
-          {steps.map((step, index) => (
-            <div key={index} className="flex items-center gap-2">
-              <span className="w-5 shrink-0 text-right text-[13px] text-ink-tertiary">{index + 1}.</span>
-              <Input
-                aria-label={`Step ${index + 1} name`}
-                value={step.name}
-                onChange={(e) => updateStep(index, e.target.value)}
-                placeholder="Step name"
-                invalid={Boolean(errors.steps) && !step.name.trim()}
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                iconOnly
-                aria-label={`Remove step ${index + 1}`}
-                onClick={() => setSteps((prev) => prev.filter((_, i) => i !== index))}
-              >
-                <X className="h-4 w-4" strokeWidth={1.75} />
-              </Button>
-            </div>
-          ))}
+        <div className="flex flex-col gap-3">
+          {steps.map((step, index) => {
+            const invalid = Boolean(errors.steps) && Boolean(stepProblem(step));
+            return (
+              <div key={index} className="flex flex-col gap-2 rounded-control border border-line-subtle bg-inset p-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="w-5 shrink-0 text-right text-[13px] text-ink-tertiary">{index + 1}.</span>
+                  <Input
+                    aria-label={`Step ${index + 1} name`}
+                    value={step.name}
+                    onChange={(e) => patchStep(index, { name: e.target.value })}
+                    placeholder="Step name"
+                    invalid={invalid && !step.name.trim()}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    iconOnly
+                    aria-label={`Remove step ${index + 1}`}
+                    onClick={() => setSteps((prev) => prev.filter((_, i) => i !== index))}
+                  >
+                    <X className="h-4 w-4" strokeWidth={1.75} />
+                  </Button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pl-7">
+                  <Select
+                    aria-label={`Step ${index + 1} action`}
+                    className="w-48"
+                    fullWidth={false}
+                    size="sm"
+                    options={ACTION_OPTIONS}
+                    value={step.actionType}
+                    onChange={(e) => changeAction(index, e.target.value as StepActionType)}
+                  />
+                  {step.actionType === 'move_to_location' && (
+                    <Select
+                      aria-label={`Step ${index + 1} zone`}
+                      className="w-56"
+                      fullWidth={false}
+                      size="sm"
+                      placeholder={zonesLoading ? 'Loading zones…' : 'Choose a zone'}
+                      options={zoneOptions}
+                      value={step.zoneId ?? ''}
+                      invalid={invalid && !step.actionConfig.location}
+                      onChange={(e) => selectZone(index, e.target.value)}
+                    />
+                  )}
+                  {step.actionType === 'pickup_object' && (
+                    <Input
+                      aria-label={`Step ${index + 1} object`}
+                      size="sm"
+                      className="w-56"
+                      placeholder="Object id, e.g. pallet-12"
+                      value={String(step.actionConfig.objectId ?? '')}
+                      invalid={invalid && !String(step.actionConfig.objectId ?? '').trim()}
+                      onChange={(e) => patchStep(index, { actionConfig: { objectId: e.target.value } })}
+                    />
+                  )}
+                  {step.actionType === 'wait' && (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        aria-label={`Step ${index + 1} duration in seconds`}
+                        type="number"
+                        min={1}
+                        size="sm"
+                        className="w-24"
+                        placeholder="Seconds"
+                        value={
+                          step.actionConfig.durationMs === undefined
+                            ? ''
+                            : String(Number(step.actionConfig.durationMs) / 1000)
+                        }
+                        invalid={invalid && !(Number(step.actionConfig.durationMs ?? 0) > 0)}
+                        onChange={(e) => {
+                          const seconds = Number(e.target.value);
+                          patchStep(index, {
+                            actionConfig:
+                              e.target.value === '' || !Number.isFinite(seconds)
+                                ? {}
+                                : { durationMs: Math.round(seconds * 1000) },
+                          });
+                        }}
+                      />
+                      <span className="text-[13px] text-ink-tertiary">seconds</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
           <div>
             <Button
               variant="ghost"
               size="sm"
               leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}
-              onClick={() => setSteps((prev) => [...prev, { name: '' }])}
+              onClick={() => setSteps((prev) => [...prev, newStep()])}
             >
               Add step
             </Button>
@@ -188,4 +338,10 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
       />
     </FormModal>
   );
+}
+
+interface FieldErrors {
+  name?: string;
+  robot?: string;
+  steps?: string;
 }

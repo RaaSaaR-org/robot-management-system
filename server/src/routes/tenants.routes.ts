@@ -16,6 +16,7 @@ import {
 } from '../services/TenantService.js';
 import { getTenantId } from '../middleware/tenantContext.js';
 import { MULTI_TENANCY_ENABLED, DEFAULT_TENANT_ID } from '../config/features.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const tenantsRoutes = Router();
 
@@ -28,8 +29,7 @@ tenantsRoutes.get('/', superAdminOnly, async (_req: Request, res: Response) => {
     const tenants = await tenantService.list();
     res.json({ tenants });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list tenants', 500);
   }
 });
 
@@ -52,8 +52,7 @@ tenantsRoutes.get('/current', async (req: Request, res: Response) => {
     }
     res.json(tenant);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to load the current tenant', 500);
   }
 });
 
@@ -79,8 +78,7 @@ tenantsRoutes.post('/', superAdminOnly, async (req: Request, res: Response) => {
     if (error instanceof TenantSlugTakenError) {
       return res.status(409).json({ error: error.message });
     }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to create the tenant', 400);
   }
 });
 
@@ -125,8 +123,7 @@ tenantsRoutes.post('/onboard', superAdminOnly, async (req: Request, res: Respons
     if (error instanceof TenantSlugTakenError) {
       return res.status(409).json({ error: error.message });
     }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to onboard the tenant', 400);
   }
 });
 
@@ -146,9 +143,12 @@ tenantsRoutes.patch('/:id', superAdminOnly, async (req: Request, res: Response) 
     });
     res.json(tenant);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    const status = message === 'Tenant not found' ? 404 : 400;
-    res.status(status).json({ error: message });
+    // 'Tenant not found' is thrown by TenantService itself, so it is safe to
+    // echo; anything else goes through the helper unread.
+    if (error instanceof Error && error.message === 'Tenant not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    sendFailure(res, error, 'Failed to update the tenant', 400);
   }
 });
 
@@ -167,8 +167,9 @@ tenantsRoutes.delete('/:id', superAdminOnly, async (req: Request, res: Response)
         counts: error.counts,
       });
     }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    const status = message === 'Tenant not found' ? 404 : 400;
-    res.status(status).json({ error: message });
+    if (error instanceof Error && error.message === 'Tenant not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    sendFailure(res, error, 'Failed to delete the tenant', 400);
   }
 });

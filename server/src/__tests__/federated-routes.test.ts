@@ -234,7 +234,8 @@ describe('Federated Routes', () => {
         .send({});
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('no eligible robots');
+      expect(response.body.error).toBe('Failed to select participants');
+      expect(response.body.error).not.toContain('no eligible robots');
     });
   });
 
@@ -260,7 +261,8 @@ describe('Federated Routes', () => {
       const response = await request(app).post('/api/federated/rounds/round-001/distribute');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('round not ready');
+      expect(response.body.error).toBe('Failed to distribute model');
+      expect(response.body.error).not.toContain('round not ready');
     });
   });
 
@@ -371,7 +373,8 @@ describe('Federated Routes', () => {
         .send(validBody);
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('duplicate update');
+      expect(response.body.error).toBe('Failed to submit model update');
+      expect(response.body.error).not.toContain('duplicate update');
     });
   });
 
@@ -407,7 +410,8 @@ describe('Federated Routes', () => {
       const response = await request(app).post('/api/federated/rounds/round-001/aggregate');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('not enough updates');
+      expect(response.body.error).toBe('Failed to aggregate updates');
+      expect(response.body.error).not.toContain('not enough updates');
     });
   });
 

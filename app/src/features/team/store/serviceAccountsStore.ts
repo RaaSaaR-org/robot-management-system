@@ -5,20 +5,12 @@
  */
 
 import { create } from 'zustand';
+import { errorMessage } from '@/shared/components/ui';
 import { serviceAccountsApi } from '../api/serviceAccountsApi';
 import type {
   ServiceAccount,
   CreateServiceAccountInput,
 } from '../types/serviceAccount.types';
-
-function errorMessage(err: unknown, fallback: string): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    const m = (err as { message: unknown }).message;
-    if (typeof m === 'string' && m) return m;
-  }
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
-}
 
 interface ServiceAccountsState {
   accounts: ServiceAccount[];

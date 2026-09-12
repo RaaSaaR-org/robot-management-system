@@ -6,6 +6,7 @@
  */
 
 import { prisma } from '../database/index.js';
+import { Prisma } from '@prisma/client';
 import type { DigitalTwin as PrismaDigitalTwin } from '@prisma/client';
 import type {
   DigitalTwinRecord,
@@ -89,12 +90,27 @@ export class DigitalTwinRepository {
     }
   }
 
+  /**
+   * Delete the twin row (its `ScanSession` + `TwinZone` rows cascade).
+   *
+   * @returns false ONLY when the twin does not exist (Prisma P2025), which the
+   * route maps to 404. Every other failure — a connection loss, a locked SQLite
+   * file, a tenant-isolation denial — is rethrown. The old bare catch reported
+   * all of those as "not found", so a half-finished cascade was indistinguishable
+   * from a missing twin and the caller answered 404 over orphaned blobs.
+   */
   async delete(id: string): Promise<boolean> {
     try {
       await prisma.digitalTwin.delete({ where: { id } });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      ) {
+        return false;
+      }
+      throw error;
     }
   }
 }

@@ -12,7 +12,9 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { getErrorMessage } from '@/shared/utils';
 import { approvalsApi } from '../api';
+import { isOpen } from '../components/approvalFormat';
 import type {
   ApprovalRequest,
   ApprovalMetrics,
@@ -95,16 +97,10 @@ interface ApprovalsActions {
     stepId: string,
     input: ProcessApprovalInput
   ) => Promise<ApprovalRequest>;
-  cancelApprovalRequest: (
-    id: string,
-    cancelledBy: string,
-    reason: string
-  ) => Promise<ApprovalRequest>;
-  escalateApprovalRequest: (
-    id: string,
-    escalatedBy: string,
-    reason?: string
-  ) => Promise<ApprovalRequest>;
+  // No actor argument: the server takes it from the authenticated session
+  // (TASK-289).
+  cancelApprovalRequest: (id: string, reason: string) => Promise<ApprovalRequest>;
+  escalateApprovalRequest: (id: string, reason?: string) => Promise<ApprovalRequest>;
 
   // Worker Rights
   submitWorkerViewpoint: (
@@ -212,7 +208,7 @@ export const useApprovalsStore = create<ApprovalsStore>()(
             state.approvalRequestsLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch approvals';
+          const message = getErrorMessage(error, 'Failed to fetch approvals');
           set((state) => {
             state.approvalRequestsError = message;
             state.approvalRequestsLoading = false;
@@ -356,9 +352,11 @@ export const useApprovalsStore = create<ApprovalsStore>()(
             state.approvalRequests[index] = updatedRequest;
           }
 
-          // Update pending approvals
+          // Keep the row in the pending list while it is still open — an
+          // escalated request is open, so a decision that escalates it must not
+          // drop it out of the queue (TASK-290).
           state.pendingApprovals = state.pendingApprovals.filter(
-            (r) => r.id !== approvalRequestId || updatedRequest.status === 'pending' || updatedRequest.status === 'in_progress'
+            (r) => r.id !== approvalRequestId || isOpen(updatedRequest.status)
           );
 
           // Update selected request if it's the same
@@ -370,8 +368,8 @@ export const useApprovalsStore = create<ApprovalsStore>()(
         return updatedRequest;
       },
 
-      cancelApprovalRequest: async (id: string, cancelledBy: string, reason: string) => {
-        const updatedRequest = await approvalsApi.cancelApprovalRequest(id, cancelledBy, reason);
+      cancelApprovalRequest: async (id: string, reason: string) => {
+        const updatedRequest = await approvalsApi.cancelApprovalRequest(id, reason);
 
         set((state) => {
           const index = state.approvalRequests.findIndex((r) => r.id === id);
@@ -390,8 +388,8 @@ export const useApprovalsStore = create<ApprovalsStore>()(
         return updatedRequest;
       },
 
-      escalateApprovalRequest: async (id: string, escalatedBy: string, reason?: string) => {
-        const updatedRequest = await approvalsApi.escalateApprovalRequest(id, escalatedBy, reason);
+      escalateApprovalRequest: async (id: string, reason?: string) => {
+        const updatedRequest = await approvalsApi.escalateApprovalRequest(id, reason);
 
         set((state) => {
           const index = state.approvalRequests.findIndex((r) => r.id === id);

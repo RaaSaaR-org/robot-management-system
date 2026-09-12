@@ -10,6 +10,7 @@ import path from 'path';
 import { simulationService } from '../services/SimulationService.js';
 import { simToRealValidationService } from '../services/SimToRealValidationService.js';
 import { modelVersionRepository } from '../repositories/index.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const simulationRoutes = Router();
 
@@ -52,8 +53,7 @@ simulationRoutes.post('/jobs', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SimulationRoutes] Error submitting job:', error);
-    const message = error instanceof Error ? error.message : 'Failed to submit simulation job';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to submit simulation job', 400);
   }
 });
 
@@ -80,8 +80,7 @@ simulationRoutes.get('/jobs', async (req: Request, res: Response) => {
     res.json({ jobs, backend: simulationService.getExecutionBackend() });
   } catch (error) {
     console.error('[SimulationRoutes] Error listing jobs:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list simulation jobs';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list simulation jobs', 500);
   }
 });
 
@@ -100,8 +99,7 @@ simulationRoutes.get('/jobs/:id', async (req: Request, res: Response) => {
     res.json({ job, backend: simulationService.getExecutionBackend() });
   } catch (error) {
     console.error('[SimulationRoutes] Error getting job:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get simulation job';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get simulation job', 500);
   }
 });
 
@@ -120,8 +118,7 @@ simulationRoutes.delete('/jobs/:id', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SimulationRoutes] Error cancelling job:', error);
-    const message = error instanceof Error ? error.message : 'Failed to cancel simulation job';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to cancel simulation job', 400);
   }
 });
 
@@ -136,8 +133,7 @@ simulationRoutes.get('/environments', async (_req: Request, res: Response) => {
     res.json({ environments });
   } catch (error) {
     console.error('[SimulationRoutes] Error listing environments:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list environments';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list environments', 500);
   }
 });
 
@@ -151,8 +147,7 @@ simulationRoutes.get('/scenes', async (_req: Request, res: Response) => {
     res.json({ scenes });
   } catch (error) {
     console.error('[SimulationRoutes] Error listing scenes:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list scenes';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list scenes', 500);
   }
 });
 
@@ -170,10 +165,12 @@ simulationRoutes.post('/scenes/generate', async (req: Request, res: Response) =>
     const scene = await simulationService.generateSceneFromTwin(twinId);
     res.status(201).json({ scene });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to generate scene';
     console.error('[SimulationRoutes] Error generating scene:', error);
-    const status = /Unknown twin|no usable bounds/.test(message) ? 404 : 500;
-    res.status(status).json({ error: message });
+    // Both sentences are SimulationService's own, so they stay readable.
+    if (error instanceof Error && /Unknown twin|no usable bounds/.test(error.message)) {
+      return res.status(404).json({ error: error.message });
+    }
+    sendFailure(res, error, 'Failed to generate scene', 500);
   }
 });
 
@@ -188,8 +185,7 @@ simulationRoutes.get('/comparison/:modelId', async (req: Request, res: Response)
     res.json({ comparisons });
   } catch (error) {
     console.error('[SimulationRoutes] Error getting comparison:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get sim-to-real comparison';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get sim-to-real comparison', 500);
   }
 });
 
@@ -255,8 +251,7 @@ simulationRoutes.post('/validations', async (req: Request, res: Response) => {
     res.status(201).json({ validation, message: 'Sim-to-real validation recorded' });
   } catch (error) {
     console.error('[SimulationRoutes] Error creating validation:', error);
-    const message = error instanceof Error ? error.message : 'Failed to record validation';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to record validation', 400);
   }
 });
 
@@ -269,8 +264,7 @@ simulationRoutes.get('/validations/:modelVersionId', async (req: Request, res: R
     res.json({ validations });
   } catch (error) {
     console.error('[SimulationRoutes] Error listing validations:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list validations';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list validations', 500);
   }
 });
 

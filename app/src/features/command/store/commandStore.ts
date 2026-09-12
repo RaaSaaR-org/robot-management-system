@@ -18,6 +18,7 @@ import type {
 } from '../types/command.types';
 import { commandApi } from '../api/commandApi';
 import type { RobotCommand } from '@/features/robots/types';
+import { getErrorMessage } from '@/shared/utils';
 
 // ============================================================================
 // INITIAL STATE
@@ -74,7 +75,7 @@ export const useCommandStore = create<CommandStore>()(
             state.isInterpreting = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to interpret command';
+          const message = getErrorMessage(error, 'Failed to interpret command');
           set((state) => {
             state.error = message;
             state.isInterpreting = false;
@@ -118,7 +119,7 @@ export const useCommandStore = create<CommandStore>()(
 
           return command;
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to execute command';
+          const message = getErrorMessage(error, 'Failed to execute command');
           set((state) => {
             state.error = message;
             state.isExecuting = false;
@@ -145,7 +146,7 @@ export const useCommandStore = create<CommandStore>()(
             state.isLoadingHistory = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch history';
+          const message = getErrorMessage(error, 'Failed to fetch history');
           set((state) => {
             state.error = message;
             state.isLoadingHistory = false;

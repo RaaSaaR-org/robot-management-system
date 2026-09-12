@@ -9,7 +9,7 @@
  * @feature incidents
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import type {
   Incident as PrismaIncident,
   IncidentNotification as PrismaNotification,
@@ -51,6 +51,13 @@ vi.mock('../../database/index.js', () => ({
       update: vi.fn(),
       delete: vi.fn(),
     },
+    // TASK-287: the number generator now draws from the NumberSequence counter
+    // through an interactive transaction, so the mock has to carry both.
+    numberSequence: {
+      findUnique: vi.fn(),
+      upsert: vi.fn(),
+    },
+    $transaction: vi.fn(),
   },
 }));
 
@@ -66,6 +73,36 @@ import {
 
 // Retype the mocked prisma so `.mockResolvedValue` etc. typecheck.
 const prisma = vi.mocked(_prisma, true);
+
+/**
+ * Arm the TASK-287 allocator.
+ *
+ * `allocateNumber` runs an interactive transaction, so `$transaction` has to
+ * hand the callback a client — here the same mock. `existing` is the counter
+ * row already in the table (null means this tenant/year has none yet, which is
+ * the only path that scans for a seed), and `issued` is the value the upsert
+ * hands back.
+ *
+ * Set per test rather than in a `beforeEach`: the implementation would not
+ * survive a mock reset, and a generator whose transaction silently stopped
+ * running is exactly the kind of failure a mocked seam hides.
+ */
+function armAllocator(options: {
+  existing: number | null;
+  issued: number;
+  seedRows?: string[];
+}): void {
+  (prisma.$transaction as unknown as Mock).mockImplementation(
+    async (fn: (tx: unknown) => unknown) => fn(prisma)
+  );
+  prisma.numberSequence.findUnique.mockResolvedValue(
+    options.existing === null ? null : ({ value: options.existing } as never)
+  );
+  prisma.incident.findMany.mockResolvedValue(
+    (options.seedRows ?? []).map((incidentNumber) => ({ incidentNumber })) as never
+  );
+  prisma.numberSequence.upsert.mockResolvedValue({ value: options.issued } as never);
+}
 
 // ---------------------------------------------------------------------------
 // Fixtures — db-row shapes the mappers accept (JSON-string array columns, Date
@@ -162,30 +199,65 @@ describe('IncidentRepository', () => {
   });
 
   describe('generateIncidentNumber', () => {
-    it('returns INC-YYYY-001 when no prior incident exists for the year', async () => {
+    it('returns INC-YYYY-001 and seeds the counter at 1 on an empty year', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2026-03-01T00:00:00.000Z'));
-      prisma.incident.findFirst.mockResolvedValue(null);
+      armAllocator({ existing: null, issued: 1, seedRows: [] });
 
       const num = await repo.generateIncidentNumber();
 
       expect(num).toBe('INC-2026-001');
-      expect(prisma.incident.findFirst).toHaveBeenCalledWith({
-        where: { incidentNumber: { startsWith: 'INC-2026-' } },
-        orderBy: { incidentNumber: 'desc' },
+      expect(prisma.numberSequence.upsert).toHaveBeenCalledWith({
+        where: { scope_tenantKey_year: { scope: 'incident', tenantKey: 'default', year: 2026 } },
+        update: { value: { increment: 1 } },
+        create: { scope: 'incident', tenantKey: 'default', year: 2026, value: 1 },
       });
     });
 
-    it('increments the latest number and zero-pads to 3 digits', async () => {
+    it('increments an existing counter and zero-pads to 3 digits', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2026-03-01T00:00:00.000Z'));
-      prisma.incident.findFirst.mockResolvedValue(
-        makeIncidentRow({ incidentNumber: 'INC-2026-009' })
-      );
+      armAllocator({ existing: 9, issued: 10 });
 
       const num = await repo.generateIncidentNumber();
 
       expect(num).toBe('INC-2026-010');
+      // A counter already exists, so the seed scan must not run — paying for a
+      // table scan on every allocation is the cost this change removes.
+      expect(prisma.incident.findMany).not.toHaveBeenCalled();
+      expect(prisma.numberSequence.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ update: { value: { increment: 1 } } })
+      );
+    });
+
+    it('seeds from the NUMERIC maximum, so a year past 999 does not fold back', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-01T00:00:00.000Z'));
+      // Lexicographically 'INC-2026-999' is the largest of these. Numerically
+      // 1000 is — and picking the string maximum is the defect (TASK-287) that
+      // made every incident after the thousandth collide forever.
+      armAllocator({
+        existing: null,
+        issued: 1001,
+        seedRows: ['INC-2026-001', 'INC-2026-999', 'INC-2026-1000'],
+      });
+
+      const num = await repo.generateIncidentNumber();
+
+      expect(num).toBe('INC-2026-1001');
+      expect(prisma.numberSequence.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: { scope: 'incident', tenantKey: 'default', year: 2026, value: 1001 },
+        })
+      );
+    });
+
+    it('renders wider than the padding rather than truncating', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-01T00:00:00.000Z'));
+      armAllocator({ existing: 1000, issued: 1001 });
+
+      expect(await repo.generateIncidentNumber()).toBe('INC-2026-1001');
     });
   });
 
@@ -248,12 +320,14 @@ describe('IncidentRepository', () => {
   });
 
   describe('findByNumber', () => {
+    // findFirst, not findUnique: TASK-287 made the number unique per tenant, so
+    // Prisma no longer exposes it as a unique lookup key.
     it('queries by incidentNumber with notifications included', async () => {
-      prisma.incident.findUnique.mockResolvedValue(makeIncidentRow());
+      prisma.incident.findFirst.mockResolvedValue(makeIncidentRow());
 
       const result = await repo.findByNumber('INC-2026-001');
 
-      expect(prisma.incident.findUnique).toHaveBeenCalledWith({
+      expect(prisma.incident.findFirst).toHaveBeenCalledWith({
         where: { incidentNumber: 'INC-2026-001' },
         include: { notifications: true },
       });
@@ -261,7 +335,7 @@ describe('IncidentRepository', () => {
     });
 
     it('returns null when not found', async () => {
-      prisma.incident.findUnique.mockResolvedValue(null);
+      prisma.incident.findFirst.mockResolvedValue(null);
       expect(await repo.findByNumber('nope')).toBeNull();
     });
   });
@@ -379,7 +453,7 @@ describe('IncidentRepository', () => {
     it('generates a number, applies defaults, and JSON-encodes array columns', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
-      prisma.incident.findFirst.mockResolvedValue(null); // generateIncidentNumber
+      armAllocator({ existing: null, issued: 1 }); // generateIncidentNumber
       prisma.incident.create.mockResolvedValue(makeIncidentRow());
 
       const result = await repo.create({

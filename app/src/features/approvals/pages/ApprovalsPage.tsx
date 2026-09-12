@@ -8,9 +8,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Button, SearchInput, Select, StatRow, StatTile, Toolbar } from '@/shared/components/ui';
 import { ApprovalDetailModal, ApprovalQueue } from '../components';
-import { OPEN_STATUSES } from '../components/approvalFormat';
 import { useApprovalMetrics } from '../hooks';
 import { useApprovalsStore } from '../store';
+import { OPEN_APPROVAL_STATUSES } from '../types';
 import type { ApprovalPriority, ApprovalRequest, ApprovalStatus } from '../types';
 
 type StatusFilter = 'open' | 'approved' | 'rejected' | 'cancelled' | 'all';
@@ -32,7 +32,7 @@ const PRIORITY_OPTIONS: { value: ApprovalPriority; label: string }[] = [
 ];
 
 function statusesFor(filter: StatusFilter): ApprovalStatus[] | undefined {
-  if (filter === 'open') return OPEN_STATUSES;
+  if (filter === 'open') return OPEN_APPROVAL_STATUSES;
   if (filter === 'all') return undefined;
   return [filter];
 }
@@ -78,7 +78,13 @@ export function ApprovalsPage() {
     setStatus('open');
   };
 
-  const pending = metrics ? metrics.pendingRequests + metrics.inProgressRequests : 0;
+  // Summed over the open set rather than read off `pendingRequests +
+  // inProgressRequests`: those two are per-status tallies, so an escalated
+  // request — which the queue below still lists — would be missing from the
+  // tile that counts the same rows.
+  const pending = metrics
+    ? OPEN_APPROVAL_STATUSES.reduce((sum, s) => sum + (metrics.requestsByStatus?.[s] ?? 0), 0)
+    : 0;
 
   return (
     <div className="flex flex-col gap-4">

@@ -7,6 +7,7 @@
 import { Router, type Request, type Response } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { settingsService } from '../services/SettingsService.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const settingsRoutes = Router();
 
@@ -50,7 +51,7 @@ settingsRoutes.put('/', async (req: Request, res: Response) => {
     }
 
     console.error('Error updating settings:', error);
-    res.status(500).json({ error: 'Failed to update settings' });
+    sendFailure(res, error, 'Failed to update settings', 500);
   }
 });
 

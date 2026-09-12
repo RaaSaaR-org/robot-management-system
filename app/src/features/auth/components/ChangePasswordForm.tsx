@@ -6,7 +6,7 @@
  */
 
 import { useState, type FormEvent } from 'react';
-import { Button, FormField, Input, Panel, toast } from '@/shared/components/ui';
+import { Button, FormField, Input, Panel, errorMessage, toast } from '@/shared/components/ui';
 import { useAuthStore } from '../store/authStore';
 import { AuthFormError } from './AuthLayout';
 import { PASSWORD_HINT, validateNewPassword } from './passwordRules';
@@ -54,7 +54,7 @@ export function ChangePasswordForm({ onSuccess, onError, variant = 'panel' }: Ch
       toast.success('Password updated');
       onSuccess?.();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Change failed';
+      const message = errorMessage(err, 'Change failed');
       setFormError(message);
       toast.error("Couldn't update password", { description: message });
       onError?.(message);

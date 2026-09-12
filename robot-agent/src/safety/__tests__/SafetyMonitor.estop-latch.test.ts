@@ -104,6 +104,34 @@ describe('SafetyMonitor E-stop latch', () => {
     expect(monitor.getEStopState().reason).toBe('entered a no-go zone');
   });
 
+  // TASK-294: the status DURING a stop was asserted nowhere — the agent wrote
+  // 'online' while refusing every command, and the fleet console believed it.
+  it('reports a protective stop as protective_stop, and online again after a reset', () => {
+    const { monitor, state } = makeMonitor();
+
+    monitor.triggerProtectiveStop('system_failure', 'Critical system error detected');
+    expect(state.status).toBe('protective_stop');
+    // The kind of stop lives here, not in the status value.
+    expect(state.currentTaskName).toBe('Protective stop');
+
+    monitor.updateServerHeartbeat();
+    expect(monitor.resetEmergencyStop()).toBe(true);
+    expect(state.status).toBe('online');
+  });
+
+  it('reports an emergency stop as protective_stop too, with the E-Stop in the task slot', () => {
+    const { monitor, state } = makeMonitor();
+
+    monitor.triggerEmergencyStop('remote', 'operator hit the fleet E-Stop');
+    expect(state.status).toBe('protective_stop');
+    expect(state.currentTaskName).toBe('EMERGENCY STOP');
+    expect(monitor.getEStopState().stopCategory).toBe(0);
+
+    monitor.updateServerHeartbeat();
+    expect(monitor.resetEmergencyStop()).toBe(true);
+    expect(state.status).toBe('online');
+  });
+
   it('a reset takes the stop out of the task slot too', () => {
     const { monitor, state } = makeMonitor();
     monitor.triggerProtectiveStop('system_failure', 'Critical system error detected');

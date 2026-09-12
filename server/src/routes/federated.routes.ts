@@ -13,6 +13,7 @@ import type {
   FederatedRoundStatus,
   SelectionStrategy,
 } from '../types/federated.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const federatedRoutes = Router();
 
@@ -132,9 +133,7 @@ federatedRoutes.post(
       });
     } catch (error) {
       console.error('[FederatedRoutes] Error selecting participants:', error);
-      const message =
-        error instanceof Error ? error.message : 'Failed to select participants';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to select participants', 400);
     }
   }
 );
@@ -162,9 +161,7 @@ federatedRoutes.post(
       });
     } catch (error) {
       console.error('[FederatedRoutes] Error distributing model:', error);
-      const message =
-        error instanceof Error ? error.message : 'Failed to distribute model';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to distribute model', 400);
     }
   }
 );
@@ -222,9 +219,7 @@ federatedRoutes.post(
       });
     } catch (error) {
       console.error('[FederatedRoutes] Error submitting update:', error);
-      const message =
-        error instanceof Error ? error.message : 'Failed to submit model update';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to submit model update', 400);
     }
   }
 );
@@ -257,9 +252,7 @@ federatedRoutes.post(
       });
     } catch (error) {
       console.error('[FederatedRoutes] Error aggregating:', error);
-      const message =
-        error instanceof Error ? error.message : 'Failed to aggregate updates';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to aggregate updates', 400);
     }
   }
 );

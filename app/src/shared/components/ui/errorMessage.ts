@@ -1,11 +1,14 @@
 /**
  * @file errorMessage.ts
  * @description One readable sentence out of whatever a failed call rejects
- *              with. The API client (`@/api/client`) rejects with plain
- *              `{ code, message, statusCode }` objects, not `Error`s, so
- *              `err instanceof Error ? err.message : String(err)` prints
- *              "[object Object]". Use this for every toast description and
- *              form-level error.
+ *              with. The API client (`@/api/client`) rejects with an
+ *              `ApiRequestError` — a real `Error` carrying `code`,
+ *              `statusCode` and `details` — but a rejection can also be a raw
+ *              axios error, a bare string, or a plain object from code that
+ *              never went through the client. This reads the server's sentence
+ *              out of all of them, so use it for every toast description and
+ *              form-level error rather than
+ *              `err instanceof Error ? err.message : String(err)`.
  * @feature shared
  */
 

@@ -157,7 +157,8 @@ describe('Evaluation Routes', () => {
         });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('invalid robot');
+      expect(response.body.error).toBe('Failed to record evaluation episode');
+      expect(response.body.error).not.toContain('invalid robot');
     });
   });
 
@@ -468,7 +469,8 @@ describe('Evaluation Routes', () => {
         .send({ robotId: 'robot-1', skillId: 'skill-1' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('agent unreachable');
+      expect(response.body.error).toBe('Failed to run hardware evaluation');
+      expect(response.body.error).not.toContain('agent unreachable');
     });
   });
 

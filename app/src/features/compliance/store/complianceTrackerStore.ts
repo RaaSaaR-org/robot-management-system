@@ -17,6 +17,7 @@ import type {
   RegulatoryFramework,
   GapSeverity,
 } from '../types';
+import { getErrorMessage } from '@/shared/utils';
 
 // Extended types with computed fields
 interface RegulatoryDeadlineWithStatus extends RegulatoryDeadline {
@@ -177,7 +178,7 @@ export const useComplianceTrackerStore = create<ComplianceTrackerState>((set, ge
       set({ dashboardStats: stats, isLoadingDashboard: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch dashboard stats',
+        error: getErrorMessage(error, 'Failed to fetch dashboard stats'),
         isLoadingDashboard: false,
       });
     }
@@ -190,7 +191,7 @@ export const useComplianceTrackerStore = create<ComplianceTrackerState>((set, ge
       set({ deadlines, isLoadingDeadlines: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch deadlines',
+        error: getErrorMessage(error, 'Failed to fetch deadlines'),
         isLoadingDeadlines: false,
       });
     }
@@ -204,7 +205,7 @@ export const useComplianceTrackerStore = create<ComplianceTrackerState>((set, ge
       set({ gaps, isLoadingGaps: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch gaps',
+        error: getErrorMessage(error, 'Failed to fetch gaps'),
         isLoadingGaps: false,
       });
     }
@@ -233,7 +234,7 @@ export const useComplianceTrackerStore = create<ComplianceTrackerState>((set, ge
       set({ expiringDocuments: documents as unknown as DocumentExpiry[], isLoadingDocuments: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch expiring documents',
+        error: getErrorMessage(error, 'Failed to fetch expiring documents'),
         isLoadingDocuments: false,
       });
     }
@@ -246,7 +247,7 @@ export const useComplianceTrackerStore = create<ComplianceTrackerState>((set, ge
       set({ trainingRecords: records, isLoadingTraining: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch training records',
+        error: getErrorMessage(error, 'Failed to fetch training records'),
         isLoadingTraining: false,
       });
     }
@@ -268,7 +269,7 @@ export const useComplianceTrackerStore = create<ComplianceTrackerState>((set, ge
       set({ inspectionSchedules: schedules, isLoadingInspections: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch inspection schedules',
+        error: getErrorMessage(error, 'Failed to fetch inspection schedules'),
         isLoadingInspections: false,
       });
     }
@@ -290,7 +291,7 @@ export const useComplianceTrackerStore = create<ComplianceTrackerState>((set, ge
       set({ riskAssessments: assessments, isLoadingRiskAssessments: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch risk assessments',
+        error: getErrorMessage(error, 'Failed to fetch risk assessments'),
         isLoadingRiskAssessments: false,
       });
     }
@@ -303,7 +304,7 @@ export const useComplianceTrackerStore = create<ComplianceTrackerState>((set, ge
       set({ recentActivity: activity, isLoadingActivity: false });
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch activity',
+        error: getErrorMessage(error, 'Failed to fetch activity'),
         isLoadingActivity: false,
       });
     }
@@ -318,7 +319,7 @@ export const useComplianceTrackerStore = create<ComplianceTrackerState>((set, ge
       await get().fetchDashboardStats();
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to close gap',
+        error: getErrorMessage(error, 'Failed to close gap'),
       });
       throw error;
     }
@@ -332,7 +333,7 @@ export const useComplianceTrackerStore = create<ComplianceTrackerState>((set, ge
       await get().fetchDashboardStats();
     } catch (error) {
       set({
-        error: error instanceof Error ? error.message : 'Failed to update deadline progress',
+        error: getErrorMessage(error, 'Failed to update deadline progress'),
       });
       throw error;
     }

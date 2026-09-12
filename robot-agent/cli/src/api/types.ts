@@ -4,13 +4,16 @@
  */
 
 // Status types
+// Mirrors `robot-agent/src/robot/types.ts` — `protective_stop` is a robot held
+// by a latched safety stop (TASK-294).
 export type RobotStatus =
   | 'online'
   | 'offline'
   | 'busy'
   | 'error'
   | 'charging'
-  | 'maintenance';
+  | 'maintenance'
+  | 'protective_stop';
 
 export type CommandStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'cancelled';
 

@@ -13,6 +13,7 @@ import type { UserRole } from './features/auth/types/auth.types';
 import { AppLayout } from './components/layout';
 import { AlertProvider } from './features/alerts';
 import { PageLoader } from './shared/components/ui/PageLoader';
+import { RouteErrorBoundary } from './shared/components/ui/RouteErrorBoundary';
 import { FeedbackProvider } from './shared/components/ui/FeedbackProvider';
 import {
   LazyLandingPage,
@@ -116,7 +117,16 @@ function ProtectedAppRoute({
       ) : !roleAllowed ? (
         <Navigate to="/dashboard" replace />
       ) : (
-        <AppLayout>{children}</AppLayout>
+        <AppLayout>
+          {/*
+            A page that throws during render takes only its own slot down:
+            the shell stays mounted, and navigating elsewhere clears the
+            boundary because the URL is its reset key.
+          */}
+          <RouteErrorBoundary resetKey={`${location.pathname}${location.search}`}>
+            {children}
+          </RouteErrorBoundary>
+        </AppLayout>
       )}
     </ProtectedRoute>
   );

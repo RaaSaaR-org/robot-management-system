@@ -4,6 +4,7 @@
  * @feature gdpr
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
@@ -65,7 +66,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch requests';
+          const message = getErrorMessage(error, 'Failed to fetch requests');
           set((state) => {
             state.error = message;
             state.isLoading = false;
@@ -87,7 +88,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isLoadingRequest = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch request';
+          const message = getErrorMessage(error, 'Failed to fetch request');
           set((state) => {
             state.error = message;
             state.isLoadingRequest = false;
@@ -109,7 +110,7 @@ export const useGDPRStore = create<GDPRStore>()(
           });
           return request;
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to submit request';
+          const message = getErrorMessage(error, 'Failed to submit request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -132,7 +133,7 @@ export const useGDPRStore = create<GDPRStore>()(
           });
           return request;
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to submit request';
+          const message = getErrorMessage(error, 'Failed to submit request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -155,7 +156,7 @@ export const useGDPRStore = create<GDPRStore>()(
           });
           return request;
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to submit request';
+          const message = getErrorMessage(error, 'Failed to submit request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -178,7 +179,7 @@ export const useGDPRStore = create<GDPRStore>()(
           });
           return request;
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to submit request';
+          const message = getErrorMessage(error, 'Failed to submit request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -201,7 +202,7 @@ export const useGDPRStore = create<GDPRStore>()(
           });
           return request;
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to submit request';
+          const message = getErrorMessage(error, 'Failed to submit request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -224,7 +225,7 @@ export const useGDPRStore = create<GDPRStore>()(
           });
           return request;
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to submit request';
+          const message = getErrorMessage(error, 'Failed to submit request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -247,7 +248,7 @@ export const useGDPRStore = create<GDPRStore>()(
           });
           return request;
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to submit request';
+          const message = getErrorMessage(error, 'Failed to submit request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -275,7 +276,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isSubmitting = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to cancel request';
+          const message = getErrorMessage(error, 'Failed to cancel request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -288,7 +289,7 @@ export const useGDPRStore = create<GDPRStore>()(
         try {
           return await gdprApi.downloadExport(id);
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to download export';
+          const message = getErrorMessage(error, 'Failed to download export');
           set((state) => {
             state.error = message;
           });
@@ -313,7 +314,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isLoadingConsents = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch consents';
+          const message = getErrorMessage(error, 'Failed to fetch consents');
           set((state) => {
             state.error = message;
             state.isLoadingConsents = false;
@@ -339,7 +340,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isSubmitting = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to update consent';
+          const message = getErrorMessage(error, 'Failed to update consent');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -350,6 +351,12 @@ export const useGDPRStore = create<GDPRStore>()(
 
       // ============================================================================
       // ADMIN
+      //
+      // @status unshipped — these six actions are tested (see
+      // `__tests__/gdprStore.test.ts`, the `// --- admin ---` block) and called
+      // by nothing: no component reads them, so the GDPR admin queue does not
+      // exist in the product. The gap is purely client-side; the fulfilment
+      // API behind `../api/gdprApi.ts` is complete. (TASK-302)
       // ============================================================================
 
       fetchAdminRequests: async (filters?: AdminRequestFilters) => {
@@ -370,7 +377,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch requests';
+          const message = getErrorMessage(error, 'Failed to fetch requests');
           set((state) => {
             state.error = message;
             state.isLoading = false;
@@ -397,7 +404,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isSubmitting = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to acknowledge request';
+          const message = getErrorMessage(error, 'Failed to acknowledge request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -425,7 +432,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isSubmitting = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to complete request';
+          const message = getErrorMessage(error, 'Failed to complete request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -453,7 +460,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isSubmitting = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to reject request';
+          const message = getErrorMessage(error, 'Failed to reject request');
           set((state) => {
             state.error = message;
             state.isSubmitting = false;
@@ -475,7 +482,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isLoadingMetrics = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch metrics';
+          const message = getErrorMessage(error, 'Failed to fetch metrics');
           set((state) => {
             state.error = message;
             state.isLoadingMetrics = false;
@@ -496,7 +503,7 @@ export const useGDPRStore = create<GDPRStore>()(
             state.isLoadingMetrics = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch SLA report';
+          const message = getErrorMessage(error, 'Failed to fetch SLA report');
           set((state) => {
             state.error = message;
             state.isLoadingMetrics = false;

@@ -113,16 +113,43 @@ export interface ZoneEStopResult extends FleetEStopResult {
 // ============================================================================
 
 /**
+ * Whether an E-stop event latched a stop or released one.
+ *
+ * Mirrors `EStopAction` in `server/src/services/SafetyService.ts`. Explicit on
+ * purpose: a safety state must never be inferred from the `reason` prose.
+ */
+export type EStopAction = 'trigger' | 'reset';
+
+/**
+ * Result of an E-stop applied to one named robot.
+ *
+ * Extends `FleetEStopResult` so `successCount` / `failureCount` are present on
+ * every event payload whatever the scope.
+ */
+export interface SingleRobotEStopResult extends FleetEStopResult {
+  robotId: string;
+  robotName: string;
+}
+
+/** Any payload an E-stop event can carry, one per scope */
+export type EStopEventResult =
+  | FleetEStopResult
+  | ZoneEStopResult
+  | SingleRobotEStopResult;
+
+/**
  * E-stop event from server
  */
 export interface EStopEvent {
   id: string;
   scope: EStopScope;
+  /** Trigger vs reset — explicit, never inferred from `reason` */
+  action: EStopAction;
   triggeredAt: string;
   triggeredBy: string;
   reason: string;
   affectedRobots: string[];
-  result: FleetEStopResult | ZoneEStopResult;
+  result: EStopEventResult;
 }
 
 // ============================================================================

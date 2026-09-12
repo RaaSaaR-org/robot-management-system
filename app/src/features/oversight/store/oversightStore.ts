@@ -4,6 +4,7 @@
  * @feature oversight
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
@@ -84,7 +85,7 @@ export const useOversightStore = create<OversightStore>()(
             state.dashboardLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch dashboard';
+          const message = getErrorMessage(error, 'Failed to fetch dashboard');
           set((state) => {
             state.dashboardError = message;
             state.dashboardLoading = false;

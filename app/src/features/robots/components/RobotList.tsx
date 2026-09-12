@@ -12,6 +12,7 @@ import {
   Button, DataTable, EmptyState, ErrorState, Panel, SearchInput, SegmentedControl, Select,
   SkeletonRows, Toolbar, confirm, errorMessage, toast, type DataTableColumn, type RowActionItem,
 } from '@/shared/components/ui';
+import { usePermission } from '@/features/auth/hooks/useAuth';
 import { useRobots } from '../hooks/useRobots';
 import { useRobotsStore } from '../store/robotsStore';
 import { RobotCard, robotBattery, robotLastSeen, robotPlace } from './RobotCard';
@@ -49,6 +50,11 @@ export function RobotList({ onRegister }: RobotListProps) {
   const navigate = useNavigate();
   const { robots, isLoading, error, filters, pagination, fetchRobots, setFilters, clearFilters, setPage } =
     useRobots();
+  // Registering and unregistering are `robots:write` on the server
+  // (`memberOrAbove`). A role that will never hold it doesn't see the control
+  // at all — `disabled` is this repo's idiom for transient state, not for a
+  // permission the user cannot acquire by waiting.
+  const canWrite = usePermission('robots:write');
   const unregisterRobot = useRobotsStore((s) => s.unregisterRobot);
   const clearError = useRobotsStore((s) => s.clearError);
   const [view, setViewState] = useState<ViewMode>(readView);
@@ -114,7 +120,12 @@ export function RobotList({ onRegister }: RobotListProps) {
 
   const actionsFor = (robot: Robot): RowActionItem[] => [
     { label: 'Open control center', icon: <Gauge />, onSelect: () => navigate(`/robots/${robot.id}/cockpit`) },
-    { label: 'Unregister', icon: <Trash2 />, tone: 'danger', separatorBefore: true, onSelect: () => void askUnregister(robot) },
+    ...(canWrite
+      ? [{
+          label: 'Unregister', icon: <Trash2 />, tone: 'danger' as const, separatorBefore: true,
+          onSelect: () => void askUnregister(robot),
+        }]
+      : []),
   ];
 
   const columns = useMemo<DataTableColumn<Robot>[]>(
@@ -164,7 +175,11 @@ export function RobotList({ onRegister }: RobotListProps) {
       icon={<Bot />}
       title="No robots yet"
       description="A robot joins the fleet when you register its agent URL."
-      action={<Button leftIcon={<Plus className="h-4 w-4" />} onClick={onRegister}>Register robot</Button>}
+      action={
+        canWrite ? (
+          <Button leftIcon={<Plus className="h-4 w-4" />} onClick={onRegister}>Register robot</Button>
+        ) : undefined
+      }
     />
   );
 
@@ -191,7 +206,9 @@ export function RobotList({ onRegister }: RobotListProps) {
               value={view}
               onChange={(v) => setView(v as ViewMode)}
             />
-            <Button leftIcon={<Plus className="h-4 w-4" />} onClick={onRegister}>Register robot</Button>
+            {canWrite && (
+              <Button leftIcon={<Plus className="h-4 w-4" />} onClick={onRegister}>Register robot</Button>
+            )}
           </>
         }
       />

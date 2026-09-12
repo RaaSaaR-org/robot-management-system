@@ -39,6 +39,7 @@ import {
   type SimToRealComparisonRow,
 } from './SimToRealValidationService.js';
 import type { ModelVersion } from '../types/vla.types.js';
+import { MULTI_TENANCY_ENABLED, DEFAULT_TENANT_ID } from '../config/features.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -576,6 +577,12 @@ export class SimulationService extends EventEmitter {
           embodimentTag:
             env.embodiment ?? (env.id.startsWith('so101') ? 'so101' : 'generic'),
           backend: env.backend,
+          // This runs at module import, outside any request scope, so the
+          // tenant-isolation extension cannot stamp the row (TASK-285). Stamp
+          // it here: a null-tenant built-in scene is invisible to the next
+          // in-request upsert, which then CREATEs and hits P2002 on the unique
+          // builtinEnvId.
+          tenantId: MULTI_TENANCY_ENABLED ? DEFAULT_TENANT_ID : null,
         });
       }
     } catch (err) {

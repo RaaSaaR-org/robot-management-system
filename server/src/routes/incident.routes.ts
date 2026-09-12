@@ -9,6 +9,7 @@ import { incidentService } from '../services/IncidentService.js';
 import { breachAssessmentService } from '../services/BreachAssessmentService.js';
 import { notificationWorkflowService } from '../services/NotificationWorkflowService.js';
 import { SIZE_LIMITS } from '../storage/model-storage.js';
+import { prismaErrorToAppError } from '../utils/errors.js';
 import type {
   IncidentType,
   IncidentSeverity,
@@ -234,6 +235,15 @@ incidentRoutes.post('/', async (req: Request, res: Response) => {
     res.status(201).json(fullIncident);
   } catch (error) {
     console.error('Error creating incident:', error);
+    // A duplicate incident number is a conflict, not a server fault. It should
+    // now be unreachable — the number comes from an atomic counter (TASK-287) —
+    // but answering 500 told the caller to retry the one thing that could not
+    // help, so map Prisma's own codes before falling back.
+    const prismaError = prismaErrorToAppError(error);
+    if (prismaError) {
+      res.status(prismaError.statusCode).json({ error: prismaError.message });
+      return;
+    }
     res.status(500).json({ error: 'Failed to create incident' });
   }
 });

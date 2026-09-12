@@ -108,7 +108,8 @@ describe('Training Docs Routes', () => {
         .send({ sourceType: 'synthetic' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('db boom');
+      expect(response.body.error).toBe('Failed to record provenance');
+      expect(response.body.error).not.toContain('db boom');
     });
   });
 
@@ -255,7 +256,8 @@ describe('Training Docs Routes', () => {
         .send(validBody);
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('gen failed');
+      expect(response.body.error).toBe('Failed to generate summary');
+      expect(response.body.error).not.toContain('gen failed');
     });
   });
 
@@ -321,7 +323,8 @@ describe('Training Docs Routes', () => {
         .send({ copyrightMeasures: 'x' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('update failed');
+      expect(response.body.error).toBe('Failed to update summary');
+      expect(response.body.error).not.toContain('update failed');
     });
   });
 
@@ -404,7 +407,8 @@ describe('Training Docs Routes', () => {
       );
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('export failed');
+      expect(response.body.error).toBe('Failed to export documentation');
+      expect(response.body.error).not.toContain('export failed');
     });
   });
 
@@ -530,7 +534,8 @@ describe('Training Docs Routes', () => {
         .send(validBody);
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('create failed');
+      expect(response.body.error).toBe('Failed to create bias assessment');
+      expect(response.body.error).not.toContain('create failed');
     });
   });
 
@@ -642,7 +647,8 @@ describe('Training Docs Routes', () => {
         .send({ knownLimitations: ['new'] });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('update failed');
+      expect(response.body.error).toBe('Failed to update bias assessment');
+      expect(response.body.error).not.toContain('update failed');
     });
   });
 });

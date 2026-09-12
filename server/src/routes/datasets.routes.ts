@@ -44,6 +44,7 @@ import { DatasetViewError, resolveLocalView } from '../services/lerobot/LocalDat
 // TASK-220 — POST /compatibility, at the bottom of this file.
 import { analyzeDatasetIds, UnknownDatasetError } from '../services/lerobot/datasetCompatibility.js';
 import { ConflictError } from '../utils/errors.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 /** In-memory job state for push-to-hub operations */
 const pushJobs = new Map<string, PushToHubJobState>();
@@ -87,10 +88,17 @@ async function localReadRoot(storagePath: string, res: Response): Promise<string
     const view = await resolveLocalView(storagePath);
     return view.root;
   } catch (error) {
-    const code = error instanceof DatasetViewError ? error.code : 'VIEW_FAILED';
-    const detail = error instanceof Error ? error.message : String(error);
-    console.error(`[datasets] local view failed for ${storagePath}: ${code}: ${detail}`);
-    res.status(503).json({ error: 'Dataset view unavailable', code, detail });
+    // A DatasetViewError is this repo's own sentence ("ffmpeg is not
+    // installed"), so its detail still reaches the viewer. Anything else is a
+    // library or driver failure and is logged instead of echoed.
+    console.error(`[datasets] local view failed for ${storagePath}:`, error);
+    if (error instanceof DatasetViewError) {
+      res
+        .status(503)
+        .json({ error: 'Dataset view unavailable', code: error.code, detail: error.message });
+      return null;
+    }
+    sendFailure(res, error, 'Dataset view unavailable', 503, { code: 'VIEW_FAILED' });
     return null;
   }
 }
@@ -301,13 +309,12 @@ function sendImportError(res: Response, error: unknown, fallback: string): void 
     res.status(error.status).json({ error: error.message, message: error.message, code: error.code });
     return;
   }
-  let message = fallback;
-  if (error instanceof Error) {
-    message = error.message.includes('Foreign key constraint')
-      ? 'Invalid robot type reference. Please try again.'
-      : error.message;
+  if (error instanceof Error && error.message.includes('Foreign key constraint')) {
+    const message = 'Invalid robot type reference. Please try again.';
+    res.status(400).json({ error: message, message, code: 'IMPORT_ERROR' });
+    return;
   }
-  res.status(400).json({ error: message, message, code: 'IMPORT_ERROR' });
+  sendFailure(res, error, fallback, 400, { message: fallback, code: 'IMPORT_ERROR' });
 }
 
 export const datasetRoutes = Router();
@@ -333,8 +340,7 @@ datasetRoutes.post('/', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error creating dataset:', error);
-    const message = error instanceof Error ? error.message : 'Failed to create dataset';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to create dataset', 400);
   }
 });
 
@@ -518,8 +524,7 @@ datasetRoutes.post('/interventions', async (req: Request, res: Response) => {
     res.status(201).json({ id: episode.id });
   } catch (error) {
     console.error('[DatasetRoutes] Error recording intervention:', error);
-    const message = error instanceof Error ? error.message : 'Failed to record intervention';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to record intervention', 400);
   }
 });
 
@@ -558,9 +563,12 @@ datasetRoutes.post('/:id/annotate', async (req: Request, res: Response) => {
     res.status(201).json({ jobId: job.id });
   } catch (error) {
     console.error('[DatasetRoutes] Error queueing annotate job:', error);
-    const message = error instanceof Error ? error.message : 'Failed to queue annotate job';
-    const status = message.includes('not found') ? 404 : 400;
-    res.status(status).json({ error: message });
+    // "not found" is this repo's own sentence, so that one is echoed;
+    // every other failure answers with the fallback, unread.
+    if (error instanceof Error && error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
+    }
+    sendFailure(res, error, 'Failed to queue annotate job', 400);
   }
 });
 
@@ -695,8 +703,7 @@ datasetRoutes.post('/:id/push-to-hub', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error starting push to hub:', error);
-    const message = error instanceof Error ? error.message : 'Failed to start push';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to start push', 500);
   }
 });
 
@@ -777,8 +784,7 @@ datasetRoutes.put('/:id', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error updating dataset:', error);
-    const message = error instanceof Error ? error.message : 'Failed to update dataset';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to update dataset', 400);
   }
 });
 
@@ -833,8 +839,7 @@ datasetRoutes.post('/:id/upload/initiate', async (req: Request, res: Response) =
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error initiating upload:', error);
-    const message = error instanceof Error ? error.message : 'Failed to initiate upload';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to initiate upload', 400);
   }
 });
 
@@ -855,8 +860,7 @@ datasetRoutes.post('/:id/upload/complete', async (req: Request, res: Response) =
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error completing upload:', error);
-    const message = error instanceof Error ? error.message : 'Failed to complete upload';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to complete upload', 400);
   }
 });
 
@@ -873,13 +877,11 @@ datasetRoutes.get('/:id/stats', async (req: Request, res: Response) => {
     res.json(stats);
   } catch (error) {
     console.error('[DatasetRoutes] Error getting stats:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get dataset stats';
-
-    if (message.includes('not found')) {
-      return res.status(404).json({ error: message });
+    if (error instanceof Error && error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
     }
 
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get dataset stats', 500);
   }
 });
 
@@ -900,16 +902,19 @@ datasetRoutes.post('/:id/compute-stats', async (req: Request, res: Response) => 
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error computing stats:', error);
-    const message = error instanceof Error ? error.message : 'Failed to compute stats';
-
-    if (message.includes('not found')) {
-      return res.status(404).json({ error: message });
+    // DatasetService's own sentences stay readable; anything else is logged
+    // above and answered with the fallback.
+    if (error instanceof Error && error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
     }
-    if (message.includes('not ready') || message.includes('not available')) {
-      return res.status(400).json({ error: message });
+    if (
+      error instanceof Error &&
+      (error.message.includes('not ready') || error.message.includes('not available'))
+    ) {
+      return res.status(400).json({ error: error.message });
     }
 
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to compute stats', 500);
   }
 });
 
@@ -1663,7 +1668,6 @@ datasetRoutes.post('/compatibility', async (req: Request, res: Response) => {
       return res.status(404).json({ error: error.message, datasetIds: error.datasetIds });
     }
     console.error('[DatasetRoutes] Error analyzing compatibility:', error);
-    const message = error instanceof Error ? error.message : 'Failed to analyze compatibility';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to analyze compatibility', 400);
   }
 });

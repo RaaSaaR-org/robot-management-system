@@ -32,6 +32,7 @@ import type {
   CreateListingInput,
   SubmitReviewInput,
 } from '../types/marketplace.types';
+import { getErrorMessage } from '@/shared/utils';
 
 // ============================================================================
 // RETURN TYPE INTERFACES
@@ -342,7 +343,7 @@ export function useMarketplaceDownload(
       .catch((err: unknown) => {
         if (!cancelled) {
           setState('error');
-          setError(err instanceof Error ? err.message : 'Failed to load download info');
+          setError(getErrorMessage(err, 'Failed to load download info'));
         }
       });
 
@@ -398,7 +399,7 @@ export function useMarketplaceDownload(
       refreshListing();
     } catch (err: unknown) {
       setState('error');
-      setError(err instanceof Error ? err.message : 'Download failed');
+      setError(getErrorMessage(err, 'Download failed'));
     }
   }, [listingId, info]);
 

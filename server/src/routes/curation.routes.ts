@@ -18,6 +18,7 @@ import type {
   CurationConfig,
   AugmentationConfig,
 } from '../types/curation.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const curationRoutes = Router();
 
@@ -368,7 +369,7 @@ function sendCurationError(res: Response, error: unknown, fallback: string): voi
     res.status(400).json({ error: error.message, code: error.code });
     return;
   }
-  res.status(500).json({ error: error instanceof Error ? error.message : fallback });
+  sendFailure(res, error, fallback, 500);
 }
 
 /**

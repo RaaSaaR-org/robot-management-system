@@ -92,7 +92,7 @@ describe('complianceTrackerStore', () => {
   it('fetchRegulatoryDeadlines sets error on failure', async () => {
     api.getRegulatoryDeadlines.mockRejectedValue('x');
     await useComplianceTrackerStore.getState().fetchRegulatoryDeadlines();
-    expect(useComplianceTrackerStore.getState().error).toBe('Failed to fetch deadlines');
+    expect(useComplianceTrackerStore.getState().error).toBe('x');
   });
 
   it('fetchGaps uses provided filters and persists them', async () => {

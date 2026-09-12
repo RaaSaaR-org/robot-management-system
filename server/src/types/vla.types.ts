@@ -57,7 +57,11 @@ export type DatasetStatus = (typeof DatasetStatuses)[number];
 export const SkillStatuses = ['draft', 'published', 'deprecated', 'archived'] as const;
 export type SkillStatus = (typeof SkillStatuses)[number];
 
-// Deployment status
+// Deployment status. The three terminal values are distinct on purpose: a
+// rollout that was deliberately withdrawn ('rolled_back'), one that was called
+// off before it reached any robot ('cancelled') and one that broke ('failed')
+// must stay tellable apart in the deployment history, which doubles as
+// post-market monitoring evidence. (TASK-299)
 export const DeploymentStatuses = [
   'pending',
   'deploying',
@@ -65,6 +69,8 @@ export const DeploymentStatuses = [
   'production',
   'rolling_back',
   'failed',
+  'rolled_back',
+  'cancelled',
 ] as const;
 export type DeploymentStatus = (typeof DeploymentStatuses)[number];
 

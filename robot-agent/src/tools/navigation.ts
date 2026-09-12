@@ -7,6 +7,12 @@ import { ai, z } from '../agent/genkit.js';
 import type { RobotLocation, Zone, ZoneBounds } from '../robot/types.js';
 import type { RobotStateManager } from '../robot/state.js';
 import { config } from '../config/config.js';
+import {
+  SERVICE_TOKEN_ENV,
+  isAuthRejection,
+  platformAuthHeaders,
+  recordPlatformAuthRejection,
+} from '../utils/platform-auth.js';
 
 // Global reference to robot state manager (set by main)
 let robotStateManager: RobotStateManager;
@@ -15,6 +21,14 @@ let robotStateManager: RobotStateManager;
 let cachedZones: Zone[] = [];
 let cachedNamedLocations: Record<string, RobotLocation> = {};
 let lastZoneFetch = 0;
+/**
+ * Whether the last attempt to read the zone list actually succeeded.
+ *
+ * It is the difference between "that zone does not exist" and "I cannot find
+ * out what zones exist", and those must not produce the same movement. Starts
+ * false: nothing has been read yet.
+ */
+let zonesReadable = false;
 
 // Default fallback locations (used when server is unavailable)
 const FALLBACK_LOCATIONS: Record<string, RobotLocation> = {
@@ -73,16 +87,35 @@ async function fetchZones(): Promise<Zone[]> {
     return cachedZones;
   }
 
+  const url = `${config.serverUrl}/api/zones`;
   try {
     // Fetch from server - use the server URL from config
-    const response = await fetch(`${config.serverUrl}/api/zones`);
+    const response = await fetch(url, { headers: platformAuthHeaders() });
     if (!response.ok) {
-      console.warn('[Navigation] Failed to fetch zones:', response.status);
+      zonesReadable = false;
+      if (isAuthRejection(response.status)) {
+        recordPlatformAuthRejection('navigation', response.status, url);
+        console.error(
+          `[Navigation] Zone list rejected: HTTP ${response.status} — ${
+            process.env[SERVICE_TOKEN_ENV]
+              ? `the configured ${SERVICE_TOKEN_ENV} was refused`
+              : `no ${SERVICE_TOKEN_ENV} is configured`
+          }. Named zones cannot be resolved until that is fixed.`
+        );
+      } else {
+        console.warn('[Navigation] Failed to fetch zones:', response.status);
+      }
+      // Same seeding the catch branch does: home and the charging station have
+      // to keep working when the zone list does not.
+      if (Object.keys(cachedNamedLocations).length === 0) {
+        cachedNamedLocations = { ...FALLBACK_LOCATIONS };
+      }
       return cachedZones;
     }
     const data = (await response.json()) as { data?: Zone[] };
     cachedZones = data.data || [];
     lastZoneFetch = now;
+    zonesReadable = true;
 
     // Derive named locations from zones
     cachedNamedLocations = deriveNamedLocationsFromZones(cachedZones);
@@ -95,6 +128,7 @@ async function fetchZones(): Promise<Zone[]> {
       robotStateManager.setZoneCache(cachedZones);
     }
   } catch (error) {
+    zonesReadable = false;
     // Log a concise message - this is expected when server isn't running yet
     const message = error instanceof Error ? error.message : 'Unknown error';
     const isConnectionError = message.includes('fetch failed') || message.includes('ECONNREFUSED');
@@ -203,11 +237,17 @@ async function validateDestinationZone(
 }
 
 /**
- * Clear zone cache (call when zones are updated)
+ * Clear zone cache (call when zones are updated).
+ *
+ * The derived named locations go with it: they ARE the zone list in another
+ * shape, so keeping them would answer from a cache the caller just declared
+ * stale — and would hide an unreadable zone list behind names read earlier.
  */
 export function clearZoneCache(): void {
   cachedZones = [];
+  cachedNamedLocations = {};
   lastZoneFetch = 0;
+  zonesReadable = false;
 }
 
 /**
@@ -229,8 +269,15 @@ async function resolveDestination(
     // Try to find zone in named locations (from server)
     const loc = await getNamedLocation(destination.zone);
     if (loc) return loc;
-    // Default to a position in the zone if not found
-    return { x: 25, y: 25, zone: destination.zone, floor: '1' };
+    // No invented coordinate. This used to return (25, 25) for any zone the
+    // server never confirmed, and the robot then drove to a made-up spot and
+    // reported success from it — a fabricated arrival is worse than a refusal.
+    if (!zonesReadable) {
+      throw new Error(
+        `Cannot resolve zone "${destination.zone}": the zone list could not be read from the platform, so this destination is unknown.`
+      );
+    }
+    throw new Error(`Unknown zone: ${destination.zone}`);
   }
 
   // Coordinates provided

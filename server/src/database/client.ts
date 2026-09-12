@@ -19,6 +19,8 @@
  * Wave 3c: ModelVersion, Deployment, SimulationJob, SyntheticJob.
  * Wave 3d: Zone, Conversation.
  * Wave 3f: EpisodeReward, InterventionEpisode (TASK-179).
+ * TASK-285: DigitalTwin, ScanSession, SimScene.
+ * TASK-286: SensorScan, MotionClip, VlaSession.
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -30,7 +32,7 @@ import { getTenantId } from '../middleware/tenantContext.js';
  * Keep this in sync with the Prisma schema — adding a model here without
  * adding the column will blow up at runtime.
  */
-const TENANT_SCOPED_MODELS = new Set<string>([
+export const TENANT_SCOPED_MODELS = new Set<string>([
   // Wave 1 (TASK-155)
   'User',
   'Robot',
@@ -68,6 +70,14 @@ const TENANT_SCOPED_MODELS = new Set<string>([
   // TASK-213 host mode
   'TourRoute',
   'TourRun',
+  // TASK-285 digital twin / scanning
+  'DigitalTwin',
+  'ScanSession',
+  'SimScene',
+  // TASK-286 perception & VLA
+  'SensorScan',
+  'MotionClip',
+  'VlaSession',
 ]);
 
 const globalForPrisma = globalThis as unknown as {

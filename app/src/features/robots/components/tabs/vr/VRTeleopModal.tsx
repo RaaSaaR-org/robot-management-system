@@ -10,7 +10,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createXRStore } from '@react-three/xr';
 import * as THREE from 'three';
-import { Badge, Button, Panel, StatusTag } from '@/shared/components/ui';
+import { Badge, Button, Panel, StatusTag, errorMessage } from '@/shared/components/ui';
 import { safetyApi } from '@/features/safety/api/safetyApi';
 import { normalizeRobotType, type JointState } from '../../../types/robots.types';
 import type { TeleopTabProps } from '../types';
@@ -610,7 +610,7 @@ export function VRTeleopModalBody({
       setAgentErrors((prev) => prev.filter((e) => e.code !== 'estop_latched'));
     } catch (error) {
       setEstopNote(
-        `Reset failed: ${error instanceof Error ? error.message : 'unknown error'} — the robot is still stopped.`,
+        `Reset failed: ${errorMessage(error, 'unknown error')} — the robot is still stopped.`,
       );
     } finally {
       setResetting(false);

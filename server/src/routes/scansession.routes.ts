@@ -8,8 +8,15 @@
 
 import { Router, type Request, type Response } from 'express';
 import { scanSessionService } from '../services/ScanSessionService.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const scanSessionRoutes = Router();
+
+// ScanSessionService's own sentences (ScanSessionService.ts:70, :111), matched
+// by their shape rather than by substring. Prisma's P2025 message also ends in
+// "not found", and echoing that would put the failing query and the absolute
+// server path in the response.
+const MISSING_RECORD = /^(Digital twin|Scan session) .+ not found$/;
 
 /**
  * POST /api/scan-sessions — start a sweep: creates the session, calls the
@@ -25,11 +32,11 @@ scanSessionRoutes.post('/', async (req: Request, res: Response) => {
     const session = await scanSessionService.startSession({ robotId, twinId });
     res.status(201).json(session);
   } catch (error) {
-    if (error instanceof Error && error.message.includes('not found')) {
+    if (error instanceof Error && MISSING_RECORD.test(error.message)) {
       return res.status(404).json({ error: error.message });
     }
     console.error('[ScanSession] start error:', error);
-    res.status(500).json({ error: 'Failed to start scan session' });
+    sendFailure(res, error, 'Failed to start scan session', 500);
   }
 });
 
@@ -42,11 +49,11 @@ scanSessionRoutes.post('/:id/stop', async (req: Request, res: Response) => {
     const session = await scanSessionService.stopSession(req.params.id);
     res.json(session);
   } catch (error) {
-    if (error instanceof Error && error.message.includes('not found')) {
+    if (error instanceof Error && MISSING_RECORD.test(error.message)) {
       return res.status(404).json({ error: error.message });
     }
     console.error('[ScanSession] stop error:', error);
-    res.status(500).json({ error: 'Failed to stop scan session' });
+    sendFailure(res, error, 'Failed to stop scan session', 500);
   }
 });
 
@@ -60,7 +67,7 @@ scanSessionRoutes.get('/:id', async (req: Request, res: Response) => {
     res.json(session);
   } catch (error) {
     console.error('[ScanSession] get error:', error);
-    res.status(500).json({ error: 'Failed to get scan session' });
+    sendFailure(res, error, 'Failed to get scan session', 500);
   }
 });
 
@@ -73,6 +80,6 @@ scanSessionRoutes.get('/:id/frames', async (req: Request, res: Response) => {
     res.json({ frames });
   } catch (error) {
     console.error('[ScanSession] frames error:', error);
-    res.status(500).json({ error: 'Failed to list session frames' });
+    sendFailure(res, error, 'Failed to list session frames', 500);
   }
 });

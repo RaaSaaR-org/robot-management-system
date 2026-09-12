@@ -21,6 +21,7 @@ import {
   selectStagingVersions,
   selectProductionVersions,
 } from '../deploymentStore';
+import { isActiveDeployment } from '../../components/deploymentHelpers';
 
 // Mock the api barrel module that the store imports
 vi.mock('../../api', () => ({
@@ -148,10 +149,10 @@ describe('deploymentStore', () => {
       expect(s.deployments).toEqual([]);
     });
 
-    it('falls back to default error message for non-Error throws', async () => {
+    it('surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
       api.listDeployments.mockRejectedValue('nope');
       await useDeploymentStore.getState().fetchDeployments();
-      expect(useDeploymentStore.getState().deploymentsError).toBe('Failed to fetch deployments');
+      expect(useDeploymentStore.getState().deploymentsError).toBe('nope');
     });
   });
 
@@ -266,12 +267,16 @@ describe('deploymentStore', () => {
 
   it('rollbackDeployment passes the reason and replaces the deployment', async () => {
     useDeploymentStore.setState({ deployments: [makeDeployment({ id: 'r', status: 'production' })] } as never);
-    api.rollbackDeployment.mockResolvedValue(makeDeployment({ id: 'r', status: 'failed' }));
+    // A completed rollback comes back as 'rolled_back', not 'failed' (TASK-299).
+    api.rollbackDeployment.mockResolvedValue(makeDeployment({ id: 'r', status: 'rolled_back' }));
 
     await useDeploymentStore.getState().rollbackDeployment('r', 'regression');
 
     expect(api.rollbackDeployment).toHaveBeenCalledWith('r', 'regression');
-    expect(useDeploymentStore.getState().deployments[0].status).toBe('failed');
+    const rolled = useDeploymentStore.getState().deployments[0];
+    expect(rolled.status).toBe('rolled_back');
+    // …and it has left the Active split for History.
+    expect(isActiveDeployment(rolled)).toBe(false);
   });
 
   // -------------------------------------------------------------------------
@@ -591,6 +596,8 @@ describe('deploymentStore', () => {
           makeDeployment({ id: 'd-canary', status: 'canary' }),
           makeDeployment({ id: 'd-prod', status: 'production' }),
           makeDeployment({ id: 'd-failed', status: 'failed' }),
+          makeDeployment({ id: 'd-rolled-back', status: 'rolled_back' }),
+          makeDeployment({ id: 'd-cancelled', status: 'cancelled' }),
         ],
         selectedDeploymentId: 'd-canary',
         deploymentMetrics: { 'd-prod': { rps: 7 } as never },
@@ -615,9 +622,11 @@ describe('deploymentStore', () => {
       expect(ids).toEqual(['d-pending', 'd-deploying', 'd-canary']);
     });
 
-    it('selectCompletedDeployments returns production/failed', () => {
+    it('selectCompletedDeployments returns every finished rollout, withdrawals included', () => {
+      // 'production' is still serving traffic, so it counts as active; the three
+      // terminal states are what History shows. (TASK-299)
       const ids = selectCompletedDeployments(useDeploymentStore.getState()).map((d) => d.id);
-      expect(ids).toEqual(['d-prod', 'd-failed']);
+      expect(ids).toEqual(['d-failed', 'd-rolled-back', 'd-cancelled']);
     });
 
     it('selectDeploymentById finds the right one', () => {

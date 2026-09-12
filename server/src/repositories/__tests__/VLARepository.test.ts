@@ -1150,7 +1150,7 @@ describe('DeploymentRepository', () => {
       orderBy: { createdAt: 'desc' },
       include: deploymentInclude,
     });
-    await repo.findByStatus('rolled_back' as never);
+    await repo.findByStatus('rolled_back');
     expect(prismaMock.deployment.findMany).toHaveBeenLastCalledWith({
       where: { status: 'rolled_back' },
       orderBy: { createdAt: 'desc' },
@@ -1175,6 +1175,20 @@ describe('DeploymentRepository', () => {
       include: deploymentInclude,
     });
     expect(result?.status).toBe('production');
+  });
+
+  it('update() writes the terminal rolled_back status through to prisma', async () => {
+    // The status column is a free-form String, so the two terminal values added
+    // in TASK-299 need no migration — this proves the write reaches prisma and
+    // comes back mapped onto the domain type.
+    prismaMock.deployment.update.mockResolvedValue(makeDbDeployment({ status: 'rolled_back' }));
+    const result = await repo.update('dp-1', { status: 'rolled_back' });
+    expect(prismaMock.deployment.update).toHaveBeenCalledWith({
+      where: { id: 'dp-1' },
+      data: { status: 'rolled_back' },
+      include: deploymentInclude,
+    });
+    expect(result?.status).toBe('rolled_back');
   });
 
   it('update() returns null when prisma throws', async () => {

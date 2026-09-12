@@ -5,7 +5,10 @@
  */
 
 /**
- * The rejection value of `@/api/client` — a plain object, not an `Error`.
+ * The `{ code, message, statusCode }` envelope. `@/api/client` now rejects with
+ * `ApiRequestError`, a real `Error` carrying these as own properties, so that
+ * case is already handled by the `instanceof Error` branch below; this shape
+ * still covers hand-built rejections and older mocks that pass a plain object.
  * Mirrors `ApiError` from `shared/types/api.types` without importing it, so
  * this module stays dependency-free.
  */
@@ -16,12 +19,13 @@ interface ApiErrorLike {
 }
 
 /**
- * Recognise the api client's rejection envelope.
+ * Recognise a plain `{ code, message, statusCode }` rejection envelope.
  *
- * The client rejects with `{ code, message, statusCode }` (see
- * `api/client.ts` → `createApiError`), so an `instanceof Error` check alone
- * throws away the server's message and every caller reads "An unknown error
- * occurred". Only objects carrying that envelope (`message` *plus* `code` or
+ * The api client itself rejects with `ApiRequestError` (see
+ * `api/client.ts`), which the `instanceof Error` branch handles. This keeps
+ * the same message reachable when the envelope arrives as a plain object —
+ * a mock, a hand-built rejection, a value that crossed a structured clone.
+ * Only objects carrying the envelope (`message` *plus* `code` or
  * `statusCode`) are unwrapped — an arbitrary `{ message }` bag is still an
  * unknown value and keeps falling through to the fallback.
  */

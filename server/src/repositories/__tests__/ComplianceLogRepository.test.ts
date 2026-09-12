@@ -4,45 +4,47 @@
  *   hash-chain creation/verification, metrics aggregation, and access auditing. Mocks the
  *   Prisma client at the I/O boundary while running the real encryption/hash mappers.
  * @feature compliance
+ *
+ * The create tests assert against the transaction client, not the singleton: since
+ * TASK-291 the head read and the insert both happen inside `prisma.$transaction`,
+ * and a head read that escaped back onto the singleton would be the exact defect
+ * that forked the chain. The concurrency this protects is covered for real in
+ * ComplianceLogRepository.concurrency.integration.test.ts.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Prisma } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
 // Hoisted mock for the singleton Prisma client (repo imports `prisma`)
 // ---------------------------------------------------------------------------
 
-const { mockPrisma } = vi.hoisted(() => ({
-  mockPrisma: {
-    complianceLog: {
-      findFirst: vi.fn(),
-      findUnique: vi.fn(),
-      findMany: vi.fn(),
-      create: vi.fn(),
-      count: vi.fn(),
-      groupBy: vi.fn(),
-      aggregate: vi.fn(),
+const { mockPrisma, mockTx } = vi.hoisted(() => {
+  const model = () => ({
+    findFirst: vi.fn(),
+    findUnique: vi.fn(),
+    findMany: vi.fn(),
+    create: vi.fn(),
+    count: vi.fn(),
+    groupBy: vi.fn(),
+    aggregate: vi.fn(),
+  });
+
+  // The interactive-transaction client the repository must do its chain work on.
+  const tx = { complianceLog: model() };
+
+  return {
+    mockTx: tx,
+    mockPrisma: {
+      complianceLog: model(),
+      complianceLogAccess: {
+        create: vi.fn(),
+        findMany: vi.fn(),
+      },
+      $transaction: vi.fn(),
     },
-    complianceLogAccess: {
-      create: vi.fn(),
-      findMany: vi.fn(),
-    },
-  } as {
-    complianceLog: {
-      findFirst: ReturnType<typeof vi.fn>;
-      findUnique: ReturnType<typeof vi.fn>;
-      findMany: ReturnType<typeof vi.fn>;
-      create: ReturnType<typeof vi.fn>;
-      count: ReturnType<typeof vi.fn>;
-      groupBy: ReturnType<typeof vi.fn>;
-      aggregate: ReturnType<typeof vi.fn>;
-    };
-    complianceLogAccess: {
-      create: ReturnType<typeof vi.fn>;
-      findMany: ReturnType<typeof vi.fn>;
-    };
-  },
-}));
+  };
+});
 
 vi.mock('../../database/index.js', () => ({ prisma: mockPrisma }));
 
@@ -55,6 +57,53 @@ import type {
   CompliancePayload,
   ComplianceEventType,
 } from '../../types/compliance.types.js';
+
+// The chain order the repository must use (TASK-291). `seq` leads: `timestamp`
+// alone is non-unique, so ties came back in arbitrary order and read as breaks.
+// Rows that predate the backfill have no `seq` and fall back to
+// (timestamp, id) — timestamp FIRST, because `id` is a random uuid and an
+// id-led tie-break shuffles an unnumbered chain into false tamper reports.
+const CHAIN_ORDER_ASC = [
+  { seq: { sort: 'asc', nulls: 'first' } },
+  { timestamp: 'asc' },
+  { id: 'asc' },
+];
+const CHAIN_ORDER_DESC = [
+  { seq: { sort: 'desc', nulls: 'last' } },
+  { timestamp: 'desc' },
+  { id: 'desc' },
+];
+
+type OrderTerm = Record<string, string | { sort: string; nulls?: string }>;
+
+/**
+ * Sort fixture rows the way the database would for a given Prisma `orderBy`.
+ *
+ * Lets a chain-order regression be caught by the walk itself — feed the rows in
+ * a scrambled order and let the repository's own `orderBy` impose the chain —
+ * rather than only by asserting the shape of the query.
+ */
+function applyOrderBy<T extends Record<string, unknown>>(rows: T[], orderBy: OrderTerm[]): T[] {
+  const terms = orderBy.map((term) => {
+    const [field, spec] = Object.entries(term)[0];
+    return typeof spec === 'string'
+      ? { field, sort: spec, nulls: 'first' }
+      : { field, sort: spec.sort, nulls: spec.nulls ?? 'first' };
+  });
+
+  return [...rows].sort((a, b) => {
+    for (const { field, sort, nulls } of terms) {
+      const av = a[field] as string | number | Date | null;
+      const bv = b[field] as string | number | Date | null;
+      if (av === null && bv === null) continue;
+      if (av === null) return nulls === 'first' ? -1 : 1;
+      if (bv === null) return nulls === 'first' ? 1 : -1;
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      if (cmp !== 0) return sort === 'asc' ? cmp : -cmp;
+    }
+    return 0;
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Fixtures — build DB rows whose encrypted payload is produced by REAL encrypt()
@@ -103,6 +152,7 @@ function makeLogRow(overrides: Record<string, unknown> = {}) {
     outputHash: null,
     previousHash,
     currentHash,
+    seq: 1,
     decisionId: null,
     timestamp,
     immutable: true,
@@ -134,11 +184,23 @@ function makeCreateInput(overrides: Partial<CreateComplianceLogInput> = {}): Cre
   };
 }
 
+/** Prisma's P2002, as the client raises it when the `seq` unique index is hit. */
+function uniqueSeqViolation(): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError(
+    'Unique constraint failed on the fields: (`seq`)',
+    { code: 'P2002', clientVersion: 'test', meta: { target: ['seq'] } },
+  );
+}
+
 describe('ComplianceLogRepository', () => {
   let repo: ComplianceLogRepository;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Interactive transaction: hand the callback the tx client.
+    mockPrisma.$transaction.mockImplementation(
+      async (cb: (client: typeof mockTx) => unknown) => cb(mockTx),
+    );
     repo = new ComplianceLogRepository();
   });
 
@@ -147,22 +209,36 @@ describe('ComplianceLogRepository', () => {
   // -------------------------------------------------------------------------
   describe('create', () => {
     it('builds the hash chain off the latest log and persists an immutable row', async () => {
-      mockPrisma.complianceLog.findFirst.mockResolvedValue({ currentHash: 'prev-hash' });
-      mockPrisma.complianceLog.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+      mockTx.complianceLog.findFirst.mockResolvedValue({ seq: 7, currentHash: 'prev-hash' });
+      mockTx.complianceLog.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
         Promise.resolve(makeLogRow(data)),
       );
 
       const input = makeCreateInput({ severity: 'warning', operatorId: 'op-9' });
       const result = await repo.create(input);
 
-      // previous hash lookup
-      expect(mockPrisma.complianceLog.findFirst).toHaveBeenCalledWith({
-        orderBy: { timestamp: 'desc' },
-        select: { currentHash: true },
+      // The whole chain operation runs in one transaction, at the only
+      // isolation level the sqlite-generated client exposes.
+      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+      // Budgets are explicit: a queued append must wait its turn rather than
+      // be dropped, since a lost compliance log is worse than a slow one.
+      expect(mockPrisma.$transaction.mock.calls[0][1]).toEqual({
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 20_000,
+        timeout: 20_000,
       });
 
+      // Head read happens on the transaction client, in chain order — never on
+      // the singleton, which is what let two creates read the same head.
+      expect(mockTx.complianceLog.findFirst).toHaveBeenCalledWith({
+        orderBy: CHAIN_ORDER_DESC,
+        select: { seq: true, currentHash: true },
+      });
+      expect(mockPrisma.complianceLog.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.complianceLog.create).not.toHaveBeenCalled();
+
       // create payload shape
-      const createArg = mockPrisma.complianceLog.create.mock.calls[0][0];
+      const createArg = mockTx.complianceLog.create.mock.calls[0][0];
       const data = createArg.data;
       expect(data.sessionId).toBe('sess-1');
       expect(data.robotId).toBe('robot-1');
@@ -171,11 +247,13 @@ describe('ComplianceLogRepository', () => {
       expect(data.severity).toBe('warning');
       expect(data.previousHash).toBe('prev-hash');
       expect(data.immutable).toBe(true);
+      // next chain position, claimed under the unique index
+      expect(data.seq).toBe(8);
 
       // payloadHash is sha256 of the serialized payload
       expect(data.payloadHash).toBe(sha256(JSON.stringify(input.payload)));
 
-      // currentHash matches the real chain hash computation
+      // currentHash matches the real chain hash computation — seq is NOT an input
       const expectedHash = generateLogHash(
         'prev-hash',
         (data.timestamp as Date).toISOString(),
@@ -194,34 +272,121 @@ describe('ComplianceLogRepository', () => {
       expect(result.payload).toEqual(input.payload);
       // row is built from the create data, so severity round-trips through the mapper
       expect(result.severity).toBe('warning');
+      expect(result.seq).toBe(8);
     });
 
-    it('uses empty previousHash when there is no prior log, and defaults severity to info', async () => {
-      mockPrisma.complianceLog.findFirst.mockResolvedValue(null);
-      mockPrisma.complianceLog.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+    it('uses empty previousHash and seq 1 when there is no prior log, and defaults severity to info', async () => {
+      mockTx.complianceLog.findFirst.mockResolvedValue(null);
+      mockTx.complianceLog.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
         Promise.resolve(makeLogRow(data)),
       );
 
       await repo.create(makeCreateInput());
 
-      const data = mockPrisma.complianceLog.create.mock.calls[0][0].data;
+      const data = mockTx.complianceLog.create.mock.calls[0][0].data;
       expect(data.previousHash).toBe('');
       expect(data.severity).toBe('info');
+      expect(data.seq).toBe(1);
+    });
+
+    it('starts a chain at seq 1 when the head predates the backfill and has a null seq', async () => {
+      mockTx.complianceLog.findFirst.mockResolvedValue({ seq: null, currentHash: 'legacy-hash' });
+      mockTx.complianceLog.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve(makeLogRow(data)),
+      );
+
+      await repo.create(makeCreateInput());
+
+      const data = mockTx.complianceLog.create.mock.calls[0][0].data;
+      expect(data.seq).toBe(1);
+      expect(data.previousHash).toBe('legacy-hash');
     });
 
     it('falls back to 365-day retention for unknown event types', async () => {
-      mockPrisma.complianceLog.findFirst.mockResolvedValue(null);
-      mockPrisma.complianceLog.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+      mockTx.complianceLog.findFirst.mockResolvedValue(null);
+      mockTx.complianceLog.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
         Promise.resolve(makeLogRow(data)),
       );
 
       await repo.create(makeCreateInput({ eventType: 'unknown_type' as ComplianceEventType }));
 
-      const data = mockPrisma.complianceLog.create.mock.calls[0][0].data;
+      const data = mockTx.complianceLog.create.mock.calls[0][0].data;
       const ts = data.timestamp as Date;
       const expected = new Date(ts);
       expected.setDate(expected.getDate() + 365);
       expect((data.retentionExpiresAt as Date).getTime()).toBe(expected.getTime());
+    });
+
+    it('retries against a freshly read head when the insert loses the seq race (P2002)', async () => {
+      // First attempt sees head seq 4; a concurrent writer takes seq 5 and the
+      // unique index rejects ours. The retry must re-read — reusing the stale
+      // head would persist the duplicate previousHash this whole task exists
+      // to prevent.
+      mockTx.complianceLog.findFirst
+        .mockResolvedValueOnce({ seq: 4, currentHash: 'hash-4' })
+        .mockResolvedValueOnce({ seq: 5, currentHash: 'hash-5' });
+      mockTx.complianceLog.create
+        .mockRejectedValueOnce(uniqueSeqViolation())
+        .mockImplementationOnce(({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(makeLogRow(data)),
+        );
+
+      const result = await repo.create(makeCreateInput());
+
+      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(2);
+      expect(mockTx.complianceLog.findFirst).toHaveBeenCalledTimes(2);
+      expect(mockTx.complianceLog.create).toHaveBeenCalledTimes(2);
+
+      const first = mockTx.complianceLog.create.mock.calls[0][0].data;
+      const second = mockTx.complianceLog.create.mock.calls[1][0].data;
+      expect(first.seq).toBe(5);
+      expect(first.previousHash).toBe('hash-4');
+      // the retry chains onto the winner, not onto the head it first read
+      expect(second.seq).toBe(6);
+      expect(second.previousHash).toBe('hash-5');
+      expect(second.currentHash).toBe(
+        generateLogHash(
+          'hash-5',
+          (second.timestamp as Date).toISOString(),
+          second.payloadHash as string,
+          'ai_decision',
+        ),
+      );
+      expect(result.seq).toBe(6);
+    });
+
+    it('retries a serializable conflict (P2034)', async () => {
+      mockTx.complianceLog.findFirst.mockResolvedValue({ seq: 1, currentHash: 'h1' });
+      mockTx.complianceLog.create
+        .mockRejectedValueOnce(
+          new Prisma.PrismaClientKnownRequestError('write conflict', {
+            code: 'P2034',
+            clientVersion: 'test',
+          }),
+        )
+        .mockImplementationOnce(({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(makeLogRow(data)),
+        );
+
+      await expect(repo.create(makeCreateInput())).resolves.toBeDefined();
+      expect(mockTx.complianceLog.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('gives up after a bounded number of lost races rather than looping forever', async () => {
+      mockTx.complianceLog.findFirst.mockResolvedValue({ seq: 1, currentHash: 'h1' });
+      mockTx.complianceLog.create.mockRejectedValue(uniqueSeqViolation());
+
+      await expect(repo.create(makeCreateInput())).rejects.toMatchObject({ code: 'P2002' });
+      // MAX_CHAIN_ATTEMPTS
+      expect(mockTx.complianceLog.create).toHaveBeenCalledTimes(5);
+    });
+
+    it('does not retry an unrelated failure', async () => {
+      mockTx.complianceLog.findFirst.mockResolvedValue(null);
+      mockTx.complianceLog.create.mockRejectedValue(new Error('database is gone'));
+
+      await expect(repo.create(makeCreateInput())).rejects.toThrow('database is gone');
+      expect(mockTx.complianceLog.create).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -287,6 +452,7 @@ describe('ComplianceLogRepository', () => {
       expect(mockPrisma.complianceLog.findUnique).toHaveBeenCalledWith({ where: { id: 'log-1' } });
       expect(result?.payloadEncrypted).toBe(row.payloadEncrypted);
       expect(result?.payloadIv).toBe(row.payloadIv);
+      expect(result?.seq).toBe(row.seq);
       // encrypted mapper does not add a decrypted payload field
       expect((result as unknown as { payload?: unknown }).payload).toBeUndefined();
     });
@@ -307,6 +473,7 @@ describe('ComplianceLogRepository', () => {
 
       const result = await repo.findAll();
 
+      // findAll is the browsing query, not a chain walk — timestamp stays.
       expect(mockPrisma.complianceLog.findMany).toHaveBeenCalledWith({
         where: {},
         skip: 0,
@@ -380,6 +547,7 @@ describe('ComplianceLogRepository', () => {
 
       const result = await repo.findBySessionId('sess-1');
 
+      // Display order for one session's events — deliberately still timestamp.
       expect(mockPrisma.complianceLog.findMany).toHaveBeenCalledWith({
         where: { sessionId: 'sess-1' },
         orderBy: { timestamp: 'asc' },
@@ -412,12 +580,12 @@ describe('ComplianceLogRepository', () => {
   // verifyHashChain
   // -------------------------------------------------------------------------
   describe('verifyHashChain', () => {
-    it('reports a valid chain when each link is consistent', async () => {
+    it('reports a valid chain when each link is consistent, walking in seq order', async () => {
       // build a real 2-link chain
       const t1 = new Date('2026-01-01T00:00:00.000Z');
-      const log1 = makeLogRow({ id: 'l1', previousHash: '', timestamp: t1 });
+      const log1 = makeLogRow({ id: 'l1', previousHash: '', timestamp: t1, seq: 1 });
       const t2 = new Date('2026-01-02T00:00:00.000Z');
-      const log2 = makeLogRow({ id: 'l2', previousHash: log1.currentHash, timestamp: t2 });
+      const log2 = makeLogRow({ id: 'l2', previousHash: log1.currentHash, timestamp: t2, seq: 2 });
 
       mockPrisma.complianceLog.findMany.mockResolvedValue([log1, log2]);
 
@@ -425,7 +593,7 @@ describe('ComplianceLogRepository', () => {
 
       expect(mockPrisma.complianceLog.findMany).toHaveBeenCalledWith({
         where: {},
-        orderBy: { timestamp: 'asc' },
+        orderBy: CHAIN_ORDER_ASC,
       });
       expect(result.isValid).toBe(true);
       expect(result.totalLogs).toBe(2);
@@ -435,12 +603,78 @@ describe('ComplianceLogRepository', () => {
       expect(result.lastLogTimestamp).toEqual(t2);
     });
 
+    it('verifies a chain whose two links share a timestamp — the case timestamp ordering broke', async () => {
+      // Same millisecond, so `orderBy: timestamp` could return these in either
+      // order and one link always looked broken. seq disambiguates.
+      const t = new Date('2026-01-01T00:00:00.000Z');
+      const log1 = makeLogRow({ id: 'l1', previousHash: '', timestamp: t, seq: 1 });
+      const log2 = makeLogRow({
+        id: 'l2',
+        previousHash: log1.currentHash,
+        timestamp: t,
+        seq: 2,
+        payload: { description: 'second', outputAction: 'stop' } as CompliancePayload,
+      });
+
+      mockPrisma.complianceLog.findMany.mockResolvedValue([log1, log2]);
+
+      const result = await repo.verifyHashChain();
+      expect(result.isValid).toBe(true);
+      expect(result.brokenLinks).toEqual([]);
+    });
+
+    it('walks unnumbered legacy rows in timestamp order, not by their random uuid', async () => {
+      // Rows written before the backfill have seq = null, so the tie-break IS
+      // the whole order. `id` is @default(uuid()) — a random v4 — so an id-led
+      // tie-break returns an intact legacy chain shuffled and reports nearly
+      // every link broken: a false tamper report in the Art. 12 evidence chain.
+      const t1 = new Date('2026-01-01T00:00:00.000Z');
+      const t2 = new Date('2026-01-02T00:00:00.000Z');
+      const t3 = new Date('2026-01-03T00:00:00.000Z');
+
+      // Ids deliberately run opposite to the chain, as random uuids may.
+      const l1 = makeLogRow({
+        id: 'ffffffff-0000-4000-8000-000000000001',
+        seq: null,
+        previousHash: '',
+        timestamp: t1,
+      });
+      const l2 = makeLogRow({
+        id: '77777777-0000-4000-8000-000000000002',
+        seq: null,
+        previousHash: l1.currentHash,
+        timestamp: t2,
+        payload: { description: 'second', outputAction: 'stop' } as CompliancePayload,
+      });
+      const l3 = makeLogRow({
+        id: '00000000-0000-4000-8000-000000000003',
+        seq: null,
+        previousHash: l2.currentHash,
+        timestamp: t3,
+        payload: { description: 'third', outputAction: 'wait' } as CompliancePayload,
+      });
+
+      // Stored order is arbitrary; the query's orderBy has to impose the chain.
+      mockPrisma.complianceLog.findMany.mockImplementation(
+        ({ orderBy }: { orderBy: OrderTerm[] }) =>
+          Promise.resolve(applyOrderBy([l3, l1, l2], orderBy)),
+      );
+
+      const result = await repo.verifyHashChain();
+
+      expect(result.brokenLinks).toEqual([]);
+      expect(result.isValid).toBe(true);
+      expect(result.totalLogs).toBe(3);
+      expect(result.firstLogTimestamp).toEqual(t1);
+      expect(result.lastLogTimestamp).toEqual(t3);
+    });
+
     it('flags a broken previousHash link', async () => {
       const t1 = new Date('2026-01-01T00:00:00.000Z');
-      const log1 = makeLogRow({ id: 'l1', previousHash: '', timestamp: t1 });
+      const log1 = makeLogRow({ id: 'l1', previousHash: '', timestamp: t1, seq: 1 });
       const t2 = new Date('2026-01-02T00:00:00.000Z');
       // wrong previousHash but recompute currentHash so only the link breaks
-      const log2 = makeLogRow({ id: 'l2', previousHash: 'WRONG', timestamp: t2 });
+      const log2 = makeLogRow({ id: 'l2', previousHash: 'WRONG', timestamp: t2, seq: 2 });
 
       mockPrisma.complianceLog.findMany.mockResolvedValue([log1, log2]);
 
@@ -480,7 +714,7 @@ describe('ComplianceLogRepository', () => {
 
       expect(mockPrisma.complianceLog.findMany).toHaveBeenCalledWith({
         where: { timestamp: { gte: start, lte: end } },
-        orderBy: { timestamp: 'asc' },
+        orderBy: CHAIN_ORDER_ASC,
       });
       expect(result.isValid).toBe(true);
       expect(result.totalLogs).toBe(0);
@@ -671,16 +905,17 @@ describe('ComplianceLogRepository', () => {
   // getLatestLog
   // -------------------------------------------------------------------------
   describe('getLatestLog', () => {
-    it('returns the most recent decrypted log', async () => {
+    it('returns the chain head in seq order, not the newest timestamp', async () => {
       mockPrisma.complianceLog.findFirst.mockResolvedValue(makeLogRow());
 
       const result = await repo.getLatestLog();
 
       expect(mockPrisma.complianceLog.findFirst).toHaveBeenCalledWith({
-        orderBy: { timestamp: 'desc' },
+        orderBy: CHAIN_ORDER_DESC,
       });
       expect(result?.id).toBe('log-1');
       expect(result?.payload).toEqual(SAMPLE_PAYLOAD);
+      expect(result?.seq).toBe(1);
     });
 
     it('returns null when there are no logs', async () => {

@@ -17,7 +17,7 @@ import {
   DuplicateTokenNameError,
   type AssignableServiceRole,
 } from '../services/ServiceAccountService.js';
-import { prismaErrorToAppError } from '../utils/errors.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const serviceAccountRoutes = Router();
 
@@ -31,20 +31,11 @@ function resolveActorId(req: AuthenticatedRequest): string {
   return req.user?.id ?? 'unknown';
 }
 
-/**
- * Last resort in a catch block. Prisma stringifies a failure as the query it
- * tried to run plus the file and line that ran it, so it is mapped first —
- * the owner creating a service account must never read a database dump.
- */
-function sendFailure(res: Response, error: unknown, fallbackStatus: number): void {
-  const prismaError = prismaErrorToAppError(error);
-  if (prismaError) {
-    res.status(prismaError.statusCode).json({ error: prismaError.message });
-    return;
-  }
-  const message = error instanceof Error ? error.message : 'Unknown error';
-  res.status(fallbackStatus).json({ error: message });
-}
+// The last resort in every catch below is the shared `sendFailure`
+// (`utils/routeErrors.ts`): Prisma stringifies a failure as the query it tried
+// to run plus the file and line that ran it, so it is mapped first — the owner
+// creating a service account must never read a database dump — and anything
+// unmapped is logged rather than echoed.
 
 // ============================================================================
 // GET / — list service accounts
@@ -62,7 +53,7 @@ serviceAccountRoutes.get('/', async (req: AuthenticatedRequest, res: Response) =
     // Reads keep the plain 500 they always had. The Prisma mapping is for the
     // write paths: a "record not found" answered by a *collection* endpoint
     // would put the UI in an empty not-found state over a server fault.
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    sendFailure(res, error, 'Failed to list service accounts', 500);
   }
 });
 
@@ -97,7 +88,7 @@ serviceAccountRoutes.post('/', async (req: AuthenticatedRequest, res: Response) 
     if (error instanceof DuplicateNameError) {
       return res.status(409).json({ error: error.message });
     }
-    sendFailure(res, error, 400);
+    sendFailure(res, error, 'Failed to create the service account', 400);
   }
 });
 
@@ -123,7 +114,7 @@ serviceAccountRoutes.delete('/:id', async (req: AuthenticatedRequest, res: Respo
     if (error instanceof ServiceAccountNotFoundError) {
       return res.status(404).json({ error: error.message });
     }
-    sendFailure(res, error, 400);
+    sendFailure(res, error, 'Failed to delete the service account', 400);
   }
 });
 
@@ -136,7 +127,7 @@ serviceAccountRoutes.get('/:id/tokens', async (req: AuthenticatedRequest, res: R
     const tokens = await serviceAccountService.listTokens(req.params.id);
     res.json({ tokens });
   } catch (error) {
-    sendFailure(res, error, 500);
+    sendFailure(res, error, 'Failed to list tokens', 500);
   }
 });
 
@@ -169,7 +160,7 @@ serviceAccountRoutes.post('/:id/tokens', async (req: AuthenticatedRequest, res: 
     if (error instanceof DuplicateTokenNameError) {
       return res.status(409).json({ error: error.message });
     }
-    sendFailure(res, error, 400);
+    sendFailure(res, error, 'Failed to create the token', 400);
   }
 });
 
@@ -192,7 +183,7 @@ serviceAccountRoutes.post(
       if (error instanceof TokenNotFoundError) {
         return res.status(404).json({ error: error.message });
       }
-      sendFailure(res, error, 400);
+      sendFailure(res, error, 'Failed to rotate the token', 400);
     }
   }
 );
@@ -216,7 +207,7 @@ serviceAccountRoutes.delete(
       if (error instanceof TokenNotFoundError) {
         return res.status(404).json({ error: error.message });
       }
-      sendFailure(res, error, 400);
+      sendFailure(res, error, 'Failed to revoke the token', 400);
     }
   }
 );

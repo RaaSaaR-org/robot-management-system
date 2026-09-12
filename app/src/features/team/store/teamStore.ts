@@ -6,6 +6,7 @@
  */
 
 import { create } from 'zustand';
+import { errorMessage } from '@/shared/components/ui';
 import { teamApi } from '../api/teamApi';
 import type {
   TeamMember,
@@ -13,15 +14,6 @@ import type {
   AddTeamMemberResult,
   AssignableRole,
 } from '../types/team.types';
-
-function errorMessage(err: unknown, fallback: string): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    const m = (err as { message: unknown }).message;
-    if (typeof m === 'string' && m) return m;
-  }
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
-}
 
 interface TeamState {
   members: TeamMember[];

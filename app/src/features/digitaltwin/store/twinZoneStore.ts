@@ -7,6 +7,7 @@
  * @feature digitaltwin
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { createStore } from '@/store';
 import { twinZoneApi } from '../api/twinZoneApi';
 import type {
@@ -96,7 +97,7 @@ export const useTwinZoneStore = createStore<TwinZoneStore>(
       } catch (e) {
         set((state) => {
           state.isLoading = false;
-          state.error = e instanceof Error ? e.message : 'Failed to load zones';
+          state.error = getErrorMessage(e, 'Failed to load zones');
         });
       }
     },
@@ -123,7 +124,7 @@ export const useTwinZoneStore = createStore<TwinZoneStore>(
       } catch (e) {
         set((state) => {
           state.isLoading = false;
-          state.error = e instanceof Error ? e.message : 'Failed to create zone';
+          state.error = getErrorMessage(e, 'Failed to create zone');
         });
         return null;
       }
@@ -150,7 +151,7 @@ export const useTwinZoneStore = createStore<TwinZoneStore>(
       } catch (e) {
         set((state) => {
           state.isLoading = false;
-          state.error = e instanceof Error ? e.message : 'Failed to update zone';
+          state.error = getErrorMessage(e, 'Failed to update zone');
         });
         return null;
       }
@@ -168,7 +169,7 @@ export const useTwinZoneStore = createStore<TwinZoneStore>(
         return true;
       } catch (e) {
         set((state) => {
-          state.error = e instanceof Error ? e.message : 'Failed to delete zone';
+          state.error = getErrorMessage(e, 'Failed to delete zone');
         });
         return false;
       }

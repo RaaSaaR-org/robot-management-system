@@ -33,7 +33,7 @@ vi.mock('../../api', () => ({
 }));
 
 // The PUT to the presigned URL. Not the subject here.
-vi.stubGlobal('XMLHttpRequest', class {
+class FakeXHR {
   upload = { addEventListener: () => {} };
   addEventListener(event: string, fn: () => void) { if (event === 'load') this.onload = fn; }
   onload: (() => void) | null = null;
@@ -41,7 +41,7 @@ vi.stubGlobal('XMLHttpRequest', class {
   open() {}
   setRequestHeader() {}
   send() { queueMicrotask(() => this.onload?.()); }
-});
+}
 
 function ready(over: Partial<Dataset> = {}): Dataset {
   return {
@@ -71,6 +71,13 @@ async function startUpload(): Promise<void> {
 }
 
 beforeEach(() => {
+  // Installed here, not at module scope: the global test setup starts msw in a
+  // `beforeAll`, and msw's XHR interceptor wraps whatever `XMLHttpRequest` is
+  // global at that moment. A stub installed during import becomes that
+  // "original", and the interceptor then calls `getAllResponseHeaders()` on it.
+  // Stubbing after `server.listen()` replaces the interceptor's proxy outright,
+  // which is what this suite wants — the PUT never reaches msw at all.
+  vi.stubGlobal('XMLHttpRequest', FakeXHR);
   vi.clearAllMocks();
   vi.useFakeTimers({ shouldAdvanceTime: true });
   listRobotTypes.mockResolvedValue([{ id: 'rt1', name: 'G1 EDU', manufacturer: 'Unitree' }]);

@@ -94,6 +94,15 @@ export interface UpsertBuiltinSceneInput {
   description?: string | null;
   embodimentTag: string;
   backend: SimSceneBackend;
+  /**
+   * Owner of the seeded row (TASK-285). Built-in scenes are seeded at boot,
+   * outside any request scope, so the tenant-isolation extension does not stamp
+   * them. Leaving them null makes the next in-request `upsert` miss the row
+   * (its `where` carries a tenantId) and fall through to CREATE, which hits
+   * P2002 on the unique `builtinEnvId`. Callers pass DEFAULT_TENANT_ID when
+   * multi-tenancy is on, null when it is off.
+   */
+  tenantId?: string | null;
 }
 
 export interface UpsertTwinSceneInput {
@@ -151,6 +160,7 @@ export class SimSceneRepository {
         embodimentTag: input.embodimentTag,
         backend: input.backend,
         status: 'ready',
+        tenantId: input.tenantId ?? null,
       },
     });
     return dbToDomain(row as DbScene);

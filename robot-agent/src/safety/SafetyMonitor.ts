@@ -1222,7 +1222,12 @@ export class SafetyMonitor {
     this.stateUpdater((s) => {
       s.targetLocation = undefined;
       s.speed = 0;
-      s.status = 'online'; // Stopped but not in error
+      // A latched robot refuses to move, so it must not report 'online' — that
+      // rendered a stopped robot green in the fleet console with live command
+      // buttons (TASK-294). Both stop categories report the same status; which
+      // KIND of stop it is stays in `currentTaskName` below and in
+      // `getStatus().estop` (stopCategory / triggeredBy).
+      s.status = 'protective_stop';
       s.currentTaskName = category === 0 ? 'EMERGENCY STOP' : 'Protective stop';
 
       const warning =

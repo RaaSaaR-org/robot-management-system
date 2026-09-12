@@ -118,10 +118,10 @@ describe('complianceStore', () => {
     expect(s.logs).toEqual([]);
   });
 
-  it('fetchLogs falls back to default message for non-Error throws', async () => {
+  it('fetchLogs surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
     api.getLogs.mockRejectedValue('weird');
     await useComplianceStore.getState().fetchLogs();
-    expect(useComplianceStore.getState().error).toBe('Failed to fetch logs');
+    expect(useComplianceStore.getState().error).toBe('weird');
   });
 
   // --- fetchLog ---

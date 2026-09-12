@@ -223,4 +223,45 @@ describe('PeerTracker', () => {
     expect(tr.list()).toHaveLength(1);
     expect(tr.status().lastError).toContain('malformed');
   });
+
+  it('logs a refused credential once, not on every poll', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fetchImpl = vi.fn(async () => new Response('no', { status: 401 })) as unknown as typeof fetch;
+    const { tr, tick } = tracker({ fetchImpl });
+
+    for (let i = 0; i < 4; i++) {
+      await tr.pollOnce();
+      tick(2000);
+    }
+
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0][0])).toContain('NEODEM_SERVICE_TOKEN');
+    err.mockRestore();
+  });
+
+  it('logs again once the credential starts working and is then refused afresh', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let accepted = false;
+    const fetchImpl = vi.fn(async () =>
+      accepted
+        ? new Response(JSON.stringify({ peers: [] }), { status: 200 })
+        : new Response('no', { status: 401 })
+    ) as unknown as typeof fetch;
+    const { tr, tick } = tracker({ fetchImpl });
+
+    await tr.pollOnce();
+    tick(2000);
+    await tr.pollOnce();
+    expect(err).toHaveBeenCalledTimes(1);
+
+    accepted = true;
+    tick(2000);
+    await tr.pollOnce();
+
+    accepted = false;
+    tick(2000);
+    await tr.pollOnce();
+    expect(err).toHaveBeenCalledTimes(2);
+    err.mockRestore();
+  });
 });

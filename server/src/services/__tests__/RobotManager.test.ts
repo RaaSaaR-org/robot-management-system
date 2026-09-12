@@ -62,6 +62,7 @@ vi.mock('../../repositories/index.js', () => ({
 }));
 
 import { RobotManager } from '../RobotManager.js';
+import { RobotStatusSchema } from '../../database/schemas.js';
 import type {
   Robot,
   RegisteredRobot,
@@ -548,6 +549,23 @@ describe('onRobotEvent', () => {
 });
 
 // ===========================================================================
+// Status contract
+// ===========================================================================
+
+describe('robot status contract', () => {
+  // TASK-294: the zod gate is the fourth declaration of the status union and
+  // the only one that rejects at RUNTIME. Widening the TypeScript unions
+  // without it would make the server refuse the value it now receives.
+  it('accepts protective_stop at the zod gate', () => {
+    expect(RobotStatusSchema.safeParse('protective_stop').success).toBe(true);
+  });
+
+  it('still rejects a status nothing declares', () => {
+    expect(RobotStatusSchema.safeParse('estop').success).toBe(false);
+  });
+});
+
+// ===========================================================================
 // Health-check lifecycle
 // ===========================================================================
 
@@ -607,6 +625,41 @@ describe('health-check lifecycle', () => {
       expect.objectContaining({ x: 5, y: 6, zone: 'Zone Z' })
     );
     expect(events.some((e) => e.type === 'robot_status_changed')).toBe(true);
+  });
+
+  // TASK-294: the value an agent reports while a safety stop is latched. Paired
+  // with the SafetyMonitor test that proves the agent really emits it — this
+  // half only proves the server carries it through unchanged.
+  it('carries a reported protective_stop through to the database and the status event', async () => {
+    const mgr = new RobotManager();
+    const registered = makeRegistered({
+      robot: makeRobot({ id: 'r1', status: 'online', batteryLevel: 90 }),
+    });
+    robotRepository.getAllRegisteredRobots.mockResolvedValue([registered]);
+    await mgr.initialize();
+
+    httpGet
+      .mockResolvedValueOnce({ status: 'ok', robotStatus: 'protective_stop', batteryLevel: 90 })
+      .mockResolvedValueOnce(makeRobot({ id: 'r1' }));
+    robotRepository.updateHealthCheck.mockResolvedValue(undefined as never);
+
+    const events: { type: string }[] = [];
+    mgr.onRobotEvent((e) => events.push(e));
+
+    mgr.startHealthChecks(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    mgr.stopHealthChecks();
+
+    expect(robotRepository.updateHealthCheck).toHaveBeenCalledWith(
+      'r1',
+      true,
+      'protective_stop',
+      90,
+      undefined
+    );
+    expect(events.some((e) => e.type === 'robot_status_changed')).toBe(true);
+    // The stop must also be visible on the cached robot the event carries.
+    expect((await mgr.getRobot('r1'))?.status).toBe('protective_stop');
   });
 
   it('marks a previously-connected robot offline when its health check fails', async () => {

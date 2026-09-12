@@ -58,8 +58,6 @@ class FakeWebSocket {
   }
 }
 
-vi.stubGlobal('WebSocket', FakeWebSocket);
-
 /** The real numbers off nvidia/GR00T-N1.7-AppleToPlate. */
 function grootPreview(over: Partial<HFDatasetPreview> = {}): HFDatasetPreview {
   return {
@@ -93,6 +91,12 @@ async function openPreview(repoId = 'nvidia/GR00T-N1.7-AppleToPlate'): Promise<v
 }
 
 beforeEach(() => {
+  // Installed here, not at module scope: the global test setup starts msw in a
+  // `beforeAll`, and msw's WebSocket interceptor overwrites `globalThis.WebSocket`
+  // with its own class — swallowing a stub installed during import. Stubbing
+  // after `server.listen()` (which the setup leaves writable on purpose) keeps
+  // this fake in place.
+  vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.clearAllMocks();
   FakeWebSocket.instances = [];
   listRobotTypes.mockResolvedValue([]);

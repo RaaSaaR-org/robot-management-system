@@ -43,10 +43,22 @@ export class LogExportService {
       where.sessionId = { in: options.sessionIds };
     }
 
-    // Fetch logs
+    // Fetch logs in chain order (TASK-291). An export is evidence: it must
+    // reproduce the hash chain in the order the chain was built, which is `seq`,
+    // not `timestamp` — timestamps are non-unique and were never the chain
+    // order. `nulls: 'first'` is explicit because SQLite sorts NULLs first and
+    // PostgreSQL sorts them last. Rows that predate the backfill have no `seq`
+    // and fall back to `(timestamp, id)`: timestamp first, because `id` is a
+    // random uuid and would emit the legacy history shuffled. Same order as
+    // CHAIN_ORDER_ASC in ComplianceLogRepository — the export and the
+    // verification have to agree or one accuses the other of tampering.
     const logs = await prisma.complianceLog.findMany({
       where,
-      orderBy: { timestamp: 'asc' },
+      orderBy: [
+        { seq: { sort: 'asc', nulls: 'first' } },
+        { timestamp: 'asc' },
+        { id: 'asc' },
+      ],
     });
 
     // Transform logs for export

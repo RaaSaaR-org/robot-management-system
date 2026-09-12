@@ -2,6 +2,16 @@
  * @file training-docs.routes.ts
  * @description REST API endpoints for EU AI Act training data documentation
  * @feature compliance
+ * @regulatory EU AI Act Art. 10 (data governance), Art. 11 / Annex IV
+ *   (technical documentation) — the HTTP surface exists; no operator can reach
+ *   it. See @status.
+ * @status unshipped — all 12 routes are mounted (`server/src/app.ts`,
+ *   `/api/training-docs`) and covered by 41 passing tests against a fully
+ *   mocked service, but nothing in `app/src` calls them: there is no
+ *   `trainingDocsApi`, no store and no page. The only in-product writer is
+ *   `TeleoperationService` → `recordProvenance`; every read, the bias
+ *   assessments and the PDF export are reachable by hand-written HTTP only.
+ *   Do not read this module as Art. 10/11 coverage. (TASK-302)
  */
 
 import { Router, Request, Response } from 'express';
@@ -16,6 +26,7 @@ import type {
   ExportFormat,
   DatasetSourceType,
 } from '../types/training-docs.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const trainingDocsRoutes = Router();
 
@@ -66,8 +77,7 @@ trainingDocsRoutes.post(
       });
     } catch (error) {
       console.error('[TrainingDocsRoutes] Error recording provenance:', error);
-      const message = error instanceof Error ? error.message : 'Failed to record provenance';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to record provenance', 400);
     }
   }
 );
@@ -156,8 +166,7 @@ trainingDocsRoutes.post(
       });
     } catch (error) {
       console.error('[TrainingDocsRoutes] Error generating summary:', error);
-      const message = error instanceof Error ? error.message : 'Failed to generate summary';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to generate summary', 400);
     }
   }
 );
@@ -204,8 +213,7 @@ trainingDocsRoutes.put(
       });
     } catch (error) {
       console.error('[TrainingDocsRoutes] Error updating summary:', error);
-      const message = error instanceof Error ? error.message : 'Failed to update summary';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to update summary', 400);
     }
   }
 );
@@ -266,8 +274,7 @@ trainingDocsRoutes.get(
       res.send(document.content);
     } catch (error) {
       console.error('[TrainingDocsRoutes] Error exporting documentation:', error);
-      const message = error instanceof Error ? error.message : 'Failed to export documentation';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to export documentation', 400);
     }
   }
 );
@@ -338,8 +345,7 @@ trainingDocsRoutes.post(
       });
     } catch (error) {
       console.error('[TrainingDocsRoutes] Error creating bias assessment:', error);
-      const message = error instanceof Error ? error.message : 'Failed to create bias assessment';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to create bias assessment', 400);
     }
   }
 );
@@ -417,8 +423,7 @@ trainingDocsRoutes.put(
       });
     } catch (error) {
       console.error('[TrainingDocsRoutes] Error updating bias assessment:', error);
-      const message = error instanceof Error ? error.message : 'Failed to update bias assessment';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to update bias assessment', 400);
     }
   }
 );

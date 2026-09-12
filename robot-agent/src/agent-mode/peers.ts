@@ -13,6 +13,12 @@
 
 import type { OdometryFrame } from '../hardware/HardwareClient.js';
 import type { DynamicObstacle } from './occupancy-map.js';
+import {
+  SERVICE_TOKEN_ENV,
+  isAuthRejection,
+  platformAuthHeaders,
+  recordPlatformAuthRejection,
+} from '../utils/platform-auth.js';
 
 /** One other robot, as the server reports it. */
 export interface FleetPeer {
@@ -154,6 +160,8 @@ export class PeerTracker {
   private lastPollAt: string | null = null;
   private lastError: string | null = null;
   private lastErrorLogMs = 0;
+  /** True while a refusal has already been reported and nothing has changed since. */
+  private authRejectionLogged = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private inFlight = false;
 
@@ -231,9 +239,19 @@ export class PeerTracker {
   async pollOnce(): Promise<void> {
     if (!this.enabled || this.inFlight) return;
     this.inFlight = true;
+    let authRejected = false;
     try {
-      const res = await this.fetchImpl(this.url, { signal: AbortSignal.timeout(this.timeoutMs) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await this.fetchImpl(this.url, {
+        headers: platformAuthHeaders(),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      if (!res.ok) {
+        if (isAuthRejection(res.status)) {
+          authRejected = true;
+          recordPlatformAuthRejection('PeerTracker', res.status, this.url);
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
       const body = (await res.json()) as unknown;
       const raw =
         typeof body === 'object' && body !== null && Array.isArray((body as { peers?: unknown }).peers)
@@ -242,11 +260,30 @@ export class PeerTracker {
       if (!raw) throw new Error('malformed peers payload');
       this.ingest(raw.map(parseFleetPeer).filter((p): p is FleetPeer => p !== null));
       this.lastError = null;
+      // The credential works: arm the refusal log again, so a token that later
+      // expires or is downgraded is reported instead of swallowed.
+      this.authRejectionLogged = false;
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       this.lastError = why;
       const t = this.now();
-      if (t - this.lastErrorLogMs > 60_000) {
+      if (authRejected) {
+        // Once per state change rather than once per 60 s: a refused
+        // credential is not the flaky-network case the throttle exists for —
+        // it will not heal on its own, so the first poll after a restart must
+        // say so, and every poll after that would only bury it. The flag
+        // clears on the next poll that succeeds.
+        if (!this.authRejectionLogged) {
+          this.authRejectionLogged = true;
+          console.error(
+            `[Peers] poll rejected: ${why} — ${
+              process.env[SERVICE_TOKEN_ENV]
+                ? `the configured ${SERVICE_TOKEN_ENV} was refused`
+                : `no ${SERVICE_TOKEN_ENV} is configured`
+            }. This robot cannot see its peers.`
+          );
+        }
+      } else if (t - this.lastErrorLogMs > 60_000) {
         this.lastErrorLogMs = t;
         this.log(`[Peers] poll failed: ${why} — keeping the last set until it expires`);
       }

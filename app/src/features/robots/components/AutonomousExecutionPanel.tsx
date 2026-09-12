@@ -12,7 +12,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Square } from 'lucide-react';
-import { Button, Panel, StatusTag, toast, type Tone } from '@/shared/components/ui';
+import { Button, Panel, StatusTag, errorMessage, toast, type Tone } from '@/shared/components/ui';
 import { deploymentApi } from '@/features/deployment/api/deploymentApi';
 import { Readout } from './common';
 
@@ -97,7 +97,7 @@ export function AutonomousExecutionPanel({ robotId }: AutonomousExecutionPanelPr
       toast.success('Skill stopped');
       setTimeout(closePanel, 800);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to stop';
+      const message = errorMessage(err, 'Failed to stop');
       setError(message);
       setStatus('error');
       toast.error("Couldn't stop skill", { description: message });

@@ -2,7 +2,16 @@
  * @file UpdateService.ts
  * @description Secure OTA update management service with Ed25519 signing
  * @feature updates
- * @regulatory CRA Art. 13, MR Art. 10, Annex I
+ * @regulatory CRA Art. 13, MR Art. 10, Annex I — CLAIMED, NOT MET; see @status.
+ * @status unshipped — signs and records updates, but never delivers one.
+ *   `deployToRobot` writes an `UpdateDeployment` row, flips the package to
+ *   `deployed` and emits an event; there is no outbound call to the robot
+ *   anywhere in this file, and the agent exposes no OTA endpoint to receive
+ *   one (`robot-agent/src/api/rest-routes.ts`). A package's `checksum` and
+ *   `signature` are real Ed25519 over the bytes handed to
+ *   `createUpdatePackage`, but no artifact is stored, so nothing can be
+ *   downloaded and verified against them later. A "deployed" package means
+ *   "an operator pressed deploy", not "a robot is running it". (TASK-302)
  */
 
 import crypto from 'node:crypto';

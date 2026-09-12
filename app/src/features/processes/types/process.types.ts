@@ -24,13 +24,40 @@ export type ProcessStatus =
 /** Process priority levels */
 export type ProcessPriority = 'low' | 'normal' | 'high' | 'critical';
 
-/** Process step status */
+/**
+ * Process step status.
+ *
+ * Mirrors the server's `StepInstanceStatus`
+ * (`server/src/types/process.types.ts`) exactly — `queued` (set on every
+ * dispatched step) and `cancelled` are values the server really sends, and a
+ * status missing here renders as an empty tag in `TaskTimeline`.
+ */
 export type ProcessStepStatus =
   | 'pending'
+  | 'queued'
   | 'in_progress'
   | 'completed'
   | 'failed'
-  | 'skipped';
+  | 'skipped'
+  | 'cancelled';
+
+/**
+ * What a step actually does. Only the action types the robot agent executes
+ * (`IMPLEMENTED_ACTION_TYPES` in `robot-agent/src/robot/TaskQueue.ts`) are
+ * offered: the agent refuses `inspect` and `custom`, and `execute_skill` is
+ * server-side only, so putting any of them in this form would be offering the
+ * user a step that fails.
+ *
+ * The agent is a separate package — this list is a deliberate copy, not an
+ * import.
+ */
+export type StepActionType =
+  | 'move_to_location'
+  | 'pickup_object'
+  | 'drop_object'
+  | 'wait'
+  | 'charge'
+  | 'return_home';
 
 /** Process action commands */
 export type ProcessAction = 'start' | 'pause' | 'resume' | 'cancel' | 'retry';
@@ -89,6 +116,10 @@ export interface Process {
 export interface CreateProcessStep {
   name: string;
   description?: string;
+  /** What the robot does for this step */
+  actionType: StepActionType;
+  /** Parameters for that action (location, objectId, durationMs …) */
+  actionConfig: Record<string, unknown>;
 }
 
 /** Process creation request */
@@ -299,10 +330,22 @@ export const PROCESS_PRIORITY_COLORS: Record<ProcessPriority, 'success' | 'defau
 /** Step status display labels */
 export const PROCESS_STEP_STATUS_LABELS: Record<ProcessStepStatus, string> = {
   pending: 'Pending',
+  queued: 'Queued',
   in_progress: 'In Progress',
   completed: 'Completed',
   failed: 'Failed',
   skipped: 'Skipped',
+  cancelled: 'Cancelled',
+};
+
+/** Step action display labels (also the order the picker offers them in) */
+export const PROCESS_STEP_ACTION_LABELS: Record<StepActionType, string> = {
+  move_to_location: 'Move to zone',
+  pickup_object: 'Pick up object',
+  drop_object: 'Drop object',
+  wait: 'Wait',
+  charge: 'Go charge',
+  return_home: 'Return home',
 };
 
 /** Default pagination */

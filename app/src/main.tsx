@@ -44,7 +44,16 @@ async function prepare() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     const { worker } = await import('./mocks/browser');
     await worker.start({
-      onUnhandledRequest: 'bypass',
+      // Anything that is not `/api` (the bundle, fonts, the service worker
+      // itself) goes to the network untouched. An unhandled `/api` request is
+      // a defect: the GET catch-all answers those, so what lands here is a
+      // POST/PATCH/DELETE that would otherwise leave the page for the real
+      // internet — on GitHub Pages, a 404 HTML page parsed as JSON.
+      onUnhandledRequest: (request, print) => {
+        if (new URL(request.url).pathname.startsWith('/api/')) {
+          print.warning();
+        }
+      },
       serviceWorker: {
         url: `${import.meta.env.BASE_URL}mockServiceWorker.js`,
       },

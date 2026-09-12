@@ -6,6 +6,7 @@
  * @stateAccess useZoneStore (read/write)
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
@@ -127,7 +128,7 @@ export const useZoneStore = create<ZoneStore>()(
         } catch (error) {
           set((state) => {
             state.isLoading = false;
-            state.error = error instanceof Error ? error.message : 'Failed to fetch zones';
+            state.error = getErrorMessage(error, 'Failed to fetch zones');
           });
         }
       },
@@ -150,7 +151,7 @@ export const useZoneStore = create<ZoneStore>()(
         } catch (error) {
           set((state) => {
             state.isLoading = false;
-            state.error = error instanceof Error ? error.message : 'Failed to fetch zones';
+            state.error = getErrorMessage(error, 'Failed to fetch zones');
           });
         }
       },
@@ -197,7 +198,7 @@ export const useZoneStore = create<ZoneStore>()(
         } catch (error) {
           set((state) => {
             state.isLoading = false;
-            state.error = error instanceof Error ? error.message : 'Failed to create zone';
+            state.error = getErrorMessage(error, 'Failed to create zone');
           });
           throw error;
         }
@@ -225,7 +226,7 @@ export const useZoneStore = create<ZoneStore>()(
         } catch (error) {
           set((state) => {
             state.isLoading = false;
-            state.error = error instanceof Error ? error.message : 'Failed to update zone';
+            state.error = getErrorMessage(error, 'Failed to update zone');
           });
           throw error;
         }
@@ -251,7 +252,7 @@ export const useZoneStore = create<ZoneStore>()(
         } catch (error) {
           set((state) => {
             state.isLoading = false;
-            state.error = error instanceof Error ? error.message : 'Failed to delete zone';
+            state.error = getErrorMessage(error, 'Failed to delete zone');
           });
           return false;
         }

@@ -28,6 +28,13 @@ import type {
   TwinZonePoint,
 } from '../types/twin.types.js';
 import { TwinZoneTypes, isTwinZoneType } from '../types/twin.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
+
+// ScanSessionService's own sentence (ScanSessionService.ts:166), matched by its
+// shape rather than by substring. Prisma's P2025 message also ends in "not
+// found", and echoing that would put the failing query and the absolute server
+// path in the response.
+const TWIN_NOT_FOUND = /^Digital twin .+ not found$/;
 
 // ============================================================================
 // SIDECAR WORKER ROUTES — /api/twin/workers (workerAuthMiddleware)
@@ -47,7 +54,7 @@ twinWorkerRoutes.post('/claim', async (req: Request, res: Response) => {
     res.json(job);
   } catch (error) {
     console.error('[TwinWorker] claim error:', error);
-    res.status(500).json({ error: 'Failed to claim build job' });
+    sendFailure(res, error, 'Failed to claim build job', 500);
   }
 });
 
@@ -67,7 +74,7 @@ twinWorkerRoutes.post('/progress', async (req: Request, res: Response) => {
     res.json(result);
   } catch (error) {
     console.error('[TwinWorker] progress error:', error);
-    res.status(500).json({ error: 'Failed to update progress' });
+    sendFailure(res, error, 'Failed to update progress', 500);
   }
 });
 
@@ -85,7 +92,7 @@ twinWorkerRoutes.post('/heartbeat', async (req: Request, res: Response) => {
     res.json(result);
   } catch (error) {
     console.error('[TwinWorker] heartbeat error:', error);
-    res.status(500).json({ error: 'Failed to process heartbeat' });
+    sendFailure(res, error, 'Failed to process heartbeat', 500);
   }
 });
 
@@ -111,7 +118,7 @@ twinWorkerRoutes.post('/complete', async (req: Request, res: Response) => {
     res.json(result);
   } catch (error) {
     console.error('[TwinWorker] complete error:', error);
-    res.status(500).json({ error: 'Failed to complete build job' });
+    sendFailure(res, error, 'Failed to complete build job', 500);
   }
 });
 
@@ -131,7 +138,7 @@ twinWorkerRoutes.post('/failed', async (req: Request, res: Response) => {
     res.json(result);
   } catch (error) {
     console.error('[TwinWorker] failed error:', error);
-    res.status(500).json({ error: 'Failed to record build failure' });
+    sendFailure(res, error, 'Failed to record build failure', 500);
   }
 });
 
@@ -154,7 +161,7 @@ twinWorkerRoutes.get('/inputs/:scanId/download', async (req: Request, res: Respo
     stream.pipe(res);
   } catch (error) {
     console.error('[TwinWorker] input download error:', error);
-    if (!res.headersSent) res.status(500).json({ error: 'Failed to download scan input' });
+    if (!res.headersSent) sendFailure(res, error, 'Failed to download scan input', 500);
   }
 });
 
@@ -191,7 +198,7 @@ twinWorkerRoutes.put('/artifacts/:twinId/:name', async (req: Request, res: Respo
         res.json({ key });
       } catch (err) {
         console.error('[TwinWorker] artifact upload error:', err);
-        if (!res.headersSent) res.status(500).json({ error: 'Failed to store artifact' });
+        if (!res.headersSent) sendFailure(res, err, 'Failed to store artifact', 500);
       }
     });
     req.on('error', () => {
@@ -199,7 +206,7 @@ twinWorkerRoutes.put('/artifacts/:twinId/:name', async (req: Request, res: Respo
     });
   } catch (error) {
     console.error('[TwinWorker] artifact error:', error);
-    if (!res.headersSent) res.status(500).json({ error: 'Failed to store artifact' });
+    if (!res.headersSent) sendFailure(res, error, 'Failed to store artifact', 500);
   }
 });
 
@@ -216,7 +223,7 @@ digitalTwinRoutes.get('/', async (_req: Request, res: Response) => {
     res.json(twins.map(twinToDTO));
   } catch (error) {
     console.error('[DigitalTwin] list error:', error);
-    res.status(500).json({ error: 'Failed to list digital twins' });
+    sendFailure(res, error, 'Failed to list digital twins', 500);
   }
 });
 
@@ -233,7 +240,7 @@ digitalTwinRoutes.post('/', async (req: Request, res: Response) => {
     res.status(201).json(twinToDTO(twin));
   } catch (error) {
     console.error('[DigitalTwin] create error:', error);
-    res.status(500).json({ error: 'Failed to create digital twin' });
+    sendFailure(res, error, 'Failed to create digital twin', 500);
   }
 });
 
@@ -245,19 +252,24 @@ digitalTwinRoutes.get('/:id', async (req: Request, res: Response) => {
     res.json(twinToDTO(twin));
   } catch (error) {
     console.error('[DigitalTwin] get error:', error);
-    res.status(500).json({ error: 'Failed to get digital twin' });
+    sendFailure(res, error, 'Failed to get digital twin', 500);
   }
 });
 
-/** DELETE /api/digital-twins/:id — delete a twin (cascades zones + sessions). */
+/**
+ * DELETE /api/digital-twins/:id — erase a twin and everything it owns: its raw
+ * scans + their point-cloud blobs, its sim scene, its built artifacts, then the
+ * row itself (zones + sessions cascade). A failure part-way through the cascade
+ * throws and is reported as 500 — never as a success over orphaned data.
+ */
 digitalTwinRoutes.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const ok = await digitalTwinRepository.delete(req.params.id);
+    const ok = await digitalTwinService.deleteTwin(req.params.id);
     if (!ok) return res.status(404).json({ error: 'Digital twin not found' });
     res.status(204).send();
   } catch (error) {
     console.error('[DigitalTwin] delete error:', error);
-    res.status(500).json({ error: 'Failed to delete digital twin' });
+    sendFailure(res, error, 'Failed to delete digital twin', 500);
   }
 });
 
@@ -291,11 +303,11 @@ digitalTwinRoutes.post(
       if (error instanceof PointCloudParseError) {
         return res.status(400).json({ error: error.message });
       }
-      if (error instanceof Error && error.message.includes('not found')) {
+      if (error instanceof Error && TWIN_NOT_FOUND.test(error.message)) {
         return res.status(404).json({ error: error.message });
       }
       console.error('[DigitalTwin] import error:', error);
-      res.status(500).json({ error: 'Failed to import point cloud' });
+      sendFailure(res, error, 'Failed to import point cloud', 500);
     }
   },
 );
@@ -332,7 +344,7 @@ digitalTwinRoutes.get('/:id/cloud', async (req: Request, res: Response) => {
     await streamArtifact(res, twin.cloudKey, 'application/octet-stream', `${twin.id}-cloud.pcd`);
   } catch (error) {
     console.error('[DigitalTwin] cloud error:', error);
-    if (!res.headersSent) res.status(500).json({ error: 'Failed to stream cloud' });
+    if (!res.headersSent) sendFailure(res, error, 'Failed to stream cloud', 500);
   }
 });
 
@@ -343,7 +355,7 @@ digitalTwinRoutes.get('/:id/mesh', async (req: Request, res: Response) => {
     await streamArtifact(res, twin.meshKey, 'model/gltf-binary', `${twin.id}-mesh.glb`);
   } catch (error) {
     console.error('[DigitalTwin] mesh error:', error);
-    if (!res.headersSent) res.status(500).json({ error: 'Failed to stream mesh' });
+    if (!res.headersSent) sendFailure(res, error, 'Failed to stream mesh', 500);
   }
 });
 
@@ -354,7 +366,7 @@ digitalTwinRoutes.get('/:id/occupancy.pgm', async (req: Request, res: Response) 
     await streamArtifact(res, twin.occupancyPgmKey, 'image/x-portable-graymap', `${twin.id}-occupancy.pgm`);
   } catch (error) {
     console.error('[DigitalTwin] occupancy.pgm error:', error);
-    if (!res.headersSent) res.status(500).json({ error: 'Failed to stream occupancy grid' });
+    if (!res.headersSent) sendFailure(res, error, 'Failed to stream occupancy grid', 500);
   }
 });
 
@@ -365,7 +377,7 @@ digitalTwinRoutes.get('/:id/occupancy.yaml', async (req: Request, res: Response)
     await streamArtifact(res, twin.occupancyYamlKey, 'text/yaml', `${twin.id}-occupancy.yaml`);
   } catch (error) {
     console.error('[DigitalTwin] occupancy.yaml error:', error);
-    if (!res.headersSent) res.status(500).json({ error: 'Failed to stream occupancy metadata' });
+    if (!res.headersSent) sendFailure(res, error, 'Failed to stream occupancy metadata', 500);
   }
 });
 
@@ -382,7 +394,7 @@ digitalTwinRoutes.get('/:id/zones', async (req: Request, res: Response) => {
     res.json(zones);
   } catch (error) {
     console.error('[TwinZone] list error:', error);
-    res.status(500).json({ error: 'Failed to list zones' });
+    sendFailure(res, error, 'Failed to list zones', 500);
   }
 });
 
@@ -414,7 +426,7 @@ digitalTwinRoutes.post('/:id/zones', async (req: Request, res: Response) => {
     res.status(201).json(zone);
   } catch (error) {
     console.error('[TwinZone] create error:', error);
-    res.status(500).json({ error: 'Failed to create zone' });
+    sendFailure(res, error, 'Failed to create zone', 500);
   }
 });
 
@@ -437,7 +449,7 @@ digitalTwinRoutes.put('/:id/zones/:zoneId', async (req: Request, res: Response) 
     res.json(zone);
   } catch (error) {
     console.error('[TwinZone] update error:', error);
-    res.status(500).json({ error: 'Failed to update zone' });
+    sendFailure(res, error, 'Failed to update zone', 500);
   }
 });
 
@@ -448,7 +460,7 @@ digitalTwinRoutes.delete('/:id/zones/:zoneId', async (req: Request, res: Respons
     res.status(204).send();
   } catch (error) {
     console.error('[TwinZone] delete error:', error);
-    res.status(500).json({ error: 'Failed to delete zone' });
+    sendFailure(res, error, 'Failed to delete zone', 500);
   }
 });
 
@@ -471,7 +483,7 @@ digitalTwinRoutes.get('/:id/places/_index.json', async (req: Request, res: Respo
     res.json(graph);
   } catch (error) {
     console.error('[TwinPlaceGraph] export error:', error);
-    res.status(500).json({ error: 'Failed to export place graph' });
+    sendFailure(res, error, 'Failed to export place graph', 500);
   }
 });
 
@@ -488,7 +500,7 @@ digitalTwinRoutes.get('/:id/export/nav2-keepout.pgm', async (req: Request, res: 
     res.send(pgm);
   } catch (error) {
     console.error('[TwinExport] keepout.pgm error:', error);
-    res.status(500).json({ error: 'Failed to export keep-out mask' });
+    sendFailure(res, error, 'Failed to export keep-out mask', 500);
   }
 });
 
@@ -501,7 +513,7 @@ digitalTwinRoutes.get('/:id/export/nav2-keepout.yaml', async (req: Request, res:
     res.send(yaml);
   } catch (error) {
     console.error('[TwinExport] keepout.yaml error:', error);
-    res.status(500).json({ error: 'Failed to export costmap filter' });
+    sendFailure(res, error, 'Failed to export costmap filter', 500);
   }
 });
 
@@ -512,6 +524,6 @@ digitalTwinRoutes.get('/:id/export/vda5050.json', async (req: Request, res: Resp
     res.json(roadmap);
   } catch (error) {
     console.error('[TwinExport] vda5050 error:', error);
-    res.status(500).json({ error: 'Failed to export roadmap' });
+    sendFailure(res, error, 'Failed to export roadmap', 500);
   }
 });

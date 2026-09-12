@@ -12,7 +12,6 @@ import {
   type DataTableColumn,
   type RowActionItem,
 } from '@/shared/components/ui';
-import { useAuthStore } from '@/features/auth/store/authStore';
 import { useApprovalsStore } from '../store';
 import type { ApprovalRequest } from '../types';
 import { formatRelative, humanize, isOpen, priorityTone, slaInfo, statusTone } from './approvalFormat';
@@ -33,8 +32,6 @@ const PRIORITY_ORDER = ['low', 'normal', 'high', 'critical', 'urgent'];
 export function ApprovalQueue({ rows, isLoading, error, onRetry, onOpen, hasFilters, onClearFilters }: ApprovalQueueProps) {
   const escalate = useApprovalsStore((s) => s.escalateApprovalRequest);
   const cancel = useApprovalsStore((s) => s.cancelApprovalRequest);
-  const user = useAuthStore((s) => s.user);
-  const actor = user?.email ?? user?.id ?? 'unknown-reviewer';
 
   const askEscalate = async (r: ApprovalRequest) => {
     const ok = await confirm({
@@ -44,7 +41,7 @@ export function ApprovalQueue({ rows, isLoading, error, onRetry, onOpen, hasFilt
     });
     if (!ok) return;
     try {
-      await escalate(r.id, actor, 'Escalated manually from the approval queue');
+      await escalate(r.id, 'Escalated manually from the approval queue');
       toast.success('Request escalated', { description: r.requestNumber });
     } catch (err) {
       toast.error("Couldn't escalate request", { description: errorMessage(err) });
@@ -61,7 +58,7 @@ export function ApprovalQueue({ rows, isLoading, error, onRetry, onOpen, hasFilt
     });
     if (!ok) return;
     try {
-      await cancel(r.id, actor, 'Cancelled from the approval queue');
+      await cancel(r.id, 'Cancelled from the approval queue');
       toast.success('Request cancelled', { description: r.requestNumber });
     } catch (err) {
       toast.error("Couldn't cancel request", { description: errorMessage(err) });

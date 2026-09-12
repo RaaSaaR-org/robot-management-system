@@ -22,6 +22,7 @@ import type {
   ExecuteChainRequest,
   ValidateParametersRequest,
 } from '../types/skill.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const skillsRoutes = Router();
 
@@ -53,8 +54,7 @@ chainsRoutes.post('/', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error creating skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to create skill chain';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to create skill chain', 400);
   }
 });
 
@@ -85,8 +85,7 @@ chainsRoutes.get('/', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error listing skill chains:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list skill chains';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list skill chains', 500);
   }
 });
 
@@ -103,8 +102,7 @@ chainsRoutes.get('/active', async (_req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error listing active chains:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list active chains';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list active chains', 500);
   }
 });
 
@@ -123,8 +121,7 @@ chainsRoutes.get('/:id', async (req: Request, res: Response) => {
     res.json({ chain });
   } catch (error) {
     console.error('[SkillsRoutes] Error getting skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get skill chain';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get skill chain', 500);
   }
 });
 
@@ -148,8 +145,7 @@ chainsRoutes.put('/:id', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error updating skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to update skill chain';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to update skill chain', 400);
   }
 });
 
@@ -169,8 +165,7 @@ chainsRoutes.delete('/:id', async (req: Request, res: Response) => {
     res.json({ message: 'Skill chain deleted successfully' });
   } catch (error) {
     console.error('[SkillsRoutes] Error deleting skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to delete skill chain';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to delete skill chain', 400);
   }
 });
 
@@ -189,8 +184,7 @@ chainsRoutes.post('/:id/activate', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error activating skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to activate skill chain';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to activate skill chain', 400);
   }
 });
 
@@ -209,8 +203,7 @@ chainsRoutes.post('/:id/archive', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error archiving skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to archive skill chain';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to archive skill chain', 400);
   }
 });
 
@@ -243,8 +236,7 @@ chainsRoutes.post('/:id/execute', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error executing skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to execute skill chain';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to execute skill chain', 500);
   }
 });
 
@@ -277,8 +269,7 @@ skillsRoutes.post('/', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error creating skill:', error);
-    const message = error instanceof Error ? error.message : 'Failed to create skill';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to create skill', 400);
   }
 });
 
@@ -313,8 +304,7 @@ skillsRoutes.get('/', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error listing skills:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list skills';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list skills', 500);
   }
 });
 
@@ -331,8 +321,7 @@ skillsRoutes.get('/published', async (_req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error listing published skills:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list published skills';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to list published skills', 500);
   }
 });
 
@@ -352,8 +341,7 @@ skillsRoutes.get('/for-robot/:robotId', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error getting skills for robot:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get skills for robot';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to get skills for robot', 400);
   }
 });
 
@@ -372,8 +360,7 @@ skillsRoutes.get('/:id', async (req: Request, res: Response) => {
     res.json({ skill });
   } catch (error) {
     console.error('[SkillsRoutes] Error getting skill:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get skill';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get skill', 500);
   }
 });
 
@@ -397,8 +384,7 @@ skillsRoutes.put('/:id', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error updating skill:', error);
-    const message = error instanceof Error ? error.message : 'Failed to update skill';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to update skill', 400);
   }
 });
 
@@ -418,8 +404,7 @@ skillsRoutes.delete('/:id', async (req: Request, res: Response) => {
     res.json({ message: 'Skill deleted successfully' });
   } catch (error) {
     console.error('[SkillsRoutes] Error deleting skill:', error);
-    const message = error instanceof Error ? error.message : 'Failed to delete skill';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to delete skill', 400);
   }
 });
 
@@ -442,8 +427,7 @@ skillsRoutes.post('/:id/publish', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error publishing skill:', error);
-    const message = error instanceof Error ? error.message : 'Failed to publish skill';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to publish skill', 400);
   }
 });
 
@@ -462,8 +446,7 @@ skillsRoutes.post('/:id/deprecate', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error deprecating skill:', error);
-    const message = error instanceof Error ? error.message : 'Failed to deprecate skill';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to deprecate skill', 400);
   }
 });
 
@@ -482,8 +465,7 @@ skillsRoutes.post('/:id/archive', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error archiving skill:', error);
-    const message = error instanceof Error ? error.message : 'Failed to archive skill';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to archive skill', 400);
   }
 });
 
@@ -511,8 +493,7 @@ skillsRoutes.post('/:id/validate', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error validating parameters:', error);
-    const message = error instanceof Error ? error.message : 'Failed to validate parameters';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to validate parameters', 400);
   }
 });
 
@@ -532,8 +513,7 @@ skillsRoutes.get('/:id/compatible-robots', async (req: Request, res: Response) =
     res.json(result);
   } catch (error) {
     console.error('[SkillsRoutes] Error getting compatible robots:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get compatible robots';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to get compatible robots', 400);
   }
 });
 
@@ -549,8 +529,7 @@ skillsRoutes.get('/:id/check-robot/:robotId', async (req: Request, res: Response
     res.json(result);
   } catch (error) {
     console.error('[SkillsRoutes] Error checking robot compatibility:', error);
-    const message = error instanceof Error ? error.message : 'Failed to check compatibility';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to check compatibility', 400);
   }
 });
 
@@ -576,8 +555,7 @@ skillsRoutes.post('/:id/abort', async (req: Request, res: Response) => {
     res.status(204).send();
   } catch (error) {
     console.error('[SkillsRoutes] Error aborting skill:', error);
-    const message = error instanceof Error ? error.message : 'Failed to abort skill';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to abort skill', 500);
   }
 });
 
@@ -614,8 +592,7 @@ skillsRoutes.post('/:id/execute', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[SkillsRoutes] Error executing skill:', error);
-    const message = error instanceof Error ? error.message : 'Failed to execute skill';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to execute skill', 500);
   }
 });
 

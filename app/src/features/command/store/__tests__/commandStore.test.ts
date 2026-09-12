@@ -155,7 +155,7 @@ describe('commandStore', () => {
       expect(state.interpretation).toBeNull();
     });
 
-    it('uses fallback message for non-Error rejection', async () => {
+    it('surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
       mockedApi.interpretCommand.mockRejectedValue('weird');
 
       await expect(
@@ -164,7 +164,7 @@ describe('commandStore', () => {
           .interpretCommand({ text: 'move', robotId: 'robot-1' })
       ).rejects.toBe('weird');
 
-      expect(useCommandStore.getState().error).toBe('Failed to interpret command');
+      expect(useCommandStore.getState().error).toBe('weird');
     });
   });
 

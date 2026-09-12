@@ -173,6 +173,8 @@ export interface ComplianceLog {
   outputHash: string | null;
   previousHash: string;
   currentHash: string;
+  /** Chain position (TASK-291). Null only on rows predating the backfill. */
+  seq: number | null;
   decisionId: string | null;
   timestamp: Date;
   immutable: boolean;
@@ -197,6 +199,8 @@ export interface ComplianceLogEncrypted {
   outputHash: string | null;
   previousHash: string;
   currentHash: string;
+  /** Chain position (TASK-291). Null only on rows predating the backfill. */
+  seq: number | null;
   decisionId: string | null;
   timestamp: Date;
   immutable: boolean;

@@ -18,6 +18,7 @@ import {
   simSceneRepository,
 } from '../repositories/index.js';
 import { sensorScanService } from './SensorScanService.js';
+import { modelStorage } from '../storage/model-storage.js';
 import { twinToDTO } from './twinDto.js';
 import type {
   TwinBuildJob,
@@ -330,6 +331,79 @@ export class DigitalTwinService extends EventEmitter {
 
     console.log(`[DigitalTwinService] Job failed: ${req.sessionId} - ${req.error}`);
     return { ok: true };
+  }
+
+  // ==========================================================================
+  // DELETION — the erasure cascade
+  // ==========================================================================
+
+  /**
+   * Erase a twin and everything it owns. Returns false iff the twin does not
+   * exist (the route answers 404); every failure part-way through THROWS, so a
+   * half-finished cascade can never be reported as a success.
+   *
+   * Order is the whole point, and it is not interchangeable:
+   *   1. enumerate the twin's sessions, then each session's scans — `SensorScan`
+   *      has no relation to `ScanSession`, so once the twin row goes and its
+   *      sessions cascade away there is no index left to find the scans or
+   *      their point-cloud blobs by;
+   *   2. delete each scan's blob + row (strict: a blob failure aborts the whole
+   *      delete rather than dropping the only pointer to it). This covers the
+   *      FAILED-build case too — `failJob` never prunes frames, so a failed
+   *      twin still holds its full raw sweep when the user deletes it;
+   *   3. the twin's SimScene row;
+   *   4. the built artifacts (merged cloud, mesh, occupancy grids, roadmap,
+   *      MJCF scene) — customers' buildings, not derived scratch. Strict for
+   *      the same reason as (2): `deleteTwinArtifact` tolerates an already-gone
+   *      blob (ENOENT) and rejects on anything else, aborting before step 5;
+   *   5. the DigitalTwin row itself, letting ScanSession + TwinZone cascade.
+   *
+   * Multi-tenancy: with the flag off the tenant extension is a passthrough and
+   * this deletes exactly the enumerated rows. With it on and a tenant in scope,
+   * every step is already scoped by the extension — `listByTwin`/`deleteMany`
+   * get `tenantId` injected and the twin `delete` is refused unless the row
+   * belongs to the caller — so the cascade can never reach across tenants; a
+   * foreign twin fails the `findById` scope check first and reads as 404.
+   */
+  async deleteTwin(twinId: string): Promise<boolean> {
+    const twin = await digitalTwinRepository.findById(twinId);
+    if (!twin) return false;
+
+    // 1 + 2 — scans and their blobs, reached while the index still exists.
+    const sessions = await scanSessionRepository.listByTwin(twinId);
+    let deletedScans = 0;
+    for (const session of sessions) {
+      const scans = await sensorScanService.listScansBySession(session.id);
+      for (const scan of scans) {
+        if (await sensorScanService.deleteScan(scan.id, { strictStorage: true })) {
+          deletedScans++;
+        }
+      }
+    }
+
+    // 3 — the twin-derived physics scene.
+    await simSceneRepository.deleteByTwinId(twinId);
+
+    // 4 — the built artifacts.
+    const artifactKeys = [
+      twin.cloudKey,
+      twin.meshKey,
+      twin.occupancyPgmKey,
+      twin.occupancyYamlKey,
+      twin.roadmapKey,
+      twin.simSceneKey,
+    ].filter((key): key is string => typeof key === 'string' && key.length > 0);
+    for (const key of new Set(artifactKeys)) {
+      await modelStorage.deleteTwinArtifact(key);
+    }
+
+    // 5 — the row (sessions + zones cascade in the database).
+    const deleted = await digitalTwinRepository.delete(twinId);
+    console.log(
+      `[DigitalTwinService] Deleted twin ${twinId}: ${sessions.length} session(s), ` +
+        `${deletedScans} scan(s), ${artifactKeys.length} artifact(s)`,
+    );
+    return deleted;
   }
 
   /**

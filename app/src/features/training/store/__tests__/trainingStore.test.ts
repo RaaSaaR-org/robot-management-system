@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ApiRequestError } from '@/api/client';
 import {
   useTrainingStore,
   selectDatasets,
@@ -190,10 +191,22 @@ describe('trainingStore', () => {
       expect(s.datasets).toEqual([]);
     });
 
-    it('uses fallback message for non-Error throws', async () => {
+    it('surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
       vi.mocked(trainingApi.listDatasets).mockRejectedValue('weird');
       await useTrainingStore.getState().fetchDatasets();
-      expect(useTrainingStore.getState().datasetsError).toBe('Failed to fetch datasets');
+      expect(useTrainingStore.getState().datasetsError).toBe('weird');
+    });
+
+    it('surfaces the message of an ApiRequestError (the shape production rejects with)', async () => {
+      vi.mocked(trainingApi.listDatasets).mockRejectedValue(
+        new ApiRequestError({
+          code: 'UNKNOWN_ERROR',
+          message: 'Dataset service unavailable',
+          statusCode: 503,
+        })
+      );
+      await useTrainingStore.getState().fetchDatasets();
+      expect(useTrainingStore.getState().datasetsError).toBe('Dataset service unavailable');
     });
   });
 

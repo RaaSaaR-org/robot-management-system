@@ -8,13 +8,28 @@
 // STATUS TYPES (aligned with NeoDEM)
 // ============================================================================
 
+/**
+ * Operational status of a robot.
+ *
+ * `protective_stop` (TASK-294) is what a robot held by a latched safety stop
+ * reports — emergency AND protective alike. Before it existed the stop path
+ * wrote `'online'`, so a robot that refused every command rendered green in the
+ * fleet console. The emergency-vs-protective distinction is NOT a status value:
+ * it survives in `currentTaskName` ('EMERGENCY STOP' vs 'Protective stop') and
+ * in `GET /robots/:id/safety` (`estop.stopCategory`, `triggeredBy`).
+ *
+ * SHARED CONTRACT — declared four times and they must stay identical:
+ * here, `robot-agent/cli/src/api/types.ts`, `server/src/services/RobotManager.ts`
+ * and the zod gate `RobotStatusSchema` in `server/src/database/schemas.ts`.
+ */
 export type RobotStatus =
   | 'online'
   | 'offline'
   | 'busy'
   | 'error'
   | 'charging'
-  | 'maintenance';
+  | 'maintenance'
+  | 'protective_stop';
 
 export type CommandStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'cancelled';
 

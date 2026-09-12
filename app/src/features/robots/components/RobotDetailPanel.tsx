@@ -23,6 +23,7 @@ import { RobotControlCenter } from './RobotControlCenter';
 import { AutonomousExecutionPanel } from './AutonomousExecutionPanel';
 import { EmergencyStopButton } from './EmergencyStopButton';
 import { RobotStatusTag, ProvenanceTag, provenanceOf } from './common';
+import { usePermission } from '@/features/auth/hooks/useAuth';
 import { useRobot } from '../hooks/useRobots';
 import { useTelemetryStream } from '../hooks/useTelemetryStream';
 import { useRobotsStore } from '../store/robotsStore';
@@ -59,6 +60,13 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
     connect: reconnectTelemetry,
   } = useTelemetryStream(robotId);
   const robotTasks = useTasksByRobotId(robotId);
+  // Both checks sit above the early returns so the hook order never changes.
+  // `robots:command` folds into `canExecuteCommands` below — the one value the
+  // tabs and the RowActions items already read — so no leaf component repeats
+  // the check. `robots:write` gates unregistering, which the server guards with
+  // `memberOrAbove`.
+  const canCommand = usePermission('robots:command');
+  const canWrite = usePermission('robots:write');
   const [isCommandLoading, setIsCommandLoading] = useState(false);
 
   const executeCommand = useCallback(
@@ -152,7 +160,7 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
     );
   }
 
-  const canExecuteCommands = isRobotAvailable(robot) && !isCommandLoading;
+  const canExecuteCommands = canCommand && isRobotAvailable(robot) && !isCommandLoading;
 
   return (
     <div className={cn('flex flex-col gap-6', className)}>
@@ -192,13 +200,15 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
                   disabled: !canExecuteCommands,
                   onSelect: () => void handleReturnHome(),
                 },
-                {
-                  label: 'Unregister',
-                  icon: <Trash2 className={ICON} strokeWidth={1.75} />,
-                  tone: 'danger',
-                  separatorBefore: true,
-                  onSelect: () => void handleUnregister(),
-                },
+                ...(canWrite
+                  ? [{
+                      label: 'Unregister',
+                      icon: <Trash2 className={ICON} strokeWidth={1.75} />,
+                      tone: 'danger' as const,
+                      separatorBefore: true,
+                      onSelect: () => void handleUnregister(),
+                    }]
+                  : []),
               ]}
             />
           </>

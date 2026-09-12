@@ -93,7 +93,10 @@ describe('Security Routes', () => {
         });
 
       expect(res.status).toBe(400);
-      expect(res.body.error).toContain('Fingerprint mismatch');
+      // TASK-298: the handler answers with its own sentence and logs the real
+      // cause; the raw service message must never reach the response body.
+      expect(res.body.error).toBe('Registration failed');
+      expect(res.body.error).not.toContain('Fingerprint mismatch');
     });
   });
 

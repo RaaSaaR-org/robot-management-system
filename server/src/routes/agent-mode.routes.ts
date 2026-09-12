@@ -355,9 +355,11 @@ agentModeRoutes.get('/:id/agent-mode/map/cloud', async (req: Request, res: Respo
       if (error instanceof HttpClientError && error.statusCode === 404 && isObjectBody(error.responseBody)) {
         return res.status(404).json(error.responseBody);
       }
-      const why = error instanceof Error ? error.message : String(error);
-      console.warn(`[AgentMode] cloud fetch failed for ${req.params.id}: ${why}`);
-      return res.status(502).json({ ...AGENT_STATE_UNAVAILABLE, error: why });
+      // Logged, not echoed: the caught text here is whatever the HTTP client or
+      // the driver said, and AGENT_STATE_UNAVAILABLE already says the operable
+      // thing — the robot did not answer.
+      console.warn(`[AgentMode] cloud fetch failed for ${req.params.id}:`, error);
+      return res.status(502).json(AGENT_STATE_UNAVAILABLE);
     }
   } catch (error) {
     console.error('[AgentMode] cloud proxy error:', error);
@@ -394,9 +396,9 @@ agentModeRoutes.get('/:id/agent-mode/map', async (req: Request, res: Response) =
       ) {
         return res.status(404).json(error.responseBody);
       }
-      const why = error instanceof Error ? error.message : String(error);
-      console.warn(`[AgentMode] map fetch failed for ${req.params.id}: ${why}`);
-      return res.status(502).json({ ...AGENT_STATE_UNAVAILABLE, error: why });
+      // Logged, not echoed — same contract as the cloud proxy above.
+      console.warn(`[AgentMode] map fetch failed for ${req.params.id}:`, error);
+      return res.status(502).json(AGENT_STATE_UNAVAILABLE);
     }
   } catch (error) {
     console.error('[AgentMode] Get map error:', error);

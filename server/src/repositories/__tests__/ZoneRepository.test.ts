@@ -15,6 +15,7 @@ const { mockPrisma } = vi.hoisted(() => ({
   mockPrisma: {
     zone: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       findMany: vi.fn(),
       count: vi.fn(),
       create: vi.fn(),
@@ -25,6 +26,7 @@ const { mockPrisma } = vi.hoisted(() => ({
   } as unknown as {
     zone: {
       findUnique: ReturnType<typeof vi.fn>;
+      findFirst: ReturnType<typeof vi.fn>;
       findMany: ReturnType<typeof vi.fn>;
       count: ReturnType<typeof vi.fn>;
       create: ReturnType<typeof vi.fn>;
@@ -131,19 +133,31 @@ describe('ZoneRepository.findById', () => {
 // ---------------------------------------------------------------------------
 
 describe('ZoneRepository.findByNameAndFloor', () => {
-  it('queries the composite unique constraint and maps the result', async () => {
-    mockPrisma.zone.findUnique.mockResolvedValue(makeDbZone());
+  // TASK-288: this must be a `findFirst`, not a compound-unique `findUnique`.
+  // The tenant-isolation extension injects `where.tenantId` into findFirst but
+  // can only post-filter a unique lookup to null, which is what let a second
+  // tenant's "Warehouse A" pass validation and then raise a raw P2002.
+  it('queries with a plain name/floor filter the tenant extension can scope', async () => {
+    mockPrisma.zone.findFirst.mockResolvedValue(makeDbZone());
 
     const result = await zoneRepository.findByNameAndFloor('Warehouse A', 'ground');
 
-    expect(mockPrisma.zone.findUnique).toHaveBeenCalledWith({
-      where: { name_floor: { name: 'Warehouse A', floor: 'ground' } },
+    expect(mockPrisma.zone.findFirst).toHaveBeenCalledWith({
+      where: { name: 'Warehouse A', floor: 'ground' },
     });
     expect(result?.id).toBe('zone-1');
   });
 
+  it('never uses a compound unique lookup', async () => {
+    mockPrisma.zone.findFirst.mockResolvedValue(null);
+
+    await zoneRepository.findByNameAndFloor('Warehouse A', 'ground');
+
+    expect(mockPrisma.zone.findUnique).not.toHaveBeenCalled();
+  });
+
   it('returns null when no matching row exists', async () => {
-    mockPrisma.zone.findUnique.mockResolvedValue(null);
+    mockPrisma.zone.findFirst.mockResolvedValue(null);
 
     const result = await zoneRepository.findByNameAndFloor('Nope', 'ground');
 

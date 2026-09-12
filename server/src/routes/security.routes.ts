@@ -7,6 +7,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { deviceRegistryService } from '../services/DeviceRegistryService.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const securityRoutes = Router();
 
@@ -35,9 +36,8 @@ securityRoutes.post('/devices/register', async (req: Request, res: Response) => 
 
     res.status(201).json(record);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Registration failed';
     console.error('[SecurityRoutes] Registration error:', error);
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Registration failed', 400);
   }
 });
 

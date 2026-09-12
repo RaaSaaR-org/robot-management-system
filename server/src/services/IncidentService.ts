@@ -92,6 +92,12 @@ export class IncidentService {
    * Handle E-stop events from SafetyService
    */
   private async handleEStopEvent(event: EStopEvent): Promise<void> {
+    // Only a trigger is an incident. A reset releases one, so recording it
+    // would file a fresh entry in the Art. 73 register on every resume.
+    if (event.action === 'reset') {
+      return;
+    }
+
     console.log(`[IncidentService] E-stop event detected: ${event.scope} by ${event.triggeredBy}`);
 
     // Map E-stop scope to incident severity

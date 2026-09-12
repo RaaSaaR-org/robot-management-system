@@ -5,7 +5,7 @@
  */
 
 import { useState, type FormEvent } from 'react';
-import { Button, FormField, Input } from '@/shared/components/ui';
+import { Button, FormField, Input, errorMessage } from '@/shared/components/ui';
 import { useAuthStore } from '../store/authStore';
 import { AuthFormError } from './AuthLayout';
 import { PASSWORD_HINT, validateNewPassword } from './passwordRules';
@@ -45,7 +45,7 @@ export function ResetPasswordForm({ token, onSuccess, onError }: ResetPasswordFo
       await resetPassword(token, password);
       onSuccess?.();
     } catch (err) {
-      onError?.(err instanceof Error ? err.message : 'Reset failed');
+      onError?.(errorMessage(err, 'Reset failed'));
     }
   };
 
