@@ -3,7 +3,7 @@ id: "TASK-282"
 aliases: []
 title: "Enforce member-or-above authorization on fleet and physical write routes"
 slug: "enforce-member-or-above-authorization-on-fleet-and-physical-write-routes"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []

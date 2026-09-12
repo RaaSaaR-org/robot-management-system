@@ -3,7 +3,7 @@ id: "TASK-299"
 aliases: []
 title: "Record deployment rollback and cancel as themselves, not as failures"
 slug: "record-deployment-rollback-and-cancel-as-themselves-not-as-failures"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []

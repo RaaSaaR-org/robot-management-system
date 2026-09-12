@@ -3,7 +3,7 @@ id: "TASK-286"
 aliases: []
 title: "Record tenant ownership for sensor scans, motion clips and VLA sessions"
 slug: "record-tenant-ownership-for-sensor-scans-motion-clips-and-vla-sessions"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []

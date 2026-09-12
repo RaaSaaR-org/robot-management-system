@@ -3,7 +3,7 @@ id: "TASK-297"
 aliases: []
 title: "Sweep app catches onto the shared error helpers"
 slug: "sweep-app-catches-onto-the-shared-error-helpers"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []

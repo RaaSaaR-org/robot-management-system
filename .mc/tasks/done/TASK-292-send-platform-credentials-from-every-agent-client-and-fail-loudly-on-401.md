@@ -3,7 +3,7 @@ id: "TASK-292"
 aliases: []
 title: "Send platform credentials from every agent client and fail loudly on 401"
 slug: "send-platform-credentials-from-every-agent-client-and-fail-loudly-on-401"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []

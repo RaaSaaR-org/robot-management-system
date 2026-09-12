@@ -3,7 +3,7 @@ id: "TASK-293"
 aliases: []
 title: "Fail unimplemented action types instead of reporting them completed"
 slug: "fail-unimplemented-action-types-instead-of-reporting-them-completed"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []

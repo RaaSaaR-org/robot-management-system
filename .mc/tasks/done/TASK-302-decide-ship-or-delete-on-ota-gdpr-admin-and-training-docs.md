@@ -3,7 +3,7 @@ id: "TASK-302"
 aliases: []
 title: "Decide ship-or-delete on OTA, GDPR admin and training docs"
 slug: "decide-ship-or-delete-on-ota-gdpr-admin-and-training-docs"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
