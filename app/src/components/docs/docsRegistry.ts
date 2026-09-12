@@ -55,6 +55,7 @@ export function titleFromSlug(slug: string): string {
 // ---------------------------------------------------------------------------
 
 const CATEGORY_MAP: Record<string, string> = {
+  'platform': 'Getting Started',
   'demo-intro': 'Getting Started',
   'demo-day': 'Getting Started',
   'README': 'Getting Started',
