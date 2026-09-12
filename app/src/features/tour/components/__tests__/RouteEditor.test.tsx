@@ -239,3 +239,21 @@ describe('RouteEditor', () => {
     expect(screen.getByTestId('tour-autogreet-inert')).toHaveTextContent('will not offer it to anyone');
   });
 });
+
+
+// A viewer reads the tour. Delete lives in the page header now, so this
+// asserts the editor itself: the values are there, and nothing can change them.
+// TourEditorPage owns disabling Delete for the same role.
+it('shows existing tour values without letting a read-only user change them', async () => {
+  renderWithProviders(<RouteEditor readOnly route={route} robots={[]} onSaved={vi.fn()} />, { withAuth: false });
+  await settle();
+  const name = screen.getByTestId('tour-route-name');
+  expect(name).toHaveValue(route.name);
+  // One disabled fieldset carries the form, so every control inside it is dead.
+  expect(name).toBeDisabled();
+  // Save is not offered at all, and no keyboard submit reaches the store.
+  expect(screen.queryByTestId('tour-route-save')).toBeNull();
+  fireEvent.submit(name.closest('form')!);
+  await settle();
+  expect(api.updateRoute).not.toHaveBeenCalled();
+});

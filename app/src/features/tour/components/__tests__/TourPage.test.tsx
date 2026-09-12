@@ -6,6 +6,8 @@
  * @feature tour
  */
 
+import { useAuthStore } from '@/features/auth/store/authStore';
+import { MOCK_USER } from '@/mocks/mockData';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { getToasts, dismissToast, confirm } from '@/shared/components/ui';
@@ -94,6 +96,7 @@ const run: TourRun = {
 };
 
 beforeEach(() => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'member' } });
   useTourStore.getState().reset();
   dismissToast();
   confirmMock.mockResolvedValue(true);
@@ -318,4 +321,37 @@ describe('TourPage', () => {
     await screen.findByTestId('tour-route-row');
     expect(screen.getByTestId('tour-new-route').closest('a')).toHaveAttribute('href', '/tour/routes/new');
   });
+});
+
+
+it('keeps tours readable for viewers but disables starting and ending them', async () => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'viewer' } });
+  renderWithProviders(<TourPage />, { withAuth: false });
+  await screen.findByTestId('tour-route-row');
+  expect(screen.queryByTestId('tour-new-route')).not.toBeInTheDocument();
+  expect(screen.getByTestId('tour-read-only')).toHaveTextContent(/Read-only access/);
+
+  const menu = await openRowMenu();
+  for (const name of ['Start tour', 'Delete']) {
+    const item = within(menu).getByRole('menuitem', { name });
+    expect(item).toBeDisabled();
+    fireEvent.click(item);
+  }
+  expect(api.startRoute).not.toHaveBeenCalled();
+  // Opening a tour is not a write, so Edit stays — the editor it opens is
+  // read-only for this role (see TourEditorPage).
+  expect(within(menu).getByRole('menuitem', { name: 'Edit' })).toBeEnabled();
+  fireEvent.keyDown(menu, { key: 'Escape' });
+
+  act(() => {
+    useTourStore.getState().applyEvent({ type: 'agent:tour:started', robotId: 'g1', timestamp: 'x', tour: startedTour() });
+  });
+  const banner = await screen.findByTestId('tour-active-banner');
+  const abort = within(banner).getByTestId('tour-abort');
+  expect(abort).toBeDisabled();
+  fireEvent.click(abort);
+  // The row's own verb swapped to End tour, and it is refused as well.
+  const live = await openRowMenu();
+  expect(within(live).getByRole('menuitem', { name: 'End tour' })).toBeDisabled();
+  expect(api.abortRoute).not.toHaveBeenCalled();
 });

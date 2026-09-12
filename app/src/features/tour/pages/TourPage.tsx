@@ -11,6 +11,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { LinkButton, PageHeader, StatRow, StatTile, Tabs, confirm, errorMessage, toast } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import { LiveTag } from '@/features/patrol/components/opsUi';
 import type { TourRoute, TourRun } from '../types/tour.types';
@@ -37,6 +38,8 @@ export interface TourPageProps {
 }
 
 export const TourPage = memo(function TourPage({ className }: TourPageProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const robots = useRobotsStore(selectRobots);
   const fetchRobots = useRobotsStore((s) => s.fetchRobots);
 
@@ -183,11 +186,20 @@ export const TourPage = memo(function TourPage({ className }: TourPageProps) {
         description="Tours the robot gives visitors, and the questions they asked."
         meta={<LiveTag connected={isConnected} data-testid="tour-live" />}
         actions={
-          <LinkButton to="/tour/routes/new" leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} data-testid="tour-new-route">
-            New tour
-          </LinkButton>
+          canWrite ? (
+            <LinkButton to="/tour/routes/new" leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} data-testid="tour-new-route">
+              New tour
+            </LinkButton>
+          ) : undefined
         }
       />
+
+      {/* A viewer reads this page. Saying so beats a row of dead buttons. */}
+      {!canWrite && (
+        <p className="text-[13px] text-ink-secondary" data-testid="tour-read-only">
+          Read-only access. A member role or higher is required to manage routes and runs.
+        </p>
+      )}
 
       {hasRoutes && (
         <StatRow columns={3}>

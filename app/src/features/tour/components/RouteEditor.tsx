@@ -33,6 +33,12 @@ export interface RouteEditorRobot {
 }
 
 export interface RouteEditorProps {
+  /**
+   * Read a tour without being able to change it: every field is disabled and
+   * Save is gone. A viewer role gets this — the server refuses the write
+   * anyway, so offering the form would only produce a 403.
+   */
+  readOnly?: boolean;
   /** Existing tour to edit; null/undefined = new tour. */
   route?: TourRoute | null;
   robots: RouteEditorRobot[];
@@ -204,7 +210,7 @@ function countErrors(e: FieldErrors): number {
 // COMPONENT
 // ============================================================================
 
-export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRobotId, onSaved, onCancel, className }: RouteEditorProps) {
+export const RouteEditor = memo(function RouteEditor({ readOnly = false, route, robots, defaultRobotId, onSaved, onCancel, className }: RouteEditorProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFromRoute(route, defaultRobotId));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -215,7 +221,7 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
   const [previewNote, setPreviewNote] = useState<string | null>(null);
   const [previewingStopId, setPreviewingStopId] = useState<string | null>(null);
   /** Stop ids whose details are folded away (inputs stay mounted). */
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(route?.stops.map((s) => s.id) ?? []));
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(readOnly ? [] : (route?.stops.map((s) => s.id) ?? [])));
   const formRef = useRef<HTMLFormElement>(null);
 
   const saveRoute = useTourStore((s) => s.saveRoute);
@@ -228,10 +234,10 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
   // Reset the draft when a different tour is opened.
   useEffect(() => {
     setDraft(draftFromRoute(route, defaultRobotId));
-    setCollapsed(new Set(route?.stops.map((s) => s.id) ?? []));
+    setCollapsed(new Set(readOnly ? [] : (route?.stops.map((s) => s.id) ?? [])));
     setSubmitted(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route?.id]);
+  }, [route?.id, readOnly]);
 
   useEffect(() => {
     if (draft.robotId) void fetchPlaces(draft.robotId);
@@ -310,6 +316,7 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
   const handleSubmit = useCallback(
     async (event: FormEvent) => {
       event.preventDefault();
+      if (readOnly) return;
       setSubmitted(true);
       if (problems.length > 0) {
         requestAnimationFrame(() => formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
@@ -327,7 +334,7 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
       setSaveError(message);
       toast.error(route ? "Couldn't update tour" : "Couldn't create tour", { description: message });
     },
-    [problems, saveRoute, draft, route, onSaved],
+    [readOnly, problems, saveRoute, draft, route, onSaved],
   );
 
   const placeOptions = places ?? [];
@@ -346,6 +353,10 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
 
   return (
     <form ref={formRef} onSubmit={(e) => void handleSubmit(e)} noValidate className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'} data-testid="tour-route-editor">
+      {/* One fieldset for the body: `disabled` propagates to every control in
+          it, so no field has to know about the role. min-w-0 because a
+          fieldset's intrinsic min-width would otherwise overflow the grid. */}
+      <fieldset disabled={readOnly} className="min-w-0">
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3 xl:items-start">
         <div className="flex min-w-0 flex-col gap-6 xl:col-span-2">
           {/* Basics */}
@@ -540,16 +551,19 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
           </Panel.Body>
         </Panel>
       </div>
+      </fieldset>
 
       <div className="sticky bottom-0 z-10 -mx-4 flex justify-end gap-2 border-t border-line bg-canvas px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         {onCancel && (
           <Button variant="ghost" onClick={onCancel}>
-            Cancel
+            {readOnly ? 'Back to tours' : 'Cancel'}
           </Button>
         )}
-        <Button type="submit" data-testid="tour-route-save" isLoading={saving} disabled={saving}>
-          {route ? 'Save changes' : 'Create tour'}
-        </Button>
+        {!readOnly && (
+          <Button type="submit" data-testid="tour-route-save" isLoading={saving} disabled={saving}>
+            {route ? 'Save changes' : 'Create tour'}
+          </Button>
+        )}
       </div>
     </form>
   );

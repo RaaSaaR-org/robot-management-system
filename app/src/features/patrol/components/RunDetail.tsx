@@ -25,6 +25,7 @@ import {
   confirm,
   toast,
 } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import type { PatrolFinding, PatrolLeg } from '../types/patrol.types';
 import { PATROL_RUN_MODE_LABELS } from '../types/patrol.types';
 import { usePatrolStore, selectFindingsForRun, selectRouteById, selectRunById } from '../store/patrolStore';
@@ -122,6 +123,8 @@ interface FindingRowProps {
 }
 
 const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAck, onNormal, onEscalate }: FindingRowProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const ev = finding.evidence ?? {};
   // A verdict is a judgement, not a one-way door. Only the verdict a finding
   // already carries is disabled: an operator who clicked "This is normal" on a
@@ -190,7 +193,7 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
           variant="secondary"
           leftIcon={<Check className={ICON} strokeWidth={1.75} />}
           data-testid="patrol-finding-ack"
-          disabled={busy || finding.status !== 'open'}
+          disabled={!canWrite || busy || finding.status !== 'open'}
           isLoading={busy}
           onClick={() => onAck(finding)}
         >
@@ -202,13 +205,13 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
             {
               label: 'This is normal',
               icon: <ShieldCheck />,
-              disabled: busy || isNormal,
+              disabled: !canWrite || busy || isNormal,
               onSelect: () => onNormal(finding),
             },
             {
               label: 'Escalate',
               icon: <Flag />,
-              disabled: busy || isEscalated,
+              disabled: !canWrite || busy || isEscalated,
               onSelect: () => onEscalate(finding),
             },
           ]}
@@ -227,6 +230,8 @@ function errorText(fallback: string): { description: string } {
 }
 
 export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, className }: RunDetailProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const run = usePatrolStore(selectRunById(runId));
   const findings = usePatrolStore(selectFindingsForRun(runId));
   const status = usePatrolStore((s) => s.runDetailStatus[runId] ?? 'idle');
@@ -413,7 +418,7 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
         actions={
           <>
             {run.status === 'running' && (
-              <Button variant="secondary" leftIcon={<Square className={ICON} strokeWidth={1.75} />} isLoading={aborting} onClick={() => void handleAbort()}>
+              <Button variant="secondary" leftIcon={<Square className={ICON} strokeWidth={1.75} />} disabled={!canWrite} isLoading={aborting} onClick={() => void handleAbort()}>
                 Abort run
               </Button>
             )}
@@ -421,7 +426,7 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
               variant="secondary"
               data-testid="patrol-run-promote"
               leftIcon={baselineIsThisRun ? <Check className={ICON} strokeWidth={1.75} /> : undefined}
-              disabled={!canPromote || promoting}
+              disabled={!canWrite || !canPromote || promoting}
               isLoading={promoting}
               title={
                 baselineIsThisRun

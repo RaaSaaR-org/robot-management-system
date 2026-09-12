@@ -8,8 +8,9 @@
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Download, Trash2 } from 'lucide-react';
-import { ErrorState, PageHeader, Panel, RowActions, SkeletonText, confirm, toast } from '@/shared/components/ui';
+import { Download, Lock, Trash2 } from 'lucide-react';
+import { EmptyState, ErrorState, LinkButton, PageHeader, Panel, RowActions, SkeletonText, confirm, toast } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import type { PatrolRoute } from '../types/patrol.types';
 import { usePatrolStore, selectRouteById, selectRuns } from '../store/patrolStore';
@@ -25,6 +26,8 @@ export interface RouteEditorPageProps {
 }
 
 export const RouteEditorPage = memo(function RouteEditorPage({ className }: RouteEditorPageProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const { id } = useParams<{ id: string }>();
   const isNew = !id || id === 'new';
   const navigate = useNavigate();
@@ -97,6 +100,22 @@ export const RouteEditorPage = memo(function RouteEditorPage({ className }: Rout
 
   const root = className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6';
 
+  if (isNew && !canWrite) {
+    return (
+      <div className={root} data-testid="patrol-route-page">
+        <PageHeader eyebrow="Automate" back={BACK} title="New route" />
+        <Panel>
+          <EmptyState
+            icon={<Lock />}
+            title="Read-only access"
+            description="A member role or higher is required to create a route."
+            action={<LinkButton to="/patrol" variant="secondary">Back to routes</LinkButton>}
+          />
+        </Panel>
+      </div>
+    );
+  }
+
   if (!isNew && !route) {
     return (
       <div className={root} data-testid="patrol-route-page">
@@ -122,13 +141,13 @@ export const RouteEditorPage = memo(function RouteEditorPage({ className }: Rout
               label="More actions"
               items={[
                 { label: 'Export VDA5050', icon: <Download />, onSelect: () => void exportRouteVda5050(route) },
-                { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, onSelect: () => void handleDelete(route) },
+                { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, disabled: !canWrite, onSelect: () => void handleDelete(route) },
               ]}
             />
           ) : undefined
         }
       />
-      <RouteEditor key={route?.id ?? 'new'} route={route} robots={robotOptions} onSaved={handleSaved} onCancel={() => navigate('/patrol')} />
+      <RouteEditor readOnly={!canWrite} key={route?.id ?? 'new'} route={route} robots={robotOptions} onSaved={handleSaved} onCancel={() => navigate('/patrol')} />
       {route && (
         <Panel>
           <Panel.Header title="Runs of this route" description="The last 20 runs, newest first." />

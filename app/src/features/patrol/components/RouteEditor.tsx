@@ -44,6 +44,12 @@ export interface RouteEditorRobot {
 }
 
 export interface RouteEditorProps {
+  /**
+   * Read a route without being able to change it: every field is disabled and
+   * Save is gone. A viewer role gets this — the server refuses the write
+   * anyway, so offering the form would only produce a 403.
+   */
+  readOnly?: boolean;
   /** Existing route to edit; null/undefined = new route. */
   route?: PatrolRoute | null;
   robots: RouteEditorRobot[];
@@ -186,7 +192,7 @@ function fieldErrors(problems: string[]): FieldErrors {
 // COMPONENT
 // ============================================================================
 
-export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRobotId, onSaved, onCancel, className }: RouteEditorProps) {
+export const RouteEditor = memo(function RouteEditor({ readOnly = false, route, robots, defaultRobotId, onSaved, onCancel, className }: RouteEditorProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFromRoute(route, defaultRobotId));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -194,7 +200,7 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
   const [pickPlace, setPickPlace] = useState<string>('');
   const [manualPlace, setManualPlace] = useState('');
   /** Checkpoint ids whose details are folded away (inputs stay mounted). */
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(route?.checkpoints.map((c) => c.id) ?? []));
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(readOnly ? [] : (route?.checkpoints.map((c) => c.id) ?? [])));
   const formRef = useRef<HTMLFormElement>(null);
 
   const saveRoute = usePatrolStore((s) => s.saveRoute);
@@ -205,10 +211,10 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
   // Reset the draft when a different route is opened.
   useEffect(() => {
     setDraft(draftFromRoute(route, defaultRobotId));
-    setCollapsed(new Set(route?.checkpoints.map((c) => c.id) ?? []));
+    setCollapsed(new Set(readOnly ? [] : (route?.checkpoints.map((c) => c.id) ?? [])));
     setSubmitted(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route?.id]);
+  }, [route?.id, readOnly]);
 
   useEffect(() => {
     if (draft.robotId) void fetchPlaces(draft.robotId);
@@ -274,6 +280,7 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
   const handleSubmit = useCallback(
     async (event: FormEvent) => {
       event.preventDefault();
+      if (readOnly) return;
       setSubmitted(true);
       if (problems.length > 0 || cronBlocks) {
         // Focus the first field that needs attention once the errors are drawn.
@@ -292,7 +299,7 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
       setSaveError(message);
       toast.error(route ? "Couldn't update route" : "Couldn't create route", { description: message });
     },
-    [problems, cronBlocks, saveRoute, draft, route, onSaved],
+    [readOnly, problems, cronBlocks, saveRoute, draft, route, onSaved],
   );
 
   const placeOptions = places ?? [];
@@ -323,6 +330,10 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
 
   return (
     <form ref={formRef} onSubmit={(e) => void handleSubmit(e)} noValidate className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'} data-testid="patrol-route-editor">
+      {/* One fieldset for the body: `disabled` propagates to every control in
+          it, so no field has to know about the role. min-w-0 because a
+          fieldset's intrinsic min-width would otherwise overflow the grid. */}
+      <fieldset disabled={readOnly} className="min-w-0">
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3 xl:items-start">
         <div className="flex min-w-0 flex-col gap-6 xl:col-span-2">
           {/* Basics */}
@@ -527,16 +538,19 @@ export const RouteEditor = memo(function RouteEditor({ route, robots, defaultRob
           </Panel.Body>
         </Panel>
       </div>
+      </fieldset>
 
       <div className="sticky bottom-0 z-10 -mx-4 flex justify-end gap-2 border-t border-line bg-canvas px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         {onCancel && (
           <Button variant="ghost" onClick={onCancel}>
-            Cancel
+            {readOnly ? 'Back to routes' : 'Cancel'}
           </Button>
         )}
-        <Button type="submit" data-testid="patrol-route-save" isLoading={saving} disabled={saving || cronBlocks}>
-          {route ? 'Save changes' : 'Create route'}
-        </Button>
+        {!readOnly && (
+          <Button type="submit" data-testid="patrol-route-save" isLoading={saving} disabled={saving || cronBlocks}>
+            {route ? 'Save changes' : 'Create route'}
+          </Button>
+        )}
       </div>
     </form>
   );

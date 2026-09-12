@@ -6,6 +6,7 @@
  * @dependencies @/features/fleet/hooks, @/features/fleet/types
  */
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useState, useCallback, useRef } from 'react';
 import { useZoneEditor } from '../hooks';
 import type { Zone, ZoneBounds } from '../types/fleet.types';
@@ -169,7 +170,10 @@ export function ZoneEditor({
   onEditZone,
   onZoneDrawn,
 }: ZoneEditorProps) {
-  const { editorMode, drawingBounds, setDrawingBounds } = useZoneEditor();
+  const { can } = useAuth();
+  const canManage = can('fleet:manage');
+  const { editorMode: requestedMode, drawingBounds, setDrawingBounds } = useZoneEditor();
+  const editorMode = canManage ? requestedMode : 'view';
   const [dragState, setDragState] = useState<DragState | null>(null);
   const svgRef = useRef<SVGGElement>(null);
 
@@ -336,7 +340,7 @@ export function ZoneEditor({
           offset={offset}
           isSelected={zone.id === selectedZoneId}
           onSelect={() => onSelectZone(zone.id)}
-          onDoubleClick={() => onEditZone(zone)}
+          onDoubleClick={() => { if (canManage) onEditZone(zone); }}
         />
       ))}
 

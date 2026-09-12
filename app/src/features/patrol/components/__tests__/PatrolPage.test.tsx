@@ -6,6 +6,8 @@
  * @feature patrol
  */
 
+import { useAuthStore } from '@/features/auth/store/authStore';
+import { MOCK_USER } from '@/mocks/mockData';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { getToasts, dismissToast, confirm } from '@/shared/components/ui';
@@ -61,6 +63,7 @@ const run: PatrolRun = {
 };
 
 beforeEach(() => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'member' } });
   usePatrolStore.getState().reset();
   dismissToast();
   confirmMock.mockResolvedValue(true);
@@ -239,4 +242,41 @@ describe('PatrolPage', () => {
     await screen.findByTestId('patrol-route-row');
     expect(screen.getByTestId('patrol-new-route').closest('a')).toHaveAttribute('href', '/patrol/routes/new');
   });
+});
+
+
+it('keeps routes readable for viewers but disables starting and aborting runs', async () => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'viewer' } });
+  renderWithProviders(<PatrolPage />, { withAuth: false });
+  await screen.findByTestId('patrol-route-row');
+  expect(screen.queryByTestId('patrol-new-route')).not.toBeInTheDocument();
+  expect(screen.getByTestId('patrol-read-only')).toHaveTextContent(/Read-only access/);
+
+  const menu = await openRowMenu();
+  for (const name of ['Start run', 'Baseline run', 'Delete']) {
+    const item = within(menu).getByRole('menuitem', { name });
+    expect(item).toBeDisabled();
+    fireEvent.click(item);
+  }
+  expect(api.startRoute).not.toHaveBeenCalled();
+  // Reading a route and exporting it are not writes, so both stay open.
+  expect(within(menu).getByRole('menuitem', { name: 'Edit' })).toBeEnabled();
+  expect(within(menu).getByRole('menuitem', { name: 'Export VDA5050' })).toBeEnabled();
+  fireEvent.keyDown(menu, { key: 'Escape' });
+
+  act(() => {
+    usePatrolStore.getState().applyEvent({
+      type: 'agent:patrol:started', robotId: 'g1', timestamp: 'x',
+      patrol: { ...run, runId: 'run-9', status: 'running', finishedAt: null, findingCount: 0,
+        legs: [{ index: 0, checkpointId: 'cp-a', placeId: 'hall', name: 'Hall', status: 'running', findingIds: [] }] },
+    });
+  });
+  const banner = await screen.findByTestId('patrol-active-banner');
+  const abort = within(banner).getByTestId('patrol-abort');
+  expect(abort).toBeDisabled();
+  fireEvent.click(abort);
+  // The row's own verb swapped to Abort run, and it is refused as well.
+  const live = await openRowMenu();
+  expect(within(live).getByRole('menuitem', { name: 'Abort run' })).toBeDisabled();
+  expect(api.abortRoute).not.toHaveBeenCalled();
 });

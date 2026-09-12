@@ -9,8 +9,9 @@
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Trash2 } from 'lucide-react';
-import { ErrorState, PageHeader, Panel, RowActions, SkeletonText, confirm, toast } from '@/shared/components/ui';
+import { Lock, Trash2 } from 'lucide-react';
+import { EmptyState, ErrorState, LinkButton, PageHeader, Panel, RowActions, SkeletonText, confirm, toast } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import { ArmedTag } from '@/features/patrol/components/opsUi';
 import type { TourRoute } from '../types/tour.types';
@@ -25,6 +26,8 @@ export interface TourEditorPageProps {
 }
 
 export const TourEditorPage = memo(function TourEditorPage({ className }: TourEditorPageProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const { id } = useParams<{ id: string }>();
   const isNew = !id || id === 'new';
   const navigate = useNavigate();
@@ -98,6 +101,22 @@ export const TourEditorPage = memo(function TourEditorPage({ className }: TourEd
 
   const root = className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6';
 
+  if (isNew && !canWrite) {
+    return (
+      <div className={root} data-testid="tour-route-page">
+        <PageHeader eyebrow="Automate" back={BACK} title="New tour" />
+        <Panel>
+          <EmptyState
+            icon={<Lock />}
+            title="Read-only access"
+            description="A member role or higher is required to create a tour."
+            action={<LinkButton to="/tour" variant="secondary">Back to tours</LinkButton>}
+          />
+        </Panel>
+      </div>
+    );
+  }
+
   if (!isNew && !route) {
     return (
       <div className={root} data-testid="tour-route-page">
@@ -121,12 +140,12 @@ export const TourEditorPage = memo(function TourEditorPage({ className }: TourEd
           route ? (
             <RowActions
               label="More actions"
-              items={[{ label: 'Delete', icon: <Trash2 />, tone: 'danger', onSelect: () => void handleDelete(route) }]}
+              items={[{ label: 'Delete', icon: <Trash2 />, tone: 'danger', disabled: !canWrite, onSelect: () => void handleDelete(route) }]}
             />
           ) : undefined
         }
       />
-      <RouteEditor key={route?.id ?? 'new'} route={route} robots={robotOptions} onSaved={handleSaved} onCancel={() => navigate('/tour')} />
+      <RouteEditor readOnly={!canWrite} key={route?.id ?? 'new'} route={route} robots={robotOptions} onSaved={handleSaved} onCancel={() => navigate('/tour')} />
       {route && (
         <Panel>
           <Panel.Header title="Visits of this tour" description="The last 20 visits, newest first." />

@@ -19,6 +19,7 @@ import {
   type DataTableColumn,
 } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useZones, useZoneManagement } from '../hooks';
 import type { Zone } from '../types/fleet.types';
 import { ZONE_TYPE_LABEL, ZONE_TYPE_TONE, zoneColor } from '../utils/mapColors';
@@ -42,6 +43,8 @@ export interface ZoneConfigPanelProps {
  * ```
  */
 export function ZoneConfigPanel({ onEditZone, onCreateZone, className }: ZoneConfigPanelProps) {
+  const { can } = useAuth();
+  const canManage = can('fleet:manage');
   const { zones, zonesForCurrentFloor, selectedZone, currentFloor, isLoading, error, selectZone, refresh } =
     useZones(false);
   const { deleteZone } = useZoneManagement();
@@ -89,7 +92,11 @@ export function ZoneConfigPanel({ onEditZone, onCreateZone, className }: ZoneCon
     <Panel className={cn('flex flex-col', className)}>
       <Panel.Header
         title="Zones"
-        description={`Floor ${currentFloor} · ${zonesForCurrentFloor.length} ${zonesForCurrentFloor.length === 1 ? 'zone' : 'zones'}`}
+        description={
+          canManage
+            ? `Floor ${currentFloor} · ${zonesForCurrentFloor.length} ${zonesForCurrentFloor.length === 1 ? 'zone' : 'zones'}`
+            : `Floor ${currentFloor} · ${zonesForCurrentFloor.length} ${zonesForCurrentFloor.length === 1 ? 'zone' : 'zones'} · read-only, an owner role manages zones`
+        }
       />
       <DataTable
         caption={`Zones on floor ${currentFloor}`}
@@ -100,9 +107,10 @@ export function ZoneConfigPanel({ onEditZone, onCreateZone, className }: ZoneCon
         defaultSort={{ key: 'name', direction: 'asc' }}
         onRowClick={(z) => selectZone(selectedZone?.id === z.id ? null : z.id)}
         rowClassName={(z) => (selectedZone?.id === z.id ? 'bg-primary/10' : undefined)}
+        // Zone writes need an owner role; selecting a zone on the map does not.
         rowActions={(z) => [
-          { label: 'Edit', icon: <Pencil />, onSelect: () => onEditZone?.(z) },
-          { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, onSelect: () => void askDelete(z) },
+          { label: 'Edit', icon: <Pencil />, disabled: !canManage, onSelect: () => onEditZone?.(z) },
+          { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, disabled: !canManage, onSelect: () => void askDelete(z) },
         ]}
         rowActionsLabel={(z) => `Actions for ${z.name}`}
         isLoading={isLoading}
@@ -119,7 +127,8 @@ export function ZoneConfigPanel({ onEditZone, onCreateZone, className }: ZoneCon
             title="No zones on this floor"
             description="A zone tells robots how to treat an area."
             action={
-              onCreateZone && (
+              onCreateZone &&
+              canManage && (
                 <Button size="sm" leftIcon={<Plus className="h-4 w-4" />} onClick={onCreateZone}>
                   New zone
                 </Button>

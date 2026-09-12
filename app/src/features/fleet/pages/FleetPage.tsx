@@ -11,6 +11,7 @@ import { useState, useCallback, useEffect, useMemo, type ReactNode } from 'react
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PenSquare, Plus, X } from 'lucide-react';
 import { Button, PageHeader, Panel, Tabs } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { FleetMap } from '../components/FleetMap';
 import { ZoneConfigPanel } from '../components/ZoneConfigPanel';
 import { ZoneFormModal } from '../components/ZoneFormModal';
@@ -40,6 +41,8 @@ export interface FleetPageProps {
  * Robots and Sites tabs.
  */
 export function FleetPage({ className }: FleetPageProps) {
+  const { can } = useAuth();
+  const canManage = can('fleet:manage');
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const raw = params.get('tab');
@@ -133,6 +136,10 @@ export function FleetPage({ className }: FleetPageProps) {
     setDrawnBounds(null);
   }, []);
 
+  // Zone writes need an owner role or higher; the server refuses them below
+  // that, so the buttons say so instead of producing a 403. New scan is not a
+  // zone write and stays as it was — the twin routes are not in this gate.
+  const zoneWriteTitle = canManage ? undefined : 'An owner role or higher is required to manage zones';
   // Every tab brings its own actions; the Robots tab has none in the header.
   let headerActions: ReactNode;
   if (tab === 'map') {
@@ -143,10 +150,12 @@ export function FleetPage({ className }: FleetPageProps) {
           leftIcon={drawing ? <X className="h-4 w-4" /> : <PenSquare className="h-4 w-4" />}
           onClick={() => setEditorMode(drawing ? 'view' : 'draw')}
           aria-pressed={drawing}
+          disabled={!canManage}
+          title={zoneWriteTitle}
         >
           {drawing ? 'Cancel drawing' : 'Draw zone'}
         </Button>
-        <Button leftIcon={<Plus className="h-4 w-4" />} onClick={openCreate}>
+        <Button leftIcon={<Plus className="h-4 w-4" />} onClick={openCreate} disabled={!canManage} title={zoneWriteTitle}>
           New zone
         </Button>
       </>

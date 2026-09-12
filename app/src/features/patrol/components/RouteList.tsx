@@ -22,6 +22,7 @@ import {
   type DataTableColumn,
   type RowActionItem,
 } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import type { PatrolRoute, PatrolRun, PatrolRunMode } from '../types/patrol.types';
 import { isRunActive } from '../utils/patrolFormat';
 import { describeCron } from '../utils/cronText';
@@ -60,6 +61,8 @@ export const RouteList = memo(function RouteList({
   onExport,
   onDelete,
 }: RouteListProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('');
@@ -138,19 +141,21 @@ export const RouteList = memo(function RouteList({
     },
   ];
 
+  // Writes need a member role or above; reading a route and exporting it do
+  // not, so Edit (the editor is read-only for a viewer) and Export stay.
   const rowActions = (r: PatrolRoute): RowActionItem[] => {
     const live = isRunActive(lastRunByRoute[r.id]);
     const noCheckpoints = r.checkpoints.length === 0;
     const items: RowActionItem[] = live
-      ? [{ label: 'Abort run', icon: <Square />, onSelect: () => onAbort(r) }]
+      ? [{ label: 'Abort run', icon: <Square />, disabled: !canWrite, onSelect: () => onAbort(r) }]
       : [
-          { label: 'Start run', icon: <Play />, disabled: noCheckpoints, onSelect: () => onStart(r, 'patrol') },
-          { label: 'Baseline run', icon: <ShieldCheck />, disabled: noCheckpoints, onSelect: () => onStart(r, 'baseline') },
+          { label: 'Start run', icon: <Play />, disabled: !canWrite || noCheckpoints, onSelect: () => onStart(r, 'patrol') },
+          { label: 'Baseline run', icon: <ShieldCheck />, disabled: !canWrite || noCheckpoints, onSelect: () => onStart(r, 'baseline') },
         ];
     items.push(
       { label: 'Edit', icon: <Pencil />, onSelect: () => navigate(`/patrol/routes/${encodeURIComponent(r.id)}`) },
       { label: 'Export VDA5050', icon: <Download />, onSelect: () => onExport(r) },
-      { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, onSelect: () => onDelete(r) },
+      { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, disabled: !canWrite, onSelect: () => onDelete(r) },
     );
     return items;
   };
@@ -199,9 +204,11 @@ export const RouteList = memo(function RouteList({
                 title="No routes yet"
                 description="A route is the ordered list of places a robot walks, with a schedule and a baseline of what is normal."
                 action={
-                  <LinkButton to="/patrol/routes/new" leftIcon={<Plus className="h-4 w-4" />} data-testid="patrol-new-route-empty">
-                    New route
-                  </LinkButton>
+                  canWrite ? (
+                    <LinkButton to="/patrol/routes/new" leftIcon={<Plus className="h-4 w-4" />} data-testid="patrol-new-route-empty">
+                      New route
+                    </LinkButton>
+                  ) : undefined
                 }
               />
             )

@@ -9,6 +9,7 @@
 
 import { useState, useEffect } from 'react';
 import { FormField, FormModal, Input, Select, Textarea, errorMessage, toast } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useZoneManagement, useZoneEditor } from '../hooks';
 import type { Zone, ZoneType, ZoneBounds } from '../types/fleet.types';
 import { ZONE_COLOR_OPTIONS, ZONE_TYPE_LABEL } from '../utils/mapColors';
@@ -84,6 +85,8 @@ function validate(form: FormState): FieldErrors {
  * ```
  */
 export function ZoneFormModal({ isOpen, zone, defaultBounds, currentFloor, onClose, onSuccess }: ZoneFormModalProps) {
+  const { can } = useAuth();
+  const canManage = can('fleet:manage');
   const { createZone, updateZone } = useZoneManagement();
   const { closeFormModal } = useZoneEditor();
   const [form, setForm] = useState<FormState>(() => initialState(zone, defaultBounds, currentFloor));
@@ -110,6 +113,13 @@ export function ZoneFormModal({ isOpen, zone, defaultBounds, currentFloor, onClo
   };
 
   const handleSubmit = async () => {
+    // The server refuses a zone write below owner. Nothing should be able to
+    // open this modal without the role, but a form that can still be submitted
+    // would turn that into an unexplained 403.
+    if (!canManage) {
+      setFormError('An owner role or higher is required to manage zones.');
+      return;
+    }
     const nextErrors = validate(form);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
@@ -164,6 +174,7 @@ export function ZoneFormModal({ isOpen, zone, defaultBounds, currentFloor, onClo
       submitLabel={zone ? 'Save changes' : 'Create zone'}
       submittingLabel={zone ? 'Saving…' : 'Creating…'}
       isSubmitting={saving}
+      submitDisabled={!canManage}
       error={formError}
       onSubmit={handleSubmit}
       noValidate

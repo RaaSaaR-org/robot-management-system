@@ -11,6 +11,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 import { Plus } from 'lucide-react';
 import { LinkButton, PageHeader, StatRow, StatTile, Tabs, confirm, errorMessage, toast } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import type { PatrolRoute, PatrolRun, PatrolRunMode } from '../types/patrol.types';
 import { usePatrolStore, selectActiveRuns, selectRoutes, selectRuns } from '../store/patrolStore';
@@ -37,6 +38,8 @@ export interface PatrolPageProps {
 }
 
 export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const robots = useRobotsStore(selectRobots);
   const fetchRobots = useRobotsStore((s) => s.fetchRobots);
 
@@ -187,11 +190,20 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
         description="Routes a robot walks on its own, with control photos and what was not normal."
         meta={<LiveTag connected={isConnected} data-testid="patrol-live" />}
         actions={
-          <LinkButton to="/patrol/routes/new" leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} data-testid="patrol-new-route">
-            New route
-          </LinkButton>
+          canWrite ? (
+            <LinkButton to="/patrol/routes/new" leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} data-testid="patrol-new-route">
+              New route
+            </LinkButton>
+          ) : undefined
         }
       />
+
+      {/* A viewer reads this page. Saying so beats a row of dead buttons. */}
+      {!canWrite && (
+        <p className="text-[13px] text-ink-secondary" data-testid="patrol-read-only">
+          Read-only access. A member role or higher is required to manage routes and runs.
+        </p>
+      )}
 
       {hasRoutes && (
         <StatRow columns={3}>

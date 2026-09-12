@@ -240,6 +240,24 @@ describe('UserRepository.findAll', () => {
 // ---------------------------------------------------------------------------
 
 describe('UserRepository.create', () => {
+  it.each([false, true])('persists an explicit forcePasswordChange=%s', async (forcePasswordChange) => {
+    mockPrisma.user.create.mockImplementation(async ({ data }) =>
+      makeDbUser({ forcePasswordChange: data.forcePasswordChange ?? true })
+    );
+
+    const result = await repo.create({
+      email: 'alice@example.com',
+      passwordHash: 'h',
+      name: 'Alice',
+      forcePasswordChange,
+    });
+
+    expect(result.forcePasswordChange).toBe(forcePasswordChange);
+    expect(mockPrisma.user.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ forcePasswordChange }),
+    });
+  });
+
   it('lower-cases email and applies defaults, returning a mapped domain user', async () => {
     mockPrisma.user.create.mockResolvedValue(
       makeDbUser({ id: 'new', email: 'bob@example.com', role: 'viewer' })
@@ -259,6 +277,7 @@ describe('UserRepository.create', () => {
         role: 'viewer', // default applied
         avatar: undefined,
         tenantId: undefined,
+        forcePasswordChange: undefined, // preserve the temporary-password default
       },
     });
     expect(result.id).toBe('new');
@@ -285,6 +304,7 @@ describe('UserRepository.create', () => {
         role: 'owner',
         avatar: 'pic.png',
         tenantId: 't-9',
+        forcePasswordChange: undefined,
       },
     });
   });

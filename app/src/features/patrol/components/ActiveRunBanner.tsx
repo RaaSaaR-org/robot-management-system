@@ -11,6 +11,7 @@ import { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Square } from 'lucide-react';
 import { Button, Panel } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import type { PatrolRun } from '../types/patrol.types';
 import { PATROL_RUN_MODE_LABELS } from '../types/patrol.types';
 import { runProgressText } from '../utils/patrolFormat';
@@ -44,6 +45,8 @@ const ActiveRunCard = memo(function ActiveRunCard({
   onAbort: (run: PatrolRun) => void;
   now: number;
 }) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const current = run.legs.find((l) => l.status === 'running');
   const legs = run.legs.map((l) => ({
     index: l.index,
@@ -74,7 +77,7 @@ const ActiveRunCard = memo(function ActiveRunCard({
           <span className="text-sm tabular-nums text-ink-primary" title="Elapsed" aria-hidden="true">
             {formatElapsed(run.startedAt, now)}
           </span>
-          <Button variant="secondary" size="sm" leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />} data-testid="patrol-abort" onClick={() => onAbort(run)}>
+          <Button variant="secondary" size="sm" leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />} data-testid="patrol-abort" disabled={!canWrite} onClick={() => onAbort(run)}>
             Abort run
           </Button>
         </div>

@@ -4,6 +4,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
+import { ownerOnly } from '../middleware/auth.middleware.js';
 import {
   zoneService,
   ZoneValidationError,
@@ -149,7 +150,7 @@ zoneRoutes.get('/:id', async (req: Request, res: Response) => {
  * POST / - Create a new zone
  * Body: CreateZoneInput
  */
-zoneRoutes.post('/', async (req: Request, res: Response) => {
+zoneRoutes.post('/', ownerOnly, async (req: Request, res: Response) => {
   try {
     const { name, floor, type, bounds, color, description, metadata } = req.body;
 
@@ -180,7 +181,7 @@ zoneRoutes.post('/', async (req: Request, res: Response) => {
  * PUT /:id - Update a zone
  * Body: UpdateZoneInput
  */
-zoneRoutes.put('/:id', async (req: Request, res: Response) => {
+zoneRoutes.put('/:id', ownerOnly, async (req: Request, res: Response) => {
   try {
     const { name, floor, type, bounds, color, description, metadata } = req.body;
 
@@ -214,7 +215,7 @@ zoneRoutes.put('/:id', async (req: Request, res: Response) => {
 /**
  * DELETE /:id - Delete a zone
  */
-zoneRoutes.delete('/:id', async (req: Request, res: Response) => {
+zoneRoutes.delete('/:id', ownerOnly, async (req: Request, res: Response) => {
   try {
     const deleted = await zoneService.deleteZone(req.params.id);
 
@@ -232,7 +233,7 @@ zoneRoutes.delete('/:id', async (req: Request, res: Response) => {
 /**
  * DELETE /floor/:floor - Delete all zones on a floor
  */
-zoneRoutes.delete('/floor/:floor', async (req: Request, res: Response) => {
+zoneRoutes.delete('/floor/:floor', ownerOnly, async (req: Request, res: Response) => {
   try {
     const count = await zoneService.deleteZonesByFloor(req.params.floor);
     res.json({ success: true, deleted: count });

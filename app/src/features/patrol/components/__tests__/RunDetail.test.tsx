@@ -7,8 +7,10 @@
  * @feature patrol
  */
 
+import { useAuthStore } from '@/features/auth/store/authStore';
+import { MOCK_USER } from '@/mocks/mockData';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { confirm } from '@/shared/components/ui';
 import { renderWithProviders } from '@/test/utils';
 import { RunDetail } from '../RunDetail';
@@ -74,6 +76,7 @@ const finding: PatrolFinding = {
 };
 
 beforeEach(() => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'member' } });
   usePatrolStore.getState().reset();
   vi.clearAllMocks();
   api.getRun.mockResolvedValue({ ...run, findings: [finding] });
@@ -269,4 +272,19 @@ describe('RunDetail', () => {
     expect(api.getBaseline).not.toHaveBeenCalled();
     expect(screen.getByTestId('patrol-run-promote')).toBeDisabled();
   });
+});
+
+it('lets viewers read findings but prevents review actions and baseline promotion', async () => {
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'viewer' } });
+  renderWithProviders(<RunDetail runId="run-1" />, { withAuth: false });
+  await screen.findByTestId('patrol-finding');
+  // The finding itself stays readable; every verdict on it is refused.
+  expect(screen.getByTestId('patrol-finding-ack')).toBeDisabled();
+  // One open of the menu: clicking the kebab again would close it.
+  fireEvent.click(screen.getByRole('button', { name: /more actions for/i }));
+  const menu = screen.getByRole('menu');
+  for (const name of ['This is normal', 'Escalate']) {
+    expect(within(menu).getByRole('menuitem', { name })).toBeDisabled();
+  }
+  expect(screen.getByTestId('patrol-run-promote')).toBeDisabled();
 });

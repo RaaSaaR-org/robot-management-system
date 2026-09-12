@@ -3,8 +3,8 @@
  * @description Tests for the useFeatures hook and useFeaturesStore
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { renderHook, act, waitFor, cleanup } from '@testing-library/react';
 
 vi.mock('@/api', () => ({
   apiClient: {
@@ -117,6 +117,11 @@ describe('useFeaturesStore', () => {
 });
 
 describe('useFeatures hook', () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     useFeaturesStore.setState({
@@ -152,5 +157,44 @@ describe('useFeatures hook', () => {
       await Promise.resolve();
     });
     expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it('paces outage retries across consumers and recovers when the server returns', async () => {
+    vi.useFakeTimers();
+    mockGet.mockRejectedValue(new Error('network down'));
+
+    const first = renderHook(() => useFeatures());
+    const second = renderHook(() => useFeatures());
+    await act(async () => {});
+
+    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(first.result.current).toEqual(DEFAULT_FLAGS);
+    expect(second.result.current).toEqual(DEFAULT_FLAGS);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_999); });
+    expect(mockGet).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(mockGet).toHaveBeenCalledTimes(2);
+    expect(first.result.current).toEqual(DEFAULT_FLAGS);
+
+    mockGet.mockResolvedValue({ data: ENABLED_FLAGS });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(mockGet).toHaveBeenCalledTimes(3);
+    expect(first.result.current).toEqual(ENABLED_FLAGS);
+    expect(second.result.current).toEqual(ENABLED_FLAGS);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(mockGet).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(['network down', ''])('cancels an outage retry on unmount (error: %j)', async (message) => {
+    vi.useFakeTimers();
+    mockGet.mockRejectedValue(new Error(message));
+    const { unmount } = renderHook(() => useFeatures());
+    await act(async () => {});
+    expect(mockGet).toHaveBeenCalledTimes(1);
+
+    unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(mockGet).toHaveBeenCalledTimes(1);
   });
 });

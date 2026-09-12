@@ -54,6 +54,8 @@ vi.mock('@/features/robots/hooks/useRobots', () => ({
 }));
 
 import { FleetPage } from '../FleetPage';
+import { useAuthStore } from '@/features/auth/store/authStore';
+import { MOCK_USER } from '@/mocks/mockData';
 
 function renderAt(url: string) {
   return render(
@@ -66,6 +68,7 @@ function renderAt(url: string) {
 beforeEach(() => {
   zoneEditor.editorMode = 'view';
   zoneEditor.setEditorMode = vi.fn();
+  useAuthStore.setState({ user: { ...MOCK_USER, role: 'owner' } });
 });
 
 describe('FleetPage tabs', () => {
@@ -123,5 +126,36 @@ describe('FleetPage tabs', () => {
   it('keeps the zone form mounted on every tab', () => {
     renderAt('/fleet?tab=sites');
     expect(screen.getByTestId('zone-form')).toHaveAttribute('data-open', 'false');
+  });
+});
+
+describe('the zone actions in the header', () => {
+  it.each(['viewer', 'member'] as const)('are offered to a %s but refused', (role) => {
+    useAuthStore.setState({ user: { ...MOCK_USER, role } });
+    renderAt('/fleet');
+    // Both stay visible and say why: a missing button reads as a broken page,
+    // a disabled one with a reason reads as a permission.
+    for (const name of ['Draw zone', 'New zone']) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('title', 'An owner role or higher is required to manage zones');
+      fireEvent.click(button);
+    }
+    expect(zoneEditor.setEditorMode).not.toHaveBeenCalled();
+    expect(screen.getByTestId('zone-form')).toHaveAttribute('data-open', 'false');
+  });
+
+  it('work for an owner', () => {
+    renderAt('/fleet');
+    fireEvent.click(screen.getByRole('button', { name: 'New zone' }));
+    expect(screen.getByTestId('zone-form')).toHaveAttribute('data-open', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Draw zone' }));
+    expect(zoneEditor.setEditorMode).toHaveBeenCalledWith('draw');
+  });
+
+  it('leaves New scan alone: a twin scan is not a zone write', () => {
+    useAuthStore.setState({ user: { ...MOCK_USER, role: 'viewer' } });
+    renderAt('/fleet?tab=sites');
+    expect(screen.getByRole('button', { name: 'New scan' })).toBeEnabled();
   });
 });

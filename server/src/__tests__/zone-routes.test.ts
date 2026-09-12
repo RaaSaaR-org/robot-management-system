@@ -46,6 +46,8 @@ vi.mock('../middleware/auth.middleware.js', () => ({
     next();
   },
   AuthenticatedRequest: {},
+  // Authorization is covered through createApp in field-operations-role-routing.test.ts.
+  ownerOnly: (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
 import { zoneRoutes } from '../routes/zone.routes.js';

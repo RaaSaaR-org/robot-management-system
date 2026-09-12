@@ -135,6 +135,8 @@ export class AuthService {
       email,
       passwordHash,
       name,
+      // This password was chosen by the user, not issued as a temporary password.
+      forcePasswordChange: false,
     });
 
     // Update last login

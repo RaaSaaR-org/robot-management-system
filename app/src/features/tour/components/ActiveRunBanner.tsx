@@ -11,6 +11,7 @@ import { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Square } from 'lucide-react';
 import { Button, Panel } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { RoutePath, RunStatusTag, formatElapsed } from '@/features/patrol/components/opsUi';
 import type { TourRun } from '../types/tour.types';
 import { currentLeg, currentStopText, runProgressText } from '../utils/tourFormat';
@@ -43,6 +44,8 @@ const ActiveRunCard = memo(function ActiveRunCard({
   onAbort: (run: TourRun) => void;
   now: number;
 }) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const current = currentLeg(run);
   // Shared with the Agent Mode rail's tour chip — see `currentStopText`.
   const stopText = currentStopText(current ? { index: current.index + 1, name: current.name || current.placeId } : null);
@@ -68,7 +71,7 @@ const ActiveRunCard = memo(function ActiveRunCard({
           <span className="text-sm tabular-nums text-ink-primary" title="Elapsed" aria-hidden="true">
             {formatElapsed(run.startedAt, now)}
           </span>
-          <Button variant="secondary" size="sm" leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />} data-testid="tour-abort" onClick={() => onAbort(run)}>
+          <Button variant="secondary" size="sm" leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />} data-testid="tour-abort" disabled={!canWrite} onClick={() => onAbort(run)}>
             End tour
           </Button>
         </div>

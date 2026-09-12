@@ -214,3 +214,22 @@ describe('RouteEditor', () => {
     expect(tokens).not.toContain('self-start');
   });
 });
+
+
+// A viewer reads the route. Delete and Export live in the page header now, so
+// this asserts the editor itself: the values are there, and nothing can change
+// them. RouteEditorPage owns disabling Delete for the same role.
+it('shows existing route values without letting a read-only user change them', async () => {
+  render(<RouteEditor readOnly route={{ id: 'read-route', name: 'Read route', robotId: null, twinId: null, checkpoints: [cp('hall', 'hall')], cronExpression: null, enabled: true, timeWindows: [], homePlaceId: null, createdAt: 'x', updatedAt: 'x' }} robots={[]} onSaved={vi.fn()} />);
+  await act(async () => {});
+  const name = screen.getByTestId('patrol-route-name');
+  expect(name).toHaveValue('Read route');
+  // One disabled fieldset carries the form, so every control inside it is dead.
+  expect(name).toBeDisabled();
+  expect(screen.getByTestId('patrol-checkpoint-add')).toBeDisabled();
+  // Save is not offered at all, and no keyboard submit reaches the store.
+  expect(screen.queryByTestId('patrol-route-save')).toBeNull();
+  fireEvent.submit(name.closest('form')!);
+  await act(async () => {});
+  expect(api.updateRoute).not.toHaveBeenCalled();
+});

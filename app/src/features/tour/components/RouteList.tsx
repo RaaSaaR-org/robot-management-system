@@ -23,6 +23,7 @@ import {
   type DataTableColumn,
   type RowActionItem,
 } from '@/shared/components/ui';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import { ArmedTag, RunStatusTag, formatRelative } from '@/features/patrol/components/opsUi';
 import type { TourRoute, TourRun } from '../types/tour.types';
 import { estimateTourSeconds, formatEstimate, isRunActive } from '../utils/tourFormat';
@@ -60,6 +61,8 @@ export const RouteList = memo(function RouteList({
   onAbort,
   onDelete,
 }: RouteListProps) {
+  const { can } = useAuth();
+  const canWrite = can('tasks:write');
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('');
@@ -145,14 +148,16 @@ export const RouteList = memo(function RouteList({
     },
   ];
 
+  // Writes need a member role or above; opening a tour does not, so Edit stays
+  // and the editor it opens is read-only for a viewer.
   const rowActions = (r: TourRoute): RowActionItem[] => {
     const live = isRunActive(lastRunByRoute[r.id]);
     return [
       live
-        ? { label: 'End tour', icon: <Square />, onSelect: () => onAbort(r) }
-        : { label: 'Start tour', icon: <Play />, disabled: r.stops.length === 0, onSelect: () => onStart(r) },
+        ? { label: 'End tour', icon: <Square />, disabled: !canWrite, onSelect: () => onAbort(r) }
+        : { label: 'Start tour', icon: <Play />, disabled: !canWrite || r.stops.length === 0, onSelect: () => onStart(r) },
       { label: 'Edit', icon: <Pencil />, onSelect: () => navigate(`/tour/routes/${encodeURIComponent(r.id)}`) },
-      { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, onSelect: () => onDelete(r) },
+      { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, disabled: !canWrite, onSelect: () => onDelete(r) },
     ];
   };
 
@@ -200,9 +205,11 @@ export const RouteList = memo(function RouteList({
                 title="No tours yet"
                 description="A tour is the ordered list of places the robot walks a visitor to, with what it says at each one."
                 action={
-                  <LinkButton to="/tour/routes/new" leftIcon={<Plus className="h-4 w-4" />} data-testid="tour-new-route-empty">
-                    New tour
-                  </LinkButton>
+                  canWrite ? (
+                    <LinkButton to="/tour/routes/new" leftIcon={<Plus className="h-4 w-4" />} data-testid="tour-new-route-empty">
+                      New tour
+                    </LinkButton>
+                  ) : undefined
                 }
               />
             )
