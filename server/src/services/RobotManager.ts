@@ -23,14 +23,25 @@ import { alertService } from './AlertService.js';
 // TYPES
 // ============================================================================
 
-/** Robot operational status */
+/**
+ * Robot operational status.
+ *
+ * `protective_stop` (TASK-294) is reported by an agent whose SafetyMonitor holds
+ * a latched stop. It flows through the health poll untouched — in particular
+ * `normalizePresentedStatus` must keep leaving it alone, exactly as it leaves
+ * 'maintenance' alone, or the stop would be hidden behind 'offline'.
+ *
+ * Kept identical to the zod gate `RobotStatusSchema`
+ * (`server/src/database/schemas.ts`) and to the two agent-side declarations.
+ */
 export type RobotStatus =
   | 'online'
   | 'offline'
   | 'busy'
   | 'error'
   | 'charging'
-  | 'maintenance';
+  | 'maintenance'
+  | 'protective_stop';
 
 /** Command execution status */
 export type CommandStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'cancelled';

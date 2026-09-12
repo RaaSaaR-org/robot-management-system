@@ -255,6 +255,36 @@ A Robot Fleet Management System (humanoid robots in German manufacturing/logisti
 | CRA Annex I, Part II(7)   | Secure update delivery         | Signed packages, TLS 1.3 delivery, integrity verification before installation, atomic updates with rollback | Both      | Critical |
 | MR Annex III              | Safety update assessment       | Any update affecting safety requires impact assessment; potential re-certification trigger                  | Both      | Critical |
 
+**Implementation status (2026-09-12, TASK-302): none of section 6.3 is met by
+the current code.** This table states what the regulations require, not what
+NeoDEM does — and for update mechanisms the distance between the two is total,
+so it is recorded here rather than left to be discovered during an audit:
+
+- **Signed packages** (`CRA Annex I, Part II(7)`) — partially real. The server
+  generates an Ed25519 keypair per package and signs the SHA-256 of the bytes it
+  is handed (`server/src/services/UpdateService.ts`, `createUpdatePackage`).
+  But the API accepts no upload in practice: `POST /api/updates` falls back to a
+  fabricated `update-package-<version>` buffer, so what is signed is a constant.
+- **Integrity verification before installation** — not met. The robot's
+  `downloadUpdate` (`robot-agent/src/updates/SecureUpdateClient.ts`) rebuilds
+  that same constant instead of downloading anything, so its checksum and
+  signature checks verify a value neither side ever transmitted.
+- **OTA delivery and automatic updates** (`CRA Art. 13(8)`, `Annex I, Part
+  I(2)(j)`) — not met. `UpdateService.deployToRobot` writes a deployment row and
+  emits an event; it makes no outbound call, and the agent exposes no OTA
+  endpoint to receive one. The 4-hourly `startPeriodicChecks` discards its
+  result.
+- **Atomic updates with rollback** — not met on the install side. `applyUpdate`
+  creates a backup directory and logs the install; nothing is replaced. The
+  anti-rollback version comparison is real and does work.
+- **5-year / 10-year support periods** (`CRA Art. 13(8)`, `MR Art. 10`) — these
+  are process commitments, unaffected by the above, and remain open.
+
+Closing this needs a stored artifact (object storage plus an artifact column on
+`UpdatePackage`), a real download, a delivery channel to the agent with a
+status callback, and a hardware-gated install step. Until then, treat
+`UpdatePackage.status = 'deployed'` as "an operator pressed deploy".
+
 ### 6.4 Network Security
 
 | Regulation Reference      | Requirement Summary         | Technical Implementation                                                                     | Component | Priority |

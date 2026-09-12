@@ -21,6 +21,9 @@ import {
 } from './marketplaceDemoData';
 import { createDemoAgentState, createDemoScene } from './agentModeDemoData';
 import type { AgentModeState } from '@/features/agentmode/types/agentmode.types';
+import type { FleetSafetyStatus, RobotSafetyStatus } from '@/features/safety/types/safety.types';
+import type { UserSettings } from '@/features/settings/types/settings.types';
+import type { Organization } from '@/features/organizations/types/organizations.types';
 import type {
   MarketplaceListing,
   MarketplacePurchase,
@@ -614,11 +617,132 @@ export const handlers = [
   })),
 
   // ========================================================================
-  // Catch-all: other GET /api/* return empty data
+  // Safety — the fleet Stop button is mounted on the dashboard, so these two
+  // are requested on the demo's very first page.
   // ========================================================================
 
-  http.get('/api/*', () => {
-    return HttpResponse.json({ data: [], total: 0, items: [] });
+  http.get('/api/safety/fleet', () => HttpResponse.json(demoFleetSafety())),
+  http.get('/api/safety/events', () => HttpResponse.json({ events: [], count: 0 })),
+  http.get('/api/safety/robots/:id', ({ params }) =>
+    HttpResponse.json(demoRobotSafety(String(params.id)))
+  ),
+
+  // ========================================================================
+  // Account, workspace and tenancy chrome
+  // ========================================================================
+
+  http.get('/api/config/features', () => HttpResponse.json({
+    multiTenancyEnabled: false,
+    natsEnabled: false,
+    rustfsEnabled: false,
+  })),
+  http.get('/api/settings', () => HttpResponse.json(DEMO_SETTINGS)),
+  http.get('/api/auth/mfa/status', () => HttpResponse.json({
+    mfaEnabled: false,
+    totpConfigured: false,
+    hasRecoveryCodes: false,
+  })),
+  http.get('/api/team/service-accounts', () => HttpResponse.json({ accounts: [] })),
+  http.get('/api/team', () => HttpResponse.json({ members: [] })),
+  http.get('/api/tenants/current', () => HttpResponse.json(DEMO_TENANT)),
+  http.get('/api/tenants', () => HttpResponse.json({ tenants: [] })),
+
+  // ========================================================================
+  // Missions — patrol and host mode answer with bare arrays (TASK-212/213)
+  // ========================================================================
+
+  http.get('/api/patrol/routes', () => HttpResponse.json([])),
+  http.get('/api/patrol/runs', () => HttpResponse.json([])),
+  http.get('/api/patrol/places', () => HttpResponse.json([])),
+  http.get('/api/patrol/findings', () => HttpResponse.json([])),
+  http.get('/api/tour/routes', () => HttpResponse.json([])),
+  http.get('/api/tour/places', () => HttpResponse.json([])),
+  http.get('/api/tour/runs', () => HttpResponse.json([])),
+
+  // ========================================================================
+  // Command history, incidents and deployments
+  // ========================================================================
+
+  http.get('/api/command/history', () => HttpResponse.json({
+    entries: [],
+    pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },
+  })),
+  http.get('/api/incidents/dashboard', () => HttpResponse.json({
+    totalIncidents: 0,
+    openIncidents: 0,
+    incidentsBySeverity: {},
+    incidentsByType: {},
+    incidentsByStatus: {},
+    overdueNotifications: 0,
+    pendingNotifications: 0,
+    recentIncidents: [],
+    averageResolutionTimeHours: null,
+  })),
+  http.get('/api/incidents', () => HttpResponse.json({
+    incidents: [], page: 1, limit: 20, total: 0, totalPages: 0,
+  })),
+  http.get('/api/deployments', () => HttpResponse.json({
+    deployments: [],
+    pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },
+  })),
+
+  // ========================================================================
+  // The rest of what the demo navigation actually requests: the fleet map's
+  // per-floor zones, the training queue, and the voice + memory channels the
+  // Agent Mode console opens. Each one was found by the e2e contract spec.
+  // ========================================================================
+
+  http.get('/api/zones/floor/:floor', ({ params }) => HttpResponse.json({
+    zones: DEMO_ZONES.filter((z) => String(z.floor) === String(params.floor)),
+  })),
+  http.get('/api/training/jobs', () => HttpResponse.json({
+    jobs: [],
+    pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },
+  })),
+
+  // No voice sidecar answers in a static demo build, and `available: false` is
+  // what the UI degrades on — the honest answer, not an empty envelope.
+  http.get('/api/robots/:id/voice/health', () => HttpResponse.json({
+    available: false, service: null, adapter: null,
+  })),
+  http.get('/api/robots/:id/voice/status', () => HttpResponse.json({
+    state: 'idle', paused: false,
+    wake: { enabled: false, windowOpenS: null },
+    contextId: null, lastTranscript: null, lastReply: null, metrics: {},
+  })),
+  http.get('/api/robots/:id/voice/volume', () => HttpResponse.json({ volume: 50 })),
+  // EventSource, not axios: an open stream that never speaks, which is exactly
+  // what a demo with no microphone has to say.
+  http.get('/api/robots/:id/voice/events', () =>
+    new HttpResponse(': demo voice stream\n\n', {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+    })
+  ),
+  // `null` is the documented "this deployment cannot answer" digest — unknown,
+  // which is true here, rather than a fabricated set of counts.
+  http.get('/api/robots/:id/agent-mode/memory', () => HttpResponse.json(null)),
+
+  // ========================================================================
+  // Catch-all: a GET /api/* nobody wrote a handler for is a 404, loudly.
+  //
+  // It used to answer `{ data: [], total: 0, items: [] }` — an envelope no
+  // store reads, so a store doing `state.rows = response.rows` stored
+  // `undefined` and the page crashed somewhere else entirely. A 404 puts the
+  // store on the `catch` path it already has, and the header lets the e2e
+  // contract spec name the endpoint that is missing.
+  // ========================================================================
+
+  http.get('/api/*', ({ request }) => {
+    const { pathname } = new URL(request.url);
+    const message = `No demo handler for GET ${pathname}`;
+    if (import.meta.env?.DEV) {
+      console.error(`[msw] ${message} — add one in src/mocks/handlers.ts`);
+    }
+    return HttpResponse.json(
+      { error: message },
+      { status: 404, headers: { 'x-msw-unhandled': '1' } }
+    );
   }),
 ];
 
@@ -643,6 +767,72 @@ function demoAgentState(robotId: string): AgentModeState {
     scene: demoAgentScene(robotId),
   };
 }
+
+// ============================================================================
+// Safety demo state — every demo robot armed, nothing stopped
+// ============================================================================
+
+function demoRobotSafety(robotId: string): RobotSafetyStatus {
+  const robot = DEMO_ROBOTS.find((r) => r.id === robotId);
+  return {
+    robotId,
+    robotName: robot?.name ?? robotId,
+    status: 'armed',
+    stopCategory: 2,
+    requiresManualReset: false,
+    operatingMode: 'automatic',
+    serverConnected: true,
+    lastServerHeartbeat: new Date().toISOString(),
+    currentSpeed: 0,
+    activeSpeedLimit: 1500,
+    activeForceLimit: 150,
+    systemHealthy: true,
+    warnings: [],
+    lastCheckTimestamp: new Date().toISOString(),
+  };
+}
+
+function demoFleetSafety(): FleetSafetyStatus {
+  return {
+    timestamp: new Date().toISOString(),
+    robots: DEMO_ROBOTS.map((r) => demoRobotSafety(r.id)),
+    anyTriggered: false,
+    triggeredCount: 0,
+  };
+}
+
+// ============================================================================
+// Account / workspace demo records
+// ============================================================================
+
+const DEMO_SETTINGS: UserSettings = {
+  id: 'demo-settings',
+  userId: MOCK_USER.id,
+  theme: 'dark',
+  language: 'en',
+  compactMode: false,
+  emailNotifications: true,
+  alertsEnabled: true,
+  maintenanceReminders: true,
+  weeklyDigest: false,
+  defaultDashboardView: 'fleet',
+  refreshIntervalSec: 30,
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-01T00:00:00Z',
+};
+
+const DEMO_TENANT: Organization = {
+  id: 'demo-tenant',
+  slug: 'demo',
+  name: 'NeoDEM Demo',
+  logoUrl: null,
+  plan: 'demo',
+  settings: '{}',
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-01T00:00:00Z',
+  isDefault: true,
+  counts: { users: 1, robots: DEMO_ROBOTS.length, datasets: 1, trainingJobs: 0 },
+};
 
 // ============================================================================
 // Marketplace demo state (mutable so purchases/reviews persist per session)

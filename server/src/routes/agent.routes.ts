@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from 'express';
 import { conversationManager } from '../services/ConversationManager.js';
 import { agentCardResolver } from '../services/A2AClient.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const agentRoutes = Router();
 
@@ -29,8 +30,7 @@ agentRoutes.post('/register', async (req: Request, res: Response) => {
     res.json({ agentCard });
   } catch (error) {
     console.error('Error registering agent:', error);
-    const message = error instanceof Error ? error.message : 'Failed to register agent';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to register agent', 500);
   }
 });
 

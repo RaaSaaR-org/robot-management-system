@@ -163,7 +163,8 @@ describe('Simulation Routes', () => {
         .send({ modelId: 'model-abc', environment: 'kitchen', rolloutCount: 5, backend: 'bogus' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Unknown backend');
+      expect(response.body.error).toBe('Failed to submit simulation job');
+      expect(response.body.error).not.toContain('Unknown backend');
     });
   });
 
@@ -206,7 +207,8 @@ describe('Simulation Routes', () => {
       const response = await request(app).get('/api/simulation/jobs');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('DB error');
+      expect(response.body.error).toBe('Failed to list simulation jobs');
+      expect(response.body.error).not.toContain('DB error');
     });
   });
 
@@ -242,7 +244,8 @@ describe('Simulation Routes', () => {
       const response = await request(app).get('/api/simulation/jobs/sim-001');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to get simulation job');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -269,7 +272,8 @@ describe('Simulation Routes', () => {
       const response = await request(app).delete('/api/simulation/jobs/sim-001');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Cannot cancel completed job');
+      expect(response.body.error).toBe('Failed to cancel simulation job');
+      expect(response.body.error).not.toContain('Cannot cancel completed job');
     });
   });
 
@@ -296,7 +300,8 @@ describe('Simulation Routes', () => {
       const response = await request(app).get('/api/simulation/environments');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to list environments');
+      expect(response.body.error).not.toContain('fail');
     });
   });
 
@@ -323,7 +328,8 @@ describe('Simulation Routes', () => {
       const response = await request(app).get('/api/simulation/comparison/model-abc');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get sim-to-real comparison');
+      expect(response.body.error).not.toContain('fail');
     });
   });
 
@@ -460,7 +466,8 @@ describe('Simulation Routes', () => {
         .send({ twinId: 'twin-1' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to generate scene');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 

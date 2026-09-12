@@ -20,6 +20,7 @@ import {
   StatusTag,
   ToggleChip,
   confirm,
+  errorMessage,
   toast,
 } from '@/shared/components/ui';
 import type { SegmentedOption } from '@/shared/components/ui';
@@ -56,30 +57,6 @@ const SPEED_OPTIONS: Array<SegmentedOption<SpeedValue>> = [
   { value: '1', label: '1×' },
   { value: '2', label: '2×' },
 ];
-
-// ============================================================================
-// ERRORS
-// ============================================================================
-
-/**
- * Pull a human-readable message off whatever the API layer rejected with.
- *
- * `apiClient` rejects with a plain `ApiError` object ({ code, message, details,
- * statusCode }) — `ApiError` is an interface, not a class, so `instanceof Error`
- * is always false for it and would discard the server's message. The server's
- * clip validation names the exact defect ("frames[17].dofPos must be 29 finite
- * numbers …"), which is the whole point of showing it. Mirrors the shape checks
- * used by `getErrorMessage` in ../../store/robotsStore.ts.
- */
-function apiErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === 'string' && error) return error;
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = (error as { message: unknown }).message;
-    if (typeof message === 'string' && message) return message;
-  }
-  return fallback;
-}
 
 // ============================================================================
 // IMPORT VALIDATION
@@ -217,7 +194,7 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
     try {
       setClips(await listClips());
     } catch (error) {
-      setListError(apiErrorMessage(error, 'Could not load motion clips.'));
+      setListError(errorMessage(error, 'Could not load motion clips.'));
     } finally {
       setIsLoading(false);
     }
@@ -259,7 +236,7 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
       setSelected(null);
       // Beside the list, not instead of it — one bad clip must not cost the user
       // the library they were browsing.
-      setActionError(apiErrorMessage(error, `Could not load "${summary.name}".`));
+      setActionError(errorMessage(error, `Could not load "${summary.name}".`));
     } finally {
       if (seq === loadSeqRef.current) setLoadingClipId(null);
     }
@@ -277,7 +254,7 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
       try {
         await deleteClip(summary.id);
       } catch (error) {
-        const message = apiErrorMessage(error, `Could not delete "${summary.name}".`);
+        const message = errorMessage(error, `Could not delete "${summary.name}".`);
         setActionError(message);
         toast.error("Couldn't delete motion clip", { description: message });
         return;
@@ -299,7 +276,7 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
       const blob = new Blob([JSON.stringify(clip, null, 2)], { type: 'application/json' });
       downloadBlob(blob, `${summary.name.replace(/[^\w.-]+/g, '_')}.json`);
     } catch (error) {
-      toast.error("Couldn't download motion clip", { description: apiErrorMessage(error, summary.name) });
+      toast.error("Couldn't download motion clip", { description: errorMessage(error, summary.name) });
     }
   }, []);
 
@@ -325,7 +302,7 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
         await refresh();
         await handleSelect(created);
       } catch (error) {
-        setImportError(apiErrorMessage(error, 'The server rejected this clip.'));
+        setImportError(errorMessage(error, 'The server rejected this clip.'));
       } finally {
         setIsImporting(false);
       }

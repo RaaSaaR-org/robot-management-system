@@ -18,6 +18,13 @@ export const RobotLocationSchema = z.object({
   heading: z.number().optional(),
 });
 
+/**
+ * The runtime gate for a robot status. Must stay in step with the `RobotStatus`
+ * union declared in `server/src/services/RobotManager.ts`,
+ * `robot-agent/src/robot/types.ts` and `robot-agent/cli/src/api/types.ts`:
+ * a value the union accepts but this enum rejects is a status the server
+ * receives and then refuses (TASK-294, which added 'protective_stop').
+ */
 export const RobotStatusSchema = z.enum([
   'online',
   'offline',
@@ -25,6 +32,7 @@ export const RobotStatusSchema = z.enum([
   'error',
   'charging',
   'maintenance',
+  'protective_stop',
 ]);
 
 // ============================================================================

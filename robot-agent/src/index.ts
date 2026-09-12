@@ -525,7 +525,9 @@ async function main() {
     console.log('  Press Ctrl+C to stop the server');
     console.log('='.repeat(60));
 
-    // Start secure OTA update checks (CRA Art. 13)
+    // OTA update checks — @status unshipped: this polls and discards; no update
+    // can be delivered (TASK-302). See SecureUpdateClient.ts for the CRA Art. 13
+    // claim and the caveat attached to it.
     secureUpdateClient.startPeriodicChecks();
   });
 

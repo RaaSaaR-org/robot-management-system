@@ -8,6 +8,7 @@
  * @feature digitaltwin
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { createStore } from '@/store';
 import { twinApi } from '../api/twinApi';
 import type { DigitalTwinDTO, Site } from '../types/twin.types';
@@ -46,7 +47,7 @@ export const useTwinStore = createStore<TwinStore>(
       } catch (e) {
         set((state) => {
           state.isLoading = false;
-          state.error = e instanceof Error ? e.message : 'Failed to load twins';
+          state.error = getErrorMessage(e, 'Failed to load twins');
         });
       }
     },

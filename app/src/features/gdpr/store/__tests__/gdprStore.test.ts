@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { ApiRequestError } from '@/api/client';
 import {
   useGDPRStore,
   selectRequests,
@@ -80,10 +81,22 @@ describe('gdprStore', () => {
     expect(useGDPRStore.getState().isLoading).toBe(false);
   });
 
-  it('fetchMyRequests uses default message for non-Error throws', async () => {
+  it('fetchMyRequests surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
     api.getMyRequests.mockRejectedValue('boom');
     await useGDPRStore.getState().fetchMyRequests();
-    expect(useGDPRStore.getState().error).toBe('Failed to fetch requests');
+    expect(useGDPRStore.getState().error).toBe('boom');
+  });
+
+  it('fetchMyRequests surfaces the message of an ApiRequestError (the shape production rejects with)', async () => {
+    api.getMyRequests.mockRejectedValue(
+      new ApiRequestError({
+        code: 'UNKNOWN_ERROR',
+        message: 'Request service unavailable',
+        statusCode: 503,
+      })
+    );
+    await useGDPRStore.getState().fetchMyRequests();
+    expect(useGDPRStore.getState().error).toBe('Request service unavailable');
   });
 
   // --- fetchRequest ---

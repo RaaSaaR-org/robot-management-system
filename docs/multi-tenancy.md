@@ -111,7 +111,24 @@ one shot is a large blast-radius migration. Instead, multi-tenancy rolls out in 
 - **Wave 3d** (shipped): `Zone`, `Conversation`.
 - **Wave 3e** (shipped): `ApiToken`.
 - **Wave 3f** (shipped, TASK-179): `EpisodeReward`, `InterventionEpisode`.
+- **TASK-212** (shipped): `PatrolRoute`, `PatrolRun`, `PatrolFinding`.
+- **TASK-213** (shipped): `TourRoute`, `TourRun`.
+- **TASK-217** (shipped): `DatasetEpisodeFlag`.
+- **TASK-165** (shipped): `ApiToken`.
+- **TASK-285** (shipped): `DigitalTwin`, `ScanSession`, `SimScene`.
+- **TASK-286** (shipped): `SensorScan`, `MotionClip`, `VlaSession` — the first wave that had
+  to *add* the `tenantId` column rather than allowlist an existing one.
 - **Not scoped** (by design): `Fleet` (no DB model), `Message` (implicit via `Conversation` FK).
+
+The list above is prose and rots; the ratchet is a test.
+`server/src/database/__tests__/tenantAllowlist.test.ts` derives the expected set from
+Prisma's DMMF (`Prisma.dmmf.datamodel.models`) and fails whenever a model that carries a
+`tenantId` column is missing from the exported `TENANT_SCOPED_MODELS`, unless it is listed
+in that file's `EXCEPTIONS` set. Note what it cannot see: a model with **no** `tenantId`
+column at all records no ownership, so it appears in neither set and the ratchet is silent
+about it. Closing one of those is a migration, not an allowlist edit — TASK-286 did exactly
+that for `SensorScan`, `MotionClip` and `VlaSession`, which is why the ratchet had a
+hand-written case naming them until the column existed.
 
 The allowlist is the single source of truth for "which models are tenant-scoped". Adding
 a model to it without also adding the FK column is a runtime error — that's intentional,
@@ -417,14 +434,28 @@ pipeline for v1.
 
 ## 10. Current limitations
 
-- **19 models are tenant-scoped** (Waves 1 + 3a–3e): `User`, `Robot`, `Dataset`,
-  `TrainingJob`, `Alert`, `Incident`, `RobotTask`, `RobotCommand`,
-  `ProcessDefinition`, `ProcessInstance`, `ApprovalRequest`, `Event`,
+- **33 models are tenant-scoped** — every model that carries a `tenantId` column:
+  `User`, `Robot`, `Dataset`, `TrainingJob`, `Alert`, `Incident`, `RobotTask`,
+  `RobotCommand`, `ProcessDefinition`, `ProcessInstance`, `ApprovalRequest`, `Event`,
   `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`, `Zone`,
-  `Conversation`, `ApiToken`.
-  Models not in this list (e.g. `ComplianceLog`) still show global counts.
+  `Conversation`, `ApiToken`, `EpisodeReward`, `InterventionEpisode`, `PatrolRoute`,
+  `PatrolRun`, `PatrolFinding`, `DatasetEpisodeFlag`, `TourRoute`, `TourRun`,
+  `DigitalTwin`, `ScanSession`, `SimScene`, `SensorScan`, `MotionClip`, `VlaSession`.
+  Read the live list off `TENANT_SCOPED_MODELS` in `server/src/database/client.ts` —
+  `tenantAllowlist.test.ts` keeps the two in step.
+  Models with no `tenantId` column (e.g. `ComplianceLog`) still show global counts.
+  `SensorScan` is backfilled in pages rather than one `updateMany` — it holds one row per
+  LiDAR frame, so an unbounded stamp would lock the table during startup
+  (`backfillPaged()` in `server/src/database/seedTenant.ts`).
   Note: `ApiToken` auth lookup (`authenticateServiceToken`) runs before tenant
   context is set, so the extension passes through — this is by design.
+- **Built-in sim scenes belong to the DEFAULT organization.** `SimulationService` seeds the
+  built-in `SimScene` rows at boot, outside any request scope, and stamps them with
+  `DEFAULT_TENANT_ID` when multi-tenancy is on (null when off). Other organizations
+  therefore do not see the built-in scene catalogue in the simulation picker — only their
+  own twin-derived scenes. Giving every tenant its own copy of the built-ins is future
+  work; making the read null-tolerant is not an option, since that would expose every
+  unstamped row of every scoped model.
 - **No logo upload.** Logos are external URLs only (v1). A future version could add
   upload to RustFS.
 - **Single-tenant user model.** A given `User` row belongs to exactly one tenant. No

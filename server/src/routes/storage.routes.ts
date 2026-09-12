@@ -12,6 +12,7 @@ import {
   SIZE_LIMITS,
   type BucketName,
 } from '../storage/index.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const storageRoutes = Router();
 
@@ -78,8 +79,7 @@ storageRoutes.post('/presign', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[StorageRoutes] Error generating presigned URL:', error);
-    const message = error instanceof Error ? error.message : 'Failed to generate presigned URL';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to generate presigned URL', 400);
   }
 });
 

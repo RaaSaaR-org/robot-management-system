@@ -17,6 +17,7 @@ import type {
   ContributionStatus,
   ContributionLicenseType,
 } from '../types/contribution.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const contributionsRoutes = Router();
 
@@ -114,9 +115,7 @@ contributionsRoutes.post('/:id/upload', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[ContributionsRoutes] Error uploading data:', error);
-    const message =
-      error instanceof Error ? error.message : 'Failed to upload data';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to upload data', 400);
   }
 });
 
@@ -136,9 +135,7 @@ contributionsRoutes.post('/:id/submit', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[ContributionsRoutes] Error submitting for review:', error);
-    const message =
-      error instanceof Error ? error.message : 'Failed to submit for review';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to submit for review', 400);
   }
 });
 
@@ -212,9 +209,7 @@ contributionsRoutes.post('/:id/review', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[ContributionsRoutes] Error reviewing contribution:', error);
-    const message =
-      error instanceof Error ? error.message : 'Failed to review contribution';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to review contribution', 400);
   }
 });
 
@@ -239,9 +234,7 @@ contributionsRoutes.post('/:id/revoke', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[ContributionsRoutes] Error revoking contribution:', error);
-    const message =
-      error instanceof Error ? error.message : 'Failed to revoke contribution';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to revoke contribution', 400);
   }
 });
 
@@ -314,9 +307,7 @@ contributionsRoutes.post('/credits/redeem', async (req: Request, res: Response) 
     });
   } catch (error) {
     console.error('[ContributionsRoutes] Error redeeming credits:', error);
-    const message =
-      error instanceof Error ? error.message : 'Failed to redeem credits';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to redeem credits', 400);
   }
 });
 
@@ -553,8 +544,7 @@ contributionsRoutes.put(
       });
     } catch (error) {
       console.error('[ContributionsRoutes] Error approving contribution (db):', error);
-      const message = error instanceof Error ? error.message : 'Failed to approve contribution';
-      res.status(400).json({ error: message });
+      sendFailure(res, error, 'Failed to approve contribution', 400);
     }
   }
 );

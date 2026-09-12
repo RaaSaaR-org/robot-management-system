@@ -7,7 +7,8 @@
 import { useEffect, useState } from 'react';
 import { FormField, FormModal, Textarea } from '@/shared/components/ui';
 import type { Deployment } from '../types';
-import { deploymentName, errorMessage } from './deploymentHelpers';
+import { deploymentName } from './deploymentHelpers';
+import { errorMessage } from '@/shared/components/ui';
 
 export interface RollbackFormModalProps {
   deployment: Deployment | null;

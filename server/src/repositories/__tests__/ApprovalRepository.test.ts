@@ -8,7 +8,7 @@
  * @feature approvals
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import type {
   ApprovalRequest as PrismaApprovalRequest,
   ApprovalChain as PrismaApprovalChain,
@@ -60,9 +60,38 @@ const mockPrisma = vi.hoisted(() => ({
   escalationRule: {
     findMany: vi.fn(),
   },
+  // TASK-287: request numbers come from the NumberSequence counter, claimed
+  // inside an interactive transaction.
+  numberSequence: {
+    findUnique: vi.fn(),
+    upsert: vi.fn(),
+  },
+  $transaction: vi.fn(),
 }));
 
 vi.mock('../../database/index.js', () => ({ prisma: mockPrisma }));
+
+/**
+ * Arm the TASK-287 allocator: `$transaction` hands the callback this same mock,
+ * `existing` is the counter row already stored (null means none, the only path
+ * that scans for a seed) and `issued` is what the upsert returns.
+ */
+function armAllocator(options: {
+  existing: number | null;
+  issued: number;
+  seedRows?: string[];
+}): void {
+  (mockPrisma.$transaction as Mock).mockImplementation(
+    async (fn: (tx: unknown) => unknown) => fn(mockPrisma)
+  );
+  mockPrisma.numberSequence.findUnique.mockResolvedValue(
+    options.existing === null ? null : { value: options.existing }
+  );
+  mockPrisma.approvalRequest.findMany.mockResolvedValue(
+    (options.seedRows ?? []).map((requestNumber) => ({ requestNumber }))
+  );
+  mockPrisma.numberSequence.upsert.mockResolvedValue({ value: options.issued });
+}
 
 import {
   ApprovalRequestRepository,
@@ -72,6 +101,11 @@ import {
   EscalationRuleRepository,
   approvalRequestRepository,
 } from '../ApprovalRepository.js';
+// Imported, never retyped: these assertions are the reason the old literal
+// `['pending', 'in_progress']` survived a bug that dropped escalated requests
+// out of every "open" query (TASK-290). Comparing against the constant means
+// they track the definition instead of pinning a copy of it.
+import { OPEN_APPROVAL_STATUSES } from '../../types/approval.types.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures — db-row shapes the inline mappers accept (Date columns, JSON
@@ -304,10 +338,12 @@ describe('ApprovalRequestRepository', () => {
   });
 
   describe('findByRequestNumber', () => {
+    // findFirst, not findUnique: TASK-287 made the number unique per tenant, so
+    // it is no longer a unique lookup key on its own.
     it('queries by requestNumber with relations', async () => {
-      mockPrisma.approvalRequest.findUnique.mockResolvedValue(makeRequestRow());
+      mockPrisma.approvalRequest.findFirst.mockResolvedValue(makeRequestRow());
       const result = await repo.findByRequestNumber('APR-2026-00001');
-      expect(mockPrisma.approvalRequest.findUnique).toHaveBeenCalledWith({
+      expect(mockPrisma.approvalRequest.findFirst).toHaveBeenCalledWith({
         where: { requestNumber: 'APR-2026-00001' },
         include: includeRelations,
       });
@@ -315,7 +351,7 @@ describe('ApprovalRequestRepository', () => {
     });
 
     it('returns null when not found', async () => {
-      mockPrisma.approvalRequest.findUnique.mockResolvedValue(null);
+      mockPrisma.approvalRequest.findFirst.mockResolvedValue(null);
       expect(await repo.findByRequestNumber('nope')).toBeNull();
     });
   });
@@ -344,7 +380,7 @@ describe('ApprovalRequestRepository', () => {
       await repo.findPendingForUser('user-42');
       expect(mockPrisma.approvalRequest.findMany).toHaveBeenCalledWith({
         where: {
-          status: { in: ['pending', 'in_progress'] },
+          status: { in: OPEN_APPROVAL_STATUSES },
           steps: { some: { assignedTo: 'user-42', status: 'awaiting' } },
         },
         include: includeRelations,
@@ -359,7 +395,7 @@ describe('ApprovalRequestRepository', () => {
       await repo.findPendingByRole('manager');
       expect(mockPrisma.approvalRequest.findMany).toHaveBeenCalledWith({
         where: {
-          status: { in: ['pending', 'in_progress'] },
+          status: { in: OPEN_APPROVAL_STATUSES },
           steps: {
             some: { approverRole: 'manager', status: 'awaiting', assignedTo: null },
           },
@@ -379,7 +415,7 @@ describe('ApprovalRequestRepository', () => {
         where: { status: unknown; slaDeadline: { lt: Date } };
         orderBy: unknown;
       };
-      expect(call.where.status).toEqual({ in: ['pending', 'in_progress'] });
+      expect(call.where.status).toEqual({ in: OPEN_APPROVAL_STATUSES });
       expect(call.where.slaDeadline.lt).toBeInstanceOf(Date);
       expect(call.where.slaDeadline.lt.getTime()).toBeGreaterThanOrEqual(before);
       expect(call.orderBy).toEqual({ slaDeadline: 'asc' });
@@ -474,15 +510,15 @@ describe('ApprovalRequestRepository', () => {
       const call = mockPrisma.approvalRequest.findMany.mock.calls[0][0] as {
         where: { status: unknown; slaDeadline: { lt: Date } };
       };
-      expect(call.where.status).toEqual({ in: ['pending', 'in_progress'] });
+      expect(call.where.status).toEqual({ in: OPEN_APPROVAL_STATUSES });
       expect(call.where.slaDeadline.lt).toBeInstanceOf(Date);
     });
   });
 
   describe('create', () => {
     it('generates request number, computes SLA, builds single_approval data (no chain) and maps result', async () => {
-      // generateRequestNumber -> findFirst
-      mockPrisma.approvalRequest.findFirst.mockResolvedValue(null);
+      // generateRequestNumber -> NumberSequence counter, seeded on first use
+      armAllocator({ existing: null, issued: 1, seedRows: [] });
       const created = makeRequestRow({
         requestNumber: 'APR-' + new Date().getFullYear() + '-00001',
         steps: [makeStepRow()],
@@ -498,10 +534,21 @@ describe('ApprovalRequestRepository', () => {
         requestReason: 'periodic review',
       });
 
-      expect(mockPrisma.approvalRequest.findFirst).toHaveBeenCalledWith({
-        where: { requestNumber: { startsWith: `APR-${new Date().getFullYear()}-` } },
-        orderBy: { requestNumber: 'desc' },
-        select: { requestNumber: true },
+      expect(mockPrisma.numberSequence.upsert).toHaveBeenCalledWith({
+        where: {
+          scope_tenantKey_year: {
+            scope: 'approval',
+            tenantKey: 'default',
+            year: new Date().getFullYear(),
+          },
+        },
+        update: { value: { increment: 1 } },
+        create: {
+          scope: 'approval',
+          tenantKey: 'default',
+          year: new Date().getFullYear(),
+          value: 1,
+        },
       });
 
       const data = mockPrisma.approvalRequest.create.mock.calls[0][0]
@@ -534,9 +581,7 @@ describe('ApprovalRequestRepository', () => {
     });
 
     it('increments request number from the last one and creates a chain for chain_approval', async () => {
-      mockPrisma.approvalRequest.findFirst.mockResolvedValue({
-        requestNumber: `APR-${new Date().getFullYear()}-00041`,
-      });
+      armAllocator({ existing: 41, issued: 42 });
       mockPrisma.approvalRequest.create.mockResolvedValue(makeRequestRow());
 
       await repo.create({
@@ -698,7 +743,7 @@ describe('ApprovalRequestRepository', () => {
       const arg = mockPrisma.approvalRequest.count.mock.calls[0][0] as {
         where: { status: unknown; slaDeadline: { lt: Date } };
       };
-      expect(arg.where.status).toEqual({ in: ['pending', 'in_progress'] });
+      expect(arg.where.status).toEqual({ in: OPEN_APPROVAL_STATUSES });
       expect(arg.where.slaDeadline.lt).toBeInstanceOf(Date);
       expect(result).toBe(9);
     });

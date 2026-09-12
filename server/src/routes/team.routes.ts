@@ -18,7 +18,7 @@ import {
   TeamMemberNotFoundError,
   type AssignableRole,
 } from '../services/TeamService.js';
-import { prismaErrorToAppError } from '../utils/errors.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const teamRoutes = Router();
 
@@ -33,20 +33,11 @@ function resolveActorId(req: AuthenticatedRequest): string {
   return req.user?.id ?? 'unknown';
 }
 
-/**
- * Last resort in a catch block. Prisma stringifies a failure as the query it
- * tried to run plus the file and line that ran it, so it is mapped first —
- * the owner adding a teammate must never read a database dump.
- */
-function sendFailure(res: Response, error: unknown, fallbackStatus: number): void {
-  const prismaError = prismaErrorToAppError(error);
-  if (prismaError) {
-    res.status(prismaError.statusCode).json({ error: prismaError.message });
-    return;
-  }
-  const message = error instanceof Error ? error.message : 'Unknown error';
-  res.status(fallbackStatus).json({ error: message });
-}
+// The last resort in every catch below is the shared `sendFailure`
+// (`utils/routeErrors.ts`): Prisma stringifies a failure as the query it tried
+// to run plus the file and line that ran it, so it is mapped first — the owner
+// adding a teammate must never read a database dump — and anything unmapped is
+// logged rather than echoed.
 
 // ============================================================================
 // GET /api/team — list members of the caller's tenant
@@ -66,7 +57,7 @@ teamRoutes.get('/', async (req: AuthenticatedRequest, res: Response) => {
     // Reads keep the plain 500 they always had. The Prisma mapping is for the
     // write paths: a "record not found" answered by a *collection* endpoint
     // would put the UI in an empty not-found state over a server fault.
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    sendFailure(res, error, 'Failed to list team members', 500);
   }
 });
 
@@ -113,7 +104,7 @@ teamRoutes.post('/', async (req: AuthenticatedRequest, res: Response) => {
     if (error instanceof InvalidRoleError) {
       return res.status(400).json({ error: error.message });
     }
-    sendFailure(res, error, 400);
+    sendFailure(res, error, 'Failed to add the teammate', 400);
   }
 });
 
@@ -174,7 +165,7 @@ teamRoutes.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
     if (error instanceof TeamMemberNotFoundError) {
       return res.status(404).json({ error: error.message });
     }
-    sendFailure(res, error, 400);
+    sendFailure(res, error, 'Failed to update the teammate', 400);
   }
 });
 
@@ -201,6 +192,6 @@ teamRoutes.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
     if (error instanceof TeamMemberNotFoundError) {
       return res.status(404).json({ error: error.message });
     }
-    sendFailure(res, error, 400);
+    sendFailure(res, error, 'Failed to deactivate the teammate', 400);
   }
 });

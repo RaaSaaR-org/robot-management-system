@@ -151,7 +151,8 @@ describe('Reward-Model Evaluation Routes (TASK-179)', () => {
         .send({ datasetId: 'ds-1', rewardType: 'robometer' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toContain('Dataset not ready');
+      expect(response.body.error).toBe('Failed to start reward-model evaluation');
+      expect(response.body.error).not.toContain('Dataset not ready');
     });
   });
 

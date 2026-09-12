@@ -5,6 +5,7 @@
  */
 
 import { prisma } from '../database/index.js';
+import { allocateFormattedNumber } from './NumberSequenceRepository.js';
 import type {
   Incident as PrismaIncident,
   IncidentNotification as PrismaNotification,
@@ -116,27 +117,15 @@ function dbTemplateToDomain(dbTemplate: PrismaTemplate): NotificationTemplate {
 
 export class IncidentRepository {
   /**
-   * Generate next incident number in format INC-YYYY-NNN
+   * Generate next incident number in format INC-YYYY-NNN.
+   *
+   * Draws from the atomic per-tenant counter rather than scanning for the
+   * current maximum (TASK-287). The rendered format is unchanged below the
+   * padding width; past it the number widens — `INC-2026-1000` — instead of
+   * colliding with itself, which is what the old string `orderBy` did.
    */
   async generateIncidentNumber(): Promise<string> {
-    const year = new Date().getFullYear();
-    const prefix = `INC-${year}-`;
-
-    // Find the latest incident number for this year
-    const latestIncident = await prisma.incident.findFirst({
-      where: {
-        incidentNumber: { startsWith: prefix },
-      },
-      orderBy: { incidentNumber: 'desc' },
-    });
-
-    let nextNum = 1;
-    if (latestIncident) {
-      const currentNum = parseInt(latestIncident.incidentNumber.replace(prefix, ''), 10);
-      nextNum = currentNum + 1;
-    }
-
-    return `${prefix}${nextNum.toString().padStart(3, '0')}`;
+    return allocateFormattedNumber('incident', 3);
   }
 
   /**
@@ -154,7 +143,10 @@ export class IncidentRepository {
    * Find an incident by incident number
    */
   async findByNumber(incidentNumber: string): Promise<Incident | null> {
-    const incident = await prisma.incident.findUnique({
+    // findFirst, not findUnique: the number is only unique per tenant now
+    // (TASK-287), so Prisma no longer offers it as a unique lookup — and
+    // findFirst is what the tenant-isolation extension can scope anyway.
+    const incident = await prisma.incident.findFirst({
       where: { incidentNumber },
       include: { notifications: true },
     });

@@ -100,7 +100,8 @@ describe('Uncertainty Routes', () => {
         .send({ episodes: [] });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('Failed to rank episodes: compute failure');
+      expect(response.body.error).toBe('Failed to rank episodes');
+      expect(response.body.error).not.toContain('compute failure');
     });
   });
 
@@ -142,7 +143,8 @@ describe('Uncertainty Routes', () => {
         .send({ predictions: [[0.5, 0.5]] });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('Failed to compute JSD: jsd boom');
+      expect(response.body.error).toBe('Failed to compute JSD');
+      expect(response.body.error).not.toContain('jsd boom');
     });
   });
 
@@ -185,7 +187,8 @@ describe('Uncertainty Routes', () => {
         .send({ predictions: [[0.5, 0.5]] });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('Failed to compute MC Dropout: mc boom');
+      expect(response.body.error).toBe('Failed to compute MC Dropout');
+      expect(response.body.error).not.toContain('mc boom');
     });
   });
 });

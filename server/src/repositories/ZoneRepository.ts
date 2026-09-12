@@ -107,11 +107,19 @@ export class ZoneRepository {
   }
 
   /**
-   * Find a zone by name and floor (unique constraint)
+   * Find a zone by name and floor — the duplicate pre-check behind the
+   * `@@unique([tenantId, name, floor])` constraint (TASK-288).
+   *
+   * Deliberately a `findFirst` rather than a compound-unique `findUnique`: the
+   * tenant-isolation extension injects `where.tenantId` into `findFirst` but
+   * can only post-filter a unique lookup, which silently turned another
+   * tenant's zone into `null` and let a colliding insert through to a raw
+   * P2002. With the constraint now tenant-qualified, `(name, floor)` is no
+   * longer unique on its own anyway.
    */
   async findByNameAndFloor(name: string, floor: string): Promise<Zone | null> {
-    const zone = await prisma.zone.findUnique({
-      where: { name_floor: { name, floor } },
+    const zone = await prisma.zone.findFirst({
+      where: { name, floor },
     });
     return zone ? dbZoneToDomain(zone) : null;
   }

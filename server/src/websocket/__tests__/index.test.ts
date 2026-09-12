@@ -8,6 +8,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+// Type-only: erased at runtime, so it does not defeat the vi.mock below.
+import type { EStopEvent } from '../../services/SafetyService.js';
 
 // ---------------------------------------------------------------------------
 // Mock the `ws` module. We need:
@@ -497,14 +499,78 @@ describe('setupWebSocket', () => {
       expect(msg.reason).toBe('preempted');
     });
 
+    // Driven with a real `EStopEvent` from the service's own type, not an
+    // invented `{ robotId, engaged }` literal — that shape the service never
+    // emits, so the old test passed no matter what went over the wire.
     it('broadcasts safety e-stop events under safety:estop', () => {
       const wss = setup();
       const client = connect(wss, makeClient());
       client.reset();
-      services.estop.cb?.({ robotId: 'r1', engaged: true });
+
+      const estopEvent: EStopEvent = {
+        id: 'estop-1',
+        scope: 'robot',
+        action: 'trigger',
+        triggeredAt: '2026-01-01T00:00:00.000Z',
+        triggeredBy: 'operator',
+        reason: 'obstacle detected',
+        affectedRobots: ['r1'],
+        result: {
+          scope: 'robot',
+          robotId: 'r1',
+          robotName: 'Robot One',
+          triggeredAt: '2026-01-01T00:00:00.000Z',
+          triggeredBy: 'operator',
+          reason: 'obstacle detected',
+          robotResults: [{ robotId: 'r1', robotName: 'Robot One', success: true }],
+          successCount: 1,
+          failureCount: 0,
+        },
+      };
+
+      services.estop.cb?.(estopEvent);
+
       const msg = JSON.parse(client.sent[0]);
       expect(msg.type).toBe('safety:estop');
-      expect(msg.event).toEqual({ robotId: 'r1', engaged: true });
+      expect(msg.event).toEqual(estopEvent);
+      // The trigger/reset discriminator must survive the envelope — it is what
+      // the console reduces into the fleet Stop button.
+      expect(msg.event.action).toBe('trigger');
+    });
+
+    it('broadcasts a reset e-stop event with its action intact', () => {
+      const wss = setup();
+      const client = connect(wss, makeClient());
+      client.reset();
+
+      const resetEvent: EStopEvent = {
+        id: 'estop-2',
+        scope: 'fleet',
+        action: 'reset',
+        triggeredAt: '2026-01-01T00:01:00.000Z',
+        triggeredBy: 'server',
+        reason: 'Fleet E-stop reset',
+        affectedRobots: ['r1', 'r2'],
+        result: {
+          scope: 'fleet',
+          triggeredAt: '2026-01-01T00:01:00.000Z',
+          triggeredBy: 'server',
+          reason: 'Fleet E-stop reset',
+          robotResults: [
+            { robotId: 'r1', robotName: 'Robot One', success: true },
+            { robotId: 'r2', robotName: 'Robot Two', success: true },
+          ],
+          successCount: 2,
+          failureCount: 0,
+        },
+      };
+
+      services.estop.cb?.(resetEvent);
+
+      const msg = JSON.parse(client.sent[0]);
+      expect(msg.type).toBe('safety:estop');
+      expect(msg.event.action).toBe('reset');
+      expect(msg.event.affectedRobots).toEqual(['r1', 'r2']);
     });
 
     it('broadcasts incident events', () => {

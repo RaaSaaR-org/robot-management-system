@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ApiRequestError } from '@/api/client';
 import { useOversightStore } from '../oversightStore';
 import { oversightApi } from '../../api';
 
@@ -87,12 +88,26 @@ describe('oversightStore', () => {
       expect(s.dashboardLoading).toBe(false);
     });
 
-    it('falls back to default message for non-Error rejection', async () => {
+    it('surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
       api.getDashboardStats.mockRejectedValue('nope');
 
       await useOversightStore.getState().fetchDashboardStats();
 
-      expect(useOversightStore.getState().dashboardError).toBe('Failed to fetch dashboard');
+      expect(useOversightStore.getState().dashboardError).toBe('nope');
+    });
+
+    it('surfaces the message of an ApiRequestError (the shape production rejects with)', async () => {
+      api.getDashboardStats.mockRejectedValue(
+        new ApiRequestError({
+          code: 'UNKNOWN_ERROR',
+          message: 'Dashboard service unavailable',
+          statusCode: 503,
+        })
+      );
+
+      await useOversightStore.getState().fetchDashboardStats();
+
+      expect(useOversightStore.getState().dashboardError).toBe('Dashboard service unavailable');
     });
   });
 

@@ -7,6 +7,7 @@
  */
 
 import { prisma } from '../database/index.js';
+import { allocateFormattedNumber } from './NumberSequenceRepository.js';
 import type {
   ApprovalRequest as PrismaApprovalRequest,
   ApprovalChain as PrismaApprovalChain,
@@ -19,6 +20,7 @@ import type {
 import {
   SLA_HOURS,
   APPROVAL_TYPE_MAP,
+  OPEN_APPROVAL_STATUSES,
 } from '../types/approval.types.js';
 import type {
   ApprovalRequest,
@@ -218,25 +220,14 @@ function dbEscalationRuleToDomain(db: PrismaEscalationRule): EscalationRule {
 }
 
 /**
- * Generate a unique request number in format APR-YYYY-NNNNN
+ * Generate a unique request number in format APR-YYYY-NNNNN.
+ *
+ * Draws from the atomic per-tenant counter rather than scanning for the current
+ * maximum (TASK-287), so two tenants can each hold APR-2026-00001 and neither
+ * can be handed a number the other already has.
  */
 async function generateRequestNumber(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `APR-${year}-`;
-
-  const lastRequest = await prisma.approvalRequest.findFirst({
-    where: { requestNumber: { startsWith: prefix } },
-    orderBy: { requestNumber: 'desc' },
-    select: { requestNumber: true },
-  });
-
-  let nextNumber = 1;
-  if (lastRequest) {
-    const lastNumber = parseInt(lastRequest.requestNumber.split('-')[2], 10);
-    nextNumber = lastNumber + 1;
-  }
-
-  return `${prefix}${nextNumber.toString().padStart(5, '0')}`;
+  return allocateFormattedNumber('approval', 5);
 }
 
 // ============================================================================
@@ -267,7 +258,9 @@ export class ApprovalRequestRepository {
    * Find by request number
    */
   async findByRequestNumber(requestNumber: string): Promise<ApprovalRequest | null> {
-    const request = await prisma.approvalRequest.findUnique({
+    // findFirst, not findUnique: the number is unique per tenant now
+    // (TASK-287), so it is no longer a unique lookup key on its own.
+    const request = await prisma.approvalRequest.findFirst({
       where: { requestNumber },
       include: this.includeRelations,
     });
@@ -295,7 +288,7 @@ export class ApprovalRequestRepository {
   async findPendingForUser(userId: string): Promise<ApprovalRequest[]> {
     const requests = await prisma.approvalRequest.findMany({
       where: {
-        status: { in: ['pending', 'in_progress'] },
+        status: { in: [...OPEN_APPROVAL_STATUSES] },
         steps: {
           some: {
             assignedTo: userId,
@@ -315,7 +308,7 @@ export class ApprovalRequestRepository {
   async findPendingByRole(role: ApproverRole): Promise<ApprovalRequest[]> {
     const requests = await prisma.approvalRequest.findMany({
       where: {
-        status: { in: ['pending', 'in_progress'] },
+        status: { in: [...OPEN_APPROVAL_STATUSES] },
         steps: {
           some: {
             approverRole: role,
@@ -337,7 +330,7 @@ export class ApprovalRequestRepository {
     const now = new Date();
     const requests = await prisma.approvalRequest.findMany({
       where: {
-        status: { in: ['pending', 'in_progress'] },
+        status: { in: [...OPEN_APPROVAL_STATUSES] },
         slaDeadline: { lt: now },
       },
       include: this.includeRelations,
@@ -354,7 +347,11 @@ export class ApprovalRequestRepository {
     const threshold = new Date(now.getTime() + withinHours * 60 * 60 * 1000);
     const requests = await prisma.approvalRequest.findMany({
       where: {
-        status: { in: ['pending', 'in_progress'] },
+        // `gt: now` can never match an escalated row — escalation only happens
+        // after the deadline and escalate() does not move it — so including
+        // `escalated` here is a no-op. It is included anyway so all six "open"
+        // queries read identically.
+        status: { in: [...OPEN_APPROVAL_STATUSES] },
         slaDeadline: { gt: now, lt: threshold },
       },
       include: this.includeRelations,
@@ -401,7 +398,7 @@ export class ApprovalRequestRepository {
 
     if (filters.overdue) {
       where.slaDeadline = { lt: new Date() };
-      where.status = { in: ['pending', 'in_progress'] };
+      where.status = { in: [...OPEN_APPROVAL_STATUSES] };
     }
 
     if (filters.fromDate || filters.toDate) {
@@ -608,7 +605,7 @@ export class ApprovalRequestRepository {
   async countOverdue(): Promise<number> {
     return prisma.approvalRequest.count({
       where: {
-        status: { in: ['pending', 'in_progress'] },
+        status: { in: [...OPEN_APPROVAL_STATUSES] },
         slaDeadline: { lt: new Date() },
       },
     });

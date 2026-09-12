@@ -18,6 +18,7 @@ import {
   type TrainingMetrics,
   type UpdateModelVersionInput,
 } from '../types/vla.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const modelsRoutes = Router();
 
@@ -61,9 +62,7 @@ modelsRoutes.get('/', async (_req: Request, res: Response) => {
     const result = await modelVersionRepository.findAll();
     res.json({ modelVersions: result.data, pagination: result.pagination });
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: err instanceof Error ? err.message : 'Failed to list model versions' });
+    sendFailure(res, err, 'Failed to list model versions', 500);
   }
 });
 
@@ -77,9 +76,7 @@ modelsRoutes.get('/versions', async (_req: Request, res: Response) => {
     const result = await modelVersionRepository.findAll();
     res.json({ modelVersions: result.data, pagination: result.pagination });
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: err instanceof Error ? err.message : 'Failed to list model versions' });
+    sendFailure(res, err, 'Failed to list model versions', 500);
   }
 });
 
@@ -149,9 +146,7 @@ modelsRoutes.post('/versions', async (req: Request, res: Response) => {
     const modelVersion = await modelRegistryService.register(input);
     res.status(201).json({ modelVersion });
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: err instanceof Error ? err.message : 'Failed to register model version' });
+    sendFailure(res, err, 'Failed to register model version', 500);
   }
 });
 
@@ -201,9 +196,7 @@ modelsRoutes.patch('/versions/:id', async (req: Request, res: Response) => {
 
     res.json({ modelVersion });
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: err instanceof Error ? err.message : 'Failed to update model version' });
+    sendFailure(res, err, 'Failed to update model version', 500);
   }
 });
 
@@ -220,9 +213,7 @@ modelsRoutes.get('/versions/:id/lineage', async (req: Request, res: Response) =>
     }
     res.json({ lineage });
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: err instanceof Error ? err.message : 'Failed to resolve model lineage' });
+    sendFailure(res, err, 'Failed to resolve model lineage', 500);
   }
 });
 
@@ -242,8 +233,6 @@ modelsRoutes.get('/versions/:id', async (req: Request, res: Response) => {
     const evaluation = await modelVersionRepository.getEvaluationSummary(modelVersion.id);
     res.json({ modelVersion, evaluation });
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: err instanceof Error ? err.message : 'Failed to load model version' });
+    sendFailure(res, err, 'Failed to load model version', 500);
   }
 });

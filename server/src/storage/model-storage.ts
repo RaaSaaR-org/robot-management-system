@@ -588,11 +588,16 @@ export class ModelStorageClient {
   }
 
   /**
-   * Delete a twin artifact (local file or rustfs object).
+   * Delete a twin artifact (local file or rustfs object). Strict on both
+   * backends: an artifact that is already gone (ENOENT) is not a failure, but
+   * anything else REJECTS, so the erasure cascade cannot drop the DigitalTwin
+   * row — the only index to these blobs — while the blob itself survives.
    */
   async deleteTwinArtifact(key: string): Promise<void> {
     if (this.isLocalKey(key)) {
-      await fs.unlink(key).catch(() => {});
+      await fs.unlink(key).catch((err: NodeJS.ErrnoException) => {
+        if (err?.code !== 'ENOENT') throw err;
+      });
       return;
     }
     const client = getRustFSClient();

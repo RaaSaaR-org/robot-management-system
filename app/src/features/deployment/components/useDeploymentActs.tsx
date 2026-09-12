@@ -10,7 +10,8 @@ import { confirm, toast } from '@/shared/components/ui';
 import { useDeploymentStore } from '../store';
 import type { Deployment } from '../types';
 import { RollbackFormModal } from './RollbackFormModal';
-import { deploymentName, errorMessage } from './deploymentHelpers';
+import { deploymentName } from './deploymentHelpers';
+import { errorMessage } from '@/shared/components/ui';
 
 export interface DeploymentActs {
   start: (d: Deployment) => Promise<boolean>;

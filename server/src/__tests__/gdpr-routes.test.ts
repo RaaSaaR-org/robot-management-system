@@ -201,7 +201,8 @@ describe('GDPR Routes', () => {
       const response = await request(app).post('/api/gdpr/requests/erasure').send({});
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('not allowed');
+      expect(response.body.error).toBe('Failed to create erasure request');
+      expect(response.body.error).not.toContain('not allowed');
     });
   });
 
@@ -383,7 +384,7 @@ describe('GDPR Routes', () => {
       expect(response.body.error).toContain('contestReason is required');
     });
 
-    it('returns 400 on service error (message passthrough)', async () => {
+    it('returns 400 with its own sentence, never the service error text', async () => {
       mockGdprRequestService.createADMReviewRequest.mockRejectedValue(new Error('queue full'));
 
       const response = await request(app)
@@ -391,7 +392,8 @@ describe('GDPR Routes', () => {
         .send({ decisionId: 'dec-1', contestReason: 'unfair' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('queue full');
+      expect(response.body.error).toBe('Failed to create ADM review request');
+      expect(response.body.error).not.toContain('queue full');
     });
   });
 
@@ -481,13 +483,14 @@ describe('GDPR Routes', () => {
       expect(mockGdprRequestService.cancelRequest).toHaveBeenCalledWith('req-001', 'user-9');
     });
 
-    it('returns 400 on service error (message passthrough)', async () => {
+    it('returns 400 with its own sentence, never the service error text', async () => {
       mockGdprRequestService.cancelRequest.mockRejectedValue(new Error('already completed'));
 
       const response = await request(app).delete('/api/gdpr/requests/req-001');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('already completed');
+      expect(response.body.error).toBe('Failed to cancel request');
+      expect(response.body.error).not.toContain('already completed');
     });
   });
 
@@ -565,13 +568,14 @@ describe('GDPR Routes', () => {
       expect(mockGdprRequestService.verifyRequest).toHaveBeenCalledWith('tok-123');
     });
 
-    it('returns 400 on verification failure (message passthrough)', async () => {
+    it('returns 400 with its own sentence, never the service error text', async () => {
       mockGdprRequestService.verifyRequest.mockRejectedValue(new Error('expired token'));
 
       const response = await request(app).get('/api/gdpr/verify/tok-123');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('expired token');
+      expect(response.body.error).toBe('Verification failed');
+      expect(response.body.error).not.toContain('expired token');
     });
   });
 
@@ -976,7 +980,7 @@ describe('GDPR Routes', () => {
       expect(response.body.error).toBe('Request must be in progress to execute erasure');
     });
 
-    it('returns 400 on service error (message passthrough)', async () => {
+    it('returns 400 with its own sentence, never the service error text', async () => {
       mockGdprRequestService.getRequest.mockResolvedValue({
         ...SAMPLE_REQUEST,
         requestType: 'erasure',
@@ -990,7 +994,8 @@ describe('GDPR Routes', () => {
         .send({});
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('erasure blocked');
+      expect(response.body.error).toBe('Failed to execute erasure');
+      expect(response.body.error).not.toContain('erasure blocked');
     });
   });
 

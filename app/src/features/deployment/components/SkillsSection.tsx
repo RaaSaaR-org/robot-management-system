@@ -32,7 +32,8 @@ import { ChainsTable } from './ChainsTable';
 import { RunSkillModal } from './RunSkillModal';
 import { SkillDetailsModal } from './SkillDetailsModal';
 import { SkillFormModal } from './SkillFormModal';
-import { deployToneFor, errorMessage } from './deploymentHelpers';
+import { deployToneFor } from './deploymentHelpers';
+import { errorMessage } from '@/shared/components/ui';
 
 export interface SkillsSectionProps {
   /** The page header's "New skill" button opens the form through this. */

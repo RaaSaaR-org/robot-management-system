@@ -628,7 +628,7 @@ describe('agent-mode routes', () => {
       expect(res.body.error).toContain('AGENT_MAP_ENABLED');
     });
 
-    it('502s with the agent’s error text when the robot is unreachable — never an empty map', async () => {
+    it('502s with the server’s own sentence when the robot is unreachable — never an empty map, never the driver text', async () => {
       mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
       mockGet.mockRejectedValue(new HttpClientError('ECONNREFUSED'));
 
@@ -636,7 +636,9 @@ describe('agent-mode routes', () => {
 
       expect(res.status).toBe(502);
       expect(res.body.code).toBe('AGENT_STATE_UNAVAILABLE');
-      expect(res.body.error).toContain('ECONNREFUSED');
+      expect(res.body.error).toBe(AGENT_STATE_UNAVAILABLE.error);
+      // The driver's text is exactly what must never reach a client.
+      expect(res.body.error).not.toContain('ECONNREFUSED');
     });
 
     it('502s when the robot answers 200 without a map body', async () => {

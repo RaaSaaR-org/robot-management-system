@@ -74,6 +74,11 @@ function safeParseJson<T>(value: string | null | undefined, fallback: T): T {
  */
 const SUMMARY_SELECT = {
   id: true,
+  // Selected but not mapped: the row type `dbToSummary` takes is
+  // `Omit<PrismaMotionClip, 'frames'>`, so every column except `frames` has to be
+  // asked for. `tenantId` stays out of MotionClipSummary — the API shape is
+  // unchanged, tenant scoping is enforced by the Prisma client extension.
+  tenantId: true,
   name: true,
   source: true,
   robotType: true,

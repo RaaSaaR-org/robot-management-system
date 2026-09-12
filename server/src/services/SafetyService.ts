@@ -63,15 +63,43 @@ export interface ZoneEStopResult extends FleetEStopResult {
   zoneName: string;
 }
 
+/**
+ * Whether an E-stop event latched a stop or released one.
+ *
+ * Explicit discriminator: a client must never infer armed-vs-triggered from the
+ * `reason` prose, so every emitted event says which direction it moved.
+ */
+export type EStopAction = 'trigger' | 'reset';
+
+/**
+ * Result of an E-stop applied to one named robot.
+ *
+ * Extends `FleetEStopResult` so that `successCount` / `failureCount` are present
+ * on every `EStopEvent['result']` regardless of scope — consumers such as
+ * IncidentService read those two fields off the union without narrowing.
+ */
+export interface SingleRobotEStopResult extends FleetEStopResult {
+  robotId: string;
+  robotName: string;
+}
+
+/** Any payload an E-stop event can carry, one per scope */
+export type EStopEventResult =
+  | FleetEStopResult
+  | ZoneEStopResult
+  | SingleRobotEStopResult;
+
 /** E-stop event for logging */
 export interface EStopEvent {
   id: string;
   scope: EStopScope;
+  /** Trigger vs reset — explicit, never inferred from `reason` */
+  action: EStopAction;
   triggeredAt: string;
   triggeredBy: string;
   reason: string;
   affectedRobots: string[];
-  result: FleetEStopResult | ZoneEStopResult;
+  result: EStopEventResult;
 }
 
 type EStopEventCallback = (event: EStopEvent) => void;
@@ -93,13 +121,46 @@ class SafetyService {
   // ============================================================================
 
   /**
-   * Trigger E-stop on a single robot
+   * Trigger E-stop on a single robot.
+   *
+   * Emits a `robot`-scoped `trigger` event. Fleet and zone stops do NOT come
+   * through here (they call `applyRobotEStop` directly) — they emit one
+   * aggregate event naming every affected robot instead, so a fleet stop
+   * produces a single event rather than one per robot.
    */
   async triggerRobotEStop(
     robotId: string,
     reason: string,
     triggeredBy = 'server'
   ): Promise<RobotEStopStatus> {
+    const { status, robotName } = await this.applyRobotEStop(robotId, reason, triggeredBy);
+
+    this.logEStopEvent('robot', 'trigger', triggeredBy, reason, [robotId], {
+      scope: 'robot',
+      robotId,
+      robotName,
+      triggeredAt: new Date().toISOString(),
+      triggeredBy,
+      reason,
+      robotResults: [{ robotId, robotName, success: true }],
+      successCount: 1,
+      failureCount: 0,
+    });
+
+    return status;
+  }
+
+  /**
+   * Apply an E-stop to one robot without emitting an event.
+   *
+   * The shared mechanism behind the single-robot, fleet and zone paths; each
+   * caller owns the event it emits.
+   */
+  private async applyRobotEStop(
+    robotId: string,
+    reason: string,
+    triggeredBy = 'server'
+  ): Promise<{ status: RobotEStopStatus; robotName: string }> {
     const registered = await robotManager.getRegisteredRobot(robotId);
     if (!registered) {
       throw new Error(`Robot ${robotId} not found`);
@@ -127,7 +188,7 @@ class SafetyService {
         console.error('[SafetyService] Failed to create alert:', err);
       });
 
-      return response;
+      return { status: response, robotName: registered.robot.name };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       throw new Error(`Failed to trigger E-stop: ${message}`);
@@ -135,9 +196,36 @@ class SafetyService {
   }
 
   /**
-   * Reset E-stop on a single robot
+   * Reset E-stop on a single robot.
+   *
+   * Emits a `robot`-scoped `reset` event. As with the trigger path, a fleet
+   * reset bypasses this wrapper and emits one aggregate event.
    */
   async resetRobotEStop(robotId: string): Promise<RobotEStopStatus> {
+    const { status, robotName } = await this.applyRobotReset(robotId);
+    const reason = 'Robot E-stop reset';
+
+    this.logEStopEvent('robot', 'reset', 'server', reason, [robotId], {
+      scope: 'robot',
+      robotId,
+      robotName,
+      triggeredAt: new Date().toISOString(),
+      triggeredBy: 'server',
+      reason,
+      robotResults: [{ robotId, robotName, success: true }],
+      successCount: 1,
+      failureCount: 0,
+    });
+
+    return status;
+  }
+
+  /**
+   * Reset one robot's E-stop without emitting an event.
+   */
+  private async applyRobotReset(
+    robotId: string
+  ): Promise<{ status: RobotEStopStatus; robotName: string }> {
     const registered = await robotManager.getRegisteredRobot(robotId);
     if (!registered) {
       throw new Error(`Robot ${robotId} not found`);
@@ -163,7 +251,7 @@ class SafetyService {
         sourceId: robotId,
       });
 
-      return response;
+      return { status: response, robotName: registered.robot.name };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       throw new Error(`Failed to reset E-stop: ${message}`);
@@ -211,7 +299,7 @@ class SafetyService {
     const results = await Promise.allSettled(
       connectedRobots.map(async (robot) => {
         try {
-          await this.triggerRobotEStop(robot.id, reason, triggeredBy);
+          await this.applyRobotEStop(robot.id, reason, triggeredBy);
           return { robotId: robot.id, robotName: robot.name, success: true };
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -251,7 +339,7 @@ class SafetyService {
     };
 
     // Log the event
-    this.logEStopEvent('fleet', triggeredBy, reason, robotResults.map((r) => r.robotId), fleetResult);
+    this.logEStopEvent('fleet', 'trigger', triggeredBy, reason, robotResults.map((r) => r.robotId), fleetResult);
 
     // Create fleet-wide alert (non-blocking)
     alertService.createAlert({
@@ -277,7 +365,7 @@ class SafetyService {
     const results = await Promise.allSettled(
       connectedRobots.map(async (robot) => {
         try {
-          await this.resetRobotEStop(robot.id);
+          await this.applyRobotReset(robot.id);
           return { robotId: robot.id, robotName: robot.name, success: true };
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -306,15 +394,22 @@ class SafetyService {
     const successCount = robotResults.filter((r) => r.success).length;
     const failureCount = robotResults.filter((r) => !r.success).length;
 
-    return {
+    const reason = 'Fleet E-stop reset';
+    const fleetResult: FleetEStopResult = {
       scope: 'fleet',
       triggeredAt: new Date().toISOString(),
       triggeredBy: 'server',
-      reason: 'Fleet E-stop reset',
+      reason,
       robotResults,
       successCount,
       failureCount,
     };
+
+    // A reset must broadcast just as loudly as a stop: a console that missed it
+    // would keep offering "Resume fleet" on an already-armed fleet.
+    this.logEStopEvent('fleet', 'reset', 'server', reason, robotResults.map((r) => r.robotId), fleetResult);
+
+    return fleetResult;
   }
 
   // ============================================================================
@@ -359,7 +454,7 @@ class SafetyService {
     const results = await Promise.allSettled(
       robotsInZone.map(async (robot) => {
         try {
-          await this.triggerRobotEStop(
+          await this.applyRobotEStop(
             robot.id,
             `Zone E-stop (${zone.name}): ${reason}`,
             'zone'
@@ -405,7 +500,7 @@ class SafetyService {
     };
 
     // Log the event
-    this.logEStopEvent('zone', triggeredBy, reason, robotResults.map((r) => r.robotId), zoneResult);
+    this.logEStopEvent('zone', 'trigger', triggeredBy, reason, robotResults.map((r) => r.robotId), zoneResult);
 
     // Create zone alert
     await alertService.createAlert({
@@ -557,14 +652,16 @@ class SafetyService {
    */
   private logEStopEvent(
     scope: EStopScope,
+    action: EStopAction,
     triggeredBy: string,
     reason: string,
     affectedRobots: string[],
-    result: FleetEStopResult | ZoneEStopResult
+    result: EStopEventResult
   ): void {
     const event: EStopEvent = {
       id: `estop-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       scope,
+      action,
       triggeredAt: new Date().toISOString(),
       triggeredBy,
       reason,

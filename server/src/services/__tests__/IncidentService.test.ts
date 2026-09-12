@@ -10,6 +10,7 @@ import type {
   SafetyEventTrigger,
   IncidentNotification,
 } from '../../types/incident.types.js';
+import type { EStopEvent } from '../SafetyService.js';
 
 // ---------------------------------------------------------------------------
 // Mocks for external boundaries (repositories + collaborating services)
@@ -106,6 +107,41 @@ function makeTrigger(overrides: Partial<SafetyEventTrigger> = {}): SafetyEventTr
     timestamp: new Date('2026-06-01T12:00:00Z'),
     ...overrides,
   };
+}
+
+function makeEStopEvent(overrides: Partial<EStopEvent> = {}): EStopEvent {
+  const reason = overrides.reason ?? 'Fleet E-stop';
+  return {
+    id: 'es-1',
+    scope: 'fleet',
+    action: 'trigger',
+    triggeredAt: '2026-06-01T12:00:00Z',
+    triggeredBy: 'server',
+    reason,
+    affectedRobots: ['r1'],
+    result: {
+      scope: 'fleet',
+      triggeredAt: '2026-06-01T12:00:00Z',
+      triggeredBy: 'server',
+      reason,
+      robotResults: [{ robotId: 'r1', robotName: 'Robot One', success: true }],
+      successCount: 1,
+      failureCount: 0,
+    },
+    ...overrides,
+  };
+}
+
+/** Subscribe a fresh service and return the handler SafetyService would call. */
+function subscribedEStopHandler(): (event: EStopEvent) => void {
+  const svc = new IncidentService();
+  svc.initialize();
+  return vi.mocked(safetyService.onEStopEvent).mock.calls[0][0] as (event: EStopEvent) => void;
+}
+
+/** Let the fire-and-forget E-stop handler settle. */
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 beforeEach(() => {
@@ -316,6 +352,75 @@ describe('detectIncident', () => {
     expect(alertService.createAlert).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'error' })
     );
+  });
+});
+
+// ===========================================================================
+// E-stop auto-detection (action discriminator)
+// ===========================================================================
+
+describe('E-stop auto-detection', () => {
+  beforeEach(() => {
+    vi.mocked(safetyService.onEStopEvent).mockReturnValue(() => {});
+    vi.mocked(incidentRepository.create).mockResolvedValue(makeIncident());
+  });
+
+  it('files no incident and no alert for a fleet reset', async () => {
+    const handler = subscribedEStopHandler();
+
+    handler(makeEStopEvent({ action: 'reset', reason: 'Fleet E-stop reset' }));
+    await flush();
+
+    expect(incidentRepository.create).not.toHaveBeenCalled();
+    expect(alertService.createAlert).not.toHaveBeenCalled();
+  });
+
+  it('files no incident and no alert for a single-robot reset', async () => {
+    const handler = subscribedEStopHandler();
+
+    handler(
+      makeEStopEvent({
+        scope: 'robot',
+        action: 'reset',
+        reason: 'Robot E-stop reset',
+      })
+    );
+    await flush();
+
+    expect(incidentRepository.create).not.toHaveBeenCalled();
+    expect(alertService.createAlert).not.toHaveBeenCalled();
+  });
+
+  it('still files a critical incident for a fleet trigger', async () => {
+    const handler = subscribedEStopHandler();
+
+    handler(makeEStopEvent({ action: 'trigger', reason: 'Fleet E-stop' }));
+    await flush();
+
+    expect(incidentRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'safety', severity: 'critical', createdBy: 'system' })
+    );
+    expect(alertService.createAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'critical' })
+    );
+  });
+
+  it('still files a high-severity incident for a single-robot trigger', async () => {
+    const handler = subscribedEStopHandler();
+
+    handler(
+      makeEStopEvent({
+        scope: 'robot',
+        action: 'trigger',
+        reason: 'Obstacle detected',
+      })
+    );
+    await flush();
+
+    expect(incidentRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'high', robotId: 'r1' })
+    );
+    expect(alertService.createAlert).toHaveBeenCalled();
   });
 });
 

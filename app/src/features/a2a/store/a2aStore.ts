@@ -17,6 +17,7 @@ import type {
   RobotAgentConfig,
   A2AChatMode,
 } from '../types';
+import { getErrorMessage } from '@/shared/utils';
 
 // ============================================================================
 // INITIAL STATE
@@ -65,7 +66,7 @@ export const useA2AStore = createStore<A2AStore>(
         });
         return conversation;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to create conversation';
+        const message = getErrorMessage(error, 'Failed to create conversation');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -87,7 +88,7 @@ export const useA2AStore = createStore<A2AStore>(
           state.isLoading = false;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch conversations';
+        const message = getErrorMessage(error, 'Failed to fetch conversations');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -113,7 +114,7 @@ export const useA2AStore = createStore<A2AStore>(
           }
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to delete conversation';
+        const message = getErrorMessage(error, 'Failed to delete conversation');
         set((state) => {
           state.error = message;
         });
@@ -162,7 +163,7 @@ export const useA2AStore = createStore<A2AStore>(
 
         return response;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to send message';
+        const message = getErrorMessage(error, 'Failed to send message');
         set((state) => {
           state.error = message;
         });
@@ -182,7 +183,7 @@ export const useA2AStore = createStore<A2AStore>(
           }
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch messages';
+        const message = getErrorMessage(error, 'Failed to fetch messages');
         set((state) => {
           state.error = message;
         });
@@ -200,7 +201,7 @@ export const useA2AStore = createStore<A2AStore>(
           state.tasks = tasks;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch tasks';
+        const message = getErrorMessage(error, 'Failed to fetch tasks');
         set((state) => {
           state.error = message;
         });
@@ -248,7 +249,7 @@ export const useA2AStore = createStore<A2AStore>(
         });
         return agentCard;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to register agent';
+        const message = getErrorMessage(error, 'Failed to register agent');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -265,7 +266,7 @@ export const useA2AStore = createStore<A2AStore>(
           state.registeredAgents = state.registeredAgents.filter((a) => a.name !== name);
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to unregister agent';
+        const message = getErrorMessage(error, 'Failed to unregister agent');
         console.error('[A2AStore] Failed to unregister agent:', message);
         set((state) => {
           state.error = message;
@@ -281,7 +282,7 @@ export const useA2AStore = createStore<A2AStore>(
           state.registeredAgents = agents;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch agents';
+        const message = getErrorMessage(error, 'Failed to fetch agents');
         set((state) => {
           state.error = message;
         });
@@ -304,7 +305,7 @@ export const useA2AStore = createStore<A2AStore>(
           };
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to enable robot agent';
+        const message = getErrorMessage(error, 'Failed to enable robot agent');
         set((state) => {
           state.error = message;
         });
@@ -373,7 +374,7 @@ export const useA2AStore = createStore<A2AStore>(
           state.events = events;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch events';
+        const message = getErrorMessage(error, 'Failed to fetch events');
         set((state) => {
           state.error = message;
         });
@@ -466,7 +467,7 @@ export const useA2AStore = createStore<A2AStore>(
           }
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to submit form';
+        const message = getErrorMessage(error, 'Failed to submit form');
         set((state) => {
           state.error = message;
         });
@@ -514,7 +515,7 @@ export const useA2AStore = createStore<A2AStore>(
           }
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to cancel form';
+        const message = getErrorMessage(error, 'Failed to cancel form');
         set((state) => {
           state.error = message;
         });

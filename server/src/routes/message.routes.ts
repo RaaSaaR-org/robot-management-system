@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { conversationManager } from '../services/ConversationManager.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const messageRoutes = Router();
 
@@ -35,8 +36,7 @@ messageRoutes.post('/send', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Error sending message:', error);
-    const msg = error instanceof Error ? error.message : 'Failed to send message';
-    res.status(500).json({ error: msg });
+    sendFailure(res, error, 'Failed to send message', 500);
   }
 });
 
@@ -64,8 +64,7 @@ messageRoutes.post('/orchestrate', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Error in orchestrated message:', error);
-    const msg = error instanceof Error ? error.message : 'Failed to process orchestrated message';
-    res.status(500).json({ error: msg });
+    sendFailure(res, error, 'Failed to process orchestrated message', 500);
   }
 });
 

@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ApiRequestError } from '@/api/client';
 import {
   useFleetLearningStore,
   selectRounds,
@@ -164,12 +165,26 @@ describe('fleetlearningStore', () => {
     expect(state.rounds).toEqual([]);
   });
 
-  it('fetchRounds uses fallback message for non-Error rejections', async () => {
+  it('fetchRounds surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
     mockedApi.listRounds.mockRejectedValue('string failure');
 
     await useFleetLearningStore.getState().fetchRounds();
 
-    expect(useFleetLearningStore.getState().error).toBe('Failed to fetch rounds');
+    expect(useFleetLearningStore.getState().error).toBe('string failure');
+  });
+
+  it('fetchRounds surfaces the message of an ApiRequestError (the shape production rejects with)', async () => {
+    mockedApi.listRounds.mockRejectedValue(
+      new ApiRequestError({
+        code: 'UNKNOWN_ERROR',
+        message: 'Round service unavailable',
+        statusCode: 503,
+      })
+    );
+
+    await useFleetLearningStore.getState().fetchRounds();
+
+    expect(useFleetLearningStore.getState().error).toBe('Round service unavailable');
   });
 
   // --------------------------------------------------------------------------

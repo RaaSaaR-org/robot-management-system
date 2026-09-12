@@ -326,10 +326,10 @@ describe('alertsStore', () => {
       expect(s.error).toBe('boom');
     });
 
-    it('uses fallback message for non-Error rejections', async () => {
+    it('surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
       (alertsApi.getActiveAlerts as any).mockRejectedValue('weird');
       await useAlertsStore.getState().fetchActiveAlerts();
-      expect(useAlertsStore.getState().error).toBe('Failed to fetch alerts');
+      expect(useAlertsStore.getState().error).toBe('weird');
     });
   });
 

@@ -6,6 +6,7 @@
  */
 
 import { createStore } from '@/store';
+import { getErrorMessage } from '@/shared/utils';
 import { simulationApi } from '../api/simulationApi';
 import type { SimScene } from '../types';
 
@@ -41,7 +42,7 @@ export const useSimulationStore = createStore<SimulationStore>(
       } catch (e) {
         set((state) => {
           state.scenesLoading = false;
-          state.scenesError = e instanceof Error ? e.message : 'Failed to load scenes';
+          state.scenesError = getErrorMessage(e, 'Failed to load scenes');
         });
       }
     },

@@ -2,12 +2,19 @@
  * @file update.routes.ts
  * @description REST API routes for secure OTA update management
  * @feature updates
- * @regulatory CRA Art. 13, MR Art. 10
+ * @regulatory CRA Art. 13, MR Art. 10 — CLAIMED, NOT MET; see @status.
+ * @status unshipped — these routes manage update metadata only. `POST /`
+ *   falls back to a fabricated `update-package-<version>` buffer when no
+ *   `fileData` is posted, and the UI posts none, so the package that gets
+ *   signed is a constant; there is no upload, download or artifact endpoint,
+ *   and `POST /:id/deploy/:robotId` records the intent without contacting the
+ *   robot. See `../services/UpdateService.ts`. (TASK-302)
  */
 
 import { Router, type Request, type Response } from 'express';
 import { updateService, SEMVER_REGEX } from '../services/UpdateService.js';
 import type { UpdatePackageStatus } from '../services/UpdateService.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const updateRoutes = Router();
 
@@ -109,9 +116,8 @@ updateRoutes.post('/:id/approve', async (req: Request, res: Response) => {
     const pkg = await updateService.approveUpdate(req.params.id, approverId);
     res.json(pkg);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to approve update';
     console.error('Error approving update:', error);
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to approve update', 400);
   }
 });
 
@@ -133,9 +139,8 @@ updateRoutes.post('/:id/deploy/:robotId', async (req: Request, res: Response) =>
     );
     res.status(201).json(deployment);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to deploy update';
     console.error('Error deploying update:', error);
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to deploy update', 400);
   }
 });
 
@@ -153,8 +158,7 @@ updateRoutes.post('/:id/rollback/:robotId', async (req: Request, res: Response) 
     const deployment = await updateService.triggerRollback(req.params.robotId, targetVersion);
     res.json(deployment);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to trigger rollback';
     console.error('Error triggering rollback:', error);
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to trigger rollback', 400);
   }
 });

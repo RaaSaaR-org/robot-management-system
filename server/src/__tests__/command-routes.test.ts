@@ -143,7 +143,8 @@ describe('Command Routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to interpret command');
-      expect(response.body.message).toBe('LLM down');
+      expect(response.body.message).toBe('Failed to interpret command');
+      expect(response.body.message).not.toContain('LLM down');
     });
   });
 

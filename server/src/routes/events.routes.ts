@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { conversationManager } from '../services/ConversationManager.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const eventsRoutes = Router();
 
@@ -29,7 +30,6 @@ eventsRoutes.post('/get', async (req: Request, res: Response) => {
     res.json({ events });
   } catch (error) {
     console.error('Error getting events:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get events';
-    res.status(500).json({ error: message });
+    sendFailure(res, error, 'Failed to get events', 500);
   }
 });

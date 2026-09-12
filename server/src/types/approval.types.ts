@@ -51,6 +51,22 @@ export const ApprovalStatuses = [
 
 export type ApprovalStatus = (typeof ApprovalStatuses)[number];
 
+/**
+ * Statuses a human can still act on — the one definition of "open" (TASK-290).
+ *
+ * `escalated` belongs here: escalation is the SLA-breach path, so a request that
+ * breaches its deadline must stay in the queue, in the overdue set and in the
+ * "pending for me"/"pending for role" lists rather than vanish from all three.
+ * `expired` stays out deliberately: nothing in the server ever writes it (the
+ * only occurrence is the zero-seed in `countByStatus`), so including it would
+ * widen the set on a status that cannot exist.
+ *
+ * Mirrored by OPEN_APPROVAL_STATUSES in
+ * app/src/features/approvals/types/approval.types.ts; the two lists are pinned
+ * together by server/src/__tests__/approval-open-statuses.test.ts.
+ */
+export const OPEN_APPROVAL_STATUSES: ApprovalStatus[] = ['pending', 'in_progress', 'escalated'];
+
 /** Status for individual approval steps */
 export const ApprovalStepStatuses = [
   'pending', // Not yet ready for action

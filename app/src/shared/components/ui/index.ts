@@ -72,6 +72,8 @@ export { EmptyState } from './EmptyState';
 export type { EmptyStateProps } from './EmptyState';
 export { ErrorState } from './ErrorState';
 export type { ErrorStateProps } from './ErrorState';
+export { RouteErrorBoundary } from './RouteErrorBoundary';
+export type { RouteErrorBoundaryProps } from './RouteErrorBoundary';
 export { Skeleton, SkeletonText, SkeletonRows } from './Skeleton';
 export type { SkeletonProps, SkeletonTextProps, SkeletonRowsProps } from './Skeleton';
 export { Spinner } from './Spinner';

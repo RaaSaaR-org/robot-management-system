@@ -5,7 +5,7 @@
  */
 
 import { useState, type FormEvent } from 'react';
-import { Button, FormField, Input } from '@/shared/components/ui';
+import { Button, FormField, Input, errorMessage } from '@/shared/components/ui';
 import { useAuthStore } from '../store/authStore';
 import { AuthFormError } from './AuthLayout';
 
@@ -37,7 +37,7 @@ export function ForgotPasswordForm({ onSuccess, onRequested, onError }: ForgotPa
       onRequested?.(email);
       onSuccess?.(resetToken);
     } catch (err) {
-      onError?.(err instanceof Error ? err.message : 'Request failed');
+      onError?.(errorMessage(err, 'Request failed'));
     }
   };
 

@@ -40,6 +40,102 @@ The `images` field maps camera names to base64-encoded JPEGs. Camera names come 
 
 Base URL: `http://localhost:3001`
 
+### Authorization (TASK-282, TASK-283)
+
+Roles are `super-admin` > `owner` > `member` > `viewer`. Authentication alone is
+not authorization: on **every authenticated mount**, every
+`POST`/`PUT`/`PATCH`/`DELETE` additionally requires **`member` or above**
+(`writeRoleGuard`, `server/src/middleware/auth.middleware.ts`). A `viewer` gets
+`403 {error: 'Forbidden'}`.
+
+The rule is per **verb**, not per route: there is no separate tier for
+destructive actions. Unregistering a robot (`DELETE /api/robots/:id`) and
+sending it a motion command (`POST /api/robots/:id/command`) both need the same
+`member`. `GET`/`HEAD`/`OPTIONS` are untouched, so a viewer keeps full read
+access — with one wrinkle: the camera stream is a `GET`, but nothing can read it
+without a ticket, and the ticket is minted by a `POST`. That mint is therefore
+exempt (class 3); without it a viewer's cockpit answers "The server refused a
+stream ticket for this camera."
+
+There are exactly four classes of exception, and nothing else.
+
+**1. Self-service writes** (`SELF_SERVICE_WRITES`), a user acting on their own
+account or their own personal data:
+
+| Method | Path | Why |
+|--------|------|-----|
+| PUT | `/api/settings` | Own theme and UI preferences |
+| POST | `/api/settings/reset` | The same preferences, back to defaults |
+| POST | `/api/gdpr/requests/*` | Data-subject rights (GDPR Art. 15-22) |
+| DELETE | `/api/gdpr/requests/:id` | Withdraw one's own request |
+| POST | `/api/gdpr/consents` | Grant consent for one's own data |
+| DELETE | `/api/gdpr/consents/:type` | Withdraw it again |
+
+`/api/gdpr/admin/*` is **not** exempt — it acts on other people's requests.
+
+**2. Mounts that carry no guard at all** (`UNGUARDED_WRITE_MOUNTS`, `app.ts`),
+because a user JWT is not what authenticates them:
+
+| Mount | Writes | Why it stays open |
+|-------|--------|-------------------|
+| `/api/config` | 0 | Client bootstrap, read before any session exists |
+| `/api/auth` | 13 | Login, register, refresh, forgot-password, MFA — guarding these would make logging in require being logged in |
+| `/api/training/workers` | 6 | Shared worker token (`workerAuthMiddleware`), carries no role |
+| `/api/twin/workers` | 6 | Same |
+| `/metrics` | 0 | Prometheus scrape |
+| `/.well-known/a2a` | 0 | A2A agent discovery |
+
+Password change and MFA enrolment on a live session are genuinely self-service,
+but they live on `/api/auth` and so never reach the guard.
+
+**3. Writes that perform no write** (`POST_SHAPED_READS`), where the handler is
+a pure function of its request body — no repository call, nothing persisted, so
+granting it to a viewer grants no more than a `GET` would:
+
+| Method | Path | Why |
+|--------|------|-----|
+| POST | `/api/patrol/cron/validate` | Returns the next five fire times for a cron expression. A viewer plans a schedule in the UI before asking a member to save it. |
+| POST | `/api/robots/:id/camera/:name/ticket` | Mints the two-minute, one-camera ticket the MJPEG stream is read with — an `<img>` cannot send an `Authorization` header, so the ticket is the only way to open a stream a viewer is allowed to watch. Persists nothing, and reads only the robot row `GET /api/robots/:id` already serves them. |
+
+**4. Halts** (`SAFETY_HALT_WRITES`), because a read-only operator who can see a
+hazard must be able to stop it:
+
+| Method | Path | Why |
+|--------|------|-----|
+| POST | `/api/safety/fleet/estop` | `FleetEmergencyStopButton`, on the dashboard and the safety page |
+| POST | `/api/robots/:id/command` | **Only** with an `emergency_stop` body — `EmergencyStopButton`. The endpoint itself stays `member`: any other command type from a viewer is still a 403, so this cannot be used to drive a robot |
+
+The class is one-way: a viewer may stop, never start. `POST
+/api/safety/fleet/estop/reset` and `POST /api/safety/robots/:id/estop/reset`
+put robots back in motion and stay `member`. The zone and per-robot stops under
+`/api/safety` stay `member` too — no shipped UI fires them.
+
+**Consequences worth knowing** (classified deliberately, not by oversight):
+
+- Most **POST-shaped reads** now require `member`: `/api/a2a/*/list`,
+  `/api/a2a/events/get`, `/api/datasets/compatibility`,
+  `/api/curation/diversity-score`, `/api/embodiments/validate`,
+  `/api/compliance/verify` and `/api/compliance/export`. They are POSTs because
+  they carry a request body, but a viewer loses them. Reclassify by adding an
+  entry to `POST_SHAPED_READS` if that proves wrong in the field.
+- **Acknowledgements are member-level**: alerts, oversight anomalies and patrol
+  findings all clear a fleet-wide signal for everyone, not a personal one.
+- **Contribution submission is member-level**: donating robot data is an
+  operator act; approval was already `ownerOnly`.
+- `AUTH_DISABLED=true` (the dev default, and `helm/neodem/values.yaml`) bypasses
+  this layer along with authentication itself.
+- A service account whose token reaches any authenticated mount must be created
+  with role **`member`**; a `viewer` token 403s on every write, compliance log
+  ingestion included.
+
+The inventory is enumerated from the live router stack in
+`server/src/__tests__/write-route-authorization.test.ts`, which is **fail
+closed**: all 349 write verbs must either refuse a viewer or fall into one of
+the four classes above. A new mount that forgets the guard fails CI.
+`POST /api/robots/:id/command` counts as enforced there and is proved separately:
+the sweep fires it with an empty body and demands the 403, and a named case
+fires the `emergency_stop` body and demands the stop goes through.
+
 ### Public
 
 | Method | Path | Description |
@@ -249,7 +345,8 @@ Findings arrive through `POST /api/robots/:id/agent-mode/events` (`agent:patrol:
 | `/api/storage` | Object storage (RustFS/S3) |
 | `/api/settings` | User preferences |
 | `/api/security` | Device identity, certificates |
-| `/api/updates` | OTA update management |
+| `/api/updates` | OTA update **metadata**: create, Ed25519-sign, approve and record deployments. Delivery is not implemented — no artifact is stored or served, and deploying does not contact the robot (TASK-302) |
+| `/api/training-docs` | EU AI Act Art. 10/11 training-data documentation: dataset provenance, training-data summaries, bias assessments, PDF export. HTTP-only — the app ships no client for it (TASK-302) |
 
 ## Robot Agent (port 41245)
 

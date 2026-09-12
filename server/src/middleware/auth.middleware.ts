@@ -420,3 +420,202 @@ export const viewerOrAbove = roleMiddleware(
   'member',
   'viewer'
 );
+
+/**
+ * The verbs `writeRoleGuard` inspects. Everything else — GET, HEAD, OPTIONS —
+ * is a read and passes straight through.
+ *
+ * That alone does NOT keep the MJPEG stream on `/api/robots/:id/camera/:name`
+ * working for a viewer. The stream is a GET, but it is unreadable without a
+ * ticket, and the ticket is minted by a POST — so the mint has to be exempt
+ * too, and it is, in `POST_SHAPED_READS` below.
+ */
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/**
+ * Write paths a `viewer` may still reach, matched against the full request
+ * path (TASK-282). Every entry is a self-service action a user performs on
+ * their own account or their own personal data — never on a robot, a fleet
+ * object, or another person.
+ *
+ * This is the only hole in `writeRoleGuard`, so keep it minimal and keep every
+ * entry anchored: a loose pattern here is a privilege escalation. An entry that
+ * matches no live route fails `__tests__/write-route-authorization.test.ts`,
+ * so a stale exemption cannot sit here unnoticed.
+ *
+ * TASK-283 classified all 349 write verbs against this bar. The decisions that
+ * were close enough to be worth recording, all of them resolved as
+ * member-or-above rather than exempt:
+ *
+ * - **Password change and MFA enrolment on a live session** — genuinely
+ *   self-service, but they live on `/api/auth`, which is an unauthenticated
+ *   mount and never reaches this guard. No entry needed; adding one would open
+ *   a hole for no gain.
+ * - **Alert acknowledgement** (`PATCH /api/alerts/:id/acknowledge`) and the
+ *   oversight/patrol acknowledgements — these clear a fleet-wide signal for
+ *   everyone, not a personal notification. Member.
+ * - **Contribution submission** (`POST /api/contributions`, `/:id/submit`,
+ *   `/:id/upload`) — a contribution donates robot data into the platform and is
+ *   reviewed by an owner (`contributions.routes.ts` already gates the approval
+ *   half with `ownerOnly`). Donating is an operator act, not a personal one.
+ * - **`/api/gdpr/admin/*`** — acts on other people's requests. Member, and the
+ *   one-segment anchoring below is what keeps it out.
+ */
+export const SELF_SERVICE_WRITES: RegExp[] = [
+  // PUT /api/settings — a viewer's own theme and UI preferences.
+  /^\/api\/settings\/?$/,
+  // POST /api/settings/reset — those same preferences, back to defaults.
+  /^\/api\/settings\/reset\/?$/,
+  // POST /api/gdpr/requests/* and DELETE /api/gdpr/requests/:id — data-subject
+  // rights (GDPR Art. 15-22), which a viewer must be able to exercise over
+  // their own data and withdraw again. One segment only, so this never reaches
+  // /api/gdpr/admin/*, which acts on other people's requests.
+  /^\/api\/gdpr\/requests\/[^/]+\/?$/,
+  // POST /api/gdpr/consents and DELETE /api/gdpr/consents/:type — a viewer
+  // granting and withdrawing consent for their own data.
+  /^\/api\/gdpr\/consents(?:\/[^/]+)?\/?$/,
+];
+
+/**
+ * Endpoints that are registered as POST but perform no write at all (TASK-283).
+ *
+ * A handful of endpoints are POSTs only because they need a request body, not
+ * because they change anything. Most of them still ended up member-or-above —
+ * a viewer losing `POST /api/datasets/compatibility` is a small, reversible
+ * cost, and keeping the exception list short matters more. This list is for the
+ * ones where the opposite answer is already recorded as a product decision.
+ *
+ * The bar is strictly narrower than it looks, and it is about what the caller
+ * gains, not about the verb: the handler must persist nothing, and must hand a
+ * viewer no more than a GET they may already make. A pure function of the
+ * request body clears it outright; a handler that only reads clears it when the
+ * row it reads is one the same viewer can already fetch with a GET. Anything
+ * that creates, mutates or deletes belongs behind the guard.
+ *
+ * Keep every entry anchored, and keep the reason attached to it. A stale entry
+ * fails `__tests__/write-route-authorization.test.ts`, which requires each one
+ * to match a live route.
+ */
+export const POST_SHAPED_READS: RegExp[] = [
+  // POST /api/patrol/cron/validate — parses a cron expression and returns the
+  // next five fire times (`patrol.routes.ts:106`). It is a calculator: no
+  // service call that touches storage, no patrol route involved, nothing saved.
+  // A viewer plans a schedule in the UI before asking a member to save it, so
+  // `field-operations-role-routing.test.ts` asserts a viewer gets 200 here —
+  // that test is the recorded decision this entry honours.
+  /^\/api\/patrol\/cron\/validate\/?$/,
+  // POST /api/robots/:id/camera/:name/ticket — the short-lived ticket the MJPEG
+  // stream is read with (`robot.routes.ts:277`). The stream itself is a GET this
+  // guard never touches, but an `<img>` cannot send an Authorization header, so
+  // the ticket is the only way to open it: refuse the mint and a viewer loses
+  // every camera, which is not the rule this guard is supposed to express.
+  // It persists nothing. One `getRegisteredRobot` lookup — the same row
+  // `GET /api/robots/:id` already serves the same viewer — then a signature over
+  // the caller's own identity, good for that one camera for two minutes
+  // (`security/cameraTicket.ts`) and authorising nothing else.
+  /^\/api\/robots\/[^/]+\/camera\/[^/]+\/ticket\/?$/,
+];
+
+/**
+ * Halts a `viewer` may fire (TASK-282, TASK-284).
+ *
+ * The other two classes are about writes small enough to grant. This one is
+ * the opposite argument: stopping a robot is the one action a read-only
+ * operator must never be refused, because they are often the person who can
+ * see the hazard. Refusing the stop is the dangerous answer, not granting it.
+ *
+ * It is deliberately one-way — a viewer may stop, never start:
+ *
+ * - Clearing a stop is NOT here. `/api/safety/fleet/estop/reset` and
+ *   `/api/safety/robots/:id/estop/reset` put robots back in motion, which is an
+ *   operator decision. The `\/?$` anchors are what keep the `/reset` suffix out,
+ *   so keep them.
+ * - The zone and per-robot stops on `/api/safety` are not here either: no
+ *   shipped UI fires them (`RobotEmergencyStopButton` is exported and rendered
+ *   nowhere), and this list tracks the buttons a viewer actually has. Add one
+ *   only alongside a UI that needs it.
+ *
+ * A stale entry fails `__tests__/write-route-authorization.test.ts`, which
+ * requires each one to match a live route.
+ */
+export const SAFETY_HALT_WRITES: RegExp[] = [
+  // POST /api/safety/fleet/estop — `FleetEmergencyStopButton`, on the dashboard
+  // and the safety page (`safety.routes.ts:128`).
+  /^\/api\/safety\/fleet\/estop\/?$/,
+];
+
+/**
+ * The per-robot halt cannot be allowlisted by path, because it has none of its
+ * own: `POST /api/robots/:id/command` is the general command endpoint — move,
+ * pick up, charge, return home — and exempting the path would hand a viewer the
+ * controls. The halt is one command *type* on it, the one
+ * `robotsApi.emergencyStop` sends, so the body is what decides. The robot's
+ * `CommandExecutor` dispatches `emergency_stop` without reading the payload, so
+ * the type is the whole of the decision.
+ */
+const ROBOT_COMMAND_PATH = /^\/api\/robots\/[^/]+\/command\/?$/;
+const HALT_COMMAND_TYPES = new Set(['emergency_stop']);
+
+/**
+ * Is this request a halt a `viewer` may fire? Exported so the enumeration test
+ * classifies routes through the same predicate the guard enforces, rather than
+ * a second copy of the rule that can drift from it.
+ */
+export function isSafetyHalt(path: string, body: unknown): boolean {
+  if (SAFETY_HALT_WRITES.some((pattern) => pattern.test(path))) {
+    return true;
+  }
+  if (!ROBOT_COMMAND_PATH.test(path)) {
+    return false;
+  }
+  const type = (body as { type?: unknown } | undefined)?.type;
+  return typeof type === 'string' && HALT_COMMAND_TYPES.has(type);
+}
+
+/**
+ * Require `member` or above for any write on the mount it guards (TASK-282).
+ *
+ * Mounted as an extra handler *after* `authMiddleware` on each protected mount
+ * — see `app.ts`. There is deliberately no `app.use('/api', writeRoleGuard)`
+ * chokepoint: Express runs middleware in mount order, so a guard registered
+ * before the routers would see no `req.user`, and one registered after them
+ * would never run at all. The enumeration test, not this comment, is what
+ * holds the mount list down.
+ *
+ * Reads pass through untouched. Writes are delegated to `memberOrAbove`, which
+ * owns the single 403 response body — this must never answer a second one.
+ */
+export function writeRoleGuard(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): void {
+  // Dev bypass, identical to every other layer: keeps AUTH_DISABLED=true
+  // deployments and the existing route suites behaving exactly as before.
+  if (isAuthDisabled()) {
+    return next();
+  }
+
+  if (!WRITE_METHODS.has(req.method)) {
+    return next();
+  }
+
+  // `req.path` is mount-relative inside a mounted middleware, so it would read
+  // `/:id/command` here and match none of the absolute patterns above.
+  const path = req.originalUrl.split('?')[0];
+  if (SELF_SERVICE_WRITES.some((pattern) => pattern.test(path))) {
+    return next();
+  }
+  // Registered as a write, performs none — see `POST_SHAPED_READS`.
+  if (POST_SHAPED_READS.some((pattern) => pattern.test(path))) {
+    return next();
+  }
+  // A stop, which a read-only operator must not be refused — see
+  // `SAFETY_HALT_WRITES`. Body-sensitive: on the shared command endpoint only
+  // the emergency-stop type passes, and no `/reset` passes anywhere.
+  if (isSafetyHalt(path, req.body)) {
+    return next();
+  }
+
+  memberOrAbove(req, res, next);
+}

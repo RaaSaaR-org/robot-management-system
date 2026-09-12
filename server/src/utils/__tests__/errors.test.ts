@@ -26,7 +26,9 @@ import {
   isOperationalError,
   wrapError,
   errorResponse,
+  prismaErrorToAppError,
 } from '../errors.js';
+import { Prisma } from '@prisma/client';
 
 describe('AppError', () => {
   it('applies defaults when only a message is supplied', () => {
@@ -328,5 +330,80 @@ describe('errorResponse', () => {
         details: { resource: 'Robot', identifier: 'r-1' },
       },
     });
+  });
+});
+
+describe('prismaErrorToAppError', () => {
+  /** A real known-request error, built the way ServiceAccountService.test.ts does. */
+  function known(code: string): Prisma.PrismaClientKnownRequestError {
+    return new Prisma.PrismaClientKnownRequestError(
+      'Invalid `prisma.user.create()` invocation in\n' +
+        '/Users/somebody/robot-management-system/server/src/services/TeamService.ts:88:31\n' +
+        'Unique constraint failed on the fields: (`email`)',
+      { code, clientVersion: '5.0.0' }
+    );
+  }
+
+  it('maps P2002 to a 409 conflict that repeats none of the dump', () => {
+    const raw = known('P2002');
+    const mapped = prismaErrorToAppError(raw);
+
+    expect(mapped).toBeInstanceOf(ConflictError);
+    expect(mapped?.statusCode).toBe(409);
+    expect(mapped?.message).toBe('That value is already taken. Choose a different one.');
+    expect(mapped?.message).not.toContain('prisma.user.create');
+    expect(mapped?.message).not.toContain('/Users/');
+    expect(mapped?.context).toMatchObject({ prismaCode: 'P2002' });
+  });
+
+  it('maps P2003 to a 400 that tells the reader to reload', () => {
+    const mapped = prismaErrorToAppError(known('P2003'));
+
+    expect(mapped).toBeInstanceOf(BadRequestError);
+    expect(mapped?.statusCode).toBe(400);
+    expect(mapped?.message).toBe(
+      'This refers to a record that does not exist. Reload the page and try again.'
+    );
+    expect(mapped?.context).toMatchObject({ prismaCode: 'P2003' });
+  });
+
+  it('maps P2025 to a 404', () => {
+    const mapped = prismaErrorToAppError(known('P2025'));
+
+    expect(mapped).toBeInstanceOf(NotFoundError);
+    expect(mapped?.statusCode).toBe(404);
+    expect(mapped?.message).toBe('Record not found');
+    expect(mapped?.context).toMatchObject({ prismaCode: 'P2025' });
+  });
+
+  it('keeps an unrecognised code in the context, not in the message', () => {
+    const mapped = prismaErrorToAppError(known('P2014'));
+
+    expect(mapped).toBeInstanceOf(InternalError);
+    expect(mapped?.statusCode).toBe(500);
+    expect(mapped?.message).toBe('The database refused this change.');
+    expect(mapped?.message).not.toContain('P2014');
+    expect(mapped?.context).toMatchObject({ prismaCode: 'P2014' });
+  });
+
+  it('maps a validation error to a 400 without the argument dump', () => {
+    const mapped = prismaErrorToAppError(
+      new Prisma.PrismaClientValidationError(
+        'Argument `where` of type UserWhereUniqueInput needs at least one argument.',
+        { clientVersion: '5.0.0' }
+      )
+    );
+
+    expect(mapped).toBeInstanceOf(BadRequestError);
+    expect(mapped?.statusCode).toBe(400);
+    expect(mapped?.message).toBe('The request does not match what the database expects.');
+    expect(mapped?.message).not.toContain('UserWhereUniqueInput');
+  });
+
+  it('returns null for anything that did not come from Prisma', () => {
+    expect(prismaErrorToAppError(new Error('connect ECONNREFUSED'))).toBeNull();
+    expect(prismaErrorToAppError(new NotFoundError('Robot'))).toBeNull();
+    expect(prismaErrorToAppError('P2002')).toBeNull();
+    expect(prismaErrorToAppError(null)).toBeNull();
   });
 });

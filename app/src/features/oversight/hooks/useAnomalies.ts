@@ -4,6 +4,7 @@
  * @feature oversight
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   useOversightStore,
@@ -83,7 +84,7 @@ export function useAnomalies(options: UseAnomaliesOptions = {}): UseAnomaliesRet
       try {
         await storeAcknowledge(anomalyId);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to acknowledge anomaly';
+        const message = getErrorMessage(err, 'Failed to acknowledge anomaly');
         setError(message);
         throw err;
       } finally {
@@ -101,7 +102,7 @@ export function useAnomalies(options: UseAnomaliesOptions = {}): UseAnomaliesRet
       try {
         await storeResolve(anomalyId, resolution);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to resolve anomaly';
+        const message = getErrorMessage(err, 'Failed to resolve anomaly');
         setError(message);
         throw err;
       } finally {

@@ -126,7 +126,8 @@ describe('Deployments Routes', () => {
         .send({ modelVersionId: 'mv-001' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Model not found');
+      expect(response.body.error).toBe('Failed to create deployment');
+      expect(response.body.error).not.toContain('Model not found');
     });
   });
 
@@ -181,7 +182,8 @@ describe('Deployments Routes', () => {
       const response = await request(app).get('/api/deployments');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('DB error');
+      expect(response.body.error).toBe('Failed to list deployments');
+      expect(response.body.error).not.toContain('DB error');
     });
   });
 
@@ -207,7 +209,8 @@ describe('Deployments Routes', () => {
       const response = await request(app).get('/api/deployments/active');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to get active deployments');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -272,7 +275,8 @@ describe('Deployments Routes', () => {
       const response = await request(app).get('/api/deployments/dep-001');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('explode');
+      expect(response.body.error).toBe('Failed to get deployment');
+      expect(response.body.error).not.toContain('explode');
     });
   });
 
@@ -309,7 +313,8 @@ describe('Deployments Routes', () => {
       const response = await request(app).get('/api/deployments/dep-001/metrics');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('m-fail');
+      expect(response.body.error).toBe('Failed to get metrics');
+      expect(response.body.error).not.toContain('m-fail');
     });
   });
 
@@ -335,7 +340,8 @@ describe('Deployments Routes', () => {
       const response = await request(app).post('/api/deployments/dep-001/start');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot start');
+      expect(response.body.error).toBe('Failed to start deployment');
+      expect(response.body.error).not.toContain('cannot start');
     });
   });
 
@@ -360,7 +366,8 @@ describe('Deployments Routes', () => {
       const response = await request(app).post('/api/deployments/dep-001/progress');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('no next stage');
+      expect(response.body.error).toBe('Failed to progress deployment');
+      expect(response.body.error).not.toContain('no next stage');
     });
   });
 
@@ -386,7 +393,8 @@ describe('Deployments Routes', () => {
       const response = await request(app).post('/api/deployments/dep-001/promote');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot promote');
+      expect(response.body.error).toBe('Failed to promote deployment');
+      expect(response.body.error).not.toContain('cannot promote');
     });
   });
 
@@ -425,7 +433,8 @@ describe('Deployments Routes', () => {
         .send({ reason: 'oops' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('rollback failed');
+      expect(response.body.error).toBe('Failed to rollback deployment');
+      expect(response.body.error).not.toContain('rollback failed');
     });
   });
 
@@ -451,7 +460,8 @@ describe('Deployments Routes', () => {
       const response = await request(app).post('/api/deployments/dep-001/cancel');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot cancel');
+      expect(response.body.error).toBe('Failed to cancel deployment');
+      expect(response.body.error).not.toContain('cannot cancel');
     });
   });
 });

@@ -120,7 +120,8 @@ describe('Oversight Routes', () => {
         .send({ reason: 'maintenance' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to activate manual mode');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -169,7 +170,8 @@ describe('Oversight Routes', () => {
       const response = await request(app).delete('/api/oversight/robots/robot-1/manual-mode');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('db down');
+      expect(response.body.error).toBe('Failed to deactivate manual mode');
+      expect(JSON.stringify(response.body)).not.toContain('db down');
     });
   });
 
@@ -201,7 +203,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).get('/api/oversight/manual-sessions');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get manual sessions');
     });
   });
 
@@ -232,7 +234,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).get('/api/oversight/verifications');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get verification schedules');
     });
   });
 
@@ -287,7 +289,7 @@ describe('Oversight Routes', () => {
         .send({ name: 'Daily check', intervalMinutes: 60 });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to create verification schedule');
     });
   });
 
@@ -312,7 +314,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).get('/api/oversight/verifications/due');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get due verifications');
     });
   });
 
@@ -367,7 +369,7 @@ describe('Oversight Routes', () => {
         .send({ status: 'skipped' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to complete verification');
     });
   });
 
@@ -414,7 +416,7 @@ describe('Oversight Routes', () => {
         .send({ name: 'Updated' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to update verification schedule');
     });
   });
 
@@ -448,7 +450,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).delete('/api/oversight/verifications/v-1');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to deactivate verification schedule');
     });
   });
 
@@ -497,7 +499,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).get('/api/oversight/anomalies');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get anomalies');
     });
   });
 
@@ -524,7 +526,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).get('/api/oversight/anomalies/active');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get active anomalies');
     });
   });
 
@@ -549,7 +551,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).get('/api/oversight/anomalies/unacknowledged');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get unacknowledged anomalies');
     });
   });
 
@@ -585,7 +587,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).post('/api/oversight/anomalies/a-1/acknowledge');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to acknowledge anomaly');
     });
   });
 
@@ -635,7 +637,7 @@ describe('Oversight Routes', () => {
         .send({ resolution: 'fixed' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to resolve anomaly');
     });
   });
 
@@ -669,7 +671,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).get('/api/oversight/robots/robot-1/capabilities');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get robot capabilities');
     });
   });
 
@@ -694,7 +696,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).get('/api/oversight/fleet/overview');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get fleet overview');
     });
   });
 
@@ -741,7 +743,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).get('/api/oversight/logs');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get oversight logs');
     });
   });
 
@@ -766,7 +768,7 @@ describe('Oversight Routes', () => {
       const response = await request(app).get('/api/oversight/dashboard');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('fail');
+      expect(response.body.error).toBe('Failed to get dashboard stats');
     });
   });
 });

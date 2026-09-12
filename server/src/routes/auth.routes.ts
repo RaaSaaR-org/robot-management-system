@@ -13,8 +13,23 @@ import {
   type AuthenticatedRequest,
 } from '../middleware/auth.middleware.js';
 import { MULTI_TENANCY_ENABLED } from '../config/features.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const authRoutes = Router();
+
+// AuthService's own sentences. Every catch below matches these exactly rather
+// than testing the caught text for a substring: a Prisma failure message opens
+// with "Invalid `prisma.user.create()` invocation in <absolute path>" followed
+// by the failing query, so `message.includes('Invalid')` read a database dump
+// as a validation error and echoed the whole of it at 400.
+const PASSWORD_POLICY_MESSAGE =
+  'Password must be at least 8 characters with uppercase, lowercase, and number';
+
+const LOGIN_REJECTIONS = new Set([
+  'Invalid email or password',
+  'Account is deactivated',
+  'User not found',
+]);
 
 // ============================================================================
 // MFA RATE LIMITERS
@@ -84,17 +99,17 @@ authRoutes.post('/register', async (req: Request, res: Response) => {
     res.status(201).json(result);
   } catch (error) {
     console.error('Registration error:', error);
-    const message = error instanceof Error ? error.message : 'Registration failed';
 
-    if (message.includes('already registered')) {
-      return res.status(409).json({ error: 'Conflict', message });
+    if (error instanceof Error) {
+      if (error.message === 'Email already registered') {
+        return res.status(409).json({ error: 'Conflict', message: error.message });
+      }
+      if (error.message === 'Invalid email format' || error.message === PASSWORD_POLICY_MESSAGE) {
+        return res.status(400).json({ error: 'Validation error', message: error.message });
+      }
     }
 
-    if (message.includes('Invalid') || message.includes('must be')) {
-      return res.status(400).json({ error: 'Validation error', message });
-    }
-
-    res.status(500).json({ error: 'Internal error', message: 'Registration failed' });
+    sendFailure(res, error, 'Registration failed', 500);
   }
 });
 
@@ -167,24 +182,19 @@ authRoutes.post('/login', async (req: Request, res: Response) => {
     res.json(result);
   } catch (error) {
     console.error('Login error:', error);
-    const rawMessage = error instanceof Error ? error.message : 'Login failed';
 
     // TASK-164: never leak whether the email is registered or why the
     // login failed — return a single generic message for any 4xx cause.
     // Internal-only states (unreachable DB, crashed process) still surface
     // as 500 so ops can see them.
-    if (
-      rawMessage.includes('Invalid') ||
-      rawMessage.includes('deactivated') ||
-      rawMessage.includes('not found')
-    ) {
+    if (error instanceof Error && LOGIN_REJECTIONS.has(error.message)) {
       return res.status(401).json({
         error: 'Unauthorized',
         message: 'Incorrect email or password.',
       });
     }
 
-    res.status(500).json({ error: 'Internal error', message: 'Login failed' });
+    sendFailure(res, error, 'Login failed', 500);
   }
 });
 
@@ -234,17 +244,17 @@ authRoutes.post('/refresh', async (req: Request, res: Response) => {
     res.json(result);
   } catch (error) {
     console.error('Token refresh error:', error);
-    const message = error instanceof Error ? error.message : 'Token refresh failed';
 
-    if (message.includes('Invalid') || message.includes('expired')) {
-      return res.status(401).json({ error: 'Unauthorized', message });
+    if (error instanceof Error) {
+      if (error.message === 'Invalid or expired refresh token') {
+        return res.status(401).json({ error: 'Unauthorized', message: error.message });
+      }
+      if (error.message === 'Account is deactivated') {
+        return res.status(403).json({ error: 'Forbidden', message: error.message });
+      }
     }
 
-    if (message.includes('deactivated')) {
-      return res.status(403).json({ error: 'Forbidden', message });
-    }
-
-    res.status(500).json({ error: 'Internal error', message: 'Token refresh failed' });
+    sendFailure(res, error, 'Token refresh failed', 500);
   }
 });
 
@@ -285,13 +295,12 @@ authRoutes.get(
       res.json(user);
     } catch (error) {
       console.error('Get current user error:', error);
-      const message = error instanceof Error ? error.message : 'Failed to get user';
 
-      if (message.includes('not found')) {
-        return res.status(404).json({ error: 'Not found', message });
+      if (error instanceof Error && error.message === 'User not found') {
+        return res.status(404).json({ error: 'Not found', message: error.message });
       }
 
-      res.status(500).json({ error: 'Internal error', message: 'Failed to get user' });
+      sendFailure(res, error, 'Failed to get user', 500);
     }
   }
 );
@@ -341,17 +350,17 @@ authRoutes.post('/reset-password', async (req: Request, res: Response) => {
     res.json({ message: 'Password reset successfully' });
   } catch (error) {
     console.error('Reset password error:', error);
-    const message = error instanceof Error ? error.message : 'Password reset failed';
 
-    if (message.includes('Invalid') || message.includes('expired')) {
-      return res.status(400).json({ error: 'Bad request', message });
+    if (error instanceof Error) {
+      if (error.message === 'Invalid or expired reset token') {
+        return res.status(400).json({ error: 'Bad request', message: error.message });
+      }
+      if (error.message === PASSWORD_POLICY_MESSAGE) {
+        return res.status(400).json({ error: 'Validation error', message: error.message });
+      }
     }
 
-    if (message.includes('must be')) {
-      return res.status(400).json({ error: 'Validation error', message });
-    }
-
-    res.status(500).json({ error: 'Internal error', message: 'Password reset failed' });
+    sendFailure(res, error, 'Password reset failed', 500);
   }
 });
 
@@ -384,17 +393,17 @@ authRoutes.post(
       res.json({ message: 'Password changed successfully' });
     } catch (error) {
       console.error('Change password error:', error);
-      const message = error instanceof Error ? error.message : 'Password change failed';
 
-      if (message.includes('incorrect')) {
-        return res.status(401).json({ error: 'Unauthorized', message });
+      if (error instanceof Error) {
+        if (error.message === 'Current password is incorrect') {
+          return res.status(401).json({ error: 'Unauthorized', message: error.message });
+        }
+        if (error.message === PASSWORD_POLICY_MESSAGE) {
+          return res.status(400).json({ error: 'Validation error', message: error.message });
+        }
       }
 
-      if (message.includes('must be')) {
-        return res.status(400).json({ error: 'Validation error', message });
-      }
-
-      res.status(500).json({ error: 'Internal error', message: 'Password change failed' });
+      sendFailure(res, error, 'Password change failed', 500);
     }
   }
 );

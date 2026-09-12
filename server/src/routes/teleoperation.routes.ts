@@ -17,6 +17,7 @@ import type {
   TeleoperationType,
   TeleoperationStatus,
 } from '../types/teleoperation.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const teleoperationRoutes = Router();
 
@@ -61,8 +62,7 @@ teleoperationRoutes.post('/sessions', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error creating session:', error);
-    const message = error instanceof Error ? error.message : 'Failed to create session';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to create session', 400);
   }
 });
 
@@ -155,8 +155,7 @@ teleoperationRoutes.put('/sessions/:id', async (req: Request, res: Response) => 
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error updating session:', error);
-    const message = error instanceof Error ? error.message : 'Failed to update session';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to update session', 400);
   }
 });
 
@@ -196,8 +195,7 @@ teleoperationRoutes.post('/sessions/:id/start', async (req: Request, res: Respon
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error starting session:', error);
-    const message = error instanceof Error ? error.message : 'Failed to start session';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to start session', 400);
   }
 });
 
@@ -217,8 +215,7 @@ teleoperationRoutes.post('/sessions/:id/pause', async (req: Request, res: Respon
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error pausing session:', error);
-    const message = error instanceof Error ? error.message : 'Failed to pause session';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to pause session', 400);
   }
 });
 
@@ -238,8 +235,7 @@ teleoperationRoutes.post('/sessions/:id/resume', async (req: Request, res: Respo
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error resuming session:', error);
-    const message = error instanceof Error ? error.message : 'Failed to resume session';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to resume session', 400);
   }
 });
 
@@ -259,8 +255,7 @@ teleoperationRoutes.post('/sessions/:id/end', async (req: Request, res: Response
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error ending session:', error);
-    const message = error instanceof Error ? error.message : 'Failed to end session';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to end session', 400);
   }
 });
 
@@ -292,8 +287,7 @@ teleoperationRoutes.post('/sessions/:id/frame', async (req: Request, res: Respon
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error recording frame:', error);
-    const message = error instanceof Error ? error.message : 'Failed to record frame';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to record frame', 400);
   }
 });
 
@@ -318,8 +312,7 @@ teleoperationRoutes.post('/sessions/:id/frames', async (req: Request, res: Respo
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error recording frames batch:', error);
-    const message = error instanceof Error ? error.message : 'Failed to record frames';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to record frames', 400);
   }
 });
 
@@ -364,9 +357,12 @@ teleoperationRoutes.post('/sessions/:id/episodes/next', async (req: Request, res
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error advancing episode:', error);
-    const message = error instanceof Error ? error.message : 'Failed to advance episode';
-    const status = message.includes('not found') ? 404 : 400;
-    res.status(status).json({ error: message });
+    // "not found" is this repo's own sentence, so that one is echoed;
+    // every other failure answers with the fallback, unread.
+    if (error instanceof Error && error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
+    }
+    sendFailure(res, error, 'Failed to advance episode', 400);
   }
 });
 
@@ -383,9 +379,12 @@ teleoperationRoutes.get('/sessions/:id/episodes', async (req: Request, res: Resp
     res.json({ sessionId: id, episodes });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error listing episodes:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list episodes';
-    const status = message.includes('not found') ? 404 : 500;
-    res.status(status).json({ error: message });
+    // "not found" is this repo's own sentence, so that one is echoed;
+    // every other failure answers with the fallback, unread.
+    if (error instanceof Error && error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
+    }
+    sendFailure(res, error, 'Failed to list episodes', 500);
   }
 });
 
@@ -412,9 +411,12 @@ teleoperationRoutes.delete(
       });
     } catch (error) {
       console.error('[TeleoperationRoutes] Error discarding episode:', error);
-      const message = error instanceof Error ? error.message : 'Failed to discard episode';
-      const status = message.includes('not found') ? 404 : 400;
-      res.status(status).json({ error: message });
+      // "not found" is this repo's own sentence, so that one is echoed;
+      // every other failure answers with the fallback, unread.
+      if (error instanceof Error && error.message.includes('not found')) {
+        return res.status(404).json({ error: error.message });
+      }
+      sendFailure(res, error, 'Failed to discard episode', 400);
     }
   }
 );
@@ -440,8 +442,7 @@ teleoperationRoutes.post('/sessions/:id/annotate', async (req: Request, res: Res
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error annotating session:', error);
-    const message = error instanceof Error ? error.message : 'Failed to annotate session';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to annotate session', 400);
   }
 });
 
@@ -462,7 +463,6 @@ teleoperationRoutes.post('/sessions/:id/export', async (req: Request, res: Respo
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error exporting session:', error);
-    const message = error instanceof Error ? error.message : 'Failed to export session';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to export session', 400);
   }
 });

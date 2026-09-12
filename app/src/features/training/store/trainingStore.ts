@@ -7,6 +7,7 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { getErrorMessage } from '@/shared/utils';
 import { trainingApi } from '../api';
 import type {
   TrainingState,
@@ -85,7 +86,7 @@ export const useTrainingStore = create<TrainingStore>()(
             state.datasetsLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch datasets';
+          const message = getErrorMessage(error, 'Failed to fetch datasets');
           set((state) => {
             state.datasetsError = message;
             state.datasetsLoading = false;
@@ -178,7 +179,7 @@ export const useTrainingStore = create<TrainingStore>()(
             state.trainingJobsLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch training jobs';
+          const message = getErrorMessage(error, 'Failed to fetch training jobs');
           set((state) => {
             state.trainingJobsError = message;
             state.trainingJobsLoading = false;

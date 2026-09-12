@@ -4,6 +4,7 @@
  * @feature explainability
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
@@ -63,7 +64,7 @@ export const useExplainabilityStore = create<ExplainabilityStore>()(
             state.isLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch decisions';
+          const message = getErrorMessage(error, 'Failed to fetch decisions');
           set((state) => {
             state.error = message;
             state.isLoading = false;
@@ -85,7 +86,7 @@ export const useExplainabilityStore = create<ExplainabilityStore>()(
             state.isLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch decision';
+          const message = getErrorMessage(error, 'Failed to fetch decision');
           set((state) => {
             state.error = message;
             state.isLoading = false;
@@ -107,7 +108,7 @@ export const useExplainabilityStore = create<ExplainabilityStore>()(
             state.isLoadingExplanation = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch explanation';
+          const message = getErrorMessage(error, 'Failed to fetch explanation');
           set((state) => {
             state.error = message;
             state.isLoadingExplanation = false;
@@ -129,7 +130,7 @@ export const useExplainabilityStore = create<ExplainabilityStore>()(
             state.isLoadingMetrics = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch metrics';
+          const message = getErrorMessage(error, 'Failed to fetch metrics');
           set((state) => {
             state.error = message;
             state.isLoadingMetrics = false;
@@ -152,7 +153,7 @@ export const useExplainabilityStore = create<ExplainabilityStore>()(
           });
         } catch (error) {
           const message =
-            error instanceof Error ? error.message : 'Failed to fetch documentation';
+            getErrorMessage(error, 'Failed to fetch documentation');
           set((state) => {
             state.error = message;
             state.isLoadingDocumentation = false;

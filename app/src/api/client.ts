@@ -171,9 +171,41 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
 // ============================================================================
 
 /**
- * Creates a standardized ApiError from an Axios error.
+ * The rejection value of every `apiClient` call.
+ *
+ * It is a real `Error` — so `error instanceof Error` is true and
+ * `getErrorMessage` / `errorMessage` keep the server's sentence — while
+ * carrying `code`, `message`, `details` and `statusCode` as own properties,
+ * exactly as the `ApiError` interface declares them.
  */
-function createApiError(error: AxiosError<ApiError>): ApiError {
+export class ApiRequestError extends Error implements ApiError {
+  /** Machine-readable classification, e.g. `NETWORK_ERROR`. */
+  readonly code: string;
+  /** Structured detail the server attached, when it sent any. */
+  readonly details?: Record<string, unknown>;
+  /** HTTP status, or 0 when the request never reached the server. */
+  readonly statusCode: number;
+
+  constructor(init: {
+    code: string;
+    message: string;
+    details?: Record<string, unknown>;
+    statusCode: number;
+  }) {
+    super(init.message);
+    this.name = 'ApiRequestError';
+    this.code = init.code;
+    this.details = init.details;
+    this.statusCode = init.statusCode;
+    // Keep `instanceof` working when compiled down / across realms.
+    Object.setPrototypeOf(this, ApiRequestError.prototype);
+  }
+}
+
+/**
+ * Creates a standardized ApiRequestError from an Axios error.
+ */
+function createApiError(error: AxiosError<ApiError>): ApiRequestError {
   if (error.response?.data) {
     // Server routes across the codebase use mixed error shapes:
     //   - { message: "..." }                  (most routes)
@@ -186,27 +218,27 @@ function createApiError(error: AxiosError<ApiError>): ApiError {
       (typeof data.error === 'string' ? data.error : undefined) ||
       error.message ||
       'An unknown error occurred';
-    return {
+    return new ApiRequestError({
       code: data.code || 'UNKNOWN_ERROR',
       message,
       details: data.details,
       statusCode: error.response.status,
-    };
+    });
   }
 
   if (error.request) {
-    return {
+    return new ApiRequestError({
       code: 'NETWORK_ERROR',
       message: 'Unable to connect to the server. Please check your internet connection.',
       statusCode: 0,
-    };
+    });
   }
 
-  return {
+  return new ApiRequestError({
     code: 'REQUEST_ERROR',
     message: error.message || 'An error occurred while preparing the request',
     statusCode: 0,
-  };
+  });
 }
 
 // ============================================================================

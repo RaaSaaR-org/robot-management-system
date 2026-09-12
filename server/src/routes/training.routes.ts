@@ -112,8 +112,7 @@ trainingRoutes.post('/jobs', async (req: Request, res: Response) => {
       return res.status(400).json({ error: error.message, datasetIds: error.datasetIds });
     }
     console.error('[TrainingRoutes] Error submitting job:', error);
-    const message = error instanceof Error ? error.message : 'Failed to submit training job';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to submit training job', 400);
   }
 });
 
@@ -246,8 +245,7 @@ trainingRoutes.post('/jobs/:id/cancel', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[TrainingRoutes] Error cancelling job:', error);
-    const message = error instanceof Error ? error.message : 'Failed to cancel training job';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to cancel training job', 400);
   }
 });
 
@@ -270,8 +268,7 @@ trainingRoutes.post('/jobs/:id/retry', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[TrainingRoutes] Error retrying job:', error);
-    const message = error instanceof Error ? error.message : 'Failed to retry training job';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to retry training job', 400);
   }
 });
 
@@ -333,6 +330,7 @@ import type {
   WorkerCheckpointRequest,
   WorkerCheckpointResponse,
 } from '../types/training.types.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 // ============================================================================
 // POST /api/training/workers/claim - Worker claims the next pending job
@@ -647,7 +645,6 @@ trainingRoutes.get('/jobs/:id/estimate', async (req: Request, res: Response) => 
     res.json(estimate);
   } catch (error) {
     console.error('[TrainingRoutes] Error estimating duration:', error);
-    const message = error instanceof Error ? error.message : 'Failed to estimate duration';
-    res.status(400).json({ error: message });
+    sendFailure(res, error, 'Failed to estimate duration', 400);
   }
 });

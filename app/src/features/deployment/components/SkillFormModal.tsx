@@ -19,7 +19,8 @@ import {
 } from '@/shared/components/ui';
 import { useDeploymentStore } from '../store';
 import type { SkillDefinition, SkillParameter } from '../types';
-import { errorMessage, parametersToSchema, schemaToParameters } from './deploymentHelpers';
+import { parametersToSchema, schemaToParameters } from './deploymentHelpers';
+import { errorMessage } from '@/shared/components/ui';
 
 export interface SkillFormModalProps {
   isOpen: boolean;

@@ -4,6 +4,7 @@
  * @feature oversight
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   useOversightStore,
@@ -79,7 +80,7 @@ export function useVerifications(options: UseVerificationsOptions = {}): UseVeri
         const schedule = await storeCreate(input);
         return schedule;
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to create schedule';
+        const message = getErrorMessage(err, 'Failed to create schedule');
         setError(message);
         throw err;
       } finally {
@@ -97,7 +98,7 @@ export function useVerifications(options: UseVerificationsOptions = {}): UseVeri
       try {
         await storeComplete(input);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to complete verification';
+        const message = getErrorMessage(err, 'Failed to complete verification');
         setError(message);
         throw err;
       } finally {

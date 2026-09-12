@@ -5,13 +5,12 @@
  */
 
 import type { Tone } from '@/shared/components/ui';
+import { OPEN_APPROVAL_STATUSES } from '../types';
 import type { ApprovalPriority, ApprovalRequest, ApprovalStatus, ApprovalStepStatus } from '../types';
 
-/** Statuses a human can still act on. */
-export const OPEN_STATUSES: ApprovalStatus[] = ['pending', 'in_progress', 'escalated'];
-
+/** The single "can a human still act on this?" predicate for the feature. */
 export function isOpen(status: ApprovalStatus): boolean {
-  return OPEN_STATUSES.includes(status);
+  return OPEN_APPROVAL_STATUSES.includes(status);
 }
 
 /** "safety_parameter_modification" → "Safety parameter modification" */

@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
-import { Button, ErrorState, Modal, Panel, SkeletonText, StatusTag, confirm, toast } from '@/shared/components/ui';
+import { Button, ErrorState, Modal, Panel, SkeletonText, StatusTag, confirm, errorMessage, toast } from '@/shared/components/ui';
 import { authApi } from '../api/authApi';
 import type { MFAStatus } from '../types/auth.types';
 import { MFASetup } from './MFASetup';
@@ -25,7 +25,7 @@ export function SecuritySettings() {
     try {
       setMfaStatus(await authApi.mfaGetStatus());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      setError(errorMessage(err, 'Unknown error'));
     } finally {
       setIsLoading(false);
     }
@@ -50,7 +50,7 @@ export function SecuritySettings() {
       await fetchStatus();
     } catch (err) {
       toast.error("Couldn't turn off two-step verification", {
-        description: err instanceof Error ? err.message : String(err),
+        description: errorMessage(err),
       });
     } finally {
       setTurningOff(false);

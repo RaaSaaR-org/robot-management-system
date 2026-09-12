@@ -13,7 +13,8 @@ import { FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/c
 import { useRobots } from '@/features/robots/hooks/useRobots';
 import { deploymentApi } from '../api/deploymentApi';
 import type { RolloutStrategy, SkillDefinition } from '../types';
-import { errorMessage, schemaToParameters } from './deploymentHelpers';
+import { schemaToParameters } from './deploymentHelpers';
+import { errorMessage } from '@/shared/components/ui';
 
 /** Rollout strategy options (lerobot-rollout, TASK-179). */
 const ROLLOUT_STRATEGIES: { value: RolloutStrategy; label: string }[] = [

@@ -370,9 +370,15 @@ export class DeploymentService extends EventEmitter {
       }
     }
 
-    // Update status to failed
+    // A rollback that put every robot back on its previous model is a
+    // controlled withdrawal, not a failure — only a robot that refused the
+    // switch back leaves the fleet in a state nobody chose. Zero attempts (no
+    // previous version recorded, e.g. after a server restart) counts as a
+    // clean withdrawal. `failedRobotIds` is not touched: it means "failed to
+    // receive the deployment" and must not be overloaded. (TASK-299)
+    const failedRollbacks = rollbackResults.filter(r => !r.success);
     updated = await deploymentRepository.update(deploymentId, {
-      status: 'failed',
+      status: failedRollbacks.length === 0 ? 'rolled_back' : 'failed',
       completedAt: new Date(),
     });
 
@@ -385,7 +391,14 @@ export class DeploymentService extends EventEmitter {
       reason,
     });
 
-    console.log(`[DeploymentService] Rollback completed: ${deploymentId}`);
+    if (failedRollbacks.length > 0) {
+      console.log(
+        `[DeploymentService] Rollback completed with failures: ${deploymentId}, ` +
+          `robots still on the new model: ${failedRollbacks.map(r => r.robotId).join(', ')}`,
+      );
+    } else {
+      console.log(`[DeploymentService] Rollback completed: ${deploymentId}`);
+    }
     return updated!;
   }
 
@@ -405,9 +418,10 @@ export class DeploymentService extends EventEmitter {
     // Clear timers
     this.clearStageTimer(deploymentId);
 
-    // Update status
+    // Update status. A cancel is a deliberate withdrawal before rollout, so it
+    // gets its own terminal value rather than being filed as a failure.
     const updated = await deploymentRepository.update(deploymentId, {
-      status: 'failed',
+      status: 'cancelled',
       completedAt: new Date(),
     });
 

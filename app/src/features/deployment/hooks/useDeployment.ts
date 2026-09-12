@@ -11,6 +11,7 @@ import type {
   DeploymentResponse,
   AggregatedDeploymentMetrics,
 } from '../types';
+import { getErrorMessage } from '@/shared/utils';
 
 export interface UseDeploymentReturn {
   deployment: Deployment | undefined;
@@ -74,7 +75,7 @@ export function useDeployment(deploymentId: string): UseDeploymentReturn {
         nextStageTime: response.nextStageTime,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch deployment');
+      setError(getErrorMessage(err, 'Failed to fetch deployment'));
     } finally {
       setIsLoading(false);
     }

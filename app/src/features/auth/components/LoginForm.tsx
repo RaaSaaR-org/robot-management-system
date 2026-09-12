@@ -8,7 +8,7 @@
 
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { Button, FormField, Input } from '@/shared/components/ui';
+import { Button, FormField, Input, errorMessage } from '@/shared/components/ui';
 import { useAuth } from '../hooks/useAuth';
 import { AuthFormError, authLinkClass } from './AuthLayout';
 
@@ -60,7 +60,7 @@ export function LoginForm({ onSuccess, onError, onMfaRequired }: LoginFormProps)
         onMfaRequired?.({ userId: mfa.userId, mfaToken: mfa.mfaToken });
         return;
       }
-      onError?.(err instanceof Error ? err.message : 'Login failed');
+      onError?.(errorMessage(err, 'Login failed'));
     }
   };
 

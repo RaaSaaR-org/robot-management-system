@@ -7,7 +7,7 @@
  */
 
 import { useState } from 'react';
-import { Button, Checkbox, FormField, Input } from '@/shared/components/ui';
+import { Button, Checkbox, FormField, Input, errorMessage } from '@/shared/components/ui';
 import { authApi } from '../api/authApi';
 import { AuthFormError } from './AuthLayout';
 
@@ -51,7 +51,7 @@ export function MFASetup({ onComplete, onCancel }: MFASetupProps) {
       setOtpauthUrl(result.otpauthUrl);
       setStep('verify');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start setup');
+      setError(errorMessage(err, 'Failed to start setup'));
     } finally {
       setIsLoading(false);
     }
@@ -69,7 +69,7 @@ export function MFASetup({ onComplete, onCancel }: MFASetupProps) {
       setRecoveryCodes(result.recoveryCodes);
       setStep('recovery');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid code. Try again.');
+      setError(errorMessage(err, 'Invalid code. Try again.'));
     } finally {
       setIsLoading(false);
     }

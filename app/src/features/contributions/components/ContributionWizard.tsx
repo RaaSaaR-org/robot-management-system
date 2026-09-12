@@ -6,6 +6,7 @@
 
 import { useState } from 'react';
 import { cn } from '@/shared/utils/cn';
+import { errorMessage } from '@/shared/components/ui';
 import {
   ChevronLeft,
   ChevronRight,
@@ -177,7 +178,7 @@ export function ContributionWizard({
       }
       setCurrentStep((prev) => Math.min(prev + 1, STEPS.length - 1));
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'An error occurred');
+      setLocalError(errorMessage(err, 'An error occurred'));
     } finally {
       setIsSubmitting(false);
     }
@@ -199,7 +200,7 @@ export function ContributionWizard({
       await submitForReview(data.contributionId);
       onComplete(data.contributionId);
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Failed to submit');
+      setLocalError(errorMessage(err, 'Failed to submit'));
     } finally {
       setIsSubmitting(false);
     }

@@ -9,6 +9,7 @@
 import { Suspense, lazy } from 'react';
 import { BatteryCharging, Home } from 'lucide-react';
 import { Button, Panel, StatusTag } from '@/shared/components/ui';
+import { usePermission } from '@/features/auth/hooks/useAuth';
 import { Robot3DViewerFallback } from '../visualization';
 import { VlaControlSection } from '../VlaControlSection';
 import { ProvenanceTag, Readout, provenanceOf } from '../common';
@@ -56,6 +57,11 @@ export function OverviewTab({
   const speed = odometry ? odometrySpeed(odometry) : null;
   const statusLabel =
     ROBOT_STATUS_LABELS[robot.status as keyof typeof ROBOT_STATUS_LABELS] ?? robot.status;
+  // Read only to explain *why* the buttons are dead, never to gate them: the
+  // gate is `canExecuteCommands`, computed once in RobotDetailPanel. Without
+  // this, a viewer looking at a healthy robot would be told the robot is at
+  // fault for their own role's limit.
+  const canCommand = usePermission('robots:command');
 
   return (
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
@@ -116,11 +122,18 @@ export function OverviewTab({
                 Home
               </Button>
             </div>
-            {!isRobotAvailable(robot) && (
+            {!canCommand ? (
               <p className="text-xs text-ink-tertiary">
-                Robot must be online to receive commands — currently{' '}
-                <span className="text-ink-secondary">{statusLabel.toLowerCase()}</span>.
+                Your role can watch this robot but not command it. Ask an owner for
+                robot command access.
               </p>
+            ) : (
+              !isRobotAvailable(robot) && (
+                <p className="text-xs text-ink-tertiary">
+                  Robot must be online to receive commands — currently{' '}
+                  <span className="text-ink-secondary">{statusLabel.toLowerCase()}</span>.
+                </p>
+              )
             )}
           </Panel.Body>
         </Panel>

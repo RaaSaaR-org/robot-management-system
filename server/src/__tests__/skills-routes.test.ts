@@ -134,7 +134,8 @@ describe('Skills Routes', () => {
         .send({ name: 'x', steps: [{ skillId: 'skill-001' }] });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('bad chain');
+      expect(response.body.error).toBe('Failed to create skill chain');
+      expect(JSON.stringify(response.body)).not.toContain('bad chain');
     });
   });
 
@@ -166,7 +167,8 @@ describe('Skills Routes', () => {
       const response = await request(app).get('/api/skills/chains');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('db down');
+      expect(response.body.error).toBe('Failed to list skill chains');
+      expect(JSON.stringify(response.body)).not.toContain('db down');
     });
   });
 
@@ -188,7 +190,8 @@ describe('Skills Routes', () => {
       const response = await request(app).get('/api/skills/chains/active');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to list active chains');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -218,7 +221,8 @@ describe('Skills Routes', () => {
       const response = await request(app).get('/api/skills/chains/chain-001');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to get skill chain');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -258,7 +262,8 @@ describe('Skills Routes', () => {
         .send({ name: 'x' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('invalid update');
+      expect(response.body.error).toBe('Failed to update skill chain');
+      expect(JSON.stringify(response.body)).not.toContain('invalid update');
     });
   });
 
@@ -288,7 +293,8 @@ describe('Skills Routes', () => {
       const response = await request(app).delete('/api/skills/chains/chain-001');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot delete');
+      expect(response.body.error).toBe('Failed to delete skill chain');
+      expect(JSON.stringify(response.body)).not.toContain('cannot delete');
     });
   });
 
@@ -310,7 +316,8 @@ describe('Skills Routes', () => {
       const response = await request(app).post('/api/skills/chains/chain-001/activate');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot activate');
+      expect(response.body.error).toBe('Failed to activate skill chain');
+      expect(JSON.stringify(response.body)).not.toContain('cannot activate');
     });
   });
 
@@ -332,7 +339,8 @@ describe('Skills Routes', () => {
       const response = await request(app).post('/api/skills/chains/chain-001/archive');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot archive');
+      expect(response.body.error).toBe('Failed to archive skill chain');
+      expect(JSON.stringify(response.body)).not.toContain('cannot archive');
     });
   });
 
@@ -384,7 +392,8 @@ describe('Skills Routes', () => {
         .send({ robotId: 'robot-1' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('exec boom');
+      expect(response.body.error).toBe('Failed to execute skill chain');
+      expect(JSON.stringify(response.body)).not.toContain('exec boom');
     });
   });
 
@@ -428,7 +437,8 @@ describe('Skills Routes', () => {
         .send({ name: 'x', version: '1.0.0' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('bad skill');
+      expect(response.body.error).toBe('Failed to create skill');
+      expect(JSON.stringify(response.body)).not.toContain('bad skill');
     });
   });
 
@@ -482,7 +492,8 @@ describe('Skills Routes', () => {
       const response = await request(app).get('/api/skills');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('db down');
+      expect(response.body.error).toBe('Failed to list skills');
+      expect(JSON.stringify(response.body)).not.toContain('db down');
     });
   });
 
@@ -504,7 +515,8 @@ describe('Skills Routes', () => {
       const response = await request(app).get('/api/skills/published');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to list published skills');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -526,7 +538,8 @@ describe('Skills Routes', () => {
       const response = await request(app).get('/api/skills/for-robot/robot-1');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('no robot');
+      expect(response.body.error).toBe('Failed to get skills for robot');
+      expect(JSON.stringify(response.body)).not.toContain('no robot');
     });
   });
 
@@ -556,7 +569,8 @@ describe('Skills Routes', () => {
       const response = await request(app).get('/api/skills/skill-001');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to get skill');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -592,7 +606,8 @@ describe('Skills Routes', () => {
       const response = await request(app).put('/api/skills/skill-001').send({ name: 'x' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('invalid');
+      expect(response.body.error).toBe('Failed to update skill');
+      expect(JSON.stringify(response.body)).not.toContain('invalid');
     });
   });
 
@@ -622,7 +637,8 @@ describe('Skills Routes', () => {
       const response = await request(app).delete('/api/skills/skill-001');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot delete');
+      expect(response.body.error).toBe('Failed to delete skill');
+      expect(JSON.stringify(response.body)).not.toContain('cannot delete');
     });
   });
 
@@ -648,7 +664,8 @@ describe('Skills Routes', () => {
       const response = await request(app).post('/api/skills/skill-001/publish');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot publish');
+      expect(response.body.error).toBe('Failed to publish skill');
+      expect(JSON.stringify(response.body)).not.toContain('cannot publish');
     });
   });
 
@@ -673,7 +690,8 @@ describe('Skills Routes', () => {
       const response = await request(app).post('/api/skills/skill-001/deprecate');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot deprecate');
+      expect(response.body.error).toBe('Failed to deprecate skill');
+      expect(JSON.stringify(response.body)).not.toContain('cannot deprecate');
     });
   });
 
@@ -695,7 +713,8 @@ describe('Skills Routes', () => {
       const response = await request(app).post('/api/skills/skill-001/archive');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cannot archive');
+      expect(response.body.error).toBe('Failed to archive skill');
+      expect(JSON.stringify(response.body)).not.toContain('cannot archive');
     });
   });
 
@@ -735,7 +754,8 @@ describe('Skills Routes', () => {
         .send({ parameters: { speed: 1 } });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('bad params');
+      expect(response.body.error).toBe('Failed to validate parameters');
+      expect(JSON.stringify(response.body)).not.toContain('bad params');
     });
   });
 
@@ -763,7 +783,8 @@ describe('Skills Routes', () => {
       const response = await request(app).get('/api/skills/skill-001/compatible-robots');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to get compatible robots');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -787,7 +808,8 @@ describe('Skills Routes', () => {
       const response = await request(app).get('/api/skills/skill-001/check-robot/robot-1');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to check compatibility');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -837,7 +859,8 @@ describe('Skills Routes', () => {
         .send({ robotId: 'robot-1' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('abort boom');
+      expect(response.body.error).toBe('Failed to abort skill');
+      expect(JSON.stringify(response.body)).not.toContain('abort boom');
     });
   });
 
@@ -905,7 +928,8 @@ describe('Skills Routes', () => {
         .send({ robotId: 'robot-1' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('exec boom');
+      expect(response.body.error).toBe('Failed to execute skill');
+      expect(JSON.stringify(response.body)).not.toContain('exec boom');
     });
   });
 });

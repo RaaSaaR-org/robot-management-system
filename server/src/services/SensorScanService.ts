@@ -219,18 +219,40 @@ export class SensorScanService extends EventEmitter {
     return modelStorage.getSensorScanStream(record.storageKey);
   }
 
-  async deleteScan(id: string): Promise<boolean> {
+  /**
+   * Delete one scan: its stored blob first, then its row.
+   *
+   * @param opts.strictStorage When true, a blob-delete failure REJECTS and the
+   * row is left in place, so the scan can be found and retried. The erasure
+   * cascade (DigitalTwinService.deleteTwin) uses this: dropping the row while
+   * the point cloud survives in the bucket would orphan customer data with no
+   * index left to reach it. The default (false) keeps the ad-hoc/prune
+   * behaviour — best effort on the blob, always drop the row.
+   */
+  async deleteScan(id: string, opts: { strictStorage?: boolean } = {}): Promise<boolean> {
     const record = await sensorScanRepository.findById(id);
     if (!record) return false;
 
-    try {
+    if (opts.strictStorage) {
       if (record.storageBackend === 'local') {
-        await fs.unlink(record.storageKey).catch(() => {});
+        // A blob that is already gone is not a failure — the row still must go.
+        await fs.unlink(record.storageKey).catch((err: NodeJS.ErrnoException) => {
+          if (err?.code !== 'ENOENT') throw err;
+        });
       } else {
-        await modelStorage.deleteSensorScan(record.storageKey).catch(() => {});
+        await modelStorage.deleteSensorScan(record.storageKey);
       }
-    } finally {
       await sensorScanRepository.delete(id);
+    } else {
+      try {
+        if (record.storageBackend === 'local') {
+          await fs.unlink(record.storageKey).catch(() => {});
+        } else {
+          await modelStorage.deleteSensorScan(record.storageKey).catch(() => {});
+        }
+      } finally {
+        await sensorScanRepository.delete(id);
+      }
     }
 
     this.emitEvent({

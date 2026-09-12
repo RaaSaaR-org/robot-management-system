@@ -10,8 +10,20 @@
  * @status live
  */
 
-import { platformAuthHeaders } from '../utils/platform-auth.js';
+import {
+  SERVICE_TOKEN_ENV,
+  isAuthRejection,
+  platformAuthHeaders,
+  recordPlatformAuthRejection,
+} from '../utils/platform-auth.js';
 import { config } from '../config/config.js';
+
+/** Why the platform refused us, in the words an operator can act on. */
+function credentialHint(): string {
+  return process.env[SERVICE_TOKEN_ENV]
+    ? `the configured ${SERVICE_TOKEN_ENV} was refused`
+    : `no ${SERVICE_TOKEN_ENV} is configured`;
+}
 
 // ============================================================================
 // TYPES
@@ -156,6 +168,28 @@ export class ComplianceLogClient {
     return AbortSignal.timeout(this.requestTimeoutMs);
   }
 
+  /**
+   * The platform refused our credential on a compliance call.
+   *
+   * Record-keeping is a duty, not best-effort telemetry (EU AI Act Art. 12,
+   * GDPR Art. 30): a 401/403 here means the audit trail has a hole in it, and a
+   * queue that quietly grows until the process exits is not a report of that.
+   * So it is recorded for `GET /api/v1/health` and said out loud — but never
+   * made fatal, exactly as the other platform clients do it: compliance logging
+   * is not permitted to decide whether the robot runs.
+   */
+  private reportAuthRejection(
+    what: string,
+    status: number,
+    url: string,
+    consequence: string,
+  ): void {
+    recordPlatformAuthRejection('ComplianceLogClient', status, url);
+    console.error(
+      `[ComplianceLogClient] ${what} rejected: HTTP ${status} — ${credentialHint()}. ${consequence}`,
+    );
+  }
+
   // ==========================================================================
   // SESSION MANAGEMENT
   // ==========================================================================
@@ -169,8 +203,9 @@ export class ComplianceLogClient {
    * queue for a later flush. The robot boots either way.
    */
   async startSession(): Promise<string> {
+    const url = `${this.serverUrl}/api/compliance/sessions`;
     try {
-      const response = await fetch(`${this.serverUrl}/api/compliance/sessions`, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...platformAuthHeaders() },
         body: JSON.stringify({ robotId: this.robotId }),
@@ -178,6 +213,14 @@ export class ComplianceLogClient {
       });
 
       if (!response.ok) {
+        if (isAuthRejection(response.status)) {
+          this.reportAuthRejection(
+            'Session start',
+            response.status,
+            url,
+            'This robot falls back to an offline session, and nothing it records reaches the audit trail until that is fixed.',
+          );
+        }
         throw new Error(`Failed to start session: ${response.statusText}`);
       }
 
@@ -218,12 +261,23 @@ export class ComplianceLogClient {
     try {
       // Bounded like the rest: this one runs from the SIGTERM/SIGINT path, where
       // an unbounded wait holds the whole shutdown open behind a stalled server.
-      const response = await fetch(`${this.serverUrl}/api/compliance/sessions/${this.sessionId}`, {
+      const url = `${this.serverUrl}/api/compliance/sessions/${this.sessionId}`;
+      const response = await fetch(url, {
         method: 'DELETE',
         headers: platformAuthHeaders(),
         signal: this.requestSignal(),
       });
-      if (!response.ok) throw new Error(`Failed to end session: HTTP ${response.status}`);
+      if (!response.ok) {
+        if (isAuthRejection(response.status)) {
+          this.reportAuthRejection(
+            'Session shutdown',
+            response.status,
+            url,
+            'The server keeps this session open with no end time.',
+          );
+        }
+        throw new Error(`Failed to end session: HTTP ${response.status}`);
+      }
       console.log(`[ComplianceLogClient] Session ended: ${this.sessionId}`);
     } catch (error) {
       console.error('[ComplianceLogClient] Failed to end session:', error);
@@ -356,9 +410,10 @@ export class ComplianceLogClient {
    */
   private async sendLogImmediately(log: QueuedLog): Promise<void> {
     const sessionId = await this.getSessionId();
+    const url = `${this.serverUrl}/api/compliance/logs`;
 
     try {
-      const response = await fetch(`${this.serverUrl}/api/compliance/logs`, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...platformAuthHeaders() },
         body: JSON.stringify({
@@ -377,6 +432,14 @@ export class ComplianceLogClient {
       });
 
       if (!response.ok) {
+        if (isAuthRejection(response.status)) {
+          this.reportAuthRejection(
+            'Immediate log delivery',
+            response.status,
+            url,
+            `This ${log.eventType} record is queued for retry and is in no audit trail yet.`,
+          );
+        }
         throw new Error(`Failed to send log: ${response.statusText}`);
       }
 
@@ -411,10 +474,14 @@ export class ComplianceLogClient {
     // Send logs one by one (server doesn't support batch endpoint yet)
     let successCount = 0;
     const failedLogs: QueuedLog[] = [];
+    const url = `${this.serverUrl}/api/compliance/logs`;
+    // Once per pass, not once per record: a refused credential refuses the whole
+    // backlog, and N identical lines would bury the one fact behind them.
+    let authRejected = false;
 
     for (const [index, log] of logsToSend.entries()) {
       try {
-        const response = await fetch(`${this.serverUrl}/api/compliance/logs`, {
+        const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...platformAuthHeaders() },
           body: JSON.stringify({
@@ -435,6 +502,15 @@ export class ComplianceLogClient {
         if (response.ok) {
           successCount++;
         } else {
+          if (isAuthRejection(response.status) && !authRejected) {
+            authRejected = true;
+            this.reportAuthRejection(
+              'Queued log delivery',
+              response.status,
+              url,
+              'Records stay queued in this process and are lost if it exits before the credential is fixed.',
+            );
+          }
           failedLogs.push(log);
         }
       } catch {

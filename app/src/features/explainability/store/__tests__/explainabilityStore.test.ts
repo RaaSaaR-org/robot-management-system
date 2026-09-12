@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ApiRequestError } from '@/api/client';
 import {
   useExplainabilityStore,
   selectDecisions,
@@ -108,12 +109,26 @@ describe('explainabilityStore', () => {
       expect(s.decisions).toEqual([]);
     });
 
-    it('falls back to default error message for non-Error rejection', async () => {
+    it('surfaces a bare-string rejection (getErrorMessage passes strings through)', async () => {
       api.getDecisions.mockRejectedValue('weird');
 
       await useExplainabilityStore.getState().fetchDecisions();
 
-      expect(useExplainabilityStore.getState().error).toBe('Failed to fetch decisions');
+      expect(useExplainabilityStore.getState().error).toBe('weird');
+    });
+
+    it('surfaces the message of an ApiRequestError (the shape production rejects with)', async () => {
+      api.getDecisions.mockRejectedValue(
+        new ApiRequestError({
+          code: 'UNKNOWN_ERROR',
+          message: 'Decision log unavailable',
+          statusCode: 503,
+        })
+      );
+
+      await useExplainabilityStore.getState().fetchDecisions();
+
+      expect(useExplainabilityStore.getState().error).toBe('Decision log unavailable');
     });
 
     it('clears a previous error when starting a new fetch', async () => {

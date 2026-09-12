@@ -7,27 +7,13 @@
  */
 
 import { create } from 'zustand';
+import { errorMessage } from '@/shared/components/ui';
 import { organizationsApi } from '../api/organizationsApi';
 import type {
   Organization,
   CreateOrganizationInput,
   UpdateOrganizationInput,
 } from '../types/organizations.types';
-
-/**
- * Extract a human-readable message from a thrown value. The API client
- * rejects with a plain `ApiError` object (not a native Error), so the
- * usual `err instanceof Error ? err.message : fallback` pattern silently
- * drops the server's text. This helper handles both shapes.
- */
-function errorMessage(err: unknown, fallback: string): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    const m = (err as { message: unknown }).message;
-    if (typeof m === 'string' && m) return m;
-  }
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
-}
 
 interface OrganizationsState {
   list: Organization[];

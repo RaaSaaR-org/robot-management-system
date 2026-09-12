@@ -16,6 +16,7 @@ import type {
   CanaryStage,
   AggregatedDeploymentMetrics,
   ThresholdCheckResult,
+  DeploymentEvent,
 } from '../../types/deployment.types.js';
 import type { Robot, RegisteredRobot } from '../RobotManager.js';
 
@@ -137,6 +138,29 @@ function makeRegistered(overrides: Partial<RegisteredRobot> = {}): RegisteredRob
   };
 }
 
+/**
+ * Stand-in for the Deployment table, keyed by id. It is a store rather than an
+ * echo mock because the thing under test is what the service *persists*: an
+ * `update` that hands the patch straight back lets a test assert a status the
+ * row never took, which is how a rollback writing `'failed'` passed for so
+ * long. Same reason as the checkpointRows map in TrainingOrchestrator.test.ts.
+ * (TASK-299)
+ */
+const rows = new Map<string, Deployment>();
+
+/** Put a row in the fake table and return it. */
+function seedRow(deployment: Deployment): Deployment {
+  rows.set(deployment.id, deployment);
+  return deployment;
+}
+
+/** Point findById at the fake table (rather than one canned record). */
+function readThrough(): void {
+  vi.mocked(deploymentRepository.findById).mockImplementation(
+    async (id: string) => rows.get(id) ?? null,
+  );
+}
+
 // Each test uses a fresh instance by resetting the singleton's private cache.
 let service: DeploymentService;
 
@@ -149,11 +173,17 @@ beforeEach(() => {
   service = DeploymentService.getInstance();
   service.cleanup();
   service.removeAllListeners();
-  // Default repo update behaviour: echo back a merged record so callers that
-  // expect a non-null result get one.
+  // Default repo update behaviour: merge the patch into the stored row (adding
+  // one if the test never seeded it) and return what is now stored, so a later
+  // read sees exactly what was written.
+  rows.clear();
   vi.mocked(deploymentRepository.update).mockImplementation(
-    async (id: string, patch: Partial<Deployment>) =>
-      makeDeployment({ id, ...(patch as Partial<Deployment>) }),
+    async (id: string, patch: Partial<Deployment>) => {
+      const current = rows.get(id) ?? makeDeployment({ id });
+      const next: Deployment = { ...current, ...(patch as Partial<Deployment>), id };
+      rows.set(id, next);
+      return next;
+    },
   );
 });
 
@@ -464,13 +494,33 @@ describe('rollback', () => {
     );
   });
 
-  it('marks deployment failed and emits rollback events (no previous versions)', async () => {
-    vi.mocked(deploymentRepository.findById).mockResolvedValue(
-      makeDeployment({ id: 'dep-1', status: 'canary', deployedRobotIds: ['a'] }),
-    );
+  // Deploys one model version to the eligible robots so the service records a
+  // previous version per robot — the thing rollback needs to switch them back.
+  async function deployFirst(): Promise<void> {
+    seedRow(makeDeployment({ id: 'dep-1', status: 'pending' }));
+    readThrough();
+    vi.mocked(modelVersionRepository.findById).mockResolvedValue(makeModelVersion());
+    vi.mocked(modelVersionRepository.update).mockResolvedValue(makeModelVersion() as never);
 
-    const events: string[] = [];
-    service.onDeploymentEvent((e) => events.push(e.type));
+    const robots = [makeRobot({ id: 'a' }), makeRobot({ id: 'b' })];
+    vi.mocked(robotManager.listRobots).mockResolvedValue(robots);
+    vi.mocked(robotManager.getRobot).mockImplementation(
+      async (id: string) => robots.find((r) => r.id === id),
+    );
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
+    httpPost.mockResolvedValue({ status: 'switched', previousModelVersion: 'mv-0' });
+
+    await service.startCanary('dep-1');
+  }
+
+  it('persists rolled_back when there was nothing to switch back', async () => {
+    // No previous version recorded (e.g. after a server restart): zero rollback
+    // attempts is still a controlled withdrawal, not a failure.
+    seedRow(makeDeployment({ id: 'dep-1', status: 'canary', deployedRobotIds: ['a'] }));
+    readThrough();
+
+    const events: DeploymentEvent[] = [];
+    service.onDeploymentEvent((e) => events.push(e));
 
     const result = await service.rollback('dep-1', 'bad metrics');
 
@@ -478,13 +528,47 @@ describe('rollback', () => {
       'dep-1',
       expect.objectContaining({ status: 'rolling_back' }),
     );
-    expect(deploymentRepository.update).toHaveBeenLastCalledWith(
-      'dep-1',
-      expect.objectContaining({ status: 'failed' }),
+    // Read the status back out of the stored row, not off a call argument.
+    expect(rows.get('dep-1')!.status).toBe('rolled_back');
+    expect(rows.get('dep-1')!.completedAt).toBeInstanceOf(Date);
+    expect(result.status).toBe('rolled_back');
+    expect(events.map((e) => e.type)).toContain('deployment:rollback:started');
+    expect(events.find((e) => e.type === 'deployment:rollback:completed')?.deployment?.status).toBe(
+      'rolled_back',
     );
+  });
+
+  it('persists rolled_back when every robot switches back', async () => {
+    await deployFirst();
+    expect(rows.get('dep-1')!.deployedRobotIds.length).toBeGreaterThan(0);
+
+    const events: DeploymentEvent[] = [];
+    service.onDeploymentEvent((e) => events.push(e));
+
+    const result = await service.rollback('dep-1', 'regression');
+
+    expect(httpPost).toHaveBeenCalledWith(
+      expect.stringContaining('/vla/model/switch'),
+      expect.objectContaining({ rollback: true }),
+    );
+    expect(rows.get('dep-1')!.status).toBe('rolled_back');
+    expect(result.status).toBe('rolled_back');
+    expect(events.find((e) => e.type === 'deployment:rollback:completed')?.deployment?.status).toBe(
+      'rolled_back',
+    );
+  });
+
+  it('persists failed when a robot refuses to switch back', async () => {
+    await deployFirst();
+
+    // The switch back errors on every robot: the fleet is left in a state
+    // nobody chose, which is the one case that earns 'failed'.
+    httpPost.mockResolvedValue({ status: 'error', error: 'stuck' });
+
+    const result = await service.rollback('dep-1', 'regression');
+
+    expect(rows.get('dep-1')!.status).toBe('failed');
     expect(result.status).toBe('failed');
-    expect(events).toContain('deployment:rollback:started');
-    expect(events).toContain('deployment:rollback:completed');
   });
 });
 
@@ -509,22 +593,21 @@ describe('cancelDeployment', () => {
     );
   });
 
-  it('cancels a pending deployment, marks it failed and emits cancelled', async () => {
-    vi.mocked(deploymentRepository.findById).mockResolvedValue(
-      makeDeployment({ id: 'dep-1', status: 'pending' }),
-    );
+  it('cancels a pending deployment, persists cancelled and emits cancelled', async () => {
+    seedRow(makeDeployment({ id: 'dep-1', status: 'pending' }));
+    readThrough();
 
-    const events: string[] = [];
-    service.onDeploymentEvent((e) => events.push(e.type));
+    const events: DeploymentEvent[] = [];
+    service.onDeploymentEvent((e) => events.push(e));
 
     const result = await service.cancelDeployment('dep-1');
 
-    expect(result.status).toBe('failed');
-    expect(deploymentRepository.update).toHaveBeenCalledWith(
-      'dep-1',
-      expect.objectContaining({ status: 'failed' }),
+    expect(result.status).toBe('cancelled');
+    expect(rows.get('dep-1')!.status).toBe('cancelled');
+    expect(rows.get('dep-1')!.completedAt).toBeInstanceOf(Date);
+    expect(events.find((e) => e.type === 'deployment:cancelled')?.deployment?.status).toBe(
+      'cancelled',
     );
-    expect(events).toContain('deployment:cancelled');
   });
 });
 
@@ -617,9 +700,8 @@ describe('handleThresholdViolation', () => {
   });
 
   it('auto-rolls back on a critical violation', async () => {
-    vi.mocked(deploymentRepository.findById).mockResolvedValue(
-      makeDeployment({ id: 'dep-1', status: 'canary', deployedRobotIds: [] }),
-    );
+    seedRow(makeDeployment({ id: 'dep-1', status: 'canary', deployedRobotIds: [] }));
+    readThrough();
     const violations: ThresholdCheckResult = {
       passed: false,
       violations: [
@@ -633,10 +715,8 @@ describe('handleThresholdViolation', () => {
     await service.handleThresholdViolation('dep-1', metrics, violations);
 
     expect(events).toContain('deployment:rollback:started');
-    expect(deploymentRepository.update).toHaveBeenCalledWith(
-      'dep-1',
-      expect.objectContaining({ status: 'failed' }),
-    );
+    // An auto-rollback that completed is still a controlled withdrawal.
+    expect(rows.get('dep-1')!.status).toBe('rolled_back');
   });
 });
 

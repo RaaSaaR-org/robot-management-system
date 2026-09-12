@@ -853,6 +853,10 @@ describe('escalateOverdueApprovals', () => {
   });
 
   it('skips already-escalated requests', async () => {
+    // Before TASK-290 this fed the guard input production could never produce:
+    // `escalated` was not an open status, so findOverdue() could not return an
+    // escalated row and the guard below was dead code. Now that an escalated
+    // request stays in the overdue set, this case is the real behaviour.
     vi.mocked(approvalRequestRepository.findOverdue).mockResolvedValue([
       makeRequest({ status: 'escalated' }),
     ]);
@@ -861,6 +865,48 @@ describe('escalateOverdueApprovals', () => {
 
     expect(escalationRuleRepository.findActiveForEntityType).not.toHaveBeenCalled();
     expect(approvalRequestRepository.escalate).not.toHaveBeenCalled();
+  });
+
+  it('escalates only the pending request when both are overdue', async () => {
+    // The mixed batch findOverdue() now actually returns: the escalated row
+    // must not be escalated a second time on every 30-minute tick, while the
+    // pending one beside it still must be.
+    const rule = {
+      id: 'rule1',
+      name: 'r',
+      description: null,
+      entityType: 'performance_evaluation' as const,
+      approvalType: null,
+      triggerCondition: 'overdue' as const,
+      triggerThreshold: 2,
+      escalateTo: 'admin' as const,
+      notifyOriginal: false,
+      notifyAdmin: true,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    vi.mocked(approvalRequestRepository.findOverdue).mockResolvedValue([
+      makeRequest({
+        id: 'already-escalated',
+        status: 'escalated',
+        slaDeadline: new Date(Date.now() - 9 * 60 * 60 * 1000),
+      }),
+      makeRequest({
+        id: 'still-pending',
+        status: 'pending',
+        slaDeadline: new Date(Date.now() - 5 * 60 * 60 * 1000),
+      }),
+    ]);
+    vi.mocked(escalationRuleRepository.findActiveForEntityType).mockResolvedValue([rule]);
+    vi.mocked(approvalRequestRepository.escalate).mockResolvedValue(
+      makeRequest({ id: 'still-pending', status: 'escalated', escalationLevel: 1 })
+    );
+
+    await service.escalateOverdueApprovals();
+
+    expect(approvalRequestRepository.escalate).toHaveBeenCalledTimes(1);
+    expect(approvalRequestRepository.escalate).toHaveBeenCalledWith('still-pending', 'system');
   });
 
   it('does not escalate when the overdue threshold is not yet reached', async () => {

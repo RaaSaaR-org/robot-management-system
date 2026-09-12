@@ -129,7 +129,10 @@ robot-agent/src/
 │   ├── SafetyMonitor.ts      # Safety monitoring & protective stop
 │   └── types.ts
 ├── compliance/
-│   └── ComplianceLogClient.ts # HTTP client for server compliance API
+│   └── ComplianceLogClient.ts # Compliance logs → server. Authenticates with
+│                              # NEODEM_SERVICE_TOKEN (platformAuthHeaders);
+│                              # a 401/403 is recorded and reported on
+│                              # GET /api/v1/health instead of being dropped
 ├── vla/                       # VLA inference client (gRPC)
 │   ├── vla-client.ts          # gRPC client for VLA inference server
 │   ├── vla-controller.ts      # VLA action execution controller
@@ -175,10 +178,32 @@ vla_runner.py — Thread-based VLA control loop at 5 Hz.
 | `test` | Test file (`*.test.ts`, `hardware/tests/test_*.py`) — CI only |
 | `orphaned` | Imported/referenced by live code but no caller or launcher exercises it — broken wire |
 | `dead` | No importer, no caller anywhere. Safe to delete. |
+| `unshipped` | Reachable from a live entry point and green in CI, but cannot deliver the function its header or `@regulatory` tag claims — do not read it as coverage |
 
-When adding a new file, tag it. When moving code from live to orphaned
-(or vice versa), update the tag. `scripts/annotate-status.mjs` handled
-the initial bulk pass; subsequent maintenance is manual.
+`unshipped` is the tag for the worst kind of file to inherit: one that looks
+finished. It is not `orphaned` (the wire is connected) and not `dead` (it runs),
+it simply cannot do the job its own header advertises — a signature check over a
+fabricated constant, a fulfilment API no screen calls. Write it with the reason
+on the same line, so a reader never has to open a second file to learn what is
+missing:
+
+```ts
+ * @status unshipped — <one line: what it cannot do> (TASK-NNN)
+```
+
+When a file carries both `unshipped` and a `@regulatory` tag, keep the
+regulatory claim and mark it as claimed-not-met next to the status; deleting the
+claim hides the gap from whoever audits that article later.
+
+When adding a new file, tag it. When moving code between statuses, update the
+tag. Maintenance is entirely manual and nothing enforces it: `test-all.sh` and
+`.github/` never look at `@status`, and `scripts/annotate-status.mjs` — which
+did the initial bulk pass and is still cited in older revisions of this file —
+**no longer exists**. To take an inventory, grep:
+
+```bash
+grep -rn '@status unshipped' app/src server/src robot-agent/src
+```
 
 ## AI Tools (Genkit)
 
@@ -233,7 +258,8 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 
 - **Max queue size**: 5
 - **Priority order**: critical(4) > high(3) > normal(2) > low(1)
-- **Supported actions**: `move_to_location`, `pickup_object`, `drop_object`, `charge`, `return_home`, `wait`, `inspect`, `custom`
+- **Supported actions**: `move_to_location`, `pickup_object`, `drop_object`, `charge`, `return_home`, `wait` — the list is `IMPLEMENTED_ACTION_TYPES` in `src/robot/TaskQueue.ts`
+- **Refuses `inspect` and `custom`**: declared by the server, implemented by nobody. The task is accepted, then reported `failed` with `Action type '<type>' is not implemented by this robot agent` — it is never simulated as completed. Any action type outside the supported list (e.g. the server-only `execute_skill`) gets the same answer
 - **Rejects tasks** when robot is in `error` or `maintenance` state
 
 ## Key Endpoints

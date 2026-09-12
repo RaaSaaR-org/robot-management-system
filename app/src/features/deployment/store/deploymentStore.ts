@@ -8,6 +8,7 @@ import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import { deploymentApi } from '../api';
+import { isActiveDeployment } from '../components/deploymentHelpers';
 import type {
   DeploymentState,
   DeploymentStore,
@@ -35,6 +36,7 @@ import type {
   ChainExecutionResult,
   SkillEvent,
 } from '../types';
+import { getErrorMessage } from '@/shared/utils';
 
 const initialState: DeploymentState = {
   // Deployments
@@ -99,7 +101,7 @@ export const useDeploymentStore = create<DeploymentStore>()(
             state.deploymentsLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch deployments';
+          const message = getErrorMessage(error, 'Failed to fetch deployments');
           set((state) => {
             state.deploymentsError = message;
             state.deploymentsLoading = false;
@@ -124,7 +126,7 @@ export const useDeploymentStore = create<DeploymentStore>()(
             state.deploymentsLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch active deployments';
+          const message = getErrorMessage(error, 'Failed to fetch active deployments');
           set((state) => {
             state.deploymentsError = message;
             state.deploymentsLoading = false;
@@ -281,7 +283,7 @@ export const useDeploymentStore = create<DeploymentStore>()(
             state.skillsLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch skills';
+          const message = getErrorMessage(error, 'Failed to fetch skills');
           set((state) => {
             state.skillsError = message;
             state.skillsLoading = false;
@@ -303,7 +305,7 @@ export const useDeploymentStore = create<DeploymentStore>()(
             state.skillsLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch published skills';
+          const message = getErrorMessage(error, 'Failed to fetch published skills');
           set((state) => {
             state.skillsError = message;
             state.skillsLoading = false;
@@ -439,7 +441,7 @@ export const useDeploymentStore = create<DeploymentStore>()(
             state.skillChainsLoading = false;
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to fetch skill chains';
+          const message = getErrorMessage(error, 'Failed to fetch skill chains');
           set((state) => {
             state.skillChainsError = message;
             state.skillChainsLoading = false;
@@ -677,8 +679,14 @@ export const selectActiveDeployments = (state: DeploymentStore) =>
     (d) => d.status === 'pending' || d.status === 'deploying' || d.status === 'canary'
   );
 
+/**
+ * Everything that is no longer moving — the History split. Derived from
+ * `isActiveDeployment` so it cannot drift from the one the pages use: a
+ * hard-coded `production || failed` list silently dropped 'rolled_back' and
+ * 'cancelled' rows. (TASK-299)
+ */
 export const selectCompletedDeployments = (state: DeploymentStore) =>
-  state.deployments.filter((d) => d.status === 'production' || d.status === 'failed');
+  state.deployments.filter((d) => !isActiveDeployment(d));
 
 export const selectDeploymentById = (id: string) => (state: DeploymentStore) =>
   state.deployments.find((d) => d.id === id);

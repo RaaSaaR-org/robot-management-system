@@ -148,7 +148,8 @@ describe('Embodiments Routes', () => {
       const response = await request(app).post('/api/embodiments').send(VALID_CREATE_INPUT);
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Invalid YAML config');
+      expect(response.body.error).toBe('Failed to create embodiment');
+      expect(response.body.error).not.toContain('Invalid YAML config');
     });
   });
 
@@ -196,7 +197,8 @@ describe('Embodiments Routes', () => {
       const response = await request(app).get('/api/embodiments');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('DB error');
+      expect(response.body.error).toBe('Failed to list embodiments');
+      expect(response.body.error).not.toContain('DB error');
     });
   });
 
@@ -243,7 +245,8 @@ describe('Embodiments Routes', () => {
       const response = await request(app).get('/api/embodiments/so101/config');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to get config');
+      expect(response.body.error).not.toContain('boom');
     });
   });
 
@@ -277,7 +280,8 @@ describe('Embodiments Routes', () => {
       const response = await request(app).get('/api/embodiments/so101');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('DB error');
+      expect(response.body.error).toBe('Failed to get embodiment');
+      expect(response.body.error).not.toContain('DB error');
     });
   });
 
@@ -321,7 +325,8 @@ describe('Embodiments Routes', () => {
         .send({ configYaml: 'bad' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Invalid YAML config');
+      expect(response.body.error).toBe('Failed to update embodiment');
+      expect(response.body.error).not.toContain('Invalid YAML config');
     });
   });
 
@@ -355,7 +360,8 @@ describe('Embodiments Routes', () => {
       const response = await request(app).delete('/api/embodiments/so101');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('FK constraint');
+      expect(response.body.error).toBe('Failed to delete embodiment');
+      expect(response.body.error).not.toContain('FK constraint');
     });
   });
 
@@ -400,7 +406,8 @@ describe('Embodiments Routes', () => {
         .send({ configYaml: 'bad: : :' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('parse failure');
+      expect(response.body.error).toBe('Failed to validate config');
+      expect(response.body.error).not.toContain('parse failure');
     });
   });
 
@@ -439,7 +446,8 @@ describe('Embodiments Routes', () => {
         .send({ robotTypeId: 'rt-1' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('not found');
+      expect(response.body.error).toBe('Failed to link embodiment');
+      expect(response.body.error).not.toContain('not found');
     });
   });
 
@@ -466,7 +474,8 @@ describe('Embodiments Routes', () => {
       const response = await request(app).post('/api/embodiments/so101/unlink');
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('not found');
+      expect(response.body.error).toBe('Failed to unlink embodiment');
+      expect(response.body.error).not.toContain('not found');
     });
   });
 });

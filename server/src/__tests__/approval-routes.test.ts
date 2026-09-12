@@ -4,9 +4,10 @@
  * @feature approvals
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
 const { mockApprovalWorkflowService } = vi.hoisted(() => ({
@@ -40,18 +41,28 @@ vi.mock('../services/ApprovalWorkflowService.js', () => ({
   approvalWorkflowService: mockApprovalWorkflowService,
 }));
 
-vi.mock('../middleware/auth.middleware.js', () => ({
-  authMiddleware: (req: any, _res: any, next: any) => {
-    req.user = { id: 'user-123', email: 'test@example.com', name: 'Test', role: 'admin' };
-    next();
-  },
-  AuthenticatedRequest: {},
-}));
+// The auth middleware is deliberately NOT mocked (TASK-289). The decision
+// actor now comes from the session, so a stub that invents `req.user` would
+// make body value and session identity indistinguishable — exactly the seam
+// these tests exist to check. Each app is therefore built *after*
+// AUTH_DISABLED is set, following `auth-middleware.test.ts`.
+const JWT_SECRET = process.env.JWT_SECRET as string;
 
-import { approvalRoutes } from '../routes/approval.routes.js';
-import { authMiddleware } from '../middleware/auth.middleware.js';
+/** A token for a user whose id appears nowhere in any request body below. */
+function tokenFor(userId: string): string {
+  return jwt.sign(
+    { userId, email: 'a@b.c', name: 'A', role: 'member' },
+    JWT_SECRET,
+    { expiresIn: 3600 }
+  );
+}
 
-function createApp() {
+async function createApp(authDisabled = true): Promise<express.Express> {
+  process.env.AUTH_DISABLED = String(authDisabled);
+  vi.resetModules();
+  const { authMiddleware } = await import('../middleware/auth.middleware.js');
+  const { approvalRoutes } = await import('../routes/approval.routes.js');
+
   const app = express();
   app.use(express.json());
   app.use('/api/approvals', authMiddleware as any, approvalRoutes);
@@ -85,10 +96,17 @@ const mockContest = {
 
 describe('Approval Routes', () => {
   let app: express.Express;
+  const originalEnv = { ...process.env };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    app = createApp();
+    // Default app: AUTH_DISABLED=true, so the session user is MOCK_USER
+    // ('dev-user-id'). Tests that need a real token rebuild the app.
+    app = await createApp();
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
   });
 
   // --------------------------------------------------------------------------
@@ -121,7 +139,8 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('DB error');
+      expect(response.body.error).toBe('Failed to get approval requests');
+      expect(JSON.stringify(response.body)).not.toContain('DB error');
     });
   });
 
@@ -167,7 +186,8 @@ describe('Approval Routes', () => {
       });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to create approval request');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -201,7 +221,8 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/pending/me');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('x');
+      expect(response.body.error).toBe('Failed to get pending approvals');
+      expect(JSON.stringify(response.body)).not.toContain('x');
     });
   });
 
@@ -233,7 +254,7 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/pending/role/admin');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('y');
+      expect(response.body.error).toBe('Failed to get pending approvals by role');
     });
   });
 
@@ -258,7 +279,8 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/overdue');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('z');
+      expect(response.body.error).toBe('Failed to get overdue approvals');
+      expect(JSON.stringify(response.body)).not.toContain('z');
     });
   });
 
@@ -293,7 +315,8 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/nearing-deadline');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('w');
+      expect(response.body.error).toBe('Failed to get approvals nearing deadline');
+      expect(JSON.stringify(response.body)).not.toContain('w');
     });
   });
 
@@ -327,7 +350,7 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/appr-001');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('e');
+      expect(response.body.error).toBe('Failed to get approval request');
     });
   });
 
@@ -336,12 +359,12 @@ describe('Approval Routes', () => {
   // --------------------------------------------------------------------------
 
   describe('POST /api/approvals/:id/steps/:stepId/decide', () => {
-    it('processes an approval decision', async () => {
+    it('records the dev session user as the actor under AUTH_DISABLED', async () => {
       mockApprovalWorkflowService.processApproval.mockResolvedValue(mockRequest);
 
       const response = await request(app)
         .post('/api/approvals/appr-001/steps/step-1/decide')
-        .send({ decision: 'approve', decidedBy: 'user-123' });
+        .send({ decision: 'approve' });
 
       expect(response.status).toBe(200);
       expect(mockApprovalWorkflowService.processApproval).toHaveBeenCalledWith(
@@ -349,27 +372,69 @@ describe('Approval Routes', () => {
           approvalRequestId: 'appr-001',
           stepId: 'step-1',
           decision: 'approve',
-          decidedBy: 'user-123',
+          decidedBy: 'dev-user-id',
         })
       );
+    });
+
+    it('takes the actor from the token, not from the body', async () => {
+      app = await createApp(false);
+      mockApprovalWorkflowService.processApproval.mockResolvedValue(mockRequest);
+
+      const response = await request(app)
+        .post('/api/approvals/appr-001/steps/step-1/decide')
+        .set('Authorization', `Bearer ${tokenFor('token-user')}`)
+        // Every string in this body is someone else; 'token-user' appears in
+        // none of it, so only a session-derived actor can produce it.
+        .send({ decision: 'approve', decisionNotes: 'reviewed for victim@corp' });
+
+      expect(response.status).toBe(200);
+      expect(mockApprovalWorkflowService.processApproval).toHaveBeenCalledWith(
+        expect.objectContaining({ decidedBy: 'token-user' })
+      );
+    });
+
+    it('refuses a body-supplied decidedBy naming someone else', async () => {
+      app = await createApp(false);
+
+      const response = await request(app)
+        .post('/api/approvals/appr-001/steps/step-1/decide')
+        .set('Authorization', `Bearer ${tokenFor('token-user')}`)
+        .send({ decision: 'approve', decidedBy: 'victim@corp' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('decidedBy is not accepted');
+      expect(mockApprovalWorkflowService.processApproval).not.toHaveBeenCalled();
+    });
+
+    it('refuses a body-supplied decidedBy under AUTH_DISABLED too', async () => {
+      const response = await request(app)
+        .post('/api/approvals/appr-001/steps/step-1/decide')
+        .send({ decision: 'approve', decidedBy: 'dev-user-id' });
+
+      expect(response.status).toBe(400);
+      expect(mockApprovalWorkflowService.processApproval).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 without a token when auth is enabled', async () => {
+      app = await createApp(false);
+
+      const response = await request(app)
+        .post('/api/approvals/appr-001/steps/step-1/decide')
+        .send({ decision: 'approve' });
+
+      expect(response.status).toBe(401);
+      expect(mockApprovalWorkflowService.processApproval).not.toHaveBeenCalled();
     });
 
     it('returns 400 for invalid decision', async () => {
       const response = await request(app)
         .post('/api/approvals/appr-001/steps/step-1/decide')
-        .send({ decision: 'maybe', decidedBy: 'user-123' });
+        .send({ decision: 'maybe' });
 
       expect(response.status).toBe(400);
       expect(response.body.error).toContain('Valid decision is required');
-    });
-
-    it('returns 400 when decidedBy missing', async () => {
-      const response = await request(app)
-        .post('/api/approvals/appr-001/steps/step-1/decide')
-        .send({ decision: 'approve' });
-
-      expect(response.status).toBe(400);
-      expect(response.body.error).toBe('decidedBy is required');
+      expect(mockApprovalWorkflowService.processApproval).not.toHaveBeenCalled();
     });
 
     it('returns 500 on service error', async () => {
@@ -377,10 +442,10 @@ describe('Approval Routes', () => {
 
       const response = await request(app)
         .post('/api/approvals/appr-001/steps/step-1/decide')
-        .send({ decision: 'reject', decidedBy: 'user-123' });
+        .send({ decision: 'reject' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('p');
+      expect(response.body.error).toBe('Failed to process approval decision');
     });
   });
 
@@ -389,28 +454,68 @@ describe('Approval Routes', () => {
   // --------------------------------------------------------------------------
 
   describe('POST /api/approvals/:id/cancel', () => {
-    it('cancels an approval request', async () => {
+    it('cancels with the dev session user as the actor under AUTH_DISABLED', async () => {
       mockApprovalWorkflowService.cancelApprovalRequest.mockResolvedValue(mockRequest);
 
       const response = await request(app)
         .post('/api/approvals/appr-001/cancel')
-        .send({ cancelledBy: 'user-123', reason: 'no longer needed' });
+        .send({ reason: 'no longer needed' });
 
       expect(response.status).toBe(200);
       expect(mockApprovalWorkflowService.cancelApprovalRequest).toHaveBeenCalledWith(
         'appr-001',
-        'user-123',
+        'dev-user-id',
         'no longer needed'
       );
     });
 
-    it('returns 400 when fields missing', async () => {
+    it('takes the actor from the token, not from the body', async () => {
+      app = await createApp(false);
+      mockApprovalWorkflowService.cancelApprovalRequest.mockResolvedValue(mockRequest);
+
       const response = await request(app)
         .post('/api/approvals/appr-001/cancel')
-        .send({ cancelledBy: 'user-123' });
+        .set('Authorization', `Bearer ${tokenFor('token-user')}`)
+        .send({ reason: 'cancelled on behalf of victim@corp' });
+
+      expect(response.status).toBe(200);
+      expect(mockApprovalWorkflowService.cancelApprovalRequest).toHaveBeenCalledWith(
+        'appr-001',
+        'token-user',
+        'cancelled on behalf of victim@corp'
+      );
+    });
+
+    it('refuses a body-supplied cancelledBy', async () => {
+      app = await createApp(false);
+
+      const response = await request(app)
+        .post('/api/approvals/appr-001/cancel')
+        .set('Authorization', `Bearer ${tokenFor('token-user')}`)
+        .send({ cancelledBy: 'victim@corp', reason: 'x' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('cancelledBy and reason are required');
+      expect(response.body.error).toContain('cancelledBy is not accepted');
+      expect(mockApprovalWorkflowService.cancelApprovalRequest).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 without a token when auth is enabled', async () => {
+      app = await createApp(false);
+
+      const response = await request(app)
+        .post('/api/approvals/appr-001/cancel')
+        .send({ reason: 'x' });
+
+      expect(response.status).toBe(401);
+      expect(mockApprovalWorkflowService.cancelApprovalRequest).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when reason missing', async () => {
+      const response = await request(app).post('/api/approvals/appr-001/cancel').send({});
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe('reason is required');
+      expect(mockApprovalWorkflowService.cancelApprovalRequest).not.toHaveBeenCalled();
     });
 
     it('returns 404 when not found', async () => {
@@ -418,7 +523,7 @@ describe('Approval Routes', () => {
 
       const response = await request(app)
         .post('/api/approvals/missing/cancel')
-        .send({ cancelledBy: 'user-123', reason: 'x' });
+        .send({ reason: 'x' });
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Approval request not found');
@@ -429,10 +534,10 @@ describe('Approval Routes', () => {
 
       const response = await request(app)
         .post('/api/approvals/appr-001/cancel')
-        .send({ cancelledBy: 'user-123', reason: 'x' });
+        .send({ reason: 'x' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('c');
+      expect(response.body.error).toBe('Failed to cancel approval request');
     });
   });
 
@@ -441,34 +546,77 @@ describe('Approval Routes', () => {
   // --------------------------------------------------------------------------
 
   describe('POST /api/approvals/:id/escalate', () => {
-    it('escalates an approval request', async () => {
+    it('escalates with the dev session user as the actor under AUTH_DISABLED', async () => {
       mockApprovalWorkflowService.escalateRequest.mockResolvedValue(mockRequest);
 
       const response = await request(app)
         .post('/api/approvals/appr-001/escalate')
-        .send({ escalatedBy: 'user-123', reason: 'urgent' });
+        .send({ reason: 'urgent' });
 
       expect(response.status).toBe(200);
       expect(mockApprovalWorkflowService.escalateRequest).toHaveBeenCalledWith(
         'appr-001',
-        'user-123',
+        'dev-user-id',
         'urgent'
       );
     });
 
-    it('returns 400 when escalatedBy missing', async () => {
-      const response = await request(app).post('/api/approvals/appr-001/escalate').send({});
+    it('takes the actor from the token, not from the body', async () => {
+      app = await createApp(false);
+      mockApprovalWorkflowService.escalateRequest.mockResolvedValue(mockRequest);
+
+      const response = await request(app)
+        .post('/api/approvals/appr-001/escalate')
+        .set('Authorization', `Bearer ${tokenFor('token-user')}`)
+        .send({ reason: 'raised for victim@corp' });
+
+      expect(response.status).toBe(200);
+      expect(mockApprovalWorkflowService.escalateRequest).toHaveBeenCalledWith(
+        'appr-001',
+        'token-user',
+        'raised for victim@corp'
+      );
+    });
+
+    it('refuses a body-supplied escalatedBy', async () => {
+      app = await createApp(false);
+
+      const response = await request(app)
+        .post('/api/approvals/appr-001/escalate')
+        .set('Authorization', `Bearer ${tokenFor('token-user')}`)
+        .send({ escalatedBy: 'victim@corp' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('escalatedBy is required');
+      expect(response.body.error).toContain('escalatedBy is not accepted');
+      expect(mockApprovalWorkflowService.escalateRequest).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 without a token when auth is enabled', async () => {
+      app = await createApp(false);
+
+      const response = await request(app).post('/api/approvals/appr-001/escalate').send({});
+
+      expect(response.status).toBe(401);
+      expect(mockApprovalWorkflowService.escalateRequest).not.toHaveBeenCalled();
+    });
+
+    it('escalates without a reason', async () => {
+      mockApprovalWorkflowService.escalateRequest.mockResolvedValue(mockRequest);
+
+      const response = await request(app).post('/api/approvals/appr-001/escalate').send({});
+
+      expect(response.status).toBe(200);
+      expect(mockApprovalWorkflowService.escalateRequest).toHaveBeenCalledWith(
+        'appr-001',
+        'dev-user-id',
+        undefined
+      );
     });
 
     it('returns 404 when not found', async () => {
       mockApprovalWorkflowService.escalateRequest.mockResolvedValue(null);
 
-      const response = await request(app)
-        .post('/api/approvals/missing/escalate')
-        .send({ escalatedBy: 'user-123' });
+      const response = await request(app).post('/api/approvals/missing/escalate').send({});
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Approval request not found');
@@ -477,12 +625,10 @@ describe('Approval Routes', () => {
     it('returns 500 on service error', async () => {
       mockApprovalWorkflowService.escalateRequest.mockRejectedValue(new Error('esc'));
 
-      const response = await request(app)
-        .post('/api/approvals/appr-001/escalate')
-        .send({ escalatedBy: 'user-123' });
+      const response = await request(app).post('/api/approvals/appr-001/escalate').send({});
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('esc');
+      expect(response.body.error).toBe('Failed to escalate approval request');
     });
   });
 
@@ -526,7 +672,8 @@ describe('Approval Routes', () => {
         .send({ workerId: 'worker-1', statement: 'x' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('vp');
+      expect(response.body.error).toBe('Failed to submit viewpoint');
+      expect(JSON.stringify(response.body)).not.toContain('vp');
     });
   });
 
@@ -560,7 +707,8 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/appr-001/viewpoint');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('gvp');
+      expect(response.body.error).toBe('Failed to get viewpoint');
+      expect(JSON.stringify(response.body)).not.toContain('gvp');
     });
   });
 
@@ -617,7 +765,7 @@ describe('Approval Routes', () => {
         .send({ acknowledgedBy: 'user-123' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('ack');
+      expect(response.body.error).toBe('Failed to acknowledge viewpoint');
     });
   });
 
@@ -677,7 +825,7 @@ describe('Approval Routes', () => {
         .send({ response: 'noted', respondedBy: 'user-123' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('resp');
+      expect(response.body.error).toBe('Failed to respond to viewpoint');
     });
   });
 
@@ -721,7 +869,8 @@ describe('Approval Routes', () => {
         .send({ workerId: 'worker-1', contestReason: 'unfair' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('cd');
+      expect(response.body.error).toBe('Failed to contest decision');
+      expect(JSON.stringify(response.body)).not.toContain('cd');
     });
   });
 
@@ -762,7 +911,8 @@ describe('Approval Routes', () => {
         .send({ workerId: 'worker-1', reason: 'need human' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('ri');
+      expect(response.body.error).toBe('Failed to request human intervention');
+      expect(JSON.stringify(response.body)).not.toContain('ri');
     });
   });
 
@@ -792,7 +942,8 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/contests');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to get contests');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -826,7 +977,8 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/contests/contest-001');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('gc');
+      expect(response.body.error).toBe('Failed to get contest');
+      expect(JSON.stringify(response.body)).not.toContain('gc');
     });
   });
 
@@ -894,7 +1046,8 @@ describe('Approval Routes', () => {
         .send({ outcome: 'decision_overturned', reviewNotes: 'ok', processedBy: 'user-123' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('pc');
+      expect(response.body.error).toBe('Failed to process contest');
+      expect(JSON.stringify(response.body)).not.toContain('pc');
     });
   });
 
@@ -923,7 +1076,8 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/metrics');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to get metrics');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -946,7 +1100,8 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/sla-report');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to get SLA report');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 
@@ -969,7 +1124,8 @@ describe('Approval Routes', () => {
       const response = await request(app).get('/api/approvals/oversight-metrics');
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('boom');
+      expect(response.body.error).toBe('Failed to get oversight metrics');
+      expect(JSON.stringify(response.body)).not.toContain('boom');
     });
   });
 });

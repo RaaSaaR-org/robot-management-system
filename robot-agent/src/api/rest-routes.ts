@@ -27,6 +27,7 @@ import http from 'node:http';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import { INTENT_MAX_CHARS } from '../agent-mode/intents.js';
 import { getIdentityStore } from '../agent-mode/identity.js';
+import { lastPlatformAuthRejection } from '../utils/platform-auth.js';
 
 /**
  * Shared secret that unlocks the personal-data routes from off-box.
@@ -342,12 +343,17 @@ export function createRestRoutes(
   router.get('/health', (req: Request, res: Response) => {
     const robot = robotStateManager.getRobotInterface();
     const telemetry = robotStateManager.getTelemetry();
+    // The platform refusing this robot's credential is invisible everywhere
+    // else: each client swallows its own 401 and keeps running. This is where
+    // an operator (or a probe) can see it without reading four logs.
+    const lastRejection = lastPlatformAuthRejection();
     res.json({
       status: 'healthy',
       robotId: robot.id,
       robotStatus: robot.status,
       batteryLevel: telemetry.batteryLevel,
       powerSource: telemetry.powerSource,
+      platformAuth: { ok: lastRejection === null, lastRejection },
       timestamp: new Date().toISOString(),
     });
   });

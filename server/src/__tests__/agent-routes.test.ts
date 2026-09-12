@@ -89,7 +89,7 @@ describe('Agent Routes', () => {
       expect(mockAgentCardResolver.fetchAgentCard).not.toHaveBeenCalled();
     });
 
-    it('returns 500 with the error message when fetching the card fails', async () => {
+    it('returns 500 with its own sentence, never the caught error text', async () => {
       mockAgentCardResolver.fetchAgentCard.mockRejectedValue(new Error('unreachable host'));
 
       const response = await request(app)
@@ -97,7 +97,8 @@ describe('Agent Routes', () => {
         .send({ agentUrl: 'http://localhost:9999' });
 
       expect(response.status).toBe(500);
-      expect(response.body.error).toBe('unreachable host');
+      expect(response.body.error).toBe('Failed to register agent');
+      expect(response.body.error).not.toContain('unreachable host');
     });
 
     it('returns 500 with default message for non-Error rejections', async () => {

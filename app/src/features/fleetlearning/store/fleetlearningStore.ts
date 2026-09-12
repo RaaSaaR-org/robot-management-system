@@ -5,6 +5,7 @@
  * @dependencies zustand, fleetlearningApi
  */
 
+import { getErrorMessage } from '@/shared/utils';
 import { createStore } from '@/store';
 import { fleetlearningApi } from '../api/fleetlearningApi';
 import type {
@@ -69,7 +70,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.isLoading = false;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch rounds';
+        const message = getErrorMessage(error, 'Failed to fetch rounds');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -90,7 +91,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.isLoading = false;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch round';
+        const message = getErrorMessage(error, 'Failed to fetch round');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -111,7 +112,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
         });
         return round;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to create round';
+        const message = getErrorMessage(error, 'Failed to create round');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -135,7 +136,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.isLoading = false;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to start round';
+        const message = getErrorMessage(error, 'Failed to start round');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -159,7 +160,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.isLoading = false;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to cancel round';
+        const message = getErrorMessage(error, 'Failed to cancel round');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -191,7 +192,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.isLoading = false;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch participants';
+        const message = getErrorMessage(error, 'Failed to fetch participants');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -215,7 +216,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.isLoading = false;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch privacy budgets';
+        const message = getErrorMessage(error, 'Failed to fetch privacy budgets');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -239,7 +240,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.isLoading = false;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch ROHE metrics';
+        const message = getErrorMessage(error, 'Failed to fetch ROHE metrics');
         set((state) => {
           state.error = message;
           state.isLoading = false;
@@ -266,7 +267,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
         // Record on the dedicated `convergenceError` field, NOT the shared
         // `error` (which drives the Rounds-tab banner). The ConvergenceChart
         // surfaces this so a genuine failure isn't silently swallowed.
-        const message = error instanceof Error ? error.message : 'Failed to fetch convergence data';
+        const message = getErrorMessage(error, 'Failed to fetch convergence data');
         set((state) => {
           state.convergenceError = message;
           state.isLoading = false;
