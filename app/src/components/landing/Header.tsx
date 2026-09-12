@@ -18,7 +18,8 @@ const NAV_ITEMS: ReadonlyArray<{ label: string; href: string }> = [
   { label: 'Embodied Loop', href: '#circle' },
   { label: 'Data', href: '#data' },
   { label: 'Models', href: '#models' },
-  { label: 'Safety', href: '#safety' },
+  { label: 'Proof', href: '#proof' },
+  { label: 'Ownership', href: '#ownership' },
   { label: 'Install', href: '#install' },
 ];
 

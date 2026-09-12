@@ -109,10 +109,10 @@ export const STAGES: Stage[] = [
 const STAGE_LINKS: Record<string, { href: string; label: string }> = {
   collect: { href: '#data', label: 'Explore the data engine' },
   train: { href: '#models', label: 'Explore model readiness' },
-  deploy: { href: '#safety', label: 'Explore the deployment gates' },
-  evaluate: { href: '#safety', label: 'See the simulation evidence' },
-  operate: { href: '#safety', label: 'Explore the safety layers' },
-  comply: { href: '#sovereignty', label: 'Explore ownership and control' },
+  deploy: { href: '#proof', label: 'Explore the deployment gates' },
+  evaluate: { href: '#proof', label: 'See the simulation evidence' },
+  operate: { href: '#proof', label: 'Explore the safety layers' },
+  comply: { href: '#ownership', label: 'Explore ownership and control' },
 };
 
 const READOUT_ID = 'fullcircle-readout';

@@ -50,7 +50,7 @@ describe('The Embodied Loop', () => {
     expect(panel?.textContent).toContain('The bridge to a real G1 is deliberately locked.');
     expect(
       screen.getByRole('link', { name: 'Explore the deployment gates' }).getAttribute('href'),
-    ).toBe('#safety');
+    ).toBe('#proof');
   });
 
   it('lets the visitor pause and resume the decorative animation', () => {
