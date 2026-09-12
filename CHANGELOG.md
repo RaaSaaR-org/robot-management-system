@@ -3,6 +3,9 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.09.12.1] - 2026-09-12
+
+
 ## [v2026.09.12] - 2026-09-12
 
 ### Added
