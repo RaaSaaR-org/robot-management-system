@@ -78,6 +78,16 @@ jobs:
       - name: Normalise platform for artifact names
         run: echo "PLATFORM_PAIR=${{ matrix.platform }}" | tr '/' '-' >> $GITHUB_ENV
 
+      # GHCR refuses a repository name with an uppercase letter, and this
+      # organisation has three of them. `docker/metadata-action` lowercases the
+      # name it is given, which is why `images:` below can interpolate the owner
+      # raw and still work — but every hand-written reference to the repository
+      # has to do it itself. They all read this one value instead.
+      - name: Compute the image repository (GHCR requires it lowercase)
+        run: |
+          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE=${{ env.REGISTRY }}/$owner/neodem-${{ matrix.component }}" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -95,7 +105,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-${{ matrix.component }}
+          images: ${{ env.IMAGE }}
 
       - name: Build and push by digest
         id: build
@@ -105,7 +115,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ matrix.build_args }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-${{ matrix.component }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           # Scoped per component AND per arch: a shared scope would have the two
           # architectures evicting each other's layers on every run.
           cache-from: type=gha,scope=${{ matrix.component }}-${{ env.PLATFORM_PAIR }}
@@ -149,6 +159,13 @@ jobs:
       matrix:
         component: [app, server, robot-agent]
     steps:
+      # Same reason as in `build`: everything below that names the repository
+      # by hand needs it lowercased.
+      - name: Compute the image repository (GHCR requires it lowercase)
+        run: |
+          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE=${{ env.REGISTRY }}/$owner/neodem-${{ matrix.component }}" >> "$GITHUB_ENV"
+
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
@@ -170,7 +187,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-${{ matrix.component }}
+          images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
             type=ref,event=tag
@@ -182,11 +199,11 @@ jobs:
         run: |
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-${{ matrix.component }}@sha256:%s ' *)
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
 
       - name: Inspect published manifest
         run: |
           docker buildx imagetools inspect \
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-${{ matrix.component }}:${{ steps.meta.outputs.version }}
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
 
   # build-vla-server: removed — VLA Server is now in its own repository
