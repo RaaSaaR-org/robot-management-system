@@ -86,6 +86,7 @@ import { configRoutes } from './routes/config.routes.js';
 import { tenantsRoutes } from './routes/tenants.routes.js';
 import { teamRoutes } from './routes/team.routes.js';
 import { serviceAccountRoutes } from './routes/service-accounts.routes.js';
+import { researchRoutes } from './routes/research.routes.js';
 
 // Import middleware
 import { authMiddleware, cameraStreamTicket, writeRoleGuard } from './middleware/auth.middleware.js';
@@ -418,6 +419,7 @@ export function createApp(): Express {
   app.use('/api/tenants', ...protect, tenantsRoutes);
   app.use('/api/team', ...protect, teamRoutes);
   app.use('/api/team/service-accounts', ...protect, serviceAccountRoutes);
+  app.use('/api/research', ...protect, researchRoutes);
 
   // Uncertainty routes (protected) - TASK-073 Ensemble uncertainty for active learning
   app.use('/api/uncertainty', ...protect, uncertaintyRoutes);

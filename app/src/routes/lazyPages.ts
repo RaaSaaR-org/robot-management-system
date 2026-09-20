@@ -342,3 +342,7 @@ export const LazyOrganizationsPage = lazy(() =>
 export const LazyTeamPage = lazy(() =>
   import('@/features/team').then((m) => ({ default: m.TeamPage }))
 );
+
+export const LazyResearchPage = lazy(() =>
+  import('@/features/research').then((m) => ({ default: m.ResearchPage }))
+);

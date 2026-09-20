@@ -62,6 +62,7 @@ import {
   ownerOnly,
   memberOrAbove,
   viewerOrAbove,
+  writeRoleGuard,
   type AuthenticatedRequest,
   type AuthUser,
 } from '../auth.middleware.js';
@@ -150,6 +151,43 @@ describe('authMiddleware', () => {
       expect(req.user).toBeUndefined();
       expect(res.status).toHaveBeenCalledWith(401);
       expect(next).not.toHaveBeenCalled();
+    });
+
+    it('retains explicit service attribution and role limits in development', async () => {
+      process.env.AUTH_DISABLED = 'true';
+      mocks.authenticateServiceToken.mockResolvedValue({ userId: 'researcher', email: 'researcher@service.local',
+        name: 'Researcher', role: 'viewer', tenantId: 'default', tokenId: 'token-1' });
+      const req = makeReq({ headers: { authorization: 'Bearer ndsa_researcher' } as any,
+        method: 'POST', originalUrl: '/api/research/records' });
+      const res = makeRes();
+      const next = makeNext();
+      await authMiddleware(req, res, next);
+      expect(req.user).toMatchObject({ id: 'researcher', authType: 'service', role: 'viewer' });
+      expect(next).toHaveBeenCalledOnce();
+      next.mockClear();
+      writeRoleGuard(req, res, next);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(next).not.toHaveBeenCalled();
+      res.status.mockClear();
+      req.user!.role = 'member';
+      ownerOnly(req, res, next);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('does not turn invalid service credentials into the dev super-admin', async () => {
+      process.env.AUTH_DISABLED = 'true';
+      mocks.authenticateServiceToken.mockResolvedValue(null);
+      const req = makeReq({ headers: { authorization: 'Bearer ndsa_invalid' } as any });
+      const res = makeRes();
+      const next = makeNext();
+      await authMiddleware(req, res, next);
+      expect(req.user).toBeUndefined();
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+      await optionalAuthMiddleware(req, res, next);
+      expect(req.user).toBeUndefined();
+      expect(next).toHaveBeenCalledOnce();
     });
   });
 

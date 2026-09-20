@@ -43,7 +43,8 @@ const app = createApp();
  * with it — update it in the same commit, having checked the new route is
  * guarded.
  */
-const EXPECTED_WRITE_ROUTES = 349;
+// Research records and atomic model publications both use the guarded mount.
+const EXPECTED_WRITE_ROUTES = 351;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;

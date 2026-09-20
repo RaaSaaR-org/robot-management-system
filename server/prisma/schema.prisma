@@ -2557,6 +2557,7 @@ model ModelVersion {
   children ModelVersion[] @relation("ModelLineage")
 
   checkpoints        ModelCheckpoint[]
+  researchPublications ResearchModelPublication[]
   evaluationEpisodes EvaluationEpisode[]
   // Runs that started from this model's weights (TASK-239).
   initializedJobs    TrainingJob[]       @relation("TrainingJobInitFromModel")
@@ -3166,6 +3167,71 @@ model Tenant {
   sensorScans SensorScan[]
   motionClips MotionClip[]
   vlaSessions VlaSession[]
+  researchRecords ResearchRecord[]
+  researchModelPublications ResearchModelPublication[]
 
   @@index([slug])
+}
+
+// Immutable publication snapshots. IDs and operation keys are tenant-scoped;
+// authors are authenticated snapshots so deleting an account loses no attribution.
+// No update endpoint exists: corrections append a record with supersedesId.
+model ResearchRecord {
+  id             String
+  tenantId       String
+  tenant         Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  kind           String
+  version        Int @default(1)
+  idempotencyKey String
+  campaignId     String
+  ideaId         String?
+  parentId       String?
+  sourceRunId    String?
+  title          String
+  bodyJson       String
+  evidenceJson   String
+  datasetId      String?
+  datasetVersion String?
+  supersedesId   String?
+  authorId       String
+  authorName     String
+  authorKind     String
+  contentHash    String
+  createdAt      DateTime @default(now())
+
+  @@id([tenantId, id])
+  @@unique([tenantId, authorId, idempotencyKey])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, campaignId, kind])
+  @@index([tenantId, ideaId])
+  @@index([tenantId, datasetId, datasetVersion])
+  @@index([tenantId, sourceRunId])
+  @@index([tenantId, supersedesId])
+}
+
+// Transactional operation receipt for real model registration by a researcher.
+model ResearchModelPublication {
+  id             String
+  tenantId       String
+  tenant         Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  authorId       String
+  authorName     String
+  authorKind     String
+  idempotencyKey String
+  campaignId     String
+  ideaId         String?
+  sourceRunId    String
+  datasetId      String
+  modelVersionId String
+  modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id], onDelete: Restrict)
+  inputJson      String
+  contentHash    String
+  createdAt      DateTime @default(now())
+
+  @@id([tenantId, id])
+  @@unique([tenantId, authorId, idempotencyKey])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, campaignId])
+  @@index([tenantId, sourceRunId])
+  @@index([modelVersionId])
 }

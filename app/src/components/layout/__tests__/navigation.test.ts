@@ -187,6 +187,7 @@ describe('NAV_GROUPS', () => {
       ['Train', '/training'],
       ['Models', '/models'],
       ['Learning', '/fleet-learning'],
+      ['Research', '/research'],
     ]);
     // Copied verbatim from each stage page's own TABS const.
     expect(rail[1].tabs).toEqual([
@@ -238,6 +239,7 @@ describe('isNavItemActive', () => {
     ['/datasets/d-1/episodes', 'Skill Training'],
     ['/training', 'Skill Training'],
     ['/models', 'Skill Training'],
+    ['/research/report-1', 'Skill Training'],
     ['/fleet-learning', 'Skill Training'],
     ['/fleet-learning/rounds/1', 'Skill Training'],
     ['/marketplace/mine', 'Marketplace'],

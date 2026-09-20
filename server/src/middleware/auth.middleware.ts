@@ -139,6 +139,12 @@ function extractBearerToken(req: Request): string | null {
   return authHeader.slice(7);
 }
 
+/** Explicit service credentials retain attribution and role limits in local dev. */
+function usesDevelopmentBypass(req: AuthenticatedRequest): boolean {
+  return isAuthDisabled() && req.user?.authType !== 'service'
+    && !extractBearerToken(req)?.startsWith('ndsa_');
+}
+
 /**
  * Paths, relative to the `/api/robots` mount, that serve an MJPEG stream.
  * `/:id/camera/:name` and nothing else.
@@ -224,7 +230,7 @@ export function cameraStreamTicket(
 /**
  * Authentication middleware - requires valid JWT
  *
- * When AUTH_DISABLED=true, injects mock user and allows all requests.
+ * When AUTH_DISABLED=true, injects a mock user unless a service token is supplied.
  * Otherwise, validates JWT from Authorization header.
  */
 export async function authMiddleware(
@@ -232,8 +238,8 @@ export async function authMiddleware(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  // Skip auth in development mode
-  if (isAuthDisabled()) {
+  // Keep local browser access while honoring explicit researcher credentials.
+  if (usesDevelopmentBypass(req)) {
     req.user = MOCK_USER;
     return continueWithTenant(req, req.user, next);
   }
@@ -311,8 +317,8 @@ export async function optionalAuthMiddleware(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  // Skip auth in development mode
-  if (isAuthDisabled()) {
+  // Keep local browser access while honoring explicit service credentials.
+  if (usesDevelopmentBypass(req)) {
     req.user = MOCK_USER;
     return continueWithTenant(req, req.user, next);
   }
@@ -365,8 +371,8 @@ export async function optionalAuthMiddleware(
  */
 export function roleMiddleware(...roles: UserRole[]): RequestHandler {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    // Skip in development mode
-    if (isAuthDisabled()) {
+    // Explicit service identities keep their role limits in development too.
+    if (usesDevelopmentBypass(req)) {
       return next();
     }
 
@@ -590,9 +596,9 @@ export function writeRoleGuard(
   res: Response,
   next: NextFunction
 ): void {
-  // Dev bypass, identical to every other layer: keeps AUTH_DISABLED=true
-  // deployments and the existing route suites behaving exactly as before.
-  if (isAuthDisabled()) {
+  // No-token development requests retain the existing bypass; service tokens
+  // still enforce the same role guard as authenticated deployments.
+  if (usesDevelopmentBypass(req)) {
     return next();
   }
 
