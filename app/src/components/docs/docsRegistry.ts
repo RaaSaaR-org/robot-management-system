@@ -72,6 +72,7 @@ const CATEGORY_MAP: Record<string, string> = {
   'vr-teleop-data-collection': 'Robot Integration',
   'training-pipeline-testing': 'Training',
   'training-run-export': 'Training',
+  'research-publications': 'Research',
   'deployment': 'Operations',
   'dev-workflow': 'Operations',
   'operations': 'Operations',

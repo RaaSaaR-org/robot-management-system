@@ -226,6 +226,7 @@ export const NAV_GROUPS: NavGroup[] = [
           /^\/datasets(\/|$)/,
           /^\/training(\/|$)/,
           /^\/models(\/|$)/,
+          /^\/research(\/|$)/,
           /^\/fleet-learning(\/|$)/,
         ],
         // No `tabs` on the row: its page is whatever stop the rail points at,
@@ -267,6 +268,7 @@ export const NAV_GROUPS: NavGroup[] = [
               { id: 'rohe', label: 'ROHE' },
             ],
           },
+          { label: 'Research', path: '/research', icon: BrainCircuit },
         ],
       },
       // Deployments keeps its own row: it is the seam where Build hands over

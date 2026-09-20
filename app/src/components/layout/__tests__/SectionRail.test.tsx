@@ -29,7 +29,7 @@ vi.mock('../navigation', async (importOriginal) => {
 const MISSION_STOPS = ['Patrol', 'Guide', 'Automations'];
 
 /** The Skill Training rail, in model order (TASK-278). */
-const STAGE_STOPS = ['Overview', 'Collect', 'Datasets', 'Train', 'Models', 'Learning'];
+const STAGE_STOPS = ['Overview', 'Collect', 'Datasets', 'Train', 'Models', 'Learning', 'Research'];
 
 beforeEach(() => {
   nav.groups = NAV_GROUPS;
@@ -86,7 +86,7 @@ describe('SectionRail', () => {
     expectRail(MISSION_STOPS, current);
   });
 
-  // The same for the Skill Training row: its five stages live outside
+  // The same for the Skill Training row: its stages live outside
   // /pipeline, so the rail has to survive on every one of their URLs — a new
   // session, a recording cockpit, an episode viewer, a round detail.
   it.each([
@@ -103,7 +103,9 @@ describe('SectionRail', () => {
     ['/models', 'Models'],
     ['/fleet-learning', 'Learning'],
     ['/fleet-learning/rounds/r-1', 'Learning'],
-  ])('shows the six pipeline stages on %s, current on %s', (path, current) => {
+    ['/research', 'Research'],
+    ['/research/publication-1', 'Research'],
+  ])('shows the pipeline and research stops on %s, current on %s', (path, current) => {
     renderAt(path);
     expectRail(STAGE_STOPS, current);
   });

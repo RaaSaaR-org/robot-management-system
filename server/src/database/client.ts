@@ -78,6 +78,8 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   'SensorScan',
   'MotionClip',
   'VlaSession',
+  'ResearchRecord',
+  'ResearchModelPublication',
 ]);
 
 const globalForPrisma = globalThis as unknown as {
