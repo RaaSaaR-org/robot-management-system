@@ -2,7 +2,7 @@
 id: "TASK-310"
 title: "Publish agent research in NeoDEM"
 slug: "publish-agent-research-in-neodem"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 tags: [research, training, ui]
@@ -27,7 +27,7 @@ experiment orchestrator or TASK-241's general comments and ratings system.
 - [x] Details show hypotheses, training settings and predicted versus observed outcomes without implying simulator success.
 - [x] Evidence, corrections and original record remain inspectable; Markdown cannot execute HTML or unsafe links.
 - [x] Desktop and mobile views pass focused tests and browser verification.
-- [ ] Open a PR containing only the research feature and its required integration changes.
+- [x] Open a PR containing only the research feature and its required integration changes.
 
 ## Notes
 
@@ -41,3 +41,5 @@ with zero page errors or horizontal overflow. No simulation was started.
 
 PostgreSQL 16 migration replay and schema drift check passed in an isolated
 container: all migrations applied, no difference detected.
+
+PR: https://github.com/RaaSaaR-org/robot-management-system/pull/324
