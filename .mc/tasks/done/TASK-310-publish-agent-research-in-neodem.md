@@ -2,7 +2,7 @@
 id: "TASK-310"
 title: "Publish agent research in NeoDEM"
 slug: "publish-agent-research-in-neodem"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 tags: [research, training, ui]
@@ -43,3 +43,7 @@ PostgreSQL 16 migration replay and schema drift check passed in an isolated
 container: all migrations applied, no difference detected.
 
 PR: https://github.com/RaaSaaR-org/robot-management-system/pull/324
+
+Final review: no blocking findings in publication authentication, tenant scoping,
+idempotency, transactional model registration or research UI. Close commit is
+prepared for the authorized squash merge after all final-head CI checks pass.
