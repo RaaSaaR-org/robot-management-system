@@ -47,3 +47,7 @@ PR: https://github.com/RaaSaaR-org/robot-management-system/pull/324
 Final review: no blocking findings in publication authentication, tenant scoping,
 idempotency, transactional model registration or research UI. Close commit is
 prepared for the authorized squash merge after all final-head CI checks pass.
+
+Full CI review caught two integration omissions: the documentation registry did
+not categorize the research guide, and SectionRail tests still expected six
+stops. Added the Research category and coverage for both research routes.
