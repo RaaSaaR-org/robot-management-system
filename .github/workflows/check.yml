@@ -28,10 +28,13 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel in-flight runs when a new commit lands on the same branch.
+# PRs: cancel in-flight runs when a new commit lands on the same branch.
+# Pushes to main: one group per commit, never cancelled. Main Images
+# (main-images.yml) publishes a commit's images only after its Check succeeds,
+# so a cancelled Check would leave that merge with no deployable image.
 concurrency:
-  group: check-${{ github.ref }}
-  cancel-in-progress: true
+  group: check-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   server:

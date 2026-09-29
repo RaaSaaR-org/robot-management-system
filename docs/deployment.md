@@ -54,6 +54,18 @@ NEODEM_VERSION=2026.06.21 docker compose up -d   # pulls that tag instead of bui
 For Helm, set the image `tag` in `helm/neodem/values.yaml` to the release version
 (default is `latest`).
 
+**Per-commit images (tracking `main`):** every push to `main` whose **Check**
+run succeeds also publishes all three images (arm64 + amd64) under one shared,
+immutable tag `sha-<first 7 hex chars of the commit>` — e.g. `sha-77cc8ff` —
+via `.github/workflows/main-images.yml`. The full commit SHA is the image's
+`org.opencontainers.image.revision` label. A commit tag is never overwritten,
+and commit builds never move `latest`, so a GitOps deployment can pin the
+exact commit it deploys:
+
+```bash
+docker buildx imagetools inspect ghcr.io/raasaar-org/neodem-server:sha-77cc8ff
+```
+
 ---
 
 ## Architecture Overview
