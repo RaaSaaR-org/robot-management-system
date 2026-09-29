@@ -12,6 +12,18 @@ on:
         type: string
         required: false
         default: ''
+      # Both set by main-images.yml, which publishes every checked commit on
+      # main (TASK-312). Left blank, the build is exactly what it always was.
+      ref:
+        description: 'Full commit SHA to build and to record as org.opencontainers.image.revision. Blank = github.sha.'
+        type: string
+        required: false
+        default: ''
+      commit_tag:
+        description: 'Immutable per-commit tag (e.g. sha-77cc8ff). When set it is the ONLY tag published, and an existing tag is never overwritten.'
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
     inputs:
       version:
@@ -71,8 +83,13 @@ jobs:
               VITE_WS_URL=/api/a2a/ws
               VITE_A2A_SERVER_URL=
     steps:
+      # `inputs.ref` matters for main-images.yml: it is called from a
+      # `workflow_run` event, whose `github.sha` is the tip of main at the time
+      # the run started — not the commit whose Check passed.
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       # `linux/amd64` is not a legal artifact name; `linux-amd64` is.
       - name: Normalise platform for artifact names
@@ -101,11 +118,16 @@ jobs:
       # Labels only. Tags are applied once, by the merge job, to the manifest
       # list — a per-arch image must not carry them or the two arches would
       # race to own the same tag.
+      #
+      # The revision label is overridden rather than left to the action, which
+      # would write `github.sha` — wrong under `workflow_run` (see checkout).
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.ref || github.sha }}
 
       - name: Build and push by digest
         id: build
@@ -188,13 +210,34 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
+          # A commit build (commit_tag set) publishes that one tag and nothing
+          # else: moving `latest` on every merge would silently change what a
+          # Helm install with the default `tag: "latest"` runs. Release/tag
+          # builds are exactly as before.
           tags: |
-            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
-            type=ref,event=tag
-            type=match,pattern=v(.*),group=1
-            type=raw,value=latest
+            type=raw,value=${{ inputs.commit_tag }},enable=${{ inputs.commit_tag != '' }}
+            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' && inputs.commit_tag == '' }}
+            type=ref,event=tag,enable=${{ inputs.commit_tag == '' }}
+            type=match,pattern=v(.*),group=1,enable=${{ inputs.commit_tag == '' }}
+            type=raw,value=latest,enable=${{ inputs.commit_tag == '' }}
+
+      # A commit tag is immutable: once `sha-<short>` exists it names what a
+      # deployment may already run, so a re-run must never repoint it. This is
+      # also what lets a re-run after a partial failure fill in just the
+      # missing components.
+      - name: Refuse to overwrite an existing commit tag
+        id: exists
+        if: inputs.commit_tag != ''
+        run: |
+          if docker buildx imagetools inspect "${{ env.IMAGE }}:${{ inputs.commit_tag }}" >/dev/null 2>&1; then
+            echo "${{ env.IMAGE }}:${{ inputs.commit_tag }} already exists — leaving it untouched."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create manifest list and push
+        if: steps.exists.outputs.skip != 'true'
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create \

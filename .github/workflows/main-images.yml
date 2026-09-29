@@ -1,0 +1,104 @@
+name: Main Images
+
+# Publishes all three multi-arch images for every commit on `main` whose Check
+# run succeeded, under one shared immutable tag: `sha-<first 7 hex chars>`.
+# The full SHA is the `org.opencontainers.image.revision` label. This is what
+# the GitOps repository (RaaSaaR-org/deployments) deploys — it never builds
+# from source and never follows a mutable tag. TASK-312 / issue #326.
+#
+# Why `workflow_run` and not a job inside check.yml: Check is the PR gate and
+# stays free of `packages: write` and of a six-way image build per PR.
+#
+# Under `workflow_run`, `github.sha` is the tip of main when THIS run started,
+# which may already be a later commit. Everything below therefore uses
+# `github.event.workflow_run.head_sha` — the commit that was actually checked.
+#
+# Release versions (`vX`, `X`, `latest`) are untouched: they still come from
+# release.yml / a `v*` tag push. A commit build never moves `latest`.
+
+on:
+  workflow_run:
+    workflows: [Check]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One run per commit, never cancelled: a newer merge must not take away an
+# older commit's images.
+concurrency:
+  group: main-images-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve commit tag
+    # Only a green Check of a push to main in this repository publishes —
+    # never a PR run, never a fork.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      sha: ${{ steps.tag.outputs.sha }}
+      tag: ${{ steps.tag.outputs.tag }}
+      build: ${{ steps.exists.outputs.build }}
+    steps:
+      - name: Compute the commit tag
+        id: tag
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Unexpected head_sha '$HEAD_SHA'"
+            exit 1
+          fi
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${HEAD_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A re-run (or a duplicate event) for a commit that is already fully
+      # published skips the six builds. A partial publish still builds, and
+      # build-images.yml's merge job then only fills in the missing components.
+      - name: Skip if all three images already carry the tag
+        id: exists
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          build=false
+          for component in app server robot-agent; do
+            image="ghcr.io/$owner/neodem-$component:$TAG"
+            if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+              echo "$image exists"
+            else
+              echo "$image missing"
+              build=true
+            fi
+          done
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  images:
+    name: Build & publish ${{ needs.resolve.outputs.tag }}
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-images.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+      commit_tag: ${{ needs.resolve.outputs.tag }}
