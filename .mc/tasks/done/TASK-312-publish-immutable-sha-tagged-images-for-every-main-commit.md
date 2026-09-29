@@ -3,7 +3,7 @@ id: "TASK-312"
 aliases: []
 title: "Publish immutable SHA-tagged images for every main commit"
 slug: "publish-immutable-sha-tagged-images-for-every-main-commit"
-status: "review"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
