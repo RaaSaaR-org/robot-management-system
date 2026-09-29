@@ -12,7 +12,7 @@ Immutable once committed. Later changes of mind get their own record.
 The session ran **unattended**: the user asked for open issues to be triaged and
 worked "without me". No interview took place. Every decision below was taken by
 the agent, is marked **Owner: agent (unattended)**, and is open to override; the
-ones the agent judged genuinely user-owned are listed under *Open questions* and
+ones the agent judged genuinely user-owned were listed as open questions and
 were resolved only provisionally. Nothing here overrides a user statement — none
 existed beyond the issue text.
 
@@ -108,7 +108,7 @@ the base stop awaited before the bind is acknowledged; while a lease is held,
 REST motion starts are refused; with no lease held they stay admitted.
 **Rejected:** requiring a lease for autonomous starts too — changes how
 Agent Mode, patrols and VLA runs are started, which is a product decision
-(Open question 5).
+(question 5, now under *Resolved questions*).
 **Owner:** agent (unattended); **confirmed by the user 2026-09-30**
 (Resolved question 5).
 
