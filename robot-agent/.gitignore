@@ -3,3 +3,5 @@ data/pointclouds-real/
 # server, so host mode still works when the server is down). Local state, not
 # something a deployment should inherit from git.
 data/*-routes-cache*.json
+# Control-lease high-water generation (TASK-314): per-robot runtime state.
+data/control-lease-*.json

@@ -28,6 +28,7 @@ import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import { INTENT_MAX_CHARS } from '../agent-mode/intents.js';
 import { getIdentityStore } from '../agent-mode/identity.js';
 import { lastPlatformAuthRejection } from '../utils/platform-auth.js';
+import { controlLease, type ControlLeaseRegistry } from '../control-lease/control-lease.js';
 
 /**
  * Shared secret that unlocks the personal-data routes from off-box.
@@ -134,10 +135,38 @@ function timingSafeEquals(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/** Bounds on a control lease's TTL, in ms (TASK-314). */
+const LEASE_TTL_MIN_MS = 500;
+const LEASE_TTL_MAX_MS = 60_000;
+/** Longest id / name string a lease request may carry. */
+const LEASE_STRING_MAX = 200;
+
+function leaseGenerationProblem(value: unknown): string | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? null
+    : 'generation must be a positive safe integer';
+}
+
+function leaseTtlProblem(value: unknown): string | null {
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= LEASE_TTL_MIN_MS &&
+    value <= LEASE_TTL_MAX_MS
+    ? null
+    : `ttlMs must be an integer between ${LEASE_TTL_MIN_MS} and ${LEASE_TTL_MAX_MS}`;
+}
+
+function leaseStringProblem(name: string, value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 && value.length <= LEASE_STRING_MAX
+    ? null
+    : `${name} must be a non-empty string of at most ${LEASE_STRING_MAX} characters`;
+}
+
 export function createRestRoutes(
   robotStateManager: RobotStateManager,
   deviceIdentity?: DeviceIdentityManager,
   secureBoot?: SecureBootVerifier,
+  leases: ControlLeaseRegistry = controlLease,
 ): Router {
   const router = Router();
 
@@ -2156,6 +2185,90 @@ export function createRestRoutes(
       return;
     }
     res.json({ ok: true, identity: result.identity, self: agentModeController.selfState() });
+  });
+
+  // ============================================================================
+  // CONTROL LEASE (TASK-314)
+  //
+  // The server installs, renews and releases the robot's one control lease;
+  // the agent fences stale generations and expires the lease on its own clock.
+  // Behind `personalDataGate` so a browser can never install a lease itself —
+  // only a server-side caller holding the bearer token (or loopback) can.
+  // `GET` is `observe()`, which never carries the hash. Nothing consults the
+  // lease yet, so these routes change no robot behaviour.
+  // ============================================================================
+
+  router.use('/robots/:id/control-lease', personalDataGate);
+
+  router.get('/robots/:id/control-lease', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    res.json(leases.observe());
+  });
+
+  router.post('/robots/:id/control-lease/install', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const problem =
+      leaseGenerationProblem(body.generation) ??
+      (typeof body.leaseIdHash === 'string' && /^[0-9a-fA-F]{64}$/.test(body.leaseIdHash)
+        ? null
+        : 'leaseIdHash must be 64 hex characters') ??
+      leaseStringProblem('sessionId', body.sessionId) ??
+      leaseStringProblem('userId', body.userId) ??
+      leaseStringProblem('displayName', body.displayName) ??
+      (body.tenantId === null || body.tenantId === undefined
+        ? null
+        : leaseStringProblem('tenantId', body.tenantId)) ??
+      leaseTtlProblem(body.ttlMs);
+    if (problem) {
+      res.status(400).json({ code: 'INVALID_LEASE', message: problem });
+      return;
+    }
+    const result = leases.install({
+      generation: body.generation as number,
+      leaseIdHash: body.leaseIdHash as string,
+      sessionId: body.sessionId as string,
+      userId: body.userId as string,
+      displayName: body.displayName as string,
+      tenantId: (body.tenantId as string | null | undefined) ?? null,
+      ttlMs: body.ttlMs as number,
+    });
+    if (result.ok) {
+      res.json({ installed: true, generation: result.generation, fencedGeneration: result.fencedGeneration });
+      return;
+    }
+    if (result.code === 'stale_generation') {
+      res.status(409).json({ code: result.code, highWater: result.highWater });
+      return;
+    }
+    res.status(503).json({ code: result.code });
+  });
+
+  router.post('/robots/:id/control-lease/renew', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const problem = leaseGenerationProblem(body.generation) ?? leaseTtlProblem(body.ttlMs);
+    if (problem) {
+      res.status(400).json({ code: 'INVALID_LEASE', message: problem });
+      return;
+    }
+    const result = leases.renew({ generation: body.generation as number, ttlMs: body.ttlMs as number });
+    if (!result.ok) {
+      res.status(409).json({ code: result.code });
+      return;
+    }
+    res.json({ renewed: true, bound: result.bound });
+  });
+
+  router.post('/robots/:id/control-lease/release', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const problem = leaseGenerationProblem(body.generation);
+    if (problem) {
+      res.status(400).json({ code: 'INVALID_LEASE', message: problem });
+      return;
+    }
+    res.json({ released: leases.release({ generation: body.generation as number }).released });
   });
 
   // ============================================================================

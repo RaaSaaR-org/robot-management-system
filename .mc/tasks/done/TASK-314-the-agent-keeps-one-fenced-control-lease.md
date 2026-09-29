@@ -3,9 +3,9 @@ id: "TASK-314"
 aliases: []
 title: "The agent keeps one fenced control lease"
 slug: "the-agent-keeps-one-fenced-control-lease"
-status: "todo"
+status: "done"
 priority: 2
-owner: "huhn511"
+owner: "claude"
 projects: []
 customers: []
 tags: [core, safety]
@@ -135,3 +135,25 @@ Vitest with fake timers and an injected clock for the registry; supertest-style
 route tests the way `robot-agent/src/api/__tests__/` already builds the router;
 a temp dir for the persistence file. `npm run typecheck` and `npx vitest run` in
 `robot-agent/`.
+
+## Implementation Notes
+
+Decisions made while implementing (2026-09-30, unattended `/implement`):
+
+- **`fenced` is emitted only when a `held` lease is revoked.** Installing over, or
+  releasing, an already-`expired` lease flips it to `released` (release still
+  answers `released:true`) but emits no second `fenced` — the lease already got
+  its zero stop on `expired`, and a second stop could land on the successor's
+  first commands.
+- **A failed high-water write refuses the install** with
+  `code:'high_water_unwritable'` (503 on the route) and leaves the previous lease
+  in charge. The high-water is written before the old lease is fenced.
+- **Expiry is also checked lazily**: `renew`, `verify` and `observe` flip a
+  past-deadline `held` lease to `expired` (and emit) even if the timer has not
+  fired yet.
+- **`createRestRoutes` takes the registry as an optional fourth argument**
+  (default: the `controlLease` singleton) so route tests use a temp-dir registry.
+- **`wireControlLeaseStops(registry, client)`** lives in `control-lease.ts` so the
+  stop wiring is testable with a stubbed client; `index.ts` only calls it.
+- `robot-agent/data/control-lease-*.json` is git-ignored; the routes are
+  documented in `docs/api.md`.

@@ -23,6 +23,7 @@ import {
   type AgentCardOptions,
 } from './agent/agent-card.js';
 import { hardwareClient } from './hardware/HardwareClient.js';
+import { controlLease, wireControlLeaseStops } from './control-lease/control-lease.js';
 import { RobotAgentExecutor } from './agent/agent-executor.js';
 import { createRestRoutes } from './api/rest-routes.js';
 import { createTelemetryWebSocket } from './api/websocket.js';
@@ -322,6 +323,11 @@ async function main() {
     robotStateManager.setName(name);
     console.log(`[Identity] agent card renamed to "${agentCard.name}"`);
   });
+
+  // A fenced or expired control lease (TASK-314) sends one zero-TTL stop —
+  // the same call keyboard teleop makes on socket close. The registry only
+  // emits; this is the one place its events reach the hardware.
+  wireControlLeaseStops(controlLease, hardwareClient);
 
   // Honest identity follows the sim↔hardware state: on every sidecar
   // attach/detach, update the served agent card in place (name/description)
