@@ -536,11 +536,6 @@ export interface Config {
     };
   };
   /**
-   * Place awareness (TASK-195): the robot's continuously maintained answer to
-   * "where am I?" — a metric pose from the existing 2 s hardware poll, resolved
-   * against a hand-authored place graph.
-   */
-  /**
    * Robot-wide per-user control leases (TASK-313 / TASK-314).
    */
   controlLease: {
@@ -552,6 +547,11 @@ export interface Config {
      */
     required: boolean;
   };
+  /**
+   * Place awareness (TASK-195): the robot's continuously maintained answer to
+   * "where am I?" — a metric pose from the existing 2 s hardware poll, resolved
+   * against a hand-authored place graph.
+   */
   place: {
     /**
      * Path to the place graph JSON (`PLACE_GRAPH_PATH`), e.g.

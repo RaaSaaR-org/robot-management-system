@@ -324,17 +324,17 @@ async function main() {
     console.log(`[Identity] agent card renamed to "${agentCard.name}"`);
   });
 
+  // A fenced or expired control lease (TASK-314) sends one zero-TTL stop —
+  // the same call keyboard teleop makes on socket close. The registry only
+  // emits; this is the one place its events reach the hardware.
+  wireControlLeaseStops(controlLease, hardwareClient);
+
   // Honest identity follows the sim↔hardware state: on every sidecar
   // attach/detach, update the served agent card in place (name/description)
   // and ask the server to re-pull /api/v1/register so its fleet record picks
   // up the changed serial/firmware/isSimulated values. Best-effort — the
   // agent keeps working when the server is unreachable. Read-only from the
   // robot's perspective: no motion or actuation is commanded.
-  // A fenced or expired control lease (TASK-314) sends one zero-TTL stop —
-  // the same call keyboard teleop makes on socket close. The registry only
-  // emits; this is the one place its events reach the hardware.
-  wireControlLeaseStops(controlLease, hardwareClient);
-
   hardwareClient.onConnectionChange((connected) => {
     updateAgentCardIdentity(agentCard, agentCardOptions, connected);
     console.log(
