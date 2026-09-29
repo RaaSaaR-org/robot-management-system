@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title"><title id="title">NeoDEM — Signal tree symbol</title><g fill="#ffffff"><g fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M64 25V102M64 46L43 33V23M64 46L85 33V23M64 67L30 48H21M64 67L98 48H107M64 79L39 96H25M64 79L89 96H103"/>
+</g>
+<g fill="#ffffff"><rect x="59" y="16" width="10" height="10" rx="2"/><rect x="38" y="15" width="10" height="10" rx="2"/><rect x="80" y="15" width="10" height="10" rx="2"/><rect x="13" y="43" width="10" height="10" rx="2"/><rect x="105" y="43" width="10" height="10" rx="2"/><rect x="17" y="91" width="10" height="10" rx="2"/><rect x="101" y="91" width="10" height="10" rx="2"/><rect x="59" y="101" width="10" height="10" rx="2"/></g></g></svg>

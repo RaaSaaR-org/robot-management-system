@@ -39,6 +39,7 @@ node_modules/
 # Database
 *.db
 *.db-journal
+*.db.bak*
 .vscode
 # OS specific
 

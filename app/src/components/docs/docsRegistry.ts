@@ -65,6 +65,7 @@ const CATEGORY_MAP: Record<string, string> = {
   'multi-tenancy': 'Architecture',
   'process-delegation-architecture': 'Architecture',
   'robot-integration-guide': 'Robot Integration',
+  'new-embodiment-integration-plan': 'Robot Integration',
   'vla-integration-guide': 'Robot Integration',
   'agent-mode': 'Robot Integration',
   'g1-edu-lab-bringup': 'Robot Integration',

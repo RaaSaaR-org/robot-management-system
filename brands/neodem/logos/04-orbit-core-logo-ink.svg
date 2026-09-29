@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 128" role="img" aria-labelledby="title"><title id="title">NeoDEM — Orbit core</title><g fill="#0f1b2a"><g fill="none" stroke="#0f1b2a" stroke-width="6" stroke-linecap="round">
+  <path d="M91 25C75 27 51 40 36 56C19 73 14 91 23 100C33 110 55 102 77 83C96 66 109 43 104 32"/>
+  <path d="M37 25C53 27 77 40 92 56C109 73 114 91 105 100C95 110 73 102 51 83C32 66 19 43 24 32"/>
+</g>
+<g fill="#0f1b2a"><rect x="51" y="51" width="26" height="26" rx="5"/><circle cx="27" cy="25" r="5"/><circle cx="101" cy="25" r="5"/></g></g><g transform="translate(155 35) scale(1.05)"><g fill="#0f1b2a"><g fill="none" stroke="#0f1b2a" stroke-width="7" stroke-linecap="square" stroke-linejoin="round">
+  <path d="M4 52V4H7L36 52H39V4"/>
+  <path d="M86 45C82 51 68 56 60 47C53 39 56 19 69 19C80 19 86 26 86 36H57"/>
+  <path d="M116 19C94 19 94 53 116 53C138 53 138 19 116 19Z"/>
+  <path d="M151 4H167C194 4 194 52 167 52H151Z"/>
+  <path d="M231 4H204V52H231M204 28H227"/>
+  <path d="M249 52V4H252L270 30L288 4H291V52"/>
+</g></g></g></svg>
