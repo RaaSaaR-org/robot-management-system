@@ -3,7 +3,7 @@
 **Date:** 2026-09-30
 **Task:** `.mc/tasks/todo/TASK-313-robot-wide-per-user-control-leases.md`
 **Source:** GitHub issue #323 (spec handoff from vrhq TASK-008)
-**Hand-off:** `/plan` — epic, split into TASK-314 … TASK-320
+**Hand-off:** `/plan` — epic, split into TASK-314 … TASK-321
 
 Immutable once committed. Later changes of mind get their own record.
 
@@ -15,6 +15,11 @@ the agent, is marked **Owner: agent (unattended)**, and is open to override; the
 ones the agent judged genuinely user-owned are listed under *Open questions* and
 were resolved only provisionally. Nothing here overrides a user statement — none
 existed beyond the issue text.
+
+**Addendum 2026-09-30 — user answers.** The user then answered the five open
+questions. The answers confirm D8, D10 and D11 and settle the rollout in D9;
+none reverses a decision, so they are recorded here rather than in a new
+record. See *Resolved questions*.
 
 ## What prompted it
 
@@ -104,41 +109,63 @@ REST motion starts are refused; with no lease held they stay admitted.
 **Rejected:** requiring a lease for autonomous starts too — changes how
 Agent Mode, patrols and VLA runs are started, which is a product decision
 (Open question 5).
-**Owner:** agent (unattended).
+**Owner:** agent (unattended); **confirmed by the user 2026-09-30**
+(Resolved question 5).
 
 ### D9 — Rollout
 
-**Chosen:** two flags, both default off: `CONTROL_LEASES_ENABLED` (server) and
+**Chosen:** two flags: `CONTROL_LEASES_ENABLED` (server) and
 `CONTROL_LEASE_REQUIRED` (agent). Off = today's behaviour byte for byte.
+Staged rollout: both stay default off while TASK-315 … TASK-320 land; TASK-321
+then flips `CONTROL_LEASES_ENABLED` to default **on**. `CONTROL_LEASE_REQUIRED`
+stays default **off** — enforcement is opt-in per deployment. When an operator
+turns `CONTROL_LEASE_REQUIRED` on, legacy clients that never bind a lease are
+refused motion outright with an explicit error code (`lease_required` on
+sockets, per TASK-315/316); there is no warn-only or grace mode.
 **Rejected:** a single flag — server and agent deploy separately, and the agent
-must be able to enforce before any client can acquire is advertised.
-**Owner:** agent (unattended; the harness asked for default-off).
+must be able to enforce before any client can acquire is advertised. Also
+rejected: a warn/grace period for legacy clients under enforcement — a lease
+that only warns proves nothing.
+**Owner:** agent (unattended) for the two-flag shape; **user, 2026-09-30** for
+the staged default-on and the outright refusal (Resolved question 4).
 
 ### D10 — Numbers and roles
 
-**Chosen (provisional):** TTL 5 s, renew 1 s (from #323), client local deadline
+**Chosen:** TTL 5 s, renew 1 s (from #323), client local deadline
 `ttl − 2 × renew`; acquire `memberOrAbove`, observe `viewerOrAbove`.
 **Rejected:** a longer TTL for flaky Wi-Fi — expiry is a final bound on
 authority, not a stop deadline, but it should still be as short as the network
-allows. **Owner:** agent (unattended), flagged for user confirmation.
+allows. **Owner:** agent (unattended); **numbers and roles confirmed by the
+user 2026-09-30** — no narrower "operator" permission (Resolved questions 1, 2).
 
 ### D11 — Scope
 
 **Chosen:** RMS backend, agent and RMS app only. vrhq integration stays in vrhq.
 Administrative forced takeover is **not planned** (optional in #323).
-**Owner:** agent (unattended).
+**Owner:** agent (unattended); **confirmed by the user 2026-09-30** (Resolved
+question 3).
 
-## Open questions (user-owned, provisionally resolved)
+## Resolved questions
 
-1. Confirm 5 s / 1 s against real deployment latency before enabling.
-2. Is `member` the right floor to acquire, or is an "operator" permission needed?
-3. Is administrative forced takeover wanted?
-4. When should the flags default on; should enforced deployments reject legacy
-   clients outright?
-5. Should autonomous starts require a lease even when no human holds one?
+Asked unattended as open questions; answered by the user on 2026-09-30.
+
+1. **TTL / renew timing.** Confirmed: TTL 5 s, renew every 1 s. (2026-09-30)
+2. **Who may acquire.** `member` is the floor (`memberOrAbove`); no separate
+   "operator" permission. (2026-09-30)
+3. **Administrative forced takeover.** Not wanted; stays out of scope.
+   (2026-09-30)
+4. **Rollout.** Both flags stay default off while TASK-315 … TASK-320 land;
+   TASK-321 then flips `CONTROL_LEASES_ENABLED` (server) to default on.
+   `CONTROL_LEASE_REQUIRED` (agent) stays default off, opt-in per deployment.
+   When it is on, legacy clients without a bound lease are refused motion
+   outright with an explicit error code — no warn/grace mode. (2026-09-30)
+5. **Autonomous starts.** VLA, Agent Mode and patrol starts stay admitted
+   while no lease is held and are refused while another user holds one; they
+   do not need a lease of their own. (2026-09-30)
 
 ## Plan
 
 TASK-314 agent registry → TASK-315 keyboard teleop binding, TASK-316 other
 ingress, TASK-317 server authority → TASK-318 renewal/expiry/events → TASK-319
-teleop console + VR → TASK-320 data-collection inputs.
+teleop console + VR → TASK-320 data-collection inputs → TASK-321
+`CONTROL_LEASES_ENABLED` on by default.
