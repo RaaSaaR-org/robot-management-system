@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 128" role="img" aria-labelledby="title"><title id="title">NeoDEM — Living circuit</title><g fill="#0f1b2a"><g fill="none" stroke="#0f1b2a" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M46 70H35C23 70 18 61 21 51C23 45 28 41 35 40C34 27 44 19 55 22C63 10 84 16 86 31C101 30 111 42 106 55C104 64 97 70 87 70H82"/>
+  <path d="M64 42V96M48 49L64 63L80 49M64 78L40 94H28M64 78L88 94H100"/>
+</g>
+<g fill="#0f1b2a"><rect x="20" y="89" width="10" height="10" rx="2"/><rect x="59" y="96" width="10" height="10" rx="2"/><rect x="98" y="89" width="10" height="10" rx="2"/></g></g><g transform="translate(155 35) scale(1.05)"><g fill="#0f1b2a"><g fill="none" stroke="#0f1b2a" stroke-width="7" stroke-linecap="square" stroke-linejoin="round">
+  <path d="M4 52V4H7L36 52H39V4"/>
+  <path d="M86 45C82 51 68 56 60 47C53 39 56 19 69 19C80 19 86 26 86 36H57"/>
+  <path d="M116 19C94 19 94 53 116 53C138 53 138 19 116 19Z"/>
+  <path d="M151 4H167C194 4 194 52 167 52H151Z"/>
+  <path d="M231 4H204V52H231M204 28H227"/>
+  <path d="M249 52V4H252L270 30L288 4H291V52"/>
+</g></g></g></svg>

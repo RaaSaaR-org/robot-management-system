@@ -89,7 +89,9 @@ The robot agent uses `.env.so101` for SO-101 configuration (port 41245, robot ty
 | [Agent Mode, patrol and host mode](agent-mode.md) | The on-robot local-LLM agent and its two use cases: what they do, how to switch them on, what they refuse |
 | [VLA Integration](vla-integration-guide.md) | VLA models, camera setup, inference pipeline |
 | [Robot Integration](robot-integration-guide.md) | SO-101 setup, calibration, sidecar |
+| [New Embodiment Integration Plan](new-embodiment-integration-plan.md) | Scope, implementation steps, validation, and handover for a new robot type |
 | [Dev Workflow](dev-workflow.md) | Code conventions, feature structure |
 | [App Architecture](app-architecture.md) | Frontend patterns, Zustand, routes |
 | [Brand Guide](brand.md) | Colors, typography, design tokens |
+| [Product Brand Files](../brands/README.md) | NeoDEM identity, positioning, messaging, voice, and visual identity |
 | [Deployment](deployment.md) | Kubernetes / Helm deployment |

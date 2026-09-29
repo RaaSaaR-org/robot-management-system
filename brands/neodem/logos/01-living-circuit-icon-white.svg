@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title"><title id="title">NeoDEM — Living circuit symbol</title><g fill="#ffffff"><g fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M46 70H35C23 70 18 61 21 51C23 45 28 41 35 40C34 27 44 19 55 22C63 10 84 16 86 31C101 30 111 42 106 55C104 64 97 70 87 70H82"/>
+  <path d="M64 42V96M48 49L64 63L80 49M64 78L40 94H28M64 78L88 94H100"/>
+</g>
+<g fill="#ffffff"><rect x="20" y="89" width="10" height="10" rx="2"/><rect x="59" y="96" width="10" height="10" rx="2"/><rect x="98" y="89" width="10" height="10" rx="2"/></g></g></svg>

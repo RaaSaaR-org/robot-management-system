@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 128" role="img" aria-labelledby="title"><title id="title">NeoDEM — Continuum</title><g fill="#b2f8df"><path fill="#b2f8df" fill-rule="evenodd" d="M38 18H90C104 18 112 28 112 42V86C112 100 104 110 90 110H38C24 110 16 100 16 86V42C16 28 24 18 38 18ZM38 32C33 32 30 36 30 42V86C30 92 33 96 38 96H72L38 32ZM56 32L90 96C95 96 98 92 98 86V42C98 36 95 32 90 32H56Z"/></g><g transform="translate(155 35) scale(1.05)"><g fill="#f1f5fc"><g fill="none" stroke="#f1f5fc" stroke-width="7" stroke-linecap="square" stroke-linejoin="round">
+  <path d="M4 52V4H7L36 52H39V4"/>
+  <path d="M86 45C82 51 68 56 60 47C53 39 56 19 69 19C80 19 86 26 86 36H57"/>
+  <path d="M116 19C94 19 94 53 116 53C138 53 138 19 116 19Z"/>
+  <path d="M151 4H167C194 4 194 52 167 52H151Z"/>
+  <path d="M231 4H204V52H231M204 28H227"/>
+  <path d="M249 52V4H252L270 30L288 4H291V52"/>
+</g></g></g></svg>

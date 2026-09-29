@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 128" role="img" aria-labelledby="title"><title id="title">NeoDEM — Signal tree</title><g fill="#b2f8df"><g fill="none" stroke="#b2f8df" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M64 25V102M64 46L43 33V23M64 46L85 33V23M64 67L30 48H21M64 67L98 48H107M64 79L39 96H25M64 79L89 96H103"/>
+</g>
+<g fill="#b2f8df"><rect x="59" y="16" width="10" height="10" rx="2"/><rect x="38" y="15" width="10" height="10" rx="2"/><rect x="80" y="15" width="10" height="10" rx="2"/><rect x="13" y="43" width="10" height="10" rx="2"/><rect x="105" y="43" width="10" height="10" rx="2"/><rect x="17" y="91" width="10" height="10" rx="2"/><rect x="101" y="91" width="10" height="10" rx="2"/><rect x="59" y="101" width="10" height="10" rx="2"/></g></g><g transform="translate(155 35) scale(1.05)"><g fill="#f1f5fc"><g fill="none" stroke="#f1f5fc" stroke-width="7" stroke-linecap="square" stroke-linejoin="round">
+  <path d="M4 52V4H7L36 52H39V4"/>
+  <path d="M86 45C82 51 68 56 60 47C53 39 56 19 69 19C80 19 86 26 86 36H57"/>
+  <path d="M116 19C94 19 94 53 116 53C138 53 138 19 116 19Z"/>
+  <path d="M151 4H167C194 4 194 52 167 52H151Z"/>
+  <path d="M231 4H204V52H231M204 28H227"/>
+  <path d="M249 52V4H252L270 30L288 4H291V52"/>
+</g></g></g></svg>
