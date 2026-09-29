@@ -540,6 +540,18 @@ export interface Config {
    * "where am I?" — a metric pose from the existing 2 s hardware poll, resolved
    * against a hand-authored place graph.
    */
+  /**
+   * Robot-wide per-user control leases (TASK-313 / TASK-314).
+   */
+  controlLease: {
+    /**
+     * Whether motion requires a held control lease (`CONTROL_LEASE_REQUIRED`,
+     * default `false`). In TASK-314 this is only REPORTED — as `enforced` in
+     * `GET /robots/:id/control-lease` — and nothing gates on it yet, so the
+     * default leaves robot behaviour exactly as it was.
+     */
+    required: boolean;
+  };
   place: {
     /**
      * Path to the place graph JSON (`PLACE_GRAPH_PATH`), e.g.
@@ -908,6 +920,9 @@ export const config: Config = {
       transcriptRetentionDays: envFloat(process.env.TOUR_TRANSCRIPT_RETENTION_DAYS, 30),
       disclosureExtra: process.env.TOUR_DISCLOSURE_EXTRA || '',
     },
+  },
+  controlLease: {
+    required: process.env.CONTROL_LEASE_REQUIRED === 'true',
   },
   place: {
     // No default map: see the interface. UNKNOWN is the honest answer for a

@@ -23,6 +23,7 @@ import {
   type AgentCardOptions,
 } from './agent/agent-card.js';
 import { hardwareClient } from './hardware/HardwareClient.js';
+import { controlLease, wireControlLeaseStops } from './control-lease/control-lease.js';
 import { RobotAgentExecutor } from './agent/agent-executor.js';
 import { createRestRoutes } from './api/rest-routes.js';
 import { createTelemetryWebSocket } from './api/websocket.js';
@@ -329,6 +330,11 @@ async function main() {
   // up the changed serial/firmware/isSimulated values. Best-effort — the
   // agent keeps working when the server is unreachable. Read-only from the
   // robot's perspective: no motion or actuation is commanded.
+  // A fenced or expired control lease (TASK-314) sends one zero-TTL stop —
+  // the same call keyboard teleop makes on socket close. The registry only
+  // emits; this is the one place its events reach the hardware.
+  wireControlLeaseStops(controlLease, hardwareClient);
+
   hardwareClient.onConnectionChange((connected) => {
     updateAgentCardIdentity(agentCard, agentCardOptions, connected);
     console.log(

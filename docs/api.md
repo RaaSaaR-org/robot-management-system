@@ -390,6 +390,17 @@ Base URL: `http://localhost:41245`
 | GET/POST | `../identity` | Read the identity snapshot / edit Name, Emoji, Operator and Site (personal-data gate) |
 | GET | `../identity/body.md` | Generated `BODY.md` hardware inventory (personal-data gate) |
 
+### Control lease (`/api/v1/robots/:id/control-lease`, TASK-314)
+
+The robot's one installed control lease — fenced by a strictly increasing `generation` whose high-water is persisted in `data/control-lease-<ROBOT_ID>.json`, and expired on the agent's own clock. All four routes sit behind the personal-data gate (configured `AGENT_MEMORY_TOKEN` required; loopback only when unset; cross-origin browser requests refused), so only the server installs leases. `CONTROL_LEASE_REQUIRED` (default `false`) is reported as `enforced`; nothing gates motion on the lease yet.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/install` | `{generation, leaseIdHash (sha256 hex), sessionId, userId, displayName, tenantId, ttlMs (500–60000)}` → `{installed:true, generation, fencedGeneration}`; 409 `{code:'stale_generation', highWater}`; 503 `{code:'high_water_unreadable'\|'high_water_unwritable'}` |
+| POST | `/renew` | `{generation, ttlMs}` → `{renewed:true, bound}`; 409 `{code:'not_installed'\|'expired'}` (a late renew never resurrects) |
+| POST | `/release` | `{generation}` → `{released:boolean}`; a stale generation is a no-op |
+| GET | `/` | `{enforced, state:'none'\|'held'\|'expired'\|'released', generation, userId, displayName, sessionId, expiresInMs, bound, error?}` — never the hash |
+
 ### Patrol (`/api/v1/robots/:id/agent-mode/patrol`, TASK-212)
 
 | Method | Path | Description |
