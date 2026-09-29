@@ -3,7 +3,7 @@ id: "TASK-314"
 aliases: []
 title: "The agent keeps one fenced control lease"
 slug: "the-agent-keeps-one-fenced-control-lease"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
