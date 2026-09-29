@@ -3,9 +3,9 @@ id: "TASK-314"
 aliases: []
 title: "The agent keeps one fenced control lease"
 slug: "the-agent-keeps-one-fenced-control-lease"
-status: "review"
+status: "done"
 priority: 2
-owner: "huhn511"
+owner: "claude"
 projects: []
 customers: []
 tags: [core, safety]
