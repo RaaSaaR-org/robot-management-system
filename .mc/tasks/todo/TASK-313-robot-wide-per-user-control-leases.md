@@ -29,8 +29,9 @@ it, with no user, session or generation attached. This epic makes human motion
 authority an **exclusive, fenced, expiring lease per `(tenantId, robotId)`**,
 granted by the server across all replicas and enforced by the robot agent at the
 point every motion command is admitted. Everything ships behind two flags that
-default **off**, so existing shared-teleop behaviour is unchanged until an
-operator turns them on. Source: GitHub issue #323 (spec handoff from the vrhq
+default **off** while the children land, so existing shared-teleop behaviour is
+unchanged; the last child (TASK-321) then turns the server flag on by default,
+while agent enforcement stays opt-in per deployment. Source: GitHub issue #323 (spec handoff from the vrhq
 repo, TASK-008 there).
 
 Decision record: [`docs/records/TASK-313-robot-wide-per-user-control-leases.md`](../../../docs/records/TASK-313-robot-wide-per-user-control-leases.md)
@@ -117,11 +118,15 @@ browser ─renew 1 Hz─▶ server ─recheck role, conditional UPDATE─▶ age
   refused. No human preempts another human.
 - **E-stop** is independent: accepted from any socket or authorized caller,
   bound or not, and no lease operation resets it.
-- **Flags, default off:** `CONTROL_LEASES_ENABLED` (server — exposes the
-  capability and routes) and `CONTROL_LEASE_REQUIRED` (agent — enforces). With
-  both off, behaviour is byte-identical to today.
-- **Defaults:** TTL 5 s, renew every 1 s (from #323; provisional, see Open
-  questions). Acquire: `memberOrAbove`. Observe: `viewerOrAbove`.
+- **Flags:** `CONTROL_LEASES_ENABLED` (server — exposes the capability and
+  routes) and `CONTROL_LEASE_REQUIRED` (agent — enforces). With both off,
+  behaviour is byte-identical to today. Both stay default off while TASK-315 …
+  TASK-320 land; TASK-321 flips `CONTROL_LEASES_ENABLED` to default on.
+  `CONTROL_LEASE_REQUIRED` stays default off (opt-in per deployment); when it is
+  on, legacy clients without a bound lease are refused motion outright with an
+  explicit error code (`lease_required`) — no warn/grace mode.
+- **Defaults:** TTL 5 s, renew every 1 s (from #323; confirmed by the user
+  2026-09-30). Acquire: `memberOrAbove`. Observe: `viewerOrAbove`.
 
 ### Children
 
@@ -134,14 +139,15 @@ browser ─renew 1 Hz─▶ server ─recheck role, conditional UPDATE─▶ age
 | TASK-318 | Renewal, expiry, role revocation, observer events | 5 | 315, 317 |
 | TASK-319 | Teleop console + VR acquire, renew and release | 5 | 318 |
 | TASK-320 | Data-collection input views drive under the lease | 3 | 319 |
+| TASK-321 | Control leases are on by default | 2 | 320 |
 
 Out of scope: the vrhq (HQ) client/bridge integration — that lives in the vrhq
 repo and consumes the capability this epic publishes; administrative forced
-takeover (optional per #323, not planned — see Open questions).
+takeover (optional per #323; the user confirmed it is not wanted).
 
 ## Acceptance Criteria
 
-- [ ] All seven children are `done`.
+- [ ] All eight children are `done`.
 - [ ] With both flags off, the existing teleop, VR, Agent Mode and VLA test suites
       pass unchanged.
 - [ ] With both flags on, automated tests show exactly one generation can command
@@ -160,21 +166,22 @@ Each child carries its own unit/integration tests with mock agents (#323 asks fo
 mock agents for automated commands). The epic closes on the union above; physical
 stop behaviour on hardware is measured separately and is not claimed by this epic.
 
-## Open questions (user-owned)
+## Resolved questions (user, 2026-09-30)
 
-1. **TTL / renew timing.** 5 s / 1 s adopted provisionally from #323; confirm
-   against real deployment latency (split-host, Wi-Fi robots) before enabling.
-2. **Who may acquire.** Default `super-admin | owner | member`; `viewer` denied.
-   Should a narrower "operator" permission exist?
-3. **Administrative forced takeover.** Not planned. Wanted? It needs its own
-   authorization, reason, audit and notification.
-4. **Rollout.** When (if ever) should the flags default on, and should a
-   deployment with leases enabled refuse legacy clients that never bind?
-5. **Autonomous starts while no lease is held** stay admitted (the lease governs
-   humans). Should enforced mode instead require a lease for API-started
-   VLA/agent runs too?
+1. **TTL / renew timing.** Confirmed: 5 s / 1 s.
+2. **Who may acquire.** `member` is the floor (`super-admin | owner | member`);
+   `viewer` denied; no separate "operator" permission.
+3. **Administrative forced takeover.** Not wanted.
+4. **Rollout.** Both flags default off while TASK-315 … TASK-320 land; TASK-321
+   flips `CONTROL_LEASES_ENABLED` to default on. `CONTROL_LEASE_REQUIRED` stays
+   default off, opt-in per deployment; when on, legacy clients that never bind
+   are refused motion outright with an explicit error code — no warn/grace mode.
+5. **Autonomous starts** (VLA, Agent Mode, patrols) stay admitted while no
+   lease is held and are refused while another user holds one.
 
 ## Notes
 
 - 2026-09-30: grilled and planned unattended from #323 (user absent); every
   decision above was taken by the agent and is marked so in the record.
+- 2026-09-30: the user answered all five open questions (see *Resolved
+  questions* and the record); TASK-321 added for the default-on flip.
