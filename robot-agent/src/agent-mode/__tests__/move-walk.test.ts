@@ -169,6 +169,30 @@ describe('AgentModeController.walkTo — the move walk (TASK-336)', () => {
     expect(h.controller.getState().plan).toBeNull();
   });
 
+  it('walks on odometry an operator registered to the twin (TASK-342)', async () => {
+    // The state manager hands out the graph already carried into odometry, so
+    // a registered-by-registration robot walks exactly like an identity one.
+    const h = rig({
+      registration: {
+        registered: true,
+        how: 'registration',
+        registration: {
+          twinId: 'twin-1',
+          odomFrameId: 'boot-1',
+          x: 3,
+          y: -1,
+          yawDeg: 90,
+          method: 'manual',
+          createdAt: null,
+        },
+      },
+    });
+    const start = await h.controller.walkTo({ x: 0, y: 0, place: 'HERE' });
+    expect(start.ok).toBe(true);
+    if (!start.ok) return;
+    expect((await start.done).ok).toBe(true);
+  });
+
   it('refuses without a place graph — twin coordinates mean nothing then', async () => {
     const h = rig({ registration: null });
     const start = await h.controller.walkTo({ x: 1, y: 1 });
