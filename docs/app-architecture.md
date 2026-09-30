@@ -103,10 +103,8 @@ src/
 │   │   │   └── SiteMap.tsx
 │   │   ├── hooks/
 │   │   │   └── useFleetStatus.ts
-│   │   ├── store/
-│   │   │   └── fleetStore.ts
 │   │   └── pages/
-│   │       └── FleetDashboard.tsx
+│   │       └── FleetPage.tsx
 │   │
 │   ├── alerts/                 # Alerts & notifications
 │   │   ├── index.ts
