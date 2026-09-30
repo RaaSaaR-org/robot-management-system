@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-The A2A Protocol Server is the backend for NeoDEM. It implements the A2A (Agent-to-Agent) protocol to enable communication between the frontend application and robot agents. The server manages robot registration, conversations, tasks, zones, alerts, processes, compliance logging, incident management, GDPR, VLA training pipelines, and real-time events via WebSocket. Data is persisted via Prisma ORM (SQLite locally, PostgreSQL in production). The schema has 73 models.
+The A2A Protocol Server is the backend for NeoDEM. It implements the A2A (Agent-to-Agent) protocol to enable communication between the frontend application and robot agents. The server manages robot registration, conversations, tasks, alerts, processes, compliance logging, incident management, GDPR, VLA training pipelines, and real-time events via WebSocket. Data is persisted via Prisma ORM (SQLite locally, PostgreSQL in production). The schema has 73 models.
 
 ## Commands
 
@@ -68,7 +68,6 @@ server/src/
 │   ├── auth.routes.ts         # Authentication
 │   ├── robot.routes.ts        # Robot management
 │   ├── alert.routes.ts        # Alert CRUD
-│   ├── zone.routes.ts         # Zone/facility management
 │   ├── command.routes.ts      # NL command interpretation
 │   ├── process.routes.ts      # Process/workflow management
 │   ├── patrol.routes.ts       # Patrol routes/runs/findings + photos (TASK-212)
@@ -108,7 +107,6 @@ server/src/
 │   ├── ConversationManager.ts # A2A conversations, orchestration
 │   ├── AuthService.ts         # JWT auth
 │   ├── AlertService.ts        # Alert CRUD + WebSocket
-│   ├── ZoneService.ts         # Zone CRUD + geometry
 │   ├── CommandInterpreter.ts  # NL → structured command (Gemini)
 │   ├── ProcessManager.ts      # Multi-step workflow engine
 │   ├── PatrolService.ts       # Patrol CRUD, ingest → alerts, proxies (TASK-212)
@@ -152,7 +150,7 @@ server/src/
 │   ├── A2AClient.ts, HttpClient.ts, LogExportService.ts
 │   └── ...
 ├── repositories/         # 18 repositories (Prisma data access)
-│   ├── RobotRepository.ts, AlertRepository.ts, ZoneRepository.ts
+│   ├── RobotRepository.ts, AlertRepository.ts
 │   ├── ConversationRepository.ts, TaskRepository.ts, AgentRepository.ts
 │   ├── UserRepository.ts, RefreshTokenRepository.ts, CommandRepository.ts
 │   ├── ProcessRepository.ts, RobotTaskRepository.ts, EventRepository.ts
@@ -217,19 +215,6 @@ server/src/
 | DELETE | `/api/alerts/:id`                 | Delete alert             |
 | DELETE | `/api/alerts/clear/acknowledged`  | Clear acknowledged       |
 | DELETE | `/api/alerts/clear/all`           | Clear all alerts         |
-
-### Zones (`/api/zones`) — auth required
-
-| Method | Path                          | Description                     |
-| ------ | ----------------------------- | ------------------------------- |
-| GET    | `/api/zones/`                 | List zones (filter: floor, type)|
-| GET    | `/api/zones/at-point`         | Find zone at x,y,floor         |
-| GET    | `/api/zones/named-locations`  | Zone centers as named locations |
-| GET    | `/api/zones/floor/:floor`     | All zones on a floor            |
-| GET    | `/api/zones/:id`              | Get single zone                 |
-| POST   | `/api/zones/`                 | Create zone                     |
-| PUT    | `/api/zones/:id`              | Update zone                     |
-| DELETE | `/api/zones/:id`              | Delete zone                     |
 
 ### Command Interpretation (`/api/command`) — auth required
 
@@ -366,7 +351,7 @@ Photos: `PatrolPhotoStore` — S3 bucket `patrol-photos` when RustFS is configur
 
 - `ws://localhost:3001/api/a2a/ws` - Real-time event streaming
 
-**Outbound events**: `robot_registered`, `robot_unregistered`, `robot_status_changed`, `robot_telemetry`, `robot_health_check`, `alert_created`, `alert_acknowledged`, `alert_deleted`, `zone_created`, `zone_updated`, `zone_deleted`, `task_event`, `process:*`, `task:*`, `robot:work_assigned`, `agent:*` (incl. `agent:patrol:started|leg|finished` carrying `patrol`, `agent:finding:detected|confirmed` carrying `finding` + `patrol`)
+**Outbound events**: `robot_registered`, `robot_unregistered`, `robot_status_changed`, `robot_telemetry`, `robot_health_check`, `alert_created`, `alert_acknowledged`, `alert_deleted`, `task_event`, `process:*`, `task:*`, `robot:work_assigned`, `agent:*` (incl. `agent:patrol:started|leg|finished` carrying `patrol`, `agent:finding:detected|confirmed` carrying `finding` + `patrol`)
 
 **Inbound messages**: `ping` (returns pong), `subscribe` (subscribes to all events)
 
@@ -382,7 +367,6 @@ Services are singleton managers with DB-backed persistence. Core services:
 | `ConversationManager` | `conversationManager` | A2A conversations, orchestration, agent routing |
 | `AuthService` | `authService` | JWT auth (access 15m, refresh 7d) |
 | `AlertService` | `alertService` | Alert CRUD, WebSocket broadcast |
-| `ZoneService` | `zoneService` | Zone CRUD, geometry validation |
 | `CommandInterpreter` | `commandInterpreter` | NL → structured command (Gemini, keyword fallback) |
 | `ProcessManager` | `processManager` | Multi-step workflow engine |
 | `TaskDistributor` | `taskDistributor` | Push-model task scheduler (2s interval) |

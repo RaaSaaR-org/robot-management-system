@@ -54,7 +54,6 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   'SimulationJob',
   'SyntheticJob',
   // Wave 3d
-  'Zone',
   'Conversation',
   // Wave 3e (TASK-165 service accounts)
   'ApiToken',
