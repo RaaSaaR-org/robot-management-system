@@ -3,6 +3,63 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.09.30] - 2026-09-30
+
+### Added
+
+- operators align a robot to its site from the Robots tab (#367)
+- the robot agent fences in the twin frame once its odometry is registered (#366)
+- a robot's frame registration is stored and computed on the server (#365)
+- process steps and commands move to places (#357)
+- the fleet map is a site map (#356)
+- zone E-stop, deployments and verification target twin zones (#355)
+- a robot moves to a place by name and refuses keepouts (#354)
+- the agent loads its site's places through its binding (#353)
+- a robot is bound to a site (#352)
+- twin zones are uniquely named places (#351)
+- the experiment loop — an agent proposes a hypothesis, a human starts it, and the platform trains, evaluates and rates the result (#346)
+- control leases are on by default (#344)
+- actors, comments and ratings — let people and agents leave a judgement with evidence on datasets, models, episodes and runs (#343)
+- data-collection input views drive under the control lease (#342)
+- the teleop console acquires, renews and releases a control lease (#341)
+- control leases renew only over a live bound socket (#339)
+- make the robot's voice a selectable pack, so a customer can ship their own — starting with Saarländisch (#338)
+- other agent motion ingress honours the control lease (#333)
+- turning thinking off costs a small planner its goto — decide, per model, whether that trade is wanted (#337)
+- the server grants one control lease per robot across replicas (#336)
+- keyboard teleop drives only on a lease-bound socket (#332)
+- the agent keeps one fenced control lease (#330)
+- publish immutable SHA-tagged images for every main commit (#328)
+- publish agent research in NeoDEM (#324)
+
+### Fixed
+
+- roboctl move does not move a sidecar-backed robot (#364)
+- alert sourceId is a robot foreign key used for other ids (#363)
+- zone E-stop and the site map work against a live sim robot (#361)
+- a GDPR request is readable only by its data subject or someone who may act for them (#347)
+- close the server gaps the Build pages ran into (#340)
+- GDPR self-service requests act as a placeholder user (#334)
+- a PR that follows the title rule is invisible to the changelog (#335)
+
+### Changed
+
+- location.place is a robot's only answer to where it is (#358)
+- the fleet Zone model and /api/zones are removed (#359)
+
+### Maintenance
+
+- the docs draw the architecture and the network (#348)
+- the App CI job has room under its time limit (#362)
+- close epic TASK-274 (#360)
+- plan TASK-274: split the zone unification into nine children (#350)
+- spec TASK-274: TwinZone is the only zone model (#349)
+- close epic TASK-313: robot-wide per-user control leases (#345)
+- record control-lease rollout decisions (TASK-313) (#331)
+- spec and plan robot-wide per-user control leases (TASK-313) (#329)
+- add brand pack and new embodiment integration plan (#327)
+
+
 ## [v2026.09.12.1] - 2026-09-12
 
 ### Fixed
