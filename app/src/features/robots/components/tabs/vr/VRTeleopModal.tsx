@@ -903,11 +903,13 @@ export function VRTeleopModalBody({
             <Button
               variant="secondary"
               size="sm"
-              disabled={standing || estopLatched}
+              disabled={standing || estopLatched || !leaseAllows}
               data-testid="vr-stand-base"
               title={estopLatched
                 ? 'Clear the E-Stop first — the base is damped because somebody stopped the robot'
-                : 'Command the base back into its standing FSM'}
+                : !leaseAllows
+                  ? 'Take control first — standing the base is a motion command'
+                  : 'Command the base back into its standing FSM'}
               onClick={standBase}
             >
               {standing ? 'Standing…' : 'Stand'}
