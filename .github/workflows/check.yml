@@ -83,7 +83,11 @@ jobs:
   app:
     name: App typecheck + build (dev + demo)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 10, not 5. A green run takes 3-5 minutes on a hosted runner: vitest
+    # alone is 1.5-3 minutes (~2,700 tests, most of it jsdom environment
+    # setup per file), then two vite builds of ~30-45 s each. Runner speed
+    # varies enough that 5 minutes cancelled passing runs mid demo-build.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
