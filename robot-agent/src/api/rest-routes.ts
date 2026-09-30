@@ -9,6 +9,7 @@ import type { NextFunction, Request, Response } from 'express';
 import type { RobotStateManager } from '../robot/state.js';
 import { ControlBusyError } from '../robot/state.js';
 import type {
+  CommandType,
   RobotCommandRequest,
   RegistrationInfo,
   PushedTask,
@@ -29,6 +30,7 @@ import { INTENT_MAX_CHARS } from '../agent-mode/intents.js';
 import { getIdentityStore } from '../agent-mode/identity.js';
 import { lastPlatformAuthRejection } from '../utils/platform-auth.js';
 import { controlLease, type ControlLeaseRegistry } from '../control-lease/control-lease.js';
+import { refuseIfLeaseHeld } from '../control-lease/motion-guard.js';
 
 /**
  * Shared secret that unlocks the personal-data routes from off-box.
@@ -135,6 +137,9 @@ function timingSafeEquals(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/** `/command` types that stop the robot — never refused by the lease guard (TASK-316). */
+const STOP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['stop', 'emergency_stop']);
+
 /** Bounds on a control lease's TTL, in ms (TASK-314). */
 const LEASE_TTL_MIN_MS = 500;
 const LEASE_TTL_MAX_MS = 60_000;
@@ -214,6 +219,9 @@ export function createRestRoutes(
       });
       return;
     }
+
+    // Stopping is always allowed; everything else starts motion (TASK-316).
+    if (!STOP_COMMANDS.has(commandRequest.type) && refuseIfLeaseHeld(res, leases)) return;
 
     try {
       const command = await robotStateManager.executeCommand(
@@ -415,6 +423,7 @@ export function createRestRoutes(
       });
       return;
     }
+    if (refuseIfLeaseHeld(res, leases)) return;
 
     const body = req.body as {
       skillId?: string;
@@ -583,6 +592,7 @@ export function createRestRoutes(
       });
       return;
     }
+    if (refuseIfLeaseHeld(res, leases)) return;
 
     const body = req.body as {
       skillId?: string;
@@ -714,6 +724,7 @@ export function createRestRoutes(
       });
       return;
     }
+    if (refuseIfLeaseHeld(res, leases)) return;
 
     const task: PushedTask = req.body;
 
@@ -1079,6 +1090,7 @@ export function createRestRoutes(
       });
       return;
     }
+    if (refuseIfLeaseHeld(res, leases)) return;
 
     const { instruction, config: vlaConfig } = req.body;
 
@@ -1180,6 +1192,7 @@ export function createRestRoutes(
       });
       return;
     }
+    if (refuseIfLeaseHeld(res, leases)) return;
 
     robotStateManager.resumeVLAControl();
 
@@ -1483,6 +1496,7 @@ export function createRestRoutes(
   // POST /robots/:id/agent-mode/command — {text, contextId?, spoken?}
   router.post('/robots/:id/agent-mode/command', async (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
+    if (refuseIfLeaseHeld(res, leases)) return;
     const text = req.body?.text;
     if (typeof text !== 'string' || !text.trim()) {
       res.status(400).json({ code: 'INVALID_REQUEST', message: 'body must be {text: string}' });
@@ -1549,6 +1563,7 @@ export function createRestRoutes(
   // recorded as a skipped run (agent:tour:finished) so the server can alert.
   router.post('/robots/:id/agent-mode/tour', async (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
+    if (refuseIfLeaseHeld(res, leases)) return;
     const routeId = req.body?.routeId;
     if (typeof routeId !== 'string' || !routeId.trim()) {
       res.status(400).json({ code: 'INVALID_REQUEST', message: 'body must be {routeId: string, origin?, route?}' });
@@ -1611,6 +1626,7 @@ export function createRestRoutes(
   // recorded as a skipped run (agent:patrol:finished) so the server can alert.
   router.post('/robots/:id/agent-mode/patrol', async (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
+    if (refuseIfLeaseHeld(res, leases)) return;
     const routeId = req.body?.routeId;
     if (typeof routeId !== 'string' || !routeId.trim()) {
       res.status(400).json({ code: 'INVALID_REQUEST', message: 'body must be {routeId: string, mode?, origin?, route?}' });
