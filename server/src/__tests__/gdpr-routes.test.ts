@@ -1222,6 +1222,96 @@ describe('GDPR Routes', () => {
   });
 
   // --------------------------------------------------------------------------
+  // Per-id reads are limited to the data subject (TASK-324)
+  // --------------------------------------------------------------------------
+
+  describe('per-id request reads', () => {
+    const FOREIGN_REQUEST = {
+      ...SAMPLE_REQUEST,
+      userId: 'user-9',
+      status: 'completed',
+      responseData: { export: { records: 5 } },
+    };
+
+    it.each([
+      ['GET', '/api/gdpr/requests/req-001'],
+      ['GET', '/api/gdpr/requests/req-001/download'],
+    ])('answers 404 to a member reading a foreign request: %s %s', async (_m, url) => {
+      currentRole.value = 'member';
+      mockGdprRequestService.getRequest.mockResolvedValue(FOREIGN_REQUEST);
+
+      const response = await request(app).get(url);
+
+      expect(response.status).toBe(404);
+      expect(response.body).toEqual({ error: 'Request not found' });
+      expect(mockGdprRequestService.getStatusHistory).not.toHaveBeenCalled();
+      expect(mockFindUser).not.toHaveBeenCalled();
+    });
+
+    it('answers 404, not 400, for a foreign request that is not yet completed', async () => {
+      currentRole.value = 'viewer';
+      mockGdprRequestService.getRequest.mockResolvedValue({ ...FOREIGN_REQUEST, status: 'pending' });
+
+      const response = await request(app).get('/api/gdpr/requests/req-001/download');
+
+      expect(response.status).toBe(404);
+      expect(response.body.error).toBe('Request not found');
+    });
+
+    it.each([
+      ['/api/gdpr/requests/req-001', 'request'],
+      ['/api/gdpr/requests/req-001/download', 'export'],
+    ])('lets the data subject read their own request: %s', async (url, key) => {
+      currentRole.value = 'viewer';
+      mockGdprRequestService.getRequest.mockResolvedValue({ ...FOREIGN_REQUEST, userId: 'user-123' });
+      mockGdprRequestService.getStatusHistory.mockResolvedValue([]);
+
+      const response = await request(app).get(url);
+
+      expect(response.status).toBe(200);
+      expect(response.body[key]).toBeDefined();
+    });
+
+    it('lets a super-admin read any request', async () => {
+      mockGdprRequestService.getRequest.mockResolvedValue(FOREIGN_REQUEST);
+
+      const response = await request(app).get('/api/gdpr/requests/req-001/download');
+
+      expect(response.status).toBe(200);
+      expect(response.body.export.records).toBe(5);
+    });
+
+    it('lets a tenant owner read a request of a user in their tenant', async () => {
+      currentRole.value = 'owner';
+      mockFindUser.mockResolvedValue({ tenantId: 'tenant-a' });
+      mockGdprRequestService.getRequest.mockResolvedValue(FOREIGN_REQUEST);
+      mockGdprRequestService.getStatusHistory.mockResolvedValue([]);
+
+      const response = await request(app).get('/api/gdpr/requests/req-001');
+
+      expect(response.status).toBe(200);
+      expect(mockFindUser).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'user-9' } }));
+    });
+
+    it.each([
+      ['a user of another tenant', { tenantId: 'tenant-b' }],
+      ['an unknown user', null],
+    ])('answers 404 to a tenant owner reading a request of %s', async (_label, target) => {
+      currentRole.value = 'owner';
+      mockFindUser.mockResolvedValue(target);
+      mockGdprRequestService.getRequest.mockResolvedValue(FOREIGN_REQUEST);
+
+      const detail = await request(app).get('/api/gdpr/requests/req-001');
+      const download = await request(app).get('/api/gdpr/requests/req-001/download');
+
+      expect(detail.status).toBe(404);
+      expect(download.status).toBe(404);
+      expect(download.body).toEqual({ error: 'Request not found' });
+      expect(mockGdprRequestService.getStatusHistory).not.toHaveBeenCalled();
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // Data subject resolution (TASK-270)
   // --------------------------------------------------------------------------
 
