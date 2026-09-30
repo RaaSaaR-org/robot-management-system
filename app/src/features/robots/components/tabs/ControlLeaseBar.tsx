@@ -20,6 +20,8 @@ export interface ControlLeaseBarProps {
   robotName: string;
   /** The view's agent socket is open — taking control needs one to bind. */
   connected: boolean;
+  /** Render the per-robot E-stop here; off for a view that has its own always-on stop. */
+  showEstop?: boolean;
 }
 
 /** Seconds until `expiresAt`, re-read every second; null without a deadline. */
@@ -41,7 +43,7 @@ export function holderLabel(holder: ControlLeaseHolder, secondsLeft: number | nu
   return secondsLeft === null ? base : `${base} · expires in ${secondsLeft} s`;
 }
 
-export function ControlLeaseBar({ lease, robotId, robotName, connected }: ControlLeaseBarProps) {
+export function ControlLeaseBar({ lease, robotId, robotName, connected, showEstop = true }: ControlLeaseBarProps) {
   const { state, holder, notice } = lease;
   const secondsLeft = useSecondsLeft(holder?.expiresAt);
 
@@ -94,7 +96,7 @@ export function ControlLeaseBar({ lease, robotId, robotName, connected }: Contro
               Take control
             </Button>
           )}
-          <RobotEmergencyStopButton robotId={robotId} robotName={robotName} size="sm" />
+          {showEstop && <RobotEmergencyStopButton robotId={robotId} robotName={robotName} size="sm" />}
         </div>
       </div>
       {notice && (

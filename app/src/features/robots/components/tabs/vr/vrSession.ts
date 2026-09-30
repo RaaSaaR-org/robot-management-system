@@ -130,6 +130,12 @@ export async function estopSequence(
 export interface StreamGateState {
   estopLatched: boolean;
   status: LinkStatus;
+  /**
+   * The control lease allows driving (TASK-319): true when the server does not
+   * advertise leases, otherwise only while this console's lease is `bound`.
+   * Omitted means true, which is the behaviour before leases.
+   */
+  leaseAllows?: boolean;
 }
 
 /**
@@ -142,7 +148,7 @@ export interface StreamGateState {
  * moving freely while it was stopped. Stop at the source.
  */
 export function shouldStream(state: StreamGateState): boolean {
-  return !state.estopLatched && state.status === 'open';
+  return !state.estopLatched && state.status === 'open' && state.leaseAllows !== false;
 }
 
 /** The subset of `WebSocket` this module uses, so tests can supply a fake. */
@@ -326,5 +332,22 @@ export function createTeleopLink(options: TeleopLinkOptions): TeleopLink {
       }
       setStatus('closed');
     },
+  };
+}
+
+/**
+ * The link as the control-lease hook sees it (TASK-319): `send` goes through
+ * whichever socket the link currently holds, `isOpen` says whether that one is
+ * open. The link reconnects on its own, and a reconnected socket is unbound, so
+ * the caller attaches one of these on each `open` and detaches on anything else
+ * — the detach is what releases the lease.
+ */
+export function leaseSocketFor(link: Pick<TeleopLink, 'send' | 'status'>): {
+  send(payload: unknown): boolean;
+  isOpen(): boolean;
+} {
+  return {
+    send: (payload: unknown) => link.status() === 'open' && link.send(payload),
+    isOpen: () => link.status() === 'open',
   };
 }

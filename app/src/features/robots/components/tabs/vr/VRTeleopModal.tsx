@@ -19,6 +19,7 @@ import { headsetTargets, type HeadsetTarget, type XrAvailability } from './vrAva
 import {
   createTeleopLink,
   estopSequence,
+  leaseSocketFor,
   linkState,
   shouldStream,
   ESTOP_REASON,
@@ -27,6 +28,8 @@ import {
   type LinkStatus,
   type TeleopLink,
 } from './vrSession';
+import { useControlLease } from '../../../hooks/useControlLease';
+import { ControlLeaseBar } from '../ControlLeaseBar';
 import { createLoopHealth, isPoseFrame, onPositionsSent, onStateReceived, type LoopHealth } from './vrHud';
 import { EMULATOR_ACTIVE, XR_EMULATOR } from './vrConstants';
 import { getWsBaseUrl } from './vrUrls';
@@ -303,6 +306,20 @@ export function VRTeleopModalBody({
       }),
     [],
   );
+  /**
+   * Control lease (TASK-319). Inert when the server does not advertise leases.
+   * A gate (loss or release) stops the stream at once and ends the session:
+   * the wearer cannot read the desktop banner that says why the robot stopped.
+   */
+  const lease = useControlLease(robot.id, {
+    onMotionGate: () => {
+      canStreamRef.current = false;
+      void xrStore.getState().session?.end().catch(() => { /* already ending */ });
+    },
+  });
+  const leaseRef = useRef(lease);
+  leaseRef.current = lease;
+  const leaseAllows = !lease.enabled || lease.state === 'bound';
   const jointMap = useMemo<VrJointMap>(() => buildJointMap(joints), [joints]);
   /** Ask the left arm, then the right: a one-armed robot names its gripper on one side only. */
   const trigger = useMemo<EndEffectorMode>(() => {
@@ -326,7 +343,8 @@ export function VRTeleopModalBody({
   }, [joints]);
   const retargetMode: 'orientation' | 'ik' = ikCapable && preferIk ? 'ik' : 'orientation';
 
-  const canEnterVr = status === 'open' && (sessionSupported === true || EMULATOR_ACTIVE);
+  // With leases on, entering the session requires holding the robot.
+  const canEnterVr = status === 'open' && (sessionSupported === true || EMULATOR_ACTIVE) && leaseAllows;
 
   const send = useCallback((payload: unknown): boolean => {
     const ok = linkRef.current?.send(payload) ?? false;
@@ -344,6 +362,8 @@ export function VRTeleopModalBody({
   // identity here would tear the socket down and reconnect it.
   const handleMessage = useCallback((msg: unknown, at: number) => {
     if (typeof msg !== 'object' || msg === null) return;
+    // Lease frames belong to the lease hook (read through a ref, so this stays stable).
+    if (leaseRef.current.handleSocketMessage(msg)) return;
     const frame = msg as Record<string, unknown>;
     switch (frame.type) {
       case 'config':
@@ -505,8 +525,15 @@ export function VRTeleopModalBody({
   // Mirror the React-side facts into the refs the render loop reads. Refs, not
   // props, because the rig reads them 72-120 times a second.
   useEffect(() => {
-    canStreamRef.current = shouldStream({ estopLatched, status });
-  }, [estopLatched, status]);
+    canStreamRef.current = shouldStream({ estopLatched, status, leaseAllows });
+  }, [estopLatched, status, leaseAllows]);
+  // The lease binds to the socket the link holds NOW. A reconnect is a new,
+  // unbound socket, so anything but `open` detaches — and detaching releases.
+  useEffect(() => {
+    const link = linkRef.current;
+    if (status === 'open' && link) lease.attachSocket(leaseSocketFor(link));
+    else lease.attachSocket(null);
+  }, [status, lease.attachSocket]); // eslint-disable-line react-hooks/exhaustive-deps -- attachSocket is the stable part
   // Forget any outstanding RTT probe the moment the link is not open.
   // `createTeleopLink` reconnects internally, so the modal's connect effect does
   // not re-run and `healthRef` — built once at mount — survived the outage. A
@@ -679,6 +706,17 @@ export function VRTeleopModalBody({
         if (active === was) return;
         inVrRef.current = active;
         if (active) recenter();
+        // Headset exit, tracking loss and session end all land here: give control back.
+        if (!active) leaseRef.current.release();
+        // Tracking loss: the headset taken off hides the session. Blurred (a
+        // system menu over the scene) is not a loss.
+        if (active && s.session && typeof s.session.addEventListener === 'function') {
+          const session = s.session;
+          const onVisibility = (): void => {
+            if (session.visibilityState === 'hidden') leaseRef.current.release();
+          };
+          session.addEventListener('visibilitychange', onVisibility);
+        }
         // Leaving VR puts the robot back the way it faces on the desktop
         // preview — the recenter turned it to wherever the wearer was facing,
         // which means nothing once the headset is off.
@@ -741,14 +779,20 @@ export function VRTeleopModalBody({
             RTT {meters.rttMs === null ? '—' : `${Math.round(meters.rttMs)} ms`}
           </span>
           <span className="text-xs text-ink-tertiary" data-testid="vr-stream">
-            {estopLatched ? 'Stream held (E-stop)' : shouldStream({ estopLatched, status }) ? 'Stream armed' : 'Stream idle'}
+            {estopLatched
+              ? 'Stream held (E-stop)'
+              : shouldStream({ estopLatched, status, leaseAllows })
+                ? 'Stream armed'
+                : lease.enabled && !leaseAllows
+                  ? 'Stream held (no control)'
+                  : 'Stream idle'}
           </span>
         </div>
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
             size="sm"
-            disabled={status !== 'open' || inVr}
+            disabled={status !== 'open' || inVr || !leaseAllows}
             title={inVr ? 'Disabled in VR: Home snaps every joint at once, under the wearer’s hands' : undefined}
             onClick={() => send({ preset: 'home' })}
           >
@@ -805,6 +849,17 @@ export function VRTeleopModalBody({
           </Button>
         </div>
       </div>
+
+      {lease.enabled && (
+        // No E-stop here: the modal's own stop above is always enabled.
+        <ControlLeaseBar
+          lease={lease}
+          robotId={robot.id}
+          robotName={robot.name}
+          connected={status === 'open'}
+          showEstop={false}
+        />
+      )}
 
       {/* E-Stop banner. Latched is a state the operator has to be able to leave
           without putting the headset back on — see `resetEstop`. */}
