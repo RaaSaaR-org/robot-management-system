@@ -73,6 +73,13 @@ account or their own personal data:
 
 `/api/gdpr/admin/*` is **not** exempt — it acts on other people's requests.
 
+"One's own" is enforced in the handlers, not only by the guard (TASK-270): the
+data subject of every `/api/gdpr/requests*` and `/api/gdpr/consents*` call is the
+authenticated user (`dev-user-id` under `AUTH_DISABLED=true`). A `userId` in the
+body or query is honoured only when it names the caller, when the caller is a
+`super-admin`, or when the caller is an `owner` and the named user belongs to the
+owner's tenant; anything else is `403`.
+
 **2. Mounts that carry no guard at all** (`UNGUARDED_WRITE_MOUNTS`, `app.ts`),
 because a user JWT is not what authenticates them:
 

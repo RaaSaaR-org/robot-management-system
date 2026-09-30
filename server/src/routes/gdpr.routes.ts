@@ -48,6 +48,66 @@ import {
   type RestrictionReason,
 } from '../types/gdpr.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import type { AuthenticatedRequest, AuthUser, UserRole } from '../middleware/auth.middleware.js';
+import { prisma } from '../database/index.js';
+
+/**
+ * Roles that may file a request or change a consent on someone else's behalf
+ * (TASK-270) — a platform super-admin for anyone, or a tenant owner acting as
+ * the controller for a person in their own organisation. Members process
+ * requests under /admin but never originate one in another person's name.
+ */
+const ACT_FOR_OTHERS_ROLES: readonly UserRole[] = ['super-admin', 'owner'];
+
+/**
+ * Whether `caller` may act for the user `targetId`. A super-admin may act for
+ * anyone; an owner only for a user in their own tenant, checked explicitly so
+ * it holds whether or not the tenant-isolation extension is enabled.
+ */
+async function mayActFor(caller: AuthUser, targetId: string): Promise<boolean> {
+  if (!ACT_FOR_OTHERS_ROLES.includes(caller.role)) return false;
+  if (caller.role === 'super-admin') return true;
+  if (!caller.tenantId) return false;
+  const target = await prisma.user.findUnique({
+    where: { id: targetId },
+    select: { tenantId: true },
+  });
+  return target?.tenantId === caller.tenantId;
+}
+
+/**
+ * Resolves whose data a self-service call is about (TASK-270).
+ *
+ * The data subject is the authenticated caller. An explicit `userId` is
+ * honoured only when it names the caller, or when the caller's role may act
+ * for others; any other value is refused with 403, never silently replaced.
+ * Sends the error response itself and returns null when the call must stop.
+ */
+export async function resolveDataSubject(
+  req: Request,
+  res: Response,
+  requested: unknown,
+): Promise<string | null> {
+  const user = (req as AuthenticatedRequest).user;
+  if (!user?.id) {
+    res.status(401).json({ error: 'Authentication required' });
+    return null;
+  }
+  if (requested === undefined || requested === null || requested === '') {
+    return user.id;
+  }
+  if (typeof requested !== 'string') {
+    res.status(400).json({ error: 'userId must be a string' });
+    return null;
+  }
+  if (requested === user.id || (await mayActFor(user, requested))) {
+    return requested;
+  }
+  res.status(403).json({
+    error: 'You can only file GDPR requests and manage consents for your own account',
+  });
+  return null;
+}
 
 export const gdprRoutes = Router();
 
@@ -60,8 +120,8 @@ export const gdprRoutes = Router();
  */
 gdprRoutes.post('/requests/access', async (req: Request, res: Response) => {
   try {
-    // For now, use a placeholder userId - in production this comes from auth middleware
-    const userId = req.body.userId || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.body.userId);
+    if (!userId) return;
     const format = req.body.format || 'json';
     const includeMetadata = req.body.includeMetadata ?? true;
 
@@ -82,7 +142,8 @@ gdprRoutes.post('/requests/access', async (req: Request, res: Response) => {
  */
 gdprRoutes.post('/requests/rectification', async (req: Request, res: Response) => {
   try {
-    const userId = req.body.userId || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.body.userId);
+    if (!userId) return;
     const { fields } = req.body;
 
     if (!fields || !Array.isArray(fields) || fields.length === 0) {
@@ -104,7 +165,8 @@ gdprRoutes.post('/requests/rectification', async (req: Request, res: Response) =
  */
 gdprRoutes.post('/requests/erasure', async (req: Request, res: Response) => {
   try {
-    const userId = req.body.userId || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.body.userId);
+    if (!userId) return;
     const { reason, scope, specificData } = req.body;
 
     const request = await gdprRequestService.createErasureRequest(userId, {
@@ -128,7 +190,8 @@ gdprRoutes.post('/requests/erasure', async (req: Request, res: Response) => {
  */
 gdprRoutes.post('/requests/restriction', async (req: Request, res: Response) => {
   try {
-    const userId = req.body.userId || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.body.userId);
+    if (!userId) return;
     const { scope, reason, details } = req.body;
 
     if (!scope || !RestrictionScopes.includes(scope)) {
@@ -161,7 +224,8 @@ gdprRoutes.post('/requests/restriction', async (req: Request, res: Response) => 
  */
 gdprRoutes.post('/requests/portability', async (req: Request, res: Response) => {
   try {
-    const userId = req.body.userId || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.body.userId);
+    if (!userId) return;
     const format = req.body.format || 'json';
     const dataCategories = req.body.dataCategories;
 
@@ -188,7 +252,8 @@ gdprRoutes.post('/requests/portability', async (req: Request, res: Response) => 
  */
 gdprRoutes.post('/requests/objection', async (req: Request, res: Response) => {
   try {
-    const userId = req.body.userId || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.body.userId);
+    if (!userId) return;
     const { processingActivity, reason, details } = req.body;
 
     if (!processingActivity) {
@@ -221,7 +286,8 @@ gdprRoutes.post('/requests/objection', async (req: Request, res: Response) => {
  */
 gdprRoutes.post('/requests/adm-review', async (req: Request, res: Response) => {
   try {
-    const userId = req.body.userId || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.body.userId);
+    if (!userId) return;
     const { decisionId, contestReason, evidence } = req.body;
 
     if (!decisionId) {
@@ -258,7 +324,8 @@ gdprRoutes.post('/requests/adm-review', async (req: Request, res: Response) => {
  */
 gdprRoutes.get('/requests', async (req: Request, res: Response) => {
   try {
-    const userId = (req.query.userId as string) || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.query.userId);
+    if (!userId) return;
     const requests = await gdprRequestService.getUserRequests(userId);
     res.json({ requests });
   } catch (error) {
@@ -295,7 +362,8 @@ gdprRoutes.get('/requests/:id', async (req: Request, res: Response) => {
 gdprRoutes.delete('/requests/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const userId = (req.query.userId as string) || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.query.userId);
+    if (!userId) return;
 
     const request = await gdprRequestService.cancelRequest(id, userId);
     res.json(request);
@@ -360,7 +428,8 @@ gdprRoutes.get('/verify/:token', async (req: Request, res: Response) => {
  */
 gdprRoutes.get('/consents', async (req: Request, res: Response) => {
   try {
-    const userId = (req.query.userId as string) || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.query.userId);
+    if (!userId) return;
     const consents = await consentService.getUserConsents(userId);
     res.json({ consents });
   } catch (error) {
@@ -374,7 +443,8 @@ gdprRoutes.get('/consents', async (req: Request, res: Response) => {
  */
 gdprRoutes.post('/consents', async (req: Request, res: Response) => {
   try {
-    const userId = req.body.userId || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.body.userId);
+    if (!userId) return;
     const { type, granted, consents } = req.body;
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
@@ -423,7 +493,8 @@ gdprRoutes.post('/consents', async (req: Request, res: Response) => {
 gdprRoutes.delete('/consents/:type', async (req: Request, res: Response) => {
   try {
     const { type } = req.params;
-    const userId = (req.query.userId as string) || 'current-user';
+    const userId = await resolveDataSubject(req, res, req.query.userId);
+    if (!userId) return;
 
     if (!ConsentTypes.includes(type as ConsentType)) {
       return res.status(400).json({
