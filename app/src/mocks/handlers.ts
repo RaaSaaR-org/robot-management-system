@@ -367,6 +367,7 @@ export const handlers = [
 
     const listings = demoMarketplaceListings
       .filter((l) => {
+        if (demoUnpublishedListingIds.has(l.id)) return false;
         if (type && l.type !== type) return false;
         if (robotType && l.robotType !== robotType) return false;
         if (baseModel && l.baseModel !== baseModel) return false;
@@ -441,6 +442,34 @@ export const handlers = [
       return HttpResponse.json({ error: 'Listing not found' }, { status: 404 });
     }
     return HttpResponse.json({ listing });
+  }),
+
+  // Seller acts (TASK-272): same contract as the server — own listings only,
+  // and a listing somebody bought can be unpublished but not deleted.
+  ...(['unpublish', 'publish'] as const).map((act) =>
+    http.post(`/api/marketplace/listings/:id/${act}`, ({ params }) => {
+      const mine = demoMyListings.find((m) => m.listing.id === params.id);
+      if (!mine) return HttpResponse.json({ error: 'Only the seller can change this listing' }, { status: 403 });
+      if (act === 'unpublish') demoUnpublishedListingIds.add(mine.listing.id);
+      else demoUnpublishedListingIds.delete(mine.listing.id);
+      mine.status = act === 'unpublish' ? 'draft' : 'active';
+      return HttpResponse.json({ listing: mine.listing });
+    }),
+  ),
+
+  http.delete('/api/marketplace/listings/:id', ({ params }) => {
+    const index = demoMyListings.findIndex((m) => m.listing.id === params.id);
+    if (index === -1) return HttpResponse.json({ error: 'Only the seller can delete this listing' }, { status: 403 });
+    if (demoMyListings[index].totalRevenue > 0) {
+      return HttpResponse.json(
+        { error: 'Buyers hold a licence to this listing — unpublish it instead' },
+        { status: 409 },
+      );
+    }
+    demoMyListings.splice(index, 1);
+    const listingIndex = demoMarketplaceListings.findIndex((l) => l.id === params.id);
+    if (listingIndex !== -1) demoMarketplaceListings.splice(listingIndex, 1);
+    return HttpResponse.json({ id: params.id, outcome: 'deleted' });
   }),
 
   http.post('/api/marketplace/listings/:id/purchase', async ({ params, request }) => {
@@ -843,7 +872,9 @@ const demoMarketplaceListings: MarketplaceListing[] = DEMO_MARKETPLACE_LISTINGS.
   reviews: [...l.reviews],
 }));
 const demoMyPurchases: MarketplacePurchase[] = [...DEMO_MY_PURCHASES];
-const demoMyListings = [...DEMO_MY_LISTINGS];
+const demoMyListings = DEMO_MY_LISTINGS.map((m) => ({ ...m }));
+/** Listings the demo seller unpublished: out of the browse, still in "My listings". */
+const demoUnpublishedListingIds = new Set<string>();
 let demoCreditBalance = DEMO_MARKETPLACE_CREDIT_BALANCE;
 
 /** Mirrors the real API's download gate: purchaser or seller only. */
