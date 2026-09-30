@@ -103,6 +103,17 @@ export const robotsApi = {
   },
 
   /**
+   * Bind a robot to a site (TASK-327), or unbind it with `null`.
+   * @param robotId - Robot ID
+   * @param twinId - Digital twin id of the site, or null for no site
+   * @returns The updated robot
+   */
+  async updateRobotSite(robotId: string, twinId: string | null): Promise<Robot> {
+    const response = await apiClient.patch<Robot>(ENDPOINTS.get(robotId), { twinId });
+    return response.data;
+  },
+
+  /**
    * Send a command to a robot.
    * @param robotId - Target robot ID
    * @param command - Command to execute

@@ -9,6 +9,7 @@ import { MessageSquare } from 'lucide-react';
 import { Badge, KeyValueList, LinkButton, Panel, StatusTag } from '@/shared/components/ui';
 import { formatDateTime } from '@/shared/utils/format';
 import type { InfoTabProps } from './types';
+import { SiteSelect } from './SiteSelect';
 
 const METADATA_LABELS: Record<string, string> = {
   robotType: 'Robot type',
@@ -51,6 +52,7 @@ export function InfoTab({ robot }: InfoTabProps) {
               { label: 'Serial number', value: robot.serialNumber, mono: true },
               { label: 'Firmware', value: robot.firmware },
               { label: 'IP address', value: robot.ipAddress, mono: true },
+              { label: 'Site', value: <SiteSelect robotId={robot.id} twinId={robot.twinId} /> },
               { label: 'Zone', value: robot.location?.zone || 'Place unknown' },
               {
                 label: 'Registered',

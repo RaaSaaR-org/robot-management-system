@@ -9,6 +9,7 @@ import { logger } from './utils/logger.js';
 import { setupWebSocket } from './websocket/index.js';
 import { connectDatabase, disconnectDatabase } from './database/index.js';
 import { seedZones } from './database/seedZones.js';
+import { seedDemoWarehouse } from './database/seedDemoWarehouse.js';
 import { seedDefaultTenant } from './database/seedTenant.js';
 import { conversationManager } from './services/ConversationManager.js';
 import { robotManager } from './services/RobotManager.js';
@@ -59,6 +60,9 @@ async function main() {
   // initialises its in-memory cache so cached reads see tenantId-stamped
   // rows from the start.
   await seedDefaultTenant();
+
+  // Seed the "Demo Warehouse" site matching the sim's warehouse scene (TASK-327)
+  await seedDemoWarehouse();
 
   // Seed default zones if database is empty
   await seedZones();

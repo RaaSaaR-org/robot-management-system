@@ -162,6 +162,11 @@ export interface Robot {
   updatedAt: string;
   a2aEnabled?: boolean;
   a2aAgentUrl?: string;
+  /**
+   * TASK-327: the site — the digital twin this robot works in. `null` = no site.
+   * Owned by the server (set via `PATCH /api/robots/:id`), never by the agent.
+   */
+  twinId?: string | null;
 }
 
 /** Robot telemetry data */
@@ -503,8 +508,15 @@ export class RobotManager {
         a2aAgentUrl: baseUrl,
       };
 
-      // Persist to database
-      await robotRepository.upsertWithRegistration(robotWithA2A, endpoints, agentCard, baseUrl);
+      // Persist to database. The site binding (TASK-327) is server-owned and
+      // survives re-registration: take it off the persisted row.
+      const persisted = await robotRepository.upsertWithRegistration(
+        robotWithA2A,
+        endpoints,
+        agentCard,
+        baseUrl
+      );
+      robotWithA2A.twinId = persisted?.twinId ?? null;
 
       // Create registered robot entry
       const now = new Date().toISOString();
@@ -640,6 +652,29 @@ export class RobotManager {
       this.robotCache.set(robotId, registered);
     }
     return registered ?? undefined;
+  }
+
+  /**
+   * TASK-327: bind a robot to a site, or unbind it with `null`. Writes the row
+   * and the cache together, so `GET /:id` (served from the cache) agrees at
+   * once. Returns `undefined` when the robot does not exist for this tenant.
+   */
+  async setRobotSite(robotId: string, twinId: string | null): Promise<Robot | undefined> {
+    const updated = await robotRepository.setTwin(robotId, twinId);
+    if (!updated) return undefined;
+    const cached = this.robotCache.get(robotId);
+    if (cached) cached.robot.twinId = twinId;
+    return this.normalizePresentedStatus(cached ? cached.robot : updated);
+  }
+
+  /**
+   * TASK-327: a twin was deleted — the FK already set its robots' `twinId` to
+   * NULL (`onDelete: SetNull`); drop the same binding from the cache.
+   */
+  forgetSite(twinId: string): void {
+    for (const registered of this.robotCache.values()) {
+      if (registered.robot.twinId === twinId) registered.robot.twinId = null;
+    }
   }
 
   /**

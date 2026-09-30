@@ -89,6 +89,7 @@ export function dbRobotToDomain(db: DbRobot): Robot {
     updatedAt: db.updatedAt.toISOString(),
     a2aEnabled: db.a2aEnabled,
     a2aAgentUrl: db.a2aAgentUrl ?? undefined,
+    twinId: db.twinId ?? null,
   };
 }
 

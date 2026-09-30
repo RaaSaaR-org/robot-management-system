@@ -187,6 +187,8 @@ Rate limited: 20 requests per 15 minutes.
 | GET | `/` | List all robots |
 | GET | `/:id` | Get robot details |
 | DELETE | `/:id` | Unregister robot |
+| PATCH | `/:id` | `{twinId: string \| null}` — bind the robot to a site (the digital twin it works in) or unbind it (TASK-327). Unknown twin, or one of another tenant → 404. Deleting the twin unbinds its robots. `twinId` is on every robot DTO |
+| GET | `/:id/places` | The bound site's place graph — the same payload as `GET /api/digital-twins/:twinId/places/_index.json`; 404 `{error: 'robot has no site'}` when unbound (TASK-327) |
 | POST | `/:id/command` | Send command to robot |
 | GET | `/:id/telemetry` | Get robot telemetry |
 | GET | `/:id/peers` | Every OTHER online robot as `{robotId, name, x, y, headingDeg, frame, place, zone, updatedAt, footprintRadiusM}` for the robot-agent's peer tracker (TASK-207); poses ≤1 s old (refreshed from the agents on demand). `frame` is passed through as reported — the caller drops what it cannot compare |

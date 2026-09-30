@@ -15,6 +15,7 @@ import { PointCloudParseError } from '../storage/pointcloud-parse.js';
 import { twinZoneService } from '../services/TwinZoneService.js';
 import { twinExportService } from '../services/TwinExportService.js';
 import { twinPlaceGraphService } from '../services/TwinPlaceGraphService.js';
+import { robotManager } from '../services/RobotManager.js';
 import { sensorScanService } from '../services/SensorScanService.js';
 import { digitalTwinRepository } from '../repositories/index.js';
 import { modelStorage } from '../storage/model-storage.js';
@@ -266,6 +267,8 @@ digitalTwinRoutes.delete('/:id', async (req: Request, res: Response) => {
   try {
     const ok = await digitalTwinService.deleteTwin(req.params.id);
     if (!ok) return res.status(404).json({ error: 'Digital twin not found' });
+    // TASK-327: the FK unbound this twin's robots; keep the robot cache in step.
+    robotManager.forgetSite(req.params.id);
     res.status(204).send();
   } catch (error) {
     console.error('[DigitalTwin] delete error:', error);
