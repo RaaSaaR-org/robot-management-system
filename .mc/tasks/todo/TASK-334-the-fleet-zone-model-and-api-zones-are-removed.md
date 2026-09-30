@@ -3,7 +3,7 @@ id: "TASK-334"
 aliases: []
 title: "The fleet Zone model and /api/zones are removed"
 slug: "the-fleet-zone-model-and-api-zones-are-removed"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
