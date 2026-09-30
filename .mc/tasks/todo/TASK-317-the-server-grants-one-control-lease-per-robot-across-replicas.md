@@ -3,7 +3,7 @@ id: "TASK-317"
 aliases: []
 title: "The server grants one control lease per robot across replicas"
 slug: "the-server-grants-one-control-lease-per-robot-across-replicas"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
