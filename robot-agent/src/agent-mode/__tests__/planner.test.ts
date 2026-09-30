@@ -943,3 +943,30 @@ describe('Planner — the turn+walk fold end to end', () => {
     expect(result.blocks[1].params).toEqual({ distanceM: 3, direction: 'forward' });
   });
 });
+
+describe('Planner — thinking (TASK-249)', () => {
+  const answer = { text: JSON.stringify({ blocks: [{ kind: 'speak', text: 'ok' }] }) };
+
+  it('sends the thinking flag it was constructed with', async () => {
+    for (const thinking of [true, false]) {
+      const calls: GenerateRequest[] = [];
+      const generate = vi.fn(async (req: GenerateRequest): Promise<GenerateResponse> => {
+        calls.push(req);
+        return { text: answer.text, output: null };
+      });
+      await new Planner({ generate, modelRef: MODEL_REF, thinking }).plan({
+        command: 'sag ok',
+        sceneSummary: 'empty',
+      });
+      expect(calls.length).toBeGreaterThan(0);
+      for (const req of calls) expect(req.thinking).toBe(thinking);
+    }
+  });
+
+  it('defaults to the configured, per-model-resolved setting', async () => {
+    const { config } = await import('../../config/config.js');
+    const { planner, calls } = makePlanner([answer]);
+    await planner.plan({ command: 'sag ok', sceneSummary: 'empty' });
+    expect(calls[0]?.thinking).toBe(config.agentMode.plannerThinking);
+  });
+});

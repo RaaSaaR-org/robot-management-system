@@ -94,6 +94,21 @@ describe('benchHeaderLines', () => {
     expect(text).toMatch(/planner thinking is (ON|off)/);
   });
 
+  it('resolves thinking per benched model, not for the configured one', () => {
+    const saved = process.env.AGENT_PLANNER_THINKING;
+    try {
+      delete process.env.AGENT_PLANNER_THINKING;
+      const unset = benchHeaderLines(['gemma4:e4b', 'gemma4:12b'], 'scene').join('\n');
+      expect(unset).toContain('ON for gemma4:e4b');
+      expect(unset).toContain('off for gemma4:12b');
+      process.env.AGENT_PLANNER_THINKING = 'false';
+      expect(benchHeaderLines(['gemma4:e4b'], 'scene').join('\n')).toContain('off for gemma4:e4b');
+    } finally {
+      if (saved === undefined) delete process.env.AGENT_PLANNER_THINKING;
+      else process.env.AGENT_PLANNER_THINKING = saved;
+    }
+  });
+
   it('records how a dash was counted, because the rule changed under it', () => {
     expect(header()).toContain('Open-loop dashes counted as:');
     expect(header()).toContain('goto-door');
