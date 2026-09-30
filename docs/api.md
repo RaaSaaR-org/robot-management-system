@@ -280,6 +280,18 @@ The server holds the last plan per robot in memory, fans `agent:*` events out ov
 | POST | `/toggle` | `{enabled}` — switch Agent Mode on or off |
 | POST | `/estop` · `/estop/reset` | Manual E-Stop and its acknowledge; the answer says `delivered` and `deliveryError` rather than assuming the robot stopped |
 
+### Control lease (`/api/robots/:id/control-lease`, TASK-317)
+
+The authority for one robot-wide, per-user control lease. One `RobotControlLease` row per robot, taken only by a conditional update (or a primary-key create), so any number of server replicas grant exactly one holder; the same user's second session competes like anyone else. A won lease is usable only once the robot agent has acked the install of its `generation` (the agent's `/api/v1/robots/:id/control-lease/install`); a refused or unreachable agent leaves the row `unconfirmed`, which blocks every acquisition until the agent, asked directly, reports nothing installed. The robot is resolved in the caller's tenant — a robot of another tenant is `404`. Only the SHA-256 of `leaseId` is stored; neither leaves the server except `leaseId` in the acquire answer, and acquire, denial (409 / 403), release and unconfirmed are written to the compliance log with tenant, robot, user, session and generation.
+
+Behind `CONTROL_LEASES_ENABLED` (default `false`): the GET answers `enabled:false`, both POSTs `404 {code:'control_leases_disabled'}`. `CONTROL_LEASE_TTL_MS` (default `5000`, clamped to 500–60000) and `CONTROL_LEASE_RENEW_MS` (default `1000`, at most half the TTL).
+
+| Method | Path | Guard | Description |
+|--------|------|-------|-------------|
+| GET | `/` | viewer | `{capability:{version:1, enabled, ttlMs, renewEveryMs}, holder}`; `holder` is `null` or `{userId, displayName, state:'installing'\|'held'\|'stopping'\|'unconfirmed', generation, expiresAt}` — never the secret or its hash |
+| POST | `/` | member | `{displayName?}` → `201 {leaseId, generation, sessionId, ttlMs, renewEveryMs, expiresAt}`; `409 {code:'lease_held'\|'lease_unconfirmed', holder}`; `503 {code:'agent_unconfirmed'}` |
+| POST | `/release` | member | `{leaseId, generation}` → `{released:true}`; a stale generation, a wrong secret or another user → `{released:false}` and the holder is untouched; `503 {code:'agent_unconfirmed'}` when the agent could not be told |
+
 ### Tour / host mode (`/api/tour`, TASK-213)
 
 Routes are the server's record; runs are what the robot reports back. There is no `/api/robots` half: a tour is never started by a schedule.
