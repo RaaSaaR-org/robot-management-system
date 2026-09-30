@@ -3,7 +3,7 @@ id: "TASK-315"
 aliases: []
 title: "Keyboard teleop drives only on a lease-bound socket"
 slug: "keyboard-teleop-drives-only-on-a-lease-bound-socket"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []
