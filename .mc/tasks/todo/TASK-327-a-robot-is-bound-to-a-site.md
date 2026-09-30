@@ -3,7 +3,7 @@ id: "TASK-327"
 aliases: []
 title: "A robot is bound to a site"
 slug: "a-robot-is-bound-to-a-site"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
