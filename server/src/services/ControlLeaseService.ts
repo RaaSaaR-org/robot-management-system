@@ -17,7 +17,7 @@
  * Only its SHA-256 is stored or sent to the agent, and neither the secret nor
  * the hash is ever logged, audited, or returned by `observe`.
  *
- * Behind `CONTROL_LEASES_ENABLED` (default off) — the routes check the flag;
+ * Behind `CONTROL_LEASES_ENABLED` (default on; `=false` turns it off) — the routes check the flag;
  * this service does not, so tests can drive it directly.
  */
 
@@ -49,10 +49,11 @@ function intFromEnv(name: string, fallback: number): number {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-/** `CONTROL_LEASES_ENABLED=true` turns the acquire / release routes on. Read per call. */
-export function controlLeasesEnabled(): boolean {
-  return process.env.CONTROL_LEASES_ENABLED === 'true';
-}
+/**
+ * Whether the acquire / release routes are on (`CONTROL_LEASES_ENABLED`,
+ * default on since TASK-321). Read per call; lives in `config/features.ts`.
+ */
+export { controlLeasesEnabled } from '../config/features.js';
 
 /** Lease TTL, clamped into the range the agent accepts. Read per call. */
 export function controlLeaseTtlMs(): number {
