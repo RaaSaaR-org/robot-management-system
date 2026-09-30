@@ -18,7 +18,10 @@ import {
   isVoiceTurnInFlight,
   narratePlanOutcome,
   resetNarrationState,
+  sayBody,
+  speakThroughVoiceService,
 } from '../voice-narrator.js';
+import { config } from '../../config/config.js';
 import type { AgentBlock, AgentModeEvent, AgentPlan } from '../types.js';
 
 // One narrator per plan id is now enforced across calls, so the armed set has to
@@ -411,5 +414,43 @@ describe('isVoiceTurnInFlight', () => {
     expect(isVoiceTurnInFlight()).toBe(true);
     stop();
     expect(isVoiceTurnInFlight()).toBe(false);
+  });
+});
+
+describe('the voice pack narration speaks through (TASK-229)', () => {
+  it('builds a /say body with language and voice as separate fields', () => {
+    expect(sayBody('Hallo', 'de', 'saar')).toEqual({ text: 'Hallo', language: 'de', voice: 'saar' });
+    expect(sayBody('Hello', 'en')).toEqual({ text: 'Hello', language: 'en' });
+    expect(sayBody('Hi')).toEqual({ text: 'Hi' });
+  });
+
+  it('carries the configured pack into the voice service request', async () => {
+    const original = config.agentMode.voicePack;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      config.agentMode.voicePack = 'saar';
+      expect(await speakThroughVoiceService('Ich gehe los.', 'de')).toBe(true);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(String(url)).toMatch(/\/say$/);
+      expect(JSON.parse(init.body)).toEqual({ text: 'Ich gehe los.', language: 'de', voice: 'saar' });
+
+      // Unset: no voice field, so the voice service's own VOICE_VOICE speaks.
+      config.agentMode.voicePack = undefined;
+      await speakThroughVoiceService('Done.', 'en');
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ text: 'Done.', language: 'en' });
+    } finally {
+      config.agentMode.voicePack = original;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reports a refused pack as not spoken rather than throwing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 409 }));
+    try {
+      expect(await speakThroughVoiceService('Hallo', 'de')).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

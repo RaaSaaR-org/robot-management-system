@@ -18,6 +18,10 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=8"]
+# The Saarländisch voice pack (tts/saar_engine.py) calls a Gradio app. Optional:
+# without it the pack is listed unavailable with the ImportError as its reason.
+#   uv sync --group saar
+saar = ["gradio_client>=1.3"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

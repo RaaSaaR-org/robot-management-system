@@ -9,7 +9,7 @@
  * @feature robots
  */
 
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useEffect } from 'react';
 import { MicOff } from 'lucide-react';
 import { Button, Panel } from '@/shared/components/ui';
 import { voiceApi } from '../../api/voiceApi';
@@ -26,16 +26,50 @@ export const VoiceTab = memo(function VoiceTab({ robot, robotId }: VoiceTabProps
   const { voice, health, status, refreshHealth } = useVoiceChannel(robotId);
   const addTypedEntry = useVoiceStore((s) => s.addTypedEntry);
   const setPaused = useVoiceStore((s) => s.setPaused);
+  const voiceListing = useVoiceStore((s) => s.voices[robotId] ?? null);
+  const pickedVoice = useVoiceStore((s) => s.selectedVoice[robotId]);
+  const setVoices = useVoiceStore((s) => s.setVoices);
+  const setSelectedVoice = useVoiceStore((s) => s.setSelectedVoice);
 
   // null = first health poll still in flight (avoid an offline flash on mount)
   const available = health === null ? null : health.available;
 
+  // The pack list comes from the robot, re-read whenever the service comes
+  // (back) up — a pack that failed to load may have loaded after a restart.
+  useEffect(() => {
+    if (available !== true) return;
+    let cancelled = false;
+    voiceApi
+      .getVoices(robotId)
+      .then((listing) => {
+        if (!cancelled) setVoices(robotId, listing);
+      })
+      .catch(() => {
+        // An older voice service has no /voices: the composer simply shows no
+        // picker and /say speaks in the configured pack, as before.
+        if (!cancelled) setVoices(robotId, null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [robotId, available, setVoices]);
+
+  // The operator's pick for this robot, else the robot's configured pack.
+  const selectedVoice = pickedVoice ?? voiceListing?.active ?? null;
+
   const handleSay = useCallback(
     async (text: string, language: VoiceLanguage) => {
-      await voiceApi.say(robotId, text, language);
+      // Send the pick only when one was made: omitted, the robot's own
+      // configured pack speaks, which is also what an older service expects.
+      await voiceApi.say(robotId, text, language, pickedVoice);
       addTypedEntry(robotId, text, language);
     },
-    [robotId, addTypedEntry]
+    [robotId, pickedVoice, addTypedEntry]
+  );
+
+  const handleVoiceChange = useCallback(
+    (voiceId: string) => setSelectedVoice(robotId, voiceId),
+    [robotId, setSelectedVoice]
   );
 
   const handleToggleListen = useCallback(async () => {
@@ -90,7 +124,13 @@ export const VoiceTab = memo(function VoiceTab({ robot, robotId }: VoiceTabProps
           <Panel.Header title="Conversation" description="What the robot says, hears and replies." />
           <Panel.Body className="flex flex-col gap-4">
             <VoiceConversation entries={voice.entries} className="h-[320px] xl:h-[400px]" />
-            <VoiceComposer onSay={handleSay} disabled={available === false} />
+            <VoiceComposer
+              onSay={handleSay}
+              disabled={available === false}
+              voices={voiceListing?.voices ?? []}
+              voice={selectedVoice}
+              onVoiceChange={handleVoiceChange}
+            />
           </Panel.Body>
         </Panel>
 

@@ -145,6 +145,22 @@ wheels = [
 ]
 
 [[package]]
+name = "gradio-client"
+version = "2.7.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "httpx" },
+    { name = "huggingface-hub" },
+    { name = "packaging" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/14/dd/bfc46f5c671f4be56949fd26a062972d63b03aa6fc799c7aacb004a48807/gradio_client-2.7.1.tar.gz", hash = "sha256:2c629110496dbca67a848cd70add8cf5c3a24776404a2c5ef4fd759c7c2c33c4", size = 62702, upload-time = "2026-09-18T11:58:23.469Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/03/8a/dea48fd8863da2a920e6f83c3ce9b0a00dbb5517cd77b834746812d4687e/gradio_client-2.7.1-py3-none-any.whl", hash = "sha256:b4f953212a66eeb7fa12d93fcf98fa90a0567c2c9c6a5fc2795610f7c71e21b5", size = 63574, upload-time = "2026-09-18T11:58:21.845Z" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -529,6 +545,9 @@ dependencies = [
 dev = [
     { name = "pytest" },
 ]
+saar = [
+    { name = "gradio-client" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -546,3 +565,4 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]
+saar = [{ name = "gradio-client", specifier = ">=1.3" }]

@@ -6,12 +6,18 @@
  */
 
 import { apiClient } from '@/api/client';
-import type { VoiceHealth, VoiceLanguage, VoiceStatus } from '../types/voice.types';
+import type {
+  VoiceHealth,
+  VoiceLanguage,
+  VoicePackListing,
+  VoiceStatus,
+} from '../types/voice.types';
 
 // Note: apiClient already has /api prefix in baseURL
 const ENDPOINTS = {
   health: (id: string) => `/robots/${id}/voice/health`,
   status: (id: string) => `/robots/${id}/voice/status`,
+  voices: (id: string) => `/robots/${id}/voice/voices`,
   say: (id: string) => `/robots/${id}/voice/say`,
   listenToggle: (id: string) => `/robots/${id}/voice/listen/toggle`,
   sessionReset: (id: string) => `/robots/${id}/voice/session/reset`,
@@ -32,15 +38,26 @@ export const voiceApi = {
     return response.data;
   },
 
-  /** Speak typed text through the robot speaker (queued upstream, 202). */
+  /** The robot's voice packs, with licence / realtime / availability. */
+  async getVoices(robotId: string): Promise<VoicePackListing> {
+    const response = await apiClient.get<VoicePackListing>(ENDPOINTS.voices(robotId));
+    return response.data;
+  },
+
+  /**
+   * Speak typed text through the robot speaker (queued upstream, 202).
+   * `voice` picks the pack; omitted, the robot's configured pack speaks. An
+   * unknown or unloaded pack is a 4xx — never a silent fallback.
+   */
   async say(
     robotId: string,
     text: string,
-    language?: VoiceLanguage
-  ): Promise<{ accepted: boolean; text: string }> {
-    const response = await apiClient.post<{ accepted: boolean; text: string }>(
+    language?: VoiceLanguage,
+    voice?: string
+  ): Promise<{ accepted: boolean; text: string; voice?: string }> {
+    const response = await apiClient.post<{ accepted: boolean; text: string; voice?: string }>(
       ENDPOINTS.say(robotId),
-      { text, language }
+      { text, language, voice }
     );
     return response.data;
   },

@@ -56,7 +56,7 @@ Verify: `Get-NetFirewallRule -DisplayName "NeoDEM voice G1 mic (UDP 5555)"`.
 
 ### Step 2 — speak out of the robot
 
-`g1_say.py` is the quick way: Piper → resample → `POST /play`, the same output
+`g1_say.py` is the quick way: voice pack → resample → `POST /play`, the same output
 leg the voice service uses, so a pass proves the speaker path on its own (no
 mic, no LLM). It warns if the adapter is in mock mode instead of silently
 "succeeding".
@@ -66,7 +66,23 @@ uv run python scripts/g1_say.py "Hallo, ich bin ein Roboter."   # auto de/en
 uv run python scripts/g1_say.py "Hello Florian" --lang en
 uv run python scripts/g1_say.py "Eins zwei drei vier ..." --stop-after 2  # verify /stop cuts
 uv run python scripts/g1_say.py --volume 60                     # set speaker level
+uv run python scripts/g1_say.py --voice list                    # packs, licence, why one is down
 ```
+
+**Saarländisch leg (TASK-229 / TASK-322).** Needs `uv sync --group saar`,
+`VOICE_SAAR_SPACE` (+ `VOICE_SAAR_TOKEN` for the private Space) — see the README
+section "Voice packs". Synthesis takes about twice the audio length, so expect
+a pause before the robot speaks; that is the pack's `realtime: false`, not a
+hang. It prints the dialect text it actually sends ("spoken as: …").
+
+```powershell
+uv run python scripts/g1_say.py "Hallo, ich bin der Roboter aus Saarbrücken." --voice saar
+```
+
+| Voice pack | Licence | Commercial | Realtime |
+|---|---|---|---|
+| `piper_de` / `piper_en` | GPL-3.0 (piper-tts) | no | yes |
+| `saar` | CC-BY-NC-4.0 (F5-TTS-German base weights) | no — demo only | no |
 
 `/play` returns when the SDK *drained* the audio, which is not proof it was
 audible — trust your ears. If it reports 200 but nothing comes out, that is the
@@ -126,6 +142,7 @@ long as agent, voice service and adapter run on this box.
 ## 3. Sign-off (from the task's Test Strategy)
 
 - [ ] `/health` ok; `/play` audible; `/stop` cuts within ~1 s
+- [ ] `g1_say.py --voice saar "…"` audible and recognisably Saarländisch (TASK-322)
 - [ ] 5 DE + 5 EN turns at 1–3 m, ≥ 9/10 correct transcripts, no self-trigger
 - [ ] multi-turn: follow-up answered with context; "Neues Gespräch" resets
 - [ ] 15 min open-mic soak: no crash/stall, `/health` stays ok, VRAM stable

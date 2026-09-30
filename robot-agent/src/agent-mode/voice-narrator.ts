@@ -58,6 +58,23 @@ export const PLAN_ACK_TIMEOUT_MS = 12_000;
 const MAX_SPOKEN_ACTIONS = 3;
 
 /**
+ * The `/say` body. `language` says what the text is and `voice` which pack
+ * speaks it — separate axes (TASK-229). Omitted fields leave the choice to the
+ * voice service: its default language, its configured pack (`VOICE_VOICE`).
+ */
+export function sayBody(
+  text: string,
+  language?: SpokenLanguage,
+  voice?: string
+): { text: string; language?: SpokenLanguage; voice?: string } {
+  return {
+    text,
+    ...(language ? { language } : {}),
+    ...(voice ? { voice } : {}),
+  };
+}
+
+/**
  * POST to the voice service's `/say`. Returns false — never throws — when the
  * service is not running, because a robot with no voice must still execute the
  * plan; the same text always reaches the operator as block results in the UI.
@@ -70,7 +87,7 @@ export async function speakThroughVoiceService(
     const res = await fetch(`${config.agentMode.voiceServiceUrl}/say`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(language ? { text, language } : { text }),
+      body: JSON.stringify(sayBody(text, language, config.agentMode.voicePack)),
       signal: AbortSignal.timeout(10_000),
     });
     return res.ok;

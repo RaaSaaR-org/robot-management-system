@@ -124,3 +124,20 @@ describe('setStatus', () => {
     expect(useVoiceStore.getState().byRobot[ROBOT].pipelineState).toBe('speaking');
   });
 });
+
+describe('voice pack selection (TASK-229)', () => {
+  it('remembers the picked pack per robot, independently', () => {
+    const store = useVoiceStore.getState();
+    store.setSelectedVoice('g1-a', 'saar');
+    store.setSelectedVoice('g1-b', 'piper_en');
+    expect(useVoiceStore.getState().selectedVoice).toMatchObject({ 'g1-a': 'saar', 'g1-b': 'piper_en' });
+  });
+
+  it('keeps the relayed pack list per robot', () => {
+    const listing = { active: 'piper_de', available: true, reason: null, voices: [] };
+    useVoiceStore.getState().setVoices('g1-a', listing);
+    expect(useVoiceStore.getState().voices['g1-a']).toEqual(listing);
+    useVoiceStore.getState().setVoices('g1-a', null);
+    expect(useVoiceStore.getState().voices['g1-a']).toBeNull();
+  });
+});

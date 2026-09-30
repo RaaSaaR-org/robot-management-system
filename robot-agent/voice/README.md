@@ -35,18 +35,20 @@ uv run python -m voice_service --agent-url http://localhost:41243/   # other rob
 uv run python -m voice_service --env-file .env.voice # load VOICE_* vars from a file
 ```
 
-Speak German or English — the language is auto-detected per utterance and
-the answer voice matches. Say **"Neues Gespräch"** / **"new conversation"**
+Speak German or English — the language is auto-detected per utterance, and
+the reply is spoken by the configured voice pack (`VOICE_VOICE`, see
+[Voice packs](#voice-packs)). Say **"Neues Gespräch"** / **"new conversation"**
 to reset the conversation memory.
 
 ## HTTP control API (`:8768`)
 
 | Endpoint | Description |
 |---|---|
-| `GET /health` | liveness, loaded models, wired components, agent reachability |
-| `GET /status` | pipeline state, contextId, last transcript/reply, latency p50/p95 |
-| `GET /config` / `POST /config` | view / patch runtime-tunable config (VAD thresholds, mode, …) |
-| `POST /say` | `{"text": "...", "language": "de"}` — direct TTS output |
+| `GET /health` | liveness, loaded models, wired components, agent reachability, the voice packs |
+| `GET /status` | pipeline state, contextId, last transcript/reply, latency p50/p95 (TTS also per pack, `tts.<pack>`) |
+| `GET /voices` | the voice packs: `available` (+ `reason`), `licence`, `commercial`, `realtime`, and the active one |
+| `GET /config` / `POST /config` | view / patch runtime-tunable config (VAD thresholds, mode, `voice`, …) |
+| `POST /say` | `{"text": "...", "language": "de", "voice": "saar"}` — direct TTS output; `voice` optional. Unknown pack → 404, unloaded → 409, never a fallback |
 | `POST /listen/toggle` | pause/resume listening (push-to-talk gate) |
 | `POST /session/reset` | new A2A contextId |
 | `GET /events` | SSE stream of pipeline events (state, transcript, reply, errors) |
@@ -62,6 +64,70 @@ All settings are `VOICE_*` env vars with sensible defaults — see
 - `VOICE_LANGUAGES` / `VOICE_DEFAULT_LANGUAGE` — `en,de` / `de`
 - `VOICE_INPUT_DEVICE` / `VOICE_OUTPUT_DEVICE` — index or name substring
   (`uv run python scripts/list_devices.py`)
+- `VOICE_VOICE` — the voice pack that speaks (default `piper_de`); see below
+
+## Voice packs
+
+A *voice pack* is who the robot sounds like. It is its own axis, separate from
+language: `VOICE_LANGUAGES` gates what Whisper may recognise, `VOICE_VOICE`
+picks the voice that answers. A dialect is a voice, never a language — Whisper
+can never return `saar`, so putting it in the language list would poison the
+input path.
+
+| id | engine | licence | commercial | realtime | notes |
+|---|---|---|---|---|---|
+| `piper_de` | Piper | GPL-3.0 (piper-tts) | no | yes | Thorsten, the default |
+| `piper_en` | Piper | GPL-3.0 (piper-tts) | no | yes | Lessac |
+| `saar` | F5-TTS finetune via Gradio | CC-BY-NC-4.0 (F5-TTS-German base weights) | **no** | **no** (RTF ~1.9 on Apple MPS) | Saarländisch; internal/demo only |
+
+Packs are declared as data in `voice_service/tts/registry.py`. Every pack loads
+at startup; one that cannot (missing package, no model, unreachable endpoint)
+is listed **unavailable with its reason** and the others still speak. Asking
+for an unknown or unloaded pack is an error — `/say` answers 404/409 and
+`POST /config {"voice": ...}` refuses to switch — never a silent fallback to
+Piper. `uv run python scripts/g1_say.py --voice list` prints the live table.
+
+**Licence column, read before promising a voice to a customer.** Only a pack
+with `commercial = yes` may be shipped. Neither current pack qualifies: Piper
+makes this process GPL-derived, and the Saar finetune inherits the
+non-commercial licence of its F5-TTS-German base weights (the Saar-Voice
+dialect data itself is CC BY 4.0). The commercial path is a retrain on an
+MIT-weights base, which is not built.
+
+### The Saarländisch pack (`saar`)
+
+The model runs in the separate `saar-voice-example` project's Gradio app —
+the private HF Space `huhn511/saar-tts`, or the same app served locally with
+`saar-tts serve` — and the pack calls its `/speak_pcm` endpoint (base64 s16le
+at 16 kHz, no WAV parsing). It is **opt-in**:
+
+```powershell
+uv sync --group saar                        # gradio_client
+$env:VOICE_SAAR_SPACE = "huhn511/saar-tts"  # or http://127.0.0.1:7860/ for a local app
+$env:VOICE_SAAR_TOKEN = "hf_..."            # private Space; falls back to HF_TOKEN
+uv run python scripts/g1_say.py "Hallo, ich bin der Roboter." --voice saar --no-play --save out/saar.wav
+```
+
+Unset `VOICE_SAAR_SPACE` leaves the pack unavailable, so no robot calls a
+remote model unless someone configured it. The token is read from the
+environment only — it is not a config field and never appears in `/config`.
+`VOICE_SAAR_SPEAKER` picks the reference speaker (default `P03`); it is a pack
+option, not a `/say` parameter, because no other pack could honour it.
+
+Before synthesis the pack rewrites the agent's standard German into the
+Saar-Voice corpus orthography (`tts/saar_dialect.py`, the rules ported from
+`saar-voice-example`): lowercase, quasi-phonetic, dialect lexicon and sound
+rules — `"Ich bin der Roboter aus Saarbrücken."` becomes `"isch bin der
+roboter aus saarbrigge."`. Sentence-final periods are kept on purpose: they
+are where the synthesis side splits the text into chunks.
+
+It is not real-time. Measured here on Apple MPS through a local app: 5.4 s of
+audio in 10.0 s. `realtime: false` widens the pipeline's per-request timeout
+(a hung synthesis fails its own request instead of wedging the speaker), and
+the Voice tab shows it as a badge. Keep a Piper pack as `VOICE_VOICE` for live
+conversation and pick `saar` per `/say` or for Agent Mode narration
+(`AGENT_MODE_VOICE=saar` in the robot-agent's environment) until a faster
+Saar pack exists.
 
 ## Turn-taking
 
@@ -164,7 +230,8 @@ sign-off checklist, troubleshooting).
 ## Testing
 
 ```powershell
-uv run pytest                                   # 40+ unit tests, no GPU/mic needed
+uv run pytest                                   # 140+ unit tests, no GPU/mic needed
+VOICE_SAAR_LIVE_SPACE=http://127.0.0.1:7860/ uv run pytest tests/test_saar_pack.py   # + real Saar synthesis
 uv run python scripts/smoke_tts.py [--play]     # Piper -> WAV (out/)
 uv run python scripts/smoke_stt.py              # Piper speech -> VAD -> Whisper golden test
 uv run python scripts/smoke_roundtrip.py --lang de   # full loop against live agent + Ollama

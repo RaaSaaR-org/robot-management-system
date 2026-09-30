@@ -116,6 +116,7 @@ The keys you are most likely to touch, all in `.env.g1-edu-agent`:
 | `PLACE_GRAPH_PATH` | the sim room | Named places, or fetched from the twin when unset |
 | `AGENT_HEARTBEAT_ENABLED` | `false` | Let the robot notice things while idle (see below) |
 | `VOICE_SERVICE_URL` | `http://localhost:8768` | The voice service; `speak` is text-only when it is unreachable |
+| `AGENT_MODE_VOICE` | unset | Voice pack narration speaks in (e.g. `saar`); unset = the voice service's own `VOICE_VOICE`. An unknown or unloaded pack is refused, never swapped for Piper |
 
 The example file documents every other key inline, with the measurements that chose the
 defaults.

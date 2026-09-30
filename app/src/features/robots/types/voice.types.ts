@@ -15,7 +15,37 @@ export type VoicePipelineState =
   | 'paused'
   | 'unknown';
 
+/** What the text is. Separate from the voice pack that speaks it. */
 export type VoiceLanguage = 'de' | 'en';
+
+/**
+ * One selectable voice (voice service tts/registry.py), relayed by the server
+ * from the robot so the frontend never hardcodes the list. `commercial` and
+ * `realtime` are the two caveats a customer must see before relying on a pack.
+ */
+export interface VoicePack {
+  id: string;
+  label: string;
+  engine: string;
+  /** Languages the voice is meant for — metadata, not a filter */
+  languages: string[];
+  licence: string;
+  /** May a customer ship this voice? False for GPL/NC-encumbered packs */
+  commercial: boolean;
+  /** Fast enough for a conversational turn */
+  realtime: boolean;
+  /** Loaded on the robot; when false, `reason` says why */
+  available: boolean;
+  reason: string | null;
+}
+
+/** GET /voice/voices — the robot's packs and the one it speaks in by default. */
+export interface VoicePackListing {
+  active: string;
+  available: boolean;
+  reason: string | null;
+  voices: VoicePack[];
+}
 
 /** GET /voice/health — aggregated availability of the voice sidecars. */
 export interface VoiceHealth {
@@ -34,6 +64,8 @@ export interface VoiceHealth {
       a2a: boolean;
     };
     agent_reachable: boolean | null;
+    /** The active voice pack and the full pack list (absent on older services) */
+    voice?: VoicePackListing;
   } | null;
   /** G1 audio adapter (speaker volume); null when unreachable */
   adapter: { status: string; mock: boolean } | null;
