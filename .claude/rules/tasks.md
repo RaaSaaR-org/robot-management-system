@@ -56,7 +56,7 @@ Size is **the context window the implementing agent needs**, not human effort. S
 
 ## Branch and PR
 
-Branch: `<type>/task-nnn-<slug>`, type one of `feat` · `fix` · `chore` · `refactor` · `docs`. The slug is the title lowercased, non-alphanumeric runs collapsed to `-`, cut at 60 chars on a `-`.
+Branch: `<type>/task-nnn-<slug>`, type one of `feat` · `fix` · `chore` · `refactor` · `docs`. The type is what files the squash merge in the changelog, since the PR title carries none (`feat` → Added, `fix` → Fixed, `refactor` → Changed, `chore`/`docs` → Maintenance; `scripts/release/changelog-section.sh`) — pick it for what the change is. The slug is the title lowercased, non-alphanumeric runs collapsed to `-`, cut at 60 chars on a `-`.
 
 **Never push to `main`, and never commit on it.** Everything lands through a PR — the task-file close included. The PR title is the task's title verbatim — read it from the file, never retype it. The body names `TASK-NNN`.
 

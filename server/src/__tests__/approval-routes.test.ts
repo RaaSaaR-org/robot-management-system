@@ -153,7 +153,7 @@ describe('Approval Routes', () => {
       mockApprovalWorkflowService.createApprovalRequest.mockResolvedValue(mockRequest);
 
       const body = {
-        entityType: 'task',
+        entityType: 'shift_change',
         entityId: 'task-1',
         requestedBy: 'requester-1',
         requestReason: 'needs review',
@@ -179,7 +179,7 @@ describe('Approval Routes', () => {
       mockApprovalWorkflowService.createApprovalRequest.mockRejectedValue(new Error('boom'));
 
       const response = await request(app).post('/api/approvals').send({
-        entityType: 'task',
+        entityType: 'shift_change',
         entityId: 'task-1',
         requestedBy: 'requester-1',
         requestReason: 'needs review',
@@ -188,6 +188,33 @@ describe('Approval Routes', () => {
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to create approval request');
       expect(JSON.stringify(response.body)).not.toContain('boom');
+    });
+
+    it('returns 400 for an entity type with no workflow config', async () => {
+      const response = await request(app).post('/api/approvals').send({
+        entityType: 'ai_decision',
+        entityId: 'dec-1',
+        requestedBy: 'requester-1',
+        requestReason: 'needs review',
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe(
+        'No approval workflow is configured for entity type ai_decision'
+      );
+      expect(mockApprovalWorkflowService.createApprovalRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not treat an inherited property name as a configured type', async () => {
+      const response = await request(app).post('/api/approvals').send({
+        entityType: 'toString',
+        entityId: 'x',
+        requestedBy: 'requester-1',
+        requestReason: 'needs review',
+      });
+
+      expect(response.status).toBe(400);
+      expect(mockApprovalWorkflowService.createApprovalRequest).not.toHaveBeenCalled();
     });
   });
 

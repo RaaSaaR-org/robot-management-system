@@ -61,9 +61,25 @@ vi.mock('../services/DataRestrictionService.js', () => ({
   dataRestrictionService: mockDataRestrictionService,
 }));
 
+// The caller's role, switched per test. super-admin by default, so the
+// existing cases that name another user's id act as an administrator would.
+const currentRole = vi.hoisted(() => ({ value: 'super-admin' }));
+
+// Tenant lookup for an owner acting for another user (TASK-270).
+const mockFindUser = vi.hoisted(() => vi.fn());
+vi.mock('../database/index.js', () => ({
+  prisma: { user: { findUnique: mockFindUser } },
+}));
+
 vi.mock('../middleware/auth.middleware.js', () => ({
   authMiddleware: (req: any, _res: any, next: any) => {
-    req.user = { id: 'user-123', email: 'test@example.com', name: 'Test', role: 'admin' };
+    req.user = {
+      id: 'user-123',
+      email: 'test@example.com',
+      name: 'Test',
+      role: currentRole.value,
+      tenantId: 'tenant-a',
+    };
     next();
   },
   AuthenticatedRequest: {},
@@ -91,6 +107,7 @@ describe('GDPR Routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    currentRole.value = 'super-admin';
     app = createApp();
   });
 
@@ -412,13 +429,13 @@ describe('GDPR Routes', () => {
       expect(mockGdprRequestService.getUserRequests).toHaveBeenCalledWith('user-9');
     });
 
-    it('defaults to current-user when no userId', async () => {
+    it('defaults to the authenticated user when no userId', async () => {
       mockGdprRequestService.getUserRequests.mockResolvedValue([]);
 
       const response = await request(app).get('/api/gdpr/requests');
 
       expect(response.status).toBe(200);
-      expect(mockGdprRequestService.getUserRequests).toHaveBeenCalledWith('current-user');
+      expect(mockGdprRequestService.getUserRequests).toHaveBeenCalledWith('user-123');
     });
 
     it('returns 500 on service error', async () => {
@@ -1201,6 +1218,106 @@ describe('GDPR Routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to lift restriction');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Data subject resolution (TASK-270)
+  // --------------------------------------------------------------------------
+
+  describe('data subject resolution', () => {
+    it('attributes a self-service request to the authenticated user', async () => {
+      currentRole.value = 'viewer';
+      mockGdprRequestService.createAccessRequest.mockResolvedValue(SAMPLE_REQUEST);
+
+      const response = await request(app).post('/api/gdpr/requests/access').send({ format: 'json' });
+
+      expect(response.status).toBe(201);
+      expect(mockGdprRequestService.createAccessRequest).toHaveBeenCalledWith(
+        'user-123',
+        expect.anything(),
+      );
+    });
+
+    it('attributes a consent change to the authenticated user', async () => {
+      currentRole.value = 'member';
+      mockConsentService.updateConsent.mockResolvedValue({ consentType: 'marketing', granted: true });
+
+      const response = await request(app)
+        .post('/api/gdpr/consents')
+        .send({ type: 'marketing', granted: true });
+
+      expect(response.status).toBe(200);
+      expect(mockConsentService.updateConsent.mock.calls[0][0]).toBe('user-123');
+    });
+
+    it('accepts a non-admin naming their own id', async () => {
+      currentRole.value = 'viewer';
+      mockGdprRequestService.getUserRequests.mockResolvedValue([]);
+
+      const response = await request(app).get('/api/gdpr/requests?userId=user-123');
+
+      expect(response.status).toBe(200);
+      expect(mockGdprRequestService.getUserRequests).toHaveBeenCalledWith('user-123');
+    });
+
+    it.each([
+      ['POST', '/api/gdpr/requests/access', { userId: 'user-9' }],
+      ['POST', '/api/gdpr/requests/erasure', { userId: 'user-9' }],
+      ['POST', '/api/gdpr/consents', { userId: 'user-9', type: 'marketing', granted: true }],
+      ['GET', '/api/gdpr/requests?userId=user-9', undefined],
+      ['GET', '/api/gdpr/consents?userId=user-9', undefined],
+      ['DELETE', '/api/gdpr/requests/req-001?userId=user-9', undefined],
+      ['DELETE', '/api/gdpr/consents/marketing?userId=user-9', undefined],
+    ])('rejects a foreign userId from a member: %s %s', async (method, url, body) => {
+      currentRole.value = 'member';
+      const agent = request(app);
+      const call =
+        method === 'POST' ? agent.post(url).send(body) : method === 'GET' ? agent.get(url) : agent.delete(url);
+
+      const response = await call;
+
+      expect(response.status).toBe(403);
+      expect(response.body.error).toContain('your own account');
+      expect(mockGdprRequestService.createAccessRequest).not.toHaveBeenCalled();
+      expect(mockGdprRequestService.createErasureRequest).not.toHaveBeenCalled();
+      expect(mockGdprRequestService.getUserRequests).not.toHaveBeenCalled();
+      expect(mockGdprRequestService.cancelRequest).not.toHaveBeenCalled();
+      expect(mockConsentService.updateConsent).not.toHaveBeenCalled();
+      expect(mockConsentService.getUserConsents).not.toHaveBeenCalled();
+      expect(mockConsentService.revokeConsent).not.toHaveBeenCalled();
+    });
+
+    it('lets a tenant owner act for another user in their tenant', async () => {
+      currentRole.value = 'owner';
+      mockFindUser.mockResolvedValue({ tenantId: 'tenant-a' });
+      mockConsentService.getUserConsents.mockResolvedValue([]);
+
+      const response = await request(app).get('/api/gdpr/consents?userId=user-9');
+
+      expect(response.status).toBe(200);
+      expect(mockConsentService.getUserConsents).toHaveBeenCalledWith('user-9');
+    });
+
+    it.each([
+      ['a user of another tenant', { tenantId: 'tenant-b' }],
+      ['an unknown user', null],
+    ])('rejects a tenant owner acting for %s', async (_label, target) => {
+      currentRole.value = 'owner';
+      mockFindUser.mockResolvedValue(target);
+
+      const response = await request(app)
+        .delete('/api/gdpr/consents/marketing?userId=user-9');
+
+      expect(response.status).toBe(403);
+      expect(mockConsentService.revokeConsent).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-string userId', async () => {
+      const response = await request(app).post('/api/gdpr/requests/access').send({ userId: 42 });
+
+      expect(response.status).toBe(400);
+      expect(mockGdprRequestService.createAccessRequest).not.toHaveBeenCalled();
     });
   });
 });
