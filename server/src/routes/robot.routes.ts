@@ -7,7 +7,8 @@ import { Router, type Request, type Response } from 'express';
 import { robotManager } from '../services/RobotManager.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from '../services/HttpClient.js';
 import { sensorScanService } from '../services/SensorScanService.js';
-import { robotRepository } from '../repositories/index.js';
+import { robotRepository, digitalTwinRepository } from '../repositories/index.js';
+import { twinPlaceGraphService } from '../services/TwinPlaceGraphService.js';
 import { prisma } from '../database/index.js';
 import http from 'node:http';
 import { agentServiceAuthHeaders } from '../services/agentServiceAuth.js';
@@ -118,6 +119,57 @@ robotRoutes.get('/:id', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error getting robot:', error);
     res.status(500).json({ error: 'Failed to get robot' });
+  }
+});
+
+/**
+ * PATCH /:id - Bind a robot to a site (TASK-327)
+ *
+ * Body `{ twinId: string | null }`: a digital twin id binds, `null` unbinds.
+ * The twin must exist for the caller's tenant — tenant isolation makes one of
+ * another tenant read as missing, so both answer 404. Viewers are refused by
+ * the global write guard (`writeRoleGuard`), like every other robot mutation.
+ */
+robotRoutes.patch('/:id', async (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as { twinId?: unknown };
+    if (!('twinId' in body) || (body.twinId !== null && typeof body.twinId !== 'string')) {
+      return res.status(400).json({ error: 'twinId must be a string or null' });
+    }
+    const twinId = body.twinId === '' ? null : (body.twinId as string | null);
+
+    if (twinId !== null && !(await digitalTwinRepository.findById(twinId))) {
+      return res.status(404).json({ error: 'Digital twin not found' });
+    }
+
+    const robot = await robotManager.setRobotSite(req.params.id, twinId);
+    if (!robot) return res.status(404).json({ error: 'Robot not found' });
+    res.json(robot);
+  } catch (error) {
+    console.error('Error updating robot site:', error);
+    res.status(500).json({ error: 'Failed to update robot' });
+  }
+});
+
+/**
+ * GET /:id/places - The place graph of the robot's site (TASK-327)
+ *
+ * Same payload as `GET /api/digital-twins/:twinId/places/_index.json`. The
+ * binding is read off the row, not the cache — the row is what a twin delete
+ * (`onDelete: SetNull`) updates. Agents reach it with their service token.
+ */
+robotRoutes.get('/:id/places', async (req: Request, res: Response) => {
+  try {
+    const robot = await robotRepository.findById(req.params.id);
+    if (!robot) return res.status(404).json({ error: 'Robot not found' });
+    if (!robot.twinId) return res.status(404).json({ error: 'robot has no site' });
+
+    const graph = await twinPlaceGraphService.exportPlaceGraph(robot.twinId);
+    if (!graph) return res.status(404).json({ error: 'robot has no site' });
+    res.json(graph);
+  } catch (error) {
+    console.error('Error exporting robot place graph:', error);
+    res.status(500).json({ error: 'Failed to export place graph' });
   }
 });
 

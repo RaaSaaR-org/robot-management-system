@@ -201,6 +201,36 @@ export const useRobotsStore = createStore<RobotsStore>(
     },
 
     // --------------------------------------------------------------------------
+    // Update Robot Site (TASK-327)
+    // --------------------------------------------------------------------------
+
+    updateRobotSite: async (robotId: string, twinId: string | null) => {
+      set((state) => {
+        state.error = null;
+      });
+
+      try {
+        const robot = await robotsApi.updateRobotSite(robotId, twinId);
+
+        set((state) => {
+          if (state.robotDetail?.id === robotId) {
+            state.robotDetail.twinId = robot.twinId ?? null;
+          }
+          const index = state.robots.findIndex((r) => r.id === robotId);
+          if (index !== -1) {
+            state.robots[index].twinId = robot.twinId ?? null;
+          }
+        });
+      } catch (error) {
+        const errorMessage = getErrorMessage(error);
+        set((state) => {
+          state.error = errorMessage;
+        });
+        throw new Error(errorMessage);
+      }
+    },
+
+    // --------------------------------------------------------------------------
     // Select Robot
     // --------------------------------------------------------------------------
     selectRobot: (id: string | null) => {

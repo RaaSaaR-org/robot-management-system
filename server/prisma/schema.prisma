@@ -49,6 +49,11 @@ model Robot {
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
+  // TASK-327: the site (digital twin) this robot works in — set from the
+  // Robots tab "Site" picker; unbound when the twin is deleted.
+  twinId String?
+  twin   DigitalTwin? @relation(fields: [twinId], references: [id], onDelete: SetNull)
+
   // Relations
   conversations      Conversation[]
   telemetryLogs      RobotTelemetry[]
@@ -66,6 +71,7 @@ model Robot {
   // TASK-287: a serial number is unique WITHIN a tenant, not across the
   // platform — two operators may legitimately run the same hardware serial.
   @@unique([tenantId, serialNumber])
+  @@index([twinId])
   @@index([status])
   @@index([a2aEnabled])
   @@index([tenantId, updatedAt])
@@ -205,6 +211,7 @@ model DigitalTwin {
 
   zones    TwinZone[]
   sessions ScanSession[]
+  robots   Robot[] // TASK-327: robots bound to this twin as their site
 
   @@index([robotId])
   @@index([status])

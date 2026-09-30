@@ -185,6 +185,8 @@ export interface Robot {
   a2aEnabled?: boolean;
   /** A2A agent URL for this robot */
   a2aAgentUrl?: string;
+  /** TASK-327: the site (digital twin id) this robot works in; null = no site */
+  twinId?: string | null;
 }
 
 // ============================================================================
@@ -415,6 +417,8 @@ export interface RobotsActions {
   registerRobot: (robotUrl: string) => Promise<Robot>;
   /** Unregister a robot */
   unregisterRobot: (robotId: string) => Promise<void>;
+  /** TASK-327: bind the robot to a site (digital twin id), or unbind with null */
+  updateRobotSite: (robotId: string, twinId: string | null) => Promise<void>;
   /** Select a robot */
   selectRobot: (id: string | null) => void;
   /** Update filters */

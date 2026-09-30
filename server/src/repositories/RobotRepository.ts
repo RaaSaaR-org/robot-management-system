@@ -106,6 +106,18 @@ export class RobotRepository {
   }
 
   /**
+   * TASK-327: bind a robot to a site (digital twin), or unbind it with `null`.
+   * Tenant-scoped like every read here: a robot of another tenant is invisible,
+   * so the result is `null` (not found) rather than a cross-tenant write.
+   */
+  async setTwin(id: string, twinId: string | null): Promise<Robot | null> {
+    const existing = await prisma.robot.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) return null;
+    const robot = await prisma.robot.update({ where: { id }, data: { twinId } });
+    return dbRobotToDomain(robot);
+  }
+
+  /**
    * Delete a robot
    */
   async delete(id: string): Promise<boolean> {

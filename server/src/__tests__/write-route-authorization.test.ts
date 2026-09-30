@@ -50,7 +50,8 @@ const app = createApp();
 // delete, and the rating PUT.
 // TASK-242 adds five on the guarded /api/experiments mount: propose, propose
 // from a strategy, approve, reject, cancel.
-const EXPECTED_WRITE_ROUTES = 371;
+// TASK-327 adds one on the guarded /api/robots mount: PATCH /:id (site binding).
+const EXPECTED_WRITE_ROUTES = 372;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;
