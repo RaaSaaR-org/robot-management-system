@@ -427,10 +427,13 @@ export class ControlLeaseService {
   ): Promise<LeaseRow | null> {
     const nowMs = this.now();
     const issuedAt = new Date(nowMs);
+    // No tenantId here: a row's tenant is fixed when it is created. Rewriting it
+    // on every take could move it out from under the tenant filter the Prisma
+    // extension adds to `updateMany` (a legacy robot with a null tenantId whose
+    // row was stamped with the caller's tenant on create), wedging the robot.
     const data = {
       ...claim,
       state: 'installing',
-      tenantId: robot.tenantId,
       issuedAt,
       // The install window: a replica that dies mid-install must not wedge the
       // robot forever. The agent's own TTL bounds the lease there too.
@@ -453,7 +456,7 @@ export class ControlLeaseService {
     if (await this.readRow(robot.robotId)) return null;
     try {
       return await this.deps.db.robotControlLease.create({
-        data: { robotId: robot.robotId, ...data, generation: 1 },
+        data: { robotId: robot.robotId, tenantId: robot.tenantId, ...data, generation: 1 },
       });
     } catch (error) {
       if (isP2002(error)) return null;
