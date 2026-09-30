@@ -80,6 +80,13 @@ body or query is honoured only when it names the caller, when the caller is a
 `super-admin`, or when the caller is an `owner` and the named user belongs to the
 owner's tenant; anything else is `403`.
 
+The per-id reads `GET /api/gdpr/requests/:id` and `GET /api/gdpr/requests/:id/download`
+take no `userId`; whose request it is comes from the row itself (TASK-324). The
+request is returned only to its data subject or to a caller who may act for them
+under the same rule (`super-admin`, or an `owner` of the subject's tenant). Any
+other caller gets `404 Request not found` — the same answer as a missing id,
+never a `403` or a "not yet completed" `400` that would confirm the id exists.
+
 **2. Mounts that carry no guard at all** (`UNGUARDED_WRITE_MOUNTS`, `app.ts`),
 because a user JWT is not what authenticates them:
 

@@ -12,7 +12,7 @@
  * - POST /gdpr/requests/objection - Submit objection (Art. 21)
  * - POST /gdpr/requests/adm-review - Contest AI decision (Art. 22)
  * - GET /gdpr/requests - List user's requests
- * - GET /gdpr/requests/:id - Get request details
+ * - GET /gdpr/requests/:id - Get request details (own, or one the caller may act for)
  * - DELETE /gdpr/requests/:id - Cancel pending request
  * - GET /gdpr/requests/:id/download - Download export
  * - GET /gdpr/verify/:token - Verify erasure request
@@ -46,6 +46,7 @@ import {
   type ConsentType,
   type RestrictionScope,
   type RestrictionReason,
+  type GDPRRequest,
 } from '../types/gdpr.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
 import type { AuthenticatedRequest, AuthUser, UserRole } from '../middleware/auth.middleware.js';
@@ -107,6 +108,33 @@ export async function resolveDataSubject(
     error: 'You can only file GDPR requests and manage consents for your own account',
   });
   return null;
+}
+
+/**
+ * Loads a GDPR request for a per-id self-service read (TASK-324).
+ *
+ * The request is returned only when the caller is its data subject or may act
+ * for them (`mayActFor`). Anything else — a missing id or someone else's
+ * request — is answered with the same `404 Request not found`, so a caller
+ * cannot probe which ids exist. Sends the error response itself and returns
+ * null when the call must stop.
+ */
+async function loadVisibleRequest(
+  req: Request,
+  res: Response,
+  id: string,
+): Promise<GDPRRequest | null> {
+  const user = (req as AuthenticatedRequest).user;
+  if (!user?.id) {
+    res.status(401).json({ error: 'Authentication required' });
+    return null;
+  }
+  const request = await gdprRequestService.getRequest(id);
+  if (!request || (request.userId !== user.id && !(await mayActFor(user, request.userId)))) {
+    res.status(404).json({ error: 'Request not found' });
+    return null;
+  }
+  return request;
 }
 
 export const gdprRoutes = Router();
@@ -340,11 +368,8 @@ gdprRoutes.get('/requests', async (req: Request, res: Response) => {
 gdprRoutes.get('/requests/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const request = await gdprRequestService.getRequest(id);
-
-    if (!request) {
-      return res.status(404).json({ error: 'Request not found' });
-    }
+    const request = await loadVisibleRequest(req, res, id);
+    if (!request) return;
 
     // Include status history
     const history = await gdprRequestService.getStatusHistory(id);
@@ -379,11 +404,8 @@ gdprRoutes.delete('/requests/:id', async (req: Request, res: Response) => {
 gdprRoutes.get('/requests/:id/download', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const request = await gdprRequestService.getRequest(id);
-
-    if (!request) {
-      return res.status(404).json({ error: 'Request not found' });
-    }
+    const request = await loadVisibleRequest(req, res, id);
+    if (!request) return;
 
     if (request.status !== 'completed') {
       return res.status(400).json({ error: 'Request is not yet completed' });
