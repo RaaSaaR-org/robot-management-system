@@ -27,8 +27,10 @@
  * {@link wireControlLeaseStops} turns `fenced`/`expired` into a zero-velocity
  * stop — `index.ts` calls it with the real hardware client.
  *
- * In TASK-314 nothing consults the registry yet, so robot behaviour does not
- * change; `CONTROL_LEASE_REQUIRED` is only reported as `enforced`.
+ * The registry itself never refuses motion. With `CONTROL_LEASE_REQUIRED` on,
+ * its consumers do: `motion-guard.ts` refuses REST motion starts while a lease
+ * is held, and `socket-binding.ts` admits a motion socket's frames only while it
+ * is bound to the held generation (TASK-316). Flag off: nothing consults it.
  */
 
 import crypto from 'node:crypto';
