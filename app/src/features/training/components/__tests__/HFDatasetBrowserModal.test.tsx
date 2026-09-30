@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { HFDatasetBrowserModal } from '../HFDatasetBrowserModal';
 import type { HFDatasetPreview } from '../../types';
 
@@ -47,14 +47,21 @@ class FakeWebSocket {
     this.closed = true;
   }
 
+  // Both wrap the handler in act(): a frame or a close arrives outside React's
+  // event system, and the state update it causes otherwise logs an act()
+  // warning on every run.
   emit(payload: unknown): void {
-    this.onmessage?.({ data: JSON.stringify(payload) });
+    act(() => {
+      this.onmessage?.({ data: JSON.stringify(payload) });
+    });
   }
 
   /** The server going away, a proxy timing out, a laptop lid closing. */
   drop(): void {
     this.closed = true;
-    this.onclose?.();
+    act(() => {
+      this.onclose?.();
+    });
   }
 }
 
