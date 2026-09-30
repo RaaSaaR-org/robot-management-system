@@ -3,7 +3,7 @@ id: "TASK-249"
 aliases: []
 title: "Turning thinking off costs a small planner its goto — decide, per model, whether that trade is wanted"
 slug: "thinking-off-costs-a-small-planner-its-goto"
-status: "in-progress"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
