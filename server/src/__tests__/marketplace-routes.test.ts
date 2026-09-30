@@ -133,6 +133,29 @@ describe('POST /api/marketplace/listings/:id/unpublish and /publish', () => {
     expect(res.status).toBe(200);
   });
 
+  it.each([
+    ['suspended', 'publish'],
+    ['suspended', 'unpublish'],
+    ['pending_review', 'publish'],
+  ])("refuses the seller a %s listing's %s with 409 — moderation is the platform's", async (status, act) => {
+    mockRepo.findListingById.mockResolvedValue(listingRecord({ status }));
+
+    const res = await request(asSeller()).post(`/api/marketplace/listings/lst-1/${act}`);
+
+    expect(res.status).toBe(409);
+    expect(mockRepo.updateListingStatus).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it('lets a super-admin publish a suspended listing', async () => {
+    mockRepo.findListingById.mockResolvedValue(listingRecord({ status: 'suspended' }));
+
+    const res = await request(asPlatformAdmin()).post('/api/marketplace/listings/lst-1/publish');
+
+    expect(res.status).toBe(200);
+    expect(mockRepo.updateListingStatus).toHaveBeenCalledWith('lst-1', 'published');
+  });
+
   it('answers 404 for an unknown listing', async () => {
     mockRepo.findListingById.mockResolvedValue(null);
 

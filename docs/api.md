@@ -356,7 +356,7 @@ the entity's state forbids it. Each act, and each create of these entities, writ
 | DELETE | `/api/federated/rounds/:id` | Finished round (completed / failed / cancelled) → `deleted` with its participants; running → 409 |
 | DELETE | `/api/deployments/:id` | pending / failed / rolled back / cancelled → `deleted`; live → 409 |
 | DELETE | `/api/models/versions/:id` | Always `archived`, never removed; 409 while a deployment of it is unfinished or a skill runs it |
-| POST | `/api/marketplace/listings/:id/unpublish` \| `/publish` | Seller or super-admin → `{listing}` as `draft` / `published` |
+| POST | `/api/marketplace/listings/:id/unpublish` \| `/publish` | Seller or super-admin → `{listing}` as `draft` / `published`; a `pending_review` / `suspended` listing → 409 unless super-admin |
 | DELETE | `/api/marketplace/listings/:id` | Seller or super-admin; nobody bought it → `deleted`; a buyer holds a licence → 409 |
 
 ### Other Route Groups

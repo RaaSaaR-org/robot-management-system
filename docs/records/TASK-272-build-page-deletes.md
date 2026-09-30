@@ -51,7 +51,10 @@ entity gets which was left to the implementer.
    publish puts it back — an unpublish with no way back would be a trap. Delete is
    refused once anyone holds a licence (unpublish instead). Only the seller or a
    `super-admin` may act; a tenant `owner` may not, because the marketplace spans
-   tenants.
+   tenants. A listing in a moderation state (`pending_review`, `suspended`) is the
+   platform's call: the seller's publish or unpublish answers 409, since publish
+   would skip the review and unpublish would turn a suspension into a draft the
+   seller could republish. Only a `super-admin` moves it out.
 7. **Audit:** one helper, `server/src/services/buildAudit.ts`, writes an
    `access_audit` compliance entry (robot key `platform-build`) for every create
    **and** every delete / archive / cancel / unpublish / publish / rollback on these

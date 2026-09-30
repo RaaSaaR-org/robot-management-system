@@ -63,6 +63,9 @@ export interface MarketplaceActor {
  */
 const LISTING_ADMIN_ROLES = new Set(['super-admin']);
 
+/** Statuses the platform sets; a seller's publish/unpublish may not leave them. */
+const MODERATED_LISTING_STATUSES = new Set(['pending_review', 'suspended']);
+
 function canManageListing(actor: MarketplaceActor, sellerId: string): boolean {
   return actor.userId === sellerId || (actor.role !== undefined && LISTING_ADMIN_ROLES.has(actor.role));
 }
@@ -328,6 +331,17 @@ export class MarketplaceService {
     }
     if (!canManageListing(actor, listing.sellerId)) {
       return { ok: false, status: 403, error: 'Only the seller can change this listing' };
+    }
+    // A listing under review or suspended is the platform's call, not the
+    // seller's: publish would skip the review, unpublish would lift the
+    // suspension on the way back to draft.
+    const isAdmin = actor.role !== undefined && LISTING_ADMIN_ROLES.has(actor.role);
+    if (!isAdmin && MODERATED_LISTING_STATUSES.has(listing.status)) {
+      return {
+        ok: false,
+        status: 409,
+        error: `The listing is ${listing.status.replace('_', ' ')} — only a platform admin can change it`,
+      };
     }
 
     await marketplaceRepository.updateListingStatus(listingId, published ? 'published' : 'draft');
