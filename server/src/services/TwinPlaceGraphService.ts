@@ -8,6 +8,7 @@
  */
 
 import { digitalTwinRepository, twinZoneRepository } from '../repositories/index.js';
+import { PLACE_ZONE_KEEPOUT } from './twinPlaceGeometry.js';
 import {
   PLACE_FRAME_UNITS,
   PLACE_FRAME_YAW_CONVENTION,
@@ -40,12 +41,7 @@ import type {
  * never enter. `speed` zones stay out — they are a behaviour annotation over
  * floor that already belongs to some other place, not somewhere to go.
  */
-const PLACE_ZONE_TYPES: ReadonlyMap<string, boolean> = new Map([
-  ['room', false],
-  ['workcell', false],
-  ['charging', false],
-  ['keepout', true],
-]);
+const PLACE_ZONE_TYPES = PLACE_ZONE_KEEPOUT;
 
 /**
  * Place type implied by the zone type when the operator did not pick one in

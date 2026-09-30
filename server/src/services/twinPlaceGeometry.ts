@@ -8,8 +8,17 @@
 
 import type { TwinZonePoint } from '../types/twin.types.js';
 
-/** Zone types that are places (mirrors `PLACE_ZONE_TYPES` in TwinPlaceGraphService). */
-export const PLACE_ZONE_TYPE_NAMES: readonly string[] = ['room', 'workcell', 'charging', 'keepout'];
+/**
+ * Zone types that are places, and the `keepout` flag each carries in the place
+ * graph. The one list: TwinPlaceGraphService emits exactly these, and
+ * `findContainingPlace` searches exactly these, so the two cannot drift.
+ */
+export const PLACE_ZONE_KEEPOUT: ReadonlyMap<string, boolean> = new Map([
+  ['room', false],
+  ['workcell', false],
+  ['charging', false],
+  ['keepout', true],
+]);
 
 /** The minimum a zone needs for containment: a type and a polygon. */
 export interface PlaceZoneLike {
@@ -53,7 +62,7 @@ export function findContainingPlace<Z extends PlaceZoneLike>(
   let best: Z | null = null;
   let bestArea = Infinity;
   for (const zone of zones) {
-    if (!PLACE_ZONE_TYPE_NAMES.includes(zone.type)) continue;
+    if (!PLACE_ZONE_KEEPOUT.has(zone.type)) continue;
     if (!Array.isArray(zone.points) || zone.points.length < 3) continue;
     if (!pointInPolygon(point, zone.points)) continue;
     const area = polygonArea(zone.points);
