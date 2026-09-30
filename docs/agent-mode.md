@@ -107,6 +107,7 @@ The keys you are most likely to touch, all in `.env.g1-edu-agent`:
 |-----|---------|---------|
 | `AGENT_MODE_ENABLED` | `false` | The master switch |
 | `AGENT_PLANNER_MODEL`, `AGENT_VISION_MODEL` | `gemma3:4b` in code; the profile pins `gemma4:e2b` and `qwen2.5vl:7b` | The two Ollama models |
+| `AGENT_PLANNER_THINKING` | per model: on for `gemma4:e2b` and `gemma4:e4b`, off otherwise | Let the planner think. Off costs small models plan accuracy (`gemma4:e2b` 51/54 → 42/54 on the planner bench); `true`/`false` overrides the per-model default. Bench a new planner both ways before choosing it (TASK-249) |
 | `AGENT_OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Where Ollama listens |
 | `AGENT_STOP_WORDS` | `stopp,stop,halt` | Spoken words that stop the robot without touching the model |
 | `AGENT_RANGE_ENABLED` | `true` | Use the LiDAR cone query for distances instead of the vision model's guess |

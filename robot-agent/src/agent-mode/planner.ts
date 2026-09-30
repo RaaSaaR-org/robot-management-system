@@ -181,6 +181,13 @@ export interface PlannerDeps {
    * call against a model that just proved it does not answer is a doomed one.
    */
   timeoutMs?: number;
+  /**
+   * Whether the model may think (default `config.agentMode.plannerThinking`,
+   * resolved for the configured planner model). A caller that overrides
+   * `modelRef` with a DIFFERENT model — the bench — must resolve it for that
+   * model with `resolvePlannerThinking`, or it measures the wrong default.
+   */
+  thinking?: boolean;
 }
 
 const MAX_BLOCKS = 12;
@@ -748,11 +755,13 @@ export class Planner {
   private readonly generate: GenerateFn;
   private readonly modelRefOverride: string | undefined;
   private readonly timeoutMs: number;
+  private readonly thinking: boolean;
 
   constructor(deps: PlannerDeps = {}) {
     this.generate = deps.generate ?? genkitGenerate;
     this.modelRefOverride = deps.modelRef;
     this.timeoutMs = deps.timeoutMs ?? config.agentMode.plannerTimeoutMs;
+    this.thinking = deps.thinking ?? config.agentMode.plannerThinking;
   }
 
   /**
@@ -836,7 +845,7 @@ export class Planner {
             prompt: [{ text: prompt }],
             outputSchema: PlanSchema,
             temperature: 0,
-            thinking: config.agentMode.plannerThinking,
+            thinking: this.thinking,
           },
           remainingMs,
           model

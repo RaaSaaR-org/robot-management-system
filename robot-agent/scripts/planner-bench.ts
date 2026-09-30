@@ -39,7 +39,7 @@ import { Planner } from '../src/agent-mode/planner.js';
 import { agentModelRef } from '../src/agent-mode/llm.js';
 import { SceneMemoryStore } from '../src/agent-mode/scene-memory.js';
 import { normalizeDeg } from '../src/agent-mode/types.js';
-import { config } from '../src/config/config.js';
+import { config, resolvePlannerThinking } from '../src/config/config.js';
 // `Planner.plan` answers `PlannedBlock[]` — kind + params, no `id`/`status`
 // yet, because nothing has executed them. The bench graded `AgentBlock[]`,
 // which only ever worked because it reads `kind` and `params` and nothing else.
@@ -401,12 +401,18 @@ export function benchHeaderLines(models: readonly string[], sceneSummary: string
   return [
     `Planner bench — ${CASES.length} cases × ${REPEATS} repeats, real prompt and schema.`,
     `Models: ${models.join(', ')}`,
-    // Read back off `config`, not off `process.env`: `config` is what
-    // `Planner.plan` hands the model, and `AGENT_PLANNER_THINKING` is only true
-    // for the exact string "true". The setting is worth ~500 tokens of thinking
-    // per call, so a pair of runs recorded without it is not a pair.
+    // Resolved PER MODEL, exactly as `config` resolves it for the configured
+    // planner (TASK-249): `AGENT_PLANNER_THINKING` wins when it is 'true' or
+    // 'false', otherwise the measured default in PLANNER_MODELS_THAT_THINK
+    // applies. The setting moves small models by up to 17 points, so a pair of
+    // runs recorded without it is not a pair.
     `AGENT_PLANNER_THINKING=${process.env.AGENT_PLANNER_THINKING ?? '(unset)'} → planner thinking is ` +
-      `${config.agentMode.plannerThinking ? 'ON' : 'off'}`,
+      models
+        .map(
+          (m) =>
+            `${resolvePlannerThinking(m, process.env.AGENT_PLANNER_THINKING) ? 'ON' : 'off'} for ${m}`
+        )
+        .join(', '),
     `Open-loop dashes counted as: every forward \`walk\` in the ${APPROACH_CASE_IDS.length} cases that ` +
       `asked for an approach (${APPROACH_CASE_IDS.join(', ')}).`,
     '',
@@ -439,7 +445,12 @@ async function benchModel(
   cases: readonly Case[] = CASES
 ): Promise<Row> {
   const modelRef = await agentModelRef(model);
-  const planner = new Planner({ modelRef });
+  // The configured default is resolved for `config.agentMode.plannerModel`,
+  // which is not necessarily the model being benched.
+  const planner = new Planner({
+    modelRef,
+    thinking: resolvePlannerThinking(model, process.env.AGENT_PLANNER_THINKING),
+  });
   const row: Row = {
     model,
     pass: 0,

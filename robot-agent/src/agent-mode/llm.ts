@@ -85,6 +85,13 @@ export interface GenerateRequest {
  * `think` is Ollama's own documented knob for exactly this and does not depend
  * on an OpenAI-compat shim forwarding an unknown key; `reasoning_effort` only
  * ever worked here by way of the `restOfConfig` spread above.
+ *
+ * Suppressing thinking has a price on small planners (TASK-249): `think: false`
+ * drops `gemma4:e4b` from 48/54 to 42/54 on the planner bench, with three
+ * open-loop dashes, and `gemma4:e2b` from 51/54 to 42/54. Which planner models
+ * therefore think by default is decided in `config.ts`
+ * (`PLANNER_MODELS_THAT_THINK`), not here — this transport only carries the
+ * flag it is given.
  */
 export function buildGenerateConfig(req: GenerateRequest): Record<string, unknown> {
   return {

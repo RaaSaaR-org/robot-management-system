@@ -134,7 +134,10 @@ export interface Config {
     visionModel: string;
     /**
      * Let the planner model think before answering (`AGENT_PLANNER_THINKING`).
-     * Default OFF — see `visionThinking` for why the two roles differ.
+     * `true`/`false` set it; unset resolves PER MODEL via
+     * `resolvePlannerThinking` — off, except for the small models listed in
+     * `PLANNER_MODELS_THAT_THINK`, which lose their `goto` without it
+     * (TASK-249). See `visionThinking` for why the two roles differ.
      */
     plannerThinking: boolean;
     /**
@@ -643,8 +646,59 @@ function normalizeRobotDescription(raw: string): string {
  * Default Ollama model for both Agent Mode roles (planner + vision). Declared
  * before `config` because the config initializer reads it (a `const` below the
  * initializer would still be in its temporal dead zone).
+ *
+ * Choosing a different planner? Thinking off costs small models plan accuracy
+ * (TASK-249) — see {@link PLANNER_MODELS_THAT_THINK} for the measured cost and
+ * which models therefore think by default. `gemma3:4b` has no thinking mode,
+ * so the flag is inert for this default.
  */
 export const DEFAULT_AGENT_MODEL = 'gemma3:4b';
+
+/**
+ * Planner models that plan measurably worse with thinking off, and so think by
+ * default (TASK-249). `AGENT_PLANNER_THINKING` still wins when it is set to
+ * `true` or `false`; this list only decides what "unset" means for a model.
+ *
+ * READ THIS BEFORE PICKING A PLANNER SMALLER THAN `gemma4:12b`. Thinking off
+ * (native `/api/chat` `think: false`, the transport since `32697991`) is not
+ * free for a small model. `planner-bench.ts`, 18 cases x 3 repeats, Ollama
+ * 0.33.3 on an Apple-silicon Mac, 2026-09-30 (latency is relative — the
+ * GPU-box numbers are several times faster):
+ *
+ * | model        | thinking off                    | thinking on                     |
+ * | ------------ | ------------------------------- | ------------------------------- |
+ * | `gemma4:e4b` | 42/54 (78%), 3 dashes, 0.7 s    | 48/54 (89%), 0 dashes, 0.7 s    |
+ * | `gemma4:e2b` | 42/54 (78%), 6 fallbacks, 0.2 s | 51/54 (94%), 0 fallbacks, 4.2 s |
+ * | `gemma4:12b` | 51/54 (94%), 0 dashes, GPU box | not benched — nothing to buy back |
+ *
+ * A "dash" is an approach answered with a forward `walk` instead of a `goto`:
+ * the robot runs open-loop instead of the measured-range loop. On `e4b` the
+ * gain costs no latency at all — on the planner prompt it emits 0 characters
+ * of thinking either way; it is `think: false` itself that changes its
+ * answers. On `e2b` the thinking is real (~20x the latency) and buys back
+ * `stand`, `damp` and `goto-door`, which it otherwise fails 3/3.
+ *
+ * `gemma4:12b` (the GPU-box planner) is not listed: it scored 51/54 on both
+ * sides of `32697991` (GPU box, 2026-09-06), so thinking off costs it nothing
+ * and thinking on would only add latency. For any other model, bench both ways
+ * before choosing it:
+ * `AGENT_PLANNER_THINKING=true|false REPEATS=3 npm run bench:planner -- <model>`.
+ */
+export const PLANNER_MODELS_THAT_THINK: readonly string[] = ['gemma4:e4b', 'gemma4:e2b'];
+
+/**
+ * Whether the planner thinks, for one model. `'true'`/`'false'` in
+ * `AGENT_PLANNER_THINKING` are an explicit operator choice and win; anything
+ * else (unset, empty, a typo) falls back to the measured per-model default in
+ * {@link PLANNER_MODELS_THAT_THINK}. A `:latest` tag is ignored for the lookup.
+ */
+export function resolvePlannerThinking(model: string, envValue: string | undefined): boolean {
+  const explicit = envValue?.trim().toLowerCase();
+  if (explicit === 'true') return true;
+  if (explicit === 'false') return false;
+  const name = model.trim().toLowerCase().replace(/:latest$/, '');
+  return PLANNER_MODELS_THAT_THINK.includes(name);
+}
 
 /**
  * A number from the environment, or the fallback when it is missing OR unusable.
@@ -807,9 +861,13 @@ export const config: Config = {
     enabled: process.env.AGENT_MODE_ENABLED === 'true',
     plannerModel: process.env.AGENT_PLANNER_MODEL || DEFAULT_AGENT_MODEL,
     visionModel: process.env.AGENT_VISION_MODEL || DEFAULT_AGENT_MODEL,
-    // Opt-IN for the planner, opt-OUT for vision: both env vars accept
-    // 'true'/'false' and fall back to the measured default (see the interface).
-    plannerThinking: process.env.AGENT_PLANNER_THINKING === 'true',
+    // Both env vars accept 'true'/'false' and fall back to the measured
+    // default: per model for the planner (off unless the model is listed in
+    // PLANNER_MODELS_THAT_THINK — TASK-249), on for vision (see the interface).
+    plannerThinking: resolvePlannerThinking(
+      process.env.AGENT_PLANNER_MODEL || DEFAULT_AGENT_MODEL,
+      process.env.AGENT_PLANNER_THINKING
+    ),
     // envFloat, not parseInt: a NaN deadline is worse than a wrong one.
     // `setTimeout(NaN)` fires on the next tick, so a typo'd value would time
     // every plan out instantly — the failure this knob exists to prevent,
