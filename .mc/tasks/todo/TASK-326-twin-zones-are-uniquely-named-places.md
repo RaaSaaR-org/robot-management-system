@@ -3,7 +3,7 @@ id: "TASK-326"
 aliases: []
 title: "Twin zones are uniquely named places"
 slug: "twin-zones-are-uniquely-named-places"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
