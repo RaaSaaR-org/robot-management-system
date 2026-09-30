@@ -64,3 +64,12 @@ TASK-266 rebuilt the deployments, model registry, fleet learning, marketplace an
 - Server route and service tests.
 - `npx tsc`, `npx vitest run` and `npx playwright test`.
 - Click each new act through in live mode.
+
+## Decisions (2026-09-30)
+
+Recorded in `docs/records/TASK-272-build-page-deletes.md`. In short:
+
+- **Delete vs archive per entity.** Update package: deleted when never deployed, archived when robots ran it. Model version: always archived (six tables reference it), refused while a deployment of it is unfinished or a skill runs it. Deployment and finished round: deleted. Listing: unpublish (with a matching publish back), delete refused once anyone holds a licence.
+- **Audit.** Creates were not recorded anywhere, so "the same way creates are recorded" had nothing to copy. One helper (`server/src/services/buildAudit.ts`) now records every create and every destructive act on these five entities in the compliance log.
+- **AC 3 was already met** on `main` before this task (`DeploymentService.cancelDeployment` stores `cancelled` since TASK-299); it is covered by the existing service test and needed no change.
+- **The rollback bug** was the literal `packageId: 'rollback'` fallback plus the route ignoring its own `:id`; the rollback row now belongs to the package in the URL.

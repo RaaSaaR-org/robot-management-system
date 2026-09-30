@@ -340,6 +340,25 @@ Routes are the server's record; runs, findings and photos are what the robot rep
 
 Findings arrive through `POST /api/robots/:id/agent-mode/events` (`agent:patrol:*` / `agent:finding:*` events carry `patrol` and `finding`); the server raises one alert per finding (message tail `[finding:<id> run:<runId>]`, severity by type × time window) and one warning alert per skipped run, and fans the events out on `/api/a2a/ws`. `PatrolSchedulerService` fires enabled routes on their cron (30 s tick, one start per slot, one retry after `PATROL_RETRY_MIN`).
 
+### Build-page removals (TASK-272)
+
+Every destructive act answers `200 {id, outcome: 'deleted' | 'archived'}` (or the
+updated entity where noted), `404` for an unknown id and `409` with the reason when
+the entity's state forbids it. Each act, and each create of these entities, writes an
+`access_audit` compliance entry (robot key `platform-build`). Decisions:
+`docs/records/TASK-272-build-page-deletes.md`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/updates/:id/rollback/:robotId` | `{targetVersion}` → the rollback `UpdateDeployment`, filed under package `:id` |
+| DELETE | `/api/updates/:id` | Never deployed → `deleted`; has deployments → `archived` (hidden from `GET /api/updates` unless `?includeArchived=true`); still installing → 409 |
+| POST | `/api/federated/rounds/:id/cancel` | Cancel an unfinished round → the round (`status: 'cancelled'`); in-flight participants become `excluded`; finished → 409 |
+| DELETE | `/api/federated/rounds/:id` | Finished round (completed / failed / cancelled) → `deleted` with its participants; running → 409 |
+| DELETE | `/api/deployments/:id` | pending / failed / rolled back / cancelled → `deleted`; live → 409 |
+| DELETE | `/api/models/versions/:id` | Always `archived`, never removed; 409 while a deployment of it is unfinished or a skill runs it |
+| POST | `/api/marketplace/listings/:id/unpublish` \| `/publish` | Seller or super-admin → `{listing}` as `draft` / `published` |
+| DELETE | `/api/marketplace/listings/:id` | Seller or super-admin; nobody bought it → `deleted`; a buyer holds a licence → 409 |
+
 ### Other Route Groups
 
 | Base Path | Feature |
