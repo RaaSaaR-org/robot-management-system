@@ -3,7 +3,7 @@ id: "TASK-325"
 aliases: []
 title: "The docs draw the architecture and the network"
 slug: "the-docs-draw-the-architecture-and-the-network"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
