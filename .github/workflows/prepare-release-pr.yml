@@ -75,20 +75,19 @@ jobs:
           echo "Next version: v${VERSION}"
 
           # --- Build the changelog section ------------------------------------
-          section_for() {
-            echo "$subjects" | grep -E "^($1)(\(.+\))?!?: " | sed -E "s/^($1)(\(.+\))?!?: //" | sed 's/^/- /' || true
-          }
-          ADDED="$(section_for 'feat')"
-          FIXED="$(section_for 'fix')"
-          CHANGED="$(section_for 'perf|refactor|revert')"
-          OTHER="$(section_for 'chore|docs|build|ci|test|style')"
+          # Every commit in the range becomes exactly one bullet: by its
+          # conventional prefix, else by its PR's branch type (a squash merge's
+          # subject is the bare task title, per .claude/rules/tasks.md), else
+          # under ### Changed. The script exits non-zero, naming the subject,
+          # if a bullet goes missing — so this step fails instead of publishing
+          # a short release note (TASK-303).
+          SECTION="$(CHANGELOG_BRANCH_OF='gh pr view --json headRefName -q .headRefName' \
+            ./scripts/release/changelog-section.sh "$RANGE")"
           {
             echo "## [v${VERSION}] - $(date -u +%Y-%m-%d)"
             echo ""
-            if [ -n "$ADDED" ];   then echo "### Added";       echo ""; echo "$ADDED";   echo ""; fi
-            if [ -n "$FIXED" ];   then echo "### Fixed";       echo ""; echo "$FIXED";   echo ""; fi
-            if [ -n "$CHANGED" ]; then echo "### Changed";     echo ""; echo "$CHANGED"; echo ""; fi
-            if [ -n "$OTHER" ];   then echo "### Maintenance"; echo ""; echo "$OTHER";   echo ""; fi
+            echo "$SECTION"
+            echo ""
           } > /tmp/section.md
           echo "----- changelog -----"; cat /tmp/section.md
 

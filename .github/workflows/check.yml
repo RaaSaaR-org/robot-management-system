@@ -8,6 +8,7 @@ name: Check
 #   - python       the four suites test-all.sh runs (sim, curation, hardware
 #                  sidecar, Isaac offline verifiers)
 #   - e2e          the Playwright demo gate
+#   - release-tooling  the changelog generator prepare-release-pr.yml runs
 #
 # The python and e2e jobs exist because those suites gated nothing until
 # 2026-09-06: this file ran neither, while local Python stages could skip
@@ -265,6 +266,20 @@ jobs:
           MUJOCO_GL: osmesa
           CYCLONEDDS_HOME: /opt/cyclonedds
         run: ./scripts/test-all.sh --python-only
+
+  release-tooling:
+    name: Changelog generator
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Full history + tags, so the v2026.08.27..v2026.09.12 replay runs
+      # instead of skipping (TASK-303).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Test scripts/release/changelog-section.sh
+        run: ./scripts/release/test-changelog-section.sh
 
   e2e:
     name: Playwright (demo gate)
