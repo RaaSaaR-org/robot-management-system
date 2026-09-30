@@ -3,7 +3,7 @@ id: "TASK-341"
 aliases: []
 title: "A robot's frame registration is stored and computed on the server"
 slug: "a-robot-s-frame-registration-is-stored-and-computed-on-the-server"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
