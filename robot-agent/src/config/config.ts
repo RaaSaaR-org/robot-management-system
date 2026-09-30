@@ -434,6 +434,14 @@ export interface Config {
     /** Voice service for `speak`; text-only when unreachable (`VOICE_SERVICE_URL`). */
     voiceServiceUrl: string;
     /**
+     * Voice pack Agent Mode narrates in (TASK-229, `AGENT_MODE_VOICE`), sent
+     * as `voice` on every `/say`. Unset = the voice service's own configured
+     * pack (`VOICE_VOICE`), so one knob sets both the conversation and the
+     * narration voice; set it only to narrate in a different pack. An unknown
+     * or unloaded pack is refused by the voice service, never swapped.
+     */
+    voicePack?: string;
+    /**
      * Heartbeat (TASK-199): the robot noticing things while nobody is talking
      * to it. Opt-IN per deployment — this is the pillar with the highest blast
      * radius, and a robot that speaks up on its own is a decision an operator
@@ -943,6 +951,7 @@ export const config: Config = {
     navLookEveryM: parseFloat(process.env.AGENT_NAV_LOOK_EVERY_M || '2'),
     navPathMarginM: parseFloat(process.env.AGENT_NAV_PATH_MARGIN_M || '0.05'),
     voiceServiceUrl: process.env.VOICE_SERVICE_URL || 'http://localhost:8768',
+    voicePack: process.env.AGENT_MODE_VOICE?.trim() || undefined,
     heartbeat: {
       enabled: process.env.AGENT_HEARTBEAT_ENABLED === 'true',
       minIntervalMs: parseInt(process.env.AGENT_HEARTBEAT_MIN_INTERVAL_MS || '300000', 10),
