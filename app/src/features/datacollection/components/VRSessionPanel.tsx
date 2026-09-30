@@ -5,7 +5,8 @@
  *              same network opens this page and enters XR), a clearly-labeled
  *              "Simulate VR input" switch that streams synthetic pick-and-place
  *              motion to the robot agent for headset-less testing, and a
- *              collapsed keyboard fallback.
+ *              collapsed keyboard fallback. The simulated input joins the
+ *              session page's control lease when one is passed (TASK-320).
  * @feature datacollection
  */
 
@@ -15,6 +16,7 @@ import { VRTeleopSection } from '../../robots/components/tabs/vr/VRTeleopSection
 import { KeyboardTeleopSection } from '../../robots/components/tabs/TeleopTab';
 import { useSimulatedVrInput, type SimInputStatus } from '../hooks/useSimulatedVrInput';
 import type { Robot } from '../../robots/types/robots.types';
+import type { InputLease } from '../hooks/inputLease';
 
 export interface VRSessionPanelProps {
   robot: Robot | null;
@@ -28,19 +30,22 @@ export interface VRSessionPanelProps {
   onNextEpisode?: () => boolean | Promise<boolean>;
   /** The episode being captured, for the in-headset REC line. Null when idle. */
   recording?: { episode: number; frames: number } | null;
+  /** The session page's control lease; the simulated input streams only while it is bound. */
+  lease?: InputLease;
 }
 
 const STATUS: Record<SimInputStatus | 'off', { label: string; tone: StatusTagTone }> = {
   off: { label: 'Simulation off', tone: 'neutral' },
   disconnected: { label: 'Input disconnected', tone: 'neutral' },
   connecting: { label: 'Connecting…', tone: 'warning' },
+  awaiting_control: { label: 'Take control to stream', tone: 'warning' },
   streaming: { label: 'Streaming synthetic motion', tone: 'sim' },
 };
 
-export function VRSessionPanel({ robot, onNextEpisode, recording }: VRSessionPanelProps) {
+export function VRSessionPanel({ robot, onNextEpisode, recording, lease }: VRSessionPanelProps) {
   const [simulate, setSimulate] = useState(false);
   const [showKeyboard, setShowKeyboard] = useState(false);
-  const simStatus = useSimulatedVrInput({ robot, enabled: simulate });
+  const simStatus = useSimulatedVrInput({ robot, enabled: simulate, lease });
   const status = STATUS[simulate ? simStatus : 'off'];
 
   if (!robot) {
