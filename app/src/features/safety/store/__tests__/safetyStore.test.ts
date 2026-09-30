@@ -99,6 +99,7 @@ function resetStore() {
     isTriggering: false,
     isResetting: false,
     lastActionError: null,
+    lastZoneEStop: null,
     heartbeatsActive: false,
   });
 }
@@ -328,6 +329,15 @@ describe('safetyStore', () => {
         reason: 'spill',
         triggeredBy: 'user',
       });
+    });
+
+    it('keeps the result, so a caller can say how many robots stopped', async () => {
+      mockApi.triggerZoneEStop.mockResolvedValue({ zoneId: 'zone-a', successCount: 2 } as never);
+      mockApi.getFleetSafetyStatus.mockResolvedValue(makeFleetStatus());
+
+      await useSafetyStore.getState().triggerZoneEStop('zone-a', 'spill');
+
+      expect(useSafetyStore.getState().lastZoneEStop).toMatchObject({ zoneId: 'zone-a', successCount: 2 });
     });
 
     it('records error and returns false on failure', async () => {

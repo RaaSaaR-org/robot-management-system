@@ -10,6 +10,8 @@
  *   world bounds box (its `bounds`, or the live cloud's XY extent as a fallback
  *   before occupancy exists). Existing zones render as filled polygons and are
  *   editable (double-click to edit, click select). Emits zones via the store.
+ *   The read-only drawing (bounds, transform, cloud, polygons) lives in
+ *   `TwinTopDown`, which the fleet site map shares.
  * @feature digitaltwin
  */
 
@@ -20,9 +22,16 @@ import {
   selectTwinZones,
   selectTwinZoneMode,
   selectTwinDraftPoints,
-  TWIN_ZONE_COLORS,
 } from '../store/twinZoneStore';
-import type { AccumulatedCloud, DigitalTwinDTO, TwinPoint, TwinZoneDTO } from '../types/twin.types';
+import type { AccumulatedCloud, DigitalTwinDTO, TwinPoint } from '../types/twin.types';
+import {
+  TwinTopDown,
+  deriveWorldBounds,
+  makeTopDownTransform,
+  TOP_DOWN_PADDING as PADDING,
+  TOP_DOWN_VIEW_H as VIEW_H,
+  TOP_DOWN_VIEW_W as VIEW_W,
+} from './TwinTopDown';
 
 export interface ZoneAuthoringOverlayProps {
   twin: DigitalTwinDTO;
@@ -30,46 +39,6 @@ export interface ZoneAuthoringOverlayProps {
   cloud?: AccumulatedCloud | null;
   /** Optional occupancy PGM image URL to draw under the polygons. */
   occupancyImageUrl?: string;
-}
-
-const VIEW_W = 720;
-const VIEW_H = 540;
-const PADDING = 24;
-
-interface WorldBounds {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-}
-
-/** Derive world bounds (meters) from the twin, falling back to the cloud XY. */
-function deriveWorldBounds(twin: DigitalTwinDTO, cloud?: AccumulatedCloud | null): WorldBounds {
-  const tb = twin.bounds;
-  const hasTwinBounds = tb && (tb.maxX - tb.minX > 0.5 || tb.maxY - tb.minY > 0.5);
-  if (hasTwinBounds) {
-    return { minX: tb.minX, minY: tb.minY, maxX: tb.maxX, maxY: tb.maxY };
-  }
-  if (cloud && cloud.pointCount > 0) {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    const p = cloud.positions;
-    for (let i = 0; i < cloud.pointCount; i++) {
-      const x = p[i * 3];
-      const y = p[i * 3 + 1];
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-    }
-    if (Number.isFinite(minX)) return { minX, minY, maxX, maxY };
-  }
-  // Default 12 m square centered on world origin.
-  return {
-    minX: twin.worldOrigin.x - 6,
-    minY: twin.worldOrigin.y - 6,
-    maxX: twin.worldOrigin.x + 6,
-    maxY: twin.worldOrigin.y + 6,
-  };
 }
 
 export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAuthoringOverlayProps) {
@@ -89,24 +58,7 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
 
   const bounds = useMemo(() => deriveWorldBounds(twin, cloud), [twin, cloud]);
 
-  // World → screen transform: fit world bounds into the padded viewport,
-  // preserving aspect ratio. World +y is up, so the screen y axis is flipped.
-  const transform = useMemo(() => {
-    const wWidth = Math.max(0.001, bounds.maxX - bounds.minX);
-    const wHeight = Math.max(0.001, bounds.maxY - bounds.minY);
-    const scale = Math.min((VIEW_W - 2 * PADDING) / wWidth, (VIEW_H - 2 * PADDING) / wHeight);
-    const offsetX = (VIEW_W - wWidth * scale) / 2;
-    const offsetY = (VIEW_H - wHeight * scale) / 2;
-    const worldToScreen = (p: TwinPoint) => ({
-      x: offsetX + (p.x - bounds.minX) * scale,
-      y: VIEW_H - (offsetY + (p.y - bounds.minY) * scale), // flip Y (world up → screen down)
-    });
-    const screenToWorld = (sx: number, sy: number): TwinPoint => ({
-      x: bounds.minX + (sx - offsetX) / scale,
-      y: bounds.minY + (VIEW_H - sy - offsetY) / scale,
-    });
-    return { scale, worldToScreen, screenToWorld };
-  }, [bounds]);
+  const transform = useMemo(() => makeTopDownTransform(bounds), [bounds]);
 
   const screenToMap = useCallback(
     (clientX: number, clientY: number): TwinPoint | null => {
@@ -172,7 +124,6 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
 
   // UI strokes (draft polygon, hint) use the primary token; zone fills are data.
   const primary = useCssColor('--color-primary');
-  const zoneColor = (z: TwinZoneDTO) => z.color || TWIN_ZONE_COLORS[z.type] || primary;
 
   const draftScreen = draftPoints.map(transform.worldToScreen);
   const draftPath =
@@ -182,115 +133,41 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
       : '';
 
   return (
-    <svg
-      ref={svgRef}
-      viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-      className="h-full w-full select-none bg-inset"
-      style={{ cursor: mode === 'draw' ? 'crosshair' : 'default' }}
+    <TwinTopDown
+      twin={twin}
+      cloud={cloud}
+      occupancyImageUrl={occupancyImageUrl}
+      zones={zones}
+      selectedZoneId={selectedZoneId}
+      onZoneClick={(z) => selectZone(z.id)}
+      onZoneDoubleClick={(z) => startEditingZone(z)}
+      svgRef={svgRef}
+      cursor={mode === 'draw' ? 'crosshair' : 'default'}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onMouseMove={handleMouseMove}
+      aria-label={`Zone editor for ${twin.name}`}
     >
-      {/* Optional occupancy image, stretched to the world bounds box. */}
-      {occupancyImageUrl && (
-        <image
-          href={occupancyImageUrl}
-          x={transform.worldToScreen({ x: bounds.minX, y: bounds.maxY }).x}
-          y={transform.worldToScreen({ x: bounds.minX, y: bounds.maxY }).y}
-          width={(bounds.maxX - bounds.minX) * transform.scale}
-          height={(bounds.maxY - bounds.minY) * transform.scale}
-          opacity={0.9}
-          preserveAspectRatio="none"
-          style={{ imageRendering: 'pixelated' }}
-        />
-      )}
+      {() => (
+        <>
+          {/* Active draft polygon */}
+          {draftScreen.length > 0 && (
+            <g pointerEvents="none">
+              {draftPath && <path d={draftPath} fill={primary} fillOpacity={0.12} stroke={primary} strokeWidth={2} strokeDasharray="5,4" />}
+              {draftScreen.map((p, i) => (
+                <circle key={i} cx={p.x} cy={p.y} r={4} fill={primary} />
+              ))}
+            </g>
+          )}
 
-      {/* Top-down cloud projection (light dots) when no occupancy image. */}
-      {!occupancyImageUrl && cloud && cloud.pointCount > 0 && (
-        <CloudProjection cloud={cloud} worldToScreen={transform.worldToScreen} />
-      )}
-
-      {/* Existing zones */}
-      {zones.map((z) => {
-        const pts = z.points.map(transform.worldToScreen).map((p) => `${p.x},${p.y}`).join(' ');
-        const selected = z.id === selectedZoneId;
-        const color = zoneColor(z);
-        const centroid = z.points.length
-          ? transform.worldToScreen({
-              x: z.points.reduce((a, p) => a + p.x, 0) / z.points.length,
-              y: z.points.reduce((a, p) => a + p.y, 0) / z.points.length,
-            })
-          : { x: 0, y: 0 };
-        return (
-          <g key={z.id}>
-            <polygon
-              points={pts}
-              fill={color}
-              fillOpacity={selected ? 0.32 : 0.18}
-              stroke={color}
-              strokeWidth={selected ? 2.5 : 1.5}
-              style={{ cursor: 'pointer' }}
-              onClick={(e) => {
-                e.stopPropagation();
-                selectZone(z.id);
-              }}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                startEditingZone(z);
-              }}
-            />
-            <text x={centroid.x} y={centroid.y} fontSize={12} fill={color} textAnchor="middle" pointerEvents="none">
-              {z.name}
+          {/* Draw-mode hint */}
+          {mode === 'draw' && (
+            <text x={PADDING} y={PADDING} fontSize={12} fill={primary} opacity={0.9} pointerEvents="none">
+              Click to add vertices · double-click / Enter to close · Backspace undo · Esc cancel
             </text>
-          </g>
-        );
-      })}
-
-      {/* Active draft polygon */}
-      {draftScreen.length > 0 && (
-        <g pointerEvents="none">
-          {draftPath && <path d={draftPath} fill={primary} fillOpacity={0.12} stroke={primary} strokeWidth={2} strokeDasharray="5,4" />}
-          {draftScreen.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r={4} fill={primary} />
-          ))}
-        </g>
+          )}
+        </>
       )}
-
-      {/* Draw-mode hint */}
-      {mode === 'draw' && (
-        <text x={PADDING} y={PADDING} fontSize={12} fill={primary} opacity={0.9} pointerEvents="none">
-          Click to add vertices · double-click / Enter to close · Backspace undo · Esc cancel
-        </text>
-      )}
-    </svg>
-  );
-}
-
-/** Faint top-down projection of the cloud (subsampled) for context. */
-function CloudProjection({
-  cloud,
-  worldToScreen,
-}: {
-  cloud: AccumulatedCloud;
-  worldToScreen: (p: TwinPoint) => { x: number; y: number };
-}) {
-  const dotColor = useCssColor('--color-ink-muted', 'gray');
-  const dots = useMemo(() => {
-    const out: Array<{ x: number; y: number }> = [];
-    const n = cloud.pointCount;
-    const step = Math.max(1, Math.floor(n / 6000)); // cap ~6k dots
-    const p = cloud.positions;
-    for (let i = 0; i < n; i += step) {
-      out.push(worldToScreen({ x: p[i * 3], y: p[i * 3 + 1] }));
-    }
-    return out;
-  }, [cloud, worldToScreen]);
-
-  return (
-    <g pointerEvents="none">
-      {dots.map((d, i) => (
-        <circle key={i} cx={d.x} cy={d.y} r={0.7} fill={dotColor} opacity={0.6} />
-      ))}
-    </g>
+    </TwinTopDown>
   );
 }

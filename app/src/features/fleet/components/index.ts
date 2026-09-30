@@ -5,6 +5,8 @@
  */
 
 export { FleetStats } from './FleetStats';
+export { SiteMap, groupSiteRobots, LAST_SITE_KEY } from './SiteMap';
+export type { SiteMapProps, SiteRobotGroups } from './SiteMap';
 export { FleetMap } from './FleetMap';
 export { FleetMapPopover } from './FleetMapPopover';
 export { FleetMapToolbar } from './FleetMapToolbar';

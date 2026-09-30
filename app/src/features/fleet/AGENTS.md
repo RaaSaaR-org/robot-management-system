@@ -32,7 +32,8 @@ fleet/
 |-----------|---------|
 | `FleetPage` | Main fleet management page |
 | `FleetOverview` | Summary of all robots |
-| `FleetMap` | Visual map of robot locations |
+| `SiteMap` | Fleet > Map and the dashboard: a twin top-down (`digitaltwin/components/TwinTopDown`) with its zones, the site-aligned robots bound to it, and zone E-stop by click |
+| `FleetMap` | Legacy flat map of fleet zones (no longer on a page; removed in TASK-334) |
 | `BulkActions` | Execute commands on multiple robots |
 
 ## Key Types
