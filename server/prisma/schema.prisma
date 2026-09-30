@@ -3261,3 +3261,66 @@ model RobotControlLease {
 
   @@index([tenantId])
 }
+
+// ============================================================================
+// SOCIAL LAYER — comments and ratings by people and agents (TASK-241)
+// ============================================================================
+
+/// A comment on a dataset, dataset view, model version, episode or training
+/// job, left by a user, an agent or the system. The actor is a value object —
+/// loose id + denormalized displayName, no FK — so a deleted actor still reads.
+/// Soft-deleted rather than removed: a thread with replies must not vanish.
+model Comment {
+  id           String    @id @default(uuid())
+  tenantId     String?
+  /// dataset | dataset_view | model_version | episode | training_job
+  subjectType  String
+  subjectId    String
+  /// Only for subjectType 'episode', with subjectId = the dataset id.
+  episodeIndex Int?
+  /// Threading, one level deep.
+  parentId     String?
+  parent       Comment?  @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies      Comment[] @relation("CommentThread")
+  /// user | agent | system
+  actorType    String
+  actorId      String
+  displayName  String
+  body         String
+  evidenceJson String    @default("[]") // JSON: EvidenceRef[]
+  editedAt     DateTime?
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([subjectType, subjectId, createdAt])
+  @@index([actorType, actorId])
+  @@index([tenantId, createdAt])
+  @@index([parentId])
+}
+
+/// One rating per actor per subject, updated in place (no history in v1).
+/// `subjectKey` is subjectId, or "<datasetId>#<episodeIndex>" for an episode:
+/// a unique index over a nullable episodeIndex would let NULLs repeat, so the
+/// one-per-actor rule is enforced on a non-null key instead.
+model Rating {
+  id             String   @id @default(uuid())
+  tenantId       String?
+  subjectType    String
+  subjectId      String
+  episodeIndex   Int?
+  subjectKey     String
+  actorType      String
+  actorId        String
+  displayName    String
+  /// 0..1, normalized — a reward score and a success rate are fractions.
+  score          Float
+  dimensionsJson String   @default("{}") // JSON: Record<string, number>, each 0..1
+  evidenceJson   String   @default("[]") // JSON: EvidenceRef[]
+  comment        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([subjectType, subjectKey, actorType, actorId])
+  @@index([subjectType, subjectId])
+  @@index([tenantId, updatedAt])
+}

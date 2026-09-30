@@ -5,9 +5,9 @@ aliases:
 title: Actors, comments and ratings — let people and agents leave a judgement with
   evidence on datasets, models, episodes and runs
 slug: actors-comments-and-ratings
-status: todo
+status: in-progress
 priority: 2
-owner: ''
+owner: huhn511
 projects: []
 customers: []
 tags:
@@ -17,13 +17,13 @@ tags:
 sprint: ''
 parent: ""
 depends_on:
-spe: 8
-effort: ""
 - '[[TASK-238]]'
 - '[[TASK-240]]'
+spe: 8
+effort: ""
 due_date: ''
 created: 2026-09-04
-updated: "2026-09-05"
+updated: "2026-09-30"
 status_note: 'Written 2026-09-04. Depends on TASK-238 and TASK-240 because two of the
   four comment subjects (ModelVersion, DatasetView) only become addressable there.'
 ---

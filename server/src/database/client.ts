@@ -82,6 +82,9 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   'ResearchModelPublication',
   // TASK-317 control leases — written with the robot's tenantId
   'RobotControlLease',
+  // TASK-241 comments and ratings
+  'Comment',
+  'Rating',
 ]);
 
 const globalForPrisma = globalThis as unknown as {
