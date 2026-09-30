@@ -113,8 +113,8 @@ export interface RobotMapMarker {
   batteryLevel: number | null;
   /** Floor identifier */
   floor: string;
-  /** Current zone name */
-  zone?: string;
+  /** Id of the place the robot stands in, null when none (TASK-333) */
+  place?: string | null;
   /** Name of the task the robot is running, if any */
   currentTask?: string;
   /** Robot metadata (power source, etc.) */
@@ -211,7 +211,7 @@ export const DEFAULT_FLOORS = ['1', '2'] as const;
  * Server database is the single source of truth - see seedZones.ts
  */
 export const MOCK_ZONES: FloorZone[] = [
-  { id: 'wa', name: 'Warehouse A', floor: '1', bounds: { x: 0, y: 0, width: 20, height: 15 }, type: 'operational' },
+  { id: 'wa', name: 'Hall A', floor: '1', bounds: { x: 0, y: 0, width: 20, height: 15 }, type: 'operational' },
   { id: 'wb', name: 'Warehouse B', floor: '1', bounds: { x: 20, y: 0, width: 25, height: 20 }, type: 'operational' },
   { id: 'wc', name: 'Warehouse C', floor: '1', bounds: { x: 35, y: 15, width: 15, height: 15 }, type: 'operational' },
   { id: 'cs', name: 'Charging Station', floor: '1', bounds: { x: 0, y: 15, width: 10, height: 10 }, type: 'charging' },

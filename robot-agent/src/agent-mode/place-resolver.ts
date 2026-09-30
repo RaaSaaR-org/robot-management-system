@@ -138,13 +138,56 @@ export function toScenePlace(observation: PlaceObservation): ScenePlace {
 // ── geometry ────────────────────────────────────────────────────────────────
 
 /**
+ * Unsigned area of a simple polygon, m² (shoelace). Degenerate polygons (fewer
+ * than three vertices) have no area.
+ */
+export function polygonAreaM2(polygon: readonly PlaceVertex[]): number {
+  if (polygon.length < 3) return 0;
+  let twice = 0;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i] as PlaceVertex;
+    const [xj, yj] = polygon[j] as PlaceVertex;
+    twice += xj * yi - xi * yj;
+  }
+  return Math.abs(twice) / 2;
+}
+
+/**
+ * Which place contains this pose — the one answer to "where is this robot"
+ * (TASK-333). Floor predicate FIRST: two places with the same footprint on
+ * different storeys are a normal thing to author and must never collide.
+ *
+ * Twin zones may overlap — a CHARGING-A drawn inside a hall room — so among
+ * the containing places the SMALLEST polygon area wins: it is the more
+ * specific answer, and the one an operator drew on purpose. Equal areas fall
+ * back to the deepest margin, so a graph with two identical footprints still
+ * resolves deterministically instead of by array order.
+ */
+export function findContainingPlace(places: readonly Place[], pose: PlacePose): Place | null {
+  const floor = pose.floor ?? DEFAULT_PLACE_FLOOR;
+  let best: Place | null = null;
+  let bestArea = Infinity;
+  let bestMargin = -Infinity;
+  for (const place of places) {
+    if (place.floor !== floor) continue;
+    if (!pointInPolygon(pose.x, pose.y, place.polygon)) continue;
+    const area = polygonAreaM2(place.polygon);
+    const margin = distanceToBoundaryM(pose.x, pose.y, place.polygon);
+    if (area < bestArea || (area === bestArea && margin > bestMargin)) {
+      best = place;
+      bestArea = area;
+      bestMargin = margin;
+    }
+  }
+  return best;
+}
+
+/**
  * Is `(x, y)` inside `polygon`? Ray cast along +x, counting crossings.
  *
  * Concave rings are the reason this is a ray cast and not an AABB test: the
  * warehouse graph's CROSS-AISLE is an L, and every "just check the bounding
  * box" shortcut puts the robot in the cross aisle while it stands in an aisle.
- * `zoneUtils.isPointInZone` stays as it is — it answers a different question
- * (fleet `Zone` AABBs, which really are rectangles).
  *
  * A point exactly on an edge is not specified either way, and deliberately not
  * special-cased: the hysteresis margin means no decision is ever taken within
@@ -610,31 +653,9 @@ export class PlaceTracker {
     return this.committed;
   }
 
-  /**
-   * Which place contains this pose? Floor predicate FIRST: `RobotLocation`
-   * carries a floor and the fleet's `Zone` is unique on `[name, floor]`, so two
-   * places with the same footprint on different storeys are a normal thing to
-   * author and must never collide.
-   *
-   * The graphs are authored non-overlapping (verified on a 0.05 m grid), so at
-   * most one place matches. The deepest-margin tie-break below is not a policy,
-   * only a guarantee that a graph which breaks that invariant still resolves
-   * deterministically instead of by array order.
-   */
+  /** Which place contains this pose? See {@link findContainingPlace}. */
   private findPlace(pose: PlacePose): Place | null {
-    const floor = pose.floor ?? DEFAULT_PLACE_FLOOR;
-    let best: Place | null = null;
-    let bestMargin = -Infinity;
-    for (const place of this.graph.places) {
-      if (place.floor !== floor) continue;
-      if (!pointInPolygon(pose.x, pose.y, place.polygon)) continue;
-      const margin = distanceToBoundaryM(pose.x, pose.y, place.polygon);
-      if (margin > bestMargin) {
-        best = place;
-        bestMargin = margin;
-      }
-    }
-    return best;
+    return findContainingPlace(this.graph.places, pose);
   }
 
   private observe(place: Place, marginM: number): PlaceObservation {

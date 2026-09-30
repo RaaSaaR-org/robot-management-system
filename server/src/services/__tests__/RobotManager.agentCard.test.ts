@@ -77,7 +77,7 @@ function makeRobot(): Robot {
     model: 'g1',
     status: 'online',
     batteryLevel: 90,
-    location: { x: 0, y: 0, zone: 'Zone A' },
+    location: { x: 0, y: 0, place: 'ZONE-A' },
     lastSeen: new Date().toISOString(),
     capabilities: [],
     createdAt: new Date().toISOString(),

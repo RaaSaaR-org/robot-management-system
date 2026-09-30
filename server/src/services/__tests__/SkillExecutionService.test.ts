@@ -82,7 +82,7 @@ function makeRobot(overrides: Partial<Robot> = {}): Robot {
     model: 'so101',
     status: 'online',
     batteryLevel: 90,
-    location: { zone: 'Zone A' } as Robot['location'],
+    location: { x: 0, y: 0, place: 'ZONE-A' },
     lastSeen: new Date().toISOString(),
     capabilities: [],
     createdAt: new Date().toISOString(),

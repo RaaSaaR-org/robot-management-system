@@ -957,7 +957,7 @@ async function seedSimSceneRaw(
 
 describe('tenant-isolation extension — DigitalTwin (TASK-285)', () => {
   it('scopes findMany by tenant', async () => {
-    await seedDigitalTwinRaw('dt-a1', 'Warehouse A', TENANT_A);
+    await seedDigitalTwinRaw('dt-a1', 'Site A', TENANT_A);
     await seedDigitalTwinRaw('dt-b1', 'Warehouse B', TENANT_B);
 
     const twins = await prisma.digitalTwin.findMany();
@@ -999,7 +999,7 @@ describe('tenant-isolation extension — DigitalTwin (TASK-285)', () => {
 
 describe('tenant-isolation extension — ScanSession (TASK-285)', () => {
   it('scopes findMany by tenant', async () => {
-    await seedDigitalTwinRaw('dt-a1', 'Warehouse A', TENANT_A);
+    await seedDigitalTwinRaw('dt-a1', 'Site A', TENANT_A);
     await seedDigitalTwinRaw('dt-b1', 'Warehouse B', TENANT_B);
     await seedScanSessionRaw('ss-a1', 'dt-a1', 'recording', TENANT_A);
     await seedScanSessionRaw('ss-b1', 'dt-b1', 'recording', TENANT_B);
@@ -1033,7 +1033,7 @@ describe('tenant-isolation extension — ScanSession (TASK-285)', () => {
   });
 
   it('updateMany still updates the caller tenant own session', async () => {
-    await seedDigitalTwinRaw('dt-a1', 'Warehouse A', TENANT_A);
+    await seedDigitalTwinRaw('dt-a1', 'Site A', TENANT_A);
     await seedScanSessionRaw('ss-a1', 'dt-a1', 'processing', TENANT_A);
 
     const result = await prisma.scanSession.updateMany({

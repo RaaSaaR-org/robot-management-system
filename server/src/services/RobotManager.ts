@@ -75,9 +75,11 @@ export interface RobotLocation {
   y: number;
   z?: number;
   floor?: string;
-  zone?: string;
   heading?: number;
-  /** Place-graph id the robot believes it stands in (TASK-195), null = unknown. */
+  /**
+   * Place-graph id the robot believes it stands in (TASK-195), null = unknown.
+   * The robot's only answer to where it is (TASK-333).
+   */
   place?: string | null;
   /**
    * The odometry frame `x`/`y`/`heading` live in, as the agent reports it
@@ -112,7 +114,6 @@ export interface FleetPeer {
   headingDeg: number | null;
   frame: OdometryFrame | null;
   place: string | null;
-  zone: string | null;
   /** When this pose was last synced from the peer's agent. */
   updatedAt: string | null;
   /**
@@ -303,7 +304,6 @@ export function locationDiffers(a: RobotLocation | undefined, b: RobotLocation):
   return (
     Math.abs(a.x - b.x) > POSE_EPSILON_M ||
     Math.abs(a.y - b.y) > POSE_EPSILON_M ||
-    a.zone !== b.zone ||
     headingChanged ||
     (a.place ?? null) !== (b.place ?? null) ||
     (a.frame?.kind ?? null) !== (b.frame?.kind ?? null) ||
@@ -850,7 +850,6 @@ export class RobotManager {
           headingDeg: typeof loc.heading === 'number' ? loc.heading : null,
           frame: loc.frame && loc.frame.kind && loc.frame.id ? { kind: loc.frame.kind, id: loc.frame.id } : null,
           place: loc.place ?? null,
-          zone: loc.zone ?? null,
           updatedAt: r.poseSyncedAt ?? null,
           // Measured here, on one clock, so the agent does not have to guess
           // how stale a colleague's pose is from an ISO string of ours.

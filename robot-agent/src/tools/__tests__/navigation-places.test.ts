@@ -112,7 +112,7 @@ describe('moveToLocation', () => {
     expect(moves).toHaveLength(1);
     expect(moves[0]!.x).toBeCloseTo(0);
     expect(moves[0]!.y).toBeCloseTo(-3.75);
-    expect(moves[0]!.zone).toBe('Charging Bay A');
+    expect(moves[0]!.place).toBe('CHARGING-A');
   });
 
   it('refuses a named keepout, naming it', async () => {
@@ -175,7 +175,7 @@ describe('moveToLocation', () => {
 describe('charging station', () => {
   it('is the nearest charging place of the registered graph', async () => {
     stub({ places: PLACES });
-    expect(await getChargingStationLocation()).toMatchObject({ zone: 'Charging Bay A' });
+    expect(await getChargingStationLocation()).toMatchObject({ place: 'CHARGING-A' });
   });
 
   it('is unknown without a registered graph — never invented', async () => {

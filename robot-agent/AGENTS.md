@@ -213,9 +213,9 @@ All 8 tools are registered with Genkit and available to the AI agent:
 
 | Tool | Input | Description |
 |------|-------|-------------|
-| `moveToLocation` | `{ x?, y?, zone? }` | Move to coordinates or named zone. Resolves zone names via server zone API (cached 60s). Validates against restricted zones. |
+| `moveToLocation` | `{ x?, y?, place? }` | Move to coordinates or a place of the registered place graph, by name. Refuses keepouts. |
 | `stopMovement` | `{ reason? }` | Stop current movement |
-| `goToCharge` | `{ priority? }` | Navigate to charging station (fetched from server zones) |
+| `goToCharge` | `{ priority? }` | Navigate to the nearest `charging` place of the place graph |
 | `returnHome` | `{ priority? }` | Navigate to home position |
 
 ### Manipulation (2 tools)
@@ -750,7 +750,6 @@ are off by default because the sim's shadow pass is what costs the tick its budg
 | `ROBOT_DESCRIPTION`| (generic)          | AI prompt context              |
 | `INITIAL_X`        | `10.0`             | Starting X coordinate          |
 | `INITIAL_Y`        | `10.0`             | Starting Y coordinate          |
-| `INITIAL_ZONE`     | `Warehouse A`      | Starting zone name             |
 | `INITIAL_FLOOR`    | `1`                | Starting floor                 |
 
 ### Pre-configured Profiles

@@ -5,10 +5,8 @@
  * @status live
  */
 
-import type { SimulatedRobotState, RobotLocation, Zone } from './types.js';
+import type { SimulatedRobotState, RobotLocation } from './types.js';
 import { chargingStationLocation } from '../tools/navigation.js';
-import { isPointInZone } from './zoneUtils.js';
-import { formatZoneEnterEvent, formatZoneExitEvent } from './telemetry.js';
 
 /**
  * Callback to update robot state
@@ -51,8 +49,6 @@ const LOW_BATTERY_CLEAR_PCT = 25;
 
 export class SimulationEngine {
   private simulationInterval: NodeJS.Timeout | null = null;
-  private zoneCache: Zone[] = [];
-  private previousZone: Zone | null = null;
   /** See {@link SimulationEngine.setPoseAuthority}. Null = simulation owns the position. */
   private poseAuthority: (() => boolean) | null = null;
   private readonly config: SimulationConfig;
@@ -119,34 +115,20 @@ export class SimulationEngine {
    * frame origin — the one location that needs no graph.
    */
   private get chargingStation(): RobotLocation | null {
-    return chargingStationLocation() ?? { x: 0, y: 0, floor: '1', zone: 'Home Base' };
-  }
-
-  /**
-   * Set the zone cache for real-time zone tracking.
-   * Called from navigation tools after zone data is fetched from the server.
-   */
-  setZoneCache(zones: Zone[]): void {
-    this.zoneCache = zones;
+    return chargingStationLocation() ?? { x: 0, y: 0, floor: '1', place: null };
   }
 
   /**
    * Tell the engine that something else owns the robot's position (TASK-195).
    *
-   * `start()` is called unconditionally at boot, with no hardware check, so
-   * `updateZoneTracking()` used to write `location.zone` ten times a second
-   * from a FROZEN simulated position while a real robot walked — and its
-   * enter/exit events were `console.log`'d and went nowhere. Now that the place
-   * resolver derives position from real odometry, that writer must stand down
-   * whenever the resolver has an authoritative pose; otherwise the two disagree
-   * at 10 Hz and the last writer wins.
-   *
-   * The zone writer is the only thing gated. Zones and places are different
-   * vocabularies — see `RobotLocation.place` — so the resolver does not take
-   * `zone` over, it simply stops the simulation from inventing one.
+   * `start()` is called unconditionally at boot, with no hardware check. While
+   * the place resolver derives `location.place` from real odometry it is the
+   * only writer of that field; the simulation names the place it arrived at
+   * only when no real pose drives the location (TASK-333 — the simulation no
+   * longer invents zones, and `place` is the robot's only answer to where it is).
    *
    * @param probe returns true while a real pose is driving the location; pass
-   *        null to hand zone tracking back to the simulation.
+   *        null to hand the arrival place back to the simulation.
    */
   setPoseAuthority(probe: (() => boolean) | null): void {
     this.poseAuthority = probe;
@@ -164,12 +146,6 @@ export class SimulationEngine {
     if (state.targetLocation && state.status === 'busy') {
       const moved = this.updatePosition(deltaTime);
       stateChanged = moved;
-    }
-
-    // Zone tracking — synchronous, reads from cached zone data
-    if (this.zoneCache.length > 0) {
-      const zoneChanged = this.updateZoneTracking();
-      stateChanged = zoneChanged || stateChanged;
     }
 
     // Handle battery
@@ -210,8 +186,8 @@ export class SimulationEngine {
         if (s.targetLocation) {
           s.location.x = s.targetLocation.x;
           s.location.y = s.targetLocation.y;
-          s.location.zone = s.targetLocation.zone;
           s.location.floor = s.targetLocation.floor;
+          if (!this.hasPoseAuthority()) s.location.place = s.targetLocation.place ?? null;
         }
         s.targetLocation = undefined;
         s.speed = 0;
@@ -259,66 +235,16 @@ export class SimulationEngine {
   }
 
   /**
-   * Check current zone and emit enter/exit events on transitions.
-   * Fully synchronous — reads from in-memory zoneCache.
-   * @returns true if zone changed
+   * True while a real pose owns the position (TASK-195). Never throws: a broken
+   * probe must not take the simulation tick down, and "the simulation owns the
+   * position" is the safe fallback.
    */
-  private updateZoneTracking(): boolean {
-    // Something else owns the position (TASK-195) — do not fabricate a zone
-    // from a simulated one. Never throws: a broken probe must not take the
-    // whole simulation tick down, and "the simulation keeps tracking" is the
-    // pre-TASK-195 behaviour, which is the safe fallback.
+  private hasPoseAuthority(): boolean {
     try {
-      if (this.poseAuthority?.() === true) return false;
+      return this.poseAuthority?.() === true;
     } catch {
-      // fall through to simulated zone tracking
-    }
-
-    const state = this.stateGetter();
-    const floor = state.location.floor ?? '1';
-
-    // Find which cached zone the robot is currently in
-    let currentZone: Zone | null = null;
-    for (const zone of this.zoneCache) {
-      if (zone.floor === floor && isPointInZone(state.location.x, state.location.y, zone.bounds)) {
-        currentZone = zone;
-        break;
-      }
-    }
-
-    const prevId = this.previousZone?.id ?? null;
-    const currId = currentZone?.id ?? null;
-
-    if (currId === prevId) {
       return false;
     }
-
-    // Zone transition detected
-    if (this.previousZone) {
-      const exitEvent = formatZoneExitEvent(state.id, {
-        id: this.previousZone.id,
-        name: this.previousZone.name,
-        type: this.previousZone.type,
-      });
-      console.log(`[SimulationEngine] ${exitEvent.type}: ${this.previousZone.name}`);
-    }
-
-    if (currentZone) {
-      const enterEvent = formatZoneEnterEvent(state.id, {
-        id: currentZone.id,
-        name: currentZone.name,
-        type: currentZone.type,
-      });
-      console.log(`[SimulationEngine] ${enterEvent.type}: ${currentZone.name}`);
-    }
-
-    // Update location.zone on state
-    this.stateUpdater((s) => {
-      s.location.zone = currentZone?.name ?? '';
-    });
-
-    this.previousZone = currentZone;
-    return true;
   }
 
   /**

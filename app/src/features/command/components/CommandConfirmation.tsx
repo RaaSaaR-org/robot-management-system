@@ -34,7 +34,7 @@ export interface CommandConfirmationProps {
   isExecuting: boolean;
 }
 
-/** "Atlas will move to Warehouse A." — the consequence in one sentence */
+/** "Atlas will move to DOCK-1." — the consequence in one sentence */
 export function describeConsequence(interpretation: CommandInterpretation, robotName: string): string {
   const { commandType, parameters, originalText } = interpretation;
   const where =

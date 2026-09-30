@@ -3,7 +3,7 @@ id: "TASK-333"
 aliases: []
 title: "location.place is a robot's only answer to where it is"
 slug: "location-place-is-a-robot-s-only-answer-to-where-it-is"
-status: "todo"
+status: "in-progress"
 priority: 3
 owner: "huhn511"
 projects: []

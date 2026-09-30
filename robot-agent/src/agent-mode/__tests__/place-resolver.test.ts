@@ -27,12 +27,15 @@ import {
   DEFAULT_PLACE_HYSTERESIS_MARGIN_M,
   PlaceTracker,
   distanceToBoundaryM,
+  findContainingPlace,
   loadPlaceGraph,
   parsePlaceGraph,
   pointInPolygon,
+  polygonAreaM2,
   toScenePlace,
   type Place,
   type PlaceGraph,
+  type PlaceVertex,
 } from '../place-resolver.js';
 
 const PLACES_DIR = path.resolve(
@@ -145,6 +148,47 @@ describe('the floor predicate', () => {
   it('defaults a floorless pose to floor 0, never to "any floor"', () => {
     expect(resolveOnce(stacked, 0, 0)).toBe('GROUND');
     expect(resolveOnce(stacked, 0, 0, 2)).toBeNull();
+  });
+});
+
+describe('overlapping places — the smallest containing one wins (TASK-333)', () => {
+  const square = (cx: number, cy: number, half: number): PlaceVertex[] => [
+    [cx - half, cy - half],
+    [cx + half, cy - half],
+    [cx + half, cy + half],
+    [cx - half, cy + half],
+  ];
+  const base = warehouse.places[0] as Place;
+  /** A CHARGING-A drawn inside a hall room, listed AFTER the hall on purpose. */
+  const nested: PlaceGraph = {
+    ...warehouse,
+    places: [
+      { ...base, id: 'HALL', floor: 0, polygon: square(0, 0, 10) },
+      { ...base, id: 'CHARGING-A', floor: 0, polygon: square(5, 5, 1) },
+    ],
+  };
+
+  it('measures polygon area', () => {
+    expect(polygonAreaM2(square(0, 0, 10))).toBe(400);
+    expect(polygonAreaM2([[0, 0], [1, 1]])).toBe(0);
+  });
+
+  it('reports the small place while inside it, though the big one is deeper', () => {
+    expect(resolveOnce(nested, 5, 5)).toBe('CHARGING-A');
+    expect(findContainingPlace(nested.places, { x: 5, y: 5 })?.id).toBe('CHARGING-A');
+  });
+
+  it('reports the big place outside the small one', () => {
+    expect(resolveOnce(nested, -5, -5)).toBe('HALL');
+  });
+
+  it('breaks an equal-area tie by the deepest margin, not by array order', () => {
+    const twins: Place[] = [
+      { ...base, id: 'LEFT', floor: 0, polygon: square(0, 0, 2) },
+      { ...base, id: 'RIGHT', floor: 0, polygon: square(1, 0, 2) },
+    ];
+    expect(findContainingPlace(twins, { x: 1.4, y: 0 })?.id).toBe('RIGHT');
+    expect(findContainingPlace([...twins].reverse(), { x: -0.4, y: 0 })?.id).toBe('LEFT');
   });
 });
 

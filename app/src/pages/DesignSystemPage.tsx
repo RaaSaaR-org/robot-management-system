@@ -102,7 +102,7 @@ interface DemoRobot {
 const INITIAL_ROBOTS: DemoRobot[] = [
   { id: 'g1-01', name: 'Atlas', model: 'Unitree G1 EDU', status: 'online', battery: 86, site: 'Hall 3', lastSeenMin: 0 },
   { id: 'g1-02', name: 'Bruno', model: 'Unitree G1', status: 'charging', battery: 18, site: 'Dock A', lastSeenMin: 2 },
-  { id: 'g1-03', name: 'Clara', model: 'Unitree G1 EDU', status: 'busy', battery: 64, site: 'Warehouse A', lastSeenMin: 0 },
+  { id: 'g1-03', name: 'Clara', model: 'Unitree G1 EDU', status: 'busy', battery: 64, site: 'Hall A', lastSeenMin: 0 },
   { id: 'h1-01', name: 'Dora', model: 'Unitree H1', status: 'offline', battery: 0, site: 'Lab', lastSeenMin: 1440 },
   { id: 'so-01', name: 'Emil', model: 'SO-101 arm', status: 'e-stop', battery: 100, site: 'Bench 2', lastSeenMin: 5 },
   { id: 'g1-04', name: 'Fritz', model: 'Unitree G1', status: 'degraded', battery: 41, site: 'Hall 3', lastSeenMin: 12 },
@@ -982,7 +982,7 @@ export function DesignSystemPage() {
             <p className="text-[13px] text-ink-tertiary">Small · 13 — meta, table cells</p>
             <p className="text-xs text-ink-muted">Caption · 12 — hints</p>
             <Eyebrow>Eyebrow · 11 uppercase</Eyebrow>
-            <code className="w-fit rounded-tag bg-inset px-1.5 py-0.5 font-mono text-[13px] text-ink-secondary">roboctl move "Warehouse A"</code>
+            <code className="w-fit rounded-tag bg-inset px-1.5 py-0.5 font-mono text-[13px] text-ink-secondary">roboctl move "DOCK-1"</code>
           </div>
         </Section>
       </div>

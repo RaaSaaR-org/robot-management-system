@@ -155,8 +155,12 @@ export interface RobotLocation {
   y: number;
   z?: number;
   floor?: string;
-  zone?: string;
   heading?: number;
+  /**
+   * Id of the place the robot stands in, from its site's place graph, or null
+   * when it is in none (TASK-333) — the robot's only answer to where it is.
+   */
+  place?: string | null;
   /**
    * The robot's pose is registered to its site's twin (TASK-328). Only robots
    * with `siteAligned === true` may be drawn on the site map.
@@ -333,7 +337,6 @@ export interface RobotFilters {
   status?: RobotStatus | RobotStatus[];
   search?: string;
   capabilities?: string[];
-  zone?: string;
 }
 
 /** Pagination parameters */
@@ -353,7 +356,6 @@ export interface RobotListParams {
   status?: RobotStatus | RobotStatus[];
   search?: string;
   capabilities?: string[];
-  zone?: string;
   page?: number;
   pageSize?: number;
   sortBy?: keyof Robot;
@@ -563,7 +565,7 @@ export function getBatteryCategory(level: number | null): 'critical' | 'low' | '
  */
 export function formatRobotLocation(location: RobotLocation): string {
   const parts: string[] = [];
-  if (location.zone) parts.push(location.zone);
+  if (location.place) parts.push(location.place);
   if (location.floor) parts.push(`Floor ${location.floor}`);
   if (parts.length === 0) {
     parts.push(`(${location.x.toFixed(1)}, ${location.y.toFixed(1)})`);

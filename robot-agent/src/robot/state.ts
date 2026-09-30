@@ -15,7 +15,6 @@ import type {
   CommandType,
   RobotLocation,
   PushedTask,
-  Zone,
   RobotType,
   PointCloudFrame,
   PointCloudPose,
@@ -1770,13 +1769,6 @@ export class RobotStateManager {
     this.unsubscribePose = null;
     if (this.placeRefreshTimer) clearInterval(this.placeRefreshTimer);
     this.placeRefreshTimer = null;
-  }
-
-  /**
-   * Update the zone cache used for real-time zone tracking in the simulation engine.
-   */
-  setZoneCache(zones: Zone[]): void {
-    this.simulation.setZoneCache(zones);
   }
 
   // ============================================================================

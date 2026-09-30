@@ -166,7 +166,7 @@ export function useFleetStatus(): UseFleetStatusReturn {
       status: robot.status,
       batteryLevel: robot.batteryLevel ?? 0,
       floor: robot.location?.floor ?? '1',
-      zone: robot.location?.zone,
+      place: robot.location?.place ?? null,
       metadata: robot.metadata,
     }));
   }, [robots]);

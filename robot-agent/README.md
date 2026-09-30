@@ -7,7 +7,7 @@ The Robot Agent software that runs directly on humanoid robots, enabling A2A (Ag
 ## Features
 
 - **A2A Protocol Support**: Full A2A agent implementation with AgentCard, streaming, and task management
-- **Natural Language Commands**: Process commands via Gemini AI (e.g., "Move to Warehouse A", "Pick up the box")
+- **Natural Language Commands**: Process commands via Gemini AI (e.g., "Go to DOCK-1", "Pick up the box")
 - **NeoDEM Compatible**: REST API endpoints that integrate with the NeoDEM control system
 - **Real-time Telemetry**: WebSocket streaming of robot sensor data and status
 - **Simulation Mode**: Built-in simulation for development and demos (movement, battery, manipulation)
@@ -68,7 +68,6 @@ The server will start on `http://localhost:41243` by default.
 | `ROBOT_MODEL` | Robot model name | `SimBot H1` |
 | `INITIAL_X` | Starting X coordinate | `10.0` |
 | `INITIAL_Y` | Starting Y coordinate | `10.0` |
-| `INITIAL_ZONE` | Starting zone name | `Warehouse A` |
 | `INITIAL_FLOOR` | Starting floor | `1` |
 
 ## Endpoints
@@ -97,7 +96,7 @@ The server will start on `http://localhost:41243` by default.
 
 ### Navigation
 - Move to coordinates: `{ "type": "move", "payload": { "destination": { "x": 25, "y": 15 } } }`
-- Move to zone: `{ "type": "move", "payload": { "destination": { "zone": "Warehouse A" } } }`
+- Move to a place: `{ "type": "move", "payload": { "destination": { "place": "DOCK-1" } } }`
 - Return home: `{ "type": "return_home" }`
 - Go to charging station: `{ "type": "charge" }`
 - Stop movement: `{ "type": "stop" }`
@@ -107,16 +106,13 @@ The server will start on `http://localhost:41243` by default.
 - Pick up object: `{ "type": "pickup", "payload": { "objectId": "box-123" } }`
 - Drop object: `{ "type": "drop" }`
 
-## Named Locations
+## Places
 
-The robot knows these pre-defined locations:
-- `home` - Home base (0, 0)
-- `charging_station` - Charging bay (5, 0)
-- `warehouse_a` - Warehouse A (25, 15)
-- `warehouse_b` - Warehouse B (25, 35)
-- `loading_dock` - Loading dock (45, 25)
-- `entrance` - Building entrance (50, 0)
-- `exit` - Building exit (50, 50)
+The robot's only answer to "where am I" is `location.place`: the id of the
+place it stands in, from the place graph of the twin its site is bound to (for
+example `DOCK-1` or `CHARGING-A` in the warehouse scene), or `null` when it is
+in none. Where places overlap the smallest containing one wins. A robot moves
+to a place by name and refuses keepouts.
 
 ## Integration with NeoDEM
 
@@ -142,7 +138,7 @@ The main app can discover robots by:
 Using the A2A protocol with natural language:
 
 ```
-"Move to Warehouse A"
+"Go to DOCK-1"
 "What is your current location?"
 "Pick up box-123"
 "Drop what you're holding"
@@ -159,7 +155,7 @@ curl http://localhost:41243/api/v1/robots/sim-robot-001
 # Send move command
 curl -X POST http://localhost:41243/api/v1/robots/sim-robot-001/command \
   -H "Content-Type: application/json" \
-  -d '{"type": "move", "payload": {"destination": {"x": 25, "y": 15, "zone": "Warehouse A"}}}'
+  -d '{"type": "move", "payload": {"destination": {"place": "DOCK-1"}}}'
 
 # Get telemetry
 curl http://localhost:41243/api/v1/robots/sim-robot-001/telemetry

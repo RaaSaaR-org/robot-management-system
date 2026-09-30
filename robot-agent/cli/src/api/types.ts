@@ -35,8 +35,9 @@ export interface RobotLocation {
   y: number;
   z?: number;
   floor?: string;
-  zone?: string;
   heading?: number;
+  /** Id of the place the robot stands in, or null for unknown (TASK-333). */
+  place?: string | null;
 }
 
 // Joint state

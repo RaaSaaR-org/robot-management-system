@@ -350,7 +350,7 @@ describe('Safety Routes', () => {
   describe('POST /api/safety/zones/:id/estop', () => {
     it('triggers zone E-stop', async () => {
       mockSafetyService.triggerZoneEStop.mockResolvedValue({
-        zoneName: 'Warehouse A',
+        zoneName: 'Hall A',
         triggered: 2,
       });
 
@@ -359,7 +359,7 @@ describe('Safety Routes', () => {
         .send({ reason: 'spill', triggeredBy: 'operator-1' });
 
       expect(response.status).toBe(200);
-      expect(response.body.message).toBe('Zone E-stop triggered for Warehouse A');
+      expect(response.body.message).toBe('Zone E-stop triggered for Hall A');
       expect(response.body.triggered).toBe(2);
       expect(mockSafetyService.triggerZoneEStop).toHaveBeenCalledWith(
         'zone-1',

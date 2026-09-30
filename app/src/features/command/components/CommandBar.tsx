@@ -24,7 +24,7 @@ export interface CommandBarProps {
   className?: string;
 }
 
-const EXAMPLES = ['Move to Warehouse A', 'Go to the charging station', 'Return home'];
+const EXAMPLES = ['Go to DOCK-1', 'Go to the charging station', 'Return home'];
 
 /**
  * Natural language command bar: text → VLA interpretation → preview → confirm → execute.

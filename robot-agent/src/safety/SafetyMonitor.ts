@@ -1394,7 +1394,7 @@ export class SafetyMonitor {
       location: {
         x: state.location.x,
         y: state.location.y,
-        zone: state.location.zone,
+        place: state.location.place ?? null,
       },
       speed: state.speed,
       forceReading: {

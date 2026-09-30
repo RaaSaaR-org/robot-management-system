@@ -278,18 +278,18 @@ describe('robotsStore', () => {
     });
 
     it('setFilters merges filters, resets page to 1 and fetches', () => {
-      useRobotsStore.setState({ filters: { zone: 'A' }, pagination: { page: 3, pageSize: 12, total: 0, totalPages: 0 } });
+      useRobotsStore.setState({ filters: { search: 'A' }, pagination: { page: 3, pageSize: 12, total: 0, totalPages: 0 } });
 
       useRobotsStore.getState().setFilters({ status: 'online' });
 
       const s = useRobotsStore.getState();
-      expect(s.filters).toEqual({ zone: 'A', status: 'online' });
+      expect(s.filters).toEqual({ search: 'A', status: 'online' });
       expect(s.pagination.page).toBe(1);
       expect(robotsApi.listRobots).toHaveBeenCalledTimes(1);
     });
 
     it('clearFilters empties filters, resets page and fetches', () => {
-      useRobotsStore.setState({ filters: { zone: 'A' }, pagination: { page: 5, pageSize: 12, total: 0, totalPages: 0 } });
+      useRobotsStore.setState({ filters: { search: 'A' }, pagination: { page: 5, pageSize: 12, total: 0, totalPages: 0 } });
 
       useRobotsStore.getState().clearFilters();
 
@@ -470,7 +470,7 @@ describe('robotsStore', () => {
         robots: [robot],
         selectedRobotId: 'r1',
         robotDetail: robot,
-        filters: { zone: 'A' },
+        filters: { search: 'A' },
         pagination: { page: 2, pageSize: 12, total: 1, totalPages: 1 },
         isLoading: true,
         error: 'e',
@@ -480,7 +480,7 @@ describe('robotsStore', () => {
       expect(selectRobots(s)).toEqual([robot]);
       expect(selectSelectedRobotId(s)).toBe('r1');
       expect(selectRobotDetail(s)).toEqual(robot);
-      expect(selectFilters(s)).toEqual({ zone: 'A' });
+      expect(selectFilters(s)).toEqual({ search: 'A' });
       expect(selectPagination(s).page).toBe(2);
       expect(selectIsLoading(s)).toBe(true);
       expect(selectError(s)).toBe('e');

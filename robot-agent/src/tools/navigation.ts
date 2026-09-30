@@ -21,7 +21,7 @@ import {
 let robotStateManager: RobotStateManager;
 
 /** The frame origin — the only destination that needs no place graph. */
-const HOME_LOCATION: RobotLocation = { x: 0, y: 0, floor: '1', zone: 'Home Base' };
+const HOME_LOCATION: RobotLocation = { x: 0, y: 0, floor: '1', place: null };
 
 export function setRobotStateManager(manager: RobotStateManager): void {
   robotStateManager = manager;
@@ -46,7 +46,7 @@ function currentFloor(): string {
 
 function locationOf(place: Place): RobotLocation {
   const { x, y } = placeTarget(place);
-  return { x, y, floor: currentFloor(), zone: place.name };
+  return { x, y, floor: currentFloor(), place: place.id };
 }
 
 /**

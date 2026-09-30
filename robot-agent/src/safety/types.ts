@@ -421,7 +421,7 @@ export interface SafetyEvent {
 export interface SafetyEventContext {
   robotId: string;
   robotName: string;
-  location: { x: number; y: number; zone?: string };
+  location: { x: number; y: number; place?: string | null };
   speed: number;
   forceReading?: ForceReading;
   operatingMode: OperatingMode;
