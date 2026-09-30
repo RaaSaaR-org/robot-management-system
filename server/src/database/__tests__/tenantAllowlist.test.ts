@@ -81,11 +81,12 @@ describe('TENANT_SCOPED_MODELS vs the Prisma schema', () => {
     }
   });
 
-  it('derives 35 scoped models including immutable research and model publications', () => {
+  it('derives 36 scoped models including research publications and control leases', () => {
     // A count, not a list: it catches a model quietly *added* to the allowlist
     // with a column nobody reviewed, which neither test above would notice.
     // Moving this number is fine — it is a prompt to say why in the PR.
-    expect(TENANT_SCOPED_MODELS.size).toBe(35);
-    expect(modelsWithTenantId()).toHaveLength(35);
+    // 36th: RobotControlLease (TASK-317), written with the robot's tenantId.
+    expect(TENANT_SCOPED_MODELS.size).toBe(36);
+    expect(modelsWithTenantId()).toHaveLength(36);
   });
 });
