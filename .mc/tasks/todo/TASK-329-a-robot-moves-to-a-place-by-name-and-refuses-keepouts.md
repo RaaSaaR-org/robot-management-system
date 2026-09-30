@@ -3,7 +3,7 @@ id: "TASK-329"
 aliases: []
 title: "A robot moves to a place by name and refuses keepouts"
 slug: "a-robot-moves-to-a-place-by-name-and-refuses-keepouts"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
