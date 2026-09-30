@@ -43,8 +43,9 @@ const app = createApp();
  * with it — update it in the same commit, having checked the new route is
  * guarded.
  */
-// Research records and atomic model publications both use the guarded mount.
-const EXPECTED_WRITE_ROUTES = 353;
+// Research records and atomic model publications both use the guarded mount;
+// control-lease renew (TASK-318) sits behind writeRoleGuard + memberOrAbove.
+const EXPECTED_WRITE_ROUTES = 354;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;

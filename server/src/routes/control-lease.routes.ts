@@ -33,6 +33,7 @@ import { prisma } from '../database/index.js';
 import { robotManager } from '../services/RobotManager.js';
 import { complianceLogService } from '../services/ComplianceLogService.js';
 import { publishControlLeaseTransition } from '../services/controlLeaseEvents.js';
+import { runAsPlatform } from '../middleware/tenantContext.js';
 
 /**
  * One compliance entry per lease event. The metadata carries tenant, robot,
@@ -73,7 +74,13 @@ export function createDefaultControlLeaseService(): ControlLeaseService {
     audit: auditControlLeaseEvent,
     publish: publishControlLeaseTransition,
     readUser: async (userId) => {
-      const row = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, isActive: true } });
+      // The caller's own row, by the id its verified token names. Read as the
+      // platform: a super-admin's row has no tenant (or an impersonated one
+      // differs), and the tenant filter would otherwise hide it and refuse
+      // every renewal.
+      const row = await runAsPlatform(() =>
+        prisma.user.findUnique({ where: { id: userId }, select: { role: true, isActive: true } })
+      );
       if (row) return row;
       // The AUTH_DISABLED mock user has no row; it keeps the role it is given
       // on every request. Any other missing user has lost its lease.
