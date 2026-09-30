@@ -10,7 +10,6 @@ import {
   DEMO_ROBOTS,
   DEMO_H1_TELEMETRY,
   DEMO_ALERTS,
-  DEMO_ZONES,
 } from './demoData';
 import {
   DEMO_MARKETPLACE_LISTINGS,
@@ -203,17 +202,6 @@ export const handlers = [
 
   http.patch('/api/alerts/:id/acknowledge', () => {
     return HttpResponse.json({ success: true });
-  }),
-
-  // ========================================================================
-  // Zones
-  // ========================================================================
-
-  http.get('/api/zones', () => {
-    return HttpResponse.json({
-      data: DEMO_ZONES,
-      pagination: { page: 1, pageSize: DEMO_ZONES.length, total: DEMO_ZONES.length, totalPages: 1 },
-    });
   }),
 
   // ========================================================================
@@ -723,14 +711,10 @@ export const handlers = [
   })),
 
   // ========================================================================
-  // The rest of what the demo navigation actually requests: the fleet map's
-  // per-floor zones, the training queue, and the voice + memory channels the
-  // Agent Mode console opens. Each one was found by the e2e contract spec.
+  // The rest of what the demo navigation actually requests: the training
+  // queue, and the voice + memory channels the Agent Mode console opens. Each one was found by the e2e contract spec.
   // ========================================================================
 
-  http.get('/api/zones/floor/:floor', ({ params }) => HttpResponse.json({
-    zones: DEMO_ZONES.filter((z) => String(z.floor) === String(params.floor)),
-  })),
   http.get('/api/training/jobs', () => HttpResponse.json({
     jobs: [],
     pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },

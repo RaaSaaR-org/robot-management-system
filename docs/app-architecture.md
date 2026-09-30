@@ -99,10 +99,8 @@ src/
 │   ├── fleet/                  # Fleet overview & management
 │   │   ├── index.ts
 │   │   ├── components/
-│   │   │   ├── FleetMap.tsx
 │   │   │   ├── FleetStats.tsx
-│   │   │   ├── FleetTable.tsx
-│   │   │   └── ZoneOverlay.tsx
+│   │   │   └── SiteMap.tsx
 │   │   ├── hooks/
 │   │   │   └── useFleetStatus.ts
 │   │   ├── store/

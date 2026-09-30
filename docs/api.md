@@ -462,10 +462,9 @@ Platform limits: at most 8 arms and `EXPERIMENT_MAX_GPU_HOURS` (default 96) GPU 
 | Base Path | Feature |
 |-----------|---------|
 | `/api/alerts` | Alert management |
-| `/api/zones` | Fleet zone configuration |
 | `/api/command` | Natural language command processing |
 | `/api/processes` | Workflow management |
-| `/api/safety` | E-stop, safety monitoring |
+| `/api/safety` | E-stop, safety monitoring. `POST /api/safety/zones/:id/estop` takes a **TwinZone** id (TASK-330): it stops every non-offline robot bound to that zone's twin whose `location.place` is the zone's place; 404 for an unknown zone |
 | `/api/explainability` | AI decision transparency |
 | `/api/gdpr` | GDPR self-service (Art. 15-22) |
 | `/api/incidents` | Incident reporting |

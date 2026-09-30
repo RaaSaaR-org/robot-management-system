@@ -10,21 +10,20 @@ Provides fleet-level view and bulk operations for managing multiple robots simul
 
 ```
 fleet/
-├── api/
-│   └── fleetApi.ts          # API calls
 ├── components/
-│   ├── FleetOverview.tsx        # Fleet summary dashboard
-│   ├── FleetMap.tsx             # Spatial robot visualization
-│   ├── BulkActions.tsx          # Multi-robot operations
+│   ├── SiteMap.tsx              # Twin top-down: zones, bound robots, zone E-stop
 │   └── FleetStats.tsx           # Fleet statistics
+├── hooks/
+│   └── useFleetStatus.ts        # Fleet status derived from robots + alerts
 ├── pages/
 │   └── FleetPage.tsx            # Main fleet page
-├── store/
-│   └── fleetStore.ts            # Zustand store
 ├── types/
 │   └── fleet.types.ts           # TypeScript types
 └── index.ts
 ```
+
+Fleet zones no longer exist here (TASK-334): zones are authored on a digital
+twin (`features/digitaltwin`) and `SiteMap` reads them from there.
 
 ## Key Components
 
@@ -33,7 +32,6 @@ fleet/
 | `FleetPage` | Main fleet management page |
 | `FleetOverview` | Summary of all robots |
 | `SiteMap` | Fleet > Map and the dashboard: a twin top-down (`digitaltwin/components/TwinTopDown`) with its zones, the site-aligned robots bound to it, and zone E-stop by click |
-| `FleetMap` | Legacy flat map of fleet zones (no longer on a page; removed in TASK-334) |
 | `BulkActions` | Execute commands on multiple robots |
 
 ## Key Types
