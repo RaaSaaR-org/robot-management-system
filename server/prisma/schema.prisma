@@ -3235,3 +3235,29 @@ model ResearchModelPublication {
   @@index([tenantId, sourceRunId])
   @@index([modelVersionId])
 }
+
+// ============================================================================
+// CONTROL LEASES (TASK-317)
+// ============================================================================
+
+/// The server's half of a robot-wide control lease (TASK-313 epic). One row per
+/// robot, mutated only through conditional `updateMany` calls and a primary-key
+/// create, so any number of server replicas agree on exactly one holder. The raw
+/// lease secret is never stored — only its SHA-256 — and the row is written with
+/// the robot's own tenantId, never one taken from a request body.
+model RobotControlLease {
+  robotId     String    @id
+  tenantId    String?
+  generation  Int       @default(0)
+  leaseIdHash String?
+  sessionId   String?
+  userId      String?
+  displayName String?
+  /// installing | held | stopping | unconfirmed | released | expired
+  state       String    @default("released")
+  issuedAt    DateTime?
+  expiresAt   DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  @@index([tenantId])
+}

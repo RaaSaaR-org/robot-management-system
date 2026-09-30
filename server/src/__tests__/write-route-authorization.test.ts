@@ -44,7 +44,7 @@ const app = createApp();
  * guarded.
  */
 // Research records and atomic model publications both use the guarded mount.
-const EXPECTED_WRITE_ROUTES = 351;
+const EXPECTED_WRITE_ROUTES = 353;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;
