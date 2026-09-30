@@ -494,7 +494,7 @@ export class ControlLeaseService {
 
     const current = await this.readUser(user);
     if (!current || !current.isActive || !LEASE_ROLES.has(current.role)) {
-      await this.fence(robot, mine, 'not_authorized', 'released');
+      await this.fenceOrRecordLoss(robot, mine, user.id, 'not_authorized');
       throw new ControlLeaseError(403, { code: 'not_authorized' });
     }
 
@@ -523,12 +523,12 @@ export class ControlLeaseService {
       throw new ControlLeaseError(503, { code: 'agent_unconfirmed' });
     }
     if (!agent.ok) {
-      await this.fence(robot, mine, 'lease_lost', 'released');
+      await this.fenceOrRecordLoss(robot, mine, user.id, 'lease_lost');
       throw new ControlLeaseError(409, { code: 'lease_lost' });
     }
     const pastFirstWindow = row.issuedAt === null || nowMs - row.issuedAt.getTime() > ttlMs;
     if (!agent.bound && pastFirstWindow) {
-      await this.fence(robot, mine, 'transport_lost', 'released');
+      await this.fenceOrRecordLoss(robot, mine, user.id, 'transport_lost');
       throw new ControlLeaseError(409, { code: 'transport_lost' });
     }
 
@@ -683,6 +683,22 @@ export class ControlLeaseService {
       data: { state: 'released', leaseIdHash: null, expiresAt: null },
     });
     return true;
+  }
+
+  /**
+   * Fence the renewing caller's lease; when it no longer matched (already
+   * fenced, released or never theirs) the loss is still audited, so every
+   * refused renewal leaves one compliance entry.
+   */
+  private async fenceOrRecordLoss(
+    robot: ControlLeaseRobot,
+    mine: { generation: number; leaseIdHash: string; userId: string },
+    userId: string,
+    reason: 'not_authorized' | 'lease_lost' | 'transport_lost'
+  ): Promise<void> {
+    if (await this.fence(robot, mine, reason, 'released')) return;
+    const row = await this.readRow(robot.robotId);
+    await this.audit(this.lossEvent(robot, row, userId, mine.generation, reason));
   }
 
   /** The caller as the database knows it now, never as the JWT remembers it. */

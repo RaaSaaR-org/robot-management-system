@@ -207,6 +207,16 @@ describe('ControlLeaseService.renew — the role is re-read from the database', 
     expect((await refusal(service(dbA).renew(BOB, ROBOT.robotId, second.leaseId, second.generation))).status).toBe(403);
     expect(agent.releases).toEqual([grant.generation, second.generation]);
   });
+
+  it('a refused renew is audited even when there is no lease left to fence', async () => {
+    const grant = await service(dbA).acquire(ALICE, ROBOT.robotId);
+    await dbA.user.update({ where: { id: ALICE.id }, data: { role: 'viewer' } });
+    const error = await refusal(service(dbA).renew(ALICE, ROBOT.robotId, 'not-the-secret', grant.generation));
+    expect(error.status).toBe(403);
+    expect(agent.releases).toEqual([]);
+    expect((await row())?.state).toBe('held');
+    expect(audits.at(-1)).toMatchObject({ action: 'fence', reason: 'not_authorized', userId: ALICE.id });
+  });
 });
 
 describe('ControlLeaseService.renew — the agent decides whether the lease is live', () => {
