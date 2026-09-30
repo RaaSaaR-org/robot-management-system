@@ -3,7 +3,7 @@ id: "TASK-336"
 aliases: []
 title: "roboctl move does not move a sidecar-backed robot"
 slug: "roboctl-move-does-not-move-a-sidecar-backed-robot"
-status: "todo"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []

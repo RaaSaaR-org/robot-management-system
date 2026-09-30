@@ -236,6 +236,8 @@ All 8 tools are registered with Genkit and available to the AI agent:
 
 `moveToLocation({ place })` and the REST `move` command (`roboctl move`) resolve a name against the robot's registered place graph (TASK-328) — place `id` case-insensitively, then `name`, then `placeType` (nearest) — and drive to the polygon centroid (`src/tools/place-destination.ts`). A target inside a keepout place, named or `{x,y}`, is refused with `keepout: <place id>`. `home` is the frame origin and the only built-in name; with no registered graph a named move fails and a coordinate move proceeds (the geofence stays the safety layer). The charging station is the nearest `charging` place.
 
+On a **sidecar-backed** robot (MuJoCo `sim_g1_dds`, a real G1 — `RobotStateManager.isSidecarBacked()`) the kinematic `SimulationEngine` moves nothing, so `CommandExecutor` hands `move`/`charge`/`return_home` (and the Genkit move tools) to `agentModeController.walkTo` (TASK-336): a one-block `goto` plan through the navigator and `LocoClient`, with the registered keepouts checked — Agent Mode need not be switched on. The command stays `executing` and flips to `completed`/`failed` in the history when the walk ends; `roboctl move` waits for that. It refuses before any motion when the place frame is not registered to the twin or there is no place graph, while an E-Stop is latched, or while another plan runs. `stop` aborts the walk. A coordinate move walks into a 1.6 m square around the point.
+
 ## Simulation Engine
 
 The simulation runs at **100ms tick intervals** with these behaviors:
