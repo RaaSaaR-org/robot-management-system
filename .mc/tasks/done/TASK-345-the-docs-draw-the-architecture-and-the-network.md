@@ -1,5 +1,5 @@
 ---
-id: "TASK-338"
+id: "TASK-345"
 aliases: []
 title: "The docs draw the architecture and the network"
 slug: "the-docs-draw-the-architecture-and-the-network"
@@ -16,7 +16,7 @@ spe: 2
 effort: "medium"
 due_date: ""
 created: "2026-09-30"
-updated: "2026-09-30"
+updated: "2026-10-01"
 ---
 
 # The docs draw the architecture and the network
