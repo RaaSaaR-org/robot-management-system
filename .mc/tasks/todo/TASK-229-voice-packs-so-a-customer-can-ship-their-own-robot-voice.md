@@ -5,7 +5,7 @@ aliases:
 title: Make the robot's voice a selectable pack, so a customer can ship their own — starting
   with Saarländisch
 slug: voice-packs-so-a-customer-can-ship-their-own-robot-voice
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -21,7 +21,7 @@ spe: 8
 effort: ""
 due_date: ''
 created: 2026-08-29
-updated: "2026-09-05"
+updated: "2026-09-30"
 status_note: 'Written 2026-08-29 from a read of the live voice stack and of the finished
   Saar-TTS project (separate repo `saar-voice-example`, finetune trained and evaluated
   2026-08-29). The Saarländisch voice is the DELIVERABLE but not the POINT: the point is

@@ -1,6 +1,6 @@
 """Speak text out of the real G1 speaker from the command line (TASK-181 step 2).
 
-Piper -> resample to 16 kHz -> POST /play on the audio adapter. No robot-agent,
+Voice pack -> resample to 16 kHz -> POST /play on the audio adapter. No robot-agent,
 no LLM, no microphone involved: this is the output leg of the voice pipeline on
 its own, which makes it the quickest way to prove the speaker works and a handy
 demo trigger.
@@ -12,6 +12,14 @@ Needs the adapter running:  scripts/run_g1_adapter.ps1
     uv run python scripts/g1_say.py "Ein langer Satz ..." --stop-after 2
     uv run python scripts/g1_say.py --volume 60
     uv run python scripts/g1_say.py "Test" --save out/test.wav
+    uv run python scripts/g1_say.py --voice list
+    uv run python scripts/g1_say.py "Hallo, ich bin der Roboter." --voice saar
+    uv run python scripts/g1_say.py "Das ist gut." --voice saar --no-play --save out/saar.wav
+
+The text goes through the same stages as the live pipeline — tts_normalize(),
+then the pack's own prepare() (the Saar pack's dialect rewrite), then
+synthesis — so what comes out of the speaker is what a conversation would say.
+--no-play synthesizes and saves without an adapter, for a box with no robot.
 
 Language is auto-detected from the text unless --lang says otherwise; the
 detection is a deliberately dumb stopword check, so pass --lang when it matters.
@@ -32,7 +40,8 @@ import httpx
 
 from voice_service.audio.resample import resample_s16le
 from voice_service.config import PIPELINE_SAMPLE_RATE, VoiceConfig
-from voice_service.tts.registry import VoiceRegistry
+from voice_service.tts.normalize import tts_normalize
+from voice_service.tts.registry import VoiceError, VoiceRegistry
 
 # Enough to separate the two languages we ship voices for. Anything cleverer
 # belongs in the voice service, which already does real detection via Whisper.
@@ -62,6 +71,39 @@ def write_wav(path: Path, pcm: bytes, rate: int) -> None:
         w.writeframes(pcm)
 
 
+def synthesize(args: argparse.Namespace) -> tuple[bytes | None, float]:
+    """Text -> 16 kHz PCM through the chosen pack, exactly as the pipeline does it.
+
+    Returns (None, 0) with the reason printed when the pack cannot speak — an
+    unknown or unloaded voice is an error here too, never a quiet Piper.
+    """
+    language = args.lang or detect_language(args.text)
+    config = VoiceConfig.from_env()
+    registry = VoiceRegistry(config)
+    registry.load()
+    voice = args.voice or config.voice
+
+    t0 = time.perf_counter()
+    try:
+        text = registry.prepare(tts_normalize(args.text), language, voice)
+        pcm, rate = registry.synthesize(text, language, voice)
+    except VoiceError as exc:
+        print(f"voice pack {voice!r} cannot speak: {exc}")
+        return None, 0.0
+    if text != args.text:
+        print(f"spoken as: {text}")
+    print(f"tts [{voice}/{language}]: {len(pcm) / 2 / rate:.2f}s audio @ {rate} Hz "
+          f"in {time.perf_counter() - t0:.2f}s")
+
+    pcm16 = resample_s16le(pcm, rate, PIPELINE_SAMPLE_RATE)
+    seconds = len(pcm16) / 2 / PIPELINE_SAMPLE_RATE
+    if args.save:
+        path = Path(args.save)
+        write_wav(path, pcm16, PIPELINE_SAMPLE_RATE)
+        print(f"wrote {path} ({seconds:.2f}s @ {PIPELINE_SAMPLE_RATE} Hz)")
+    return pcm16, seconds
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("text", nargs="?", help="what the robot should say")
@@ -74,6 +116,8 @@ def main() -> int:
     parser.add_argument("--volume", type=int, metavar="0..100", help="set speaker volume (before speaking, if text given)")
     parser.add_argument("--stop-after", type=float, metavar="SECONDS", help="POST /stop mid-playback, to verify it cuts")
     parser.add_argument("--save", metavar="PATH", help="also write the 16 kHz PCM to a WAV file")
+    parser.add_argument("--no-play", action="store_true",
+                        help="synthesize (and --save) only; no adapter, no robot needed")
     args = parser.parse_args()
 
     # Before the text and adapter checks on purpose: listing the packs reads the
@@ -83,11 +127,17 @@ def main() -> int:
         registry.load()
         for pack in registry.describe():
             state = "ok" if pack["available"] else f"unavailable: {pack['reason']}"
-            print(f"{pack['id']:<12} {pack['licence']:<24} realtime={str(pack['realtime']):<5} {state}")
+            print(f"{pack['id']:<10} {pack['licence']:<44} commercial={str(pack['commercial']):<5} "
+                  f"realtime={str(pack['realtime']):<5} {state}")
         return 0
 
     if args.text is None and args.volume is None:
         parser.error("give TEXT to speak, or --volume to set the level")
+    if args.no_play:
+        if args.text is None:
+            parser.error("--no-play needs TEXT")
+        pcm16, _ = synthesize(args)
+        return 0 if pcm16 is not None else 1
 
     try:
         health = httpx.get(args.adapter + "/health", timeout=5.0).json()
@@ -109,22 +159,9 @@ def main() -> int:
         if args.text is None:
             return 0 if r.status_code == 200 else 1
 
-    language = args.lang or detect_language(args.text)
-    config = VoiceConfig.from_env()
-    registry = VoiceRegistry(config)
-    registry.load()
-
-    t0 = time.perf_counter()
-    pcm, rate = registry.synthesize(args.text, language, args.voice or config.voice)
-    print(f"tts [{language}]: {len(pcm) / 2 / rate:.2f}s audio @ {rate} Hz in {time.perf_counter() - t0:.2f}s")
-
-    pcm16 = resample_s16le(pcm, rate, PIPELINE_SAMPLE_RATE)
-    seconds = len(pcm16) / 2 / PIPELINE_SAMPLE_RATE
-
-    if args.save:
-        path = Path(args.save)
-        write_wav(path, pcm16, PIPELINE_SAMPLE_RATE)
-        print(f"wrote {path} ({seconds:.2f}s @ {PIPELINE_SAMPLE_RATE} Hz)")
+    pcm16, seconds = synthesize(args)
+    if pcm16 is None:
+        return 1
 
     stop_timer: threading.Timer | None = None
     if args.stop_after is not None:

@@ -330,7 +330,7 @@ def test_voice_env_override() -> None:
 
 def test_undeclared_voice_env_is_rejected() -> None:
     with pytest.raises(ValueError, match="VOICE_VOICE"):
-        VoiceConfig.from_env(env={"VOICE_VOICE": "saar"})
+        VoiceConfig.from_env(env={"VOICE_VOICE": "klingon"})
 
 
 def test_runtime_switch_between_loaded_packs_works() -> None:
