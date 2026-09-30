@@ -3,7 +3,7 @@ id: "TASK-318"
 aliases: []
 title: "Control leases renew only over a live bound socket"
 slug: "control-leases-renew-only-over-a-live-bound-socket"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
