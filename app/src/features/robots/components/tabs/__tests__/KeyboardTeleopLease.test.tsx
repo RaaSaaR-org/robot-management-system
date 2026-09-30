@@ -72,7 +72,7 @@ function capability(enabled: boolean) {
 
 async function connect(): Promise<FakeSocket> {
   fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));
-  const ws = FakeSocket.instances.at(-1)!;
+  const ws = FakeSocket.instances[FakeSocket.instances.length - 1];
   act(() => {
     ws.open();
     ws.receive({
