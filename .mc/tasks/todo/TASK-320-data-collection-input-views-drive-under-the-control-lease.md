@@ -3,7 +3,7 @@ id: "TASK-320"
 aliases: []
 title: "Data-collection input views drive under the control lease"
 slug: "data-collection-input-views-drive-under-the-control-lease"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
