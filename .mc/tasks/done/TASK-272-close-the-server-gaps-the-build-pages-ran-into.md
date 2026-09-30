@@ -3,7 +3,7 @@ id: "TASK-272"
 aliases: []
 title: "Close the server gaps the Build pages ran into"
 slug: "close-the-server-gaps-the-build-pages-ran-into"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
