@@ -148,6 +148,9 @@ server:
   env:
     nodeEnv: production
     authDisabled: "true"
+    # Robot-wide per-user control leases (TASK-321): on by default; "false"
+    # turns the lease routes off (GET answers enabled:false, POSTs 404).
+    controlLeasesEnabled: "true"
     publicUrl: ""
     corsOrigins: ""
   resources:
@@ -235,6 +238,11 @@ robotAgent:
     initialY: "10.0"
     initialZone: "Warehouse A"
     initialFloor: "1"
+    # Require a bound control lease for motion (TASK-321): opt-in, default
+    # "false". "true" refuses motion from clients that never bind a lease
+    # (sockets: lease_required; REST starts while another user holds it: 409
+    # control_lease_held) — no grace mode. Turn on only once every client binds.
+    controlLeaseRequired: "false"
   resources:
     requests:
       memory: "256Mi"

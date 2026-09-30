@@ -10,6 +10,7 @@ This guide covers deploying NeoDEM across three environments: **Raspberry Pi** (
 - [Docker Compose](#docker-compose)
 - [Kubernetes (Helm)](#kubernetes-helm)
 - [Environment Variables Reference](#environment-variables-reference)
+- [Control leases](#control-leases)
 - [PostgreSQL Migration (SQLite → PostgreSQL)](#postgresql-migration)
 - [TLS / HTTPS](#tls--https)
 - [Troubleshooting](#troubleshooting)
@@ -435,6 +436,8 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `server.replicaCount` | Server replicas | `2` |
 | `server.env.AUTH_DISABLED` | Disable auth | `"false"` |
 | `server.env.RATE_LIMIT_DISABLED` | Disable rate limits | `"false"` |
+| `server.env.controlLeasesEnabled` | Grant per-user control leases (`CONTROL_LEASES_ENABLED`) | `"true"` |
+| `robotAgent.env.controlLeaseRequired` | Agent refuses motion without a bound lease (`CONTROL_LEASE_REQUIRED`) | `"false"` |
 | `app.replicaCount` | App replicas | `2` |
 | `robotAgent.enabled` | Deploy robot agent | `true` |
 | `ingress.enabled` | Enable ingress | `true` |
@@ -471,6 +474,7 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `OPENROUTER_API_KEY` | No | — | OpenRouter key for orchestrator LLM |
 | `ORCHESTRATOR_MODEL` | No | `stepfun/step-3.5-flash:free` | LLM model for agent routing |
 | `PUBLIC_URL` | No | — | Server's public URL for agent discovery |
+| `CONTROL_LEASES_ENABLED` | No | `true` | Grant robot-wide per-user control leases; `false` opts out (see [Control leases](#control-leases)) |
 
 ### Robot Agent (`robot-agent/.env`)
 
@@ -488,6 +492,7 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `LLM_PROVIDER` | No | `gemini` | `gemini` or `openrouter` |
 | `OPENROUTER_API_KEY` | No | — | OpenRouter API key (alternative) |
 | `LLM_MODEL` | No | — | Override default LLM model |
+| `CONTROL_LEASE_REQUIRED` | No | `false` | Refuse motion from clients without a bound control lease (see [Control leases](#control-leases)) |
 
 ### App (`app/.env`)
 
@@ -496,6 +501,42 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `VITE_API_BASE_URL` | No | `http://localhost:3001/api` | Server API URL |
 | `VITE_WS_URL` | No | — | WebSocket URL override |
 | `VITE_A2A_SERVER_URL` | No | — | A2A server URL override |
+
+---
+
+## Control leases
+
+A control lease gives one user exclusive, expiring motion authority over one
+robot (epic TASK-313; API in `docs/api.md` → Control lease). Two flags, one per
+side:
+
+- **`CONTROL_LEASES_ENABLED` (server) — on by default** (TASK-321). The server
+  grants, renews and releases leases at `/api/robots/:id/control-lease`, and the
+  app's teleop console and data-collection inputs ask the operator to "Take
+  control" before they drive. Set it to `false` to opt out: the GET then answers
+  `enabled:false`, both POSTs `404 control_leases_disabled`, and the app drives
+  as it did before leases existed. A split-host fleet needs `AGENT_MEMORY_TOKEN`
+  on both sides, because the server installs each lease on the agent through its
+  personal-data gate.
+- **`CONTROL_LEASE_REQUIRED` (robot agent) — off by default, opt-in per
+  deployment.** Off, the agent records the installed lease but gates nothing:
+  a client that never binds still drives. On, the agent enforces the lease, and
+  a legacy client that never binds is refused outright — there is no warn-only
+  or grace mode:
+  - motion sockets (`/ws/keyboard-teleop`, bilateral teleop): every motion frame
+    is dropped with `{type:'error', code:'lease_required'}`; a `{bind}` naming a
+    wrong or stale lease gets `lease_invalid`;
+  - REST motion starts (command, skills, VLA, evaluation, tasks, Agent Mode
+    command/tour/patrol) while another user holds the lease:
+    `409 {code:'control_lease_held', holder:{displayName, userId}, message}`.
+    With no lease held, autonomous starts are admitted as before.
+
+  Turn it on only once **every** client in the deployment binds leases — the
+  NeoDEM app from TASK-319/TASK-320 on, and vrhq only with its own lease
+  integration. E-stop is never gated on the lease.
+
+Timing: `CONTROL_LEASE_TTL_MS` (default `5000`) and `CONTROL_LEASE_RENEW_MS`
+(default `1000`) on the server.
 
 ---
 
