@@ -3,7 +3,7 @@ id: "TASK-303"
 aliases: []
 title: "A PR that follows the title rule is invisible to the changelog"
 slug: "a-pr-that-follows-the-title-rule-is-invisible-to-the-changelog"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-09-12"
-updated: "2026-09-12"
+updated: "2026-09-30"
 ---
 
 # A PR that follows the title rule is invisible to the changelog
@@ -84,12 +84,12 @@ when they differ. That guard is the part that makes this not happen again.
 
 ## Acceptance Criteria
 
-- [ ] Every non-merge, non-`chore(release)` commit in the range appears exactly
+- [x] Every non-merge, non-`chore(release)` commit in the range appears exactly
       once in the generated section.
-- [ ] The workflow exits non-zero when a subject reaches no section, naming the
+- [x] The workflow exits non-zero when a subject reaches no section, naming the
       subject, so a silent drop cannot recur.
-- [ ] Replaying the range `v2026.08.27..v2026.09.12` produces 92 bullets.
-- [ ] If the tracker rule changes, `.claude/rules/tasks.md` says so in the same
+- [x] Replaying the range `v2026.08.27..v2026.09.12` produces 92 bullets.
+- [x] If the tracker rule changes, `.claude/rules/tasks.md` says so in the same
       PR, and the branch-type list stays the source of the prefix.
 
 ## Test Strategy
@@ -104,3 +104,21 @@ assert the workflow fails and names it.
 Found while publishing v2026.09.12: the release PR described 59 of 92 commits.
 The missing 33 were added by hand on `release-please/main` before merging, so
 the published release is complete; the generator is not.
+
+## Resolution (2026-09-30)
+
+Direction 1 plus a lookup: a subject is placed by its conventional prefix, else
+by the head branch type of the PR its `(#NNN)` suffix names, else under
+`### Changed`. The PR-title rule is unchanged, so AC 4 does not apply;
+`.claude/rules/tasks.md` gains one sentence that the branch type now files the
+merge in the changelog. Reasoning and replay numbers:
+`docs/records/TASK-303-changelog-places-every-commit.md`.
+
+- `scripts/release/changelog-section.sh` — the generator and the count guard
+  (rendered bullets vs subjects read; exits 1 naming each unplaced subject).
+  `CHANGELOG_STRICT=1` disables the fallback so the guard can be exercised.
+- `scripts/release/test-changelog-section.sh` — hermetic cases plus the
+  `v2026.08.27..v2026.09.12` replay (92 bullets); run by the new
+  `release-tooling` job in `.github/workflows/check.yml`.
+- `.github/workflows/prepare-release-pr.yml` — calls the script, with
+  `gh pr view` as the branch lookup.
