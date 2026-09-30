@@ -174,7 +174,16 @@ keepout. The Fleet page's Map tab and the dashboard draw a **site map**
 with its zones and the live robots bound to it, and E-stop a zone from the map.
 A robot's position is `location.place`, the place it is in, and only robots
 whose frame is aligned with the twin are plotted. The agent fetches its site's
-places from `GET /api/robots/:id/places`.
+places from `GET /api/robots/:id/places` (TASK-274).
+
+A simulated robot's world is the twin's frame by construction. A real robot's
+odometry starts wherever the sidecar came up, so an operator aligns it to its
+site from the Robots tab (TASK-325). The server stores that odom → twin
+transform per robot (`RobotFrameRegistration`, `PUT`/`GET`/`DELETE
+/api/robots/:id/frame-registration`). The agent polls it, carries the place
+graph into odometry, and fences, names places and walks in that frame. A
+re-zeroed odometry (new sidecar boot id) invalidates the registration, and the
+agent fails closed until the robot is aligned again.
 
 ## Communication Protocols
 

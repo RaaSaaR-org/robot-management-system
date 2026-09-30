@@ -47,6 +47,7 @@ sequenceDiagram
     A-->>S: identity, embodiment, skills
     S->>A: WS /ws/telemetry/:robotId (server dials)
     A->>S: GET /api/robots/:id/places (its site's places, then every 60 s)
+    A->>S: GET /api/robots/:id/frame-registration (odom → twin, every 5 s)
     loop every 30 s
         S->>A: GET /api/v1/health
     end
@@ -123,6 +124,7 @@ Each row is one connection, listed from the side that opens it.
 | server → agent | HTTP proxy | `/api/v1/robots/:id/{camera,vla,skills,agent-mode,map}/*` | camera MJPEG, model switch, eval runs |
 | agent → server | HTTP REST | `:3001 /api/compliance/*`, events, peers | Bearer `NEODEM_SERVICE_TOKEN` |
 | agent → server | HTTP | `:3001 /api/robots/:id/places` | the bound site's place graph (a twin's named zones), at boot and every 60 s; `404 robot has no site` when unbound. Bearer `NEODEM_SERVICE_TOKEN` |
+| agent → server | HTTP | `:3001 /api/robots/:id/frame-registration` | the operator's odom → twin alignment, at boot and every 5 s (`PLACE_REGISTRATION_REFRESH_MS`); `404` when none. Bearer `NEODEM_SERVICE_TOKEN` |
 | **Data plane** | | | |
 | server → Postgres | Postgres wire | `:5432` | `DATABASE_URL`, SQLite file in local dev |
 | server → NATS | NATS JetStream | `:4222` (monitor `:8222`) | `jobs.training.>`, `jobs.dataset.>`, `synthetic.jobs.>`, KV |
