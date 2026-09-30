@@ -166,6 +166,45 @@ export interface RobotLocation {
    * with `siteAligned === true` may be drawn on the site map.
    */
   siteAligned?: boolean;
+  /**
+   * Where the robot stands in its SITE's (twin) frame, present only while
+   * `siteAligned` (TASK-342). `x`/`y`/`heading` are raw odometry, which for a
+   * robot aligned by a frame registration is NOT the twin frame — the site map
+   * plots this. Heading in degrees.
+   */
+  sitePose?: { x: number; y: number; heading: number };
+}
+
+/**
+ * How a robot's odometry sits in its site twin (TASK-341):
+ * `twin = Rot(yawDeg) · odom + (x, y)`, valid for one odometry session.
+ */
+export interface FrameRegistration {
+  robotId: string;
+  twinId: string;
+  odomFrameId: string;
+  x: number;
+  y: number;
+  yawDeg: number;
+  method: 'manual' | 'place-anchor';
+  anchorPlaceId: string | null;
+  createdAt: string;
+  /** Still applies: same site, same odometry session */
+  current: boolean;
+  /** Why not, operator-facing; null when current */
+  staleReason: string | null;
+}
+
+/** Align a robot: it stands on a place facing `headingDeg`, or a typed transform */
+export type FrameRegistrationRequest =
+  | { method: 'place-anchor'; placeId: string; headingDeg: number }
+  | { method: 'manual'; x: number; y: number; yawDeg: number };
+
+/** One place of a robot's site, as `GET /api/robots/:id/places` lists it */
+export interface SitePlace {
+  id: string;
+  name: string;
+  keepout: boolean;
 }
 
 // ============================================================================
