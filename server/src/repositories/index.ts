@@ -44,15 +44,6 @@ export type {
   PaginationParams,
   PaginatedResult,
 } from './AlertRepository.js';
-export { zoneRepository, ZoneRepository } from './ZoneRepository.js';
-export type {
-  Zone,
-  ZoneType,
-  ZoneBounds,
-  CreateZoneInput,
-  UpdateZoneInput,
-  ZoneFilters,
-} from './ZoneRepository.js';
 export { commandRepository, CommandRepository } from './CommandRepository.js';
 export type {
   CommandInterpretation,

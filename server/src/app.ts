@@ -37,7 +37,6 @@ import { patrolRoutes, patrolRobotRoutes } from './routes/patrol.routes.js';
 import { tourRoutes } from './routes/tour.routes.js';
 import { wellKnownRoutes } from './routes/wellknown.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
-import { zoneRoutes } from './routes/zone.routes.js';
 import { commandRoutes } from './routes/command.routes.js';
 import { processRoutes } from './routes/process.routes.js';
 import { safetyRoutes } from './routes/safety.routes.js';
@@ -283,9 +282,6 @@ export function createApp(): Express {
 
   // Alert routes (protected)
   app.use('/api/alerts', ...protect, alertRoutes);
-
-  // Zone routes (protected)
-  app.use('/api/zones', ...protect, zoneRoutes);
 
   // Command routes (protected)
   app.use('/api/command', ...protect, commandRoutes);

@@ -81,14 +81,15 @@ describe('TENANT_SCOPED_MODELS vs the Prisma schema', () => {
     }
   });
 
-  it('derives 39 scoped models including control leases, comments, ratings and experiments', () => {
+  it('derives 38 scoped models including control leases, comments, ratings and experiments', () => {
     // A count, not a list: it catches a model quietly *added* to the allowlist
     // with a column nobody reviewed, which neither test above would notice.
     // Moving this number is fine — it is a prompt to say why in the PR.
     // 36th: RobotControlLease (TASK-317), written with the robot's tenantId.
     // 37th/38th: Comment and Rating (TASK-241), stamped from the caller's tenant.
     // 39th: Experiment (TASK-242).
-    expect(TENANT_SCOPED_MODELS.size).toBe(39);
-    expect(modelsWithTenantId()).toHaveLength(39);
+    // Back to 38: the fleet Zone is gone (TASK-334).
+    expect(TENANT_SCOPED_MODELS.size).toBe(38);
+    expect(modelsWithTenantId()).toHaveLength(38);
   });
 });

@@ -8,7 +8,6 @@ import type { IncomingMessage, Server } from 'http';
 import { conversationManager } from '../services/ConversationManager.js';
 import { robotManager, type RobotEvent } from '../services/RobotManager.js';
 import { alertService, type AlertEvent } from '../services/AlertService.js';
-import { zoneService, type ZoneEvent } from '../services/ZoneService.js';
 import { processManager } from '../services/ProcessManager.js';
 import { taskDistributor } from '../services/TaskDistributor.js';
 import { safetyService, type EStopEvent } from '../services/SafetyService.js';
@@ -205,16 +204,6 @@ export function setupWebSocket(server: Server): void {
     const message = JSON.stringify({
       type: event.type,
       alert: event.alert,
-      timestamp: event.timestamp,
-    });
-    broadcast(clients, message);
-  });
-
-  // Subscribe to zone events and broadcast to all clients
-  zoneService.onZoneEvent((event: ZoneEvent) => {
-    const message = JSON.stringify({
-      type: event.type,
-      zone: event.zone,
       timestamp: event.timestamp,
     });
     broadcast(clients, message);

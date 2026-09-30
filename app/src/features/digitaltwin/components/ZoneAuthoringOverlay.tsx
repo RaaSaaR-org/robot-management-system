@@ -1,7 +1,7 @@
 /**
  * @file ZoneAuthoringOverlay.tsx
  * @description 2D top-down SVG editor for authoring L2 polygon zones on a twin.
- *   Cloned from the fleet ZoneEditor but extended from single-rect drawing into
+ *   Cloned from the former fleet ZoneEditor but extended from single-rect drawing into
  *   MULTI-CLICK POLYGON drawing:
  *     - click to add a vertex
  *     - double-click or Enter to close the polygon (opens the form)

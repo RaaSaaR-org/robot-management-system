@@ -19,7 +19,7 @@ import request from 'supertest';
 const SECRET = 'test-secret-for-agent-endpoints';
 
 /** The prefixes `app.ts` mounts behind `authMiddleware`, and the agent calls. */
-const PREFIXES = ['/api/zones', '/api/updates', '/api/processes', '/api/robots'] as const;
+const PREFIXES = ['/api/updates', '/api/processes', '/api/robots'] as const;
 
 /** The real middleware in front of stub routers — the mount shape from `app.ts`. */
 async function mountApp() {
