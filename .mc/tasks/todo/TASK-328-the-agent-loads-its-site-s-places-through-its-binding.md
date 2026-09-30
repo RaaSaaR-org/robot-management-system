@@ -3,7 +3,7 @@ id: "TASK-328"
 aliases: []
 title: "The agent loads its site's places through its binding"
 slug: "the-agent-loads-its-site-s-places-through-its-binding"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
