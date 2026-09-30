@@ -12,6 +12,7 @@ import type {
   CreateUpdateRequest,
   DeployUpdateRequest,
   RollbackRequest,
+  DeleteOutcome,
 } from '../types/updates.types';
 
 // ============================================================================
@@ -93,6 +94,14 @@ export const updatesApi = {
       ENDPOINTS.rollback(packageId, robotId),
       input
     );
+    return response.data;
+  },
+
+  /**
+   * Delete a package: removed when never deployed, archived when robots ran it.
+   */
+  async deletePackage(id: string): Promise<{ id: string; outcome: DeleteOutcome }> {
+    const response = await apiClient.delete<{ id: string; outcome: DeleteOutcome }>(ENDPOINTS.byId(id));
     return response.data;
   },
 

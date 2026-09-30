@@ -1,13 +1,13 @@
 /**
  * @file RoundsSection.tsx
  * @description Rounds tab of fleet learning: search, status filter, the
- *              rounds table with start / cancel acts and server pagination
+ *              rounds table with start / cancel / delete acts and server pagination
  * @feature fleetlearning
  */
 
 import { useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Eye, Network, Play, Search } from 'lucide-react';
+import { Ban, ChevronLeft, ChevronRight, Eye, Network, Play, Search, Trash2 } from 'lucide-react';
 import {
   Button, DataTable, EmptyState, Panel, SearchInput, Select, StatusTag, Toolbar, confirm, toast,
   type DataTableColumn, type RowActionItem,
@@ -16,17 +16,17 @@ import { formatTimeAgo, getErrorMessage } from '@/shared/utils';
 import { useFederatedRounds } from '../hooks/fleetlearning';
 import { useFleetLearningStore } from '../store/fleetlearningStore';
 import {
-  AGGREGATION_METHOD_LABELS, canStartRound, isRoundActive,
+  AGGREGATION_METHOD_LABELS, canCancelRound, canDeleteRound, canStartRound, isRoundActive,
   type FederatedRound, type FederatedRoundStatus,
 } from '../types/fleetlearning.types';
+import { shortRoundId, useRoundActs } from './useRoundActs';
 
 const STATUSES: FederatedRoundStatus[] = [
   'created', 'selecting', 'distributing', 'training', 'collecting', 'aggregating', 'completed', 'failed', 'cancelled',
 ];
 const STATUS_OPTIONS = STATUSES.map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1) }));
 
-/** Short, readable round id: a hash sign and the first six characters of the id. */
-export const shortRoundId = (id: string) => `#${id.slice(0, 6)}`;
+export { shortRoundId };
 
 export interface RoundsSectionProps {
   /** Primary action for the empty state ("New round"). */
@@ -37,6 +37,7 @@ export function RoundsSection({ newAction }: RoundsSectionProps) {
   const navigate = useNavigate();
   const { rounds, pagination, filters, isLoading, error, fetchRounds, setFilters, clearFilters, setPage } = useFederatedRounds();
   const startRound = useFleetLearningStore((s) => s.startRound);
+  const acts = useRoundActs();
   const [query, setQuery] = useState('');
   const status = filters.status ?? '';
 
@@ -83,10 +84,20 @@ export function RoundsSection({ newAction }: RoundsSectionProps) {
     },
   ];
 
-  // No Cancel: the server has no route to cancel a round, so the menu offers only what it accepts.
+  // After a cancel or delete the page reloads, so the total and the page stay right.
+  const runAct = async (act: (r: FederatedRound) => Promise<boolean>, r: FederatedRound) => {
+    if (await act(r)) void fetchRounds();
+  };
+
   const rowActions = (r: FederatedRound): RowActionItem[] => [
     { label: 'Open', icon: <Eye />, onSelect: () => navigate(`/fleet-learning/rounds/${r.id}`) },
     ...(canStartRound(r) ? [{ label: 'Start round', icon: <Play />, onSelect: () => void start(r) }] : []),
+    ...(canCancelRound(r)
+      ? [{ label: 'Cancel round', icon: <Ban />, tone: 'danger' as const, separatorBefore: true, onSelect: () => void runAct(acts.cancel, r) }]
+      : []),
+    ...(canDeleteRound(r)
+      ? [{ label: 'Delete', icon: <Trash2 />, tone: 'danger' as const, separatorBefore: true, onSelect: () => void runAct(acts.remove, r) }]
+      : []),
   ];
 
   const hasFilters = Boolean(query || status);

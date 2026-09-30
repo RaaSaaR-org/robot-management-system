@@ -10,9 +10,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Eye, PackageSearch, Plus, Rocket, Search, Undo2 } from 'lucide-react';
+import { CheckCircle2, Eye, PackageSearch, Plus, Rocket, Search, Trash2, Undo2 } from 'lucide-react';
 import {
   Button, DataTable, EmptyState, Panel, SearchInput, Select, StatusTag, Toolbar,
+  confirm, errorMessage, toast,
   type DataTableColumn, type RowActionItem,
 } from '@/shared/components/ui';
 import { formatTimeAgo } from '@/shared/utils';
@@ -25,10 +26,11 @@ import { NewPackageModal } from './NewPackageModal';
 import { UpdateDetailsModal } from './UpdateDetailsModal';
 import { firstLine, formatBytes } from './updateActs';
 
-const STATUS_OPTIONS = (Object.keys(UPDATE_STATUS_LABELS) as UpdatePackageStatus[]).map((s) => ({
-  value: s,
-  label: UPDATE_STATUS_LABELS[s],
-}));
+// Archived packages are deleted ones the server keeps for their history; the
+// list never shows them, so neither does the filter.
+const STATUS_OPTIONS = (Object.keys(UPDATE_STATUS_LABELS) as UpdatePackageStatus[])
+  .filter((s) => s !== 'archived')
+  .map((s) => ({ value: s, label: UPDATE_STATUS_LABELS[s] }));
 
 export interface UpdatesSectionProps {
   /** Additional class names */
@@ -47,6 +49,7 @@ export function UpdatesSection({ className, newPackageOpen, onNewPackageOpenChan
   const packages = useUpdatesStore(selectPackages);
   const isLoading = useUpdatesStore(selectIsLoading);
   const fetchPackages = useUpdatesStore((s) => s.fetchPackages);
+  const removePackage = useUpdatesStore((s) => s.deletePackage);
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -114,7 +117,32 @@ export function UpdatesSection({ className, newPackageOpen, onNewPackageOpenChan
     ...(p.status === 'deployed'
       ? [{ label: 'Roll back', icon: <Undo2 />, tone: 'danger' as const, separatorBefore: true, onSelect: () => setRollingBack(p) }]
       : []),
+    {
+      label: 'Delete', icon: <Trash2 />, tone: 'danger' as const, separatorBefore: p.status !== 'deployed',
+      onSelect: () => void deletePackage(p),
+    },
   ];
+
+  async function deletePackage(p: UpdatePackage) {
+    const everDeployed = p.status === 'deployed' || p.status === 'rolled_back';
+    const ok = await confirm({
+      title: `Delete v${p.version}?`,
+      description: everDeployed
+        ? `It leaves this list and can no longer be deployed. Robots keep what they run, and v${p.version} stays archived with its deployment history for the audit trail.`
+        : `The signed package is removed for good and can no longer be approved or deployed.`,
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      const outcome = await removePackage(p.id);
+      toast.success(outcome === 'archived' ? 'Package archived' : 'Package deleted', {
+        description: outcome === 'archived' ? `v${p.version} is kept with its deployment history.` : `v${p.version}`,
+      });
+    } catch (err) {
+      toast.error("Couldn't delete the package", { description: errorMessage(err) });
+    }
+  }
 
   return (
     <div className={className ? `flex flex-col gap-6 ${className}` : 'flex flex-col gap-6'}>

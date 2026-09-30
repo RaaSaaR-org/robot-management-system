@@ -1,13 +1,13 @@
 /**
  * @file RoundDetailPage.tsx
  * @description One federated round: state, participants and configuration,
- *              with start and cancel acts
+ *              with start, cancel and delete acts
  * @feature fleetlearning
  */
 
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { Play } from 'lucide-react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { Ban, Play, Trash2 } from 'lucide-react';
 import {
   Button, ErrorState, KeyValueList, PageHeader, Panel, SkeletonText, StatRow, StatTile, StatusTag,
   confirm, toast,
@@ -15,11 +15,12 @@ import {
 import { formatDateTime, getErrorMessage } from '@/shared/utils';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { ParticipantList } from '../components/ParticipantList';
-import { shortRoundId } from '../components/RoundsSection';
 import { useRobotNames } from '../components/useRobotNames';
+import { shortRoundId, useRoundActs } from '../components/useRoundActs';
 import { useRoundDetail } from '../hooks/fleetlearning';
 import {
-  AGGREGATION_METHOD_LABELS, SELECTION_STRATEGY_LABELS, canStartRound, formatDuration, isRoundActive,
+  AGGREGATION_METHOD_LABELS, SELECTION_STRATEGY_LABELS, canCancelRound, canDeleteRound, canStartRound,
+  formatDuration, isRoundActive,
 } from '../types/fleetlearning.types';
 
 const BACK = { to: '/fleet-learning', label: 'Fleet learning' };
@@ -28,7 +29,9 @@ export function RoundDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const { round, participants, isLoading, error, fetchRound, startRound } = useRoundDetail(id);
   const robotName = useRobotNames();
-  const [pending, setPending] = useState(false);
+  const navigate = useNavigate();
+  const acts = useRoundActs();
+  const [pending, setPending] = useState<'start' | 'cancel' | 'delete' | null>(null);
   // The store keeps the last round opened; show it only when it is this one.
   const current = round?.id === id ? round : null;
 
@@ -53,7 +56,6 @@ export function RoundDetailPage() {
     ? Math.floor(((r.completedAt ? new Date(r.completedAt).getTime() : Date.now()) - new Date(r.startedAt).getTime()) / 1000)
     : undefined;
 
-  // Start is the only act: the server has no route to cancel a round, so the page does not offer one.
   const start = async () => {
     const ok = await confirm({
       title: 'Start round?',
@@ -61,16 +63,32 @@ export function RoundDetailPage() {
       confirmLabel: 'Start round',
     });
     if (!ok) return;
-    setPending(true);
+    setPending('start');
     try {
       await startRound();
       toast.success('Round started', { description: `Round ${shortRoundId(r.id)}` });
     } catch (err) {
       toast.error("Couldn't start the round", { description: getErrorMessage(err) });
     } finally {
-      setPending(false);
+      setPending(null);
       void fetchRound();
     }
+  };
+
+  const cancel = async () => {
+    setPending('cancel');
+    try {
+      if (await acts.cancel(r)) void fetchRound();
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const remove = async () => {
+    setPending('delete');
+    const deleted = await acts.remove(r);
+    setPending(null);
+    if (deleted) navigate(BACK.to);
   };
 
   const loss = r.metrics?.avgLocalLoss;
@@ -85,9 +103,20 @@ export function RoundDetailPage() {
         description={`Model ${r.globalModelVersion} · ${AGGREGATION_METHOD_LABELS[r.config.aggregationMethod]}`}
         meta={<StatusTag status={r.status} dot pulse={active} />}
         actions={
-          canStartRound(r) ? (
-            <Button leftIcon={<Play className="h-4 w-4" />} isLoading={pending} onClick={() => void start()}>Start round</Button>
-          ) : undefined
+          <>
+            {canCancelRound(r) && (
+              <Button variant="danger" leftIcon={<Ban className="h-4 w-4" />} isLoading={pending === 'cancel'}
+                disabled={pending !== null} onClick={() => void cancel()}>Cancel round</Button>
+            )}
+            {canDeleteRound(r) && (
+              <Button variant="danger" leftIcon={<Trash2 className="h-4 w-4" />} isLoading={pending === 'delete'}
+                disabled={pending !== null} onClick={() => void remove()}>Delete</Button>
+            )}
+            {canStartRound(r) && (
+              <Button leftIcon={<Play className="h-4 w-4" />} isLoading={pending === 'start'}
+                disabled={pending !== null} onClick={() => void start()}>Start round</Button>
+            )}
+          </>
         }
       />
 

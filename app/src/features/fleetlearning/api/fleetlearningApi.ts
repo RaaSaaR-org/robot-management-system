@@ -30,7 +30,6 @@ const ENDPOINTS = {
   round: (id: string) => `/federated/rounds/${id}`,
   roundSelectParticipants: (id: string) => `/federated/rounds/${id}/select-participants`,
   roundDistribute: (id: string) => `/federated/rounds/${id}/distribute`,
-  // Not served yet: the server has no cancel route, so the UI does not offer Cancel.
   roundCancel: (id: string) => `/federated/rounds/${id}/cancel`,
   roundParticipants: (id: string) => `/federated/rounds/${id}/participants`,
   // Privacy
@@ -85,11 +84,20 @@ async function startRound(id: string): Promise<FederatedRound> {
 }
 
 /**
- * Cancel a federated round
+ * Cancel a round that has not finished. Participants still training are
+ * excluded; the server answers 409 once the round is over.
  */
 async function cancelRound(id: string): Promise<FederatedRound> {
   const response = await apiClient.post<FederatedRound>(ENDPOINTS.roundCancel(id));
   return response.data;
+}
+
+/**
+ * Delete a finished (completed, failed or cancelled) round and its
+ * participants. A running round answers 409: cancel it first.
+ */
+async function deleteRound(id: string): Promise<void> {
+  await apiClient.delete(ENDPOINTS.round(id));
 }
 
 /**
@@ -159,6 +167,7 @@ export const fleetlearningApi = {
   createRound,
   startRound,
   cancelRound,
+  deleteRound,
   getParticipants,
   // Privacy
   listPrivacyBudgets,
