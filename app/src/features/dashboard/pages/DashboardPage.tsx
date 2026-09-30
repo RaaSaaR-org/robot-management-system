@@ -8,10 +8,10 @@
  * @stateAccess useFleetStatus (read)
  */
 
-import { useCallback, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { MessageSquare, RefreshCw } from 'lucide-react';
-import { useFleetStatus, useZones, FleetStats, FleetMap } from '@/features/fleet';
+import { useFleetStatus, FleetStats, SiteMap } from '@/features/fleet';
 import { FleetEmergencyStopButton } from '@/features/safety';
 import {
   Button,
@@ -31,10 +31,7 @@ import { OrchestratorDrawer } from '../components/OrchestratorDrawer';
  * redirect target of the legacy /orchestrator route).
  */
 export function DashboardPage() {
-  const navigate = useNavigate();
-  const { status, robotMarkers, floors, isLoading, error, refresh } = useFleetStatus();
-  const { zones } = useZones();
-  const [selectedFloor, setSelectedFloor] = useState(floors[0] || '1');
+  const { status, robotMarkers, isLoading, error, refresh } = useFleetStatus();
 
   const [searchParams, setSearchParams] = useSearchParams();
   const chatOpen = searchParams.get('drawer') === 'chat';
@@ -103,7 +100,7 @@ export function DashboardPage() {
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
           <Panel className="xl:col-span-2">
             <Panel.Header
-              title="Fleet map"
+              title="Site map"
               actions={
                 <div className="flex items-center gap-2">
                   <StatusTag tone="live" dot pulse>Live</StatusTag>
@@ -113,14 +110,7 @@ export function DashboardPage() {
                 </div>
               }
             />
-            <FleetMap
-              robots={robotMarkers}
-              zones={zones}
-              selectedFloor={selectedFloor}
-              onFloorChange={setSelectedFloor}
-              onRobotClick={(id) => navigate(`/robots/${id}`)}
-              onRobotMapClick={(id) => navigate(`/agent?robot=${encodeURIComponent(id)}&tab=map`)}
-            />
+            <SiteMap size="compact" />
           </Panel>
           <NeedsAttentionPanel robots={robotMarkers} />
         </div>

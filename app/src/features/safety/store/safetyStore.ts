@@ -12,6 +12,7 @@ import type {
   RobotSafetyStatus,
   FleetSafetyStatus,
   EStopEvent,
+  ZoneEStopResult,
 } from '../types/safety.types';
 
 // Enable Immer support for Map and Set
@@ -38,6 +39,8 @@ interface SafetyState {
   isTriggering: boolean;
   isResetting: boolean;
   lastActionError: string | null;
+  /** The last zone stop that reached the server (how many robots it stopped) */
+  lastZoneEStop: ZoneEStopResult | null;
 
   // Heartbeat state
   heartbeatsActive: boolean;
@@ -93,6 +96,7 @@ export const useSafetyStore = createStore<SafetyStore>(
     isTriggering: false,
     isResetting: false,
     lastActionError: null,
+    lastZoneEStop: null,
     heartbeatsActive: false,
 
     // Fleet status actions
@@ -268,13 +272,14 @@ export const useSafetyStore = createStore<SafetyStore>(
       });
 
       try {
-        await safetyApi.triggerZoneEStop(zoneId, {
+        const result = await safetyApi.triggerZoneEStop(zoneId, {
           reason,
           triggeredBy: 'user',
         });
 
         set((state) => {
           state.isTriggering = false;
+          state.lastZoneEStop = result ?? null;
         });
 
         // Refresh fleet status
