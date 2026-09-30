@@ -108,6 +108,13 @@ export interface RobotLocation {
    * frames match on kind AND id; absent/null means "comparable to nobody".
    */
   frame?: { kind: 'sim' | 'odom'; id: string } | null;
+  /**
+   * True only when the robot's place graph is a SITE graph (it names a digital
+   * twin) AND the robot's pose is registered to it — today, a sim robot, whose
+   * world origin is the twin origin (TASK-328). False or absent otherwise. The
+   * site map (TASK-331) plots only robots that claim this.
+   */
+  siteAligned?: boolean;
 }
 
 // ============================================================================

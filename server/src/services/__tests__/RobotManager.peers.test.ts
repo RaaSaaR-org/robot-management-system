@@ -114,6 +114,14 @@ describe('locationDiffers', () => {
     expect(locationDiffers(base, { ...base, frame: null })).toBe(true);
     expect(locationDiffers(undefined, base)).toBe(true);
   });
+
+  it('sees a site-alignment flip, so the site map learns of it (TASK-328)', () => {
+    const base = { x: 1, y: 2, heading: 0, place: 'A', frame: SIM };
+    expect(locationDiffers(base, { ...base, siteAligned: true })).toBe(true);
+    expect(locationDiffers({ ...base, siteAligned: true }, { ...base, siteAligned: false })).toBe(true);
+    // Absent and false are the same claim: not aligned.
+    expect(locationDiffers(base, { ...base, siteAligned: false })).toBe(false);
+  });
 });
 
 describe('RobotManager peers', () => {

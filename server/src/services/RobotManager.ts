@@ -85,6 +85,13 @@ export interface RobotLocation {
    * match on kind AND id; absent means comparable to nobody. Never invented here.
    */
   frame?: OdometryFrame | null;
+  /**
+   * The agent's claim that its pose is registered to its SITE's twin (TASK-328):
+   * true only for a twin-bound place graph the pose can be compared with —
+   * today, a sim robot. The site map (TASK-331) plots only robots with
+   * `siteAligned === true`. Relayed as reported; never invented here.
+   */
+  siteAligned?: boolean;
 }
 
 /** See {@link RobotLocation.frame}. */
@@ -284,7 +291,7 @@ export interface RegisteredRobot {
 export const POSE_EPSILON_M = 0.01;
 export const HEADING_EPSILON_DEG = 0.5;
 
-/** Position, heading, zone, place or frame changed (beyond the epsilons). */
+/** Position, heading, zone, place, frame or site alignment changed (beyond the epsilons). */
 export function locationDiffers(a: RobotLocation | undefined, b: RobotLocation): boolean {
   if (!a) return true;
   const headingA = a.heading ?? null;
@@ -300,7 +307,8 @@ export function locationDiffers(a: RobotLocation | undefined, b: RobotLocation):
     headingChanged ||
     (a.place ?? null) !== (b.place ?? null) ||
     (a.frame?.kind ?? null) !== (b.frame?.kind ?? null) ||
-    (a.frame?.id ?? null) !== (b.frame?.id ?? null)
+    (a.frame?.id ?? null) !== (b.frame?.id ?? null) ||
+    (a.siteAligned === true) !== (b.siteAligned === true)
   );
 }
 

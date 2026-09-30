@@ -41,8 +41,8 @@ import {
   type PlaceObservation,
 } from '../agent-mode/place-resolver.js';
 import { evaluateGeofence } from '../agent-mode/geofence.js';
-import { assessFrameRegistration, type FrameRegistration } from '../agent-mode/place-frame.js';
-import { PlaceGraphSource } from '../agent-mode/place-graph-source.js';
+import { assessFrameRegistration, type FrameRegistration, type PoseFrame } from '../agent-mode/place-frame.js';
+import { PlaceGraphSource, robotCachePath } from '../agent-mode/place-graph-source.js';
 import type { PoseSource } from '../agent-mode/scene-memory.js';
 import type { AgentGeofenceState, ScenePlace } from '../agent-mode/types.js';
 import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
@@ -303,6 +303,18 @@ export class RobotStateManager {
   /** Logged once per graph so an unregistered frame is visible, not silent. */
   private placeFrameWarned = false;
   /**
+   * The pose frame {@link placeFrame} was assessed for (TASK-328). The sidecar
+   * only says whether it is a sim once it answers, which is usually AFTER the
+   * cached graph was adopted — so a change here re-assesses the frame.
+   */
+  private placeFramePose: PoseFrame | null = null;
+  /** JSON of the adopted graph, so an unchanged periodic refresh keeps the tracker. */
+  private placeGraphKey: string | null = null;
+  /** Background refresh of a platform-served graph (TASK-328). */
+  private placeRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  /** Latched so "no site" is logged once per unbinding, not once per refresh. */
+  private placeUnboundLogged = false;
+  /**
    * True when an operator re-anchor landed while a `zone_violation` stop was
    * latched. See {@link evaluateGeofenceForPose} — it is what stops a declared
    * PLACE from being read as evidence of CLEARANCE.
@@ -472,9 +484,10 @@ export class RobotStateManager {
    * takes the controls; sampling on the poll makes place correct under teleop,
    * under VLA, and while the agent is idle, for free.
    *
-   * With neither `PLACE_GRAPH_PATH` nor `PLACE_TWIN_ID` this subscribes to
-   * nothing at all — no tracker, no listener, no behaviour change whatsoever for
-   * the SO-101 and room-scene profiles.
+   * With neither `PLACE_GRAPH_PATH` nor `PLACE_TWIN_ID`, the robot asks the
+   * platform for its SITE's graph — the twin it is bound to (TASK-328). A robot
+   * with no site gets no tracker, so its place stays UNKNOWN exactly as before;
+   * the pose listener is attached but returns at once until a graph arrives.
    *
    * TASK-200 adds the second source: a real site's places, generated from a
    * `DigitalTwin`'s zones and served by the platform. It boots from the DISK
@@ -484,9 +497,12 @@ export class RobotStateManager {
    * local `PLACE_GRAPH_PATH` still wins: it is the sim/bench escape hatch.
    */
   private initPlaceAwareness(): void {
+    // `siteAligned` is only ever claimed for a graph adopted in THIS process; a
+    // value restored from the persisted snapshot is about a graph nobody loaded.
+    delete this.state.location.siteAligned;
+
     const graphPath = appConfig.place.graphPath;
     const twinId = appConfig.place.twinId;
-    if (!graphPath && !twinId) return;
 
     if (graphPath) {
       try {
@@ -501,32 +517,26 @@ export class RobotStateManager {
         );
         return;
       }
-    } else if (twinId) {
-      const source = new PlaceGraphSource({
-        serverUrl: appConfig.serverUrl,
-        twinId,
-        cachePath: appConfig.place.cachePath,
-      });
+    } else {
+      // TASK-328: with neither env var, the robot's places are its SITE's — the
+      // twin it is bound to on the platform (`Robot.twinId`). Lowest precedence:
+      // an explicit twin or file is an operator overriding the binding.
+      const source = twinId
+        ? new PlaceGraphSource({ serverUrl: appConfig.serverUrl, twinId, cachePath: appConfig.place.cachePath })
+        : new PlaceGraphSource({
+            serverUrl: appConfig.serverUrl,
+            robotId: appConfig.robotId,
+            cachePath: robotCachePath(appConfig.place.cachePath, appConfig.robotId),
+          });
       const cached = source.loadCached();
       if (cached) this.adoptPlaceGraph(cached, `${source.cacheFile} (cache)`);
-      else {
+      else if (twinId) {
         console.warn(
           `[RobotStateManager] No cached place graph for twin ${twinId} — place stays UNKNOWN ` +
             'until the platform answers',
         );
       }
-      // Fire-and-forget: nothing waits on it, and a failure leaves the cached
-      // graph (or no graph) exactly as it was.
-      void source
-        .refresh()
-        .then((result) => {
-          if (result.origin === 'server' && result.graph) {
-            this.adoptPlaceGraph(result.graph, source.url);
-          }
-        })
-        .catch(() => {
-          /* refresh() never rejects; this is belt and braces. */
-        });
+      this.startPlaceGraphRefresh(source);
     }
 
     this.unsubscribePose = hardwareClient.onPoseSample((pose) => this.onPoseSample(pose));
@@ -546,6 +556,12 @@ export class RobotStateManager {
    * graph, which is what an operator who just re-surveyed the site expects.
    */
   private adoptPlaceGraph(graph: PlaceGraph, origin: string): void {
+    const key = JSON.stringify(graph);
+    // A periodic refresh that returns the same graph must not reset the tracker:
+    // that would throw away the drift budget every minute for nothing.
+    if (this.placeGraph && key === this.placeGraphKey) return;
+    this.placeGraphKey = key;
+    this.placeUnboundLogged = false;
     this.placeGraph = graph;
     this.placeTracker = new PlaceTracker({
       graph,
@@ -554,14 +570,97 @@ export class RobotStateManager {
     });
     // A new graph is a new frame question, so the answer — and the "we told the
     // operator" latch — are recomputed rather than inherited.
-    this.placeFrame = assessFrameRegistration(graph);
-    this.placeFrameWarned = false;
+    this.assessPlaceFrame();
     const fences = graph.places.filter((p) => p.keepout).length;
     console.log(
       `[RobotStateManager] Place graph loaded: ${graph.places.length} places ` +
         `(${fences} keepout) in frame '${graph.frame.id}' (${origin})`,
     );
-    if (!this.placeFrame.registered) this.warnUnregisteredFrame();
+    // Warn only once the pose frame is actually known: before the sidecar has
+    // answered, a sim would be reported as unregistered hardware.
+    if (hardwareClient.getOdometryFrame() !== null && !this.placeFrame?.registered) this.warnUnregisteredFrame();
+  }
+
+  /**
+   * The frame this robot's pose arrives in (TASK-328). A sidecar that reports
+   * itself as a sim publishes the MJCF world frame, whose origin is the twin's;
+   * anything else — real odometry, or no sidecar yet — is `odom`, which fails
+   * closed.
+   */
+  private currentPoseFrame(): PoseFrame {
+    return hardwareClient.getOdometryFrame()?.kind === 'sim' ? 'twin' : 'odom';
+  }
+
+  /**
+   * (Re)assess whether the loaded graph can be compared with the pose, and
+   * publish the answer as `location.siteAligned`. A new answer resets the
+   * "we told the operator" latch rather than inheriting it.
+   */
+  private assessPlaceFrame(): void {
+    const graph = this.placeGraph;
+    if (!graph) return;
+    const poseFrame = this.currentPoseFrame();
+    this.placeFramePose = poseFrame;
+    this.placeFrame = assessFrameRegistration(graph, { poseFrame });
+    this.placeFrameWarned = false;
+    // True ONLY for a twin-bound graph the pose is registered to: the site map
+    // (TASK-331) plots a robot on the twin only on this claim.
+    this.state.location.siteAligned = graph.frame.twinId !== undefined && this.placeFrame.registered;
+  }
+
+  /**
+   * Refresh a platform-served graph now and on {@link appConfig.place.refreshMs}
+   * thereafter, so a Site change in the UI reaches the robot without a restart.
+   * Fire-and-forget: nothing waits on it, and a failure leaves the cached graph
+   * (or no graph) exactly as it was.
+   */
+  private startPlaceGraphRefresh(source: PlaceGraphSource): void {
+    const tick = (): void => {
+      void source
+        .refresh()
+        .then((result) => {
+          if (result.origin === 'server' && result.graph) {
+            this.adoptPlaceGraph(result.graph, source.url);
+          } else if (result.origin === 'unbound') {
+            if (!this.placeUnboundLogged) {
+              this.placeUnboundLogged = true;
+              console.log(`[RobotStateManager] Robot ${appConfig.robotId} has no site — place stays UNKNOWN`);
+            }
+            this.dropPlaceGraph();
+          }
+        })
+        .catch(() => {
+          /* refresh() never rejects; this is belt and braces. */
+        });
+    };
+    tick();
+    if (appConfig.place.refreshMs > 0) {
+      this.placeRefreshTimer = setInterval(tick, appConfig.place.refreshMs);
+      this.placeRefreshTimer.unref?.();
+    }
+  }
+
+  /**
+   * The platform said the robot has no site any more (TASK-328): forget the
+   * graph, so place and geofence read UNKNOWN rather than naming places at a
+   * site the robot has left.
+   */
+  private dropPlaceGraph(): void {
+    if (!this.placeGraph) return;
+    this.placeGraph = null;
+    this.placeGraphKey = null;
+    this.placeTracker = null;
+    this.placeBelief = null;
+    this.placeFrame = null;
+    this.placeFramePose = null;
+    this.placeFrameWarned = false;
+    this.geofenceState = { enforcement: 'no-map', reason: null };
+    delete this.state.location.siteAligned;
+    if (this.state.location.place != null) {
+      this.state.location.place = null;
+      this.setAgentSafetyState({ place: null });
+    }
+    this.notifyListeners();
   }
 
   /**
@@ -602,6 +701,9 @@ export class RobotStateManager {
     // and keeps driving `location.x/y/heading` — it is the MAP that cannot be
     // compared with it, so the resolver is not consulted at all rather than
     // being consulted and disbelieved. See `agent-mode/place-frame.ts`.
+    // TASK-328: the sidecar says whether it is a sim only once it answers —
+    // re-assess when that (or a sidecar swap) changes what the pose frame is.
+    if (this.currentPoseFrame() !== this.placeFramePose) this.assessPlaceFrame();
     const frameBlocked = this.placeFrame !== null && !this.placeFrame.registered;
     if (frameBlocked) this.warnUnregisteredFrame();
 
@@ -1666,6 +1768,8 @@ export class RobotStateManager {
     // does not outlive the manager that owns the tracker.
     this.unsubscribePose?.();
     this.unsubscribePose = null;
+    if (this.placeRefreshTimer) clearInterval(this.placeRefreshTimer);
+    this.placeRefreshTimer = null;
   }
 
   /**

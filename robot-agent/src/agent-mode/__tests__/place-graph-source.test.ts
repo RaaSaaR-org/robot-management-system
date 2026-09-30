@@ -19,7 +19,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { PlaceGraphSource } from '../place-graph-source.js';
+import { PlaceGraphSource, robotCachePath } from '../place-graph-source.js';
 
 const TWIN_ID = 'twin-abc';
 
@@ -196,5 +196,84 @@ describe('PlaceGraphSource', () => {
     // The robot was re-pointed at a different site without clearing the cache.
     const repointed = makeSource(vi.fn() as unknown as typeof fetch, 'twin-new');
     expect(repointed.loadCached()).toBeNull();
+  });
+
+  describe('bound to a site (TASK-328)', () => {
+    function bindingSource(fetchImpl: typeof fetch): PlaceGraphSource {
+      return new PlaceGraphSource({
+        serverUrl: 'http://localhost:3001/',
+        robotId: 'robot-1',
+        cachePath: robotCachePath(path.join(root, 'place-graph-cache.json'), 'robot-1'),
+        fetchImpl,
+      });
+    }
+
+    function notFound(body: unknown): Response {
+      return { ok: false, status: 404, json: async () => body } as unknown as Response;
+    }
+
+    it('reads the robot\'s places endpoint and caches per robot', async () => {
+      const source = bindingSource((async () => okResponse(graphBody())) as unknown as typeof fetch);
+      expect(source.url).toBe('http://localhost:3001/api/robots/robot-1/places');
+      expect(source.cacheFile).toBe(path.join(root, 'place-graph-cache.robot-robot-1.json'));
+
+      const result = await source.refresh();
+
+      expect(result.origin).toBe('server');
+      expect(result.graph?.frame.twinId).toBe(TWIN_ID);
+      expect(source.loadCached()?.frame.twinId).toBe(TWIN_ID);
+    });
+
+    it('treats 404 "robot has no site" as unbound, not an error, and drops the cache', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(okResponse(graphBody()))
+        .mockResolvedValueOnce(notFound({ error: 'robot has no site' }));
+      const source = bindingSource(fetchImpl as unknown as typeof fetch);
+      await source.refresh();
+      expect(source.loadCached()).not.toBeNull();
+
+      const result = await source.refresh();
+
+      expect(result).toEqual({ graph: null, origin: 'unbound' });
+      expect(source.loadCached()).toBeNull();
+    });
+
+    it('treats any other 404 as the platform being unavailable and keeps the cache', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(okResponse(graphBody()))
+        .mockResolvedValueOnce(notFound({ error: 'Robot not found' }));
+      const source = bindingSource(fetchImpl as unknown as typeof fetch);
+      await source.refresh();
+
+      const result = await source.refresh();
+
+      expect(result.origin).toBe('cache');
+      expect(result.graph?.frame.twinId).toBe(TWIN_ID);
+    });
+
+    it('boots from the disk cache when the server is unreachable', async () => {
+      await bindingSource((async () => okResponse(graphBody())) as unknown as typeof fetch).refresh();
+      const offline = bindingSource((async () => {
+        throw new Error('ECONNREFUSED');
+      }) as unknown as typeof fetch);
+
+      expect(offline.loadCached()?.frame.twinId).toBe(TWIN_ID);
+      const result = await offline.refresh();
+      expect(result.origin).toBe('cache');
+      expect(result.error).toContain('ECONNREFUSED');
+    });
+
+    it('rejects a served graph that names no twin', async () => {
+      const body = graphBody();
+      delete (body.frame as Record<string, unknown>).twinId;
+      const source = bindingSource((async () => okResponse(body)) as unknown as typeof fetch);
+
+      const result = await source.refresh();
+
+      expect(result.origin).toBe('none');
+      expect(result.error).toContain('frame.twinId is missing');
+    });
   });
 });
