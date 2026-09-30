@@ -55,6 +55,12 @@ class VoiceConfig:
     voice: str = "piper_de"
     piper_voice_de: str = "de_DE-thorsten-high"
     piper_voice_en: str = "en_US-lessac-high"
+    # Saar dialect pack (tts/saar_engine.py): HF Space id ("huhn511/saar-tts")
+    # or URL of a locally served app. Empty = the pack stays unavailable, so no
+    # robot calls out to a remote model unless someone configured it to. The
+    # token lives in VOICE_SAAR_TOKEN / HF_TOKEN, never here (GET /config).
+    saar_space: str = ""
+    saar_speaker: str = "P03"
 
     vad_threshold: float = 0.5
     vad_min_speech_ms: int = 250

@@ -33,6 +33,8 @@ import { processSchedulerService } from './services/ProcessSchedulerService.js';
 import { patrolSchedulerService } from './services/PatrolSchedulerService.js';
 import { patrolPhotoCleanupJob } from './jobs/patrol-photo-cleanup.js';
 import { tourTranscriptCleanupJob } from './jobs/tour-transcript-cleanup.js';
+import { ControlLeaseSweeper } from './jobs/control-lease-sweeper.js';
+import { getDefaultControlLeaseService } from './routes/control-lease.routes.js';
 import { MULTI_TENANCY_ENABLED } from './config/features.js';
 
 const PORT = process.env.PORT || 3001;
@@ -91,6 +93,10 @@ async function main() {
   patrolPhotoCleanupJob.startSchedule(1);
   // Host-mode visitor transcripts (TASK-213) — daily, 30 d by default.
   tourTranscriptCleanupJob.startSchedule(24);
+  // Control leases (TASK-318) — fences leases nobody renewed within their TTL,
+  // every renew interval. A no-op tick while CONTROL_LEASES_ENABLED is off.
+  const controlLeaseSweeper = new ControlLeaseSweeper(getDefaultControlLeaseService);
+  controlLeaseSweeper.start();
 
   // Initialize digital-twin build orchestrator (TASK-170) — reaps any scan
   // sessions left stuck in 'processing' from a prior run. No NATS dependency:
@@ -159,6 +165,7 @@ async function main() {
     patrolSchedulerService.stop();
     patrolPhotoCleanupJob.stopSchedule();
     tourTranscriptCleanupJob.stopSchedule();
+    controlLeaseSweeper.stop();
     telemetryIngestionService.stopAll();
     retentionCleanupJob.stopSchedule();
     telemetryCleanupJob.stopSchedule();

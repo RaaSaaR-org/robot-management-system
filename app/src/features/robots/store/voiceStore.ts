@@ -14,6 +14,7 @@ import type {
   VoiceHealth,
   VoiceHistoryEntry,
   VoiceMicActivity,
+  VoicePackListing,
   VoicePipelineState,
   VoiceStatus,
 } from '../types/voice.types';
@@ -46,6 +47,13 @@ export interface VoiceStore {
   connection: Record<string, VoiceConnectionState>;
   health: Record<string, VoiceHealth | null>;
   status: Record<string, VoiceStatus | null>;
+  /** The robot's voice packs (GET /voice/voices), null while unknown */
+  voices: Record<string, VoicePackListing | null>;
+  /**
+   * The pack the operator picked in the composer, per robot. Absent = speak
+   * in the robot's configured pack. Session-only, like the history.
+   */
+  selectedVoice: Record<string, string>;
 
   applyEvent: (robotId: string, event: VoiceEvent) => void;
   addTypedEntry: (robotId: string, text: string, language?: string) => void;
@@ -53,6 +61,8 @@ export interface VoiceStore {
   setHealth: (robotId: string, health: VoiceHealth | null) => void;
   setStatus: (robotId: string, status: VoiceStatus | null) => void;
   setPaused: (robotId: string, paused: boolean) => void;
+  setVoices: (robotId: string, listing: VoicePackListing | null) => void;
+  setSelectedVoice: (robotId: string, voiceId: string) => void;
   clearHistory: (robotId: string) => void;
 }
 
@@ -184,6 +194,8 @@ export const useVoiceStore = createStore<VoiceStore>(
     connection: {},
     health: {},
     status: {},
+    voices: {},
+    selectedVoice: {},
 
     applyEvent: (robotId, event) =>
       set((state) => {
@@ -238,6 +250,16 @@ export const useVoiceStore = createStore<VoiceStore>(
       set((state) => {
         state.byRobot[robotId] ??= emptyVoiceRobotState();
         state.byRobot[robotId].paused = paused;
+      }),
+
+    setVoices: (robotId, listing) =>
+      set((state) => {
+        state.voices[robotId] = listing;
+      }),
+
+    setSelectedVoice: (robotId, voiceId) =>
+      set((state) => {
+        state.selectedVoice[robotId] = voiceId;
       }),
 
     clearHistory: (robotId) =>

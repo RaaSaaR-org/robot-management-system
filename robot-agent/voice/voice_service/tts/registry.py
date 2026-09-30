@@ -114,6 +114,26 @@ VOICE_PACKS: tuple[VoicePack, ...] = (
         realtime=True,
         options={"piper_language": "en"},
     ),
+    # The first dialect pack, and the reason this registry exists. Every field
+    # below is a caveat made first-class instead of a footnote:
+    # - licence: the finetune inherits CC-BY-NC-4.0 from its F5-TTS-German base
+    #   weights (the Saar-Voice data itself is CC BY 4.0), so it is an internal
+    #   and demo voice — commercial=False is what the UI shows a customer.
+    # - realtime: RTF ~1.95 warm on Apple MPS; the pipeline widens its synthesis
+    #   timeout for it, and it must never become the default by accident.
+    # - the dialect text stage lives in SaarVoiceEngine.prepare(), so the agent
+    #   keeps writing standard German and only this voice speaks Saarländisch.
+    # The reference speaker (VOICE_SAAR_SPEAKER, default P03) is a pack option
+    # and deliberately not a /say parameter: other packs could not honour it.
+    VoicePack(
+        id="saar",
+        label="Saarländisch (F5 finetune)",
+        engine="saar",
+        languages=("de",),
+        licence="CC-BY-NC-4.0 (F5-TTS-German base weights)",
+        commercial=False,
+        realtime=False,
+    ),
 )
 
 
@@ -126,8 +146,15 @@ def _make_piper(config: VoiceConfig, pack: VoicePack) -> TTSEngine:
     return PiperEngine(config, voice_name=config.piper_voice_for(language))
 
 
+def _make_saar(config: VoiceConfig, pack: VoicePack) -> TTSEngine:
+    from .saar_engine import SaarVoiceEngine
+
+    return SaarVoiceEngine(config, space=config.saar_space, speaker=config.saar_speaker)
+
+
 ENGINE_FACTORIES: dict[str, EngineFactory] = {
     "piper": _make_piper,
+    "saar": _make_saar,
 }
 
 

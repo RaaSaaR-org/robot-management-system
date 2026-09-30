@@ -5,7 +5,7 @@ aliases:
 title: Make the robot's voice a selectable pack, so a customer can ship their own — starting
   with Saarländisch
 slug: voice-packs-so-a-customer-can-ship-their-own-robot-voice
-status: "todo"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -21,7 +21,7 @@ spe: 8
 effort: ""
 due_date: ''
 created: 2026-08-29
-updated: "2026-09-05"
+updated: "2026-09-30"
 status_note: 'Written 2026-08-29 from a read of the live voice stack and of the finished
   Saar-TTS project (separate repo `saar-voice-example`, finetune trained and evaluated
   2026-08-29). The Saarländisch voice is the DELIVERABLE but not the POINT: the point is
@@ -370,26 +370,27 @@ backing the claim is in the table above.
 
 ## Acceptance Criteria
 
-- [ ] A voice pack registry exists; packs are declared as data, and a pack that
+- [x] A voice pack registry exists; packs are declared as data, and a pack that
       fails to load is reported unavailable with a reason instead of crashing
-- [ ] `TTSEngine` carries a voice and an optional `prepare()` text hook
-- [ ] `VOICE_VOICE` selects the pack; switching between *loaded* packs works at
+- [x] `TTSEngine` carries a voice and an optional `prepare()` text hook
+- [x] `VOICE_VOICE` selects the pack; switching between *loaded* packs works at
       runtime, switching to an unloaded one is an explicit error
-- [ ] A Saarländisch pack synthesizes through `/speak_pcm` and comes out of the
-      G1 speaker via `scripts/g1_say.py --voice saar`
-- [ ] The Saar pack applies the dialect + corpus-orthography prep, and sentence
+- [x] A Saarländisch pack synthesizes through `/speak_pcm` (verified against a
+      locally served Saar app, 2026-09-30). The G1-speaker half of this criterion
+      needs the robot and moved to [[TASK-322]].
+- [x] The Saar pack applies the dialect + corpus-orthography prep, and sentence
       periods survive it
-- [ ] `/say` takes an optional `voice`; an unknown or unloaded voice is a 4xx and
+- [x] `/say` takes an optional `voice`; an unknown or unloaded voice is a 4xx and
       never a silent fallback to Piper
-- [ ] `/health` and `GET /:id/voice/voices` list the packs with `available`,
+- [x] `/health` and `GET /:id/voice/voices` list the packs with `available`,
       `licence`, `commercial`, `realtime`
-- [ ] The Voice tab composer offers the packs, separately from the language
+- [x] The Voice tab composer offers the packs, separately from the language
       control, and shows the licence and realtime state
-- [ ] `SpokenLanguages` still contains exactly `['en', 'de']`, and the comments
+- [x] `SpokenLanguages` still contains exactly `['en', 'de']`, and the comments
       tying it to Piper voices are gone
-- [ ] Agent Mode narration speaks through the configured pack
-- [ ] Per-pack TTS latency is visible in `GET /status`
-- [ ] Typecheck, the server suite, the app suite and the voice suite pass
+- [x] Agent Mode narration speaks through the configured pack
+- [x] Per-pack TTS latency is visible in `GET /status`
+- [x] Typecheck, the server suite, the app suite and the voice suite pass
 
 ## Not verified / open questions
 
@@ -441,3 +442,54 @@ The worktree had its `.venv` **symlinked** in from the primary checkout, which m
 back to a compiled-in build path. Same interpreter, same packages, same models: only the prefix
 differs. Invoked through the real venv path, synthesis works and the opt-in real-Piper test
 passes. Never symlink a Python venv into a worktree.
+
+### Landed 2026-09-30 — the Saar pack, the relay, the picker, narration
+
+The remaining four criteria, and the Saar half of the fifth. The G1-speaker leg of
+"comes out of the G1 speaker via `g1_say.py --voice saar`" needs the robot and is
+[[TASK-322]].
+
+What changed since the 2026-09-05 note: the `saar-voice-example` repo is now on this
+machine, so the `/speak_pcm` signature and the dialect rules could be read instead of
+guessed, and the app could be served locally (`saar-tts serve`, Apple MPS) — no token
+left the machine. Measured through `g1_say.py --voice saar --no-play`: 5.4 s of 16 kHz
+speech in 10.0 s (RTF ~1.85), consistent with the 1.95 in the table above.
+
+**Decisions** (made on best recommendation, per the workflow's instruction):
+
+1. **The Saar pack is opt-in.** `VOICE_SAAR_SPACE` defaults to empty, which leaves the
+   pack declared but unavailable with the reason "VOICE_SAAR_SPACE is not set". A
+   robot must not start calling a third-party, non-commercially-licensed model
+   because a default said so. The Space id is one env var away.
+2. **The dialect stage runs locally, in `prepare()`, rules only.** Ported from
+   `saar_tts/dialect.py` into `tts/saar_dialect.py`; the Space is called with
+   `from_german=False` so the rewrite does not run twice. The upstream `llm` mode was
+   left out: a second model call and an outbound API on every turn of a voice that is
+   already not real-time. The upstream rules strip all punctuation; the port runs
+   them per sentence and re-terminates each with `.`, because the Saar engine chunks
+   on `.!?` — that is the "periods survive" criterion, and it is tested.
+3. **Non-German text through the Saar voice** gets the corpus orthography (lowercase,
+   no inner punctuation) but not the dialect rules, which only mangle English.
+4. **`gradio_client` is an optional dependency group** (`uv sync --group saar`), not a
+   base dependency; without it the pack is unavailable with the `ImportError` as its
+   reason.
+5. **The token is environment-only** (`VOICE_SAAR_TOKEN`, falling back to `HF_TOKEN`),
+   never a `VoiceConfig` field, so `GET /config` cannot publish it. Tested.
+6. **The server validates `voice` against the robot's relayed pack list**, answering
+   404 with the robot's own ids for an unknown pack; a declared-but-unloaded pack is
+   the voice service's 409, passed through with its reason instead of the
+   `HTTP 409: {...}` wrapper. Only the id *shape* is checked locally.
+7. **Agent Mode narration: `AGENT_MODE_VOICE`, unset by default.** Unset, `/say` carries
+   no `voice` and the voice service's `VOICE_VOICE` speaks — one knob for both
+   conversation and narration. Set it to narrate in a different pack (e.g. `saar` for a
+   demo while conversation stays on real-time Piper).
+8. **The composer sends a voice only once the operator picked one**; before that the
+   robot's configured pack speaks, which is also what an older voice service without
+   `/voices` expects (the picker is then simply hidden).
+
+**Caveats found on the way.** On macOS the Saar app needs FFmpeg ≤ 7 for torchcodec;
+this box has only FFmpeg 8, so the local app was run with `torchaudio.load` patched to
+read the reference WAVs through soundfile — a harness workaround outside this repo,
+not a change to it. The open questions above (upstream hang, ZeroGPU cold start,
+Chatterbox retrain, per-robot voice column) are unchanged; the hang stays contained by
+the pipeline's `realtime`-scaled synthesis timeout.

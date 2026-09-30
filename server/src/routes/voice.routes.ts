@@ -42,8 +42,12 @@ async function resolveVoiceTargets(robotId: string): Promise<VoiceTargets | null
 
 function respondProxyError(res: Response, error: unknown, action: string): void {
   if (error instanceof HttpClientError && error.statusCode) {
-    // Upstream answered with an error (e.g. 400 missing text) — pass it through.
-    return void res.status(error.statusCode).json({ error: error.message });
+    // Upstream answered with an error (e.g. 400 missing text, 409 voice pack
+    // not loaded) — pass it through, with the voice service's own reason when
+    // it sent one rather than the "HTTP 409: {...}" wrapper around it.
+    const body = error.responseBody as { error?: unknown } | undefined;
+    const reason = typeof body?.error === 'string' ? body.error : error.message;
+    return void res.status(error.statusCode).json({ error: reason });
   }
   if (error instanceof HttpClientError) {
     return void res.status(502).json({ error: 'Voice service unreachable' });
@@ -92,9 +96,53 @@ voiceRoutes.get('/:id/voice/status', async (req: Request, res: Response) => {
   }
 });
 
+/** One voice pack as the voice service describes it (tts/registry.py). */
+interface VoicePackEntry {
+  id: string;
+  label: string;
+  engine: string;
+  languages: string[];
+  licence: string;
+  commercial: boolean;
+  realtime: boolean;
+  available: boolean;
+  reason: string | null;
+}
+
+interface VoicesResponse {
+  active: string;
+  available: boolean;
+  reason: string | null;
+  voices: VoicePackEntry[];
+}
+
+// Shape check only. Which ids exist is the voice service's answer, never a
+// list kept here — a second hardcoded union is exactly what TASK-229 removed.
+const VOICE_ID_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/**
+ * GET /:id/voice/voices — The robot's voice packs, relayed from the voice
+ * service so the frontend never hardcodes one. Each pack carries its licence,
+ * `commercial`, `realtime`, and `available` with the reason when it is not.
+ */
+voiceRoutes.get('/:id/voice/voices', async (req: Request, res: Response) => {
+  try {
+    const targets = await resolveVoiceTargets(req.params.id);
+    if (!targets) return res.status(404).json({ error: 'Robot not found' });
+    const client = new HttpClient(targets.serviceUrl, HTTP_TIMEOUTS.SHORT);
+    res.json(await client.get<VoicesResponse>('/voices'));
+  } catch (error) {
+    respondProxyError(res, error, 'list voice packs');
+  }
+});
+
 /**
  * POST /:id/voice/say — Speak typed text through the robot speaker.
- * Body: {text: string, language?: 'de'|'en'}. Upstream answers 202 {accepted}.
+ * Body: {text: string, language?: 'de'|'en', voice?: string}. Upstream answers
+ * 202 {accepted, voice}. `language` says what the text is, `voice` which pack
+ * speaks it — separate axes, so 'saar' is a voice and never a language.
+ * An unknown voice is 404 here; a declared one that did not load is the voice
+ * service's 409 passed through. Neither ever falls back to the default pack.
  */
 voiceRoutes.post('/:id/voice/say', async (req: Request, res: Response) => {
   try {
@@ -109,12 +157,32 @@ voiceRoutes.post('/:id/voice/say', async (req: Request, res: Response) => {
     if (language !== undefined && language !== 'de' && language !== 'en') {
       return res.status(400).json({ error: "language must be 'de' or 'en'" });
     }
+    const voice = req.body?.voice;
+    if (voice !== undefined && (typeof voice !== 'string' || !VOICE_ID_PATTERN.test(voice))) {
+      return res.status(400).json({ error: 'voice must be a voice pack id' });
+    }
 
     const targets = await resolveVoiceTargets(req.params.id);
     if (!targets) return res.status(404).json({ error: 'Robot not found' });
+
+    if (voice !== undefined) {
+      // Validate against the robot's own pack list, so the answer names the
+      // packs this robot really has instead of a list that drifts.
+      const listing = await new HttpClient(targets.serviceUrl, HTTP_TIMEOUTS.SHORT).get<VoicesResponse>(
+        '/voices'
+      );
+      const known = (listing.voices ?? []).map((pack) => pack.id);
+      if (!known.includes(voice)) {
+        return res.status(404).json({
+          error: `unknown voice pack '${voice}'`,
+          voices: known,
+        });
+      }
+    }
+
     // TTS synthesis is queued upstream (202), but leave headroom over SHORT.
     const client = new HttpClient(targets.serviceUrl, HTTP_TIMEOUTS.MEDIUM);
-    res.status(202).json(await client.post('/say', { text, language }));
+    res.status(202).json(await client.post('/say', { text, language, voice }));
   } catch (error) {
     respondProxyError(res, error, 'send say');
   }
