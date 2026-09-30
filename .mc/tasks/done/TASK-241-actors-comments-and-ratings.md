@@ -5,7 +5,7 @@ aliases:
 title: Actors, comments and ratings — let people and agents leave a judgement with
   evidence on datasets, models, episodes and runs
 slug: actors-comments-and-ratings
-status: review
+status: done
 priority: 2
 owner: huhn511
 projects: []
@@ -216,16 +216,16 @@ row), the model detail page from TASK-238, and the training job detail.
 
 ## Acceptance Criteria
 
-- [ ] A user can comment and rate on all five subject types
-- [ ] An agent rating without evidence is rejected with a 400 that says why
-- [ ] An agent rating with evidence pointing at a non-existent id is rejected
-- [ ] Evidence chips link to the referenced run / validation / dataset
-- [ ] `summary` reports human and agent means separately
-- [ ] One rating per actor per subject; a second PUT updates rather than duplicates
-- [ ] Soft-deleting a comment with replies keeps the thread readable
-- [ ] The feed returns activity across subject types, newest first
-- [ ] Each agent rating produces a `ComplianceLog` entry with its evidence
-- [ ] A comment on a non-existent subject is rejected
+- [x] A user can comment and rate on all five subject types
+- [x] An agent rating without evidence is rejected with a 400 that says why
+- [x] An agent rating with evidence pointing at a non-existent id is rejected
+- [x] Evidence chips link to the referenced run / validation / dataset
+- [x] `summary` reports human and agent means separately
+- [x] One rating per actor per subject; a second PUT updates rather than duplicates
+- [x] Soft-deleting a comment with replies keeps the thread readable
+- [x] The feed returns activity across subject types, newest first
+- [x] Each agent rating produces a `ComplianceLog` entry with its evidence
+- [x] A comment on a non-existent subject is rejected
 
 ## Test Strategy
 
