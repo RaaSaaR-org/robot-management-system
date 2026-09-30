@@ -16,7 +16,7 @@ spe: 5
 effort: "medium"
 due_date: ""
 created: "2026-09-30"
-updated: "2026-09-30"
+updated: "2026-10-01"
 ---
 
 # roboctl move does not move a sidecar-backed robot
