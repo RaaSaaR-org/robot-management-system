@@ -3,7 +3,7 @@ id: "TASK-319"
 aliases: []
 title: "The teleop console acquires, renews and releases a control lease"
 slug: "the-teleop-console-acquires-renews-and-releases-a-control-lease"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []
