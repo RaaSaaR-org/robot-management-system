@@ -3,7 +3,7 @@ id: "TASK-336"
 aliases: []
 title: "roboctl move does not move a sidecar-backed robot"
 slug: "roboctl-move-does-not-move-a-sidecar-backed-robot"
-status: "backlog"
+status: "todo"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -12,8 +12,8 @@ tags: [core, robot-agent]
 sprint: ""
 parent: ""
 depends_on: []
-spe:
-effort: ""
+spe: 5
+effort: "medium"
 due_date: ""
 created: "2026-09-30"
 updated: "2026-09-30"
@@ -51,6 +51,21 @@ it honestly.
 - TASK-329's acceptance criterion "roboctl move CHARGING-A drives the sim robot to that
   place's centroid" holds only for the kinematic SimBot, not the MuJoCo G1.
 
+## Decision
+
+Recorded in `docs/records/TASK-336-roboctl-move-does-not-move-a-sidecar-backed-robot.md`.
+
+- On a sidecar-backed robot (MuJoCo `sim_g1_dds` or a real G1 — the pose comes from the
+  hardware sidecar) `move` routes to the same real-locomotion path Agent Mode's `goto`
+  uses: navigator + block executor over `LocoClient`, with place resolution and the
+  keepout/geofence checks. The command reports `completed` only when the walk has
+  finished; until then it is `executing`, and it ends `failed` with the walk's reason.
+- If the robot's frame is not registered to its twin (`assessFrameRegistration`), or it
+  has no place graph, `move` refuses with a clear error before any motion.
+- The kinematic `SimulationEngine` path stays for pure-sim robots.
+- Rejected: refusing `move` on every sidecar-backed robot — Agent Mode already proves
+  the walk path works.
+
 ### Robot Agent
 
 - When a hardware sidecar provides the pose, `move` should hand the resolved target to
@@ -71,7 +86,15 @@ it honestly.
 - [ ] On the MuJoCo G1, `roboctl move "CHARGING-A"` either walks the robot into
       `CHARGING-A` (location.place updates) or fails with an explicit message — never a
       `completed` with no motion.
+- [ ] On a sidecar-backed robot `move` (and `charge`, `return_home`) runs through the
+      Agent Mode walk path and the command is `completed` only after the walk finished;
+      a walk that ends short leaves the command `failed` with the reason.
+- [ ] On an unregistered frame (or with no place graph) `move` fails with a clear error
+      and nothing moves.
+- [ ] `stop` aborts a running move walk.
+- [ ] `roboctl move` waits for an `executing` command to end and prints the final status.
 - [ ] The kinematic SimBot behaviour is unchanged.
+- [ ] Unit tests cover the executor routing and the controller's walk.
 
 ## Test Strategy
 
