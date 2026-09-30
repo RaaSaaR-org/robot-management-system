@@ -992,17 +992,6 @@ export function createKeyboardTeleopWebSocket(
         return;
       }
 
-      // ---- stand the base back up ------------------------------------------
-      // A LOCOMOTION command, so it lives on the socket that carries the other
-      // ones rather than behind a REST call. That is not a style choice: the
-      // only other route to this FSM is Agent Mode's `posture stand`, and Agent
-      // Mode refuses every command while `controlOwnerLock` is held by teleop —
-      // which it is, for as long as this socket is open. An operator in a
-      // headset therefore had to LEAVE the session to re-arm the base and then
-      // come back, and nothing in the headset told them so.
-      //
-      // Gated by the latch like every other motion command: a robot is damped
-      // after an E-Stop precisely because somebody stopped it.
       if ('bind' in msg) {
         // Flag off: ignored, exactly as any unknown frame always was.
         if (leaseRequired) void handleBind(msg.bind);
@@ -1016,6 +1005,17 @@ export function createKeyboardTeleopWebSocket(
         return;
       }
 
+      // ---- stand the base back up ------------------------------------------
+      // A LOCOMOTION command, so it lives on the socket that carries the other
+      // ones rather than behind a REST call. That is not a style choice: the
+      // only other route to this FSM is Agent Mode's `posture stand`, and Agent
+      // Mode refuses every command while `controlOwnerLock` is held by teleop —
+      // which it is, for as long as this socket is open. An operator in a
+      // headset therefore had to LEAVE the session to re-arm the base and then
+      // come back, and nothing in the headset told them so.
+      //
+      // Gated by the latch like every other motion command: a robot is damped
+      // after an E-Stop precisely because somebody stopped it.
       if ('posture' in msg) {
         if (msg.posture !== 'stand') {
           sendError('bad_posture', `unknown posture ${JSON.stringify(msg.posture)}; only "stand" is offered here`);
