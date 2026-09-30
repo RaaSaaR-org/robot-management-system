@@ -73,3 +73,8 @@ Recorded in `docs/records/TASK-272-build-page-deletes.md`. In short:
 - **Audit.** Creates were not recorded anywhere, so "the same way creates are recorded" had nothing to copy. One helper (`server/src/services/buildAudit.ts`) now records every create and every destructive act on these five entities in the compliance log.
 - **AC 3 was already met** on `main` before this task (`DeploymentService.cancelDeployment` stores `cancelled` since TASK-299); it is covered by the existing service test and needed no change.
 - **The rollback bug** was the literal `packageId: 'rollback'` fallback plus the route ignoring its own `:id`; the rollback row now belongs to the package in the URL.
+
+## Review (2026-09-30)
+
+- **Live check.** A scratch server (SQLite, `AUTH_DISABLED`, `NODE_ENV=development`) was driven over HTTP: a rollback of an approved package on a robot with no successful deployment answers 200 and is filed under that package (the old foreign-key failure); an unknown package answers 404. Package delete archived a rolled-back package and deleted a fresh one. A created round refused delete (409), cancelled (200), refused a second cancel (409), then deleted. A model with a pending deployment refused archive (409); after the deployment was deleted, it archived. A listing unpublished (out of the browse), published again and deleted. Each act wrote a `platform-build` `access_audit` compliance entry. The pages' confirms and toasts are covered by component tests, not clicked in a browser.
+- **Fix in review.** A seller's publish or unpublish of a `pending_review` or `suspended` listing now answers 409 (super-admin only), so neither act can bypass moderation; see decision 6 in the record.
