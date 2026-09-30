@@ -263,6 +263,9 @@ export class SocialService {
       case 'training_job':
         if (!(await this.repo.trainingJobExists(subjectId))) throw missing();
         break;
+      case 'experiment':
+        if (!(await this.repo.experimentExists(subjectId))) throw missing();
+        break;
     }
     return { subjectType, subjectId, episodeIndex };
   }

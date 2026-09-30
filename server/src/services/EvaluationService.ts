@@ -48,6 +48,9 @@ export interface RecordEpisodeDto {
 
 export type EvaluationPeriod = '24h' | '7d' | '30d';
 
+/** Where a rollout ran: on a robot, or in a simulation job (TASK-242). */
+export type EpisodeSource = 'real' | 'sim';
+
 export interface EpisodeFilters {
   robotId?: string;
   modelVersion?: string;
@@ -117,9 +120,16 @@ export class EvaluationService {
   /**
    * Build where clause from common filters
    */
-  private buildWhere(filters: { robotId?: string; modelVersion?: string; period?: EvaluationPeriod; success?: boolean }) {
+  private buildWhere(filters: {
+    robotId?: string;
+    modelVersion?: string;
+    period?: EvaluationPeriod;
+    success?: boolean;
+    source?: EpisodeSource;
+  }) {
     const where: Record<string, unknown> = {};
     if (filters.robotId) where.robotId = filters.robotId;
+    if (filters.source) where.source = filters.source;
     if (filters.modelVersion) where.modelVersion = filters.modelVersion;
     if (filters.period) {
       where.startedAt = { gte: this.getPeriodStart(filters.period) };
@@ -202,9 +212,10 @@ export class EvaluationService {
   async getSuccessRate(
     robotId?: string,
     modelVersion?: string,
-    period: EvaluationPeriod = '24h'
+    period: EvaluationPeriod = '24h',
+    source?: EpisodeSource
   ): Promise<SuccessRateResult> {
-    const where = this.buildWhere({ robotId, modelVersion, period });
+    const where = this.buildWhere({ robotId, modelVersion, period, source });
 
     const totalEpisodes = await prisma.evaluationEpisode.count({ where });
     const successfulEpisodes = await prisma.evaluationEpisode.count({

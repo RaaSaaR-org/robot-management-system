@@ -85,6 +85,8 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   // TASK-241 comments and ratings
   'Comment',
   'Rating',
+  // TASK-242 experiments (ExperimentArm is reached only through its experiment)
+  'Experiment',
 ]);
 
 const globalForPrisma = globalThis as unknown as {

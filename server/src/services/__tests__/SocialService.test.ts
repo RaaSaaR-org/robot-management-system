@@ -34,6 +34,7 @@ class FakeRepo {
   datasets = new Map<string, DatasetFacts>();
   modelVersions = new Set<string>();
   trainingJobs = new Set<string>();
+  experiments = new Set<string>();
   evalEpisodes = new Set<string>();
   validations = new Set<string>();
   rewards = new Set<string>();
@@ -119,6 +120,9 @@ class FakeRepo {
   async datasetExists(id: string) {
     return this.datasets.has(id);
   }
+  async experimentExists(id: string) {
+    return this.experiments.has(id);
+  }
   async existingEvaluationEpisodeIds(ids: string[]) {
     return new Set(ids.filter((id) => this.evalEpisodes.has(id)));
   }
@@ -143,6 +147,7 @@ beforeEach(() => {
   repo.datasets.set('view-1', { id: 'view-1', kind: 'view', demonstrationCount: 2 });
   repo.modelVersions.add('mv-1');
   repo.trainingJobs.add('tj-1');
+  repo.experiments.add('exp-1');
   repo.evalEpisodes.add('ee-1');
   repo.evalEpisodes.add('ee-2');
   repo.validations.add('s2r-1');
@@ -171,6 +176,7 @@ describe('subjects', () => {
     ['model_version', 'mv-1', undefined],
     ['episode', 'ds-1', 2],
     ['training_job', 'tj-1', undefined],
+    ['experiment', 'exp-1', undefined],
   ];
 
   it.each(all)('a user can comment and rate on %s', async (type, id, ep) => {
@@ -187,12 +193,13 @@ describe('subjects', () => {
     await expectCode(svc.resolveSubject('dataset', 'nope', undefined), 404, 'SOCIAL_SUBJECT_NOT_FOUND');
     await expectCode(svc.resolveSubject('model_version', 'nope', undefined), 404, 'SOCIAL_SUBJECT_NOT_FOUND');
     await expectCode(svc.resolveSubject('training_job', 'nope', undefined), 404, 'SOCIAL_SUBJECT_NOT_FOUND');
+    await expectCode(svc.resolveSubject('experiment', 'nope', undefined), 404, 'SOCIAL_SUBJECT_NOT_FOUND');
     await expectCode(svc.resolveSubject('dataset_view', 'ds-1', undefined), 404, 'SOCIAL_SUBJECT_NOT_FOUND');
     await expectCode(svc.resolveSubject('episode', 'ds-1', 3), 404, 'SOCIAL_SUBJECT_NOT_FOUND');
   });
 
   it('rejects malformed subjects', async () => {
-    await expectCode(svc.resolveSubject('experiment', 'x', undefined), 400, 'SOCIAL_SUBJECT_TYPE_INVALID');
+    await expectCode(svc.resolveSubject('robot', 'x', undefined), 400, 'SOCIAL_SUBJECT_TYPE_INVALID');
     await expectCode(svc.resolveSubject('episode', 'ds-1', undefined), 400, 'SOCIAL_SUBJECT_INVALID');
     await expectCode(svc.resolveSubject('episode', 'ds-1', -1), 400, 'SOCIAL_SUBJECT_INVALID');
     await expectCode(svc.resolveSubject('dataset', 'ds-1', 1), 400, 'SOCIAL_SUBJECT_INVALID');
