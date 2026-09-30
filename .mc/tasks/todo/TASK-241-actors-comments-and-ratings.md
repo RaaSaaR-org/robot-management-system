@@ -5,7 +5,7 @@ aliases:
 title: Actors, comments and ratings — let people and agents leave a judgement with
   evidence on datasets, models, episodes and runs
 slug: actors-comments-and-ratings
-status: in-progress
+status: review
 priority: 2
 owner: huhn511
 projects: []
