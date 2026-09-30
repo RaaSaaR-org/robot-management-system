@@ -14,6 +14,7 @@
 
 import type { IncomingMessage } from 'http';
 import { DEFAULT_TENANT_ID } from '../config/features.js';
+import type { ControlLeaseTransition } from '../services/ControlLeaseService.js';
 
 export interface SocketIdentity {
   userId: string;
@@ -64,4 +65,26 @@ export function mayObserveTenant(identity: SocketIdentity | null | undefined, te
   if (identity.role === 'super-admin') return true;
   if (tenantId === null || identity.tenantId === null) return true;
   return identity.tenantId === tenantId;
+}
+
+/**
+ * Deliver one control-lease transition to the sockets allowed to see it:
+ * identified, and of the robot's tenant. The tenant is routing only — the
+ * payload is the public event, which by construction carries no lease secret.
+ */
+export function deliverControlLeaseTransition<T extends object>(
+  clients: Iterable<T>,
+  identities: WeakMap<T, SocketIdentity>,
+  transition: ControlLeaseTransition,
+  send: (client: T, message: string) => void
+): number {
+  const message = JSON.stringify({ ...transition.event, timestamp: Date.now() });
+  let delivered = 0;
+  for (const client of clients) {
+    if (mayObserveTenant(identities.get(client), transition.tenantId)) {
+      send(client, message);
+      delivered++;
+    }
+  }
+  return delivered;
 }

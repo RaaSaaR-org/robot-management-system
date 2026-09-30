@@ -24,11 +24,10 @@ import { twinZoneService } from '../services/TwinZoneService.js';
 import { agentModeService } from '../services/AgentModeService.js';
 import { authService } from '../services/AuthService.js';
 import { onControlLeaseTransition } from '../services/controlLeaseEvents.js';
-import type { ControlLeaseTransition } from '../services/ControlLeaseService.js';
 import {
+  deliverControlLeaseTransition,
   identityFromToken,
   identityFromUpgrade,
-  mayObserveTenant,
   type AccessTokenVerifier,
   type SocketIdentity,
 } from './socketIdentity.js';
@@ -84,24 +83,6 @@ function broadcast(clients: Set<WebSocket>, message: string): void {
 const verifyAccessToken: AccessTokenVerifier = (token) => authService.verifyAccessToken(token);
 
 /**
- * Deliver one control-lease transition (TASK-318) to the sockets allowed to see
- * it: identified, and of the robot's tenant. The tenant is routing only — the
- * payload is the public event, which by construction carries no lease secret.
- */
-export function deliverControlLeaseTransition(
-  clients: Set<WebSocket>,
-  identities: WeakMap<WebSocket, SocketIdentity>,
-  transition: ControlLeaseTransition
-): void {
-  const message = JSON.stringify({ ...transition.event, timestamp: Date.now() });
-  clients.forEach((client) => {
-    if (mayObserveTenant(identities.get(client), transition.tenantId)) {
-      safeSend(client, message, clients);
-    }
-  });
-}
-
-/**
  * Setup WebSocket server for real-time communication
  */
 export function setupWebSocket(server: Server): void {
@@ -134,8 +115,12 @@ export function setupWebSocket(server: Server): void {
   }, HEARTBEAT_INTERVAL_MS);
 
   // Clean up interval when server closes
+  // Control-lease transitions (TASK-318) go only to identified sockets of the
+  // robot's tenant — they name users, unlike everything broadcast below.
   const stopLeaseEvents = onControlLeaseTransition((transition) =>
-    deliverControlLeaseTransition(clients, clientIdentity, transition)
+    deliverControlLeaseTransition(clients, clientIdentity, transition, (client, message) =>
+      safeSend(client, message, clients)
+    )
   );
 
   wss.on('close', () => {
