@@ -83,7 +83,7 @@ describe('resolvePlaceDestination', () => {
   });
 
   it('answers null for a name that is no place', () => {
-    expect(resolvePlaceDestination('Warehouse A', PLACES)).toBeNull();
+    expect(resolvePlaceDestination('Loading Bay', PLACES)).toBeNull();
     expect(resolvePlaceDestination('  ', PLACES)).toBeNull();
   });
 
@@ -139,9 +139,9 @@ describe('moveToLocation', () => {
 
   it('lists the known places for an unknown name', async () => {
     stub({ places: PLACES });
-    const result = await move({ place: 'Warehouse A' });
+    const result = await move({ place: 'Loading Bay' });
     expect(result.success).toBe(false);
-    expect(result.message).toContain('Unknown place "Warehouse A"');
+    expect(result.message).toContain('Unknown place "Loading Bay"');
     expect(result.message).toContain('CHARGING-A');
     expect(moves).toHaveLength(0);
   });

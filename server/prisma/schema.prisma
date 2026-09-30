@@ -527,7 +527,7 @@ model Zone {
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
-  // Tenant-qualified (TASK-288): "Warehouse A" on floor 1 is a default zone
+  // Tenant-qualified (TASK-288): "Hall A" on floor 1 is a default zone
   // name, so a global unique made the second tenant to create one collide.
   @@unique([tenantId, name, floor])
   @@index([floor])

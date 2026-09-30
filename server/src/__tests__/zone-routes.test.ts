@@ -62,7 +62,7 @@ function createApp() {
 
 const MOCK_ZONE = {
   id: 'zone-001',
-  name: 'Warehouse A',
+  name: 'Hall A',
   floor: '1',
   type: 'storage',
   bounds: { x: 0, y: 0, width: 10, height: 10 },
@@ -94,7 +94,7 @@ describe('Zone Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.zones).toHaveLength(1);
-      expect(response.body.zones[0].name).toBe('Warehouse A');
+      expect(response.body.zones[0].name).toBe('Hall A');
       expect(mockZoneService.getZones).toHaveBeenCalledWith(
         {},
         { page: 1, pageSize: 100 }
@@ -212,13 +212,13 @@ describe('Zone Routes', () => {
 
   describe('GET /api/zones/named-locations', () => {
     it('returns derived named locations', async () => {
-      const locations = { 'Warehouse A': { x: 5, y: 5, floor: '1' } };
+      const locations = { 'Hall A': { x: 5, y: 5, floor: '1' } };
       mockZoneService.getNamedLocations.mockResolvedValue(locations);
 
       const response = await request(app).get('/api/zones/named-locations');
 
       expect(response.status).toBe(200);
-      expect(response.body.locations['Warehouse A']).toEqual({ x: 5, y: 5, floor: '1' });
+      expect(response.body.locations['Hall A']).toEqual({ x: 5, y: 5, floor: '1' });
       expect(mockZoneService.getNamedLocations).toHaveBeenCalledTimes(1);
     });
 
@@ -300,7 +300,7 @@ describe('Zone Routes', () => {
       mockZoneService.createZone.mockResolvedValue(MOCK_ZONE);
 
       const body = {
-        name: 'Warehouse A',
+        name: 'Hall A',
         floor: '1',
         type: 'storage',
         bounds: { x: 0, y: 0, width: 10, height: 10 },

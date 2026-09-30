@@ -539,8 +539,8 @@ export class RobotStateManager {
     }
 
     this.unsubscribePose = hardwareClient.onPoseSample((pose) => this.onPoseSample(pose));
-    // The resolver now owns the robot's position, so the 10 Hz simulated zone
-    // writer stands down as soon as a real pose has arrived. See
+    // The resolver now owns the robot's position, so the simulation stops naming
+    // its arrival place as soon as a real pose has arrived. See
     // `SimulationEngine.setPoseAuthority`.
     this.simulation.setPoseAuthority(() => this.placeBelief?.poseM != null);
   }
