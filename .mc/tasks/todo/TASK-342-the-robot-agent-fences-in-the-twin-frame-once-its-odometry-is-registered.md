@@ -3,7 +3,7 @@ id: "TASK-342"
 aliases: []
 title: "The robot agent fences in the twin frame once its odometry is registered"
 slug: "the-robot-agent-fences-in-the-twin-frame-once-its-odometry-is-registered"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
