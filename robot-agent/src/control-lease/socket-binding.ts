@@ -17,8 +17,9 @@
  *  - On `fenced` / `expired` of the bound generation the socket is unbound and
  *    `onRevoked` fires. There is no auto-rebind.
  *  - The registry's `bound` count is the number of live bindings to its current
- *    generation, across EVERY socket kind using this helper — so keyboard and
- *    bilateral sockets never overwrite each other's count.
+ *    generation, across EVERY socket kind: this class and keyboard teleop's own
+ *    binding (TASK-315) both count through {@link adjustBoundCount}, so neither
+ *    overwrites the other's count.
  *
  * Enforcement follows the registry's `observe().enforced`
  * (`CONTROL_LEASE_REQUIRED`); with it off every frame is admitted and a bind
@@ -36,21 +37,24 @@ export interface BindRequest {
   generation: number;
 }
 
-/** Every live binding, per registry — the source of the registry's `bound` count. */
-const liveBindings = new WeakMap<ControlLeaseRegistry, Set<LeaseSocketBinding>>();
+/** Live bound sockets per registry and generation — the source of its `bound` count. */
+const boundCounts = new WeakMap<ControlLeaseRegistry, Map<number, number>>();
 
-function bindingsOf(leases: ControlLeaseRegistry): Set<LeaseSocketBinding> {
-  let set = liveBindings.get(leases);
-  if (!set) {
-    set = new Set();
-    liveBindings.set(leases, set);
+/**
+ * Add `delta` (+1 on bind, -1 on unbind) to the sockets bound to `generation`
+ * and publish the total to the registry. EVERY motion socket kind (keyboard
+ * teleop, bilateral) goes through this one counter, so neither overwrites the
+ * other's count with its own.
+ */
+export function adjustBoundCount(leases: ControlLeaseRegistry, generation: number, delta: number): void {
+  let counts = boundCounts.get(leases);
+  if (!counts) {
+    counts = new Map();
+    boundCounts.set(leases, counts);
   }
-  return set;
-}
-
-function publishCount(leases: ControlLeaseRegistry, generation: number): void {
-  let n = 0;
-  for (const b of bindingsOf(leases)) if (b.generation === generation) n += 1;
+  const n = Math.max(0, (counts.get(generation) ?? 0) + delta);
+  if (n === 0) counts.delete(generation);
+  else counts.set(generation, n);
   leases.setBoundCount(generation, n);
 }
 
@@ -94,10 +98,10 @@ export class LeaseSocketBinding {
   bind(req: BindRequest): BindResult {
     if (!this.leases.verify(req.leaseId, req.generation)) return { ok: false, code: 'lease_invalid' };
     const previous = this.boundGeneration;
+    if (previous === req.generation) return { ok: true, generation: req.generation };
     this.boundGeneration = req.generation;
-    bindingsOf(this.leases).add(this);
-    if (previous !== null && previous !== req.generation) publishCount(this.leases, previous);
-    publishCount(this.leases, req.generation);
+    if (previous !== null) adjustBoundCount(this.leases, previous, -1);
+    adjustBoundCount(this.leases, req.generation, +1);
     return { ok: true, generation: req.generation };
   }
 
@@ -120,8 +124,7 @@ export class LeaseSocketBinding {
   private unbind(): void {
     const generation = this.boundGeneration;
     this.boundGeneration = null;
-    bindingsOf(this.leases).delete(this);
-    if (generation !== null) publishCount(this.leases, generation);
+    if (generation !== null) adjustBoundCount(this.leases, generation, -1);
   }
 
   private onLeaseEvent(event: LeaseEvent): void {

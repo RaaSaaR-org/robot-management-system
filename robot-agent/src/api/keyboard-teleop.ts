@@ -18,6 +18,7 @@ import { FingerRetargeter, gripPose, type HandKeypoints } from '../teleop/dexpil
 import { G1_ARM_CHAINS, G1_FINGER_CHAINS, type Side } from '../teleop/g1-chains.generated.js';
 import { markTeleopMode } from '../teleop/teleop-mode.js';
 import { controlLease, type ControlLeaseRegistry, type LeaseEvent } from '../control-lease/control-lease.js';
+import { adjustBoundCount } from '../control-lease/socket-binding.js';
 
 /** How fast a held joint moves, in radians per second. */
 const SLEW_RATE_RAD_PER_S = 0.8;
@@ -326,12 +327,6 @@ export function createKeyboardTeleopWebSocket(
 
   console.log('[KeyboardTeleop] WebSocket server ready on path: /ws/keyboard-teleop');
 
-  /**
-   * Live sockets bound per lease generation (TASK-315), so the registry's
-   * `bound` count covers every window the holder has open, not just the last.
-   */
-  const boundSockets = new Map<number, number>();
-
   wss.on('connection', (ws: WebSocket) => {
     console.log('[KeyboardTeleop] Client connected');
 
@@ -614,13 +609,13 @@ export function createKeyboardTeleopWebSocket(
       return leases.verify(boundLeaseId, boundGeneration);
     };
 
-    /** Keep the registry's `bound` count equal to the sockets bound to `generation`. */
-    const adjustBound = (generation: number, delta: number): void => {
-      const n = Math.max(0, (boundSockets.get(generation) ?? 0) + delta);
-      if (n === 0) boundSockets.delete(generation);
-      else boundSockets.set(generation, n);
-      leases.setBoundCount(generation, n);
-    };
+    /**
+     * Keep the registry's `bound` count equal to the sockets bound to
+     * `generation` — every window the holder has open, keyboard AND bilateral
+     * (the counter is shared through `socket-binding.ts`, TASK-316).
+     */
+    const adjustBound = (generation: number, delta: number): void =>
+      adjustBoundCount(leases, generation, delta);
 
     /** Give back THIS socket's `teleop` holder, if it has one. */
     const releaseHolder = (): void => {
