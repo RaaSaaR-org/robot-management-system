@@ -2070,7 +2070,7 @@ model SimulationFrame {
 
 model FederatedRound {
   id                    String    @id @default(uuid())
-  status                String    @default("created") // created, selecting, distributing, training, collecting, aggregating, completed, failed
+  status                String    @default("created") // created, selecting, distributing, training, collecting, aggregating, completed, failed, cancelled
   globalModelVersion    String
   newModelVersion       String?
   config                Json // FederatedRoundConfig

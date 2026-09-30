@@ -22,6 +22,7 @@ const { mockPrisma } = vi.hoisted(() => ({
       findMany: vi.fn(),
       count: vi.fn(),
       update: vi.fn(),
+      delete: vi.fn(),
     },
     federatedParticipant: {
       create: vi.fn(),
@@ -741,5 +742,67 @@ describe('getParticipantsForRound', () => {
     ]);
     const result = await service.getParticipantsForRound('round-1');
     expect(result.map((p) => p.id)).toEqual(['p1', 'p2']);
+  });
+});
+
+// ===========================================================================
+// cancelRound / deleteRound (TASK-272)
+// ===========================================================================
+
+describe('cancelRound', () => {
+  it('cancels a running round, excludes in-flight participants and keeps uploaded ones', async () => {
+    mockPrisma.federatedRound.findUnique.mockResolvedValue(makeRoundRow({ status: 'training' }));
+    mockPrisma.federatedParticipant.findMany.mockResolvedValue([
+      makeParticipantRow({ id: 'p-train', status: 'training' }),
+      makeParticipantRow({ id: 'p-done', status: 'uploaded' }),
+    ]);
+    mockPrisma.federatedRound.update.mockResolvedValue(makeRoundRow({ status: 'cancelled', completedAt: new Date() }));
+    const events: unknown[] = [];
+    service.on('round:cancelled', (e) => events.push(e));
+
+    const result = await service.cancelRound('round-1');
+
+    expect(result.status).toBe('cancelled');
+    expect(mockPrisma.federatedRound.update.mock.calls[0][0].data.status).toBe('cancelled');
+    expect(mockPrisma.federatedParticipant.update).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.federatedParticipant.update).toHaveBeenCalledWith({
+      where: { id: 'p-train' },
+      data: { status: 'excluded', failureReason: 'round cancelled' },
+    });
+    expect(events).toHaveLength(1);
+  });
+
+  it.each(['completed', 'failed', 'cancelled'])('refuses a %s round with 409', async (status) => {
+    mockPrisma.federatedRound.findUnique.mockResolvedValue(makeRoundRow({ status }));
+    await expect(service.cancelRound('round-1')).rejects.toMatchObject({ statusCode: 409 });
+    expect(mockPrisma.federatedRound.update).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for an unknown round', async () => {
+    mockPrisma.federatedRound.findUnique.mockResolvedValue(null);
+    await expect(service.cancelRound('nope')).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('deleteRound', () => {
+  it('deletes a finished round and returns what was removed', async () => {
+    mockPrisma.federatedRound.findUnique.mockResolvedValue(makeRoundRow({ status: 'completed' }));
+    mockPrisma.federatedRound.delete.mockResolvedValue({});
+
+    const result = await service.deleteRound('round-1');
+
+    expect(result.id).toBe('round-1');
+    expect(mockPrisma.federatedRound.delete).toHaveBeenCalledWith({ where: { id: 'round-1' } });
+  });
+
+  it('refuses a running round with 409 — cancel it first', async () => {
+    mockPrisma.federatedRound.findUnique.mockResolvedValue(makeRoundRow({ status: 'training' }));
+    await expect(service.deleteRound('round-1')).rejects.toMatchObject({ statusCode: 409 });
+    expect(mockPrisma.federatedRound.delete).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for an unknown round', async () => {
+    mockPrisma.federatedRound.findUnique.mockResolvedValue(null);
+    await expect(service.deleteRound('nope')).rejects.toMatchObject({ statusCode: 404 });
   });
 });

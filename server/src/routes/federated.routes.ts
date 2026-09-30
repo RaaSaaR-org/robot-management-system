@@ -14,8 +14,14 @@ import type {
   SelectionStrategy,
 } from '../types/federated.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { auditBuildAct } from '../services/buildAudit.js';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 
 export const federatedRoutes = Router();
+
+function actorOf(req: Request): string | undefined {
+  return (req as AuthenticatedRequest).user?.id;
+}
 
 // ============================================================================
 // ROUND MANAGEMENT
@@ -34,6 +40,13 @@ federatedRoutes.post('/rounds', async (req: Request, res: Response) => {
     }
 
     const round = await federatedLearningService.createRound(body);
+    await auditBuildAct({
+      resourceType: 'federated_round',
+      resourceId: round.id,
+      action: 'create',
+      actorId: actorOf(req),
+      metadata: { globalModelVersion: round.globalModelVersion },
+    });
 
     res.status(201).json(round);
   } catch (error) {
@@ -91,6 +104,55 @@ federatedRoutes.get('/rounds/:id', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[FederatedRoutes] Error getting round:', error);
     res.status(500).json({ error: 'Failed to get round' });
+  }
+});
+
+/**
+ * POST /api/federated/rounds/:id/cancel
+ * Cancel a round that has not finished (TASK-272). 409 once it is
+ * completed, failed or already cancelled.
+ */
+federatedRoutes.post('/rounds/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const round = await federatedLearningService.cancelRound(req.params.id);
+    await auditBuildAct({
+      resourceType: 'federated_round',
+      resourceId: round.id,
+      action: 'cancel',
+      actorId: actorOf(req),
+      metadata: { globalModelVersion: round.globalModelVersion },
+    });
+    res.json(round);
+  } catch (error) {
+    console.error('[FederatedRoutes] Error cancelling round:', error);
+    sendFailure(res, error, 'Failed to cancel round');
+  }
+});
+
+/**
+ * DELETE /api/federated/rounds/:id
+ * Delete a finished round and its participants (TASK-272). A running round
+ * answers 409: cancel it first. Answers { id, outcome: 'deleted' }.
+ */
+federatedRoutes.delete('/rounds/:id', async (req: Request, res: Response) => {
+  try {
+    const round = await federatedLearningService.deleteRound(req.params.id);
+    await auditBuildAct({
+      resourceType: 'federated_round',
+      resourceId: round.id,
+      action: 'delete',
+      actorId: actorOf(req),
+      metadata: {
+        status: round.status,
+        globalModelVersion: round.globalModelVersion,
+        newModelVersion: round.newModelVersion,
+        participantCount: round.participantCount,
+      },
+    });
+    res.json({ id: round.id, outcome: 'deleted' });
+  } catch (error) {
+    console.error('[FederatedRoutes] Error deleting round:', error);
+    sendFailure(res, error, 'Failed to delete round');
   }
 });
 
