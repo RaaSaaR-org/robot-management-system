@@ -3,6 +3,8 @@
  * @description Session detail and recording cockpit: status-driven acts
  *              (start, pause, resume, end through confirm), live HUD, robot
  *              viewer, cameras, episodes, and the completed-session review.
+ *              Under the control lease the page holds one lease that its
+ *              gamepad and simulated-VR inputs join (TASK-320).
  * @feature datacollection
  */
 
@@ -29,6 +31,8 @@ import { useTelemetryStream } from '../../robots/hooks/useTelemetryStream';
 import { JointStateGrid } from '../../robots/components/visualization';
 import { KeyboardTeleopSection } from '../../robots/components/tabs/TeleopTab';
 import { useGamepadJoints } from '../hooks/useGamepadJoints';
+import { useSessionControlLease } from '../hooks/useSessionControlLease';
+import { ControlLeaseBar } from '../../robots/components/tabs/ControlLeaseBar';
 import { jointPositionUnit } from '../../robots/types/robots.types';
 import type { RobotType } from '../../robots/types/robots.types';
 import { TELEOPERATION_TYPE_LABELS, formatDuration, canStartSession, canPauseSession, canEndSession } from '../types/datacollection.types';
@@ -188,9 +192,21 @@ export function SessionDetailPage() {
 
   // TASK-117 gamepad fallback over the keyboard-teleop sidecar socket.
   const gamepadEligible = !!robot && !!session && ['gamepad', 'keyboard_mouse', 'bilateral_aloha'].includes(session.type);
+  // TASK-320: one control lease for the page, joined by the gamepad and the
+  // simulated-VR input. Inert (no socket, no UI) while the server does not
+  // advertise leases.
+  const sessionIsLive = !!session && ['created', 'recording', 'paused'].includes(session.status);
+  const sessionIsVr = session?.type === 'vr_quest' || session?.type === 'vr_vision_pro';
+  const leaseInputs = gamepadEligible || sessionIsVr;
+  const { lease, connected: leaseConnected } = useSessionControlLease(
+    session?.robotId ?? '',
+    robot?.a2aAgentUrl,
+    robotOnline && sessionIsLive && leaseInputs,
+  );
   useGamepadJoints({
     robot: gamepadEligible ? robot : null,
     enabled: gamepadEligible && (session?.status === 'recording' || session?.status === 'paused'),
+    lease,
   });
 
   const handleAnnotate = async () => {
@@ -296,6 +312,15 @@ export function SessionDetailPage() {
         </Panel>
       )}
 
+      {isLive && lease.enabled && leaseInputs && robot && (
+        <Panel data-testid="session-control-lease">
+          <Panel.Header title="Control" description="Gamepad and simulated VR input drive the robot only while you hold control." />
+          <Panel.Body>
+            <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={leaseConnected} />
+          </Panel.Body>
+        </Panel>
+      )}
+
       {isLive && (
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
           <div className="flex flex-col gap-6 xl:col-span-2">
@@ -340,6 +365,7 @@ export function SessionDetailPage() {
       {isLive && isVrSession && (
         <VRSessionPanel
           robot={robot}
+          lease={lease}
           onNextEpisode={handleNextEpisode}
           // 1-based, matching the HUD; frames are the CURRENT take's count.
           recording={isRecording ? {

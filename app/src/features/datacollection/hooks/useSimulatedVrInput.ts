@@ -7,13 +7,18 @@
  *              `{positions}` batches at ~16 Hz: phase-offset left/right
  *              reach cycles over the arm joints plus hand open/close, all
  *              clamped to the advertised joint limits.
+ *
+ *              Under the control lease (TASK-320) the socket joins the session
+ *              page's lease and streams only while bound; unbound it reports
+ *              `awaiting_control` and sends nothing.
  * @feature datacollection
  */
 
 import { useEffect, useRef, useState } from 'react';
 import type { Robot } from '../../robots/types/robots.types';
+import { useInputLeaseGate, type InputLease } from './inputLease';
 
-export type SimInputStatus = 'disconnected' | 'connecting' | 'streaming';
+export type SimInputStatus = 'disconnected' | 'connecting' | 'awaiting_control' | 'streaming';
 
 interface JointConfig {
   name: string;
@@ -25,6 +30,8 @@ interface JointConfig {
 interface UseSimulatedVrInputArgs {
   robot: Robot | null;
   enabled: boolean;
+  /** The session page's control lease; omitted or capability off → unchanged. */
+  lease?: InputLease;
 }
 
 /** Full reach/grasp cycle duration (seconds) — slow, plausible pick-and-place. */
@@ -114,9 +121,10 @@ function selectDrivenJoints(joints: JointConfig[]): JointConfig[] {
  * Streams synthetic VR-like motion to the robot agent while `enabled`.
  * Returns the connection/streaming status for the UI chip.
  */
-export function useSimulatedVrInput({ robot, enabled }: UseSimulatedVrInputArgs): SimInputStatus {
+export function useSimulatedVrInput({ robot, enabled, lease }: UseSimulatedVrInputArgs): SimInputStatus {
   const [status, setStatus] = useState<SimInputStatus>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
+  const gate = useInputLeaseGate(lease);
 
   useEffect(() => {
     if (!enabled || !robot) {
@@ -132,15 +140,25 @@ export function useSimulatedVrInput({ robot, enabled }: UseSimulatedVrInputArgs)
     let timer: ReturnType<typeof setInterval> | null = null;
     const startedAt = Date.now();
 
+    ws.onopen = () => {
+      if (wsRef.current === ws) gate.attach(ws);
+    };
     ws.onmessage = (event) => {
       if (wsRef.current !== ws) return;
       try {
         const msg = JSON.parse(event.data);
+        if (gate.handleMessage(ws, msg)) return;
         if (msg.type === 'config' && Array.isArray(msg.joints) && !timer) {
           joints = selectDrivenJoints(msg.joints as JointConfig[]);
-          setStatus('streaming');
+          setStatus(gate.canDrive(ws) ? 'streaming' : 'awaiting_control');
           timer = setInterval(() => {
             if (ws.readyState !== WebSocket.OPEN) return;
+            // Without the lease: send nothing and say so. Never re-acquire here.
+            if (!gate.canDrive(ws)) {
+              setStatus('awaiting_control');
+              return;
+            }
+            setStatus('streaming');
             const t = (Date.now() - startedAt) / 1000;
             ws.send(JSON.stringify({ positions: computeSimulatedPose(joints, t) }));
           }, TICK_MS);
@@ -151,6 +169,7 @@ export function useSimulatedVrInput({ robot, enabled }: UseSimulatedVrInputArgs)
     };
 
     const markDisconnected = () => {
+      gate.detach(ws);
       if (wsRef.current === ws) {
         setStatus('disconnected');
         wsRef.current = null;
@@ -167,17 +186,19 @@ export function useSimulatedVrInput({ robot, enabled }: UseSimulatedVrInputArgs)
       if (timer) clearInterval(timer);
       if (wsRef.current === ws) wsRef.current = null;
       // Park the joints at home before leaving so the robot doesn't freeze mid-reach.
-      if (ws.readyState === WebSocket.OPEN) {
+      // Home is motion: under the lease it goes out only while still bound.
+      if (ws.readyState === WebSocket.OPEN && gate.canDrive(ws)) {
         try {
           ws.send(JSON.stringify({ preset: 'home' }));
         } catch {
           /* closing anyway */
         }
       }
+      gate.detach(ws);
       ws.close();
       setStatus('disconnected');
     };
-  }, [robot, enabled]);
+  }, [robot, enabled, gate]);
 
   return status;
 }

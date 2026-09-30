@@ -7,15 +7,23 @@
  *              `/ws/keyboard-teleop` velocity-mode protocol as
  *              `KeyboardTeleopSection` so the sidecar handles both inputs
  *              identically.
+ *
+ *              Under the control lease (TASK-320) the socket goes to the robot
+ *              agent's `/ws/keyboard-teleop` — the endpoint that enforces the
+ *              lease — joins the page's lease, and sends a non-zero direction
+ *              only while bound. A stop (direction 0) always goes out.
  * @feature datacollection
  */
 
 import { useEffect, useRef } from 'react';
 import type { Robot } from '../../robots/types/robots.types';
+import { useInputLeaseGate, type InputLease } from './inputLease';
 
 interface UseGamepadJointsArgs {
   robot: Robot | null;
   enabled: boolean;
+  /** The session page's control lease; omitted or capability off → unchanged. */
+  lease?: InputLease;
 }
 
 /** Stick deadzone — anything below this magnitude is treated as zero. */
@@ -84,6 +92,12 @@ function readGamepad(gp: Gamepad): JointDirections {
   };
 }
 
+/** The robot agent's own WebSocket base — where the control lease is enforced. */
+function getAgentWsBaseUrl(robot: Robot): string {
+  const agent = robot.a2aAgentUrl?.replace(/\/$/, '') ?? 'http://localhost:41243';
+  return agent.replace(/^http/, 'ws');
+}
+
 function getWsBaseUrl(robot: Robot): string {
   // 41243 is the robot agent's default port; this fallback read 41245, a port
   // nothing listens on.
@@ -102,18 +116,36 @@ function getWsBaseUrl(robot: Robot): string {
  * (matching the sidecar's velocity loop), and only sends a message when a
  * joint's direction actually changes — keeps the WS quiet at idle.
  */
-export function useGamepadJoints({ robot, enabled }: UseGamepadJointsArgs): void {
+export function useGamepadJoints({ robot, enabled, lease }: UseGamepadJointsArgs): void {
   const wsRef = useRef<WebSocket | null>(null);
   const lastRef = useRef<JointDirections>(ZERO);
   const rafRef = useRef<number | null>(null);
+  const gate = useInputLeaseGate(lease);
+  const leaseEnabled = lease?.enabled === true;
 
   useEffect(() => {
     if (!enabled || !robot) return;
 
     let stopped = false;
-    const ws = new WebSocket(`${getWsBaseUrl(robot)}/ws/keyboard-teleop`);
+    // The SO-101 sidecar's socket knows nothing of leases; under one, drive
+    // through the agent, which enforces it.
+    const base = leaseEnabled ? getAgentWsBaseUrl(robot) : getWsBaseUrl(robot);
+    const ws = new WebSocket(`${base}/ws/keyboard-teleop`);
     wsRef.current = ws;
     lastRef.current = ZERO;
+
+    ws.onopen = () => {
+      if (!stopped) gate.attach(ws);
+    };
+    ws.onmessage = (event) => {
+      if (stopped) return;
+      try {
+        gate.handleMessage(ws, JSON.parse(String(event.data)));
+      } catch {
+        /* not JSON */
+      }
+    };
+    ws.onclose = () => gate.detach(ws);
 
     const send = (joint: keyof JointDirections, direction: -1 | 0 | 1) => {
       if (ws.readyState !== WebSocket.OPEN) return;
@@ -129,7 +161,9 @@ export function useGamepadJoints({ robot, enabled }: UseGamepadJointsArgs): void
         const pads = navigator.getGamepads ? navigator.getGamepads() : [];
         const gp = Array.from(pads).find((p): p is Gamepad => p !== null);
         if (gp) {
-          const next = readGamepad(gp);
+          // Without the lease the sticks read as centred: nothing moves, and
+          // a stick held when control is lost sends its stop.
+          const next = gate.canDrive(ws) ? readGamepad(gp) : ZERO;
           const last = lastRef.current;
           (Object.keys(next) as Array<keyof JointDirections>).forEach((joint) => {
             if (next[joint] !== last[joint]) {
@@ -153,8 +187,9 @@ export function useGamepadJoints({ robot, enabled }: UseGamepadJointsArgs): void
           ws.send(JSON.stringify({ joint, direction: 0 }));
         });
       }
+      gate.detach(ws);
       ws.close();
       wsRef.current = null;
     };
-  }, [robot, enabled]);
+  }, [robot, enabled, leaseEnabled, gate]);
 }
