@@ -541,9 +541,10 @@ export interface Config {
   controlLease: {
     /**
      * Whether motion requires a held control lease (`CONTROL_LEASE_REQUIRED`,
-     * default `false`). In TASK-314 this is only REPORTED — as `enforced` in
-     * `GET /robots/:id/control-lease` — and nothing gates on it yet, so the
-     * default leaves robot behaviour exactly as it was.
+     * default `false`). Reported as `enforced` in `GET /robots/:id/control-lease`.
+     * When on, REST motion starts are refused while a lease is held and motion
+     * sockets must bind to it (TASK-316); the default leaves robot behaviour
+     * exactly as it was.
      */
     required: boolean;
   };
