@@ -346,3 +346,8 @@ export const LazyTeamPage = lazy(() =>
 export const LazyResearchPage = lazy(() =>
   import('@/features/research').then((m) => ({ default: m.ResearchPage }))
 );
+
+/** Activity feed — comments and ratings by people and agents (TASK-241) */
+export const LazyActivityPage = lazy(() =>
+  import('@/features/social').then((m) => ({ default: m.ActivityPage }))
+);

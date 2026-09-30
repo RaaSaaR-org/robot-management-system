@@ -388,6 +388,7 @@ Errors are `{error, message, code, context?}`. A missing subject → 404 `SOCIAL
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/social/me` | `{actor}` — who this request speaks as (the UI offers edit/delete on that actor's comments) |
 | GET | `/api/social/:subjectType/:subjectId/comments` (`?episodeIndex=`) | `{threads: CommentThread[]}` — top-level comments oldest first, each with one level of `replies`; a soft-deleted comment keeps its row (`body: ''`, `deletedAt` set) while it has replies |
 | POST | `/api/social/:subjectType/:subjectId/comments` | `{body, parentId?, evidence?, episodeIndex?}` → 201 `{comment}` |
 | PATCH | `/api/social/comments/:id` | `{body}` → `{comment}`; author only (403 `SOCIAL_NOT_AUTHOR`) |

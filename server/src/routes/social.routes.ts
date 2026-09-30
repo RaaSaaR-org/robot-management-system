@@ -41,8 +41,13 @@ function subjectParams(req: SocialRequest, episodeIndex: unknown) {
 }
 
 // ---------------------------------------------------------------------------
-// Feed — declared before the /:subjectType routes
+// Who am I, feed — declared before the /:subjectType routes
 // ---------------------------------------------------------------------------
+
+/** The actor this request speaks as, so a UI can offer edit/delete on its own rows. */
+socialRoutes.get('/me', (req: SocialRequest, res: Response) => {
+  res.json({ actor: actorOf(req) });
+});
 
 socialRoutes.get('/feed', async (req: SocialRequest, res: Response) => {
   try {

@@ -193,6 +193,11 @@ describe('actor resolution', () => {
     expect(ok.body.comment).toMatchObject({ actorType: 'agent', actorId: 'eval-agent' });
   });
 
+  it('GET /me reports the resolved actor', async () => {
+    expect((await request(app).get('/api/social/me')).body.actor).toMatchObject({ actorType: 'user', actorId: 'u-1' });
+    expect((await request(app).get('/api/social/me').set(AGENT)).body.actor).toMatchObject({ actorType: 'agent' });
+  });
+
   it('the AUTH_DISABLED mock user is a system actor, not an invented user', async () => {
     const res = await request(app).post('/api/social/dataset/ds-a/comments').set('x-test-auth', 'dev').send({ body: 'x' });
     expect(res.status).toBe(201);

@@ -188,6 +188,7 @@ describe('NAV_GROUPS', () => {
       ['Models', '/models'],
       ['Learning', '/fleet-learning'],
       ['Research', '/research'],
+      ['Activity', '/activity'],
     ]);
     // Copied verbatim from each stage page's own TABS const.
     expect(rail[1].tabs).toEqual([

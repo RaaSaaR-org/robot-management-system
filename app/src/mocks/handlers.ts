@@ -20,6 +20,7 @@ import {
   withoutReviews,
 } from './marketplaceDemoData';
 import { createDemoAgentState, createDemoScene } from './agentModeDemoData';
+import { socialDemoHandlers } from './socialDemoHandlers';
 import type { AgentModeState } from '@/features/agentmode/types/agentmode.types';
 import type { FleetSafetyStatus, RobotSafetyStatus } from '@/features/safety/types/safety.types';
 import type { UserSettings } from '@/features/settings/types/settings.types';
@@ -34,6 +35,9 @@ import type {
 } from '@/features/contributions/types/marketplace.types';
 
 export const handlers = [
+  // Comments and ratings (TASK-241)
+  ...socialDemoHandlers,
+
   // ========================================================================
   // Health
   // ========================================================================

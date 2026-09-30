@@ -26,7 +26,7 @@ const ROUTES = [
   '/processes',
   // Build
   '/pipeline',
-  '/data-collection', '/datasets', '/training', '/models', '/fleet-learning',
+  '/data-collection', '/datasets', '/training', '/models', '/fleet-learning', '/activity',
   '/deployments', '/deployments?tab=skills',
   '/marketplace',
   // Comply

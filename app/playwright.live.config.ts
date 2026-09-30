@@ -14,7 +14,9 @@ export default defineConfig({
   reporter: [['list'], ['html', { outputFolder: 'e2e/report-live', open: 'never' }]],
 
   use: {
-    baseURL: 'http://localhost:1420',
+    // PLAYWRIGHT_LIVE_URL points the suite at a stack on another port (e.g. a
+    // worktree's own vite + server while :1420 runs someone else's).
+    baseURL: process.env.PLAYWRIGHT_LIVE_URL || 'http://localhost:1420',
     colorScheme: 'dark',
     viewport: { width: 1440, height: 900 },
   },
