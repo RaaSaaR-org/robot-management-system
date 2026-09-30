@@ -61,6 +61,7 @@ const CATEGORY_MAP: Record<string, string> = {
   'README': 'Getting Started',
   'architecture': 'Architecture',
   'app-architecture': 'Architecture',
+  'network-architecture': 'Architecture',
   'api': 'Architecture',
   'multi-tenancy': 'Architecture',
   'process-delegation-architecture': 'Architecture',

@@ -165,9 +165,16 @@ Key endpoints:
 - `POST /predict` — run inference (images + state + instruction -> actions)
 - `POST /reset` — reset model state between episodes
 
-## Fleet Map
+## Site Map
 
-![Fleet Map](https://raw.githubusercontent.com/RaaSaaR-org/robot-management-system/main/app/public/screenshots/fleet-map.png)
+A robot is bound to one site, a digital twin (`Robot.twinId`). The twin's zones
+(`TwinZone`) are the only zone model: each is a uniquely named place or a
+keepout. The Fleet page's Map tab and the dashboard draw a **site map**
+(`app/src/features/fleet/components/SiteMap.tsx`): pick a twin, see it top-down
+with its zones and the live robots bound to it, and E-stop a zone from the map.
+A robot's position is `location.place`, the place it is in, and only robots
+whose frame is aligned with the twin are plotted. The agent fetches its site's
+places from `GET /api/robots/:id/places`.
 
 ## Communication Protocols
 

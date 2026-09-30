@@ -213,7 +213,7 @@ robot-management-system/
 │   │   │   ├── deployment/ # VLA model deployment
 │   │   │   ├── evaluation/ # Model evaluation
 │   │   │   ├── explainability/ # AI decision transparency
-│   │   │   ├── fleet/      # Fleet map & zone management
+│   │   │   ├── fleet/      # Fleet page & site map (twin zones)
 │   │   │   ├── fleetlearning/ # Federated learning
 │   │   │   ├── gdpr/       # GDPR self-service portal
 │   │   │   ├── incidents/  # Incident management

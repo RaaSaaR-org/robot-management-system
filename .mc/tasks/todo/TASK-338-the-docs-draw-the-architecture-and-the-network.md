@@ -1,5 +1,5 @@
 ---
-id: "TASK-325"
+id: "TASK-338"
 aliases: []
 title: "The docs draw the architecture and the network"
 slug: "the-docs-draw-the-architecture-and-the-network"
