@@ -61,3 +61,8 @@ A second server defect turned up in the same pass. Creating an approval for an e
 - **Who may act for someone else: `super-admin` and `owner`.** The task says "admin roles"; the unified role model (TASK-162) has no `admin`, so the controller-side roles are the two that administer an organisation. `member` processes requests under `/api/gdpr/admin/*` but does not originate one in another person's name — filing an erasure or revoking a consent for someone is a controller act, not an operator one.
 - **A foreign `userId` is refused with 403, never silently replaced by the caller's id.** Replacing it would file the request against the wrong person without telling the caller. A `userId` equal to the caller's own id is accepted for any role, so a client that sends it anyway keeps working. A non-string `userId` is a 400.
 - **Approval entity types are checked with `hasOwnProperty` on `APPROVAL_TYPE_MAP`**, so a name like `toString` cannot pass as a configured type. The existing route tests posted `entityType: 'task'`, which is itself unconfigured; they now use `shift_change`.
+
+## Verification (2026-09-30)
+
+- `cd server && npm run typecheck` clean; `npx vitest run` 236/236 files pass.
+- Live, against a copy of the dev DB with `AUTH_DISABLED=true`: `POST /api/gdpr/requests/access` → 201 with `userId: dev-user-id`, and `GET /api/gdpr/requests` lists it; `POST /api/gdpr/consents {type: marketing, granted: true}` → 200 for `dev-user-id`, and `GET /api/gdpr/consents` lists it; `POST /api/approvals {entityType: ai_decision, …}` → 400 `No approval workflow is configured for entity type ai_decision`.
