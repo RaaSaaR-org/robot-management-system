@@ -73,6 +73,13 @@ account or their own personal data:
 
 `/api/gdpr/admin/*` is **not** exempt — it acts on other people's requests.
 
+"One's own" is enforced in the handlers, not only by the guard (TASK-270): the
+data subject of every `/api/gdpr/requests*` and `/api/gdpr/consents*` call is the
+authenticated user (`dev-user-id` under `AUTH_DISABLED=true`). A `userId` in the
+body or query is honoured only when it names the caller, when the caller is a
+`super-admin`, or when the caller is an `owner` and the named user belongs to the
+owner's tenant; anything else is `403`.
+
 **2. Mounts that carry no guard at all** (`UNGUARDED_WRITE_MOUNTS`, `app.ts`),
 because a user JWT is not what authenticates them:
 
@@ -392,7 +399,7 @@ Base URL: `http://localhost:41245`
 
 ### Control lease (`/api/v1/robots/:id/control-lease`, TASK-314)
 
-The robot's one installed control lease — fenced by a strictly increasing `generation` whose high-water is persisted in `data/control-lease-<ROBOT_ID>.json`, and expired on the agent's own clock. All four routes sit behind the personal-data gate (configured `AGENT_MEMORY_TOKEN` required; loopback only when unset; cross-origin browser requests refused), so only the server installs leases. `CONTROL_LEASE_REQUIRED` (default `false`) is reported as `enforced`; with it off, nothing gates motion on the lease.
+The robot's one installed control lease — fenced by a strictly increasing `generation` whose high-water is persisted in `data/control-lease-<ROBOT_ID>.json`, and expired on the agent's own clock. All four routes sit behind the personal-data gate (configured `AGENT_MEMORY_TOKEN` required; loopback only when unset; cross-origin browser requests refused), so only the server installs leases. `CONTROL_LEASE_REQUIRED` (default `false`) is reported as `enforced`; with it off, nothing gates motion on the lease. When it is on, `/ws/keyboard-teleop` drives only on a socket bound to the installed lease (TASK-315, see `robot-agent/AGENTS.md`), and the REST motion routes and the bilateral socket follow the rules below (TASK-316).
 
 | Method | Path | Description |
 |--------|------|-------------|
