@@ -95,8 +95,9 @@ while IFS= read -r subject; do
   section=""
   if [ -n "$BRANCH_OF" ] && [[ "$subject" =~ $PR_SUFFIX ]]; then
     # Word splitting of $BRANCH_OF is intended: it is a command with arguments.
+    # stdin is closed so the lookup cannot swallow the subjects this loop reads.
     # shellcheck disable=SC2086
-    branch="$($BRANCH_OF "${BASH_REMATCH[1]}" 2>/dev/null || true)"
+    branch="$($BRANCH_OF "${BASH_REMATCH[1]}" </dev/null 2>/dev/null || true)"
     section="$(section_of_type "${branch%%/*}")"
     if [ -n "$section" ]; then BY_BRANCH=$((BY_BRANCH + 1)); fi
   fi
