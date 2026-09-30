@@ -368,14 +368,14 @@ describe('triggerZoneEStop', () => {
     ]);
     vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
     httpPost.mockResolvedValue({ ok: true });
-    vi.mocked(alertService.createAlert).mockRejectedValue(new Error('FK violated') as never);
+    vi.mocked(alertService.createAlert).mockRejectedValue(new Error('database down') as never);
 
     const result = await safetyService.triggerZoneEStop('z1', 'spill');
 
     expect(result.successCount).toBe(1);
-    // Alert.sourceId is a foreign key to Robot — a zone id must never go there.
+    // Alert.sourceId is polymorphic (TASK-337): the zone alert points at its zone.
     expect(alertService.createAlert).toHaveBeenCalledWith(
-      expect.not.objectContaining({ sourceId: expect.anything() })
+      expect.objectContaining({ source: 'system', sourceId: 'z1' })
     );
   });
 });

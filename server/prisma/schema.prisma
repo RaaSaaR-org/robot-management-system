@@ -60,7 +60,6 @@ model Robot {
   commands           RobotCommand[]
   agentCard          AgentCard?
   endpoints          RobotEndpoints?
-  alerts             Alert[]
   robotTasks         RobotTask[]
   incidents          Incident[]
   evaluationEpisodes EvaluationEpisode[]
@@ -485,7 +484,11 @@ model Alert {
   title          String
   message        String
   source         String // AlertSource: 'robot' | 'task' | 'system' | 'user'
-  sourceId       String? // ID of the source entity (robotId, taskId, etc.)
+  // Polymorphic: `source` says what it points to — a robot id for 'robot', a
+  // task id for 'task', an incident, twin zone or workflow id for 'system'.
+  // Deliberately no foreign key (TASK-337): a relation to Robot rejected
+  // every non-robot id, so those alerts were never written.
+  sourceId       String?
   acknowledged   Boolean   @default(false)
   acknowledgedAt DateTime?
   acknowledgedBy String? // User ID who acknowledged
@@ -493,9 +496,6 @@ model Alert {
   autoDismissMs  Int? // Auto-dismiss after ms (null = never)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
-
-  // Optional relation to robot if source is robot
-  robot Robot? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
 
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
