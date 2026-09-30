@@ -298,13 +298,47 @@ describe('fleetlearningStore', () => {
     expect(state.selectedRound?.status).toBe('cancelled');
   });
 
-  it('cancelRound rethrows and records error on failure', async () => {
+  it('cancelRound rethrows on failure without turning it into a load error', async () => {
     mockedApi.cancelRound.mockRejectedValue(new Error('cannot cancel'));
 
     await expect(useFleetLearningStore.getState().cancelRound('r1')).rejects.toThrow(
       'cannot cancel'
     );
-    expect(useFleetLearningStore.getState().error).toBe('cannot cancel');
+    // `error` is the rounds table's load error; the caller toasts a refused cancel.
+    expect(useFleetLearningStore.getState().error).toBeNull();
+    expect(useFleetLearningStore.getState().isLoading).toBe(false);
+  });
+
+  // --------------------------------------------------------------------------
+  // deleteRound (TASK-272)
+  // --------------------------------------------------------------------------
+
+  it('deleteRound drops the round and clears it when it was selected', async () => {
+    const round = makeRound({ id: 'r1', status: 'completed' });
+    useFleetLearningStore.setState({
+      rounds: [round, makeRound({ id: 'r2' })],
+      selectedRound: round,
+      participants: [makeParticipant()],
+    });
+    mockedApi.deleteRound.mockResolvedValue(undefined);
+
+    await useFleetLearningStore.getState().deleteRound('r1');
+
+    const state = useFleetLearningStore.getState();
+    expect(mockedApi.deleteRound).toHaveBeenCalledWith('r1');
+    expect(state.rounds.map((r) => r.id)).toEqual(['r2']);
+    expect(state.selectedRound).toBeNull();
+    expect(state.participants).toEqual([]);
+  });
+
+  it('deleteRound rethrows and keeps the round when the server refuses', async () => {
+    const round = makeRound({ id: 'r1', status: 'training' });
+    useFleetLearningStore.setState({ rounds: [round] });
+    mockedApi.deleteRound.mockRejectedValue(new Error('cancel it first'));
+
+    await expect(useFleetLearningStore.getState().deleteRound('r1')).rejects.toThrow('cancel it first');
+    expect(useFleetLearningStore.getState().rounds).toHaveLength(1);
+    expect(useFleetLearningStore.getState().error).toBeNull();
   });
 
   // --------------------------------------------------------------------------

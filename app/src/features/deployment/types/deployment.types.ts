@@ -770,6 +770,8 @@ export interface DeploymentState {
   // Model Versions (for deployment)
   modelVersions: ModelVersion[];
   modelVersionsLoading: boolean;
+  /** The last model-version load failure, for the registry's ErrorState (TASK-272). */
+  modelVersionsError: string | null;
 
   // Filters
   deploymentFilters: DeploymentFilters;
@@ -787,6 +789,8 @@ export interface DeploymentActions {
   promoteDeployment: (id: string) => Promise<void>;
   rollbackDeployment: (id: string, reason: string) => Promise<void>;
   cancelDeployment: (id: string) => Promise<void>;
+  /** Delete a deployment that is not rolling out; throws with the server reason. */
+  deleteDeployment: (id: string) => Promise<void>;
   setDeploymentFilters: (filters: Partial<DeploymentFilters>) => void;
   selectDeployment: (id: string | null) => void;
 

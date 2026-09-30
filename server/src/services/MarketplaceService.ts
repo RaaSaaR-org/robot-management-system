@@ -51,6 +51,25 @@ export interface MarketplaceServiceError {
 
 export type MarketplaceServiceResult<T> = ({ ok: true } & T) | MarketplaceServiceError;
 
+/** Who is acting on a listing: the user id, and their role. */
+export interface MarketplaceActor {
+  userId: string;
+  role?: string;
+}
+
+/**
+ * Roles that may manage any listing, not only their own. Only the platform
+ * role: the marketplace spans tenants, so a tenant owner is just a seller here.
+ */
+const LISTING_ADMIN_ROLES = new Set(['super-admin']);
+
+/** Statuses the platform sets; a seller's publish/unpublish may not leave them. */
+const MODERATED_LISTING_STATUSES = new Set(['pending_review', 'suspended']);
+
+function canManageListing(actor: MarketplaceActor, sellerId: string): boolean {
+  return actor.userId === sellerId || (actor.role !== undefined && LISTING_ADMIN_ROLES.has(actor.role));
+}
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -290,6 +309,72 @@ export class MarketplaceService {
     });
     const sellerStats = await marketplaceRepository.getSellerStats([sellerId]);
     return this.toListingDto(record, sellerStats);
+  }
+
+  // ==========================================================================
+  // PUBLISH / UNPUBLISH / DELETE (TASK-272)
+  // ==========================================================================
+
+  /**
+   * Publish or unpublish a listing. Only its seller or an admin may. An
+   * unpublished listing is a draft: out of the public browse, still in the
+   * seller's own list, and buyers keep what they bought.
+   */
+  async setListingPublished(
+    actor: MarketplaceActor,
+    listingId: string,
+    published: boolean
+  ): Promise<MarketplaceServiceResult<{ listing: MarketplaceListingDto; previousStatus: string }>> {
+    const listing = await marketplaceRepository.findListingById(listingId);
+    if (!listing) {
+      return { ok: false, status: 404, error: 'Listing not found' };
+    }
+    if (!canManageListing(actor, listing.sellerId)) {
+      return { ok: false, status: 403, error: 'Only the seller can change this listing' };
+    }
+    // A listing under review or suspended is the platform's call, not the
+    // seller's: publish would skip the review, unpublish would lift the
+    // suspension on the way back to draft.
+    const isAdmin = actor.role !== undefined && LISTING_ADMIN_ROLES.has(actor.role);
+    if (!isAdmin && MODERATED_LISTING_STATUSES.has(listing.status)) {
+      return {
+        ok: false,
+        status: 409,
+        error: `The listing is ${listing.status.replace('_', ' ')} — only a platform admin can change it`,
+      };
+    }
+
+    await marketplaceRepository.updateListingStatus(listingId, published ? 'published' : 'draft');
+    const updated = await this.getListing(listingId);
+    return { ok: true, listing: updated!, previousStatus: listing.status };
+  }
+
+  /**
+   * Delete a listing nobody has bought. Once a buyer holds a licence the
+   * listing is their receipt, so it can only be unpublished.
+   */
+  async deleteListing(
+    actor: MarketplaceActor,
+    listingId: string
+  ): Promise<MarketplaceServiceResult<{ removed: MarketplaceListingRecord }>> {
+    const listing = await marketplaceRepository.findListingById(listingId);
+    if (!listing) {
+      return { ok: false, status: 404, error: 'Listing not found' };
+    }
+    if (!canManageListing(actor, listing.sellerId)) {
+      return { ok: false, status: 403, error: 'Only the seller can delete this listing' };
+    }
+    const purchases = await marketplaceRepository.countPurchases(listingId);
+    if (purchases > 0) {
+      return {
+        ok: false,
+        status: 409,
+        error: `${purchases} buyer(s) hold a licence to this listing — unpublish it instead`,
+      };
+    }
+
+    await marketplaceRepository.deleteListing(listingId);
+    return { ok: true, removed: listing };
   }
 
   // ==========================================================================

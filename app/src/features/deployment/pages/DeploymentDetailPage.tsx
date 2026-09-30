@@ -1,12 +1,12 @@
 /**
  * @file DeploymentDetailPage.tsx
- * @description One rollout: canary stage, robots and metrics, with start/promote/roll back/cancel
+ * @description One rollout: canary stage, robots and metrics, with start/promote/roll back/cancel/delete
  * @feature deployment
  */
 
 import { useCallback, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowUpCircle, Play, Undo2, XCircle } from 'lucide-react';
+import { ArrowUpCircle, Play, Trash2, Undo2, XCircle } from 'lucide-react';
 import {
   Button,
   ErrorState,
@@ -31,6 +31,7 @@ import { DeploymentProgress } from '../components/DeploymentProgress';
 import { useDeploymentActs } from '../components/useDeploymentActs';
 import {
   canCancel,
+  canDelete,
   canPromote,
   canRollBack,
   deploymentName,
@@ -64,8 +65,8 @@ export function DeploymentDetailPage() {
   useDeploymentProgress();
 
   const onChanged = useCallback(
-    (act: 'start' | 'promote' | 'rollback' | 'cancel') => {
-      if (act === 'cancel') navigate('/deployments');
+    (act: 'start' | 'promote' | 'rollback' | 'cancel' | 'delete') => {
+      if (act === 'cancel' || act === 'delete') navigate('/deployments');
       else void fetchDeployment();
     },
     [fetchDeployment, navigate],
@@ -127,6 +128,14 @@ export function DeploymentDetailPage() {
       tone: 'danger',
       separatorBefore: more.length > 0,
       onSelect: () => void acts.cancel(d),
+    });
+  if (canDelete(d))
+    more.push({
+      label: 'Delete',
+      icon: <Trash2 className={icon} />,
+      tone: 'danger',
+      separatorBefore: more.length > 0 && !canCancel(d),
+      onSelect: () => void acts.remove(d),
     });
 
   const failed = d.failedRobotIds.length;

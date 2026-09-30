@@ -43,6 +43,7 @@ vi.mock('../../repositories/index.js', () => ({
     findActive: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    delete: vi.fn(),
   },
   modelVersionRepository: {
     findById: vi.fn(),
@@ -609,6 +610,40 @@ describe('cancelDeployment', () => {
       'cancelled',
     );
   });
+});
+
+// ===========================================================================
+// deleteDeployment (TASK-272)
+// ===========================================================================
+
+describe('deleteDeployment', () => {
+  it('answers 404 when not found', async () => {
+    vi.mocked(deploymentRepository.findById).mockResolvedValue(null as never);
+    await expect(service.deleteDeployment('missing')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it.each(['pending', 'failed', 'rolled_back', 'cancelled'] as const)(
+    'deletes a %s deployment and returns it',
+    async (status) => {
+      vi.mocked(deploymentRepository.findById).mockResolvedValue(makeDeployment({ id: 'dep-1', status }));
+      vi.mocked(deploymentRepository.delete).mockResolvedValue(true);
+
+      const result = await service.deleteDeployment('dep-1');
+
+      expect(result.id).toBe('dep-1');
+      expect(deploymentRepository.delete).toHaveBeenCalledWith('dep-1');
+    },
+  );
+
+  it.each(['deploying', 'canary', 'production', 'rolling_back'] as const)(
+    'refuses a %s deployment with 409',
+    async (status) => {
+      vi.mocked(deploymentRepository.findById).mockResolvedValue(makeDeployment({ status }));
+
+      await expect(service.deleteDeployment('dep-1')).rejects.toMatchObject({ statusCode: 409 });
+      expect(deploymentRepository.delete).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ===========================================================================

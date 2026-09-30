@@ -19,8 +19,14 @@ import {
   type UpdateModelVersionInput,
 } from '../types/vla.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { auditBuildAct } from '../services/buildAudit.js';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 
 export const modelsRoutes = Router();
+
+function actorOf(req: Request): string | undefined {
+  return (req as AuthenticatedRequest).user?.id;
+}
 
 /**
  * Schemes an `artifactUri` may carry, following the `TrainingRunManifestDataset.uri`
@@ -144,6 +150,13 @@ modelsRoutes.post('/versions', async (req: Request, res: Response) => {
     // Through the service, not the repository: a registration that names a
     // skill has to move the skill's own pointer too (TASK-238).
     const modelVersion = await modelRegistryService.register(input);
+    await auditBuildAct({
+      resourceType: 'model_version',
+      resourceId: modelVersion.id,
+      action: 'create',
+      actorId: actorOf(req),
+      metadata: { version: modelVersion.version, artifactUri: modelVersion.artifactUri },
+    });
     res.status(201).json({ modelVersion });
   } catch (err) {
     sendFailure(res, err, 'Failed to register model version', 500);
@@ -197,6 +210,37 @@ modelsRoutes.patch('/versions/:id', async (req: Request, res: Response) => {
     res.json({ modelVersion });
   } catch (err) {
     sendFailure(res, err, 'Failed to update model version', 500);
+  }
+});
+
+/**
+ * DELETE /api/models/versions/:id
+ * The registry's delete archives (TASK-272): deploymentStatus becomes
+ * 'archived' and the row stays, because deployments, evaluations, checkpoints
+ * and lineage point at it. 409 while a deployment of it is unfinished or a
+ * skill runs it. Answers { id, outcome: 'archived' }.
+ */
+modelsRoutes.delete('/versions/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { before } = await modelRegistryService.archive(id);
+    if (before.deploymentStatus !== 'archived') {
+      await auditBuildAct({
+        resourceType: 'model_version',
+        resourceId: id,
+        action: 'archive',
+        actorId: actorOf(req),
+        metadata: {
+          version: before.version,
+          name: before.name,
+          previousDeploymentStatus: before.deploymentStatus,
+          artifactUri: before.artifactUri,
+        },
+      });
+    }
+    res.json({ id, outcome: 'archived' });
+  } catch (err) {
+    sendFailure(res, err, 'Failed to archive model version', 500);
   }
 });
 

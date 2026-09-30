@@ -337,6 +337,21 @@ export class MarketplaceRepository {
     return row ? versionDbToDomain(row) : null;
   }
 
+  /** Move a listing to another status (publish / unpublish, TASK-272). */
+  async updateListingStatus(id: string, status: string): Promise<void> {
+    await prisma.marketplaceListing.update({ where: { id }, data: { status } });
+  }
+
+  /** How many purchases a listing has — buyers who hold a licence to it. */
+  async countPurchases(listingId: string): Promise<number> {
+    return prisma.listingPurchase.count({ where: { listingId } });
+  }
+
+  /** Delete a listing; versions, licences and reviews cascade (TASK-272). */
+  async deleteListing(id: string): Promise<void> {
+    await prisma.marketplaceListing.delete({ where: { id } });
+  }
+
   /** A buyer's purchase of a listing (any tier), or null. */
   async findPurchase(buyerId: string, listingId: string): Promise<ListingPurchaseRecord | null> {
     const row = await prisma.listingPurchase.findUnique({

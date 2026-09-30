@@ -41,6 +41,7 @@ export {
   // Model version selectors
   selectModelVersions,
   selectModelVersionsLoading,
+  selectModelVersionsError,
   selectStagingVersions,
   selectProductionVersions,
 } from './deploymentStore';

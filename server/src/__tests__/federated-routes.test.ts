@@ -9,8 +9,11 @@ import express from 'express';
 import request from 'supertest';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
-const { mockFederatedService } = vi.hoisted(() => ({
+const { mockFederatedService, mockAudit } = vi.hoisted(() => ({
+  mockAudit: vi.fn(),
   mockFederatedService: {
+    cancelRound: vi.fn(),
+    deleteRound: vi.fn(),
     createRound: vi.fn(),
     listRounds: vi.fn(),
     getRound: vi.fn(),
@@ -32,6 +35,8 @@ const { mockFederatedService } = vi.hoisted(() => ({
 vi.mock('../services/FederatedLearningService.js', () => ({
   federatedLearningService: mockFederatedService,
 }));
+
+vi.mock('../services/buildAudit.js', () => ({ auditBuildAct: mockAudit }));
 
 vi.mock('../middleware/auth.middleware.js', () => ({
   authMiddleware: (req: any, _res: any, next: any) => {
@@ -84,6 +89,9 @@ describe('Federated Routes', () => {
       expect(mockFederatedService.createRound).toHaveBeenCalledWith({
         globalModelVersion: 'v1',
       });
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ resourceType: 'federated_round', action: 'create', actorId: 'user-123' })
+      );
     });
 
     it('returns 400 when globalModelVersion missing', async () => {
@@ -676,6 +684,62 @@ describe('Federated Routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to record intervention');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Cancel and delete (TASK-272)
+  // --------------------------------------------------------------------------
+
+  describe('POST /api/federated/rounds/:id/cancel', () => {
+    it('cancels the round and records it', async () => {
+      mockFederatedService.cancelRound.mockResolvedValue({ ...ROUND, status: 'cancelled' });
+
+      const response = await request(app).post('/api/federated/rounds/round-001/cancel');
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('cancelled');
+      expect(mockFederatedService.cancelRound).toHaveBeenCalledWith('round-001');
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ resourceType: 'federated_round', resourceId: 'round-001', action: 'cancel' })
+      );
+    });
+
+    it('answers 409 for a finished round', async () => {
+      const { ConflictError } = await import('../utils/errors.js');
+      mockFederatedService.cancelRound.mockRejectedValue(new ConflictError('Round is already completed'));
+
+      const response = await request(app).post('/api/federated/rounds/round-001/cancel');
+
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe('Round is already completed');
+      expect(mockAudit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /api/federated/rounds/:id', () => {
+    it('deletes a finished round and records the removed row', async () => {
+      mockFederatedService.deleteRound.mockResolvedValue({ ...ROUND, status: 'completed', participantCount: 3 });
+
+      const response = await request(app).delete('/api/federated/rounds/round-001');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ id: 'round-001', outcome: 'deleted' });
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'delete',
+          metadata: expect.objectContaining({ status: 'completed', participantCount: 3 }),
+        })
+      );
+    });
+
+    it('answers 404 for an unknown round', async () => {
+      const { NotFoundError } = await import('../utils/errors.js');
+      mockFederatedService.deleteRound.mockRejectedValue(new NotFoundError('Round', 'nope'));
+
+      const response = await request(app).delete('/api/federated/rounds/nope');
+
+      expect(response.status).toBe(404);
     });
   });
 });

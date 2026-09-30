@@ -3,7 +3,7 @@ id: "TASK-272"
 aliases: []
 title: "Close the server gaps the Build pages ran into"
 slug: "close-the-server-gaps-the-build-pages-ran-into"
-status: "todo"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-09-11"
-updated: "2026-09-11"
+updated: "2026-09-30"
 ---
 
 # Close the server gaps the Build pages ran into
@@ -64,3 +64,17 @@ TASK-266 rebuilt the deployments, model registry, fleet learning, marketplace an
 - Server route and service tests.
 - `npx tsc`, `npx vitest run` and `npx playwright test`.
 - Click each new act through in live mode.
+
+## Decisions (2026-09-30)
+
+Recorded in `docs/records/TASK-272-build-page-deletes.md`. In short:
+
+- **Delete vs archive per entity.** Update package: deleted when never deployed, archived when robots ran it. Model version: always archived (six tables reference it), refused while a deployment of it is unfinished or a skill runs it. Deployment and finished round: deleted. Listing: unpublish (with a matching publish back), delete refused once anyone holds a licence.
+- **Audit.** Creates were not recorded anywhere, so "the same way creates are recorded" had nothing to copy. One helper (`server/src/services/buildAudit.ts`) now records every create and every destructive act on these five entities in the compliance log.
+- **AC 3 was already met** on `main` before this task (`DeploymentService.cancelDeployment` stores `cancelled` since TASK-299); it is covered by the existing service test and needed no change.
+- **The rollback bug** was the literal `packageId: 'rollback'` fallback plus the route ignoring its own `:id`; the rollback row now belongs to the package in the URL.
+
+## Review (2026-09-30)
+
+- **Live check.** A scratch server (SQLite, `AUTH_DISABLED`, `NODE_ENV=development`) was driven over HTTP: a rollback of an approved package on a robot with no successful deployment answers 200 and is filed under that package (the old foreign-key failure); an unknown package answers 404. Package delete archived a rolled-back package and deleted a fresh one. A created round refused delete (409), cancelled (200), refused a second cancel (409), then deleted. A model with a pending deployment refused archive (409); after the deployment was deleted, it archived. A listing unpublished (out of the browse), published again and deleted. Each act wrote a `platform-build` `access_audit` compliance entry. The pages' confirms and toasts are covered by component tests, not clicked in a browser.
+- **Fix in review.** A seller's publish or unpublish of a `pending_review` or `suspended` listing now answers 409 (super-admin only), so neither act can bypass moderation; see decision 6 in the record.

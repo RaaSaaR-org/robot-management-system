@@ -13,7 +13,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
-const { mockModelVersionRepository, mockSkillDefinitionRepository, prismaDouble } = vi.hoisted(() => ({
+const {
+  mockModelVersionRepository,
+  mockSkillDefinitionRepository,
+  mockDeploymentRepository,
+  mockAudit,
+  prismaDouble,
+} = vi.hoisted(() => ({
+  mockDeploymentRepository: {
+    findByModelVersion: vi.fn(),
+  },
+  mockAudit: vi.fn(),
   mockModelVersionRepository: {
     findAll: vi.fn(),
     findById: vi.fn(),
@@ -36,7 +46,10 @@ const { mockModelVersionRepository, mockSkillDefinitionRepository, prismaDouble 
 vi.mock('../repositories/index.js', () => ({
   modelVersionRepository: mockModelVersionRepository,
   skillDefinitionRepository: mockSkillDefinitionRepository,
+  deploymentRepository: mockDeploymentRepository,
 }));
+
+vi.mock('../services/buildAudit.js', () => ({ auditBuildAct: mockAudit }));
 
 vi.mock('../database/index.js', () => ({
   prisma: {
@@ -398,6 +411,81 @@ describe('GET /api/models/versions/:id/lineage', () => {
     mockModelVersionRepository.getLineage.mockResolvedValue(null);
 
     const res = await request(createApp()).get('/api/models/versions/ghost/lineage');
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('DELETE /api/models/versions/:id (TASK-272: archive, never remove)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockModelVersionRepository.findById.mockResolvedValue(domainModel());
+    mockModelVersionRepository.update.mockResolvedValue(domainModel({ deploymentStatus: 'archived' }));
+    mockDeploymentRepository.findByModelVersion.mockResolvedValue([]);
+    mockSkillDefinitionRepository.findAll.mockResolvedValue(skillPage([]));
+  });
+
+  it('archives the version and records it', async () => {
+    const res = await request(createApp()).delete('/api/models/versions/mv-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ id: 'mv-1', outcome: 'archived' });
+    expect(mockModelVersionRepository.update).toHaveBeenCalledWith('mv-1', { deploymentStatus: 'archived' });
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceType: 'model_version',
+        resourceId: 'mv-1',
+        action: 'archive',
+        metadata: expect.objectContaining({ previousDeploymentStatus: 'staging' }),
+      })
+    );
+  });
+
+  it('archives past finished deployments', async () => {
+    mockDeploymentRepository.findByModelVersion.mockResolvedValue([
+      { id: 'd1', status: 'rolled_back' },
+      { id: 'd2', status: 'cancelled' },
+    ]);
+
+    const res = await request(createApp()).delete('/api/models/versions/mv-1');
+
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses while a deployment of it is live', async () => {
+    mockDeploymentRepository.findByModelVersion.mockResolvedValue([{ id: 'd1', status: 'production' }]);
+
+    const res = await request(createApp()).delete('/api/models/versions/mv-1');
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('roll them back or cancel them first');
+    expect(mockModelVersionRepository.update).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it('refuses while a skill runs it', async () => {
+    mockSkillDefinitionRepository.findAll.mockResolvedValue(skillPage([{ id: 's1', name: 'Apple to plate' }]));
+
+    const res = await request(createApp()).delete('/api/models/versions/mv-1');
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('Apple to plate');
+  });
+
+  it('is idempotent on an archived version and does not record twice', async () => {
+    mockModelVersionRepository.findById.mockResolvedValue(domainModel({ deploymentStatus: 'archived' }));
+
+    const res = await request(createApp()).delete('/api/models/versions/mv-1');
+
+    expect(res.status).toBe(200);
+    expect(mockModelVersionRepository.update).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it('404s for an unknown id', async () => {
+    mockModelVersionRepository.findById.mockResolvedValue(null);
+
+    const res = await request(createApp()).delete('/api/models/versions/ghost');
 
     expect(res.status).toBe(404);
   });

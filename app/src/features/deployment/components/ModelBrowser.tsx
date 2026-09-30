@@ -27,9 +27,12 @@ export interface ModelBrowserProps {
   onCopyUri?: (version: ModelVersion) => void;
   /** Opens the edit form (name, skill link); offered as a row action when given. */
   onEdit?: (version: ModelVersion) => void;
-  /** Archives a staging version; offered last, as the menu's destructive act. */
+  /** Archives a version not yet archived; offered last, as the menu's destructive act. */
   onArchive?: (version: ModelVersion) => void;
   isLoading?: boolean;
+  /** A failed load: the table shows it with a Retry that calls `onRetry`. */
+  error?: string | null;
+  onRetry?: () => void;
   /** Primary action of the empty state. */
   emptyAction?: ReactNode;
   /** @deprecated rows are no longer "selected"; kept for API compatibility. */
@@ -49,7 +52,8 @@ const STATUS_OPTIONS = [
 const SOURCE_OPTIONS = ModelSourceKinds.map((kind) => ({ value: kind, label: MODEL_SOURCE_KIND_LABELS[kind] }));
 
 export function ModelBrowser({
-  modelVersions, onSelectVersion, onDeploy, onCopyUri, onEdit, onArchive, isLoading = false, emptyAction, className,
+  modelVersions, onSelectVersion, onDeploy, onCopyUri, onEdit, onArchive, isLoading = false, error, onRetry,
+  emptyAction, className,
 }: ModelBrowserProps) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('');
@@ -157,7 +161,9 @@ export function ModelBrowser({
           items.push({ label: 'Deploy', icon: <Rocket />, onSelect: () => onDeploy(v) });
         }
         if (onCopyUri) items.push({ label: 'Copy artifact URI', icon: <Copy />, onSelect: () => onCopyUri(v) });
-        if (onArchive && v.deploymentStatus === 'staging') {
+        // Any version not yet archived; the server refuses (with the reason)
+        // one a live deployment or a skill still holds.
+        if (onArchive && v.deploymentStatus !== 'archived') {
           items.push({ label: 'Archive', icon: <Archive />, tone: 'danger', separatorBefore: true, onSelect: () => onArchive(v) });
         }
         return items;
@@ -191,6 +197,9 @@ export function ModelBrowser({
           rowActions={rowActions}
           rowActionsLabel={(v) => `Actions for ${getModelDisplayName(v)}`}
           isLoading={isLoading}
+          error={error}
+          errorTitle="Couldn't load models"
+          onRetry={onRetry}
           empty={hasFilters ? (
             <EmptyState icon={<Search />} title="No models match" description="Try another name, or clear the filters."
               action={<Button variant="secondary" onClick={clearFilters}>Clear filters</Button>} />

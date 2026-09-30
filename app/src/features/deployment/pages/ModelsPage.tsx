@@ -23,7 +23,7 @@ import type { ModelVersion } from '../types';
 
 export function ModelsPage() {
   const navigate = useNavigate();
-  const { modelVersions, isLoading, fetchModelVersions } = useModelVersionsAutoFetch();
+  const { modelVersions, isLoading, error, fetchModelVersions } = useModelVersionsAutoFetch();
   const fetchSkills = useDeploymentStore((s) => s.fetchSkills);
   const skills = useDeploymentStore(selectSkills);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -55,13 +55,16 @@ export function ModelsPage() {
     const name = getModelDisplayName(v);
     const ok = await confirm({
       title: `Archive ${name}?`,
-      description: 'It leaves the deploy list, so no new rollout can use it. The artifact and its history are kept.',
+      description:
+        'It leaves the deploy list, so no new rollout can use it. Models are archived, never deleted: the artifact, its deployments, evaluations and lineage are kept.',
       confirmLabel: 'Archive',
       tone: 'danger',
     });
     if (!ok) return;
     try {
-      await deploymentApi.updateModelVersion(v.id, { deploymentStatus: 'archived' });
+      // The registry's delete route (TASK-272): it refuses a model a live
+      // deployment or a skill still holds, and records the act.
+      await deploymentApi.archiveModelVersion(v.id);
       toast.success('Model archived', { description: name });
       await fetchModelVersions();
     } catch (err) {
@@ -87,6 +90,8 @@ export function ModelsPage() {
       <ModelBrowser
         modelVersions={modelVersions}
         isLoading={isLoading}
+        error={error}
+        onRetry={() => void fetchModelVersions()}
         onSelectVersion={(v) => setOpenId(v.id)}
         onDeploy={(v) => navigate(`/deployments?new=${v.id}`)}
         onCopyUri={(v) => void copyUri(v)}

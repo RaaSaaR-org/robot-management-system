@@ -9,7 +9,11 @@
 // ENUMS & CONSTANTS
 // ============================================================================
 
-export type UpdatePackageStatus = 'pending' | 'approved' | 'deployed' | 'rolled_back';
+export type UpdatePackageStatus = 'pending' | 'approved' | 'deployed' | 'rolled_back' | 'archived';
+
+/** What a delete did (TASK-272): removed the package, or archived one robots ran. */
+export type DeleteOutcome = 'deleted' | 'archived';
+
 export type DeploymentStatus = 'pending' | 'downloading' | 'installing' | 'success' | 'failed' | 'rolled_back';
 
 export const UPDATE_STATUS_LABELS: Record<UpdatePackageStatus, string> = {
@@ -17,6 +21,7 @@ export const UPDATE_STATUS_LABELS: Record<UpdatePackageStatus, string> = {
   approved: 'Approved',
   deployed: 'Deployed',
   rolled_back: 'Rolled Back',
+  archived: 'Archived',
 };
 
 export const DEPLOYMENT_STATUS_LABELS: Record<DeploymentStatus, string> = {
@@ -97,6 +102,11 @@ export interface UpdatesActions {
   approvePackage: (id: string, approverId: string) => Promise<void>;
   deployPackage: (packageId: string, robotId: string, previousVersion?: string) => Promise<void>;
   triggerRollback: (packageId: string, robotId: string, targetVersion: string) => Promise<void>;
+  /**
+   * Delete a package and drop it from the list (TASK-272). Unlike the other
+   * acts it throws on failure, so the caller can toast the server's reason.
+   */
+  deletePackage: (id: string) => Promise<DeleteOutcome>;
   fetchDeployments: (robotId: string) => Promise<void>;
   reset: () => void;
 }
