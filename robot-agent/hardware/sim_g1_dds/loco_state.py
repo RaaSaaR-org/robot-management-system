@@ -112,6 +112,23 @@ def wrap_angle(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
+def pose_relative_to(origin: tuple[float, float, float],
+                     pose: tuple[float, float, float]) -> tuple[float, float, float]:
+    """`pose` expressed in the frame whose origin is `origin` (both world x, y, yaw).
+
+    This is what a real G1's odometry reports: its frame starts wherever the
+    base stood when the sidecar came up, so the world pose is carried into
+    that start-up frame. `sim_node.py --odom-origin boot` (TASK-342) uses it to
+    publish odometry that is NOT the MJCF world -- the case a frame
+    registration exists to fix. Yaw comes back wrapped to (-pi, pi].
+    """
+    ox, oy, oyaw = origin
+    x, y, yaw = pose
+    c, s = math.cos(oyaw), math.sin(oyaw)
+    dx, dy = x - ox, y - oy
+    return (c * dx + s * dy, -s * dx + c * dy, wrap_angle(yaw - oyaw))
+
+
 @dataclass
 class Pose:
     """World pose. `yaw` is continuous (unwrapped) -- see the module docstring."""

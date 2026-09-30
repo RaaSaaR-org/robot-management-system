@@ -94,4 +94,62 @@ describe('assessFrameRegistration', () => {
       expect(assessFrameRegistration(graph({ id: 'depot', kind: 'site' }), { poseFrame: 'twin' }).registered).toBe(false);
     });
   });
+
+  describe('with a frame registration (TASK-342)', () => {
+    const twinGraph = () => graph({ id: 'twin-demo', kind: 'site', twinId: 'twin-demo' });
+    const registration = {
+      twinId: 'twin-demo',
+      odomFrameId: 'boot-1',
+      x: 3,
+      y: 2,
+      yawDeg: 90,
+      method: 'place-anchor',
+      createdAt: null,
+    };
+
+    it('registers a twin graph on odometry while the registration is current', () => {
+      expect(
+        assessFrameRegistration(twinGraph(), { poseFrame: 'odom', registration, odomFrameId: 'boot-1' }),
+      ).toEqual({ registered: true, how: 'registration', registration });
+    });
+
+    it('refuses it once odometry has restarted (a new boot id)', () => {
+      const status = assessFrameRegistration(twinGraph(), {
+        poseFrame: 'odom',
+        registration,
+        odomFrameId: 'boot-2',
+      });
+      expect(status.registered).toBe(false);
+      expect(status.registered === false && status.reason).toContain('odometry restarted');
+    });
+
+    it('refuses it while the odometry session is not known yet', () => {
+      const status = assessFrameRegistration(twinGraph(), { poseFrame: 'odom', registration, odomFrameId: null });
+      expect(status.registered).toBe(false);
+    });
+
+    it('refuses a registration measured against another twin', () => {
+      const status = assessFrameRegistration(twinGraph(), {
+        poseFrame: 'odom',
+        registration: { ...registration, twinId: 'twin-other' },
+        odomFrameId: 'boot-1',
+      });
+      expect(status.registered).toBe(false);
+      expect(status.registered === false && status.reason).toContain('twin-other');
+    });
+
+    it('says there is none when there is none', () => {
+      const status = assessFrameRegistration(twinGraph(), { poseFrame: 'odom', registration: null, odomFrameId: 'boot-1' });
+      expect(status.registered === false && status.reason).toContain('no frame registration');
+    });
+
+    it('never applies a registration to a twin-less graph', () => {
+      const status = assessFrameRegistration(graph({ id: 'depot', kind: 'site' }), {
+        poseFrame: 'odom',
+        registration,
+        odomFrameId: 'boot-1',
+      });
+      expect(status.registered).toBe(false);
+    });
+  });
 });

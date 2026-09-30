@@ -122,6 +122,16 @@ describe('locationDiffers', () => {
     // Absent and false are the same claim: not aligned.
     expect(locationDiffers(base, { ...base, siteAligned: false })).toBe(false);
   });
+
+  it('sees the site pose appear, vanish or move — a registration changes it with odometry still (TASK-342)', () => {
+    const base = { x: 1, y: 2, heading: 0, siteAligned: true };
+    const site = { x: 4, y: 1, heading: 90 };
+    expect(locationDiffers(base, { ...base, sitePose: site })).toBe(true);
+    expect(locationDiffers({ ...base, sitePose: site }, base)).toBe(true);
+    expect(locationDiffers({ ...base, sitePose: site }, { ...base, sitePose: { ...site, x: 4.5 } })).toBe(true);
+    expect(locationDiffers({ ...base, sitePose: site }, { ...base, sitePose: { ...site, heading: 95 } })).toBe(true);
+    expect(locationDiffers({ ...base, sitePose: site }, { ...base, sitePose: { ...site, x: 4.001 } })).toBe(false);
+  });
 });
 
 describe('RobotManager peers', () => {

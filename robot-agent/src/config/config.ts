@@ -638,6 +638,12 @@ export interface Config {
      */
     refreshMs: number;
     /**
+     * How often a platform-bound robot polls its frame registration
+     * (`PLACE_REGISTRATION_REFRESH_MS`, TASK-342): an operator's alignment
+     * reaches the fence within one poll. 0 = once at boot only.
+     */
+    registrationRefreshMs: number;
+    /**
      * Where the fetched place graph is cached (`PLACE_GRAPH_CACHE_PATH`). The
      * binding source caches per robot, beside it:
      * `place-graph-cache.robot-<robotId>.json`.
@@ -1023,6 +1029,7 @@ export const config: Config = {
     faultNullPose: process.env.PLACE_FAULT_NULL_POSE === 'true',
     twinId: process.env.PLACE_TWIN_ID || '',
     refreshMs: envFloat(process.env.PLACE_GRAPH_REFRESH_MS, 60_000),
+    registrationRefreshMs: envFloat(process.env.PLACE_REGISTRATION_REFRESH_MS, 5_000),
     cachePath: process.env.PLACE_GRAPH_CACHE_PATH || './data/place-graph-cache.json',
     keepoutMarginM: envFloat(process.env.PLACE_KEEPOUT_MARGIN_M, 0.5),
   },

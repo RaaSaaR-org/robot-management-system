@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sim_node = pytest.importorskip("sim_node")
 
 from joints import BODY, LHAND, RHAND  # noqa: E402
+from loco_state import pose_relative_to  # noqa: E402
 
 
 # ---------------------------------------------------------------- query parsing
@@ -94,6 +95,7 @@ class FakeNode:
         self.calls: list[dict] = []
         self.scene = type("S", (), {"name": "test_scene.xml"})()
         self.behind_s = 0.0
+        self.odom_origin = None  # TASK-342: world odometry unless a test sets one
         self.lock = _NullLock()
         n = len(BODY) + (len(LHAND) + len(RHAND) if hands else 0)
         self.data = type("D", (), {"qpos": [0.1 * i for i in range(n)], "time": 12.5})()
@@ -116,6 +118,12 @@ class FakeNode:
 
     def measured_pose(self):
         return (1.0, 2.0, 0.5)
+
+    def odom_pose(self):
+        # Same rule as SimNode.odom_pose -- the real one needs MuJoCo.
+        if self.odom_origin is None:
+            return self.measured_pose()
+        return pose_relative_to(self.odom_origin, self.measured_pose())
 
 
 class _NullLock:
@@ -193,6 +201,25 @@ class TestSnapshotRoute:
         head, body = get(FakeNode(), "/health?cachebust=1")
         assert b"200" in head.split(b"\r\n")[0]
         assert json.loads(body)["status"] == "ok"
+
+
+
+class TestBootOdometry:
+    """TASK-342: `--odom-origin boot` reports odometry about the start-up pose."""
+
+    def test_health_says_which_odometry_frame(self):
+        node = FakeNode()
+        assert json.loads(get(node, "/health")[1])["odom_frame"] == "world"
+        node.odom_origin = (0.0, 0.0, 0.0)
+        assert json.loads(get(node, "/health")[1])["odom_frame"] == "boot"
+
+    def test_state_odometry_is_relative_to_the_boot_pose(self):
+        node = FakeNode()  # measured world pose (1, 2, 0.5)
+        assert json.loads(get(node, "/state")[1])["odometry"] == pytest.approx(
+            {"x": 1.0, "y": 2.0, "yaw": 0.5})
+        node.odom_origin = (1.0, 2.0, 0.5)
+        assert json.loads(get(node, "/state")[1])["odometry"] == pytest.approx(
+            {"x": 0.0, "y": 0.0, "yaw": 0.0}, abs=1e-12)
 
 
 class TestStateJoints:

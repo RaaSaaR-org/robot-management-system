@@ -113,6 +113,13 @@ export interface RobotLocation {
    * site map (TASK-331) plots only robots that claim this.
    */
   siteAligned?: boolean;
+  /**
+   * Where the robot stands in its SITE's (twin) frame, present only while
+   * `siteAligned` (TASK-342). `x`/`y`/`heading` stay the raw odometry pose; for
+   * a robot aligned by a frame registration this is that pose carried through
+   * it, for a sim whose world is the twin it is the same pose. Heading in degrees.
+   */
+  sitePose?: { x: number; y: number; heading: number };
 }
 
 // ============================================================================
