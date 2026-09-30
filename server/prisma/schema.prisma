@@ -66,6 +66,7 @@ model Robot {
   deviceCertificate  DeviceCertificate?
   vlaSessions        VlaSession[]
   sensorScans        SensorScan[]
+  frameRegistration  RobotFrameRegistration?
 
   // TASK-287: a serial number is unique WITHIN a tenant, not across the
   // platform — two operators may legitimately run the same hardware serial.
@@ -74,6 +75,28 @@ model Robot {
   @@index([status])
   @@index([a2aEnabled])
   @@index([tenantId, updatedAt])
+}
+
+// TASK-341: how a robot's odometry frame sits in its site twin's world frame —
+// `twin = Rot(yawDeg) * odom + (x, y)`. Valid only while the robot is bound to
+// `twinId` AND its odometry is still the frame it was measured in
+// (`odomFrameId`, the sidecar boot id); odometry re-zeroes on every restart.
+model RobotFrameRegistration {
+  id            String   @id @default(uuid())
+  robotId       String   @unique
+  twinId        String
+  odomFrameId   String
+  x             Float
+  y             Float
+  yawDeg        Float
+  method        String // manual | place-anchor
+  anchorPlaceId String?
+  tenantId      String?
+  createdAt     DateTime @default(now())
+
+  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
 
 // Recorded point-cloud scan from a depth / LiDAR sensor (e.g. Livox MID-360).

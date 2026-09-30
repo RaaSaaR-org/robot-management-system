@@ -111,9 +111,14 @@ export class RobotRepository {
    * so the result is `null` (not found) rather than a cross-tenant write.
    */
   async setTwin(id: string, twinId: string | null): Promise<Robot | null> {
-    const existing = await prisma.robot.findUnique({ where: { id }, select: { id: true } });
+    const existing = await prisma.robot.findUnique({ where: { id }, select: { id: true, twinId: true } });
     if (!existing) return null;
     const robot = await prisma.robot.update({ where: { id }, data: { twinId } });
+    // TASK-341: a frame registration is measured against ONE twin; a new site
+    // (or none) leaves it describing a frame the robot is no longer in.
+    if (existing.twinId !== twinId) {
+      await prisma.robotFrameRegistration.deleteMany({ where: { robotId: id } });
+    }
     return dbRobotToDomain(robot);
   }
 
