@@ -5,7 +5,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { SocialPanel } from '@/features/social';
 import { CloudUpload, GitFork, Layers } from 'lucide-react';
 import {
   Button,
@@ -63,6 +64,8 @@ export function DatasetEpisodesPage() {
   const [episodesLoading, setEpisodesLoading] = useState(false);
   const [episodesError, setEpisodesError] = useState<string | null>(null);
   const [selectedEpisode, setSelectedEpisode] = useState<number | null>(null);
+  const [searchParams] = useSearchParams();
+  const requestedEpisodeRef = useRef(searchParams.get('episode'));
   const [frames, setFrames] = useState<FrameData[]>([]);
   const [framesLoading, setFramesLoading] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -153,7 +156,9 @@ export function DatasetEpisodesPage() {
         const flags: Record<number, boolean> = {};
         for (const ep of eps) if (ep.flagged) flags[ep.index] = true;
         setFlaggedMap(flags);
-        if (eps.length > 0) setSelectedEpisode(eps[0].index);
+        // `?episode=N` (an activity-feed link, TASK-241) opens that episode.
+        const requested = eps.find((e) => String(e.index) === requestedEpisodeRef.current);
+        if (eps.length > 0) setSelectedEpisode((requested ?? eps[0]).index);
       })
       .catch((err) => {
         setEpisodes([]);
@@ -574,10 +579,25 @@ export function DatasetEpisodesPage() {
                 annotating={annotating}
                 onAnnotate={() => void handleAnnotate()}
               />
+              <Panel>
+                <SocialPanel
+                  subject={{ subjectType: 'episode', subjectId: datasetId, episodeIndex: selectedEpisode }}
+                  title={`Episode ${selectedEpisode} discussion`}
+                />
+              </Panel>
             </>
           )}
         </div>
       </div>
+
+      {dataset && (
+        <Panel>
+          <SocialPanel
+            subject={{ subjectType: isView ? 'dataset_view' : 'dataset', subjectId: dataset.id }}
+            title={isView ? 'View discussion' : 'Dataset discussion'}
+          />
+        </Panel>
+      )}
 
       <DatasetViewsSection
         parentEpisodeCount={episodes.length || dataset?.demonstrationCount || 0}

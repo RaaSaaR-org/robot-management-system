@@ -7,6 +7,7 @@
 import { Ban, Download, RotateCcw } from 'lucide-react';
 import { Button, KeyValueList, Modal, StatusTag } from '@/shared/components/ui';
 import type { TrainingJob } from '../../types';
+import { SocialPanel } from '@/features/social';
 import { TrainingProgressMonitor } from '../TrainingProgressMonitor';
 import { JobMixture } from './JobMixture';
 import { RunExportNotice } from './RunExportNotice';
@@ -83,6 +84,9 @@ function OpenJobModal({ job, onClose, onCancel, onRetry }: Omit<JobDetailModalPr
             ]}
           />
         </div>
+      </div>
+      <div className="mt-6">
+        <SocialPanel subject={{ subjectType: 'training_job', subjectId: job.id }} />
       </div>
     </Modal>
   );

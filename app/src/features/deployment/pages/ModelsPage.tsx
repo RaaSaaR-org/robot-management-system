@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { Button, PageHeader, confirm, toast } from '@/shared/components/ui';
 import { getErrorMessage } from '@/shared/utils';
@@ -26,7 +26,10 @@ export function ModelsPage() {
   const { modelVersions, isLoading, error, fetchModelVersions } = useModelVersionsAutoFetch();
   const fetchSkills = useDeploymentStore((s) => s.fetchSkills);
   const skills = useDeploymentStore(selectSkills);
-  const [openId, setOpenId] = useState<string | null>(null);
+  // `?model=<id>` opens that model's details — the target of an evidence chip
+  // or activity-feed link (TASK-241).
+  const [searchParams] = useSearchParams();
+  const [openId, setOpenId] = useState<string | null>(() => searchParams.get('model'));
   const [showRegister, setShowRegister] = useState(false);
   const [editing, setEditing] = useState<ModelVersion | null>(null);
 

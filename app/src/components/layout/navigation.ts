@@ -19,6 +19,7 @@ import {
   Bot,
   Brain,
   BrainCircuit,
+  MessagesSquare,
   Cpu,
   Database,
   GraduationCap,
@@ -227,6 +228,7 @@ export const NAV_GROUPS: NavGroup[] = [
           /^\/training(\/|$)/,
           /^\/models(\/|$)/,
           /^\/research(\/|$)/,
+          /^\/activity(\/|$)/,
           /^\/fleet-learning(\/|$)/,
         ],
         // No `tabs` on the row: its page is whatever stop the rail points at,
@@ -269,6 +271,7 @@ export const NAV_GROUPS: NavGroup[] = [
             ],
           },
           { label: 'Research', path: '/research', icon: BrainCircuit },
+          { label: 'Activity', path: '/activity', icon: MessagesSquare },
         ],
       },
       // Deployments keeps its own row: it is the seam where Build hands over

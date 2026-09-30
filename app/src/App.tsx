@@ -49,6 +49,7 @@ import {
   LazyIncidentDetailPage,
   LazyDatasetsPage,
   LazyResearchPage,
+  LazyActivityPage,
   LazyDatasetEpisodesPage,
   LazyTrainingPage,
   LazyDeploymentsPage,
@@ -482,6 +483,7 @@ function App() {
           />
           <Route path="/research" element={<ProtectedAppRoute><LazyResearchPage /></ProtectedAppRoute>} />
           <Route path="/research/:id" element={<ProtectedAppRoute><LazyResearchPage /></ProtectedAppRoute>} />
+          <Route path="/activity" element={<ProtectedAppRoute><LazyActivityPage /></ProtectedAppRoute>} />
 
           {/* DataCollection - Robot data collection sessions */}
           <Route
