@@ -239,7 +239,6 @@ beforeEach(async () => {
   await raw.apiToken.deleteMany();
   // Wave 3d
   await raw.conversation.deleteMany();
-  await raw.zone.deleteMany();
   // Wave 3c
   await raw.deployment.deleteMany();
   await raw.modelVersion.deleteMany();
@@ -860,43 +859,14 @@ describe('tenant-isolation extension — SyntheticJob (Wave 3c)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Wave 3d model tests (Zone, Conversation)
+// Wave 3d model tests (Conversation)
 // ---------------------------------------------------------------------------
-
-async function seedZoneRaw(id: string, name: string, tenantId: string): Promise<void> {
-  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
-  await raw.zone.create({
-    data: { id, name, floor: '1', type: 'operational', bounds: '{}', tenantId },
-  });
-  await raw.$disconnect();
-}
 
 async function seedConversationRaw(id: string, name: string, tenantId: string): Promise<void> {
   const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
   await raw.conversation.create({ data: { id, name, tenantId } });
   await raw.$disconnect();
 }
-
-describe('tenant-isolation extension — Zone (Wave 3d)', () => {
-  it('scopes findMany by tenant', async () => {
-    await seedZoneRaw('z-a1', 'Zone A', TENANT_A);
-    await seedZoneRaw('z-b1', 'Zone B', TENANT_B);
-    const results = await prisma.zone.findMany();
-    expect(results).toHaveLength(1);
-    expect(results[0].id).toBe('z-a1');
-  });
-
-  it('stamps tenantId on create', async () => {
-    const z = await prisma.zone.create({ data: { name: 'New Zone', floor: '2', type: 'charging', bounds: '{}' } });
-    expect(z.tenantId).toBe(TENANT_A);
-  });
-
-  it('blocks cross-tenant findUnique', async () => {
-    await seedZoneRaw('z-b1', 'Zone B', TENANT_B);
-    const found = await prisma.zone.findUnique({ where: { id: 'z-b1' } });
-    expect(found).toBeNull();
-  });
-});
 
 describe('tenant-isolation extension — Conversation (Wave 3d)', () => {
   it('scopes findMany by tenant', async () => {

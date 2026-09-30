@@ -509,33 +509,6 @@ model Alert {
 }
 
 // ============================================================================
-// ZONES
-// ============================================================================
-
-model Zone {
-  id          String   @id @default(uuid())
-  name        String
-  floor       String
-  type        String // ZoneType: 'operational' | 'restricted' | 'charging' | 'maintenance'
-  bounds      String // JSON: { x, y, width, height }
-  color       String?
-  description String?
-  metadata    String? // JSON: Record<string, unknown>
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id])
-
-  // Tenant-qualified (TASK-288): "Hall A" on floor 1 is a default zone
-  // name, so a global unique made the second tenant to create one collide.
-  @@unique([tenantId, name, floor])
-  @@index([floor])
-  @@index([type])
-  @@index([tenantId, createdAt])
-}
-
-// ============================================================================
 // EVENT LOG
 // ============================================================================
 
@@ -3167,7 +3140,6 @@ model Tenant {
   syntheticJobs  SyntheticJob[]
 
   // Relations (Wave 3d — conversations / misc)
-  zones         Zone[]
   conversations Conversation[]
 
   // Relations (Wave 3e — service accounts)

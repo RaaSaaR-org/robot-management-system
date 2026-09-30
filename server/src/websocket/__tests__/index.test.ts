@@ -60,7 +60,6 @@ const services = vi.hoisted(() => {
     task: make(), // conversationManager.onTaskEvent
     robot: make(), // robotManager.onRobotEvent
     alert: make(), // alertService.onAlertEvent
-    zone: make(), // zoneService.onZoneEvent
     process: make(), // processManager.onProcessEvent
     robotTask: make(), // taskDistributor.onTaskEvent
     estop: make(), // safetyService.onEStopEvent
@@ -89,11 +88,6 @@ vi.mock('../../services/RobotManager.js', () => ({
 vi.mock('../../services/AlertService.js', () => ({
   alertService: {
     onAlertEvent: vi.fn((cb: (e: unknown) => void) => { services.alert.cb = cb; return () => {}; }),
-  },
-}));
-vi.mock('../../services/ZoneService.js', () => ({
-  zoneService: {
-    onZoneEvent: vi.fn((cb: (e: unknown) => void) => { services.zone.cb = cb; return () => {}; }),
   },
 }));
 vi.mock('../../services/ProcessManager.js', () => ({
@@ -444,15 +438,6 @@ describe('setupWebSocket', () => {
       services.alert.cb?.({ type: 'alert:created', alert: { id: 'a1' }, timestamp: 123 });
       const msg = JSON.parse(client.sent[0]);
       expect(msg).toEqual({ type: 'alert:created', alert: { id: 'a1' }, timestamp: 123 });
-    });
-
-    it('broadcasts zone events', () => {
-      const wss = setup();
-      const client = connect(wss, makeClient());
-      client.reset();
-      services.zone.cb?.({ type: 'zone:updated', zone: { id: 'z1' }, timestamp: 9 });
-      const msg = JSON.parse(client.sent[0]);
-      expect(msg).toEqual({ type: 'zone:updated', zone: { id: 'z1' }, timestamp: 9 });
     });
 
     it('broadcasts process events extracting only present fields', () => {

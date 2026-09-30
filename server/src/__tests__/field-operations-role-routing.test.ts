@@ -1,13 +1,12 @@
 /**
  * @file field-operations-role-routing.test.ts
- * @description Real application routing protects zone, tour and patrol writes from viewers.
+ * @description Real application routing protects tour and patrol writes from viewers.
  * @feature auth
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { createApp } from '../app.js';
-import { zoneService } from '../services/ZoneService.js';
 import { tourService } from '../services/TourService.js';
 import { patrolService } from '../services/PatrolService.js';
 import { patrolPhotoStore } from '../services/PatrolPhotoStore.js';
@@ -31,10 +30,6 @@ afterEach(() => {
 });
 
 const writes = [
-  { method: 'post', path: '/api/zones', spy: () => vi.spyOn(zoneService, 'createZone') },
-  { method: 'put', path: '/api/zones/zone-1', spy: () => vi.spyOn(zoneService, 'updateZone') },
-  { method: 'delete', path: '/api/zones/zone-1', spy: () => vi.spyOn(zoneService, 'deleteZone') },
-  { method: 'delete', path: '/api/zones/floor/1', spy: () => vi.spyOn(zoneService, 'deleteZonesByFloor') },
   { method: 'post', path: '/api/tour/routes', spy: () => vi.spyOn(tourService, 'createRoute') },
   { method: 'put', path: '/api/tour/routes/route-1', spy: () => vi.spyOn(tourService, 'updateRoute') },
   { method: 'delete', path: '/api/tour/routes/route-1', spy: () => vi.spyOn(tourService, 'deleteRoute') },
@@ -64,7 +59,7 @@ describe.each(writes)('$method $path', ({ method, path, spy }) => {
     expect(operation).not.toHaveBeenCalled();
   });
 
-  it.each(path.startsWith('/api/zones') ? ['owner', 'super-admin'] : ['member', 'owner', 'super-admin'])('allows %s to reach the operation', async (role) => {
+  it.each(['member', 'owner', 'super-admin'])('allows %s to reach the operation', async (role) => {
     const operation = spy().mockResolvedValue({
       unreachable: false, result: { ok: true }, key: 'control.jpg', kind: 'control', size: 1,
     } as never);
@@ -93,21 +88,10 @@ it('accepts robot photo callbacks from an authenticated member service account',
   expect(upload).toHaveBeenCalledOnce();
 });
 
-it('rejects zone mutations by members', async () => {
-  for (const { method, path, spy } of writes.filter(({ path }) => path.startsWith('/api/zones'))) {
-    const operation = spy();
-    const result = await request(app)[method](path)
-      .set('Authorization', `Bearer ${token('member')}`).send({});
-    expect(result.status).toBe(403);
-    expect(operation).not.toHaveBeenCalled();
-  }
-});
-
-it('lets viewers read zones, tour routes, patrol routes and validate a schedule', async () => {
-  vi.spyOn(zoneService, 'getZones').mockResolvedValue({ zones: [], total: 0 } as never);
+it('lets viewers read tour routes, patrol routes and validate a schedule', async () => {
   vi.spyOn(tourService, 'listRoutes').mockResolvedValue([]);
   vi.spyOn(patrolService, 'listRoutes').mockResolvedValue([]);
-  for (const path of ['/api/zones', '/api/tour/routes', '/api/patrol/routes']) {
+  for (const path of ['/api/tour/routes', '/api/patrol/routes']) {
     const result = await request(app).get(path).set('Authorization', `Bearer ${token('viewer')}`);
     expect(result.status).toBe(200);
   }

@@ -6,5 +6,3 @@
 
 export { useFleetStatus } from './useFleetStatus';
 export type { UseFleetStatusReturn } from './useFleetStatus';
-export { useZones, useZoneManagement, useZoneEditor } from './useZones';
-export type { UseZonesReturn, UseZoneManagementReturn, UseZoneEditorReturn } from './useZones';

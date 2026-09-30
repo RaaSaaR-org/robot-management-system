@@ -136,7 +136,6 @@ export async function seedDefaultTenant(): Promise<void> {
     backfill(prisma.simulationJob),
     backfill(prisma.syntheticJob),
     // Wave 3d
-    backfill(prisma.zone),
     backfill(prisma.conversation),
     // Wave 3e
     backfill(prisma.apiToken),
@@ -159,7 +158,7 @@ export async function seedDefaultTenant(): Promise<void> {
     'alerts', 'incidents', 'robotTasks', 'robotCommands',
     'processDefinitions', 'processInstances', 'approvalRequests', 'events',
     'modelVersions', 'deployments', 'simulationJobs', 'syntheticJobs',
-    'zones', 'conversations',
+    'conversations',
     'apiTokens',
     'episodeRewards', 'interventionEpisodes',
     'digitalTwins', 'scanSessions', 'simScenes',

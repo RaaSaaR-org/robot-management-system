@@ -1,12 +1,11 @@
 /**
  * @file demoData.ts
- * @description Mock data for demo mode — H1 humanoid fleet with telemetry, alerts, and zones
+ * @description Mock data for demo mode — H1 humanoid fleet with telemetry and alerts
  * @feature mocks
  */
 
 import type { Robot, RobotTelemetry, JointState } from '@/features/robots/types';
 import type { Alert } from '@/features/alerts/types';
-import type { Zone } from '@/features/fleet/types';
 
 // ============================================================================
 // H1 HUMANOID — Primary Demo Robot
@@ -213,49 +212,3 @@ export const DEMO_ALERTS: Alert[] = [
   },
 ];
 
-// ============================================================================
-// ZONES (4)
-// ============================================================================
-
-export const DEMO_ZONES: Zone[] = [
-  {
-    id: 'demo-zone-001',
-    name: 'Assembly Hall',
-    floor: '1',
-    bounds: { x: 0, y: 0, width: 20, height: 15 },
-    type: 'operational',
-    description: 'Main assembly area for robot operations',
-    createdAt: '2025-01-01T00:00:00.000Z',
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: 'demo-zone-002',
-    name: 'Lab Bench A',
-    floor: '1',
-    bounds: { x: 0, y: 15, width: 10, height: 10 },
-    type: 'operational',
-    description: 'Robot arm workbench for precision tasks',
-    createdAt: '2025-01-01T00:00:00.000Z',
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: 'demo-zone-003',
-    name: 'Charging Station',
-    floor: '1',
-    bounds: { x: 10, y: 15, width: 10, height: 10 },
-    type: 'charging',
-    description: 'Battery charging and power management area',
-    createdAt: '2025-01-01T00:00:00.000Z',
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: 'demo-zone-004',
-    name: 'Storage',
-    floor: '1',
-    bounds: { x: 20, y: 0, width: 15, height: 15 },
-    type: 'maintenance',
-    description: 'Equipment storage and offline robot parking',
-    createdAt: '2025-01-01T00:00:00.000Z',
-    updatedAt: new Date().toISOString(),
-  },
-];
