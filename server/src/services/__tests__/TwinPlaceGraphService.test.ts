@@ -115,15 +115,29 @@ describe('TwinPlaceGraphService.buildPlaceGraph', () => {
     expect(graph.places[0]).toMatchObject({ id: 'RACK-A', keepout: true, placeType: 'rack_face' });
   });
 
-  it('leaves workcell / charging / speed zones OUT of the place graph', () => {
-    // They are task annotations, not the vocabulary an operator uses for
-    // "where are you". Promote one by re-typing it as a room.
+  it('emits room, workcell, charging and keepout as places, and leaves speed OUT (TASK-326)', () => {
+    // Since TASK-274 the twin is the only zone model, so every navigable zone
+    // is a place. Speed zones annotate floor that belongs to another place.
     const graph = service.buildPlaceGraph(makeTwin(), [
-      makeZone({ id: 'a', type: 'workcell' }),
-      makeZone({ id: 'b', type: 'charging' }),
-      makeZone({ id: 'c', type: 'speed' }),
+      makeZone({ id: 'a', name: 'room-1', type: 'room', metadata: null }),
+      makeZone({ id: 'b', name: 'cell-1', type: 'workcell', metadata: null }),
+      makeZone({ id: 'c', name: 'dock-1', type: 'charging', metadata: null }),
+      makeZone({ id: 'd', name: 'rack-1', type: 'keepout', metadata: null }),
+      makeZone({ id: 'e', name: 'slow-1', type: 'speed', metadata: null }),
     ]);
-    expect(graph.places).toEqual([]);
+    expect(graph.places.map((p) => [p.id, p.keepout, p.placeType])).toEqual([
+      ['ROOM-1', false, 'unknown'],
+      ['CELL-1', false, 'cell'],
+      ['DOCK-1', false, 'charging'],
+      ['RACK-1', true, 'unknown'],
+    ]);
+  });
+
+  it('lets metadata.placeType override the type implied by the zone type', () => {
+    const graph = service.buildPlaceGraph(makeTwin(), [
+      makeZone({ type: 'charging', metadata: { placeType: 'dock' } }),
+    ]);
+    expect(graph.places[0].placeType).toBe('dock');
   });
 
   it('falls back to placeType "unknown" rather than guessing', () => {

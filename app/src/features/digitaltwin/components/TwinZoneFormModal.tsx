@@ -10,6 +10,10 @@
  *   robot's place graph is expressed in. Places are HAND-AUTHORED here rather
  *   than derived from the twin-builder's DBSCAN clusters: a cluster is a blob of
  *   geometry with no name, and "AISLE-3" is a name a human uses out loud.
+ *
+ *   TASK-326: every zone except `speed` is a place, so its name must be a
+ *   valid place id and unique per twin. The server's 400 (unsafe name) and 409
+ *   (duplicate name) land inline on the Name field, not in a generic error.
  * @feature digitaltwin
  */
 
@@ -22,8 +26,11 @@ import { ZONE_TYPE_LABELS } from './ZoneLegend';
 
 const TYPE_OPTIONS = (Object.keys(ZONE_TYPE_LABELS) as TwinZoneType[]).map((value) => ({ value, label: ZONE_TYPE_LABELS[value] }));
 
-/** Zone types that become entries in the robot's place graph. */
-const PLACE_BEARING_TYPES: ReadonlySet<TwinZoneType> = new Set<TwinZoneType>(['room', 'keepout']);
+/** Zone types that become entries in the robot's place graph (TASK-326). */
+const PLACE_BEARING_TYPES: ReadonlySet<TwinZoneType> = new Set<TwinZoneType>(['room', 'workcell', 'charging', 'keepout']);
+
+/** Server answers about the name itself: 400 not a place id, 409 duplicate. */
+const NAME_ERROR_STATUSES: ReadonlySet<number> = new Set([400, 409]);
 
 const PLACE_TYPE_LABELS: Record<TwinPlaceType, string> = {
   aisle: 'Aisle',
@@ -120,14 +127,20 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
     };
 
     setFormError(undefined);
+    // A rejected name belongs on the Name field; anything else is form-wide.
+    const showFailure = (fallback: string) => {
+      const { error, errorStatus } = useTwinZoneStore.getState();
+      if (errorStatus !== null && NAME_ERROR_STATUSES.has(errorStatus)) setNameError(error ?? fallback);
+      else setFormError(error ?? fallback);
+    };
     if (editingZone) {
       const saved = await updateZone(editingZone.id, body);
       if (saved) toast.success('Zone updated', { description: name });
-      else setFormError(useTwinZoneStore.getState().error ?? "Couldn't update the zone.");
+      else showFailure("Couldn't update the zone.");
     } else if (pendingPolygon && pendingPolygon.length >= 3) {
       const saved = await createZone({ ...body, points: pendingPolygon });
       if (saved) toast.success('Zone created', { description: name });
-      else setFormError(useTwinZoneStore.getState().error ?? "Couldn't create the zone.");
+      else showFailure("Couldn't create the zone.");
     }
   };
 
@@ -148,14 +161,14 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
       onSubmit={handleSubmit}
       noValidate
     >
-      <FormField label="Name" required error={nameError}>
+      <FormField label="Name" required error={nameError} hint="Also the robot's place id: letters, digits, '.', '_' or '-', unique in this twin.">
         <Input
           value={form.name}
           onChange={(e) => {
             setForm((f) => ({ ...f, name: e.target.value }));
             if (nameError) setNameError(undefined);
           }}
-          placeholder="e.g. Loading dock"
+          placeholder="e.g. loading-dock"
         />
       </FormField>
 
@@ -164,7 +177,7 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
       </FormField>
 
       {PLACE_BEARING_TYPES.has(form.type) && (
-        <FormField label="Place type" hint="How the robot names this region out loud. Rooms and keep-outs are published to the robot as its place graph.">
+        <FormField label="Place type" hint="How the robot names this region out loud. Every zone except speed zones is published to the robot as its place graph.">
           <Select options={PLACE_OPTIONS} value={form.placeType} onChange={(e) => setForm((f) => ({ ...f, placeType: e.target.value as TwinPlaceType }))} />
         </FormField>
       )}
