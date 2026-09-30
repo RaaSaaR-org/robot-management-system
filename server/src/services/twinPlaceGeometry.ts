@@ -1,8 +1,9 @@
 /**
  * @file twinPlaceGeometry.ts
  * @description Pure geometry over TwinZone places: "which place contains this
- *              point". Shared by the place-aware slices of TASK-274 (zone
- *              E-stop, deployments) so they all answer it the same way.
+ *              point", and "is this robot in that zone". Shared by the
+ *              place-aware slices of TASK-274 (zone E-stop, deployments,
+ *              verification scope) so they all answer it the same way.
  * @feature digitaltwin
  */
 
@@ -72,4 +73,31 @@ export function findContainingPlace<Z extends PlaceZoneLike>(
     }
   }
   return best;
+}
+
+/** A TwinZone resolved to the place id a robot on its twin would report. */
+export interface ZonePlaceTarget {
+  zoneId: string;
+  name: string;
+  twinId: string;
+  /** Place-graph id; null when the zone is not a place (e.g. `speed`). */
+  placeId: string | null;
+}
+
+/** The minimum of a robot the zone matcher reads. */
+export interface PlacedRobotLike {
+  twinId?: string | null;
+  location?: { place?: string | null } | null;
+}
+
+/**
+ * The one "is this robot in that zone" answer (TASK-330): the robot is bound to
+ * the zone's twin AND reports the zone's place id. A robot whose place is
+ * null/absent (unbound, unaligned, unknown) never matches, and neither does a
+ * zone that is not a place.
+ */
+export function robotIsInTwinZone(robot: PlacedRobotLike, zone: ZonePlaceTarget): boolean {
+  const place = robot.location?.place;
+  if (zone.placeId === null || place === null || place === undefined) return false;
+  return robot.twinId === zone.twinId && place === zone.placeId;
 }

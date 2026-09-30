@@ -14,15 +14,17 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../../repositories/index.js', () => ({
   digitalTwinRepository: { findById: vi.fn() },
-  twinZoneRepository: { listByTwin: vi.fn() },
+  twinZoneRepository: { listByTwin: vi.fn(), findById: vi.fn() },
 }));
 
 import {
   TwinPlaceGraphService,
+  assignPlaceIds,
   slugifyPlaceId,
   PLACE_ID_MAX_LENGTH,
   ROBOT_SAFE_PLACE_ID,
 } from '../TwinPlaceGraphService.js';
+import { twinZoneRepository } from '../../repositories/index.js';
 import type { DigitalTwinRecord, TwinZoneRecord } from '../../types/twin.types.js';
 
 function makeTwin(overrides: Partial<DigitalTwinRecord> = {}): DigitalTwinRecord {
@@ -202,5 +204,32 @@ describe('TwinPlaceGraphService.buildPlaceGraph', () => {
       makeZone({ id: 'z2', name: 'Lobby', metadata: { floor: 'ground' } }),
     ]);
     expect(graph.places.map((p) => p.floor)).toEqual([1, 0]);
+  });
+});
+
+describe('assignPlaceIds / resolveZonePlaces (TASK-330)', () => {
+  const kitchen = makeZone({ id: 'z-k', name: 'Kitchen', metadata: null });
+  const override = makeZone({ id: 'z-o', name: 'Store', metadata: { placeId: 'dock-1' } });
+  const speed = makeZone({ id: 'z-s', name: 'Slow', type: 'speed', metadata: null });
+
+  it('gives each place zone the id the place graph emits, and skips non-places', () => {
+    const zones = [kitchen, override, speed];
+    const ids = assignPlaceIds(zones);
+    expect(Object.fromEntries(ids)).toEqual({ 'z-k': 'KITCHEN', 'z-o': 'DOCK-1' });
+    const graph = service.buildPlaceGraph(makeTwin(), zones);
+    expect(graph.places.map((p) => p.id)).toEqual(['KITCHEN', 'DOCK-1']);
+  });
+
+  it('resolves ids to twin + place, omitting unknown ids and nulling non-places', async () => {
+    const byId = new Map([kitchen, speed].map((z) => [z.id, z]));
+    vi.mocked(twinZoneRepository.findById).mockImplementation(async (id) => byId.get(id) ?? null);
+    vi.mocked(twinZoneRepository.listByTwin).mockResolvedValue([kitchen, override, speed]);
+
+    await expect(service.resolveZonePlaces(['z-k', 'missing', 'z-s', 'z-k'])).resolves.toEqual([
+      { zoneId: 'z-k', name: 'Kitchen', twinId: 'twin-1', placeId: 'KITCHEN' },
+      { zoneId: 'z-s', name: 'Slow', twinId: 'twin-1', placeId: null },
+    ]);
+    // siblings are loaded once per twin, not once per zone
+    expect(twinZoneRepository.listByTwin).toHaveBeenCalledTimes(1);
   });
 });

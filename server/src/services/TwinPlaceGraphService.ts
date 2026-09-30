@@ -8,7 +8,7 @@
  */
 
 import { digitalTwinRepository, twinZoneRepository } from '../repositories/index.js';
-import { PLACE_ZONE_KEEPOUT } from './twinPlaceGeometry.js';
+import { PLACE_ZONE_KEEPOUT, type ZonePlaceTarget } from './twinPlaceGeometry.js';
 import {
   PLACE_FRAME_UNITS,
   PLACE_FRAME_YAW_CONVENTION,
@@ -132,6 +132,36 @@ function floorOf(zone: TwinZoneRecord): number {
   return Number.isFinite(n) ? Math.trunc(n) : 0;
 }
 
+/**
+ * The place id each place-type zone gets in the twin's place graph, keyed by
+ * zone id — the SAME id the robot reports back as `location.place`. Zones that
+ * are not places (wrong type, fewer than 3 vertices) are absent — see
+ * `buildPlaceGraph` for why a degenerate polygon is dropped.
+ */
+export function assignPlaceIds(zones: readonly TwinZoneRecord[]): Map<string, string> {
+  const byZone = new Map<string, string>();
+  const usedIds = new Set<string>();
+  for (const zone of zones) {
+    if (!PLACE_ZONE_TYPES.has(zone.type)) continue;
+    if (!Array.isArray(zone.points) || zone.points.length < 3) continue;
+
+    const base = slugifyPlaceId(metaString(zone, 'placeId') ?? zone.name);
+    let id = base;
+    // Two zones slugging to "AISLE-3" are an authoring mistake, but a graph with
+    // a duplicate id is REJECTED wholesale by the robot. Disambiguate instead —
+    // and keep the suffixed id inside the robot's length limit too, which is
+    // why the stem is re-capped against the suffix rather than appended to.
+    let suffix = 2;
+    while (usedIds.has(id)) {
+      const tag = `-${suffix++}`;
+      id = `${capPlaceId(base.slice(0, PLACE_ID_MAX_LENGTH - tag.length))}${tag}`;
+    }
+    usedIds.add(id);
+    byZone.set(zone.id, id);
+  }
+  return byZone;
+}
+
 export class TwinPlaceGraphService {
   private static instance: TwinPlaceGraphService;
 
@@ -156,25 +186,12 @@ export class TwinPlaceGraphService {
    */
   buildPlaceGraph(twin: DigitalTwinRecord, zones: TwinZoneRecord[]): PlaceGraphDTO {
     const places: PlaceGraphPlaceDTO[] = [];
-    const usedIds = new Set<string>();
+    const placeIds = assignPlaceIds(zones);
 
     for (const zone of zones) {
+      const id = placeIds.get(zone.id);
       const keepout = PLACE_ZONE_TYPES.get(zone.type);
-      if (keepout === undefined) continue;
-      if (!Array.isArray(zone.points) || zone.points.length < 3) continue;
-
-      const base = slugifyPlaceId(metaString(zone, 'placeId') ?? zone.name);
-      let id = base;
-      // Two zones named "Aisle 3" are an authoring mistake, but a graph with a
-      // duplicate id is REJECTED wholesale by the robot. Disambiguate instead —
-      // and keep the suffixed id inside the robot's length limit too, which is
-      // why the stem is re-capped against the suffix rather than appended to.
-      let suffix = 2;
-      while (usedIds.has(id)) {
-        const tag = `-${suffix++}`;
-        id = `${capPlaceId(base.slice(0, PLACE_ID_MAX_LENGTH - tag.length))}${tag}`;
-      }
-      usedIds.add(id);
+      if (id === undefined || keepout === undefined) continue;
 
       places.push({
         id,
@@ -207,6 +224,33 @@ export class TwinPlaceGraphService {
     if (!twin) return null;
     const zones = await twinZoneRepository.listByTwin(twinId);
     return this.buildPlaceGraph(twin, zones);
+  }
+
+  /**
+   * Resolve TwinZone ids to the place a robot would report for them (zone E-stop,
+   * deployment `targetZones`, verification `robotScope: 'zone'`). Unknown ids
+   * are absent from the result; a zone that is not a place (e.g. `speed`) comes
+   * back with `placeId: null`, which no robot matches.
+   */
+  async resolveZonePlaces(zoneIds: readonly string[]): Promise<ZonePlaceTarget[]> {
+    const targets: ZonePlaceTarget[] = [];
+    const zonesByTwin = new Map<string, TwinZoneRecord[]>();
+    for (const zoneId of new Set(zoneIds)) {
+      const zone = await twinZoneRepository.findById(zoneId);
+      if (!zone) continue;
+      let siblings = zonesByTwin.get(zone.twinId);
+      if (!siblings) {
+        siblings = await twinZoneRepository.listByTwin(zone.twinId);
+        zonesByTwin.set(zone.twinId, siblings);
+      }
+      targets.push({
+        zoneId: zone.id,
+        name: zone.name,
+        twinId: zone.twinId,
+        placeId: assignPlaceIds(siblings).get(zone.id) ?? null,
+      });
+    }
+    return targets;
   }
 }
 

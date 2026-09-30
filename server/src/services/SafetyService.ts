@@ -5,7 +5,8 @@
  */
 
 import { robotManager, type Robot, type RobotCommandRequest } from './RobotManager.js';
-import { zoneService } from './ZoneService.js';
+import { twinPlaceGraphService } from './TwinPlaceGraphService.js';
+import { robotIsInTwinZone } from './twinPlaceGeometry.js';
 import { alertService } from './AlertService.js';
 import { HttpClient, HTTP_TIMEOUTS } from './HttpClient.js';
 
@@ -59,8 +60,11 @@ export interface FleetEStopResult {
 
 /** Zone E-stop result */
 export interface ZoneEStopResult extends FleetEStopResult {
+  /** The TwinZone id (TASK-330). */
   zoneId: string;
   zoneName: string;
+  /** The twin (site) the zone belongs to. */
+  twinId: string;
 }
 
 /**
@@ -417,24 +421,23 @@ class SafetyService {
   // ============================================================================
 
   /**
-   * Trigger E-stop on all robots in a specific zone
+   * Trigger E-stop on every non-offline robot in a TwinZone (TASK-330): bound to
+   * the zone's twin and reporting the zone's place. A robot whose place is
+   * unknown is not selected — use the fleet E-stop when in doubt.
    */
   async triggerZoneEStop(
     zoneId: string,
     reason: string,
     triggeredBy = 'server'
   ): Promise<ZoneEStopResult> {
-    // Get zone details
-    const zone = await zoneService.getZone(zoneId);
+    const [zone] = await twinPlaceGraphService.resolveZonePlaces([zoneId]);
     if (!zone) {
       throw new Error(`Zone ${zoneId} not found`);
     }
 
-    // Find robots in this zone
     const allRobots = await robotManager.listRobots();
     const robotsInZone = allRobots.filter(
-      (robot) =>
-        robot.location?.zone === zone.name && robot.status !== 'offline'
+      (robot) => robotIsInTwinZone(robot, zone) && robot.status !== 'offline'
     );
 
     if (robotsInZone.length === 0) {
@@ -442,6 +445,7 @@ class SafetyService {
         scope: 'zone',
         zoneId,
         zoneName: zone.name,
+        twinId: zone.twinId,
         triggeredAt: new Date().toISOString(),
         triggeredBy,
         reason,
@@ -491,6 +495,7 @@ class SafetyService {
       scope: 'zone',
       zoneId,
       zoneName: zone.name,
+      twinId: zone.twinId,
       triggeredAt: new Date().toISOString(),
       triggeredBy,
       reason,

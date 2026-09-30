@@ -8,6 +8,7 @@ import { CalendarClock, Check, Clock } from 'lucide-react';
 import { DataTable, EmptyState, Panel, StatusTag, confirm, errorMessage, toast, type DataTableColumn } from '@/shared/components/ui';
 import type { CompleteVerificationInput, DueVerification } from '../types';
 import { formatInterval } from './oversightFormat';
+import { useTwinZoneNames } from '@/features/digitaltwin/hooks/useTwinZoneNames';
 
 export interface VerificationsPanelProps {
   due: DueVerification[];
@@ -25,8 +26,14 @@ function overdueLabel(minutes: number): string {
 }
 
 export function VerificationsPanel({ due, isLoading, robotName, onComplete, className }: VerificationsPanelProps) {
+  // A 'zone' scope names a TwinZone (TASK-330); show its name, not its id.
+  const zoneName = useTwinZoneNames(due.filter((v) => v.schedule.robotScope === 'zone').map((v) => v.schedule.scopeId));
   const scopeName = (v: DueVerification) =>
-    v.schedule.robotScope === 'robot' ? robotName(v.schedule.scopeId) : v.schedule.robotScope === 'zone' ? `Zone ${v.schedule.scopeId ?? ''}` : 'All robots';
+    v.schedule.robotScope === 'robot'
+      ? robotName(v.schedule.scopeId)
+      : v.schedule.robotScope === 'zone'
+        ? `Zone ${v.schedule.scopeId ? zoneName(v.schedule.scopeId) : ''}`
+        : 'All robots';
 
   const complete = async (v: DueVerification) => {
     const ok = await confirm({
@@ -36,7 +43,7 @@ export function VerificationsPanel({ due, isLoading, robotName, onComplete, clas
     });
     if (!ok) return;
     try {
-      await onComplete({ scheduleId: v.schedule.id, status: 'completed', robotId: v.schedule.scopeId ?? undefined });
+      await onComplete({ scheduleId: v.schedule.id, status: 'completed', robotId: v.schedule.robotScope === 'robot' ? (v.schedule.scopeId ?? undefined) : undefined });
       toast.success('Verification completed', { description: v.schedule.name });
     } catch (err) {
       toast.error("Couldn't complete verification", { description: errorMessage(err) });

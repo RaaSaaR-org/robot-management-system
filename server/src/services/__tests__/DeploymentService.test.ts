@@ -59,6 +59,12 @@ vi.mock('../RobotManager.js', () => ({
   },
 }));
 
+vi.mock('../TwinPlaceGraphService.js', () => ({
+  twinPlaceGraphService: {
+    resolveZonePlaces: vi.fn(),
+  },
+}));
+
 vi.mock('../SimToRealValidationService.js', () => ({
   simToRealValidationService: {
     getLatestForModelVersion: vi.fn(),
@@ -68,6 +74,7 @@ vi.mock('../SimToRealValidationService.js', () => ({
 import { DeploymentService } from '../DeploymentService.js';
 import { deploymentRepository, modelVersionRepository } from '../../repositories/index.js';
 import { robotManager } from '../RobotManager.js';
+import { twinPlaceGraphService } from '../TwinPlaceGraphService.js';
 import { simToRealValidationService } from '../SimToRealValidationService.js';
 
 // ---------------------------------------------------------------------------
@@ -252,6 +259,17 @@ describe('createDeployment', () => {
     await expect(service.createDeployment(baseRequest)).rejects.toThrow(
       'Model version not found: mv-1',
     );
+  });
+
+  it('rejects targetZones that are not TwinZone ids', async () => {
+    vi.mocked(modelVersionRepository.findById).mockResolvedValue(makeModelVersion());
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([
+      { zoneId: 'tz-1', name: 'Kitchen', twinId: 't1', placeId: 'KITCHEN' },
+    ]);
+    await expect(
+      service.createDeployment({ ...baseRequest, targetZones: ['tz-1', 'Zone A'] }),
+    ).rejects.toThrow('Target zone not found: Zone A');
+    expect(deploymentRepository.create).not.toHaveBeenCalled();
   });
 
   it('throws when an active deployment already exists for the model version', async () => {
@@ -825,5 +843,46 @@ describe('events and cleanup', () => {
 
     service.cleanup();
     expect(service.getDeploymentContext('dep-clean')).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// target zones (TASK-330)
+// ===========================================================================
+
+describe('robot selection by targetZones', () => {
+  const at = (place: string | null) => ({ x: 0, y: 0, place }) as Robot['location'];
+  const eligible = (deployment: Deployment): Promise<string[]> =>
+    (service as unknown as { getEligibleRobots(d: Deployment): Promise<string[]> })
+      .getEligibleRobots(deployment);
+
+  it('picks only robots bound to the zone twin that report the zone place', async () => {
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([
+      { zoneId: 'tz-1', name: 'Kitchen', twinId: 't1', placeId: 'KITCHEN' },
+    ]);
+    vi.mocked(robotManager.listRobots).mockResolvedValue([
+      makeRobot({ id: 'in', twinId: 't1', location: at('KITCHEN') }),
+      makeRobot({ id: 'elsewhere', twinId: 't1', location: at('HALL') }),
+      makeRobot({ id: 'other-site', twinId: 't2', location: at('KITCHEN') }),
+      makeRobot({ id: 'unplaced', twinId: 't1', location: at(null) }),
+      makeRobot({ id: 'legacy', twinId: 't1', location: { x: 0, y: 0, zone: 'tz-1' } }),
+    ]);
+
+    await expect(eligible(makeDeployment({ targetZones: ['tz-1'] }))).resolves.toEqual(['in']);
+    expect(twinPlaceGraphService.resolveZonePlaces).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not resolve zones when no targetZones are set', async () => {
+    vi.mocked(robotManager.listRobots).mockResolvedValue([makeRobot({ id: 'a' })]);
+    await expect(eligible(makeDeployment({ targetZones: [] }))).resolves.toEqual(['a']);
+    expect(twinPlaceGraphService.resolveZonePlaces).not.toHaveBeenCalled();
+  });
+
+  it('selects nobody when the target zone no longer exists', async () => {
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([]);
+    vi.mocked(robotManager.listRobots).mockResolvedValue([
+      makeRobot({ id: 'a', twinId: 't1', location: at('KITCHEN') }),
+    ]);
+    await expect(eligible(makeDeployment({ targetZones: ['gone'] }))).resolves.toEqual([]);
   });
 });

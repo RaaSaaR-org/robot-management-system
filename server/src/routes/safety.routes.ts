@@ -170,7 +170,10 @@ safetyRoutes.post('/fleet/estop/reset', async (_req: Request, res: Response) => 
 // ============================================================================
 
 /**
- * POST /safety/zones/:id/estop - Trigger E-stop for all robots in a zone
+ * POST /safety/zones/:id/estop - Trigger E-stop for all robots in a zone.
+ * `:id` is a TwinZone id (TASK-330): stops every non-offline robot bound to that
+ * zone's twin whose reported `location.place` is the zone's place. 404 when the
+ * zone does not exist. Body: { reason, triggeredBy? }.
  */
 safetyRoutes.post('/zones/:id/estop', async (req: Request, res: Response) => {
   try {

@@ -164,6 +164,7 @@ export interface VerificationSchedule {
   description: string | null;
   intervalMinutes: number;
   robotScope: RobotScope;
+  /** Robot id for `'robot'`, TwinZone id for `'zone'` (TASK-330), null for `'all'`. */
   scopeId: string | null;
   isActive: boolean;
   createdAt: Date;
@@ -224,6 +225,8 @@ export interface DueVerification {
   lastCompletion: VerificationCompletion | null;
   dueAt: Date;
   overdueSinceMinutes: number;
+  /** Robots the schedule covers now (`'zone'` = robots in that TwinZone, TASK-330). */
+  robotIds: string[];
 }
 
 // ============================================================================

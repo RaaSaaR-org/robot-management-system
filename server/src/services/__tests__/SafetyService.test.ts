@@ -30,9 +30,9 @@ vi.mock('../RobotManager.js', () => ({
   },
 }));
 
-vi.mock('../ZoneService.js', () => ({
-  zoneService: {
-    getZone: vi.fn(),
+vi.mock('../TwinPlaceGraphService.js', () => ({
+  twinPlaceGraphService: {
+    resolveZonePlaces: vi.fn(),
   },
 }));
 
@@ -44,7 +44,7 @@ vi.mock('../AlertService.js', () => ({
 
 import { safetyService } from '../SafetyService.js';
 import { robotManager } from '../RobotManager.js';
-import { zoneService } from '../ZoneService.js';
+import { twinPlaceGraphService } from '../TwinPlaceGraphService.js';
 import { alertService } from '../AlertService.js';
 
 // ---------------------------------------------------------------------------
@@ -305,33 +305,40 @@ describe('resetFleetEStop', () => {
 // ===========================================================================
 
 describe('triggerZoneEStop', () => {
+  const ZONE_A = { zoneId: 'z1', name: 'Zone A', twinId: 't1', placeId: 'ZONE-A' };
+  const at = (place: string | null) => ({ x: 0, y: 0, place }) as Robot['location'];
+
   it('throws when the zone does not exist', async () => {
-    vi.mocked(zoneService.getZone).mockResolvedValue(null as never);
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([]);
     await expect(safetyService.triggerZoneEStop('z1', 'reason')).rejects.toThrow(
       'Zone z1 not found'
     );
   });
 
   it('returns empty result when no robots are in the zone', async () => {
-    vi.mocked(zoneService.getZone).mockResolvedValue({ id: 'z1', name: 'Zone A' } as never);
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([ZONE_A]);
     vi.mocked(robotManager.listRobots).mockResolvedValue([
-      makeRobot({ id: 'a', status: 'online', location: { zone: 'Zone B' } as Robot['location'] }),
+      makeRobot({ id: 'a', status: 'online', twinId: 't1', location: at('ZONE-B') }),
     ]);
 
     const result = await safetyService.triggerZoneEStop('z1', 'reason');
     expect(result.scope).toBe('zone');
     expect(result.zoneId).toBe('z1');
     expect(result.zoneName).toBe('Zone A');
+    expect(result.twinId).toBe('t1');
     expect(result.robotResults).toHaveLength(0);
     expect(result.successCount).toBe(0);
   });
 
-  it('only triggers robots matching the zone name and excludes offline', async () => {
-    vi.mocked(zoneService.getZone).mockResolvedValue({ id: 'z1', name: 'Zone A' } as never);
+  it('only triggers robots on the zone twin in the zone place, excluding offline and unplaced', async () => {
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([ZONE_A]);
     const robots = [
-      makeRobot({ id: 'in', status: 'online', location: { zone: 'Zone A' } as Robot['location'] }),
-      makeRobot({ id: 'out', status: 'online', location: { zone: 'Zone B' } as Robot['location'] }),
-      makeRobot({ id: 'off', status: 'offline', location: { zone: 'Zone A' } as Robot['location'] }),
+      makeRobot({ id: 'in', status: 'online', twinId: 't1', location: at('ZONE-A') }),
+      makeRobot({ id: 'out', status: 'online', twinId: 't1', location: at('ZONE-B') }),
+      makeRobot({ id: 'off', status: 'offline', twinId: 't1', location: at('ZONE-A') }),
+      makeRobot({ id: 'other-site', status: 'online', twinId: 't2', location: at('ZONE-A') }),
+      makeRobot({ id: 'unbound', status: 'online', twinId: null, location: at('ZONE-A') }),
+      makeRobot({ id: 'unplaced', status: 'online', twinId: 't1', location: at(null) }),
     ];
     vi.mocked(robotManager.listRobots).mockResolvedValue(robots);
     vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());

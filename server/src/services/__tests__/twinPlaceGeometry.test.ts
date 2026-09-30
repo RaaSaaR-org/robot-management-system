@@ -6,7 +6,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { findContainingPlace, pointInPolygon, polygonArea } from '../twinPlaceGeometry.js';
+import {
+  findContainingPlace,
+  pointInPolygon,
+  polygonArea,
+  robotIsInTwinZone,
+} from '../twinPlaceGeometry.js';
 
 function rect(x0: number, y0: number, x1: number, y1: number) {
   return [
@@ -49,5 +54,30 @@ describe('twinPlaceGeometry', () => {
   it('ignores degenerate polygons', () => {
     const line = { type: 'room', points: [{ x: 0, y: 0 }, { x: 50, y: 50 }] };
     expect(findContainingPlace([line], { x: 1, y: 1 })).toBeNull();
+  });
+});
+
+describe('robotIsInTwinZone (TASK-330)', () => {
+  const zone = { zoneId: 'tz-1', name: 'Kitchen', twinId: 't1', placeId: 'KITCHEN' };
+
+  it('matches a robot bound to the zone twin that reports the zone place', () => {
+    expect(robotIsInTwinZone({ twinId: 't1', location: { place: 'KITCHEN' } }, zone)).toBe(true);
+  });
+
+  it('does not match a robot on another twin, in another place, or unbound', () => {
+    expect(robotIsInTwinZone({ twinId: 't2', location: { place: 'KITCHEN' } }, zone)).toBe(false);
+    expect(robotIsInTwinZone({ twinId: 't1', location: { place: 'HALL' } }, zone)).toBe(false);
+    expect(robotIsInTwinZone({ twinId: null, location: { place: 'KITCHEN' } }, zone)).toBe(false);
+  });
+
+  it('never matches a robot whose place is null or absent', () => {
+    expect(robotIsInTwinZone({ twinId: 't1', location: { place: null } }, zone)).toBe(false);
+    expect(robotIsInTwinZone({ twinId: 't1', location: {} }, zone)).toBe(false);
+    expect(robotIsInTwinZone({ twinId: 't1' }, zone)).toBe(false);
+  });
+
+  it('never matches a zone that is not a place', () => {
+    const notAPlace = { ...zone, placeId: null };
+    expect(robotIsInTwinZone({ twinId: 't1', location: { place: null } }, notAPlace)).toBe(false);
   });
 });
