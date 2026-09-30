@@ -17,6 +17,7 @@ import { WristTeleop, parseWristPose } from '../teleop/wrist-teleop.js';
 import { FingerRetargeter, gripPose, type HandKeypoints } from '../teleop/dexpilot.js';
 import { G1_ARM_CHAINS, G1_FINGER_CHAINS, type Side } from '../teleop/g1-chains.generated.js';
 import { markTeleopMode } from '../teleop/teleop-mode.js';
+import { controlLease, type ControlLeaseRegistry, type LeaseEvent } from '../control-lease/control-lease.js';
 
 /** How fast a held joint moves, in radians per second. */
 const SLEW_RATE_RAD_PER_S = 0.8;
@@ -142,6 +143,12 @@ export function clampPlanar(vx: number, vy: number, limit: number): { vx: number
  * - `bad_posture` — `{posture}` named something other than `stand`.
  * - `stand_unavailable` — this agent was built with no base-posture path.
  * - `stand_failed` — the FSM change was attempted and refused.
+ * - `lease_required` — (`CONTROL_LEASE_REQUIRED` only) a motion frame arrived
+ *   on a socket that is not bound to the installed control lease, and was
+ *   DISCARDED. Once per socket, reset by a successful `{bind}`.
+ * - `lease_invalid` — (`CONTROL_LEASE_REQUIRED` only) a `{bind}` named a
+ *   secret or generation the registry does not hold. Sent for EVERY failed
+ *   bind: a bind is a deliberate act, not a stream.
  */
 export type TeleopErrorCode =
   | 'loco_unavailable'
@@ -153,7 +160,9 @@ export type TeleopErrorCode =
   | 'ik_unsupported'
   | 'bad_posture'
   | 'stand_unavailable'
-  | 'stand_failed';
+  | 'stand_failed'
+  | 'lease_required'
+  | 'lease_invalid';
 
 interface DirectionMessage {
   joint: string;
@@ -233,7 +242,16 @@ interface PostureMessage {
    */
   posture: 'stand';
 }
+interface BindMessage {
+  /**
+   * (`CONTROL_LEASE_REQUIRED` only) Bind this socket to the installed control
+   * lease. `leaseId` is the RAW secret the server handed the lease holder; the
+   * registry compares only its hash. Ignored while the flag is off.
+   */
+  bind: { leaseId?: unknown; generation?: unknown };
+}
 type TeleopMessage =
+  | BindMessage
   | DirectionMessage
   | DeltaMessage
   | PositionMessage
@@ -272,6 +290,14 @@ function parseHandKeypoints(value: unknown): HandKeypoints | null {
   return { wrist, thumb, index, middle };
 }
 
+/**
+ * The frames that move something. Everything else — `estop`, `bind`, and any
+ * frame this socket does not recognise — is never lease-gated.
+ */
+const MOTION_KEYS = [
+  'posture', 'preset', 'move', 'wrists', 'hands', 'positions', 'position', 'direction', 'delta',
+] as const;
+
 /** Injected so this module does not import the Agent Mode controller. */
 export interface KeyboardTeleopDeps {
   /**
@@ -282,6 +308,13 @@ export interface KeyboardTeleopDeps {
    * `stand_unavailable` rather than pretending.
    */
   standBase?: () => Promise<{ ok: boolean; error?: string }>;
+  /** The control-lease registry (TASK-314). Defaults to the process singleton. */
+  controlLease?: ControlLeaseRegistry;
+  /**
+   * Whether motion needs a bound control lease (`CONTROL_LEASE_REQUIRED`).
+   * Read once per connection; defaults to `config.controlLease.required`.
+   */
+  leaseRequired?: () => boolean;
 }
 
 export function createKeyboardTeleopWebSocket(
@@ -293,19 +326,42 @@ export function createKeyboardTeleopWebSocket(
 
   console.log('[KeyboardTeleop] WebSocket server ready on path: /ws/keyboard-teleop');
 
+  /**
+   * Live sockets bound per lease generation (TASK-315), so the registry's
+   * `bound` count covers every window the holder has open, not just the last.
+   */
+  const boundSockets = new Map<number, number>();
+
   wss.on('connection', (ws: WebSocket) => {
     console.log('[KeyboardTeleop] Client connected');
 
-    // TASK-194 arbitration: a human at the controls outranks every autonomous
-    // owner. The claim always succeeds; Agent Mode reacts to the preemption by
-    // aborting its running plan.
-    const claim = controlOwnerLock.claim('teleop');
-    if (claim.preempted) {
-      console.warn(`[KeyboardTeleop] Preempted ${claim.preempted} — human teleop takes over`);
-    }
+    /**
+     * TASK-315: with `CONTROL_LEASE_REQUIRED` on, a socket is an OBSERVER until
+     * it binds to the installed control lease — it claims nothing, preempts
+     * nobody and enables no teleop on connect. Read once: a flag that flipped
+     * under an open socket would leave it half in each world.
+     */
+    const leaseRequired = (deps.leaseRequired ?? (() => config.controlLease.required))();
+    const leases = deps.controlLease ?? controlLease;
+    /** Whether THIS socket holds one `teleop` holder on `controlOwnerLock`. */
+    let holdsTeleop = false;
 
-    // Enter teleop mode — joints now follow operator input instead of animation.
-    const positions = robotStateManager.enableTeleop();
+    let positions: Record<string, number>;
+    let claim: { preempted?: string } = {};
+    if (!leaseRequired) {
+      // TASK-194 arbitration: a human at the controls outranks every autonomous
+      // owner. The claim always succeeds; Agent Mode reacts to the preemption by
+      // aborting its running plan.
+      claim = controlOwnerLock.claim('teleop');
+      holdsTeleop = true;
+      if (claim.preempted) {
+        console.warn(`[KeyboardTeleop] Preempted ${claim.preempted} — human teleop takes over`);
+      }
+      // Enter teleop mode — joints now follow operator input instead of animation.
+      positions = robotStateManager.enableTeleop();
+    } else {
+      positions = robotStateManager.getTeleopPositions();
+    }
     const joints = robotStateManager.getActiveJointConfig();
 
     // Advertise the embodiment so the client can build controls for any robot.
@@ -321,15 +377,25 @@ export function createKeyboardTeleopWebSocket(
       positions,
     }));
 
-    // The claim result used to be computed, logged and dropped. The operator
-    // who just took the robot away from Agent Mode is entitled to know they
-    // did — and to know they hold it, rather than inferring ownership from the
-    // robot happening to respond.
-    ws.send(JSON.stringify({
-      type: 'control',
-      owner: controlOwnerLock.get(),
-      preempted: claim.preempted ?? null,
-    }));
+    if (!leaseRequired) {
+      // The claim result used to be computed, logged and dropped. The operator
+      // who just took the robot away from Agent Mode is entitled to know they
+      // did — and to know they hold it, rather than inferring ownership from
+      // the robot happening to respond.
+      ws.send(JSON.stringify({
+        type: 'control',
+        owner: controlOwnerLock.get(),
+        preempted: claim.preempted ?? null,
+      }));
+    } else {
+      // `observe()` carries no secret — it is what `GET …/control-lease` shows.
+      ws.send(JSON.stringify({
+        type: 'lease',
+        state: 'unbound',
+        required: true,
+        holder: leases.observe(),
+      }));
+    }
 
     /**
      * Whether the latch was set the last time the tick looked, so the transition
@@ -523,6 +589,179 @@ export function createKeyboardTeleopWebSocket(
       return handCapable;
     };
 
+    // ---- control lease (TASK-315) ------------------------------------------
+    // Everything below is inert while `leaseRequired` is false: `mayDrive`
+    // answers true, nothing subscribes, and a `{bind}` frame is ignored.
+
+    /** The lease generation this socket is bound to, or null while unbound. */
+    let boundGeneration: number | null = null;
+    /** The raw secret it bound with — kept in memory only, to re-`verify`. */
+    let boundLeaseId: string | null = null;
+    /** A bind awaiting its preemption stop; a second one meanwhile is dropped. */
+    let binding = false;
+
+    /**
+     * Whether a motion frame may be processed NOW.
+     *
+     * Asked at processing time, not cached at bind time: `verify` is also the
+     * registry's lazy expiry check, so a lease past its deadline flips to
+     * `expired` right here, the listener below unbinds this socket, and the
+     * frame that asked is discarded.
+     */
+    const mayDrive = (): boolean => {
+      if (!leaseRequired) return true;
+      if (boundGeneration === null || boundLeaseId === null) return false;
+      return leases.verify(boundLeaseId, boundGeneration);
+    };
+
+    /** Keep the registry's `bound` count equal to the sockets bound to `generation`. */
+    const adjustBound = (generation: number, delta: number): void => {
+      const n = Math.max(0, (boundSockets.get(generation) ?? 0) + delta);
+      if (n === 0) boundSockets.delete(generation);
+      else boundSockets.set(generation, n);
+      leases.setBoundCount(generation, n);
+    };
+
+    /** Give back THIS socket's `teleop` holder, if it has one. */
+    const releaseHolder = (): void => {
+      if (!holdsTeleop) return;
+      holdsTeleop = false;
+      controlOwnerLock.release('teleop');
+      if (!controlOwnerLock.isOwnedBy('teleop')) {
+        robotStateManager.disableTeleop();
+      }
+    };
+
+    /** Forget every motion this socket had queued or was integrating. */
+    const haltMotion = (): void => {
+      velocity.clear();
+      rampTarget = null;
+      commanded = ZERO_VELOCITY;
+      pendingMove = null;
+      wristTeleop.reset();
+      for (const retargeter of fingers.values()) retargeter.reset();
+      fingerSeed.clear();
+      handsSeenAt.clear();
+    };
+
+    /** Drop the binding; `state` is what the client is told, null to say nothing. */
+    const unbind = (state: 'revoked' | 'expired' | null): void => {
+      if (boundGeneration === null) return;
+      const generation = boundGeneration;
+      boundGeneration = null;
+      boundLeaseId = null;
+      haltMotion();
+      adjustBound(generation, -1);
+      releaseHolder();
+      if (state && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'lease', state, generation }));
+      }
+    };
+
+    /** One zero-TTL stop, fire-and-forget; a failure is logged, never thrown. */
+    const stopBase = (): void => {
+      const fail = (err: unknown): void => {
+        console.warn(`[KeyboardTeleop] fence stop failed: ${err instanceof Error ? err.message : String(err)}`);
+      };
+      // Issued synchronously, inside the fence event, so it is on the wire
+      // before anything the successor sends.
+      try {
+        void hardwareClient.locoMove(0, 0, 0, 0).catch(fail);
+      } catch (err) {
+        fail(err);
+      }
+    };
+
+    /**
+     * Fence: the lease this socket drives under was replaced, released or ran
+     * out. Stop the base now — the pending slot is already cleared by
+     * `unbind`, so a `move` queued behind an in-flight RPC never goes out —
+     * and do NOT rebind: the client has to present the new lease itself.
+     */
+    const unsubscribeLease = leaseRequired
+      ? leases.subscribe((event: LeaseEvent) => {
+          if (event.type !== 'fenced' && event.type !== 'expired') return;
+          if (boundGeneration === null || event.generation !== boundGeneration) return;
+          stopBase();
+          unbind(event.type === 'fenced' ? 'revoked' : 'expired');
+        })
+      : () => {};
+
+    const sendLeaseInvalid = (message: string): void => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({
+        type: 'error',
+        code: 'lease_invalid' satisfies TeleopErrorCode,
+        message,
+        at: new Date().toISOString(),
+      }));
+    };
+
+    /**
+     * `{bind:{leaseId, generation}}`: become a driver under the installed lease.
+     *
+     * Several sockets may bind the same generation (the holder's other
+     * windows); each is one `teleop` holder. Binding is what preempts Agent
+     * Mode or a VLA rollout — and when it does, the zero-velocity stop is
+     * AWAITED before `bound` is sent, so the operator's first `move` never
+     * races the autonomous owner's last one.
+     */
+    const handleBind = async (raw: BindMessage['bind']): Promise<void> => {
+      const leaseId = raw && typeof raw === 'object' ? raw.leaseId : undefined;
+      const generation = raw && typeof raw === 'object' ? raw.generation : undefined;
+      if (typeof leaseId !== 'string' || typeof generation !== 'number' || !Number.isInteger(generation)) {
+        sendLeaseInvalid('bind needs {leaseId: string, generation: integer}');
+        return;
+      }
+      if (binding) return;
+      if (!leases.verify(leaseId, generation)) {
+        sendLeaseInvalid('that lease is not the installed, held control lease for this robot');
+        return;
+      }
+      if (boundGeneration === generation && boundLeaseId === leaseId) {
+        // Already bound to exactly this lease — idempotent, no second holder.
+        ws.send(JSON.stringify({ type: 'lease', state: 'bound', generation }));
+        return;
+      }
+      // A different, valid generation while bound means the old one is gone.
+      unbind(null);
+
+      binding = true;
+      try {
+        const bindClaim = controlOwnerLock.claim('teleop');
+        holdsTeleop = true;
+        if (bindClaim.preempted) {
+          console.warn(`[KeyboardTeleop] Bind preempted ${bindClaim.preempted} — human teleop takes over`);
+          try {
+            await hardwareClient.locoMove(0, 0, 0, 0);
+          } catch (err) {
+            console.warn(`[KeyboardTeleop] preemption stop failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        // The socket closed, or the lease was fenced, while the stop was out.
+        if (cleanedUp || !leases.verify(leaseId, generation)) {
+          releaseHolder();
+          if (!cleanedUp) sendLeaseInvalid('the control lease changed while binding');
+          return;
+        }
+        boundGeneration = generation;
+        boundLeaseId = leaseId;
+        adjustBound(generation, +1);
+        const bindPositions = robotStateManager.enableTeleop();
+        errorsSent.delete('lease_required');
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: 'lease', state: 'bound', generation }));
+        ws.send(JSON.stringify({
+          type: 'control',
+          owner: controlOwnerLock.get(),
+          preempted: bindClaim.preempted ?? null,
+        }));
+        ws.send(JSON.stringify({ type: 'state', positions: bindPositions }));
+      } finally {
+        binding = false;
+      }
+    };
+
     const drive = async (vx: number, vy: number, omega: number, ttlS: number): Promise<void> => {
       if (moveInFlight) {
         pendingMove = { velocity: { vx, vy, omega }, ttlS };
@@ -562,7 +801,7 @@ export function createKeyboardTeleopWebSocket(
         // A pending ZERO is always delivered: that is a stop, and a stop is
         // never stale. Only motion is dropped.
         const stillMotion = next !== null && isMoving(next.velocity);
-        if (next && !(stillMotion && (cleanedUp || robotStateManager.isEStopTriggered()))) {
+        if (next && !(stillMotion && (cleanedUp || robotStateManager.isEStopTriggered() || !mayDrive()))) {
           void drive(next.velocity.vx, next.velocity.vy, next.velocity.omega, next.ttlS);
         }
       }
@@ -653,6 +892,12 @@ export function createKeyboardTeleopWebSocket(
       // its input was being discarded the second time. The genuinely sticky
       // codes (`loco_disabled`, `unknown_joints`) stay latched for the socket.
       errorsSent.delete('estop_latched');
+      // A held key or a ramp still catching up is motion too: under a lease
+      // it runs only while the binding still verifies (lazy expiry included).
+      if (leaseRequired && (velocity.size > 0 || rampTarget) && !mayDrive()) {
+        haltMotion();
+        return;
+      }
       let moved = false;
       for (const [joint, vel] of velocity) {
         if (vel !== 0) {
@@ -758,6 +1003,19 @@ export function createKeyboardTeleopWebSocket(
       //
       // Gated by the latch like every other motion command: a robot is damped
       // after an E-Stop precisely because somebody stopped it.
+      if ('bind' in msg) {
+        // Flag off: ignored, exactly as any unknown frame always was.
+        if (leaseRequired) void handleBind(msg.bind);
+        return;
+      }
+
+      // Admission (TASK-315): every motion frame is checked HERE, when it is
+      // processed — never against a binding cached at some earlier point.
+      if (leaseRequired && MOTION_KEYS.some((k) => k in msg) && !mayDrive()) {
+        sendError('lease_required', 'this socket is not bound to the robot\'s control lease — acquire one and send {bind}');
+        return;
+      }
+
       if ('posture' in msg) {
         if (msg.posture !== 'stand') {
           sendError('bad_posture', `unknown posture ${JSON.stringify(msg.posture)}; only "stand" is offered here`);
@@ -977,15 +1235,21 @@ export function createKeyboardTeleopWebSocket(
       // nobody is watching any more. Direct, for the same reason the E-Stop is:
       // this must not sit in the pending slot behind a blocked RPC.
       if (hasDriven) void hardwareClient.locoMove(0, 0, 0, 0);
-      controlOwnerLock.release('teleop');
+      unsubscribeLease();
+      if (boundGeneration !== null) {
+        const generation = boundGeneration;
+        boundGeneration = null;
+        boundLeaseId = null;
+        adjustBound(generation, -1);
+      }
+      // Only a holder this socket actually took: an unbound observer under
+      // `CONTROL_LEASE_REQUIRED` claimed nothing and must release nothing.
       // Teleop is active only while an operator is connected — but "an
       // operator" can be several sockets at once (keyboard tab + VR view +
       // gamepad). Only the LAST one leaves teleop mode and resumes the idle
       // animation; otherwise one closing view yanks the joints out from under
       // a human still driving from another.
-      if (!controlOwnerLock.isOwnedBy('teleop')) {
-        robotStateManager.disableTeleop();
-      }
+      releaseHolder();
     };
 
     ws.on('close', () => {
