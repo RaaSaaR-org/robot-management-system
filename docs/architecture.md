@@ -1,29 +1,76 @@
 # System Architecture
 
-NeoDEM is a distributed system with five services. In development, all run on a Raspberry Pi 5 except the VLA inference server, which runs on a separate machine with GPU/MPS.
+NeoDEM covers the whole Physical AI lifecycle: Collect → Train → Deploy →
+Evaluate → Operate → Comply. The **server** is the system of record and the
+orchestrator. There is one **robot-agent** per robot, and it is the only
+process that talks to hardware, through a sidecar. Model serving
+(**vla-server**) and training (**training-worker**) live in separate repos and
+run on a GPU box. Ports, protocols and zones are covered in
+[network-architecture.md](network-architecture.md).
 
+[![NeoDEM architecture overview: app, server, robot-agent, sidecars, G1, training-worker and vla-server, with numbered markers for the six lifecycle stages](diagrams/architecture-overview.svg)](diagrams/architecture-overview.svg)
+
+> **Interactive:** open [`diagrams/architecture-overview.svg`](diagrams/architecture-overview.svg)
+> straight from a checkout in a browser. Click a lifecycle stage to highlight
+> its path, and hover a line for details. GitHub shows it as a static image.
+
+## A skill's path through the lifecycle
+
+The numbers match the markers in the diagram.
+
+```mermaid
+sequenceDiagram
+    participant App as app
+    participant S as server
+    participant DB as Postgres · RustFS
+    participant W as training-worker
+    participant A as robot-agent
+    participant R as sidecar · G1
+    participant V as vla-server
+
+    Note over App,V: 1 · Collect
+    App->>S: start a recording session
+    S->>A: POST /api/v1/robots/:id/recording/start
+    App->>A: teleop WS (lease-bound)
+    A->>R: /action · /loco/*
+    A->>A: EpisodeRecorder writes LeRobot v3
+    S->>A: POST …/recording/stop
+    A-->>S: episode report · dataset path
+    S->>DB: register dataset
+
+    Note over App,V: 2 · Train
+    App->>S: start a training run
+    W->>S: POST /api/training/workers/claim (poll)
+    W->>DB: read dataset · write checkpoints (S3)
+    W->>S: progress · complete
+
+    Note over App,V: 3 · Deploy
+    App->>S: deploy model to robot
+    S->>A: /api/v1/robots/:id/vla/*
+    A->>V: POST /load-adapter (LoRA hot-swap)
+
+    Note over App,V: 4 · Evaluate
+    S->>S: spawn sim_evaluator (MuJoCo)
+    S->>V: rollouts call POST /predict
+
+    Note over App,V: 5 · Operate
+    App->>S: task or chat
+    S->>A: POST …/tasks · A2A JSON-RPC
+    loop closed loop
+        A->>R: GET /state · cameras
+        A->>V: POST /predict
+        A->>R: POST /action
+    end
+    A-->>S: telemetry WS
+    S-->>App: /api/a2a/ws
+
+    Note over App,V: 6 · Comply
+    A->>S: POST /api/compliance/logs
+    S->>DB: audit log, retention, legal holds
 ```
-┌─────────────┐     REST/WS      ┌─────────────┐      A2A        ┌──────────────┐
-│     App      │◄───────────────►│   Server     │◄──────────────►│ Robot Agent   │
-│  React/Tauri │                 │  Express     │                │  Genkit AI    │
-│    :1420     │                 │    :3001     │                │    :41245     │
-└─────────────┘                  └──────┬───────┘                └──────┬───────┘
-                                        │                               │
-                                        ▼                               ▼
-                                 ┌─────────────┐                ┌──────────────┐
-                                 │   SQLite     │                │   Sidecar    │
-                                 │  (Prisma)    │                │  Python HTTP │
-                                 │  dev.db      │                │    :8765     │
-                                 └─────────────┘                └──────┬───────┘
-                                                                       │
-                                                             ┌─────────┴─────────┐
-                                                             │                   │
-                                                        ┌────▼────┐       ┌──────▼──────┐
-                                                        │ SO-101  │       │ VLA Server  │
-                                                        │/dev/tty │       │    :8000    │
-                                                        │ ACM0    │       │  (remote)   │
-                                                        └─────────┘       └─────────────┘
-```
+
+The server spawns the sim evaluator as a Python subprocess (`evaluate_vla.py
+--vla-server`). The server process itself makes no HTTP call to vla-server.
 
 ## Services
 
@@ -69,8 +116,8 @@ See [api.md](api.md) for the full endpoint list.
 |---|---|
 | Location | `robot-agent/` |
 | Stack | Node.js, Genkit (Gemini 2.5 Flash), A2A SDK |
-| Port | 41245 (SO-101 profile) |
-| Config | `.env.so101` |
+| Port | 41243 (default and SO-101); the G1 EDU sim profile uses 41245, the G1 EDU agent profile 41246 |
+| Config | `.env.<profile>`, from the `.env.*.example` files |
 
 AI-powered agent that interprets natural language commands, manages robot state, and orchestrates VLA inference. Persists state to `robot-agent/data/state.json` on shutdown.
 
@@ -78,8 +125,9 @@ Key endpoints:
 - `GET /.well-known/agent-card.json` — A2A agent card
 - `/api/v1/robots/:id/*` — telemetry, commands, tasks, safety, VLA control
 - `/api/v1/health` — health check
-- `ws://localhost:41245/ws/telemetry/:robotId` — telemetry stream
-- `ws://localhost:41245/ws/bilateral-teleop` — ALOHA-style teleoperation
+- `ws://localhost:41243/ws/telemetry/:robotId` — telemetry stream (the server dials it)
+- `ws://localhost:41243/ws/keyboard-teleop` — keyboard, gamepad and VR teleop, bound to a control lease
+- `ws://localhost:41243/ws/bilateral-teleop` — ALOHA-style teleoperation
 
 ### Hardware Sidecar
 
@@ -117,21 +165,42 @@ Key endpoints:
 - `POST /predict` — run inference (images + state + instruction -> actions)
 - `POST /reset` — reset model state between episodes
 
-## Fleet Map
+## Site Map
 
-![Fleet Map](https://raw.githubusercontent.com/RaaSaaR-org/robot-management-system/main/app/public/screenshots/fleet-map.png)
+A robot is bound to one site, a digital twin (`Robot.twinId`). The twin's zones
+(`TwinZone`) are the only zone model: each is a uniquely named place or a
+keepout. The Fleet page's Map tab and the dashboard draw a **site map**
+(`app/src/features/fleet/components/SiteMap.tsx`): pick a twin, see it top-down
+with its zones and the live robots bound to it, and E-stop a zone from the map.
+A robot's position is `location.place`, the place it is in, and only robots
+whose frame is aligned with the twin are plotted. The agent fetches its site's
+places from `GET /api/robots/:id/places` (TASK-274).
+
+A simulated robot's world is the twin's frame by construction. A real robot's
+odometry starts wherever the sidecar came up, so an operator aligns it to its
+site from the Robots tab (TASK-325). The server stores that odom → twin
+transform per robot (`RobotFrameRegistration`, `PUT`/`GET`/`DELETE
+/api/robots/:id/frame-registration`). The agent polls it, carries the place
+graph into odometry, and fences, names places and walks in that frame. A
+re-zeroed odometry (new sidecar boot id) invalidates the registration, and the
+agent fails closed until the robot is aligned again.
 
 ## Communication Protocols
 
 | Path | Protocol | Purpose |
 |------|----------|---------|
-| App <-> Server | REST + WebSocket | UI operations, real-time telemetry |
-| Server <-> Agent | A2A (HTTP) | Task distribution, commands |
-| Agent <-> Sidecar | HTTP | Hardware control, VLA orchestration, `/loco/*` |
-| Sidecar <-> G1 | DDS (Unitree) | `LocoClient` RPC on `rt/api/sport/*`, `rt/arm_sdk`, `rt/dex3/*` |
-| Sidecar <-> SO-101 | Serial (LeRobot) | Joint commands via `/dev/ttyACM0` |
-| Sidecar <-> VLA Server | HTTP | Inference requests (POST /predict) |
-| VLA Server <-> GR00T | ZMQ (port 5555) | GR00T N1 model inference |
+| App ↔ Server | REST `/api/*` + WebSocket `/api/a2a/ws` | UI operations, live events |
+| App → Agent | WebSocket `/ws/keyboard-teleop` | Teleop, bound to a server-granted control lease |
+| Server → Agent | HTTP `/api/v1/*`, A2A JSON-RPC, telemetry WS | Registration, health, heartbeat, tasks, conversations |
+| Agent → Server | HTTP `/api/*` with a service token | Compliance logs, events |
+| Agent → Sidecar | HTTP | Hardware control, `/loco/*`, cameras |
+| Sidecar ↔ G1 | Unitree DDS · ZMQ | `rt/api/sport/*` loco RPC, lowstate via the state bridge |
+| Agent → VLA Server | HTTP `/predict`, `/load-adapter` | Closed-loop inference, adapter hot-swap |
+| VLA Server → GR00T | ZMQ `:5555` | GR00T backend |
+
+Every port, the cadence of each call, the auth on each hop and the
+differences between dev, compose and Helm are listed in
+[network-architecture.md](network-architecture.md).
 
 ## Agent Mode
 
@@ -247,7 +316,7 @@ npm run db:studio     # Open Prisma Studio GUI
 
 ## Systemd Services
 
-All four services run as systemd units on the Raspberry Pi:
+On the SO-101 bootstrap rig, a Raspberry Pi, all four services run as systemd units:
 
 | Unit | Working Directory | After |
 |------|-------------------|-------|

@@ -1,0 +1,252 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" width="1200" height="820" role="img" aria-labelledby="t d">
+<title id="t">NeoDEM architecture overview</title>
+<desc id="d">One skill through the lifecycle. 1 Collect: teleop episodes are recorded on the robot-agent, and datasets can also be imported from the HF Hub. 2 Train: a worker claims a job from the server and moves data through RustFS. 3 Deploy: the server tells the agent to deploy, and the agent hot-swaps the adapter on vla-server. 4 Evaluate: the server spawns sim rollouts against the policy. 5 Operate: tasks go down, telemetry comes up, and inference runs closed-loop at the edge. 6 Comply: the agent ships audit logs and the server keeps them in Postgres. Open this file in a browser and click a stage to highlight its path.</desc>
+<style>
+  svg { --bg:#f5f7fa; --panel:#ffffff; --inset:#eef2f6; --ink:#0f1b2a; --ink2:#3a4b5e; --ink3:#566a80; --line:#d5dde6; --strong:#b4c1ce; --key:#3a4b5e; --primary:#0f7a60; --onp:#ffffff; --sim:#5b4bb0; }
+  @media (prefers-color-scheme: dark) {
+    svg { --bg:#080f18; --panel:#101d2c; --inset:#0b1522; --ink:#f1f5fc; --ink2:#b2c3d5; --ink3:#9aafc5; --line:#243649; --strong:#3b546c; --key:#b2c3d5; --primary:#b2f8df; --onp:#0a2225; --sim:#c5b9ef; }
+  }
+  text { font-family: Inter, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
+  .bg { fill: var(--bg); }
+  .zl { font-size: 11px; font-weight: 600; letter-spacing: .12em; fill: var(--ink3); }
+  .box { fill: var(--panel); stroke: var(--strong); stroke-width: 1.2; }
+  .box.key { stroke: var(--key); stroke-width: 1.6; }
+  .box.sim { stroke: var(--sim); stroke-dasharray: 4 3; }
+  .box.ext { fill: var(--inset); }
+  .bt { font-family: Archivo, Inter, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 600; }
+  .bs { font-size: 11.5px; fill: var(--ink3); }
+  .bm { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; fill: var(--ink2); }
+  .li { font-size: 12px; fill: var(--ink2); }
+  .el { font-size: 11px; fill: var(--ink2); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+  .el.m { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 10.5px; }
+  .dv { stroke: var(--line); }
+  .e { fill: none; stroke: var(--ink3); stroke-width: 1.4; }
+  .e.opt { stroke-dasharray: 5 4; }
+  .e.direct { stroke: var(--primary); stroke-width: 1.8; stroke-dasharray: 6 4; }
+  .e.sim { stroke: var(--sim); stroke-dasharray: 4 3; }
+  .ah { fill: var(--ink3); } .ah.p { fill: var(--primary); } .ah.s { fill: var(--sim); }
+  .mk circle { fill: var(--primary); }
+  .mk text { fill: var(--onp); font-size: 10.5px; font-weight: 600; text-anchor: middle; }
+  .chip rect { fill: var(--panel); stroke: var(--line); }
+  .chip { cursor: pointer; }
+  .chip:hover rect, .chip:focus rect { stroke: var(--primary); }
+  .chip.on rect { stroke: var(--primary); stroke-width: 2; }
+  .chip .cs { font-size: 11px; fill: var(--ink3); }
+  .focus .edge { opacity: .12; }
+  .focus .edge.hi { opacity: 1; }
+  .edge, .chip rect { transition: opacity 150ms, stroke 150ms; }
+  @media (prefers-reduced-motion: reduce) { .edge, .chip rect { transition: none; } }
+</style>
+<defs>
+  <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0 0 L10 5 L0 10 z"/></marker>
+  <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah p" d="M0 0 L10 5 L0 10 z"/></marker>
+  <marker id="as" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah s" d="M0 0 L10 5 L0 10 z"/></marker>
+</defs>
+<rect class="bg" width="1200" height="820"/>
+
+<!-- lifecycle stages: click one to trace its path (works when the file is opened directly) -->
+<g id="stages">
+  <g class="chip" data-s="1" tabindex="0"><title>Collect: teleop episodes are recorded as LeRobot v3, or imported from the HF Hub</title><rect x="20" y="14" width="184" height="50" rx="10"/><g class="mk"><circle cx="40" cy="39" r="9"/><text x="40" y="43">1</text></g><text class="bt" x="58" y="35">Collect</text><text class="cs" x="58" y="53">LeRobot v3 · HF import</text></g>
+  <g class="chip" data-s="2" tabindex="0"><title>Train: the worker claims a job, reads the dataset and writes a checkpoint</title><rect x="216" y="14" width="184" height="50" rx="10"/><g class="mk"><circle cx="236" cy="39" r="9"/><text x="236" y="43">2</text></g><text class="bt" x="254" y="35">Train</text><text class="cs" x="254" y="53">claim job · S3 in/out</text></g>
+  <g class="chip" data-s="3" tabindex="0"><title>Deploy: the agent hot-swaps the LoRA adapter on vla-server</title><rect x="412" y="14" width="184" height="50" rx="10"/><g class="mk"><circle cx="432" cy="39" r="9"/><text x="432" y="43">3</text></g><text class="bt" x="450" y="35">Deploy</text><text class="cs" x="450" y="53">hot-swap LoRA adapter</text></g>
+  <g class="chip" data-s="4" tabindex="0"><title>Evaluate: the server spawns sim rollouts against the policy</title><rect x="608" y="14" width="184" height="50" rx="10"/><g class="mk"><circle cx="628" cy="39" r="9"/><text x="628" y="43">4</text></g><text class="bt" x="646" y="35">Evaluate</text><text class="cs" x="646" y="53">MuJoCo sim rollouts</text></g>
+  <g class="chip" data-s="5" tabindex="0"><title>Operate: tasks, A2A chat, telemetry and closed-loop inference</title><rect x="804" y="14" width="184" height="50" rx="10"/><g class="mk"><circle cx="824" cy="39" r="9"/><text x="824" y="43">5</text></g><text class="bt" x="842" y="35">Operate</text><text class="cs" x="842" y="53">tasks · telemetry · /predict</text></g>
+  <g class="chip" data-s="6" tabindex="0"><title>Comply: the agent ships audit logs and the server keeps them</title><rect x="1000" y="14" width="180" height="50" rx="10"/><g class="mk"><circle cx="1020" cy="39" r="9"/><text x="1020" y="43">6</text></g><text class="bt" x="1038" y="35">Comply</text><text class="cs" x="1038" y="53">audit logs → Postgres</text></g>
+</g>
+
+<g id="diagram" transform="translate(0 90)">
+  <text class="zl" x="20" y="18">PEOPLE &amp; DEVICES</text>
+  <text class="zl" x="300" y="18">CONTROL PLANE</text>
+  <text class="zl" x="720" y="18">ROBOT EDGE · ONE PER ROBOT</text>
+  <text class="zl" x="300" y="528">COMPUTE · SEPARATE REPOS</text>
+  <text class="zl" x="20" y="528">EXTERNAL</text>
+
+  <!-- ===== edges ===== -->
+  <g class="edge" data-s="1 5"><title>Teleop over a WebSocket straight to the robot-agent (keyboard, gamepad, VR), bound to a control lease</title>
+    <path class="e direct" d="M135 60 V40 H950 V58" marker-end="url(#ap)"/>
+    <text class="el" x="470" y="35">direct teleop WS, skips the server</text></g>
+  <g class="edge"><title>The Quest 3 loads the app over USB adb reverse on localhost, the only origin WebXR accepts</title>
+    <path class="e" d="M135 280 V252" marker-end="url(#a)"/><text class="el" x="142" y="271">loads app</text></g>
+  <g class="edge" data-s="5"><title>REST under /api and one WebSocket at /api/a2a/ws</title>
+    <path class="e" d="M250 120 H298" marker-end="url(#a)" marker-start="url(#a)"/>
+    <text class="el" x="256" y="112">REST</text><text class="el" x="260" y="136">WS</text>
+    <g class="mk"><circle cx="275" cy="150" r="8"/><text x="275" y="154">5</text></g></g>
+  <g class="edge"><title>LLM calls: server CommandInterpreter and agent Genkit, HTTPS 443</title>
+    <path class="e opt" d="M300 330 H266 V572 H252" marker-end="url(#a)"/></g>
+  <g class="edge" data-s="1"><title>Dataset import and browse from the Hugging Face Hub</title>
+    <path class="e opt" d="M250 672 H282 V280 H298" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="282" cy="630" r="8"/><text x="282" y="634">1</text></g></g>
+
+  <g class="edge" data-s="6"><title>Audit, compliance and system of record in Postgres (SQLite file in dev)</title>
+    <path class="e" d="M372 360 V398" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="386" cy="382" r="8"/><text x="386" y="386">6</text></g></g>
+  <g class="edge" data-s="2"><title>Job queues and KV on NATS JetStream (optional)</title>
+    <path class="e opt" d="M467 360 V398" marker-end="url(#a)"/></g>
+  <g class="edge" data-s="1 2"><title>Datasets, checkpoints and models in RustFS / S3 (optional)</title>
+    <path class="e opt" d="M560 360 V398" marker-end="url(#a)"/></g>
+
+  <g class="edge" data-s="5"><title>Push-model task distribution and A2A JSON-RPC conversations</title>
+    <path class="e" d="M600 92 H718" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="614" cy="84" r="8"/><text x="614" y="88">5</text></g><text class="el" x="628" y="87">tasks · A2A</text></g>
+  <g class="edge" data-s="3"><title>The server proxies /vla/* to the agent, which loads the model</title>
+    <path class="e" d="M600 132 H718" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="614" cy="124" r="8"/><text x="614" y="128">3</text></g><text class="el" x="628" y="127">deploy model</text></g>
+  <g class="edge" data-s="5"><title>Telemetry over a WebSocket that the server dials, rebroadcast to the app</title>
+    <path class="e" d="M718 172 H602" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="614" cy="164" r="8"/><text x="614" y="168">5</text></g><text class="el" x="628" y="167">telemetry</text></g>
+  <g class="edge" data-s="1"><title>The server starts and stops recording on /api/v1/robots/:id/recording/*. The agent writes a LeRobot v3 dataset and reports each episode; interventions go to /api/datasets/interventions</title>
+    <path class="e" d="M718 208 H602" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="614" cy="200" r="8"/><text x="614" y="204">1</text></g><text class="el" x="628" y="203">episodes</text></g>
+  <g class="edge" data-s="6"><title>ComplianceLogClient posts audit logs with the agent's service token</title>
+    <path class="e" d="M718 240 H602" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="614" cy="232" r="8"/><text x="614" y="236">6</text></g><text class="el" x="628" y="235">audit logs</text></g>
+
+  <g class="edge" data-s="1 5"><title>HTTP to the hardware sidecar</title>
+    <path class="e" d="M785 250 V288" marker-end="url(#a)" marker-start="url(#a)"/><text class="el" x="792" y="274">HTTP</text></g>
+  <g class="edge" data-s="4 5"><title>The same sidecar contract, served by the MuJoCo sim</title>
+    <path class="e sim" d="M927 250 V288" marker-end="url(#as)"/><text class="el" x="934" y="274">or sim</text></g>
+  <g class="edge"><title>SO-101 and voice sidecars</title>
+    <path class="e opt" d="M1067 250 V288" marker-end="url(#a)"/></g>
+  <g class="edge" data-s="1 5"><title>Unitree DDS for locomotion, odometry and LiDAR; ZMQ for state and cameras</title>
+    <path class="e" d="M785 350 V388" marker-end="url(#a)" marker-start="url(#a)"/><text class="el" x="792" y="374">DDS · ZMQ</text></g>
+  <g class="edge"><title>Serial link to the SO-101 arm through LeRobot</title>
+    <path class="e opt" d="M1067 350 V388" marker-end="url(#a)" marker-start="url(#a)"/><text class="el" x="1074" y="374">serial</text></g>
+
+  <g class="edge" data-s="3 5"><title>VlaModelManager calls /load-adapter; SkillExecutor calls /predict in the closed loop</title>
+    <path class="e" d="M1155 250 V538" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="1155" cy="276" r="8"/><text x="1155" y="280">3</text></g>
+    <g class="mk"><circle cx="1155" cy="500" r="8"/><text x="1155" y="504">5</text></g>
+    <text class="el m" transform="translate(1172 388) rotate(90)" text-anchor="middle">/load-adapter · /predict</text></g>
+
+  <g class="edge" data-s="2"><title>The worker polls the server to claim a job, then reports progress</title>
+    <path class="e" d="M312 540 V362" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="312" cy="505" r="8"/><text x="312" y="509">2</text></g>
+    <text class="el" transform="translate(324 480) rotate(-90)">claim job</text></g>
+  <g class="edge" data-s="2"><title>The dataset comes in and checkpoints go out through S3</title>
+    <path class="e" d="M450 572 H560 V472" marker-end="url(#a)" marker-start="url(#a)"/>
+    <g class="mk"><circle cx="480" cy="572" r="8"/><text x="480" y="576">2</text></g><text class="el" x="494" y="564">S3 in/out</text></g>
+  <g class="edge" data-s="4"><title>The server spawns evaluate_vla.py as a subprocess</title>
+    <path class="e" d="M600 330 H650 V624 H910 V606" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="650" cy="480" r="8"/><text x="650" y="484">4</text></g><text class="el" x="664" y="620">spawns</text></g>
+  <g class="edge" data-s="4"><title>Sim rollouts query the policy on vla-server</title>
+    <path class="e" d="M970 572 H998" marker-end="url(#a)"/>
+    <g class="mk"><circle cx="984" cy="590" r="8"/><text x="984" y="594">4</text></g></g>
+
+  <!-- ===== nodes ===== -->
+  <rect class="box key" x="20" y="60" width="230" height="190" rx="10"/>
+  <text class="bt" x="36" y="86">NeoDEM app</text>
+  <text class="bs" x="36" y="104">React · Tauri · Zustand · three.js</text>
+  <line class="dv" x1="36" y1="116" x2="234" y2="116"/>
+  <text class="li" x="36" y="138"><tspan font-weight="600">Collect</tspan> · teleop, recording</text>
+  <text class="li" x="36" y="158"><tspan font-weight="600">Train</tspan> · datasets, runs</text>
+  <text class="li" x="36" y="178"><tspan font-weight="600">Deploy</tspan> · models, OTA</text>
+  <text class="li" x="36" y="198"><tspan font-weight="600">Evaluate</tspan> · sim, scores</text>
+  <text class="li" x="36" y="218"><tspan font-weight="600">Operate</tspan> · fleet, Agent Mode</text>
+  <text class="li" x="36" y="238"><tspan font-weight="600">Comply</tspan> · audit, GDPR, approvals</text>
+
+  <rect class="box" x="20" y="280" width="230" height="60" rx="10"/>
+  <text class="bt" x="36" y="305">Quest 3</text>
+  <text class="bs" x="36" y="324">WebXR teleop over adb reverse</text>
+  <rect class="box" x="20" y="370" width="230" height="60" rx="10"/>
+  <text class="bt" x="36" y="395">roboctl · rmsctl</text>
+  <text class="bs" x="36" y="414">CLIs for one agent · for the server</text>
+  <rect class="box ext" x="20" y="540" width="230" height="64" rx="10"/>
+  <text class="bt" x="36" y="566">Gemini · OpenRouter</text>
+  <text class="bs" x="36" y="585">LLM for server and agent (Genkit)</text>
+  <rect class="box ext" x="20" y="640" width="230" height="64" rx="10"/>
+  <text class="bt" x="36" y="666">Hugging Face Hub</text>
+  <text class="bs" x="36" y="685">dataset import and browse</text>
+
+  <rect class="box key" x="300" y="60" width="300" height="300" rx="10"/>
+  <text class="bt" x="316" y="86">server · :3001</text>
+  <text class="bs" x="316" y="104">Node · Express · Prisma · JWT RBAC</text>
+  <line class="dv" x1="316" y1="116" x2="584" y2="116"/>
+  <text class="bm" x="316" y="136">REST /api · WS /api/a2a/ws · A2A</text>
+  <text class="li" x="316" y="162"><tspan font-weight="600">RobotManager</tspan> · registration, 30 s health</text>
+  <text class="li" x="316" y="184"><tspan font-weight="600">SafetyService</tspan> · 5 s heartbeat, E-stop</text>
+  <text class="li" x="316" y="206"><tspan font-weight="600">TaskDistributor</tspan> · pushes tasks</text>
+  <text class="li" x="316" y="228"><tspan font-weight="600">TelemetryIngestion</tspan> · WS per robot</text>
+  <text class="li" x="316" y="250"><tspan font-weight="600">TrainingOrchestrator</tspan> · job queue</text>
+  <text class="li" x="316" y="272"><tspan font-weight="600">Control leases</tspan> · one per robot</text>
+  <text class="li" x="316" y="294"><tspan font-weight="600">Compliance</tspan> · audit, GDPR, holds</text>
+  <text class="li" x="316" y="316"><tspan font-weight="600">Datasets</tspan> · curation, LeRobot views</text>
+  <text class="bs" x="316" y="344">routes → services → repositories</text>
+
+  <rect class="box" x="330" y="400" width="85" height="70" rx="10"/>
+  <text class="bt" x="372" y="428" text-anchor="middle">Postgres</text>
+  <text class="bs" x="372" y="446" text-anchor="middle">SQLite in dev</text>
+  <rect class="box" x="425" y="400" width="85" height="70" rx="10"/>
+  <text class="bt" x="467" y="428" text-anchor="middle">NATS</text>
+  <text class="bs" x="467" y="446" text-anchor="middle">jobs · KV</text>
+  <rect class="box" x="520" y="400" width="80" height="70" rx="10"/>
+  <text class="bt" x="560" y="428" text-anchor="middle">RustFS</text>
+  <text class="bs" x="560" y="446" text-anchor="middle">8 S3 buckets</text>
+
+  <rect class="box key" x="720" y="60" width="460" height="190" rx="10"/>
+  <text class="bt" x="736" y="86">robot-agent · :41243</text>
+  <text class="bs" x="736" y="104">Node · @a2a-js/sdk · Genkit · one process per robot</text>
+  <line class="dv" x1="736" y1="116" x2="1164" y2="116"/>
+  <text class="li" x="736" y="142"><tspan font-weight="600">A2A agent</tspan> · Genkit tools</text>
+  <text class="li" x="736" y="168"><tspan font-weight="600">Agent Mode</tspan> · local LLM planner</text>
+  <text class="li" x="736" y="194"><tspan font-weight="600">Safety monitor</tspan> · control lease</text>
+  <text class="li" x="736" y="220"><tspan font-weight="600">Telemetry</tspan> · state, cameras, cloud</text>
+  <text class="li" x="960" y="142"><tspan font-weight="600">SkillExecutor</tspan> · VlaModelManager</text>
+  <text class="li" x="960" y="168"><tspan font-weight="600">EpisodeRecorder</tspan> · LeRobot v3</text>
+  <text class="li" x="960" y="194"><tspan font-weight="600">ComplianceLogClient</tspan></text>
+  <text class="li" x="960" y="220"><tspan font-weight="600">Task queue</tspan> · REST /api/v1</text>
+
+  <rect class="box" x="720" y="290" width="130" height="60" rx="10"/>
+  <text class="bt" x="736" y="315">g1_sidecar</text>
+  <text class="bs" x="736" y="334">DDS ↔ HTTP bridge</text>
+  <rect class="box sim" x="862" y="290" width="130" height="60" rx="10"/>
+  <text class="bt" x="878" y="315">sim_g1_dds</text>
+  <text class="bs" x="878" y="334">MuJoCo, same wire</text>
+  <rect class="box" x="1004" y="290" width="126" height="60" rx="10"/>
+  <text class="bt" x="1020" y="315">so101 · voice</text>
+  <text class="bs" x="1020" y="334">other sidecars</text>
+  <rect class="box key" x="720" y="390" width="272" height="60" rx="10"/>
+  <text class="bt" x="736" y="415">Unitree G1 EDU + Dex3-1</text>
+  <text class="bs" x="736" y="434">43 DOF · DDS domain 0 · head cams · LiDAR</text>
+  <rect class="box" x="1004" y="390" width="126" height="60" rx="10"/>
+  <text class="bt" x="1020" y="415">SO-101 arm</text>
+  <text class="bs" x="1020" y="434">bootstrap embodiment</text>
+
+  <rect class="box" x="300" y="540" width="150" height="64" rx="10"/>
+  <text class="bt" x="316" y="566">training-worker</text>
+  <text class="bs" x="316" y="585">LoRA fine-tune · GPU</text>
+  <rect class="box" x="720" y="540" width="115" height="64" rx="10"/>
+  <text class="bt" x="736" y="566">Ollama</text>
+  <text class="bs" x="736" y="585">Agent Mode LLM</text>
+  <rect class="box sim" x="850" y="540" width="120" height="64" rx="10"/>
+  <text class="bt" x="866" y="566">sim-evaluator</text>
+  <text class="bs" x="866" y="585">MuJoCo rollouts</text>
+  <rect class="box key" x="1000" y="540" width="180" height="64" rx="10"/>
+  <text class="bt" x="1016" y="566">vla-server · :8000</text>
+  <text class="bs" x="1016" y="585">SmolVLA · π0.5 · GR00T</text>
+</g>
+
+<script><![CDATA[
+(function () {
+  var root = document.documentElement;
+  var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
+  var edges = Array.prototype.slice.call(document.querySelectorAll('.edge'));
+  var current = null;
+  function show(s) {
+    current = (current === s) ? null : s;
+    root.classList.toggle('focus', current !== null);
+    chips.forEach(function (c) { c.classList.toggle('on', c.getAttribute('data-s') === current); });
+    edges.forEach(function (e) {
+      var st = (e.getAttribute('data-s') || '').split(' ');
+      e.classList.toggle('hi', current !== null && st.indexOf(current) !== -1);
+    });
+  }
+  chips.forEach(function (c) {
+    c.addEventListener('click', function (ev) { ev.stopPropagation(); show(c.getAttribute('data-s')); });
+    c.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); show(c.getAttribute('data-s')); }
+    });
+  });
+  root.addEventListener('click', function () { if (current !== null) show(current); });
+})();
+]]></script>
+</svg>
