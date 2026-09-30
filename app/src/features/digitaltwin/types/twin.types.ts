@@ -283,3 +283,27 @@ export function twinGridSize(
   if (!dims || !resolution || resolution <= 0) return null;
   return { w: Math.round(dims.width / resolution), h: Math.round(dims.length / resolution) };
 }
+
+// ============================================================================
+// PLACE GRAPH (TASK-200 / TASK-332) — `GET /digital-twins/:id/places/_index.json`
+// and `GET /robots/:id/places`
+// ============================================================================
+
+/** One place of a site: a named polygon in the twin's frame (metres). */
+export interface PlaceGraphPlace {
+  id: string;
+  name: string;
+  placeType: string;
+  floor: number;
+  /** CCW ring, implicitly closed, metres in the twin frame. */
+  polygon: [number, number][];
+  source: string;
+  /** The robot must not stand here. */
+  keepout: boolean;
+}
+
+export interface PlaceGraph {
+  version: number;
+  frame: { id: string; kind: string; units: string; yawConvention: string; twinId: string };
+  places: PlaceGraphPlace[];
+}

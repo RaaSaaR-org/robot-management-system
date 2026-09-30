@@ -18,6 +18,7 @@ import type {
   CreateTwinZoneRequest,
   UpdateTwinZoneRequest,
   SensorScanSummaryDTO,
+  PlaceGraph,
 } from '../types/twin.types';
 
 // apiClient already prefixes /api.
@@ -150,6 +151,12 @@ export const twinApi = {
    * `room` + `keepout` zones, so keep-outs can never diverge between the Nav2
    * raster and what the robot's geofence enforces.
    */
+  async getPlaceGraph(twinId: string): Promise<PlaceGraph> {
+    const res = await apiClient.get<PlaceGraph>(ENDPOINTS.placeGraph(twinId));
+    return res.data;
+  },
+
+  /** The same place graph as a file download. */
   async downloadPlaceGraph(twinId: string): Promise<Blob> {
     const res = await apiClient.get<Blob>(ENDPOINTS.placeGraph(twinId), { responseType: 'blob' });
     return res.data;

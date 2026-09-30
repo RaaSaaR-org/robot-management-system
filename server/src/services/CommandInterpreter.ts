@@ -162,7 +162,7 @@ Your task is to interpret natural language commands and convert them into struct
 2. Infer reasonable defaults when not specified (e.g., normal speed)
 3. Add warnings for potentially risky operations
 4. Suggest alternatives when confidence is below 0.7
-5. For location-based commands, try to identify named zones (e.g., "warehouse", "charging station", "assembly line")`;
+5. For location-based commands, try to identify named places of the robot's site (e.g., "warehouse", "charging station", "assembly line")`;
 
 // ============================================================================
 // SERVICE CLASS
@@ -511,8 +511,8 @@ export class CommandInterpreter {
 
     if (params.target) {
       config.target = params.target;
-      // Try to resolve target to zone location
-      config.zoneName = params.target;
+      // The target names a place of the robot's site (TASK-332)
+      config.placeName = params.target;
     }
 
     if (params.objects && params.objects.length > 0) {

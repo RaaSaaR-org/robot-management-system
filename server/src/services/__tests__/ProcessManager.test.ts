@@ -64,6 +64,12 @@ vi.mock('../TaskDistributor.js', () => ({
   },
 }));
 
+// TASK-332: place references resolve against the twin's place graph.
+const { exportPlaceGraph } = vi.hoisted(() => ({ exportPlaceGraph: vi.fn() }));
+vi.mock('../TwinPlaceGraphService.js', () => ({
+  twinPlaceGraphService: { exportPlaceGraph },
+}));
+
 import { ProcessManager } from '../ProcessManager.js';
 import { processRepository } from '../../repositories/ProcessRepository.js';
 import { robotTaskRepository } from '../../repositories/RobotTaskRepository.js';
@@ -891,5 +897,158 @@ describe('onProcessEvent', () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler.mock.calls[0][0]).toMatchObject({ type: 'process:updated' });
+  });
+});
+
+// ===========================================================================
+// TASK-332: "Move to place" steps store a place reference
+// ===========================================================================
+
+function placeGraph(places: Array<{ id: string; name: string; keepout?: boolean; polygon?: [number, number][] }>) {
+  return {
+    version: 1,
+    frame: { id: 'twin-twin1', kind: 'site', units: 'm', yawConvention: 'ccw', twinId: 'twin1' },
+    places: places.map((p) => ({
+      id: p.id,
+      name: p.name,
+      placeType: 'cell',
+      polygon: p.polygon ?? [[0, 0], [4, 0], [4, 2], [0, 2]],
+      source: 'surveyed',
+      keepout: p.keepout ?? false,
+      landmarks: [],
+    })),
+  };
+}
+
+const placeStep = (placeId: string) => ({
+  name: 'Go to dock',
+  actionType: 'move_to_location' as const,
+  actionConfig: { place: { twinId: 'twin1', placeId } },
+  order: 0,
+});
+
+describe('place references on save', () => {
+  it('accepts a step referencing an existing non-keepout place', async () => {
+    exportPlaceGraph.mockResolvedValue(placeGraph([{ id: 'dock', name: 'Dock' }]));
+    repo.createDefinition.mockResolvedValue(makeDefinition());
+    await manager.createDefinition({ name: 'X', stepTemplates: [placeStep('dock')] } as never, 'u');
+    expect(exportPlaceGraph).toHaveBeenCalledWith('twin1');
+    expect(repo.createDefinition).toHaveBeenCalled();
+  });
+
+  it('rejects a step referencing a missing place', async () => {
+    exportPlaceGraph.mockResolvedValue(placeGraph([{ id: 'dock', name: 'Dock' }]));
+    await expect(
+      manager.createDefinition({ name: 'X', stepTemplates: [placeStep('gone')] } as never, 'u')
+    ).rejects.toThrow(/does not exist/);
+    expect(repo.createDefinition).not.toHaveBeenCalled();
+  });
+
+  it('rejects a step referencing a keepout place on update', async () => {
+    exportPlaceGraph.mockResolvedValue(placeGraph([{ id: 'pit', name: 'Pit', keepout: true }]));
+    await expect(
+      manager.updateDefinition('def1', { stepTemplates: [placeStep('pit')] } as never)
+    ).rejects.toThrow(/keepout/);
+    expect(repo.updateDefinition).not.toHaveBeenCalled();
+  });
+
+  it('rejects a step whose site does not exist', async () => {
+    exportPlaceGraph.mockResolvedValue(null);
+    await expect(
+      manager.createDefinition({ name: 'X', stepTemplates: [placeStep('dock')] } as never, 'u')
+    ).rejects.toThrow(/Site twin1 does not exist/);
+  });
+
+  it('leaves legacy location steps alone', async () => {
+    repo.createDefinition.mockResolvedValue(makeDefinition());
+    const legacy = { name: 'Old', actionType: 'move_to_location', actionConfig: { location: { x: 1, y: 2 } }, order: 0 };
+    await manager.createDefinition({ name: 'X', stepTemplates: [legacy] } as never, 'u');
+    expect(exportPlaceGraph).not.toHaveBeenCalled();
+  });
+});
+
+describe('place references at run time', () => {
+  function arrangeStep(actionConfig: Record<string, unknown>) {
+    repo.findInstanceById.mockResolvedValue(makeInstance({ status: 'in_progress' }));
+    repo.getNextPendingStep.mockResolvedValue(makeStep({ id: 's1', actionConfig }));
+    repo.updateStepStatus.mockResolvedValue(makeStep());
+    repo.getStepFailedRobotIds.mockResolvedValue([]);
+    taskRepo.create.mockResolvedValue({ id: 'task1' } as never);
+  }
+
+  it('resolves the place to its centroid and requires the twin', async () => {
+    arrangeStep({ place: { twinId: 'twin1', placeId: 'dock' } });
+    exportPlaceGraph.mockResolvedValue(placeGraph([{ id: 'dock', name: 'Dock' }]));
+
+    await manager.executeNextStep('inst1');
+
+    expect(taskRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionConfig: expect.objectContaining({
+          place: { twinId: 'twin1', placeId: 'dock' },
+          location: { x: 2, y: 1, place: 'dock' },
+          requiredTwinId: 'twin1',
+        }),
+      }),
+      'process',
+      'inst1',
+      's1'
+    );
+  });
+
+  it('fails the step and process cleanly when the place disappeared', async () => {
+    arrangeStep({ place: { twinId: 'twin1', placeId: 'dock' } });
+    exportPlaceGraph.mockResolvedValue(placeGraph([]));
+    repo.updateStepResult.mockResolvedValue(true);
+    repo.findStepById.mockResolvedValue(makeStep({ id: 's1', status: 'failed' }));
+    repo.updateInstanceStatus.mockResolvedValue(makeInstance({ status: 'failed' }));
+    const processFailed = vi.fn();
+    manager.on('process:failed', processFailed);
+
+    await manager.executeNextStep('inst1');
+
+    expect(taskRepo.create).not.toHaveBeenCalled();
+    expect(repo.updateStepResult).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ success: false, message: expect.stringMatching(/does not exist/) })
+    );
+    expect(repo.incrementStepRetry).not.toHaveBeenCalled();
+    expect(repo.updateInstanceStatus).toHaveBeenCalledWith('inst1', 'failed', expect.stringContaining('cannot run'));
+    expect(processFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('still runs legacy location steps unchanged', async () => {
+    arrangeStep({ location: { x: 5, y: 6 } });
+
+    await manager.executeNextStep('inst1');
+
+    expect(exportPlaceGraph).not.toHaveBeenCalled();
+    const input = taskRepo.create.mock.calls[0][0] as { actionConfig: Record<string, unknown> };
+    expect(input.actionConfig.location).toEqual({ x: 5, y: 6 });
+    expect(input.actionConfig.requiredTwinId).toBeUndefined();
+  });
+
+  it('reassignment only considers robots bound to the place twin', async () => {
+    const step = makeStep({
+      id: 's1',
+      assignedRobotId: 'botA',
+      retryCount: 2,
+      maxRetries: 2,
+      failedRobotIds: [],
+      actionConfig: { place: { twinId: 'twin1', placeId: 'dock' } },
+    });
+    repo.findStepById.mockResolvedValue(step);
+    repo.updateStepResult.mockResolvedValue(true);
+    repo.addFailedRobotToStep.mockResolvedValue(true);
+    repo.findInstanceById.mockResolvedValue(makeInstance({ status: 'in_progress' }));
+    findEligibleRobotsForReassignment.mockResolvedValue([]);
+    repo.updateInstanceStatus.mockResolvedValue(makeInstance({ status: 'failed' }));
+
+    await manager.onStepCompleted('s1', { success: false, message: 'boom' });
+
+    expect(findEligibleRobotsForReassignment).toHaveBeenCalledWith(
+      expect.objectContaining({ actionConfig: expect.objectContaining({ requiredTwinId: 'twin1' }) }),
+      ['botA']
+    );
   });
 });

@@ -10,6 +10,10 @@
 
 import { digitalTwinRepository, twinZoneRepository } from '../repositories/index.js';
 import { modelStorage } from '../storage/model-storage.js';
+import { polygonCentroid } from './twinPlaceGeometry.js';
+
+// Moved to twinPlaceGeometry (TASK-332); re-exported for existing callers.
+export { polygonCentroid };
 import {
   createGrid,
   fillPolygon,
@@ -286,39 +290,6 @@ export class TwinExportService {
       // Caching is best-effort — exports are recomputed cheaply on demand.
     }
   }
-}
-
-/**
- * Area-weighted centroid of a simple polygon. Falls back to the vertex average
- * for degenerate (zero-area) polygons. Returns null for < 1 vertex.
- */
-export function polygonCentroid(points: TwinZonePoint[]): { x: number; y: number } | null {
-  if (points.length === 0) return null;
-  if (points.length < 3) {
-    const sx = points.reduce((a, p) => a + p.x, 0) / points.length;
-    const sy = points.reduce((a, p) => a + p.y, 0) / points.length;
-    return { x: sx, y: sy };
-  }
-
-  let area = 0;
-  let cx = 0;
-  let cy = 0;
-  const n = points.length;
-  for (let i = 0; i < n; i++) {
-    const a = points[i];
-    const b = points[(i + 1) % n];
-    const cross = a.x * b.y - b.x * a.y;
-    area += cross;
-    cx += (a.x + b.x) * cross;
-    cy += (a.y + b.y) * cross;
-  }
-  area *= 0.5;
-  if (Math.abs(area) < 1e-9) {
-    const sx = points.reduce((acc, p) => acc + p.x, 0) / n;
-    const sy = points.reduce((acc, p) => acc + p.y, 0) / n;
-    return { x: sx, y: sy };
-  }
-  return { x: cx / (6 * area), y: cy / (6 * area) };
 }
 
 export const twinExportService = TwinExportService.getInstance();
