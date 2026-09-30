@@ -9,9 +9,10 @@
  * | `GET  /:id/control-lease`          | viewerOrAbove  |
  * | `POST /:id/control-lease`          | memberOrAbove  |
  * | `POST /:id/control-lease/release`  | memberOrAbove  |
+ * | `POST /:id/control-lease/renew`    | memberOrAbove  |
  *
  * Behind `CONTROL_LEASES_ENABLED` (default off): the GET still answers, with
- * `capability.enabled: false`; both POSTs answer 404 `control_leases_disabled`.
+ * `capability.enabled: false`; every POST answers 404 `control_leases_disabled`.
  */
 
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
@@ -31,6 +32,7 @@ import {
 import { prisma } from '../database/index.js';
 import { robotManager } from '../services/RobotManager.js';
 import { complianceLogService } from '../services/ComplianceLogService.js';
+import { publishControlLeaseTransition } from '../services/controlLeaseEvents.js';
 
 /**
  * One compliance entry per lease event. The metadata carries tenant, robot,
@@ -69,6 +71,16 @@ export function createDefaultControlLeaseService(): ControlLeaseService {
     db: prisma,
     agent: httpControlLeaseAgent,
     audit: auditControlLeaseEvent,
+    publish: publishControlLeaseTransition,
+    readUser: async (userId) => {
+      const row = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, isActive: true } });
+      if (row) return row;
+      // The AUTH_DISABLED mock user has no row; it keeps the role it is given
+      // on every request. Any other missing user has lost its lease.
+      return process.env.AUTH_DISABLED === 'true' && userId === 'dev-user-id'
+        ? { role: 'super-admin', isActive: true }
+        : null;
+    },
     resolveRobot: async (robotId) => {
       const row = await prisma.robot.findUnique({
         where: { id: robotId },
@@ -80,6 +92,13 @@ export function createDefaultControlLeaseService(): ControlLeaseService {
       return { robotId: row.id, tenantId: row.tenantId ?? null, baseUrl: registered.baseUrl };
     },
   });
+}
+
+let defaultService: ControlLeaseService | undefined;
+
+/** The one production service per process, shared by the routes and the expiry sweeper. */
+export function getDefaultControlLeaseService(): ControlLeaseService {
+  return (defaultService ??= createDefaultControlLeaseService());
 }
 
 function leaseUser(req: Request): ControlLeaseUser | null {
@@ -105,8 +124,8 @@ function sendError(res: Response, error: unknown, what: string): void {
   if (!res.headersSent) res.status(500).json({ code: 'control_lease_error' });
 }
 
-/** The two write paths, relative to the `/api/robots` mount. */
-const LEASE_WRITE_PATH = /^\/([^/]+)\/control-lease(?:\/release)?\/?$/;
+/** The write paths, relative to the `/api/robots` mount. */
+const LEASE_WRITE_PATH = /^\/([^/]+)\/control-lease(?:\/release|\/renew)?\/?$/;
 
 /**
  * A role refusal happens in a guard (`writeRoleGuard` at the mount,
@@ -146,6 +165,24 @@ export function controlLeaseDenialAudit(
   };
 }
 
+const LEASE_BODY_MESSAGE = 'leaseId (string) and generation (integer ≥ 1) are required';
+
+/** `{leaseId, generation}` as release and renew take it, or null when malformed. */
+function leaseBody(req: Request): { leaseId: string; generation: number } | null {
+  const body = (req.body ?? {}) as { leaseId?: unknown; generation?: unknown };
+  if (
+    typeof body.leaseId !== 'string' ||
+    body.leaseId.length === 0 ||
+    body.leaseId.length > 128 ||
+    typeof body.generation !== 'number' ||
+    !Number.isSafeInteger(body.generation) ||
+    body.generation < 1
+  ) {
+    return null;
+  }
+  return { leaseId: body.leaseId, generation: body.generation };
+}
+
 export interface ControlLeaseRoutesOptions {
   service?: ControlLeaseService;
   enabled?: () => boolean;
@@ -157,7 +194,7 @@ export function createControlLeaseRoutes(options: ControlLeaseRoutesOptions = {}
   const enabled = options.enabled ?? controlLeasesEnabled;
   const audit = options.audit ?? auditControlLeaseEvent;
   let service = options.service;
-  const svc = (): ControlLeaseService => (service ??= createDefaultControlLeaseService());
+  const svc = (): ControlLeaseService => (service ??= getDefaultControlLeaseService());
   const auditRoleDenial = controlLeaseDenialAudit(audit);
 
   /** 404 while the flag is off — the feature does not exist yet. */
@@ -221,21 +258,38 @@ export function createControlLeaseRoutes(options: ControlLeaseRoutesOptions = {}
           res.status(401).json({ code: 'unauthorized' });
           return;
         }
-        const body = (req.body ?? {}) as { leaseId?: unknown; generation?: unknown };
-        if (
-          typeof body.leaseId !== 'string' ||
-          body.leaseId.length === 0 ||
-          body.leaseId.length > 128 ||
-          typeof body.generation !== 'number' ||
-          !Number.isSafeInteger(body.generation) ||
-          body.generation < 1
-        ) {
-          res.status(400).json({ code: 'invalid_release', message: 'leaseId (string) and generation (integer ≥ 1) are required' });
+        const body = leaseBody(req);
+        if (!body) {
+          res.status(400).json({ code: 'invalid_release', message: LEASE_BODY_MESSAGE });
           return;
         }
         res.json(await svc().release(user, req.params.id, body.leaseId, body.generation));
       } catch (error) {
         sendError(res, error, 'release');
+      }
+    }
+  );
+
+  router.post(
+    '/:id/control-lease/renew',
+    requireEnabled,
+    auditRoleDenial,
+    memberOrAbove,
+    async (req: Request, res: Response) => {
+      try {
+        const user = leaseUser(req);
+        if (!user) {
+          res.status(401).json({ code: 'unauthorized' });
+          return;
+        }
+        const body = leaseBody(req);
+        if (!body) {
+          res.status(400).json({ code: 'invalid_renew', message: LEASE_BODY_MESSAGE });
+          return;
+        }
+        res.json(await svc().renew(user, req.params.id, body.leaseId, body.generation));
+      } catch (error) {
+        sendError(res, error, 'renew');
       }
     }
   );

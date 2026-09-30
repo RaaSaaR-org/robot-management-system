@@ -18,6 +18,7 @@ import {
   hashLeaseId,
   type AgentInstallBody,
   type AgentInstallResult,
+  type AgentRenewResult,
   type ControlLeaseAgentPort,
   type ControlLeaseAuditEvent,
   type ControlLeaseRobot,
@@ -40,6 +41,9 @@ class MockAgent implements ControlLeaseAgentPort {
   async install(_robot: ControlLeaseRobot, body: AgentInstallBody): Promise<AgentInstallResult> {
     this.installs.push(body);
     return this.installResult;
+  }
+  async renew(): Promise<AgentRenewResult> {
+    return { ok: true, bound: true };
   }
   async release(_robot: ControlLeaseRobot, generation: number): Promise<boolean> {
     this.releases.push(generation);

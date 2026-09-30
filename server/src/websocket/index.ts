@@ -4,7 +4,7 @@
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
-import type { Server } from 'http';
+import type { IncomingMessage, Server } from 'http';
 import { conversationManager } from '../services/ConversationManager.js';
 import { robotManager, type RobotEvent } from '../services/RobotManager.js';
 import { alertService, type AlertEvent } from '../services/AlertService.js';
@@ -22,6 +22,16 @@ import { scanSessionService } from '../services/ScanSessionService.js';
 import { digitalTwinService } from '../services/DigitalTwinService.js';
 import { twinZoneService } from '../services/TwinZoneService.js';
 import { agentModeService } from '../services/AgentModeService.js';
+import { authService } from '../services/AuthService.js';
+import { onControlLeaseTransition } from '../services/controlLeaseEvents.js';
+import type { ControlLeaseTransition } from '../services/ControlLeaseService.js';
+import {
+  identityFromToken,
+  identityFromUpgrade,
+  mayObserveTenant,
+  type AccessTokenVerifier,
+  type SocketIdentity,
+} from './socketIdentity.js';
 import type { AgentModeEvent } from '../types/agent-mode.types.js';
 import type { SensorScanEvent } from '../types/pointcloud.types.js';
 import type { DigitalTwinEvent, TwinZoneEvent } from '../types/twin.types.js';
@@ -71,6 +81,26 @@ function broadcast(clients: Set<WebSocket>, message: string): void {
   });
 }
 
+const verifyAccessToken: AccessTokenVerifier = (token) => authService.verifyAccessToken(token);
+
+/**
+ * Deliver one control-lease transition (TASK-318) to the sockets allowed to see
+ * it: identified, and of the robot's tenant. The tenant is routing only — the
+ * payload is the public event, which by construction carries no lease secret.
+ */
+export function deliverControlLeaseTransition(
+  clients: Set<WebSocket>,
+  identities: WeakMap<WebSocket, SocketIdentity>,
+  transition: ControlLeaseTransition
+): void {
+  const message = JSON.stringify({ ...transition.event, timestamp: Date.now() });
+  clients.forEach((client) => {
+    if (mayObserveTenant(identities.get(client), transition.tenantId)) {
+      safeSend(client, message, clients);
+    }
+  });
+}
+
 /**
  * Setup WebSocket server for real-time communication
  */
@@ -83,6 +113,8 @@ export function setupWebSocket(server: Server): void {
   const clients = new Set<WebSocket>();
   // Track alive status for heartbeat - use WeakMap to avoid memory leaks
   const clientAliveStatus = new WeakMap<WebSocket, boolean>();
+  // Who each socket proved to be (TASK-318); absent → no tenant-scoped events.
+  const clientIdentity = new WeakMap<WebSocket, SocketIdentity>();
 
   // Heartbeat interval to detect dead connections
   const heartbeatInterval = setInterval(() => {
@@ -102,11 +134,16 @@ export function setupWebSocket(server: Server): void {
   }, HEARTBEAT_INTERVAL_MS);
 
   // Clean up interval when server closes
+  const stopLeaseEvents = onControlLeaseTransition((transition) =>
+    deliverControlLeaseTransition(clients, clientIdentity, transition)
+  );
+
   wss.on('close', () => {
     clearInterval(heartbeatInterval);
+    stopLeaseEvents();
   });
 
-  wss.on('connection', (ws: WebSocket) => {
+  wss.on('connection', (ws: WebSocket, req?: IncomingMessage) => {
     // Reject connection if at capacity
     if (clients.size >= MAX_CLIENTS) {
       console.warn(`[WebSocket] Connection rejected: max clients (${MAX_CLIENTS}) reached`);
@@ -117,6 +154,8 @@ export function setupWebSocket(server: Server): void {
     console.log(`[WebSocket] Client connected (total: ${clients.size + 1})`);
     clients.add(ws);
     clientAliveStatus.set(ws, true);
+    const identity = identityFromUpgrade(req, verifyAccessToken);
+    if (identity) clientIdentity.set(ws, identity);
 
     // Send welcome message
     ws.send(JSON.stringify({
@@ -134,7 +173,7 @@ export function setupWebSocket(server: Server): void {
     ws.on('message', (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
-        handleClientMessage(ws, message);
+        handleClientMessage(ws, message, clientIdentity);
       } catch (error) {
         console.error('Invalid WebSocket message:', error);
         ws.send(JSON.stringify({
@@ -431,7 +470,11 @@ export function setupWebSocket(server: Server): void {
 /**
  * Handle messages from WebSocket clients
  */
-function handleClientMessage(ws: WebSocket, message: unknown): void {
+function handleClientMessage(
+  ws: WebSocket,
+  message: unknown,
+  identities: WeakMap<WebSocket, SocketIdentity>
+): void {
   if (!message || typeof message !== 'object') {
     return;
   }
@@ -442,6 +485,15 @@ function handleClientMessage(ws: WebSocket, message: unknown): void {
     case 'ping':
       ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
       break;
+
+    case 'auth': {
+      // In-band identification for clients that cannot put the token on the
+      // upgrade URL. A bad token clears nothing and grants nothing.
+      const identity = identityFromToken(msg.token, verifyAccessToken);
+      if (identity) identities.set(ws, identity);
+      ws.send(JSON.stringify({ type: 'auth', authenticated: identity !== null }));
+      break;
+    }
 
     case 'subscribe':
       // Client wants to subscribe to specific events

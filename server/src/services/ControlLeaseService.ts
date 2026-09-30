@@ -113,9 +113,19 @@ export type AgentInstallResult =
   | { ok: false; reason: 'stale_generation'; highWater: number }
   | { ok: false; reason: 'refused' | 'unreachable' };
 
+/**
+ * The agent's answer to a renew: `bound` is true while a control socket is
+ * bound to that generation. `rejected` is its 409 (`not_installed | expired` —
+ * the agent restarted or already fenced it); `unreachable` is no answer at all.
+ */
+export type AgentRenewResult =
+  | { ok: true; bound: boolean }
+  | { ok: false; reason: 'rejected' | 'unreachable' };
+
 /** The server→agent half. The default speaks HTTP; tests pass a mock. */
 export interface ControlLeaseAgentPort {
   install(robot: ControlLeaseRobot, body: AgentInstallBody): Promise<AgentInstallResult>;
+  renew(robot: ControlLeaseRobot, generation: number, ttlMs: number): Promise<AgentRenewResult>;
   /** true when the agent answered (released or not); false when it could not be reached. */
   release(robot: ControlLeaseRobot, generation: number): Promise<boolean>;
   /** The agent's own view; null when it could not be reached. */
@@ -124,7 +134,8 @@ export interface ControlLeaseAgentPort {
 
 /** One audit entry. Never carries the lease secret or its hash. */
 export interface ControlLeaseAuditEvent {
-  action: 'acquire' | 'deny' | 'release' | 'unconfirmed';
+  /** `fence`: a renewal was lost and the lease revoked; `expire`: nobody renewed it in time. */
+  action: 'acquire' | 'deny' | 'release' | 'unconfirmed' | 'fence' | 'expire';
   result: 'allowed' | 'denied';
   robotId: string;
   tenantId: string | null;
@@ -153,6 +164,39 @@ export interface ControlLeaseGrant {
   expiresAt: string;
 }
 
+/** The renew result. */
+export interface ControlLeaseRenewal {
+  generation: number;
+  expiresAt: string;
+  ttlMs: number;
+  renewEveryMs: number;
+}
+
+/**
+ * What observers see on every holder transition. Public fields only — never
+ * `leaseId`, never its hash, never the session id.
+ */
+export interface ControlLeaseObserverEvent {
+  type: 'control_lease';
+  robotId: string;
+  state: ControlLeaseState;
+  generation: number;
+  holder: { userId: string | null; displayName: string | null };
+  expiresAt: string | null;
+}
+
+/** One transition plus the tenant it may be delivered to (routing only, not payload). */
+export interface ControlLeaseTransition {
+  tenantId: string | null;
+  event: ControlLeaseObserverEvent;
+}
+
+/** The current user as the database knows it — the JWT role may be stale. */
+export interface ControlLeaseUserRecord {
+  role: string;
+  isActive: boolean;
+}
+
 /** A refusal the routes turn into an HTTP answer verbatim. */
 export class ControlLeaseError extends Error {
   constructor(
@@ -164,7 +208,7 @@ export class ControlLeaseError extends Error {
   }
 }
 
-type LeaseDb = Pick<PrismaClient, 'robotControlLease'>;
+type LeaseDb = Pick<PrismaClient, 'robotControlLease'> & Partial<Pick<PrismaClient, 'user'>>;
 
 export interface ControlLeaseServiceDeps {
   db: LeaseDb;
@@ -172,6 +216,13 @@ export interface ControlLeaseServiceDeps {
   resolveRobot: (robotId: string) => Promise<ControlLeaseRobot | null>;
   agent: ControlLeaseAgentPort;
   audit?: (event: ControlLeaseAuditEvent) => Promise<void> | void;
+  /** Every holder transition, for the observer fan-out. Must not throw. */
+  publish?: (transition: ControlLeaseTransition) => void;
+  /**
+   * The user's current role and active flag, read fresh on every renew.
+   * Defaults to `db.user`; null when the user no longer exists.
+   */
+  readUser?: (userId: string) => Promise<ControlLeaseUserRecord | null>;
   now?: () => number;
   ttlMs?: () => number;
   renewEveryMs?: () => number;
@@ -197,7 +248,13 @@ interface LeaseRow {
   displayName: string | null;
   sessionId: string | null;
   expiresAt: Date | null;
+  issuedAt: Date | null;
+  leaseIdHash: string | null;
+  tenantId: string | null;
 }
+
+/** Roles that may hold a lease (decision: `member` is the floor). */
+const LEASE_ROLES = new Set(['super-admin', 'owner', 'member']);
 
 function isP2002(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
@@ -210,17 +267,17 @@ function isP2002(error: unknown): boolean {
 export class ControlLeaseService {
   private readonly now: () => number;
   private readonly ttl: () => number;
-  private readonly renew: () => number;
+  private readonly renewCadence: () => number;
 
   constructor(private readonly deps: ControlLeaseServiceDeps) {
     this.now = deps.now ?? Date.now;
     this.ttl = deps.ttlMs ?? (() => controlLeaseTtlMs());
-    this.renew = deps.renewEveryMs ?? (() => controlLeaseRenewMs(this.ttl()));
+    this.renewCadence = deps.renewEveryMs ?? (() => controlLeaseRenewMs(this.ttl()));
   }
 
   /** The capability block `GET …/control-lease` advertises. */
   capability(enabled: boolean): { version: 1; enabled: boolean; ttlMs: number; renewEveryMs: number } {
-    return { version: 1, enabled, ttlMs: this.ttl(), renewEveryMs: this.renew() };
+    return { version: 1, enabled, ttlMs: this.ttl(), renewEveryMs: this.renewCadence() };
   }
 
   /** Public holder fields for one robot; never the secret or its hash. */
@@ -304,6 +361,7 @@ export class ControlLeaseService {
         generation,
         reason: `install_${installed.reason}`,
       });
+      this.publish(robot, { generation, userId: user.id, displayName, expiresAt: won.expiresAt }, 'unconfirmed');
       throw new ControlLeaseError(503, { code: 'agent_unconfirmed' });
     }
 
@@ -340,12 +398,13 @@ export class ControlLeaseService {
       sessionId,
       generation,
     });
+    this.publish(robot, { generation, userId: user.id, displayName, expiresAt }, 'held');
     return {
       leaseId,
       generation,
       sessionId,
       ttlMs,
-      renewEveryMs: this.renew(),
+      renewEveryMs: this.renewCadence(),
       expiresAt: expiresAt.toISOString(),
     };
   }
@@ -375,7 +434,9 @@ export class ControlLeaseService {
     });
     if (stopping.count !== 1) return { released: false };
 
-    const sessionId = (await this.readRow(robotId))?.sessionId ?? null;
+    const held = await this.readRow(robotId);
+    const sessionId = held?.sessionId ?? null;
+    const holder = { generation, userId: user.id, displayName: held?.displayName ?? null };
     const answered = await this.deps.agent.release(robot, generation).catch(() => false);
     if (!answered) {
       await this.deps.db.robotControlLease.updateMany({
@@ -392,6 +453,7 @@ export class ControlLeaseService {
         generation,
         reason: 'release_unreachable',
       });
+      this.publish(robot, { ...holder, expiresAt: held?.expiresAt ?? null }, 'unconfirmed');
       throw new ControlLeaseError(503, { code: 'agent_unconfirmed' });
     }
 
@@ -408,7 +470,150 @@ export class ControlLeaseService {
       sessionId,
       generation,
     });
+    this.publish(robot, { ...holder, expiresAt: null }, 'released');
     return { released: true };
+  }
+
+  /**
+   * Keep a held lease alive (decision D7). Succeeds only for the current,
+   * unexpired generation presented with its secret by its holder, while the
+   * holder still has a role that may hold one and — once the first TTL window
+   * has passed — while the agent reports a control socket bound to it. Every
+   * refusal after the lease was found fences it; a late renew never
+   * resurrects an expired row.
+   */
+  async renew(
+    user: ControlLeaseUser,
+    robotId: string,
+    leaseId: string,
+    generation: number
+  ): Promise<ControlLeaseRenewal> {
+    const robot = await this.robotFor(user, robotId);
+    const leaseIdHash = hashLeaseId(leaseId);
+    const mine = { generation, leaseIdHash, userId: user.id };
+
+    const current = await this.readUser(user);
+    if (!current || !current.isActive || !LEASE_ROLES.has(current.role)) {
+      await this.fence(robot, mine, 'not_authorized', 'released');
+      throw new ControlLeaseError(403, { code: 'not_authorized' });
+    }
+
+    const row = await this.readRow(robotId);
+    const nowMs = this.now();
+    const live =
+      row !== null &&
+      row.generation === generation &&
+      row.leaseIdHash === leaseIdHash &&
+      row.userId === user.id &&
+      row.state === 'held' &&
+      row.expiresAt !== null &&
+      row.expiresAt.getTime() > nowMs;
+    if (!live) {
+      await this.audit(this.lossEvent(robot, row, user.id, generation, 'lease_lost'));
+      throw new ControlLeaseError(409, { code: 'lease_lost' });
+    }
+
+    const ttlMs = this.ttl();
+    const agent = await this.deps.agent
+      .renew(robot, generation, ttlMs)
+      .catch((): AgentRenewResult => ({ ok: false, reason: 'unreachable' }));
+    if (!agent.ok && agent.reason === 'unreachable') {
+      // Leave the DB deadline alone: the agent expires the lease on its own
+      // TTL, and the sweeper fences the row once it lapses here too.
+      throw new ControlLeaseError(503, { code: 'agent_unconfirmed' });
+    }
+    if (!agent.ok) {
+      await this.fence(robot, mine, 'lease_lost', 'released');
+      throw new ControlLeaseError(409, { code: 'lease_lost' });
+    }
+    const pastFirstWindow = row.issuedAt === null || nowMs - row.issuedAt.getTime() > ttlMs;
+    if (!agent.bound && pastFirstWindow) {
+      await this.fence(robot, mine, 'transport_lost', 'released');
+      throw new ControlLeaseError(409, { code: 'transport_lost' });
+    }
+
+    const expiresAt = new Date(this.now() + ttlMs);
+    const extended = await this.deps.db.robotControlLease.updateMany({
+      where: { robotId, ...mine, state: 'held', expiresAt: { gt: new Date(this.now()) } },
+      data: { expiresAt },
+    });
+    if (extended.count !== 1) {
+      // It lapsed (and was swept) while the agent answered.
+      await this.audit(this.lossEvent(robot, row, user.id, generation, 'lease_lost'));
+      throw new ControlLeaseError(409, { code: 'lease_lost' });
+    }
+    return { generation, expiresAt: expiresAt.toISOString(), ttlMs, renewEveryMs: this.renewCadence() };
+  }
+
+  /**
+   * Fence every `held` lease whose deadline lapsed without a renewal. Safe on
+   * every replica at once: each row is claimed by the same conditional update,
+   * so exactly one replica fences it. Returns how many this call fenced.
+   */
+  async sweepExpired(): Promise<number> {
+    const lapsed = await this.deps.db.robotControlLease.findMany({
+      where: { state: 'held', expiresAt: { lt: new Date(this.now()) } },
+    });
+    let fenced = 0;
+    for (const row of lapsed as LeaseRow[]) {
+      const resolved = await this.deps.resolveRobot(row.robotId).catch(() => null);
+      // An unresolvable robot still gets its row fenced; the release then
+      // counts as unanswered and the row stays blocked (`unconfirmed`).
+      const robot = resolved ?? { robotId: row.robotId, tenantId: row.tenantId ?? null, baseUrl: '' };
+      const done = await this.fence(
+        robot,
+        { generation: row.generation, expiresAt: { lt: new Date(this.now()) } },
+        'expired',
+        'expired',
+        resolved !== null
+      );
+      if (done) fenced++;
+    }
+    return fenced;
+  }
+
+  /**
+   * Revoke one held lease: row → `stopping`, agent `release`, row → `final`
+   * (`unconfirmed` when the agent does not ack). `match` narrows which row
+   * may be fenced, so only the lease it names is ever touched. False when the
+   * row no longer matched (someone else fenced or released it first).
+   */
+  private async fence(
+    robot: ControlLeaseRobot,
+    match: Prisma.RobotControlLeaseWhereInput,
+    reason: 'not_authorized' | 'lease_lost' | 'transport_lost' | 'expired',
+    final: 'released' | 'expired',
+    reachable = true
+  ): Promise<boolean> {
+    const { robotId } = robot;
+    const claimed = await this.deps.db.robotControlLease.updateMany({
+      where: { ...match, robotId, state: 'held' },
+      data: { state: 'stopping' },
+    });
+    if (claimed.count !== 1) return false;
+    const row = await this.readRow(robotId);
+    if (!row) return false;
+    const generation = row.generation;
+    this.publish(robot, row, 'stopping');
+
+    const answered = reachable && (await this.deps.agent.release(robot, generation).catch(() => false));
+    const state: ControlLeaseState = answered ? final : 'unconfirmed';
+    await this.deps.db.robotControlLease.updateMany({
+      where: { robotId, generation, state: 'stopping' },
+      data: answered ? { state, leaseIdHash: null, expiresAt: null } : { state },
+    });
+    await this.audit({
+      action: reason === 'expired' ? 'expire' : 'fence',
+      result: 'denied',
+      robotId,
+      tenantId: robot.tenantId,
+      userId: row.userId ?? 'unknown',
+      sessionId: row.sessionId,
+      generation,
+      reason: answered ? reason : `${reason}_release_unreachable`,
+    });
+    this.publish(robot, { ...row, expiresAt: answered ? null : row.expiresAt }, state);
+    return true;
   }
 
   // --------------------------------------------------------------------------
@@ -478,6 +683,61 @@ export class ControlLeaseService {
       data: { state: 'released', leaseIdHash: null, expiresAt: null },
     });
     return true;
+  }
+
+  /** The caller as the database knows it now, never as the JWT remembers it. */
+  private async readUser(user: ControlLeaseUser): Promise<ControlLeaseUserRecord | null> {
+    if (this.deps.readUser) return this.deps.readUser(user.id);
+    if (!this.deps.db.user) return null;
+    const row = await this.deps.db.user.findUnique({
+      where: { id: user.id },
+      select: { role: true, isActive: true },
+    });
+    return row ?? null;
+  }
+
+  /** The audit entry for a renew that found its lease already gone. */
+  private lossEvent(
+    robot: ControlLeaseRobot,
+    row: LeaseRow | null,
+    userId: string,
+    generation: number,
+    reason: string
+  ): ControlLeaseAuditEvent {
+    return {
+      action: 'fence',
+      result: 'denied',
+      robotId: robot.robotId,
+      tenantId: robot.tenantId,
+      userId,
+      sessionId: row && row.userId === userId && row.generation === generation ? row.sessionId : null,
+      generation,
+      reason,
+    };
+  }
+
+  /** Tell observers about one transition. A failing observer never changes the lease. */
+  private publish(
+    robot: ControlLeaseRobot,
+    row: Pick<LeaseRow, 'generation' | 'userId' | 'displayName' | 'expiresAt'>,
+    state: ControlLeaseState
+  ): void {
+    if (!this.deps.publish) return;
+    try {
+      this.deps.publish({
+        tenantId: robot.tenantId,
+        event: {
+          type: 'control_lease',
+          robotId: robot.robotId,
+          state,
+          generation: row.generation,
+          holder: { userId: row.userId, displayName: row.displayName },
+          expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+        },
+      });
+    } catch {
+      console.error('[ControlLeaseService] publishing a transition failed:', robot.robotId, state);
+    }
   }
 
   private async readRow(robotId: string): Promise<LeaseRow | null> {
@@ -570,6 +830,26 @@ export const httpControlLeaseAgent: ControlLeaseAgentPort = {
           return { ok: false, reason: 'stale_generation', highWater: reply.highWater };
         }
         return { ok: false, reason: 'refused' };
+      }
+      return { ok: false, reason: 'unreachable' };
+    }
+  },
+
+  async renew(robot, generation, ttlMs) {
+    try {
+      const answer = await clientFor(robot).post<{ renewed?: boolean; bound?: boolean }>(
+        leasePath(robot, '/renew'),
+        { generation, ttlMs }
+      );
+      // Anything but an explicit renewal is treated as a refusal (fail closed).
+      return answer?.renewed === true
+        ? { ok: true, bound: answer.bound === true }
+        : { ok: false, reason: 'rejected' };
+    } catch (error) {
+      // Only the agent's own 409 (not_installed | expired) says the lease is
+      // gone; a 5xx or no answer is "could not confirm", not "lost".
+      if (error instanceof HttpClientError && error.statusCode === 409) {
+        return { ok: false, reason: 'rejected' };
       }
       return { ok: false, reason: 'unreachable' };
     }

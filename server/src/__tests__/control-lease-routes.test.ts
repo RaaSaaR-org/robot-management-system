@@ -45,6 +45,7 @@ let installResult: AgentInstallResult = { ok: true };
 
 const agent: ControlLeaseAgentPort = {
   install: async () => installResult,
+  renew: async () => ({ ok: true, bound: true }),
   release: async () => true,
   observe: async () => ({ state: 'held', generation: 1 }),
 };
