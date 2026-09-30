@@ -52,9 +52,9 @@ function makeDbRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'cmd-1',
     robotId: 'robot-1',
-    originalText: 'Move to Warehouse A',
+    originalText: 'Move to DOCK-1',
     commandType: 'navigation',
-    parameters: JSON.stringify({ target: 'Warehouse A', speed: 'normal' }),
+    parameters: JSON.stringify({ target: 'DOCK-1', speed: 'normal' }),
     confidence: 0.95,
     safetyClassification: 'safe',
     warnings: JSON.stringify(['low battery']),
@@ -72,9 +72,9 @@ function makeCreateInput(
 ): CreateCommandInterpretationInput {
   return {
     robotId: 'robot-1',
-    originalText: 'Move to Warehouse A',
+    originalText: 'Move to DOCK-1',
     commandType: 'navigation',
-    parameters: { target: 'Warehouse A', speed: 'normal' },
+    parameters: { target: 'DOCK-1', speed: 'normal' },
     confidence: 0.95,
     safetyClassification: 'safe',
     warnings: ['low battery'],
@@ -105,9 +105,9 @@ describe('CommandRepository.findById', () => {
     expect(result).toEqual({
       id: 'cmd-1',
       robotId: 'robot-1',
-      originalText: 'Move to Warehouse A',
+      originalText: 'Move to DOCK-1',
       commandType: 'navigation',
-      parameters: { target: 'Warehouse A', speed: 'normal' },
+      parameters: { target: 'DOCK-1', speed: 'normal' },
       confidence: 0.95,
       safetyClassification: 'safe',
       warnings: ['low battery'],
@@ -260,9 +260,9 @@ describe('CommandRepository.create', () => {
     expect(mockPrisma.commandInterpretation.create).toHaveBeenCalledWith({
       data: {
         robotId: 'robot-1',
-        originalText: 'Move to Warehouse A',
+        originalText: 'Move to DOCK-1',
         commandType: 'navigation',
-        parameters: JSON.stringify({ target: 'Warehouse A', speed: 'normal' }),
+        parameters: JSON.stringify({ target: 'DOCK-1', speed: 'normal' }),
         confidence: 0.95,
         safetyClassification: 'safe',
         warnings: JSON.stringify(['low battery']),

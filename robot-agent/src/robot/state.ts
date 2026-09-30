@@ -15,7 +15,6 @@ import type {
   CommandType,
   RobotLocation,
   PushedTask,
-  Zone,
   RobotType,
   PointCloudFrame,
   PointCloudPose,
@@ -540,8 +539,8 @@ export class RobotStateManager {
     }
 
     this.unsubscribePose = hardwareClient.onPoseSample((pose) => this.onPoseSample(pose));
-    // The resolver now owns the robot's position, so the 10 Hz simulated zone
-    // writer stands down as soon as a real pose has arrived. See
+    // The resolver now owns the robot's position, so the simulation stops naming
+    // its arrival place as soon as a real pose has arrived. See
     // `SimulationEngine.setPoseAuthority`.
     this.simulation.setPoseAuthority(() => this.placeBelief?.poseM != null);
   }
@@ -1770,13 +1769,6 @@ export class RobotStateManager {
     this.unsubscribePose = null;
     if (this.placeRefreshTimer) clearInterval(this.placeRefreshTimer);
     this.placeRefreshTimer = null;
-  }
-
-  /**
-   * Update the zone cache used for real-time zone tracking in the simulation engine.
-   */
-  setZoneCache(zones: Zone[]): void {
-    this.simulation.setZoneCache(zones);
   }
 
   // ============================================================================

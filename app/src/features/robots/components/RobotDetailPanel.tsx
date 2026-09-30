@@ -168,7 +168,7 @@ export function RobotDetailPanel({ robotId, className }: RobotDetailPanelProps) 
         eyebrow="Operate"
         back={BACK}
         title={robot.name}
-        description={`${robot.model} · ${robot.location?.zone || 'Place unknown'}`}
+        description={`${robot.model} · ${robot.location?.place ?? 'Place unknown'}`}
         meta={
           <>
             <RobotStatusTag status={robot.status} />

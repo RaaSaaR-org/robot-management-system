@@ -67,7 +67,7 @@ function writeState(opts: {
     robotState: {
       status: 'online',
       batteryLevel: 37,
-      location: { x: 11, y: 22, zone: 'AISLE-3', heading: 90, floor: '2' },
+      location: { x: 11, y: 22, place: 'AISLE-3', heading: 90, floor: '2' },
       heldObject: 'crate-7',
       speed: 0,
       errors: [],
@@ -141,7 +141,7 @@ describe('RobotStateManager — a rebooted robot remembers it was stopped', () =
 
     expect(state.batteryLevel).toBe(37);
     expect(state.location.x).toBe(11);
-    expect(state.location.zone).toBe('AISLE-3');
+    expect(state.location.place).toBe('AISLE-3');
     expect(state.heldObject).toBe('crate-7');
   });
 
@@ -157,7 +157,7 @@ describe('RobotStateManager — a rebooted robot remembers it was stopped', () =
     // A robot that was carried while powered off must not report its old pose.
     expect(state.location.x).toBe(INITIAL_LOCATION.x);
     expect(state.location.y).toBe(INITIAL_LOCATION.y);
-    expect(state.location.zone).toBeUndefined();
+    expect(state.location.place ?? null).toBeNull();
     expect(state.heldObject).toBeUndefined();
     expect(mgr.getAgentSafetyState().place).toBeNull();
     // Battery does not go stale the way a pose does.

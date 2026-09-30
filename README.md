@@ -540,7 +540,7 @@ npm run db:studio     # Prisma Studio
 ```bash
 cd robot-agent/cli && npm run dev -- status
 cd robot-agent/cli && npm run dev -- telemetry
-cd robot-agent/cli && npm run dev -- move "Warehouse A"
+cd robot-agent/cli && npm run dev -- move "CHARGING-A"
 ```
 
 ### Code style

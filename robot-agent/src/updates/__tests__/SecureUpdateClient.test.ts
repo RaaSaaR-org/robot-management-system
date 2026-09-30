@@ -23,8 +23,7 @@ vi.mock('../../config/config.js', () => ({
     maxPayloadKg: 5,
     robotDescription: 'Test robot',
     geminiApiKey: 'test',
-    initialLocation: { x: 0, y: 0, floor: '1', zone: 'test' },
-    zoneCacheTtlMs: 60000,
+    initialLocation: { x: 0, y: 0, floor: '1' },
   },
 }));
 

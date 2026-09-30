@@ -123,7 +123,7 @@ export function getMockInterpretation(request: InterpretCommandRequest): Command
   // Generate alternatives for low confidence
   const suggestedAlternatives: string[] = [];
   if (matched.confidence < 0.8) {
-    suggestedAlternatives.push('Did you mean: "Move to Warehouse A"?');
+    suggestedAlternatives.push('Did you mean: "Go to DOCK-1"?');
     suggestedAlternatives.push('Did you mean: "Pick up the pallet"?');
   }
 
@@ -132,7 +132,7 @@ export function getMockInterpretation(request: InterpretCommandRequest): Command
     originalText: request.text,
     commandType: matched.commandType,
     parameters: {
-      target: target || (matched.commandType === 'move' ? 'Warehouse A' : undefined),
+      target: target || (matched.commandType === 'move' ? 'DOCK-1' : undefined),
       destination:
         matched.commandType === 'move'
           ? { x: 20 + Math.random() * 20, y: 10 + Math.random() * 10 }

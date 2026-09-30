@@ -82,7 +82,6 @@ export const robotsApi = {
         status: params?.status,
         search: params?.search,
         capabilities: params?.capabilities?.join(','),
-        zone: params?.zone,
         page: params?.page,
         pageSize: params?.pageSize,
         sortBy: params?.sortBy,

@@ -13,11 +13,11 @@ const getRobotStatus = ai.defineTool(
     name: 'getRobotStatus',
     description: 'Get the current status of the robot (battery level and current zone)',
     inputSchema: z.object({}),
-    outputSchema: z.object({ batteryPercent: z.number(), zone: z.string() }),
+    outputSchema: z.object({ batteryPercent: z.number(), place: z.string() }),
   },
   async () => {
     console.log('[TOOL] getRobotStatus was called by the model ✓');
-    return { batteryPercent: 87, zone: 'Warehouse A' };
+    return { batteryPercent: 87, place: 'DOCK-1' };
   }
 );
 

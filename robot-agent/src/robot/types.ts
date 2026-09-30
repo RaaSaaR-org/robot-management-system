@@ -89,14 +89,12 @@ export interface RobotLocation {
   y: number;
   z?: number;
   floor?: string;
-  zone?: string;
   heading?: number;
   /**
    * Id of the surveyed place the robot is standing in (TASK-195), or null for
-   * UNKNOWN. Distinct from {@link RobotLocation.zone} on purpose: `zone` is a
-   * fleet `Zone` name (server-owned AABBs, unique on `[name, floor]`), `place`
-   * comes from the robot's own place graph. Writing a place id into `zone`
-   * would put a name on the fleet map that no `Zone` row has.
+   * UNKNOWN. It is the robot's only answer to "where am I" (TASK-333): places
+   * come from the twin-bound place graph, and where two overlap the smallest
+   * containing one wins (`agent-mode/place-resolver.ts findPlace`).
    *
    * `location` is a JSON string in Prisma, so this needs no migration.
    */

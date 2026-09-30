@@ -31,7 +31,6 @@ export interface FleetPeer {
   /** The frame the peer's pose is in; null when the peer does not say. */
   frame: OdometryFrame | null;
   place: string | null;
-  zone: string | null;
   /** ISO time the SERVER last saw this pose. */
   updatedAt: string | null;
   /**
@@ -129,7 +128,6 @@ export function parseFleetPeer(raw: unknown): FleetPeer | null {
     headingDeg: num(o.headingDeg),
     frame,
     place: str(o.place),
-    zone: str(o.zone),
     updatedAt: str(o.updatedAt),
     poseAgeMs: num(o.poseAgeMs),
     footprintRadiusM: num(o.footprintRadiusM) ?? DEFAULT_FOOTPRINT_M,

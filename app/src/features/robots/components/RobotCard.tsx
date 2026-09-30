@@ -29,11 +29,11 @@ export interface RobotCardProps {
   className?: string;
 }
 
-/** Zone and floor, or "Place unknown". */
+/** Place and floor, or "Place unknown". */
 export function robotPlace(robot: Robot): string {
   const loc = robot.location;
   const parts: string[] = [];
-  if (loc?.zone) parts.push(loc.zone);
+  if (loc?.place) parts.push(loc.place);
   if (loc?.floor) parts.push(`Floor ${loc.floor}`);
   return parts.length ? parts.join(' · ') : 'Place unknown';
 }

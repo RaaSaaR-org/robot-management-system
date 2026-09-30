@@ -309,7 +309,7 @@ export class RobotAgentExecutor implements AgentExecutor {
           robotClass: robotState.robotClass,
           maxPayloadKg: robotState.maxPayloadKg,
           robotDescription: robotState.description,
-          currentLocation: `(${robotState.location.x.toFixed(1)}, ${robotState.location.y.toFixed(1)}) in ${robotState.location.zone || 'Unknown Zone'}, Floor ${robotState.location.floor || '1'}`,
+          currentLocation: `(${robotState.location.x.toFixed(1)}, ${robotState.location.y.toFixed(1)}) in ${robotState.location.place ?? 'an unknown place'}, Floor ${robotState.location.floor || '1'}`,
           batteryLevel: Math.round(robotState.batteryLevel),
           status: robotState.status,
           heldObject: robotState.heldObject || 'nothing',

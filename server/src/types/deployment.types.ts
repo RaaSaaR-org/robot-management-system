@@ -224,7 +224,6 @@ export interface RobotEligibility {
   robotId: string;
   score: number;
   robotType?: string;
-  zone?: string;
   status: string;
   utilization: number;
 }

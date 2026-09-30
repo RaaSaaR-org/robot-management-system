@@ -53,7 +53,7 @@ export function InfoTab({ robot }: InfoTabProps) {
               { label: 'Firmware', value: robot.firmware },
               { label: 'IP address', value: robot.ipAddress, mono: true },
               { label: 'Site', value: <SiteSelect robotId={robot.id} twinId={robot.twinId} /> },
-              { label: 'Zone', value: robot.location?.zone || 'Place unknown' },
+              { label: 'Place', value: robot.location?.place ?? 'Place unknown' },
               {
                 label: 'Registered',
                 value: formatDateTime(robot.createdAt, { year: 'numeric', month: 'short', day: 'numeric' }),

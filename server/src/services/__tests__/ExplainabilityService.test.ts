@@ -48,7 +48,7 @@ function makeDecision(overrides: Partial<DecisionExplanation> = {}): DecisionExp
     entityId: 'cmd-1',
     robotId: 'r1',
     inputFactors: {
-      userCommand: 'Move to Warehouse A',
+      userCommand: 'Move to DOCK-1',
       robotState: {
         status: 'online',
         batteryLevel: 87,
@@ -231,7 +231,7 @@ describe('formatExplanation', () => {
     expect(formatted.confidence.level).toBe('high');
     expect(formatted.confidence.description).toContain('92%');
     expect(formatted.decisionType).toBe('Command Interpretation');
-    expect(formatted.summary).toContain('Move to Warehouse A');
+    expect(formatted.summary).toContain('Move to DOCK-1');
     expect(formatted.summary).toContain('92% confidence');
     expect(formatted.summary).toContain('safe');
   });
@@ -264,7 +264,7 @@ describe('formatExplanation', () => {
     const items = explainabilityService.formatExplanation(decision).inputFactors.items;
     const byLabel = (label: string) => items.find((i) => i.label === label)?.value;
 
-    expect(byLabel('User Command')).toBe('Move to Warehouse A');
+    expect(byLabel('User Command')).toBe('Move to DOCK-1');
     expect(byLabel('Robot Status')).toBe('online');
     expect(byLabel('Battery Level')).toBe('87%');
     expect(byLabel('Robot Location')).toBe('(1, 2, 3)');

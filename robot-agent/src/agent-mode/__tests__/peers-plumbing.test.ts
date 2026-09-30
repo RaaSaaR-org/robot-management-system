@@ -33,7 +33,6 @@ const peer = (over: Partial<FleetPeer> = {}): FleetPeer => ({
   headingDeg: 0,
   frame: FRAME,
   place: null,
-  zone: null,
   updatedAt: '2026-08-15T10:00:00.000Z',
   poseAgeMs: null, // server says nothing about pose age unless a test says so
   footprintRadiusM: 0.35,

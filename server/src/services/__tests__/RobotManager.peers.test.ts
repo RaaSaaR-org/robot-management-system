@@ -63,7 +63,7 @@ function registered(id: string, over: Partial<Robot> = {}, reg: Partial<Register
       model: 'g1_edu',
       status: 'online',
       batteryLevel: 90,
-      location: { x: 1, y: 2, heading: 90, frame: SIM, place: 'DESK', zone: 'Lab' },
+      location: { x: 1, y: 2, heading: 90, frame: SIM, place: 'DESK' },
       lastSeen: '2026-08-15T10:00:00.000Z',
       capabilities: [],
       createdAt: '2026-08-15T09:00:00.000Z',
@@ -102,7 +102,7 @@ beforeEach(() => {
 });
 
 describe('locationDiffers', () => {
-  it('sees a heading, place or frame change, not just x/y/zone — and ignores sim jitter', () => {
+  it('sees a heading, place or frame change, not just x/y — and ignores sim jitter', () => {
     const base = { x: 1, y: 2, heading: 0, place: 'A', frame: SIM };
     expect(locationDiffers(base, { ...base })).toBe(false);
     expect(locationDiffers(base, { ...base, x: 1.000000001, heading: 0.09 })).toBe(false); // jitter
@@ -141,7 +141,6 @@ describe('RobotManager peers', () => {
       headingDeg: 90,
       frame: SIM,
       place: 'DESK',
-      zone: 'Lab',
       updatedAt: '2026-08-15T10:00:01.000Z',
       poseAgeMs: expect.any(Number),
       footprintRadiusM: 0.35, // no metadata → the honest default
@@ -152,7 +151,7 @@ describe('RobotManager peers', () => {
   it('passes a missing frame through as null — the consumer decides, the server never invents one', async () => {
     const mgr = await manager(registered('a'), registered('b', { location: { x: 0, y: 0 } }));
     expect(mgr.getPeers('a')[0]).toMatchObject({
-      frame: null, headingDeg: null, place: null, zone: null, updatedAt: null, poseAgeMs: null,
+      frame: null, headingDeg: null, place: null, updatedAt: null, poseAgeMs: null,
     });
   });
 

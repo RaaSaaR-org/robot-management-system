@@ -14,8 +14,9 @@ export const RobotLocationSchema = z.object({
   y: z.number(),
   z: z.number().optional(),
   floor: z.string().optional(),
-  zone: z.string().optional(),
   heading: z.number().optional(),
+  /** Place-graph id (TASK-333) — stripped by `z.object` if not listed here. */
+  place: z.string().nullable().optional(),
 });
 
 /**

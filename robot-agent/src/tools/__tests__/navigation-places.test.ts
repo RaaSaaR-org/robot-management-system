@@ -83,7 +83,7 @@ describe('resolvePlaceDestination', () => {
   });
 
   it('answers null for a name that is no place', () => {
-    expect(resolvePlaceDestination('Warehouse A', PLACES)).toBeNull();
+    expect(resolvePlaceDestination('Loading Bay', PLACES)).toBeNull();
     expect(resolvePlaceDestination('  ', PLACES)).toBeNull();
   });
 
@@ -112,7 +112,7 @@ describe('moveToLocation', () => {
     expect(moves).toHaveLength(1);
     expect(moves[0]!.x).toBeCloseTo(0);
     expect(moves[0]!.y).toBeCloseTo(-3.75);
-    expect(moves[0]!.zone).toBe('Charging Bay A');
+    expect(moves[0]!.place).toBe('CHARGING-A');
   });
 
   it('refuses a named keepout, naming it', async () => {
@@ -139,9 +139,9 @@ describe('moveToLocation', () => {
 
   it('lists the known places for an unknown name', async () => {
     stub({ places: PLACES });
-    const result = await move({ place: 'Warehouse A' });
+    const result = await move({ place: 'Loading Bay' });
     expect(result.success).toBe(false);
-    expect(result.message).toContain('Unknown place "Warehouse A"');
+    expect(result.message).toContain('Unknown place "Loading Bay"');
     expect(result.message).toContain('CHARGING-A');
     expect(moves).toHaveLength(0);
   });
@@ -175,7 +175,7 @@ describe('moveToLocation', () => {
 describe('charging station', () => {
   it('is the nearest charging place of the registered graph', async () => {
     stub({ places: PLACES });
-    expect(await getChargingStationLocation()).toMatchObject({ zone: 'Charging Bay A' });
+    expect(await getChargingStationLocation()).toMatchObject({ place: 'CHARGING-A' });
   });
 
   it('is unknown without a registered graph — never invented', async () => {

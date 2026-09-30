@@ -94,7 +94,7 @@ export function formatStatus(robot: Robot, format: OutputFormat): string {
 
   table.push(
     [colors.muted('Status'), statusColor(robot.status), colors.muted('Battery'), batteryColor(robot.batteryLevel)],
-    [colors.muted('Location'), `(${loc.x.toFixed(1)}, ${loc.y.toFixed(1)})`, colors.muted('Zone'), loc.zone || '-'],
+    [colors.muted('Location'), `(${loc.x.toFixed(1)}, ${loc.y.toFixed(1)})`, colors.muted('Place'), loc.place ?? '-'],
     [colors.muted('Holding'), heldObject || colors.muted('nothing'), colors.muted('Model'), robot.model],
     [colors.muted('Floor'), loc.floor || '1', colors.muted('Firmware'), robot.firmware || '-']
   );

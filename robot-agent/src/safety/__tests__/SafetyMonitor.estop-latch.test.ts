@@ -21,7 +21,7 @@ function makeMonitor() {
     status: 'online',
     warnings: [] as string[],
     // executeStop() logs the stop location, so this has to be present.
-    location: { x: 0, y: 0, zone: 'Warehouse A' },
+    location: { x: 0, y: 0, place: 'STAGING' },
     updatedAt: new Date().toISOString(),
   } as unknown as SimulatedRobotState;
 

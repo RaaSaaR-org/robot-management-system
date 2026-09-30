@@ -3,7 +3,7 @@ id: "TASK-333"
 aliases: []
 title: "location.place is a robot's only answer to where it is"
 slug: "location-place-is-a-robot-s-only-answer-to-where-it-is"
-status: "todo"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -84,15 +84,15 @@ is the checklist.
 
 ## Acceptance Criteria
 
-- [ ] `RobotLocation` has no `zone` field in agent, server or app; `git grep -n
+- [x] `RobotLocation` has no `zone` field in agent, server or app; `git grep -n
       "INITIAL_ZONE\|zoneUtils\|setZoneCache\|Warehouse A" -- robot-agent server app`
       finds nothing.
-- [ ] With overlapping places (a small one inside a big one), `location.place` reports
+- [x] With overlapping places (a small one inside a big one), `location.place` reports
       the small one while inside it.
-- [ ] The sim robot still reports a place at boot and after moves; the keepout
+- [x] The sim robot still reports a place at boot and after moves; the keepout
       `zone_violation` stop still fires.
-- [ ] App robot views show the place.
-- [ ] Typecheck + vitest pass in all three components.
+- [x] App robot views show the place.
+- [x] Typecheck + vitest pass in all three components.
 
 ## Test Strategy
 

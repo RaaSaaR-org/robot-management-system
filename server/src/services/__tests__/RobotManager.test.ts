@@ -89,7 +89,7 @@ function makeRobot(overrides: Partial<Robot> = {}): Robot {
     model: 'so101',
     status: 'online',
     batteryLevel: 90,
-    location: { x: 0, y: 0, zone: 'Zone A' },
+    location: { x: 0, y: 0, place: 'ZONE-A' },
     lastSeen: new Date().toISOString(),
     capabilities: [],
     createdAt: new Date().toISOString(),
@@ -606,7 +606,7 @@ describe('health-check lifecycle', () => {
     // first GET = /api/v1/health, second GET = robot data endpoint
     httpGet
       .mockResolvedValueOnce({ status: 'ok', robotStatus: 'busy', batteryLevel: 55 })
-      .mockResolvedValueOnce(makeRobot({ id: 'r1', location: { x: 5, y: 6, zone: 'Zone Z' } }));
+      .mockResolvedValueOnce(makeRobot({ id: 'r1', location: { x: 5, y: 6, place: 'ZONE-Z' } }));
     robotRepository.updateHealthCheck.mockResolvedValue(undefined as never);
 
     const events: { type: string }[] = [];
@@ -622,7 +622,7 @@ describe('health-check lifecycle', () => {
       true,
       'busy',
       55,
-      expect.objectContaining({ x: 5, y: 6, zone: 'Zone Z' })
+      expect.objectContaining({ x: 5, y: 6, place: 'ZONE-Z' })
     );
     expect(events.some((e) => e.type === 'robot_status_changed')).toBe(true);
   });

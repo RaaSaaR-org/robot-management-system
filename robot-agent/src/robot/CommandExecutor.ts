@@ -424,7 +424,7 @@ export class CommandExecutor {
         s.location = {
           x: s.location.x + dx,
           y: s.location.y + dy,
-          zone: s.location.zone,
+          place: s.location.place,
         };
 
         // Update heading based on movement direction

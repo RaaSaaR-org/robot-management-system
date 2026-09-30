@@ -35,7 +35,7 @@ function makeMonitor() {
     status: 'online',
     warnings: [] as string[],
     errors: [] as string[],
-    location: { x: 4.2, y: 1.1, zone: 'Warehouse A' },
+    location: { x: 4.2, y: 1.1, place: 'AISLE-1' },
     batteryLevel: 90,
     updatedAt: new Date().toISOString(),
   } as unknown as SimulatedRobotState;

@@ -60,8 +60,6 @@ spec:
               value: {{ .Values.robotAgent.env.initialX | quote }}
             - name: INITIAL_Y
               value: {{ .Values.robotAgent.env.initialY | quote }}
-            - name: INITIAL_ZONE
-              value: {{ .Values.robotAgent.env.initialZone | quote }}
             - name: INITIAL_FLOOR
               value: {{ .Values.robotAgent.env.initialFloor | quote }}
             # Control-lease enforcement (TASK-321) — opt-in, default off

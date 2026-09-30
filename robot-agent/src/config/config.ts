@@ -42,10 +42,7 @@ export interface Config {
     x: number;
     y: number;
     floor: string;
-    zone: string;
   };
-  /** Zone cache time-to-live in milliseconds */
-  zoneCacheTtlMs: number;
   /** Server URL for API calls */
   serverUrl: string;
   /** VLA inference configuration */
@@ -842,9 +839,7 @@ export const config: Config = {
     x: parseFloat(process.env.INITIAL_X || '10.0'),
     y: parseFloat(process.env.INITIAL_Y || '10.0'),
     floor: process.env.INITIAL_FLOOR || '1',
-    zone: process.env.INITIAL_ZONE || 'Warehouse A',
   },
-  zoneCacheTtlMs: parseInt(process.env.ZONE_CACHE_TTL_MS || '60000', 10), // 1 minute default
   serverUrl: process.env.SERVER_URL || 'http://localhost:3001',
   vla: {
     host: process.env.VLA_INFERENCE_HOST || 'localhost',
@@ -1073,7 +1068,7 @@ export function validateConfig(): void {
   console.log(`  - LLM Provider: ${config.llmProvider}`);
   console.log(`  - LLM Model: ${getActiveModelName()}`);
   console.log(`  - Max Payload: ${config.maxPayloadKg}kg`);
-  console.log(`  - Initial Location: (${config.initialLocation.x}, ${config.initialLocation.y}) in ${config.initialLocation.zone}`);
+  console.log(`  - Initial Location: (${config.initialLocation.x}, ${config.initialLocation.y}), floor ${config.initialLocation.floor}`);
   console.log(`  - VLA Inference: ${config.vla.enabled ? 'enabled' : 'disabled'}`);
   if (config.vla.enabled) {
     console.log(`    - Host: ${config.vla.host}:${config.vla.port}`);

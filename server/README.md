@@ -125,7 +125,7 @@ curl -X POST http://localhost:3000/robots/robot-001/register \
 ```bash
 curl -X POST http://localhost:3000/robots/robot-001/command \
   -H "Content-Type: application/json" \
-  -d '{"type": "move", "payload": {"destination": {"zone": "Warehouse A"}}}'
+  -d '{"type": "move", "payload": {"destination": {"place": "DOCK-1"}}}'
 ```
 
 ## Current Limitations

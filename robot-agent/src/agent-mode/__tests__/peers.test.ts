@@ -19,7 +19,6 @@ const peer = (over: Partial<FleetPeer> = {}): FleetPeer => ({
   headingDeg: 90,
   frame: { kind: 'sim', id: 'g1_dex3_room_scene' },
   place: null,
-  zone: null,
   updatedAt: '2026-08-15T10:00:00.000Z',
   poseAgeMs: null, // server says nothing about pose age unless a test says so
   footprintRadiusM: 0.35,

@@ -205,7 +205,6 @@ services:
       ROBOT_DESCRIPTION: ${ROBOT_DESCRIPTION:-A versatile humanoid robot for general tasks}
       INITIAL_X: ${INITIAL_X:-10.0}
       INITIAL_Y: ${INITIAL_Y:-10.0}
-      INITIAL_ZONE: ${INITIAL_ZONE:-Warehouse A}
       INITIAL_FLOOR: ${INITIAL_FLOOR:-1}
     ports:
       - "41243:41243"

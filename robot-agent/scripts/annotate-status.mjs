@@ -52,7 +52,6 @@ const FILES = [
   { path: 'src/robot/StatePublisher.ts', status: 'live' },
   { path: 'src/robot/TaskQueue.ts', status: 'live' },
   { path: 'src/robot/StatePersistence.ts', status: 'live' },
-  { path: 'src/robot/zoneUtils.ts', status: 'live' },
   { path: 'src/robot/joint-configs/index.ts', status: 'live' },
   { path: 'src/robot/joint-configs/g1.config.ts', status: 'live' },
   { path: 'src/robot/joint-configs/h1.config.ts', status: 'live' },

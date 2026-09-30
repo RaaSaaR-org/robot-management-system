@@ -236,7 +236,6 @@ robotAgent:
     robotDescription: "A versatile humanoid robot for general tasks"
     initialX: "10.0"
     initialY: "10.0"
-    initialZone: "Warehouse A"
     initialFloor: "1"
     # Require a bound control lease for motion (TASK-321): opt-in, default
     # "false". "true" refuses motion from clients that never bind a lease
