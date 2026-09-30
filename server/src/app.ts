@@ -76,6 +76,7 @@ import { aggregationRoutes } from './routes/aggregation.routes.js';
 import { contributionsRoutes } from './routes/contributions.routes.js';
 import { marketplaceRoutes } from './routes/marketplace.routes.js';
 import { evaluationRoutes } from './routes/evaluation.routes.js';
+import { socialRoutes } from './routes/social.routes.js';
 import { securityRoutes } from './routes/security.routes.js';
 import { updateRoutes } from './routes/update.routes.js';
 import { settingsRoutes } from './routes/settings.routes.js';
@@ -416,6 +417,9 @@ export function createApp(): Express {
 
   // Evaluation routes (protected) - VLA model evaluation dashboard
   app.use('/api/evaluation', ...protect, evaluationRoutes);
+
+  // Comments and ratings by people and agents (TASK-241)
+  app.use('/api/social', ...protect, socialRoutes);
 
   // Security routes (protected) - Device identity & certificate management (CRA Annex I)
   app.use('/api/security', ...protect, securityRoutes);

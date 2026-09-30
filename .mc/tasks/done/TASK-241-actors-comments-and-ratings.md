@@ -5,9 +5,9 @@ aliases:
 title: Actors, comments and ratings — let people and agents leave a judgement with
   evidence on datasets, models, episodes and runs
 slug: actors-comments-and-ratings
-status: todo
+status: done
 priority: 2
-owner: ''
+owner: huhn511
 projects: []
 customers: []
 tags:
@@ -17,13 +17,13 @@ tags:
 sprint: ''
 parent: ""
 depends_on:
-spe: 8
-effort: ""
 - '[[TASK-238]]'
 - '[[TASK-240]]'
+spe: 8
+effort: ""
 due_date: ''
 created: 2026-09-04
-updated: "2026-09-05"
+updated: "2026-09-30"
 status_note: 'Written 2026-09-04. Depends on TASK-238 and TASK-240 because two of the
   four comment subjects (ModelVersion, DatasetView) only become addressable there.'
 ---
@@ -216,16 +216,16 @@ row), the model detail page from TASK-238, and the training job detail.
 
 ## Acceptance Criteria
 
-- [ ] A user can comment and rate on all five subject types
-- [ ] An agent rating without evidence is rejected with a 400 that says why
-- [ ] An agent rating with evidence pointing at a non-existent id is rejected
-- [ ] Evidence chips link to the referenced run / validation / dataset
-- [ ] `summary` reports human and agent means separately
-- [ ] One rating per actor per subject; a second PUT updates rather than duplicates
-- [ ] Soft-deleting a comment with replies keeps the thread readable
-- [ ] The feed returns activity across subject types, newest first
-- [ ] Each agent rating produces a `ComplianceLog` entry with its evidence
-- [ ] A comment on a non-existent subject is rejected
+- [x] A user can comment and rate on all five subject types
+- [x] An agent rating without evidence is rejected with a 400 that says why
+- [x] An agent rating with evidence pointing at a non-existent id is rejected
+- [x] Evidence chips link to the referenced run / validation / dataset
+- [x] `summary` reports human and agent means separately
+- [x] One rating per actor per subject; a second PUT updates rather than duplicates
+- [x] Soft-deleting a comment with replies keeps the thread readable
+- [x] The feed returns activity across subject types, newest first
+- [x] Each agent rating produces a `ComplianceLog` entry with its evidence
+- [x] A comment on a non-existent subject is rejected
 
 ## Test Strategy
 
@@ -248,3 +248,15 @@ needs this layer to exist first.
 The existing automatic signals (`EpisodeReward`, `DatasetEpisodeFlag`) are NOT
 migrated into `Rating`. They keep their own tables and are referenced as
 evidence — they are measurements, and a rating is a judgement about them.
+
+## Implementation notes (2026-09-30)
+
+Decisions are recorded in `docs/records/TASK-241-comments-and-ratings.md`. In short:
+five subject types (`dataset`, `dataset_view`, `model_version`, `episode`,
+`training_job`; `experiment` dropped, since no model exists to validate it); rating
+uniqueness on a non-null `subjectKey`, because NULLs in a unique index repeat;
+service tokens name their `AgentCard` through `X-Agent-Name`; evidence ids are
+checked for every author; `GET /api/social/me` exists so the UI can offer
+edit/delete; the feed lives at `/activity`. Reload persistence is tested
+against a live stack in `app/e2e/live/social.spec.ts`, and the demo build covers
+the evidence chip and the feed in `app/e2e/social.spec.ts`.

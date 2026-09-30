@@ -46,7 +46,9 @@ const app = createApp();
 // Research records and atomic model publications both use the guarded mount;
 // control-lease renew (TASK-318) sits behind writeRoleGuard + memberOrAbove.
 // TASK-272 adds eight: the Build-page deletes, round cancel, listing (un)publish.
-const EXPECTED_WRITE_ROUTES = 362;
+// TASK-241 adds four on the guarded /api/social mount: comment create, edit,
+// delete, and the rating PUT.
+const EXPECTED_WRITE_ROUTES = 366;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;
