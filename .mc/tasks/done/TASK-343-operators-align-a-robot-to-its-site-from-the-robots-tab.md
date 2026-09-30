@@ -3,7 +3,7 @@ id: "TASK-343"
 aliases: []
 title: "Operators align a robot to its site from the Robots tab"
 slug: "operators-align-a-robot-to-its-site-from-the-robots-tab"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -67,10 +67,10 @@ odometry.
 
 ## Acceptance Criteria
 
-- [ ] A robot with a site shows its alignment status; "Align" with a place and heading
+- [x] A robot with a site shows its alignment status; "Align" with a place and heading
       calls PUT and the status turns aligned; "Clear" calls DELETE.
-- [ ] The site map plots an aligned robot at `sitePose` (its true twin position).
-- [ ] Vitest (Testing Library) covers the component and the SiteMap pose choice.
+- [x] The site map plots an aligned robot at `sitePose` (its true twin position).
+- [x] Vitest (Testing Library) covers the component and the SiteMap pose choice.
 
 ## Test Strategy
 
