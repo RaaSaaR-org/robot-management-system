@@ -3,7 +3,7 @@ id: "TASK-324"
 aliases: []
 title: "A GDPR request is readable only by its data subject or someone who may act for them"
 slug: "a-gdpr-request-is-readable-only-by-its-data-subject-or"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
