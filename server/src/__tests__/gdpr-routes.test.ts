@@ -65,9 +65,21 @@ vi.mock('../services/DataRestrictionService.js', () => ({
 // existing cases that name another user's id act as an administrator would.
 const currentRole = vi.hoisted(() => ({ value: 'super-admin' }));
 
+// Tenant lookup for an owner acting for another user (TASK-270).
+const mockFindUser = vi.hoisted(() => vi.fn());
+vi.mock('../database/index.js', () => ({
+  prisma: { user: { findUnique: mockFindUser } },
+}));
+
 vi.mock('../middleware/auth.middleware.js', () => ({
   authMiddleware: (req: any, _res: any, next: any) => {
-    req.user = { id: 'user-123', email: 'test@example.com', name: 'Test', role: currentRole.value };
+    req.user = {
+      id: 'user-123',
+      email: 'test@example.com',
+      name: 'Test',
+      role: currentRole.value,
+      tenantId: 'tenant-a',
+    };
     next();
   },
   AuthenticatedRequest: {},
@@ -1276,14 +1288,29 @@ describe('GDPR Routes', () => {
       expect(mockConsentService.revokeConsent).not.toHaveBeenCalled();
     });
 
-    it('lets a tenant owner act for another user', async () => {
+    it('lets a tenant owner act for another user in their tenant', async () => {
       currentRole.value = 'owner';
+      mockFindUser.mockResolvedValue({ tenantId: 'tenant-a' });
       mockConsentService.getUserConsents.mockResolvedValue([]);
 
       const response = await request(app).get('/api/gdpr/consents?userId=user-9');
 
       expect(response.status).toBe(200);
       expect(mockConsentService.getUserConsents).toHaveBeenCalledWith('user-9');
+    });
+
+    it.each([
+      ['a user of another tenant', { tenantId: 'tenant-b' }],
+      ['an unknown user', null],
+    ])('rejects a tenant owner acting for %s', async (_label, target) => {
+      currentRole.value = 'owner';
+      mockFindUser.mockResolvedValue(target);
+
+      const response = await request(app)
+        .delete('/api/gdpr/consents/marketing?userId=user-9');
+
+      expect(response.status).toBe(403);
+      expect(mockConsentService.revokeConsent).not.toHaveBeenCalled();
     });
 
     it('rejects a non-string userId', async () => {
