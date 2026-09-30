@@ -29,7 +29,7 @@ vi.mock('../navigation', async (importOriginal) => {
 const MISSION_STOPS = ['Patrol', 'Guide', 'Automations'];
 
 /** The Skill Training rail, in model order (TASK-278). */
-const STAGE_STOPS = ['Overview', 'Collect', 'Datasets', 'Train', 'Models', 'Learning', 'Research', 'Activity'];
+const STAGE_STOPS = ['Overview', 'Collect', 'Datasets', 'Train', 'Models', 'Experiments', 'Learning', 'Research', 'Activity'];
 
 beforeEach(() => {
   nav.groups = NAV_GROUPS;
@@ -101,6 +101,8 @@ describe('SectionRail', () => {
     ['/training', 'Train'],
     ['/training?tab=simulation', 'Train'],
     ['/models', 'Models'],
+    ['/experiments', 'Experiments'],
+    ['/experiments/exp-1', 'Experiments'],
     ['/fleet-learning', 'Learning'],
     ['/fleet-learning/rounds/r-1', 'Learning'],
     ['/research', 'Research'],

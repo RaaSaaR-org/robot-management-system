@@ -370,9 +370,10 @@ the entity's state forbids it. Each act, and each create of these entities, writ
 
 ### Social — comments and ratings (`/api/social`, TASK-241)
 
-People and agents leave comments and 0..1 ratings on five subject types:
+People and agents leave comments and 0..1 ratings on six subject types:
 `dataset`, `dataset_view` (a `Dataset` with `kind = 'view'`), `model_version`,
-`episode` (`subjectId` = dataset id, plus `episodeIndex`) and `training_job`.
+`episode` (`subjectId` = dataset id, plus `episodeIndex`), `training_job` and
+`experiment` (TASK-242).
 Types: `server/src/types/social.types.ts`. Decisions:
 `docs/records/TASK-241-comments-and-ratings.md`.
 
@@ -406,6 +407,46 @@ Dimensions (each 0..1, all optional): dataset / view `coverage`, `cleanliness`,
 `diversity`, `labelQuality`; model version `successRate`, `robustness`, `latency`,
 `simToRealGap`; episode `demonstrationQuality`, `taskCompletion`; training job
 `resultStrength`, `reproducibility`.
+
+### Experiments — the experiment loop (`/api/experiments`, TASK-242)
+
+One hypothesis, several arms; each arm is (dataset refs × hyperparameters ×
+starting model) and **varies exactly one thing against the baseline** — the
+data, the starting model, or one hyperparameter key. An agent proposes, a person
+approves, the platform trains, evaluates in sim, rates and concludes. Types:
+`server/src/types/experiment.types.ts`. Decisions:
+`docs/records/TASK-242-experiment-loop.md`.
+
+Actors resolve exactly as on `/api/social` (`X-Agent-Name` for an agent). An
+**agent can propose but never approve or reject** → 403 `EXPERIMENT_APPROVER_NOT_HUMAN`.
+
+Lifecycle: `proposed` → (approve) `approved` → `running` → `completed`, or
+`rejected` / `cancelled`. Arms: `pending` → `training` → `evaluating` → `scored`,
+or `failed` / `cancelled`. After approval nothing is manual: a finished run
+(`TrainingOrchestrator` `model:completed`) submits a sim evaluation with the
+environment's `VLA_EVAL_PROFILES` profile; a finished evaluation writes one
+`EvaluationEpisode` per rollout (`source: 'sim'`, `robotId: null`), stores the
+`ArmResult` and PUTs a `Rating` on the arm's `ModelVersion` as agent
+`experiment-runner` with the episode ids as evidence. When every arm is scored or
+failed, the verdict is stored and posted as a comment on subject `experiment`.
+
+**Verdict.** Each arm against the baseline, two-proportion z-test with a pooled
+standard error, Bonferroni-corrected across arms (critical z 1.96 for one arm,
+2.24 for two, 2.39 for three), no call below 10 rollouts per arm. Within noise →
+`winnerArmId: null` and the note says so. Every number carries its `episodeCount`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/experiments` | `{title, hypothesis, baseModel, fineTuneMethod, evaluation: {environment, rolloutCount}, budget?: {maxArms, maxGpuHours, gpuHoursPerArm}, arms: [{name, isBaseline?, label?, datasetRefs: [{datasetId, weight?}], initFromModelVersionId?, hyperparameters?}]}` → 201 `{experiment}`. Runs nothing. 400 `EXPERIMENT_ARM_NOT_ONE_AXIS` (names every difference), `EXPERIMENT_OVER_BUDGET`, `EXPERIMENT_MIXTURE_INCOMPATIBLE`, `EXPERIMENT_INIT_FROM_INVALID` |
+| POST | `/api/experiments/propose/:strategy` | `data-ablation` `{datasetId, rewardType?, bands?: [0.1, 0.25], …common}` (one reward-band view per arm) or `lr-sweep` `{datasetId, hyperparameters?, learningRates?, …common}` → 201 `{experiment}` |
+| GET | `/api/experiments?status=&modelVersionId=` | `{experiments}` — `modelVersionId` finds experiments that produced or started from that model |
+| GET | `/api/experiments/:id` | `{experiment}` with arms, results and verdict |
+| GET | `/api/experiments/:id/arms` | `{arms, baselineArmId}` |
+| POST | `/api/experiments/:id/approve` | Human only. Freezes every cited view, writes a `system_event` `experiment_approved` compliance entry with approver and budget, submits one training job per arm → `{experiment}` (409 unless `proposed`) |
+| POST | `/api/experiments/:id/reject` | Human only. `{reason?}` → `{experiment}` |
+| POST | `/api/experiments/:id/cancel` | Cancels outstanding training jobs and sim evaluations; scored arms keep their results → `{experiment}` |
+
+Platform limits: at most 8 arms and `EXPERIMENT_MAX_GPU_HOURS` (default 96) GPU hours per experiment.
 
 ### Other Route Groups
 

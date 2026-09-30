@@ -347,6 +347,14 @@ export const LazyResearchPage = lazy(() =>
   import('@/features/research').then((m) => ({ default: m.ResearchPage }))
 );
 
+/** Experiments — hypothesis, arms, verdict (TASK-242) */
+export const LazyExperimentsPage = lazy(() =>
+  import('@/features/experiments').then((m) => ({ default: m.ExperimentsPage }))
+);
+export const LazyExperimentDetailPage = lazy(() =>
+  import('@/features/experiments').then((m) => ({ default: m.ExperimentDetailPage }))
+);
+
 /** Activity feed — comments and ratings by people and agents (TASK-241) */
 export const LazyActivityPage = lazy(() =>
   import('@/features/social').then((m) => ({ default: m.ActivityPage }))

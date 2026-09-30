@@ -13,7 +13,7 @@ export interface Actor {
   displayName: string;
 }
 
-export type SubjectType = 'dataset' | 'dataset_view' | 'model_version' | 'episode' | 'training_job';
+export type SubjectType = 'dataset' | 'dataset_view' | 'model_version' | 'episode' | 'training_job' | 'experiment';
 
 export interface SubjectRef {
   subjectType: SubjectType;
@@ -28,6 +28,7 @@ export const RATING_DIMENSIONS: Readonly<Record<SubjectType, readonly string[]>>
   model_version: ['successRate', 'robustness', 'latency', 'simToRealGap'],
   episode: ['demonstrationQuality', 'taskCompletion'],
   training_job: ['resultStrength', 'reproducibility'],
+  experiment: ['rigor', 'usefulness'],
 };
 
 export type EvidenceRef =

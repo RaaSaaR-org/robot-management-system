@@ -22,6 +22,7 @@ import {
   MessagesSquare,
   Cpu,
   Database,
+  FlaskConical,
   GraduationCap,
   Joystick,
   LayoutDashboard,
@@ -227,6 +228,7 @@ export const NAV_GROUPS: NavGroup[] = [
           /^\/datasets(\/|$)/,
           /^\/training(\/|$)/,
           /^\/models(\/|$)/,
+          /^\/experiments(\/|$)/,
           /^\/research(\/|$)/,
           /^\/activity(\/|$)/,
           /^\/fleet-learning(\/|$)/,
@@ -259,6 +261,8 @@ export const NAV_GROUPS: NavGroup[] = [
           },
           // Model Registry (TASK-238).
           { label: 'Models', path: '/models', icon: Brain },
+          // The experiment loop: propose, approve, train, evaluate, rate (TASK-242).
+          { label: 'Experiments', path: '/experiments', icon: FlaskConical },
           {
             label: 'Learning',
             path: '/fleet-learning',

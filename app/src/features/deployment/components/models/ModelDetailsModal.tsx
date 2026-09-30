@@ -9,6 +9,7 @@ import { Rocket } from 'lucide-react';
 import { Button, KeyValueList, LinkButton, Modal, StatusTag, type KeyValueItem } from '@/shared/components/ui';
 import { formatDateTime } from '@/shared/utils';
 import { SocialPanel } from '@/features/social';
+import { ModelExperimentsLink } from '@/features/experiments';
 import { MODEL_SOURCE_KIND_LABELS } from '../../types';
 import type { ModelVersion } from '../../types';
 import { getModelDisplayName, UNLINKED_SKILL_LABEL } from './modelDisplay';
@@ -95,6 +96,7 @@ export function ModelDetailsModal({ version, skillName, parentName, onClose }: M
             <KeyValueList items={metrics} />
           </div>
         )}
+        <ModelExperimentsLink modelVersionId={version.id} />
         <SocialPanel subject={{ subjectType: 'model_version', subjectId: version.id }} />
       </div>
     </Modal>

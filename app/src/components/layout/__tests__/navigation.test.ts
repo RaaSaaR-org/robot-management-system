@@ -186,6 +186,7 @@ describe('NAV_GROUPS', () => {
       ['Datasets', '/datasets'],
       ['Train', '/training'],
       ['Models', '/models'],
+      ['Experiments', '/experiments'],
       ['Learning', '/fleet-learning'],
       ['Research', '/research'],
       ['Activity', '/activity'],
@@ -201,7 +202,7 @@ describe('NAV_GROUPS', () => {
       { id: 'simulation', label: 'Simulation' },
       { id: 'evaluation', label: 'Evaluation' },
     ]);
-    expect(rail[5].tabs?.map((t) => t.label)).toEqual(['Rounds', 'Convergence', 'Privacy', 'ROHE']);
+    expect(rail[6].tabs?.map((t) => t.label)).toEqual(['Rounds', 'Convergence', 'Privacy', 'ROHE']);
     // The overview, the dataset list and the model registry own no tab bar.
     for (const index of [0, 2, 4]) expect(rail[index].tabs).toBeUndefined();
   });
