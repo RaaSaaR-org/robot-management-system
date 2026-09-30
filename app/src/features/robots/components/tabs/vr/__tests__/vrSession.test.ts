@@ -11,6 +11,7 @@ import {
   estopSequence,
   shouldStream,
   createTeleopLink,
+  leaseSocketFor,
   LINK_STALE_AFTER_MS,
   LINK_LOST_AFTER_MS,
   RECONNECT_BACKOFF_MS,
@@ -354,6 +355,39 @@ describe('createTeleopLink', () => {
     link.connect();
     link.connect();
     expect(sockets).toHaveLength(1);
+    link.dispose();
+  });
+});
+
+describe('control lease gate (TASK-319)', () => {
+  it('holds the stream while the lease does not allow driving', () => {
+    expect(shouldStream({ estopLatched: false, status: 'open', leaseAllows: false })).toBe(false);
+    expect(shouldStream({ estopLatched: false, status: 'open', leaseAllows: true })).toBe(true);
+  });
+
+  it('leaseSocketFor sends through the live socket and reports it open', () => {
+    const sockets: FakeSocket[] = [];
+    const link = createTeleopLink({
+      url: 'ws://robot/ws/keyboard-teleop',
+      onMessage: () => {},
+      onStatus: () => {},
+      socketFactory: () => {
+        const s = new FakeSocket();
+        sockets.push(s);
+        return s;
+      },
+    });
+    const socket = leaseSocketFor(link);
+    link.connect();
+    expect(socket.isOpen()).toBe(false);
+    expect(socket.send({ bind: { leaseId: 'L', generation: 1 } })).toBe(false);
+    sockets[0].open();
+    expect(socket.isOpen()).toBe(true);
+    expect(socket.send({ bind: { leaseId: 'L', generation: 1 } })).toBe(true);
+    expect(sockets[0].sent).toEqual(['{"bind":{"leaseId":"L","generation":1}}']);
+    sockets[0].drop();
+    expect(socket.isOpen()).toBe(false);
+    expect(socket.send({ move: { vx: 0, vy: 0, omega: 0 } })).toBe(false);
     link.dispose();
   });
 });

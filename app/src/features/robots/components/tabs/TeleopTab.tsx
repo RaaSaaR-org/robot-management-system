@@ -10,6 +10,8 @@ import { Button, EmptyState, Panel, StatusTag, toast } from '@/shared/components
 import { cn } from '@/shared/utils/cn';
 import type { TeleopTabProps } from './types';
 import { VRTeleopSection } from './vr/VRTeleopSection';
+import { ControlLeaseBar } from './ControlLeaseBar';
+import { useControlLease, type LeaseSocket } from '../../hooks/useControlLease';
 
 // ============================================================================
 // TYPES & HELPERS
@@ -73,6 +75,22 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
   const [activeDir, setActiveDir] = useState(0);
 
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Control lease (TASK-319). With the capability off this is inert and the
+  // section drives exactly as before; with it on, motion needs `bound`.
+  const lease = useControlLease(robot.id, {
+    onMotionGate: () => {
+      setActiveDir(0);
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ preset: 'stop' }));
+    },
+  });
+  const leaseRef = useRef(lease);
+  leaseRef.current = lease;
+  const canDrive = !lease.enabled || lease.state === 'bound';
+  const canDriveRef = useRef(canDrive);
+  canDriveRef.current = canDrive;
+
   // Refs let the (stable) key handlers read the latest selection/joint list.
   const selectedRef = useRef(0);
   const jointsRef = useRef<TeleopJoint[]>([]);
@@ -88,16 +106,27 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
 
     ws.onopen = () => {
       opened = true;
+      const socket: LeaseSocket = {
+        send: (payload) => {
+          if (ws.readyState !== WebSocket.OPEN) return false;
+          ws.send(JSON.stringify(payload));
+          return true;
+        },
+        isOpen: () => ws.readyState === WebSocket.OPEN,
+      };
+      leaseRef.current.attachSocket(socket);
       setConnecting(false);
       setConnected(true);
       toast.success('Keyboard teleop connected', { description: robot.name });
     };
     ws.onclose = () => {
+      if (wsRef.current === ws) leaseRef.current.attachSocket(null);
       setConnecting(false);
       setConnected(false);
       wsRef.current = null;
     };
     ws.onerror = () => {
+      if (wsRef.current === ws) leaseRef.current.attachSocket(null);
       setConnecting(false);
       setConnected(false);
       wsRef.current = null;
@@ -110,6 +139,7 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
+        if (leaseRef.current.handleSocketMessage(msg)) return;
         if (msg.type === 'config') {
           setRobotType(msg.robotType ?? '');
           setJoints(msg.joints ?? []);
@@ -123,6 +153,9 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
   }, [robot]);
 
   const disconnect = useCallback(() => {
+    // Hand control back on purpose first, so the operator sees no "lost" banner.
+    leaseRef.current.release();
+    leaseRef.current.attachSocket(null);
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -147,6 +180,8 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
     };
 
     const driveSelected = (direction: 1 | -1 | 0) => {
+      // Without the lease a press is ignored; a release (0) always goes out.
+      if (direction !== 0 && !canDriveRef.current) return;
       const joint = jointsRef.current[selectedRef.current];
       if (!joint) return;
       setActiveDir(direction);
@@ -162,7 +197,11 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
 
       if (k === 'ArrowUp') { moveSelection(-1); e.preventDefault(); return; }
       if (k === 'ArrowDown') { moveSelection(1); e.preventDefault(); return; }
-      if (k === 'h' || k === 'H') { send({ preset: 'home' }); e.preventDefault(); return; }
+      if (k === 'h' || k === 'H') {
+        if (canDriveRef.current) send({ preset: 'home' });
+        e.preventDefault();
+        return;
+      }
       if (k === ' ') { send({ preset: 'stop' }); setActiveDir(0); e.preventDefault(); return; }
 
       if (e.repeat) return; // begin motion once per physical key press
@@ -221,6 +260,9 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
         }
       />
       <Panel.Body className="flex flex-col gap-4">
+        {lease.enabled && (
+          <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robot.name} connected={connected} />
+        )}
         <Panel variant="inset" padding="sm">
           <ul className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4" aria-label="Keyboard controls">
             {KEY_DISPLAY.map(({ keys, label }) => (
