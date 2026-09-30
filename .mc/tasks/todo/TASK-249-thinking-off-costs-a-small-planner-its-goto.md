@@ -149,6 +149,12 @@ prints the resolved value per model; the `llm.ts` transport comment names the co
 g1-edu profile example no longer forces planner thinking off; `docs/agent-mode.md` lists
 the key.
 
+Confirmed on the branch: `REPEATS=3 npm run bench:planner -- gemma4:e4b` with
+`AGENT_PLANNER_THINKING` unset now prints "planner thinking is ON for gemma4:e4b" and
+scores 48/54, 0 dashes, 0.7 s median — the thinking-on row, reached by default.
+`npm run typecheck` (src + scripts) and the robot-agent vitest suite (140 files, 2397
+tests) pass.
+
 ## Acceptance Criteria
 
 - [x] `gemma4:e4b` benched with `AGENT_PLANNER_THINKING=true` on `main`, score and median
@@ -157,7 +163,7 @@ the key.
 - [x] A decision from the three options is written down with its reason, in this file
 - [x] Whatever the decision, the cost of thinking-off for small models is documented where a
       model is chosen (`DEFAULT_AGENT_MODEL` in `config.ts`, or the `llm.ts` transport comment)
-- [ ] `npm run typecheck` and the robot-agent suite pass
+- [x] `npm run typecheck` and the robot-agent suite pass
 
 ## Test Strategy
 
