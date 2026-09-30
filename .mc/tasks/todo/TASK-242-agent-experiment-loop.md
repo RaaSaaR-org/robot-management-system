@@ -191,20 +191,22 @@ experiments that produced or used that model.
 
 ## Acceptance Criteria
 
-- [ ] A proposed experiment runs nothing until a human approves it
-- [ ] An arm differing from the baseline on two axes is rejected at propose time
+- [x] A proposed experiment runs nothing until a human approves it
+- [x] An arm differing from the baseline on two axes is rejected at propose time
       with a message naming both
-- [ ] Approving freezes every cited dataset view and submits one job per arm
-- [ ] A completed job advances its arm to `evaluating` without manual action
-- [ ] A scored arm has a `Rating` on its `ModelVersion` authored by the runner
+- [x] Approving freezes every cited dataset view and submits one job per arm
+- [x] A completed job advances its arm to `evaluating` without manual action
+- [x] A scored arm has a `Rating` on its `ModelVersion` authored by the runner
       agent, carrying evaluation episode ids as evidence
-- [ ] The verdict names no winner when the difference is within sampling noise,
+- [x] The verdict names no winner when the difference is within sampling noise,
       and says so
-- [ ] Every arm result states its episode count, in the API and in the chart
-- [ ] Cancelling a running experiment cancels its outstanding training jobs
-- [ ] A failed arm does not block the experiment from concluding
-- [ ] The `data-ablation` proposer produces a valid experiment from a real
-      dataset with reward scores
+- [x] Every arm result states its episode count, in the API and in the chart
+- [x] Cancelling a running experiment cancels its outstanding training jobs
+- [x] A failed arm does not block the experiment from concluding
+- Moved to [[TASK-323]]: "The `data-ablation` proposer produces a valid experiment
+  from a real dataset with reward scores" — it needs a reward-model run and the GPU
+  training worker. The same code path is verified here against SQLite with seeded
+  `EpisodeReward` rows (`server/src/__tests__/experiments-routes.integration.test.ts`).
 
 ## Test Strategy
 
@@ -219,7 +221,8 @@ experiments that produced or used that model.
   `training` through `scored` and produces a `Rating` row.
 - **Manual, end to end on the local stack:** a two-arm `data-ablation`
   experiment on a real dataset — propose, approve, watch both arms train in sim,
-  read the verdict and the agent's rating with its evidence chips.
+  read the verdict and the agent's rating with its evidence chips. Moved to
+  [[TASK-323]] (needs the GPU training worker).
 
 ## Notes
 
@@ -228,3 +231,12 @@ settings, and leaves a trail a human can read and argue with. Two properties are
 what separate that from an expensive random search, and both are acceptance
 criteria above rather than aspirations — every arm varies one thing, and no
 verdict outruns its sample size.
+
+## Implementation (2026-09-30)
+
+Decisions: `docs/records/TASK-242-experiment-loop.md`. API: `docs/api.md`
+§ Experiments. Beyond the spec's schema: `Experiment.baseModel`,
+`fineTuneMethod`, `evaluationJson`, `rejectedReason`; `ExperimentArm.isBaseline`,
+`simJobId`, `failureReason`, `updatedAt`; `EvaluationEpisode.robotId` nullable and
+`source` ('real' | 'sim'); social subject type `experiment`. Pure rules (one axis,
+budget, noise) live in `server/src/services/experimentRules.ts`.
