@@ -53,7 +53,9 @@ const app = createApp();
 // TASK-327 adds one on the guarded /api/robots mount: PATCH /:id (site binding).
 // TASK-334 removes the four fleet-zone writes: POST /, PUT /:id, DELETE /:id and
 // DELETE /floor/:floor.
-const EXPECTED_WRITE_ROUTES = 368;
+// TASK-341 adds two on the guarded /api/robots mount: PUT and DELETE
+// /:id/frame-registration.
+const EXPECTED_WRITE_ROUTES = 370;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;

@@ -9,6 +9,7 @@ import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from '../services/HttpClie
 import { sensorScanService } from '../services/SensorScanService.js';
 import { robotRepository, digitalTwinRepository } from '../repositories/index.js';
 import { twinPlaceGraphService } from '../services/TwinPlaceGraphService.js';
+import { frameRegistrationService, parseRegistrationRequest } from '../services/FrameRegistrationService.js';
 import { prisma } from '../database/index.js';
 import http from 'node:http';
 import { agentServiceAuthHeaders } from '../services/agentServiceAuth.js';
@@ -170,6 +171,62 @@ robotRoutes.get('/:id/places', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error exporting robot place graph:', error);
     res.status(500).json({ error: 'Failed to export place graph' });
+  }
+});
+
+/** The 404 body for a robot without a frame registration (TASK-341). */
+export const NO_FRAME_REGISTRATION_ERROR = 'no frame registration';
+
+/**
+ * GET /:id/frame-registration - How the robot's odometry sits in its site twin (TASK-341)
+ *
+ * The transform `twin = Rot(yawDeg) · odom + (x, y)` plus whether it still
+ * applies (`current`, `staleReason`). The robot agent polls this with its
+ * service token (TASK-342).
+ */
+robotRoutes.get('/:id/frame-registration', async (req: Request, res: Response) => {
+  try {
+    const registration = await frameRegistrationService.get(req.params.id);
+    if (!registration) return res.status(404).json({ error: NO_FRAME_REGISTRATION_ERROR });
+    res.json(registration);
+  } catch (error) {
+    console.error('Error reading frame registration:', error);
+    res.status(500).json({ error: 'Failed to read frame registration' });
+  }
+});
+
+/**
+ * PUT /:id/frame-registration - Align a robot to its site (TASK-341)
+ *
+ * `{ method: 'place-anchor', placeId, headingDeg }` — the robot stands at the
+ * centroid of that place of its site, facing `headingDeg` in the twin frame —
+ * or `{ method: 'manual', x, y, yawDeg }`. Measured against the robot's live
+ * odometry, so it needs a connected robot reporting an `odom` frame.
+ */
+robotRoutes.put('/:id/frame-registration', async (req: Request, res: Response) => {
+  try {
+    const parsed = parseRegistrationRequest(req.body);
+    if (typeof parsed === 'string') return res.status(400).json({ error: parsed });
+    const result = await frameRegistrationService.set(req.params.id, parsed);
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    res.json(result.registration);
+  } catch (error) {
+    console.error('Error saving frame registration:', error);
+    res.status(500).json({ error: 'Failed to save frame registration' });
+  }
+});
+
+/**
+ * DELETE /:id/frame-registration - Forget a robot's alignment (TASK-341)
+ */
+robotRoutes.delete('/:id/frame-registration', async (req: Request, res: Response) => {
+  try {
+    const deleted = await frameRegistrationService.clear(req.params.id);
+    if (!deleted) return res.status(404).json({ error: NO_FRAME_REGISTRATION_ERROR });
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting frame registration:', error);
+    res.status(500).json({ error: 'Failed to delete frame registration' });
   }
 });
 
