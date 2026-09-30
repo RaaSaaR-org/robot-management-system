@@ -3,7 +3,7 @@ id: "TASK-338"
 aliases: []
 title: "The App CI job has room under its time limit"
 slug: "the-app-ci-job-has-room-under-its-time-limit"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
@@ -61,9 +61,9 @@ pass get cancelled mid demo-build, so every PR on 2026-09-30 needed one or two
 
 ## Acceptance Criteria
 
-- [ ] The `app` job's `timeout-minutes` is 10, with a comment explaining the number.
-- [ ] `HFDatasetBrowserModal.test.tsx` passes and logs no act() warnings.
-- [ ] CI is green on the PR without a rerun.
+- [x] The `app` job's `timeout-minutes` is 10, with a comment explaining the number.
+- [x] `HFDatasetBrowserModal.test.tsx` passes and logs no act() warnings.
+- [x] CI is green on the PR without a rerun.
 
 ## Test Strategy
 
