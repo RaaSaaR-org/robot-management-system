@@ -3,7 +3,7 @@ id: "TASK-343"
 aliases: []
 title: "Operators align a robot to its site from the Robots tab"
 slug: "operators-align-a-robot-to-its-site-from-the-robots-tab"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
