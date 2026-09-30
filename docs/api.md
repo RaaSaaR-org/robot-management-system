@@ -364,6 +364,44 @@ the entity's state forbids it. Each act, and each create of these entities, writ
 | POST | `/api/marketplace/listings/:id/unpublish` \| `/publish` | Seller or super-admin → `{listing}` as `draft` / `published`; a `pending_review` / `suspended` listing → 409 unless super-admin |
 | DELETE | `/api/marketplace/listings/:id` | Seller or super-admin; nobody bought it → `deleted`; a buyer holds a licence → 409 |
 
+### Social — comments and ratings (`/api/social`, TASK-241)
+
+People and agents leave comments and 0..1 ratings on five subject types:
+`dataset`, `dataset_view` (a `Dataset` with `kind = 'view'`), `model_version`,
+`episode` (`subjectId` = dataset id, plus `episodeIndex`) and `training_job`.
+Types: `server/src/types/social.types.ts`. Decisions:
+`docs/records/TASK-241-comments-and-ratings.md`.
+
+**Actor.** A human JWT → `user` (`X-Agent-Name` ignored). A service token
+(`ndsa_…`) must send `X-Agent-Name: <AgentCard.name>` → `agent`; missing → 400
+`SOCIAL_AGENT_NAME_REQUIRED`, unknown → 403 `SOCIAL_AGENT_UNKNOWN`. With
+`AUTH_DISABLED=true` → `system` actor `dev` (or an agent, if `X-Agent-Name` names one).
+
+**Evidence** (`EvidenceRef[]`): `{kind:'evaluation_episode', ids}`,
+`{kind:'sim_to_real_validation', id}`, `{kind:'episode_reward', datasetId, rewardType}`,
+`{kind:'training_job'|'model_version'|'dataset', id}`, `{kind:'external', uri, note}`.
+An **agent** rating with no evidence → 400 `SOCIAL_AGENT_EVIDENCE_REQUIRED`; any
+referenced id that does not exist → 400 `SOCIAL_EVIDENCE_NOT_FOUND`. Every agent
+rating writes an `ai_decision` compliance entry (robot key `platform`) carrying its evidence.
+
+Errors are `{error, message, code, context?}`. A missing subject → 404 `SOCIAL_SUBJECT_NOT_FOUND`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/social/:subjectType/:subjectId/comments` (`?episodeIndex=`) | `{threads: CommentThread[]}` — top-level comments oldest first, each with one level of `replies`; a soft-deleted comment keeps its row (`body: ''`, `deletedAt` set) while it has replies |
+| POST | `/api/social/:subjectType/:subjectId/comments` | `{body, parentId?, evidence?, episodeIndex?}` → 201 `{comment}` |
+| PATCH | `/api/social/comments/:id` | `{body}` → `{comment}`; author only (403 `SOCIAL_NOT_AUTHOR`) |
+| DELETE | `/api/social/comments/:id` | Soft delete → `{comment}`; author only |
+| GET | `/api/social/:subjectType/:subjectId/rating` | `{mine: Rating \| null, ratings: Rating[]}` |
+| PUT | `/api/social/:subjectType/:subjectId/rating` | `{score: 0..1, dimensions?, evidence?, comment?, episodeIndex?}` → 201 on create, 200 on update — one rating per actor per subject |
+| GET | `/api/social/:subjectType/:subjectId/summary` | `{summary: {count, mean, byDimension, byActorType: {user, agent, system}, commentCount}}` — human and agent means kept apart |
+| GET | `/api/social/feed?actorType=&subjectType=&limit=` | `{items: FeedItem[]}` — comments and ratings across subjects, newest first (default 50, max 200) |
+
+Dimensions (each 0..1, all optional): dataset / view `coverage`, `cleanliness`,
+`diversity`, `labelQuality`; model version `successRate`, `robustness`, `latency`,
+`simToRealGap`; episode `demonstrationQuality`, `taskCompletion`; training job
+`resultStrength`, `reproducibility`.
+
 ### Other Route Groups
 
 | Base Path | Feature |
