@@ -11,7 +11,7 @@
  * | `POST /:id/control-lease/release`  | memberOrAbove  |
  * | `POST /:id/control-lease/renew`    | memberOrAbove  |
  *
- * Behind `CONTROL_LEASES_ENABLED` (default off): the GET still answers, with
+ * Behind `CONTROL_LEASES_ENABLED` (default on; `=false` turns it off): the GET still answers, with
  * `capability.enabled: false`; every POST answers 404 `control_leases_disabled`.
  */
 

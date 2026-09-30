@@ -3,7 +3,7 @@ id: "TASK-321"
 aliases: []
 title: "Control leases are on by default"
 slug: "control-leases-are-on-by-default"
-status: "todo"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []

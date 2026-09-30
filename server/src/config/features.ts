@@ -31,12 +31,29 @@ export const MULTI_TENANCY_ENABLED = readBoolFlag('MULTI_TENANCY_ENABLED', false
 export const DEFAULT_TENANT_ID = 'default';
 
 /**
+ * Robot-wide per-user control leases (TASK-317, default flipped on by
+ * TASK-321). On unless `CONTROL_LEASES_ENABLED` is set to something other
+ * than `true` / `1` — `CONTROL_LEASES_ENABLED=false` turns it off. On: the
+ * lease routes under `/api/robots/:id/control-lease` answer and the sweeper
+ * fences expired leases. Off: the GET answers `enabled:false` and both POSTs
+ * 404 `control_leases_disabled`.
+ *
+ * Read per call (not a startup constant), so tests and the routes see the
+ * current environment. Enforcement is the robot agent's separate opt-in flag,
+ * `CONTROL_LEASE_REQUIRED` (default off).
+ */
+export function controlLeasesEnabled(): boolean {
+  return readBoolFlag('CONTROL_LEASES_ENABLED', true);
+}
+
+/**
  * Snapshot of every feature flag — exposed via /api/config/features so
  * the frontend can decide which UI to render before login.
  */
 export function getFeatureFlags(): Record<string, boolean> {
   return {
     multiTenancyEnabled: MULTI_TENANCY_ENABLED,
+    controlLeasesEnabled: controlLeasesEnabled(),
     natsEnabled: process.env.NATS_URL !== undefined,
     rustfsEnabled: process.env.RUSTFS_ENDPOINT !== undefined,
   };

@@ -267,7 +267,7 @@ export function createApp(): Express {
   app.use('/api/robots', ...protect, agentModeRoutes);
 
   // Control leases (TASK-317) — acquire / release / observe one robot-wide
-  // lease. Behind CONTROL_LEASES_ENABLED (default off). Its role-denial audit
+  // lease. Behind CONTROL_LEASES_ENABLED (default on). Its role-denial audit
   // is mounted above, ahead of the robotRoutes guard.
   app.use('/api/robots', ...protect, controlLeaseRoutes);
 

@@ -28,6 +28,7 @@ data:
   # Server configuration
   NODE_ENV: {{ .Values.server.env.nodeEnv | quote }}
   AUTH_DISABLED: {{ .Values.server.env.authDisabled | quote }}
+  CONTROL_LEASES_ENABLED: {{ .Values.server.env.controlLeasesEnabled | quote }}
   {{- if .Values.server.env.publicUrl }}
   PUBLIC_URL: {{ .Values.server.env.publicUrl | quote }}
   {{- end }}
