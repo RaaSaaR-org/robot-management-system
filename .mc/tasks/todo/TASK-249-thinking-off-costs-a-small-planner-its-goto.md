@@ -3,9 +3,9 @@ id: "TASK-249"
 aliases: []
 title: "Turning thinking off costs a small planner its goto — decide, per model, whether that trade is wanted"
 slug: "thinking-off-costs-a-small-planner-its-goto"
-status: "todo"
+status: "in-progress"
 priority: 3
-owner: ""
+owner: "huhn511"
 projects: []
 customers: []
 tags: ["core", "agent-mode"]
@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-09-06"
-updated: "2026-09-06"
+updated: "2026-09-30"
 ---
 
 # Turning thinking off costs a small planner its goto — decide, per model, whether that trade is wanted
@@ -86,13 +86,76 @@ about latency versus a robot that walks blind. Options, in the order they are wo
 - `robot-agent/src/config/config.ts:795` — `plannerModel`; `:799` — `plannerThinking`
 - `robot-agent/scripts/planner-bench.ts` — the bench and its 18-case gate
 
+## Re-bench with thinking on (2026-09-30)
+
+Not the 5090: an Apple-silicon Mac, Ollama 0.33.3, `gemma4:e4b` freshly pulled. Latency is
+therefore only comparable within this table. Same bench, 18 cases × 3 repeats, on `main`
+(`38df1325`) — the thinking-on arm through `AGENT_PLANNER_THINKING=true`:
+
+| model | thinking | plans right | dashes | fallbacks | median latency | failing cases (3/3 each) |
+|---|---|---|---|---|---|---|
+| `gemma4:e4b` | off | 42/54 (78%) | 3 | 0 | 0.7 s | goto-door, goto-chair, goto-table-en, scan |
+| `gemma4:e4b` | **on** | **48/54 (89%)** | **0** | 0 | **0.7 s** | goto-door, scan |
+| `gemma4:e2b` | off | 42/54 (78%) | 0 | 6 | 0.2 s | goto-door, scan, stand, damp |
+| `gemma4:e2b` | **on** | **51/54 (94%)** | 0 | 0 | 4.2 s | scan |
+
+The thinking-off row for `e4b` reproduces the 2026-09-06 result exactly — 42/54, three
+dashes, the same four failing cases — on different hardware and a newer Ollama. Thinking on
+removes all three dashes and recovers `goto-chair` and `goto-table-en`. `gemma4:12b` is not
+installed here and was not re-benched; its 51/54 on both sides of `32697991` stands.
+`gemma4:e2b` — the planner the shipped `.env.g1-edu-agent.example` profile pins, with
+`AGENT_PLANNER_THINKING=false` — was benched too because it is the small planner someone
+actually runs.
+
+**The mechanism is not quite the one in "Why it happens".** For `e4b` the thinking-on arm
+costs no latency, and a direct probe explains why: sent the real planner prompt and schema
+(`buildPlannerPrompt` + `toJsonSchema(PlanSchema)`) for `lauf zur Tür`, `geh zum Stuhl` and
+the `scan` command, `gemma4:e4b` produced **0 characters of thinking** over `/v1` without
+`reasoning_effort`, over native `think: true`, and over native `think: false` alike (it does
+think, ~530 chars, on a short free-form prompt — so the planner prompt is what keeps it
+from thinking). Yet `think: false` changes its answers (e.g. a `reasoning_` key instead of
+`reasoning`, different token counts). So for `e4b` it is the `think: false` switch itself —
+the chat template it selects — that costs the accuracy, not lost reasoning. For `e2b` the
+thinking is real: ~20× the latency, and it buys back `stand`, `damp` and `goto-door`. Either
+way, the fix at our layer is the same: do not send `think: false` to these models.
+
+## Decision (2026-09-30)
+
+**Option 2 — per-model thinking.** `AGENT_PLANNER_THINKING` now resolves per model:
+`true`/`false` is an explicit operator override and wins; unset (or any other value) falls
+back to a measured default — on for the models in `PLANNER_MODELS_THAT_THINK`
+(`gemma4:e4b`, `gemma4:e2b`), off for everything else, including `gemma4:12b` and the code
+default `gemma3:4b`.
+
+Why:
+
+- **Option 1 (leave it) ships a robot that walks blind or will not stand up.** The shipped
+  g1-edu profile runs `gemma4:e2b` with thinking forced off; that is 42/54 with `stand` and
+  `damp` failing every run. "12b is what ships" is true only for the GPU box.
+- **The cost is small or zero.** `e4b` gains six cases and loses its dashes for no latency
+  at all; `e2b` gains nine cases for ~4 s per plan on a laptop, well inside the 300 s
+  planner budget and the ~10 s the profile already accepts for vision thinking.
+- **12b keeps its fast path.** It is unaffected by thinking off, so it stays off and does
+  not pay for thinking it does not need — the reason a global flip (thinking on for
+  everything) was rejected.
+- **An explicit choice still wins**, so an operator who wants e2b's 0.2 s over its
+  accuracy can still set `AGENT_PLANNER_THINKING=false`.
+
+What changed: `resolvePlannerThinking` and `PLANNER_MODELS_THAT_THINK` in
+`robot-agent/src/config/config.ts` (the cost table sits there, next to
+`DEFAULT_AGENT_MODEL`, which points at it); `Planner` takes a `thinking` dep so the bench
+resolves it for the model it benches rather than for the configured one; the bench header
+prints the resolved value per model; the `llm.ts` transport comment names the cost; the
+g1-edu profile example no longer forces planner thinking off; `docs/agent-mode.md` lists
+the key.
+
 ## Acceptance Criteria
 
-- [ ] `gemma4:e4b` benched with `AGENT_PLANNER_THINKING=true` on `main`, score and median
+- [x] `gemma4:e4b` benched with `AGENT_PLANNER_THINKING=true` on `main`, score and median
       latency recorded next to the 42/54 and 51/54 rows above — this is what says whether
       thinking is in fact the cause rather than a plausible story
-- [ ] A decision from the three options is written down with its reason, in this file
-- [ ] Whatever the decision, the cost of thinking-off for small models is documented where a
+- [x] A decision from the three options is written down with its reason, in this file
+- [x] Whatever the decision, the cost of thinking-off for small models is documented where a
       model is chosen (`DEFAULT_AGENT_MODEL` in `config.ts`, or the `llm.ts` transport comment)
 - [ ] `npm run typecheck` and the robot-agent suite pass
 
