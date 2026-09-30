@@ -45,6 +45,7 @@ let installResult: AgentInstallResult = { ok: true };
 
 const agent: ControlLeaseAgentPort = {
   install: async () => installResult,
+  renew: async () => ({ ok: true, bound: true }),
   release: async () => true,
   observe: async () => ({ state: 'held', generation: 1 }),
 };
@@ -58,6 +59,7 @@ function buildApp() {
     agent,
     audit,
     resolveRobot: async (id) => (id === 'robot-1' ? { robotId: id, tenantId: 'tenant-a', baseUrl: 'http://agent' } : null),
+    readUser: async (id) => (USERS[id] ? { role: USERS[id].role, isActive: true } : null),
     ttlMs: () => 5000,
     renewEveryMs: () => 1000,
   });
@@ -122,6 +124,12 @@ describe('control-lease routes, flag off', () => {
       .set('x-test-user', 'alice')
       .send({ leaseId: 'x', generation: 1 });
     expect(release.status).toBe(404);
+    const renew = await request(app)
+      .post(`${BASE}/renew`)
+      .set('x-test-user', 'alice')
+      .send({ leaseId: 'x', generation: 1 });
+    expect(renew.status).toBe(404);
+    expect(renew.body).toEqual({ code: 'control_leases_disabled' });
     expect(await db.robotControlLease.count()).toBe(0);
   });
 });
@@ -205,5 +213,35 @@ describe('control-lease routes, flag on', () => {
     expect(ok.status).toBe(200);
     expect(ok.body).toEqual({ released: true });
     expect((await request(app).get(BASE).set('x-test-user', 'vera')).body.holder).toBeNull();
+  });
+
+  it('renew validates its body, then extends the holder\'s lease', async () => {
+    const app = buildApp();
+    const acquired = await request(app).post(BASE).set('x-test-user', 'alice').send({});
+    const bad = await request(app).post(`${BASE}/renew`).set('x-test-user', 'alice').send({ generation: 1 });
+    expect(bad.status).toBe(400);
+    expect(bad.body.code).toBe('invalid_renew');
+    const ok = await request(app)
+      .post(`${BASE}/renew`)
+      .set('x-test-user', 'alice')
+      .send({ leaseId: acquired.body.leaseId, generation: acquired.body.generation });
+    expect(ok.status).toBe(200);
+    expect(ok.body).toMatchObject({ generation: 1, ttlMs: 5000, renewEveryMs: 1000 });
+    expect(typeof ok.body.expiresAt).toBe('string');
+    expect(JSON.stringify(ok.body)).not.toContain(acquired.body.leaseId);
+    const stranger = await request(app)
+      .post(`${BASE}/renew`)
+      .set('x-test-user', 'bob')
+      .send({ leaseId: acquired.body.leaseId, generation: acquired.body.generation });
+    expect(stranger.status).toBe(409);
+    expect(stranger.body).toEqual({ code: 'lease_lost' });
+  });
+
+  it('a viewer is 403 on renew, and the refusal is audited', async () => {
+    const app = buildApp();
+    const res = await request(app).post(`${BASE}/renew`).set('x-test-user', 'vera').send({ leaseId: 'x', generation: 1 });
+    expect(res.status).toBe(403);
+    await vi.waitFor(() => expect(audits).toHaveLength(1));
+    expect(audits[0]).toMatchObject({ action: 'deny', userId: 'vera', reason: 'forbidden' });
   });
 });
