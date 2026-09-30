@@ -5,7 +5,7 @@ aliases:
 title: The experiment loop — an agent proposes a hypothesis, a human starts it, and
   the platform trains, evaluates and rates the result
 slug: agent-experiment-loop
-status: in-progress
+status: review
 priority: 2
 owner: huhn511
 projects: []
