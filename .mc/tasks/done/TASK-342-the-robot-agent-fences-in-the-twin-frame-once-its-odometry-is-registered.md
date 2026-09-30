@@ -3,7 +3,7 @@ id: "TASK-342"
 aliases: []
 title: "The robot agent fences in the twin frame once its odometry is registered"
 slug: "the-robot-agent-fences-in-the-twin-frame-once-its-odometry-is-registered"
-status: "todo"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -84,12 +84,12 @@ testable on the Mac.
 
 ## Acceptance Criteria
 
-- [ ] MuJoCo on the Mac: sim booted with `--odom-origin boot --spawn 3,2,90` bound to
+- [x] MuJoCo on the Mac: sim booted with `--odom-origin boot --spawn 3,2,90` bound to
       the Demo Warehouse twin reports "not aligned" and the fence does not enforce.
-- [ ] After a place-anchor registration, `location.place` is correct and a walk toward
+- [x] After a place-anchor registration, `location.place` is correct and a walk toward
       a keepout is stopped at the keepout's real edge in the twin (within 0.2 m).
-- [ ] Restarting the sim (new boot id) returns the frame to UNREGISTERED.
-- [ ] Vitest covers the transform, the gate and invalidation; pytest covers the sim's
+- [x] Restarting the sim (new boot id) returns the frame to UNREGISTERED.
+- [x] Vitest covers the transform, the gate and invalidation; pytest covers the sim's
       boot-origin odometry.
 
 ## Test Strategy
