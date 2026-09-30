@@ -1,15 +1,17 @@
 /**
  * @file place-frame.ts
  * @description Is the frame the robot's POSE arrives in the same frame the place
- *              graph's POLYGONS are expressed in? Nothing in this repo registers
- *              the two on real hardware, so this module's job is to say so out
- *              loud and let the callers fail closed (TASK-200 review finding 2)
- *              — and to recognise the cases that coincide by construction.
+ *              graph's POLYGONS are expressed in? On odometry the two are
+ *              related only by an operator's alignment (TASK-342), so this
+ *              module's job is to say so out loud and let the callers fail
+ *              closed (TASK-200 review finding 2) — and to recognise the cases
+ *              that coincide by construction or by a current registration.
  * @feature agentmode
  * @status live
  */
 
 import type { PlaceGraph } from './place-resolver.js';
+import type { OdomRegistration } from './frame-registration.js';
 
 /**
  * Frame kind of a graph authored directly against a simulated scene. The MJCF
@@ -34,8 +36,17 @@ export type FrameRegistration =
        * - `identity`: a `sim`-kind graph authored against the scene itself.
        * - `sim-twin-origin`: a twin graph on a SIMULATED robot, whose world
        *   origin is the twin's origin by construction (TASK-328).
+       * - `registration`: a twin graph on odometry that an operator registered
+       *   to the twin for THIS odometry session (TASK-342); the graph must be
+       *   carried into odometry with {@link registration} before it is used.
        */
       how: 'identity' | 'sim-twin-origin';
+    }
+  | {
+      registered: true;
+      how: 'registration';
+      /** The odom → twin transform the graph is carried into odometry with. */
+      registration: OdomRegistration;
     }
   | {
       registered: false;
@@ -53,12 +64,17 @@ export type FrameRegistration =
  *   twin and the MuJoCo warehouse scene share one origin) — so a twin graph
  *   needs no registration for it.
  * - `odom`: real hardware. Odometry re-zeroes wherever the base was when the
- *   sidecar came up, which is registered to nothing (alignment is TASK-325).
+ *   sidecar came up, which is registered to nothing until an operator aligns
+ *   the robot to its site for this odometry session (TASK-342).
  */
 export type PoseFrame = 'twin' | 'odom';
 
 export interface FrameRegistrationInput {
   poseFrame: PoseFrame;
+  /** The platform's registration for this robot (TASK-342), if any. */
+  registration?: OdomRegistration | null;
+  /** The id of the odometry frame the pose arrives in now (the sidecar boot id). */
+  odomFrameId?: string | null;
 }
 
 /**
@@ -84,15 +100,15 @@ export interface FrameRegistrationInput {
  * sim publishes odometry about that same origin, and the registration is the
  * identity. And (TASK-328) a twin graph on a robot that declares
  * `poseFrame: 'twin'` — a sim robot, whose world origin is the twin origin by
- * construction, so nothing needs registering. Everything else — every twin on
- * real hardware, and every hand-authored `site` graph, which is surveyed against
- * a building and not against a robot boot — is unregistered until someone
- * implements registration (TASK-325). Real hardware gets exactly the answer it
- * got before `poseFrame` existed.
+ * construction, so nothing needs registering. And (TASK-342) a twin graph on
+ * odometry that an operator registered to that twin in THIS odometry session.
+ * Everything else — an unaligned or re-booted robot, and every hand-authored
+ * `site` graph, which is surveyed against a building and not against a robot
+ * boot — is unregistered.
  */
 export function assessFrameRegistration(
   graph: PlaceGraph,
-  { poseFrame }: FrameRegistrationInput = { poseFrame: 'odom' },
+  { poseFrame, registration = null, odomFrameId = null }: FrameRegistrationInput = { poseFrame: 'odom' },
 ): FrameRegistration {
   const { id, kind, twinId } = graph.frame;
 
@@ -101,13 +117,15 @@ export function assessFrameRegistration(
   }
 
   if (twinId !== undefined) {
+    const why = registrationMismatch(twinId, registration, odomFrameId);
+    if (why === null && registration) return { registered: true, how: 'registration', registration };
     return {
       registered: false,
       reason:
         `place graph '${id}' is expressed in digital twin '${twinId}', whose origin is the robot's ` +
         'pose at scan start — nothing registers it to this robot\'s odometry origin, which is ' +
         'wherever the base was when the sidecar last came up. Places and keepouts stay UNKNOWN ' +
-        'until a frame registration exists.',
+        `until the robot is aligned to its site (${why}).`,
     };
   }
 
@@ -123,4 +141,24 @@ export function assessFrameRegistration(
   }
 
   return { registered: true, how: 'identity' };
+}
+
+/**
+ * Why a registration does not apply to this graph and this odometry session,
+ * or null when it does. A registration is about ONE twin and ONE odometry
+ * session: a sidecar restart re-zeroes odometry under a new frame id, and the
+ * stored transform then relates the twin to a frame that no longer exists.
+ */
+function registrationMismatch(
+  twinId: string,
+  registration: OdomRegistration | null,
+  odomFrameId: string | null,
+): string | null {
+  if (!registration) return 'no frame registration';
+  if (registration.twinId !== twinId) return `the registration is for twin '${registration.twinId}'`;
+  if (!odomFrameId) return 'the odometry session is not known yet';
+  if (registration.odomFrameId !== odomFrameId) {
+    return 'odometry restarted since the robot was aligned — align it again';
+  }
+  return null;
 }

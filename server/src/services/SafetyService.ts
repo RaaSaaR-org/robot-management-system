@@ -351,8 +351,7 @@ class SafetyService {
       title: 'Fleet-Wide Emergency Stop',
       message: `E-stop triggered by ${triggeredBy} for ${successCount} robots. Reason: ${reason}. ${failureCount > 0 ? `${failureCount} failures.` : ''}`,
       source: 'system',
-      // No sourceId: `Alert.sourceId` is a foreign key to `Robot`, so 'fleet'
-      // violated it and the alert was never written.
+      // No sourceId: a fleet-wide stop has no single entity to point at.
     }).catch((err) => {
       console.error('[SafetyService] Failed to create fleet alert:', err);
     });
@@ -510,14 +509,13 @@ class SafetyService {
 
     // Create zone alert (non-blocking). The robots are already stopped: an
     // alert that cannot be written must not turn that into a failed E-stop.
-    // No sourceId — `Alert.sourceId` is a foreign key to `Robot`, and a
-    // TwinZone id violated it, so every zone E-stop that stopped a robot
-    // answered 500. The zone id rides in the message instead.
+    // `Alert.sourceId` is polymorphic (TASK-337), so it carries the TwinZone id.
     alertService.createAlert({
       severity: 'critical',
       title: `Zone Emergency Stop - ${zone.name}`,
       message: `E-stop triggered by ${triggeredBy} for ${successCount} robots in zone ${zone.name} (${zoneId}). Reason: ${reason}. ${failureCount > 0 ? `${failureCount} failures.` : ''}`,
       source: 'system',
+      sourceId: zoneId,
     }).catch((err) => {
       console.error('[SafetyService] Failed to create zone alert:', err);
     });

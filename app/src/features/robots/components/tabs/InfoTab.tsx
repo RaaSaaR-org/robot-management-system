@@ -10,6 +10,7 @@ import { Badge, KeyValueList, LinkButton, Panel, StatusTag } from '@/shared/comp
 import { formatDateTime } from '@/shared/utils/format';
 import type { InfoTabProps } from './types';
 import { SiteSelect } from './SiteSelect';
+import { SiteAlignment } from './SiteAlignment';
 
 const METADATA_LABELS: Record<string, string> = {
   robotType: 'Robot type',
@@ -53,6 +54,14 @@ export function InfoTab({ robot }: InfoTabProps) {
               { label: 'Firmware', value: robot.firmware },
               { label: 'IP address', value: robot.ipAddress, mono: true },
               { label: 'Site', value: <SiteSelect robotId={robot.id} twinId={robot.twinId} /> },
+              ...(robot.twinId
+                ? [
+                    {
+                      label: 'Alignment',
+                      value: <SiteAlignment robotId={robot.id} twinId={robot.twinId} location={robot.location} />,
+                    },
+                  ]
+                : []),
               { label: 'Place', value: robot.location?.place ?? 'Place unknown' },
               {
                 label: 'Registered',

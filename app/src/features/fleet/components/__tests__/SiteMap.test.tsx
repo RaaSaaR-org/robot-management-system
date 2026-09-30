@@ -35,7 +35,7 @@ vi.mock('@/shared/components/ui', async (importOriginal) => {
 import { confirm, toast } from '@/shared/components/ui';
 import { useTwinStore } from '@/features/digitaltwin/store/twinStore';
 import { useSafetyStore } from '@/features/safety/store/safetyStore';
-import { SiteMap, LAST_SITE_KEY, groupSiteRobots } from '../SiteMap';
+import { SiteMap, LAST_SITE_KEY, groupSiteRobots, sitePoseOf } from '../SiteMap';
 
 const BOUNDS = { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 3 };
 const twin = (id: string, name: string) =>
@@ -96,6 +96,20 @@ describe('groupSiteRobots', () => {
     expect(g.plotted.map((r) => r.id)).toEqual(['a']);
     expect(g.unaligned.map((r) => r.id)).toEqual(['b', 'c']);
     expect(g.unbound.map((r) => r.id)).toEqual(['d']);
+  });
+});
+
+describe('sitePoseOf (TASK-343)', () => {
+  it('plots a registered robot at its twin pose, not its raw odometry', () => {
+    const r = robot('a', 'tw-1', true);
+    r.location = { ...r.location, x: -3, y: 0, heading: -90, sitePose: { x: 3, y: -1, heading: 0 } };
+    expect(sitePoseOf(r)).toEqual({ x: 3, y: -1, heading: 0 });
+  });
+
+  it('falls back to x/y/heading for a robot that reports no site pose', () => {
+    const r = robot('a', 'tw-1', true);
+    r.location = { ...r.location, x: 2, y: 5, heading: 45 };
+    expect(sitePoseOf(r)).toEqual({ x: 2, y: 5, heading: 45 });
   });
 });
 

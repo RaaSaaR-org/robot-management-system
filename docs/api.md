@@ -189,6 +189,9 @@ Rate limited: 20 requests per 15 minutes.
 | DELETE | `/:id` | Unregister robot |
 | PATCH | `/:id` | `{twinId: string \| null}` — bind the robot to a site (the digital twin it works in) or unbind it (TASK-327). Unknown twin, or one of another tenant → 404. Deleting the twin unbinds its robots. `twinId` is on every robot DTO |
 | GET | `/:id/places` | The bound site's place graph — the same payload as `GET /api/digital-twins/:twinId/places/_index.json`; 404 `{error: 'robot has no site'}` when unbound (TASK-327) |
+| GET | `/:id/frame-registration` | How the robot's odometry sits in its site twin: `{twinId, odomFrameId, x, y, yawDeg, method, anchorPlaceId, createdAt, current, staleReason}` with `twin = Rot(yawDeg)·odom + (x, y)`; `current` only while the site and the odometry session (`odomFrameId`) are unchanged; 404 `{error: 'no frame registration'}` (TASK-341) |
+| PUT | `/:id/frame-registration` | Align it: `{method: 'place-anchor', placeId, headingDeg}` (robot stands at the place's centroid facing `headingDeg` in the twin) or `{method: 'manual', x, y, yawDeg}`; 409 when the robot has no site, is offline, reports no `odom` frame, or is a sim already in the twin frame (TASK-341) |
+| DELETE | `/:id/frame-registration` | Forget the alignment; 204, or 404 when there is none. Changing the robot's site deletes it too (TASK-341) |
 | POST | `/:id/command` | Send command to robot |
 | GET | `/:id/telemetry` | Get robot telemetry |
 | GET | `/:id/peers` | Every OTHER online robot as `{robotId, name, x, y, headingDeg, frame, place, zone, updatedAt, footprintRadiusM}` for the robot-agent's peer tracker (TASK-207); poses ≤1 s old (refreshed from the agents on demand). `frame` is passed through as reported — the caller drops what it cannot compare |
