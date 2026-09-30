@@ -2630,7 +2630,12 @@ model Deployment {
 // EvaluationEpisode - Track VLA model evaluation rollouts
 model EvaluationEpisode {
   id             String   @id @default(uuid())
-  robotId        String
+  // Null for a simulated rollout: it ran on no robot (TASK-242).
+  robotId        String?
+  // 'real' (a robot ran it) | 'sim' (a simulation job rolled it out). Real-rate
+  // derivations (SimToRealValidation) read 'real' only, so an experiment's sim
+  // rollouts can never pass for hardware evidence.
+  source         String   @default("real")
   // The free string stays (TASK-238): rows exist that only ever had it, and a
   // migration that guesses an id is worse than a nullable foreign key.
   modelVersion   String
@@ -2645,7 +2650,7 @@ model EvaluationEpisode {
   metadata       String   @default("{}") // JSON: Record<string, unknown>
   createdAt      DateTime @default(now())
 
-  robot           Robot         @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  robot           Robot?        @relation(fields: [robotId], references: [id], onDelete: Cascade)
   // Named because `modelVersion` above is already the free string column.
   modelVersionRef ModelVersion? @relation(fields: [modelVersionId], references: [id])
 
@@ -2654,6 +2659,7 @@ model EvaluationEpisode {
   @@index([modelVersionId])
   @@index([createdAt])
   @@index([success])
+  @@index([source])
 }
 
 // EpisodeReward - Per-episode reward-model scores + progress curves
@@ -3273,7 +3279,7 @@ model RobotControlLease {
 model Comment {
   id           String    @id @default(uuid())
   tenantId     String?
-  /// dataset | dataset_view | model_version | episode | training_job
+  /// dataset | dataset_view | model_version | episode | training_job | experiment
   subjectType  String
   subjectId    String
   /// Only for subjectType 'episode', with subjectId = the dataset id.
@@ -3323,4 +3329,71 @@ model Rating {
   @@unique([subjectType, subjectKey, actorType, actorId])
   @@index([subjectType, subjectId])
   @@index([tenantId, updatedAt])
+}
+
+// ============================================================================
+// EXPERIMENTS — one hypothesis, several arms, each trained, evaluated and rated
+// (TASK-242)
+// ============================================================================
+
+/// A structured experiment. An agent (or a person) proposes it; nothing runs
+/// until a human approves it — approval is the only place that spends GPU time.
+/// The proposer is an Actor value object, same as Comment/Rating (TASK-241).
+model Experiment {
+  id             String    @id @default(uuid())
+  tenantId       String?
+  title          String
+  /// What this expects to show, in one sentence.
+  hypothesis     String
+  /// proposed | approved | running | completed | cancelled | rejected
+  status         String    @default("proposed")
+  actorType      String
+  actorId        String
+  displayName    String
+  /// Fixed for the whole experiment — the arms vary data, starting model or
+  /// one hyperparameter, never the architecture.
+  baseModel      String
+  fineTuneMethod String
+  approvedBy     String?
+  approvedAt     DateTime?
+  rejectedReason String?
+  budgetJson     String    @default("{}") // JSON: ExperimentBudget
+  evaluationJson String    @default("{}") // JSON: ExperimentEvaluation { environment, rolloutCount }
+  /// The arm every other arm is compared against.
+  baselineArmId  String?
+  verdictJson    String? // JSON: ExperimentVerdict, written on completion
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  arms           ExperimentArm[]
+
+  @@index([status, createdAt])
+  @@index([tenantId, createdAt])
+}
+
+model ExperimentArm {
+  id                     String     @id @default(uuid())
+  experimentId           String
+  experiment             Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  /// "drop shaky episodes, lr 1e-5"
+  name                   String
+  /// What this arm varies, one phrase.
+  label                  String?
+  isBaseline             Boolean    @default(false)
+  datasetRefsJson        String     @default("[]") // JSON: MixtureMemberInput[] — may name views
+  initFromModelVersionId String?
+  hyperparametersJson    String     @default("{}")
+  trainingJobId          String?
+  modelVersionId         String?
+  /// The simulation job that evaluates this arm's model.
+  simJobId               String?
+  /// pending | training | evaluating | scored | failed | cancelled
+  status                 String     @default("pending")
+  failureReason          String?
+  resultJson             String? // JSON: ArmResult
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+
+  @@index([experimentId])
+  @@index([trainingJobId])
+  @@index([simJobId])
 }

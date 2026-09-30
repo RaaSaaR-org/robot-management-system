@@ -23,13 +23,15 @@ export interface Actor {
  * What can be discussed. `episode` addresses one episode of a dataset:
  * subjectId is the dataset id and `episodeIndex` names the episode.
  * `dataset_view` is a Dataset row with `kind = 'view'` (TASK-240).
+ * `experiment` is an Experiment (TASK-242) — where its verdict is posted.
  */
 export type SubjectType =
   | 'dataset'
   | 'dataset_view'
   | 'model_version'
   | 'episode'
-  | 'training_job';
+  | 'training_job'
+  | 'experiment';
 
 export const SUBJECT_TYPES: readonly SubjectType[] = [
   'dataset',
@@ -37,6 +39,7 @@ export const SUBJECT_TYPES: readonly SubjectType[] = [
   'model_version',
   'episode',
   'training_job',
+  'experiment',
 ];
 
 /**
@@ -49,6 +52,7 @@ export const RATING_DIMENSIONS: Readonly<Record<SubjectType, readonly string[]>>
   model_version: ['successRate', 'robustness', 'latency', 'simToRealGap'],
   episode: ['demonstrationQuality', 'taskCompletion'],
   training_job: ['resultStrength', 'reproducibility'],
+  experiment: ['rigor', 'usefulness'],
 };
 
 /**

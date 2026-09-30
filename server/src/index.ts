@@ -28,6 +28,7 @@ import { syntheticDataWorker } from './workers/SyntheticDataWorker.js';
 import { initializeRustFSClient } from './storage/index.js';
 import { storageCleanupJob } from './jobs/storage-cleanup.js';
 import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
+import { experimentService } from './services/ExperimentService.js';
 import { digitalTwinService } from './services/DigitalTwinService.js';
 import { processSchedulerService } from './services/ProcessSchedulerService.js';
 import { patrolSchedulerService } from './services/PatrolSchedulerService.js';
@@ -102,6 +103,11 @@ async function main() {
   // sessions left stuck in 'processing' from a prior run. No NATS dependency:
   // the sidecar claims sessions over the HTTP worker endpoints.
   await digitalTwinService.initialize();
+
+  // The experiment loop (TASK-242) listens for finished runs and evaluations.
+  // In-process events, so it needs no NATS: a run completed over the HTTP
+  // worker endpoints still advances its arm.
+  experimentService.attach();
 
   // Initialize NATS JetStream (optional - graceful degradation if not available)
   try {

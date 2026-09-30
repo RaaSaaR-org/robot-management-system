@@ -174,6 +174,9 @@ export class SimToRealValidationService extends EventEmitter {
         input.realRobotId,
         modelVersionKey,
         period,
+        // Real hardware only: an experiment's sim rollouts are EvaluationEpisode
+        // rows too (TASK-242) and must never be read as the real rate.
+        'real',
       );
       realSuccessRate = real.successRate / 100; // service returns a percentage
       realTestCount = real.totalEpisodes;

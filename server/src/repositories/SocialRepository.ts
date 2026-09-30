@@ -177,6 +177,10 @@ export class SocialRepository {
     return (await prisma.trainingJob.count({ where: { id } })) > 0;
   }
 
+  async experimentExists(id: string): Promise<boolean> {
+    return (await prisma.experiment.count({ where: { id } })) > 0;
+  }
+
   async datasetExists(id: string): Promise<boolean> {
     return (await prisma.dataset.count({ where: { id } })) > 0;
   }

@@ -77,6 +77,7 @@ import { contributionsRoutes } from './routes/contributions.routes.js';
 import { marketplaceRoutes } from './routes/marketplace.routes.js';
 import { evaluationRoutes } from './routes/evaluation.routes.js';
 import { socialRoutes } from './routes/social.routes.js';
+import { experimentsRoutes } from './routes/experiments.routes.js';
 import { securityRoutes } from './routes/security.routes.js';
 import { updateRoutes } from './routes/update.routes.js';
 import { settingsRoutes } from './routes/settings.routes.js';
@@ -420,6 +421,9 @@ export function createApp(): Express {
 
   // Comments and ratings by people and agents (TASK-241)
   app.use('/api/social', ...protect, socialRoutes);
+
+  // The experiment loop: propose, approve, train, evaluate, rate (TASK-242)
+  app.use('/api/experiments', ...protect, experimentsRoutes);
 
   // Security routes (protected) - Device identity & certificate management (CRA Annex I)
   app.use('/api/security', ...protect, securityRoutes);

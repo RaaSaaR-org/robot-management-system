@@ -48,7 +48,9 @@ const app = createApp();
 // TASK-272 adds eight: the Build-page deletes, round cancel, listing (un)publish.
 // TASK-241 adds four on the guarded /api/social mount: comment create, edit,
 // delete, and the rating PUT.
-const EXPECTED_WRITE_ROUTES = 366;
+// TASK-242 adds five on the guarded /api/experiments mount: propose, propose
+// from a strategy, approve, reject, cancel.
+const EXPECTED_WRITE_ROUTES = 371;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;

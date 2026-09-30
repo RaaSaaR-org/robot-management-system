@@ -86,7 +86,7 @@ describe('SimToRealValidationService.createValidation', () => {
       simSuccessRate: 0.9,
     });
 
-    expect(getSuccessRateMock).toHaveBeenCalledWith('robot-7', 'policy-v3', '30d');
+    expect(getSuccessRateMock).toHaveBeenCalledWith('robot-7', 'policy-v3', '30d', 'real');
     expect(dto.realSuccessRate).toBe(0.5);
     expect(dto.realTestCount).toBe(8);
     expect(dto.domainGapScore).toBeCloseTo(0.4, 6);

@@ -53,6 +53,8 @@ export function subjectLink(s: { subjectType: SubjectType; subjectId: string; ep
       return `/models?model=${q(s.subjectId)}`;
     case 'training_job':
       return `/training?job=${q(s.subjectId)}`;
+    case 'experiment':
+      return `/experiments/${q(s.subjectId)}`;
   }
 }
 
@@ -62,6 +64,7 @@ export const SUBJECT_LABEL: Record<SubjectType, string> = {
   model_version: 'Model',
   episode: 'Episode',
   training_job: 'Training run',
+  experiment: 'Experiment',
 };
 
 export const ACTOR_LABEL: Record<ActorType, string> = { user: 'Person', agent: 'Agent', system: 'System' };

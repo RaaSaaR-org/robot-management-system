@@ -138,6 +138,19 @@ const WORKER_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 // TRAINING ORCHESTRATOR SERVICE
 // ============================================================================
 
+/** Emitted as 'model:completed' once a finished run's ModelVersion is written (TASK-242). */
+export interface TrainingCompletedEvent {
+  jobId: string;
+  /** Null when the ModelVersion could not be created. */
+  modelVersionId: string | null;
+}
+
+/** Emitted as 'model:failed' when a worker reports a run failed (TASK-242). */
+export interface TrainingFailedEvent {
+  jobId: string;
+  error: string;
+}
+
 /**
  * Training job orchestration service
  * Handles job lifecycle, validation, progress tracking, and ETA calculation
@@ -708,6 +721,9 @@ export class TrainingOrchestrator extends EventEmitter {
     }
 
     console.log(`[TrainingOrchestrator] Job completed: ${jobId}`);
+    // After the ModelVersion exists, so a listener (the experiment loop,
+    // TASK-242) can evaluate the model this run produced without polling.
+    this.emit('model:completed', { jobId, modelVersionId } satisfies TrainingCompletedEvent);
     return { job: updatedJob, modelVersionId };
   }
 
@@ -820,6 +836,7 @@ export class TrainingOrchestrator extends EventEmitter {
     });
 
     console.log(`[TrainingOrchestrator] Job failed: ${jobId} - ${error}`);
+    this.emit('model:failed', { jobId, error } satisfies TrainingFailedEvent);
     return updatedJob;
   }
 
