@@ -8,6 +8,9 @@ import { EventEmitter } from 'events';
 import { processRepository } from '../repositories/ProcessRepository.js';
 import { robotTaskRepository } from '../repositories/RobotTaskRepository.js';
 import { skillExecutionService } from './SkillExecutionService.js';
+import { twinPlaceGraphService } from './TwinPlaceGraphService.js';
+import { readPlaceRef, resolvePlaceRef, validateStepPlaces } from './processPlaceRef.js';
+import { BadRequestError } from '../utils/errors.js';
 import type {
   ProcessDefinition,
   ProcessInstance,
@@ -78,6 +81,7 @@ export class ProcessManager extends EventEmitter {
     request: CreateProcessDefinitionRequest,
     createdBy: string
   ): Promise<ProcessDefinition> {
+    await this.assertStepPlaces(request.stepTemplates);
     const definition = await processRepository.createDefinition(request, createdBy);
     logger.info(`Created process definition: ${definition.name} (${definition.id})`);
     return definition;
@@ -87,11 +91,25 @@ export class ProcessManager extends EventEmitter {
     id: string,
     request: UpdateProcessDefinitionRequest
   ): Promise<ProcessDefinition | null> {
+    if (request.stepTemplates) await this.assertStepPlaces(request.stepTemplates);
     const definition = await processRepository.updateDefinition(id, request);
     if (definition) {
       logger.info(`Updated process definition: ${definition.name} (${definition.id})`);
     }
     return definition;
+  }
+
+  /**
+   * TASK-332: a "Move to place" step must reference an existing, non-keepout
+   * place of an existing site. Throws BadRequestError otherwise.
+   */
+  private async assertStepPlaces(
+    steps: ReadonlyArray<{ name?: string; actionConfig?: Record<string, unknown> }>
+  ): Promise<void> {
+    const error = await validateStepPlaces(steps, (twinId) =>
+      twinPlaceGraphService.exportPlaceGraph(twinId)
+    );
+    if (error) throw new BadRequestError(error);
   }
 
   async publishDefinition(id: string): Promise<ProcessDefinition | null> {
@@ -339,6 +357,27 @@ export class ProcessManager extends EventEmitter {
       return;
     }
 
+    // TASK-332: a place reference resolves to the place centroid now, so a
+    // place edited after the process was saved is honoured, and a place that
+    // disappeared (or became a keepout) fails the step instead of sending the
+    // robot to stale coordinates.
+    const placeConfig: Record<string, unknown> = {};
+    const placeRef = readPlaceRef(nextStep.actionConfig);
+    if (placeRef !== undefined) {
+      const resolved =
+        typeof placeRef === 'string'
+          ? { ok: false as const, error: placeRef }
+          : await resolvePlaceRef(placeRef, (twinId) =>
+              twinPlaceGraphService.exportPlaceGraph(twinId)
+            );
+      if (!resolved.ok) {
+        await this.failStepUnresolvable(nextStep, resolved.error);
+        return;
+      }
+      placeConfig.location = resolved.value.location;
+      placeConfig.requiredTwinId = resolved.value.twinId;
+    }
+
     // Get failed robot IDs for this step (for reassignment scenarios)
     const failedRobotIds = await processRepository.getStepFailedRobotIds(nextStep.id);
 
@@ -349,6 +388,7 @@ export class ProcessManager extends EventEmitter {
         actionType: nextStep.actionType,
         actionConfig: {
           ...nextStep.actionConfig,
+          ...placeConfig,
           excludeRobotIds: failedRobotIds, // Pass to TaskDistributor to exclude failed robots
         },
         instruction: `${nextStep.name}: ${nextStep.description ?? ''}`,
@@ -527,9 +567,14 @@ export class ProcessManager extends EventEmitter {
     const instance = await processRepository.findInstanceById(step.processInstanceId);
     if (!instance) return false;
 
-    // Create a minimal task object to check eligibility
+    // Create a minimal task object to check eligibility. A place step may only
+    // go to robots bound to the place's site (TASK-332).
+    const placeRef = readPlaceRef(step.actionConfig);
     const dummyTask = {
-      actionConfig: step.actionConfig,
+      actionConfig:
+        placeRef && typeof placeRef === 'object'
+          ? { ...step.actionConfig, requiredTwinId: placeRef.twinId }
+          : step.actionConfig,
       processInstanceId: step.processInstanceId,
     } as RobotTask;
 
@@ -541,6 +586,34 @@ export class ProcessManager extends EventEmitter {
     );
 
     return eligibleRobots.length > 0;
+  }
+
+  /**
+   * Fail a step, and its process, for a reason no robot can fix — e.g. its
+   * place was deleted or turned into a keepout after the process was saved.
+   * Skips retry/reassignment: another robot would hit the same wall.
+   */
+  private async failStepUnresolvable(step: StepInstance, error: string): Promise<void> {
+    logger.warn(`Step ${step.name} cannot run: ${error}`);
+    await processRepository.updateStepResult(step.id, { success: false, message: error });
+    const updatedStep = await processRepository.findStepById(step.id);
+    if (updatedStep) {
+      this.emitProcessEvent({
+        type: 'step:failed',
+        processInstanceId: step.processInstanceId,
+        stepInstance: updatedStep,
+        error,
+      });
+    }
+    const errorMsg = `Step "${step.name}" cannot run: ${error}`;
+    const updated = await processRepository.updateInstanceStatus(
+      step.processInstanceId,
+      'failed',
+      errorMsg
+    );
+    if (updated) {
+      this.emitProcessEvent({ type: 'process:failed', processInstance: updated, error: errorMsg });
+    }
   }
 
   /**

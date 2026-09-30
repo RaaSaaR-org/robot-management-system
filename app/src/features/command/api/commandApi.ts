@@ -2,13 +2,14 @@
  * @file commandApi.ts
  * @description API calls for natural language command interpretation
  * @feature command
- * @dependencies @/api/client, @/features/command/types, @/features/robots/api, @/features/fleet/api
- * @apiCalls POST /command/interpret, GET /command/history
+ * @dependencies @/api/client, @/features/command/types, @/features/robots/api, @/features/digitaltwin
+ * @apiCalls POST /command/interpret, GET /command/history, GET /robots/:id/places
  */
 
 import { apiClient } from '@/api/client';
 import { robotsApi } from '@/features/robots/api';
-import { zoneApi, type NamedLocation } from '@/features/fleet/api';
+import type { PlaceGraph } from '@/features/digitaltwin/types/twin.types';
+import { placeCentroid, reachablePlaces } from '@/features/digitaltwin/utils/places';
 import type { RobotCommand, CommandType } from '@/features/robots/types';
 import type {
   CommandInterpretation,
@@ -17,50 +18,68 @@ import type {
 } from '../types/command.types';
 
 // ============================================================================
-// NAMED LOCATIONS (fetched from server - single source of truth)
+// NAMED LOCATIONS — the places of the robot's site (TASK-332)
 // ============================================================================
 
-/** Cached named locations from server */
-let cachedLocations: Record<string, NamedLocation> | null = null;
-let lastLocationFetch = 0;
+/** A named destination: a place centroid, or the fallback home. */
+interface NamedLocation {
+  x: number;
+  y: number;
+  /** Place id when the name came from the site's place graph. */
+  place?: string;
+}
+
+const HOME: NamedLocation = { x: 0, y: 0 };
+
+/** Per-robot cache: robot id → { name → location }. */
+const locationCache = new Map<string, { at: number; locations: Record<string, NamedLocation> }>();
 const LOCATION_CACHE_TTL_MS = 60000; // 1 minute cache
 
-/**
- * Fetch named locations from server (with caching)
- */
-async function fetchNamedLocations(): Promise<Record<string, { x: number; y: number }>> {
-  const now = Date.now();
-  if (cachedLocations && now - lastLocationFetch < LOCATION_CACHE_TTL_MS) {
-    // Return cached locations (simplified format)
-    return Object.fromEntries(
-      Object.entries(cachedLocations).map(([key, val]) => [key, { x: val.x, y: val.y }])
-    );
-  }
-
-  try {
-    // A server without named locations answers with an empty body; keep the old cache then.
-    cachedLocations = (await zoneApi.getNamedLocations()) ?? cachedLocations;
-    lastLocationFetch = now;
-  } catch (error) {
-    console.warn('[commandApi] Failed to fetch named locations from server:', error);
-  }
-  if (!cachedLocations) {
-    // Fallback home location if the server gave us nothing
-    cachedLocations = { home: { x: 0, y: 0, floor: '1', zone: 'Home Base' } };
-  }
-
-  return Object.fromEntries(
-    Object.entries(cachedLocations).map(([key, val]) => [key, { x: val.x, y: val.y }])
-  );
+/** Drop the per-robot cache (tests; a robot re-bound to another site). */
+export function clearNamedLocationCache(): void {
+  locationCache.clear();
 }
 
 /**
- * Resolve a named location to coordinates (async - fetches from server)
+ * The robot's named locations: every reachable place of its site, keyed by
+ * lower-cased place id and name, at the place centroid. A robot without a site
+ * (the endpoint answers 404) only knows `home`.
  */
-async function getLocationByName(name?: string): Promise<{ x: number; y: number } | undefined> {
+export async function fetchNamedLocations(robotId: string): Promise<Record<string, NamedLocation>> {
+  const now = Date.now();
+  const cached = locationCache.get(robotId);
+  if (cached && now - cached.at < LOCATION_CACHE_TTL_MS) return cached.locations;
+
+  const locations: Record<string, NamedLocation> = { home: HOME };
+  try {
+    const res = await apiClient.get<PlaceGraph>(ENDPOINTS.robotPlaces(robotId));
+    for (const place of reachablePlaces(res.data?.places ?? [])) {
+      const centroid = placeCentroid(place.polygon);
+      if (!centroid) continue;
+      const location = { ...centroid, place: place.id };
+      locations[place.id.toLowerCase()] = location;
+      locations[place.name.toLowerCase().trim()] = location;
+    }
+  } catch (error) {
+    // 404 = no site bound; anything else is logged. Either way only `home` is known.
+    if ((error as { response?: { status?: number } })?.response?.status !== 404) {
+      console.warn('[commandApi] Failed to fetch robot places:', error);
+    }
+  }
+  locationCache.set(robotId, { at: now, locations });
+  return locations;
+}
+
+/**
+ * Resolve a place name of the robot's site to coordinates
+ */
+export async function getLocationByName(
+  robotId: string,
+  name?: string
+): Promise<NamedLocation | undefined> {
   if (!name) return undefined;
 
-  const locations = await fetchNamedLocations();
+  const locations = await fetchNamedLocations(robotId);
   const key = name.toLowerCase().trim().replace(/\s+/g, '_');
 
   // Exact match first
@@ -103,6 +122,7 @@ const ENDPOINTS = {
   interpret: '/command/interpret',
   history: '/command/history',
   updateStatus: (id: string) => `/command/${id}/status`,
+  robotPlaces: (robotId: string) => `/robots/${robotId}/places`,
 } as const;
 
 // ============================================================================
@@ -168,8 +188,8 @@ export const commandApi = {
           interpretationId: interpretation.id,
         };
 
-        // Resolve named location to coordinates (from server)
-        const destination = await getLocationByName(interpretation.parameters.target);
+        // Resolve the place name against the robot's site
+        const destination = await getLocationByName(robotId, interpretation.parameters.target);
         if (destination) {
           payload.destination = destination;
         }

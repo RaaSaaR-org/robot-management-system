@@ -340,7 +340,7 @@ export const PROCESS_STEP_STATUS_LABELS: Record<ProcessStepStatus, string> = {
 
 /** Step action display labels (also the order the picker offers them in) */
 export const PROCESS_STEP_ACTION_LABELS: Record<StepActionType, string> = {
-  move_to_location: 'Move to zone',
+  move_to_location: 'Move to place',
   pickup_object: 'Pick up object',
   drop_object: 'Drop object',
   wait: 'Wait',

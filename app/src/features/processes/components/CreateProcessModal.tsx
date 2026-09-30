@@ -11,7 +11,9 @@ import { Plus, X } from 'lucide-react';
 import { Button, Checkbox, FormField, FormModal, Input, Select, Textarea, toast } from '@/shared/components/ui';
 import { getErrorMessage } from '@/shared/utils';
 import { useRobots } from '@/features/robots/hooks/useRobots';
-import { useZones } from '@/features/fleet/hooks/useZones';
+import { twinApi } from '@/features/digitaltwin/api/twinApi';
+import { useSitePlaces, type SitePlaces } from '@/features/digitaltwin/hooks/useSitePlaces';
+import type { DigitalTwinDTO } from '@/features/digitaltwin/types/twin.types';
 import { useTasks } from '../hooks/useTasks';
 import {
   PROCESS_PRIORITY_LABELS,
@@ -41,12 +43,20 @@ const ACTION_OPTIONS = (Object.keys(PROCESS_STEP_ACTION_LABELS) as StepActionTyp
 }));
 
 /**
- * A step being edited. `zoneId` is local to the form: the server is sent
- * coordinates, because `TaskQueue` hands `actionConfig.location` to the robot's
- * mover as a `RobotLocation` and a zone *name* has no x/y.
+ * A step being edited. A "Move to place" step stores a place reference,
+ * `actionConfig.place = { twinId, placeId }`; the server resolves it to the
+ * place centroid when the step runs (TASK-332). `siteId` is local to the form:
+ * the site picked before its place is.
  */
 interface StepDraft extends CreateProcessStep {
-  zoneId?: string;
+  siteId?: string;
+}
+
+function stepPlace(step: StepDraft): { twinId: string; placeId: string } | undefined {
+  const place = step.actionConfig.place as { twinId?: unknown; placeId?: unknown } | undefined;
+  return typeof place?.twinId === 'string' && typeof place.placeId === 'string'
+    ? { twinId: place.twinId, placeId: place.placeId }
+    : undefined;
 }
 
 const DEFAULT_ACTION: StepActionType = 'move_to_location';
@@ -60,7 +70,7 @@ function stepProblem(step: StepDraft): string | undefined {
   if (!step.name.trim()) return 'Name every step, or remove the empty ones.';
   switch (step.actionType) {
     case 'move_to_location':
-      return step.actionConfig.location ? undefined : 'Pick a zone for every "Move to zone" step.';
+      return stepPlace(step) ? undefined : 'Pick a site and a place for every "Move to place" step.';
     case 'pickup_object':
       return String(step.actionConfig.objectId ?? '').trim()
         ? undefined
@@ -77,7 +87,8 @@ function stepProblem(step: StepDraft): string | undefined {
 export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobotId }: CreateProcessModalProps) {
   const { createTask, clearError } = useTasks();
   const { robots, isLoading: robotsLoading, fetchRobots } = useRobots();
-  const { zones, isLoading: zonesLoading } = useZones();
+  const placesOf = useSitePlaces();
+  const [sites, setSites] = useState<DigitalTwinDTO[] | null>(null);
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -101,6 +112,18 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
     setErrors({});
     setFormError(undefined);
     void fetchRobots();
+    let cancelled = false;
+    twinApi
+      .listTwins()
+      .then((list) => {
+        if (!cancelled) setSites(list);
+      })
+      .catch(() => {
+        if (!cancelled) setSites([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen, preselectedRobotId, fetchRobots]);
 
   // Every robot is listed with its status: an automation can be queued for a
@@ -111,38 +134,23 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
   );
   const noneOnline = robots.length > 0 && !robots.some((r) => r.status === 'online' || r.status === 'busy');
 
-  const zoneOptions = useMemo(
-    () => zones.map((z) => ({ value: z.id, label: `${z.name} · floor ${z.floor}` })),
-    [zones],
-  );
+  const siteOptions = useMemo(() => (sites ?? []).map((t) => ({ value: t.id, label: t.name })), [sites]);
+  /** The chosen robot's site, the default for a new "Move to place" step. */
+  const robotSiteId = robots.find((r) => r.id === robotId)?.twinId ?? undefined;
 
   const patchStep = (index: number, patch: Partial<StepDraft>) =>
     setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
 
   /** Switching action type drops the previous action's parameters with it. */
   const changeAction = (index: number, actionType: StepActionType) =>
-    patchStep(index, { actionType, actionConfig: {}, zoneId: undefined });
+    patchStep(index, { actionType, actionConfig: {}, siteId: actionType === 'move_to_location' ? robotSiteId : undefined });
 
-  const selectZone = (index: number, zoneId: string) => {
-    const zone = zones.find((z) => z.id === zoneId);
-    if (!zone) {
-      patchStep(index, { zoneId: '', actionConfig: {} });
-      return;
-    }
-    // The zone's centre, derived exactly as the robot agent derives it
-    // (robot-agent/src/tools/navigation.ts).
-    patchStep(index, {
-      zoneId,
-      actionConfig: {
-        location: {
-          x: Math.round(zone.bounds.x + zone.bounds.width / 2),
-          y: Math.round(zone.bounds.y + zone.bounds.height / 2),
-          floor: zone.floor,
-          zone: zone.name,
-        },
-      },
-    });
-  };
+  /** A new site clears the place: place ids are only unique within one site. */
+  const selectSite = (index: number, siteId: string) =>
+    patchStep(index, { siteId: siteId || undefined, actionConfig: {} });
+
+  const selectPlace = (index: number, siteId: string, placeId: string) =>
+    patchStep(index, { actionConfig: placeId ? { place: { twinId: siteId, placeId } } : {} });
 
   const handleSubmit = async () => {
     const next: FieldErrors = {};
@@ -262,16 +270,16 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
                     onChange={(e) => changeAction(index, e.target.value as StepActionType)}
                   />
                   {step.actionType === 'move_to_location' && (
-                    <Select
-                      aria-label={`Step ${index + 1} zone`}
-                      className="w-56"
-                      fullWidth={false}
-                      size="sm"
-                      placeholder={zonesLoading ? 'Loading zones…' : 'Choose a zone'}
-                      options={zoneOptions}
-                      value={step.zoneId ?? ''}
-                      invalid={invalid && !step.actionConfig.location}
-                      onChange={(e) => selectZone(index, e.target.value)}
+                    <PlacePicker
+                      index={index}
+                      siteId={step.siteId ?? ''}
+                      placeId={stepPlace(step)?.placeId ?? ''}
+                      siteOptions={siteOptions}
+                      sitesLoading={sites === null}
+                      places={step.siteId ? placesOf(step.siteId) : undefined}
+                      invalid={invalid && !stepPlace(step)}
+                      onSite={(siteId) => selectSite(index, siteId)}
+                      onPlace={(placeId) => selectPlace(index, step.siteId ?? '', placeId)}
                     />
                   )}
                   {step.actionType === 'pickup_object' && (
@@ -322,7 +330,7 @@ export function CreateProcessModal({ isOpen, onClose, onSuccess, preselectedRobo
               variant="ghost"
               size="sm"
               leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}
-              onClick={() => setSteps((prev) => [...prev, newStep()])}
+              onClick={() => setSteps((prev) => [...prev, { ...newStep(), siteId: robotSiteId }])}
             >
               Add step
             </Button>
@@ -344,4 +352,68 @@ interface FieldErrors {
   name?: string;
   robot?: string;
   steps?: string;
+}
+
+interface PlacePickerProps {
+  index: number;
+  siteId: string;
+  placeId: string;
+  siteOptions: { value: string; label: string }[];
+  sitesLoading: boolean;
+  places: SitePlaces | undefined;
+  invalid: boolean;
+  onSite: (siteId: string) => void;
+  onPlace: (placeId: string) => void;
+}
+
+/** Site, then one of its reachable places. Keepouts are never offered. */
+function PlacePicker({
+  index,
+  siteId,
+  placeId,
+  siteOptions,
+  sitesLoading,
+  places,
+  invalid,
+  onSite,
+  onPlace,
+}: PlacePickerProps) {
+  const placeOptions =
+    places?.status === 'ready' ? places.places.map((p) => ({ value: p.id, label: p.name })) : [];
+  const placePlaceholder = !siteId
+    ? 'Choose a site first'
+    : places?.status === 'loading'
+      ? 'Loading places…'
+      : places?.status === 'error'
+        ? "Couldn't load places"
+        : placeOptions.length === 0
+          ? 'This site has no places'
+          : 'Choose a place';
+  return (
+    <>
+      <Select
+        aria-label={`Step ${index + 1} site`}
+        className="w-44"
+        fullWidth={false}
+        size="sm"
+        placeholder={sitesLoading ? 'Loading sites…' : siteOptions.length === 0 ? 'No sites yet' : 'Choose a site'}
+        options={siteOptions}
+        value={siteId}
+        invalid={invalid && !siteId}
+        onChange={(e) => onSite(e.target.value)}
+      />
+      <Select
+        aria-label={`Step ${index + 1} place`}
+        className="w-48"
+        fullWidth={false}
+        size="sm"
+        placeholder={placePlaceholder}
+        options={placeOptions}
+        value={placeId}
+        disabled={!siteId}
+        invalid={invalid && Boolean(siteId) && !placeId}
+        onChange={(e) => onPlace(e.target.value)}
+      />
+    </>
+  );
 }

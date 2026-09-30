@@ -221,6 +221,13 @@ export class TaskDistributor extends EventEmitter {
         return false;
       }
 
+      // TASK-332: a "Move to place" step only goes to a robot bound to the
+      // place's site — the place's coordinates mean nothing in another twin.
+      const requiredTwinId = task.actionConfig.requiredTwinId;
+      if (typeof requiredTwinId === 'string' && robot.twinId !== requiredTwinId) {
+        return false;
+      }
+
       // Must be online or busy
       if (!['online', 'busy'].includes(robot.status)) {
         return false;

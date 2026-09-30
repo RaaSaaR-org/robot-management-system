@@ -225,6 +225,24 @@ describe('distributeTask', () => {
     expect(result.reason).toBe('No eligible robots available');
   });
 
+  it('only considers robots bound to actionConfig.requiredTwinId (TASK-332)', async () => {
+    robotManager.listRobots.mockResolvedValue([
+      makeRobot({ id: 'elsewhere', status: 'online', twinId: 'twin2' }),
+      makeRobot({ id: 'unbound', status: 'online', twinId: null }),
+    ]);
+
+    const task = makeTask({ actionConfig: { requiredTwinId: 'twin1' } });
+    const none = await taskDistributor.findEligibleRobotsForReassignment(task, []);
+    expect(none).toEqual([]);
+
+    robotManager.listRobots.mockResolvedValue([
+      makeRobot({ id: 'elsewhere', status: 'online', twinId: 'twin2' }),
+      makeRobot({ id: 'onsite', status: 'online', twinId: 'twin1' }),
+    ]);
+    const some = await taskDistributor.findEligibleRobotsForReassignment(task, []);
+    expect(some.map((r) => r.id)).toEqual(['onsite']);
+  });
+
   it('filters robots lacking required capabilities', async () => {
     robotManager.listRobots.mockResolvedValue([
       makeRobot({ id: 'noskill', status: 'online', capabilities: ['walk'] }),

@@ -463,7 +463,7 @@ describe('CommandInterpreter.interpretAndExecute', () => {
     // target should be reflected in action config
     expect(taskInput.actionConfig).toMatchObject({
       target: 'warehouse',
-      zoneName: 'warehouse',
+      placeName: 'warehouse',
     });
     expect(source).toBe('command');
   });

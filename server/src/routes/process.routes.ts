@@ -23,6 +23,7 @@ import type {
   CreateRobotTaskRequest,
   RobotTaskListFilters,
 } from '../types/robotTask.types.js';
+import { BadRequestError } from '../utils/errors.js';
 
 export const processRoutes = Router();
 
@@ -87,6 +88,9 @@ processRoutes.post('/', async (req: Request, res: Response) => {
     const process = await processManager.createDefinition(request, createdBy);
     res.status(201).json(process);
   } catch (error) {
+    if (error instanceof BadRequestError) {
+      return res.status(400).json({ error: error.message });
+    }
     console.error('Error creating process:', error);
     res.status(500).json({ error: 'Failed to create process' });
   }
@@ -105,6 +109,9 @@ processRoutes.put('/:id', async (req: Request, res: Response) => {
     }
     res.json(process);
   } catch (error) {
+    if (error instanceof BadRequestError) {
+      return res.status(400).json({ error: error.message });
+    }
     console.error('Error updating process:', error);
     res.status(500).json({ error: 'Failed to update process' });
   }
