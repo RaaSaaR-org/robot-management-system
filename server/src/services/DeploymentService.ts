@@ -42,6 +42,15 @@ import {
   DEFAULT_CANARY_CONFIG,
   ROBOT_SWITCH_TIMEOUT_MS,
 } from '../types/deployment.types.js';
+import { ConflictError, NotFoundError } from '../utils/errors.js';
+
+/** A deployment in one of these states is not rolling out, so it may be deleted. */
+export const DELETABLE_DEPLOYMENT_STATUSES: readonly DeploymentStatus[] = [
+  'pending',
+  'failed',
+  'rolled_back',
+  'cancelled',
+];
 
 // ============================================================================
 // DEPLOYMENT SERVICE
@@ -433,6 +442,30 @@ export class DeploymentService extends EventEmitter {
 
     console.log(`[DeploymentService] Cancelled deployment: ${deploymentId}`);
     return updated!;
+  }
+
+  /**
+   * Delete a deployment that is not rolling out (TASK-272): pending, failed,
+   * rolled back or cancelled. A live one must be rolled back or cancelled
+   * first. Returns the removed deployment for the audit log.
+   */
+  async deleteDeployment(deploymentId: string): Promise<Deployment> {
+    const deployment = await deploymentRepository.findById(deploymentId);
+    if (!deployment) {
+      throw new NotFoundError('Deployment', deploymentId);
+    }
+    if (!DELETABLE_DEPLOYMENT_STATUSES.includes(deployment.status)) {
+      throw new ConflictError(
+        `Deployment is ${deployment.status} — roll it back or cancel it first, then delete it`
+      );
+    }
+
+    this.clearStageTimer(deploymentId);
+    this.activeDeployments.delete(deploymentId);
+    await deploymentRepository.delete(deploymentId);
+
+    console.log(`[DeploymentService] Deleted deployment: ${deploymentId}`);
+    return deployment;
   }
 
   // ============================================================================

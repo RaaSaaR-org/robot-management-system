@@ -9,9 +9,11 @@ import express from 'express';
 import request from 'supertest';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
-const { mockDeploymentService, mockDeploymentMetricsService, mockModelVersionRepository } =
+const { mockDeploymentService, mockDeploymentMetricsService, mockModelVersionRepository, mockAudit } =
   vi.hoisted(() => ({
+    mockAudit: vi.fn(),
     mockDeploymentService: {
+      deleteDeployment: vi.fn(),
       createDeployment: vi.fn(),
       listDeployments: vi.fn(),
       getActiveDeployments: vi.fn(),
@@ -41,6 +43,8 @@ vi.mock('../services/DeploymentService.js', () => ({
 vi.mock('../services/DeploymentMetricsService.js', () => ({
   deploymentMetricsService: mockDeploymentMetricsService,
 }));
+
+vi.mock('../services/buildAudit.js', () => ({ auditBuildAct: mockAudit }));
 
 vi.mock('../repositories/index.js', () => ({
   modelVersionRepository: mockModelVersionRepository,
@@ -462,6 +466,44 @@ describe('Deployments Routes', () => {
       expect(response.status).toBe(400);
       expect(response.body.error).toBe('Failed to cancel deployment');
       expect(response.body.error).not.toContain('cannot cancel');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // DELETE /api/deployments/:id (TASK-272)
+  // --------------------------------------------------------------------------
+
+  describe('DELETE /api/deployments/:id', () => {
+    it('deletes the deployment, stops monitoring and records the removed row', async () => {
+      mockDeploymentService.deleteDeployment.mockResolvedValue({ ...BASE_DEPLOYMENT, status: 'cancelled' });
+
+      const response = await request(app).delete('/api/deployments/dep-001');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ id: 'dep-001', outcome: 'deleted' });
+      expect(mockDeploymentMetricsService.stopMonitoring).toHaveBeenCalledWith('dep-001');
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resourceType: 'deployment',
+          resourceId: 'dep-001',
+          action: 'delete',
+          actorId: 'user-123',
+          metadata: expect.objectContaining({ status: 'cancelled' }),
+        })
+      );
+    });
+
+    it('answers 409 for a live deployment and records nothing', async () => {
+      const { ConflictError } = await import('../utils/errors.js');
+      mockDeploymentService.deleteDeployment.mockRejectedValue(
+        new ConflictError('Deployment is canary — roll it back or cancel it first, then delete it')
+      );
+
+      const response = await request(app).delete('/api/deployments/dep-001');
+
+      expect(response.status).toBe(409);
+      expect(response.body.error).toContain('roll it back or cancel it first');
+      expect(mockAudit).not.toHaveBeenCalled();
     });
   });
 });

@@ -9,12 +9,21 @@
  *   through here. (TASK-238)
  * @feature deployment
  */
-import { modelVersionRepository, skillDefinitionRepository } from '../repositories/index.js';
+import {
+  deploymentRepository,
+  modelVersionRepository,
+  skillDefinitionRepository,
+} from '../repositories/index.js';
 import type {
   CreateModelVersionInput,
+  DeploymentStatus,
   ModelVersion,
   UpdateModelVersionInput,
 } from '../types/vla.types.js';
+import { ConflictError, NotFoundError } from '../utils/errors.js';
+
+/** A deployment in one of these states no longer holds its model in place. */
+const FINISHED_DEPLOYMENT_STATUSES: readonly DeploymentStatus[] = ['failed', 'rolled_back', 'cancelled'];
 
 export class ModelRegistryService {
   /**
@@ -44,6 +53,46 @@ export class ModelRegistryService {
       await this.syncSkillLink(id, input.skillId);
     }
     return modelVersion;
+  }
+
+  /**
+   * Archive a model version — the registry's delete (TASK-272). A model is
+   * never removed: deployments, evaluation episodes, checkpoints, lineage and
+   * research publications all point at it. Refused while a deployment of it is
+   * not finished, or while a skill still runs it. Idempotent on an archived one.
+   * Returns the version as it was before, for the audit log.
+   */
+  async archive(id: string): Promise<{ before: ModelVersion; modelVersion: ModelVersion }> {
+    const before = await modelVersionRepository.findById(id);
+    if (!before) {
+      throw new NotFoundError('Model version', id);
+    }
+    if (before.deploymentStatus === 'archived') {
+      return { before, modelVersion: before };
+    }
+
+    const live = (await deploymentRepository.findByModelVersion(id)).filter(
+      (deployment) => !FINISHED_DEPLOYMENT_STATUSES.includes(deployment.status)
+    );
+    if (live.length > 0) {
+      throw new ConflictError(
+        `Model is in ${live.length} deployment(s) that are not finished (${live[0].status}) — ` +
+          'roll them back or cancel them first, then archive it'
+      );
+    }
+
+    const runningSkills = await skillDefinitionRepository.findAll({ linkedModelVersionId: id });
+    if (runningSkills.data.length > 0) {
+      throw new ConflictError(
+        `Skill "${runningSkills.data[0].name}" runs this model — link it to another model first, then archive it`
+      );
+    }
+
+    const modelVersion = await modelVersionRepository.update(id, { deploymentStatus: 'archived' });
+    if (!modelVersion) {
+      throw new ConflictError('Archive rejected by the registry');
+    }
+    return { before, modelVersion };
   }
 
   /**
