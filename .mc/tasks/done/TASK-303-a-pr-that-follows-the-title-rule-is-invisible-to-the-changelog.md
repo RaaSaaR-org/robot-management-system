@@ -3,7 +3,7 @@ id: "TASK-303"
 aliases: []
 title: "A PR that follows the title rule is invisible to the changelog"
 slug: "a-pr-that-follows-the-title-rule-is-invisible-to-the-changelog"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []

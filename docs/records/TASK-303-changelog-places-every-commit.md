@@ -1,7 +1,7 @@
 # TASK-303 — The changelog places every commit
 
 **Date:** 2026-09-30
-**Task:** `.mc/tasks/todo/TASK-303-a-pr-that-follows-the-title-rule-is-invisible-to-the-changelog.md`
+**Task:** `.mc/tasks/done/TASK-303-a-pr-that-follows-the-title-rule-is-invisible-to-the-changelog.md`
 
 Immutable once committed. Later changes of mind get their own record.
 
