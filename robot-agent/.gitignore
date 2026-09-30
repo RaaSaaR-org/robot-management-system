@@ -5,3 +5,6 @@ data/pointclouds-real/
 data/*-routes-cache*.json
 # Control-lease high-water generation (TASK-314): per-robot runtime state.
 data/control-lease-*.json
+# Fetched place graphs (TASK-200 twin, TASK-328 per-robot site binding)
+data/place-graph-cache*.json
+data/place-graph-cache*.json.tmp

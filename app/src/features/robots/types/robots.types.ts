@@ -157,6 +157,11 @@ export interface RobotLocation {
   floor?: string;
   zone?: string;
   heading?: number;
+  /**
+   * The robot's pose is registered to its site's twin (TASK-328). Only robots
+   * with `siteAligned === true` may be drawn on the site map.
+   */
+  siteAligned?: boolean;
 }
 
 // ============================================================================

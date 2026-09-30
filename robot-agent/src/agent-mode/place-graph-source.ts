@@ -1,9 +1,11 @@
 /**
  * @file place-graph-source.ts
  * @description Where a place graph comes from when it is not a file somebody
- *              hand-wrote (TASK-200): the platform's
- *              `/api/digital-twins/:id/places/_index.json`, cached to disk so the
- *              server being down is a stale map rather than no map.
+ *              hand-wrote: the platform's
+ *              `/api/digital-twins/:id/places/_index.json` for an explicitly
+ *              named twin (TASK-200), or `/api/robots/:id/places` — the twin the
+ *              robot is BOUND to (TASK-328) — cached to disk so the server being
+ *              down is a stale map rather than no map.
  *
  *              The server emits the graph in EXACTLY the shape the resolver
  *              reads, so this module does zero translation — it validates with
@@ -14,7 +16,7 @@
  */
 
 import { platformAuthHeaders } from '../utils/platform-auth.js';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { parsePlaceGraph } from './place-resolver.js';
 import type { PlaceGraph } from './place-resolver.js';
@@ -28,8 +30,14 @@ import type { PlaceGraph } from './place-resolver.js';
  */
 export const PLACE_GRAPH_FETCH_TIMEOUT_MS = 5000;
 
-/** Where the fetched graph ended up coming from. */
-export type PlaceGraphOrigin = 'server' | 'cache' | 'none';
+/**
+ * Where the fetched graph ended up coming from.
+ *
+ * `unbound` is the platform's authoritative "this robot has no site" (TASK-328):
+ * not a failure, so it is never papered over with a cached graph from a binding
+ * that no longer exists.
+ */
+export type PlaceGraphOrigin = 'server' | 'cache' | 'none' | 'unbound';
 
 export interface PlaceGraphResult {
   graph: PlaceGraph | null;
@@ -38,16 +46,34 @@ export interface PlaceGraphResult {
   error?: string;
 }
 
-export interface PlaceGraphSourceOptions {
+/**
+ * Which graph to ask for: a named twin's (`PLACE_TWIN_ID`), or whatever twin the
+ * robot is bound to on the platform (`Robot.twinId`).
+ */
+export type PlaceGraphTarget = { twinId: string } | { robotId: string };
+
+/** The server's 404 body for a robot without a site (TASK-327). */
+export const NO_SITE_ERROR = 'robot has no site';
+
+export type PlaceGraphSourceOptions = PlaceGraphTarget & {
   /** Platform base URL, e.g. `http://localhost:3001`. */
   serverUrl: string;
-  /** The `DigitalTwin` whose zones define this robot's places. */
-  twinId: string;
   /** Absolute path of the on-disk cache copy. */
   cachePath: string;
   timeoutMs?: number;
   /** Injected for tests; defaults to global `fetch`. */
   fetchImpl?: typeof fetch;
+};
+
+/**
+ * The on-disk cache path for a binding source: one file per robot, so two
+ * agents sharing a data directory never boot from each other's site.
+ */
+export function robotCachePath(cachePath: string, robotId: string): string {
+  const safe = robotId.replace(/[^A-Za-z0-9_-]/g, '_');
+  return cachePath.endsWith('.json')
+    ? `${cachePath.slice(0, -'.json'.length)}.robot-${safe}.json`
+    : `${cachePath}.robot-${safe}`;
 }
 
 function message(err: unknown): string {
@@ -63,14 +89,16 @@ function message(err: unknown): string {
  */
 export class PlaceGraphSource {
   private readonly serverUrl: string;
-  private readonly twinId: string;
+  private readonly target: PlaceGraphTarget;
   private readonly cachePath: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  /** The last failure line logged; cleared by a successful fetch. */
+  private lastReported: string | null = null;
 
   constructor(options: PlaceGraphSourceOptions) {
     this.serverUrl = options.serverUrl.replace(/\/+$/, '');
-    this.twinId = options.twinId;
+    this.target = 'twinId' in options ? { twinId: options.twinId } : { robotId: options.robotId };
     this.cachePath = options.cachePath;
     this.timeoutMs = options.timeoutMs ?? PLACE_GRAPH_FETCH_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
@@ -78,7 +106,9 @@ export class PlaceGraphSource {
 
   /** The endpoint this source reads. */
   get url(): string {
-    return `${this.serverUrl}/api/digital-twins/${encodeURIComponent(this.twinId)}/places/_index.json`;
+    return 'twinId' in this.target
+      ? `${this.serverUrl}/api/digital-twins/${encodeURIComponent(this.target.twinId)}/places/_index.json`
+      : `${this.serverUrl}/api/robots/${encodeURIComponent(this.target.robotId)}/places`;
   }
 
   /** The on-disk copy's path. */
@@ -114,19 +144,33 @@ export class PlaceGraphSource {
   async refresh(): Promise<PlaceGraphResult> {
     try {
       const res = await this.fetchImpl(this.url, { headers: platformAuthHeaders(), signal: AbortSignal.timeout(this.timeoutMs) });
+      if (res.status === 404 && 'robotId' in this.target && (await this.isNoSite(res))) {
+        // The platform answered, and the answer is "no site". Drop the cache: it
+        // describes a binding that no longer exists, and booting from it while
+        // the server is down would name places at a site the robot has left.
+        this.dropCache();
+        return { graph: null, origin: 'unbound' };
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as unknown;
       const graph = this.assertTwin(parsePlaceGraph(body, this.url));
       this.writeCache(body);
+      this.lastReported = null;
       return { graph, origin: 'server' };
     } catch (err) {
       const error = message(err);
       const cached = this.loadCached();
       if (cached) {
-        console.warn(`[PlaceGraph] ${this.url} unavailable (${error}) — using the cached copy`);
+        this.report('warn', `[PlaceGraph] ${this.url} unavailable (${error}) — using the cached copy`);
         return { graph: cached, origin: 'cache', error };
       }
-      console.warn(`[PlaceGraph] ${this.url} unavailable (${error}) and no cache — place stays UNKNOWN`);
+      // An explicit PLACE_TWIN_ID that cannot be loaded is a misconfiguration
+      // worth a warning. The binding source runs on EVERY robot with no place
+      // env at all, so a platform it cannot reach is routine, not a fault.
+      this.report(
+        'robotId' in this.target ? 'info' : 'warn',
+        `[PlaceGraph] ${this.url} unavailable (${error}) and no cache — place stays UNKNOWN`,
+      );
       return { graph: null, origin: 'none', error };
     }
   }
@@ -142,13 +186,52 @@ export class PlaceGraphSource {
    * is asserted rather than logged.
    */
   private assertTwin(graph: PlaceGraph): PlaceGraph {
-    if (graph.frame.twinId !== this.twinId) {
+    if ('robotId' in this.target) {
+      // A binding source does not know the twin in advance — the binding is the
+      // platform's to change — but whatever it serves must still NAME its twin,
+      // or nothing downstream could tell which origin the polygons are about.
+      if (!graph.frame.twinId) {
+        throw new Error('frame.twinId is missing — a site graph must name the twin it is expressed in');
+      }
+      return graph;
+    }
+    if (graph.frame.twinId !== this.target.twinId) {
       throw new Error(
-        `frame.twinId is ${JSON.stringify(graph.frame.twinId ?? null)}, expected ${JSON.stringify(this.twinId)} — ` +
+        `frame.twinId is ${JSON.stringify(graph.frame.twinId ?? null)}, expected ${JSON.stringify(this.target.twinId)} — ` +
           'places from another twin are expressed about another origin',
       );
     }
     return graph;
+  }
+
+  /**
+   * Log a refresh failure once per distinct message: the source refreshes on a
+   * timer (TASK-328), and the same "server down" line every minute is how an
+   * operator learns to stop reading the log.
+   */
+  private report(level: 'info' | 'warn', line: string): void {
+    if (line === this.lastReported) return;
+    this.lastReported = line;
+    if (level === 'warn') console.warn(line);
+    else console.log(line);
+  }
+
+  /** Whether a 404 is the server's "robot has no site" rather than a missing robot or route. */
+  private async isNoSite(res: Response): Promise<boolean> {
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      return body?.error === NO_SITE_ERROR;
+    } catch {
+      return false;
+    }
+  }
+
+  private dropCache(): void {
+    try {
+      rmSync(this.cachePath, { force: true });
+    } catch (err) {
+      console.warn(`[PlaceGraph] could not remove stale cache ${this.cachePath}: ${message(err)}`);
+    }
   }
 
   /**

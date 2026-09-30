@@ -66,4 +66,32 @@ describe('assessFrameRegistration', () => {
     // that the two origins coincide.
     expect(assessFrameRegistration(graph({ id: 'x', kind: 'lidar-slam' })).registered).toBe(false);
   });
+
+  describe('with the pose frame declared (TASK-328)', () => {
+    const twinGraph = () => graph({ id: 'twin-demo', kind: 'site', twinId: 'twin-demo' });
+
+    it('registers a twin graph on a SIM robot — its world origin is the twin origin', () => {
+      expect(assessFrameRegistration(twinGraph(), { poseFrame: 'twin' })).toEqual({
+        registered: true,
+        how: 'sim-twin-origin',
+      });
+    });
+
+    it('keeps real hardware + twin UNREGISTERED with exactly the old reason', () => {
+      const declared = assessFrameRegistration(twinGraph(), { poseFrame: 'odom' });
+      const legacy = assessFrameRegistration(twinGraph());
+      expect(declared.registered).toBe(false);
+      expect(declared).toEqual(legacy);
+    });
+
+    it('leaves a sim-kind graph unchanged for either pose frame', () => {
+      const sim = graph({ id: 'warehouse-sim', kind: 'sim' });
+      expect(assessFrameRegistration(sim, { poseFrame: 'twin' })).toEqual({ registered: true, how: 'identity' });
+      expect(assessFrameRegistration(sim, { poseFrame: 'odom' })).toEqual({ registered: true, how: 'identity' });
+    });
+
+    it('does not register a twin-less site graph just because the robot is a sim', () => {
+      expect(assessFrameRegistration(graph({ id: 'depot', kind: 'site' }), { poseFrame: 'twin' }).registered).toBe(false);
+    });
+  });
 });

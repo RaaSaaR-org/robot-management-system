@@ -583,6 +583,9 @@ export interface Config {
      * map the robot has no vocabulary of places, so every answer is UNKNOWN.
      * Defaulting to the warehouse graph would make a robot in the room scene
      * confidently name warehouse aisles it has never been in.
+     *
+     * Precedence of the three place sources: `PLACE_GRAPH_PATH` >
+     * `PLACE_TWIN_ID` > the robot's site binding (TASK-328).
      */
     graphPath: string;
     /**
@@ -623,10 +626,24 @@ export interface Config {
      * fetched for the wrong twin is expressed about the wrong origin and is
      * REJECTED, not adapted. `PLACE_GRAPH_PATH` still wins when both are set:
      * an explicit local file is the sim/bench escape hatch.
+     *
+     * With neither set, the robot loads the twin it is BOUND to on the platform
+     * (`Robot.twinId`, via `GET /api/robots/:id/places`, TASK-328). A robot with
+     * no site gets a 404 "robot has no site", which is not an error: place
+     * stays UNKNOWN. This variable overrides the binding.
      */
     twinId: string;
     /**
-     * Where the fetched place graph is cached (`PLACE_GRAPH_CACHE_PATH`).
+     * How often a platform-served graph (`PLACE_TWIN_ID` or the binding) is
+     * re-fetched, in ms (`PLACE_GRAPH_REFRESH_MS`, default 60000; 0 = boot
+     * only). It is what makes a Site change in the UI reach the robot without a
+     * restart. An unchanged graph keeps the tracker and its drift budget.
+     */
+    refreshMs: number;
+    /**
+     * Where the fetched place graph is cached (`PLACE_GRAPH_CACHE_PATH`). The
+     * binding source caches per robot, beside it:
+     * `place-graph-cache.robot-<robotId>.json`.
      *
      * The robot boots from this file, not from the network: Agent Mode's
      * contract is that the platform being down never stalls a block, and that
@@ -1010,6 +1027,7 @@ export const config: Config = {
     hysteresisMarginM: envFloat(process.env.PLACE_HYSTERESIS_MARGIN_M, 0.3),
     faultNullPose: process.env.PLACE_FAULT_NULL_POSE === 'true',
     twinId: process.env.PLACE_TWIN_ID || '',
+    refreshMs: envFloat(process.env.PLACE_GRAPH_REFRESH_MS, 60_000),
     cachePath: process.env.PLACE_GRAPH_CACHE_PATH || './data/place-graph-cache.json',
     keepoutMarginM: envFloat(process.env.PLACE_KEEPOUT_MARGIN_M, 0.5),
   },
