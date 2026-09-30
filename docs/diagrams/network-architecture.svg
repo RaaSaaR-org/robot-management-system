@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 810" width="1240" height="810" role="img" aria-labelledby="t d">
+<title id="t">NeoDEM network architecture</title>
+<desc id="d">Operators reach a Kubernetes ingress over HTTPS. The server on port 3001 connects to Postgres 5432, NATS 4222 and RustFS 9000, and dials each robot-agent on 41243. Teleop sockets go from the browser straight to the agent and are bound to a control lease. The robot-agent reaches its sidecar on 8767 and the G1 over DDS domain 0. vla-server on 8000 and polling workers run on a GPU box. Egress to Gemini and Hugging Face uses 443. Open this file in a browser and click a box to see only its links. Hover a line for details.</desc>
+<style>
+  svg { --bg:#f5f7fa; --panel:#ffffff; --inset:#eef2f6; --ink:#0f1b2a; --ink2:#3a4b5e; --ink3:#566a80; --line:#d5dde6; --strong:#b4c1ce; --key:#3a4b5e; --primary:#0f7a60; --onp:#ffffff; --sim:#5b4bb0; }
+  @media (prefers-color-scheme: dark) {
+    svg { --bg:#080f18; --panel:#101d2c; --inset:#0b1522; --ink:#f1f5fc; --ink2:#b2c3d5; --ink3:#9aafc5; --line:#243649; --strong:#3b546c; --key:#b2c3d5; --primary:#b2f8df; --onp:#0a2225; --sim:#c5b9ef; }
+  }
+  text { font-family: Inter, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
+  .bg { fill: var(--bg); }
+  .hint { font-size: 11px; fill: var(--ink3); }
+  .zlabel { font-size: 11px; font-weight: 600; letter-spacing: .12em; fill: var(--ink3); }
+  .box { fill: var(--panel); stroke: var(--strong); stroke-width: 1.2; }
+  .box.key { stroke: var(--key); stroke-width: 1.6; }
+  .box.sim { stroke: var(--sim); stroke-dasharray: 4 3; }
+  .box.ext { fill: var(--inset); }
+  .bt { font-family: Archivo, Inter, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 600; }
+  .bs { font-size: 11.5px; fill: var(--ink3); }
+  .bm { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; fill: var(--ink2); }
+  .li { font-size: 12px; fill: var(--ink2); }
+  .el { font-size: 11px; fill: var(--ink2); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+  .el.m { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 10.5px; }
+  .divider { stroke: var(--line); }
+  .e { fill: none; stroke: var(--ink3); stroke-width: 1.4; }
+  .e.opt { stroke-dasharray: 5 4; }
+  .e.direct { stroke: var(--primary); stroke-width: 1.8; stroke-dasharray: 6 4; }
+  .e.sim { stroke: var(--sim); stroke-dasharray: 4 3; }
+  .ah { fill: var(--ink3); } .ah.p { fill: var(--primary); } .ah.s { fill: var(--sim); }
+  .mk circle { fill: var(--primary); }
+  .mk text { fill: var(--onp); font-size: 10.5px; font-weight: 600; text-anchor: middle; }
+  /* chips unused here */
+  .chip rect { fill: var(--panel); stroke: var(--line); }
+  .chip { cursor: pointer; }
+  .chip:hover rect, .chip:focus rect { stroke: var(--primary); }
+  .chip.on rect { stroke: var(--primary); stroke-width: 2; }
+  .chip .cs { font-size: 11px; fill: var(--ink3); }
+  .zone { fill: var(--inset); stroke: var(--strong); stroke-dasharray: 5 4; }
+  .node { cursor: pointer; }
+  .node:focus .box { stroke: var(--primary); stroke-width: 2.4; }
+  .focus .edge { opacity: .12; }
+  .focus .node { opacity: .35; }
+  .focus .edge.hi, .focus .node.hi { opacity: 1; }
+  .node { transition: opacity 150ms; }
+  .edge, .chip rect { transition: opacity 150ms, stroke 150ms; }
+  @media (prefers-reduced-motion: reduce) { .edge, .chip rect { transition: none; } }
+</style>
+<rect class="bg" width="1240" height="810"/>
+<defs>
+          <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0 0 L10 5 L0 10 z"/></marker>
+          <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah p" d="M0 0 L10 5 L0 10 z"/></marker>
+          <marker id="as" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah s" d="M0 0 L10 5 L0 10 z"/></marker>
+        </defs>
+
+        <!-- zones -->
+        <rect class="zone" x="250" y="14" width="970" height="70" rx="12"/>
+        <text class="zlabel" x="266" y="44">INTERNET</text>
+        <text class="bs" x="266" y="62">egress on 443</text>
+        <rect class="zone" x="16" y="140" width="214" height="340" rx="12"/>
+        <text class="zlabel" x="32" y="162">OPERATOR</text>
+        <rect class="zone" x="250" y="140" width="440" height="470" rx="12"/>
+        <text class="zlabel" x="266" y="162">CLUSTER · HELM OR COMPOSE</text>
+        <rect class="zone" x="810" y="140" width="410" height="470" rx="12"/>
+        <text class="zlabel" x="1204" y="162" text-anchor="end">ROBOT EDGE · PER ROBOT LAN</text>
+        <rect class="zone" x="250" y="650" width="970" height="124" rx="12"/>
+        <text class="zlabel" x="1204" y="670" text-anchor="end">GPU BOX · SEPARATE REPOS</text>
+
+        <!-- ===== edges (drawn first, under nodes) ===== -->
+        <g class="edge" data-n="app ingress"><title>Operators reach the cluster over HTTPS through the ingress. In dev, vite on :1420 proxies /api and WS to :3001</title><path class="e" d="M212 200 H268" marker-end="url(#a)"/><text class="el" x="234" y="218">HTTPS</text></g>
+        <g class="edge" data-n="ingress nginx"><title>The ingress sends / to the app</title><path class="e" d="M420 200 H438" marker-end="url(#a)"/></g>
+        <g class="edge" data-n="ingress server"><title>Combined ingress (values-local): /api, /.well-known and /health go straight to the server</title><path class="e" d="M345 228 V288" marker-end="url(#a)"/><text class="el m" x="352" y="262">/api · WS</text></g>
+        <g class="edge" data-n="nginx server"><title>App-only ingress (values-production): the app nginx proxies /api, WS included, to API_UPSTREAM</title><path class="e opt" d="M540 228 V288" marker-end="url(#a)"/><text class="el m" x="547" y="262">/api proxy</text></g>
+        <g class="edge" data-n="quest app"><title>Quest 3 loads the app over USB adb reverse. WebXR accepts only the localhost origin</title><path class="e" d="M123 290 V230" marker-end="url(#a)"/><text class="el m" x="130" y="264">adb :1420</text></g>
+
+        <g class="edge" data-n="app quest roboctl agent"><title>Teleop straight to the agent: keyboard, gamepad and VR on WS :41243/ws/keyboard-teleop, bound to a control lease with {bind:{leaseId,generation}}. roboctl uses REST /api/v1 on the same port</title>
+          <path class="e direct" d="M212 428 H226 V112 H985 V288" marker-end="url(#ap)"/>
+          <path class="e direct" d="M212 318 H226"/>
+          <path class="e direct" d="M123 172 V112 H226"/>
+          <text class="el" x="300" y="130">direct to robot, skips the server</text>
+          <text class="el m" x="994" y="208">WS /ws/keyboard-teleop</text><text class="el m" x="994" y="192">lease-bound</text>
+          <text class="el m" x="994" y="224">REST /api/v1 (roboctl)</text>
+          <text class="el m" x="994" y="240">:41243</text>
+        </g>
+
+        <g class="edge" data-n="server agent"><title>Server to agent on :41243: pull registration (/api/v1/register + agent card), health every 30 s, safety heartbeat every 5 s, task push, recording start/stop, A2A JSON-RPC at /, control-lease install/renew/release (Bearer AGENT_MEMORY_TOKEN)</title><path class="e" d="M670 308 H828" marker-end="url(#a)"/><text class="el m" x="750" y="302" text-anchor="middle">A2A · REST :41243</text></g>
+        <g class="edge" data-n="server agent"><title>The server dials /ws/telemetry/:robotId per robot, about every 2 s, and rebroadcasts on /api/a2a/ws</title><path class="e" d="M670 334 H828" marker-end="url(#a)"/><text class="el m" x="750" y="328" text-anchor="middle">WS /ws/telemetry</text></g>
+        <g class="edge" data-n="server agent"><title>Agent to server on :3001 with Bearer NEODEM_SERVICE_TOKEN: compliance logs, Agent Mode events, fleet peers, incidents, eval episodes</title><path class="e" d="M830 360 H672" marker-end="url(#a)"/><text class="el m" x="750" y="354" text-anchor="middle">REST :3001 · token</text></g>
+
+        <g class="edge" data-n="server postgres"><title>Prisma over DATABASE_URL. Local dev uses a SQLite file instead</title><path class="e" d="M407 370 V448" marker-end="url(#a)"/><text class="el m" x="413" y="394">:5432</text></g>
+        <g class="edge" data-n="server nats"><title>NATS JetStream (optional): jobs.training.>, jobs.dataset.>, synthetic.jobs.>, plus KV</title><path class="e opt" d="M512 370 V448" marker-end="url(#a)"/><text class="el m" x="518" y="394">:4222</text></g>
+        <g class="edge" data-n="server rustfs"><title>RustFS S3 (optional): 8 buckets for datasets, checkpoints, models, logs, scans, twins, clips and patrol photos</title><path class="e opt" d="M620 370 V448" marker-end="url(#a)"/><text class="el m" x="626" y="394">:9000</text></g>
+
+        <g class="edge" data-n="worker twin server"><title>Workers poll /api/training/workers/* and /api/twin/workers/* with Bearer WORKER_API_TOKEN</title><path class="e" d="M300 678 V372" marker-end="url(#a)"/><path class="e" d="M500 678 V640 H300"/><text class="el m" transform="translate(292 560) rotate(-90)" text-anchor="middle">poll :3001</text></g>
+        <g class="edge" data-n="worker rustfs"><title>The training worker reads datasets and writes checkpoints through S3</title><path class="e opt" d="M400 678 V624 H620 V508" marker-end="url(#a)"/><text class="el m" x="628" y="580">S3 :9000</text></g>
+
+        <g class="edge" data-n="server gemini hf"><title>Server egress on 443: Gemini or OpenRouter for NL commands, HF Hub for dataset import</title><path class="e opt" d="M660 290 V74" marker-end="url(#a)"/><path class="e opt" d="M660 96 H995 V74" marker-end="url(#a)"/><text class="el m" transform="translate(652 230) rotate(-90)" text-anchor="middle">HTTPS :443</text></g>
+        <g class="edge" data-n="agent gemini"><title>Agent egress on 443: Genkit to Gemini or OpenRouter</title><path class="e opt" d="M860 288 V74" marker-end="url(#a)"/><text class="el m" transform="translate(852 236) rotate(-90)" text-anchor="middle">Genkit :443</text></g>
+
+        <g class="edge" data-n="agent g1sidecar"><title>HARDWARE_SIDECAR_URL: /health /state /action /estop /cameras/* /pointcloud/* /record/* /loco/*</title><path class="e" d="M890 370 V418" marker-end="url(#a)"/><text class="el m" x="896" y="400">:8767</text></g>
+        <g class="edge" data-n="agent sim"><title>G1 EDU sim profiles point HARDWARE_SIDECAR_URL at the sim facade, which serves the same contract</title><path class="e sim" d="M1025 370 V418" marker-end="url(#as)"/><text class="el m" x="1031" y="400">:8777</text></g>
+        <g class="edge" data-n="agent voice"><title>Agent Mode narration: POST /say. The server relays /voices and volume</title><path class="e opt" d="M1150 370 V418" marker-end="url(#a)"/><text class="el m" x="1156" y="400">:8768</text></g>
+        <g class="edge" data-n="g1sidecar bridge"><title>Read-only lowstate, hands, battery and odometry from the subscribe-only bridge on PC2</title><path class="e" d="M870 476 V528" marker-end="url(#a)"/><text class="el m" x="876" y="508">ZMQ :6001</text></g>
+        <g class="edge" data-n="bridge g1"><title>The bridge subscribes to rt/lowstate, rt/dex3/*/state, rt/lf/bmsstate and rt/odommodestate</title><path class="e" d="M935 558 H983" marker-end="url(#a)"/><text class="el m" x="941" y="550">DDS 0</text></g>
+        <g class="edge" data-n="g1sidecar g1"><title>Loco RPC on rt/api/sport/*, odometry and LiDAR over DDS domain 0. Head cameras over teleimager ZMQ :60000 or TCP :5600</title><path class="e" d="M930 476 V496 H1060 V528" marker-end="url(#a)"/><text class="el m" x="1068" y="512">DDS 0 · ZMQ :60000</text></g>
+
+        <g class="edge" data-n="agent vla"><title>VLA_SERVER_URL: /predict in the closed loop, /reset, /config, /load-adapter for LoRA hot-swap. No gRPC in use</title><path class="e opt" d="M1200 330 H1214 V708 H1202" marker-end="url(#a)"/><text class="el m" transform="translate(1230 520) rotate(90)" text-anchor="middle">HTTP :8000 /predict</text></g>
+        <g class="edge" data-n="vla groot"><title>GR00T backend over ZMQ :5555</title><path class="e opt" d="M1060 708 H1042" marker-end="url(#a)"/></g>
+        <g class="edge" data-n="agent ollama"><title>Agent Mode planner and VLM over the OpenAI-compatible /v1 and native /api/chat. The server uses it too when LLM_PROVIDER=ollama</title><path class="e opt" d="M850 370 V392 H790 V678" marker-end="url(#a)"/><text class="el m" transform="translate(782 540) rotate(-90)" text-anchor="middle">:11434 /v1</text></g>
+
+        <!-- ===== nodes ===== -->
+        <g class="node" data-id="gemini" tabindex="0"><rect class="box ext" x="600" y="26" width="300" height="46" rx="8"/><text class="bt" x="616" y="54">Gemini · OpenRouter</text></g>
+        <g class="node" data-id="hf" tabindex="0"><rect class="box ext" x="920" y="26" width="150" height="46" rx="8"/><text class="bt" x="936" y="54">HF Hub</text></g>
+        <g class="node" data-id="ghcr" tabindex="0"><rect class="box ext" x="1085" y="26" width="120" height="46" rx="8"/><text class="bt" x="1101" y="48">GHCR</text><text class="bs" x="1101" y="64">sha-tagged</text></g>
+
+        <g class="node" data-id="app" tabindex="0"><rect class="box key" x="34" y="172" width="178" height="56" rx="8"/><text class="bt" x="50" y="196">Browser · Tauri</text><text class="bm" x="50" y="214">dev :1420 → proxy</text></g>
+        <g class="node" data-id="quest" tabindex="0"><rect class="box" x="34" y="290" width="178" height="56" rx="8"/><text class="bt" x="50" y="314">Quest 3 · WebXR</text><text class="bs" x="50" y="332">USB, localhost origin</text></g>
+        <g class="node" data-id="roboctl" tabindex="0"><rect class="box" x="34" y="400" width="178" height="56" rx="8"/><text class="bt" x="50" y="424">roboctl</text><text class="bs" x="50" y="442">CLI for one agent</text></g>
+
+        <g class="node" data-id="ingress" tabindex="0"><rect class="box" x="270" y="172" width="150" height="56" rx="8"/><text class="bt" x="286" y="196">Ingress</text><text class="bm" x="286" y="214">:80 / :443 TLS</text></g>
+        <g class="node" data-id="nginx" tabindex="0"><rect class="box" x="440" y="172" width="200" height="56" rx="8"/><text class="bt" x="456" y="196">app · nginx</text><text class="bm" x="456" y="214">:8080 · svc :80</text></g>
+        <g class="node" data-id="server" tabindex="0"><title>Node, Express, Prisma. REST /api, one WS at /api/a2a/ws, /metrics for Prometheus (no auth), A2A card at /.well-known/a2a</title><rect class="box key" x="270" y="290" width="400" height="80" rx="8"/><text class="bt" x="286" y="316">server · :3001</text><text class="bm" x="286" y="336">REST /api · WS /api/a2a/ws</text><text class="bm" x="286" y="354">/metrics · /.well-known/a2a</text></g>
+        <g class="node" data-id="postgres" tabindex="0"><rect class="box" x="360" y="450" width="95" height="56" rx="8"/><text class="bt" x="376" y="474">Postgres</text><text class="bm" x="376" y="492">:5432</text></g>
+        <g class="node" data-id="nats" tabindex="0"><rect class="box" x="465" y="450" width="95" height="56" rx="8"/><text class="bt" x="481" y="474">NATS</text><text class="bm" x="481" y="492">:4222</text></g>
+        <g class="node" data-id="rustfs" tabindex="0"><rect class="box" x="570" y="450" width="100" height="56" rx="8"/><text class="bt" x="586" y="474">RustFS</text><text class="bm" x="586" y="492">:9000</text></g>
+
+        <g class="node" data-id="agent" tabindex="0"><title>One per robot. A2A at /, REST /api/v1, WS /ws/telemetry, /ws/pointcloud, /ws/keyboard-teleop, /ws/bilateral-teleop, /ws/agent-mode</title><rect class="box key" x="830" y="290" width="370" height="80" rx="8"/><text class="bt" x="846" y="316">robot-agent · :41243</text><text class="bm" x="846" y="336">A2A / · REST /api/v1</text><text class="bm" x="846" y="354">WS /ws/telemetry · /ws/*-teleop</text></g>
+        <g class="node" data-id="g1sidecar" tabindex="0"><title>DDS ↔ HTTP bridge. Read-only by default (G1_READ_ONLY=1); /loco/* is gated by G1_LOCO_ENABLED</title><rect class="box" x="830" y="420" width="120" height="56" rx="8"/><text class="bt" x="844" y="444">g1_sidecar</text><text class="bm" x="844" y="462">HTTP :8767</text></g>
+        <g class="node" data-id="sim" tabindex="0"><title>MuJoCo G1 that speaks the real Unitree DDS protocol on domain 1 over loopback. HTTP facade on :8777</title><rect class="box sim" x="965" y="420" width="120" height="56" rx="8"/><text class="bt" x="979" y="444">sim_g1_dds</text><text class="bm" x="979" y="462">DDS 1 · lo0</text></g>
+        <g class="node" data-id="voice" tabindex="0"><rect class="box" x="1100" y="420" width="100" height="56" rx="8"/><text class="bt" x="1114" y="444">voice</text><text class="bm" x="1114" y="462">:8768</text></g>
+        <g class="node" data-id="bridge" tabindex="0"><rect class="box" x="830" y="530" width="105" height="56" rx="8"/><text class="bt" x="844" y="554">state bridge</text><text class="bs" x="844" y="572">on robot PC2</text></g>
+        <g class="node" data-id="g1" tabindex="0"><title>Real robot on DDS domain 0. Microphone on multicast 239.168.123.161:5555</title><rect class="box key" x="985" y="530" width="215" height="56" rx="8"/><text class="bt" x="1001" y="554">Unitree G1 · DDS 0</text><text class="bs" x="1001" y="572">cams :60000 · mic multicast</text></g>
+
+        <g class="node" data-id="worker" tabindex="0"><rect class="box" x="270" y="680" width="150" height="56" rx="8"/><text class="bt" x="286" y="704">training-worker</text><text class="bs" x="286" y="722">WORKER_API_TOKEN</text></g>
+        <g class="node" data-id="twin" tabindex="0"><rect class="box" x="435" y="680" width="130" height="56" rx="8"/><text class="bt" x="451" y="704">twin-builder</text><text class="bs" x="451" y="722">CPU · point clouds</text></g>
+        <g class="node" data-id="ollama" tabindex="0"><rect class="box" x="740" y="680" width="140" height="56" rx="8"/><text class="bt" x="756" y="704">Ollama</text><text class="bm" x="756" y="722">:11434</text></g>
+        <g class="node" data-id="groot" tabindex="0"><rect class="box" x="900" y="680" width="140" height="56" rx="8"/><text class="bt" x="916" y="704">GR00T policy</text><text class="bm" x="916" y="722">ZMQ :5555</text></g>
+        <g class="node" data-id="vla" tabindex="0"><title>Separate repo. SmolVLA, pi0.5, GR00T, LingBot and others behind one HTTP API</title><rect class="box key" x="1060" y="680" width="140" height="56" rx="8"/><text class="bt" x="1076" y="704">vla-server</text><text class="bm" x="1076" y="722">FastAPI :8000</text></g>
+<text class="hint" x="16" y="800">Arrows point away from the side that opens the connection. Dashed: optional or per profile. Green dashed: direct to robot. Violet: simulation. Opened directly, click a box to focus it.</text>
+<script><![CDATA[
+(function () {
+  var root = document.documentElement;
+  var edges = Array.prototype.slice.call(document.querySelectorAll('.edge'));
+  var nodes = Array.prototype.slice.call(document.querySelectorAll('.node'));
+  var current = null;
+  function clear() {
+    current = null; root.classList.remove('focus');
+    edges.concat(nodes).forEach(function (el) { el.classList.remove('hi'); });
+  }
+  function focus(id) {
+    if (current === id) { clear(); return; }
+    clear(); current = id; root.classList.add('focus');
+    var linked = {}; linked[id] = true;
+    edges.forEach(function (e) {
+      var ids = (e.getAttribute('data-n') || '').split(' ');
+      if (ids.indexOf(id) !== -1) { e.classList.add('hi'); ids.forEach(function (x) { linked[x] = true; }); }
+    });
+    nodes.forEach(function (n) { if (linked[n.getAttribute('data-id')]) n.classList.add('hi'); });
+  }
+  nodes.forEach(function (n) {
+    n.addEventListener('click', function (ev) { ev.stopPropagation(); focus(n.getAttribute('data-id')); });
+    n.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); focus(n.getAttribute('data-id')); }
+      if (ev.key === 'Escape') clear();
+    });
+  });
+  root.addEventListener('click', clear);
+})();
+]]></script>
+</svg>

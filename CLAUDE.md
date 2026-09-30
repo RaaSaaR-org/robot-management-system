@@ -286,6 +286,8 @@ robot-management-system/
 │
 ├── docs/                   # Documentation (14 files)
 │   ├── architecture.md     # System architecture
+│   ├── network-architecture.md # Zones, ports, protocols
+│   ├── diagrams/           # Interactive SVGs (architecture, network)
 │   ├── app-architecture.md # Frontend architecture (detailed)
 │   ├── api.md              # API reference
 │   ├── brand.md            # Colors, typography, design tokens
@@ -413,6 +415,7 @@ Guidelines:
 | -------------------------------- | --------------------------------- |
 | `docs/platform.md`               | What the platform does, how far each part is taken, how to install it |
 | `docs/architecture.md`           | Full system architecture          |
+| `docs/network-architecture.md`   | Zones, ports, protocols, auth per hop; interactive SVGs in `docs/diagrams/` |
 | `docs/app-architecture.md`       | Frontend patterns (detailed)      |
 | `docs/api.md`                    | API reference                     |
 | `docs/brand.md`                  | Colors, typography, design tokens |
