@@ -464,6 +464,12 @@ export class HardwareClient {
   private sidecarBootId: string | null = null;
   /** `/health.sim` — the sidecar is `sim_node.py`, whose odometry IS the MJCF world frame. */
   private sidecarIsSim = false;
+  /**
+   * `/health.odom_frame === 'boot'` (TASK-342): a sim started with
+   * `--odom-origin boot` reports odometry about its start-up pose, exactly like
+   * a real robot, so its frame is `odom` (keyed by boot id), not the sim world.
+   */
+  private sidecarOdomFromBoot = false;
   /** `/health.scene` of the sim, when it says. */
   private sidecarScene: string | null = null;
   /**
@@ -535,11 +541,13 @@ export class HardwareClient {
         boot_id?: unknown;
         sim?: unknown;
         scene?: unknown;
+        odom_frame?: unknown;
       };
       this.sidecarAvailable = data.status === 'ok';
       this.setConnected(data.connected);
       this.sidecarBootId = typeof data.boot_id === 'string' && data.boot_id ? data.boot_id : null;
       this.sidecarIsSim = data.sim === true;
+      this.sidecarOdomFromBoot = data.odom_frame === 'boot';
       this.sidecarScene = typeof data.scene === 'string' && data.scene ? data.scene : null;
       if (this.sidecarAvailable) {
         console.log(`[Hardware] Sidecar reachable — arm connected: ${this.connected}`);
@@ -740,10 +748,13 @@ export class HardwareClient {
    *   until someone builds cross-robot registration, which is the honest answer.
    * - `null`: no sidecar at all (a pure in-process sim); poses are comparable to
    *   nobody's.
+   *
+   * A sim run with `--odom-origin boot` (TASK-342) is `odom`: its odometry is
+   * about its start-up pose, like a real robot's, and not the MJCF world.
    */
   getOdometryFrame(): OdometryFrame | null {
     if (!this.sidecarAvailable) return null;
-    if (this.sidecarIsSim) return { kind: 'sim', id: this.sidecarScene ?? 'sim' };
+    if (this.sidecarIsSim && !this.sidecarOdomFromBoot) return { kind: 'sim', id: this.sidecarScene ?? 'sim' };
     if (!this.sidecarBootId) return null;
     return { kind: 'odom', id: this.sidecarBootId };
   }

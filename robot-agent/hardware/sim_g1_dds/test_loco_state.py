@@ -53,7 +53,7 @@ from loco_state import (  # noqa: E402
     ARM_TASK_WAVE, ARM_TASK_WAVE_TURN, FSM_DAMP, FSM_SIT, FSM_START,
     FSM_ZERO_TORQUE, MAX_OMEGA, MAX_VX, MAX_VY, STAND_HEIGHT_DEFAULT,
     STAND_HEIGHT_HIGH, STAND_HEIGHT_LOW, SHAKE_DURATION_S, UINT32_MAX,
-    WAVE_DURATION_S, LocoState, wrap_angle,
+    WAVE_DURATION_S, LocoState, pose_relative_to, wrap_angle,
 )
 from joints import (  # noqa: E402
     ARM_REST, R_ELBOW, R_SHOULDER_PITCH, R_SHOULDER_ROLL, R_SHOULDER_YAW, R_WRIST_ROLL,
@@ -551,3 +551,28 @@ def test_arm_task_and_locomotion_are_independent():
 
     assert st.pose.x == pytest.approx(0.5, abs=1e-3)
     assert st.arm_task_active(1.0) is True
+
+
+# ---------------------------------------------------------------- boot odometry
+# TASK-342: `sim_node.py --odom-origin boot` publishes odometry about the
+# start-up pose, like a real G1 -- the frame a frame registration aligns.
+
+def test_pose_relative_to_the_spawn_pose():
+    """Spawned at world (3, 2) facing +90 deg: odometry starts at zero, and a
+    metre walked forward (world +y) is a metre along odometry +x."""
+    origin = (3.0, 2.0, math.pi / 2)
+    assert pose_relative_to(origin, origin) == pytest.approx((0.0, 0.0, 0.0), abs=1e-12)
+    assert pose_relative_to(origin, (3.0, 3.0, math.pi / 2)) == pytest.approx((1.0, 0.0, 0.0), abs=1e-12)
+    # World +x is to the robot's right at the start: odometry -y.
+    assert pose_relative_to(origin, (4.0, 2.0, math.pi / 2)) == pytest.approx((0.0, -1.0, 0.0), abs=1e-12)
+
+
+def test_pose_relative_to_wraps_yaw():
+    x, y, yaw = pose_relative_to((0.0, 0.0, 3.0), (0.0, 0.0, -3.0))
+    assert yaw == pytest.approx(wrap_angle(-6.0))
+    assert -math.pi < yaw <= math.pi
+
+
+def test_pose_relative_to_the_world_origin_is_the_identity():
+    pose = (1.5, -2.25, 0.7)
+    assert pose_relative_to((0.0, 0.0, 0.0), pose) == pytest.approx(pose)

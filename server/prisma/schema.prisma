@@ -60,13 +60,13 @@ model Robot {
   commands           RobotCommand[]
   agentCard          AgentCard?
   endpoints          RobotEndpoints?
-  alerts             Alert[]
   robotTasks         RobotTask[]
   incidents          Incident[]
   evaluationEpisodes EvaluationEpisode[]
   deviceCertificate  DeviceCertificate?
   vlaSessions        VlaSession[]
   sensorScans        SensorScan[]
+  frameRegistration  RobotFrameRegistration?
 
   // TASK-287: a serial number is unique WITHIN a tenant, not across the
   // platform — two operators may legitimately run the same hardware serial.
@@ -75,6 +75,28 @@ model Robot {
   @@index([status])
   @@index([a2aEnabled])
   @@index([tenantId, updatedAt])
+}
+
+// TASK-341: how a robot's odometry frame sits in its site twin's world frame —
+// `twin = Rot(yawDeg) * odom + (x, y)`. Valid only while the robot is bound to
+// `twinId` AND its odometry is still the frame it was measured in
+// (`odomFrameId`, the sidecar boot id); odometry re-zeroes on every restart.
+model RobotFrameRegistration {
+  id            String   @id @default(uuid())
+  robotId       String   @unique
+  twinId        String
+  odomFrameId   String
+  x             Float
+  y             Float
+  yawDeg        Float
+  method        String // manual | place-anchor
+  anchorPlaceId String?
+  tenantId      String?
+  createdAt     DateTime @default(now())
+
+  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
 
 // Recorded point-cloud scan from a depth / LiDAR sensor (e.g. Livox MID-360).
@@ -485,7 +507,11 @@ model Alert {
   title          String
   message        String
   source         String // AlertSource: 'robot' | 'task' | 'system' | 'user'
-  sourceId       String? // ID of the source entity (robotId, taskId, etc.)
+  // Polymorphic: `source` says what it points to — a robot id for 'robot', a
+  // task id for 'task', an incident, twin zone or workflow id for 'system'.
+  // Deliberately no foreign key (TASK-337): a relation to Robot rejected
+  // every non-robot id, so those alerts were never written.
+  sourceId       String?
   acknowledged   Boolean   @default(false)
   acknowledgedAt DateTime?
   acknowledgedBy String? // User ID who acknowledged
@@ -493,9 +519,6 @@ model Alert {
   autoDismissMs  Int? // Auto-dismiss after ms (null = never)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
-
-  // Optional relation to robot if source is robot
-  robot Robot? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
 
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])

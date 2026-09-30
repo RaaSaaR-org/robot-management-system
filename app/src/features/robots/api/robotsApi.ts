@@ -16,6 +16,9 @@ import type {
   CommandListResponse,
   TelemetryHistoryParams,
   TelemetryHistoryResponse,
+  FrameRegistration,
+  FrameRegistrationRequest,
+  SitePlace,
 } from '../types/robots.types';
 
 // ============================================================================
@@ -30,7 +33,13 @@ const ENDPOINTS = {
   command: (id: string) => `/robots/${id}/command`,
   telemetry: (id: string) => `/robots/${id}/telemetry`,
   telemetryHistory: (id: string) => `/robots/${id}/telemetry/history`,
+  frameRegistration: (id: string) => `/robots/${id}/frame-registration`,
+  places: (id: string) => `/robots/${id}/places`,
 } as const;
+
+function isNotFound(error: unknown): boolean {
+  return (error as { response?: { status?: number } })?.response?.status === 404;
+}
 
 // ============================================================================
 // API FUNCTIONS
@@ -110,6 +119,47 @@ export const robotsApi = {
   async updateRobotSite(robotId: string, twinId: string | null): Promise<Robot> {
     const response = await apiClient.patch<Robot>(ENDPOINTS.get(robotId), { twinId });
     return response.data;
+  },
+
+  /**
+   * The robot's frame registration to its site (TASK-341), or null when it has none.
+   * @param robotId - Robot ID
+   */
+  async getFrameRegistration(robotId: string): Promise<FrameRegistration | null> {
+    try {
+      const response = await apiClient.get<FrameRegistration>(ENDPOINTS.frameRegistration(robotId));
+      return response.data;
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
+  },
+
+  /**
+   * Align a robot to its site (TASK-341). Refused with 409 when the robot has
+   * no site, is offline, or is a sim already in the twin frame.
+   */
+  async putFrameRegistration(robotId: string, request: FrameRegistrationRequest): Promise<FrameRegistration> {
+    const response = await apiClient.put<FrameRegistration>(ENDPOINTS.frameRegistration(robotId), request);
+    return response.data;
+  },
+
+  /** Forget a robot's alignment (TASK-341). */
+  async deleteFrameRegistration(robotId: string): Promise<void> {
+    await apiClient.delete(ENDPOINTS.frameRegistration(robotId));
+  },
+
+  /**
+   * The places of the robot's site (TASK-327), or an empty list when it has none.
+   */
+  async getSitePlaces(robotId: string): Promise<SitePlace[]> {
+    try {
+      const response = await apiClient.get<{ places?: SitePlace[] }>(ENDPOINTS.places(robotId));
+      return (response.data?.places ?? []).map((p) => ({ id: p.id, name: p.name, keepout: p.keepout === true }));
+    } catch (error) {
+      if (isNotFound(error)) return [];
+      throw error;
+    }
   },
 
   /**

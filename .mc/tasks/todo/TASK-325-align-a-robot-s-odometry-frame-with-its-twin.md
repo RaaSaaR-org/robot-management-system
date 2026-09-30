@@ -3,7 +3,7 @@ id: "TASK-325"
 aliases: []
 title: "Align a robot's odometry frame with its twin"
 slug: "align-a-robot-s-odometry-frame-with-its-twin"
-status: "todo"
+status: "backlog"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -12,8 +12,6 @@ tags: [core, robot-agent, server]
 sprint: ""
 parent: ""
 depends_on: ["[[TASK-274]]"]
-spe: 8
-effort: "high"
 due_date: ""
 created: "2026-09-30"
 updated: "2026-09-30"
@@ -101,3 +99,14 @@ Vitest for the SE(2) transform (round trip, yaw wrap), `assessFrameRegistration`
 and without a registration, invalidation on incarnation change, and the server
 anchor computation. Then the MuJoCo-on-Mac run above with the seeded Demo Warehouse
 twin from TASK-274; Isaac Sim on the Linux box as an optional second check.
+
+## Children
+
+- [[TASK-341]] server: store and compute the registration (API) — done (#365)
+- [[TASK-342]] robot agent + MuJoCo sim: fence in the twin frame once registered — done (#366)
+- [[TASK-343]] app: Align action, status, site map plots the twin pose — done (#367)
+- [[TASK-344]] backlog: the same check in Isaac Sim on the GPU box (needs that machine)
+
+Every required acceptance criterion is met by TASK-341..343. The epic stays open,
+in `backlog`, only for the optional Isaac Sim check (TASK-344), which needs the
+Linux GPU box; it closes with that child.
