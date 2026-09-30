@@ -3,7 +3,7 @@ id: "TASK-335"
 aliases: []
 title: "Zone E-stop and the site map work against a live sim robot"
 slug: "zone-e-stop-and-the-site-map-work-against-a-live-sim-robot"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
