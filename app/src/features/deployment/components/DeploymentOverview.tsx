@@ -7,6 +7,7 @@
 import { Badge, Divider, KeyValueList, Panel, ProgressBar, StatusTag } from '@/shared/components/ui';
 import { cn, formatDateTime } from '@/shared/utils';
 import type { Deployment } from '../types';
+import { useTwinZoneNames } from '@/features/digitaltwin/hooks/useTwinZoneNames';
 import { formatStageDuration, reachedStages, strategyLabel } from './deploymentHelpers';
 
 export interface DeploymentOverviewProps {
@@ -20,11 +21,11 @@ function stageState(index: number, reached: number, d: Deployment): 'completed' 
   return index < reached ? 'completed' : 'pending';
 }
 
-function Tags({ values }: { values?: string[] }) {
+function Tags({ values, label = (v) => v }: { values?: string[]; label?: (value: string) => string }) {
   if (!values || values.length === 0) return null;
   return (
     <span className="flex flex-wrap gap-1">
-      {values.map((v) => <Badge key={v} size="sm">{v}</Badge>)}
+      {values.map((v) => <Badge key={v} size="sm">{label(v)}</Badge>)}
     </span>
   );
 }
@@ -33,6 +34,8 @@ export function DeploymentOverview({ deployment: d }: DeploymentOverviewProps) {
   const stages = d.canaryConfig?.stages ?? [];
   const reached = reachedStages(d);
   const t = d.rollbackThresholds;
+  // targetZones are TwinZone ids (TASK-330); show their names.
+  const zoneName = useTwinZoneNames(d.targetZones ?? []);
 
   return (
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
@@ -83,7 +86,7 @@ export function DeploymentOverview({ deployment: d }: DeploymentOverviewProps) {
               { label: 'Started', value: d.startedAt ? formatDateTime(d.startedAt) : undefined },
               { label: 'Completed', value: d.completedAt ? formatDateTime(d.completedAt) : undefined },
               { label: 'Robot types', value: <Tags values={d.targetRobotTypes} /> },
-              { label: 'Zones', value: d.targetZones?.length ? <Tags values={d.targetZones} /> : 'All zones' },
+              { label: 'Zones', value: d.targetZones?.length ? <Tags values={d.targetZones} label={zoneName} /> : 'All zones' },
             ]}
           />
           {t && (

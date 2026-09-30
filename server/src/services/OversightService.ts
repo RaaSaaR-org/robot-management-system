@@ -19,6 +19,9 @@ import {
   anomalyRecordRepository,
 } from '../repositories/OversightRepository.js';
 import { robotManager } from './RobotManager.js';
+import { twinPlaceGraphService } from './TwinPlaceGraphService.js';
+import { robotIsInTwinZone } from './twinPlaceGeometry.js';
+import { BadRequestError } from '../utils/errors.js';
 import { alertService } from './AlertService.js';
 import type {
   ManualControlSession,
@@ -235,9 +238,52 @@ export class OversightService {
   async createVerificationSchedule(
     input: CreateVerificationScheduleInput
   ): Promise<VerificationSchedule> {
+    await this.assertScopeResolvable(input);
     const schedule = await verificationScheduleRepository.create(input);
     console.log(`[OversightService] Created verification schedule: ${schedule.name}`);
     return schedule;
+  }
+
+  /**
+   * A `'zone'` scope names a TwinZone (TASK-330) and a `'robot'` scope a robot;
+   * both need a `scopeId`, and a zone id must exist.
+   */
+  private async assertScopeResolvable(input: {
+    robotScope?: VerificationSchedule['robotScope'];
+    scopeId?: string | null;
+  }): Promise<void> {
+    if (input.robotScope !== 'zone' && input.robotScope !== 'robot') return;
+    if (!input.scopeId) {
+      throw new BadRequestError(`robotScope '${input.robotScope}' requires a scopeId`);
+    }
+    if (input.robotScope === 'zone') {
+      const [zone] = await twinPlaceGraphService.resolveZonePlaces([input.scopeId]);
+      if (!zone) throw new BadRequestError(`Zone ${input.scopeId} not found`);
+    }
+  }
+
+  /**
+   * The robots a schedule covers right now: every robot for `'all'`, the one
+   * robot for `'robot'`, and for `'zone'` every robot bound to the TwinZone's
+   * twin that reports the zone's place (TASK-330) — the same matcher as zone
+   * E-stop and deployments. A deleted zone or robot resolves to no robots.
+   */
+  async resolveScheduleRobotIds(schedule: VerificationSchedule): Promise<string[]> {
+    const robots = await robotManager.listRobots();
+    switch (schedule.robotScope) {
+      case 'all':
+        return robots.map((r) => r.id);
+      case 'robot':
+        return robots.filter((r) => r.id === schedule.scopeId).map((r) => r.id);
+      case 'zone': {
+        if (!schedule.scopeId) return [];
+        const [zone] = await twinPlaceGraphService.resolveZonePlaces([schedule.scopeId]);
+        if (!zone) return [];
+        return robots.filter((r) => robotIsInTwinZone(r, zone)).map((r) => r.id);
+      }
+      default:
+        return [];
+    }
   }
 
   /**
@@ -275,6 +321,7 @@ export class OversightService {
           lastCompletion,
           dueAt,
           overdueSinceMinutes,
+          robotIds: await this.resolveScheduleRobotIds(schedule),
         };
       })
     );
@@ -320,6 +367,14 @@ export class OversightService {
     id: string,
     input: Partial<CreateVerificationScheduleInput>
   ): Promise<VerificationSchedule | null> {
+    if (input.robotScope !== undefined || input.scopeId !== undefined) {
+      const current = await verificationScheduleRepository.findById(id);
+      if (!current) return null;
+      await this.assertScopeResolvable({
+        robotScope: input.robotScope ?? current.robotScope,
+        scopeId: input.scopeId !== undefined ? input.scopeId : current.scopeId,
+      });
+    }
     return verificationScheduleRepository.update(id, input);
   }
 

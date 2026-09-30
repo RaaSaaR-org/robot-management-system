@@ -72,6 +72,12 @@ vi.mock('../RobotManager.js', () => ({
   },
 }));
 
+vi.mock('../TwinPlaceGraphService.js', () => ({
+  twinPlaceGraphService: {
+    resolveZonePlaces: vi.fn(),
+  },
+}));
+
 vi.mock('../AlertService.js', () => ({
   alertService: {
     createAlert: vi.fn(),
@@ -88,6 +94,7 @@ import {
 } from '../../repositories/OversightRepository.js';
 import { robotManager } from '../RobotManager.js';
 import { alertService } from '../AlertService.js';
+import { twinPlaceGraphService } from '../TwinPlaceGraphService.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -194,6 +201,7 @@ beforeEach(() => {
   // logAction is called by many methods; give it a default resolved value
   vi.mocked(oversightLogRepository.create).mockResolvedValue(makeLog());
   vi.mocked(alertService.createAlert).mockResolvedValue({} as never);
+  vi.mocked(robotManager.listRobots).mockResolvedValue([]);
 });
 
 // ===========================================================================
@@ -357,6 +365,77 @@ describe('verification schedules', () => {
     vi.mocked(verificationScheduleRepository.deactivate).mockResolvedValue(schedule);
     await expect(oversightService.deactivateVerificationSchedule('sch1')).resolves.toBe(schedule);
     expect(verificationScheduleRepository.deactivate).toHaveBeenCalledWith('sch1');
+  });
+});
+
+// ===========================================================================
+// verification robot scope (TASK-330)
+// ===========================================================================
+
+describe('verification robot scope', () => {
+  const KITCHEN = { zoneId: 'tz-1', name: 'Kitchen', twinId: 't1', placeId: 'KITCHEN' };
+  const at = (place: string | null) => ({ x: 0, y: 0, place }) as Robot['location'];
+  const fleet = [
+    makeRobot({ id: 'in', twinId: 't1', location: at('KITCHEN') }),
+    makeRobot({ id: 'elsewhere', twinId: 't1', location: at('HALL') }),
+    makeRobot({ id: 'other-site', twinId: 't2', location: at('KITCHEN') }),
+    makeRobot({ id: 'unplaced', twinId: 't1', location: at(null) }),
+  ];
+
+  it("resolves a 'zone' scope to the robots in that TwinZone's place", async () => {
+    vi.mocked(robotManager.listRobots).mockResolvedValue(fleet);
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([KITCHEN]);
+    await expect(
+      oversightService.resolveScheduleRobotIds(makeSchedule({ robotScope: 'zone', scopeId: 'tz-1' }))
+    ).resolves.toEqual(['in']);
+    expect(twinPlaceGraphService.resolveZonePlaces).toHaveBeenCalledWith(['tz-1']);
+  });
+
+  it("resolves 'all' and 'robot' scopes, and a deleted zone to nobody", async () => {
+    vi.mocked(robotManager.listRobots).mockResolvedValue(fleet);
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([]);
+    await expect(oversightService.resolveScheduleRobotIds(makeSchedule())).resolves.toHaveLength(4);
+    await expect(
+      oversightService.resolveScheduleRobotIds(makeSchedule({ robotScope: 'robot', scopeId: 'elsewhere' }))
+    ).resolves.toEqual(['elsewhere']);
+    await expect(
+      oversightService.resolveScheduleRobotIds(makeSchedule({ robotScope: 'zone', scopeId: 'gone' }))
+    ).resolves.toEqual([]);
+  });
+
+  it("attaches the resolved robots to due verifications", async () => {
+    vi.mocked(robotManager.listRobots).mockResolvedValue(fleet);
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([KITCHEN]);
+    vi.mocked(verificationScheduleRepository.findDue).mockResolvedValue([
+      makeSchedule({ robotScope: 'zone', scopeId: 'tz-1' }),
+    ]);
+    vi.mocked(verificationCompletionRepository.findByScheduleId).mockResolvedValue([]);
+    const [due] = await oversightService.getDueVerifications();
+    expect(due.robotIds).toEqual(['in']);
+  });
+
+  it("rejects a 'zone' schedule whose scopeId is not a TwinZone", async () => {
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([]);
+    await expect(
+      oversightService.createVerificationSchedule({
+        name: 'Zone check',
+        intervalMinutes: 60,
+        robotScope: 'zone',
+        scopeId: 'Zone A',
+      })
+    ).rejects.toThrow('Zone Zone A not found');
+    expect(verificationScheduleRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('validates a scope change against the stored schedule on update', async () => {
+    vi.mocked(verificationScheduleRepository.findById).mockResolvedValue(
+      makeSchedule({ robotScope: 'zone', scopeId: 'tz-1' })
+    );
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([]);
+    await expect(
+      oversightService.updateVerificationSchedule('sch1', { scopeId: 'gone' })
+    ).rejects.toThrow('Zone gone not found');
+    expect(verificationScheduleRepository.update).not.toHaveBeenCalled();
   });
 });
 

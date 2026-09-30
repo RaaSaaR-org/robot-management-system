@@ -11,6 +11,8 @@ import {
   modelVersionRepository,
 } from '../repositories/index.js';
 import { robotManager } from './RobotManager.js';
+import { twinPlaceGraphService } from './TwinPlaceGraphService.js';
+import { robotIsInTwinZone } from './twinPlaceGeometry.js';
 import { HttpClient, HTTP_TIMEOUTS } from './HttpClient.js';
 import { simToRealValidationService } from './SimToRealValidationService.js';
 import type {
@@ -129,6 +131,16 @@ export class DeploymentService extends EventEmitter {
     const modelVersion = await modelVersionRepository.findById(request.modelVersionId);
     if (!modelVersion) {
       throw new Error(`Model version not found: ${request.modelVersionId}`);
+    }
+
+    // targetZones are TwinZone ids (TASK-330); reject any that do not exist.
+    if (request.targetZones && request.targetZones.length > 0) {
+      const found = await twinPlaceGraphService.resolveZonePlaces(request.targetZones);
+      const known = new Set(found.map((z) => z.zoneId));
+      const missing = request.targetZones.filter((id) => !known.has(id));
+      if (missing.length > 0) {
+        throw new Error(`Target zone not found: ${missing.join(', ')}`);
+      }
     }
 
     // Check for existing active deployment for same model version
@@ -602,6 +614,11 @@ export class DeploymentService extends EventEmitter {
    */
   private async getEligibleRobots(deployment: Deployment): Promise<string[]> {
     const allRobots = await robotManager.listRobots();
+    // Resolve the TwinZone ids once per selection pass (TASK-330).
+    const targetZones =
+      deployment.targetZones.length > 0
+        ? await twinPlaceGraphService.resolveZonePlaces(deployment.targetZones)
+        : [];
 
     return allRobots.filter(robot => {
       // Must be online or busy
@@ -617,10 +634,10 @@ export class DeploymentService extends EventEmitter {
         }
       }
 
-      // Must be in target zones (if specified)
+      // Must be in one of the target TwinZones (if specified). A zone deleted
+      // since creation resolves to nothing, so it selects no robot.
       if (deployment.targetZones.length > 0) {
-        const zone = robot.location.zone ?? '';
-        if (!deployment.targetZones.includes(zone)) {
+        if (!targetZones.some((zone) => robotIsInTwinZone(robot, zone))) {
           return false;
         }
       }

@@ -3,7 +3,7 @@ id: "TASK-330"
 aliases: []
 title: "Zone E-stop, deployments and verification target twin zones"
 slug: "zone-e-stop-deployments-and-verification-target-twin-zones"
-status: "todo"
+status: "in-progress"
 priority: 3
 owner: "huhn511"
 projects: []
