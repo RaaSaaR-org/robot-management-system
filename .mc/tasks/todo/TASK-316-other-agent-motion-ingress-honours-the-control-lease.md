@@ -3,7 +3,7 @@ id: "TASK-316"
 aliases: []
 title: "Other agent motion ingress honours the control lease"
 slug: "other-agent-motion-ingress-honours-the-control-lease"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
