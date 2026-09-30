@@ -3,7 +3,7 @@ id: "TASK-337"
 aliases: []
 title: "Alert sourceId is a robot foreign key used for other ids"
 slug: "alert-sourceid-is-a-robot-foreign-key-used-for-other-ids"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -65,11 +65,11 @@ the id according to `Alert.source`. Decisions:
 
 ## Acceptance Criteria
 
-- [ ] Task, incident, notification-workflow and zone alerts are written
+- [x] Task, incident, notification-workflow and zone alerts are written
       (integration test against SQLite with foreign keys on).
-- [ ] Robot alerts still link to their robot (lookup by `sourceId` where
+- [x] Robot alerts still link to their robot (lookup by `sourceId` where
       `source` is `robot`).
-- [ ] Zone E-stop alerts carry the zone id in `sourceId`.
+- [x] Zone E-stop alerts carry the zone id in `sourceId`.
 
 ## Test Strategy
 
