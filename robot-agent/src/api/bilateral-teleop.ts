@@ -14,11 +14,19 @@
  *             working, but no UI in the app connects to it). Scheduled for
  *             removal in a follow-up cleanup task — find with
  *             `git grep "@deprecated TASK-117"`. Do not extend.
+ *
+ * Control lease (TASK-316): while it is still wired up it is a motion ingress,
+ * so with `CONTROL_LEASE_REQUIRED` on it follows the same contract as keyboard
+ * teleop — `{bind:{leaseId, generation}}` first, unbound `leader_state` frames
+ * are dropped with `{type:'error', code:'lease_required'}`, and a fence or
+ * expiry stops forwarding at once. Flag off: behaviour unchanged.
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { FrameRecorder, JointPositions } from '../teleop/FrameRecorder.js';
+import { controlLease, type ControlLeaseRegistry } from '../control-lease/control-lease.js';
+import { LeaseSocketBinding, parseBindFrame } from '../control-lease/socket-binding.js';
 
 const SIDECAR_URL = process.env.HARDWARE_SIDECAR_URL ?? 'http://localhost:8765';
 
@@ -67,13 +75,34 @@ interface FollowerStateMessage {
 interface ErrorMessage {
   type: 'error';
   message: string;
+  code?: 'lease_required' | 'lease_invalid';
+}
+
+interface LeaseMessage {
+  type: 'lease';
+  state: 'unbound' | 'bound' | 'revoked' | 'expired';
+  required?: true;
+  generation?: number;
 }
 
 interface ReadyMessage {
   type: 'ready';
 }
 
-type OutgoingMessage = FollowerStateMessage | ErrorMessage | ReadyMessage;
+type OutgoingMessage = FollowerStateMessage | ErrorMessage | ReadyMessage | LeaseMessage;
+
+/** The two sidecar calls the bridge makes — injectable so tests need no HTTP. */
+export interface BilateralSidecarClient {
+  sendAction(joints: Record<string, number>): Promise<void>;
+  fetchFollowerState(): Promise<Record<string, number>>;
+}
+
+export interface BilateralTeleopOptions {
+  /** Defaults to the process control-lease registry. */
+  leases?: ControlLeaseRegistry;
+  /** Defaults to HTTP against `HARDWARE_SIDECAR_URL`. */
+  sidecar?: BilateralSidecarClient;
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -122,6 +151,11 @@ async function fetchFollowerState(): Promise<Record<string, number>> {
   }
 }
 
+const httpSidecar: BilateralSidecarClient = {
+  sendAction: sendActionToSidecar,
+  fetchFollowerState,
+};
+
 function send(ws: WebSocket, msg: OutgoingMessage): void {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(msg));
@@ -141,7 +175,10 @@ function extractSessionId(req: IncomingMessage): string | null {
 
 export function createBilateralTeleopWebSocket(
   frameRecorder: FrameRecorder,
+  options: BilateralTeleopOptions = {},
 ): WebSocketServer {
+  const leases = options.leases ?? controlLease;
+  const sidecar = options.sidecar ?? httpSidecar;
   // noServer: upgrades are routed by the shared dispatcher in index.ts.
   const wss = new WebSocketServer({ noServer: true });
 
@@ -155,14 +192,50 @@ export function createBilateralTeleopWebSocket(
       frameRecorder.startSession(sessionId);
     }
 
+    // One binding per socket; with the flag off it admits everything.
+    const binding = new LeaseSocketBinding(leases, (event) => {
+      send(ws, {
+        type: 'lease',
+        state: event.type === 'expired' ? 'expired' : 'revoked',
+        generation: event.generation,
+      });
+    });
+    let leaseRequiredSent = false;
+
     send(ws, { type: 'ready' });
+    if (binding.enforced) send(ws, { type: 'lease', state: 'unbound', required: true });
 
     ws.on('message', async (data: Buffer) => {
       try {
-        const msg = JSON.parse(data.toString()) as LeaderStateMessage;
+        const parsed = JSON.parse(data.toString()) as unknown;
+
+        const bind = parseBindFrame(parsed);
+        if (bind !== undefined) {
+          // Flag off: a bind frame is ignored, as TASK-315 specifies.
+          if (!binding.enforced) return;
+          const result = bind ? binding.bind(bind) : ({ ok: false, code: 'lease_invalid' } as const);
+          if (result.ok) {
+            leaseRequiredSent = false;
+            send(ws, { type: 'lease', state: 'bound', generation: result.generation });
+          } else {
+            send(ws, { type: 'error', code: 'lease_invalid', message: 'Control lease secret or generation is not valid' });
+          }
+          return;
+        }
+
+        const msg = parsed as LeaderStateMessage;
 
         if (msg.type !== 'leader_state' || !msg.joints) {
           send(ws, { type: 'error', message: 'Expected message type "leader_state" with joints' });
+          return;
+        }
+
+        // Checked at processing time: a fence between frames stops forwarding.
+        if (!binding.admits()) {
+          if (!leaseRequiredSent) {
+            leaseRequiredSent = true;
+            send(ws, { type: 'error', code: 'lease_required', message: 'Bind a control lease before driving' });
+          }
           return;
         }
 
@@ -170,10 +243,10 @@ export function createBilateralTeleopWebSocket(
         const followerTarget = mapLeaderToFollower(msg.joints);
 
         // Send to hardware sidecar
-        await sendActionToSidecar(followerTarget);
+        await sidecar.sendAction(followerTarget);
 
         // Read back actual follower state
-        const followerActual = await fetchFollowerState();
+        const followerActual = await sidecar.fetchFollowerState();
         const followerJoints = Object.keys(followerActual).length > 0 ? followerActual : followerTarget;
 
         // Record frame if session is active
@@ -195,6 +268,7 @@ export function createBilateralTeleopWebSocket(
 
     ws.on('close', () => {
       console.log('[BilateralTeleop] Client disconnected');
+      binding.dispose();
       if (frameRecorder.isRecording()) {
         frameRecorder.stopSession();
       }

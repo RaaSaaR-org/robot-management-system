@@ -430,7 +430,7 @@ Base URL: `http://localhost:41245`
 
 ### Control lease (`/api/v1/robots/:id/control-lease`, TASK-314)
 
-The robot's one installed control lease — fenced by a strictly increasing `generation` whose high-water is persisted in `data/control-lease-<ROBOT_ID>.json`, and expired on the agent's own clock. All four routes sit behind the personal-data gate (configured `AGENT_MEMORY_TOKEN` required; loopback only when unset; cross-origin browser requests refused), so only the server installs leases. `CONTROL_LEASE_REQUIRED` (default `false`) is reported as `enforced`. When it is on, `/ws/keyboard-teleop` drives only on a socket bound to the installed lease (TASK-315, see `robot-agent/AGENTS.md`); the other motion paths do not gate on it yet.
+The robot's one installed control lease — fenced by a strictly increasing `generation` whose high-water is persisted in `data/control-lease-<ROBOT_ID>.json`, and expired on the agent's own clock. All four routes sit behind the personal-data gate (configured `AGENT_MEMORY_TOKEN` required; loopback only when unset; cross-origin browser requests refused), so only the server installs leases. `CONTROL_LEASE_REQUIRED` (default `false`) is reported as `enforced`; with it off, nothing gates motion on the lease. When it is on, `/ws/keyboard-teleop` drives only on a socket bound to the installed lease (TASK-315, see `robot-agent/AGENTS.md`), and the REST motion routes and the bilateral socket follow the rules below (TASK-316).
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -438,6 +438,10 @@ The robot's one installed control lease — fenced by a strictly increasing `gen
 | POST | `/renew` | `{generation, ttlMs}` → `{renewed:true, bound}`; 409 `{code:'not_installed'\|'expired'}` (a late renew never resurrects) |
 | POST | `/release` | `{generation}` → `{released:boolean}`; a stale generation is a no-op |
 | GET | `/` | `{enforced, state:'none'\|'held'\|'expired'\|'released', generation, userId, displayName, sessionId, expiresInMs, bound, error?}` — never the hash |
+
+**Motion ingress while a lease is held (TASK-316).** With `CONTROL_LEASE_REQUIRED` on and the lease `held`, every REST route that *starts* motion answers `409 {code:'control_lease_held', holder:{displayName, userId}, message}` and starts nothing: `POST /robots/:id/command` (except `type: 'stop'\|'emergency_stop'`), `/skills/execute`, `/vla/start`, `/vla/resume`, `/evaluation/run`, `/tasks`, `/agent-mode/command`, `/agent-mode/tour`, `/agent-mode/patrol`. Stop, abort and E-stop routes are never refused (`/vla/stop`, `/vla/pause`, `/skills/abort`, `/agent-mode/tour/abort`, `/agent-mode/patrol/abort`, `/agent-mode/estop*`, `/safety/estop*`). With no lease held (`none`, `expired`, `released`) autonomous starts are admitted as before.
+
+The bilateral teleop socket (`/ws/bilateral-teleop`) follows the socket binding contract: the server sends `{type:'lease', state:'unbound', required:true}` after `ready`; the client sends `{bind:{leaseId, generation}}` and gets `{type:'lease', state:'bound', generation}` or `{type:'error', code:'lease_invalid'}`. `leader_state` frames from an unbound socket are dropped with `{type:'error', code:'lease_required'}` (once per binding); a fence, release or expiry of the bound generation sends `{type:'lease', state:'revoked'\|'expired', generation}` and stops forwarding at once — no auto-rebind. Flag off: no lease messages, a `{bind}` frame is ignored.
 
 ### Patrol (`/api/v1/robots/:id/agent-mode/patrol`, TASK-212)
 
@@ -491,4 +495,4 @@ The robot's one installed control lease — fenced by a strictly increasing `gen
 | Path | Description |
 |------|-------------|
 | `ws://localhost:41245/ws/telemetry/:robotId` | Telemetry stream (2s interval) |
-| `ws://localhost:41245/ws/bilateral-teleop` | ALOHA-style teleoperation |
+| `ws://localhost:41245/ws/bilateral-teleop` | ALOHA-style teleoperation (needs a bound control lease when `CONTROL_LEASE_REQUIRED` is on — see Control lease) |
