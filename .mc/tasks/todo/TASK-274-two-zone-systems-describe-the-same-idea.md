@@ -183,6 +183,24 @@ and is listed beside the site map, not plotted. Alignment is TASK-325.
   and documents `Robot.twinId` and the zone E-stop's new id semantics.
 - Release notes: breaking — `/api/zones` and the `Zone` table are gone.
 
+## Plan (2026-09-30)
+
+Children, in implementation order (`parent: "[[TASK-274]]"`):
+
+1. TASK-326 Twin zones are uniquely named places — spe 3
+2. TASK-327 A robot is bound to a site — spe 5 (after 326)
+3. TASK-328 The agent loads its site's places through its binding — spe 5 (after 327)
+4. TASK-329 A robot moves to a place by name and refuses keepouts — spe 5 (after 328)
+5. TASK-330 Zone E-stop, deployments and verification target twin zones — spe 5 (after 327)
+6. TASK-331 The fleet map is a site map — spe 8 (after 328, 330)
+7. TASK-332 Process steps and commands move to places — spe 5 (after 327)
+8. TASK-333 location.place is a robot's only answer to where it is — spe 5 (after 329, 330)
+9. TASK-334 The fleet Zone model and /api/zones are removed — spe 5 (after 331, 332, 333)
+
+Planning note: the seed creates the Demo Warehouse twin only; the sim robot is bound
+through the Robots → Site picker (robots are registered at runtime, not seeded), as
+the Test Strategy's step 2 already does.
+
 ## Acceptance Criteria
 
 - [ ] `model Zone` is gone from `server/prisma/schema.prisma`; a migration drops the
