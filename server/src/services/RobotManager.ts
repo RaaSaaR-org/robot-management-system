@@ -628,7 +628,21 @@ export class RobotManager {
    */
   async listRobots(): Promise<Robot[]> {
     const robots = await robotRepository.findAll();
-    return robots.map((robot) => this.normalizePresentedStatus(robot));
+    return robots.map((robot) => this.normalizePresentedStatus(this.withLiveLocation(robot)));
+  }
+
+  /**
+   * The stored row keeps x/y/place but not `siteAligned` or `frame` — those are
+   * claims about THIS agent process's pose and are never persisted. `getRobot`
+   * serves the live cache and carries them; the list must too, or the site map
+   * (which reads the list) shows an aligned sim robot as "not aligned". The row
+   * stays the tenant-scoped source of WHICH robots exist; only a connected
+   * robot's live location is laid over it.
+   */
+  private withLiveLocation(robot: Robot): Robot {
+    const cached = this.robotCache.get(robot.id);
+    if (!cached?.isConnected) return robot;
+    return { ...robot, location: cached.robot.location };
   }
 
   /**

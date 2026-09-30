@@ -360,6 +360,24 @@ describe('triggerZoneEStop', () => {
     // top-level result still carries the original triggeredBy
     expect(result.triggeredBy).toBe('guard');
   });
+
+  it('reports a performed zone E-stop as success even when its alert cannot be written', async () => {
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([ZONE_A]);
+    vi.mocked(robotManager.listRobots).mockResolvedValue([
+      makeRobot({ id: 'in', status: 'online', twinId: 't1', location: at('ZONE-A') }),
+    ]);
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
+    httpPost.mockResolvedValue({ ok: true });
+    vi.mocked(alertService.createAlert).mockRejectedValue(new Error('FK violated') as never);
+
+    const result = await safetyService.triggerZoneEStop('z1', 'spill');
+
+    expect(result.successCount).toBe(1);
+    // Alert.sourceId is a foreign key to Robot — a zone id must never go there.
+    expect(alertService.createAlert).toHaveBeenCalledWith(
+      expect.not.objectContaining({ sourceId: expect.anything() })
+    );
+  });
 });
 
 // ===========================================================================
