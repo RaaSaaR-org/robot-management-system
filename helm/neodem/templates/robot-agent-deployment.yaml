@@ -64,6 +64,9 @@ spec:
               value: {{ .Values.robotAgent.env.initialZone | quote }}
             - name: INITIAL_FLOOR
               value: {{ .Values.robotAgent.env.initialFloor | quote }}
+            # Control-lease enforcement (TASK-321) — opt-in, default off
+            - name: CONTROL_LEASE_REQUIRED
+              value: {{ .Values.robotAgent.env.controlLeaseRequired | quote }}
             # VLA Inference Server URL (if enabled)
             {{- if .Values.vlaInference.enabled }}
             - name: VLA_SERVER_URL

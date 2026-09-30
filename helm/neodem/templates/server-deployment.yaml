@@ -48,6 +48,11 @@ spec:
                 configMapKeyRef:
                   name: {{ include "neodem.fullname" . }}-config
                   key: AUTH_DISABLED
+            - name: CONTROL_LEASES_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "neodem.fullname" . }}-config
+                  key: CONTROL_LEASES_ENABLED
             # Database
             - name: DATABASE_URL
               valueFrom:
