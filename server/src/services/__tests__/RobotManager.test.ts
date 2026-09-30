@@ -338,6 +338,31 @@ describe('listRobots', () => {
     const result = await mgr.listRobots();
     expect(result[0].status).toBe('online');
   });
+
+  it("carries a connected robot's live siteAligned/frame, never a disconnected one's", async () => {
+    const mgr = new RobotManager();
+    const live = {
+      x: 0.1,
+      y: -2.8,
+      place: 'CHARGING-A',
+      siteAligned: true,
+      frame: { kind: 'sim', id: 'g1_warehouse_scene.xml' },
+    } as Robot['location'];
+    robotRepository.getAllRegisteredRobots.mockResolvedValue([
+      makeRegistered({ robot: makeRobot({ id: 'r1', location: live }) }),
+      makeRegistered({ robot: makeRobot({ id: 'r2', location: live }), isConnected: false }),
+    ]);
+    await mgr.initialize();
+    const stored = { x: 0.1, y: -2.8, place: 'CHARGING-A' } as Robot['location'];
+    robotRepository.findAll.mockResolvedValue([
+      makeRobot({ id: 'r1', location: stored }),
+      makeRobot({ id: 'r2', location: stored }),
+    ]);
+    const [r1, r2] = await mgr.listRobots();
+    expect(r1.location.siteAligned).toBe(true);
+    expect(r1.location.frame).toEqual({ kind: 'sim', id: 'g1_warehouse_scene.xml' });
+    expect(r2.location.siteAligned).toBeUndefined();
+  });
 });
 
 describe('getRobot', () => {

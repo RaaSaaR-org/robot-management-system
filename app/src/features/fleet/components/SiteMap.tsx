@@ -281,8 +281,8 @@ function RobotGroup({
       <h3 className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">{title}</h3>
       <ul className="flex flex-col gap-1">
         {robots.map((r) => (
-          <li key={r.id} className="flex items-center justify-between gap-2">
-            <Link to={`/robots/${r.id}`} className="truncate text-ink-primary hover:underline">
+          <li key={r.id} className="flex min-w-0 flex-col items-start gap-1">
+            <Link to={`/robots/${r.id}`} className="max-w-full truncate text-ink-primary hover:underline">
               {r.name}
             </Link>
             <StatusTag tone={tone} size="sm">
