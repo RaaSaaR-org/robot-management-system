@@ -3,7 +3,7 @@ id: "TASK-332"
 aliases: []
 title: "Process steps and commands move to places"
 slug: "process-steps-and-commands-move-to-places"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
