@@ -1,362 +1,203 @@
 /**
  * @file navigation.ts
- * @description Genkit tools for robot navigation commands with zone awareness
+ * @description Genkit tools for robot navigation: moves go to a place of the
+ * robot's place graph by name, or to coordinates, and never into a keepout.
+ * @feature navigation
  */
 
 import { ai, z } from '../agent/genkit.js';
-import type { RobotLocation, Zone, ZoneBounds } from '../robot/types.js';
+import type { RobotLocation } from '../robot/types.js';
 import type { RobotStateManager } from '../robot/state.js';
-import { config } from '../config/config.js';
+import type { Place } from '../agent-mode/place-resolver.js';
 import {
-  SERVICE_TOKEN_ENV,
-  isAuthRejection,
-  platformAuthHeaders,
-  recordPlatformAuthRejection,
-} from '../utils/platform-auth.js';
+  HOME_ALIAS,
+  keepoutAt,
+  nearest,
+  placeTarget,
+  resolvePlaceDestination,
+} from './place-destination.js';
 
 // Global reference to robot state manager (set by main)
 let robotStateManager: RobotStateManager;
 
-// Cached zones and derived named locations from server
-let cachedZones: Zone[] = [];
-let cachedNamedLocations: Record<string, RobotLocation> = {};
-let lastZoneFetch = 0;
-/**
- * Whether the last attempt to read the zone list actually succeeded.
- *
- * It is the difference between "that zone does not exist" and "I cannot find
- * out what zones exist", and those must not produce the same movement. Starts
- * false: nothing has been read yet.
- */
-let zonesReadable = false;
-
-// Default fallback locations (used when server is unavailable)
-const FALLBACK_LOCATIONS: Record<string, RobotLocation> = {
-  home: { x: 0, y: 0, floor: '1', zone: 'Home Base' },
-  charging_station: { x: 5, y: 20, floor: '1', zone: 'Charging Bay' },
-};
+/** The frame origin — the only destination that needs no place graph. */
+const HOME_LOCATION: RobotLocation = { x: 0, y: 0, floor: '1', zone: 'Home Base' };
 
 export function setRobotStateManager(manager: RobotStateManager): void {
   robotStateManager = manager;
 }
 
 /**
- * Derive named locations from zone center points
- * This is the single source of truth for location name -> coordinates
+ * The places a destination may be resolved against and judged by: the loaded
+ * graph, but only when its frame is registered to the robot's pose. An
+ * unregistered graph (real robot, TASK-325) names places the robot is not in,
+ * so it answers nothing here — the same fail-closed rule the geofence follows.
  */
-function deriveNamedLocationsFromZones(zones: Zone[]): Record<string, RobotLocation> {
-  const locations: Record<string, RobotLocation> = {};
+function registeredPlaces(): readonly Place[] | null {
+  if (!robotStateManager) return null;
+  if (robotStateManager.getPlaceFrameRegistration()?.registered !== true) return null;
+  const places = robotStateManager.getPlaces();
+  return places.length > 0 ? places : null;
+}
 
-  for (const zone of zones) {
-    // Calculate center point of zone bounds
-    const centerX = Math.round(zone.bounds.x + zone.bounds.width / 2);
-    const centerY = Math.round(zone.bounds.y + zone.bounds.height / 2);
-    const key = zone.name.toLowerCase().replace(/\s+/g, '_');
+function currentFloor(): string {
+  return robotStateManager?.getState().location.floor ?? '1';
+}
 
-    locations[key] = {
-      x: centerX,
-      y: centerY,
-      floor: zone.floor,
-      zone: zone.name,
-    };
-
-    // Add common aliases for special zone types
-    if (zone.type === 'charging') {
-      locations['charging_station'] = locations[key];
-      locations['charge'] = locations[key];
-    }
-    if (zone.type === 'maintenance') {
-      locations['maintenance'] = locations[key];
-    }
-  }
-
-  // Ensure home location exists (default to origin)
-  if (!locations['home']) {
-    locations['home'] = { x: 0, y: 0, floor: '1', zone: 'Home Base' };
-  }
-
-  return locations;
+function locationOf(place: Place): RobotLocation {
+  const { x, y } = placeTarget(place);
+  return { x, y, floor: currentFloor(), zone: place.name };
 }
 
 /**
- * Fetch zones from server (cached) and derive named locations
+ * The nearest `charging` place of the registered graph, or null when there is
+ * none (no graph, an unregistered one, or a site without a charger).
  */
-async function fetchZones(): Promise<Zone[]> {
-  const now = Date.now();
-  if (cachedZones.length > 0 && now - lastZoneFetch < config.zoneCacheTtlMs) {
-    return cachedZones;
-  }
-
-  const url = `${config.serverUrl}/api/zones`;
-  try {
-    // Fetch from server - use the server URL from config
-    const response = await fetch(url, { headers: platformAuthHeaders() });
-    if (!response.ok) {
-      zonesReadable = false;
-      if (isAuthRejection(response.status)) {
-        recordPlatformAuthRejection('navigation', response.status, url);
-        console.error(
-          `[Navigation] Zone list rejected: HTTP ${response.status} — ${
-            process.env[SERVICE_TOKEN_ENV]
-              ? `the configured ${SERVICE_TOKEN_ENV} was refused`
-              : `no ${SERVICE_TOKEN_ENV} is configured`
-          }. Named zones cannot be resolved until that is fixed.`
-        );
-      } else {
-        console.warn('[Navigation] Failed to fetch zones:', response.status);
-      }
-      // Same seeding the catch branch does: home and the charging station have
-      // to keep working when the zone list does not.
-      if (Object.keys(cachedNamedLocations).length === 0) {
-        cachedNamedLocations = { ...FALLBACK_LOCATIONS };
-      }
-      return cachedZones;
-    }
-    const data = (await response.json()) as { data?: Zone[] };
-    cachedZones = data.data || [];
-    lastZoneFetch = now;
-    zonesReadable = true;
-
-    // Derive named locations from zones
-    cachedNamedLocations = deriveNamedLocationsFromZones(cachedZones);
-    console.log(
-      `[Navigation] Fetched ${cachedZones.length} zones, derived ${Object.keys(cachedNamedLocations).length} named locations`
-    );
-
-    // Share zone cache with simulation engine for real-time zone tracking
-    if (robotStateManager) {
-      robotStateManager.setZoneCache(cachedZones);
-    }
-  } catch (error) {
-    zonesReadable = false;
-    // Log a concise message - this is expected when server isn't running yet
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    const isConnectionError = message.includes('fetch failed') || message.includes('ECONNREFUSED');
-    if (isConnectionError) {
-      console.warn('[Navigation] Server not available, using fallback locations');
-    } else {
-      console.warn('[Navigation] Error fetching zones:', message);
-    }
-    // Use fallback locations if no cache available
-    if (Object.keys(cachedNamedLocations).length === 0) {
-      cachedNamedLocations = { ...FALLBACK_LOCATIONS };
-    }
-  }
-
-  return cachedZones;
+export function chargingStationLocation(): RobotLocation | null {
+  const places = registeredPlaces();
+  if (!places) return null;
+  const from = robotStateManager.getState().location;
+  const charger = nearest(places.filter((p) => p.placeType === 'charging' && !p.keepout), from);
+  return charger ? locationOf(charger) : null;
 }
 
 /**
- * Get a named location by name (async - fetches from server if needed)
- * @param name - Location name (e.g., "home", "charging_station", "warehouse_a")
- * @returns Location coordinates or undefined if not found
- */
-export async function getNamedLocation(name: string): Promise<RobotLocation | undefined> {
-  // Ensure zones are fetched (which also populates named locations)
-  await fetchZones();
-
-  const key = name.toLowerCase().trim().replace(/\s+/g, '_');
-
-  // Exact match first
-  if (cachedNamedLocations[key]) {
-    return cachedNamedLocations[key];
-  }
-
-  // Try with spaces instead of underscores
-  const keyWithSpaces = name.toLowerCase().trim();
-  if (cachedNamedLocations[keyWithSpaces]) {
-    return cachedNamedLocations[keyWithSpaces];
-  }
-
-  // Partial match
-  const found = Object.entries(cachedNamedLocations).find(
-    ([k]) => key.includes(k) || k.includes(key)
-  );
-  return found?.[1];
-}
-
-/**
- * Get the charging station location (async)
+ * Get the charging station location: the nearest `charging` place. Throws when
+ * the robot knows none — a made-up charger is a drive to nowhere.
  */
 export async function getChargingStationLocation(): Promise<RobotLocation> {
-  const loc = await getNamedLocation('charging_station');
-  return loc || FALLBACK_LOCATIONS.charging_station;
+  const loc = chargingStationLocation();
+  if (loc) return loc;
+  throw new Error(noChargerReason());
+}
+
+/** Why {@link chargingStationLocation} came back empty, operator-facing. */
+function noChargerReason(): string {
+  return registeredPlaces()
+    ? 'No charging place in this robot\'s place graph.'
+    : 'Cannot find a charging place: this robot has no registered place graph.';
 }
 
 /**
- * Get the home location (async)
+ * Get the home location: the frame origin.
  */
 export async function getHomeLocation(): Promise<RobotLocation> {
-  const loc = await getNamedLocation('home');
-  return loc || FALLBACK_LOCATIONS.home;
+  return { ...HOME_LOCATION };
 }
 
 /**
- * Check if a point is inside zone bounds
+ * Resolve a named destination to a location. `home` is the frame origin; every
+ * other name must be a place of the registered graph.
  */
-function isPointInBounds(x: number, y: number, bounds: ZoneBounds): boolean {
-  return (
-    x >= bounds.x &&
-    x <= bounds.x + bounds.width &&
-    y >= bounds.y &&
-    y <= bounds.y + bounds.height
-  );
-}
-
-/**
- * Find the zone at a specific point
- */
-function findZoneAtPoint(x: number, y: number, floor: string, zones: Zone[]): Zone | null {
-  for (const zone of zones) {
-    if (zone.floor === floor && isPointInBounds(x, y, zone.bounds)) {
-      return zone;
-    }
+function resolveNamedDestination(name: string): { location: RobotLocation; place: Place | null } {
+  if (name.trim().toLowerCase() === HOME_ALIAS) return { location: { ...HOME_LOCATION }, place: null };
+  const places = registeredPlaces();
+  if (!places) {
+    throw new Error(
+      `Cannot resolve place "${name}": this robot has no registered place graph, so no place is known. ` +
+        'Bind the robot to a site, or move by coordinates.',
+    );
   }
-  return null;
-}
-
-/**
- * Validate that a destination is not in a restricted zone
- */
-async function validateDestinationZone(
-  location: RobotLocation
-): Promise<{ valid: boolean; message?: string; zone?: Zone }> {
-  const zones = await fetchZones();
-  const floor = location.floor || '1';
-  const zone = findZoneAtPoint(location.x, location.y, floor, zones);
-
-  if (zone && zone.type === 'restricted') {
-    return {
-      valid: false,
-      message: `Cannot navigate to "${zone.name}" - this is a restricted zone.`,
-      zone,
-    };
+  const place = resolvePlaceDestination(name, places, robotStateManager.getState().location);
+  if (!place) {
+    const known = places.map((p) => p.id).join(', ');
+    throw new Error(`Unknown place "${name}". Known places: ${known}.`);
   }
-
-  return { valid: true, zone: zone || undefined };
+  return { location: locationOf(place), place };
 }
 
+/** A move request resolved to a point, or refused with the reason. */
+export type MoveTarget =
+  | { ok: true; location: RobotLocation; label: string }
+  | { ok: false; message: string; keepout?: string };
+
 /**
- * Clear zone cache (call when zones are updated).
+ * Turn a move request — coordinates, or a place by id, name or type — into the
+ * point to drive to, refusing any point inside a keepout of the registered
+ * place graph. Shared by the agent's `moveToLocation` tool and the REST `move`
+ * command (`roboctl move`), so both refuse the same things.
  *
- * The derived named locations go with it: they ARE the zone list in another
- * shape, so keeping them would answer from a cache the caller just declared
- * stale — and would hide an unreadable zone list behind names read earlier.
+ * Without a registered graph a named move fails (no place is known) and a
+ * coordinate move proceeds: there is nothing to judge a keepout by, and the
+ * geofence remains the safety layer.
  */
-export function clearZoneCache(): void {
-  cachedZones = [];
-  cachedNamedLocations = {};
-  lastZoneFetch = 0;
-  zonesReadable = false;
-}
-
-/**
- * Resolve a destination to a RobotLocation (async - fetches from server)
- */
-async function resolveDestination(
-  destination:
-    | { x: number; y: number; floor?: string; zone?: string }
-    | { zone: string }
-    | { namedLocation: string }
-): Promise<RobotLocation> {
-  if ('namedLocation' in destination) {
-    const loc = await getNamedLocation(destination.namedLocation);
-    if (loc) return loc;
-    throw new Error(`Unknown named location: ${destination.namedLocation}`);
-  }
-
-  if ('zone' in destination && !('x' in destination)) {
-    // Try to find zone in named locations (from server)
-    const loc = await getNamedLocation(destination.zone);
-    if (loc) return loc;
-    // No invented coordinate. This used to return (25, 25) for any zone the
-    // server never confirmed, and the robot then drove to a made-up spot and
-    // reported success from it — a fabricated arrival is worse than a refusal.
-    if (!zonesReadable) {
-      throw new Error(
-        `Cannot resolve zone "${destination.zone}": the zone list could not be read from the platform, so this destination is unknown.`
-      );
+export function resolveMoveTarget(input: { x?: number; y?: number; place?: string; floor?: string }): MoveTarget {
+  const { x, y, place } = input;
+  let location: RobotLocation;
+  let label: string;
+  if (x !== undefined && y !== undefined) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return { ok: false, message: 'Invalid coordinates: x and y must be valid numbers' };
     }
-    throw new Error(`Unknown zone: ${destination.zone}`);
+    location = { x, y, floor: input.floor ?? currentFloor() };
+    label = `(${x}, ${y})`;
+  } else if (typeof place === 'string') {
+    const name = place.trim();
+    if (name.length === 0 || name.length > 100) {
+      return { ok: false, message: 'Invalid place: must be 1-100 characters' };
+    }
+    try {
+      location = resolveNamedDestination(name).location;
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+    label = name;
+  } else {
+    return { ok: false, message: 'Provide either coordinates (x, y) or a place' };
   }
 
-  // Coordinates provided
-  return {
-    x: destination.x,
-    y: destination.y,
-    floor: destination.floor || '1',
-    zone: destination.zone,
-  };
+  const places = registeredPlaces();
+  const keepout = places ? keepoutAt(location.x, location.y, places) : null;
+  if (keepout) {
+    return { ok: false, message: `Cannot navigate to "${keepout.id}" — it is a keepout.`, keepout: keepout.id };
+  }
+  return { ok: true, location, label };
 }
 
 export const moveToLocation = ai.defineTool(
   {
     name: 'moveToLocation',
     description:
-      'Move the robot to a specified location. Provide EITHER coordinates (x, y) OR a zone/location name. Named locations: home, charging_station, entrance, exit, warehouse_a, warehouse_b, loading_dock. Zone examples: "Warehouse A", "Loading Dock".',
+      'Move the robot to a place of its site, or to coordinates. Provide EITHER coordinates (x, y, metres) OR a place: ' +
+      'a place id (e.g. "CHARGING-A"), its name (e.g. "Charging Bay A") or its type (e.g. "charging station" — the nearest one). ' +
+      '"home" is the frame origin. Keepout places (rack faces, dock edges) are refused.',
     inputSchema: z.object({
-      x: z.number().optional().describe('X coordinate (use with y for coordinates)'),
-      y: z.number().optional().describe('Y coordinate (use with x for coordinates)'),
-      zone: z.string().optional().describe('Zone or named location (e.g., "Warehouse A", "home", "charging_station")'),
+      x: z.number().optional().describe('X coordinate in metres (use with y)'),
+      y: z.number().optional().describe('Y coordinate in metres (use with x)'),
+      place: z.string().optional().describe('Place id, name or type (e.g. "CHARGING-A", "Aisle 1", "home")'),
     }),
   },
-  async ({ x, y, zone }) => {
-    // Convert flat params to destination object with proper typing
-    type Destination = { x: number; y: number } | { zone: string };
-    let destination: Destination;
-
-    if (x !== undefined && y !== undefined) {
-      // Validate coordinates are finite numbers
-      if (!Number.isFinite(x) || !Number.isFinite(y)) {
-        return { success: false, message: 'Invalid coordinates: x and y must be valid numbers' };
-      }
-      destination = { x, y };
-    } else if (zone) {
-      // Validate zone string
-      const trimmedZone = zone.trim();
-      if (trimmedZone.length === 0 || trimmedZone.length > 100) {
-        return { success: false, message: 'Invalid zone: must be 1-100 characters' };
-      }
-      destination = { zone: trimmedZone };
-    } else {
-      return { success: false, message: 'Provide either coordinates (x, y) or a zone name' };
-    }
-    console.log('[Tool:moveToLocation]', JSON.stringify(destination));
-
+  async ({ x, y, place }) => {
     if (!robotStateManager) {
       return { success: false, message: 'Robot state manager not initialized', currentLocation: null };
     }
+    console.log('[Tool:moveToLocation]', JSON.stringify({ x, y, place }));
+
+    const target = resolveMoveTarget({ x, y, place });
+    if (!target.ok) {
+      return {
+        success: false,
+        message: target.message,
+        ...(target.keepout ? { keepout: target.keepout } : {}),
+        currentLocation: robotStateManager.getState().location,
+      };
+    }
 
     try {
-      const location = await resolveDestination(destination);
-
-      // Validate destination is not in a restricted zone
-      const validation = await validateDestinationZone(location);
-      if (!validation.valid) {
-        return {
-          success: false,
-          message: validation.message,
-          currentLocation: robotStateManager.getState().location,
-          restrictedZone: validation.zone?.name,
-        };
-      }
-
-      const result = await robotStateManager.moveTo(location);
+      const result = await robotStateManager.moveTo(target.location);
       const state = robotStateManager.getState();
-
       return {
         success: result.success,
         message: result.message,
         estimatedTime: result.estimatedTime,
         currentLocation: state.location,
-        targetLocation: location,
-        destinationZone: validation.zone?.name,
+        targetLocation: target.location,
+        destination: target.label,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       return {
         success: false,
-        message: errorMessage,
+        message: error instanceof Error ? error.message : 'Unknown error occurred',
         currentLocation: robotStateManager.getState().location,
       };
     }
@@ -404,8 +245,11 @@ export const goToCharge = ai.defineTool(
       return { success: false, message: 'Robot state manager not initialized' };
     }
 
-    // Get charging station location from server
-    const chargingStation = await getChargingStationLocation();
+    // The nearest charging place of the robot's registered place graph.
+    const chargingStation = chargingStationLocation();
+    if (!chargingStation) {
+      return { success: false, message: noChargerReason() };
+    }
     const result = await robotStateManager.moveTo(chargingStation);
     const state = robotStateManager.getState();
 
@@ -436,7 +280,7 @@ export const returnHome = ai.defineTool(
       return { success: false, message: 'Robot state manager not initialized' };
     }
 
-    // Get home location from server
+    // Home is the frame origin.
     const home = await getHomeLocation();
     const result = await robotStateManager.moveTo(home);
     const state = robotStateManager.getState();

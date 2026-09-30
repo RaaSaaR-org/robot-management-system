@@ -8,6 +8,7 @@ import ora from 'ora';
 import { createClient } from '../api/client.js';
 import { formatCommand, printError, colors } from '../utils/output.js';
 import type { CliOptions, CommandType } from '../api/types.js';
+import { describeDestination, parseMoveArgs, type MoveDestination } from './move-args.js';
 
 // Helper to execute a command
 async function executeCommand(
@@ -33,25 +34,25 @@ async function executeCommand(
 
 // Move command
 export const moveCommand = new Command('move')
-  .description('Move robot to coordinates')
-  .argument('<x>', 'X coordinate', parseFloat)
-  .argument('<y>', 'Y coordinate', parseFloat)
-  .option('-z, --zone <zone>', 'Target zone name')
+  .description('Move robot to a place of its site, or to coordinates')
+  .argument('<target...>', 'a place (id, name or type, e.g. "CHARGING-A"), or <x> <y> in metres')
+  .option('-p, --place <place>', 'Place the coordinates belong to (label only)')
   .option('--floor <floor>', 'Target floor')
-  .action(async (x: number, y: number, options: { zone?: string; floor?: string }) => {
+  // A negative coordinate (`move 4.5 -1`) is an argument, not an option.
+  .allowUnknownOption()
+  .action(async (target: string[], options: { place?: string; floor?: string }) => {
     const opts = moveCommand.optsWithGlobals<CliOptions>();
 
-    if (isNaN(x) || isNaN(y)) {
-      printError('Invalid coordinates. X and Y must be numbers.');
+    let destination: MoveDestination;
+    try {
+      destination = parseMoveArgs(target, options);
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
       process.exit(1);
     }
 
-    // Robot-agent expects destination as a RobotLocation object
-    const destination: Record<string, unknown> = { x, y };
-    if (options.zone) destination.zone = options.zone;
-    if (options.floor) destination.floor = options.floor;
-
-    await executeCommand(opts, 'move', { destination }, `Moving to (${x}, ${y})...`);
+    // The agent resolves a place against its own place graph and refuses keepouts.
+    await executeCommand(opts, 'move', { destination }, `Moving to ${describeDestination(destination)}...`);
   });
 
 // Stop command

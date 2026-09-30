@@ -6,7 +6,7 @@
  */
 
 import type { SimulatedRobotState, RobotLocation, Zone } from './types.js';
-import { getChargingStationLocation } from '../tools/navigation.js';
+import { chargingStationLocation } from '../tools/navigation.js';
 import { isPointInZone } from './zoneUtils.js';
 import { formatZoneEnterEvent, formatZoneExitEvent } from './telemetry.js';
 
@@ -51,7 +51,6 @@ const LOW_BATTERY_CLEAR_PCT = 25;
 
 export class SimulationEngine {
   private simulationInterval: NodeJS.Timeout | null = null;
-  private cachedChargingStation: RobotLocation | null = null;
   private zoneCache: Zone[] = [];
   private previousZone: Zone | null = null;
   /** See {@link SimulationEngine.setPoseAuthority}. Null = simulation owns the position. */
@@ -82,9 +81,6 @@ export class SimulationEngine {
     const state = this.stateGetter();
     console.log(`[SimulationEngine] Starting simulation for ${state.name}`);
 
-    // Prefetch charging station location
-    this.prefetchChargingStation();
-
     this.simulationInterval = setInterval(() => {
       this.tick();
     }, this.config.tickIntervalMs);
@@ -113,7 +109,17 @@ export class SimulationEngine {
    * Get the cached charging station location
    */
   getChargingStationLocation(): RobotLocation | null {
-    return this.cachedChargingStation;
+    return this.chargingStation;
+  }
+
+  /**
+   * The charger the battery logic drives to: the nearest `charging` place of
+   * the robot's registered place graph (TASK-329), read live because the graph
+   * arrives after `start()`. A robot with no such place charges at home, the
+   * frame origin — the one location that needs no graph.
+   */
+  private get chargingStation(): RobotLocation | null {
+    return chargingStationLocation() ?? { x: 0, y: 0, floor: '1', zone: 'Home Base' };
   }
 
   /**
@@ -144,20 +150,6 @@ export class SimulationEngine {
    */
   setPoseAuthority(probe: (() => boolean) | null): void {
     this.poseAuthority = probe;
-  }
-
-  /**
-   * Prefetch charging station location from server
-   */
-  private async prefetchChargingStation(): Promise<void> {
-    try {
-      const loc = await getChargingStationLocation();
-      this.cachedChargingStation = loc;
-      console.log(`[SimulationEngine] Cached charging station location: (${loc.x}, ${loc.y})`);
-    } catch (error) {
-      console.error('[SimulationEngine] Failed to fetch charging station location:', error);
-      this.cachedChargingStation = { x: 0, y: 0, floor: '1', zone: 'charging' };
-    }
   }
 
   /**
@@ -251,12 +243,12 @@ export class SimulationEngine {
    * Check if robot arrived at charging station
    */
   private checkChargingStationArrival(): void {
-    if (!this.cachedChargingStation) return;
+    if (!this.chargingStation) return;
 
     const state = this.stateGetter();
     const isAtChargingStation =
-      Math.abs(state.location.x - this.cachedChargingStation.x) < 1 &&
-      Math.abs(state.location.y - this.cachedChargingStation.y) < 1;
+      Math.abs(state.location.x - this.chargingStation.x) < 1 &&
+      Math.abs(state.location.y - this.chargingStation.y) < 1;
 
     if (isAtChargingStation) {
       this.stateUpdater((s) => {
@@ -369,7 +361,7 @@ export class SimulationEngine {
       newState.batteryLevel < 20 &&
       newState.status === 'online' &&
       !newState.targetLocation &&
-      this.cachedChargingStation
+      this.chargingStation
     ) {
       return this.startReturnToCharger('Returning to charging station');
     }
@@ -379,10 +371,10 @@ export class SimulationEngine {
     // behavior (their errors[] contains 'Critical battery level').
     if (newState.batteryLevel < 5 && !this.isEnRouteToCharger(newState)) {
       const batteryError = newState.errors.includes('Critical battery level');
-      if (this.cachedChargingStation && (newState.status !== 'error' || batteryError)) {
+      if (this.chargingStation && (newState.status !== 'error' || batteryError)) {
         return this.startReturnToCharger('Emergency: returning to charging station', true);
       }
-      if (!this.cachedChargingStation && newState.status !== 'error') {
+      if (!this.chargingStation && newState.status !== 'error') {
         // No charging station known — nothing to dock to, report the failure
         this.stateUpdater((s) => {
           if (!s.errors.includes('Critical battery level')) {
@@ -403,7 +395,7 @@ export class SimulationEngine {
    * @returns true (state changed)
    */
   private startReturnToCharger(taskName: string, critical = false): boolean {
-    const charger = this.cachedChargingStation;
+    const charger = this.chargingStation;
     if (!charger) return false;
 
     const state = this.stateGetter();
@@ -426,12 +418,12 @@ export class SimulationEngine {
    * Whether the robot is already moving towards the charging station
    */
   private isEnRouteToCharger(state: SimulatedRobotState): boolean {
-    if (!this.cachedChargingStation || !state.targetLocation || state.status !== 'busy') {
+    if (!this.chargingStation || !state.targetLocation || state.status !== 'busy') {
       return false;
     }
     return (
-      Math.abs(state.targetLocation.x - this.cachedChargingStation.x) < 1 &&
-      Math.abs(state.targetLocation.y - this.cachedChargingStation.y) < 1
+      Math.abs(state.targetLocation.x - this.chargingStation.x) < 1 &&
+      Math.abs(state.targetLocation.y - this.chargingStation.y) < 1
     );
   }
 

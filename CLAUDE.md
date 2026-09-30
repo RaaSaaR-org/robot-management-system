@@ -148,7 +148,7 @@ A CLI for controlling robot agents lives in `robot-agent/cli/`. See `robot-agent
 ```bash
 cd robot-agent/cli && npm run dev -- status       # Robot status
 cd robot-agent/cli && npm run dev -- telemetry    # Live telemetry
-cd robot-agent/cli && npm run dev -- move "Warehouse A"  # Send to zone
+cd robot-agent/cli && npm run dev -- move "CHARGING-A"  # Send to a place
 cd robot-agent/cli && npm run dev -- health       # Health check
 cd robot-agent/cli && npm run dev                 # Interactive REPL mode
 
@@ -156,7 +156,7 @@ cd robot-agent/cli && npm run dev                 # Interactive REPL mode
 cd robot-agent/cli && npm link
 roboctl status
 roboctl telemetry
-roboctl move "Warehouse A"
+roboctl move "CHARGING-A"
 ```
 
 ### Database Commands (Server)
