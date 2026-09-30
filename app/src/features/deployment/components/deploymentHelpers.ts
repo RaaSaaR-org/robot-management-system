@@ -58,6 +58,9 @@ export const canRollBack = (d: Pick<Deployment, 'status'>) =>
   d.status === 'deploying' || d.status === 'canary' || d.status === 'production';
 export const canCancel = (d: Pick<Deployment, 'status'>) =>
   d.status === 'pending' || d.status === 'deploying' || d.status === 'canary';
+/** Not rolling out, so the server allows a delete (TASK-272). */
+export const canDelete = (d: Pick<Deployment, 'status'>) =>
+  d.status === 'pending' || d.status === 'failed' || d.status === 'rolled_back' || d.status === 'cancelled';
 
 /** The human name of a model version: its name, else its skill's name, else "Model v…". */
 export function modelName(mv?: Pick<ModelVersion, 'name' | 'version' | 'skill'> | null): string {

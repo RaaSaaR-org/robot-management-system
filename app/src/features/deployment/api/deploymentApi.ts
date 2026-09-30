@@ -209,6 +209,14 @@ export const deploymentApi = {
     return response.data.deployment;
   },
 
+  /**
+   * Delete a deployment that is not rolling out (pending, failed, rolled back
+   * or cancelled). A live one answers 409: roll it back or cancel it first.
+   */
+  async deleteDeployment(id: string): Promise<void> {
+    await apiClient.delete(ENDPOINTS.deployment(id));
+  },
+
   // ============================================================================
   // SKILLS
   // ============================================================================
@@ -550,5 +558,14 @@ export const deploymentApi = {
       input
     );
     return unwrapModelVersion(response.data);
+  },
+
+  /**
+   * Archive a model version — the registry's delete. The row is kept, because
+   * deployments, evaluations and lineage point at it. The server answers 409
+   * while a deployment of it is unfinished or a skill runs it.
+   */
+  async archiveModelVersion(id: string): Promise<void> {
+    await apiClient.delete(ENDPOINTS.modelVersion(id));
   },
 };

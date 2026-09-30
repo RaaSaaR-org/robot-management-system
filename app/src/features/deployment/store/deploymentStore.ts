@@ -65,6 +65,7 @@ const initialState: DeploymentState = {
   // Model Versions
   modelVersions: [],
   modelVersionsLoading: false,
+  modelVersionsError: null,
 
   // Filters
   deploymentFilters: {},
@@ -216,6 +217,17 @@ export const useDeploymentStore = create<DeploymentStore>()(
           const index = state.deployments.findIndex((d) => d.id === id);
           if (index !== -1) {
             state.deployments[index] = deployment;
+          }
+        });
+      },
+
+      deleteDeployment: async (id: string) => {
+        await deploymentApi.deleteDeployment(id);
+
+        set((state) => {
+          state.deployments = state.deployments.filter((d) => d.id !== id);
+          if (state.selectedDeploymentId === id) {
+            state.selectedDeploymentId = null;
           }
         });
       },
@@ -551,6 +563,7 @@ export const useDeploymentStore = create<DeploymentStore>()(
       fetchModelVersions: async (params?: { skillId?: string; deploymentStatus?: string }) => {
         set((state) => {
           state.modelVersionsLoading = true;
+          state.modelVersionsError = null;
         });
 
         try {
@@ -561,9 +574,11 @@ export const useDeploymentStore = create<DeploymentStore>()(
             state.modelVersionsLoading = false;
           });
         } catch (error) {
-          console.error('Failed to fetch model versions:', error);
+          // Recorded, not swallowed: /models shows it with a Retry (TASK-272).
+          // Still resolves, so callers that only want the list are unaffected.
           set((state) => {
             state.modelVersionsLoading = false;
+            state.modelVersionsError = getErrorMessage(error, "Couldn't load model versions");
           });
         }
       },
@@ -736,6 +751,7 @@ export const selectSkillChainById = (id: string) => (state: DeploymentStore) =>
 // Model Versions
 export const selectModelVersions = (state: DeploymentStore) => state.modelVersions;
 export const selectModelVersionsLoading = (state: DeploymentStore) => state.modelVersionsLoading;
+export const selectModelVersionsError = (state: DeploymentStore) => state.modelVersionsError;
 
 export const selectStagingVersions = (state: DeploymentStore) =>
   state.modelVersions.filter((v) => v.deploymentStatus === 'staging');

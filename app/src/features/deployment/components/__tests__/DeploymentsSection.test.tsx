@@ -37,6 +37,7 @@ const acts = {
   promote: vi.fn(),
   openRollback: vi.fn(),
   cancel: vi.fn(),
+  remove: vi.fn(),
 } as unknown as DeploymentActs;
 
 function renderSection(deployments: Deployment[]) {
@@ -83,5 +84,28 @@ describe('DeploymentsSection — History', () => {
 
     await user.click(screen.getByRole('button', { name: 'History' }));
     expect(screen.getAllByRole('row').length).toBe(finished.length + 1); // + header
+  });
+});
+
+describe('DeploymentsSection — Delete (TASK-272)', () => {
+  it('offers Delete on a cancelled rollout and hands it to the act', async () => {
+    const user = userEvent.setup();
+    const cancelled = makeDeployment('d-cancelled', 'cancelled');
+    renderSection([cancelled]);
+
+    await user.click(screen.getByRole('button', { name: 'History' }));
+    await user.click(screen.getByRole('button', { name: /Actions for/ }));
+    await user.click(screen.getByRole('menuitem', { name: /Delete/ }));
+
+    expect(acts.remove).toHaveBeenCalledWith(cancelled);
+  });
+
+  it('offers no Delete on a live rollout', async () => {
+    const user = userEvent.setup();
+    renderSection([makeDeployment('d-canary', 'canary')]);
+
+    await user.click(screen.getByRole('button', { name: /Actions for/ }));
+    expect(screen.queryByRole('menuitem', { name: /Delete/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Cancel deployment/ })).toBeInTheDocument();
   });
 });
