@@ -3,7 +3,7 @@ id: "TASK-313"
 aliases: []
 title: "Robot-wide per-user control leases"
 slug: "robot-wide-per-user-control-leases"
-status: "todo"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -185,3 +185,19 @@ stop behaviour on hardware is measured separately and is not claimed by this epi
   decision above was taken by the agent and is marked so in the record.
 - 2026-09-30: the user answered all five open questions (see *Resolved
   questions* and the record); TASK-321 added for the default-on flip.
+
+## Outcome
+
+Shipped 2026-09-30. Every child merged:
+
+- TASK-314 — the agent keeps one fenced control lease (#330)
+- TASK-315 — keyboard teleop drives only on a lease-bound socket (#332)
+- TASK-316 — other agent motion ingress honours the control lease (#333)
+- TASK-317 — the server grants one control lease per robot across replicas (#336)
+- TASK-318 — control leases renew only over a live bound socket (#339)
+- TASK-319 — the teleop console acquires, renews and releases a control lease (#341)
+- TASK-320 — data-collection input views drive under the control lease (#342)
+- TASK-321 — control leases are on by default (#344)
+
+Spec and plan landed in #329, rollout decisions in #331.
+`CONTROL_LEASES_ENABLED` defaults on; `CONTROL_LEASE_REQUIRED` is opt-in.
