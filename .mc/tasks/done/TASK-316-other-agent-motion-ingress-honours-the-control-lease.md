@@ -3,7 +3,7 @@ id: "TASK-316"
 aliases: []
 title: "Other agent motion ingress honours the control lease"
 slug: "other-agent-motion-ingress-honours-the-control-lease"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -70,13 +70,13 @@ unchanged.
 
 ## Acceptance Criteria
 
-- [ ] Flag on + lease held: every listed start route returns 409
+- [x] Flag on + lease held: every listed start route returns 409
       `control_lease_held` naming the holder and starts nothing.
-- [ ] Flag on + lease held: stop, abort and E-stop routes still succeed.
-- [ ] Flag on: bilateral action frames from an unbound socket never reach the
+- [x] Flag on + lease held: stop, abort and E-stop routes still succeed.
+- [x] Flag on: bilateral action frames from an unbound socket never reach the
       sidecar client; a bound socket's do; fence stops them.
-- [ ] Flag on + no lease: autonomous routes behave as today.
-- [ ] Flag off: existing route and bilateral tests pass unmodified.
+- [x] Flag on + no lease: autonomous routes behave as today.
+- [x] Flag off: existing route and bilateral tests pass unmodified.
 
 ## Test Strategy
 
