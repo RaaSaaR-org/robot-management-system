@@ -27,7 +27,13 @@ re-releases) — see `CHANGELOG.md`.
    (`.github/workflows/prepare-release-pr.yml`) keeps an always-open PR titled
    `chore(release): vYYYY.MM.DD`. It shows the next CalVer version and the
    `CHANGELOG.md` entries accumulated since the last release. Review it any time
-   to see exactly what the next release will contain.
+   to see exactly what the next release will contain. The section is built by
+   `scripts/release/changelog-section.sh`: every non-merge commit becomes one
+   line, placed by its conventional prefix, else by its PR's branch type
+   (`feat/…` → Added, `fix/…` → Fixed, `refactor/…` → Changed,
+   `chore/…`/`docs/…` → Maintenance), else under Changed. If a line goes
+   missing the run fails and names the subject, rather than publishing a short
+   release note. `scripts/release/test-changelog-section.sh` tests it.
 2. **Squash-merge that PR** when you want to ship.
 3. On merge, **Release (CalVer)** (`.github/workflows/release.yml`) detects the
    new untagged version at the top of `CHANGELOG.md`, tags `vYYYY.MM.DD`, creates

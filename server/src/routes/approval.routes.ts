@@ -20,6 +20,7 @@ import type {
   ApprovalDecision,
   DecisionContestStatus,
 } from '../types/approval.types.js';
+import { APPROVAL_TYPE_MAP } from '../types/approval.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
 
 export const approvalRoutes = Router();
@@ -105,6 +106,14 @@ approvalRoutes.post('/', async (req: Request, res: Response) => {
     if (!entityType || !entityId || !requestedBy || !requestReason) {
       return res.status(400).json({
         error: 'entityType, entityId, requestedBy, and requestReason are required',
+      });
+    }
+
+    // An entity type with no workflow config has no approver chain to build,
+    // so the repository would crash reading its defaults (TASK-270).
+    if (!Object.prototype.hasOwnProperty.call(APPROVAL_TYPE_MAP, entityType)) {
+      return res.status(400).json({
+        error: `No approval workflow is configured for entity type ${entityType}`,
       });
     }
 
