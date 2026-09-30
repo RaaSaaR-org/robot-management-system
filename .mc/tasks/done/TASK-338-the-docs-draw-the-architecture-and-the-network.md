@@ -3,7 +3,7 @@ id: "TASK-338"
 aliases: []
 title: "The docs draw the architecture and the network"
 slug: "the-docs-draw-the-architecture-and-the-network"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -64,12 +64,12 @@ checked against the code on `main`.
 
 ## Acceptance Criteria
 
-- [ ] Every port, path and protocol in the two SVGs and the port table has a
+- [x] Every port, path and protocol in the two SVGs and the port table has a
       source in the code on `main`.
-- [ ] Both SVGs are readable in light and dark mode on GitHub, and click-to-focus
+- [x] Both SVGs are readable in light and dark mode on GitHub, and click-to-focus
       works when the file is opened directly in a browser.
-- [ ] The Mermaid blocks render on GitHub.
-- [ ] `docs/architecture.md` no longer claims a Pi 5, `:41245` as the agent
+- [x] The Mermaid blocks render on GitHub.
+- [x] `docs/architecture.md` no longer claims a Pi 5, `:41245` as the agent
       port, or sidecar → VLA as the main inference path.
 
 ## Test Strategy
