@@ -99,6 +99,21 @@ export class ExperimentRepository {
   }
 
   /**
+   * Move `from` → `data.status` only if the experiment is still `from`; true
+   * when this call made the move. Approve, reject and cancel race each other
+   * (two approvers, or a cancel mid-approval); the loser sees false and never
+   * spends GPU time on a decision that was already taken.
+   */
+  async transition(
+    id: string,
+    from: string,
+    data: Partial<Omit<Experiment, 'id' | 'createdAt' | 'updatedAt'>> & { status: string }
+  ): Promise<boolean> {
+    const { count } = await prisma.experiment.updateMany({ where: { id, status: from }, data });
+    return count === 1;
+  }
+
+  /**
    * running → completed with the verdict, only if still running. Two arms
    * settling at once both try to conclude; exactly one wins this write, and
    * only the winner posts the verdict comment.

@@ -88,6 +88,13 @@ export class FakeExperimentRepo {
     return e;
   }
 
+  async transition(id: string, from: string, data: Partial<Experiment> & { status: string }) {
+    const e = this.experiments.get(id);
+    if (!e || e.status !== from) return false;
+    this.experiments.set(id, { ...e, ...data, updatedAt: new Date() });
+    return true;
+  }
+
   async markCompleted(id: string, verdictJson: string) {
     const e = this.experiments.get(id);
     if (!e || e.status !== 'running') return false;

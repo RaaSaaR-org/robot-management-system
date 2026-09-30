@@ -12,7 +12,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { ArmComparisonChart } from '../ArmComparisonChart';
 import { ApproveExperimentDialog } from '../ApproveExperimentDialog';
 import { ArmTable } from '../ArmTable';
-import { halfWidth95, rateWithCount } from '../../utils/experiments';
+import { interval95, rateWithCount } from '../../utils/experiments';
 import type { Experiment, ExperimentArm } from '../../types/experiment.types';
 
 function arm(over: Partial<ExperimentArm>): ExperimentArm {
@@ -63,7 +63,11 @@ describe('ArmComparisonChart', () => {
   });
 
   it('draws a much wider interval for 12 rollouts than for 400', () => {
-    expect(halfWidth95(8 / 12, 12)).toBeGreaterThan(5 * halfWidth95(0.8, 400));
+    const width = (r: number, n: number) => interval95(r, n).hi - interval95(r, n).lo;
+    expect(width(8 / 12, 12)).toBeGreaterThan(5 * width(0.8, 400));
+    // 12/12 is not certainty: the interval stays wide at the edge.
+    expect(interval95(1, 12).lo).toBeLessThan(0.8);
+    expect(interval95(1, 12).hi).toBeCloseTo(1, 9);
   });
 
   it('says so when nothing is scored', () => {

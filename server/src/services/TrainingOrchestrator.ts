@@ -138,10 +138,6 @@ const WORKER_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 // TRAINING ORCHESTRATOR SERVICE
 // ============================================================================
 
-/**
- * Training job orchestration service
- * Handles job lifecycle, validation, progress tracking, and ETA calculation
- */
 /** Emitted as 'model:completed' once a finished run's ModelVersion is written (TASK-242). */
 export interface TrainingCompletedEvent {
   jobId: string;
@@ -155,6 +151,10 @@ export interface TrainingFailedEvent {
   error: string;
 }
 
+/**
+ * Training job orchestration service
+ * Handles job lifecycle, validation, progress tracking, and ETA calculation
+ */
 export class TrainingOrchestrator extends EventEmitter {
   private static instance: TrainingOrchestrator;
   private etaStates: Map<string, EtaState> = new Map();

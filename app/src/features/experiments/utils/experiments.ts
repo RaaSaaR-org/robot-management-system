@@ -23,12 +23,18 @@ export function deltaPts(delta: number): string {
 }
 
 /**
- * The 95% interval half-width of a success rate from n rollouts (normal
- * approximation), so a chart can draw how wide 12 rollouts really are.
+ * The 95% Wilson score interval of a success rate from n rollouts, so a chart
+ * can draw how wide 12 rollouts really are. Wilson rather than the normal
+ * approximation because the normal one collapses to zero width at 0/n and n/n
+ * — exactly where a small sample most needs to look uncertain.
  */
-export function halfWidth95(rate: number, n: number): number {
-  if (n <= 0) return 0;
-  return 1.96 * Math.sqrt((rate * (1 - rate)) / n);
+export function interval95(rate: number, n: number): { lo: number; hi: number } {
+  if (n <= 0) return { lo: 0, hi: 1 };
+  const z = 1.96;
+  const z2n = (z * z) / n;
+  const centre = (rate + z2n / 2) / (1 + z2n);
+  const half = (z * Math.sqrt((rate * (1 - rate)) / n + z2n / (4 * n))) / (1 + z2n);
+  return { lo: Math.max(0, centre - half), hi: Math.min(1, centre + half) };
 }
 
 /** What an arm varies against the baseline, in one line. */

@@ -164,6 +164,30 @@ describe('approve', () => {
     expect((await codeOf(svc.approve(exp.id, HUMAN))).status).toBe(409);
   });
 
+  it('two concurrent approvals submit one set of jobs, and the loser gets 409', async () => {
+    const exp = await svc.propose(design(), AGENT);
+    const results = await Promise.allSettled([svc.approve(exp.id, HUMAN), svc.approve(exp.id, HUMAN)]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const lost = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect((lost.reason as ExperimentError).statusCode).toBe(409);
+    expect(deps.training.submitJob).toHaveBeenCalledTimes(3);
+  });
+
+  it('a cancel landing mid-approval stops the jobs that approval already submitted', async () => {
+    const exp = await svc.propose(design(), AGENT);
+    let cancelled: Promise<unknown> | undefined;
+    deps.training.submitJob.mockImplementationOnce(async () => {
+      cancelled = svc.cancel(exp.id, HUMAN);
+      await cancelled;
+      return { id: 'job-mid' };
+    });
+    const after = await svc.approve(exp.id, HUMAN);
+    await cancelled;
+    expect(after.status).toBe('cancelled');
+    expect(deps.training.cancelJob).toHaveBeenCalledWith('job-mid');
+    expect(after.arms.every((a) => a.status === 'cancelled')).toBe(true);
+  });
+
   it('fails an arm whose submission is refused, and keeps the rest running', async () => {
     deps.training.submitJob.mockRejectedValueOnce(new Error('no worker'));
     const exp = await svc.propose(design(), AGENT);

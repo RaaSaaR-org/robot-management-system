@@ -94,6 +94,7 @@ export interface ExperimentDeps {
     | 'list'
     | 'listForModelVersion'
     | 'updateExperiment'
+    | 'transition'
     | 'updateArm'
     | 'findArm'
     | 'findArmByTrainingJobId'
@@ -473,7 +474,10 @@ export class ExperimentService {
     const frozen = await this.deps.freezeViews(cited);
 
     const approvedAt = this.deps.now();
-    await this.deps.repo.updateExperiment(id, { status: 'approved', approvedBy: approver.actorId, approvedAt });
+    if (!(await this.deps.repo.transition(id, 'proposed', { status: 'approved', approvedBy: approver.actorId, approvedAt }))) {
+      // Someone else approved, rejected or cancelled it between the read and now.
+      throw new ExperimentError('This experiment was decided by someone else in the meantime', 409, 'EXPERIMENT_NOT_PROPOSED');
+    }
     await this.deps.compliance.logSystemEvent({
       sessionId: `experiment-${id}`,
       robotId: 'platform',
@@ -492,6 +496,7 @@ export class ExperimentService {
       },
     });
 
+    const submitted: string[] = [];
     for (const [i, arm] of exp.arms.entries()) {
       const shape = shapes[i];
       try {
@@ -502,12 +507,25 @@ export class ExperimentService {
           hyperparameters: shape.hyperparameters,
           initFromModelVersionId: shape.initFromModelVersionId ?? null,
         });
+        submitted.push(job.id);
         await this.deps.repo.updateArm(arm.id, { trainingJobId: job.id, status: 'training' });
       } catch (e) {
         await this.deps.repo.updateArm(arm.id, { status: 'failed', failureReason: `Training submission refused: ${(e as Error).message}` });
       }
     }
-    await this.deps.repo.updateExperiment(id, { status: 'running' });
+    if (!(await this.deps.repo.transition(id, 'approved', { status: 'running' }))) {
+      // Cancelled while the jobs were being submitted: stop what this call started.
+      for (const jobId of submitted) {
+        await this.deps.training.cancelJob(jobId).catch((e: Error) =>
+          console.warn(`[ExperimentService] could not cancel job ${jobId}: ${e.message}`)
+        );
+      }
+      const arms = await this.load(id);
+      for (const arm of arms.arms) {
+        if (arm.status === 'training') await this.deps.repo.updateArm(arm.id, { status: 'cancelled', failureReason: 'Cancelled during approval' });
+      }
+      return this.get(id);
+    }
     await this.maybeConclude(id);
     return this.get(id);
   }
@@ -518,10 +536,13 @@ export class ExperimentService {
     if (exp.status !== 'proposed') {
       throw new ExperimentError(`Only a proposed experiment can be rejected; this one is ${exp.status}`, 409, 'EXPERIMENT_NOT_PROPOSED');
     }
-    await this.deps.repo.updateExperiment(id, {
+    const rejected = await this.deps.repo.transition(id, 'proposed', {
       status: 'rejected',
       rejectedReason: nonEmpty(reason) ? reason.trim().slice(0, 2000) : null,
     });
+    if (!rejected) {
+      throw new ExperimentError('This experiment was decided by someone else in the meantime', 409, 'EXPERIMENT_NOT_PROPOSED');
+    }
     return this.get(id);
   }
 
@@ -530,11 +551,19 @@ export class ExperimentService {
    * cancelled; arms that already settled keep their results.
    */
   async cancel(id: string, actor: Actor): Promise<ExperimentDTO> {
-    const exp = await this.load(id);
-    if (!['proposed', 'approved', 'running'].includes(exp.status)) {
-      throw new ExperimentError(`A ${exp.status} experiment cannot be cancelled`, 409, 'EXPERIMENT_NOT_CANCELLABLE');
+    // Re-read on a lost race: an approval moving proposed → approved → running
+    // underneath must not turn a cancel into an error.
+    let exp = await this.load(id);
+    for (let attempt = 0; ; attempt++) {
+      if (!['proposed', 'approved', 'running'].includes(exp.status)) {
+        throw new ExperimentError(`A ${exp.status} experiment cannot be cancelled`, 409, 'EXPERIMENT_NOT_CANCELLABLE');
+      }
+      if (await this.deps.repo.transition(id, exp.status, { status: 'cancelled' })) break;
+      if (attempt >= 2) {
+        throw new ExperimentError('This experiment kept changing state while being cancelled — retry', 409, 'EXPERIMENT_NOT_CANCELLABLE');
+      }
+      exp = await this.load(id);
     }
-    await this.deps.repo.updateExperiment(id, { status: 'cancelled' });
     for (const arm of exp.arms) {
       if ((TERMINAL_ARM as readonly string[]).includes(arm.status)) continue;
       if (arm.status === 'training' && arm.trainingJobId) {
@@ -782,6 +811,11 @@ export class ExperimentService {
     });
     simulationService.on('job:completed', (j: SimJob) => run('sim job:completed', this.onSimCompleted(j)));
     simulationService.on('job:failed', (j: SimJob) => run('sim job:failed', this.onSimFailed(j)));
+    // A sim evaluation cancelled outside the loop (the simulation page) would
+    // otherwise leave its arm 'evaluating' and the experiment never concluding.
+    simulationService.on('job:cancelled', (j: SimJob) =>
+      run('sim job:cancelled', this.onSimFailed({ ...j, failureReason: j.failureReason ?? 'cancelled' }))
+    );
   }
 }
 

@@ -8,7 +8,7 @@
 
 import { chartColors } from '@/shared/components/ui';
 import type { ExperimentArm } from '../types/experiment.types';
-import { halfWidth95, pct, rateWithCount } from '../utils/experiments';
+import { interval95, pct, rateWithCount } from '../utils/experiments';
 
 export interface ArmComparisonChartProps {
   arms: ExperimentArm[];
@@ -25,9 +25,7 @@ export function ArmComparisonChart({ arms, winnerArmId }: ArmComparisonChartProp
       <ul className="flex flex-col gap-3">
         {scored.map((arm) => {
           const r = arm.result!;
-          const hw = halfWidth95(r.successRate, r.episodeCount);
-          const lo = Math.max(0, r.successRate - hw);
-          const hi = Math.min(1, r.successRate + hw);
+          const { lo, hi } = interval95(r.successRate, r.episodeCount);
           const tip = `${arm.name}: ${rateWithCount(r)} — 95% interval ${pct(lo)}–${pct(hi)} from ${r.episodeCount} rollouts`;
           return (
             <li key={arm.id} className="grid grid-cols-1 gap-1 sm:grid-cols-[minmax(0,12rem)_1fr] sm:items-center sm:gap-3" title={tip}>
