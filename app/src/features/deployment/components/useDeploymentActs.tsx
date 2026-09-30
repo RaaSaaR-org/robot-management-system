@@ -17,6 +17,8 @@ export interface DeploymentActs {
   start: (d: Deployment) => Promise<boolean>;
   promote: (d: Deployment) => Promise<boolean>;
   cancel: (d: Deployment) => Promise<boolean>;
+  /** Delete a deployment that is not rolling out (TASK-272). */
+  remove: (d: Deployment) => Promise<boolean>;
   openRollback: (d: Deployment) => void;
   /** Render this once in the page: the roll back FormModal. */
   rollbackModal: ReactNode;
@@ -25,8 +27,11 @@ export interface DeploymentActs {
 /**
  * @param onChanged called after every successful act (e.g. to refetch the detail view)
  */
-export function useDeploymentActs(onChanged?: (act: 'start' | 'promote' | 'rollback' | 'cancel') => void): DeploymentActs {
+export function useDeploymentActs(
+  onChanged?: (act: 'start' | 'promote' | 'rollback' | 'cancel' | 'delete') => void,
+): DeploymentActs {
   const startDeployment = useDeploymentStore((s) => s.startDeployment);
+  const deleteDeployment = useDeploymentStore((s) => s.deleteDeployment);
   const promoteDeployment = useDeploymentStore((s) => s.promoteDeployment);
   const rollbackDeployment = useDeploymentStore((s) => s.rollbackDeployment);
   const cancelDeployment = useDeploymentStore((s) => s.cancelDeployment);
@@ -97,6 +102,31 @@ export function useDeploymentActs(onChanged?: (act: 'start' | 'promote' | 'rollb
     [cancelDeployment, onChanged],
   );
 
+  const remove = useCallback(
+    async (d: Deployment) => {
+      const ok = await confirm({
+        title: `Delete ${deploymentName(d)}?`,
+        description:
+          d.status === 'pending'
+            ? 'The rollout never starts and its record is removed for good.'
+            : 'Its record, stage history and robot list are removed for good. Robots keep the model they run now.',
+        confirmLabel: 'Delete',
+        tone: 'danger',
+      });
+      if (!ok) return false;
+      try {
+        await deleteDeployment(d.id);
+        toast.success('Deployment deleted', { description: deploymentName(d) });
+        onChanged?.('delete');
+        return true;
+      } catch (err) {
+        toast.error("Couldn't delete the deployment", { description: errorMessage(err) });
+        return false;
+      }
+    },
+    [deleteDeployment, onChanged],
+  );
+
   const submitRollback = useCallback(
     async (d: Deployment, reason: string) => {
       await rollbackDeployment(d.id, reason); // throws → stays in the modal
@@ -110,6 +140,7 @@ export function useDeploymentActs(onChanged?: (act: 'start' | 'promote' | 'rollb
     start,
     promote,
     cancel,
+    remove,
     openRollback: setRollbackTarget,
     rollbackModal: (
       <RollbackFormModal

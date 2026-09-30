@@ -9,8 +9,10 @@ import express from 'express';
 import request from 'supertest';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
-const { mockUpdateService } = vi.hoisted(() => ({
+const { mockUpdateService, mockAudit } = vi.hoisted(() => ({
+  mockAudit: vi.fn(),
   mockUpdateService: {
+    deleteUpdatePackage: vi.fn(),
     getUpdatePackages: vi.fn(),
     getUpdatePackage: vi.fn(),
     createUpdatePackage: vi.fn(),
@@ -27,6 +29,8 @@ vi.mock('../services/UpdateService.js', () => ({
   updateService: mockUpdateService,
   SEMVER_REGEX: /^\d+\.\d+\.\d+$/,
 }));
+
+vi.mock('../services/buildAudit.js', () => ({ auditBuildAct: mockAudit }));
 
 vi.mock('../middleware/auth.middleware.js', () => ({
   authMiddleware: (req: any, _res: any, next: any) => {
@@ -231,7 +235,11 @@ describe('Update Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.status).toBe('rolled_back');
-      expect(mockUpdateService.triggerRollback).toHaveBeenCalledWith('robot-001', '1.0.0');
+      // The route's package id reaches the service (TASK-272: it used to be dropped).
+      expect(mockUpdateService.triggerRollback).toHaveBeenCalledWith('pkg-001', 'robot-001', '1.0.0');
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ resourceType: 'update_package', resourceId: 'pkg-001', action: 'rollback' })
+      );
     });
 
     it('returns 400 when missing targetVersion', async () => {
@@ -241,6 +249,57 @@ describe('Update Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.error).toContain('targetVersion');
+    });
+
+    it('answers 404 for an unknown package', async () => {
+      const { NotFoundError } = await import('../utils/errors.js');
+      mockUpdateService.triggerRollback.mockRejectedValue(new NotFoundError('Update package', 'nope'));
+
+      const response = await request(app)
+        .post('/api/updates/nope/rollback/robot-001')
+        .send({ targetVersion: '1.0.0' });
+
+      expect(response.status).toBe(404);
+      expect(mockAudit).not.toHaveBeenCalled();
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // DELETE /api/updates/:id (TASK-272)
+  // --------------------------------------------------------------------------
+
+  describe('DELETE /api/updates/:id', () => {
+    const snapshot = { id: 'pkg-001', version: '1.1.0', status: 'approved', checksum: 'cs1' };
+
+    it('deletes a never-deployed package and records it', async () => {
+      mockUpdateService.deleteUpdatePackage.mockResolvedValue({ outcome: 'deleted', snapshot });
+
+      const response = await request(app).delete('/api/updates/pkg-001');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ id: 'pkg-001', outcome: 'deleted' });
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ resourceType: 'update_package', resourceId: 'pkg-001', action: 'delete' })
+      );
+    });
+
+    it('reports an archive when the package has deployment history', async () => {
+      mockUpdateService.deleteUpdatePackage.mockResolvedValue({ outcome: 'archived', snapshot });
+
+      const response = await request(app).delete('/api/updates/pkg-001');
+
+      expect(response.body.outcome).toBe('archived');
+      expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'archive' }));
+    });
+
+    it('passes a 409 through', async () => {
+      const { ConflictError } = await import('../utils/errors.js');
+      mockUpdateService.deleteUpdatePackage.mockRejectedValue(new ConflictError('still installing'));
+
+      const response = await request(app).delete('/api/updates/pkg-001');
+
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe('still installing');
     });
   });
 });

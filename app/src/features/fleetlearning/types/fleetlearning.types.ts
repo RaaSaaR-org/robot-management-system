@@ -370,6 +370,8 @@ export interface FleetLearningActions {
   createRound: (data: CreateFederatedRoundRequest) => Promise<FederatedRound>;
   startRound: (id: string) => Promise<void>;
   cancelRound: (id: string) => Promise<void>;
+  /** Delete a finished round; throws with the server reason (409 while running). */
+  deleteRound: (id: string) => Promise<void>;
   selectRound: (round: FederatedRound | null) => void;
   // Participants
   fetchParticipants: (roundId: string) => Promise<void>;
@@ -412,11 +414,20 @@ export function canStartRound(round: FederatedRound): boolean {
   return round.status === 'created' || round.status === 'selecting';
 }
 
+/** A round in one of these states is over: it can be deleted, not cancelled. */
+const FINISHED_ROUND_STATUSES: readonly FederatedRoundStatus[] = ['completed', 'failed', 'cancelled'];
+
 /**
- * Check if round can be cancelled
+ * Check if round can be cancelled: anything not finished, including a round
+ * created but never started (the server's rule, TASK-272).
  */
 export function canCancelRound(round: FederatedRound): boolean {
-  return isRoundActive(round);
+  return !FINISHED_ROUND_STATUSES.includes(round.status);
+}
+
+/** Check if round can be deleted: only once it is finished. */
+export function canDeleteRound(round: FederatedRound): boolean {
+  return FINISHED_ROUND_STATUSES.includes(round.status);
 }
 
 /**

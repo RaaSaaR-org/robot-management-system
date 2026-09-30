@@ -6,7 +6,7 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowUpCircle, ExternalLink, Plus, Rocket, Search, Undo2, XCircle } from 'lucide-react';
+import { ArrowUpCircle, ExternalLink, Plus, Rocket, Search, Trash2, Undo2, XCircle } from 'lucide-react';
 import {
   Button,
   DataTable,
@@ -24,6 +24,7 @@ import { formatTimeAgo } from '@/shared/utils';
 import type { Deployment } from '../types';
 import {
   canCancel,
+  canDelete,
   canPromote,
   canRollBack,
   deploymentName,
@@ -142,6 +143,14 @@ export function DeploymentsSection({ deployments, isLoading, error, onRetry, onC
         tone: 'danger',
         separatorBefore: true,
         onSelect: () => void acts.cancel(d),
+      });
+    if (canDelete(d))
+      items.push({
+        label: 'Delete',
+        icon: <Trash2 className={icon} />,
+        tone: 'danger',
+        separatorBefore: !canCancel(d),
+        onSelect: () => void acts.remove(d),
       });
     return items;
   };

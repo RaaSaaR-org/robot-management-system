@@ -15,8 +15,14 @@ import type {
 } from '../types/deployment.types.js';
 import type { DeploymentStatus, DeploymentStrategy } from '../types/vla.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { auditBuildAct } from '../services/buildAudit.js';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 
 export const deploymentsRoutes = Router();
+
+function actorOf(req: Request): string | undefined {
+  return (req as AuthenticatedRequest).user?.id;
+}
 
 // ============================================================================
 // POST /api/deployments - Create new deployment
@@ -32,6 +38,13 @@ deploymentsRoutes.post('/', async (req: Request, res: Response) => {
     }
 
     const deployment = await deploymentService.createDeployment(request);
+    await auditBuildAct({
+      resourceType: 'deployment',
+      resourceId: deployment.id,
+      action: 'create',
+      actorId: actorOf(req),
+      metadata: { modelVersionId: deployment.modelVersionId, strategy: deployment.strategy },
+    });
 
     res.status(201).json({
       deployment,
@@ -297,6 +310,14 @@ deploymentsRoutes.post('/:id/cancel', async (req: Request, res: Response) => {
     // Stop monitoring
     deploymentMetricsService.stopMonitoring(id);
 
+    await auditBuildAct({
+      resourceType: 'deployment',
+      resourceId: id,
+      action: 'cancel',
+      actorId: actorOf(req),
+      metadata: { modelVersionId: deployment.modelVersionId },
+    });
+
     res.json({
       deployment,
       message: 'Deployment cancelled',
@@ -304,5 +325,39 @@ deploymentsRoutes.post('/:id/cancel', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[DeploymentsRoutes] Error cancelling deployment:', error);
     sendFailure(res, error, 'Failed to cancel deployment', 400);
+  }
+});
+
+// ============================================================================
+// DELETE /api/deployments/:id - Delete a deployment that is not rolling out
+// ============================================================================
+
+/**
+ * Pending, failed, rolled back or cancelled only (TASK-272); a live one
+ * answers 409. Answers { id, outcome: 'deleted' }.
+ */
+deploymentsRoutes.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const removed = await deploymentService.deleteDeployment(id);
+    deploymentMetricsService.stopMonitoring(id);
+
+    await auditBuildAct({
+      resourceType: 'deployment',
+      resourceId: id,
+      action: 'delete',
+      actorId: actorOf(req),
+      metadata: {
+        status: removed.status,
+        modelVersionId: removed.modelVersionId,
+        strategy: removed.strategy,
+        deployedRobotIds: removed.deployedRobotIds,
+      },
+    });
+
+    res.json({ id, outcome: 'deleted' });
+  } catch (error) {
+    console.error('[DeploymentsRoutes] Error deleting deployment:', error);
+    sendFailure(res, error, 'Failed to delete deployment');
   }
 });

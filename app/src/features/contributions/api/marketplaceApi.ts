@@ -108,6 +108,29 @@ export const marketplaceApi = {
     return response.data.listing;
   },
 
+  /**
+   * Take a listing out of the public marketplace (back to draft). Buyers keep
+   * their licences. Seller only.
+   */
+  async unpublishListing(id: string): Promise<MarketplaceListing> {
+    const response = await apiClient.post<GetListingResponse>(`${ENDPOINTS.listing(id)}/unpublish`);
+    return response.data.listing;
+  },
+
+  /** Put a draft listing back into the public marketplace. Seller only. */
+  async publishListing(id: string): Promise<MarketplaceListing> {
+    const response = await apiClient.post<GetListingResponse>(`${ENDPOINTS.listing(id)}/publish`);
+    return response.data.listing;
+  },
+
+  /**
+   * Delete a listing nobody has bought. Once a buyer holds a licence the
+   * server answers 409 — unpublish it instead. Seller only.
+   */
+  async deleteListing(id: string): Promise<void> {
+    await apiClient.delete(ENDPOINTS.listing(id));
+  },
+
   // --------------------------------------------------------------------------
   // Purchase
   // --------------------------------------------------------------------------

@@ -35,6 +35,7 @@ vi.mock('../../api', () => ({
     promoteDeployment: vi.fn(),
     rollbackDeployment: vi.fn(),
     cancelDeployment: vi.fn(),
+    deleteDeployment: vi.fn(),
     getDeploymentMetrics: vi.fn(),
     listSkills: vi.fn(),
     getPublishedSkills: vi.fn(),
@@ -502,15 +503,44 @@ describe('deploymentStore', () => {
   // -------------------------------------------------------------------------
   // Model versions
   // -------------------------------------------------------------------------
-  it('fetchModelVersions loads on success and just clears loading on error', async () => {
+  it('fetchModelVersions loads on success, and records a failure for the page (TASK-272)', async () => {
     api.listModelVersions.mockResolvedValue([{ id: 'v1', deploymentStatus: 'staging' }]);
     await useDeploymentStore.getState().fetchModelVersions();
     expect(useDeploymentStore.getState().modelVersions).toHaveLength(1);
     expect(useDeploymentStore.getState().modelVersionsLoading).toBe(false);
+    expect(useDeploymentStore.getState().modelVersionsError).toBeNull();
 
-    api.listModelVersions.mockRejectedValue(new Error('x'));
+    api.listModelVersions.mockRejectedValue(new Error('registry down'));
     await useDeploymentStore.getState().fetchModelVersions();
     expect(useDeploymentStore.getState().modelVersionsLoading).toBe(false);
+    expect(useDeploymentStore.getState().modelVersionsError).toBe('registry down');
+
+    // A retry that succeeds clears it.
+    api.listModelVersions.mockResolvedValue([]);
+    await useDeploymentStore.getState().fetchModelVersions();
+    expect(useDeploymentStore.getState().modelVersionsError).toBeNull();
+  });
+
+  it('deleteDeployment drops the row and clears the selection', async () => {
+    useDeploymentStore.setState({
+      deployments: [{ id: 'd1' }, { id: 'd2' }] as never,
+      selectedDeploymentId: 'd1',
+    });
+    api.deleteDeployment.mockResolvedValue(undefined);
+
+    await useDeploymentStore.getState().deleteDeployment('d1');
+
+    expect(api.deleteDeployment).toHaveBeenCalledWith('d1');
+    expect(useDeploymentStore.getState().deployments.map((d) => d.id)).toEqual(['d2']);
+    expect(useDeploymentStore.getState().selectedDeploymentId).toBeNull();
+  });
+
+  it('deleteDeployment rethrows and keeps the row when the server refuses', async () => {
+    useDeploymentStore.setState({ deployments: [{ id: 'd1' }] as never });
+    api.deleteDeployment.mockRejectedValue(new Error('roll it back or cancel it first'));
+
+    await expect(useDeploymentStore.getState().deleteDeployment('d1')).rejects.toThrow('cancel it first');
+    expect(useDeploymentStore.getState().deployments).toHaveLength(1);
   });
 
   // -------------------------------------------------------------------------

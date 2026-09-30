@@ -152,4 +152,28 @@ describe('ModelBrowser skill column', () => {
     expect(screen.getByRole('menuitem', { name: /Edit/ })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /Archive/ })).not.toBeInTheDocument();
   });
+
+  it('offers Archive on a production version too — the server says why when it refuses (TASK-272)', () => {
+    render(
+      <ModelBrowser
+        modelVersions={[makeVersion({ deploymentStatus: 'production' })]}
+        onArchive={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Actions for/ }));
+    expect(screen.getByRole('menuitem', { name: /Archive/ })).toBeInTheDocument();
+  });
+});
+
+describe('ModelBrowser load error (TASK-272)', () => {
+  it('shows the failure with a Retry instead of an empty registry', () => {
+    let retried = 0;
+    render(<ModelBrowser modelVersions={[]} error="registry down" onRetry={() => { retried += 1; }} />);
+
+    expect(screen.getByText("Couldn't load models")).toBeInTheDocument();
+    expect(screen.queryByText('No models yet')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+    expect(retried).toBe(1);
+  });
 });

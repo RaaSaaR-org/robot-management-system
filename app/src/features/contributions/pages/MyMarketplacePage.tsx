@@ -1,16 +1,18 @@
 /**
  * @file MyMarketplacePage.tsx
- * @description My marketplace: licenses you bought and listings you published, as tabs in the URL
+ * @description My marketplace: licenses you bought and listings you published, as tabs in the URL;
+ *              a listing can be unpublished, published again or deleted from its row (TASK-272)
  * @feature marketplace
  */
 
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Download, ExternalLink, Package, Plus, ShoppingBag } from 'lucide-react';
+import { Download, ExternalLink, Eye, EyeOff, Package, Plus, ShoppingBag, Trash2 } from 'lucide-react';
 import {
   Badge, Button, DataTable, EmptyState, LinkButton, PageHeader, Panel, StatusTag, Tabs,
-  type DataTableColumn,
+  type DataTableColumn, type RowActionItem,
 } from '@/shared/components/ui';
+import { useListingActs } from '../components/useListingActs';
 import { formatTimeAgo, UI_DATE_LOCALE } from '@/shared/utils/format';
 import { CreditBalance } from '../components/CreditBalance';
 import { MarketplaceDownloadModal } from '../components/MarketplaceDownloadModal';
@@ -40,6 +42,7 @@ export function MyMarketplacePage() {
   const [publishOpen, setPublishOpen] = useState(false);
   const { purchases, myListings, creditBalance, isLoading, error, createListing, isCreatingListing, refetch } =
     useMyMarketplace();
+  const listingActs = useListingActs(() => void refetch());
 
   const openListing = (id: string) => navigate(`/marketplace/${id}`);
   const publishButton = (
@@ -145,7 +148,19 @@ export function MyMarketplacePage() {
             getRowId={(m) => m.listing.id}
             defaultSort={{ key: 'title', direction: 'asc' }}
             onRowClick={(m) => openListing(m.listing.id)}
-            rowActions={(m) => [{ label: 'Open', icon: <ExternalLink />, onSelect: () => openListing(m.listing.id) }]}
+            rowActions={(m): RowActionItem[] => [
+              { label: 'Open', icon: <ExternalLink />, onSelect: () => openListing(m.listing.id) },
+              ...(m.status === 'draft'
+                ? [{ label: 'Publish', icon: <Eye />, onSelect: () => void listingActs.publish(m) }]
+                : []),
+              ...(m.status === 'active'
+                ? [{ label: 'Unpublish', icon: <EyeOff />, tone: 'danger' as const, separatorBefore: true, onSelect: () => void listingActs.unpublish(m) }]
+                : []),
+              // A sold listing is a buyer's receipt: the server refuses to delete it, so it is not offered.
+              ...(m.totalRevenue === 0
+                ? [{ label: 'Delete', icon: <Trash2 />, tone: 'danger' as const, separatorBefore: m.status !== 'active', onSelect: () => void listingActs.remove(m) }]
+                : []),
+            ]}
             rowActionsLabel={(m) => `Actions for ${m.listing.title}`}
             isLoading={isLoading}
             error={myListings.length === 0 ? error : null}

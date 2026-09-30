@@ -9,6 +9,7 @@ import {
   useDeploymentStore,
   selectModelVersions,
   selectModelVersionsLoading,
+  selectModelVersionsError,
 } from '../store';
 import { deploymentApi } from '../api';
 import type { ModelVersion } from '../types';
@@ -19,6 +20,8 @@ export interface UseModelVersionsReturn {
   stagingVersions: ModelVersion[];
   productionVersions: ModelVersion[];
   isLoading: boolean;
+  /** The last load failure, or null (TASK-272). */
+  error: string | null;
   fetchModelVersions: (params?: { skillId?: string; deploymentStatus?: string }) => Promise<void>;
   fetchVersions: (params?: { skillId?: string; deploymentStatus?: string }) => Promise<void>;
 }
@@ -29,6 +32,7 @@ export interface UseModelVersionsReturn {
 export function useModelVersions(): UseModelVersionsReturn {
   const versions = useDeploymentStore(selectModelVersions);
   const isLoading = useDeploymentStore(selectModelVersionsLoading);
+  const error = useDeploymentStore(selectModelVersionsError);
   // Derived arrays must not be external-store snapshots: a fresh array on
   // every read makes React keep rendering even when the store has not changed.
   const stagingVersions = useMemo(
@@ -47,6 +51,7 @@ export function useModelVersions(): UseModelVersionsReturn {
     stagingVersions,
     productionVersions,
     isLoading,
+    error,
     fetchModelVersions: fetchVersions,
     fetchVersions,
   };

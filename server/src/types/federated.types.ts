@@ -387,6 +387,8 @@ export type FederatedEventType =
   | 'round:aggregating'
   | 'round:completed'
   | 'round:failed'
+  | 'round:cancelled'
+  | 'round:deleted'
   | 'participant:selected'
   | 'participant:model_received'
   | 'participant:training'

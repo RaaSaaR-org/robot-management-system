@@ -2070,7 +2070,7 @@ model SimulationFrame {
 
 model FederatedRound {
   id                    String    @id @default(uuid())
-  status                String    @default("created") // created, selecting, distributing, training, collecting, aggregating, completed, failed
+  status                String    @default("created") // created, selecting, distributing, training, collecting, aggregating, completed, failed, cancelled
   globalModelVersion    String
   newModelVersion       String?
   config                Json // FederatedRoundConfig
@@ -2738,7 +2738,7 @@ model UpdatePackage {
   publicKey  String // Base64 public key
   checksum   String // SHA-256 of package
   fileSize   Int       @default(0)
-  status     String    @default("pending") // 'pending' | 'approved' | 'deployed' | 'rolled_back'
+  status     String    @default("pending") // 'pending' | 'approved' | 'deployed' | 'rolled_back' | 'archived' (deleted with deployment history, TASK-272)
   approvedBy String?
   approvedAt DateTime?
   createdAt  DateTime  @default(now())

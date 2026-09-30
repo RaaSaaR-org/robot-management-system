@@ -16,12 +16,18 @@
 
 import crypto from 'node:crypto';
 import { prisma } from '../database/index.js';
+import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors.js';
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-export type UpdatePackageStatus = 'pending' | 'approved' | 'deployed' | 'rolled_back';
+// 'archived' (TASK-272): deleted by an operator but kept, because robots were
+// deployed from it and that history is the audit trail of what ran where.
+export type UpdatePackageStatus = 'pending' | 'approved' | 'deployed' | 'rolled_back' | 'archived';
+
+/** What a delete did: removed the row, or kept it as history and hid it. */
+export type DeleteOutcome = 'deleted' | 'archived';
 export type DeploymentStatus = 'pending' | 'downloading' | 'installing' | 'success' | 'failed' | 'rolled_back';
 
 export interface UpdatePackage {
@@ -140,8 +146,10 @@ export class UpdateService {
   /**
    * Get all update packages with optional status filter
    */
-  async getUpdatePackages(status?: UpdatePackageStatus): Promise<UpdatePackage[]> {
-    const where = status ? { status } : {};
+  async getUpdatePackages(status?: UpdatePackageStatus, includeArchived = false): Promise<UpdatePackage[]> {
+    // An archived package is one an operator deleted; it stays out of the list
+    // unless asked for by status or with includeArchived.
+    const where = status ? { status } : includeArchived ? {} : { status: { not: 'archived' } };
     const packages = await prisma.updatePackage.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -284,17 +292,29 @@ export class UpdateService {
   // --------------------------------------------------------------------------
 
   /**
-   * Trigger a rollback for a robot to a previous version
+   * Roll a robot back from an update package to `targetVersion`.
+   *
+   * The rollback row belongs to the package being rolled back. It used to fall
+   * back to the literal packageId `'rollback'` whenever the robot had no
+   * successful deployment on record; no UpdatePackage row has that id, so the
+   * insert failed its foreign key and every such rollback errored (TASK-272).
    */
-  async triggerRollback(robotId: string, targetVersion: string): Promise<UpdateDeployment> {
+  async triggerRollback(packageId: string, robotId: string, targetVersion: string): Promise<UpdateDeployment> {
     // Anti-rollback: don't allow rollback below minimum version
     if (!this.isVersionAllowed(targetVersion)) {
-      throw new Error(`Cannot rollback to version ${targetVersion}: below minimum allowed version ${MIN_ALLOWED_VERSION}`);
+      throw new BadRequestError(
+        `Cannot rollback to version ${targetVersion}: below minimum allowed version ${MIN_ALLOWED_VERSION}`
+      );
     }
 
-    // Find the last successful deployment for this robot
+    const pkg = await prisma.updatePackage.findUnique({ where: { id: packageId } });
+    if (!pkg) {
+      throw new NotFoundError('Update package', packageId);
+    }
+
+    // The deployment of this package to this robot that is being undone.
     const lastDeployment = await prisma.updateDeployment.findFirst({
-      where: { robotId, status: 'success' },
+      where: { packageId, robotId, status: 'success' },
       orderBy: { deployedAt: 'desc' },
     });
 
@@ -309,10 +329,10 @@ export class UpdateService {
     // Create a rollback deployment record
     const rollbackDeployment = await prisma.updateDeployment.create({
       data: {
-        packageId: lastDeployment?.packageId ?? 'rollback',
+        packageId,
         robotId,
         status: 'rolled_back',
-        previousVersion: lastDeployment?.previousVersion ?? null,
+        previousVersion: lastDeployment?.previousVersion ?? targetVersion,
         rolledBackAt: new Date(),
       },
     });
@@ -320,6 +340,45 @@ export class UpdateService {
     const result = this.toDomainDeployment(rollbackDeployment);
     this.emitEvent({ type: 'rollback_triggered', data: result, timestamp: new Date().toISOString() });
     return result;
+  }
+
+  // --------------------------------------------------------------------------
+  // DELETE
+  // --------------------------------------------------------------------------
+
+  /**
+   * Delete an update package. One no robot was ever deployed from is removed;
+   * one with deployments is archived instead, because those rows are the
+   * record of what ran where (TASK-272). A package still installing somewhere
+   * is refused. Returns what was acted on, for the audit log.
+   */
+  async deleteUpdatePackage(id: string): Promise<{ outcome: DeleteOutcome; snapshot: UpdatePackage }> {
+    const pkg = await prisma.updatePackage.findUnique({ where: { id } });
+    if (!pkg) {
+      throw new NotFoundError('Update package', id);
+    }
+    const snapshot = this.toDomainPackage(pkg);
+
+    const deployments = await prisma.updateDeployment.count({ where: { packageId: id } });
+    if (deployments === 0) {
+      await prisma.updatePackage.delete({ where: { id } });
+      return { outcome: 'deleted', snapshot };
+    }
+    if (pkg.status === 'archived') {
+      return { outcome: 'archived', snapshot };
+    }
+
+    const inFlight = await prisma.updateDeployment.count({
+      where: { packageId: id, status: { in: ['pending', 'downloading', 'installing'] } },
+    });
+    if (inFlight > 0) {
+      throw new ConflictError(
+        `Update ${pkg.version} is still installing on ${inFlight} robot(s) — wait for it to finish, then delete it`
+      );
+    }
+
+    await prisma.updatePackage.update({ where: { id }, data: { status: 'archived' } });
+    return { outcome: 'archived', snapshot };
   }
 
   // --------------------------------------------------------------------------

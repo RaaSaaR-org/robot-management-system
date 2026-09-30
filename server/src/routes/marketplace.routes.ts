@@ -7,7 +7,8 @@
 
 import { Router, Request, Response } from 'express';
 import { createReadStream } from 'fs';
-import { marketplaceService } from '../services/MarketplaceService.js';
+import { marketplaceService, type MarketplaceActor } from '../services/MarketplaceService.js';
+import { auditBuildAct } from '../services/buildAudit.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import {
   MARKETPLACE_LICENSE_TIERS,
@@ -223,6 +224,13 @@ marketplaceRoutes.post('/listings', async (req: Request, res: Response) => {
     }
 
     const listing = await marketplaceService.createListing(getUserId(req), getUserName(req), body);
+    await auditBuildAct({
+      resourceType: 'marketplace_listing',
+      resourceId: listing.id,
+      action: 'create',
+      actorId: getUserId(req),
+      metadata: { title: listing.title, type: listing.type },
+    });
 
     res.status(201).json({ listing });
   } catch (error) {
@@ -421,5 +429,75 @@ marketplaceRoutes.post('/listings/:id/reviews', async (req: Request, res: Respon
   } catch (error) {
     console.error('[MarketplaceRoutes] Error creating review:', error);
     res.status(500).json({ error: 'Failed to create review' });
+  }
+});
+
+// ============================================================================
+// PUBLISH / UNPUBLISH / DELETE (TASK-272) — seller or super-admin only
+// ============================================================================
+
+function actorOf(req: Request): MarketplaceActor {
+  return { userId: getUserId(req), role: (req as AuthenticatedRequest).user?.role };
+}
+
+/**
+ * POST /api/marketplace/listings/:id/unpublish  → status 'draft'
+ * POST /api/marketplace/listings/:id/publish    → status 'published'
+ * Both answer { listing }.
+ */
+for (const [act, published] of [
+  ['unpublish', false],
+  ['publish', true],
+] as const) {
+  marketplaceRoutes.post(`/listings/:id/${act}`, async (req: Request, res: Response) => {
+    try {
+      const actor = actorOf(req);
+      const result = await marketplaceService.setListingPublished(actor, req.params.id, published);
+      if (!result.ok) {
+        return res.status(result.status).json({ error: result.error });
+      }
+      await auditBuildAct({
+        resourceType: 'marketplace_listing',
+        resourceId: req.params.id,
+        action: act,
+        actorId: actor.userId,
+        metadata: { title: result.listing.title, previousStatus: result.previousStatus },
+      });
+      res.json({ listing: result.listing });
+    } catch (error) {
+      console.error(`[MarketplaceRoutes] Error on ${act}:`, error);
+      res.status(500).json({ error: `Failed to ${act} listing` });
+    }
+  });
+}
+
+/**
+ * DELETE /api/marketplace/listings/:id
+ * Delete a listing nobody has bought; 409 once a buyer holds a licence
+ * (unpublish it instead). Answers { id, outcome: 'deleted' }.
+ */
+marketplaceRoutes.delete('/listings/:id', async (req: Request, res: Response) => {
+  try {
+    const actor = actorOf(req);
+    const result = await marketplaceService.deleteListing(actor, req.params.id);
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    await auditBuildAct({
+      resourceType: 'marketplace_listing',
+      resourceId: req.params.id,
+      action: 'delete',
+      actorId: actor.userId,
+      metadata: {
+        title: result.removed.title,
+        type: result.removed.type,
+        sellerId: result.removed.sellerId,
+        status: result.removed.status,
+      },
+    });
+    res.json({ id: req.params.id, outcome: 'deleted' });
+  } catch (error) {
+    console.error('[MarketplaceRoutes] Error deleting listing:', error);
+    res.status(500).json({ error: 'Failed to delete listing' });
   }
 });

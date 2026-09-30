@@ -24,8 +24,16 @@ import type {
   SelectionStrategy,
   FederatedEvent,
   ConvergenceDataPoint,
+  ParticipantStatus,
 } from '../types/federated.types.js';
 import { DEFAULT_ROUND_CONFIG } from '../types/federated.types.js';
+import { ConflictError, NotFoundError } from '../utils/errors.js';
+
+/** A round in one of these states is over: it can be deleted, not cancelled. */
+const FINISHED_ROUND_STATUSES: readonly FederatedRoundStatus[] = ['completed', 'failed', 'cancelled'];
+
+/** Participants that have not uploaded yet — a cancel excludes them. */
+const IN_FLIGHT_PARTICIPANT_STATUSES: readonly ParticipantStatus[] = ['selected', 'model_received', 'training'];
 
 // ============================================================================
 // FEDERATED LEARNING SERVICE
@@ -103,6 +111,66 @@ export class FederatedLearningService extends EventEmitter {
       where: { id: roundId },
     });
     return round ? this.toFederatedRound(round) : undefined;
+  }
+
+  /**
+   * Cancel a round that has not finished (TASK-272). Participants still in
+   * flight are excluded and their buffered updates dropped; a participant that
+   * already uploaded keeps its status, since its privacy budget is spent.
+   */
+  async cancelRound(roundId: string): Promise<FederatedRound> {
+    const round = await this.prisma.federatedRound.findUnique({ where: { id: roundId } });
+    if (!round) {
+      throw new NotFoundError('Round', roundId);
+    }
+    if (FINISHED_ROUND_STATUSES.includes(round.status as FederatedRoundStatus)) {
+      throw new ConflictError(`Round is already ${round.status} and cannot be cancelled`);
+    }
+
+    const participants = await this.prisma.federatedParticipant.findMany({ where: { roundId } });
+    for (const participant of participants) {
+      this.modelUpdates.delete(participant.id);
+      if (IN_FLIGHT_PARTICIPANT_STATUSES.includes(participant.status as ParticipantStatus)) {
+        await this.prisma.federatedParticipant.update({
+          where: { id: participant.id },
+          data: { status: 'excluded', failureReason: 'round cancelled' },
+        });
+      }
+    }
+
+    const updated = await this.prisma.federatedRound.update({
+      where: { id: roundId },
+      data: { status: 'cancelled', completedAt: new Date() },
+    });
+
+    this.emitEvent({
+      type: 'round:cancelled',
+      roundId,
+      data: { previousStatus: round.status },
+      timestamp: new Date(),
+    });
+
+    return this.toFederatedRound(updated);
+  }
+
+  /**
+   * Delete a finished round and its participants (TASK-272). A round still
+   * running must be cancelled first. Returns the removed round for the audit log.
+   */
+  async deleteRound(roundId: string): Promise<FederatedRound> {
+    const round = await this.prisma.federatedRound.findUnique({ where: { id: roundId } });
+    if (!round) {
+      throw new NotFoundError('Round', roundId);
+    }
+    if (!FINISHED_ROUND_STATUSES.includes(round.status as FederatedRoundStatus)) {
+      throw new ConflictError(`Round is still ${round.status} — cancel it first, then delete it`);
+    }
+
+    // Participants go with the round (onDelete: Cascade).
+    await this.prisma.federatedRound.delete({ where: { id: roundId } });
+
+    this.emitEvent({ type: 'round:deleted', roundId, data: {}, timestamp: new Date() });
+    return this.toFederatedRound(round);
   }
 
   /**

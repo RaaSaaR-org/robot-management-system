@@ -116,6 +116,15 @@ export const useUpdatesStore = create<UpdatesStore>()(
         }
       },
 
+      deletePackage: async (id: string) => {
+        const { outcome } = await updatesApi.deletePackage(id);
+        // An archived package is hidden from the list just like a deleted one.
+        set((state) => {
+          state.packages = state.packages.filter((p) => p.id !== id);
+        });
+        return outcome;
+      },
+
       fetchDeployments: async (robotId: string) => {
         set((state) => {
           state.isLoading = true;

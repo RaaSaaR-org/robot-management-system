@@ -160,13 +160,27 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.isLoading = false;
         });
       } catch (error) {
-        const message = getErrorMessage(error, 'Failed to cancel round');
+        // Not recorded in `error`: that field is the rounds table's load error,
+        // and a refused cancel (409 once the round finished) is not a failed
+        // load. The caller toasts the reason.
         set((state) => {
-          state.error = message;
           state.isLoading = false;
         });
         throw error;
       }
+    },
+
+    // Throws without touching `error`: the page's load error state is for
+    // loads, and the caller toasts a failed delete.
+    deleteRound: async (id: string) => {
+      await fleetlearningApi.deleteRound(id);
+      set((state) => {
+        state.rounds = state.rounds.filter((r) => r.id !== id);
+        if (state.selectedRound?.id === id) {
+          state.selectedRound = null;
+          state.participants = [];
+        }
+      });
     },
 
     selectRound: (round: FederatedRound | null) => {
