@@ -17,6 +17,7 @@ import type { Action, ActionResult } from '../vla/types.js';
 import {
   getChargingStationLocation,
   getHomeLocation,
+  resolveMoveTarget,
 } from '../tools/navigation.js';
 import { agentModeController } from '../agent-mode/agent-mode-controller.js';
 
@@ -97,9 +98,15 @@ export class CommandExecutor {
 
     switch (type) {
       case 'move':
-        const destination = payload.destination as RobotLocation | undefined;
+        const destination = payload.destination as
+          | { x?: number; y?: number; place?: string; floor?: string }
+          | undefined;
         if (destination) {
-          result = await this.moveTo(destination);
+          // A place by name, or coordinates — either way, never into a keepout.
+          const target = resolveMoveTarget(destination);
+          result = target.ok
+            ? await this.moveTo(target.location)
+            : { success: false, message: target.message, ...(target.keepout ? { data: { keepout: target.keepout } } : {}) };
         } else {
           result = { success: false, message: 'No destination provided' };
         }
@@ -322,7 +329,12 @@ export class CommandExecutor {
    * Navigate to charging station
    */
   async goToCharge(): Promise<CommandResult> {
-    const chargingStation = await getChargingStationLocation();
+    let chargingStation;
+    try {
+      chargingStation = await getChargingStationLocation();
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : String(error) };
+    }
     const result = await this.moveTo(chargingStation);
     if (result.success) {
       result.message = `Navigating to charging station at (${chargingStation.x}, ${chargingStation.y})`;

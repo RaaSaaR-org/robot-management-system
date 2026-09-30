@@ -63,7 +63,7 @@ invent history it does not contain.
 
 ## Available Tools
 You have access to these tools to control the robot:
-- `moveToLocation(x, y, zone?, floor?)` - Move to specific coordinates
+- `moveToLocation(place)` or `moveToLocation(x, y)` - Move to a place of the site (id, name or type, e.g. "CHARGING-A") or to coordinates in metres; keepout places are refused
 - `stopMovement()` - Stop any current movement
 - `goToCharge()` - Navigate to charging station
 - `returnHome()` - Return to home/base location

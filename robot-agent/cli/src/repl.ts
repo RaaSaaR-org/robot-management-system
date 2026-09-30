@@ -17,6 +17,7 @@ import {
   colors,
 } from './utils/output.js';
 import { getDefaultUrl } from './utils/config.js';
+import { parseMoveArgs } from './commands/move-args.js';
 import type { OutputFormat, RobotTelemetry, RobotAlert } from './api/types.js';
 
 interface ReplState {
@@ -54,7 +55,7 @@ ${colors.bold('Available Commands:')}
   ${colors.highlight('health')}              Check connection health
   ${colors.highlight('history')} [n]         Show last n commands (default: 5)
 
-  ${colors.highlight('move')} <x> <y>        Move robot to coordinates
+  ${colors.highlight('move')} <place>|<x> <y> Move robot to a place or coordinates
   ${colors.highlight('stop')}                Stop robot movement
   ${colors.highlight('estop')} [reason]      Emergency stop
   ${colors.highlight('pickup')} <objectId>   Pick up an object
@@ -109,15 +110,15 @@ async function handleCommand(state: ReplState, input: string): Promise<void> {
       }
 
       case 'move': {
-        const x = parseFloat(args[0]);
-        const y = parseFloat(args[1]);
-
-        if (isNaN(x) || isNaN(y)) {
-          printError('Usage: move <x> <y>');
+        let destination;
+        try {
+          destination = parseMoveArgs(args);
+        } catch (error) {
+          printError(error instanceof Error ? error.message : String(error));
           break;
         }
 
-        const result = await state.client.sendCommand('move', { destination: { x, y } });
+        const result = await state.client.sendCommand('move', { destination });
         console.log(formatCommand(result, state.format));
         break;
       }

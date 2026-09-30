@@ -75,15 +75,16 @@ const MANIPULATOR_JOINT = /hand|thumb|finger|index|middle|gripper|jaw/i;
 const NAVIGATION_SKILL: AgentSkill = {
   id: 'navigation',
   name: 'Navigation',
-  description: 'Move the robot to specific locations, zones, or coordinates within the facility',
-  tags: ['move', 'navigate', 'go', 'travel', 'location'],
+  description:
+    "Move the robot to a place of its site (by id, name or type) or to coordinates; keepout places are refused",
+  tags: ['move', 'navigate', 'go', 'travel', 'place'],
   examples: [
-    'Move to Warehouse A',
-    'Go to coordinates (25.5, 14.2)',
-    'Navigate to the loading dock',
+    'Move to CHARGING-A',
+    'Go to coordinates (3.0, -1.5)',
+    'Navigate to Aisle 1',
     'Return to home position',
     'Go to the charging station',
-    'Move to the entrance',
+    'Move to the dock',
   ],
   inputModes: ['text'],
   outputModes: ['text', 'task-status'],

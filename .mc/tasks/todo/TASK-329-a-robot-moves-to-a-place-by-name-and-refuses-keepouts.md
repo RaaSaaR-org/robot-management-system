@@ -3,7 +3,7 @@ id: "TASK-329"
 aliases: []
 title: "A robot moves to a place by name and refuses keepouts"
 slug: "a-robot-moves-to-a-place-by-name-and-refuses-keepouts"
-status: "todo"
+status: "in-progress"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -78,13 +78,13 @@ target that lies in a keepout place, naming it. Epic TASK-274.
 
 ## Acceptance Criteria
 
-- [ ] `git grep -n "api/zones" robot-agent/` finds nothing.
-- [ ] `roboctl move "CHARGING-A"` (and the agent's move tool with `place: "charging-a"`)
+- [x] `git grep -n "api/zones" robot-agent/` finds nothing.
+- [x] `roboctl move "CHARGING-A"` (and the agent's move tool with `place: "charging-a"`)
       drives the sim robot to that place's centroid.
-- [ ] A move whose target is inside `RACK-A` is refused with a message naming `RACK-A`.
-- [ ] With no registered graph, a named move fails with an explicit message.
-- [ ] `CLAUDE.md` and `robot-agent/cli/README.md` no longer mention "Warehouse A".
-- [ ] robot-agent + cli typecheck and vitest pass.
+- [x] A move whose target is inside `RACK-A` is refused with a message naming `RACK-A`.
+- [x] With no registered graph, a named move fails with an explicit message.
+- [x] `CLAUDE.md` and `robot-agent/cli/README.md` no longer mention "Warehouse A".
+- [x] robot-agent + cli typecheck and vitest pass.
 
 ## Test Strategy
 

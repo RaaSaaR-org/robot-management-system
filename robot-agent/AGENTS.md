@@ -232,9 +232,9 @@ All 8 tools are registered with Genkit and available to the AI agent:
 | `getRobotStatus` | `{ verbose? }` | Get full robot status, battery, location |
 | `emergencyStop` | `{ reason? }` | Immediate emergency stop |
 
-### Zone Resolution
+### Place Resolution
 
-Navigation tools fetch zones from `GET {serverUrl}/api/zones` and derive named locations from zone center points. Results are cached for 60 seconds. Fallback locations when server is unavailable: `home: {x:0, y:0}`, `charging_station: {x:5, y:20}`.
+`moveToLocation({ place })` and the REST `move` command (`roboctl move`) resolve a name against the robot's registered place graph (TASK-328) — place `id` case-insensitively, then `name`, then `placeType` (nearest) — and drive to the polygon centroid (`src/tools/place-destination.ts`). A target inside a keepout place, named or `{x,y}`, is refused with `keepout: <place id>`. `home` is the frame origin and the only built-in name; with no registered graph a named move fails and a coordinate move proceeds (the geofence stays the safety layer). The charging station is the nearest `charging` place.
 
 ## Simulation Engine
 

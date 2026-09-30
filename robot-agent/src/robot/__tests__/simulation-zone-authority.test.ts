@@ -48,8 +48,7 @@ function makeEngine(state: SimulatedRobotState) {
 describe('SimulationEngine — who owns location.zone', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    // `prefetchChargingStation` talks to the server on start(); it is already
-    // wrapped in a try/catch, this only keeps the run quiet and offline.
+    // Nothing here should reach the network; this keeps the run offline.
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
   });
 
