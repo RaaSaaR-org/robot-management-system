@@ -404,7 +404,7 @@ Base URL: `http://localhost:41245`
 
 ### Control lease (`/api/v1/robots/:id/control-lease`, TASK-314)
 
-The robot's one installed control lease — fenced by a strictly increasing `generation` whose high-water is persisted in `data/control-lease-<ROBOT_ID>.json`, and expired on the agent's own clock. All four routes sit behind the personal-data gate (configured `AGENT_MEMORY_TOKEN` required; loopback only when unset; cross-origin browser requests refused), so only the server installs leases. `CONTROL_LEASE_REQUIRED` (default `false`) is reported as `enforced`; nothing gates motion on the lease yet.
+The robot's one installed control lease — fenced by a strictly increasing `generation` whose high-water is persisted in `data/control-lease-<ROBOT_ID>.json`, and expired on the agent's own clock. All four routes sit behind the personal-data gate (configured `AGENT_MEMORY_TOKEN` required; loopback only when unset; cross-origin browser requests refused), so only the server installs leases. `CONTROL_LEASE_REQUIRED` (default `false`) is reported as `enforced`. When it is on, `/ws/keyboard-teleop` drives only on a socket bound to the installed lease (TASK-315, see `robot-agent/AGENTS.md`); the other motion paths do not gate on it yet.
 
 | Method | Path | Description |
 |--------|------|-------------|

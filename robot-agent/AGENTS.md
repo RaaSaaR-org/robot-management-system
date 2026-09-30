@@ -308,6 +308,23 @@ advertised limits.
 | `{hands: {left?, right?}}` | both Dex3 hands, 7 joints each | **in the agent** (TASK-216) |
 | `{preset: 'home' \| 'stop'}` | every joint / the base | — |
 | `{estop: {reason?}}` | latches, durably | — |
+| `{bind: {leaseId, generation}}` | nothing — binds to the control lease (`CONTROL_LEASE_REQUIRED` only) | — |
+
+**Control lease (TASK-315).** With `CONTROL_LEASE_REQUIRED=true` a socket is an
+observer until it binds: connect claims nothing and preempts nobody, and sends
+`{type:'lease', state:'unbound', required:true, holder}` (the registry's
+`observe()`, never the hash) in place of `{type:'control'}`. `{bind}` is checked
+with `controlLease.verify`; success claims `teleop` (awaiting a zero-velocity
+stop first when that preempts Agent Mode or a VLA rollout) and replies
+`{type:'lease', state:'bound', generation}` + `{type:'control'}`; failure replies
+`{type:'error', code:'lease_invalid'}`. Every motion frame is re-verified when it
+is processed and, if unbound, discarded with `lease_required` (once per socket,
+reset by a bind). A fence or expiry of the bound generation stops the base,
+clears the pending `SetVelocity`, releases the holder and sends
+`{type:'lease', state:'revoked'|'expired', generation}` — no auto-rebind. Several
+sockets may bind one generation; each is one holder and counts toward `bound`.
+`{estop}` is accepted bound or not. With the flag off none of this exists and
+`{bind}` is ignored.
 
 `{wrists}` carries, per side, `p` — the palm point **relative to the robot's eye
 point** in robot axes (+x forward, +y left, +z up), metres — and `q`, its

@@ -3,7 +3,7 @@ id: "TASK-315"
 aliases: []
 title: "Keyboard teleop drives only on a lease-bound socket"
 slug: "keyboard-teleop-drives-only-on-a-lease-bound-socket"
-status: "todo"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -81,19 +81,19 @@ No new messages, claim-on-connect unchanged; a `{bind}` frame is ignored.
 
 ## Acceptance Criteria
 
-- [ ] Flag on: an unbound socket's `move`/joint frames never reach the state
+- [x] Flag on: an unbound socket's `move`/joint frames never reach the state
       manager or `hardwareClient`, and it receives `lease_required`.
-- [ ] Flag on: a socket binding with the right secret/generation drives; a wrong
+- [x] Flag on: a socket binding with the right secret/generation drives; a wrong
       secret, old generation, or expired lease gets `lease_invalid`.
-- [ ] Flag on: installing generation N+1 makes a socket bound to N stop the base,
+- [x] Flag on: installing generation N+1 makes a socket bound to N stop the base,
       receive `revoked`, and drop its frames — including a `move` already queued
       behind an in-flight RPC.
-- [ ] Flag on: connecting does not preempt Agent Mode; binding does, and the
+- [x] Flag on: connecting does not preempt Agent Mode; binding does, and the
       stop resolves before `{type:'lease', state:'bound'}` is sent.
-- [ ] Flag on: `{estop}` from an unbound socket latches the E-stop.
-- [ ] Two sockets bound to the same generation: closing one leaves the other
+- [x] Flag on: `{estop}` from an unbound socket latches the E-stop.
+- [x] Two sockets bound to the same generation: closing one leaves the other
       driving; `bound` count tracks both.
-- [ ] Flag off: all existing keyboard-teleop tests pass unmodified.
+- [x] Flag off: all existing keyboard-teleop tests pass unmodified.
 
 ## Test Strategy
 
