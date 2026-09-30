@@ -3,7 +3,7 @@ id: "TASK-325"
 aliases: []
 title: "Align a robot's odometry frame with its twin"
 slug: "align-a-robot-s-odometry-frame-with-its-twin"
-status: "in-progress"
+status: "backlog"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -102,7 +102,11 @@ twin from TASK-274; Isaac Sim on the Linux box as an optional second check.
 
 ## Children
 
-- [[TASK-341]] server: store and compute the registration (API)
-- [[TASK-342]] robot agent + MuJoCo sim: fence in the twin frame once registered
-- [[TASK-343]] app: Align action, status, site map plots the twin pose
+- [[TASK-341]] server: store and compute the registration (API) — done (#365)
+- [[TASK-342]] robot agent + MuJoCo sim: fence in the twin frame once registered — done (#366)
+- [[TASK-343]] app: Align action, status, site map plots the twin pose — done (#367)
 - [[TASK-344]] backlog: the same check in Isaac Sim on the GPU box (needs that machine)
+
+Every required acceptance criterion is met by TASK-341..343. The epic stays open,
+in `backlog`, only for the optional Isaac Sim check (TASK-344), which needs the
+Linux GPU box; it closes with that child.
