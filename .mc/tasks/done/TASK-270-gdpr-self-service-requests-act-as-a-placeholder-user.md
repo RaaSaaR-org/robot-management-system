@@ -3,7 +3,7 @@ id: "TASK-270"
 aliases: []
 title: "GDPR self-service requests act as a placeholder user"
 slug: "gdpr-self-service-requests-act-as-a-placeholder-user"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -47,9 +47,9 @@ A second server defect turned up in the same pass. Creating an approval for an e
 
 ## Acceptance Criteria
 
-- [ ] Filing a privacy request and changing a consent from Compliance → Data Privacy succeeds in live mode and shows up under the dev user.
-- [ ] No GDPR route contains `'current-user'`.
-- [ ] `POST /api/approvals` with an unconfigured entity type returns 400 with a clear message.
+- [x] Filing a privacy request and changing a consent from Compliance → Data Privacy succeeds in live mode and shows up under the dev user.
+- [x] No GDPR route contains `'current-user'`.
+- [x] `POST /api/approvals` with an unconfigured entity type returns 400 with a clear message.
 
 ## Test Strategy
 
