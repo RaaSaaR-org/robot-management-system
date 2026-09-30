@@ -7,7 +7,7 @@
  * @feature digitaltwin
  */
 
-import { getErrorMessage } from '@/shared/utils';
+import { getErrorMessage, getErrorStatus } from '@/shared/utils';
 import { createStore } from '@/store';
 import { twinZoneApi } from '../api/twinZoneApi';
 import type {
@@ -27,6 +27,8 @@ interface TwinZoneStore {
   selectedZoneId: string | null;
   isLoading: boolean;
   error: string | null;
+  /** HTTP status of the last failed create/update (409 duplicate name, 400 unsafe name). */
+  errorStatus: number | null;
 
   /** Editor mode. */
   mode: TwinZoneEditorMode;
@@ -76,6 +78,7 @@ export const useTwinZoneStore = createStore<TwinZoneStore>(
     selectedZoneId: null,
     isLoading: false,
     error: null,
+    errorStatus: null,
     mode: 'view',
     draftPoints: [],
     editingZone: null,
@@ -108,6 +111,7 @@ export const useTwinZoneStore = createStore<TwinZoneStore>(
       set((state) => {
         state.isLoading = true;
         state.error = null;
+        state.errorStatus = null;
       });
       try {
         const zone = await twinZoneApi.createZone(twinId, request);
@@ -125,6 +129,7 @@ export const useTwinZoneStore = createStore<TwinZoneStore>(
         set((state) => {
           state.isLoading = false;
           state.error = getErrorMessage(e, 'Failed to create zone');
+          state.errorStatus = getErrorStatus(e);
         });
         return null;
       }
@@ -136,6 +141,7 @@ export const useTwinZoneStore = createStore<TwinZoneStore>(
       set((state) => {
         state.isLoading = true;
         state.error = null;
+        state.errorStatus = null;
       });
       try {
         const zone = await twinZoneApi.updateZone(twinId, zoneId, request);
@@ -152,6 +158,7 @@ export const useTwinZoneStore = createStore<TwinZoneStore>(
         set((state) => {
           state.isLoading = false;
           state.error = getErrorMessage(e, 'Failed to update zone');
+          state.errorStatus = getErrorStatus(e);
         });
         return null;
       }

@@ -244,15 +244,20 @@ model ScanSession {
   @@index([workerId, lastHeartbeat])
 }
 
-// TwinZone — L2 semantic zone (typed polygon) in the twin world frame. NEW model
-// (do NOT merge with the fleet `Zone`: that is a 2D AABB with a different enum and
-// drives the SVG FleetMap). TwinZone is the sole source for Nav2/VDA5050 export
-// AND, since TASK-200, for the robot's place graph (`places/_index.json`) —
+// TwinZone — L2 semantic zone (typed polygon) in the twin world frame, and THE
+// ONLY zone model (TASK-274): the fleet `Zone` (a 2D AABB behind the SVG
+// FleetMap) is being removed, and everything that meant "a zone" — navigation,
+// zone E-stop, deployments, the fleet map — now targets a TwinZone. Every
+// navigable TwinZone is a PLACE: its name is unique per twin (case-insensitive,
+// via `nameKey`) and a valid robot place id. TwinZone is the sole source for
+// Nav2/VDA5050 export AND for the robot's place graph (`places/_index.json`) —
 // keepouts must never diverge between the two, so one is generated from the other.
 model TwinZone {
   id        String   @id @default(uuid())
   twinId    String
   name      String
+  // lower(trim(name)) — backs the per-twin case-insensitive uniqueness (TASK-326)
+  nameKey   String
   // keepout | workcell | charging | speed | room
   // 'room' (TASK-200) is a NAMED REGION OF FLOOR the robot may stand in — an
   // aisle, a dock, a staging area. It is the opposite of a keepout and is
@@ -275,6 +280,7 @@ model TwinZone {
   twin DigitalTwin @relation(fields: [twinId], references: [id], onDelete: Cascade)
 
   @@index([twinId])
+  @@unique([twinId, nameKey])
 }
 
 // ============================================================================

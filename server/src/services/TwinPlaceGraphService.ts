@@ -8,6 +8,7 @@
  */
 
 import { digitalTwinRepository, twinZoneRepository } from '../repositories/index.js';
+import { PLACE_ZONE_KEEPOUT } from './twinPlaceGeometry.js';
 import {
   PLACE_FRAME_UNITS,
   PLACE_FRAME_YAW_CONVENTION,
@@ -34,16 +35,25 @@ import type {
  * renderings of the same rows, so a keepout cannot exist in one and not the
  * other. The robot never authors places; it only caches what this returns.
  *
- * `workcell`, `charging` and `speed` zones are deliberately NOT places: they are
- * task/behaviour annotations, not the vocabulary an operator uses for "where are
- * you". Promote one by giving it `type: 'room'` in the authoring overlay.
+ * Since TASK-274 the twin is the ONLY zone model, so every navigable zone is a
+ * place: `room`, `workcell` and `charging` are places a robot may stand in (a
+ * robot is sent "to the charging zone" by name), `keepout` is a place it must
+ * never enter. `speed` zones stay out — they are a behaviour annotation over
+ * floor that already belongs to some other place, not somewhere to go.
  */
-const PLACE_ZONE_TYPES: ReadonlyMap<string, boolean> = new Map([
-  ['room', false],
-  ['keepout', true],
+const PLACE_ZONE_TYPES = PLACE_ZONE_KEEPOUT;
+
+/**
+ * Place type implied by the zone type when the operator did not pick one in
+ * `metadata.placeType`. A `room`/`keepout` says nothing about what the floor is
+ * for, so it stays the honest `unknown`.
+ */
+const PLACE_TYPE_BY_ZONE_TYPE: ReadonlyMap<string, TwinPlaceType> = new Map([
+  ['workcell', 'cell'],
+  ['charging', 'charging'],
 ]);
 
-/** Default place type when the operator did not pick one. Honest, not guessed. */
+/** Default place type when neither the operator nor the zone type says. */
 const DEFAULT_PLACE_TYPE: TwinPlaceType = 'unknown';
 
 /**
@@ -112,7 +122,7 @@ function placeTypeOf(zone: TwinZoneRecord): TwinPlaceType {
   const raw = metaString(zone, 'placeType');
   return raw && (TwinPlaceTypes as readonly string[]).includes(raw)
     ? (raw as TwinPlaceType)
-    : DEFAULT_PLACE_TYPE;
+    : (PLACE_TYPE_BY_ZONE_TYPE.get(zone.type) ?? DEFAULT_PLACE_TYPE);
 }
 
 /** Integer floor in the twin's own frame. Not the fleet's storey string. */
