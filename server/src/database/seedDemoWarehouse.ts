@@ -11,7 +11,7 @@
  * `metadata.placeType` / `metadata.floor` from the file.
  *
  * The places are inlined rather than read off disk because the server image
- * does not ship `robot-agent/`; `seedDemoWarehouse.test.ts` asserts the two
+ * does not ship `robot-agent/`; `__tests__/robot-site.integration.test.ts` asserts the two
  * still agree, so an edit to the JSON without one here fails CI.
  *
  * Idempotent: a twin named "Demo Warehouse" already present (in any tenant)
