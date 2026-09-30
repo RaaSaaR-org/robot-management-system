@@ -141,6 +141,14 @@ Why:
 - **An explicit choice still wins**, so an operator who wants e2b's 0.2 s over its
   accuracy can still set `AGENT_PLANNER_THINKING=false`.
 
+Known side effect (found in review): Host mode's visitor answerer
+(`agent-mode-controller.ts`, the `buildVisitorAnswerPrompt` call) also reads
+`config.agentMode.plannerThinking`, so it inherits the per-model default. On the g1-edu
+profile (`gemma4:e2b`) a visitor's spoken answer now thinks too; judging by the planner
+numbers that adds a few seconds per answer on a laptop. Accepted: it is the same model and
+the same flag the operator already controls, and `AGENT_PLANNER_THINKING=false` restores
+the old behaviour for both. Not benched for answer quality.
+
 What changed: `resolvePlannerThinking` and `PLANNER_MODELS_THAT_THINK` in
 `robot-agent/src/config/config.ts` (the cost table sits there, next to
 `DEFAULT_AGENT_MODEL`, which points at it); `Planner` takes a `thinking` dep so the bench
