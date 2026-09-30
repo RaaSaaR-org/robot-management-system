@@ -32,6 +32,7 @@ import { eventsRoutes } from './routes/events.routes.js';
 import { robotRoutes } from './routes/robot.routes.js';
 import { voiceRoutes } from './routes/voice.routes.js';
 import { agentModeRoutes } from './routes/agent-mode.routes.js';
+import { controlLeaseDenialAudit, controlLeaseRoutes } from './routes/control-lease.routes.js';
 import { patrolRoutes, patrolRobotRoutes } from './routes/patrol.routes.js';
 import { tourRoutes } from './routes/tour.routes.js';
 import { wellKnownRoutes } from './routes/wellknown.routes.js';
@@ -258,6 +259,12 @@ export function createApp(): Express {
 
   // Agent Mode (TASK-194) — robot-scoped ingest + proxies, in-memory only
   app.use('/api/robots', ...protect, agentModeRoutes);
+
+  // Control leases (TASK-317) — acquire / release / observe one robot-wide
+  // lease. Behind CONTROL_LEASES_ENABLED (default off). The denial audit sits
+  // ahead of `...protect` so a viewer refused by writeRoleGuard is audited too;
+  // it only ever looks at the two lease write paths.
+  app.use('/api/robots', controlLeaseDenialAudit(), ...protect, controlLeaseRoutes);
 
   // Patrol (TASK-212): routes/runs/findings at /api/patrol, the robot's photo
   // upload + the spec-named /agent-mode/patrol aliases at /api/robots.
