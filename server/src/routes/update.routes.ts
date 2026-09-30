@@ -15,8 +15,14 @@ import { Router, type Request, type Response } from 'express';
 import { updateService, SEMVER_REGEX } from '../services/UpdateService.js';
 import type { UpdatePackageStatus } from '../services/UpdateService.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { auditBuildAct } from '../services/buildAudit.js';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 
 export const updateRoutes = Router();
+
+function actorOf(req: Request): string | undefined {
+  return (req as AuthenticatedRequest).user?.id;
+}
 
 // ============================================================================
 // PACKAGE ENDPOINTS
@@ -25,12 +31,14 @@ export const updateRoutes = Router();
 /**
  * GET / - List all update packages
  * Query params:
- *   - status: 'pending' | 'approved' | 'deployed' | 'rolled_back'
+ *   - status: 'pending' | 'approved' | 'deployed' | 'rolled_back' | 'archived'
+ *   - includeArchived: 'true' to list archived (deleted-with-history) packages too
  */
 updateRoutes.get('/', async (req: Request, res: Response) => {
   try {
     const status = req.query.status as UpdatePackageStatus | undefined;
-    const packages = await updateService.getUpdatePackages(status);
+    const includeArchived = req.query.includeArchived === 'true';
+    const packages = await updateService.getUpdatePackages(status, includeArchived);
     res.json(packages);
   } catch (error) {
     console.error('Error listing update packages:', error);
@@ -60,6 +68,13 @@ updateRoutes.post('/', async (req: Request, res: Response) => {
       : Buffer.from(`update-package-${version}`);
 
     const pkg = await updateService.createUpdatePackage({ version, changelog, fileBuffer });
+    await auditBuildAct({
+      resourceType: 'update_package',
+      resourceId: pkg.id,
+      action: 'create',
+      actorId: actorOf(req),
+      metadata: { version: pkg.version, checksum: pkg.checksum },
+    });
     res.status(201).json(pkg);
   } catch (error) {
     console.error('Error creating update package:', error);
@@ -155,10 +170,39 @@ updateRoutes.post('/:id/rollback/:robotId', async (req: Request, res: Response) 
       return res.status(400).json({ error: 'Missing required field: targetVersion' });
     }
 
-    const deployment = await updateService.triggerRollback(req.params.robotId, targetVersion);
+    const deployment = await updateService.triggerRollback(req.params.id, req.params.robotId, targetVersion);
+    await auditBuildAct({
+      resourceType: 'update_package',
+      resourceId: req.params.id,
+      action: 'rollback',
+      actorId: actorOf(req),
+      metadata: { robotId: req.params.robotId, targetVersion, deploymentId: deployment.id },
+    });
     res.json(deployment);
   } catch (error) {
     console.error('Error triggering rollback:', error);
     sendFailure(res, error, 'Failed to trigger rollback', 400);
+  }
+});
+
+/**
+ * DELETE /:id - Delete an update package (TASK-272)
+ * Never deployed: the row is removed. Deployed at least once: it is archived
+ * instead, so the deployment history stays. Answers { id, outcome }.
+ */
+updateRoutes.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const { outcome, snapshot } = await updateService.deleteUpdatePackage(req.params.id);
+    await auditBuildAct({
+      resourceType: 'update_package',
+      resourceId: req.params.id,
+      action: outcome === 'deleted' ? 'delete' : 'archive',
+      actorId: actorOf(req),
+      metadata: { version: snapshot.version, status: snapshot.status, checksum: snapshot.checksum },
+    });
+    res.json({ id: req.params.id, outcome });
+  } catch (error) {
+    console.error('Error deleting update package:', error);
+    sendFailure(res, error, 'Failed to delete update package');
   }
 });
