@@ -17,13 +17,13 @@ tags:
 sprint: ''
 parent: ""
 depends_on:
-spe: 8
-effort: ""
 - '[[TASK-185]]'
 - '[[TASK-186]]'
 - '[[TASK-188]]'
 - '[[TASK-189]]'
 - '[[TASK-225]]'
+spe: 8
+effort: ""
 due_date: ''
 created: 2026-07-17
 updated: "2026-09-05"

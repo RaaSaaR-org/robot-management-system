@@ -5,9 +5,9 @@ aliases:
 title: The experiment loop — an agent proposes a hypothesis, a human starts it, and
   the platform trains, evaluates and rates the result
 slug: agent-experiment-loop
-status: todo
+status: in-progress
 priority: 2
-owner: ''
+owner: huhn511
 projects: []
 customers: []
 tags:
@@ -17,15 +17,15 @@ tags:
 sprint: ''
 parent: ""
 depends_on:
-spe: 8
-effort: ""
 - '[[TASK-238]]'
 - '[[TASK-239]]'
 - '[[TASK-240]]'
 - '[[TASK-241]]'
+spe: 8
+effort: ""
 due_date: ''
 created: 2026-09-04
-updated: "2026-09-05"
+updated: "2026-09-30"
 status_note: 'Written 2026-09-04. The capstone of the four tasks below it: each one
   supplies a piece this loop cannot fake — an addressable model (233), a run that can
   continue from one (234), a cheap data variation (235), and a place to record a
