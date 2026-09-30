@@ -171,7 +171,7 @@ const AVAILABLE_ENVIRONMENTS: SimEnvironment[] = [
  *  constant (never a request field); `execHorizon` maps to `--exec-horizon`
  *  (steps of each action chunk executed before re-querying the policy) and is
  *  only passed when set — the evaluator's own default applies otherwise. */
-interface VlaEvalProfile {
+export interface VlaEvalProfile {
   task: string;
   maxSteps: number;
   execHorizon?: number;
@@ -207,6 +207,23 @@ const VLA_EVAL_PROFILES: Record<string, VlaEvalProfile> = {
     execHorizon: 8,
   },
 };
+
+/**
+ * The rollout profile an environment is evaluated with: its embodiment's
+ * VLA_EVAL_PROFILES entry, or the default. Exported so a caller that records
+ * the rollouts (the experiment loop, TASK-242) writes the same task string the
+ * evaluator was given.
+ */
+export function getEvalProfileForEnvironment(environment: string): VlaEvalProfile {
+  const env = AVAILABLE_ENVIRONMENTS.find((e) => e.id === environment);
+  const embodiment = env?.embodiment;
+  return (embodiment ? VLA_EVAL_PROFILES[embodiment] : undefined) ?? DEFAULT_VLA_PROFILE;
+}
+
+/** True when `environment` names a built-in evaluation environment. */
+export function isKnownEnvironment(environment: string): boolean {
+  return AVAILABLE_ENVIRONMENTS.some((e) => e.id === environment);
+}
 
 // ============================================================================
 // PATHS
@@ -411,6 +428,22 @@ export class SimulationService extends EventEmitter {
     };
 
     return this.enqueueJob(job);
+  }
+
+  /**
+   * Submit a sim evaluation of a model version in a built-in environment, on
+   * that environment's own backend, and say which task string it rolls out.
+   * The experiment loop's evaluation step (TASK-242).
+   */
+  submitEvaluation(
+    modelVersionId: string,
+    environment: string,
+    rolloutCount: number
+  ): { job: SimJob; taskPrompt: string } {
+    const env = AVAILABLE_ENVIRONMENTS.find((e) => e.id === environment);
+    if (!env) throw new Error(`Unknown environment: ${environment}`);
+    const job = this.submitJob(modelVersionId, environment, rolloutCount, env.backend);
+    return { job, taskPrompt: getEvalProfileForEnvironment(environment).task };
   }
 
   /**

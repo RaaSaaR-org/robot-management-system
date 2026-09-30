@@ -209,7 +209,7 @@ function readInitFromId(value: unknown, field: string): string | null {
  * compares what is recorded; inventing a verdict from a missing record would
  * block the registered-GR00T-checkpoint case this feature exists to serve.
  */
-async function checkInitFrom(
+export async function checkInitFrom(
   request: InitFromSubmitFields,
   baseModel: string | null | undefined,
 ): Promise<InitFromColumns> {
