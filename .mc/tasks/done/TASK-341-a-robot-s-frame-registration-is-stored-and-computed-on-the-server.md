@@ -3,7 +3,7 @@ id: "TASK-341"
 aliases: []
 title: "A robot's frame registration is stored and computed on the server"
 slug: "a-robot-s-frame-registration-is-stored-and-computed-on-the-server"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -73,12 +73,12 @@ robot agent consumes it in TASK-342 and the app drives it in TASK-343.
 
 ## Acceptance Criteria
 
-- [ ] PUT place-anchor with the robot's odom pose (1, 0, 0°) on a place centred at
+- [x] PUT place-anchor with the robot's odom pose (1, 0, 0°) on a place centred at
       (3, 2) facing 90° stores a transform that maps (1, 0) → (3, 2) and heading 0° → 90°.
-- [ ] GET reports `current: false` with a reason once the robot's live odom frame id
+- [x] GET reports `current: false` with a reason once the robot's live odom frame id
       differs from `odomFrameId`, or its site changed; changing the site deletes it.
-- [ ] The 400/404/409 cases above are answered as specified; DELETE removes it.
-- [ ] Unit tests cover the SE(2) math (round trip, yaw wrap) and the routes.
+- [x] The 400/404/409 cases above are answered as specified; DELETE removes it.
+- [x] Unit tests cover the SE(2) math (round trip, yaw wrap) and the routes.
 
 ## Test Strategy
 
