@@ -556,6 +556,16 @@ export interface Config {
      * When on, REST motion starts are refused while a lease is held and motion
      * sockets must bind to it (TASK-316); the default leaves robot behaviour
      * exactly as it was.
+     *
+     * Stays opt-in per deployment even though the server grants leases by
+     * default (TASK-321). With it on, a client that never binds is refused
+     * outright — there is no warn-only or grace mode:
+     * - motion sockets (`/ws/keyboard-teleop`, bilateral teleop): motion
+     *   frames are dropped with `{type:'error', code:'lease_required'}`; a
+     *   `{bind}` naming a wrong or stale lease gets `lease_invalid`;
+     * - REST motion starts while another user holds the lease: 409
+     *   `{code:'control_lease_held', holder:{displayName, userId}, message}`.
+     * E-stop is never gated on the lease.
      */
     required: boolean;
   };
