@@ -252,6 +252,11 @@ export function createApp(): Express {
   // Mount order is load-bearing: `voiceRoutes` and `agentModeRoutes` below share
   // this prefix and do NOT get the ticket middleware, so a ticket is inert on
   // them. There are tests that hold that property down.
+  // Control-lease denial audit (TASK-317). It must run ahead of the FIRST
+  // `...protect` on this prefix: `writeRoleGuard` refuses a viewer's lease
+  // write right here, on the robotRoutes mount, before the lease router below
+  // is ever reached. It only watches the two lease write paths.
+  app.use('/api/robots', controlLeaseDenialAudit());
   app.use('/api/robots', cameraStreamTicket, ...protect, robotRoutes);
 
   // Voice service proxy (say / events / volume) — robot-scoped, live-only
@@ -261,10 +266,9 @@ export function createApp(): Express {
   app.use('/api/robots', ...protect, agentModeRoutes);
 
   // Control leases (TASK-317) — acquire / release / observe one robot-wide
-  // lease. Behind CONTROL_LEASES_ENABLED (default off). The denial audit sits
-  // ahead of `...protect` so a viewer refused by writeRoleGuard is audited too;
-  // it only ever looks at the two lease write paths.
-  app.use('/api/robots', controlLeaseDenialAudit(), ...protect, controlLeaseRoutes);
+  // lease. Behind CONTROL_LEASES_ENABLED (default off). Its role-denial audit
+  // is mounted above, ahead of the robotRoutes guard.
+  app.use('/api/robots', ...protect, controlLeaseRoutes);
 
   // Patrol (TASK-212): routes/runs/findings at /api/patrol, the robot's photo
   // upload + the spec-named /agent-mode/patrol aliases at /api/robots.
