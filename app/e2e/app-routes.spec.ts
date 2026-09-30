@@ -24,7 +24,8 @@ const ROUTES = [
   // Build
   '/pipeline', '/data-collection', '/data-collection/new', '/datasets',
   '/datasets/demo-g1-edu/episodes', '/research', '/activity', '/training', '/training?tab=evaluation',
-  '/training?tab=simulation', '/models', '/deployments', '/deployments?tab=skills',
+  '/training?tab=simulation', '/models', '/experiments', '/experiments/demo-exp-completed',
+  '/deployments', '/deployments?tab=skills',
   '/fleet-learning', '/marketplace', '/marketplace/mine', '/marketplace/ml-001',
   // Comply
   '/compliance', '/compliance?tab=explainability', '/compliance?tab=gdpr',
