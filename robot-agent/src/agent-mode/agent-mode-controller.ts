@@ -235,6 +235,41 @@ export interface SubmitCommandInput {
 }
 
 /**
+ * Where a `move` command (`roboctl move`, the REST `move`/`charge`/`return_home`,
+ * the Genkit move tools) sends a sidecar-backed robot (TASK-336): a place of the
+ * registered graph by id, or a point in the same frame.
+ */
+export interface MoveWalkTarget {
+  x: number;
+  y: number;
+  /** Place id of the registered graph, when the move named one. */
+  place?: string | null;
+}
+
+/** How a move walk ended. `ok` only when the robot actually arrived. */
+export interface MoveWalkOutcome {
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * A move walk that was refused before any motion (`ok: false`), or one that
+ * started — `done` settles when the walk has finished, never earlier, and never
+ * rejects.
+ */
+export type MoveWalkStart =
+  | { ok: false; message: string }
+  | { ok: true; planId: string; message: string; done: Promise<MoveWalkOutcome> };
+
+/**
+ * Half the side of the square a coordinate move walks into (TASK-336). The
+ * navigator only knows places and entities, so a point becomes a small place:
+ * with {@link PLACE_ENTRY_MARGIN_M}'s 0.3 m the robot counts as arrived once it
+ * stands within 0.5 m of the point on each axis.
+ */
+export const MOVE_POINT_HALF_SIDE_M = 0.8;
+
+/**
  * What an E-Stop actually achieved. `ok` says the latch is set and the plan is
  * discarded — that part is local and cannot fail. `delivered` is the hardware
  * claim: StopMove AND Damp were acked by the sidecar. They are separate because
@@ -458,6 +493,15 @@ export class AgentModeController {
   private navState: AgentNavPlan | null = null;
   /** The `goto` block whose route `navState` describes, while it runs. */
   private activeGoto: AgentBlock | null = null;
+  /**
+   * Places a `move` walk (TASK-336) resolved itself, keyed by the id of its
+   * `goto` block — the target is already a polygon (a place of the registered
+   * graph, or the square around a point), so `runGoto` must not look it up by
+   * name again.
+   */
+  private readonly moveGotoPlaces = new Map<string, Place>();
+  /** The plan id of the running `move` walk, null when none is running. */
+  private moveWalkPlanId: string | null = null;
   private readonly idleWatcher: IdleWatcher;
   private readonly heartbeat: HeartbeatMonitor;
   private readonly intents: IntentStore | null;
@@ -1199,6 +1243,11 @@ export class AgentModeController {
    * fails in one sentence that lists what would have matched.
    */
   private async runGoto(block: AgentBlock): Promise<BlockOutcome> {
+    const resolved = this.moveGotoPlaces.get(block.id);
+    if (resolved) {
+      this.moveGotoPlaces.delete(block.id);
+      return this.navigator.navigateToPlace(resolved);
+    }
     const placeName = typeof block.params.place === 'string' ? block.params.place.trim() : '';
     if (!placeName) return this.navigator.navigate(String(block.params.entity ?? ''));
 
@@ -1224,6 +1273,153 @@ export class AgentModeController {
       };
     }
     return this.navigator.navigateToPlace(place);
+  }
+
+  // ── move walks (TASK-336) ─────────────────────────────────────────────────
+
+  /**
+   * Walk a sidecar-backed robot to where a `move` command sent it — the same
+   * path `goto {place}` takes: the navigator plans on the map, the block
+   * executor drives `LocoClient`, and every stage is checked against the
+   * registered keepouts. It runs as a one-block plan built without the planner,
+   * so it shows in the Agent Mode timeline, holds the control lock and is
+   * stopped by the E-Stop like any other plan. It does NOT need Agent Mode to be
+   * switched on: a `move` is an operator's explicit order, not autonomy.
+   *
+   * Refused before any motion when the destination cannot be trusted to mean
+   * the same spot for the robot: no place graph, or one whose frame is not
+   * registered to the robot's pose (`place-frame.ts`). A robot that accepted a
+   * move there would walk to a point about another origin.
+   */
+  async walkTo(target: MoveWalkTarget): Promise<MoveWalkStart> {
+    const rsm = this.robotStateManager;
+    if (!rsm) return { ok: false, message: 'move: Agent Mode is not attached to this robot yet.' };
+    if (!Number.isFinite(target.x) || !Number.isFinite(target.y)) {
+      return { ok: false, message: 'move: the destination has no finite coordinates.' };
+    }
+
+    const registration = rsm.getPlaceFrameRegistration?.() ?? null;
+    if (!registration) {
+      return {
+        ok: false,
+        message:
+          'move refused: this robot walks on real locomotion but has no place graph, so a destination ' +
+          'cannot be placed in its frame. Bind the robot to a site (or set PLACE_GRAPH_PATH).',
+      };
+    }
+    if (!registration.registered) {
+      return {
+        ok: false,
+        message: `move refused: the robot's frame is not registered to its twin — ${registration.reason}`,
+      };
+    }
+
+    const latch = this.latchedEstop();
+    if (latch) return { ok: false, message: `move refused: ${this.latchMessage(latch)}` };
+    if (this.isRunning()) {
+      return {
+        ok: false,
+        message:
+          `move refused: Agent Mode is running "${this.plan?.command ?? 'a plan'}" — stop it first, ` +
+          'or send the destination to Agent Mode.',
+      };
+    }
+
+    const place = this.moveWalkPlace(target, rsm.getPlaces?.() ?? []);
+    if (typeof place === 'string') return { ok: false, message: place };
+
+    const claim = this.lock.claim('agent');
+    if (!claim.ok) {
+      return { ok: false, message: `move refused: ${claim.reason ?? 'control is busy.'}` };
+    }
+
+    const label = place.name || place.id;
+    const block = makeBlock('goto', { place: label }, 'move command');
+    this.moveGotoPlaces.set(block.id, place);
+    const plan: AgentPlan = {
+      id: uuidv4(),
+      robotId: this.robotId,
+      command: `move: ${label}`,
+      blocks: [block],
+      cursor: -1,
+      status: 'running',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    this.plan = plan;
+    this.abortRequested = false;
+    this.abortReason = null;
+    this.planFinalized = false;
+    this.moveWalkPlanId = plan.id;
+    this.emit('agent:plan:started', { plan: clonePlan(plan) });
+
+    const run = this.runPlan(plan, true).finally(() => {
+      this.runPromise = null;
+      this.moveGotoPlaces.delete(block.id);
+      if (this.moveWalkPlanId === plan.id) this.moveWalkPlanId = null;
+    });
+    this.runPromise = run;
+
+    const done = run.then(
+      (): MoveWalkOutcome => {
+        if (plan.status === 'done') {
+          return { ok: true, message: block.result ?? `Arrived in ${label}.` };
+        }
+        const why = block.error ?? this.abortReason ?? 'the walk did not finish';
+        return { ok: false, message: `move to ${label} ${plan.status}: ${why}` };
+      },
+      (err: unknown): MoveWalkOutcome => ({
+        ok: false,
+        message: `move to ${label} failed: ${err instanceof Error ? err.message : String(err)}`,
+      }),
+    );
+    return { ok: true, planId: plan.id, message: `Walking to ${label}`, done };
+  }
+
+  /**
+   * The polygon a move walk heads into: the named place of the registered
+   * graph, or a small square around a bare point. A string is the refusal.
+   */
+  private moveWalkPlace(target: MoveWalkTarget, places: readonly Place[]): Place | string {
+    const placeId = typeof target.place === 'string' ? target.place : '';
+    if (placeId) {
+      const found = places.find((p) => p.id === placeId);
+      if (!found) return `move refused: place "${placeId}" is not in the robot's place graph.`;
+      if (found.keepout) return `move refused: "${placeId}" is a keepout.`;
+      return found;
+    }
+    const h = MOVE_POINT_HALF_SIDE_M;
+    const label = `(${target.x.toFixed(2)}, ${target.y.toFixed(2)})`;
+    return {
+      id: label,
+      name: label,
+      placeType: 'unknown',
+      floor: 0,
+      polygon: [
+        [target.x - h, target.y - h],
+        [target.x + h, target.y - h],
+        [target.x + h, target.y + h],
+        [target.x - h, target.y + h],
+      ],
+      source: 'declared',
+      keepout: false,
+      landmarks: [],
+    };
+  }
+
+  /**
+   * Stop the running `move` walk (the `stop` command). Aborts the plan and asks
+   * the base to stop moving; the E-Stop latch is not touched. Returns false when
+   * no move walk is running — a plan the operator gave Agent Mode is not a
+   * `move`, and `stop` leaves it alone.
+   */
+  stopMoveWalk(reason: string): boolean {
+    if (!this.moveWalkPlanId || this.plan?.id !== this.moveWalkPlanId || !this.isRunning()) return false;
+    this.abortPlan(reason);
+    void this.loco.action('stop').catch((err: unknown) => {
+      console.warn(`[AgentMode] stop after a move abort failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    return true;
   }
 
   /**

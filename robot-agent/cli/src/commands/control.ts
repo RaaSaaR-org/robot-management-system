@@ -9,6 +9,7 @@ import { createClient } from '../api/client.js';
 import { formatCommand, printError, colors } from '../utils/output.js';
 import type { CliOptions, CommandType } from '../api/types.js';
 import { describeDestination, parseMoveArgs, type MoveDestination } from './move-args.js';
+import { isInFlight, waitForCommand } from './wait-command.js';
 
 // Helper to execute a command
 async function executeCommand(
@@ -21,7 +22,14 @@ async function executeCommand(
 
   try {
     const client = createClient(opts.url, opts.robot);
-    const command = await client.sendCommand(type, payload);
+    let command = await client.sendCommand(type, payload);
+
+    // A sidecar-backed robot walks for real and answers `executing` at once
+    // (TASK-336); the answer that matters is how the walk ended.
+    if (isInFlight(command)) {
+      spinner.text = `${command.result?.message ?? 'Executing'}...`;
+      command = await waitForCommand(client, command);
+    }
 
     spinner.stop();
     console.log(formatCommand(command, opts.format));

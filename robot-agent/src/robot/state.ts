@@ -28,7 +28,7 @@ import { createScanRoom, generatePosedScan, seedFromString, type ScanRoom } from
 import { getJointConfig } from './joint-configs/index.js';
 import type { JointConfig } from './types.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
-import { CommandExecutor } from './CommandExecutor.js';
+import { CommandExecutor, agentModeLocomotion } from './CommandExecutor.js';
 import { hardwareClient, HardwareActionError, type CachedBasePose } from '../hardware/HardwareClient.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import {
@@ -318,6 +318,13 @@ export class RobotStateManager {
   /** The odometry frame id {@link placeFrame} was assessed for (TASK-342). */
   private placeFrameOdomId: string | null = null;
   /**
+   * Latched once the sidecar has delivered a base pose in this process
+   * (TASK-336). From then on the pose belongs to the sidecar, so `move` walks
+   * on real locomotion — and a sidecar that drops out makes that walk fail
+   * honestly instead of sliding back to the kinematic pretence.
+   */
+  private sidecarPoseSeen = false;
+  /**
    * Whether the graph's frame is registered to the frame the robot's pose
    * arrives in. Null = no graph. See {@link assessFrameRegistration}.
    */
@@ -406,7 +413,12 @@ export class RobotStateManager {
 
     // Initialize command executor
     this.commandExecutor = new CommandExecutor(
-      { speedUnitsPerSecond: SIMULATION_CONFIG.speedUnitsPerSecond },
+      {
+        speedUnitsPerSecond: SIMULATION_CONFIG.speedUnitsPerSecond,
+        // TASK-336: a sidecar-backed robot walks for real; a pure-sim one keeps
+        // the kinematic SimulationEngine path.
+        locomotion: agentModeLocomotion(() => this.isSidecarBacked()),
+      },
       stateGetter,
       stateUpdater
     );
@@ -811,12 +823,23 @@ export class RobotStateManager {
   }
 
   /**
+   * Whether the robot's position comes from the hardware sidecar — the MuJoCo
+   * `sim_g1_dds` or a real G1 — rather than from the kinematic
+   * `SimulationEngine` (TASK-336). True once the sidecar has declared an
+   * odometry frame or delivered a pose, and it stays true for the process.
+   */
+  isSidecarBacked(): boolean {
+    return this.sidecarPoseSeen || hardwareClient.getOdometryFrame() !== null;
+  }
+
+  /**
    * One pose sample from the hardware poll — possibly `null`, which is a
    * routine event on this stack (`getLocoOdometry()` has a 2 s timeout and
    * returns null on any hiccup) and is treated as UNKNOWN, never as "carry on
    * with the last one".
    */
   private onPoseSample(pose: CachedBasePose | null): void {
+    if (pose !== null) this.sidecarPoseSeen = true;
     if (!this.placeTracker) return;
 
     // FAIL CLOSED on an unregistered frame (TASK-200 review). The pose is real

@@ -19,7 +19,12 @@ import {
   getHomeLocation,
   resolveMoveTarget,
 } from '../tools/navigation.js';
-import { agentModeController } from '../agent-mode/agent-mode-controller.js';
+import {
+  agentModeController,
+  type MoveWalkOutcome,
+  type MoveWalkStart,
+  type MoveWalkTarget,
+} from '../agent-mode/agent-mode-controller.js';
 
 /**
  * Callback to update robot state
@@ -37,12 +42,50 @@ export type AgentEstop = (
 const defaultAgentEstop: AgentEstop = (reason) => agentModeController.estop(reason);
 
 /**
+ * Real locomotion for `move` (TASK-336). On a robot whose pose comes from the
+ * hardware sidecar (the MuJoCo `sim_g1_dds`, a real G1) the kinematic
+ * `SimulationEngine` moves nothing, so a move is handed to the Agent Mode walk
+ * path instead. Injectable so tests need neither the sidecar nor the
+ * process-wide controller.
+ */
+export interface MoveLocomotion {
+  /** True while the robot's position comes from the hardware sidecar. */
+  engaged(): boolean;
+  /** Start walking; the result's `done` settles when the walk has finished. */
+  walkTo(target: MoveWalkTarget): Promise<MoveWalkStart>;
+  /** Abort a walk {@link MoveLocomotion.walkTo} started; false when none is running. */
+  stop(reason: string): boolean;
+}
+
+/**
+ * The production {@link MoveLocomotion}: the process-wide Agent Mode
+ * controller's walk path, engaged whenever `engaged` says the pose comes from
+ * the sidecar.
+ */
+export function agentModeLocomotion(engaged: () => boolean): MoveLocomotion {
+  return {
+    engaged,
+    walkTo: (target) => agentModeController.walkTo(target),
+    stop: (reason) => agentModeController.stopMoveWalk(reason),
+  };
+}
+
+/**
  * Configuration for command executor
  */
 export interface CommandExecutorConfig {
   speedUnitsPerSecond: number;
   /** Override for the Agent Mode E-Stop hook (tests). */
   agentEstop?: AgentEstop;
+  /** Real locomotion for `move` on a sidecar-backed robot; absent = kinematic only. */
+  locomotion?: MoveLocomotion;
+}
+
+/** A move that was accepted, plus — on real locomotion — when it really ends. */
+interface MoveStart {
+  result: CommandResult;
+  /** Present only for a walk: settles with how the walk ended. */
+  walk?: Promise<MoveWalkOutcome>;
 }
 
 /**
@@ -95,6 +138,7 @@ export class CommandExecutor {
     command.startedAt = new Date().toISOString();
 
     let result: CommandResult;
+    let walk: Promise<MoveWalkOutcome> | undefined;
 
     switch (type) {
       case 'move':
@@ -104,9 +148,11 @@ export class CommandExecutor {
         if (destination) {
           // A place by name, or coordinates — either way, never into a keepout.
           const target = resolveMoveTarget(destination);
-          result = target.ok
-            ? await this.moveTo(target.location)
-            : { success: false, message: target.message, ...(target.keepout ? { data: { keepout: target.keepout } } : {}) };
+          if (target.ok) {
+            ({ result, walk } = await this.beginMove(target.location));
+          } else {
+            result = { success: false, message: target.message, ...(target.keepout ? { data: { keepout: target.keepout } } : {}) };
+          }
         } else {
           result = { success: false, message: 'No destination provided' };
         }
@@ -126,16 +172,30 @@ export class CommandExecutor {
         result = await this.drop();
         break;
       case 'charge':
-        result = await this.goToCharge();
+        ({ result, walk } = await this.beginCharge());
         break;
       case 'return_home':
-        result = await this.returnHome();
+        ({ result, walk } = await this.beginReturnHome());
         break;
       case 'emergency_stop':
         result = await this.emergencyStop();
         break;
       default:
         result = { success: false, message: `Unknown command type: ${type}` };
+    }
+
+    if (result.success && walk) {
+      // A real walk (TASK-336): the command stays `executing` until the robot
+      // has actually arrived or given up. The history holds this same object,
+      // so `GET /commands` shows the final status once it lands.
+      command.result = { ...result.data, message: result.message };
+      void walk.then((outcome) => {
+        command.status = outcome.ok ? 'completed' : 'failed';
+        command.completedAt = new Date().toISOString();
+        if (outcome.ok) command.result = { ...command.result, message: outcome.message };
+        else command.errorMessage = outcome.message;
+      });
+      return command;
     }
 
     command.status = result.success ? 'completed' : 'failed';
@@ -152,21 +212,33 @@ export class CommandExecutor {
    * Move to a location
    */
   async moveTo(location: RobotLocation): Promise<CommandResult> {
+    return (await this.beginMove(location)).result;
+  }
+
+  /**
+   * Start a move. On a pure-sim robot this sets the kinematic target and is
+   * done; on a sidecar-backed robot it starts a real walk and returns it as
+   * `walk`, which settles only when the walk ends (TASK-336).
+   */
+  private async beginMove(location: RobotLocation): Promise<MoveStart> {
     const state = this.stateGetter();
 
     if (state.status === 'charging') {
-      return { success: false, message: 'Cannot move while charging. Unplug first.' };
+      return { result: { success: false, message: 'Cannot move while charging. Unplug first.' } };
     }
     if (state.status === 'error') {
-      return { success: false, message: 'Robot is in error state. Clear errors first.' };
+      return { result: { success: false, message: 'Robot is in error state. Clear errors first.' } };
     }
     if (state.batteryLevel < 5) {
-      return { success: false, message: 'Battery too low to move. Charge required.' };
+      return { result: { success: false, message: 'Battery too low to move. Charge required.' } };
     }
 
     const distance = this.calculateDistance(state.location, location);
-    const estimatedTime = Math.ceil(distance / this.config.speedUnitsPerSecond);
 
+    const locomotion = this.config.locomotion;
+    if (locomotion?.engaged()) return this.beginWalk(locomotion, location, distance);
+
+    const estimatedTime = Math.ceil(distance / this.config.speedUnitsPerSecond);
     this.stateUpdater((s) => {
       s.targetLocation = location;
       s.status = 'busy';
@@ -174,10 +246,59 @@ export class CommandExecutor {
     });
 
     return {
-      success: true,
-      message: `Moving to location (${location.x.toFixed(1)}, ${location.y.toFixed(1)})`,
-      estimatedTime,
-      data: { distance, destination: location },
+      result: {
+        success: true,
+        message: `Moving to location (${location.x.toFixed(1)}, ${location.y.toFixed(1)})`,
+        estimatedTime,
+        data: { distance, destination: location },
+      },
+    };
+  }
+
+  /**
+   * Hand a move to real locomotion. No `targetLocation` is set: the kinematic
+   * engine must not drag the pose around while odometry owns it. The robot is
+   * `busy` for exactly as long as the walk runs.
+   */
+  private async beginWalk(
+    locomotion: MoveLocomotion,
+    location: RobotLocation,
+    distance: number,
+  ): Promise<MoveStart> {
+    let start: MoveWalkStart;
+    try {
+      start = await locomotion.walkTo({ x: location.x, y: location.y, place: location.place ?? null });
+    } catch (error) {
+      start = { ok: false, message: `move failed to start: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    if (!start.ok) {
+      return { result: { success: false, message: start.message, data: { destination: location } } };
+    }
+
+    const taskName = `Walking to ${location.place ?? `(${location.x.toFixed(1)}, ${location.y.toFixed(1)})`}`;
+    this.stateUpdater((s) => {
+      s.status = 'busy';
+      s.currentTaskName = taskName;
+    });
+    const walk = start.done.then((outcome) => {
+      this.stateUpdater((s) => {
+        // Only undo what this walk set: an E-Stop or an error that landed in
+        // the meantime owns the status now.
+        if (s.status === 'busy' && s.currentTaskName === taskName) {
+          s.status = 'online';
+          s.currentTaskName = undefined;
+        }
+      });
+      return outcome;
+    });
+
+    return {
+      result: {
+        success: true,
+        message: `${start.message} — the command completes when the robot arrives`,
+        data: { distance, destination: location, locomotion: 'walk', planId: start.planId },
+      },
+      walk,
     };
   }
 
@@ -237,6 +358,9 @@ export class CommandExecutor {
    */
   async stop(): Promise<CommandResult> {
     const state = this.stateGetter();
+    // A `move` on real locomotion is an Agent Mode walk (TASK-336); clearing
+    // the kinematic target below would not stop it.
+    const walkStopped = this.config.locomotion?.stop('Stop command received') ?? false;
 
     this.stateUpdater((s) => {
       s.targetLocation = undefined;
@@ -250,8 +374,8 @@ export class CommandExecutor {
 
     return {
       success: true,
-      message: 'Movement stopped',
-      data: { location: state.location },
+      message: walkStopped ? 'Movement stopped — the running walk was aborted' : 'Movement stopped',
+      data: { location: state.location, ...(walkStopped ? { walkAborted: true } : {}) },
     };
   }
 
@@ -329,29 +453,37 @@ export class CommandExecutor {
    * Navigate to charging station
    */
   async goToCharge(): Promise<CommandResult> {
+    return (await this.beginCharge()).result;
+  }
+
+  private async beginCharge(): Promise<MoveStart> {
     let chargingStation;
     try {
       chargingStation = await getChargingStationLocation();
     } catch (error) {
-      return { success: false, message: error instanceof Error ? error.message : String(error) };
+      return { result: { success: false, message: error instanceof Error ? error.message : String(error) } };
     }
-    const result = await this.moveTo(chargingStation);
-    if (result.success) {
-      result.message = `Navigating to charging station at (${chargingStation.x}, ${chargingStation.y})`;
+    const start = await this.beginMove(chargingStation);
+    if (start.result.success) {
+      start.result.message = `Navigating to charging station at (${chargingStation.x}, ${chargingStation.y})`;
     }
-    return result;
+    return start;
   }
 
   /**
    * Return to home location
    */
   async returnHome(): Promise<CommandResult> {
+    return (await this.beginReturnHome()).result;
+  }
+
+  private async beginReturnHome(): Promise<MoveStart> {
     const home = await getHomeLocation();
-    const result = await this.moveTo(home);
-    if (result.success) {
-      result.message = `Returning to home base at (${home.x}, ${home.y})`;
+    const start = await this.beginMove(home);
+    if (start.result.success) {
+      start.result.message = `Returning to home base at (${home.x}, ${home.y})`;
     }
-    return result;
+    return start;
   }
 
   /**

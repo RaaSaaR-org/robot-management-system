@@ -21,6 +21,7 @@ roboctl history                  # Command history
 # Control commands
 roboctl move "CHARGING-A"        # Navigate to a place (id, name or type); keepouts are refused
 roboctl move 3 -1.5              # Navigate to coordinates (metres)
+                                 # (on a sidecar-backed robot the move is a real walk; roboctl waits until it ends)
 roboctl pickup <object>          # Pick up an object
 roboctl drop                     # Drop held object
 roboctl charge                   # Send to charging station
