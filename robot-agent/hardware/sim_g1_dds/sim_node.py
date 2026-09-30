@@ -74,13 +74,13 @@ try:
     from .cine_recorder import RecorderConfig, RecorderSlot, parse_size
     from .joints import ARM_REST, BASE_JOINTS, BODY, LHAND, N_BODY, N_HAND, RHAND, WEIGHT_IDX
     from .loco_service import LocoSimService
-    from .loco_state import UINT32_MAX, LocoState, wrap_angle
+    from .loco_state import UINT32_MAX, LocoState, pose_relative_to, wrap_angle
 except ImportError:  # plain-script invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from cine_recorder import RecorderConfig, RecorderSlot, parse_size  # type: ignore[no-redef]
     from joints import ARM_REST, BASE_JOINTS, BODY, LHAND, N_BODY, N_HAND, RHAND, WEIGHT_IDX
     from loco_service import LocoSimService
-    from loco_state import UINT32_MAX, LocoState, wrap_angle
+    from loco_state import UINT32_MAX, LocoState, pose_relative_to, wrap_angle
 
 DEFAULT_SCENE = (
     Path(__file__).resolve().parents[1]
@@ -530,6 +530,10 @@ class SimNode:
         self._renderer: mujoco.Renderer | None = None
         self.recorder = RecorderSlot()
         self.behind_s = 0.0  # how far sim time trails wall time (run_loop)
+        # TASK-342: None = odometry IS the MJCF world (the default). A world
+        # pose = odometry reports about the pose the base had at start-up, like
+        # a real G1 -- see set_odom_origin_here().
+        self.odom_origin: tuple[float, float, float] | None = None
         self.crc = CRC()
 
         # MuJoCo's own instability handling (mj_checkAcc -> mj_resetData) zeroes
@@ -1030,7 +1034,7 @@ class SimNode:
         stops tracking, the agent's navigation must see that.
         """
         with self.lock:
-            x, y, yaw = self.measured_pose()
+            x, y, yaw = self.odom_pose()
             self.msg_odom.position[0] = float(x)
             self.msg_odom.position[1] = float(y)
             self.msg_odom.position[2] = 0.0
@@ -1054,6 +1058,22 @@ class SimNode:
         yaw = float(q[self.base_qadr[2]])
         return (float(q[self.base_qadr[0]]), float(q[self.base_qadr[1]]),
                 wrap_angle(yaw) if wrap_yaw else yaw)
+
+    def odom_pose(self) -> tuple[float, float, float]:
+        """The base pose as ODOMETRY reports it: the world pose, or -- with
+        `--odom-origin boot` -- that pose relative to where the base stood at
+        start-up (TASK-342). Every odometry output goes through here; world
+        consumers (LiDAR, /sim/reset-pose) keep using measured_pose()."""
+        pose = self.measured_pose()
+        if self.odom_origin is None:
+            return pose
+        return pose_relative_to(self.odom_origin, pose)
+
+    def set_odom_origin_here(self) -> None:
+        """Re-zero odometry at the current base pose, as a real sidecar's
+        odometry does when it comes up."""
+        with self.lock:
+            self.odom_origin = self.measured_pose()
 
     # ------------------------------------------------------------ pose reset
 
@@ -1637,6 +1657,10 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
             if path == "/health":
                 self._send(200, {"status": "ok", "connected": True, "sim": True,
                                  "scene": node.scene.name,
+                                 # TASK-342: `boot` = odometry is about the
+                                 # start-up pose, not the MJCF world -- the
+                                 # agent then treats it as real odometry.
+                                 "odom_frame": "world" if node.odom_origin is None else "boot",
                                  "behind_s": round(node.behind_s, 3),
                                  "boot_id": BOOT_ID})
             elif path == "/cameras":
@@ -1688,7 +1712,7 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                                for n, a in zip(LHAND, node.qadr["lh"])]
                     joints += [{"name": n, "position": float(node.data.qpos[a])}
                                for n, a in zip(RHAND, node.qadr["rh"])]
-                    x, y, yaw = node.measured_pose()
+                    x, y, yaw = node.odom_pose()
                     sim_time = float(node.data.time)
                 # Same shape as g1_sidecar.py's /state (Contract §2): an explicit
                 # `connected` and `joints` as a list -- HardwareClient's poller
@@ -1719,7 +1743,7 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                     })
                     return
                 with node.lock:
-                    x, y, yaw = node.measured_pose()
+                    x, y, yaw = node.odom_pose()
                 self._send(200, {"ok": True, "x": x, "y": y, "yaw": yaw, "source": "sim"})
             elif path == "/pointcloud/sensors":
                 # Same shape as g1_sidecar.py: {"sensors": [...]}.
@@ -1962,6 +1986,20 @@ def run_loop(node: SimNode, viewer=None) -> None:
             time.sleep(min(lag, dt))
 
 
+def parse_spawn(text: str) -> tuple[float, float, float]:
+    """`X,Y,YAWDEG` -> (x, y, yaw in radians)."""
+    parts = text.split(",")
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError("--spawn wants X,Y,YAWDEG")
+    try:
+        x, y, yaw_deg = (float(p) for p in parts)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--spawn: {exc}") from exc
+    if not all(math.isfinite(v) for v in (x, y, yaw_deg)):
+        raise argparse.ArgumentTypeError("--spawn values must be finite")
+    return (x, y, math.radians(yaw_deg))
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--scene", type=Path, default=DEFAULT_SCENE)
@@ -1980,6 +2018,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--viewer", action="store_true",
                     help="open a live MuJoCo window (needs mjpython on macOS)")
     ap.add_argument("--quiet", action="store_true")
+    # TASK-342: make the sim's odometry behave like a real G1's, so aligning a
+    # robot to its site twin can be tested on a laptop.
+    ap.add_argument("--odom-origin", choices=("world", "boot"),
+                    default=os.environ.get("G1_SIM_ODOM_ORIGIN") or "world",
+                    help="world: odometry IS the MJCF world (default). boot: odometry "
+                         "starts at the pose the base has at start-up, like a real "
+                         "robot's -- /health reports odom_frame=boot")
+    ap.add_argument("--spawn", metavar="X,Y,YAWDEG", type=parse_spawn,
+                    help="start the base at this world pose (metres, degrees)")
     ap.add_argument("--record", metavar="OUT.mp4",
                     help="record a cinematic MP4 from start-up (see cine_recorder.py)")
     ap.add_argument("--record-cam", default="follow",
@@ -1999,6 +2046,19 @@ def main(argv: list[str] | None = None) -> int:
         ChannelFactoryInitialize(args.domain)
 
     node = SimNode(args.scene, args.domain, verbose=not args.quiet)
+    if args.spawn is not None:
+        if not node.has_base:
+            print(f"[SimNode] --spawn ignored: scene {args.scene.name} has no planar base",
+                  file=sys.stderr)
+        else:
+            # The physics loop is not running yet, so the reset is applied
+            # directly instead of queued for it.
+            node._apply_pose_reset(*args.spawn)
+    if args.odom_origin == "boot":
+        node.set_odom_origin_here()
+        ox, oy, oyaw = node.odom_origin or (0.0, 0.0, 0.0)
+        print(f"[SimNode]   odometry origin = start-up pose ({ox:.2f}, {oy:.2f}, "
+              f"{math.degrees(oyaw):.0f} deg) -- NOT the world frame")
 
     httpd = None
     if args.http_port:

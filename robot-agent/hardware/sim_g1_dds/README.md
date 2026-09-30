@@ -68,6 +68,25 @@ every time the node starts, so anything the agent built in the odometry frame is
 only valid within one boot. The robot-agent keys its persisted occupancy map
 (TASK-206) on this id and throws the map away when it changes.
 
+### Odometry like a real robot (TASK-342)
+
+By default odometry IS the MJCF world frame (`/health.odom_frame = "world"`), so a
+robot bound to the Demo Warehouse twin is site-aligned by construction. To test
+aligning a robot whose odometry is NOT the twin frame — the real-hardware case:
+
+```bash
+.venv/bin/python sim_node.py --scene ../sim_evaluator/mjcf/g1_warehouse_scene.xml \
+    --http-port 8777 --odom-origin boot --spawn 3,2,90
+```
+
+`--spawn X,Y,YAWDEG` starts the base at that world pose; `--odom-origin boot`
+(or `G1_SIM_ODOM_ORIGIN=boot`) makes `rt/odommodestate`, `/loco/odom` and
+`/state.odometry` report the pose relative to where the base stood at start-up,
+and `/health` says `odom_frame: "boot"`, which the robot-agent treats as real
+odometry (frame `odom`, keyed by `boot_id`). The fence then reports "not aligned"
+until an operator aligns the robot (`PUT /api/robots/:id/frame-registration`),
+and again after every restart. `/sim/reset-pose` still takes WORLD coordinates.
+
 ## Camera snapshots
 
 `GET /cameras/<name>/snapshot` renders one frame from the named MJCF camera. It

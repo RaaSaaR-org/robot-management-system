@@ -94,6 +94,13 @@ export interface RobotLocation {
    * `siteAligned === true`. Relayed as reported; never invented here.
    */
   siteAligned?: boolean;
+  /**
+   * Where the robot stands in its SITE's (twin) frame, present only while
+   * `siteAligned` (TASK-342): `x`/`y`/`heading` stay raw odometry, and for a
+   * robot aligned by a frame registration (TASK-341) this is that pose carried
+   * into the twin. Heading in degrees. Relayed as reported; never invented here.
+   */
+  sitePose?: { x: number; y: number; heading: number };
 }
 
 /** See {@link RobotLocation.frame}. */
@@ -308,7 +315,18 @@ export function locationDiffers(a: RobotLocation | undefined, b: RobotLocation):
     (a.place ?? null) !== (b.place ?? null) ||
     (a.frame?.kind ?? null) !== (b.frame?.kind ?? null) ||
     (a.frame?.id ?? null) !== (b.frame?.id ?? null) ||
-    (a.siteAligned === true) !== (b.siteAligned === true)
+    (a.siteAligned === true) !== (b.siteAligned === true) ||
+    sitePoseDiffers(a.sitePose, b.sitePose)
+  );
+}
+
+/** A site pose appeared, vanished, or moved beyond the epsilons (TASK-342). */
+function sitePoseDiffers(a: RobotLocation['sitePose'], b: RobotLocation['sitePose']): boolean {
+  if (!a || !b) return !a !== !b;
+  return (
+    Math.abs(a.x - b.x) > POSE_EPSILON_M ||
+    Math.abs(a.y - b.y) > POSE_EPSILON_M ||
+    Math.abs(a.heading - b.heading) > HEADING_EPSILON_DEG
   );
 }
 

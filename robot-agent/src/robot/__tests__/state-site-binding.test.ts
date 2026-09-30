@@ -266,7 +266,8 @@ describe('a robot loads its site places through its binding (TASK-328)', () => {
       appConfig.place.twinId = TWIN_ID;
       const { manager: m } = manager();
       await vi.waitFor(() => expect(m.getPlaceFrameRegistration()).not.toBeNull());
-      const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+      // The frame-registration poll (TASK-342) is per robot, whatever the graph source.
+      const urls = fetchMock.mock.calls.map((c) => String(c[0])).filter((u) => !u.endsWith('/frame-registration'));
       expect(urls.every((u) => u.includes(`/api/digital-twins/${TWIN_ID}/places/_index.json`))).toBe(true);
     });
 

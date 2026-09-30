@@ -42,6 +42,12 @@ import {
 import { evaluateGeofence } from '../agent-mode/geofence.js';
 import { assessFrameRegistration, type FrameRegistration, type PoseFrame } from '../agent-mode/place-frame.js';
 import { PlaceGraphSource, robotCachePath } from '../agent-mode/place-graph-source.js';
+import {
+  FrameRegistrationSource,
+  graphInOdomFrame,
+  odomToTwin,
+  type OdomRegistration,
+} from '../agent-mode/frame-registration.js';
 import type { PoseSource } from '../agent-mode/scene-memory.js';
 import type { AgentGeofenceState, ScenePlace } from '../agent-mode/types.js';
 import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
@@ -292,8 +298,25 @@ export class RobotStateManager {
   private placeTracker: PlaceTracker | null = null;
   private placeBelief: PlaceBelief | null = null;
   private unsubscribePose: (() => void) | null = null;
-  /** The graph the geofence fences against (TASK-200). Null = no graph loaded. */
+  /**
+   * The graph the geofence fences against (TASK-200), in the frame the POSE
+   * arrives in: {@link sourceGraph} itself, or — for a robot registered to its
+   * site by an operator (TASK-342) — that graph carried into odometry. Null =
+   * no graph loaded.
+   */
   private placeGraph: PlaceGraph | null = null;
+  /** The graph as it was loaded, in its own (twin) frame. Null = no graph. */
+  private sourceGraph: PlaceGraph | null = null;
+  /** Identity of the transform {@link placeGraph} was built with; null = none. */
+  private placeGraphTransformKey: string | null = null;
+  /** The platform's odom → twin registration for this robot (TASK-342). */
+  private frameRegistration: OdomRegistration | null = null;
+  /** JSON of {@link frameRegistration}, so an unchanged poll changes nothing. */
+  private frameRegistrationKey: string | null = null;
+  /** Background poll of the registration (TASK-342). */
+  private registrationRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  /** The odometry frame id {@link placeFrame} was assessed for (TASK-342). */
+  private placeFrameOdomId: string | null = null;
   /**
    * Latched once the sidecar has delivered a base pose in this process
    * (TASK-336). From then on the pose belongs to the sidecar, so `move` walks
@@ -511,6 +534,7 @@ export class RobotStateManager {
     // `siteAligned` is only ever claimed for a graph adopted in THIS process; a
     // value restored from the persisted snapshot is about a graph nobody loaded.
     delete this.state.location.siteAligned;
+    delete this.state.location.sitePose;
 
     const graphPath = appConfig.place.graphPath;
     const twinId = appConfig.place.twinId;
@@ -548,6 +572,8 @@ export class RobotStateManager {
         );
       }
       this.startPlaceGraphRefresh(source);
+      // TASK-342: a platform graph may be aligned to this robot's odometry.
+      this.startFrameRegistrationRefresh();
     }
 
     this.unsubscribePose = hardwareClient.onPoseSample((pose) => this.onPoseSample(pose));
@@ -570,18 +596,14 @@ export class RobotStateManager {
     const key = JSON.stringify(graph);
     // A periodic refresh that returns the same graph must not reset the tracker:
     // that would throw away the drift budget every minute for nothing.
-    if (this.placeGraph && key === this.placeGraphKey) return;
+    if (this.sourceGraph && key === this.placeGraphKey) return;
     this.placeGraphKey = key;
     this.placeUnboundLogged = false;
-    this.placeGraph = graph;
-    this.placeTracker = new PlaceTracker({
-      graph,
-      hysteresisMarginM: appConfig.place.hysteresisMarginM,
-      driftBudgetM: appConfig.place.driftBudgetM,
-    });
+    this.sourceGraph = graph;
     // A new graph is a new frame question, so the answer — and the "we told the
-    // operator" latch — are recomputed rather than inherited.
-    this.assessPlaceFrame();
+    // operator" latch — are recomputed rather than inherited; `rebuild` builds a
+    // fresh tracker even when the frame answer is unchanged.
+    this.assessPlaceFrame({ rebuild: true });
     const fences = graph.places.filter((p) => p.keepout).length;
     console.log(
       `[RobotStateManager] Place graph loaded: ${graph.places.length} places ` +
@@ -607,16 +629,114 @@ export class RobotStateManager {
    * publish the answer as `location.siteAligned`. A new answer resets the
    * "we told the operator" latch rather than inheriting it.
    */
-  private assessPlaceFrame(): void {
-    const graph = this.placeGraph;
+  private assessPlaceFrame({ rebuild = false }: { rebuild?: boolean } = {}): void {
+    const graph = this.sourceGraph;
     if (!graph) return;
     const poseFrame = this.currentPoseFrame();
+    const odomFrameId = this.currentOdomFrameId();
     this.placeFramePose = poseFrame;
-    this.placeFrame = assessFrameRegistration(graph, { poseFrame });
+    this.placeFrameOdomId = odomFrameId;
+    const frame = assessFrameRegistration(graph, {
+      poseFrame,
+      registration: this.frameRegistration,
+      odomFrameId,
+    });
+    this.placeFrame = frame;
     this.placeFrameWarned = false;
+
+    // TASK-342: a registered robot sees its site through the registration. The
+    // graph is carried INTO odometry once, here, so the tracker, the geofence,
+    // navigation and the local map all keep comparing like with like — the
+    // pose stays exactly what the odometry topic said.
+    const byRegistration = frame.registered && frame.how === 'registration' ? frame.registration : null;
+    const transformKey = byRegistration
+      ? JSON.stringify([byRegistration.x, byRegistration.y, byRegistration.yawDeg])
+      : null;
+    if (rebuild || !this.placeGraph || transformKey !== this.placeGraphTransformKey) {
+      const effective = byRegistration ? graphInOdomFrame(graph, byRegistration) : graph;
+      this.placeGraphTransformKey = transformKey;
+      this.placeGraph = effective;
+      // A different transform is a different frame: drift and the committed
+      // place were measured against the old one, so neither carries over.
+      this.placeTracker = new PlaceTracker({
+        graph: effective,
+        hysteresisMarginM: appConfig.place.hysteresisMarginM,
+        driftBudgetM: appConfig.place.driftBudgetM,
+      });
+      this.placeBelief = null;
+    }
+
     // True ONLY for a twin-bound graph the pose is registered to: the site map
     // (TASK-331) plots a robot on the twin only on this claim.
-    this.state.location.siteAligned = graph.frame.twinId !== undefined && this.placeFrame.registered;
+    this.state.location.siteAligned = graph.frame.twinId !== undefined && frame.registered;
+    this.updateSitePose(hardwareClient.getCachedPose());
+  }
+
+  /**
+   * The id of the odometry frame the pose arrives in now — the sidecar boot id —
+   * or null for a sim world frame or no sidecar. A change is a re-zeroed
+   * odometry, which invalidates a registration (TASK-342).
+   */
+  private currentOdomFrameId(): string | null {
+    const frame = hardwareClient.getOdometryFrame();
+    return frame?.kind === 'odom' ? frame.id : null;
+  }
+
+  /**
+   * `location.sitePose`: where the robot stands in its SITE's frame (TASK-342),
+   * present only while `siteAligned`. For a sim whose world is the twin that is
+   * the pose itself; for a registered robot it is the pose carried through the
+   * registration. The site map plots this, never raw odometry.
+   */
+  private updateSitePose(pose: CachedBasePose | null): void {
+    const frame = this.placeFrame;
+    if (!this.state.location.siteAligned || !frame?.registered || pose === null) {
+      delete this.state.location.sitePose;
+      return;
+    }
+    const odom = { x: pose.x, y: pose.y, yawDeg: pose.yawDeg };
+    const twin = frame.how === 'registration' ? odomToTwin(frame.registration, odom) : odom;
+    this.state.location.sitePose = { x: twin.x, y: twin.y, heading: twin.yawDeg };
+  }
+
+  /**
+   * Poll the platform for this robot's frame registration (TASK-342). An
+   * operator's alignment reaches the fence within one poll; a platform that
+   * cannot be asked keeps the last answer, and its authoritative "none" drops it.
+   */
+  private startFrameRegistrationRefresh(): void {
+    const source = new FrameRegistrationSource({ serverUrl: appConfig.serverUrl, robotId: appConfig.robotId });
+    const tick = (): void => {
+      void source.refresh().then((result) => {
+        if (result.kind === 'found') this.setFrameRegistration(result.registration);
+        else if (result.kind === 'none') this.setFrameRegistration(null);
+      });
+    };
+    tick();
+    if (appConfig.place.registrationRefreshMs > 0) {
+      this.registrationRefreshTimer = setInterval(tick, appConfig.place.registrationRefreshMs);
+      this.registrationRefreshTimer.unref?.();
+    }
+  }
+
+  /** Install (or with null, forget) the platform's registration and re-judge the frame. */
+  setFrameRegistration(registration: OdomRegistration | null): void {
+    const key = registration ? JSON.stringify(registration) : null;
+    if (key === this.frameRegistrationKey) return;
+    this.frameRegistrationKey = key;
+    this.frameRegistration = registration;
+    console.log(
+      registration
+        ? `[RobotStateManager] Frame registration: odom '${registration.odomFrameId}' → twin ` +
+            `'${registration.twinId}' (x=${registration.x.toFixed(3)}, y=${registration.y.toFixed(3)}, ` +
+            `yaw=${registration.yawDeg.toFixed(1)}°, ${registration.method})`
+        : '[RobotStateManager] Frame registration: none',
+    );
+    if (!this.sourceGraph) return;
+    const wasRegistered = this.placeFrame?.registered === true;
+    this.assessPlaceFrame();
+    if (!this.placeFrame?.registered && wasRegistered) this.warnUnregisteredFrame();
+    this.notifyListeners();
   }
 
   /**
@@ -657,7 +777,11 @@ export class RobotStateManager {
    * site the robot has left.
    */
   private dropPlaceGraph(): void {
-    if (!this.placeGraph) return;
+    if (!this.sourceGraph) return;
+    this.sourceGraph = null;
+    this.placeGraphTransformKey = null;
+    this.placeFrameOdomId = null;
+    delete this.state.location.sitePose;
     this.placeGraph = null;
     this.placeGraphKey = null;
     this.placeTracker = null;
@@ -716,8 +840,7 @@ export class RobotStateManager {
    */
   private onPoseSample(pose: CachedBasePose | null): void {
     if (pose !== null) this.sidecarPoseSeen = true;
-    const tracker = this.placeTracker;
-    if (!tracker) return;
+    if (!this.placeTracker) return;
 
     // FAIL CLOSED on an unregistered frame (TASK-200 review). The pose is real
     // and keeps driving `location.x/y/heading` — it is the MAP that cannot be
@@ -725,7 +848,14 @@ export class RobotStateManager {
     // being consulted and disbelieved. See `agent-mode/place-frame.ts`.
     // TASK-328: the sidecar says whether it is a sim only once it answers —
     // re-assess when that (or a sidecar swap) changes what the pose frame is.
-    if (this.currentPoseFrame() !== this.placeFramePose) this.assessPlaceFrame();
+    // TASK-342: so does a re-zeroed odometry (new boot id), which is exactly
+    // what makes a registration stale.
+    if (this.currentPoseFrame() !== this.placeFramePose || this.currentOdomFrameId() !== this.placeFrameOdomId) {
+      this.assessPlaceFrame();
+    }
+    // Read AFTER the re-assessment: a registration applied or lost swaps the tracker.
+    const tracker = this.placeTracker;
+    if (!tracker) return;
     const frameBlocked = this.placeFrame !== null && !this.placeFrame.registered;
     if (frameBlocked) this.warnUnregisteredFrame();
 
@@ -777,6 +907,7 @@ export class RobotStateManager {
       this.state.location.y = pose.y;
       this.state.location.heading = pose.yawDeg;
     }
+    this.updateSitePose(pose);
     const placeId = this.placeBelief.place?.id ?? null;
     this.state.location.place = placeId;
 
@@ -1792,6 +1923,8 @@ export class RobotStateManager {
     this.unsubscribePose = null;
     if (this.placeRefreshTimer) clearInterval(this.placeRefreshTimer);
     this.placeRefreshTimer = null;
+    if (this.registrationRefreshTimer) clearInterval(this.registrationRefreshTimer);
+    this.registrationRefreshTimer = null;
   }
 
   // ============================================================================

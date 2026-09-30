@@ -73,6 +73,16 @@ export function groupSiteRobots(robots: Robot[], twinId: string | null): SiteRob
   return groups;
 }
 
+/**
+ * Where to draw a plotted robot: its pose in the SITE frame (TASK-342). A robot
+ * aligned by a frame registration reports raw odometry in `x`/`y`/`heading`,
+ * which is not the twin frame; only a robot that predates `sitePose` (a sim
+ * whose world is the twin) falls back to them.
+ */
+export function sitePoseOf(robot: Robot): { x: number; y: number; heading?: number } {
+  return robot.location.sitePose ?? { x: robot.location.x, y: robot.location.y, heading: robot.location.heading };
+}
+
 export interface SiteMapProps {
   /** `compact` is the dashboard's: shorter map, no legend */
   size?: 'full' | 'compact';
@@ -198,7 +208,7 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
             {(t) => (
               <g data-testid="site-map-robots">
                 {groups.plotted.map((r) => (
-                  <RobotDot key={r.id} robot={r} at={t.worldToScreen({ x: r.location.x, y: r.location.y })} />
+                  <RobotDot key={r.id} robot={r} at={t.worldToScreen(sitePoseOf(r))} />
                 ))}
               </g>
             )}
@@ -214,7 +224,7 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
 function RobotDot({ robot, at }: { robot: Robot; at: { x: number; y: number } }) {
   const fill = useCssColor('--color-primary');
   const halo = useCssColor('--color-canvas', 'white');
-  const heading = robot.location.heading;
+  const heading = sitePoseOf(robot).heading;
   const rad = typeof heading === 'number' ? (heading * Math.PI) / 180 : null;
   return (
     <g data-testid={`site-map-robot-${robot.id}`} pointerEvents="none">
