@@ -40,7 +40,7 @@
  */
 
 import { createWriteStream } from 'fs';
-import { mkdir } from 'fs/promises';
+import { mkdir, rm } from 'fs/promises';
 import { dirname, join, resolve as resolvePath, sep } from 'path';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
@@ -49,7 +49,12 @@ import {
   datasetRepository,
   robotTypeRepository,
 } from '../repositories/index.js';
-import { getRustFSClient, isRustFSInitialized } from '../storage/rustfs-client.js';
+import {
+  getRustFSClient,
+  getRustFSStatus,
+  isRustFSConfigured,
+  isRustFSInitialized,
+} from '../storage/rustfs-client.js';
 import { BUCKETS } from '../storage/model-storage.js';
 import { natsClient } from '../messaging/index.js';
 import { datasetService, datasetStorageRoot } from './DatasetService.js';
@@ -121,8 +126,13 @@ export interface RepoFile {
 interface ImportSink {
   readonly kind: 'local' | 'rustfs';
   readonly storagePath: string;
-  /** Called once before the first write. */
+  /**
+   * Called once before the first write — and before any metadata is written,
+   * so a sink that cannot take the bytes refuses while nothing depends on it.
+   */
   prepare(): Promise<void>;
+  /** Undo `prepare` when the import is refused before its row exists. */
+  discard(): Promise<void>;
   write(path: string, response: Response): Promise<void>;
 }
 
@@ -166,7 +176,28 @@ class LocalImportSink implements ImportSink {
     // Before the row is written, so `isLocalStoragePath` — which is an
     // `existsSync` — is true from the moment the dataset exists rather than
     // from the moment the first file lands.
-    await mkdir(this.root, { recursive: true });
+    try {
+      await mkdir(this.root, { recursive: true });
+    } catch (error) {
+      // A read-only image (production runs as UID 1000 over a read-only
+      // /app) answered EACCES here, and the route turned it into a 400 that
+      // read like the request's fault (#368).
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EACCES' || code === 'EROFS' || code === 'EPERM') {
+        throw new HuggingFaceImportError(
+          'STORAGE_UNAVAILABLE',
+          `Local dataset storage ${this.root} is not writable (${code}); `
+            + 'set DATASET_UPLOAD_DIR to a writable path or configure RustFS.',
+          503,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async discard(): Promise<void> {
+    // A fresh uuid directory with nothing in it yet; nothing else points here.
+    await rm(this.root, { recursive: true, force: true });
   }
 
   async write(path: string, response: Response): Promise<void> {
@@ -189,6 +220,10 @@ class RustFsImportSink implements ImportSink {
     // An object store has no directories to make.
   }
 
+  async discard(): Promise<void> {
+    // Nothing was written.
+  }
+
   async write(path: string, response: Response): Promise<void> {
     const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
     await getRustFSClient().upload(
@@ -205,9 +240,28 @@ class RustFsImportSink implements ImportSink {
  *
  * Once, and before the row is created, because a decision taken per file could
  * put half a dataset in a bucket and half on a disk if RustFS came up midway.
+ *
+ * A deployment that configures RustFS means to store in it, so while RustFS is
+ * down the answer is "not now", never the local disk: in production that disk
+ * is a read-only image, and in any deployment a dataset written there is one
+ * the rest of the fleet cannot read (#368). Local is for a server with no
+ * object store configured at all.
  */
 function createSink(storageId: string): ImportSink {
   if (isRustFSInitialized()) return new RustFsImportSink(`${storageId}/`);
+  if (isRustFSConfigured()) {
+    const { errorKind } = getRustFSStatus();
+    // A `config` failure is not retried — the environment will not change
+    // under a running process — so "try again shortly" would never come true.
+    const next = errorKind === 'config'
+      ? 'its configuration is incomplete; set RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY and restart.'
+      : 'the server is retrying — try again shortly.';
+    throw new HuggingFaceImportError(
+      'STORAGE_UNAVAILABLE',
+      `Object storage (RustFS) is configured but unavailable (${errorKind ?? 'connecting'}); ${next}`,
+      503,
+    );
+  }
   return new LocalImportSink(join(datasetStorageRoot(), storageId));
 }
 
@@ -280,10 +334,18 @@ export class HuggingFaceImportService {
     const { sha, license } = await this.resolveSource(repoId, revision);
     const info = await this.fetchInfoJson(repoId, sha);
 
-    const resolvedRobotTypeId = await this.resolveRobotTypeId(robotTypeId, info);
-
+    // Storage first: a refusal here must leave nothing behind, and resolving
+    // the robot type can create one (#368 left an orphan Unitree_G1 row).
     const sink = createSink(uuidv4());
     await sink.prepare();
+
+    let resolvedRobotTypeId: string;
+    try {
+      resolvedRobotTypeId = await this.resolveRobotTypeId(robotTypeId, info);
+    } catch (error) {
+      await sink.discard().catch(() => undefined);
+      throw error;
+    }
     const datasetName = repoId.includes('/') ? repoId.split('/').pop()! : repoId;
 
     const input: CreateDatasetInput = {

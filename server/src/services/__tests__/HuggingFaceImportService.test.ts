@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { isAbsolute, join } from 'path';
 import { tmpdir } from 'os';
@@ -25,6 +25,9 @@ import { tmpdir } from 'os';
 const env = vi.hoisted(() => ({
   storageRoot: '',
   rustfsUp: false,
+  /** `RUSTFS_ENDPOINT` set: this deployment means to use the object store. */
+  rustfsConfigured: false,
+  rustfsErrorKind: undefined as string | undefined,
   uploads: [] as Array<{ bucket: string; key: string; bytes: number }>,
 }));
 
@@ -43,6 +46,13 @@ vi.mock('../../repositories/index.js', () => ({
 
 vi.mock('../../storage/rustfs-client.js', () => ({
   isRustFSInitialized: () => env.rustfsUp,
+  isRustFSConfigured: () => env.rustfsConfigured,
+  getRustFSStatus: () => ({
+    configured: env.rustfsConfigured,
+    state: env.rustfsUp ? 'ready' : env.rustfsConfigured ? 'unavailable' : 'disabled',
+    errorKind: env.rustfsUp ? undefined : env.rustfsErrorKind,
+    attempts: 1,
+  }),
   getRustFSClient: () => ({
     upload: async (bucket: string, key: string, stream: AsyncIterable<Buffer>) => {
       let bytes = 0;
@@ -262,6 +272,8 @@ describe('HuggingFaceImportService', () => {
     requested = [];
     env.uploads = [];
     env.rustfsUp = false;
+    env.rustfsConfigured = false;
+    env.rustfsErrorKind = undefined;
     env.storageRoot = await mkdtemp(join(tmpdir(), 'hf-import-'));
     service = HuggingFaceImportService.getInstance();
 
@@ -444,6 +456,83 @@ describe('HuggingFaceImportService', () => {
       ]));
       expect(env.uploads.every((u) => u.bucket === 'training-datasets')).toBe(true);
       expect(vi.mocked(datasetRepository.create).mock.calls[0]![0].storagePath).toBe('store-1/');
+      expect(existsSync(join(env.storageRoot, 'store-1'))).toBe(false);
+    });
+
+    it('refuses with 503 while a configured RustFS is down, and creates nothing', async () => {
+      // #368: RustFS configured, down after a failed start, and the import
+      // went to a local disk production cannot write — answered as EACCES/400
+      // after it had already minted a RobotType.
+      env.rustfsConfigured = true;
+      env.rustfsErrorKind = 'auth';
+      vi.mocked(robotTypeRepository.findAll).mockResolvedValue([]);
+      mockHub();
+
+      const refused = await service.importDataset({ repoId: REPO }).catch((e: unknown) => e);
+
+      expect(refused).toBeInstanceOf(HuggingFaceImportError);
+      expect(refused).toMatchObject({ code: 'STORAGE_UNAVAILABLE', status: 503 });
+      expect((refused as Error).message).toContain('(auth)');
+      expect((refused as Error).message).toContain('try again shortly');
+      expect(robotTypeRepository.create).not.toHaveBeenCalled();
+      expect(datasetRepository.create).not.toHaveBeenCalled();
+      expect(existsSync(join(env.storageRoot, 'store-1'))).toBe(false);
+    });
+
+    it('does not promise a retry for a configuration that cannot connect', async () => {
+      // TASK-347 stops retrying on `config`: "try again shortly" would never
+      // come true, so the message names what to fix instead.
+      env.rustfsConfigured = true;
+      env.rustfsErrorKind = 'config';
+      mockHub();
+
+      const refused = await service.importDataset({ repoId: REPO }).catch((e: unknown) => e);
+
+      expect(refused).toMatchObject({ code: 'STORAGE_UNAVAILABLE', status: 503 });
+      expect((refused as Error).message).toContain('RUSTFS_ACCESS_KEY');
+      expect((refused as Error).message).not.toContain('try again shortly');
+    });
+
+    it.skipIf(process.getuid?.() === 0)(
+      'refuses with 503 naming DATASET_UPLOAD_DIR when the local root is not writable',
+      async () => {
+        const readOnly = join(env.storageRoot, 'read-only');
+        await mkdir(readOnly);
+        await chmod(readOnly, 0o500);
+        const writable = env.storageRoot;
+        env.storageRoot = join(readOnly, 'datasets');
+        vi.mocked(robotTypeRepository.findAll).mockResolvedValue([]);
+        mockHub();
+
+        try {
+          const refused = await service.importDataset({ repoId: REPO }).catch((e: unknown) => e);
+
+          expect(refused).toMatchObject({ code: 'STORAGE_UNAVAILABLE', status: 503 });
+          expect((refused as Error).message).toContain('DATASET_UPLOAD_DIR');
+          expect(robotTypeRepository.create).not.toHaveBeenCalled();
+          expect(datasetRepository.create).not.toHaveBeenCalled();
+        } finally {
+          await chmod(readOnly, 0o700);
+          env.storageRoot = writable;
+        }
+      },
+    );
+
+    it('regression: refused while RustFS is down, stored in RustFS once it recovers', async () => {
+      env.rustfsConfigured = true;
+      env.rustfsErrorKind = 'connectivity';
+      mockHub();
+
+      await expect(service.importDataset({ repoId: REPO }))
+        .rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE', status: 503 });
+
+      // The client reconnected in the background (TASK-347); no restart.
+      env.rustfsUp = true;
+      await service.importDataset({ repoId: REPO });
+      await settled();
+
+      expect(vi.mocked(datasetRepository.create).mock.calls[0]![0].storagePath).toBe('store-1/');
+      expect(env.uploads.map((u) => u.key)).toContain('store-1/meta/info.json');
       expect(existsSync(join(env.storageRoot, 'store-1'))).toBe(false);
     });
 

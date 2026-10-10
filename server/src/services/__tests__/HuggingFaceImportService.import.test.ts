@@ -36,6 +36,10 @@ vi.mock('../../repositories/index.js', () => ({
 vi.mock('../../storage/rustfs-client.js', () => ({
   // The condition this whole file exists for: no object store.
   isRustFSInitialized: vi.fn().mockReturnValue(false),
+  // Not configured either: the dev server with no object store, which is the
+  // only one allowed to fall back to local disk.
+  isRustFSConfigured: vi.fn().mockReturnValue(false),
+  getRustFSStatus: vi.fn(() => ({ configured: false, state: 'disabled', attempts: 0 })),
   getRustFSClient: vi.fn(() => {
     throw new Error('RustFS must not be reached when it is not initialised');
   }),
@@ -508,6 +512,9 @@ describe('minting a robot type', () => {
       .rejects.toMatchObject({ code: 'UNKNOWN_ROBOT_DIMS' });
     expect(robotTypeRepository.create).not.toHaveBeenCalled();
     expect(datasetRepository.create).not.toHaveBeenCalled();
+    // Storage is prepared before the robot type is resolved; a refusal there
+    // takes the empty directory back out rather than leaving it behind.
+    expect(await exists()).toBe(false);
   });
 });
 
