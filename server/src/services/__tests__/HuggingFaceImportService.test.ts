@@ -473,9 +473,24 @@ describe('HuggingFaceImportService', () => {
       expect(refused).toBeInstanceOf(HuggingFaceImportError);
       expect(refused).toMatchObject({ code: 'STORAGE_UNAVAILABLE', status: 503 });
       expect((refused as Error).message).toContain('(auth)');
+      expect((refused as Error).message).toContain('try again shortly');
       expect(robotTypeRepository.create).not.toHaveBeenCalled();
       expect(datasetRepository.create).not.toHaveBeenCalled();
       expect(existsSync(join(env.storageRoot, 'store-1'))).toBe(false);
+    });
+
+    it('does not promise a retry for a configuration that cannot connect', async () => {
+      // TASK-347 stops retrying on `config`: "try again shortly" would never
+      // come true, so the message names what to fix instead.
+      env.rustfsConfigured = true;
+      env.rustfsErrorKind = 'config';
+      mockHub();
+
+      const refused = await service.importDataset({ repoId: REPO }).catch((e: unknown) => e);
+
+      expect(refused).toMatchObject({ code: 'STORAGE_UNAVAILABLE', status: 503 });
+      expect((refused as Error).message).toContain('RUSTFS_ACCESS_KEY');
+      expect((refused as Error).message).not.toContain('try again shortly');
     });
 
     it.skipIf(process.getuid?.() === 0)(
