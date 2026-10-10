@@ -3,7 +3,7 @@ id: "TASK-348"
 aliases: ["TASK-348"]
 title: "/health reports storage status"
 slug: "health-reports-storage-status"
-status: "review"
+status: "done"
 priority: 2
 owner: "FlrnFrmm"
 projects: []
