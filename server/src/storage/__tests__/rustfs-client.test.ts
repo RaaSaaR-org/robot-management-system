@@ -758,6 +758,257 @@ describe('RustFS singleton lifecycle', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Error classification: why the connection failed, without the keys (#368)
+// ---------------------------------------------------------------------------
+
+describe('classifyS3Error', () => {
+  it('reads a 403 InvalidAccessKeyId as auth', async () => {
+    const { classifyS3Error } = await import('../rustfs-client.js');
+    expect(
+      classifyS3Error({ name: 'InvalidAccessKeyId', $metadata: { httpStatusCode: 403 } }),
+    ).toEqual({ kind: 'auth', detail: 'InvalidAccessKeyId (403)' });
+  });
+
+  it('reads any 401/403 as auth, whatever the name', async () => {
+    const { classifyS3Error } = await import('../rustfs-client.js');
+    expect(classifyS3Error({ name: 'UnknownError', $metadata: { httpStatusCode: 401 } }).kind).toBe('auth');
+  });
+
+  it('reads ECONNREFUSED, by name or by code, as connectivity', async () => {
+    const { classifyS3Error } = await import('../rustfs-client.js');
+    expect(classifyS3Error(Object.assign(new Error('x'), { code: 'ECONNREFUSED' })))
+      .toEqual({ kind: 'connectivity', detail: 'Error/ECONNREFUSED' });
+    expect(classifyS3Error({ name: 'TimeoutError' }).kind).toBe('connectivity');
+  });
+
+  it('reads anything else as unknown', async () => {
+    const { classifyS3Error } = await import('../rustfs-client.js');
+    expect(classifyS3Error(new Error('boom'))).toEqual({ kind: 'unknown', detail: 'Error' });
+    expect(classifyS3Error(undefined).kind).toBe('unknown');
+  });
+
+  it('never copies the message, which a server may fill with the key id', async () => {
+    const { classifyS3Error } = await import('../rustfs-client.js');
+    const err = Object.assign(new Error('The access key AKSECRETID does not exist'), {
+      name: 'InvalidAccessKeyId',
+      $metadata: { httpStatusCode: 403 },
+    });
+    expect(classifyS3Error(err).detail).not.toContain('AKSECRETID');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Status and recovery after a failed start (#368)
+// ---------------------------------------------------------------------------
+
+describe('RustFS status and recovery', () => {
+  const savedEnv = { ...process.env };
+  const spies: Array<{ mockRestore: () => void }> = [];
+
+  const authFailure = () =>
+    Object.assign(new Error('The access key AK does not exist'), {
+      name: 'InvalidAccessKeyId',
+      $metadata: { httpStatusCode: 403 },
+    });
+
+  beforeEach(() => {
+    spies.push(vi.spyOn(console, 'log').mockImplementation(() => undefined));
+    spies.push(vi.spyOn(console, 'warn').mockImplementation(() => undefined));
+    process.env.RUSTFS_ENDPOINT = 'http://localhost:9000';
+    process.env.RUSTFS_ACCESS_KEY = 'AK';
+    process.env.RUSTFS_SECRET_KEY = 'SK';
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.resetModules();
+    process.env = { ...savedEnv };
+    spies.splice(0).forEach((s) => s.mockRestore());
+  });
+
+  it('throws an auth RustFSConnectionError and reports it without the keys', async () => {
+    h.send.mockRejectedValue(authFailure());
+    const mod = await import('../rustfs-client.js');
+
+    const err = await mod.initializeRustFSClient().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(mod.RustFSConnectionError);
+    expect((err as InstanceType<typeof mod.RustFSConnectionError>).kind).toBe('auth');
+    const status = mod.getRustFSStatus();
+    expect(status).toMatchObject({
+      configured: true,
+      state: 'unavailable',
+      errorKind: 'auth',
+      errorDetail: 'InvalidAccessKeyId (403)',
+      attempts: 1,
+    });
+    expect(status.lastAttemptAt).toEqual(expect.any(String));
+    expect(JSON.stringify(status)).not.toMatch(/"AK"|SK|does not exist/);
+  });
+
+  it('reports a refused connection as connectivity', async () => {
+    h.send.mockRejectedValue(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+    const mod = await import('../rustfs-client.js');
+
+    await expect(mod.initializeRustFSClient()).rejects.toMatchObject({ kind: 'connectivity' });
+    expect(mod.getRustFSStatus()).toMatchObject({ state: 'unavailable', errorKind: 'connectivity' });
+  });
+
+  it('reports a missing environment as config, and an unconfigured server as disabled', async () => {
+    delete process.env.RUSTFS_ENDPOINT;
+    delete process.env.RUSTFS_ACCESS_KEY;
+    delete process.env.RUSTFS_SECRET_KEY;
+    const mod = await import('../rustfs-client.js');
+
+    expect(mod.getRustFSStatus()).toMatchObject({ configured: false, state: 'disabled', attempts: 0 });
+    await expect(mod.initializeRustFSClient()).rejects.toMatchObject({ kind: 'config' });
+    expect(mod.getRustFSStatus()).toMatchObject({ configured: false, state: 'disabled' });
+    expect(mod.getRustFSStatus().errorKind).toBeUndefined();
+  });
+
+  it('does not expose the client while the connection is still being probed', async () => {
+    let release!: () => void;
+    h.send.mockReturnValue(new Promise<void>((resolve) => { release = resolve; }));
+    const mod = await import('../rustfs-client.js');
+
+    const pending = mod.initializeRustFSClient();
+    expect(mod.isRustFSInitialized()).toBe(false);
+    expect(mod.getRustFSStatus().state).toBe('connecting');
+
+    release();
+    await pending;
+    expect(mod.isRustFSInitialized()).toBe(true);
+    expect(mod.getRustFSStatus()).toMatchObject({ state: 'ready' });
+  });
+
+  it('regression: down at startup, back later — the client connects without a restart', async () => {
+    vi.useFakeTimers();
+    h.send.mockRejectedValue(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }));
+    const mod = await import('../rustfs-client.js');
+
+    await expect(mod.initializeRustFSClient()).rejects.toThrow();
+    expect(mod.isRustFSInitialized()).toBe(false);
+
+    const onReady = vi.fn();
+    mod.startRustFSRecovery({ onReady, initialDelayMs: 1_000, maxDelayMs: 10_000 });
+
+    // Still down at the first retry.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mod.getRustFSStatus()).toMatchObject({ state: 'unavailable', attempts: 2 });
+    expect(onReady).not.toHaveBeenCalled();
+
+    // The backend comes back.
+    h.send.mockResolvedValue({ Buckets: [] });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(mod.isRustFSInitialized()).toBe(true);
+    expect(mod.getRustFSStatus()).toMatchObject({ state: 'ready', attempts: 3 });
+    expect(mod.getRustFSStatus().errorKind).toBeUndefined();
+    expect(onReady).toHaveBeenCalledTimes(1);
+
+    // And it stops trying.
+    const calls = h.send.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.send.mock.calls.length).toBe(calls);
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('doubles the wait after every failure, up to the cap', async () => {
+    vi.useFakeTimers();
+    h.send.mockRejectedValue(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }));
+    const mod = await import('../rustfs-client.js');
+    const attemptsAt = () => mod.getRustFSStatus().attempts;
+
+    mod.startRustFSRecovery({ onReady: vi.fn(), initialDelayMs: 1_000, maxDelayMs: 4_000 });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(attemptsAt()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);     // t=1s
+    expect(attemptsAt()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_999); // next at +2s
+    expect(attemptsAt()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);     // t=3s
+    expect(attemptsAt()).toBe(2);
+    await vi.advanceTimersByTimeAsync(4_000); // +4s
+    expect(attemptsAt()).toBe(3);
+    await vi.advanceTimersByTimeAsync(4_000); // capped at +4s, not +8s
+    expect(attemptsAt()).toBe(4);
+  });
+
+  it('stops retrying when the configuration itself is incomplete', async () => {
+    vi.useFakeTimers();
+    delete process.env.RUSTFS_SECRET_KEY;
+    const mod = await import('../rustfs-client.js');
+
+    mod.startRustFSRecovery({ onReady: vi.fn(), initialDelayMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mod.getRustFSStatus()).toMatchObject({ configured: true, state: 'unavailable', errorKind: 'config', attempts: 1 });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mod.getRustFSStatus().attempts).toBe(1);
+  });
+
+  it('is a no-op when RustFS is not configured', async () => {
+    vi.useFakeTimers();
+    delete process.env.RUSTFS_ENDPOINT;
+    const mod = await import('../rustfs-client.js');
+    const onReady = vi.fn();
+
+    const stop = mod.startRustFSRecovery({ onReady, initialDelayMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(mod.getRustFSStatus().attempts).toBe(0);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(() => stop()).not.toThrow();
+  });
+
+  it('shares one probe between concurrent initialize calls', async () => {
+    let release!: () => void;
+    h.send.mockReturnValue(new Promise<void>((resolve) => { release = resolve; }));
+    const mod = await import('../rustfs-client.js');
+
+    const a = mod.initializeRustFSClient();
+    const b = mod.initializeRustFSClient();
+    release();
+
+    expect(await a).toBe(await b);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(mod.getRustFSStatus()).toMatchObject({ state: 'ready', attempts: 1 });
+  });
+
+  it('runs one recovery loop at a time, so onReady fires once', async () => {
+    vi.useFakeTimers();
+    h.send.mockResolvedValue({ Buckets: [] });
+    const mod = await import('../rustfs-client.js');
+    const first = vi.fn();
+    const second = vi.fn();
+
+    mod.startRustFSRecovery({ onReady: first, initialDelayMs: 1_000 });
+    mod.startRustFSRecovery({ onReady: second, initialDelayMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    expect(mod.getRustFSStatus().attempts).toBe(1);
+  });
+
+  it('stop() cancels a pending retry', async () => {
+    vi.useFakeTimers();
+    h.send.mockResolvedValue({ Buckets: [] });
+    const mod = await import('../rustfs-client.js');
+    const onReady = vi.fn();
+
+    const stop = mod.startRustFSRecovery({ onReady, initialDelayMs: 1_000 });
+    stop();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(mod.isRustFSInitialized()).toBe(false);
+    expect(onReady).not.toHaveBeenCalled();
+  });
+});
+
 // Reference the statically imported singleton helpers so the import is used
 // (lifecycle assertions above use a freshly re-imported module instance).
 describe('static singleton exports', () => {

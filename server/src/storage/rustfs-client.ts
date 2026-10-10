@@ -418,12 +418,102 @@ export class RustFSClient {
    */
   async validateConnection(): Promise<boolean> {
     try {
-      await this.client.send(new ListBucketsCommand({}));
+      await this.checkConnection();
       return true;
     } catch {
       return false;
     }
   }
+
+  /**
+   * List buckets, and throw a {@link RustFSConnectionError} saying why when it
+   * fails. `validateConnection` answers yes or no; this is the one that keeps
+   * the reason, which is what tells a wrong key from an unreachable host.
+   */
+  async checkConnection(): Promise<void> {
+    try {
+      await this.client.send(new ListBucketsCommand({}));
+    } catch (err) {
+      const { kind, detail } = classifyS3Error(err);
+      throw new RustFSConnectionError(
+        kind,
+        detail,
+        `Failed to connect to RustFS at ${this.config.endpoint}: ${detail}`,
+      );
+    }
+  }
+}
+
+// ============================================================================
+// CONNECTION ERRORS
+// ============================================================================
+
+/**
+ * Why RustFS could not be reached. `config` is the environment, not the
+ * server: retrying does not fix it, because the environment does not change
+ * under a running process.
+ */
+export type RustFSErrorKind = 'config' | 'auth' | 'connectivity' | 'unknown';
+
+export class RustFSConnectionError extends Error {
+  constructor(
+    readonly kind: RustFSErrorKind,
+    /** S3 error name, network code and HTTP status — never a key. */
+    readonly detail: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RustFSConnectionError';
+  }
+}
+
+const AUTH_ERROR_NAMES = new Set([
+  'InvalidAccessKeyId',
+  'SignatureDoesNotMatch',
+  'AccessDenied',
+  'Forbidden',
+  'InvalidToken',
+]);
+
+const CONNECTIVITY_ERROR_NAMES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'EAI_AGAIN',
+  'TimeoutError',
+  'NetworkingError',
+]);
+
+/**
+ * Sort an S3 failure into a {@link RustFSErrorKind}.
+ *
+ * The detail is built from the error's name, code and HTTP status only. Its
+ * message is left out on purpose: an S3-compatible server is free to echo the
+ * access key id back in it, and this string goes to logs and to `/health`.
+ */
+export function classifyS3Error(err: unknown): { kind: RustFSErrorKind; detail: string } {
+  const e = (err ?? {}) as {
+    name?: unknown;
+    code?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  };
+  const name = typeof e.name === 'string' ? e.name : 'Error';
+  const code = typeof e.code === 'string' ? e.code : undefined;
+  const status = typeof e.$metadata?.httpStatusCode === 'number' ? e.$metadata.httpStatusCode : undefined;
+
+  let kind: RustFSErrorKind = 'unknown';
+  if (AUTH_ERROR_NAMES.has(name) || status === 401 || status === 403) {
+    kind = 'auth';
+  } else if (CONNECTIVITY_ERROR_NAMES.has(name) || (code !== undefined && CONNECTIVITY_ERROR_NAMES.has(code))) {
+    kind = 'connectivity';
+  }
+
+  const parts = [name];
+  if (code && code !== name) parts.push(code);
+  const detail = status !== undefined ? `${parts.join('/')} (${status})` : parts.join('/');
+  return { kind, detail };
 }
 
 // ============================================================================
@@ -431,6 +521,53 @@ export class RustFSClient {
 // ============================================================================
 
 let rustfsClient: RustFSClient | null = null;
+
+export interface RustFSStatus {
+  /** `RUSTFS_ENDPOINT` is set: this deployment means to use object storage. */
+  configured: boolean;
+  state: 'disabled' | 'connecting' | 'ready' | 'unavailable';
+  /** Set while the last attempt failed. */
+  errorKind?: RustFSErrorKind;
+  /** e.g. `InvalidAccessKeyId (403)` — never a key. */
+  errorDetail?: string;
+  lastAttemptAt?: string;
+  attempts: number;
+}
+
+let inFlight: Promise<RustFSClient> | null = null;
+let recoveryRunning = false;
+let attempts = 0;
+let lastAttemptAt: string | undefined;
+let lastError: { kind: RustFSErrorKind; detail: string } | undefined;
+
+/**
+ * Whether this deployment is configured for object storage at all — which is
+ * a different question from whether it is reachable right now.
+ */
+export function isRustFSConfigured(): boolean {
+  return Boolean(process.env.RUSTFS_ENDPOINT);
+}
+
+/**
+ * Where object storage stands, for `/health` and for anyone deciding whether
+ * to wait for it or to use something else.
+ */
+export function getRustFSStatus(): RustFSStatus {
+  const configured = isRustFSConfigured();
+  let state: RustFSStatus['state'];
+  if (rustfsClient) state = 'ready';
+  else if (inFlight) state = 'connecting';
+  else if (lastError) state = lastError.kind === 'config' && !configured ? 'disabled' : 'unavailable';
+  else state = configured ? 'connecting' : 'disabled';
+
+  const status: RustFSStatus = { configured, state, attempts };
+  if (lastAttemptAt) status.lastAttemptAt = lastAttemptAt;
+  if (state === 'unavailable' && lastError) {
+    status.errorKind = lastError.kind;
+    status.errorDetail = lastError.detail;
+  }
+  return status;
+}
 
 /**
  * Get the RustFS client singleton
@@ -451,25 +588,128 @@ export function isRustFSInitialized(): boolean {
 
 /**
  * Initialize the RustFS client singleton
+ *
+ * The singleton is published only once the connection validates. Published
+ * first, every `isRustFSInitialized()` caller would see a client during each
+ * retry's probe — long enough for an import to pick the bucket and then fail
+ * on it.
  */
 export async function initializeRustFSClient(config?: RustFSConfig): Promise<RustFSClient> {
   if (rustfsClient) {
     return rustfsClient;
   }
+  // A second caller while a probe is out waits for that probe rather than
+  // starting its own: two probes would race to publish the singleton and to
+  // write the status.
+  if (inFlight) {
+    return inFlight;
+  }
+  inFlight = connect(config);
+  try {
+    return await inFlight;
+  } finally {
+    inFlight = null;
+  }
+}
 
-  const finalConfig = config ?? getConfigFromEnv();
+async function connect(config?: RustFSConfig): Promise<RustFSClient> {
+  attempts += 1;
+  lastAttemptAt = new Date().toISOString();
 
-  rustfsClient = new RustFSClient(finalConfig);
-
-  // Validate connection
-  const isConnected = await rustfsClient.validateConnection();
-  if (!isConnected) {
-    rustfsClient = null;
-    throw new Error(`Failed to connect to RustFS at ${finalConfig.endpoint}`);
+  let finalConfig: RustFSConfig;
+  try {
+    finalConfig = config ?? getConfigFromEnv();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    lastError = { kind: 'config', detail };
+    throw new RustFSConnectionError('config', detail, detail);
   }
 
+  const client = new RustFSClient(finalConfig);
+  try {
+    await client.checkConnection();
+  } catch (err) {
+    lastError = err instanceof RustFSConnectionError
+      ? { kind: err.kind, detail: err.detail }
+      : classifyS3Error(err);
+    throw err;
+  }
+
+  rustfsClient = client;
+  lastError = undefined;
   console.log(`[RustFS] Connected to ${finalConfig.endpoint}`);
   return rustfsClient;
+}
+
+export interface RustFSRecoveryOptions {
+  /** Called exactly once, when a retry connects. */
+  onReady: () => void;
+  /** First wait, doubled after every failure. Default 5 s. */
+  initialDelayMs?: number;
+  /** Ceiling for the wait. Default 5 min. */
+  maxDelayMs?: number;
+}
+
+/**
+ * Keep trying to connect after a failed start, until it works.
+ *
+ * Without this one failed probe at boot — RustFS still starting, a DNS blip
+ * during a rollout — disabled object storage for the life of the process, and
+ * every reader quietly fell back to local disk (#368).
+ *
+ * A `config` failure stops the loop: the environment will not change under a
+ * running process. The timer is `unref()`'d so it never holds the process
+ * open. One loop at a time: a second call while one runs is a no-op, so
+ * `onReady` fires once. Returns `stop()`.
+ */
+export function startRustFSRecovery(options: RustFSRecoveryOptions): () => void {
+  const { onReady, initialDelayMs = 5_000, maxDelayMs = 300_000 } = options;
+  if (!isRustFSConfigured() || rustfsClient || recoveryRunning) return () => undefined;
+  recoveryRunning = true;
+
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let delay = initialDelayMs;
+  let reportedKind = lastError?.kind;
+
+  const attempt = async (): Promise<void> => {
+    if (stopped) return;
+    try {
+      await initializeRustFSClient();
+    } catch (err) {
+      if (stopped) return;
+      const kind = err instanceof RustFSConnectionError ? err.kind : 'unknown';
+      if (kind !== reportedKind) {
+        console.warn(`[RustFS] Still unavailable (${kind}): ${lastError?.detail ?? 'unknown error'}`);
+        reportedKind = kind;
+      }
+      if (kind === 'config') {
+        console.warn('[RustFS] Configuration is incomplete; not retrying');
+        recoveryRunning = false;
+        return;
+      }
+      delay = Math.min(delay * 2, maxDelayMs);
+      schedule();
+      return;
+    }
+    if (stopped) return;
+    stopped = true;
+    recoveryRunning = false;
+    console.log(`[RustFS] Recovered after ${attempts} attempt(s)`);
+    onReady();
+  };
+
+  const schedule = (): void => {
+    timer = setTimeout(() => void attempt(), delay);
+    timer.unref?.();
+  };
+
+  schedule();
+  return () => {
+    if (!stopped) recoveryRunning = false;
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
 }
 
 /**

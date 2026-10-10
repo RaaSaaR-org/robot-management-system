@@ -25,7 +25,12 @@ import { datasetService } from './services/DatasetService.js';
 import { datasetValidationWorker } from './workers/dataset-validation.worker.js';
 import { trainingWorker } from './workers/training.worker.js';
 import { syntheticDataWorker } from './workers/SyntheticDataWorker.js';
-import { initializeRustFSClient } from './storage/index.js';
+import {
+  initializeRustFSClient,
+  isRustFSConfigured,
+  startRustFSRecovery,
+  RustFSConnectionError,
+} from './storage/index.js';
 import { storageCleanupJob } from './jobs/storage-cleanup.js';
 import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
 import { experimentService } from './services/ExperimentService.js';
@@ -145,7 +150,20 @@ async function main() {
     storageCleanupJob.startSchedule(24); // Daily at 3 AM
     logger.info('[RustFS] Object storage initialized');
   } catch (error) {
-    logger.warn({ err: error instanceof Error ? error.message : error }, '[RustFS] Failed to initialize (storage features disabled)');
+    const errorKind = error instanceof RustFSConnectionError ? error.kind : 'unknown';
+    if (isRustFSConfigured()) {
+      // Configured means wanted: keep trying rather than run without it until
+      // the next restart (#368).
+      logger.warn({ err: error instanceof Error ? error.message : error, errorKind }, '[RustFS] Failed to initialize (storage features disabled until it connects; retrying)');
+      startRustFSRecovery({
+        onReady: () => {
+          storageCleanupJob.startSchedule(24);
+          logger.info('[RustFS] Object storage recovered');
+        },
+      });
+    } else {
+      logger.warn({ err: error instanceof Error ? error.message : error, errorKind }, '[RustFS] Failed to initialize (storage features disabled)');
+    }
   }
 
   // Create Express app
