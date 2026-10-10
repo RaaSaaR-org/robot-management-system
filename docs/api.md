@@ -154,7 +154,7 @@ fires the `emergency_stop` body and demands the stop goes through.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Health check |
+| GET | `/health` | Health check. Always 200 with `status: 'ok'`; `dependencies.storage` reports RustFS as `{configured, state, errorKind?, lastAttemptAt?, attempts}`, `state` one of `disabled`·`connecting`·`ready`·`unavailable` |
 | GET | `/.well-known/a2a/agent_card.json` | A2A agent discovery card |
 
 ### Auth (`/api/auth`)
@@ -480,7 +480,7 @@ Platform limits: at most 8 arms and `EXPERIMENT_MAX_GPU_HOURS` (default 96) GPU 
 | `/api/federated/secure` | Secure aggregation (masked gradient submission) |
 | `/api/contributions` | Data contribution portal |
 | `/api/evaluation` | Model evaluation |
-| `/api/storage` | Object storage (RustFS/S3) |
+| `/api/storage` | Object storage (RustFS/S3). While storage is down every route answers 503 `{error, message, state, errorKind?}` |
 | `/api/settings` | User preferences |
 | `/api/security` | Device identity, certificates |
 | `/api/updates` | OTA update **metadata**: create, Ed25519-sign, approve and record deployments. Delivery is not implemented — no artifact is stored or served, and deploying does not contact the robot (TASK-302) |
