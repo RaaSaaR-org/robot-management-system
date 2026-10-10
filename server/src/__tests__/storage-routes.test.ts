@@ -17,6 +17,7 @@ const {
   SIZE_LIMITS,
   mockModelStorage,
   mockIsRustFSInitialized,
+  mockGetRustFSStatus,
   mockGetRustFSClient,
   mockRustFSClient,
 } = vi.hoisted(() => ({
@@ -45,6 +46,7 @@ const {
     getAllStats: vi.fn(),
   },
   mockIsRustFSInitialized: vi.fn(),
+  mockGetRustFSStatus: vi.fn(),
   mockGetRustFSClient: vi.fn(),
   mockRustFSClient: {
     delete: vi.fn(),
@@ -54,6 +56,7 @@ const {
 vi.mock('../storage/index.js', () => ({
   modelStorage: mockModelStorage,
   isRustFSInitialized: mockIsRustFSInitialized,
+  getRustFSStatus: mockGetRustFSStatus,
   getRustFSClient: mockGetRustFSClient,
   BUCKETS,
   SIZE_LIMITS,
@@ -93,14 +96,31 @@ describe('Storage Routes', () => {
   // --------------------------------------------------------------------------
 
   describe('checkStorageAvailable middleware', () => {
-    it('returns 503 when RustFS storage is not initialized', async () => {
+    it('returns 503 saying storage is not configured when there is no endpoint', async () => {
       mockIsRustFSInitialized.mockReturnValue(false);
+      mockGetRustFSStatus.mockReturnValue({ configured: false, state: 'disabled', attempts: 0 });
 
       const response = await request(app).get('/api/storage/stats');
 
       expect(response.status).toBe(503);
       expect(response.body.error).toBe('Storage not available');
-      expect(response.body.message).toBe('RustFS storage is not initialized');
+      expect(response.body.message).toBe('RustFS storage is not configured');
+      expect(response.body.state).toBe('disabled');
+      expect(response.body).not.toHaveProperty('errorKind');
+    });
+
+    it('returns 503 naming the error kind while configured storage is unavailable', async () => {
+      mockIsRustFSInitialized.mockReturnValue(false);
+      mockGetRustFSStatus.mockReturnValue({
+        configured: true, state: 'unavailable', errorKind: 'connectivity', attempts: 4,
+      });
+
+      const response = await request(app).get('/api/storage/stats');
+
+      expect(response.status).toBe(503);
+      expect(response.body.message).toBe('RustFS storage is configured but unavailable (connectivity), retrying');
+      expect(response.body.state).toBe('unavailable');
+      expect(response.body.errorKind).toBe('connectivity');
     });
   });
 
