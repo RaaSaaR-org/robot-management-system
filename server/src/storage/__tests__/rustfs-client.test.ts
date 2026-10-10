@@ -964,6 +964,36 @@ describe('RustFS status and recovery', () => {
     expect(() => stop()).not.toThrow();
   });
 
+  it('shares one probe between concurrent initialize calls', async () => {
+    let release!: () => void;
+    h.send.mockReturnValue(new Promise<void>((resolve) => { release = resolve; }));
+    const mod = await import('../rustfs-client.js');
+
+    const a = mod.initializeRustFSClient();
+    const b = mod.initializeRustFSClient();
+    release();
+
+    expect(await a).toBe(await b);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(mod.getRustFSStatus()).toMatchObject({ state: 'ready', attempts: 1 });
+  });
+
+  it('runs one recovery loop at a time, so onReady fires once', async () => {
+    vi.useFakeTimers();
+    h.send.mockResolvedValue({ Buckets: [] });
+    const mod = await import('../rustfs-client.js');
+    const first = vi.fn();
+    const second = vi.fn();
+
+    mod.startRustFSRecovery({ onReady: first, initialDelayMs: 1_000 });
+    mod.startRustFSRecovery({ onReady: second, initialDelayMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    expect(mod.getRustFSStatus().attempts).toBe(1);
+  });
+
   it('stop() cancels a pending retry', async () => {
     vi.useFakeTimers();
     h.send.mockResolvedValue({ Buckets: [] });

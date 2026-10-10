@@ -534,7 +534,8 @@ export interface RustFSStatus {
   attempts: number;
 }
 
-let connecting = false;
+let inFlight: Promise<RustFSClient> | null = null;
+let recoveryRunning = false;
 let attempts = 0;
 let lastAttemptAt: string | undefined;
 let lastError: { kind: RustFSErrorKind; detail: string } | undefined;
@@ -555,7 +556,7 @@ export function getRustFSStatus(): RustFSStatus {
   const configured = isRustFSConfigured();
   let state: RustFSStatus['state'];
   if (rustfsClient) state = 'ready';
-  else if (connecting) state = 'connecting';
+  else if (inFlight) state = 'connecting';
   else if (lastError) state = lastError.kind === 'config' && !configured ? 'disabled' : 'unavailable';
   else state = configured ? 'connecting' : 'disabled';
 
@@ -597,7 +598,21 @@ export async function initializeRustFSClient(config?: RustFSConfig): Promise<Rus
   if (rustfsClient) {
     return rustfsClient;
   }
+  // A second caller while a probe is out waits for that probe rather than
+  // starting its own: two probes would race to publish the singleton and to
+  // write the status.
+  if (inFlight) {
+    return inFlight;
+  }
+  inFlight = connect(config);
+  try {
+    return await inFlight;
+  } finally {
+    inFlight = null;
+  }
+}
 
+async function connect(config?: RustFSConfig): Promise<RustFSClient> {
   attempts += 1;
   lastAttemptAt = new Date().toISOString();
 
@@ -611,7 +626,6 @@ export async function initializeRustFSClient(config?: RustFSConfig): Promise<Rus
   }
 
   const client = new RustFSClient(finalConfig);
-  connecting = true;
   try {
     await client.checkConnection();
   } catch (err) {
@@ -619,8 +633,6 @@ export async function initializeRustFSClient(config?: RustFSConfig): Promise<Rus
       ? { kind: err.kind, detail: err.detail }
       : classifyS3Error(err);
     throw err;
-  } finally {
-    connecting = false;
   }
 
   rustfsClient = client;
@@ -647,11 +659,13 @@ export interface RustFSRecoveryOptions {
  *
  * A `config` failure stops the loop: the environment will not change under a
  * running process. The timer is `unref()`'d so it never holds the process
- * open. Returns `stop()`.
+ * open. One loop at a time: a second call while one runs is a no-op, so
+ * `onReady` fires once. Returns `stop()`.
  */
 export function startRustFSRecovery(options: RustFSRecoveryOptions): () => void {
   const { onReady, initialDelayMs = 5_000, maxDelayMs = 300_000 } = options;
-  if (!isRustFSConfigured() || rustfsClient) return () => undefined;
+  if (!isRustFSConfigured() || rustfsClient || recoveryRunning) return () => undefined;
+  recoveryRunning = true;
 
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -671,6 +685,7 @@ export function startRustFSRecovery(options: RustFSRecoveryOptions): () => void 
       }
       if (kind === 'config') {
         console.warn('[RustFS] Configuration is incomplete; not retrying');
+        recoveryRunning = false;
         return;
       }
       delay = Math.min(delay * 2, maxDelayMs);
@@ -679,6 +694,7 @@ export function startRustFSRecovery(options: RustFSRecoveryOptions): () => void 
     }
     if (stopped) return;
     stopped = true;
+    recoveryRunning = false;
     console.log(`[RustFS] Recovered after ${attempts} attempt(s)`);
     onReady();
   };
@@ -690,6 +706,7 @@ export function startRustFSRecovery(options: RustFSRecoveryOptions): () => void 
 
   schedule();
   return () => {
+    if (!stopped) recoveryRunning = false;
     stopped = true;
     if (timer) clearTimeout(timer);
   };
