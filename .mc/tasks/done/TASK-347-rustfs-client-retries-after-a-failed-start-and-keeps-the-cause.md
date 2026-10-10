@@ -3,7 +3,7 @@ id: "TASK-347"
 aliases: ["TASK-347"]
 title: "RustFS client retries after a failed start and keeps the cause"
 slug: "rustfs-client-retries-after-a-failed-start-and-keeps-the-cause"
-status: "review"
+status: "done"
 priority: 2
 owner: "FlrnFrmm"
 projects: []
