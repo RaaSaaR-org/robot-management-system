@@ -3,7 +3,7 @@ id: "TASK-349"
 aliases: ["TASK-349"]
 title: "HF import refuses an unusable sink with 503 and prepares storage before metadata"
 slug: "hf-import-refuses-an-unusable-sink-with-503-and-prepares-storage-before-metadata"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "FlrnFrmm"
 projects: []
