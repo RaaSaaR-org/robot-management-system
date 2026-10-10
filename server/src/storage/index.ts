@@ -9,9 +9,17 @@ export {
   getRustFSClient,
   isRustFSInitialized,
   initializeRustFSClient,
+  isRustFSConfigured,
+  getRustFSStatus,
+  startRustFSRecovery,
+  classifyS3Error,
+  RustFSConnectionError,
 } from './rustfs-client.js';
 export type {
   RustFSConfig,
+  RustFSErrorKind,
+  RustFSStatus,
+  RustFSRecoveryOptions,
   UploadOptions,
   UploadProgress,
   ObjectMetadata,
