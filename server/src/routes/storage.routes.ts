@@ -8,6 +8,7 @@ import { Router, Request, Response } from 'express';
 import {
   modelStorage,
   isRustFSInitialized,
+  getRustFSStatus,
   BUCKETS,
   SIZE_LIMITS,
   type BucketName,
@@ -22,9 +23,14 @@ export const storageRoutes = Router();
 
 const checkStorageAvailable = (req: Request, res: Response, next: () => void) => {
   if (!isRustFSInitialized()) {
+    const { configured, state, errorKind } = getRustFSStatus();
     return res.status(503).json({
       error: 'Storage not available',
-      message: 'RustFS storage is not initialized',
+      message: configured
+        ? `RustFS storage is configured but unavailable${errorKind ? ` (${errorKind})` : ''}, retrying`
+        : 'RustFS storage is not configured',
+      state,
+      errorKind,
     });
   }
   next();

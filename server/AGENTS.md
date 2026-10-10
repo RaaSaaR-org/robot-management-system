@@ -175,7 +175,7 @@ server/src/
 
 ### Health Check (public)
 
-- `GET /health` - Returns `{ status: 'ok', timestamp }`
+- `GET /health` - Always 200 `{ status: 'ok', timestamp, version, startedAt, uptimeSeconds, nodeVersion, environment, dependencies: { storage } }`; `dependencies.storage` is RustFS `{ configured, state, errorKind?, lastAttemptAt?, attempts }` (never `errorDetail`, the route is public)
 
 ### Authentication (`/api/auth`) — rate-limited: 20 req/15 min
 
