@@ -704,13 +704,15 @@ export class HuggingFaceImportService {
         completedFiles: files.length,
       });
 
+      // The line before the event: a browser stops listening once it hears
+      // the import has ended, so anything said after that is never seen.
+      this.log(datasetId, 'info', 'Import finished');
       datasetService.emit('dataset:event', {
         type: 'dataset:import:completed',
         datasetId,
         timestamp: new Date().toISOString(),
       });
 
-      this.log(datasetId, 'info', 'Import finished');
       console.log(`[HFImport] Import completed for ${datasetId} (${repoId})`);
     } catch (error) {
       console.error(`[HFImport] Import failed for ${datasetId}:`, error);

@@ -178,6 +178,9 @@ describe('the import activity log', () => {
     // Every line also went out on the wire, so a page that is watching sees it live.
     const wired = events().filter((e) => e.type === 'dataset:import:log').map((e) => e.log!.message);
     expect(wired).toEqual(lines);
+    // ...and the last of them before "completed", after which a browser stops listening.
+    const types = events().map((e) => e.type);
+    expect(types.lastIndexOf('dataset:import:log')).toBeLessThan(types.indexOf('dataset:import:completed'));
 
     // The last progress frame is kept for a page that attaches late.
     expect(importActivityLog.get(DATASET_ID)!.progress).toMatchObject({ progress: 95, phase: 'validating' });

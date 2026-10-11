@@ -3,7 +3,7 @@
  * @description The app's top bar: matte canvas ground, hairline bottom edge,
  *              56px tall and sticky. Left: the sidebar toggle (md+) or the
  *              drawer button (mobile) and the logo. Right: organization
- *              switcher, the ⌘K search affordance, the docs help icon, theme
+ *              switcher, background dataset imports, the ⌘K search affordance, the docs help icon, theme
  *              toggle and user menu.
  * @feature layout
  */
@@ -12,6 +12,7 @@ import { CircleHelp, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun } from 'lu
 import { Logo } from '@/components/common/Logo';
 import { paletteShortcutLabel } from '@/components/palette';
 import { useThemeStore } from '@/features/settings';
+import { ImportActivity } from '@/features/training/components/ImportActivity';
 import { useUIStore } from '@/features/settings/store/uiStore';
 import { LinkButton } from '@/shared/components/ui';
 import { Button } from '@/shared/components/ui/Button';
@@ -88,6 +89,8 @@ export function TopBar({ onOpenPalette }: TopBarProps) {
         <div className="flex items-center gap-1 sm:gap-2">
           {/* Only rendered when multi-tenancy is on */}
           <OrganizationSwitcher />
+          {/* Only rendered while a dataset import is tracked (TASK-352) */}
+          <ImportActivity />
           <Button
             variant="ghost"
             onClick={onOpenPalette}
