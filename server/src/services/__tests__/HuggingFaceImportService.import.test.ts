@@ -195,6 +195,8 @@ beforeEach(async () => {
   vi.mocked(datasetRepository.update).mockResolvedValue({} as never);
   vi.mocked(robotTypeRepository.findAll).mockResolvedValue([]);
   vi.mocked(robotTypeRepository.create).mockResolvedValue({ id: 'rt-new' } as never);
+  // A transient download failure is retried with backoff (#370); not in real time here.
+  vi.spyOn(service as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(undefined);
 });
 
 afterEach(() => {

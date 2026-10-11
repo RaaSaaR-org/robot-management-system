@@ -151,6 +151,8 @@ beforeEach(() => {
   vi.mocked(robotTypeRepository.findAll).mockResolvedValue([]);
   vi.mocked(robotTypeRepository.create).mockResolvedValue({ id: 'rt-new' } as never);
   vi.mocked(datasetService.validateAndUpdateDataset).mockResolvedValue('ready');
+  // A transient download failure is retried with backoff (#370); not in real time here.
+  vi.spyOn(service as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -171,7 +173,7 @@ describe('the import activity log', () => {
     expect(lines).toContain(`Pinned main to commit ${SHA.slice(0, 12)}`);
     expect(lines.some((l) => l.startsWith('info.json: LeRobot v3.0, robot so101, 2 episodes'))).toBe(true);
     expect(lines.some((l) => l.startsWith('Storage: local disk at '))).toBe(true);
-    expect(lines).toContain('Downloading 3 files from the Hub');
+    expect(lines).toContain('Downloading 3 files from the Hub (300 B)');
     expect(lines.filter((l) => l.startsWith('Downloaded '))).toHaveLength(3);
     expect(lines.slice(-2)).toEqual(['Validation passed', 'Import finished']);
 

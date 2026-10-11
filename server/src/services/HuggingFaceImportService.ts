@@ -82,6 +82,70 @@ const DATASET_VALIDATION_SUBJECT = 'jobs.dataset.validate';
 const MAX_CONCURRENT_DOWNLOADS = 5;
 const MAX_RETRY_DELAY_MS = 30_000;
 const INITIAL_RETRY_DELAY_MS = 1_000;
+/**
+ * Attempts per file before a dropped connection fails the import (#370).
+ *
+ * A multi-gigabyte G1 import holds hundreds of sockets to the Hub's CDN, and
+ * one of them closing mid-body surfaced as undici's bare `terminated` and
+ * failed the whole import. A transient failure is retried with backoff; a 4xx
+ * is an answer, not a glitch, and is not.
+ */
+export const MAX_FILE_DOWNLOAD_ATTEMPTS = 4;
+/** At most this often a byte-progress frame goes out while a file streams. */
+export const BYTE_PROGRESS_INTERVAL_MS = 500;
+
+/** An HTTP failure from {@link HuggingFaceImportService.downloadFileToSink}. */
+class DownloadHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+/**
+ * Whether a failed file download is worth another attempt: the connection
+ * dropped or timed out (undici says `terminated` / `fetch failed`, or a socket
+ * code), or the Hub answered 5xx / 408. A 4xx or a local write error is not.
+ */
+export function isTransientDownloadError(error: unknown): boolean {
+  if (error instanceof DownloadHttpError) return error.status >= 500 || error.status === 408;
+  if (!(error instanceof Error)) return false;
+  if (/^(terminated|fetch failed)$/i.test(error.message)) return true;
+  if (/premature close|other side closed|socket hang up/i.test(error.message)) return true;
+  const codes = [error, (error as { cause?: unknown }).cause]
+    .map((e) => (e as { code?: unknown } | undefined)?.code)
+    .filter((c): c is string => typeof c === 'string');
+  return codes.some((code) =>
+    /^(ECONNRESET|ETIMEDOUT|EPIPE|ECONNREFUSED|EAI_AGAIN|ERR_STREAM_PREMATURE_CLOSE|UND_ERR_(SOCKET|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|CLOSED))$/
+      .test(code));
+}
+
+/** `1536` → `1.5 KB`; for log lines. */
+export function formatBytes(bytes: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
+}
+
+/** A copy of `response` whose body reports every chunk it hands on. */
+function countingResponse(response: Response, onBytes: (n: number) => void): Response {
+  if (!response.body) return response;
+  const counter = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      onBytes(chunk.byteLength);
+      controller.enqueue(chunk);
+    },
+  });
+  return new Response(response.body.pipeThrough(counter), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
 
 /** A git object id, which needs no resolving. */
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -621,8 +685,19 @@ export class HuggingFaceImportService {
     let phase: HuggingFaceImportProgress['phase'] = 'metadata';
     try {
       // Phase 2: Build file list (from the authoritative repo tree)
+      const importMode: DatasetImportMode = includeVideos ? 'full' : 'metadata';
       const files = await this.resolveFileList(repoId, revision, info, includeVideos);
-      this.log(datasetId, 'info', `Downloading ${files.length} files from the Hub`);
+      // Bytes are the honest measure — one video outweighs a thousand parquet
+      // files — but only when the Hub sized every file; otherwise count files.
+      const totalBytes = files.every((f) => f.size > 0)
+        ? files.reduce((sum, f) => sum + f.size, 0)
+        : undefined;
+      this.log(
+        datasetId,
+        'info',
+        `Downloading ${files.length} files from the Hub`
+          + (totalBytes !== undefined ? ` (${formatBytes(totalBytes)})` : ''),
+      );
 
       phase = 'downloading';
       this.emitProgress(datasetId, {
@@ -632,20 +707,29 @@ export class HuggingFaceImportService {
         progress: 10,
         totalFiles: files.length,
         completedFiles: 0,
+        downloadedBytes: 0,
+        totalBytes,
+        importMode,
       });
 
       // Phase 3: Download the files into whichever store this deployment has
-      await this.downloadFiles(datasetId, repoId, revision, sink, files);
+      await this.downloadFiles(datasetId, repoId, revision, sink, files, totalBytes, importMode);
 
       // Phase 4: Trigger validation via NATS
       phase = 'validating';
+      const stored = {
+        totalFiles: files.length,
+        completedFiles: files.length,
+        downloadedBytes: totalBytes,
+        totalBytes,
+        importMode,
+      };
       this.emitProgress(datasetId, {
         datasetId,
         status: 'validating',
         phase,
         progress: 90,
-        totalFiles: files.length,
-        completedFiles: files.length,
+        ...stored,
       });
 
       await datasetRepository.update(datasetId, { status: 'validating' });
@@ -678,11 +762,22 @@ export class HuggingFaceImportService {
           // The download worked and the dataset did not: saying "completed"
           // here is what left the operator with a green toast and a red card.
           // Validation already marked the row and kept its report.
+          const error = 'Validation failed — open the dataset for the validation report';
           this.log(datasetId, 'error', 'Validation failed — the files do not form a valid LeRobot dataset');
+          // The last frame says it stopped, so the backfill a reloaded page
+          // reads agrees with the event it missed.
+          this.emitProgress(datasetId, {
+            datasetId,
+            status: 'failed',
+            phase: 'validating',
+            progress: 90,
+            ...stored,
+            error,
+          });
           datasetService.emit('dataset:event', {
             type: 'dataset:import:failed',
             datasetId,
-            error: 'Validation failed — open the dataset for the validation report',
+            error,
             timestamp: new Date().toISOString(),
           });
           return;
@@ -700,8 +795,7 @@ export class HuggingFaceImportService {
         status: 'validating',
         phase: 'validating',
         progress: 95,
-        totalFiles: files.length,
-        completedFiles: files.length,
+        ...stored,
       });
 
       // The line before the event: a browser stops listening once it hears
@@ -748,11 +842,15 @@ export class HuggingFaceImportService {
       },
     });
 
+    // Where the bar stopped, not a reset to 0 — "failed at 63 %" is information.
+    const last = importActivityLog.get(datasetId)?.progress;
     this.emitProgress(datasetId, {
+      ...(last ?? {}),
       datasetId,
       status: 'failed',
       phase,
-      progress: 0,
+      progress: last?.progress ?? 0,
+      currentFile: undefined,
       error: errorMessage,
     });
 
@@ -903,7 +1001,7 @@ export class HuggingFaceImportService {
     revision: string,
     info: LeRobotInfoV3,
     includeVideos: boolean
-  ): Promise<string[]> {
+  ): Promise<RepoFile[]> {
     let tree: RepoFile[] = [];
     try {
       tree = await this.listRepoFiles(repoId, revision);
@@ -915,10 +1013,11 @@ export class HuggingFaceImportService {
     }
 
     if (tree.length === 0) {
-      return this.buildFileList(info, includeVideos);
+      // Size 0 = unknown: progress then counts files instead of bytes.
+      return this.buildFileList(info, includeVideos).map((path) => ({ path, size: 0 }));
     }
 
-    return selectRepoFiles(tree, includeVideos).map((file) => file.path);
+    return selectRepoFiles(tree, includeVideos);
   }
 
   /**
@@ -1056,9 +1155,14 @@ export class HuggingFaceImportService {
     repoId: string,
     revision: string,
     sink: ImportSink,
-    files: string[]
+    files: RepoFile[],
+    totalBytes: number | undefined,
+    importMode: DatasetImportMode,
   ): Promise<void> {
     let completedFiles = 0;
+    let downloadedBytes = 0;
+    let lastFile: string | undefined;
+    let lastEmit = 0;
     const totalFiles = files.length;
 
     // Concurrency-limited parallel download.
@@ -1080,18 +1184,48 @@ export class HuggingFaceImportService {
     const workers: Promise<void>[] = [];
     let failure: unknown = null;
 
+    // Byte-based while every size is known, file-count otherwise (#370). The
+    // frame used to go out only when a file finished, so a single 900 MB video
+    // sat at the same number for minutes.
+    const emit = (force: boolean) => {
+      if (failure) return;
+      const now = Date.now();
+      if (!force && now - lastEmit < BYTE_PROGRESS_INTERVAL_MS) return;
+      lastEmit = now;
+      const fraction = totalBytes
+        ? Math.min(downloadedBytes / totalBytes, 1)
+        : totalFiles > 0 ? completedFiles / totalFiles : 0;
+      this.emitProgress(datasetId, {
+        datasetId,
+        status: 'importing',
+        phase: 'downloading',
+        progress: 10 + Math.round(fraction * 80),
+        currentFile: lastFile,
+        totalFiles,
+        completedFiles,
+        downloadedBytes,
+        totalBytes,
+        importMode,
+      });
+    };
+
     for (let i = 0; i < MAX_CONCURRENT_DOWNLOADS; i++) {
       workers.push(
         (async () => {
           while (queue.length > 0) {
             if (failure) return;
-            const file = queue.shift();
-            if (!file) break;
+            const next = queue.shift();
+            if (!next) break;
+            const file = next.path;
 
             const hfUrl = `${HF_BASE_URL}/${repoId}/resolve/${revision}/${file}`;
 
             try {
-              await this.downloadFileToSink(hfUrl, file, sink);
+              await this.downloadFileToSink(datasetId, hfUrl, file, sink, (n) => {
+                downloadedBytes += n;
+                lastFile = file;
+                emit(false);
+              });
             } catch (error) {
               // stats.json is optional — 404 is expected
               if (file === 'meta/stats.json' && error instanceof Error && error.message.includes('404')) {
@@ -1108,18 +1242,9 @@ export class HuggingFaceImportService {
             if (failure) return;
 
             completedFiles++;
+            lastFile = file;
             this.log(datasetId, 'info', `Downloaded ${file} (${completedFiles}/${totalFiles})`);
-            const downloadProgress = 10 + Math.round((completedFiles / totalFiles) * 80);
-
-            this.emitProgress(datasetId, {
-              datasetId,
-              status: 'importing',
-              phase: 'downloading',
-              progress: downloadProgress,
-              currentFile: file,
-              totalFiles,
-              completedFiles,
-            });
+            emit(true);
           }
         })()
       );
@@ -1130,16 +1255,51 @@ export class HuggingFaceImportService {
   }
 
   /**
-   * Download a single file from HuggingFace and stream it into the sink.
+   * Download a single file from HuggingFace and stream it into the sink,
+   * retrying a dropped connection with backoff (#370).
+   *
+   * `onBytes` hears every chunk; an attempt that fails takes its bytes back
+   * (a negative count), so the total never runs ahead of what is stored.
    */
-  private async downloadFileToSink(url: string, path: string, sink: ImportSink): Promise<void> {
-    const response = await this.fetchWithRetry(url);
-
-    if (!response.ok) {
-      throw new Error(`Failed to download ${url}: ${response.status} ${response.statusText}`);
+  private async downloadFileToSink(
+    datasetId: string,
+    url: string,
+    path: string,
+    sink: ImportSink,
+    onBytes: (n: number) => void = () => undefined,
+  ): Promise<void> {
+    let delay = INITIAL_RETRY_DELAY_MS;
+    for (let attempt = 1; ; attempt++) {
+      let received = 0;
+      try {
+        const response = await this.fetchWithRetry(url);
+        if (!response.ok) {
+          throw new DownloadHttpError(
+            `Failed to download ${url}: ${response.status} ${response.statusText}`,
+            response.status,
+          );
+        }
+        // A retry rewrites the file from the start: the local sink truncates
+        // on open, and an object store replaces the key.
+        await sink.write(path, countingResponse(response, (n) => {
+          received += n;
+          onBytes(n);
+        }));
+        return;
+      } catch (error) {
+        if (received > 0) onBytes(-received);
+        if (attempt >= MAX_FILE_DOWNLOAD_ATTEMPTS || !isTransientDownloadError(error)) throw error;
+        const reason = error instanceof Error ? error.message : String(error);
+        this.log(
+          datasetId,
+          'warn',
+          `${path}: ${reason} — retrying in ${Math.round(delay / 1000)}s `
+            + `(attempt ${attempt + 1}/${MAX_FILE_DOWNLOAD_ATTEMPTS})`,
+        );
+        await this.sleep(delay);
+        delay = Math.min(delay * 2, MAX_RETRY_DELAY_MS);
+      }
     }
-
-    await sink.write(path, response);
   }
 
   // ============================================================================

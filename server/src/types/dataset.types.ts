@@ -137,6 +137,15 @@ export interface HuggingFaceImportProgress {
   currentFile?: string;
   totalFiles?: number;
   completedFiles?: number;
+  /**
+   * Bytes stored so far and the total of the files selected for download
+   * (#370). `totalBytes` is absent when the Hub did not report a size for
+   * every file; the UI then measures by `completedFiles / totalFiles`.
+   */
+  downloadedBytes?: number;
+  totalBytes?: number;
+  /** `metadata` imports skip the videos; `full` fetches everything. */
+  importMode?: DatasetImportMode;
   error?: string;
 }
 
