@@ -5,7 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { datasetService } from '../services/DatasetService.js';
+import { datasetService, DatasetExpectationError } from '../services/DatasetService.js';
 import { dataQualityService } from '../services/DataQualityService.js';
 import type {
   CreateDatasetDto,
@@ -361,6 +361,43 @@ datasetRoutes.get('/robot-types', async (_req: Request, res: Response) => {
   } catch (error) {
     console.error('[DatasetRoutes] Error listing robot types:', error);
     res.status(500).json({ error: 'Failed to list robot types' });
+  }
+});
+
+// ============================================================================
+// POST /api/datasets/robot-types - Define a NEW robot configuration (TASK-353)
+// ============================================================================
+//
+// The supported way to get a 43-wide G1 configuration when only the 28-wide
+// one exists. Create-only by design: there is no route that rewrites a robot
+// type's widths, because other datasets are validated against them.
+
+/** Who made the request, for the audit trail. Null under the dev auth bypass. */
+function actorOf(req: Request): string | null {
+  return (req as Request & { user?: { id?: string } }).user?.id ?? null;
+}
+
+function sendExpectationError(res: Response, error: unknown, fallback: string): void {
+  if (error instanceof DatasetExpectationError) {
+    res.status(error.status).json({ error: error.message, code: error.code });
+    return;
+  }
+  sendFailure(res, error, fallback);
+}
+
+datasetRoutes.post('/robot-types', async (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const robotType = await datasetService.createRobotConfiguration({
+      name: typeof body.name === 'string' ? body.name : '',
+      manufacturer: typeof body.manufacturer === 'string' ? body.manufacturer : undefined,
+      model: typeof body.model === 'string' ? body.model : undefined,
+      actionDim: body.actionDim as number,
+      proprioceptionDim: body.proprioceptionDim as number,
+    }, actorOf(req));
+    res.status(201).json({ robotType });
+  } catch (error) {
+    sendExpectationError(res, error, 'Failed to create robot type');
   }
 });
 
@@ -785,6 +822,35 @@ datasetRoutes.put('/:id', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[DatasetRoutes] Error updating dataset:', error);
     sendFailure(res, error, 'Failed to update dataset', 400);
+  }
+});
+
+// ============================================================================
+// PUT /api/datasets/:id/robot-type - Change which robot a dataset is checked
+// against, and revalidate its stored files (TASK-353)
+// ============================================================================
+//
+// 409 while an import, upload or validation is writing the row. The old
+// verdict is voided, the change is audit-logged, and a revalidation of the
+// files already in storage starts — nothing is downloaded, moved or deleted.
+
+datasetRoutes.put('/:id/robot-type', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const body = (req.body ?? {}) as { robotTypeId?: unknown; reason?: unknown };
+    if (typeof body.robotTypeId !== 'string' || !body.robotTypeId) {
+      return res.status(400).json({ error: 'robotTypeId is required', code: 'INVALID_ROBOT_TYPE' });
+    }
+    const result = await datasetService.reassociateRobotType(id, body.robotTypeId, {
+      actorId: actorOf(req),
+      reason: typeof body.reason === 'string' ? body.reason : null,
+    });
+    res.json({
+      ...result,
+      progressUrl: `/api/datasets/${id}/progress`,
+    });
+  } catch (error) {
+    sendExpectationError(res, error, 'Failed to change the dataset robot type');
   }
 });
 
@@ -1452,7 +1518,25 @@ datasetRoutes.post('/:id/validate', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
+    // An import is still writing the files; validating them now would judge a
+    // half-downloaded tree (TASK-353).
+    if (dataset.status === 'importing' || dataset.status === 'uploading') {
+      return res.status(409).json({
+        error: `Dataset is ${dataset.status}; revalidate once it has finished`,
+        code: 'DATASET_BUSY',
+        datasetId: id,
+      });
+    }
+
     const state = await datasetService.requestValidation(id, dataset.storagePath);
+    if (state === 'queued' || state === 'started') {
+      // Revalidation reads the stored objects only — no download, no move.
+      await datasetService.auditDatasetAction(id, 'dataset.revalidate', actorOf(req), {
+        robotTypeId: dataset.robotTypeId,
+        storagePath: dataset.storagePath,
+        state,
+      });
+    }
     if (state === 'in-flight') {
       return res.status(409).json({
         error: 'A validation for this dataset is already running',

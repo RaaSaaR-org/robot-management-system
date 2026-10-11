@@ -33,6 +33,51 @@ import { DatasetStoreError, openDatasetTree } from './lerobot/DatasetTree.js';
  */
 export type ValidationOutcome = 'ready' | 'failed' | 'unavailable';
 
+/** The shape `Dataset.validationJson` is written in. */
+interface StoredValidation {
+  validatedAt?: string;
+  breakdown?: QualityScoreBreakdown;
+  report?: DatasetStructureReport;
+  /** Set by a robot-type change, cleared by the next verdict (TASK-353). */
+  invalidated?: DatasetExpectationChange;
+  /** Every expectation change, oldest first. Survives new verdicts. */
+  history?: DatasetExpectationChange[];
+}
+
+/** The compliance-log "robot" the dataset audit trail is filed under. */
+const DATASET_AUDIT_ROBOT = 'system:datasets';
+
+/**
+ * Why a robot-type change was refused (TASK-353). Carries the HTTP status and a
+ * code the route answers with, so the service decides and the route reports.
+ */
+export class DatasetExpectationError extends Error {
+  constructor(
+    message: string,
+    public readonly status: 400 | 404 | 409,
+    public readonly code: string,
+  ) {
+    super(message);
+    this.name = 'DatasetExpectationError';
+  }
+}
+
+/** What {@link DatasetService.reassociateRobotType} did. */
+export interface ReassociationResult {
+  dataset: DatasetResponse;
+  change: DatasetExpectationChange | null;
+  /** The revalidation started over the stored files, or 'unchanged' for a no-op. */
+  revalidation: ValidationRequestState | 'unchanged';
+}
+
+export interface CreateRobotConfigurationDto {
+  name: string;
+  manufacturer?: string;
+  model?: string;
+  actionDim: number;
+  proprioceptionDim: number;
+}
+
 /**
  * What {@link DatasetService.requestValidation} did with a request to validate.
  *
@@ -83,6 +128,7 @@ import type {
   LeRobotInfo,
   LeRobotStats,
   EpisodeAnnotation,
+  RobotType,
 } from '../types/vla.types.js';
 import type {
   CreateDatasetDto,
@@ -97,9 +143,11 @@ import type {
   DatasetStatsResponse,
   DatasetEvent,
   DatasetEventCallback,
+  DatasetExpectationChange,
   LeRobotInfoV3,
   LeRobotStatsV3,
 } from '../types/dataset.types.js';
+import { complianceLogService } from './ComplianceLogService.js';
 import { QUALITY_THRESHOLDS } from '../types/dataset.types.js';
 
 // ============================================================================
@@ -569,6 +617,8 @@ export class DatasetService extends EventEmitter {
   private progressKV: KV | null = null;
   /** Dataset id → when its validation started. See {@link VALIDATION_LEASE_MS}. */
   private readonly validationsInFlight = new Map<string, number>();
+  /** Datasets whose robot type is being changed right now (TASK-353). */
+  private readonly reassociating = new Set<string>();
   /**
    * Dataset id → the last progress record written for it, in this process.
    *
@@ -1204,6 +1254,8 @@ export class DatasetService extends EventEmitter {
    */
   async requestValidation(datasetId: string, storagePath: string): Promise<ValidationRequestState> {
     if (this.isValidating(datasetId)) return 'in-flight';
+    // A robot-type change is rewriting what this pass would check against.
+    if (this.reassociating.has(datasetId)) return 'in-flight';
 
     // Cheap, and it keeps the 503 the route has always answered: a dataset
     // whose store cannot be reached is not "queued", it is "nothing to open".
@@ -1280,6 +1332,202 @@ export class DatasetService extends EventEmitter {
     this.validationsInFlight.set(datasetId, Date.now());
   }
 
+  // ============================================================================
+  // EXPECTATIONS — which robot a dataset is checked against (TASK-353)
+  // ============================================================================
+
+  /**
+   * Point a dataset at a different robot type and recheck the files it has.
+   *
+   * The production case: a 43-wide G1 dataset imported against the 28-wide
+   * `Unitree_G1` type fails `ROBOT_STATE_DIM_MISMATCH`, and the only way out was
+   * deleting it and downloading it again. This changes the EXPECTATION, never
+   * the data: the robot type row is not written (other datasets may depend on
+   * it), `infoJson`, `sourceRevision` and the stored objects are not touched,
+   * and the revalidation reads the files already under `storagePath`.
+   *
+   * The old verdict is void the moment the expectation changes — its report was
+   * a judgement against a different robot — so it is replaced by an
+   * `invalidated` record, and the row goes to `validating` until the new pass
+   * writes `ready` or `failed`. A dataset that was `ready` is therefore not
+   * trainable in between, which is the point.
+   *
+   * Refused while anything else is writing this row: an import (it resolves its
+   * own robot type and would overwrite this one), an upload, a validation pass
+   * (it read the old expectation), or another reassociation.
+   */
+  async reassociateRobotType(
+    datasetId: string,
+    robotTypeId: string,
+    options: { actorId?: string | null; reason?: string | null } = {},
+  ): Promise<ReassociationResult> {
+    if (this.reassociating.has(datasetId) || this.isValidating(datasetId)) {
+      throw new DatasetExpectationError(
+        'A validation for this dataset is running; change the robot type once it has finished',
+        409,
+        'VALIDATION_IN_FLIGHT',
+      );
+    }
+    // Claimed before the first await, so a second request in the same tick and
+    // a validation request both see it.
+    this.reassociating.add(datasetId);
+    let change: DatasetExpectationChange;
+    let storagePath: string;
+    try {
+      const existing = await datasetRepository.findById(datasetId);
+      if (!existing) throw new DatasetExpectationError(`Dataset not found: ${datasetId}`, 404, 'NOT_FOUND');
+
+      const view = (await this.loadViewColumns([datasetId])).get(datasetId);
+      if (view && isDatasetView(view)) {
+        throw new DatasetExpectationError(
+          'A view has no files of its own; change the robot type on the dataset it was forked from',
+          400,
+          'VIEW_HAS_NO_FILES',
+        );
+      }
+      if (existing.status === 'importing' || existing.status === 'uploading') {
+        throw new DatasetExpectationError(
+          `Dataset is ${existing.status}; change the robot type once it has finished`,
+          409,
+          'DATASET_BUSY',
+        );
+      }
+
+      const target = await robotTypeRepository.findById(robotTypeId);
+      if (!target) {
+        throw new DatasetExpectationError(`Robot type not found: ${robotTypeId}`, 404, 'ROBOT_TYPE_NOT_FOUND');
+      }
+      if (existing.robotTypeId === target.id) {
+        return {
+          dataset: await this.toResponse(existing, view),
+          change: null,
+          revalidation: 'unchanged',
+        };
+      }
+
+      const previous = existing.robotTypeId ? await robotTypeRepository.findById(existing.robotTypeId) : null;
+      const stored = existing.validation as StoredValidation | undefined;
+      change = {
+        at: new Date().toISOString(),
+        actorId: options.actorId ?? null,
+        fromRobotTypeId: existing.robotTypeId ?? null,
+        fromRobotTypeName: previous?.name ?? null,
+        toRobotTypeId: target.id,
+        toRobotTypeName: target.name,
+        previousStatus: existing.status,
+        previousValid: stored?.report ? stored.report.valid : null,
+        reason: options.reason?.trim() || null,
+      };
+      storagePath = existing.storagePath;
+
+      await datasetRepository.update(datasetId, {
+        robotTypeId: target.id,
+        status: 'validating',
+        validation: { invalidated: change, history: [...(stored?.history ?? []), change] },
+      });
+      await this.auditDatasetAction(datasetId, 'dataset.robot-type.change', options.actorId, { ...change });
+    } finally {
+      this.reassociating.delete(datasetId);
+    }
+
+    // Revalidate what is already stored. Nothing is downloaded, moved or deleted.
+    let revalidation: ValidationRequestState;
+    try {
+      revalidation = await this.requestValidation(datasetId, storagePath);
+    } catch (error) {
+      console.error(`[DatasetService] Revalidation after robot-type change failed to start for ${datasetId}:`, error);
+      revalidation = 'store-unavailable';
+    }
+    if (revalidation === 'store-unavailable') {
+      // Nothing is running, so `validating` would be a lie nothing clears. Not
+      // `ready` either: the old verdict is void and no new one exists.
+      await datasetRepository.update(datasetId, { status: 'failed' });
+    }
+
+    const response = await this.get(datasetId);
+    if (!response) throw new DatasetExpectationError(`Dataset not found: ${datasetId}`, 404, 'NOT_FOUND');
+    this.emitEvent({
+      type: 'dataset:updated',
+      datasetId,
+      dataset: response,
+      timestamp: new Date().toISOString(),
+    });
+    return { dataset: response, change, revalidation };
+  }
+
+  /**
+   * Define a NEW robot configuration (TASK-353).
+   *
+   * The supported answer to "no registered type is 43 wide": create one with
+   * explicit widths. It never updates an existing row — widening the shared
+   * 28-wide `Unitree_G1` to make one dataset pass would silently fail every
+   * dataset that is correctly 28 wide.
+   */
+  async createRobotConfiguration(
+    dto: CreateRobotConfigurationDto,
+    actorId?: string | null,
+  ): Promise<RobotType> {
+    const name = typeof dto.name === 'string' ? dto.name.trim() : '';
+    if (!name) throw new DatasetExpectationError('name is required', 400, 'INVALID_ROBOT_TYPE');
+    const dims: Array<[string, unknown]> = [['actionDim', dto.actionDim], ['proprioceptionDim', dto.proprioceptionDim]];
+    for (const [key, value] of dims) {
+      if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0 || value > 4096) {
+        throw new DatasetExpectationError(`${key} must be a positive integer`, 400, 'INVALID_ROBOT_TYPE');
+      }
+    }
+    if (await robotTypeRepository.findByName(name)) {
+      throw new DatasetExpectationError(
+        `A robot type named "${name}" already exists; pick it, or give the new configuration another name`,
+        409,
+        'ROBOT_TYPE_EXISTS',
+      );
+    }
+    const created = await robotTypeRepository.create({
+      name,
+      manufacturer: dto.manufacturer?.trim() || 'Unknown',
+      model: dto.model?.trim() || name,
+      actionDim: dto.actionDim,
+      proprioceptionDim: dto.proprioceptionDim,
+    });
+    await this.auditDatasetAction(created.id, 'robot-type.create', actorId, {
+      name: created.name,
+      actionDim: created.actionDim,
+      proprioceptionDim: created.proprioceptionDim,
+    }, 'robot-type');
+    return created;
+  }
+
+  /**
+   * File a dataset action in the compliance log. Never throws: a log that is
+   * down must not undo a change that was already written.
+   */
+  async auditDatasetAction(
+    resourceId: string,
+    action: string,
+    actorId: string | null | undefined,
+    metadata: Record<string, unknown>,
+    resourceType = 'dataset',
+  ): Promise<void> {
+    try {
+      const { sessionId } = complianceLogService.getOrCreateSession(DATASET_AUDIT_ROBOT);
+      await complianceLogService.logAccess({
+        sessionId,
+        robotId: DATASET_AUDIT_ROBOT,
+        operatorId: actorId ?? undefined,
+        payload: {
+          description: `Datasets: ${action}`,
+          resourceType,
+          resourceId,
+          action,
+          result: 'allowed',
+          metadata,
+        },
+      });
+    } catch (error) {
+      console.error(`[DatasetService] audit log for ${action} on ${resourceId} failed:`, error);
+    }
+  }
+
   /**
    * Open a dataset and say whether it is structurally sound.
    *
@@ -1328,6 +1576,8 @@ export class DatasetService extends EventEmitter {
           expected = {
             proprioceptionDim: robotType.proprioceptionDim,
             actionDim: robotType.actionDim,
+            robotTypeName: robotType.name,
+            robotTypeModel: robotType.model,
           };
         }
       } catch {
@@ -1395,6 +1645,9 @@ export class DatasetService extends EventEmitter {
       const validation = await this.validateStructure(storagePath, existing?.robotTypeId, {
         importMode: existing?.importMode,
       });
+      // A new verdict replaces the old one and clears an invalidation, but the
+      // record of WHY the expectations changed outlives both (TASK-353).
+      const priorHistory = (existing?.validation as StoredValidation | undefined)?.history;
 
       await this.updateValidationProgress(datasetId, {
         datasetId,
@@ -1425,7 +1678,7 @@ export class DatasetService extends EventEmitter {
         await datasetRepository.update(datasetId, {
           status: 'failed',
           validation: validation.report
-            ? { validatedAt: new Date().toISOString(), report: validation.report }
+            ? { validatedAt: new Date().toISOString(), report: validation.report, history: priorHistory }
             : undefined,
         });
 
@@ -1472,7 +1725,12 @@ export class DatasetService extends EventEmitter {
         demonstrationCount: validation.episodeCount,
         lerobotVersion: validation.lerobotVersion !== 'unknown' ? validation.lerobotVersion : undefined,
         validation: validation.report
-          ? { validatedAt: new Date().toISOString(), breakdown: qualityScore, report: validation.report }
+          ? {
+            validatedAt: new Date().toISOString(),
+            breakdown: qualityScore,
+            report: validation.report,
+            history: priorHistory,
+          }
           : undefined,
       };
 
@@ -1766,6 +2024,8 @@ export class DatasetService extends EventEmitter {
           name: robotType.name,
           manufacturer: robotType.manufacturer,
           model: robotType.model,
+          actionDim: robotType.actionDim,
+          proprioceptionDim: robotType.proprioceptionDim,
         };
       }
     }
@@ -1798,9 +2058,15 @@ export class DatasetService extends EventEmitter {
     // when somebody has) and rather than a report of its own (which would be a
     // claim no run could support). Counts stay the view's own: those ARE
     // derived, and were computed against the parent when the view was created.
-    let stored = dataset.validation as
-      | { breakdown?: QualityScoreBreakdown; report?: DatasetStructureReport; validatedAt?: string }
-      | undefined;
+    let stored = dataset.validation as StoredValidation | undefined;
+    // Expectation changes are the row's OWN, even on a view (TASK-353).
+    const own = dataset.validation as StoredValidation | undefined;
+    if (own?.invalidated || own?.history?.length) {
+      response.expectations = {
+        invalidated: own.invalidated ?? null,
+        history: own.history ?? [],
+      };
+    }
     if (view) {
       response.kind = (view.kind === 'view' ? 'view' : 'materialized') as DatasetKind;
     }
@@ -1844,6 +2110,8 @@ export class DatasetService extends EventEmitter {
         warnings: stored.report.warnings,
         imageKeys: stored.report.imageKeys,
         fileCount: stored.report.files.length,
+        observedStateWidth: stored.report.observedStateWidth ?? null,
+        observedActionWidth: stored.report.observedActionWidth ?? null,
       };
     }
 
