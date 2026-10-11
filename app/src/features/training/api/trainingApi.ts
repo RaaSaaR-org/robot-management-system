@@ -148,6 +148,18 @@ export const trainingApi = {
     return response.data;
   },
 
+  /**
+   * Where the current validation pass is. The row's status is not enough: a
+   * revalidation of a `ready` or `failed` dataset leaves the row as it was
+   * until the verdict lands.
+   */
+  async getValidationProgress(datasetId: string): Promise<{ status: string; progress: number; message?: string }> {
+    const response = await apiClient.get<{ status: string; progress: number; message?: string }>(
+      `/datasets/${datasetId}/progress`,
+    );
+    return response.data;
+  },
+
   /** Rerun validation over the files already in storage — no download. */
   async revalidateDataset(datasetId: string): Promise<{ state: string }> {
     const response = await apiClient.post<{ state: string }>(`/datasets/${datasetId}/validate`);

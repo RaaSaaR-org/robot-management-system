@@ -60,6 +60,7 @@ vi.mock('../DatasetService.js', () => ({
   datasetService: {
     emit: vi.fn(),
     validateAndUpdateDataset: vi.fn().mockResolvedValue('ready'),
+    claimForImport: vi.fn().mockResolvedValue(true),
   },
   // Read from the environment rather than closed over, because `vi.mock`
   // factories are hoisted above every `let` in this file.
@@ -747,20 +748,11 @@ describe('retryImport', () => {
     await expect(service.retryImport(DATASET_ID))
       .resolves.toEqual({ datasetId: DATASET_ID, status: 'importing' });
 
-    // Two writes, in this order and for a reason: the row is CLAIMED
-    // (`importing`, old reason cleared) before the Hub round-trips, so a second
-    // retry arriving inside that window is refused; the commit and the
-    // directory are written once they are known.
-    expect(datasetRepository.update).toHaveBeenNthCalledWith(
-      1,
-      DATASET_ID,
-      expect.objectContaining({
-        status: 'importing',
-        // A stale reason on a row that is trying again is a lie about the
-        // row's current state.
-        importError: null,
-      }),
-    );
+    // The row is CLAIMED (`importing`, old reason cleared — atomically, in
+    // `DatasetService.claimForImport`, TASK-353) before the Hub round-trips, so
+    // a second retry or a robot-type change inside that window is refused; the
+    // commit and the directory are written once they are known.
+    expect(datasetService.claimForImport).toHaveBeenCalledWith(DATASET_ID);
     expect(datasetRepository.update).toHaveBeenCalledWith(
       DATASET_ID,
       expect.objectContaining({ status: 'importing', sourceRevision: SHA }),

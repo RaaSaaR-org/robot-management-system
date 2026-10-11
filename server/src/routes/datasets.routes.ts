@@ -44,6 +44,7 @@ import { DatasetViewError, resolveLocalView } from '../services/lerobot/LocalDat
 // TASK-220 — POST /compatibility, at the bottom of this file.
 import { analyzeDatasetIds, UnknownDatasetError } from '../services/lerobot/datasetCompatibility.js';
 import { ConflictError } from '../utils/errors.js';
+import { ownerOnly } from '../middleware/auth.middleware.js';
 import { sendFailure } from '../utils/routeErrors.js';
 
 /** In-memory job state for push-to-hub operations */
@@ -385,7 +386,10 @@ function sendExpectationError(res: Response, error: unknown, fallback: string): 
   sendFailure(res, error, fallback);
 }
 
-datasetRoutes.post('/robot-types', async (req: Request, res: Response) => {
+// Owner-only (admin): a robot type is shared, platform-wide configuration that
+// every dataset on it is validated against. Reassociating a dataset stays open
+// to members (operators).
+datasetRoutes.post('/robot-types', ownerOnly, async (req: Request, res: Response) => {
   try {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const robotType = await datasetService.createRobotConfiguration({

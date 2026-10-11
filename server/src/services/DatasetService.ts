@@ -42,6 +42,8 @@ interface StoredValidation {
   invalidated?: DatasetExpectationChange;
   /** Every expectation change, oldest first. Survives new verdicts. */
   history?: DatasetExpectationChange[];
+  /** Why the last pass reached no verdict (store down, pass threw). */
+  error?: string;
 }
 
 /** The compliance-log "robot" the dataset audit trail is filed under. */
@@ -1434,11 +1436,25 @@ export class DatasetService extends EventEmitter {
       };
       storagePath = existing.storagePath;
 
-      await datasetRepository.update(datasetId, {
-        robotTypeId: target.id,
-        status: 'validating',
-        validation: { invalidated: change, history: [...(stored?.history ?? []), change] },
+      // Conditional, not read-then-write: an import retry that claimed the row
+      // between the read above and this write must win, or it would download
+      // under one robot type while this records another. `claimForImport` is
+      // the other half: it refuses a row that is `validating`.
+      const { count } = await prisma.dataset.updateMany({
+        where: { id: datasetId, status: { notIn: ['importing', 'uploading'] } },
+        data: {
+          robotTypeId: target.id,
+          status: 'validating',
+          validationJson: JSON.stringify({ invalidated: change, history: [...(stored?.history ?? []), change] }),
+        },
       });
+      if (count === 0) {
+        throw new DatasetExpectationError(
+          'Dataset started importing; change the robot type once it has finished',
+          409,
+          'DATASET_BUSY',
+        );
+      }
       await this.auditDatasetAction(datasetId, 'dataset.robot-type.change', options.actorId, { ...change });
     } finally {
       this.reassociating.delete(datasetId);
@@ -1467,6 +1483,28 @@ export class DatasetService extends EventEmitter {
       timestamp: new Date().toISOString(),
     });
     return { dataset: response, change, revalidation };
+  }
+
+  /** Whether a robot-type change is being written for this dataset right now. */
+  isReassociating(datasetId: string): boolean {
+    return this.reassociating.has(datasetId);
+  }
+
+  /**
+   * Claim a dataset for an import retry, atomically (TASK-353).
+   *
+   * False when a validation or robot-type change holds it, or when the row is
+   * already `importing`/`validating`. The status condition is in the WHERE
+   * clause so a reassociation that wrote `validating` a moment ago is seen
+   * even when both requests read the row before either wrote it.
+   */
+  async claimForImport(datasetId: string): Promise<boolean> {
+    if (this.reassociating.has(datasetId) || this.isValidating(datasetId)) return false;
+    const { count } = await prisma.dataset.updateMany({
+      where: { id: datasetId, status: { notIn: ['importing', 'validating'] } },
+      data: { status: 'importing', importErrorJson: null },
+    });
+    return count > 0;
   }
 
   /**
@@ -1638,6 +1676,8 @@ export class DatasetService extends EventEmitter {
    */
   async validateAndUpdateDataset(datasetId: string, storagePath: string): Promise<ValidationOutcome> {
     this.markValidationStarted(datasetId);
+    // Read outside the try so the catch can keep the row's expectation record.
+    let existing: Dataset | null = null;
     try {
       // Update progress
       await this.updateValidationProgress(datasetId, {
@@ -1651,7 +1691,7 @@ export class DatasetService extends EventEmitter {
       // widths are checked against what this robot actually has — a 28-wide
       // state vector on a 43-DOF G1 EDU is a dataset that cannot train it, and
       // the error it produces at training time names neither number.
-      const existing = await datasetRepository.findById(datasetId);
+      existing = await datasetRepository.findById(datasetId);
       // `importMode` travels with the row because the files cannot say it: a
       // metadata-only import is missing every mp4 its info.json declares, and
       // without this the validator reported one MISSING_VIDEO_FILE error per
@@ -1675,6 +1715,14 @@ export class DatasetService extends EventEmitter {
         // the whole point: a dataset that was `ready` stays `ready` while the
         // store is down, and the caller is told to try again rather than shown
         // a red badge it cannot act on.
+        //
+        // EXCEPT a row that is `validating` (TASK-353): a robot-type change put
+        // it there and nothing else will ever take it out, so it would read
+        // "validating" for ever. It goes to `failed` — not `ready`, the old
+        // verdict is void — with the reason on the row.
+        if (existing?.status === 'validating') {
+          await this.recordUnverified(existing, `Storage unavailable — nothing was validated: ${validation.errors.join('; ')}`);
+        }
         await this.updateValidationProgress(datasetId, {
           datasetId,
           status: 'failed',
@@ -1689,12 +1737,17 @@ export class DatasetService extends EventEmitter {
         // The report goes with the failure. A dataset marked `failed` with no
         // record of what was wrong sends whoever finds it back to the logs, and
         // the logs are on a machine they may not have.
-        await datasetRepository.update(datasetId, {
-          status: 'failed',
-          validation: validation.report
-            ? { validatedAt: new Date().toISOString(), report: validation.report, history: priorHistory }
-            : undefined,
-        });
+        if (validation.report) {
+          await datasetRepository.update(datasetId, {
+            status: 'failed',
+            validation: { validatedAt: new Date().toISOString(), report: validation.report, history: priorHistory },
+          });
+        } else if (existing) {
+          // No report to store, so the reason goes on the row instead.
+          await this.recordUnverified(existing, validation.errors.join('; ') || 'Validation failed');
+        } else {
+          await datasetRepository.update(datasetId, { status: 'failed' });
+        }
 
         await this.updateValidationProgress(datasetId, {
           datasetId,
@@ -1772,7 +1825,11 @@ export class DatasetService extends EventEmitter {
     } catch (error) {
       console.error(`[DatasetService] Validation error for ${datasetId}:`, error);
 
-      await datasetRepository.update(datasetId, { status: 'failed' });
+      if (existing) {
+        await this.recordUnverified(existing, `Validation error: ${error instanceof Error ? error.message : String(error)}`);
+      } else {
+        await datasetRepository.update(datasetId, { status: 'failed' });
+      }
 
       await this.updateValidationProgress(datasetId, {
         datasetId,
@@ -1792,6 +1849,20 @@ export class DatasetService extends EventEmitter {
     } finally {
       this.validationsInFlight.delete(datasetId);
     }
+  }
+
+  /**
+   * Mark a dataset `failed` without a report, keeping its expectation record
+   * (TASK-353) and saying why. Used when no verdict could be reached: a store
+   * that could not be read, or a pass that threw. The stored report, if any,
+   * is dropped only when it was already void.
+   */
+  private async recordUnverified(row: Dataset, error: string): Promise<void> {
+    const stored = row.validation as StoredValidation | undefined;
+    const validation: StoredValidation = stored?.invalidated || !stored?.report
+      ? { invalidated: stored?.invalidated, history: stored?.history, error }
+      : { ...stored, error };
+    await datasetRepository.update(row.id, { status: 'failed', validation });
   }
 
   /**
@@ -2075,10 +2146,11 @@ export class DatasetService extends EventEmitter {
     let stored = dataset.validation as StoredValidation | undefined;
     // Expectation changes are the row's OWN, even on a view (TASK-353).
     const own = dataset.validation as StoredValidation | undefined;
-    if (own?.invalidated || own?.history?.length) {
+    if (own?.invalidated || own?.history?.length || own?.error) {
       response.expectations = {
         invalidated: own.invalidated ?? null,
         history: own.history ?? [],
+        error: own.error ?? null,
       };
     }
     if (view) {

@@ -234,6 +234,8 @@ export interface DatasetResponse extends Omit<Dataset, 'robotType' | 'skill'> {
   expectations?: {
     invalidated: DatasetExpectationChange | null;
     history: DatasetExpectationChange[];
+    /** Why the last pass reached no verdict, or null. */
+    error: string | null;
   };
   skill?: {
     id: string;

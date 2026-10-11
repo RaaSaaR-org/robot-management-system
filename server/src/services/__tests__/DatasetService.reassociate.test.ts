@@ -27,7 +27,27 @@ const { rows, types, logAccess, deleteDataset, rtUpdate } = vi.hoisted(() => ({
 
 vi.mock('../../database/index.js', () => ({
   prisma: {
-    dataset: { findMany: vi.fn(async () => []), findUnique: vi.fn(async () => null) },
+    dataset: {
+      findMany: vi.fn(async () => []),
+      findUnique: vi.fn(async () => null),
+      // The conditional writes (TASK-353): applied only when the row's CURRENT
+      // status is outside `notIn`, exactly as the database would.
+      updateMany: vi.fn(async ({ where, data }: {
+        where: { id: string; status: { notIn: string[] } };
+        data: Record<string, unknown>;
+      }) => {
+        const row = rows.get(where.id);
+        if (!row || where.status.notIn.includes(row.status as string)) return { count: 0 };
+        const next = { ...row };
+        for (const [k, v] of Object.entries(data)) {
+          if (k === 'validationJson') next.validation = JSON.parse(v as string);
+          else if (k === 'importErrorJson') next.importError = v;
+          else next[k] = v;
+        }
+        rows.set(where.id, next);
+        return { count: 1 };
+      }),
+    },
     trainingJobDataset: { findMany: vi.fn(async () => []) },
   },
 }));
@@ -85,6 +105,8 @@ vi.mock('../../messaging/kv-stores.js', () => ({
 }));
 
 import { DatasetService, DatasetExpectationError } from '../DatasetService.js';
+import { DatasetStoreError, LocalDatasetTree } from '../lerobot/DatasetTree.js';
+import { datasetRepository } from '../../repositories/index.js';
 
 // ---------------------------------------------------------------------------
 // A 43-wide G1 dataset on disk (v2.1 layout, no cameras)
@@ -291,6 +313,64 @@ describe('reassociating a dataset with another robot type (TASK-353)', () => {
     await expect(refused).rejects.toBeInstanceOf(DatasetExpectationError);
     await expect(refused).rejects.toMatchObject({ status: 409, code: 'DATASET_BUSY' });
     expect(rows.get(DATASET)!.robotTypeId).toBe(SHARED_G1.id);
+  });
+
+  it('does not leave the row validating for ever when the store cannot be read', async () => {
+    const g1Edu = await service.createRobotConfiguration({ name: 'G1 43c', actionDim: 43, proprioceptionDim: 43 });
+    // The tree opens (the path exists) but every read is refused by the store.
+    const stat = vi.spyOn(LocalDatasetTree.prototype, 'stat')
+      .mockRejectedValue(new DatasetStoreError('meta/info.json', new Error('ECONNREFUSED')));
+    try {
+      await service.reassociateRobotType(DATASET, g1Edu.id);
+      const after = await settled();
+      expect(after.status).toBe('failed');
+      expect(after.robotTypeId).toBe(g1Edu.id);
+      const response = (await service.get(DATASET))!;
+      // Unverified, not passed: the change is still recorded as invalidating the verdict.
+      expect(response.validation).toBeUndefined();
+      expect(response.expectations?.invalidated?.toRobotTypeId).toBe(g1Edu.id);
+      expect(response.expectations?.error).toMatch(/Storage unavailable/);
+    } finally {
+      stat.mockRestore();
+    }
+  });
+
+  it('keeps the reason on the row when a pass fails without a report', async () => {
+    const g1Edu = await service.createRobotConfiguration({ name: 'G1 43d', actionDim: 43, proprioceptionDim: 43 });
+    const stat = vi.spyOn(LocalDatasetTree.prototype, 'stat').mockRejectedValue(new Error('parquet exploded'));
+    try {
+      await service.reassociateRobotType(DATASET, g1Edu.id);
+      const after = await settled();
+      expect(after.status).toBe('failed');
+      const response = (await service.get(DATASET))!;
+      expect(response.expectations?.error).toMatch(/parquet exploded/);
+      expect(response.expectations?.history).toHaveLength(1);
+    } finally {
+      stat.mockRestore();
+    }
+  });
+
+  it('loses to an import that claimed the row after it was read (conditional write)', async () => {
+    const g1Edu = await service.createRobotConfiguration({ name: 'G1 43e', actionDim: 43, proprioceptionDim: 43 });
+    // The read sees `failed`; by the time of the write an import retry has claimed it.
+    const stale = { ...rows.get(DATASET)! };
+    rows.set(DATASET, { ...stale, status: 'importing' });
+    vi.mocked(datasetRepository.findById).mockResolvedValueOnce(stale as never);
+    await expect(service.reassociateRobotType(DATASET, g1Edu.id)).rejects.toMatchObject({ status: 409, code: 'DATASET_BUSY' });
+    expect(rows.get(DATASET)!.robotTypeId).toBe(SHARED_G1.id);
+    expect(rows.get(DATASET)!.status).toBe('importing');
+  });
+
+  it('claimForImport refuses a row a reassociation has put into validating', async () => {
+    const g1Edu = await service.createRobotConfiguration({ name: 'G1 43f', actionDim: 43, proprioceptionDim: 43 });
+    const spy = vi.spyOn(service, 'requestValidation').mockResolvedValueOnce('started');
+    await service.reassociateRobotType(DATASET, g1Edu.id);
+    spy.mockRestore();
+    expect(await service.claimForImport(DATASET)).toBe(false);
+
+    rows.set(DATASET, { ...rows.get(DATASET)!, status: 'failed' });
+    expect(await service.claimForImport(DATASET)).toBe(true);
+    expect(rows.get(DATASET)!.status).toBe('importing');
   });
 
   it('creates robot types only: a taken name is a 409, not an update', async () => {

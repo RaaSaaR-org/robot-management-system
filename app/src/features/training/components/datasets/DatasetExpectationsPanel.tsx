@@ -5,7 +5,7 @@
  * @feature training
  */
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { RefreshCw } from 'lucide-react';
 import {
   Button,
@@ -21,8 +21,15 @@ import { trainingApi } from '../../api/trainingApi';
 import { datasetShape } from '../../types';
 import type { Dataset, RobotType } from '../../types';
 
-/** How often a dataset that is validating is re-read. */
+/** How often a running validation pass is asked where it is. */
 export const EXPECTATIONS_POLL_MS = 2000;
+
+/**
+ * How many times it is asked before the panel stops waiting and unlocks. A row
+ * left `validating` by a pass that died would otherwise lock every control on
+ * this panel — including the one that fixes it — for ever.
+ */
+export const EXPECTATIONS_MAX_POLLS = 90;
 
 /**
  * The 43-DOF G1 configuration the production case needed (G1 EDU + Dex3-1 hands).
@@ -42,7 +49,8 @@ export interface DatasetExpectationsPanelProps {
   onDatasetChange: (dataset: Dataset) => void;
 }
 
-const BUSY_STATUSES = new Set(['importing', 'uploading', 'validating']);
+/** Statuses another flow owns. `validating` is NOT here: see `watching`. */
+const LOCKED_STATUSES = new Set(['importing', 'uploading']);
 
 function widthLabel(width: number | null | undefined): string {
   return typeof width === 'number' && width > 0 ? String(width) : '—';
@@ -73,7 +81,12 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
     proprioceptionDim: String(observedState ?? ''),
   });
 
-  const busy = BUSY_STATUSES.has(dataset.status) || pending;
+  // Watching = a pass this panel knows is running (it started one, or the row
+  // said `validating` when the page opened). Bounded, so a stuck row unlocks.
+  const [watching, setWatching] = useState(dataset.status === 'validating');
+  const [gaveUp, setGaveUp] = useState(false);
+  const locked = LOCKED_STATUSES.has(dataset.status);
+  const busy = locked || watching || pending;
 
   useEffect(() => {
     let cancelled = false;
@@ -83,18 +96,33 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
     return () => { cancelled = true; };
   }, []);
 
-  // While a pass runs, re-read the row until it writes ready or failed.
+  // Ask the pass, not the row: a revalidation of a `failed` or `ready` row
+  // leaves the row alone until the verdict lands, so polling the row's status
+  // never saw it. Once the pass reports anything but `validating`, re-read the
+  // dataset for the verdict and stop.
   useEffect(() => {
-    if (dataset.status !== 'validating') return;
-    const timer = setInterval(() => {
+    if (!watching) return;
+    let polls = 0;
+    let stopped = false;
+    const finish = (timedOut: boolean) => {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+      setWatching(false);
+      setGaveUp(timedOut);
       trainingApi.getDataset(dataset.id).then(onDatasetChange).catch(() => undefined);
+    };
+    const timer = setInterval(() => {
+      polls += 1;
+      trainingApi.getValidationProgress(dataset.id)
+        .then((p) => {
+          if (p.status !== 'validating') finish(false);
+          else if (polls >= EXPECTATIONS_MAX_POLLS) finish(true);
+        })
+        .catch(() => { if (polls >= EXPECTATIONS_MAX_POLLS) finish(true); });
     }, EXPECTATIONS_POLL_MS);
-    return () => clearInterval(timer);
-  }, [dataset.id, dataset.status, onDatasetChange]);
-
-  const refresh = useCallback(async () => {
-    onDatasetChange(await trainingApi.getDataset(dataset.id));
-  }, [dataset.id, onDatasetChange]);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [watching, dataset.id, onDatasetChange]);
 
   const options = robotTypes
     .filter((rt) => rt.id !== dataset.robotTypeId)
@@ -112,6 +140,10 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
     try {
       const result = await trainingApi.reassociateRobotType(dataset.id, selectedId, reason || undefined);
       onDatasetChange(result.dataset);
+      if (result.revalidation === 'started' || result.revalidation === 'queued') {
+        setGaveUp(false);
+        setWatching(true);
+      }
       setSelectedId('');
       setReason('');
       toast.success(
@@ -131,7 +163,8 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
     try {
       await trainingApi.revalidateDataset(dataset.id);
       toast.success('Revalidating the files already in storage');
-      await refresh();
+      setGaveUp(false);
+      setWatching(true);
     } catch (err) {
       toast.error(errorMessage(err, 'Could not start revalidation'));
     } finally {
@@ -253,8 +286,19 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
               {creating ? 'Cancel new configuration' : 'Define a new robot configuration'}
             </Button>
           </div>
-          {BUSY_STATUSES.has(dataset.status) && (
+          {locked && (
             <p className="text-xs text-ink-tertiary">Locked while the dataset is {dataset.status}.</p>
+          )}
+          {watching && !locked && (
+            <p className="text-xs text-ink-tertiary" data-testid="validation-running">Validating the stored files…</p>
+          )}
+          {gaveUp && (
+            <p className="text-xs text-ink-tertiary" data-testid="validation-gave-up">
+              The validation did not report a verdict. Revalidate to try again.
+            </p>
+          )}
+          {dataset.expectations?.error && dataset.status === 'failed' && (
+            <p className="text-xs text-signal-stopped" data-testid="validation-error">{dataset.expectations.error}</p>
           )}
         </div>
 

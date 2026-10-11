@@ -495,7 +495,15 @@ export class HuggingFaceImportService {
     // resolving the commit — and both then downloaded into the same directory.
     // The previous failure goes at the same time; it is not evidence about this
     // attempt.
-    await datasetRepository.update(datasetId, { status: 'importing', importError: null });
+    // Conditional (TASK-353): a robot-type change or a validation may have
+    // taken the row since it was read above.
+    if (!(await datasetService.claimForImport(datasetId))) {
+      throw new HuggingFaceImportError(
+        'IN_PROGRESS',
+        `Dataset ${datasetId} is being validated or its robot type is being changed`,
+        409,
+      );
+    }
 
     let sha: string;
     let license: string | null = null;

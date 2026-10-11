@@ -85,6 +85,21 @@ describe('POST /api/datasets/robot-types', () => {
     expect(res.body.robotType.id).toBe('rt-43');
   });
 
+  it('refuses a member: robot types are shared configuration, owner-only', async () => {
+    const app = express();
+    app.use(express.json());
+    // A service identity is never under the dev auth bypass, so the role check runs.
+    app.use((req, _res, next) => {
+      (req as unknown as { user: unknown }).user = { id: 'u1', role: 'member', authType: 'service' };
+      next();
+    });
+    app.use('/api/datasets', datasetRoutes);
+    const res = await request(app).post('/api/datasets/robot-types')
+      .send({ name: 'G1 43', actionDim: 43, proprioceptionDim: 43 });
+    expect(res.status).toBe(403);
+    expect(svc.createRobotConfiguration).not.toHaveBeenCalled();
+  });
+
   it('passes a taken name through as 409', async () => {
     svc.createRobotConfiguration.mockRejectedValue(new svc.DatasetExpectationError('taken', 409, 'ROBOT_TYPE_EXISTS'));
     const res = await request(createApp()).post('/api/datasets/robot-types')

@@ -262,6 +262,8 @@ export interface Dataset {
   expectations?: {
     invalidated: DatasetExpectationChange | null;
     history: DatasetExpectationChange[];
+    /** Why the last pass reached no verdict (store down, pass threw), or null. */
+    error?: string | null;
   };
 }
 

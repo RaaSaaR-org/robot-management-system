@@ -6,9 +6,13 @@
  * @feature training
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { DatasetExpectationsPanel } from '../datasets/DatasetExpectationsPanel';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  DatasetExpectationsPanel,
+  EXPECTATIONS_MAX_POLLS,
+  EXPECTATIONS_POLL_MS,
+} from '../datasets/DatasetExpectationsPanel';
 import type { Dataset, RobotType } from '../../types';
 
 const api = vi.hoisted(() => ({
@@ -17,6 +21,7 @@ const api = vi.hoisted(() => ({
   revalidateDataset: vi.fn(),
   createRobotType: vi.fn(),
   getDataset: vi.fn(),
+  getValidationProgress: vi.fn(),
 }));
 
 vi.mock('../../api/trainingApi', () => ({ trainingApi: api }));
@@ -65,7 +70,19 @@ function failedDataset(overrides: Partial<Dataset> = {}): Dataset {
 beforeEach(() => {
   vi.clearAllMocks();
   api.listRobotTypes.mockResolvedValue([G1_28, G1_43]);
+  api.getValidationProgress.mockResolvedValue({ status: 'validating', progress: 0 });
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/** Let `n` poll intervals pass and their promises settle. */
+async function pollTimes(n: number) {
+  for (let i = 0; i < n; i++) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(EXPECTATIONS_POLL_MS); });
+  }
+}
 
 describe('DatasetExpectationsPanel', () => {
   it('shows observed widths beside the expected widths and the selected robot type', async () => {
@@ -96,14 +113,45 @@ describe('DatasetExpectationsPanel', () => {
     expect(onChange).toHaveBeenCalledWith(updated);
   });
 
-  it('revalidates the existing files', async () => {
+  it('revalidates the existing files and shows the verdict once the pass reports one', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     api.revalidateDataset.mockResolvedValue({ state: 'started' });
-    api.getDataset.mockResolvedValue(failedDataset({ status: 'validating' }));
+    const verdict = failedDataset({ status: 'ready' });
+    api.getDataset.mockResolvedValue(verdict);
     const onChange = vi.fn();
+    // The row stays `failed` while the pass runs — only the progress channel knows.
     render(<DatasetExpectationsPanel dataset={failedDataset()} onDatasetChange={onChange} />);
     fireEvent.click(screen.getByTestId('revalidate-button'));
     await waitFor(() => expect(api.revalidateDataset).toHaveBeenCalledWith('ds-1'));
-    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('validation-running')).toBeInTheDocument());
+    expect(screen.getByTestId('revalidate-button')).toBeDisabled();
+
+    api.getValidationProgress.mockResolvedValue({ status: 'ready', progress: 100 });
+    await pollTimes(1);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(verdict));
+    expect(screen.queryByTestId('validation-running')).toBeNull();
+    expect(screen.getByTestId('revalidate-button')).not.toBeDisabled();
+  });
+
+  it('unlocks a row stuck in validating once polling gives up', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.getDataset.mockResolvedValue(failedDataset({ status: 'validating' }));
+    render(<DatasetExpectationsPanel dataset={failedDataset({ status: 'validating' })} onDatasetChange={vi.fn()} />);
+    expect(screen.getByTestId('revalidate-button')).toBeDisabled();
+    await pollTimes(EXPECTATIONS_MAX_POLLS);
+    await waitFor(() => expect(screen.getByTestId('validation-gave-up')).toBeInTheDocument());
+    expect(screen.getByTestId('revalidate-button')).not.toBeDisabled();
+    expect(api.getValidationProgress).toHaveBeenCalledTimes(EXPECTATIONS_MAX_POLLS);
+  });
+
+  it('shows why the last pass reached no verdict', () => {
+    render(
+      <DatasetExpectationsPanel
+        dataset={failedDataset({ validation: undefined, expectations: { invalidated: null, history: [], error: 'Storage unavailable — nothing was validated' } })}
+        onDatasetChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('validation-error')).toHaveTextContent('Storage unavailable');
   });
 
   it('locks the controls while the dataset is importing or validating', () => {
