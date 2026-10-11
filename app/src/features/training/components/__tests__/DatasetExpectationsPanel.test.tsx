@@ -96,6 +96,15 @@ describe('DatasetExpectationsPanel', () => {
     await waitFor(() => expect(api.listRobotTypes).toHaveBeenCalled());
   });
 
+  it('still renders when the robot-type list comes back without an array', async () => {
+    // The demo build's catch-all `/datasets/:id` mock once answered this call
+    // with a dataset, and the panel crashed the whole episodes page.
+    api.listRobotTypes.mockResolvedValue(undefined);
+    render(<DatasetExpectationsPanel dataset={failedDataset()} onDatasetChange={vi.fn()} />);
+    await waitFor(() => expect(api.listRobotTypes).toHaveBeenCalled());
+    expect(screen.getByTestId('selected-robot-type')).toHaveTextContent('Unitree_G1');
+  });
+
   it('reassociates with the chosen type and hands back the updated dataset', async () => {
     const updated = failedDataset({ status: 'validating', robotTypeId: 'rt-43' });
     api.reassociateRobotType.mockResolvedValue({ dataset: updated, change: {}, revalidation: 'started' });

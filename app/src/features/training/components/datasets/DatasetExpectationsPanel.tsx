@@ -91,7 +91,7 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
   useEffect(() => {
     let cancelled = false;
     trainingApi.listRobotTypes()
-      .then((list) => { if (!cancelled) setRobotTypes(list); })
+      .then((list) => { if (!cancelled) setRobotTypes(Array.isArray(list) ? list : []); })
       .catch(() => { if (!cancelled) setRobotTypes([]); });
     return () => { cancelled = true; };
   }, []);
