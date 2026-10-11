@@ -81,7 +81,8 @@ const MAX_CONCURRENT_DOWNLOADS = 5;
 const MAX_RETRY_DELAY_MS = 30_000;
 const INITIAL_RETRY_DELAY_MS = 1_000;
 const MAX_TRANSFER_ATTEMPTS = 6;
-const TRANSFER_TIMEOUT_MS = 10 * 60_000;
+// Unitree's multi-gigabyte videos can legitimately take longer than ten minutes.
+const TRANSFER_TIMEOUT_MS = 30 * 60_000;
 
 function retryableStatus(status: number): boolean {
   return status === 408 || status === 429 || [500, 502, 503, 504].includes(status);
