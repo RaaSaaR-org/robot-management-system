@@ -631,6 +631,22 @@ describe('SkillDefinitionRepository', () => {
 describe('DatasetRepository', () => {
   const repo = new DatasetRepository();
 
+  it('persists a repaired robot association and transfer diagnostics', async () => {
+    const importError = {
+      phase: 'downloading', error: 'File data/x.parquet failed', failedAt: FIXED_DATE.toISOString(),
+      file: 'data/x.parquet', transferStage: 'write' as const, attempts: 6,
+      sink: 'rustfs' as const, cause: 'ServiceUnavailable/HTTP 503', httpStatus: 503,
+    };
+    prismaMock.dataset.update.mockResolvedValue(makeDbDataset({
+      robotTypeId: 'rt-43', importErrorJson: JSON.stringify(importError),
+    }));
+    const result = await repo.update('ds-1', { robotTypeId: 'rt-43', importError });
+    expect(prismaMock.dataset.update).toHaveBeenCalledWith({
+      where: { id: 'ds-1' }, data: { robotTypeId: 'rt-43', importErrorJson: JSON.stringify(importError) },
+    });
+    expect(result).toMatchObject({ robotTypeId: 'rt-43', importError });
+  });
+
   it('exports a singleton instance', () => {
     expect(datasetRepository).toBeInstanceOf(DatasetRepository);
   });
