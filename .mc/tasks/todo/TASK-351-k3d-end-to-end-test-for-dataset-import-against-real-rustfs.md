@@ -3,7 +3,7 @@ id: "TASK-351"
 aliases: ["TASK-351"]
 title: "k3d end-to-end test for dataset import against real RustFS"
 slug: "k3d-end-to-end-test-for-dataset-import-against-real-rustfs"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "claude"
 projects: []
@@ -70,13 +70,13 @@ missing one fails its feature only at runtime.
 
 ## Acceptance Criteria
 
-- [ ] `scripts/e2e-k3d/run.sh` builds, deploys and runs the E2E on a Mac with
+- [x] `scripts/e2e-k3d/run.sh` builds, deploys and runs the E2E on a Mac with
       Docker Desktop (~8 GB) and exits 0 when the import works.
-- [ ] The E2E asserts the imported files exist as objects in RustFS, not just
+- [x] The E2E asserts the imported files exist as objects in RustFS, not just
       that the row says `ready`.
-- [ ] The bucket drift test fails when a `BUCKETS` entry is missing from either
+- [x] The bucket drift test fails when a `BUCKETS` entry is missing from either
       chart and skips the deployments chart when it is not checked out.
-- [ ] `down.sh` leaves no cluster behind.
+- [x] `down.sh` leaves no cluster behind.
 
 ## Test Strategy
 
@@ -98,6 +98,11 @@ production chart, the HF import into RustFS **works**:
 So the production import failure does not reproduce with today's `main`
 (#369/#371/#373 included) — it was most likely fixed by those, or depends on
 something the cluster has and k3d does not (see open questions below).
+
+Full `run.sh --down` on a fresh cluster with a warm Docker cache: **103 s**
+(up 46 s, install 49 s, test 8 s), exit 0, cluster deleted afterwards. A cold
+first run adds the image builds (server 128 s, app and robot-agent ~5 min
+together) and the first pulls of postgres/nats/rustfs/aws-cli.
 
 ### Bugs found
 
