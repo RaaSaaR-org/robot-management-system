@@ -70,8 +70,35 @@ describe('useImportJobsFeed', () => {
     });
     expect(store().jobs['ds-1']!.lines.map((l) => l.message)).toContain('Downloading 3 files from the Hub');
 
+    // Without NATS the row is `ready` by the time "completed" goes out.
+    getImportLog.mockImplementation((id: string) => Promise.resolve({
+      datasetId: id, status: 'ready', importError: null, progress: null, lines: [], dropped: 0, retained: true,
+    }));
     socket.emit({ type: 'dataset:import:completed', datasetId: 'ds-1' });
-    expect(store().jobs['ds-1']!.state).toBe('succeeded');
+    await vi.waitFor(() => expect(store().jobs['ds-1']!.state).toBe('succeeded'));
+    expect(socket.closed).toBe(true);
+  });
+
+  it('stays connected through validation, so a later validation failure is heard (NATS)', async () => {
+    renderHook(() => useImportJobsFeed());
+    act(() => store().track('ds-1', 'lerobot/pusht'));
+    const socket = FakeWebSocket.instances[0]!;
+
+    // The download is done; the row says `validating` and the worker has not answered.
+    getImportLog.mockImplementation((id: string) => Promise.resolve({
+      datasetId: id, status: 'validating', importError: null, progress: null, lines: [], dropped: 0, retained: true,
+    }));
+    socket.emit({ type: 'dataset:import:completed', datasetId: 'ds-1' });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(store().jobs['ds-1']!.state).toBe('running');
+    expect(socket.closed).toBe(false);
+
+    socket.emit({ type: 'dataset:validation:failed', datasetId: 'ds-1', error: 'missing meta/tasks.parquet' });
+    expect(store().jobs['ds-1']).toMatchObject({ state: 'failed', error: 'Validation failed: missing meta/tasks.parquet' });
     expect(socket.closed).toBe(true);
   });
 });

@@ -33,6 +33,10 @@ export interface ImportJob {
   currentFile: string | null;
   completedFiles: number | null;
   totalFiles: number | null;
+  /** Bytes stored so far, and the selected total (null: the Hub did not size every file) — #370 */
+  downloadedBytes: number | null;
+  totalBytes: number | null;
+  importMode: HFImportProgress['importMode'] | null;
   /** Why it failed, in the server's words */
   error: string | null;
   lines: ImportLogLine[];
@@ -67,6 +71,11 @@ interface ImportJobsState {
 interface ImportJobsActions {
   /** Start following an import the server has accepted. */
   track: (datasetId: string, label: string) => void;
+  /**
+   * Follow an import found running (the datasets list after a reload, another
+   * tab's import) — quietly: no panel, no toast. A no-op when already tracked.
+   */
+  follow: (datasetId: string, label: string) => void;
   /**
    * Open the panel on a dataset's import — following it first if it is not
    * already, quietly: whoever asks to read a log needs no toast about it.
@@ -105,6 +114,9 @@ function newJob(datasetId: string, label: string, notify = true): ImportJob {
     currentFile: null,
     completedFiles: null,
     totalFiles: null,
+    downloadedBytes: null,
+    totalBytes: null,
+    importMode: null,
     error: null,
     lines: [],
     dropped: 0,
@@ -114,6 +126,22 @@ function newJob(datasetId: string, label: string, notify = true): ImportJob {
     notify,
   };
 }
+
+/** Copy what a progress frame measured onto a running job. */
+function applyFrame(job: ImportJob, p: Partial<HFImportProgress>): void {
+  job.phase = p.phase ?? (p.status === 'validating' ? 'validating' : job.phase);
+  if (typeof p.progress === 'number') job.progress = Math.max(job.progress, p.progress);
+  job.currentFile = p.currentFile ?? job.currentFile;
+  job.completedFiles = p.completedFiles ?? job.completedFiles;
+  job.totalFiles = p.totalFiles ?? job.totalFiles;
+  job.downloadedBytes = p.downloadedBytes ?? job.downloadedBytes;
+  // A frame from a phase that counts files only says nothing about bytes.
+  if (p.totalBytes !== undefined) job.totalBytes = p.totalBytes;
+  job.importMode = p.importMode ?? job.importMode;
+}
+
+/** What a backfill says when the server lost an import it was downloading. */
+export const SERVER_RESTARTED_ERROR = 'The server restarted during the import, so it stopped; retry the import.';
 
 const lineKey = (line: ImportLogLine) => `${line.at}|${line.level}|${line.message}`;
 
@@ -206,6 +234,15 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
         });
       },
 
+      follow: (datasetId, label) => {
+        if (get().jobs[datasetId]) return;
+        set((state) => {
+          state.jobs[datasetId] = newJob(datasetId, label, false);
+          state.order = [...state.order, datasetId];
+        });
+        void get().backfill(datasetId);
+      },
+
       show: (datasetId, label) => {
         if (!get().jobs[datasetId]) {
           set((state) => {
@@ -230,21 +267,24 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
         } else if (type === 'dataset:import:progress' && message.importProgress) {
           const ip = message.importProgress;
           update(datasetId, (job) => {
+            if (job.state === 'running') applyFrame(job, ip);
             if (ip.status === 'failed') return finish(job, 'failed', ip.error ?? null);
-            if (job.state !== 'running') return;
-            job.phase = ip.phase ?? job.phase;
-            job.progress = ip.progress ?? job.progress;
-            job.currentFile = ip.currentFile ?? job.currentFile;
-            job.completedFiles = ip.completedFiles ?? job.completedFiles;
-            job.totalFiles = ip.totalFiles ?? job.totalFiles;
           });
         } else if (type === 'dataset:import:completed') {
+          // "Completed" is the DOWNLOAD. With NATS the row is still
+          // `validating` and the verdict comes later, so this is not the end:
+          // ask the row, and finish only on `ready` or `failed`. Without NATS
+          // the row is already `ready` and the answer comes straight back.
+          update(datasetId, (job) => {
+            if (job.state === 'running') job.phase = 'validating';
+          });
+          void get().backfill(datasetId);
+        } else if (type === 'dataset:validation:completed') {
           update(datasetId, (job) => finish(job, 'succeeded', null));
         } else if (type === 'dataset:import:failed') {
           update(datasetId, (job) => finish(job, 'failed', message.error ?? null));
         } else if (type === 'dataset:validation:failed') {
-          // With NATS, "completed" means the files are in and validation is
-          // queued; this is the verdict that arrives afterwards.
+          // With NATS, the verdict on a download that finished arrives here.
           update(datasetId, (job) => finish(job, 'failed', `Validation failed: ${message.error ?? 'see the dataset'}`));
         }
       },
@@ -255,17 +295,17 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
           job.dropped = response.dropped;
           job.logRetained = response.retained;
           const p = response.progress;
-          if (p && job.state === 'running') {
-            job.phase = p.phase ?? job.phase;
-            job.progress = Math.max(job.progress, p.progress);
-            job.currentFile = p.currentFile ?? job.currentFile;
-            job.completedFiles = p.completedFiles ?? job.completedFiles;
-            job.totalFiles = p.totalFiles ?? job.totalFiles;
-          }
+          if (p && job.state === 'running') applyFrame(job, p);
           if (response.status === 'failed') {
             return finish(job, 'failed', response.importError?.error ?? 'Validation failed — see the dataset');
           }
           if (response.status === 'ready') return finish(job, 'succeeded', null);
+          // Still `importing` on a server that holds no log for it: the
+          // process that was downloading is gone (a restart), and nothing
+          // will ever move this row again. Say so instead of spinning.
+          if (response.status === 'importing' && !response.retained) {
+            return finish(job, 'failed', SERVER_RESTARTED_ERROR);
+          }
         });
       },
 

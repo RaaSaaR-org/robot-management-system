@@ -777,6 +777,12 @@ export interface HFImportProgress {
   currentFile?: string;
   totalFiles?: number;
   completedFiles?: number;
+  /** Bytes stored so far (#370) */
+  downloadedBytes?: number;
+  /** Bytes selected for download; absent when the Hub did not size every file */
+  totalBytes?: number;
+  /** `metadata` skips the videos; `full` fetches everything */
+  importMode?: 'metadata' | 'full';
   error?: string;
 }
 

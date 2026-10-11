@@ -27,7 +27,7 @@ vi.mock('@/shared/components/ui/toast', () => ({
   },
 }));
 
-import { mergeLines, selectRunningCount, useImportJobsStore } from '../importJobsStore';
+import { SERVER_RESTARTED_ERROR, mergeLines, selectRunningCount, useImportJobsStore } from '../importJobsStore';
 import type { ImportLogResponse } from '../../types';
 
 const ID = 'ds-1';
@@ -79,14 +79,58 @@ describe('following an import', () => {
     expect(selectRunningCount(store())).toBe(1);
   });
 
-  it('ends on success with one toast', () => {
+  it('ends on success with one toast, once the row says ready', async () => {
+    // Without NATS the row is already `ready` when "completed" goes out.
+    getImportLog.mockResolvedValue(backfill({ status: 'ready' }));
     store().track(ID, 'lerobot/pusht');
     store().applyMessage({ type: 'dataset:import:completed', datasetId: ID });
     store().applyMessage({ type: 'dataset:import:completed', datasetId: ID });
 
-    expect(job()).toMatchObject({ state: 'succeeded', progress: 100, error: null });
+    await vi.waitFor(() => expect(job().state).toBe('succeeded'));
+    expect(job()).toMatchObject({ progress: 100, error: null });
     expect(toastSuccess).toHaveBeenCalledTimes(1);
     expect(selectRunningCount(store())).toBe(0);
+  });
+
+  it('keeps an import running while the server is still validating it (NATS)', async () => {
+    // "completed" means the download; the row is `validating` until the worker answers.
+    getImportLog.mockResolvedValue(backfill({
+      status: 'validating',
+      progress: { datasetId: ID, status: 'validating', phase: 'validating', progress: 90, completedFiles: 3, totalFiles: 3 },
+    }));
+    store().track(ID, 'lerobot/pusht');
+    store().applyMessage({ type: 'dataset:import:completed', datasetId: ID });
+    await vi.waitFor(() => expect(getImportLog).toHaveBeenCalled());
+    await Promise.resolve();
+
+    expect(job()).toMatchObject({ state: 'running', phase: 'validating' });
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(selectRunningCount(store())).toBe(1);
+
+    // The verdict, when it comes, ends it.
+    store().applyMessage({ type: 'dataset:validation:completed', datasetId: ID });
+    expect(job().state).toBe('succeeded');
+    expect(toastSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('copies byte progress off the frames, and a failed frame stops the bar where it was', () => {
+    store().track(ID, 'unitree/g1');
+    store().applyMessage({
+      type: 'dataset:import:progress',
+      datasetId: ID,
+      importProgress: {
+        status: 'importing', phase: 'downloading', progress: 50, completedFiles: 4, totalFiles: 10,
+        downloadedBytes: 500, totalBytes: 1000, importMode: 'full',
+      },
+    });
+    expect(job()).toMatchObject({ downloadedBytes: 500, totalBytes: 1000, importMode: 'full' });
+
+    store().applyMessage({
+      type: 'dataset:import:progress',
+      datasetId: ID,
+      importProgress: { status: 'failed', phase: 'downloading', progress: 50, downloadedBytes: 500, totalBytes: 1000, error: 'terminated' },
+    });
+    expect(job()).toMatchObject({ state: 'failed', error: 'terminated', progress: 50, downloadedBytes: 500 });
   });
 
   it('ends on failure with the reason, and a late progress frame cannot revive it', () => {
@@ -136,6 +180,56 @@ describe('the server backfill', () => {
     expect(job()).toMatchObject({ state: 'failed', error: 'repo not found', logRetained: false });
   });
 
+  it('fails an import the server lost to a restart instead of spinning for ever', async () => {
+    store().track(ID, 'lerobot/pusht');
+    getImportLog.mockResolvedValue(backfill({ status: 'importing', retained: false }));
+
+    await store().backfill(ID);
+
+    expect(job()).toMatchObject({ state: 'failed', error: SERVER_RESTARTED_ERROR });
+    expect(toastError).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps waiting on a validation a restart did not stop (the worker may still answer)', async () => {
+    store().track(ID, 'lerobot/pusht');
+    getImportLog.mockResolvedValue(backfill({ status: 'validating', retained: false }));
+
+    await store().backfill(ID);
+
+    expect(job().state).toBe('running');
+  });
+
+  it('restores a reloaded mid-download import: phase, bytes and lines', async () => {
+    // What localStorage brings back after a reload: the job, without its lines.
+    store().track(ID, 'unitree/g1');
+    useImportJobsStore.setState((state) => { state.jobs[ID]!.lines = []; });
+    getImportLog.mockResolvedValue(backfill({
+      lines: [line('2026-10-12T10:00:01Z', 'Downloading 10 files from the Hub (1.0 KB)')],
+      progress: {
+        datasetId: ID, status: 'importing', phase: 'downloading', progress: 42,
+        completedFiles: 4, totalFiles: 10, downloadedBytes: 400, totalBytes: 1000,
+      },
+    }));
+
+    await store().backfill(ID);
+
+    expect(job()).toMatchObject({
+      state: 'running', phase: 'downloading', downloadedBytes: 400, totalBytes: 1000, completedFiles: 4,
+    });
+    expect(job().lines).toHaveLength(1);
+  });
+
+  it('follows an import found running, quietly and only once', async () => {
+    getImportLog.mockResolvedValue(backfill());
+    store().follow(ID, 'lerobot/pusht');
+    store().follow(ID, 'lerobot/pusht');
+
+    expect(store().order).toEqual([ID]);
+    expect(store().panelOpen).toBe(false);
+    expect(job().notify).toBe(false);
+    await vi.waitFor(() => expect(getImportLog).toHaveBeenCalledTimes(1));
+  });
+
   it('opens a log quietly: reading an ended import does not toast about it', async () => {
     getImportLog.mockResolvedValue(backfill({ status: 'failed', importError: null }));
     store().show(ID, 'lerobot/pusht');
@@ -158,7 +252,7 @@ describe('tidying up', () => {
   it('clears finished imports and keeps running ones', () => {
     store().track('a', 'a');
     store().track('b', 'b');
-    store().applyMessage({ type: 'dataset:import:completed', datasetId: 'a' });
+    store().applyMessage({ type: 'dataset:validation:completed', datasetId: 'a' });
     store().clearFinished();
     expect(store().order).toEqual(['b']);
   });
