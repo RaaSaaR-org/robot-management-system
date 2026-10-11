@@ -1528,15 +1528,9 @@ datasetRoutes.post('/:id/validate', async (req: Request, res: Response) => {
       });
     }
 
-    const state = await datasetService.requestValidation(id, dataset.storagePath);
-    if (state === 'queued' || state === 'started') {
-      // Revalidation reads the stored objects only — no download, no move.
-      await datasetService.auditDatasetAction(id, 'dataset.revalidate', actorOf(req), {
-        robotTypeId: dataset.robotTypeId,
-        storagePath: dataset.storagePath,
-        state,
-      });
-    }
+    // Revalidation reads the stored objects only — no download, no move. The
+    // service audit-logs the pass it accepts on behalf of this actor.
+    const state = await datasetService.requestValidation(id, dataset.storagePath, { actorId: actorOf(req) });
     if (state === 'in-flight') {
       return res.status(409).json({
         error: 'A validation for this dataset is already running',

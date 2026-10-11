@@ -108,6 +108,7 @@ describe('POST /api/datasets/:id/validate', () => {
     svc.requestValidation.mockResolvedValue('started');
     const res = await request(createApp()).post('/api/datasets/d1/validate');
     expect(res.status).toBe(202);
-    expect(svc.auditDatasetAction).toHaveBeenCalledWith('d1', 'dataset.revalidate', null, expect.any(Object));
+    // The actor travels with the request so the service can audit the pass it accepts.
+    expect(svc.requestValidation).toHaveBeenCalledWith('d1', 'x/', { actorId: null });
   });
 });

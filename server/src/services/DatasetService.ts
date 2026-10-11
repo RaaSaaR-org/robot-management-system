@@ -1252,7 +1252,21 @@ export class DatasetService extends EventEmitter {
    * Re-entry is refused rather than queued behind the running pass: two clicks
    * used to start two full passes over the same files, writing the same row.
    */
-  async requestValidation(datasetId: string, storagePath: string): Promise<ValidationRequestState> {
+  async requestValidation(
+    datasetId: string,
+    storagePath: string,
+    audit?: { actorId: string | null },
+  ): Promise<ValidationRequestState> {
+    const state = await this.startValidation(datasetId, storagePath);
+    // An operator's revalidation is part of the dataset's audit trail
+    // (TASK-353); the import's own pass is not an operator action.
+    if (audit && (state === 'queued' || state === 'started')) {
+      await this.auditDatasetAction(datasetId, 'dataset.revalidate', audit.actorId, { storagePath, state });
+    }
+    return state;
+  }
+
+  private async startValidation(datasetId: string, storagePath: string): Promise<ValidationRequestState> {
     if (this.isValidating(datasetId)) return 'in-flight';
     // A robot-type change is rewriting what this pass would check against.
     if (this.reassociating.has(datasetId)) return 'in-flight';

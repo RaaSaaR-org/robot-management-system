@@ -28,6 +28,8 @@ import type {
   CurationSuggestResponse,
   EpisodeAnnotation,
   RobotType,
+  ReassociationResult,
+  CreateRobotConfigurationInput,
   HFDatasetPreview,
   HFImportOptions,
   CompatibilityReport,
@@ -126,6 +128,30 @@ export const trainingApi = {
   async listRobotTypes(): Promise<RobotType[]> {
     const response = await apiClient.get<{ robotTypes: RobotType[] }>('/datasets/robot-types');
     return response.data.robotTypes;
+  },
+
+  /**
+   * Define a NEW robot configuration (TASK-353). Create-only: there is no call
+   * that widens an existing type, because other datasets depend on it.
+   */
+  async createRobotType(input: CreateRobotConfigurationInput): Promise<RobotType> {
+    const response = await apiClient.post<{ robotType: RobotType }>('/datasets/robot-types', input);
+    return response.data.robotType;
+  },
+
+  /**
+   * Point a dataset at another robot type; the server voids the old verdict
+   * and revalidates the stored files (TASK-353).
+   */
+  async reassociateRobotType(datasetId: string, robotTypeId: string, reason?: string): Promise<ReassociationResult> {
+    const response = await apiClient.put<ReassociationResult>(`/datasets/${datasetId}/robot-type`, { robotTypeId, reason });
+    return response.data;
+  },
+
+  /** Rerun validation over the files already in storage — no download. */
+  async revalidateDataset(datasetId: string): Promise<{ state: string }> {
+    const response = await apiClient.post<{ state: string }>(`/datasets/${datasetId}/validate`);
+    return response.data;
   },
 
   /**

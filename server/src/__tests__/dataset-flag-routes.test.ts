@@ -204,7 +204,7 @@ describe('POST /:id/validate', () => {
     const res = await request(app).post('/api/datasets/ds1/validate');
 
     expect(res.status).toBe(202);
-    expect(mockDatasetService.requestValidation).toHaveBeenCalledWith('ds1', '/data/ds1/');
+    expect(mockDatasetService.requestValidation).toHaveBeenCalledWith('ds1', '/data/ds1/', { actorId: null });
     expect(res.body).toMatchObject({ state: 'queued', progressUrl: '/api/datasets/ds1/progress' });
     expect(mockDatasetService.validateAndUpdateDataset).not.toHaveBeenCalled();
   });
