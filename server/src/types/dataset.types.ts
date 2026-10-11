@@ -197,12 +197,45 @@ export interface DatasetListQuery {
 /**
  * Dataset response with relations
  */
+/**
+ * One change to what a dataset is expected to be (TASK-353): the robot type it
+ * is checked against. Kept in `validationJson.history` and the compliance log,
+ * so "why did this dataset start passing" has an answer.
+ */
+export interface DatasetExpectationChange {
+  at: string;
+  actorId: string | null;
+  fromRobotTypeId: string | null;
+  fromRobotTypeName: string | null;
+  toRobotTypeId: string;
+  toRobotTypeName: string;
+  /** The row status the old verdict had produced, now void. */
+  previousStatus: string;
+  /** Whether the voided report had passed, or null when there was none. */
+  previousValid: boolean | null;
+  reason: string | null;
+}
+
 export interface DatasetResponse extends Omit<Dataset, 'robotType' | 'skill'> {
   robotType?: {
     id: string;
     name: string;
     manufacturer: string;
     model: string;
+    /** What this robot type declares; the widths validation checks against. */
+    actionDim: number;
+    proprioceptionDim: number;
+  };
+  /**
+   * Expectation changes (TASK-353). `invalidated` is set from a robot-type
+   * change until the next validation writes a verdict; `history` is every
+   * change, oldest first.
+   */
+  expectations?: {
+    invalidated: DatasetExpectationChange | null;
+    history: DatasetExpectationChange[];
+    /** Why the last pass reached no verdict, or null. */
+    error: string | null;
   };
   skill?: {
     id: string;
@@ -231,6 +264,9 @@ export interface DatasetResponse extends Omit<Dataset, 'robotType' | 'skill'> {
     warnings: ValidationFinding[];
     imageKeys: string[];
     fileCount: number;
+    /** Widths read out of the data parquet — the observed schema, not the manifest. */
+    observedStateWidth: number | null;
+    observedActionWidth: number | null;
   };
   /**
    * What this row IS (TASK-240). `view` means it copies no bytes: its contents

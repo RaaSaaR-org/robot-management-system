@@ -19,6 +19,8 @@ const { trainingApiMock, datasetViewsApiMock, listRewards } = vi.hoisted(() => (
     getAnnotations: vi.fn(),
     getEpisodeVideoUrl: () => 'about:blank',
     flagEpisode: vi.fn(),
+    // The expectations panel (TASK-353) lists robot types on mount.
+    listRobotTypes: vi.fn(async () => []),
   },
   datasetViewsApiMock: {
     listViews: vi.fn(),

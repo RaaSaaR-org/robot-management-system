@@ -77,6 +77,7 @@ vi.mock('../DatasetService.js', () => ({
   datasetService: {
     emit: vi.fn(),
     validateAndUpdateDataset: vi.fn().mockResolvedValue('ready'),
+    claimForImport: vi.fn().mockResolvedValue(true),
   },
   datasetStorageRoot: () => env.storageRoot,
 }));
@@ -93,6 +94,7 @@ import {
   isVideoPath,
   retryAfterMs,
 } from '../HuggingFaceImportService.js';
+import { datasetService } from '../DatasetService.js';
 import { datasetRepository, robotTypeRepository } from '../../repositories/index.js';
 import type { LeRobotInfoV3 } from '../../types/dataset.types.js';
 import type { RobotType } from '../../types/vla.types.js';
@@ -903,7 +905,8 @@ describe('HuggingFaceImportService', () => {
       expect(result).toEqual({ datasetId: 'ds-1', status: 'importing' });
       // `null`, not absent — a stale reason left standing on a row that is
       // importing again is worse than none.
-      expect(updateWith((u) => u.importError === null)).toBeDefined();
+      // The claim clears it (`DatasetService.claimForImport`, TASK-353).
+      expect(datasetService.claimForImport).toHaveBeenCalledWith('ds-1');
       const pinned = updateWith((u) => u.sourceRevision === SHA);
       expect(pinned).toBeDefined();
       // The same directory, rather than a second copy of the dataset on disk.
@@ -921,9 +924,10 @@ describe('HuggingFaceImportService', () => {
         ...failedRow, sourceRevision: null, storagePath: `${join(env.storageRoot, 'store-1')}/`,
       } as never);
       const order: string[] = [];
-      vi.mocked(datasetRepository.update).mockImplementation(async (_id, input) => {
-        order.push(`update:${(input as { status?: string }).status}`);
-        return {} as never;
+      // The claim is `DatasetService.claimForImport` since TASK-353.
+      vi.mocked(datasetService.claimForImport).mockImplementation(async () => {
+        order.push('update:importing');
+        return true;
       });
       mockHub();
       const fetchSpy = vi.mocked(globalThis.fetch);
@@ -937,6 +941,14 @@ describe('HuggingFaceImportService', () => {
 
       expect(order[0]).toBe('update:importing');
       expect(order.indexOf('update:importing')).toBeLessThan(order.indexOf('fetch:revision'));
+    });
+
+    it('refuses with 409 when a validation or robot-type change holds the row (TASK-353)', async () => {
+      vi.mocked(datasetRepository.findById).mockResolvedValue(failedRow as never);
+      vi.mocked(datasetService.claimForImport).mockResolvedValueOnce(false);
+      await expect(service.retryImport('ds-1')).rejects.toMatchObject({ status: 409, code: 'IN_PROGRESS' });
+      // Refused before anything is written or fetched.
+      expect(datasetRepository.update).not.toHaveBeenCalled();
     });
 
     it('releases the claim when the Hub call fails, rather than sticking on importing', async () => {
