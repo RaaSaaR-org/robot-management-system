@@ -961,6 +961,15 @@ datasetRoutes.get('/:id/progress', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
+    // A Hub import in flight answers with its own frame: phase, files and
+    // bytes. This route used to know only validation progress, so for the
+    // whole of a download it fell through to the row and said `progress: 0`
+    // (#370). Read first and from memory: the frame is this process's.
+    const importFrame = importActivityLog.get(id)?.progress ?? null;
+    if (importFrame?.status === 'importing') {
+      return res.json(importFrame);
+    }
+
     const progress = await datasetService.getUploadProgress(id);
 
     if (!progress) {
@@ -970,11 +979,25 @@ datasetRoutes.get('/:id/progress', async (req: Request, res: Response) => {
         return res.status(404).json({ error: 'Dataset not found' });
       }
 
-      // No active progress, return current status
+      // An import that has stopped downloading (validating, or ended) still
+      // reports where it got to, with the row's status as the verdict.
+      if (importFrame && dataset.huggingFaceRepoId) {
+        return res.json({
+          ...importFrame,
+          status: dataset.status,
+          ...(dataset.importError ? { error: dataset.importError.error } : {}),
+        });
+      }
+
+      // No active progress, return current status. Something in flight that
+      // this process cannot measure (a restart lost its frame) is `null`, not
+      // a 0 % that reads like "nothing has happened".
+      const unmeasured = dataset.status === 'importing' || dataset.status === 'validating';
       return res.json({
         datasetId: id,
         status: dataset.status,
-        progress: dataset.status === 'ready' ? 100 : 0,
+        progress: dataset.status === 'ready' ? 100 : unmeasured ? null : 0,
+        ...(dataset.importError ? { error: dataset.importError.error } : {}),
       });
     }
 
