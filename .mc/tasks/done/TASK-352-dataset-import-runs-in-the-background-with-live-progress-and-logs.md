@@ -3,9 +3,9 @@ id: "TASK-352"
 aliases: ["TASK-352"]
 title: "Dataset import runs in the background with live progress and logs"
 slug: "dataset-import-runs-in-the-background-with-live-progress-and-logs"
-status: "review"
+status: "done"
 priority: 2
-owner: "claude"
+owner: "huhn511"
 projects: []
 customers: []
 tags: ["core", "datasets"]
