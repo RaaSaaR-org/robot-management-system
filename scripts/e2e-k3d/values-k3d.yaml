@@ -1,0 +1,79 @@
+# values-k3d.yaml — override for installing the PRODUCTION chart
+# (deployments/neoDEM) into a local k3d cluster (TASK-351).
+#
+# Only what cannot work on a laptop is changed. Everything else — the server's
+# 512Mi memory limit, the non-root securityContext, the RustFS image tag and
+# its bucket list — stays as production has it, because those are exactly the
+# things an E2E against "the way production runs" has to exercise.
+#
+# Image repositories/tags are set by install.sh (`--set`), not here: the tag
+# follows the checkout (see lib.sh `image_tag`).
+
+global:
+  # Images are side-loaded with `k3d image import`; there is no registry.
+  imagePullSecrets: []
+  # k3d ships rancher's local-path provisioner instead of Cinder.
+  storageClass: local-path
+
+hostname: localhost
+
+# No Envoy Gateway in k3d. The test reaches the server by port-forward.
+httpRoute:
+  enabled: false
+
+server:
+  image:
+    pullPolicy: Never
+  env:
+    nodeEnv: production
+    authDisabled: "true"
+    publicUrl: "http://localhost:18080"
+    corsOrigins: "http://localhost:18080"
+
+app:
+  image:
+    pullPolicy: Never
+
+robotAgent:
+  image:
+    pullPolicy: Never
+
+# PVC sizes are advisory on local-path (a hostPath directory), but keep them
+# small so nothing pretends to reserve gigabytes on the laptop.
+postgres:
+  storage:
+    size: 1Gi
+nats:
+  storage:
+    size: 1Gi
+rustfs:
+  storage:
+    size: 2Gi
+
+# Demo mode stays ON so the robot-agent image built from this checkout runs,
+# but with ONE robot and no seed Job: the seed imports a ~1 GB GR00T dataset
+# from the Hub, which is too big for a laptop run — test.sh performs a small
+# import of its own instead, through the same API the seed uses.
+demo:
+  enabled: true
+  zones:
+    enabled: false
+  robots:
+    - name: g1-01
+      env:
+        robotId: "g1-01"
+        robotName: "Unitree G1 · E2E"
+        robotModel: "Unitree G1"
+        robotType: "g1"
+        robotClass: "standard"
+        maxPayloadKg: "3"
+        robotDescription: "Simulated G1 for the k3d end-to-end test"
+        initialX: "10.0"
+        initialY: "10.0"
+        initialZone: "Warehouse A"
+        initialFloor: "1"
+  seed:
+    enabled: false
+
+vlaInference:
+  enabled: false

@@ -94,7 +94,7 @@ describe('POST /:id/validate', () => {
       state: 'queued',
       progressUrl: '/api/datasets/ds1/progress',
     });
-    expect(mockDatasetService.requestValidation).toHaveBeenCalledWith('ds1', '/data/ds1/');
+    expect(mockDatasetService.requestValidation).toHaveBeenCalledWith('ds1', '/data/ds1/', { actorId: null });
   });
 
   it('names the degraded path when there is no NATS to queue onto', async () => {

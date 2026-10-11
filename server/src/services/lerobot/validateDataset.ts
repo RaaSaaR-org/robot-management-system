@@ -74,6 +74,18 @@ export interface DatasetStructureReport {
 export interface ExpectedDimensions {
   proprioceptionDim?: number | null;
   actionDim?: number | null;
+  /**
+   * The selected robot type's name and model (TASK-353). Used only to WARN when
+   * the widths agree but `info.json`'s `robot_type` names a different machine:
+   * two robots with 43-wide vectors are not thereby interchangeable.
+   */
+  robotTypeName?: string | null;
+  robotTypeModel?: string | null;
+}
+
+/** Comparable form of a robot label: 'Unitree G1 EDU (Dex3-1)' → 'unitreeg1edudex31'. */
+function robotSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 /**
@@ -819,6 +831,28 @@ export async function validateDatasetStructure(
     error(
       'ROBOT_ACTION_DIM_MISMATCH',
       `action is ${seenAction} wide and this robot type declares actionDim ${expected.actionDim}`,
+    );
+  }
+
+  // Widths that agree say the vectors have the same SHAPE, not that they mean
+  // the same joints. When the manifest names its robot and the selected type
+  // does not answer to that name, say so — a warning, because an operator may
+  // knowingly attach a dataset to a differently named but equivalent config.
+  const declaredRobot = typeof info.robot_type === 'string' ? robotSlug(info.robot_type) : '';
+  const typeSlugs = [expected.robotTypeName, expected.robotTypeModel]
+    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    .map(robotSlug);
+  const widthsChecked = Boolean(expected.proprioceptionDim || expected.actionDim);
+  if (widthsChecked && declaredRobot.length >= 2 && typeSlugs.length > 0
+      && !report.errors.some((f) => f.code.startsWith('ROBOT_'))
+      && !typeSlugs.some((s) => s === declaredRobot || (
+        s.length >= 4 && declaredRobot.length >= 4 && (s.startsWith(declaredRobot) || declaredRobot.startsWith(s))
+      ))) {
+    warn(
+      'ROBOT_TYPE_LABEL_DIFFERS',
+      `info.json names robot_type "${String(info.robot_type)}" and the selected robot type is `
+      + `"${expected.robotTypeName ?? expected.robotTypeModel}". The widths match, which does not `
+      + 'prove the joints mean the same thing.',
     );
   }
 

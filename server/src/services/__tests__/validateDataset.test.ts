@@ -437,6 +437,21 @@ describe('the failures that used to pass', () => {
       .toContain('43');
   });
 
+  it('warns when the widths match but the manifest names a different robot (TASK-353)', async () => {
+    // Matching widths say the vectors have the same shape, not the same joints.
+    const dir = await fixture('robot-label');
+    const other = await validate(dir, {
+      proprioceptionDim: STATE_DIM, actionDim: STATE_DIM, robotTypeName: 'SO-101 Follower', robotTypeModel: 'so101',
+    });
+    expect(other.valid).toBe(true);
+    expect(codes(other.warnings)).toContain('ROBOT_TYPE_LABEL_DIFFERS');
+
+    const same = await validate(dir, {
+      proprioceptionDim: STATE_DIM, actionDim: STATE_DIM, robotTypeName: 'Unitree G1 EDU (Dex3-1)', robotTypeModel: 'unitree_g1',
+    });
+    expect(codes(same.warnings)).not.toContain('ROBOT_TYPE_LABEL_DIFFERS');
+  });
+
   it('fails when the declared episode count disagrees with the episode metadata', async () => {
     const report = await validate(await fixture('ep-count', { declaredEpisodes: 4 }));
     expect(report.valid).toBe(false);

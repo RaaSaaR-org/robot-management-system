@@ -228,6 +228,12 @@ export const handlers = [
     return HttpResponse.json({ datasets: [DEMO_DATASET], pagination: { page: 1, pageSize: 20, total: 1, totalPages: 1 } });
   }),
 
+  // Before `/api/datasets/:id`, which would otherwise answer this path with a
+  // dataset and leave the expectations panel without a list (TASK-353).
+  http.get('/api/datasets/robot-types', () => {
+    return HttpResponse.json({ robotTypes: DEMO_ROBOT_TYPES });
+  }),
+
   http.get('/api/datasets/:id', ({ params }) => {
     return HttpResponse.json({ dataset: { ...DEMO_DATASET, id: params.id } });
   }),
@@ -884,6 +890,20 @@ const DEMO_TIER_LABELS: Record<MarketplaceLicenseTier, string> = {
 };
 
 // Demo dataset/episodes for the episode viewer + curation GUI
+const DEMO_ROBOT_TYPE_BASE = {
+  cameras: [],
+  capabilities: [],
+  limits: {},
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+};
+
+const DEMO_ROBOT_TYPES = [
+  { ...DEMO_ROBOT_TYPE_BASE, id: 'unitree-g1-edu', name: 'Unitree G1 + Dex3', manufacturer: 'Unitree Robotics', model: 'G1 EDU (Dex3-1)', actionDim: 43, proprioceptionDim: 43 },
+  { ...DEMO_ROBOT_TYPE_BASE, id: 'unitree-g1', name: 'Unitree G1', manufacturer: 'Unitree Robotics', model: 'G1', actionDim: 29, proprioceptionDim: 29 },
+  { ...DEMO_ROBOT_TYPE_BASE, id: 'so101', name: 'SO-101 arm', manufacturer: 'The Robot Studio', model: 'SO-101', actionDim: 6, proprioceptionDim: 6 },
+];
+
 const DEMO_DATASET = {
   id: 'demo-g1-edu',
   name: 'G1 EDU — pick & place (demo)',
@@ -901,7 +921,7 @@ const DEMO_DATASET = {
   status: 'ready',
   createdAt: '2026-06-21T10:00:00Z',
   updatedAt: '2026-06-21T10:00:00Z',
-  robotType: { id: 'unitree-g1-edu', name: 'Unitree G1 + Dex3', manufacturer: 'Unitree Robotics', model: 'G1 EDU (Dex3-1)' },
+  robotType: { id: 'unitree-g1-edu', name: 'Unitree G1 + Dex3', manufacturer: 'Unitree Robotics', model: 'G1 EDU (Dex3-1)', actionDim: 43, proprioceptionDim: 43 },
 };
 
 const DEMO_EPISODES = [

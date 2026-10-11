@@ -48,6 +48,7 @@ vi.mock('../DatasetService.js', () => ({
   datasetService: {
     emit: vi.fn(),
     validateAndUpdateDataset: vi.fn().mockResolvedValue('ready'),
+    claimForImport: vi.fn().mockResolvedValue(true),
   },
   datasetStorageRoot: () => process.env.__TEST_DATASET_ROOT!,
 }));
@@ -199,7 +200,7 @@ describe('the import activity log', () => {
 
     const last = importActivityLog.get(DATASET_ID)!.lines.at(-1)!;
     expect(last.level).toBe('error');
-    expect(last.message).toMatch(/^Failed during downloading: Failed to download .*500/);
+    expect(last.message).toMatch(/^Failed during downloading: File .*HTTP 500/);
     const failed = events().find((e) => e.type === 'dataset:import:failed')!;
     expect(failed.error).toMatch(/500/);
     expect(events().some((e) => e.type === 'dataset:import:completed')).toBe(false);

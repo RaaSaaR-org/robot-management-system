@@ -249,7 +249,50 @@ export interface Dataset {
   materializedPath?: string | null;
   createdAt: string;
   updatedAt: string;
-  robotType?: RobotType;
+  /**
+   * The server sends only the fields validation checks against; the rest of
+   * `RobotType` is absent on a dataset response.
+   */
+  robotType?: Pick<RobotType, 'id' | 'name' | 'manufacturer' | 'model'>
+    & Partial<Pick<RobotType, 'actionDim' | 'proprioceptionDim'>>;
+  /**
+   * Robot-type changes (TASK-353). `invalidated` is set from a change until the
+   * next validation writes a verdict.
+   */
+  expectations?: {
+    invalidated: DatasetExpectationChange | null;
+    history: DatasetExpectationChange[];
+    /** Why the last pass reached no verdict (store down, pass threw), or null. */
+    error?: string | null;
+  };
+}
+
+/** One change to which robot type a dataset is validated against (TASK-353). */
+export interface DatasetExpectationChange {
+  at: string;
+  actorId: string | null;
+  fromRobotTypeId: string | null;
+  fromRobotTypeName: string | null;
+  toRobotTypeId: string;
+  toRobotTypeName: string;
+  previousStatus: string;
+  previousValid: boolean | null;
+  reason: string | null;
+}
+
+/** What `PUT /datasets/:id/robot-type` answers. */
+export interface ReassociationResult {
+  dataset: Dataset;
+  change: DatasetExpectationChange | null;
+  revalidation: 'queued' | 'started' | 'in-flight' | 'store-unavailable' | 'unchanged';
+}
+
+export interface CreateRobotConfigurationInput {
+  name: string;
+  manufacturer?: string;
+  model?: string;
+  actionDim: number;
+  proprioceptionDim: number;
 }
 
 /** One thing validation found, with a code a UI can branch on. */
@@ -268,6 +311,9 @@ export interface DatasetValidation {
   imageKeys: string[];
   /** How many files were opened to decide all this. */
   fileCount: number;
+  /** Widths read out of the data parquet — the observed schema (TASK-353). */
+  observedStateWidth?: number | null;
+  observedActionWidth?: number | null;
 }
 
 /**

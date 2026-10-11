@@ -29,6 +29,7 @@ import { DatasetViewsSection } from '../components/DatasetViewsSection';
 import { HFPushModal } from '../components/HFPushModal';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
 import { ViewBanner } from '../components/datasets/ViewBanner';
+import { DatasetExpectationsPanel } from '../components/datasets/DatasetExpectationsPanel';
 import { EpisodeListPanel } from '../components/datasets/EpisodeListPanel';
 import { EpisodeViewer, type PlaybackSpeed } from '../components/datasets/EpisodeViewer';
 import { CuratePanel } from '../components/datasets/CuratePanel';
@@ -497,6 +498,9 @@ export function DatasetEpisodesPage() {
           }
         />
       )}
+
+      {/* A view has no files of its own; its expectations are its parent's (TASK-353). */}
+      {dataset && !isView && <DatasetExpectationsPanel dataset={dataset} onDatasetChange={setDataset} />}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
         <EpisodeListPanel

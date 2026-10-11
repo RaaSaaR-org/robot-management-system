@@ -60,6 +60,7 @@ vi.mock('../DatasetService.js', () => ({
   datasetService: {
     emit: vi.fn(),
     validateAndUpdateDataset: vi.fn().mockResolvedValue('ready'),
+    claimForImport: vi.fn().mockResolvedValue(true),
   },
   // Read from the environment rather than closed over, because `vi.mock`
   // factories are hoisted above every `let` in this file.
@@ -76,6 +77,7 @@ import {
 } from '../HuggingFaceImportService.js';
 import { datasetRepository, robotTypeRepository } from '../../repositories/index.js';
 import { natsClient } from '../../messaging/index.js';
+import { getRustFSClient, isRustFSInitialized } from '../../storage/rustfs-client.js';
 import { v4 as uuidv4 } from 'uuid';
 import { datasetService } from '../DatasetService.js';
 import type { LeRobotInfoV3 } from '../../types/dataset.types.js';
@@ -188,6 +190,10 @@ afterAll(async () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.spyOn(service as unknown as { sleep(ms: number): Promise<void> }, 'sleep').mockResolvedValue();
+  vi.mocked(isRustFSInitialized).mockReturnValue(false);
+  vi.mocked(natsClient.isConnected).mockReturnValue(false);
+  vi.mocked(natsClient.getJetStream).mockReturnValue(null as never);
   requested = [];
   brokenPaths = new Map();
   await rm(join(root, STORAGE_ID), { recursive: true, force: true });
@@ -297,6 +303,107 @@ describe('when an import fails', () => {
       .map(([, input]) => (input as { importError?: { failedAt?: string } }).importError)
       .find(Boolean)!;
     expect(new Date(failure.failedAt!).toString()).not.toBe('Invalid Date');
+  });
+});
+
+describe('whole-file transfer retries', () => {
+  const path = 'data/chunk-000/file-000.parquet';
+
+  function failFileOnce(first: () => Response | Promise<Response>): void {
+    installFakeHub();
+    const fetchSpy = vi.mocked(globalThis.fetch);
+    const hub = fetchSpy.getMockImplementation()!;
+    let failed = false;
+    fetchSpy.mockImplementation(async (input, init) => {
+      if (String(input).endsWith(path) && !failed) {
+        failed = true;
+        return first();
+      }
+      return hub(input, init);
+    });
+  }
+
+  async function importSuccessfully(): Promise<void> {
+    await service.importDataset({ repoId: REPO });
+    await settle(() => expect(datasetService.validateAndUpdateDataset).toHaveBeenCalled());
+    expect(datasetRepository.update).not.toHaveBeenCalledWith(
+      DATASET_ID, expect.objectContaining({ status: 'failed' }),
+    );
+    expect(await readFile(join(root, STORAGE_ID, path), 'utf8')).toBe(`bytes of ${path}`);
+  }
+
+  it('refetches after a download connection reset', async () => {
+    failFileOnce(() => { throw new TypeError('fetch failed', { cause: Object.assign(new Error(), { code: 'ECONNRESET' }) }); });
+    await importSuccessfully();
+  });
+
+  it('replaces a partially written file after an interrupted body', async () => {
+    failFileOnce(() => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('partial')); },
+      pull(controller) { controller.error(Object.assign(new Error('terminated'), { code: 'UND_ERR_SOCKET' })); },
+    })));
+    await importSuccessfully();
+    const { readdir } = await import('fs/promises');
+    expect((await readdir(join(root, STORAGE_ID, 'data/chunk-000'))).some((p) => p.endsWith('.partial'))).toBe(false);
+  });
+
+  it('retries a 503 with a fresh response body', async () => {
+    failFileOnce(() => new Response('unavailable', { status: 503, headers: { 'retry-after': '0' } }));
+    await importSuccessfully();
+  });
+
+  it('refetches the same object after a transient RustFS write failure', async () => {
+    installFakeHub();
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    const writes: { key: string; body: string }[] = [];
+    let failed = false;
+    vi.mocked(getRustFSClient).mockReturnValue({ upload: vi.fn(async (_bucket, key, stream) => {
+      let body = '';
+      for await (const chunk of stream) body += chunk.toString();
+      writes.push({ key, body });
+      if (key.endsWith(path) && !failed) {
+        failed = true;
+        throw Object.assign(new Error('secret access key must not escape'), { name: 'ServiceUnavailable', $metadata: { httpStatusCode: 503 } });
+      }
+    }) } as never);
+    await service.importDataset({ repoId: REPO });
+    await settle(() => expect(datasetService.validateAndUpdateDataset).toHaveBeenCalled());
+    const attempts = writes.filter((w) => w.key.endsWith(path));
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toEqual(attempts[1]);
+    expect(datasetRepository.update).not.toHaveBeenCalledWith(DATASET_ID, expect.objectContaining({ status: 'failed' }));
+  });
+
+  it.each([403, 404])('does not retry permanent HTTP %s errors', async (status) => {
+    installFakeHub();
+    brokenPaths.set(path, status);
+    await service.importDataset({ repoId: REPO });
+    await settle(() => expect(datasetRepository.update).toHaveBeenCalledWith(DATASET_ID, expect.objectContaining({
+      status: 'failed', importError: expect.objectContaining({ file: path, transferStage: 'fetch', attempts: 1, httpStatus: status }),
+    })));
+    expect(requested.filter((u) => u.endsWith(path))).toHaveLength(1);
+  });
+
+  it('records filename, sink, stage and nested cause after bounded retries', async () => {
+    installFakeHub();
+    const fetchSpy = vi.mocked(globalThis.fetch);
+    const hub = fetchSpy.getMockImplementation()!;
+    let attempts = 0;
+    fetchSpy.mockImplementation(async (input, init) => {
+      if (String(input).endsWith(path)) {
+        attempts++;
+        throw new TypeError('fetch failed', { cause: Object.assign(new Error('private signed URL'), { code: 'ECONNRESET' }) });
+      }
+      return hub(input, init);
+    });
+    await service.importDataset({ repoId: REPO });
+    await settle(() => expect(datasetRepository.update).toHaveBeenCalledWith(DATASET_ID, expect.objectContaining({
+      status: 'failed', importError: expect.objectContaining({
+        file: path, transferStage: 'fetch', sink: 'local', attempts: 6, cause: 'TypeError <- Error/ECONNRESET',
+      }),
+    })));
+    expect(attempts).toBe(6);
+    expect(JSON.stringify(vi.mocked(datasetRepository.update).mock.calls)).not.toContain('private signed URL');
   });
 });
 
@@ -492,6 +599,36 @@ describe('matching a Hub robot_type to a registered robot type', () => {
 });
 
 describe('minting a robot type', () => {
+  it('keeps the compatible 28-wide Unitree type', async () => {
+    const info = { ...INFO, features: { ...INFO.features,
+      action: { dtype: 'float32', shape: [28] },
+      'observation.state': { dtype: 'float32', shape: [28] },
+    } };
+    installFakeHub({ info });
+    const shared = robotType('Unitree_G1', 'Unitree_G1', 28);
+    vi.mocked(robotTypeRepository.findAll).mockResolvedValue([shared]);
+    await service.importDataset({ repoId: REPO });
+    expect(datasetRepository.create).toHaveBeenCalledWith(expect.objectContaining({ robotTypeId: shared.id }));
+    expect(robotTypeRepository.create).not.toHaveBeenCalled();
+    await settle(() => expect(datasetService.validateAndUpdateDataset).toHaveBeenCalled());
+  });
+  it('creates a separate 43-wide type when the shared G1 type is 28-wide', async () => {
+    installFakeHub();
+    vi.mocked(robotTypeRepository.findAll).mockResolvedValue([robotType('Unitree_G1', 'Unitree_G1', 28)]);
+    await service.importDataset({ repoId: REPO });
+    expect(robotTypeRepository.create).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'unitree_g1 (action 43, state 43)', actionDim: 43, proprioceptionDim: 43,
+    }));
+    await settle(() => expect(datasetService.validateAndUpdateDataset).toHaveBeenCalled());
+  });
+
+  it('refuses an explicit robot override with incompatible widths', async () => {
+    installFakeHub();
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(robotType('Unitree_G1', 'Unitree_G1', 28));
+    await expect(service.importDataset({ repoId: REPO, robotTypeId: 'rt-28' }))
+      .rejects.toMatchObject({ code: 'ROBOT_DIMENSION_MISMATCH' });
+    expect(datasetRepository.create).not.toHaveBeenCalled();
+  });
   it('takes the widths from info.json rather than writing zeros', async () => {
     installFakeHub();
     await service.importDataset({ repoId: REPO });
@@ -592,6 +729,20 @@ describe('retryImport', () => {
     storagePath: `${join(tmpdir(), 'ignored', STORAGE_ID)}/`,
   };
 
+  it('repairs an old 28-wide association without changing the shared type', async () => {
+    installFakeHub();
+    const shared = robotType('Unitree_G1', 'Unitree_G1', 28);
+    const compatible = robotType('Unitree G1 43', 'Unitree_G1', 43);
+    vi.mocked(datasetRepository.findById).mockResolvedValue({ ...failedRow, robotTypeId: shared.id } as never);
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(shared);
+    vi.mocked(robotTypeRepository.findAll).mockResolvedValue([shared, compatible]);
+    await service.retryImport(DATASET_ID);
+    expect(datasetRepository.update).toHaveBeenCalledWith(DATASET_ID, expect.objectContaining({ robotTypeId: compatible.id, sourceRevision: SHA }));
+    expect(shared.actionDim).toBe(28);
+    expect(robotTypeRepository.create).not.toHaveBeenCalled();
+    await settle(() => expect(datasetService.validateAndUpdateDataset).toHaveBeenCalled());
+  });
+
   it('re-runs at the commit the row already pinned and clears the old failure', async () => {
     installFakeHub();
     vi.mocked(datasetRepository.findById).mockResolvedValue(failedRow as never);
@@ -599,20 +750,11 @@ describe('retryImport', () => {
     await expect(service.retryImport(DATASET_ID))
       .resolves.toEqual({ datasetId: DATASET_ID, status: 'importing' });
 
-    // Two writes, in this order and for a reason: the row is CLAIMED
-    // (`importing`, old reason cleared) before the Hub round-trips, so a second
-    // retry arriving inside that window is refused; the commit and the
-    // directory are written once they are known.
-    expect(datasetRepository.update).toHaveBeenNthCalledWith(
-      1,
-      DATASET_ID,
-      expect.objectContaining({
-        status: 'importing',
-        // A stale reason on a row that is trying again is a lie about the
-        // row's current state.
-        importError: null,
-      }),
-    );
+    // The row is CLAIMED (`importing`, old reason cleared — atomically, in
+    // `DatasetService.claimForImport`, TASK-353) before the Hub round-trips, so
+    // a second retry or a robot-type change inside that window is refused; the
+    // commit and the directory are written once they are known.
+    expect(datasetService.claimForImport).toHaveBeenCalledWith(DATASET_ID);
     expect(datasetRepository.update).toHaveBeenCalledWith(
       DATASET_ID,
       expect.objectContaining({ status: 'importing', sourceRevision: SHA }),

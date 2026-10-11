@@ -50,6 +50,7 @@ vi.mock('../DatasetService.js', () => ({
   datasetService: {
     emit: vi.fn(),
     validateAndUpdateDataset: vi.fn().mockResolvedValue('ready'),
+    claimForImport: vi.fn().mockResolvedValue(true),
   },
   datasetStorageRoot: () => process.env.__TEST_DATASET_ROOT!,
 }));
@@ -58,8 +59,7 @@ vi.mock('uuid', () => ({ v4: vi.fn(() => 'storage-id-progress') }));
 
 import {
   HuggingFaceImportService,
-  MAX_FILE_DOWNLOAD_ATTEMPTS,
-  isTransientDownloadError,
+  MAX_TRANSFER_ATTEMPTS,
 } from '../HuggingFaceImportService.js';
 import { importActivityLog } from '../ImportActivityLog.js';
 import { datasetRepository, robotTypeRepository } from '../../repositories/index.js';
@@ -309,36 +309,20 @@ describe('a dropped connection mid-download (#370: `terminated`)', () => {
 
     expect(events().some((e) => e.type === 'dataset:import:completed')).toBe(true);
     expect(requests.filter((p) => p === 'data/chunk-000/file-001.parquet')).toHaveLength(3);
-    const retries = messages().filter((m) => m.startsWith('data/chunk-000/file-001.parquet: terminated — retrying'));
+    const retries = messages().filter((m) => m.startsWith('data/chunk-000/file-001.parquet: TypeError — retrying'));
     expect(retries).toHaveLength(2);
     const last = frames().filter((f) => f.phase === 'downloading').at(-1)!;
     expect(last.downloadedBytes).toBe(last.totalBytes);
   });
 
-  it(`gives up after ${MAX_FILE_DOWNLOAD_ATTEMPTS} attempts and fails with the reason`, async () => {
+  it(`gives up after ${MAX_TRANSFER_ATTEMPTS} attempts and fails with the reason`, async () => {
     installFakeHub();
     drops.set('data/chunk-000/file-001.parquet', 99);
     await service.importDataset({ repoId: REPO });
     await settle(() => expect(ended()).toBe(true));
 
-    expect(requests.filter((p) => p === 'data/chunk-000/file-001.parquet')).toHaveLength(MAX_FILE_DOWNLOAD_ATTEMPTS);
+    expect(requests.filter((p) => p === 'data/chunk-000/file-001.parquet')).toHaveLength(MAX_TRANSFER_ATTEMPTS);
     const failed = events().find((e) => e.type === 'dataset:import:failed')!;
-    expect(failed.error).toBe('terminated');
-  });
-});
-
-describe('isTransientDownloadError', () => {
-  it('retries what a dropped or refused connection throws', () => {
-    expect(isTransientDownloadError(new TypeError('terminated'))).toBe(true);
-    expect(isTransientDownloadError(new TypeError('fetch failed'))).toBe(true);
-    expect(isTransientDownloadError(Object.assign(new Error('read'), { code: 'ECONNRESET' }))).toBe(true);
-    const withCause = Object.assign(new Error('x'), { cause: { code: 'UND_ERR_SOCKET' } });
-    expect(isTransientDownloadError(withCause)).toBe(true);
-  });
-
-  it('does not retry a local write failure or a plain error', () => {
-    expect(isTransientDownloadError(Object.assign(new Error('disk'), { code: 'ENOSPC' }))).toBe(false);
-    expect(isTransientDownloadError(new Error('unsafe path'))).toBe(false);
-    expect(isTransientDownloadError('terminated')).toBe(false);
+    expect(failed.error).toMatch(/file-001\.parquet: write to local failed after \d+ attempt\(s\): TypeError/);
   });
 });

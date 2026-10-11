@@ -113,12 +113,19 @@ rustfs:
     accessKey: "rustfsadmin"
     # Secret key for S3 authentication
     secretKey: "rustfsadmin"
-  # Buckets to create on initialization
+  # Buckets to create on initialization. Must cover every bucket in the
+  # server's `BUCKETS` map (server/src/storage/model-storage.ts): the server
+  # never creates buckets, so a missing one fails its feature at runtime.
+  # Enforced by server/src/storage/__tests__/bucket-provisioning.test.ts.
   buckets:
     - training-datasets
     - model-checkpoints
     - production-models
     - robot-logs
+    - sensor-scans
+    - digital-twins
+    - incident-clips
+    - patrol-photos
   init:
     image:
       repository: amazon/aws-cli

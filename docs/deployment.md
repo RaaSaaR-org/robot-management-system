@@ -470,6 +470,7 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `RUSTFS_ENDPOINT` | No | `http://localhost:9000` | S3-compatible storage endpoint |
 | `RUSTFS_ACCESS_KEY` | No | `rustfsadmin` | S3 access key |
 | `RUSTFS_SECRET_KEY` | No | `rustfsadmin` | S3 secret key |
+| `HF_IMPORT_CONCURRENCY` | No | `5` | Concurrent HuggingFace file transfers, capped at 5; use `1` when storage has limited room for temporary multipart uploads |
 | `COMPLIANCE_LOG_ENCRYPTION_KEY` | Prod | — | 64-char hex key for compliance logs |
 | `OPENROUTER_API_KEY` | No | — | OpenRouter key for orchestrator LLM |
 | `ORCHESTRATOR_MODEL` | No | `stepfun/step-3.5-flash:free` | LLM model for agent routing |

@@ -40,7 +40,7 @@
  */
 
 import { createWriteStream } from 'fs';
-import { mkdir, rm } from 'fs/promises';
+import { mkdir, rename, rm } from 'fs/promises';
 import { dirname, join, resolve as resolvePath, sep } from 'path';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
@@ -82,42 +82,61 @@ const DATASET_VALIDATION_SUBJECT = 'jobs.dataset.validate';
 const MAX_CONCURRENT_DOWNLOADS = 5;
 const MAX_RETRY_DELAY_MS = 30_000;
 const INITIAL_RETRY_DELAY_MS = 1_000;
-/**
- * Attempts per file before a dropped connection fails the import (#370).
- *
- * A multi-gigabyte G1 import holds hundreds of sockets to the Hub's CDN, and
- * one of them closing mid-body surfaced as undici's bare `terminated` and
- * failed the whole import. A transient failure is retried with backoff; a 4xx
- * is an answer, not a glitch, and is not.
- */
-export const MAX_FILE_DOWNLOAD_ATTEMPTS = 4;
-/** At most this often a byte-progress frame goes out while a file streams. */
-export const BYTE_PROGRESS_INTERVAL_MS = 500;
+/** Attempts per file before a dropped connection fails the import (#370). */
+export const MAX_TRANSFER_ATTEMPTS = 6;
+// Unitree's multi-gigabyte videos can legitimately take longer than ten minutes.
+const TRANSFER_TIMEOUT_MS = 30 * 60_000;
 
-/** An HTTP failure from {@link HuggingFaceImportService.downloadFileToSink}. */
-class DownloadHttpError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message);
+function retryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || [500, 502, 503, 504].includes(status);
+}
+
+/** Use identifiers only: storage errors and signed download URLs can contain credentials. */
+function transferCause(error: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  while (error && typeof error === 'object' && !seen.has(error) && parts.length < 4) {
+    seen.add(error);
+    const e = error as { name?: string; code?: string; cause?: unknown; $metadata?: { httpStatusCode?: number } };
+    const identifiers = [e.name, e.code].filter((v): v is string =>
+      typeof v === 'string' && /^[A-Za-z0-9_]+$/.test(v));
+    if (e.$metadata?.httpStatusCode) identifiers.push(`HTTP ${e.$metadata.httpStatusCode}`);
+    parts.push(identifiers.join('/') || 'Error');
+    error = e.cause;
+  }
+  return parts.join(' <- ') || 'UnknownError';
+}
+
+function retryableTransferError(error: unknown, depth = 0): boolean {
+  if (!error || typeof error !== 'object' || depth > 4) return false;
+  const e = error as { name?: string; code?: string; message?: string; cause?: unknown; $metadata?: { httpStatusCode?: number } };
+  if (e.$metadata?.httpStatusCode) return retryableStatus(e.$metadata.httpStatusCode);
+  const transient = new Set([
+    'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'EAI_AGAIN',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET',
+    'ERR_STREAM_PREMATURE_CLOSE', 'TimeoutError', 'AbortError',
+    'ServiceUnavailable', 'SlowDown', 'InternalError', 'RequestTimeout', 'RequestTimeoutException',
+  ]);
+  return transient.has(e.code ?? '') || transient.has(e.name ?? '')
+    || (e.name === 'TypeError' && ['fetch failed', 'terminated'].includes(e.message ?? ''))
+    || (e.cause !== error && retryableTransferError(e.cause, depth + 1));
+}
+
+class FileTransferError extends Error {
+  constructor(
+    readonly file: string,
+    readonly transferStage: 'fetch' | 'write',
+    readonly attempts: number,
+    readonly sink: ImportSink['kind'],
+    readonly detail: string,
+    readonly httpStatus?: number,
+  ) {
+    super(`File ${file}: ${transferStage} to ${sink} failed after ${attempts} attempt(s): ${detail}`);
+    this.name = 'FileTransferError';
   }
 }
-
-/**
- * Whether a failed file download is worth another attempt: the connection
- * dropped or timed out (undici says `terminated` / `fetch failed`, or a socket
- * code), or the Hub answered 5xx / 408. A 4xx or a local write error is not.
- */
-export function isTransientDownloadError(error: unknown): boolean {
-  if (error instanceof DownloadHttpError) return error.status >= 500 || error.status === 408;
-  if (!(error instanceof Error)) return false;
-  if (/^(terminated|fetch failed)$/i.test(error.message)) return true;
-  if (/premature close|other side closed|socket hang up/i.test(error.message)) return true;
-  const codes = [error, (error as { cause?: unknown }).cause]
-    .map((e) => (e as { code?: unknown } | undefined)?.code)
-    .filter((c): c is string => typeof c === 'string');
-  return codes.some((code) =>
-    /^(ECONNRESET|ETIMEDOUT|EPIPE|ECONNREFUSED|EAI_AGAIN|ERR_STREAM_PREMATURE_CLOSE|UND_ERR_(SOCKET|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|CLOSED))$/
-      .test(code));
-}
+/** At most this often a byte-progress frame goes out while a file streams. */
+export const BYTE_PROGRESS_INTERVAL_MS = 500;
 
 /** `1536` → `1.5 KB`; for log lines. */
 export function formatBytes(bytes: number): string {
@@ -269,7 +288,13 @@ class LocalImportSink implements ImportSink {
   async write(path: string, response: Response): Promise<void> {
     const full = safeJoin(this.root, path);
     await mkdir(dirname(full), { recursive: true });
-    await pipeline(webStream(response, path), createWriteStream(full));
+    const temporary = `${full}.${uuidv4()}.partial`;
+    try {
+      await pipeline(webStream(response, path), createWriteStream(temporary));
+      await rename(temporary, full);
+    } finally {
+      await rm(temporary, { force: true });
+    }
   }
 }
 
@@ -292,12 +317,17 @@ class RustFsImportSink implements ImportSink {
 
   async write(path: string, response: Response): Promise<void> {
     const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
-    await getRustFSClient().upload(
-      BUCKETS.TRAINING_DATASETS,
-      `${this.storagePath}${path}`,
-      webStream(response, path),
-      { contentType },
-    );
+    const body = webStream(response, path);
+    try {
+      await getRustFSClient().upload(
+        BUCKETS.TRAINING_DATASETS,
+        `${this.storagePath}${path}`,
+        body,
+        { contentType },
+      );
+    } finally {
+      body.destroy();
+    }
   }
 }
 
@@ -506,7 +536,15 @@ export class HuggingFaceImportService {
     // resolving the commit — and both then downloaded into the same directory.
     // The previous failure goes at the same time; it is not evidence about this
     // attempt.
-    await datasetRepository.update(datasetId, { status: 'importing', importError: null });
+    // Conditional (TASK-353): a robot-type change or a validation may have
+    // taken the row since it was read above.
+    if (!(await datasetService.claimForImport(datasetId))) {
+      throw new HuggingFaceImportError(
+        'IN_PROGRESS',
+        `Dataset ${datasetId} is being validated or its robot type is being changed`,
+        409,
+      );
+    }
     importActivityLog.start(datasetId);
     this.log(
       datasetId,
@@ -518,6 +556,7 @@ export class HuggingFaceImportService {
     let license: string | null = null;
     let info: LeRobotInfoV3;
     let sink: ImportSink;
+    let resolvedRobotTypeId: string;
     try {
       const source = await this.resolveSource(repoId, existing.sourceRevision ?? 'main');
       sha = source.sha;
@@ -533,6 +572,11 @@ export class HuggingFaceImportService {
       sink = createSink(storageIdOf(existing.storagePath));
       await sink.prepare();
       this.logSource(datasetId, existing.sourceRevision ?? 'main', sha, info, sink);
+      const currentType = existing.robotTypeId
+        ? await robotTypeRepository.findById(existing.robotTypeId) : null;
+      // Repair historical name-only associations without changing the shared type.
+      resolvedRobotTypeId = currentType && robotDimensionsFit(currentType, info)
+        ? currentType.id : await this.resolveRobotTypeId(undefined, info);
     } catch (error) {
       // The claim has to be released, or a repo that has been deleted leaves
       // the row `importing` for ever with nothing running.
@@ -544,6 +588,7 @@ export class HuggingFaceImportService {
       status: 'importing',
       storagePath: sink.storagePath,
       sourceRevision: sha,
+      robotTypeId: resolvedRobotTypeId,
       // Only when this attempt actually learned one. A retry against a pinned
       // sha makes no card request, and `null` there means "did not ask", so
       // writing it would erase a licence the first import recorded.
@@ -628,12 +673,19 @@ export class HuggingFaceImportService {
     if (requestedId) {
       const rt = await robotTypeRepository.findById(requestedId);
       if (!rt) throw new Error(`Robot type not found: ${requestedId}`);
+      if (!robotDimensionsFit(rt, info)) {
+        throw new HuggingFaceImportError(
+          'ROBOT_DIMENSION_MISMATCH',
+          `Robot type ${requestedId} expects action/state ${rt.actionDim}/${rt.proprioceptionDim}; `
+          + `dataset declares ${declaredFeatureWidth(info, 'action')}/${declaredFeatureWidth(info, 'observation.state')}.`,
+        );
+      }
       return rt.id;
     }
 
     const hfRobotType = info.robot_type;
     const all = await robotTypeRepository.findAll();
-    const matched = matchRobotType(all, hfRobotType);
+    const matched = matchRobotType(all, hfRobotType, info);
     if (matched) return matched.id;
 
     // The dims come out of the manifest this service has already parsed.
@@ -652,7 +704,8 @@ export class HuggingFaceImportService {
     }
 
     const created = await robotTypeRepository.create({
-      name: hfRobotType,
+      name: matchRobotType(all, hfRobotType)
+        ? `${hfRobotType} (action ${actionDim}, state ${proprioceptionDim})` : hfRobotType,
       manufacturer: 'Unknown',
       model: hfRobotType,
       actionDim,
@@ -839,6 +892,14 @@ export class HuggingFaceImportService {
         error: errorMessage,
         repoId,
         failedAt: new Date().toISOString(),
+        ...(error instanceof FileTransferError ? {
+          file: error.file,
+          transferStage: error.transferStage,
+          attempts: error.attempts,
+          sink: error.sink,
+          cause: error.detail,
+          ...(error.httpStatus === undefined ? {} : { httpStatus: error.httpStatus }),
+        } : {}),
       },
     });
 
@@ -1183,6 +1244,9 @@ export class HuggingFaceImportService {
     const queue = [...files];
     const workers: Promise<void>[] = [];
     let failure: unknown = null;
+    const configuredConcurrency = Number(process.env.HF_IMPORT_CONCURRENCY ?? MAX_CONCURRENT_DOWNLOADS);
+    const concurrency = Number.isInteger(configuredConcurrency) && configuredConcurrency > 0
+      ? Math.min(configuredConcurrency, MAX_CONCURRENT_DOWNLOADS) : MAX_CONCURRENT_DOWNLOADS;
 
     // Byte-based while every size is known, file-count otherwise (#370). The
     // frame used to go out only when a file finished, so a single 900 MB video
@@ -1209,7 +1273,7 @@ export class HuggingFaceImportService {
       });
     };
 
-    for (let i = 0; i < MAX_CONCURRENT_DOWNLOADS; i++) {
+    for (let i = 0; i < concurrency; i++) {
       workers.push(
         (async () => {
           while (queue.length > 0) {
@@ -1228,7 +1292,8 @@ export class HuggingFaceImportService {
               });
             } catch (error) {
               // stats.json is optional — 404 is expected
-              if (file === 'meta/stats.json' && error instanceof Error && error.message.includes('404')) {
+              if (file === 'meta/stats.json' && error instanceof FileTransferError
+                && error.transferStage === 'fetch' && error.httpStatus === 404) {
                 console.log(`[HFImport] stats.json not found (optional), skipping`);
                 this.log(datasetId, 'warn', 'meta/stats.json is not in the repo (optional), skipped');
               } else {
@@ -1268,37 +1333,54 @@ export class HuggingFaceImportService {
     sink: ImportSink,
     onBytes: (n: number) => void = () => undefined,
   ): Promise<void> {
-    let delay = INITIAL_RETRY_DELAY_MS;
-    for (let attempt = 1; ; attempt++) {
+    // A consumed stream cannot be replayed: each attempt fetches a fresh body
+    // and overwrites the same destination, including after an S3 upload fails.
+    for (let attempt = 1; attempt <= MAX_TRANSFER_ATTEMPTS; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), TRANSFER_TIMEOUT_MS);
+      timeout.unref();
+      let stage: 'fetch' | 'write' = 'fetch';
+      let response: Response | undefined;
+      let waitMs = INITIAL_RETRY_DELAY_MS * 2 ** (attempt - 1);
       let received = 0;
       try {
-        const response = await this.fetchWithRetry(url);
+        response = await fetch(url, { signal: controller.signal });
         if (!response.ok) {
-          throw new DownloadHttpError(
-            `Failed to download ${url}: ${response.status} ${response.statusText}`,
-            response.status,
-          );
+          throw new FileTransferError(path, stage, attempt, sink.kind, `HTTP ${response.status}`, response.status);
         }
-        // A retry rewrites the file from the start: the local sink truncates
-        // on open, and an object store replaces the key.
+        stage = 'write';
         await sink.write(path, countingResponse(response, (n) => {
           received += n;
           onBytes(n);
         }));
         return;
       } catch (error) {
+        // The attempt's bytes are rewritten by the next one: take them back so
+        // the byte total never runs ahead of what is stored.
         if (received > 0) onBytes(-received);
-        if (attempt >= MAX_FILE_DOWNLOAD_ATTEMPTS || !isTransientDownloadError(error)) throw error;
-        const reason = error instanceof Error ? error.message : String(error);
+        const retryable = error instanceof FileTransferError
+          ? retryableStatus(error.httpStatus!) : retryableTransferError(error);
+        const failure = error instanceof FileTransferError ? error
+          : new FileTransferError(path, stage, attempt, sink.kind, transferCause(error),
+            (error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata?.httpStatusCode);
+        if (!retryable || attempt === MAX_TRANSFER_ATTEMPTS) throw failure;
+        waitMs = Math.min(retryAfterMs(response?.headers.get('retry-after') ?? null) ?? waitMs, MAX_RETRY_DELAY_MS);
+        console.warn(`[HFImport] ${failure.message}; retrying`);
         this.log(
           datasetId,
           'warn',
-          `${path}: ${reason} — retrying in ${Math.round(delay / 1000)}s `
-            + `(attempt ${attempt + 1}/${MAX_FILE_DOWNLOAD_ATTEMPTS})`,
+          `${path}: ${failure.detail} — retrying in ${Math.round(waitMs / 1000)}s `
+            + `(attempt ${attempt + 1}/${MAX_TRANSFER_ATTEMPTS})`,
         );
-        await this.sleep(delay);
-        delay = Math.min(delay * 2, MAX_RETRY_DELAY_MS);
+      } finally {
+        clearTimeout(timeout);
+        controller.abort();
+        // Fetches rejected before a sink got the body must release it too.
+        if (response?.body && !response.body.locked) {
+          await response.body.cancel().catch(() => {});
+        }
       }
+      await this.sleep(waitMs);
     }
   }
 
@@ -1476,7 +1558,15 @@ export function selectRepoFiles(tree: RepoFile[], includeVideos: boolean): RepoF
  * (Dex3-1)'" is the whole of defect 5 and it should be answerable without an
  * import.
  */
-export function matchRobotType(all: RobotType[], hfRobotType: string): RobotType | null {
+function robotDimensionsFit(rt: RobotType, info: LeRobotInfoV3): boolean {
+  const action = declaredFeatureWidth(info, 'action');
+  const state = declaredFeatureWidth(info, 'observation.state');
+  return (action === 0 || rt.actionDim === action)
+    && (state === 0 || rt.proprioceptionDim === state);
+}
+
+export function matchRobotType(all: RobotType[], hfRobotType: string, info?: LeRobotInfoV3): RobotType | null {
+  if (info) all = all.filter((rt) => robotDimensionsFit(rt, info));
   const wanted = slug(hfRobotType ?? '');
   if (!wanted) return null;
   const slugsOf = (rt: RobotType): string[] => [slug(rt.model ?? ''), slug(rt.name ?? '')];

@@ -1334,7 +1334,11 @@ describe('validateAndUpdateDataset', () => {
 
     await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
 
-    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'failed' });
+    // The reason goes on the row with the status (TASK-353), not only into a log.
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', expect.objectContaining({
+      status: 'failed',
+      validation: expect.objectContaining({ error: expect.stringContaining('db write failed') }),
+    }));
     expect(events.some((e) => e.type === 'dataset:validation:failed')).toBe(true);
     unsub();
   });

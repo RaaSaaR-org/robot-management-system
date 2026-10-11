@@ -390,6 +390,12 @@ export interface DatasetImportError {
   repoId?: string;
   /** ISO-8601. */
   failedAt: string;
+  file?: string;
+  transferStage?: 'fetch' | 'write';
+  attempts?: number;
+  sink?: 'local' | 'rustfs';
+  cause?: string;
+  httpStatus?: number;
 }
 
 /**
@@ -461,6 +467,7 @@ export interface CreateDatasetInput {
 export interface UpdateDatasetInput {
   name?: string;
   description?: string;
+  robotTypeId?: string;
   skillId?: string;
   sourceRevision?: string | null;
   sourceLicense?: string | null;

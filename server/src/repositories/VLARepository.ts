@@ -802,6 +802,7 @@ export class DatasetRepository {
 
       if (input.name !== undefined) updateData.name = input.name;
       if (input.description !== undefined) updateData.description = input.description;
+      if (input.robotTypeId !== undefined) updateData.robotTypeId = input.robotTypeId;
       if (input.skillId !== undefined) updateData.skillId = input.skillId;
       if (input.qualityScore !== undefined) updateData.qualityScore = input.qualityScore;
       if (input.infoJson !== undefined) updateData.infoJson = JSON.stringify(input.infoJson);
