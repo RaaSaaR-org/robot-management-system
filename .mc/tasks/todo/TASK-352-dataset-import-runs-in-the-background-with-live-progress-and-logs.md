@@ -93,10 +93,21 @@ visible from anywhere in the app.
 - [x] An unusable sink is still refused synchronously with 503 (#371).
 - [x] Server vitest covers the log lifecycle (progress, success, failure with reason); app vitest covers the store and the panel.
 
+GitHub #370 (reliable download progress), folded into this task:
+
+- [x] A progress bar on the dataset row and in the import panel while a Hub import runs.
+- [x] Distinct phases: reading metadata, downloading, validating — "downloaded" is not "valid"; the job stays running until the row is `ready` or `failed`, also with NATS.
+- [x] Byte-based download progress (downloaded / total selected bytes) with a file-count fallback when the Hub does not size every file; counts beside the bar.
+- [x] `GET /api/datasets/:id/progress` reports a running import's frame (it said `progress: 0` for the whole download); progress survives a reload, a reconnect and events that fired before the browser subscribed.
+- [x] Indeterminate bar where nothing can be measured (metadata, validating, a frame a restart lost) — no fake 0 % or 100 %.
+- [x] On failure the bar stops where it was, the persisted reason shows, and the panel offers Retry import.
+- [x] A dropped connection mid-download (undici `terminated`) or a 5xx is retried per file with backoff instead of failing the import.
+
 ## Test Strategy
 
 - Server vitest: `ImportActivityLog` ring bound and eviction; `HuggingFaceImportService` writes lines through success and failure; the log route.
 - App vitest: `importJobsStore` event handling and backfill; `ImportActivity` panel rendering; the modal hands off and closes.
+- #370 — server vitest (`HuggingFaceImportService.progress.test.ts`, the `/progress` route): multi-file metadata-only vs full import in bytes, file-count fallback, success, mid-download failure that keeps where the bar stopped, a `terminated` body retried and one that gives up. App vitest: reload mid-import restores phase/bytes/lines; NATS completion keeps the feed open through validation; server restart fails the job; `ImportProgress` and the list cell (indeterminate vs measured, frozen failed bar, Retry).
 - Manual / E2E: import a small Hub dataset, close the dialog, watch the top-bar panel.
 
 ## Notes
@@ -104,4 +115,6 @@ visible from anywhere in the app.
 - The log ring is in memory: after a server restart the status and failure reason survive (they are on the row), the lines do not (`retained: false`).
 - `DatasetUploadModal` (file upload) is a separate flow and is out of scope.
 - A validation that fails after an otherwise clean download used to be announced as `dataset:import:completed`; it is now `dataset:import:failed` (no-NATS path), and the app also turns a later `dataset:validation:failed` into a failed import (NATS path).
+- #370 root cause of `progress: 0`: `GET /:id/progress` only read validation progress (`getUploadProgress`) and otherwise fell back to the row (`ready ? 100 : 0`); the import frames lived only on the socket and in `ImportActivityLog`. The route now answers with the import frame first.
+- After a server restart an `importing` row has no process behind it; the app now fails such a job ("retry the import") rather than polling for ever. A `validating` one keeps waiting, since a NATS worker may still answer.
 - Verified 2026-10-12 against a live server (SQLite, no NATS/RustFS): lerobot/svla_so101_pickplace and lerobot/svla_so100_pickplace (metadata only) imported in the background; the modal closed at once, the top-bar panel showed the 13-line log, and the log reloaded from `GET /import/log` after a page reload. 400 px width checked.
