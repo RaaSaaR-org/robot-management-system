@@ -3,7 +3,7 @@ id: "TASK-353"
 aliases: []
 title: "Allow correcting dataset robot/schema expectations and revalidating stored files without redownload"
 slug: "allow-correcting-dataset-robot-schema-expectations-and-revalidating-stored-files-without-redownload"
-status: "review"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
