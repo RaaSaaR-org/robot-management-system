@@ -40,7 +40,7 @@
  */
 
 import { createWriteStream } from 'fs';
-import { mkdir, rm } from 'fs/promises';
+import { mkdir, rename, rm } from 'fs/promises';
 import { dirname, join, resolve as resolvePath, sep } from 'path';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
@@ -80,6 +80,57 @@ const DATASET_VALIDATION_SUBJECT = 'jobs.dataset.validate';
 const MAX_CONCURRENT_DOWNLOADS = 5;
 const MAX_RETRY_DELAY_MS = 30_000;
 const INITIAL_RETRY_DELAY_MS = 1_000;
+const MAX_TRANSFER_ATTEMPTS = 6;
+const TRANSFER_TIMEOUT_MS = 10 * 60_000;
+
+function retryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || [500, 502, 503, 504].includes(status);
+}
+
+/** Use identifiers only: storage errors and signed download URLs can contain credentials. */
+function transferCause(error: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  while (error && typeof error === 'object' && !seen.has(error) && parts.length < 4) {
+    seen.add(error);
+    const e = error as { name?: string; code?: string; cause?: unknown; $metadata?: { httpStatusCode?: number } };
+    const identifiers = [e.name, e.code].filter((v): v is string =>
+      typeof v === 'string' && /^[A-Za-z0-9_]+$/.test(v));
+    if (e.$metadata?.httpStatusCode) identifiers.push(`HTTP ${e.$metadata.httpStatusCode}`);
+    parts.push(identifiers.join('/') || 'Error');
+    error = e.cause;
+  }
+  return parts.join(' <- ') || 'UnknownError';
+}
+
+function retryableTransferError(error: unknown, depth = 0): boolean {
+  if (!error || typeof error !== 'object' || depth > 4) return false;
+  const e = error as { name?: string; code?: string; message?: string; cause?: unknown; $metadata?: { httpStatusCode?: number } };
+  if (e.$metadata?.httpStatusCode) return retryableStatus(e.$metadata.httpStatusCode);
+  const transient = new Set([
+    'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'EAI_AGAIN',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET',
+    'ERR_STREAM_PREMATURE_CLOSE', 'TimeoutError', 'AbortError',
+    'ServiceUnavailable', 'SlowDown', 'InternalError', 'RequestTimeout', 'RequestTimeoutException',
+  ]);
+  return transient.has(e.code ?? '') || transient.has(e.name ?? '')
+    || (e.name === 'TypeError' && ['fetch failed', 'terminated'].includes(e.message ?? ''))
+    || (e.cause !== error && retryableTransferError(e.cause, depth + 1));
+}
+
+class FileTransferError extends Error {
+  constructor(
+    readonly file: string,
+    readonly transferStage: 'fetch' | 'write',
+    readonly attempts: number,
+    readonly sink: ImportSink['kind'],
+    readonly detail: string,
+    readonly httpStatus?: number,
+  ) {
+    super(`File ${file}: ${transferStage} to ${sink} failed after ${attempts} attempt(s): ${detail}`);
+    this.name = 'FileTransferError';
+  }
+}
 
 /** A git object id, which needs no resolving. */
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -203,7 +254,13 @@ class LocalImportSink implements ImportSink {
   async write(path: string, response: Response): Promise<void> {
     const full = safeJoin(this.root, path);
     await mkdir(dirname(full), { recursive: true });
-    await pipeline(webStream(response, path), createWriteStream(full));
+    const temporary = `${full}.${uuidv4()}.partial`;
+    try {
+      await pipeline(webStream(response, path), createWriteStream(temporary));
+      await rename(temporary, full);
+    } finally {
+      await rm(temporary, { force: true });
+    }
   }
 }
 
@@ -226,12 +283,17 @@ class RustFsImportSink implements ImportSink {
 
   async write(path: string, response: Response): Promise<void> {
     const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
-    await getRustFSClient().upload(
-      BUCKETS.TRAINING_DATASETS,
-      `${this.storagePath}${path}`,
-      webStream(response, path),
-      { contentType },
-    );
+    const body = webStream(response, path);
+    try {
+      await getRustFSClient().upload(
+        BUCKETS.TRAINING_DATASETS,
+        `${this.storagePath}${path}`,
+        body,
+        { contentType },
+      );
+    } finally {
+      body.destroy();
+    }
   }
 }
 
@@ -438,6 +500,7 @@ export class HuggingFaceImportService {
     let license: string | null = null;
     let info: LeRobotInfoV3;
     let sink: ImportSink;
+    let resolvedRobotTypeId: string;
     try {
       const source = await this.resolveSource(repoId, existing.sourceRevision ?? 'main');
       sha = source.sha;
@@ -452,6 +515,11 @@ export class HuggingFaceImportService {
       info = await this.fetchInfoJson(repoId, sha);
       sink = createSink(storageIdOf(existing.storagePath));
       await sink.prepare();
+      const currentType = existing.robotTypeId
+        ? await robotTypeRepository.findById(existing.robotTypeId) : null;
+      // Repair historical name-only associations without changing the shared type.
+      resolvedRobotTypeId = currentType && robotDimensionsFit(currentType, info)
+        ? currentType.id : await this.resolveRobotTypeId(undefined, info);
     } catch (error) {
       // The claim has to be released, or a repo that has been deleted leaves
       // the row `importing` for ever with nothing running.
@@ -463,6 +531,7 @@ export class HuggingFaceImportService {
       status: 'importing',
       storagePath: sink.storagePath,
       sourceRevision: sha,
+      robotTypeId: resolvedRobotTypeId,
       // Only when this attempt actually learned one. A retry against a pinned
       // sha makes no card request, and `null` there means "did not ask", so
       // writing it would erase a licence the first import recorded.
@@ -547,12 +616,19 @@ export class HuggingFaceImportService {
     if (requestedId) {
       const rt = await robotTypeRepository.findById(requestedId);
       if (!rt) throw new Error(`Robot type not found: ${requestedId}`);
+      if (!robotDimensionsFit(rt, info)) {
+        throw new HuggingFaceImportError(
+          'ROBOT_DIMENSION_MISMATCH',
+          `Robot type ${requestedId} expects action/state ${rt.actionDim}/${rt.proprioceptionDim}; `
+          + `dataset declares ${declaredFeatureWidth(info, 'action')}/${declaredFeatureWidth(info, 'observation.state')}.`,
+        );
+      }
       return rt.id;
     }
 
     const hfRobotType = info.robot_type;
     const all = await robotTypeRepository.findAll();
-    const matched = matchRobotType(all, hfRobotType);
+    const matched = matchRobotType(all, hfRobotType, info);
     if (matched) return matched.id;
 
     // The dims come out of the manifest this service has already parsed.
@@ -571,7 +647,8 @@ export class HuggingFaceImportService {
     }
 
     const created = await robotTypeRepository.create({
-      name: hfRobotType,
+      name: matchRobotType(all, hfRobotType)
+        ? `${hfRobotType} (action ${actionDim}, state ${proprioceptionDim})` : hfRobotType,
       manufacturer: 'Unknown',
       model: hfRobotType,
       actionDim,
@@ -703,6 +780,14 @@ export class HuggingFaceImportService {
         error: errorMessage,
         repoId,
         failedAt: new Date().toISOString(),
+        ...(error instanceof FileTransferError ? {
+          file: error.file,
+          transferStage: error.transferStage,
+          attempts: error.attempts,
+          sink: error.sink,
+          cause: error.detail,
+          ...(error.httpStatus === undefined ? {} : { httpStatus: error.httpStatus }),
+        } : {}),
       },
     });
 
@@ -1052,7 +1137,8 @@ export class HuggingFaceImportService {
               await this.downloadFileToSink(hfUrl, file, sink);
             } catch (error) {
               // stats.json is optional — 404 is expected
-              if (file === 'meta/stats.json' && error instanceof Error && error.message.includes('404')) {
+              if (file === 'meta/stats.json' && error instanceof FileTransferError
+                && error.transferStage === 'fetch' && error.httpStatus === 404) {
                 console.log(`[HFImport] stats.json not found (optional), skipping`);
               } else {
                 failure ??= error;
@@ -1089,13 +1175,42 @@ export class HuggingFaceImportService {
    * Download a single file from HuggingFace and stream it into the sink.
    */
   private async downloadFileToSink(url: string, path: string, sink: ImportSink): Promise<void> {
-    const response = await this.fetchWithRetry(url);
-
-    if (!response.ok) {
-      throw new Error(`Failed to download ${url}: ${response.status} ${response.statusText}`);
+    // A consumed stream cannot be replayed: each attempt fetches a fresh body
+    // and overwrites the same destination, including after an S3 upload fails.
+    for (let attempt = 1; attempt <= MAX_TRANSFER_ATTEMPTS; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), TRANSFER_TIMEOUT_MS);
+      timeout.unref();
+      let stage: 'fetch' | 'write' = 'fetch';
+      let response: Response | undefined;
+      let waitMs = INITIAL_RETRY_DELAY_MS * 2 ** (attempt - 1);
+      try {
+        response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) {
+          throw new FileTransferError(path, stage, attempt, sink.kind, `HTTP ${response.status}`, response.status);
+        }
+        stage = 'write';
+        await sink.write(path, response);
+        return;
+      } catch (error) {
+        const retryable = error instanceof FileTransferError
+          ? retryableStatus(error.httpStatus!) : retryableTransferError(error);
+        const failure = error instanceof FileTransferError ? error
+          : new FileTransferError(path, stage, attempt, sink.kind, transferCause(error),
+            (error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata?.httpStatusCode);
+        if (!retryable || attempt === MAX_TRANSFER_ATTEMPTS) throw failure;
+        waitMs = retryAfterMs(response?.headers.get('retry-after') ?? null) ?? waitMs;
+        console.warn(`[HFImport] ${failure.message}; retrying`);
+      } finally {
+        clearTimeout(timeout);
+        controller.abort();
+        // Fetches rejected before a sink got the body must release it too.
+        if (response?.body && !response.body.locked) {
+          await response.body.cancel().catch(() => {});
+        }
+      }
+      await this.sleep(Math.min(waitMs, MAX_RETRY_DELAY_MS));
     }
-
-    await sink.write(path, response);
   }
 
   // ============================================================================
@@ -1233,7 +1348,15 @@ export function selectRepoFiles(tree: RepoFile[], includeVideos: boolean): RepoF
  * (Dex3-1)'" is the whole of defect 5 and it should be answerable without an
  * import.
  */
-export function matchRobotType(all: RobotType[], hfRobotType: string): RobotType | null {
+function robotDimensionsFit(rt: RobotType, info: LeRobotInfoV3): boolean {
+  const action = declaredFeatureWidth(info, 'action');
+  const state = declaredFeatureWidth(info, 'observation.state');
+  return (action === 0 || rt.actionDim === action)
+    && (state === 0 || rt.proprioceptionDim === state);
+}
+
+export function matchRobotType(all: RobotType[], hfRobotType: string, info?: LeRobotInfoV3): RobotType | null {
+  if (info) all = all.filter((rt) => robotDimensionsFit(rt, info));
   const wanted = slug(hfRobotType ?? '');
   if (!wanted) return null;
   const slugsOf = (rt: RobotType): string[] => [slug(rt.model ?? ''), slug(rt.name ?? '')];

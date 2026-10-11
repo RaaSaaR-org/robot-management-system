@@ -276,6 +276,7 @@ describe('HuggingFaceImportService', () => {
     env.rustfsErrorKind = undefined;
     env.storageRoot = await mkdtemp(join(tmpdir(), 'hf-import-'));
     service = HuggingFaceImportService.getInstance();
+    vi.spyOn(service as unknown as { sleep(ms: number): Promise<void> }, 'sleep').mockResolvedValue();
 
     vi.mocked(datasetRepository.create).mockResolvedValue({ id: 'ds-1' } as never);
     vi.mocked(datasetRepository.update).mockResolvedValue({} as never);
