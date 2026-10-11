@@ -3,7 +3,7 @@ id: "TASK-353"
 aliases: []
 title: "Allow correcting dataset robot/schema expectations and revalidating stored files without redownload"
 slug: "allow-correcting-dataset-robot-schema-expectations-and-revalidating-stored-files-without-redownload"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "claude"
 projects: []
@@ -94,14 +94,14 @@ mutating a shared type), and revalidate the files already in storage.
 
 ## Acceptance Criteria
 
-- [ ] Details view shows observed state/action widths beside expected widths and the selected robot type.
-- [ ] An authorized operator can reassociate the dataset with another robot type after import.
-- [ ] A new robot configuration can be defined explicitly; shared robot types are never mutated.
-- [ ] Corrected association is persisted; "Revalidate existing files" reruns validation on stored objects with no download, move or delete.
-- [ ] Changing expectations invalidates the old verdict, shows validating/ready/failed, and is audit-logged with history.
-- [ ] Source provenance and dataset schema stay untouched; genuine incompatibility still fails.
-- [ ] Reassociation is refused (409) during an active import/validation.
-- [ ] Tests: 43-wide dataset on 28-wide type fails → reassociate → revalidate passes with no HF download; incompatible reassociation still fails; shared type unchanged; 409 while busy.
+- [x] Details view shows observed state/action widths beside expected widths and the selected robot type.
+- [x] An authorized operator can reassociate the dataset with another robot type after import.
+- [x] A new robot configuration can be defined explicitly; shared robot types are never mutated.
+- [x] Corrected association is persisted; "Revalidate existing files" reruns validation on stored objects with no download, move or delete.
+- [x] Changing expectations invalidates the old verdict, shows validating/ready/failed, and is audit-logged with history.
+- [x] Source provenance and dataset schema stay untouched; genuine incompatibility still fails.
+- [x] Reassociation is refused (409) during an active import/validation.
+- [x] Tests: 43-wide dataset on 28-wide type fails → reassociate → revalidate passes with no HF download; incompatible reassociation still fails; shared type unchanged; 409 while busy.
 
 ## Test Strategy
 
@@ -112,3 +112,11 @@ mutating a shared type), and revalidate the files already in storage.
 - `npm run typecheck` + `npx vitest run` in `server/` and `app/`.
 
 ## Notes
+
+- 2026-10-12: Reassociation sets the row to `validating` and starts the
+  revalidation itself; if the store is unreachable it falls back to `failed`
+  (never `ready`, since the old verdict is void). A standalone
+  "Revalidate existing files" button reuses `POST /:id/validate`.
+- No schema migration: the invalidation record and history live in
+  `Dataset.validationJson`; the durable audit trail is the compliance log
+  (`access_audit`, robot id `system:datasets`).
