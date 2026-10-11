@@ -3,7 +3,7 @@ id: "TASK-352"
 aliases: ["TASK-352"]
 title: "Dataset import runs in the background with live progress and logs"
 slug: "dataset-import-runs-in-the-background-with-live-progress-and-logs"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "claude"
 projects: []
@@ -86,12 +86,12 @@ visible from anywhere in the app.
 
 ## Acceptance Criteria
 
-- [ ] Starting an HF import closes the dialog at once; the operator can navigate away and keep working.
-- [ ] A top-bar indicator shows running imports; its panel shows phase, percent and live log lines.
-- [ ] The end is unmistakable: success, or failure with the phase and the reason.
-- [ ] A page that attaches late or reloads backfills the log and status from the server.
-- [ ] An unusable sink is still refused synchronously with 503 (#371).
-- [ ] Server vitest covers the log lifecycle (progress, success, failure with reason); app vitest covers the store and the panel.
+- [x] Starting an HF import closes the dialog at once; the operator can navigate away and keep working.
+- [x] A top-bar indicator shows running imports; its panel shows phase, percent and live log lines.
+- [x] The end is unmistakable: success, or failure with the phase and the reason.
+- [x] A page that attaches late or reloads backfills the log and status from the server.
+- [x] An unusable sink is still refused synchronously with 503 (#371).
+- [x] Server vitest covers the log lifecycle (progress, success, failure with reason); app vitest covers the store and the panel.
 
 ## Test Strategy
 
@@ -103,3 +103,5 @@ visible from anywhere in the app.
 
 - The log ring is in memory: after a server restart the status and failure reason survive (they are on the row), the lines do not (`retained: false`).
 - `DatasetUploadModal` (file upload) is a separate flow and is out of scope.
+- A validation that fails after an otherwise clean download used to be announced as `dataset:import:completed`; it is now `dataset:import:failed` (no-NATS path), and the app also turns a later `dataset:validation:failed` into a failed import (NATS path).
+- Verified 2026-10-12 against a live server (SQLite, no NATS/RustFS): lerobot/svla_so101_pickplace and lerobot/svla_so100_pickplace (metadata only) imported in the background; the modal closed at once, the top-bar panel showed the 13-line log, and the log reloaded from `GET /import/log` after a page reload. 400 px width checked.
