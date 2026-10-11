@@ -101,6 +101,7 @@ import type {
   LeRobotStatsV3,
 } from '../types/dataset.types.js';
 import { QUALITY_THRESHOLDS } from '../types/dataset.types.js';
+import { importActivityLog } from './ImportActivityLog.js';
 
 // ============================================================================
 // CONSTANTS
@@ -925,6 +926,9 @@ export class DatasetService extends EventEmitter {
     const deleted = await datasetRepository.delete(id);
 
     if (deleted) {
+      // Its import log would otherwise outlive it until 50 newer imports
+      // pushed it out, and answer for an id that no longer exists.
+      importActivityLog.forget(id);
       // Emit event
       this.emitEvent({
         type: 'dataset:deleted',
