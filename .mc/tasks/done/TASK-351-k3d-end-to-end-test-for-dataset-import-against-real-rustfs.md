@@ -3,7 +3,7 @@ id: "TASK-351"
 aliases: ["TASK-351"]
 title: "k3d end-to-end test for dataset import against real RustFS"
 slug: "k3d-end-to-end-test-for-dataset-import-against-real-rustfs"
-status: "review"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
