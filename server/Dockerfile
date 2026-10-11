@@ -42,12 +42,13 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/prisma ./prisma
 
-# Create non-root user for security
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 neodem && \
-    chown -R neodem:nodejs /app
+# Run as the base image's `node` user, UID/GID 1000 — the UID both Helm
+# charts force (`securityContext.runAsUser: 1000`). A UID of its own (it was
+# 1001) left /app owned by someone else in the cluster, so every write under
+# /app/data failed with EACCES (TASK-351).
+RUN mkdir -p /app/data && chown -R node:node /app
 
-USER neodem
+USER node
 
 # Expose port
 EXPOSE 3001
