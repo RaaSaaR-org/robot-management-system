@@ -1123,8 +1123,11 @@ export class HuggingFaceImportService {
     const queue = [...files];
     const workers: Promise<void>[] = [];
     let failure: unknown = null;
+    const configuredConcurrency = Number(process.env.HF_IMPORT_CONCURRENCY ?? MAX_CONCURRENT_DOWNLOADS);
+    const concurrency = Number.isInteger(configuredConcurrency) && configuredConcurrency > 0
+      ? Math.min(configuredConcurrency, MAX_CONCURRENT_DOWNLOADS) : MAX_CONCURRENT_DOWNLOADS;
 
-    for (let i = 0; i < MAX_CONCURRENT_DOWNLOADS; i++) {
+    for (let i = 0; i < concurrency; i++) {
       workers.push(
         (async () => {
           while (queue.length > 0) {
