@@ -41,8 +41,10 @@ dump_server_logs() {
   kc logs "deploy/$SERVER_DEPLOY" --tail=60 2>/dev/null || true
 }
 
-SERVER_SVC="$(kc get svc -l app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}')"
-SERVER_DEPLOY="$(kc get deploy -l app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}')"
+# `|| true`: under set -e a failed lookup (no namespace, no context) would
+# abort here silently instead of reaching the fail message below.
+SERVER_SVC="$(kc get svc -l app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+SERVER_DEPLOY="$(kc get deploy -l app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
 [ -n "$SERVER_SVC" ] || fail "no server Service in $NAMESPACE — run install.sh first"
 
 # --- port-forward ------------------------------------------------------------
@@ -99,21 +101,33 @@ ok "dataset ready in $(( $(now) - import_start ))s, storagePath=$STORAGE_PATH"
 # What the Hub has at the pinned commit, filtered the way the importer filters
 # (selectRepoFiles in HuggingFaceImportService.ts), as "path size" lines.
 SHA="$(jq -r .dataset.sourceRevision "$WORK/row.json")"
-curl -fsS "https://huggingface.co/api/datasets/$DATASET/tree/$SHA?recursive=true" \
-  | jq -r --argjson v "$videos" '.[] | select(.type=="file")
-      | select((.path|startswith("meta/"))
-            or ((.path|startswith("data/")) and (.path|endswith(".parquet")))
-            or ($v and (.path|startswith("videos/")) and (.path|endswith(".mp4"))))
-      | "\(.path) \(.lfs.size // .size)"' | sort >"$WORK/expected.txt"
+# Follow the Link rel="next" cursor like the importer's listRepoTree does — a
+# large repo's tree spans several pages, and page one alone under-counts.
+: >"$WORK/tree.ndjson"
+url="https://huggingface.co/api/datasets/$DATASET/tree/$SHA?recursive=true"
+for _ in $(seq 1 100); do
+  [ -n "$url" ] || break
+  curl -fsS -D "$WORK/tree.hdr" "$url" | jq -c '.[]' >>"$WORK/tree.ndjson" \
+    || fail "could not list $DATASET@$SHA on the Hub"
+  url="$(tr -d '\r' <"$WORK/tree.hdr" | sed -n 's/^[Ll]ink:.*<\([^>]*\)>; *rel="next".*/\1/p' | head -1)"
+done
+# selectRepoFiles: meta/, data/*.parquet; with videos also videos/*.mp4 and
+# everything under images/. Size as the importer takes it: max(size, lfs.size).
+jq -r --argjson v "$videos" 'select(.type=="file")
+    | select((.path|startswith("meta/"))
+          or ((.path|startswith("data/")) and (.path|endswith(".parquet")))
+          or ($v and (.path|startswith("videos/")) and (.path|endswith(".mp4")))
+          or ($v and (.path|startswith("images/"))))
+    | "\(.path) \([.size // 0, .lfs.size // 0] | max)"' "$WORK/tree.ndjson" | sort >"$WORK/expected.txt"
 [ -s "$WORK/expected.txt" ] || fail "could not list $DATASET@$SHA on the Hub"
 
 # What the bucket holds, listed from INSIDE the cluster with the same
 # credentials and endpoint the server uses — a throwaway aws-cli pod, the image
 # the chart's bucket-init Job already pulled.
-ENDPOINT="$(kc get configmap -l app.kubernetes.io/instance="$RELEASE" -o json \
-  | jq -r '[.items[].data.RUSTFS_ENDPOINT // empty][0]')"
-SECRET="$(kc get secret -l app.kubernetes.io/instance="$RELEASE" -o json \
-  | jq -r '[.items[] | select(.data.RUSTFS_ACCESS_KEY) | .metadata.name][0]')"
+ENDPOINT="$(kc get configmap -l app.kubernetes.io/instance="$RELEASE" -o json 2>/dev/null \
+  | jq -r '[.items[].data.RUSTFS_ENDPOINT // empty][0]' || true)"
+SECRET="$(kc get secret -l app.kubernetes.io/instance="$RELEASE" -o json 2>/dev/null \
+  | jq -r '[.items[] | select(.data.RUSTFS_ACCESS_KEY) | .metadata.name][0] // empty' || true)"
 [ -n "$ENDPOINT" ] && [ -n "$SECRET" ] || fail "no RUSTFS_ENDPOINT/secret found for release $RELEASE"
 AK="$(kc get secret "$SECRET" -o jsonpath='{.data.RUSTFS_ACCESS_KEY}' | base64 -d)"
 SK="$(kc get secret "$SECRET" -o jsonpath='{.data.RUSTFS_SECRET_KEY}' | base64 -d)"

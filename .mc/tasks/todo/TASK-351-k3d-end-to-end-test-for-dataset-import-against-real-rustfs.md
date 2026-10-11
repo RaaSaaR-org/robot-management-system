@@ -127,7 +127,7 @@ together) and the first pulls of postgres/nats/rustfs/aws-cli.
    to the fallbacks at `:1033` and `:1139`, which answer 200 with equal
    episode lengths (402 × 426 frames instead of the real lengths summing to
    171625) and sine-wave frames. Repro: `E2E_DATASET=nvidia/GR00T-N1.7-AppleToPlate
-   scripts/e2e-k3d/test.sh` fails at the episodes check. Needs its own task.
+   scripts/e2e-k3d/test.sh` fails at the episodes check. Tracked as [[TASK-354]].
 
 ### Open questions / not covered
 
