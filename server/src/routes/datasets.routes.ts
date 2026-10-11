@@ -18,12 +18,14 @@ import type {
   FrameData,
   PushToHubRequest,
   PushToHubJobState,
+  ImportLogResponse,
 } from '../types/dataset.types.js';
 import type { DatasetStatus } from '../types/vla.types.js';
 import {
   HuggingFaceImportError,
   huggingFaceImportService,
 } from '../services/HuggingFaceImportService.js';
+import { importActivityLog } from '../services/ImportActivityLog.js';
 import { datasetEpisodeFlagRepository } from '../repositories/DatasetEpisodeFlagRepository.js';
 import type { EpisodeFlag } from '../repositories/DatasetEpisodeFlagRepository.js';
 import { robotTypeRepository } from '../repositories/index.js';
@@ -475,6 +477,39 @@ datasetRoutes.post('/:id/import/retry', async (req: Request, res: Response) => {
   } catch (error) {
     console.error(`[DatasetRoutes] Retry failed for ${req.params.id}:`, error);
     sendImportError(res, error, 'Failed to retry import');
+  }
+});
+
+// ============================================================================
+// GET /api/datasets/:id/import/log - What a running (or ended) import did
+// ============================================================================
+//
+// The browser follows an import over the WebSocket, but a page that attaches
+// late — a reload, a second tab, the top-bar panel opened after the fact —
+// has missed every frame. This is the backfill: status and failure reason
+// from the row (they survive a restart), lines and the last progress frame
+// from memory (they do not; `retained` says which). (TASK-352)
+
+datasetRoutes.get('/:id/import/log', async (req: Request, res: Response) => {
+  try {
+    const dataset = await datasetService.get(req.params.id);
+    if (!dataset) {
+      return res.status(404).json({ error: 'Dataset not found' });
+    }
+    const activity = importActivityLog.get(dataset.id);
+    const body: ImportLogResponse = {
+      datasetId: dataset.id,
+      status: dataset.status,
+      importError: dataset.importError ?? null,
+      progress: activity?.progress ?? null,
+      lines: activity?.lines ?? [],
+      dropped: activity?.dropped ?? 0,
+      retained: activity !== null,
+    };
+    res.json(body);
+  } catch (error) {
+    console.error(`[DatasetRoutes] Error reading import log for ${req.params.id}:`, error);
+    res.status(500).json({ error: 'Failed to read import log' });
   }
 });
 

@@ -67,8 +67,10 @@ import type {
   HuggingFaceImportRequest,
   HuggingFaceImportProgress,
   HuggingFacePreview,
+  ImportLogLevel,
   LeRobotInfoV3,
 } from '../types/dataset.types.js';
+import { importActivityLog } from './ImportActivityLog.js';
 
 // ============================================================================
 // CONSTANTS
@@ -368,6 +370,14 @@ export class HuggingFaceImportService {
     const created = await datasetRepository.create(input);
     const datasetId = created.id;
 
+    importActivityLog.start(datasetId);
+    this.log(
+      datasetId,
+      'info',
+      `Import of ${repoId} started (${includeVideos ? 'data and videos' : 'metadata only'})`,
+    );
+    this.logSource(datasetId, revision, sha, info, sink);
+
     // Emit import started event
     this.emitProgress(datasetId, {
       datasetId,
@@ -433,6 +443,12 @@ export class HuggingFaceImportService {
     // The previous failure goes at the same time; it is not evidence about this
     // attempt.
     await datasetRepository.update(datasetId, { status: 'importing', importError: null });
+    importActivityLog.start(datasetId);
+    this.log(
+      datasetId,
+      'info',
+      `Retry of ${repoId} started (${importMode === 'full' ? 'data and videos' : 'metadata only'})`,
+    );
 
     let sha: string;
     let license: string | null = null;
@@ -452,6 +468,7 @@ export class HuggingFaceImportService {
       info = await this.fetchInfoJson(repoId, sha);
       sink = createSink(storageIdOf(existing.storagePath));
       await sink.prepare();
+      this.logSource(datasetId, existing.sourceRevision ?? 'main', sha, info, sink);
     } catch (error) {
       // The claim has to be released, or a repo that has been deleted leaves
       // the row `importing` for ever with nothing running.
@@ -605,6 +622,7 @@ export class HuggingFaceImportService {
     try {
       // Phase 2: Build file list (from the authoritative repo tree)
       const files = await this.resolveFileList(repoId, revision, info, includeVideos);
+      this.log(datasetId, 'info', `Downloading ${files.length} files from the Hub`);
 
       phase = 'downloading';
       this.emitProgress(datasetId, {
@@ -631,6 +649,7 @@ export class HuggingFaceImportService {
       });
 
       await datasetRepository.update(datasetId, { status: 'validating' });
+      this.log(datasetId, 'info', `All ${files.length} files stored; validating the dataset`);
 
       if (natsClient.isConnected()) {
         const js = natsClient.getJetStream();
@@ -650,10 +669,29 @@ export class HuggingFaceImportService {
             msgID: `validate-${datasetId}-${uuidv4()}`,
           });
           console.log(`[HFImport] Queued validation job for ${datasetId}`);
+          this.log(datasetId, 'info', 'Validation queued for the validation worker');
         }
       } else {
         // Run validation synchronously if NATS not available
-        await datasetService.validateAndUpdateDataset(datasetId, sink.storagePath);
+        const outcome = await datasetService.validateAndUpdateDataset(datasetId, sink.storagePath);
+        if (outcome === 'failed') {
+          // The download worked and the dataset did not: saying "completed"
+          // here is what left the operator with a green toast and a red card.
+          // Validation already marked the row and kept its report.
+          this.log(datasetId, 'error', 'Validation failed — the files do not form a valid LeRobot dataset');
+          datasetService.emit('dataset:event', {
+            type: 'dataset:import:failed',
+            datasetId,
+            error: 'Validation failed — open the dataset for the validation report',
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+        this.log(
+          datasetId,
+          outcome === 'ready' ? 'info' : 'warn',
+          outcome === 'ready' ? 'Validation passed' : 'Storage unavailable — the dataset was not validated',
+        );
       }
 
       // Emit completion
@@ -672,6 +710,7 @@ export class HuggingFaceImportService {
         timestamp: new Date().toISOString(),
       });
 
+      this.log(datasetId, 'info', 'Import finished');
       console.log(`[HFImport] Import completed for ${datasetId} (${repoId})`);
     } catch (error) {
       console.error(`[HFImport] Import failed for ${datasetId}:`, error);
@@ -695,6 +734,7 @@ export class HuggingFaceImportService {
     error: unknown,
   ): Promise<void> {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    this.log(datasetId, 'error', `Failed during ${phase}: ${errorMessage}`);
 
     await datasetRepository.update(datasetId, {
       status: 'failed',
@@ -1054,6 +1094,7 @@ export class HuggingFaceImportService {
               // stats.json is optional — 404 is expected
               if (file === 'meta/stats.json' && error instanceof Error && error.message.includes('404')) {
                 console.log(`[HFImport] stats.json not found (optional), skipping`);
+                this.log(datasetId, 'warn', 'meta/stats.json is not in the repo (optional), skipped');
               } else {
                 failure ??= error;
                 return;
@@ -1065,6 +1106,7 @@ export class HuggingFaceImportService {
             if (failure) return;
 
             completedFiles++;
+            this.log(datasetId, 'info', `Downloaded ${file} (${completedFiles}/${totalFiles})`);
             const downloadProgress = 10 + Math.round((completedFiles / totalFiles) * 80);
 
             this.emitProgress(datasetId, {
@@ -1149,12 +1191,51 @@ export class HuggingFaceImportService {
    * Emit import progress via DatasetService events
    */
   private emitProgress(datasetId: string, progress: HuggingFaceImportProgress): void {
+    importActivityLog.setProgress(datasetId, progress);
     datasetService.emit('dataset:event', {
       type: 'dataset:import:progress',
       datasetId,
       importProgress: progress,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  /**
+   * Write one line to the import's activity log and put it on the wire.
+   *
+   * The ring keeps it for a page that attaches late; the broadcast is what a
+   * page already watching shows as it happens. (TASK-352)
+   */
+  private log(datasetId: string, level: ImportLogLevel, message: string): void {
+    const line = importActivityLog.append(datasetId, level, message);
+    datasetService.emit('dataset:event', {
+      type: 'dataset:import:log',
+      datasetId,
+      log: line,
+      timestamp: line.at,
+    });
+  }
+
+  /** What was pinned, what info.json says, and where the bytes will go. */
+  private logSource(
+    datasetId: string,
+    revision: string,
+    sha: string,
+    info: LeRobotInfoV3,
+    sink: ImportSink,
+  ): void {
+    this.log(datasetId, 'info', `Pinned ${revision} to commit ${sha.slice(0, 12)}`);
+    this.log(
+      datasetId,
+      'info',
+      `info.json: LeRobot ${info.codebase_version ?? 'unknown'}, robot ${info.robot_type ?? 'unknown'}, `
+        + `${info.total_episodes ?? 0} episodes, ${info.total_frames ?? 0} frames at ${info.fps ?? 0} fps`,
+    );
+    this.log(
+      datasetId,
+      'info',
+      `Storage: ${sink.kind === 'rustfs' ? 'RustFS' : 'local disk'} at ${sink.storagePath}`,
+    );
   }
 
   /**

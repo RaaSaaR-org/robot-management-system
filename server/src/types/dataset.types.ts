@@ -140,6 +140,29 @@ export interface HuggingFaceImportProgress {
   error?: string;
 }
 
+export type ImportLogLevel = 'info' | 'warn' | 'error';
+
+/** One line of an import's activity log (TASK-352). */
+export interface ImportLogLine {
+  /** ISO timestamp */
+  at: string;
+  level: ImportLogLevel;
+  message: string;
+}
+
+/** GET /api/datasets/:id/import/log */
+export interface ImportLogResponse {
+  datasetId: string;
+  status: string;
+  importError: DatasetImportError | null;
+  progress: HuggingFaceImportProgress | null;
+  lines: ImportLogLine[];
+  /** Lines that fell off the front of the bounded ring. */
+  dropped: number;
+  /** False when this server holds no log for the import (restart, eviction). */
+  retained: boolean;
+}
+
 // ============================================================================
 // DTO TYPES
 // ============================================================================
@@ -469,6 +492,7 @@ export type DatasetEventType =
   | 'dataset:validation:failed'
   | 'dataset:import:started'
   | 'dataset:import:progress'
+  | 'dataset:import:log'
   | 'dataset:import:completed'
   | 'dataset:import:failed'
   | 'dataset:push-hf:started'
@@ -485,6 +509,8 @@ export interface DatasetEvent {
   dataset?: DatasetResponse;
   progress?: DatasetValidationProgress;
   importProgress?: HuggingFaceImportProgress;
+  /** One activity line, on `dataset:import:log` (TASK-352) */
+  log?: ImportLogLine;
   error?: string;
   timestamp: string;
 }
