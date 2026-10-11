@@ -11,6 +11,7 @@ import {
   DataTable,
   EmptyState,
   Panel,
+  ProgressBar,
   SearchInput,
   Select,
   StatusTag,
@@ -22,7 +23,9 @@ import {
 } from '@/shared/components/ui';
 import { datasetShape } from '../types';
 import type { Dataset, DatasetStatus, RobotType } from '../types';
+import { useImportJobsStore } from '../store/importJobsStore';
 import { DatasetNameCell } from './datasets/DatasetNameCell';
+import { ImportProgress } from './ImportProgress';
 import { formatCount, formatDuration, formatRelative } from './datasets/datasetFormat';
 
 export interface DatasetListProps {
@@ -223,6 +226,21 @@ export function DatasetList({
 
 /** Status tag; an import in flight shows its bar, a failed one says why on hover. */
 function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
+  // A Hub import in flight is followed by the import tracker (the datasets
+  // page starts following any it finds), which knows its phase and bytes.
+  const job = useImportJobsStore((state) => state.jobs[dataset.id]);
+  const hubImport = Boolean(dataset.huggingFaceRepoId)
+    && (dataset.status === 'importing' || dataset.status === 'validating');
+  if (hubImport) {
+    return (
+      <div className="flex w-44 max-w-full flex-col gap-1.5">
+        <StatusTag status={dataset.status} dot pulse />
+        {job?.state === 'running'
+          ? <ImportProgress job={job} compact />
+          : <ProgressBar size="sm" showValue={false} indeterminate />}
+      </div>
+    );
+  }
   if (dataset.status === 'importing' || dataset.status === 'uploading') {
     return <StatusTag status={dataset.status} dot pulse />;
   }
@@ -230,8 +248,9 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
   if (dataset.status === 'failed' && err) {
     return (
       <Tooltip content={`Import failed during ${err.phase}: ${err.error}`}>
-        <span data-testid="dataset-import-error" className="inline-flex">
+        <span data-testid="dataset-import-error" className="inline-flex max-w-[14rem] flex-col items-start gap-1">
           <StatusTag status="failed" dot />
+          <span className="max-w-full truncate text-[11px] text-ink-tertiary">{err.error}</span>
         </span>
       </Tooltip>
     );

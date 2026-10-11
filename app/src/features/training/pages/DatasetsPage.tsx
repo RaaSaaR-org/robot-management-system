@@ -129,6 +129,18 @@ function DatasetsHub() {
 
   const trackImport = useImportJobsStore((state) => state.track);
   const showImport = useImportJobsStore((state) => state.show);
+  const followImport = useImportJobsStore((state) => state.follow);
+
+  // A Hub import this browser is not following yet — started in another tab,
+  // or before localStorage was cleared — is followed quietly, so its row shows
+  // a live bar rather than a bare "Importing" (#370).
+  useEffect(() => {
+    for (const d of datasets) {
+      if (d.huggingFaceRepoId && (d.status === 'importing' || d.status === 'validating')) {
+        followImport(d.id, d.huggingFaceRepoId);
+      }
+    }
+  }, [datasets, followImport]);
 
   const retry = async (d: Dataset) => {
     try {

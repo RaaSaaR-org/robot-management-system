@@ -6,8 +6,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { DatasetList } from '../DatasetList';
+import { useImportJobsStore } from '../../store/importJobsStore';
 import { CompatibilityModal } from '../datasets/CompatibilityModal';
 import type { Dataset } from '../../types';
 
@@ -92,5 +93,45 @@ describe('mixture selection', () => {
       screen.getByRole('checkbox', { name: 'Select GR00T AppleToPlate for a training mixture' })
     );
     expect(screen.getByTestId('mixture-count')).toHaveTextContent('1 selected — pick another to compare them');
+  });
+});
+
+describe('a Hub import in the list (#370)', () => {
+  it('shows a live bar with bytes and files on the importing row', () => {
+    useImportJobsStore.setState({ jobs: {}, order: [], panelOpen: false, focusedId: null });
+    useImportJobsStore.getState().track('imp', 'unitree/g1');
+    useImportJobsStore.getState().applyMessage({
+      type: 'dataset:import:progress',
+      datasetId: 'imp',
+      importProgress: {
+        status: 'importing', phase: 'downloading', progress: 50,
+        downloadedBytes: 512, totalBytes: 1024, completedFiles: 1, totalFiles: 2,
+      },
+    });
+    render(<DatasetList datasets={[dataset({ id: 'imp', status: 'importing', huggingFaceRepoId: 'unitree/g1' })]} />);
+
+    const cell = screen.getByTestId('import-progress-imp');
+    expect(within(cell).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
+    expect(cell).toHaveTextContent('Downloading 50% · 512 B / 1.0 KB · 1 / 2 files');
+  });
+
+  it('shows an indeterminate bar, not 0 %, for an import with nothing measured yet', () => {
+    useImportJobsStore.setState({ jobs: {}, order: [], panelOpen: false, focusedId: null });
+    render(<DatasetList datasets={[dataset({ id: 'imp', status: 'importing', huggingFaceRepoId: 'unitree/g1' })]} />);
+    expect(screen.getByRole('progressbar')).toHaveAttribute('data-indeterminate');
+  });
+
+  it('puts the persisted failure reason on a failed row', () => {
+    render(
+      <DatasetList
+        datasets={[dataset({
+          id: 'f',
+          status: 'failed',
+          huggingFaceRepoId: 'unitree/g1',
+          importError: { phase: 'downloading', error: 'terminated', repoId: 'unitree/g1', failedAt: '2026-10-12T00:00:00Z' },
+        })]}
+      />,
+    );
+    expect(screen.getByTestId('dataset-import-error')).toHaveTextContent('terminated');
   });
 });

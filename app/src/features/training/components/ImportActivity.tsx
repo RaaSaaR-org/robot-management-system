@@ -7,12 +7,16 @@
  * @feature training
  */
 
-import { useEffect, useRef } from 'react';
-import { CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, X, XCircle } from 'lucide-react';
-import { Button, ProgressBar, StatusTag } from '@/shared/components/ui';
+import { useEffect, useRef, useState } from 'react';
+import { CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, RotateCw, X, XCircle } from 'lucide-react';
+import { Button, StatusTag } from '@/shared/components/ui';
+import { toast } from '@/shared/components/ui/toast';
+import { getErrorMessage } from '@/shared/utils';
 import { cn } from '@/shared/utils/cn';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { selectRunningCount, useImportJobsStore, type ImportJob } from '../store/importJobsStore';
+import { useTrainingStore } from '../store/trainingStore';
+import { ImportProgress } from './ImportProgress';
 
 // ============================================================================
 // HELPERS
@@ -173,19 +177,22 @@ function ImportJobRow({ job }: { job: ImportJob }) {
         )}
       </div>
 
-      {job.state === 'running' && (
+      {job.state !== 'succeeded' && (
         <div className="flex flex-col gap-1">
-          <ProgressBar value={job.progress} showValue size="sm" indeterminate={job.progress === 0} />
-          {job.currentFile && (
+          <ImportProgress job={job} />
+          {job.state === 'running' && job.phase === 'downloading' && job.currentFile && (
             <p className="truncate font-mono text-[11px] text-ink-tertiary" title={job.currentFile}>{job.currentFile}</p>
           )}
         </div>
       )}
 
       {job.state === 'failed' && job.error && (
-        <p role="alert" data-testid="import-job-error" className="break-words rounded-control bg-inset px-2 py-1.5 text-xs text-ink-secondary">
-          {job.error}
-        </p>
+        <div className="flex flex-col gap-2">
+          <p role="alert" data-testid="import-job-error" className="break-words rounded-control bg-inset px-2 py-1.5 text-xs text-ink-secondary">
+            {job.error}
+          </p>
+          <RetryButton job={job} />
+        </div>
       )}
 
       <button
@@ -199,6 +206,39 @@ function ImportJobRow({ job }: { job: ImportJob }) {
       </button>
       {expanded && <ImportLog job={job} />}
     </li>
+  );
+}
+
+/** Start the same import again; the row keeps its pinned commit and mode. */
+function RetryButton({ job }: { job: ImportJob }) {
+  const track = useImportJobsStore((state) => state.track);
+  const [busy, setBusy] = useState(false);
+  // A dataset that is gone has nothing to retry.
+  if (job.error === 'The dataset no longer exists') return null;
+
+  const retry = async () => {
+    setBusy(true);
+    try {
+      await useTrainingStore.getState().retryImport(job.datasetId);
+      track(job.datasetId, job.label);
+    } catch (error) {
+      toast.error("Couldn't restart the import", { description: getErrorMessage(error, job.label) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button
+      size="sm"
+      variant="secondary"
+      className="self-start"
+      leftIcon={<RotateCw className="h-3.5 w-3.5" />}
+      isLoading={busy}
+      onClick={() => void retry()}
+    >
+      Retry import
+    </Button>
   );
 }
 
