@@ -3,7 +3,7 @@ id: "TASK-355"
 aliases: ["TASK-355"]
 title: "Episode frames read the real parquet without exhausting server memory"
 slug: "episode-frames-read-the-real-parquet-without-exhausting-server-memory"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "claude"
 projects: []
@@ -46,6 +46,9 @@ repeats this — nothing is cached.
   statistics exclude the episode, reads only the needed columns (`observation.state`,
   `action`, `timestamp`, `frame_index`, `episode_index`), and decodes one page at a time,
   keeping only the episode's rows. Heap use is bounded by a page, not by the file.
+  Pages wholly before the episode are stepped over on their header (level counts; a list
+  column only when every row has the same width, verified on the rows read, else re-read),
+  so a late episode does not cost decoding the whole column (21 s -> ~2 s at 500m CPU).
 - `DatasetObjectStore` gains optional `stat(path)` and `readRange(path, offset, length)`;
   the RustFS store in `server/src/routes/datasets.routes.ts` implements them with
   `getMetadata` / `downloadRange`. Without them the reader falls back to one whole read.
