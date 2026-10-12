@@ -169,7 +169,7 @@ logout.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/register` | Register user account |
+| POST | `/register` | Register user account — 403 `SELF_REGISTRATION_DISABLED` while auth is on and `ALLOW_SELF_REGISTRATION` is not `true`; `GET /api/config/features` reports it as `selfRegistrationEnabled` |
 | POST | `/login` | Login. Returns JWT or MFA challenge |
 | POST | `/logout` | Invalidate refresh token |
 | POST | `/refresh` | Refresh access token |
@@ -189,7 +189,7 @@ logout.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/register` | Register robot from URL |
+| POST | `/register` | Register robot from URL — 409 when a robot with that identity is already registered (in any tenant; the answer names nothing of it) |
 | GET | `/` | List all robots |
 | GET | `/:id` | Get robot details |
 | DELETE | `/:id` | Unregister robot |

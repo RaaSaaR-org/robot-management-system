@@ -17,12 +17,14 @@ import { useFeatures, useFeaturesStore } from '../useFeatures';
 
 const DEFAULT_FLAGS = {
   multiTenancyEnabled: false,
+  selfRegistrationEnabled: false,
   natsEnabled: false,
   rustfsEnabled: false,
 };
 
 const ENABLED_FLAGS = {
   multiTenancyEnabled: true,
+  selfRegistrationEnabled: false,
   natsEnabled: true,
   rustfsEnabled: false,
 };

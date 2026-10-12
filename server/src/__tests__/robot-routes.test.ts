@@ -248,6 +248,32 @@ describe('Robot Routes', () => {
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('Invalid URL format');
     });
+
+    it('returns 409 with the curated sentence when the robot is already registered (TASK-369)', async () => {
+      const { ConflictError } = await import('../utils/errors.js');
+      mockRobotManager.registerRobot.mockRejectedValue(
+        new ConflictError('A robot with this identity is already registered.')
+      );
+
+      const res = await request(app)
+        .post('/api/robots/register')
+        .send({ robotUrl: 'http://robot.local:41243' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('A robot with this identity is already registered.');
+    });
+
+    it('keeps an unexpected failure a generic 500 without its text', async () => {
+      mockRobotManager.registerRobot.mockRejectedValue(new Error('secret internals of tenant-b'));
+
+      const res = await request(app)
+        .post('/api/robots/register')
+        .send({ robotUrl: 'http://robot.local:41243' });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Failed to register robot');
+      expect(JSON.stringify(res.body)).not.toContain('tenant-b');
+    });
   });
 
   describe('DELETE /api/robots/:id', () => {

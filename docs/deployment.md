@@ -460,6 +460,7 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `JWT_ACCESS_EXPIRES` | No | `15m` | Access token TTL |
 | `JWT_REFRESH_EXPIRES` | No | `7d` | Refresh token TTL |
 | `AUTH_DISABLED` | No | `false` | Disable authentication (dev only) |
+| `ALLOW_SELF_REGISTRATION` | No | `false` | With auth on, let anyone create an account via `POST /api/auth/register`. Off: the endpoint answers 403 `SELF_REGISTRATION_DISABLED` and admins add users. Ignored (always closed) under multi-tenancy |
 | `CORS_ORIGINS` | No | localhost ports | Comma-separated allowed origins |
 | `RATE_LIMIT_DISABLED` | No | `false` | Disable rate limiting (dev only) |
 | `GOOGLE_API_KEY` | No | — | Google/Gemini API key for NL commands |

@@ -18,6 +18,7 @@ import { getTenantId } from '../middleware/tenantContext.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from './HttpClient.js';
 // Safe to import directly: AlertService only depends on repositories (no service cycle)
 import { alertService } from './AlertService.js';
+import { ConflictError } from '../utils/errors.js';
 
 // ============================================================================
 // TYPES
@@ -449,6 +450,20 @@ export function buildIdentityUpdate(current: Robot, reported: Robot): Partial<Ro
 // ============================================================================
 
 /**
+ * Sentence for a registration that collides with a robot already on file.
+ * It names no robot, owner or organization on purpose: under multi-tenancy the
+ * existing row usually belongs to another tenant, and its details are not this
+ * caller's to see (TASK-369).
+ */
+export const ROBOT_ALREADY_REGISTERED_MESSAGE =
+  'A robot with this identity is already registered. Remove the existing registration first, or ask your administrator.';
+
+/** Prisma P2002: a unique constraint (robot id, agent card name, ...) refused the write. */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
+}
+
+/**
  * Re-throw a failed robot call behind `prefix`, keeping an `HttpClientError` an
  * `HttpClientError`. Flattening it to a plain Error drops `isNetworkError()`,
  * and that is what made an unreachable robot answer 500 instead of 502: the
@@ -591,6 +606,9 @@ export class RobotManager {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error(`[RobotManager] Failed to register robot from ${baseUrl}:`, message);
+      if (isUniqueViolation(error)) {
+        throw new ConflictError(ROBOT_ALREADY_REGISTERED_MESSAGE);
+      }
       rethrowRobotCallError('Failed to register robot', error);
     }
   }
