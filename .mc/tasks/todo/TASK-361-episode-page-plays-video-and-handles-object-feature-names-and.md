@@ -3,7 +3,7 @@ id: "TASK-361"
 aliases: ["TASK-361"]
 title: "Episode page plays video and handles object feature names and singular camera keys"
 slug: "episode-page-plays-video-and-handles-object-feature-names-and"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
