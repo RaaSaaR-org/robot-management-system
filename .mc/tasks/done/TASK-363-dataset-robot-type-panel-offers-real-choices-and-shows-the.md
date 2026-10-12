@@ -3,7 +3,7 @@ id: "TASK-363"
 aliases: []
 title: "Dataset robot-type panel offers real choices and shows the true validation state"
 slug: "dataset-robot-type-panel-offers-real-choices-and-shows-the"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -66,12 +66,12 @@ warning on every load.
 
 ## Acceptance Criteria
 
-- [ ] A fresh server boot creates the standard robot types once; a second boot and an existing row of the same name are left untouched.
-- [ ] The picker offers the standard types (widths-matching first) without any owner action.
-- [ ] Clicking "Revalidate existing files" switches the badge to `Validating` immediately and back to the verdict when the pass ends.
-- [ ] The panel is a single line by default whatever the verdict, expands on demand, and collapses again; the episode list stays above the fold.
-- [ ] A robot type named `unknown` is shown as a readable label, never as raw `unknown`.
-- [ ] `/datasets/:id/episodes` logs no Recharts `width(-1) and height(-1)` warning.
+- [x] A fresh server boot creates the standard robot types once; a second boot and an existing row of the same name are left untouched.
+- [x] The picker offers the standard types (widths-matching first) without any owner action.
+- [x] Clicking "Revalidate existing files" switches the badge to `Validating` immediately and back to the verdict when the pass ends.
+- [x] The panel is a single line by default whatever the verdict, expands on demand, and collapses again; the episode list stays above the fold.
+- [x] A robot type named `unknown` is shown as a readable label, never as raw `unknown`.
+- [x] `/datasets/:id/episodes` logs no Recharts `width(-1) and height(-1)` warning.
 
 ## Test Strategy
 
