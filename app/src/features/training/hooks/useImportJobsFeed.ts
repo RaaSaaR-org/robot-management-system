@@ -17,6 +17,8 @@ import { useImportJobsStore, type ImportFeedMessage } from '../store/importJobsS
 
 /** How long a dropped socket waits before it tries again. */
 export const IMPORT_FEED_RECONNECT_MS = 3000;
+/** The least time between two asks for imports started elsewhere. */
+export const IMPORT_DISCOVER_MIN_MS = 15_000;
 /** How often running imports are re-read from the server regardless. */
 export const IMPORT_FEED_POLL_MS = 10_000;
 
@@ -34,8 +36,12 @@ export function useImportJobsFeed(): void {
   // until the operator happened to open the datasets page (TASK-358).
   useEffect(() => {
     if (import.meta.env.VITE_DEMO_MODE === 'true') return;
+    let last = 0;
     const discover = () => {
-      if (document.visibilityState !== 'hidden') void useImportJobsStore.getState().discover();
+      // Flicking between tabs is not a reason to ask again every time.
+      if (document.visibilityState === 'hidden' || Date.now() - last < IMPORT_DISCOVER_MIN_MS) return;
+      last = Date.now();
+      void useImportJobsStore.getState().discover();
     };
     discover();
     document.addEventListener('visibilitychange', discover);
