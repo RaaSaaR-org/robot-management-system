@@ -82,19 +82,19 @@ controls.
 
 ## Acceptance Criteria
 
-- [ ] A viewer sees no "Delete" in a site card's actions in the Sites gallery; a member and an owner do.
-- [ ] A viewer sees no "Delete site" on the twin viewer page; a member does.
-- [ ] A viewer sees no "New zone" and no zone Edit/Delete, and double-clicking a zone opens no edit form.
-- [ ] A viewer's Start sweep, Stop and build and Import scan are disabled with a "Your role can't …" reason.
-- [ ] A viewer's "Simulate in this room" is disabled with a reason only while it would have to build the scene.
-- [ ] `DELETE /api/digital-twins/:id` answers 403 to a viewer (already true via `writeRoleGuard`; confirmed, no change).
-- [ ] Vitest component tests cover viewer vs member/owner for the gallery delete and the zone panel.
+- [x] A viewer sees no "Delete" in a site card's actions in the Sites gallery; a member and an owner do.
+- [x] A viewer sees no "Delete site" on the twin viewer page; a member does.
+- [x] A viewer sees no "New zone" and no zone Edit/Delete, and double-clicking a zone opens no edit form.
+- [x] A viewer's Start sweep, Stop and build and Import scan are disabled with a "Your role can't …" reason.
+- [x] A viewer's "Simulate in this room" is disabled with a reason only while it would have to build the scene.
+- [x] `DELETE /api/digital-twins/:id` answers 403 to a viewer (already true via `writeRoleGuard`; confirmed, no change).
+- [x] Vitest component tests cover viewer vs member/owner for the gallery delete and the zone panel.
 
 ## Test Strategy
 
 - `cd app && npx vitest run src/features/digitaltwin` — new cases in
   `SitesGallery.test.tsx` (viewer: no Delete; member and owner: Delete) and a
-  new `ZonePanel.test.tsx` / `ScanSessionPanel` case.
+  new `SiteWriteControls.test.tsx` (ZonePanel and ScanSessionPanel, viewer vs member).
 - `cd app && npx tsc --noEmit` and the full app vitest suite.
 - Server: `server/src/__tests__/write-route-authorization.test.ts` already
   covers `DELETE /api/digital-twins/:id` for a viewer.

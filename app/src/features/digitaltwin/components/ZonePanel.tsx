@@ -3,7 +3,8 @@
  * @description "Zones" side panel of the twin viewer: primary "New zone"
  *   enters draw mode (inset guide with Done / Undo / Cancel while drawing),
  *   the colour legend, and the zone list — each row selects its zone and has
- *   RowActions (Edit → TwinZoneFormModal, Delete → confirm → toast).
+ *   RowActions (Edit → TwinZoneFormModal, Delete → confirm → toast). A role
+ *   that cannot change sites gets the list and the legend only (TASK-376).
  * @feature digitaltwin
  */
 
@@ -14,6 +15,7 @@ import { Button, EmptyState, Panel, RowActions, StatusTag, confirm, toast } from
 import { useTwinZoneStore, selectTwinDraftPoints, selectTwinZones, TWIN_ZONE_COLORS } from '../store/twinZoneStore';
 import type { TwinZoneDTO } from '../types/twin.types';
 import { ZoneLegend, ZONE_TYPE_LABELS } from './ZoneLegend';
+import { useCanEditSites } from '../hooks/useCanEditSites';
 
 export const ZonePanel = memo(function ZonePanel() {
   const zones = useTwinZoneStore(selectTwinZones);
@@ -28,6 +30,7 @@ export const ZonePanel = memo(function ZonePanel() {
   const closeDraft = useTwinZoneStore((s) => s.closeDraft);
   const cancelDraft = useTwinZoneStore((s) => s.cancelDraft);
   const drawing = mode === 'draw';
+  const canEdit = useCanEditSites();
 
   const askDelete = async (zone: TwinZoneDTO) => {
     const ok = await confirm({
@@ -51,7 +54,7 @@ export const ZonePanel = memo(function ZonePanel() {
         title="Zones"
         description={zones.length > 0 ? `${zones.length} zone${zones.length === 1 ? '' : 's'} on this floor` : 'Keep-outs, work cells and places'}
         actions={
-          !drawing ? (
+          canEdit && !drawing ? (
             <Button size="sm" leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />} onClick={() => setMode('draw')}>
               New zone
             </Button>
@@ -77,7 +80,7 @@ export const ZonePanel = memo(function ZonePanel() {
         <ZoneLegend />
 
         {zones.length === 0 ? (
-          <EmptyState size="sm" icon={<Shapes />} title="No zones yet" description="Draw a keep-out or a speed zone on the floor plan." />
+          <EmptyState size="sm" icon={<Shapes />} title="No zones yet" description={canEdit ? 'Draw a keep-out or a speed zone on the floor plan.' : 'No one has drawn a zone on this floor yet.'} />
         ) : (
           <ul className="flex flex-col gap-1">
             {zones.map((z) => (
@@ -103,14 +106,16 @@ export const ZonePanel = memo(function ZonePanel() {
                   <span className="truncate text-sm text-ink-primary">{z.name}</span>
                   <StatusTag tone="neutral" size="sm">{ZONE_TYPE_LABELS[z.type] ?? z.type}</StatusTag>
                 </button>
-                <RowActions
-                  label={`Actions for ${z.name}`}
-                  size="sm"
-                  items={[
-                    { label: 'Edit', icon: <Pencil />, onSelect: () => startEditingZone(z) },
-                    { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, onSelect: () => void askDelete(z) },
-                  ]}
-                />
+                {canEdit && (
+                  <RowActions
+                    label={`Actions for ${z.name}`}
+                    size="sm"
+                    items={[
+                      { label: 'Edit', icon: <Pencil />, onSelect: () => startEditingZone(z) },
+                      { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, onSelect: () => void askDelete(z) },
+                    ]}
+                  />
+                )}
               </li>
             ))}
           </ul>

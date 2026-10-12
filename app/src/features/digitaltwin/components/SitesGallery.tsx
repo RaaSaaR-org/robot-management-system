@@ -5,7 +5,8 @@
  *   grid with live build progress, and the "New scan" modal. A card opens the
  *   twin viewer at /sites/:siteId — still a full route, because the viewer owns
  *   a point-cloud stream and a scan session that a tab click must not tear
- *   down. A card's RowActions delete a site after a confirm.
+ *   down. A card's RowActions delete a site after a confirm — offered only to a
+ *   role that may change sites (TASK-376).
  * @feature digitaltwin
  */
 
@@ -28,6 +29,7 @@ import {
 import { cn } from '@/shared/utils/cn';
 import { usePermission } from '@/features/auth/hooks/useAuth';
 import { useScanCapableRobots } from '../hooks/useScanCapableRobots';
+import { useCanEditSites } from '../hooks/useCanEditSites';
 import { useTwinStore, selectTwins } from '../store/twinStore';
 import { twinToSite, type Site } from '../types/twin.types';
 import { useTwinEvents } from '../hooks/useTwinEvents';
@@ -59,6 +61,7 @@ export function SitesGallery({ className, newScanOpen, onNewScanOpenChange }: Si
   const navigate = useNavigate();
   const { robots } = useScanCapableRobots();
   const canScan = usePermission('robots:command');
+  const canEdit = useCanEditSites();
   // Select the stable `twins` slice and map to the view model with useMemo —
   // mapping inside a Zustand selector returns a fresh array every render and
   // trips useSyncExternalStore's caching (infinite re-render loop).
@@ -177,7 +180,7 @@ export function SitesGallery({ className, newScanOpen, onNewScanOpenChange }: Si
             robotName={robotNames[site.robotId]}
             buildProgress={progressByTwin[site.id]}
             onOpen={(id) => navigate(`/sites/${id}`)}
-            onDelete={(s) => void askDelete(s)}
+            onDelete={canEdit ? (s) => void askDelete(s) : undefined}
           />
         ))}
       </div>
