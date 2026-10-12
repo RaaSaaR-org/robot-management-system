@@ -3,7 +3,7 @@ id: "TASK-382"
 aliases: []
 title: "A latched E-stop refuses moves and a returning robot can be stopped at once"
 slug: "a-latched-e-stop-refuses-moves-and-a-returning-robot-can-be-stopped-at-once"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
@@ -72,13 +72,13 @@ robot's resulting `robotStatus` so the server can mirror it.
 - `server/src/services/RobotManager.ts`
 
 ## Acceptance Criteria
-- [ ] With the E-stop latched, `execute()` of `move`, `charge`, `return_home`, `pickup`, `drop` returns `failed` with an E-stop message; location, target and status are unchanged.
-- [ ] `moveTo`, `goToCharge`, `returnHome`, `pickup`, `drop` and `executeVLAAction` refuse while latched (tools, A2A, task queue), and no walk is started on real locomotion.
-- [ ] `stop` and `emergency_stop` still run while latched.
-- [ ] A `RobotStateManager` whose persisted latch was restored on construction refuses a move.
-- [ ] The server's robot E-stop and reset are attempted even when the cached `isConnected` is false; a successful answer marks the robot connected and updates its status and emits `robot_status_changed` at once.
-- [ ] `sendCommand` attempts `stop`/`emergency_stop` regardless of `isConnected`; other commands keep the precondition.
-- [ ] An unreachable robot still fails the E-stop with an error (never reported as stopped).
+- [x] With the E-stop latched, `execute()` of `move`, `charge`, `return_home`, `pickup`, `drop` returns `failed` with an E-stop message; location, target and status are unchanged.
+- [x] `moveTo`, `goToCharge`, `returnHome`, `pickup`, `drop` and `executeVLAAction` refuse while latched (tools, A2A, task queue), and no walk is started on real locomotion.
+- [x] `stop` and `emergency_stop` still run while latched.
+- [x] A `RobotStateManager` whose persisted latch was restored on construction refuses a move.
+- [x] The server's robot E-stop and reset are attempted even when the cached `isConnected` is false; a successful answer marks the robot connected and updates its status and emits `robot_status_changed` at once.
+- [x] `sendCommand` attempts `stop`/`emergency_stop` regardless of `isConnected`; other commands keep the precondition.
+- [x] An unreachable robot still fails the E-stop with an error (never reported as stopped).
 
 ## Test Strategy
 
@@ -88,3 +88,6 @@ restored-latch test, and SafetyService/RobotManager tests with a stale
 components.
 
 ## Notes
+Fleet and zone E-stops now also attempt robots whose cached status is `offline`
+(the same 30 s lag); one that still does not answer is left out of the result,
+as before, so a long-dead robot does not turn every fleet stop into a failure.
