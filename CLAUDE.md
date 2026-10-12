@@ -130,11 +130,14 @@ cp robot-agent/.env.example robot-agent/.env
 | **Server** | `cd server && npm run dev`      | `npm run build` | `npm run typecheck` |
 | **Robot**  | `cd robot-agent && npm run dev` | `npm run build` | `npm run typecheck` |
 
-Robot agent supports per-embodiment dev profiles:
+Robot agent supports per-embodiment dev profiles. Each sets `ROBOT_TYPE` itself and
+reads its own env file (`dev:g1` → `.env.g1`); when that file is missing the agent
+warns and falls back to `.env`, so the robot type is right but port and robot id are
+the defaults until you create it from `.env.example`:
 
 ```bash
 cd robot-agent
-npm run dev          # Default (SimBot Light)
+npm run dev          # Reads .env; ROBOT_TYPE from it, else Unitree H1
 npm run dev:so101    # SO-ARM100 robot arm
 npm run dev:h1       # Unitree H1 humanoid
 npm run dev:g1       # Unitree G1 humanoid
@@ -148,7 +151,7 @@ A CLI for controlling robot agents lives in `robot-agent/cli/`. See `robot-agent
 ```bash
 cd robot-agent/cli && npm run dev -- status       # Robot status
 cd robot-agent/cli && npm run dev -- telemetry    # Live telemetry
-cd robot-agent/cli && npm run dev -- move "CHARGING-A"  # Send to a place
+cd robot-agent/cli && npm run dev -- move "CHARGING-A"  # Send to a place (exits 1 if the robot fails it)
 cd robot-agent/cli && npm run dev -- health       # Health check
 cd robot-agent/cli && npm run dev                 # Interactive REPL mode
 
