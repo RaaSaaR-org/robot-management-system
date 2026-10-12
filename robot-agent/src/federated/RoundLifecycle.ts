@@ -8,6 +8,7 @@
 import { FederatedClient } from './FederatedClient.js';
 import { LocalTrainer } from './LocalTrainer.js';
 import { DifferentialPrivacy } from './DifferentialPrivacy.js';
+import { logPollTransition, startBackoffPoll, type BackoffAttempt, type BackoffPoll } from '../utils/backoff-poll.js';
 import type {
   FederatedRound,
   FederatedStatus,
@@ -54,7 +55,7 @@ export class RoundLifecycle {
   private readonly getLocalEpisodes: () => Promise<TrainingEpisode[]>;
 
   private listeners: Set<FederatedEventListener> = new Set();
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private poll: BackoffPoll | null = null;
   private running: boolean = false;
   private currentRoundId: string | null = null;
   private phase: FederatedStatus['phase'] = 'idle';
@@ -90,22 +91,22 @@ export class RoundLifecycle {
     this.phase = 'waiting';
     console.log(`[FederatedLearning] Lifecycle started, polling every ${this.pollIntervalMs}ms`);
 
-    // Initial check
-    void this.checkForRounds();
-
-    this.pollTimer = setInterval(() => {
-      void this.checkForRounds();
-    }, this.pollIntervalMs);
+    // Initial check now, then every pollIntervalMs — backing off while the
+    // platform keeps failing (e.g. a server without the federated routes answers
+    // 404), so an outage is one log line rather than one every 30 s (TASK-372).
+    this.poll = startBackoffPoll({
+      baseMs: this.pollIntervalMs,
+      run: () => this.checkForRounds(),
+      onTransition: (t) => logPollTransition('FederatedLearning', 'open rounds', t),
+    });
   }
 
   /**
    * Stop the lifecycle polling loop.
    */
   stop(): void {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
+    this.poll?.stop();
+    this.poll = null;
     this.running = false;
     this.phase = 'idle';
     console.log('[FederatedLearning] Lifecycle stopped');
@@ -142,10 +143,10 @@ export class RoundLifecycle {
   /**
    * Poll the server for open rounds and participate if available.
    */
-  private async checkForRounds(): Promise<void> {
+  private async checkForRounds(): Promise<BackoffAttempt> {
     // Skip if already participating in a round
     if (this.phase !== 'waiting') {
-      return;
+      return { ok: true };
     }
 
     try {
@@ -157,9 +158,11 @@ export class RoundLifecycle {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      console.warn(`[FederatedLearning] Error checking for rounds: ${message}`);
-      // Don't set error phase — transient network errors shouldn't stop polling
+      // Don't set error phase — transient network errors shouldn't stop polling.
+      // The poll loop logs the first failure and the recovery, not every attempt.
+      return { ok: false, error: message };
     }
+    return { ok: true };
   }
 
   /**

@@ -334,4 +334,33 @@ describe('RoundLifecycle', () => {
       lifecycle.stop();
     });
   });
+
+  describe('polling backoff (TASK-372)', () => {
+    it('backs off while the rounds endpoint answers 404 and logs only the transitions', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      fetchMock.mockResolvedValue({ ok: false, status: 404, statusText: 'Not Found', text: async () => 'Not Found' });
+
+      const lifecycle = createLifecycle();
+      lifecycle.start();
+      // A fixed 30 s interval would make 11 calls in 5 min; backoff makes
+      // 0 s, 60 s, 180 s → 3.
+      await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      const failingLines = warn.mock.calls.filter((c) => String(c[0]).includes('[FederatedLearning]'));
+      expect(failingLines).toHaveLength(1);
+      expect(String(failingLines[0][0])).toContain('retrying with backoff');
+
+      // The platform comes back: one recovery line, then the base interval again.
+      fetchMock.mockReset();
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({ rounds: [] }) });
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      const callsAfterRecovery = fetchMock.mock.calls.length;
+      expect(log.mock.calls.some((c) => String(c[0]).includes('reachable again'))).toBe(true);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fetchMock.mock.calls.length - callsAfterRecovery).toBe(2);
+
+      lifecycle.stop();
+    });
+  });
 });

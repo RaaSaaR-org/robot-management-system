@@ -90,6 +90,7 @@ import {
   type PersistedState,
 } from './StatePersistence.js';
 import { config as appConfig } from '../config/config.js';
+import { logPollTransition, startBackoffPoll, type BackoffPoll } from '../utils/backoff-poll.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -314,7 +315,7 @@ export class RobotStateManager {
   /** JSON of {@link frameRegistration}, so an unchanged poll changes nothing. */
   private frameRegistrationKey: string | null = null;
   /** Background poll of the registration (TASK-342). */
-  private registrationRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private registrationRefreshPoll: BackoffPoll | null = null;
   /** The odometry frame id {@link placeFrame} was assessed for (TASK-342). */
   private placeFrameOdomId: string | null = null;
   /**
@@ -340,7 +341,7 @@ export class RobotStateManager {
   /** JSON of the adopted graph, so an unchanged periodic refresh keeps the tracker. */
   private placeGraphKey: string | null = null;
   /** Background refresh of a platform-served graph (TASK-328). */
-  private placeRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private placeRefreshPoll: BackoffPoll | null = null;
   /** Latched so "no site" is logged once per unbinding, not once per refresh. */
   private placeUnboundLogged = false;
   /**
@@ -703,20 +704,28 @@ export class RobotStateManager {
    * Poll the platform for this robot's frame registration (TASK-342). An
    * operator's alignment reaches the fence within one poll; a platform that
    * cannot be asked keeps the last answer, and its authoritative "none" drops it.
+   *
+   * Both "found" and the server's own "none" are answers and keep the base
+   * interval. Only a failure — a platform without the route (bare 404), an
+   * unreachable server — backs off, and is logged once, not every 5 s (TASK-372).
    */
   private startFrameRegistrationRefresh(): void {
     const source = new FrameRegistrationSource({ serverUrl: appConfig.serverUrl, robotId: appConfig.robotId });
-    const tick = (): void => {
-      void source.refresh().then((result) => {
-        if (result.kind === 'found') this.setFrameRegistration(result.registration);
-        else if (result.kind === 'none') this.setFrameRegistration(null);
-      });
+    const tick = async (): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const result = await source.refresh();
+      if (result.kind === 'found') this.setFrameRegistration(result.registration);
+      else if (result.kind === 'none') this.setFrameRegistration(null);
+      return result.kind === 'error' ? { ok: false, error: result.error } : { ok: true };
     };
-    tick();
-    if (appConfig.place.registrationRefreshMs > 0) {
-      this.registrationRefreshTimer = setInterval(tick, appConfig.place.registrationRefreshMs);
-      this.registrationRefreshTimer.unref?.();
+    if (appConfig.place.registrationRefreshMs <= 0) {
+      void tick();
+      return;
     }
+    this.registrationRefreshPoll = startBackoffPoll({
+      baseMs: appConfig.place.registrationRefreshMs,
+      run: tick,
+      onTransition: (t) => logPollTransition('FrameRegistration', source.url, t),
+    });
   }
 
   /** Install (or with null, forget) the platform's registration and re-judge the frame. */
@@ -746,8 +755,8 @@ export class RobotStateManager {
    * (or no graph) exactly as it was.
    */
   private startPlaceGraphRefresh(source: PlaceGraphSource): void {
-    const tick = (): void => {
-      void source
+    const tick = (): Promise<{ ok: true } | { ok: false; error: string }> =>
+      source
         .refresh()
         .then((result) => {
           if (result.origin === 'server' && result.graph) {
@@ -759,16 +768,25 @@ export class RobotStateManager {
             }
             this.dropPlaceGraph();
           }
-        })
-        .catch(() => {
-          /* refresh() never rejects; this is belt and braces. */
+          // 'cache' and 'none' mean the platform could not be asked: back off.
+          // PlaceGraphSource already logs each distinct failure once.
+          return result.origin === 'server' || result.origin === 'unbound'
+            ? ({ ok: true } as const)
+            : ({ ok: false, error: result.error ?? 'unavailable' } as const);
         });
-    };
-    tick();
-    if (appConfig.place.refreshMs > 0) {
-      this.placeRefreshTimer = setInterval(tick, appConfig.place.refreshMs);
-      this.placeRefreshTimer.unref?.();
+    if (appConfig.place.refreshMs <= 0) {
+      void tick().catch(() => undefined);
+      return;
     }
+    this.placeRefreshPoll = startBackoffPoll({
+      baseMs: appConfig.place.refreshMs,
+      run: tick,
+      // PlaceGraphSource already reports each distinct failure, so only the
+      // recovery is logged here — once, when the platform answers again.
+      onTransition: (t) => {
+        if (t.kind === 'recovered') logPollTransition('PlaceGraph', source.url, t);
+      },
+    });
   }
 
   /**
@@ -1921,10 +1939,10 @@ export class RobotStateManager {
     // does not outlive the manager that owns the tracker.
     this.unsubscribePose?.();
     this.unsubscribePose = null;
-    if (this.placeRefreshTimer) clearInterval(this.placeRefreshTimer);
-    this.placeRefreshTimer = null;
-    if (this.registrationRefreshTimer) clearInterval(this.registrationRefreshTimer);
-    this.registrationRefreshTimer = null;
+    this.placeRefreshPoll?.stop();
+    this.placeRefreshPoll = null;
+    this.registrationRefreshPoll?.stop();
+    this.registrationRefreshPoll = null;
   }
 
   // ============================================================================

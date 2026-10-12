@@ -246,4 +246,48 @@ describe('a robot on odometry fences its site once registered (TASK-342)', () =>
     await new Promise((r) => setTimeout(r, 40));
     expect(m.getPlaceFrameRegistration()?.registered).toBe(true);
   });
+
+  it('a platform without the route backs off and says so once; its own "none" keeps the base interval (TASK-372)', async () => {
+    const calls = (): number =>
+      (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((c) => String(c[0]).endsWith('/frame-registration'))
+        .length;
+
+    // The server's authoritative "none" (404 + body) is an answer: base 10 ms cadence.
+    // Bounds are loose on purpose (wall-clock timers on a loaded runner): backoff
+    // from 10 ms would make at most ~4 calls in 300 ms; healthy makes ~30.
+    let before = calls();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls() - before).toBeGreaterThanOrEqual(8);
+
+    // A bare 404 — a platform that predates the route — is a failure: 10 ms
+    // doubling (20, 40, 80, 160 ms…) makes at most a handful of calls in 300 ms.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) =>
+        String(url).endsWith('/frame-registration') ? json(404, { error: 'Not Found' }) : json(200, SITE_GRAPH),
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 30)); // let the in-flight base-cadence tick land on the new fetch
+    before = calls();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls() - before).toBeLessThanOrEqual(6);
+    const lines = warn.mock.calls.filter((c) => String(c[0]).startsWith('[FrameRegistration]'));
+    expect(lines).toHaveLength(1);
+    expect(String(lines[0][0])).toContain('HTTP 404');
+
+    // The platform gains the route: the next attempt recovers, logs it once, and
+    // the registration it serves is installed.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) =>
+        String(url).endsWith('/frame-registration') ? json(200, REGISTRATION) : json(200, SITE_GRAPH),
+      ),
+    );
+    await vi.waitFor(() => expect(m.getPlaceFrameRegistration()?.registered).toBe(true), { timeout: 3000 });
+    const recovered = log.mock.calls.filter((c) => String(c[0]).startsWith('[FrameRegistration]'));
+    expect(recovered).toHaveLength(1);
+    expect(String(recovered[0][0])).toContain('reachable again');
+  });
 });

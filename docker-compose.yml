@@ -43,7 +43,9 @@ services:
   # Single-node for development. Container runs as UID 10001 (rustfs user).
   # --------------------------------------------------------------------------
   rustfs:
-    image: rustfs/rustfs:latest
+    # Pinned to the same version as helm/neodem/values.yaml: `latest` changed
+    # under running installs (TASK-364, TASK-372).
+    image: rustfs/rustfs:1.0.0
     container_name: neodem-rustfs
     ports:
       - "9000:9000"   # S3 API
@@ -61,7 +63,8 @@ services:
 
   # Bucket initialization container (uses AWS CLI for S3-compatible operations)
   rustfs-init:
-    image: amazon/aws-cli:latest
+    # Pinned like RustFS above, same tag as the Helm chart's init job.
+    image: amazon/aws-cli:2.37.4
     container_name: neodem-rustfs-init
     depends_on:
       rustfs:
