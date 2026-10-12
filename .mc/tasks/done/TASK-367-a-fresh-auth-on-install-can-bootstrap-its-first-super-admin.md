@@ -3,7 +3,7 @@ id: "TASK-367"
 aliases: ["TASK-367"]
 title: "A fresh auth-on install can bootstrap its first super-admin"
 slug: "a-fresh-auth-on-install-can-bootstrap-its-first-super-admin"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
