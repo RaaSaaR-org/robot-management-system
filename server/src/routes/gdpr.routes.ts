@@ -51,6 +51,7 @@ import {
 import { sendFailure } from '../utils/routeErrors.js';
 import type { AuthenticatedRequest, AuthUser, UserRole } from '../middleware/auth.middleware.js';
 import { prisma } from '../database/index.js';
+import { parseIntegerParam } from '../utils/pagination.js';
 
 /**
  * Roles that may file a request or change a consent on someone else's behalf
@@ -564,14 +565,14 @@ gdprRoutes.get('/admin/requests', async (req: Request, res: Response) => {
 
     const result = await gdprRequestService.getAllRequests(
       filters,
-      parseInt(page as string) || 1,
-      parseInt(limit as string) || 20,
+      parseIntegerParam(page, 'page', { min: 1 }) ?? 1,
+      parseIntegerParam(limit, 'limit', { min: 1 }) ?? 20,
     );
 
     res.json(result);
   } catch (error) {
     console.error('Error fetching admin requests:', error);
-    res.status(500).json({ error: 'Failed to fetch requests' });
+    sendFailure(res, error, 'Failed to fetch requests');
   }
 });
 

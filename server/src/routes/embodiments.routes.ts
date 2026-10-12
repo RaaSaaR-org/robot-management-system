@@ -12,6 +12,7 @@ import type {
   EmbodimentQueryParams,
 } from '../types/embodiment.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parseIntegerParam } from '../utils/pagination.js';
 
 export const embodimentsRoutes = Router();
 
@@ -70,8 +71,8 @@ embodimentsRoutes.get('/', async (req: Request, res: Response) => {
       manufacturer: query.manufacturer,
       model: query.model,
       robotTypeId: query.robotTypeId,
-      page: query.page ? parseInt(query.page, 10) : undefined,
-      pageSize: query.pageSize ? parseInt(query.pageSize, 10) : undefined,
+      page: parseIntegerParam(query.page, 'page', { min: 1 }),
+      pageSize: parseIntegerParam(query.pageSize, 'pageSize', { min: 1 }),
     };
 
     const result = await embodimentService.listEmbodiments(params);

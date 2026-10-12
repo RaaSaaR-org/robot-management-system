@@ -60,6 +60,7 @@ import { analyzeDatasetIds, UnknownDatasetError } from '../services/lerobot/data
 import { ConflictError, ServiceUnavailableError } from '../utils/errors.js';
 import { ownerOnly } from '../middleware/auth.middleware.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parsePagination, parseIntegerParam } from '../utils/pagination.js';
 
 /** In-memory job state for push-to-hub operations */
 const pushJobs = new Map<string, PushToHubJobState>();
@@ -499,8 +500,8 @@ datasetRoutes.get('/', async (req: Request, res: Response) => {
       robotTypeId: query.robotTypeId,
       skillId: query.skillId,
       minQuality: query.minQuality ? parseInt(query.minQuality, 10) : undefined,
-      page: query.page ? parseInt(query.page, 10) : undefined,
-      limit: query.limit ? parseInt(query.limit, 10) : undefined,
+      page: parseIntegerParam(query.page, 'page', { min: 1 }),
+      limit: parseIntegerParam(query.limit, 'limit', { min: 1 }),
     };
 
     // Parse status parameter (can be comma-separated)
@@ -517,8 +518,7 @@ datasetRoutes.get('/', async (req: Request, res: Response) => {
       pagination: result.pagination,
     });
   } catch (error) {
-    console.error('[DatasetRoutes] Error listing datasets:', error);
-    res.status(500).json({ error: 'Failed to list datasets' });
+    sendFailure(res, error, 'Failed to list datasets');
   }
 });
 
@@ -1729,8 +1729,7 @@ datasetRoutes.get('/:id/flagged', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const query = req.query as Record<string, string | undefined>;
-    const page = query.page ? parseInt(query.page, 10) : 1;
-    const limit = query.limit ? parseInt(query.limit, 10) : 20;
+    const { page, limit } = parsePagination(query, { defaultLimit: 20 });
 
     // Check if dataset exists
     const dataset = await datasetService.get(id);
@@ -1748,8 +1747,7 @@ datasetRoutes.get('/:id/flagged', async (req: Request, res: Response) => {
     };
     res.json(payload);
   } catch (error) {
-    console.error('[DatasetRoutes] Error getting flagged trajectories:', error);
-    res.status(500).json({ error: 'Failed to get flagged trajectories' });
+    sendFailure(res, error, 'Failed to get flagged trajectories');
   }
 });
 

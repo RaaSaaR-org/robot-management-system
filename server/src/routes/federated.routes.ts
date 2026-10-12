@@ -16,6 +16,7 @@ import type {
 import { sendFailure } from '../utils/routeErrors.js';
 import { auditBuildAct } from '../services/buildAudit.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { parseOffsetPagination } from '../utils/pagination.js';
 
 export const federatedRoutes = Router();
 
@@ -62,23 +63,24 @@ federatedRoutes.post('/rounds', async (req: Request, res: Response) => {
 federatedRoutes.get('/rounds', async (req: Request, res: Response) => {
   try {
     const query = req.query as Record<string, string | undefined>;
+    const { limit, offset } = parseOffsetPagination(query, { defaultLimit: 50 });
 
     const { rounds, total } = await federatedLearningService.listRounds({
       status: query.status as FederatedRoundStatus | undefined,
       globalModelVersion: query.globalModelVersion,
-      limit: query.limit ? parseInt(query.limit, 10) : 50,
-      offset: query.offset ? parseInt(query.offset, 10) : 0,
+      limit,
+      offset,
     });
 
     res.json({
       rounds,
       total,
-      limit: query.limit ? parseInt(query.limit, 10) : 50,
-      offset: query.offset ? parseInt(query.offset, 10) : 0,
+      limit,
+      offset,
     });
   } catch (error) {
     console.error('[FederatedRoutes] Error listing rounds:', error);
-    res.status(500).json({ error: 'Failed to list rounds' });
+    sendFailure(res, error, 'Failed to list rounds');
   }
 });
 

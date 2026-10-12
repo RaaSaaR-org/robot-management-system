@@ -11,6 +11,7 @@ import { modelVersionRepository, skillDefinitionRepository } from '../repositori
 import { HttpClient } from '../services/HttpClient.js';
 import { RewardTypes, type RewardType } from '../types/vla.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parseIntegerParam } from '../utils/pagination.js';
 
 export const evaluationRoutes = Router();
 
@@ -152,14 +153,14 @@ evaluationRoutes.get('/episodes', async (req: Request, res: Response) => {
       modelVersion: modelVersion as string | undefined,
       period: period as EvaluationPeriod | undefined,
       success: success !== undefined ? success === 'true' : undefined,
-      page: page ? parseInt(page as string, 10) : undefined,
-      limit: limit ? parseInt(limit as string, 10) : undefined,
+      page: parseIntegerParam(page, 'page', { min: 1 }),
+      limit: parseIntegerParam(limit, 'limit', { min: 1 }),
     });
 
     res.json(result);
   } catch (error) {
     console.error('[EvaluationRoutes] Error listing episodes:', error);
-    res.status(500).json({ error: 'Failed to list evaluation episodes' });
+    sendFailure(res, error, 'Failed to list evaluation episodes');
   }
 });
 

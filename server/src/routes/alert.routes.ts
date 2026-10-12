@@ -5,6 +5,8 @@
 
 import { Router, type Request, type Response } from 'express';
 import { alertService, type AlertSeverity, type AlertSource } from '../services/AlertService.js';
+import { parsePagination } from '../utils/pagination.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const alertRoutes = Router();
 
@@ -69,16 +71,16 @@ alertRoutes.get('/', async (req: Request, res: Response) => {
       filters.endDate = new Date(endDate as string);
     }
 
-    const pagination = {
-      page: page ? parseInt(page as string, 10) : 1,
-      pageSize: pageSize ? parseInt(pageSize as string, 10) : 50,
-    };
+    const { page: pageNum, limit: pageSizeNum } = parsePagination(
+      { page, pageSize },
+      { limitParam: 'pageSize', defaultLimit: 50 }
+    );
+    const pagination = { page: pageNum, pageSize: pageSizeNum };
 
     const result = await alertService.getAlerts(filters, pagination);
     res.json(result);
   } catch (error) {
-    console.error('Error listing alerts:', error);
-    res.status(500).json({ error: 'Failed to list alerts' });
+    sendFailure(res, error, 'Failed to list alerts');
   }
 });
 
@@ -171,16 +173,16 @@ alertRoutes.get('/history', async (req: Request, res: Response) => {
       filtersParsed.endDate = new Date(filters.endDate as string);
     }
 
-    const pagination = {
-      page: page ? parseInt(page as string, 10) : 1,
-      pageSize: pageSize ? parseInt(pageSize as string, 10) : 50,
-    };
+    const { page: pageNum, limit: pageSizeNum } = parsePagination(
+      { page, pageSize },
+      { limitParam: 'pageSize', defaultLimit: 50 }
+    );
+    const pagination = { page: pageNum, pageSize: pageSizeNum };
 
     const result = await alertService.getAlertHistory(filtersParsed, pagination);
     res.json(result);
   } catch (error) {
-    console.error('Error getting alert history:', error);
-    res.status(500).json({ error: 'Failed to get alert history' });
+    sendFailure(res, error, 'Failed to get alert history');
   }
 });
 

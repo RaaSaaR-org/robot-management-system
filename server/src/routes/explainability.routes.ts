@@ -6,6 +6,8 @@
 import { Router, type Request, type Response } from 'express';
 import { explainabilityService } from '../services/ExplainabilityService.js';
 import type { DecisionType } from '../repositories/DecisionRepository.js';
+import { parseIntegerParam } from '../utils/pagination.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const explainabilityRoutes = Router();
 
@@ -28,8 +30,8 @@ explainabilityRoutes.get('/decisions', async (req: Request, res: Response) => {
     const { page, pageSize, robotId, decisionType, startDate, endDate } = req.query;
 
     const params = {
-      page: page ? parseInt(page as string, 10) : 1,
-      pageSize: pageSize ? parseInt(pageSize as string, 10) : 50,
+      page: parseIntegerParam(page, 'page', { min: 1 }) ?? 1,
+      pageSize: parseIntegerParam(pageSize, 'pageSize', { min: 1 }) ?? 50,
       robotId: robotId as string | undefined,
       decisionType: decisionType as DecisionType | undefined,
       startDate: startDate ? new Date(startDate as string) : undefined,
@@ -39,8 +41,7 @@ explainabilityRoutes.get('/decisions', async (req: Request, res: Response) => {
     const result = await explainabilityService.listDecisions(params);
     res.json(result);
   } catch (error) {
-    console.error('Error fetching decisions:', error);
-    res.status(500).json({ error: 'Failed to fetch decisions' });
+    sendFailure(res, error, 'Failed to fetch decisions');
   }
 });
 

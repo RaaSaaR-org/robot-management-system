@@ -18,6 +18,7 @@ import type {
   ContributionLicenseType,
 } from '../types/contribution.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parseIntegerParam, parseOffsetPagination } from '../utils/pagination.js';
 
 export const contributionsRoutes = Router();
 
@@ -147,24 +148,25 @@ contributionsRoutes.get('/', async (req: Request, res: Response) => {
   try {
     const query = req.query as Record<string, string | undefined>;
     const userId = (req as any).user?.id || query.userId;
+    const { limit, offset } = parseOffsetPagination(query, { defaultLimit: 50 });
 
     const { contributions, total } = dataContributionService.listContributions({
       userId,
       status: query.status as ContributionStatus | undefined,
       licenseType: query.licenseType as ContributionLicenseType | undefined,
-      limit: query.limit ? parseInt(query.limit, 10) : 50,
-      offset: query.offset ? parseInt(query.offset, 10) : 0,
+      limit,
+      offset,
     });
 
     res.json({
       contributions,
       total,
-      limit: query.limit ? parseInt(query.limit, 10) : 50,
-      offset: query.offset ? parseInt(query.offset, 10) : 0,
+      limit,
+      offset,
     });
   } catch (error) {
     console.error('[ContributionsRoutes] Error listing contributions:', error);
-    res.status(500).json({ error: 'Failed to list contributions' });
+    sendFailure(res, error, 'Failed to list contributions');
   }
 });
 
@@ -269,8 +271,8 @@ contributionsRoutes.get('/credits/history', async (req: Request, res: Response) 
     const query = req.query as Record<string, string | undefined>;
 
     const history = dataContributionService.getCreditHistory(userId, {
-      limit: query.limit ? parseInt(query.limit, 10) : 50,
-      offset: query.offset ? parseInt(query.offset, 10) : 0,
+      limit: parseIntegerParam(query.limit, 'limit', { min: 1 }) ?? 50,
+      offset: parseIntegerParam(query.offset, 'offset', { min: 0 }) ?? 0,
     });
 
     res.json({
@@ -279,7 +281,7 @@ contributionsRoutes.get('/credits/history', async (req: Request, res: Response) 
     });
   } catch (error) {
     console.error('[ContributionsRoutes] Error getting credit history:', error);
-    res.status(500).json({ error: 'Failed to get credit history' });
+    sendFailure(res, error, 'Failed to get credit history');
   }
 });
 
@@ -366,7 +368,7 @@ contributionsRoutes.get('/leaderboard', async (req: Request, res: Response) => {
     const query = req.query as Record<string, string | undefined>;
 
     const leaderboard = dataContributionService.getLeaderboard({
-      limit: query.limit ? parseInt(query.limit, 10) : 100,
+      limit: parseIntegerParam(query.limit, 'limit', { min: 1 }) ?? 100,
       organizationId: query.organizationId,
     });
 
@@ -376,7 +378,7 @@ contributionsRoutes.get('/leaderboard', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[ContributionsRoutes] Error getting leaderboard:', error);
-    res.status(500).json({ error: 'Failed to get leaderboard' });
+    sendFailure(res, error, 'Failed to get leaderboard');
   }
 });
 
@@ -458,8 +460,8 @@ contributionsRoutes.get('/db', async (req: Request, res: Response) => {
     const result = await contributionService.getContributions({
       userId: userId || undefined,
       status: status as string | undefined,
-      limit: limit ? parseInt(String(limit), 10) : 50,
-      offset: offset ? parseInt(String(offset), 10) : 0,
+      limit: parseIntegerParam(limit, 'limit', { min: 1 }) ?? 50,
+      offset: parseIntegerParam(offset, 'offset', { min: 0 }) ?? 0,
     });
 
     res.json({
@@ -471,7 +473,7 @@ contributionsRoutes.get('/db', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[ContributionsRoutes] Error listing contributions (db):', error);
-    res.status(500).json({ error: 'Failed to list contributions' });
+    sendFailure(res, error, 'Failed to list contributions');
   }
 });
 
@@ -497,13 +499,13 @@ contributionsRoutes.get('/credits/balance', async (req: Request, res: Response) 
  */
 contributionsRoutes.get('/db/leaderboard', async (req: Request, res: Response) => {
   try {
-    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 10;
+    const limit = parseIntegerParam(req.query.limit, 'limit', { min: 1 }) ?? 10;
     const leaderboard = await contributionService.getLeaderboard(limit);
 
     res.json({ leaderboard, count: leaderboard.length });
   } catch (error) {
     console.error('[ContributionsRoutes] Error getting leaderboard (db):', error);
-    res.status(500).json({ error: 'Failed to get leaderboard' });
+    sendFailure(res, error, 'Failed to get leaderboard');
   }
 });
 

@@ -12,6 +12,8 @@ import type {
   SyntheticJobStatus,
   IsaacLabTask,
 } from '../types/synthetic.types.js';
+import { parseOffsetPagination } from '../utils/pagination.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const syntheticRoutes = Router();
 
@@ -89,24 +91,25 @@ syntheticRoutes.post('/jobs', async (req: Request, res: Response) => {
 syntheticRoutes.get('/jobs', async (req: Request, res: Response) => {
   try {
     const query = req.query as Record<string, string | undefined>;
+    const { limit, offset } = parseOffsetPagination(query, { defaultLimit: 50 });
 
     const { jobs, total } = await syntheticDataService.listJobs({
       status: query.status as SyntheticJobStatus | undefined,
       task: query.task as IsaacLabTask | undefined,
       embodiment: query.embodiment,
-      limit: query.limit ? parseInt(query.limit, 10) : 50,
-      offset: query.offset ? parseInt(query.offset, 10) : 0,
+      limit,
+      offset,
     });
 
     res.json({
       jobs,
       total,
-      limit: query.limit ? parseInt(query.limit, 10) : 50,
-      offset: query.offset ? parseInt(query.offset, 10) : 0,
+      limit,
+      offset,
     });
   } catch (error) {
     console.error('[SyntheticRoutes] Error listing jobs:', error);
-    res.status(500).json({ error: 'Failed to list jobs' });
+    sendFailure(res, error, 'Failed to list jobs');
   }
 });
 

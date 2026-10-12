@@ -14,6 +14,8 @@ import { complianceLogService } from '../services/ComplianceLogService.js';
 import { logExportService } from '../services/LogExportService.js';
 import type { ComplianceEventType, ComplianceSeverity } from '../types/compliance.types.js';
 import type { ExportOptions } from '../types/retention.types.js';
+import { parsePagination, parseIntegerParam } from '../utils/pagination.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const complianceLogRoutes = Router();
 
@@ -55,8 +57,7 @@ complianceLogRoutes.get('/logs', async (req: Request, res: Response) => {
     } = req.query;
 
     const params = {
-      page: page ? parseInt(page as string, 10) : 1,
-      limit: limit ? parseInt(limit as string, 10) : 50,
+      ...parsePagination({ page, limit }, { defaultLimit: 50 }),
       sessionId: sessionId as string | undefined,
       robotId: robotId as string | undefined,
       operatorId: operatorId as string | undefined,
@@ -72,8 +73,7 @@ complianceLogRoutes.get('/logs', async (req: Request, res: Response) => {
     const result = await complianceLogService.listLogs(params);
     res.json(result);
   } catch (error) {
-    console.error('Error fetching compliance logs:', error);
-    res.status(500).json({ error: 'Failed to fetch compliance logs' });
+    sendFailure(res, error, 'Failed to fetch compliance logs');
   }
 });
 
@@ -465,11 +465,10 @@ complianceLogRoutes.post('/export', async (req: Request, res: Response) => {
  */
 complianceLogRoutes.get('/export/history', async (req: Request, res: Response) => {
   try {
-    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
+    const limit = parseIntegerParam(req.query.limit, 'limit', { min: 1 }) ?? 50;
     const history = await logExportService.getExportHistory(limit);
     res.json({ history });
   } catch (error) {
-    console.error('Error fetching export history:', error);
-    res.status(500).json({ error: 'Failed to fetch export history' });
+    sendFailure(res, error, 'Failed to fetch export history');
   }
 });

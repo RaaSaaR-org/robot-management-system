@@ -127,8 +127,8 @@ trainingRoutes.get('/jobs', async (req: Request, res: Response) => {
     // Parse query parameters
     const params: ListTrainingJobsQuery = {
       datasetId: query.datasetId,
-      page: query.page ? parseInt(query.page, 10) : undefined,
-      pageSize: query.pageSize ? parseInt(query.pageSize, 10) : undefined,
+      page: parseIntegerParam(query.page, 'page', { min: 1 }),
+      pageSize: parseIntegerParam(query.pageSize, 'pageSize', { min: 1 }),
     };
 
     // Parse array parameters
@@ -163,7 +163,7 @@ trainingRoutes.get('/jobs', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[TrainingRoutes] Error listing jobs:', error);
-    res.status(500).json({ error: 'Failed to list training jobs' });
+    sendFailure(res, error, 'Failed to list training jobs');
   }
 });
 
@@ -331,6 +331,7 @@ import type {
   WorkerCheckpointResponse,
 } from '../types/training.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parseIntegerParam } from '../utils/pagination.js';
 
 // ============================================================================
 // POST /api/training/workers/claim - Worker claims the next pending job

@@ -18,6 +18,7 @@ import type {
   TeleoperationStatus,
 } from '../types/teleoperation.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parseIntegerParam } from '../utils/pagination.js';
 
 export const teleoperationRoutes = Router();
 
@@ -77,8 +78,8 @@ teleoperationRoutes.get('/sessions', async (req: Request, res: Response) => {
     const params: SessionListQuery = {
       operatorId: query.operatorId,
       robotId: query.robotId,
-      page: query.page ? parseInt(query.page, 10) : undefined,
-      limit: query.limit ? parseInt(query.limit, 10) : undefined,
+      page: parseIntegerParam(query.page, 'page', { min: 1 }),
+      limit: parseIntegerParam(query.limit, 'limit', { min: 1 }),
     };
 
     // Parse type parameter
@@ -111,7 +112,7 @@ teleoperationRoutes.get('/sessions', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error listing sessions:', error);
-    res.status(500).json({ error: 'Failed to list sessions' });
+    sendFailure(res, error, 'Failed to list sessions');
   }
 });
 
@@ -326,7 +327,7 @@ teleoperationRoutes.get('/sessions/:id/frames', async (req: Request, res: Respon
     const query = req.query as Record<string, string | undefined>;
 
     const startIndex = query.startIndex ? parseInt(query.startIndex, 10) : undefined;
-    const limit = query.limit ? parseInt(query.limit, 10) : undefined;
+    const limit = parseIntegerParam(query.limit, 'limit', { min: 1 });
 
     const frames = await teleoperationService.getFrames(id, startIndex, limit);
 
@@ -337,7 +338,7 @@ teleoperationRoutes.get('/sessions/:id/frames', async (req: Request, res: Respon
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error getting frames:', error);
-    res.status(500).json({ error: 'Failed to get frames' });
+    sendFailure(res, error, 'Failed to get frames');
   }
 });
 
