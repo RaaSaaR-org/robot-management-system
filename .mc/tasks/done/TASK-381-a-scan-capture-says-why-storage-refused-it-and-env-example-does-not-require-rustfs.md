@@ -3,7 +3,7 @@ id: "TASK-381"
 aliases: []
 title: "A scan capture says why storage refused it and .env.example does not require RustFS"
 slug: "a-scan-capture-says-why-storage-refused-it-and-env-example-does-not-require-rustfs"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -52,12 +52,12 @@ Follow-ups from the TASK-350 review (PR #404, merged). Since TASK-350, a configu
 
 ## Acceptance Criteria
 
-- [ ] `POST /api/robots/:id/pointcloud/capture` answers 503 with `code: STORAGE_UNAVAILABLE`, `state`, `errorKind` when the service throws `StorageUnavailableError`; 201, 404, 502 and the unechoed 500 are unchanged.
-- [ ] Patrol routes answer a `StorageUnavailableError` with the same body fields `sendFailure` gives it.
-- [ ] `PUT /api/incidents/:id/clip` has a route test for the 503 shape.
-- [ ] `server/.env.example` leaves `RUSTFS_ENDPOINT` unset and says setting it makes RustFS required.
-- [ ] `CLAUDE.md` "Current Limitations" states that RustFS is optional only while `RUSTFS_ENDPOINT` is unset.
-- [ ] The cleanup-job skip reason says "configured but not ready".
+- [x] `POST /api/robots/:id/pointcloud/capture` answers 503 with `code: STORAGE_UNAVAILABLE`, `state`, `errorKind` when the service throws `StorageUnavailableError`; 201, 404, 502 and the unechoed 500 are unchanged.
+- [x] Patrol routes answer a `StorageUnavailableError` with the same body fields `sendFailure` gives it.
+- [x] `PUT /api/incidents/:id/clip` has a route test for the 503 shape.
+- [x] `server/.env.example` leaves `RUSTFS_ENDPOINT` unset and says setting it makes RustFS required.
+- [x] `CLAUDE.md` "Current Limitations" states that RustFS is optional only while `RUSTFS_ENDPOINT` is unset.
+- [x] The cleanup-job skip reason says "configured but not ready".
 
 ## Test Strategy
 
