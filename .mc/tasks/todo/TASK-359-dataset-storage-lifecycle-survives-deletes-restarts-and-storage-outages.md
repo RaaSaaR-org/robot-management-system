@@ -3,7 +3,7 @@ id: "TASK-359"
 aliases: ["TASK-359"]
 title: "Dataset storage lifecycle survives deletes, restarts and storage outages"
 slug: "dataset-storage-lifecycle-survives-deletes-restarts-and-storage-outages"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
