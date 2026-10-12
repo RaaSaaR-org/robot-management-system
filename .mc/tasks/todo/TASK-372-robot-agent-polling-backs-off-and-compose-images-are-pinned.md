@@ -3,7 +3,7 @@ id: "TASK-372"
 aliases: ["TASK-372"]
 title: "Robot agent polling backs off and compose images are pinned"
 slug: "robot-agent-polling-backs-off-and-compose-images-are-pinned"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
