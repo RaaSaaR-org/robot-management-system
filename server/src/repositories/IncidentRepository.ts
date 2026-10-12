@@ -5,6 +5,7 @@
  */
 
 import { prisma } from '../database/index.js';
+import { Prisma } from '@prisma/client';
 import { allocateFormattedNumber } from './NumberSequenceRepository.js';
 import type {
   Incident as PrismaIncident,
@@ -260,8 +261,14 @@ export class IncidentRepository {
         include: { notifications: true },
       });
       return dbIncidentToDomain(incident);
-    } catch {
-      return null;
+    } catch (error) {
+      // Only a missing row is "not found". Anything else — a wrong-typed field
+      // Prisma refused — used to land here too and was answered 404 for an
+      // incident that exists (TASK-386); let the route map it instead.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        return null;
+      }
+      throw error;
     }
   }
 

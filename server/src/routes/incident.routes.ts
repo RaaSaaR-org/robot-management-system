@@ -11,14 +11,42 @@ import { notificationWorkflowService } from '../services/NotificationWorkflowSer
 import { SIZE_LIMITS } from '../storage/model-storage.js';
 import { prismaErrorToAppError } from '../utils/errors.js';
 import { sendFailure } from '../utils/routeErrors.js';
-import type {
-  IncidentType,
-  IncidentSeverity,
-  IncidentStatus,
-  IncidentClipPayload,
+import { parseIntegerParam } from '../utils/pagination.js';
+import {
+  IncidentTypes,
+  IncidentSeverities,
+  IncidentStatuses,
+  type IncidentType,
+  type IncidentSeverity,
+  type IncidentStatus,
+  type IncidentClipPayload,
 } from '../types/incident.types.js';
 
 export const incidentRoutes = Router();
+
+/**
+ * Check the enum and number fields an incident write may carry (TASK-386).
+ * An unknown severity used to be stored and scored as risk 100, and an
+ * unknown status got its own dashboard bucket.
+ *
+ * @returns The first problem as a sentence, or null when the fields are fine
+ */
+function incidentFieldError(body: Record<string, unknown>): string | null {
+  const { severity, status, riskScore } = body;
+  if (severity !== undefined && !(IncidentSeverities as readonly unknown[]).includes(severity)) {
+    return `Invalid severity. Must be one of: ${IncidentSeverities.join(', ')}`;
+  }
+  if (status !== undefined && !(IncidentStatuses as readonly unknown[]).includes(status)) {
+    return `Invalid status. Must be one of: ${IncidentStatuses.join(', ')}`;
+  }
+  if (
+    riskScore !== undefined &&
+    !(typeof riskScore === 'number' && Number.isInteger(riskScore) && riskScore >= 0 && riskScore <= 100)
+  ) {
+    return 'Invalid riskScore. Must be an integer from 0 to 100';
+  }
+  return null;
+}
 
 // ============================================================================
 // INCIDENT CRUD
@@ -93,13 +121,8 @@ incidentRoutes.get('/', async (req: Request, res: Response) => {
       params.endDate = new Date(endDate as string);
     }
 
-    if (page) {
-      params.page = parseInt(page as string, 10);
-    }
-
-    if (limit) {
-      params.limit = parseInt(limit as string, 10);
-    }
+    params.page = parseIntegerParam(page, 'page', { min: 1 });
+    params.limit = parseIntegerParam(limit, 'limit', { min: 1 });
 
     if (sortBy) {
       params.sortBy = sortBy as 'detectedAt' | 'severity' | 'status' | 'updatedAt';
@@ -112,8 +135,7 @@ incidentRoutes.get('/', async (req: Request, res: Response) => {
     const result = await incidentService.listIncidents(params);
     res.json(result);
   } catch (error) {
-    console.error('Error listing incidents:', error);
-    res.status(500).json({ error: 'Failed to list incidents' });
+    sendFailure(res, error, 'Failed to list incidents');
   }
 });
 
@@ -204,11 +226,15 @@ incidentRoutes.post('/', async (req: Request, res: Response) => {
       });
     }
 
-    const validTypes = ['safety', 'security', 'data_breach', 'ai_malfunction', 'vulnerability'];
-    if (!validTypes.includes(type)) {
+    if (!(IncidentTypes as readonly unknown[]).includes(type)) {
       return res.status(400).json({
-        error: `Invalid type. Must be one of: ${validTypes.join(', ')}`,
+        error: `Invalid type. Must be one of: ${IncidentTypes.join(', ')}`,
       });
+    }
+
+    const fieldError = incidentFieldError({ severity });
+    if (fieldError) {
+      return res.status(400).json({ error: fieldError });
     }
 
     // Get user ID from auth if available
@@ -267,6 +293,11 @@ incidentRoutes.patch('/:id', async (req: Request, res: Response) => {
       dataCategories,
     } = req.body;
 
+    const fieldError = incidentFieldError({ status, severity, riskScore });
+    if (fieldError) {
+      return res.status(400).json({ error: fieldError });
+    }
+
     // Build update object with only provided fields
     const update: Record<string, unknown> = {};
     if (status !== undefined) update.status = status;
@@ -292,8 +323,7 @@ incidentRoutes.patch('/:id', async (req: Request, res: Response) => {
 
     res.json(incident);
   } catch (error) {
-    console.error('Error updating incident:', error);
-    res.status(500).json({ error: 'Failed to update incident' });
+    sendFailure(res, error, 'Failed to update incident');
   }
 });
 
