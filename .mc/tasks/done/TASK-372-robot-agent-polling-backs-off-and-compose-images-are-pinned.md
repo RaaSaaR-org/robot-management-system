@@ -3,7 +3,7 @@ id: "TASK-372"
 aliases: ["TASK-372"]
 title: "Robot agent polling backs off and compose images are pinned"
 slug: "robot-agent-polling-backs-off-and-compose-images-are-pinned"
-status: "review"
+status: done
 priority: 3
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-10-12"
-updated: "2026-10-12"
+updated: 2026-10-12
 ---
 
 # Robot agent polling backs off and compose images are pinned
@@ -80,11 +80,11 @@ pinned in the Helm chart because `latest` changed under running installs.
 
 ## Acceptance Criteria
 
-- [ ] A poll that keeps failing backs off exponentially up to a cap, and resets to the base interval on success
-- [ ] A failing poll logs once when it starts failing and once when it recovers, not on every attempt
-- [ ] The frame-registration poll backs off on a bare 404 but keeps the base interval on the server's "no frame registration" answer
-- [ ] `docker-compose.yml` contains no `:latest` image, and its third-party tags match `helm/neodem/values.yaml`
-- [ ] Unit tests cover the backoff, reset, transition logging and the compose pins
+- [x] A poll that keeps failing backs off exponentially up to a cap, and resets to the base interval on success
+- [x] A failing poll logs once when it starts failing and once when it recovers, not on every attempt
+- [x] The frame-registration poll backs off on a bare 404 but keeps the base interval on the server's "no frame registration" answer
+- [x] `docker-compose.yml` contains no `:latest` image, and its third-party tags match `helm/neodem/values.yaml`
+- [x] Unit tests cover the backoff, reset, transition logging and the compose pins
 
 ## Test Strategy
 
