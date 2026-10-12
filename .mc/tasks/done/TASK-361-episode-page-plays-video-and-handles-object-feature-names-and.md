@@ -3,7 +3,7 @@ id: "TASK-361"
 aliases: ["TASK-361"]
 title: "Episode page plays video and handles object feature names and singular camera keys"
 slug: "episode-page-plays-video-and-handles-object-feature-names-and"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -86,12 +86,12 @@ camera at all. Fix all three so every imported LeRobot dataset can be watched.
 
 ## Acceptance Criteria
 
-- [ ] A `Range` request for RustFS video answers 206 with `Content-Range` and only that window, read from RustFS as a range; no request answers with a redirect.
-- [ ] A request without `Range` answers 200 with the whole file; an unsatisfiable range answers 416.
-- [ ] The video route takes the full camera feature key, finds `observation.image`, and still accepts a bare camera name.
-- [ ] The HF video proxy reads the dataset's `sourceRevision` instead of `main`.
-- [ ] The episode page renders pusht (object-shaped names, singular camera) without crashing, covered by a unit test with the pusht shape.
-- [ ] Camera keys come from features with dtype `video` or `image`, and the video URL carries the full key and the episode window.
+- [x] A `Range` request for RustFS video answers 206 with `Content-Range` and only that window, read from RustFS as a range; no request answers with a redirect.
+- [x] A request without `Range` answers 200 with the whole file; an unsatisfiable range answers 416.
+- [x] The video route takes the full camera feature key, finds `observation.image`, and still accepts a bare camera name.
+- [x] The HF video proxy reads the dataset's `sourceRevision` instead of `main`.
+- [x] The episode page renders pusht (object-shaped names, singular camera) without crashing, covered by a unit test with the pusht shape.
+- [x] Camera keys come from features with dtype `video` or `image`, and the video URL carries the full key and the episode window.
 
 ## Test Strategy
 
