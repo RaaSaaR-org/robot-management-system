@@ -256,9 +256,10 @@ describe('createDeployment', () => {
 
   it('throws when the model version does not exist', async () => {
     vi.mocked(modelVersionRepository.findById).mockResolvedValue(null as never);
-    await expect(service.createDeployment(baseRequest)).rejects.toThrow(
-      'Model version not found: mv-1',
-    );
+    await expect(service.createDeployment(baseRequest)).rejects.toMatchObject({
+      statusCode: 404,
+      message: "Model version 'mv-1' not found",
+    });
   });
 
   it('rejects targetZones that are not TwinZone ids', async () => {
@@ -268,7 +269,7 @@ describe('createDeployment', () => {
     ]);
     await expect(
       service.createDeployment({ ...baseRequest, targetZones: ['tz-1', 'Zone A'] }),
-    ).rejects.toThrow('Target zone not found: Zone A');
+    ).rejects.toMatchObject({ statusCode: 404, message: "Target zone 'Zone A' not found" });
     expect(deploymentRepository.create).not.toHaveBeenCalled();
   });
 
@@ -278,9 +279,10 @@ describe('createDeployment', () => {
       makeDeployment({ id: 'dep-existing', status: 'canary' }),
     ] as never);
 
-    await expect(service.createDeployment(baseRequest)).rejects.toThrow(
-      'Active deployment already exists for model version: dep-existing',
-    );
+    await expect(service.createDeployment(baseRequest)).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Active deployment already exists for model version: dep-existing',
+    });
   });
 
   it('creates a deployment, merges defaults and emits a created event', async () => {
@@ -380,18 +382,20 @@ describe('createDeployment — sim-to-real validation gate', () => {
 describe('startCanary', () => {
   it('throws when the deployment is not found', async () => {
     vi.mocked(deploymentRepository.findById).mockResolvedValue(null as never);
-    await expect(service.startCanary('missing')).rejects.toThrow(
-      'Deployment not found: missing',
-    );
+    await expect(service.startCanary('missing')).rejects.toMatchObject({
+      statusCode: 404,
+      message: "Deployment 'missing' not found",
+    });
   });
 
   it('throws when the deployment is not in pending status', async () => {
     vi.mocked(deploymentRepository.findById).mockResolvedValue(
       makeDeployment({ status: 'canary' }),
     );
-    await expect(service.startCanary('dep-1')).rejects.toThrow(
-      'Cannot start deployment in status: canary',
-    );
+    await expect(service.startCanary('dep-1')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Cannot start deployment in status: canary',
+    });
   });
 
   it('starts the first stage and deploys to eligible robots', async () => {
@@ -448,9 +452,18 @@ describe('promoteToProduction', () => {
     vi.mocked(deploymentRepository.findById).mockResolvedValue(
       makeDeployment({ status: 'pending' }),
     );
-    await expect(service.promoteToProduction('dep-1')).rejects.toThrow(
-      'Cannot promote deployment: dep-1',
-    );
+    await expect(service.promoteToProduction('dep-1')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Cannot promote deployment in status: pending',
+    });
+  });
+
+  it('answers 404 when there is no context and no such deployment', async () => {
+    vi.mocked(deploymentRepository.findById).mockResolvedValue(null as never);
+    await expect(service.promoteToProduction('missing')).rejects.toMatchObject({
+      statusCode: 404,
+      message: "Deployment 'missing' not found",
+    });
   });
 
   it('deploys remaining robots, sets production status and emits completed', async () => {
@@ -499,18 +512,20 @@ describe('promoteToProduction', () => {
 describe('rollback', () => {
   it('throws when the deployment is not found', async () => {
     vi.mocked(deploymentRepository.findById).mockResolvedValue(null as never);
-    await expect(service.rollback('missing', 'reason')).rejects.toThrow(
-      'Deployment not found: missing',
-    );
+    await expect(service.rollback('missing', 'reason')).rejects.toMatchObject({
+      statusCode: 404,
+      message: "Deployment 'missing' not found",
+    });
   });
 
   it('throws when the status is not rollback-eligible', async () => {
     vi.mocked(deploymentRepository.findById).mockResolvedValue(
       makeDeployment({ status: 'failed' }),
     );
-    await expect(service.rollback('dep-1', 'reason')).rejects.toThrow(
-      'Cannot rollback deployment in status: failed',
-    );
+    await expect(service.rollback('dep-1', 'reason')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Cannot rollback deployment in status: failed',
+    });
   });
 
   // Deploys one model version to the eligible robots so the service records a
@@ -598,18 +613,20 @@ describe('rollback', () => {
 describe('cancelDeployment', () => {
   it('throws when not found', async () => {
     vi.mocked(deploymentRepository.findById).mockResolvedValue(null as never);
-    await expect(service.cancelDeployment('missing')).rejects.toThrow(
-      'Deployment not found: missing',
-    );
+    await expect(service.cancelDeployment('missing')).rejects.toMatchObject({
+      statusCode: 404,
+      message: "Deployment 'missing' not found",
+    });
   });
 
   it('throws when not in a cancellable status', async () => {
     vi.mocked(deploymentRepository.findById).mockResolvedValue(
       makeDeployment({ status: 'production' }),
     );
-    await expect(service.cancelDeployment('dep-1')).rejects.toThrow(
-      'Cannot cancel deployment in status: production',
-    );
+    await expect(service.cancelDeployment('dep-1')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Cannot cancel deployment in status: production',
+    });
   });
 
   it('cancels a pending deployment, persists cancelled and emits cancelled', async () => {
@@ -669,10 +686,22 @@ describe('deleteDeployment', () => {
 // ===========================================================================
 
 describe('progressToNextStage', () => {
-  it('throws when there is no active context', async () => {
-    await expect(service.progressToNextStage('dep-x')).rejects.toThrow(
-      'No active deployment context: dep-x',
+  it('answers 404 when there is no active context and no such deployment', async () => {
+    vi.mocked(deploymentRepository.findById).mockResolvedValue(null as never);
+    await expect(service.progressToNextStage('dep-x')).rejects.toMatchObject({
+      statusCode: 404,
+      message: "Deployment 'dep-x' not found",
+    });
+  });
+
+  it('answers 409 naming the status when the deployment is not rolling out', async () => {
+    vi.mocked(deploymentRepository.findById).mockResolvedValue(
+      makeDeployment({ id: 'dep-x', status: 'pending' }),
     );
+    await expect(service.progressToNextStage('dep-x')).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining('Cannot progress deployment in status: pending'),
+    });
   });
 
   it('promotes to production when already on the final stage', async () => {
@@ -693,9 +722,10 @@ describe('progressToNextStage', () => {
       } else {
         // Manually drive: simulate by starting from pending is not possible here,
         // so skip the promote path and assert the context guard instead.
-        await expect(service.progressToNextStage('dep-1')).rejects.toThrow(
-          'No active deployment context: dep-1',
-        );
+        vi.mocked(deploymentRepository.findById).mockResolvedValue(dep);
+        await expect(service.progressToNextStage('dep-1')).rejects.toMatchObject({
+          statusCode: 409,
+        });
         return;
       }
     }

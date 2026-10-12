@@ -743,11 +743,8 @@ datasetRoutes.post('/:id/annotate', async (req: Request, res: Response) => {
     res.status(201).json({ jobId: job.id });
   } catch (error) {
     console.error('[DatasetRoutes] Error queueing annotate job:', error);
-    // "not found" is this repo's own sentence, so that one is echoed;
-    // every other failure answers with the fallback, unread.
-    if (error instanceof Error && error.message.includes('not found')) {
-      return res.status(404).json({ error: error.message });
-    }
+    // An unknown or unready dataset is a typed AppError (404 / 409) that
+    // sendFailure passes through; every other failure answers the fallback.
     sendFailure(res, error, 'Failed to queue annotate job', 400);
   }
 });
