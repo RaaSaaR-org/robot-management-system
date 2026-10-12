@@ -3,7 +3,7 @@ id: "TASK-389"
 aliases: []
 title: "Dev commands load their env and roboctl reports failures"
 slug: "dev-commands-load-their-env-and-roboctl-reports-failures"
-status: "review"         # backlog | todo | in-progress | review | done | cancelled
+status: done
 priority: 3                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 2
 effort: "low"
 due_date: ""
 created: "2026-10-13"
-updated: "2026-10-13"
+updated: 2026-10-13
 ---
 
 # Dev commands load their env and roboctl reports failures
