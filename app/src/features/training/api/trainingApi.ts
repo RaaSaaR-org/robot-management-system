@@ -75,6 +75,7 @@ const ENDPOINTS = {
   huggingFacePreview: '/datasets/hf/preview',
   datasetImportRetry: (id: string) => `/datasets/${id}/import/retry`,
   datasetImportLog: (id: string) => `/datasets/${id}/import/log`,
+  datasetImportCancel: (id: string) => `/datasets/${id}/import/cancel`,
   datasetPushToHub: (id: string) => `/datasets/${id}/push-to-hub`,
   datasetPushStatus: (id: string) => `/datasets/${id}/push-status`,
 
@@ -504,6 +505,17 @@ export const trainingApi = {
    */
   async getImportLog(datasetId: string): Promise<ImportLogResponse> {
     const response = await apiClient.get<ImportLogResponse>(ENDPOINTS.datasetImportLog(datasetId));
+    return response.data;
+  },
+
+  /**
+   * Stop a running Hub import (TASK-371). `cancelled` once the server has
+   * removed its files; `cancelling` while it is still unwinding.
+   */
+  async cancelImport(datasetId: string): Promise<{ datasetId: string; status: 'cancelled' | 'cancelling' }> {
+    const response = await apiClient.post<{ datasetId: string; status: 'cancelled' | 'cancelling' }>(
+      ENDPOINTS.datasetImportCancel(datasetId),
+    );
     return response.data;
   },
 

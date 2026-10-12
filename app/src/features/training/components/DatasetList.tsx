@@ -249,6 +249,10 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
     return <StatusTag status={dataset.status} dot pulse />;
   }
   const err = dataset.importError;
+  if (dataset.status === 'failed' && err?.cancelled) {
+    // Stopped on purpose (TASK-371): not a failure to explain.
+    return <StatusTag tone="neutral" dot>Cancelled</StatusTag>;
+  }
   if (dataset.status === 'failed' && err) {
     // The cause first; the server's whole sentence, file name and all, on hover.
     const failure = describeImportFailure(err.error, err.phase);

@@ -57,7 +57,8 @@ const app = createApp();
 // /:id/frame-registration.
 // TASK-353 adds two on the guarded /api/datasets mount: POST /robot-types and
 // PUT /:id/robot-type.
-const EXPECTED_WRITE_ROUTES = 372;
+// TASK-371 adds one on the guarded /api/datasets mount: POST /:id/import/cancel.
+const EXPECTED_WRITE_ROUTES = 373;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;
