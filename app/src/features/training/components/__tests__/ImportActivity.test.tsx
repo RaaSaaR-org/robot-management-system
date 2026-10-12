@@ -22,6 +22,7 @@ import { useImportJobsStore } from '../../store/importJobsStore';
 const store = () => useImportJobsStore.getState();
 
 beforeEach(() => {
+  cancelImport.mockReset();
   useImportJobsStore.setState({ jobs: {}, order: [], panelOpen: false, focusedId: null });
 });
 
@@ -112,8 +113,9 @@ describe('describeJob', () => {
     });
     render(<ImportActivity />);
 
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel lerobot/pusht' }));
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel lerobot/pusht' }));
+      fireEvent.click(screen.getByTestId('import-job-cancel-confirm-confirm'));
     });
 
     expect(cancelImport).toHaveBeenCalledWith('ds-1');
@@ -121,6 +123,55 @@ describe('describeJob', () => {
     expect(screen.queryByTestId('import-job-cancel')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry import' })).toBeInTheDocument();
     expect(screen.queryByTestId('import-job-error')).not.toBeInTheDocument();
+  });
+
+  it('asks before cancelling: one click does not cancel (TASK-378)', () => {
+    act(() => {
+      store().track('ds-1', 'lerobot/pusht');
+      store().openPanel();
+    });
+    render(<ImportActivity />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel lerobot/pusht' }));
+
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Cancel the import of lerobot/pusht?');
+    expect(dialog).toHaveTextContent('The files downloaded so far are discarded.');
+    expect(cancelImport).not.toHaveBeenCalled();
+    expect(screen.getByTestId('import-job-ds-1')).not.toHaveTextContent('Cancelled');
+  });
+
+  it('keeps importing when the confirmation is dismissed (TASK-378)', () => {
+    act(() => {
+      store().track('ds-1', 'lerobot/pusht');
+      store().openPanel();
+    });
+    render(<ImportActivity />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel lerobot/pusht' }));
+    fireEvent.pointerDown(screen.getByTestId('import-job-cancel-confirm-cancel'));
+    fireEvent.click(screen.getByTestId('import-job-cancel-confirm-cancel'));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(cancelImport).not.toHaveBeenCalled();
+    // The click inside the dialog did not count as a click outside the panel.
+    expect(store().panelOpen).toBe(true);
+    expect(screen.getByTestId('import-job-cancel')).toBeInTheDocument();
+  });
+
+  it('Escape dismisses the confirmation without closing the panel (TASK-378)', () => {
+    act(() => {
+      store().track('ds-1', 'lerobot/pusht');
+      store().openPanel();
+    });
+    render(<ImportActivity />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel lerobot/pusht' }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(cancelImport).not.toHaveBeenCalled();
+    expect(store().panelOpen).toBe(true);
   });
 
   it('offers no cancel once the import is validating (TASK-371)', () => {

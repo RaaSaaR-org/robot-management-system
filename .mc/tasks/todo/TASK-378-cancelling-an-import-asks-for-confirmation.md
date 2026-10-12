@@ -59,10 +59,10 @@ the panel and unmount the dialog with it.
 
 ## Acceptance Criteria
 
-- [ ] One click on Cancel opens a confirmation and does not call `cancelImport`.
-- [ ] Confirming calls `cancelImport` and the row shows Cancelled with a Retry.
-- [ ] Dismissing (button or Escape) does not call `cancelImport`, and the import panel stays open.
-- [ ] The copy says the downloaded files are discarded.
+- [x] One click on Cancel opens a confirmation and does not call `cancelImport`.
+- [x] Confirming calls `cancelImport` and the row shows Cancelled with a Retry.
+- [x] Dismissing (button or Escape) does not call `cancelImport`, and the import panel stays open.
+- [x] The copy says the downloaded files are discarded.
 
 ## Test Strategy
 

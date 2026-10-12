@@ -9,7 +9,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Ban, CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, RotateCw, Square, X, XCircle } from 'lucide-react';
-import { Button, StatusTag, Tooltip } from '@/shared/components/ui';
+import { Button, ConfirmDialog, StatusTag, Tooltip } from '@/shared/components/ui';
 import { toast } from '@/shared/components/ui/toast';
 import { getErrorMessage } from '@/shared/utils';
 import { cn } from '@/shared/utils/cn';
@@ -67,14 +67,18 @@ export function ImportActivity() {
   const closePanel = useImportJobsStore((state) => state.closePanel);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Outside click and Escape close it; it is a glance, not a dialog.
+  // Outside click and Escape close it; it is a glance, not a dialog. A
+  // confirmation asked from inside it (cancel, TASK-378) renders in a portal,
+  // so clicks and Escape that belong to that dialog must leave the panel open.
   useEffect(() => {
     if (!panelOpen) return;
+    const confirmOpen = () => document.querySelector('[role="alertdialog"]') !== null;
     const onPointer = (event: PointerEvent) => {
+      if (confirmOpen()) return;
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) closePanel();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closePanel();
+      if (event.key === 'Escape' && !confirmOpen()) closePanel();
     };
     document.addEventListener('pointerdown', onPointer);
     document.addEventListener('keydown', onKey);
@@ -235,14 +239,17 @@ function ImportJobRow({ job }: { job: ImportJob }) {
 /**
  * Stop a running import (TASK-371). Not offered once it is validating: every
  * file is stored by then and the server refuses, so the button would only
- * ever say no.
+ * ever say no. A cancel deletes what was downloaded, so it asks first
+ * (TASK-378) — one misclick must not throw away a long download.
  */
 function CancelButton({ job }: { job: ImportJob }) {
   const cancel = useImportJobsStore((state) => state.cancel);
   const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
   if (job.phase === 'validating') return null;
 
   const onCancel = async () => {
+    setAsking(false);
     setBusy(true);
     try {
       await cancel(job.datasetId);
@@ -255,18 +262,31 @@ function CancelButton({ job }: { job: ImportJob }) {
   };
 
   return (
-    <Button
-      size="sm"
-      variant="ghost"
-      iconOnly
-      aria-label={`Cancel ${job.label}`}
-      title="Cancel import"
-      isLoading={busy}
-      onClick={() => void onCancel()}
-      data-testid="import-job-cancel"
-    >
-      <Square className="h-3.5 w-3.5" />
-    </Button>
+    <>
+      <Button
+        size="sm"
+        variant="ghost"
+        iconOnly
+        aria-label={`Cancel ${job.label}`}
+        title="Cancel import"
+        isLoading={busy}
+        onClick={() => setAsking(true)}
+        data-testid="import-job-cancel"
+      >
+        <Square className="h-3.5 w-3.5" />
+      </Button>
+      <ConfirmDialog
+        isOpen={asking}
+        onClose={() => setAsking(false)}
+        onConfirm={() => void onCancel()}
+        title={`Cancel the import of ${job.label}?`}
+        description="The files downloaded so far are discarded. Importing it again starts from the beginning."
+        confirmLabel="Cancel import"
+        cancelLabel="Keep importing"
+        tone="danger"
+        testId="import-job-cancel-confirm"
+      />
+    </>
   );
 }
 
