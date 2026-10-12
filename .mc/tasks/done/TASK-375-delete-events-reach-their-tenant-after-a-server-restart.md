@@ -3,7 +3,7 @@ id: "TASK-375"
 aliases: ["TASK-375"]
 title: "Delete events reach their tenant after a server restart"
 slug: "delete-events-reach-their-tenant-after-a-server-restart"
-status: "review"
+status: done
 priority: 2
 owner: "huhn511"
 projects: []
