@@ -215,7 +215,7 @@ To integrate a different robot (e.g., Unitree H1, Go2):
 5. Add URDF path in `app/src/features/robots/components/visualization/RobotModel.tsx`
 6. Keep `app/src/features/robots/types/robots.types.ts` in sync
 7. Add an embodiment config + `.env.{type}` profile and `dev:{type}`/`start:{type}` scripts in `robot-agent/package.json`
-8. Seed the robot type (action/proprio dims) in `server/src/scripts/seed-robot-types.ts`
+8. Seed the robot type (action/proprio dims): add it to `STANDARD_ROBOT_TYPES` in `server/src/database/seedStandardRobotTypes.ts` so every install offers it in the dataset robot-type picker (create-only, run at boot); `server/src/scripts/seed-robot-types.ts` is the older manual script
 9. For real hardware, add a sidecar (see `g1_sidecar.py`) exposing the standard sidecar HTTP contract
 
 See the existing H1, SO-101, and **G1 EDU** implementations as reference (G1 EDU is the most complete recent example, steps 1–9).

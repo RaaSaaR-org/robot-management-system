@@ -9,6 +9,7 @@ import { logger } from './utils/logger.js';
 import { setupWebSocket } from './websocket/index.js';
 import { connectDatabase, disconnectDatabase } from './database/index.js';
 import { seedDemoWarehouse } from './database/seedDemoWarehouse.js';
+import { seedStandardRobotTypes } from './database/seedStandardRobotTypes.js';
 import { seedDefaultTenant } from './database/seedTenant.js';
 import { conversationManager } from './services/ConversationManager.js';
 import { robotManager } from './services/RobotManager.js';
@@ -98,6 +99,9 @@ async function main() {
 
   // Seed the "Demo Warehouse" site matching the sim's warehouse scene (TASK-327)
   await seedDemoWarehouse();
+
+  // Seed the standard robot types the dataset robot-type picker offers (TASK-363)
+  await seedStandardRobotTypes();
 
   // Initialize managers (load cached data from database)
   await conversationManager.initialize();

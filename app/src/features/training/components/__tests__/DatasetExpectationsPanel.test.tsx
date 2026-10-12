@@ -2,7 +2,8 @@
  * @file DatasetExpectationsPanel.test.tsx
  * @description The TASK-353 recovery UI: observed vs expected widths, changing
  *              the robot type, defining a 43-wide configuration, and
- *              revalidating the stored files.
+ *              revalidating the stored files; plus the TASK-363 one-line summary,
+ *              the immediate Validating badge and readable unknown types.
  * @feature training
  */
 
@@ -77,6 +78,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** Render the panel and open it — it starts as one summary line (TASK-363). */
+function renderOpen(dataset: Dataset, onDatasetChange = vi.fn()) {
+  const utils = render(<DatasetExpectationsPanel dataset={dataset} onDatasetChange={onDatasetChange} />);
+  fireEvent.click(screen.getByTestId('expectations-expand'));
+  return utils;
+}
+
 /** Let `n` poll intervals pass and their promises settle. */
 async function pollTimes(n: number) {
   for (let i = 0; i < n; i++) {
@@ -86,7 +94,7 @@ async function pollTimes(n: number) {
 
 describe('DatasetExpectationsPanel', () => {
   it('shows observed widths beside the expected widths and the selected robot type', async () => {
-    render(<DatasetExpectationsPanel dataset={failedDataset()} onDatasetChange={vi.fn()} />);
+    renderOpen(failedDataset());
     expect(screen.getByTestId('selected-robot-type')).toHaveTextContent('Unitree_G1');
     const state = screen.getByTestId('width-row-state');
     expect(within(state).getByText('43')).toBeInTheDocument();
@@ -100,7 +108,7 @@ describe('DatasetExpectationsPanel', () => {
     // The demo build's catch-all `/datasets/:id` mock once answered this call
     // with a dataset, and the panel crashed the whole episodes page.
     api.listRobotTypes.mockResolvedValue(undefined);
-    render(<DatasetExpectationsPanel dataset={failedDataset()} onDatasetChange={vi.fn()} />);
+    renderOpen(failedDataset());
     await waitFor(() => expect(api.listRobotTypes).toHaveBeenCalled());
     expect(screen.getByTestId('selected-robot-type')).toHaveTextContent('Unitree_G1');
   });
@@ -109,7 +117,7 @@ describe('DatasetExpectationsPanel', () => {
     const updated = failedDataset({ status: 'validating', robotTypeId: 'rt-43' });
     api.reassociateRobotType.mockResolvedValue({ dataset: updated, change: {}, revalidation: 'started' });
     const onChange = vi.fn();
-    render(<DatasetExpectationsPanel dataset={failedDataset()} onDatasetChange={onChange} />);
+    renderOpen(failedDataset(), onChange);
 
     const select = await screen.findByLabelText('Robot type');
     await waitFor(() => expect(within(select).getByText(/Dex3-1.*widths match/)).toBeInTheDocument());
@@ -129,7 +137,7 @@ describe('DatasetExpectationsPanel', () => {
     api.getDataset.mockResolvedValue(verdict);
     const onChange = vi.fn();
     // The row stays `failed` while the pass runs — only the progress channel knows.
-    render(<DatasetExpectationsPanel dataset={failedDataset()} onDatasetChange={onChange} />);
+    renderOpen(failedDataset(), onChange);
     fireEvent.click(screen.getByTestId('revalidate-button'));
     await waitFor(() => expect(api.revalidateDataset).toHaveBeenCalledWith('ds-1'));
     await waitFor(() => expect(screen.getByTestId('validation-running')).toBeInTheDocument());
@@ -145,7 +153,7 @@ describe('DatasetExpectationsPanel', () => {
   it('unlocks a row stuck in validating once polling gives up', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     api.getDataset.mockResolvedValue(failedDataset({ status: 'validating' }));
-    render(<DatasetExpectationsPanel dataset={failedDataset({ status: 'validating' })} onDatasetChange={vi.fn()} />);
+    renderOpen(failedDataset({ status: 'validating' }));
     expect(screen.getByTestId('revalidate-button')).toBeDisabled();
     await pollTimes(EXPECTATIONS_MAX_POLLS);
     await waitFor(() => expect(screen.getByTestId('validation-gave-up')).toBeInTheDocument());
@@ -154,31 +162,27 @@ describe('DatasetExpectationsPanel', () => {
   });
 
   it('shows why the last pass reached no verdict', () => {
-    render(
-      <DatasetExpectationsPanel
-        dataset={failedDataset({ validation: undefined, expectations: { invalidated: null, history: [], error: 'Storage unavailable — nothing was validated' } })}
-        onDatasetChange={vi.fn()}
-      />,
-    );
+    renderOpen(failedDataset({ validation: undefined, expectations: { invalidated: null, history: [], error: 'Storage unavailable — nothing was validated' } }));
     expect(screen.getByTestId('validation-error')).toHaveTextContent('Storage unavailable');
   });
 
   it('locks the controls while the dataset is importing or validating', () => {
-    render(<DatasetExpectationsPanel dataset={failedDataset({ status: 'importing' })} onDatasetChange={vi.fn()} />);
+    renderOpen(failedDataset({ status: 'importing' }));
     expect(screen.getByTestId('revalidate-button')).toBeDisabled();
     expect(screen.getByTestId('reassociate-button')).toBeDisabled();
     expect(screen.getByText(/Locked while the dataset is importing/)).toBeInTheDocument();
   });
 
-  it('defines a new 43-wide configuration from the G1 EDU + Dex3-1 preset', async () => {
-    const created = robotType('rt-new', 'Unitree G1 EDU (Dex3-1)', 43);
+  it('defines a new configuration, prefilled with the observed widths', async () => {
+    const created = robotType('rt-new', 'Custom 43', 43);
     api.createRobotType.mockResolvedValue(created);
-    render(<DatasetExpectationsPanel dataset={failedDataset()} onDatasetChange={vi.fn()} />);
+    renderOpen(failedDataset());
     fireEvent.click(screen.getByText('Define a new robot configuration'));
-    fireEvent.click(screen.getByText(/G1 EDU \+ Dex3-1 \(43 DOF\) preset/));
+    const form = screen.getByTestId('new-robot-type-form');
+    fireEvent.change(within(form).getAllByRole('textbox')[0], { target: { value: 'Custom 43' } });
     fireEvent.click(screen.getByText('Create configuration'));
     await waitFor(() => expect(api.createRobotType).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'Unitree G1 EDU (Dex3-1)', actionDim: 43, proprioceptionDim: 43,
+      name: 'Custom 43', actionDim: 43, proprioceptionDim: 43,
     })));
   });
 
@@ -199,10 +203,73 @@ describe('DatasetExpectationsPanel', () => {
     await waitFor(() => expect(api.listRobotTypes).toHaveBeenCalled());
   });
 
-  it('stays open while the verdict fails', () => {
+  it('collapses a failing verdict to one line that names the mismatch (TASK-363)', () => {
     render(<DatasetExpectationsPanel dataset={failedDataset()} onDatasetChange={vi.fn()} />);
-    expect(screen.queryByTestId('expectations-summary')).toBeNull();
+    expect(screen.getByTestId('dataset-expectations')).toHaveAttribute('data-collapsed', 'true');
+    expect(screen.getByTestId('expectations-summary')).toHaveTextContent(
+      'Does not match Unitree_G1 — state 43 (expects 28), action 43 (expects 28)',
+    );
+    expect(screen.getByTestId('expectations-status')).toHaveTextContent(/failed/i);
+    expect(screen.queryByTestId('width-table')).toBeNull();
+  });
+
+  it('collapses again on Hide', () => {
+    renderOpen(failedDataset());
     expect(screen.getByTestId('width-table')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('expectations-collapse'));
+    expect(screen.queryByTestId('width-table')).toBeNull();
+    expect(screen.getByTestId('expectations-summary')).toBeInTheDocument();
+  });
+
+  it('shows Validating the moment Revalidate is clicked, before the server answers (TASK-363)', async () => {
+    // A `ready` row stays `ready` until the verdict lands; the badge must not.
+    api.revalidateDataset.mockReturnValue(new Promise(() => undefined));
+    const ready = failedDataset({ status: 'ready', validation: { ...failedDataset().validation!, valid: true, errors: [] } });
+    renderOpen(ready);
+    expect(screen.getByTestId('selected-robot-type-status')).toHaveTextContent(/ready/i);
+    fireEvent.click(screen.getByTestId('revalidate-button'));
+    expect(screen.getByTestId('selected-robot-type-status')).toHaveTextContent(/validating/i);
+  });
+
+  it('keeps showing Validating while the pass runs and the verdict once it lands', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.revalidateDataset.mockResolvedValue({ state: 'started' });
+    const ready = failedDataset({ status: 'ready', validation: { ...failedDataset().validation!, valid: true, errors: [] } });
+    api.getDataset.mockResolvedValue(ready);
+    renderOpen(ready);
+    fireEvent.click(screen.getByTestId('revalidate-button'));
+    await waitFor(() => expect(screen.getByTestId('validation-running')).toBeInTheDocument());
+    expect(screen.getByTestId('selected-robot-type-status')).toHaveTextContent(/validating/i);
+    api.getValidationProgress.mockResolvedValue({ status: 'ready', progress: 100 });
+    await pollTimes(1);
+    await waitFor(() => expect(screen.getByTestId('selected-robot-type-status')).toHaveTextContent(/ready/i));
+  });
+
+  it('names an `unknown` robot type readably, in the summary and the picker', async () => {
+    api.listRobotTypes.mockResolvedValue([G1_28, robotType('rt-unk', 'unknown (action 43, state 43)', 43)]);
+    const unknownRow = failedDataset({
+      robotType: { id: 'rt-x', name: 'unknown', manufacturer: 'Unknown', model: 'unknown', actionDim: 28, proprioceptionDim: 28 },
+      robotTypeId: 'rt-x',
+    });
+    render(<DatasetExpectationsPanel dataset={unknownRow} onDatasetChange={vi.fn()} />);
+    expect(screen.getByTestId('expectations-summary')).toHaveTextContent('Does not match Unidentified robot');
+    fireEvent.click(screen.getByTestId('expectations-expand'));
+    expect(screen.getByTestId('selected-robot-type')).toHaveTextContent('Unidentified robot');
+    const select = await screen.findByLabelText('Robot type');
+    await waitFor(() => expect(within(select).getByText(/^Unidentified robot — state 43/)).toBeInTheDocument());
+    expect(within(select).queryByText(/^unknown/)).toBeNull();
+  });
+
+  it('lists the types whose widths match the files first', async () => {
+    api.listRobotTypes.mockResolvedValue([
+      robotType('rt-6', 'A SO-101', 6), G1_43, robotType('rt-28b', 'B arms', 28),
+    ]);
+    renderOpen(failedDataset());
+    const select = await screen.findByLabelText('Robot type');
+    await waitFor(() => expect(within(select).getAllByRole('option').length).toBeGreaterThan(3));
+    const labels = within(select).getAllByRole('option').map((o) => o.textContent ?? '').filter((t) => !t.startsWith('Choose'));
+    expect(labels[0]).toMatch(/^Unitree G1 EDU \(Dex3-1\).*widths match/);
+    expect(labels.slice(1).map((l) => l.split(' — ')[0])).toEqual(['A SO-101', 'B arms']);
   });
 
   it('says when the old verdict was voided and lists the history', () => {
@@ -211,12 +278,7 @@ describe('DatasetExpectationsPanel', () => {
       toRobotTypeId: 'rt-43', toRobotTypeName: 'Unitree G1 EDU (Dex3-1)', previousStatus: 'failed', previousValid: false,
       reason: 'intended config',
     };
-    render(
-      <DatasetExpectationsPanel
-        dataset={failedDataset({ status: 'validating', validation: undefined, expectations: { invalidated: change, history: [change] } })}
-        onDatasetChange={vi.fn()}
-      />,
-    );
+    renderOpen(failedDataset({ status: 'validating', validation: undefined, expectations: { invalidated: change, history: [change] } }));
     expect(screen.getByTestId('verdict-invalidated')).toHaveTextContent('Revalidating the stored files');
     expect(screen.getByTestId('expectation-history')).toHaveTextContent('intended config');
     expect(screen.getByText(/Observed \(info\.json\)/)).toBeInTheDocument();

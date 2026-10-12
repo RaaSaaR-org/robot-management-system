@@ -46,6 +46,8 @@ const STATUS_GROUPS: Record<StatusToneName, string[]> = {
     'training',
     'recording',
     'syncing',
+    // datasets (a validation pass is running)
+    'validating',
     'rolling_out',
     // A2A tasks · deployments · incidents (being worked on)
     'working',

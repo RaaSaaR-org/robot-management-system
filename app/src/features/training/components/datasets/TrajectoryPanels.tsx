@@ -12,6 +12,13 @@ import type { EpisodeReward } from '@/features/evaluation/types/evaluation.types
 import type { FrameData } from '../../types';
 import { scoreTone } from './episodeFormat';
 
+/**
+ * The size a chart assumes before its container is measured. Recharts' default
+ * is -1 × -1, which logs "The width(-1) and height(-1) of chart should be
+ * greater than 0" on every mount; the first ResizeObserver tick replaces this.
+ */
+export const CHART_INITIAL_SIZE = { width: 1, height: 1 } as const;
+
 export interface JointChartPanelProps {
   frames: FrameData[];
   jointNames: string[];
@@ -56,7 +63,7 @@ export function JointChartPanel({ frames, jointNames, isLoading, currentTime, er
         ) : (
           <>
             <div className="h-[200px] sm:h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_SIZE}>
                 <LineChart data={data}>
                   <CartesianGrid {...chartTheme.grid} />
                   <XAxis dataKey="timestamp" type="number" domain={['dataMin', 'dataMax']} tickFormatter={tsFormat} {...chartTheme.xAxis} />
@@ -113,7 +120,7 @@ export function RewardCurvePanel({ reward, fallbackFps, currentTime }: RewardCur
       />
       <Panel.Body>
         <div className="h-[140px]">
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_SIZE}>
             <LineChart data={data}>
               <CartesianGrid {...chartTheme.grid} />
               <XAxis dataKey="timestamp" type="number" domain={['dataMin', 'dataMax']} tickFormatter={tsFormat} {...chartTheme.xAxis} />

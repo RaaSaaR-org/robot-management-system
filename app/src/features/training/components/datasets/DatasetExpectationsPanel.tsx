@@ -1,12 +1,14 @@
 /**
  * @file DatasetExpectationsPanel.tsx
  * @description Observed vs expected state/action widths, the robot type a dataset is checked against, and the
- *              controls to change it, define a new configuration, and revalidate the stored files (TASK-353)
+ *              controls to change it, define a new configuration, and revalidate the stored files (TASK-353).
+ *              One summary line by default, whatever the verdict, so the episode browser stays on the
+ *              first screen (TASK-363).
  * @feature training
  */
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { CheckCircle2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronUp, RefreshCw } from 'lucide-react';
 import {
   Button,
   FormField,
@@ -20,6 +22,7 @@ import {
 import { formatDateTime } from '@/shared/utils/format';
 import { trainingApi } from '../../api/trainingApi';
 import { datasetShape } from '../../types';
+import { robotTypeLabel } from './datasetFormat';
 import type { Dataset, RobotType } from '../../types';
 
 /** How often a running validation pass is asked where it is. */
@@ -32,18 +35,6 @@ export const EXPECTATIONS_POLL_MS = 2000;
  */
 export const EXPECTATIONS_MAX_POLLS = 90;
 
-/**
- * The 43-DOF G1 configuration the production case needed (G1 EDU + Dex3-1 hands).
- * A preset, not a guess: the operator still sees and can edit every field.
- */
-export const G1_EDU_DEX3_PRESET = {
-  name: 'Unitree G1 EDU (Dex3-1)',
-  manufacturer: 'Unitree',
-  model: 'unitree_g1_edu_dex3',
-  actionDim: 43,
-  proprioceptionDim: 43,
-};
-
 export interface DatasetExpectationsPanelProps {
   dataset: Dataset;
   /** Called with the dataset as the server now has it. */
@@ -52,6 +43,11 @@ export interface DatasetExpectationsPanelProps {
 
 /** Statuses another flow owns. `validating` is NOT here: see `watching`. */
 const LOCKED_STATUSES = new Set(['importing', 'uploading']);
+
+/** A stored robot-type name for display; `null` means the dataset had none. */
+function nameLabel(name: string | null | undefined): string {
+  return name == null ? 'none' : robotTypeLabel({ name });
+}
 
 function widthLabel(width: number | null | undefined): string {
   return typeof width === 'number' && width > 0 ? String(width) : '—';
@@ -86,10 +82,16 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
   // said `validating` when the page opened). Bounded, so a stuck row unlocks.
   const [watching, setWatching] = useState(dataset.status === 'validating');
   const [gaveUp, setGaveUp] = useState(false);
-  // A passing verdict needs no controls in the way: one line, opened on demand (TASK-358).
+  // One line until asked, whatever the verdict: the episode browser below is
+  // what the page is for (TASK-358 for a pass, TASK-363 for every other state).
   const [expanded, setExpanded] = useState(false);
+  // Set the moment "Revalidate" is clicked, before the server has answered.
+  const [revalidating, setRevalidating] = useState(false);
   const locked = LOCKED_STATUSES.has(dataset.status);
   const busy = locked || watching || pending;
+  // A revalidation leaves a `ready` or `failed` row alone until the verdict
+  // lands, so the row's status alone would read "Ready" for the whole pass.
+  const shownStatus = watching || revalidating ? 'validating' : dataset.status;
 
   useEffect(() => {
     let cancelled = false;
@@ -127,15 +129,15 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
     return () => { stopped = true; clearInterval(timer); };
   }, [watching, dataset.id, onDatasetChange]);
 
+  // Types whose widths fit the files first: those are the plausible choices.
   const options = robotTypes
     .filter((rt) => rt.id !== dataset.robotTypeId)
-    .map((rt) => {
-      const fits = rt.proprioceptionDim === observedState && rt.actionDim === observedAction;
-      return {
-        value: rt.id,
-        label: `${rt.name} — state ${widthLabel(rt.proprioceptionDim)}, action ${widthLabel(rt.actionDim)}${fits ? ' (widths match)' : ''}`,
-      };
-    });
+    .map((rt) => ({ rt, fits: rt.proprioceptionDim === observedState && rt.actionDim === observedAction }))
+    .sort((a, b) => Number(b.fits) - Number(a.fits) || robotTypeLabel(a.rt).localeCompare(robotTypeLabel(b.rt)))
+    .map(({ rt, fits }) => ({
+      value: rt.id,
+      label: `${robotTypeLabel(rt)} — state ${widthLabel(rt.proprioceptionDim)}, action ${widthLabel(rt.actionDim)}${fits ? ' (widths match)' : ''}`,
+    }));
 
   const reassociate = async () => {
     if (!selectedId) return;
@@ -163,6 +165,7 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
 
   const revalidate = async () => {
     setPending(true);
+    setRevalidating(true);
     try {
       await trainingApi.revalidateDataset(dataset.id);
       toast.success('Revalidating the files already in storage');
@@ -172,6 +175,7 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
       toast.error(errorMessage(err, 'Could not start revalidation'));
     } finally {
       setPending(false);
+      setRevalidating(false);
     }
   };
 
@@ -207,15 +211,34 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
     && !mismatch(observedState, expectedState)
     && !mismatch(observedAction, expectedAction);
 
-  if (passes && !expanded && !watching && !pending && !creating && !gaveUp) {
+  if (!expanded) {
+    const anyMismatch = mismatch(observedState, expectedState) || mismatch(observedAction, expectedAction);
+    const typeName = <span className="font-medium text-ink-primary">{robotTypeLabel(dataset.robotType)}</span>;
+    const widths = (observed: number | null | undefined, expected: number | undefined) => (
+      mismatch(observed, expected) ? `${widthLabel(observed)} (expects ${widthLabel(expected)})` : widthLabel(observed)
+    );
+    const failing = anyMismatch || dataset.status === 'failed';
+    const lead = shownStatus === 'validating' ? 'Validating against'
+      : passes ? 'Matches'
+        : anyMismatch ? 'Does not match'
+          : dataset.status === 'failed' ? 'Failed validation against'
+            : 'Checked against';
     return (
       <Panel data-testid="dataset-expectations" data-collapsed="true" padding="sm">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-signal-measured" strokeWidth={1.75} aria-hidden />
+          {shownStatus === 'validating' ? (
+            <RefreshCw className="h-4 w-4 shrink-0 animate-spin text-ink-tertiary" strokeWidth={1.75} aria-hidden />
+          ) : passes ? (
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-signal-measured" strokeWidth={1.75} aria-hidden />
+          ) : failing ? (
+            <AlertTriangle className="h-4 w-4 shrink-0 text-signal-stopped" strokeWidth={1.75} aria-hidden />
+          ) : null}
           <p className="min-w-0 flex-1 text-ink-secondary" data-testid="expectations-summary">
-            Matches <span className="font-medium text-ink-primary">{dataset.robotType?.name}</span>
-            {' '}— state {widthLabel(observedState)}, action {widthLabel(observedAction)}
+            {lead} {typeName}
+            {' '}— state {widths(observedState, expectedState)}, action {widths(observedAction, expectedAction)}
+            {gaveUp && <span className="ml-2 text-xs text-ink-tertiary">· no verdict reported, revalidate to try again</span>}
           </p>
+          <StatusTag status={shownStatus} dot data-testid="expectations-status" />
           <Button variant="ghost" size="sm" onClick={() => setExpanded(true)} data-testid="expectations-expand">
             Change robot type
           </Button>
@@ -230,25 +253,36 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
         title="Robot and schema expectations"
         description="What the files hold, beside what the selected robot type expects. Changing the robot type never rewrites the data."
         actions={(
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw className="h-4 w-4" strokeWidth={1.75} />}
-            disabled={busy}
-            onClick={revalidate}
-            data-testid="revalidate-button"
-          >
-            Revalidate existing files
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<RefreshCw className="h-4 w-4" strokeWidth={1.75} />}
+              disabled={busy}
+              onClick={revalidate}
+              data-testid="revalidate-button"
+            >
+              Revalidate existing files
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<ChevronUp className="h-4 w-4" strokeWidth={1.75} />}
+              onClick={() => { setExpanded(false); setCreating(false); }}
+              data-testid="expectations-collapse"
+            >
+              Hide
+            </Button>
+          </>
         )}
       />
       <Panel.Body className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-ink-secondary">Selected robot type:</span>
           <span className="font-medium text-ink-primary" data-testid="selected-robot-type">
-            {dataset.robotType?.name ?? 'none'}
+            {robotTypeLabel(dataset.robotType)}
           </span>
-          <StatusTag status={dataset.status} dot />
+          <StatusTag status={shownStatus} dot data-testid="selected-robot-type-status" />
         </div>
 
         <div className="overflow-x-auto">
@@ -284,8 +318,8 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
         {invalidated && (
           <p className="text-sm text-ink-secondary" data-testid="verdict-invalidated">
             The previous verdict was voided when the robot type changed from{' '}
-            {invalidated.fromRobotTypeName ?? 'none'} to {invalidated.toRobotTypeName}.{' '}
-            {dataset.status === 'validating' ? 'Revalidating the stored files…' : 'Revalidate to get a new verdict.'}
+            {nameLabel(invalidated.fromRobotTypeName)} to {nameLabel(invalidated.toRobotTypeName)}.{' '}
+            {shownStatus === 'validating' ? 'Revalidating the stored files…' : 'Revalidate to get a new verdict.'}
           </p>
         )}
 
@@ -331,21 +365,8 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
           <form className="flex flex-col gap-3 rounded-md border border-line p-3" onSubmit={createType} data-testid="new-robot-type-form">
             <p className="text-xs text-ink-tertiary">
               Creates a new robot type. Existing types are never changed — other datasets are validated against them.
+              The standard embodiments (G1 EDU + Dex3-1, G1 arms + hands, SO-101) are already in the list above.
             </p>
-            <div>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => setForm({
-                  ...G1_EDU_DEX3_PRESET,
-                  actionDim: String(G1_EDU_DEX3_PRESET.actionDim),
-                  proprioceptionDim: String(G1_EDU_DEX3_PRESET.proprioceptionDim),
-                })}
-              >
-                Use G1 EDU + Dex3-1 (43 DOF) preset
-              </Button>
-            </div>
             <FormField label="Name" required>
               <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             </FormField>
@@ -375,7 +396,7 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
             <ul className="flex flex-col gap-1 text-xs text-ink-secondary" data-testid="expectation-history">
               {history.map((h) => (
                 <li key={h.at}>
-                  {formatDateTime(h.at)} · {h.fromRobotTypeName ?? 'none'} → {h.toRobotTypeName}
+                  {formatDateTime(h.at)} · {nameLabel(h.fromRobotTypeName)} → {nameLabel(h.toRobotTypeName)}
                   {h.previousValid === false ? ' (previous verdict: failed)' : h.previousValid ? ' (previous verdict: passed)' : ''}
                   {h.reason ? ` · ${h.reason}` : ''}
                 </li>
