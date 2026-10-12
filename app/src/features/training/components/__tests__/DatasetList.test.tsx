@@ -134,4 +134,36 @@ describe('a Hub import in the list (#370)', () => {
     );
     expect(screen.getByTestId('dataset-import-error')).toHaveTextContent('terminated');
   });
+
+  it('says the cause of a storage failure first (TASK-358)', () => {
+    render(
+      <DatasetList
+        datasets={[dataset({
+          id: 'f',
+          status: 'failed',
+          huggingFaceRepoId: 'unitree/g1',
+          importError: {
+            phase: 'downloading',
+            error: 'File data/chunk-000/file-000.parquet: write to rustfs failed after 3 attempt(s): connect ECONNREFUSED 10.0.0.1:9000',
+            repoId: 'unitree/g1',
+            failedAt: '2026-10-12T00:00:00Z',
+          },
+        })]}
+      />,
+    );
+    expect(screen.getByTestId('dataset-import-error')).toHaveTextContent('Storage unreachable (ECONNREFUSED)');
+    expect(screen.getByTestId('dataset-import-error')).not.toHaveTextContent('file-000.parquet');
+  });
+
+  it('names the pinned commit and LeRobot version of a Hub import (TASK-358)', () => {
+    render(
+      <DatasetList
+        datasets={[dataset({
+          id: 'h', huggingFaceRepoId: 'lerobot/pusht', lerobotVersion: 'v3.0',
+          sourceRevision: '89d5752c021e580d26d90ceec7e8192ef01e7c30',
+        })]}
+      />,
+    );
+    expect(screen.getByText('lerobot/pusht@89d5752c · LeRobot v3.0')).toBeInTheDocument();
+  });
 });

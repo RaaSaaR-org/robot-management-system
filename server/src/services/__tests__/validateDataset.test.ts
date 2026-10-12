@@ -712,6 +712,18 @@ describe('a metadata-only import forgives the videos and NOTHING else', () => {
     expect(codes(report.warnings)).toContain('VIDEO_NOT_IMPORTED');
     expect(report.valid).toBe(true);
   });
+
+  it('says it once with a count, not once per missing mp4 (TASK-358)', async () => {
+    // One mp4 per episode per camera in v2.1: the import log and the dataset
+    // page used to repeat the same sentence for every one of them.
+    const dir = await fixture('v21-metadata-only-count', { version: 'v2.1', omitVideos: true });
+    const report = await validate(dir, {}, { importMode: 'metadata' });
+
+    const notImported = report.warnings.filter((w) => w.code === 'VIDEO_NOT_IMPORTED');
+    expect(notImported).toHaveLength(1);
+    expect(notImported[0].message).toMatch(/^\d+ camera files \(videos\/.+ and \d+ more\) were not fetched/);
+    expect(notImported[0].message).toContain("importMode 'metadata'");
+  });
 });
 
 describe('what it costs to check (TASK-219)', () => {

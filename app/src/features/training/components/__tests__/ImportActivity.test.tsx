@@ -65,6 +65,23 @@ describe('ImportActivity', () => {
     expect(store().order).toEqual([]);
   });
 
+  it('names the pinned commit and LeRobot version, and says the cause of a failure first (TASK-358)', () => {
+    act(() => {
+      store().track('ds-1', 'lerobot/pusht', { revision: '89d5752c021e580d26d90ceec7e8192ef01e7c30', lerobotVersion: 'v3.0' });
+      store().applyMessage({
+        type: 'dataset:import:failed',
+        datasetId: 'ds-1',
+        error: 'File data/chunk-000/file-000.parquet: write to rustfs failed after 3 attempt(s): connect ECONNREFUSED 10.0.0.1:9000',
+      });
+      store().openPanel();
+    });
+    render(<ImportActivity />);
+
+    expect(screen.getByTestId('import-job-revision')).toHaveTextContent('@89d5752c');
+    expect(screen.getByTestId('import-job-version')).toHaveTextContent('LeRobot v3.0');
+    expect(screen.getByTestId('import-job-error')).toHaveTextContent(/^Storage unreachable \(ECONNREFUSED\)$/);
+  });
+
   it('closes the panel on Escape', () => {
     act(() => {
       store().track('ds-1', 'lerobot/pusht');

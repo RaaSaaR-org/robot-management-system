@@ -612,6 +612,8 @@ datasetRoutes.get('/:id/import/log', async (req: Request, res: Response) => {
       lines: activity?.lines ?? [],
       dropped: activity?.dropped ?? 0,
       retained: activity !== null,
+      sourceRevision: dataset.sourceRevision ?? null,
+      lerobotVersion: dataset.lerobotVersion ?? null,
     };
     res.json(body);
   } catch (error) {

@@ -32,6 +32,8 @@ const BASE: ImportJob = {
   totalBytes: null,
   importMode: null,
   error: null,
+  revision: null,
+  lerobotVersion: null,
   lines: [],
   dropped: 0,
   logRetained: true,

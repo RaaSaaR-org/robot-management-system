@@ -26,6 +26,7 @@ import type { Dataset, DatasetStatus, RobotType } from '../types';
 import { useImportJobsStore } from '../store/importJobsStore';
 import { DatasetNameCell } from './datasets/DatasetNameCell';
 import { ImportProgress } from './ImportProgress';
+import { describeImportFailure } from './datasets/importFormat';
 import { formatCount, formatDuration, formatRelative } from './datasets/datasetFormat';
 
 export interface DatasetListProps {
@@ -124,6 +125,8 @@ export function DatasetList({
       header: 'Episodes',
       align: 'right',
       sortable: true,
+      // Below `sm` the name and the status are what fits in 400 px (TASK-358).
+      hideBelow: 'sm',
       cell: (d) => formatCount(d.demonstrationCount),
     },
     {
@@ -233,7 +236,8 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
     && (dataset.status === 'importing' || dataset.status === 'validating');
   if (hubImport) {
     return (
-      <div className="flex w-44 max-w-full flex-col gap-1.5">
+      // Narrower on a phone: at 400 px a 11 rem bar pushed the table sideways (TASK-358).
+      <div className="flex w-28 max-w-full flex-col gap-1.5 sm:w-44">
         <StatusTag status={dataset.status} dot pulse />
         {job?.state === 'running'
           ? <ImportProgress job={job} compact />
@@ -246,11 +250,13 @@ function DatasetStatusCell({ dataset }: { dataset: Dataset }) {
   }
   const err = dataset.importError;
   if (dataset.status === 'failed' && err) {
+    // The cause first; the server's whole sentence, file name and all, on hover.
+    const failure = describeImportFailure(err.error, err.phase);
     return (
-      <Tooltip content={`Import failed during ${err.phase}: ${err.error}`}>
-        <span data-testid="dataset-import-error" className="inline-flex max-w-[14rem] flex-col items-start gap-1">
+      <Tooltip content={`Import failed during ${err.phase}: ${failure.detail}`}>
+        <span data-testid="dataset-import-error" className="inline-flex w-28 max-w-full flex-col items-start gap-1 sm:w-auto sm:max-w-[14rem]">
           <StatusTag status="failed" dot />
-          <span className="max-w-full truncate text-[11px] text-ink-tertiary">{err.error}</span>
+          <span className="max-w-full truncate text-[11px] text-ink-tertiary">{failure.headline}</span>
         </span>
       </Tooltip>
     );

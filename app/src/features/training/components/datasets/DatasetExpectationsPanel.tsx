@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { CheckCircle2, RefreshCw } from 'lucide-react';
 import {
   Button,
   FormField,
@@ -17,6 +17,7 @@ import {
   errorMessage,
   toast,
 } from '@/shared/components/ui';
+import { formatDateTime } from '@/shared/utils/format';
 import { trainingApi } from '../../api/trainingApi';
 import { datasetShape } from '../../types';
 import type { Dataset, RobotType } from '../../types';
@@ -85,6 +86,8 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
   // said `validating` when the page opened). Bounded, so a stuck row unlocks.
   const [watching, setWatching] = useState(dataset.status === 'validating');
   const [gaveUp, setGaveUp] = useState(false);
+  // A passing verdict needs no controls in the way: one line, opened on demand (TASK-358).
+  const [expanded, setExpanded] = useState(false);
   const locked = LOCKED_STATUSES.has(dataset.status);
   const busy = locked || watching || pending;
 
@@ -198,6 +201,28 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
   const history = dataset.expectations?.history ?? [];
   const mismatch = (observed: number | null | undefined, expected: number | undefined) =>
     typeof observed === 'number' && typeof expected === 'number' && expected > 0 && observed !== expected;
+  const passes = dataset.status === 'ready'
+    && validation?.valid === true
+    && Boolean(dataset.robotType)
+    && !mismatch(observedState, expectedState)
+    && !mismatch(observedAction, expectedAction);
+
+  if (passes && !expanded && !watching && !pending && !creating && !gaveUp) {
+    return (
+      <Panel data-testid="dataset-expectations" data-collapsed="true" padding="sm">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-signal-measured" strokeWidth={1.75} aria-hidden />
+          <p className="min-w-0 flex-1 text-ink-secondary" data-testid="expectations-summary">
+            Matches <span className="font-medium text-ink-primary">{dataset.robotType?.name}</span>
+            {' '}— state {widthLabel(observedState)}, action {widthLabel(observedAction)}
+          </p>
+          <Button variant="ghost" size="sm" onClick={() => setExpanded(true)} data-testid="expectations-expand">
+            Change robot type
+          </Button>
+        </div>
+      </Panel>
+    );
+  }
 
   return (
     <Panel data-testid="dataset-expectations">
@@ -350,7 +375,7 @@ export function DatasetExpectationsPanel({ dataset, onDatasetChange }: DatasetEx
             <ul className="flex flex-col gap-1 text-xs text-ink-secondary" data-testid="expectation-history">
               {history.map((h) => (
                 <li key={h.at}>
-                  {new Date(h.at).toLocaleString()} · {h.fromRobotTypeName ?? 'none'} → {h.toRobotTypeName}
+                  {formatDateTime(h.at)} · {h.fromRobotTypeName ?? 'none'} → {h.toRobotTypeName}
                   {h.previousValid === false ? ' (previous verdict: failed)' : h.previousValid ? ' (previous verdict: passed)' : ''}
                   {h.reason ? ` · ${h.reason}` : ''}
                 </li>

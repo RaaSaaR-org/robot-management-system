@@ -9,9 +9,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 
 const getImportLog = vi.fn();
+const listDatasets = vi.fn();
 vi.mock('../../api/trainingApi', () => ({
   trainingApi: {
     getImportLog: (...a: unknown[]) => getImportLog(...a),
+    listDatasets: (...a: unknown[]) => listDatasets(...a),
     getDataset: vi.fn().mockRejectedValue(new Error('n/a')),
   },
 }));
@@ -46,10 +48,30 @@ beforeEach(() => {
   getImportLog.mockImplementation((id: string) => Promise.resolve({
     datasetId: id, status: 'importing', importError: null, progress: null, lines: [], dropped: 0, retained: true,
   }));
-  useImportJobsStore.setState({ jobs: {}, order: [], panelOpen: false, focusedId: null });
+  listDatasets.mockReset();
+  listDatasets.mockResolvedValue({ datasets: [] });
+  useImportJobsStore.setState({ jobs: {}, order: [], dismissedIds: [], panelOpen: false, focusedId: null });
 });
 
 describe('useImportJobsFeed', () => {
+  it('follows a Hub import started elsewhere, quietly, and skips a dismissed one (TASK-358)', async () => {
+    listDatasets.mockResolvedValue({
+      datasets: [
+        { id: 'ds-api', status: 'importing', huggingFaceRepoId: 'lerobot/pusht', sourceRevision: 'a'.repeat(40), lerobotVersion: 'v3.0' },
+        { id: 'ds-gone', status: 'importing', huggingFaceRepoId: 'lerobot/xarm_lift_medium' },
+        { id: 'ds-upload', status: 'importing' },
+      ],
+    });
+    useImportJobsStore.setState({ dismissedIds: ['ds-gone'] });
+
+    renderHook(() => useImportJobsFeed());
+    await vi.waitFor(() => expect(store().order).toEqual(['ds-api']));
+
+    expect(listDatasets).toHaveBeenCalledWith({ status: ['importing', 'validating'] });
+    expect(store().jobs['ds-api']).toMatchObject({ label: 'lerobot/pusht', notify: false, revision: 'a'.repeat(40), lerobotVersion: 'v3.0' });
+    expect(store().panelOpen).toBe(false);
+  });
+
   it('holds no socket while nothing is running', () => {
     renderHook(() => useImportJobsFeed());
     expect(FakeWebSocket.instances).toHaveLength(0);

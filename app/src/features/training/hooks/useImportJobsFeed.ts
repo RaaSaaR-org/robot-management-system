@@ -3,7 +3,8 @@
  * @description Keeps the background-import tracker live (TASK-352): one
  *              WebSocket while any import runs, a backfill from the server's
  *              log route on every (re)connect, and a slow poll as the safety
- *              net for frames a dropped socket never delivered.
+ *              net for frames a dropped socket never delivered. Imports
+ *              started elsewhere are discovered on load and on refocus.
  * @feature training
  *
  * Mounted once, in the app layout, so it follows an import whichever page the
@@ -16,6 +17,8 @@ import { useImportJobsStore, type ImportFeedMessage } from '../store/importJobsS
 
 /** How long a dropped socket waits before it tries again. */
 export const IMPORT_FEED_RECONNECT_MS = 3000;
+/** The least time between two asks for imports started elsewhere. */
+export const IMPORT_DISCOVER_MIN_MS = 15_000;
 /** How often running imports are re-read from the server regardless. */
 export const IMPORT_FEED_POLL_MS = 10_000;
 
@@ -27,6 +30,24 @@ function backfillRunning(): void {
 }
 
 export function useImportJobsFeed(): void {
+  // Imports this browser did not start — another tab, another machine, the
+  // API — are found by asking, on load and whenever the tab comes back into
+  // view. Without this the panel only knew what this browser had started,
+  // until the operator happened to open the datasets page (TASK-358).
+  useEffect(() => {
+    if (import.meta.env.VITE_DEMO_MODE === 'true') return;
+    let last = 0;
+    const discover = () => {
+      // Flicking between tabs is not a reason to ask again every time.
+      if (document.visibilityState === 'hidden' || Date.now() - last < IMPORT_DISCOVER_MIN_MS) return;
+      last = Date.now();
+      void useImportJobsStore.getState().discover();
+    };
+    discover();
+    document.addEventListener('visibilitychange', discover);
+    return () => document.removeEventListener('visibilitychange', discover);
+  }, []);
+
   const anyRunning = useImportJobsStore((state) =>
     state.order.some((id) => state.jobs[id]?.state === 'running'),
   );

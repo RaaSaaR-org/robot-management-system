@@ -170,6 +170,9 @@ export interface ImportLogResponse {
   dropped: number;
   /** False when this server holds no log for the import (restart, eviction). */
   retained: boolean;
+  /** The commit the import pinned, and the LeRobot version it declares — so a panel following the import can name both (TASK-358). */
+  sourceRevision: string | null;
+  lerobotVersion: string | null;
 }
 
 // ============================================================================
