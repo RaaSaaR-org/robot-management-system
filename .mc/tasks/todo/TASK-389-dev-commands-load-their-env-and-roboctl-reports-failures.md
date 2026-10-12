@@ -3,7 +3,7 @@ id: "TASK-389"
 aliases: []
 title: "Dev commands load their env and roboctl reports failures"
 slug: "dev-commands-load-their-env-and-roboctl-reports-failures"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "review"         # backlog | todo | in-progress | review | done | cancelled
 priority: 3                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "huhn511"
 projects: []
@@ -40,7 +40,9 @@ exits 0 when the robot fails the command. Make each one honest.
 - **Change:** a `server/src/config/load-env.ts` module, imported first in
   `server/src/index.ts`, loads `server/.env` resolved from the module's own location (not the
   cwd). Values already in the process env win. A missing file is fine (production injects env).
-  `dotenv` becomes a direct dependency of the server.
+  `dotenv` becomes a direct dependency of the server. `server/.env.example` sets
+  `NODE_ENV=development`, so a fresh `cp .env.example .env` starts without a compliance-log
+  key (encryption.ts derives a dev-only one); a `NODE_ENV` already in the environment wins.
 
 ### Robot Agent
 
@@ -70,12 +72,12 @@ exits 0 when the robot fails the command. Make each one honest.
 
 ## Acceptance Criteria
 
-- [ ] `cd server && npm run dev` reads `server/.env` regardless of how the Prisma client was generated; a value already set in the process env is not overridden; no `.env` is not an error.
-- [ ] `npm run dev:g1` boots with `Robot Type: g1` even with no `.env.g1`; `dev:h1` → `h1`, `dev:g1-edu` → `g1_edu`.
-- [ ] A profile whose env file is missing logs a warning naming the file and falls back to `.env`.
-- [ ] `roboctl move CHARGING-A` against a robot that fails the command exits non-zero; a completed command exits 0.
-- [ ] CLAUDE.md, README.md, docs/platform.md and robot-agent/AGENTS.md describe the profiles as they now behave.
-- [ ] Unit tests cover the server loader, the agent loader and the roboctl exit code.
+- [x] `cd server && npm run dev` reads `server/.env` regardless of how the Prisma client was generated; a value already set in the process env is not overridden; no `.env` is not an error.
+- [x] `npm run dev:g1` boots with `Robot Type: g1` even with no `.env.g1`; `dev:h1` → `h1`, `dev:g1-edu` → `g1_edu`.
+- [x] A profile whose env file is missing logs a warning naming the file and falls back to `.env`.
+- [x] `roboctl move CHARGING-A` against a robot that fails the command exits non-zero; a completed command exits 0.
+- [x] CLAUDE.md, README.md, docs/platform.md and robot-agent/AGENTS.md describe the profiles as they now behave.
+- [x] Unit tests cover the server loader, the agent loader and the roboctl exit code.
 
 ## Test Strategy
 

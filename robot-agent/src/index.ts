@@ -4,7 +4,8 @@
  * @status live
  */
 
-import 'dotenv/config';
+// First: loads .env or the profile's DOTENV_CONFIG_PATH file (TASK-389).
+import './config/env.js';
 import { reportRobotIdentity } from './utils/platform-registration.js';
 import express from 'express';
 import cors from 'cors';

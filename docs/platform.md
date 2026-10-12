@@ -249,7 +249,7 @@ cd server && npm install && npx prisma db push && npm run dev
 
 cd ../robot-agent && npm install
 cp .env.example .env.g1
-printf 'ROBOT_TYPE=g1\nROBOT_ID=sim-robot-g1\nPORT=41244\n' >> .env.g1
+printf 'ROBOT_ID=sim-robot-g1\nPORT=41244\n' >> .env.g1
 npm run dev:g1
 
 cd ../app && npm install && npm run dev     # http://localhost:1420
@@ -262,9 +262,9 @@ Two details in that block are deliberate. It is `prisma db push`, not
 `prisma migrate dev`: the schema ships as `sqlite` for local development while
 the migration lock records `postgresql`, so a migrate run aborts with P3019. And
 do not skip the two lines that write the robot's settings file — `.env.g1` is
-deliberately not in the repository, dotenv no-ops on a missing file, and without
-it `npm run dev:g1` quietly falls through to its defaults and starts an H1 on
-port 41243 instead.
+deliberately not in the repository. The script sets `ROBOT_TYPE=g1` itself, so
+without the file `npm run dev:g1` still starts a G1, but it warns that `.env.g1`
+is missing, falls back to `.env`, and listens on the default port 41243.
 
 ### Docker
 

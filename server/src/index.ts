@@ -3,6 +3,8 @@
  * @description A2A Server entry point
  */
 
+// First: loads server/.env before any module reads process.env (TASK-389).
+import './config/env.js';
 import { createServer } from 'http';
 import { createApp } from './app.js';
 import { logger } from './utils/logger.js';
