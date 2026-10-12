@@ -67,7 +67,8 @@ multipart upload, and sweep away the ones a crash left behind.
   ready (startup or recovery) and every `RUSTFS_MULTIPART_SWEEP_INTERVAL_HOURS`
   (default 6). Only when RustFS is initialized; a missing bucket is skipped; every
   failure is logged and counted, never thrown.
-- Document both env vars in `server/.env.example` and `docs/nats-rustfs.md`.
+- Document both env vars in `server/.env.example`, the env table in `docs/deployment.md`
+  and the RustFS client section of `docs/nats-rustfs.md`.
 
 ### Key files
 
@@ -75,17 +76,17 @@ multipart upload, and sweep away the ones a crash left behind.
 - `server/src/services/HuggingFaceImportService.ts`
 - `server/src/jobs/multipart-upload-sweep.ts` (new)
 - `server/src/index.ts`
-- `server/.env.example`, `docs/nats-rustfs.md`
+- `server/.env.example`, `docs/deployment.md`, `docs/nats-rustfs.md`
 
 ## Acceptance Criteria
 
-- [ ] `upload()` accepts `signal`; aborting it rejects the upload and sends `AbortMultipartUploadCommand` for a started multipart upload, even when the body stalls
-- [ ] An already-aborted signal rejects without any request to the store
-- [ ] A body or part error aborts the multipart upload (lib-storage `leavePartsOnError: false`, covered by a test against the real `Upload`)
-- [ ] Cancelling a dataset import (or a transfer timeout) aborts the RustFS upload in flight
-- [ ] The sweep aborts multipart uploads older than the configured age in every server bucket, leaves younger ones, skips missing buckets, and never throws
-- [ ] The sweep runs at startup/recovery and periodically, only when RustFS is initialized, and stops on shutdown
-- [ ] Both env vars are documented in `server/.env.example` and `docs/nats-rustfs.md`
+- [x] `upload()` accepts `signal`; aborting it rejects the upload and sends `AbortMultipartUploadCommand` for a started multipart upload, even when the body stalls
+- [x] An already-aborted signal rejects without any request to the store
+- [x] A body or part error aborts the multipart upload (lib-storage `leavePartsOnError: false`, covered by a test against the real `Upload`)
+- [x] Cancelling a dataset import (or a transfer timeout) aborts the RustFS upload in flight
+- [x] The sweep aborts multipart uploads older than the configured age in every server bucket, leaves younger ones, skips missing buckets, and never throws
+- [x] The sweep runs at startup/recovery and periodically, only when RustFS is initialized, and stops on shutdown
+- [x] Both env vars are documented in `server/.env.example`, `docs/deployment.md` and `docs/nats-rustfs.md`
 
 ## Test Strategy
 

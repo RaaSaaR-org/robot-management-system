@@ -471,6 +471,8 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `RUSTFS_ENDPOINT` | No | `http://localhost:9000` | S3-compatible storage endpoint |
 | `RUSTFS_ACCESS_KEY` | No | `rustfsadmin` | S3 access key |
 | `RUSTFS_SECRET_KEY` | No | `rustfsadmin` | S3 secret key |
+| `RUSTFS_MULTIPART_MAX_AGE_HOURS` | No | `24` | Age after which the server aborts an incomplete multipart upload (parts an interrupted upload left in a bucket). Keep it above the longest single-file upload |
+| `RUSTFS_MULTIPART_SWEEP_INTERVAL_HOURS` | No | `6` | How often that sweep runs; it also runs whenever RustFS becomes ready |
 | `HF_IMPORT_CONCURRENCY` | No | `5` | Concurrent HuggingFace file transfers, capped at 5; use `1` when storage has limited room for temporary multipart uploads |
 | `COMPLIANCE_LOG_ENCRYPTION_KEY` | Prod | — | 64-char hex key for compliance logs |
 | `OPENROUTER_API_KEY` | No | — | OpenRouter key for orchestrator LLM |
