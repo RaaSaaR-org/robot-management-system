@@ -223,12 +223,14 @@ async function readV3Episodes(store: DatasetObjectStore, fps: number): Promise<V
     await forEachParquetRow(store, file, (row) => {
       const frameCount = Number(row['length'] ?? row['num_frames'] ?? 0);
       const index = Number(row['episode_index'] ?? episodes.length);
-      // Per-camera playback window into the chunk's concatenated mp4.
+      // Per-camera playback window into the chunk's concatenated mp4, keyed by
+      // the full camera feature key (`observation.images.top`, pusht's
+      // singular `observation.image`).
       const videoWindows: Record<string, EpisodeVideoWindow> = {};
       for (const col of Object.keys(row)) {
-        const m = /^videos\/observation\.images\.(.+)\/from_timestamp$/.exec(col);
+        const m = /^videos\/(.+)\/from_timestamp$/.exec(col);
         if (!m) continue;
-        const base = `videos/observation.images.${m[1]}`;
+        const base = `videos/${m[1]}`;
         videoWindows[m[1]] = {
           from: Number(row[col] ?? 0),
           to: Number(row[`${base}/to_timestamp`] ?? 0),

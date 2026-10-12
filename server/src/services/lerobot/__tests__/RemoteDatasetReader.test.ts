@@ -156,6 +156,11 @@ describe('LeRobot v3.0 (concatenated file-* parquet)', () => {
     'videos/observation.images.front/file_index': { type: 'INT64' as const },
     'videos/observation.images.front/from_timestamp': { type: 'DOUBLE' as const },
     'videos/observation.images.front/to_timestamp': { type: 'DOUBLE' as const },
+    // pusht names its one camera in the singular
+    'videos/observation.image/chunk_index': { type: 'INT64' as const },
+    'videos/observation.image/file_index': { type: 'INT64' as const },
+    'videos/observation.image/from_timestamp': { type: 'DOUBLE' as const },
+    'videos/observation.image/to_timestamp': { type: 'DOUBLE' as const },
   };
   // Episodes 0-1 in file-000, 2-3 in file-001 — of both meta and data.
   const lengths = [4, 6, 5, 7];
@@ -170,6 +175,10 @@ describe('LeRobot v3.0 (concatenated file-* parquet)', () => {
       'videos/observation.images.front/file_index': fileOf(i),
       'videos/observation.images.front/from_timestamp': i,
       'videos/observation.images.front/to_timestamp': i + 0.5,
+      'videos/observation.image/chunk_index': 0,
+      'videos/observation.image/file_index': 0,
+      'videos/observation.image/from_timestamp': i * 2,
+      'videos/observation.image/to_timestamp': i * 2 + 1,
     };
   }
 
@@ -195,7 +204,11 @@ describe('LeRobot v3.0 (concatenated file-* parquet)', () => {
     });
     const episodes = await readRemoteEpisodes(store, info, 30);
     expect(episodes.map((e) => e.frameCount)).toEqual([4, 6]);
-    expect(episodes[1].videoWindows).toEqual({ front: { from: 1, to: 1.5, chunk: 0, file: 0 } });
+    // keyed by the full feature key, the singular `observation.image` included
+    expect(episodes[1].videoWindows).toEqual({
+      'observation.images.front': { from: 1, to: 1.5, chunk: 0, file: 0 },
+      'observation.image': { from: 2, to: 3, chunk: 0, file: 0 },
+    });
     const page = await readRemoteFrames(store, info, 1, 30, PAGE);
     expect(page.total).toBe(6);
     expect(page.frames[0].observationState[0]).toBe(1000);
@@ -205,7 +218,7 @@ describe('LeRobot v3.0 (concatenated file-* parquet)', () => {
     const episodes = await readRemoteEpisodes(await twoFileStore(), info, 30);
     expect(episodes.map((e) => [e.index, e.frameCount])).toEqual([[0, 4], [1, 6], [2, 5], [3, 7]]);
     expect(episodes.reduce((n, e) => n + e.frameCount, 0)).toBe(info.total_frames);
-    expect(episodes[3].videoWindows?.front.file).toBe(1);
+    expect(episodes[3].videoWindows?.['observation.images.front'].file).toBe(1);
   });
 
   it('opens the one data file the episode row names', async () => {

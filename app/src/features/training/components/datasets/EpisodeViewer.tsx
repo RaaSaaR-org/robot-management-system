@@ -8,7 +8,7 @@ import type { ChangeEvent, MutableRefObject } from 'react';
 import { Pause, Play, VideoOff } from 'lucide-react';
 import { Button, EmptyState, Panel, SegmentedControl } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
-import { formatClock } from './episodeFormat';
+import { cameraLabel, formatClock } from './episodeFormat';
 
 export type PlaybackSpeed = '0.5' | '1' | '2';
 
@@ -56,7 +56,7 @@ export function EpisodeViewer(p: EpisodeViewerProps) {
         {p.cameras.map((cam) => (
           <div key={cam} className="relative bg-canvas">
             <span className="absolute left-2 top-2 z-10 rounded-tag bg-canvas/80 px-1.5 py-0.5 text-xs font-medium text-ink-secondary">
-              {cam}
+              {cameraLabel(cam)}
             </span>
             <video
               ref={(el) => { p.videoRefs.current[cam] = el; }}

@@ -233,18 +233,27 @@ export class RustFSClient {
   }
 
   /**
-   * Download a file as stream
+   * Download a file as stream, or only the inclusive byte `range` of it.
+   *
+   * A ranged read that the store answered with the whole object (no `206`, no
+   * `Content-Range`) throws: the caller is about to label the bytes as that
+   * window, and a silently wrong window is worse than an error.
    */
-  async getStream(bucket: string, key: string): Promise<Readable> {
+  async getStream(bucket: string, key: string, range?: { start: number; end: number }): Promise<Readable> {
     const input: GetObjectCommandInput = {
       Bucket: bucket,
       Key: key,
+      ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
     };
 
     const response = await this.client.send(new GetObjectCommand(input));
 
     if (!response.Body) {
       throw new Error(`Empty response body for ${bucket}/${key}`);
+    }
+    if (range && !response.ContentRange && response.$metadata?.httpStatusCode !== 206) {
+      (response.Body as Readable).destroy?.();
+      throw new Error(`Store ignored the byte range for ${bucket}/${key}`);
     }
 
     return response.Body as Readable;
