@@ -9,6 +9,7 @@ import { dirname, join } from 'path';
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import { createAuthLimiter } from './middleware/authRateLimit.js';
 import rateLimit from 'express-rate-limit';
 
 // Structured logging & metrics
@@ -159,15 +160,10 @@ const apiLimiter = rateLimit({
     rateLimitDisabled || req.path === '/health' || req.path.startsWith('/api/compliance'),
 });
 
-// Strict rate limit for auth endpoints: 5 req/min per IP
-const authLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many authentication attempts, please try again later.' },
-  skip: () => rateLimitDisabled,
-});
+// Strict rate limit for credential endpoints (login, register, password reset):
+// 5 req/min per IP. Session upkeep (/me, /refresh, /logout) is not counted —
+// it stays under apiLimiter (TASK-362).
+const authLimiter = createAuthLimiter({ disabled: rateLimitDisabled });
 
 /**
  * Create and configure Express application

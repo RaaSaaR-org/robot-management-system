@@ -429,6 +429,8 @@ export interface RobotsState {
   pagination: RobotPagination;
   /** Loading state */
   isLoading: boolean;
+  /** Whether the robot list has been fetched at least once (settled) */
+  hasFetched: boolean;
   /** Error message */
   error: string | null;
   /** Individual robot detail (when viewing single robot) */

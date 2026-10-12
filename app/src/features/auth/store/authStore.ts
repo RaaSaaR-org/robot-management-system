@@ -9,6 +9,7 @@
 
 import { createStore } from '@/store';
 import { tokenStorage } from '@/api/client';
+import { getErrorStatus } from '@/shared/utils';
 import { authApi } from '../api/authApi';
 import { isMFAChallengeResponse } from '../types/auth.types';
 import type { AuthStore, User, AuthErrorCode } from '../types/auth.types';
@@ -47,6 +48,12 @@ const ERROR_MESSAGES: Record<AuthErrorCode, string> = {
   NETWORK_ERROR: "Can't reach the server. Try again in a moment.",
   UNKNOWN_ERROR: 'An unexpected error occurred. Please try again.',
 };
+
+/** Whether the server refused the credentials (as opposed to a transient failure). */
+function isAuthRejection(error: unknown): boolean {
+  const status = getErrorStatus(error);
+  return status === 401 || status === 403;
+}
 
 // ============================================================================
 // STORE
@@ -161,9 +168,14 @@ export const useAuthStore = createStore<AuthStore>(
       try {
         const response = await authApi.refresh(refreshToken);
         tokenStorage.setTokens(response.accessToken, response.refreshToken);
-      } catch {
-        // Refresh failed - logout
-        get().logout();
+      } catch (error) {
+        // Only a rejected refresh token ends the session; a 429, a 5xx or a
+        // network error keeps it for the next attempt (TASK-362).
+        if (isAuthRejection(error)) {
+          get().logout();
+          return;
+        }
+        throw error;
       }
     },
 
@@ -210,9 +222,10 @@ export const useAuthStore = createStore<AuthStore>(
             state.isInitialized = true;
             state.mustChangePassword = user.forcePasswordChange === true;
           });
-        } catch {
-          // Refresh failed - clear state
-          tokenStorage.clearTokens();
+        } catch (error) {
+          // Refresh failed. Drop the tokens only when the server rejected
+          // them — a rate limit or an outage is not a logout (TASK-362).
+          if (isAuthRejection(error)) tokenStorage.clearTokens();
           set((state) => {
             state.user = null;
             state.isAuthenticated = false;

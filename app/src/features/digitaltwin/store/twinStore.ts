@@ -8,7 +8,7 @@
  * @feature digitaltwin
  */
 
-import { getErrorMessage } from '@/shared/utils';
+import { getErrorMessage, createSingleFlight } from '@/shared/utils';
 import { createStore } from '@/store';
 import { twinApi } from '../api/twinApi';
 import type { DigitalTwinDTO, Site } from '../types/twin.types';
@@ -27,30 +27,35 @@ interface TwinStore {
   upsertTwin: (twin: DigitalTwinDTO) => void;
 }
 
+/** Joins concurrent twin-list fetches. */
+const twinListFlight = createSingleFlight();
+
 export const useTwinStore = createStore<TwinStore>(
   (set) => ({
     twins: [],
     isLoading: false,
     error: null,
 
-    fetchTwins: async () => {
-      set((state) => {
-        state.isLoading = true;
-        state.error = null;
-      });
-      try {
-        const twins = await twinApi.listTwins();
+    fetchTwins: async () =>
+      // Concurrent mounts (site map, twin pages) share one request (TASK-362).
+      twinListFlight.run('list', async () => {
         set((state) => {
-          state.twins = twins;
-          state.isLoading = false;
+          state.isLoading = true;
+          state.error = null;
         });
-      } catch (e) {
-        set((state) => {
-          state.isLoading = false;
-          state.error = getErrorMessage(e, 'Failed to load twins');
-        });
-      }
-    },
+        try {
+          const twins = await twinApi.listTwins();
+          set((state) => {
+            state.twins = twins;
+            state.isLoading = false;
+          });
+        } catch (e) {
+          set((state) => {
+            state.isLoading = false;
+            state.error = getErrorMessage(e, 'Failed to load twins');
+          });
+        }
+      }),
 
     createTwin: async (body) => {
       const twin = await twinApi.createTwin(body);

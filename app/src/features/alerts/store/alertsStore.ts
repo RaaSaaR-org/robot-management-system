@@ -20,7 +20,7 @@ import type {
 } from '../types/alerts.types';
 import { ALERT_SEVERITY_PRIORITY } from '../types/alerts.types';
 import { alertsApi } from '../api/alertsApi';
-import { getErrorMessage } from '@/shared/utils';
+import { getErrorMessage, createSingleFlight } from '@/shared/utils';
 
 // ============================================================================
 // HELPERS
@@ -112,6 +112,9 @@ const initialState: AlertsState = {
 // ============================================================================
 // STORE
 // ============================================================================
+
+/** Joins concurrent active-alert fetches. */
+const activeAlertsFlight = createSingleFlight();
 
 export const useAlertsStore = create<AlertsStore>()(
   devtools(
@@ -256,25 +259,28 @@ export const useAlertsStore = create<AlertsStore>()(
       // API ACTIONS
       // --------------------------------------------------------------------
 
-      fetchActiveAlerts: async (): Promise<void> => {
-        set((state) => {
-          state.isLoading = true;
-          state.error = null;
-        });
+      fetchActiveAlerts: async (): Promise<void> =>
+        // The banner, the dashboard panel and the alerts page all fetch on
+        // mount; concurrent calls share one request (TASK-362).
+        activeAlertsFlight.run('active', async () => {
+          set((state) => {
+            state.isLoading = true;
+            state.error = null;
+          });
 
-        try {
-          const alerts = await alertsApi.getActiveAlerts();
-          set((state) => {
-            state.alerts = sortAlerts(alerts);
-            state.isLoading = false;
-          });
-        } catch (error) {
-          set((state) => {
-            state.isLoading = false;
-            state.error = getErrorMessage(error, 'Failed to fetch alerts');
-          });
-        }
-      },
+          try {
+            const alerts = await alertsApi.getActiveAlerts();
+            set((state) => {
+              state.alerts = sortAlerts(alerts);
+              state.isLoading = false;
+            });
+          } catch (error) {
+            set((state) => {
+              state.isLoading = false;
+              state.error = getErrorMessage(error, 'Failed to fetch alerts');
+            });
+          }
+        }),
 
       fetchAlertHistory: async (page?: number): Promise<void> => {
         const { historyFilters, historyPagination } = get();

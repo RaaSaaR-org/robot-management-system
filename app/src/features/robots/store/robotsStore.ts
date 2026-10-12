@@ -7,6 +7,7 @@
  */
 
 import { createStore } from '@/store';
+import { createSingleFlight } from '@/shared/utils/inFlight';
 import { robotsApi } from '../api/robotsApi';
 import { sensorScansApi } from '../api/sensorScansApi';
 import type {
@@ -35,6 +36,7 @@ const initialState = {
     totalPages: 0,
   },
   isLoading: false,
+  hasFetched: false,
   error: null as string | null,
   robotDetail: null as Robot | null,
   telemetryCache: {} as Record<string, RobotTelemetry>,
@@ -57,6 +59,9 @@ const ERROR_MESSAGES: Record<RobotErrorCode, string> = {
   UNKNOWN_ERROR: 'An unexpected error occurred',
 };
 
+/** Joins concurrent identical robot-list fetches. */
+const robotListFlight = createSingleFlight();
+
 // ============================================================================
 // STORE
 // ============================================================================
@@ -69,31 +74,35 @@ export const useRobotsStore = createStore<RobotsStore>(
     // Fetch Robots
     // --------------------------------------------------------------------------
     fetchRobots: async () => {
-      set((state) => {
-        state.isLoading = true;
-        state.error = null;
+      const { filters, pagination } = get();
+      const params = { ...filters, page: pagination.page, pageSize: pagination.pageSize };
+
+      // Several components fetch the list when they mount together (the
+      // dashboard and its site map); they share one request (TASK-362).
+      return robotListFlight.run(JSON.stringify(params), async () => {
+        set((state) => {
+          state.isLoading = true;
+          state.error = null;
+        });
+
+        try {
+          const response = await robotsApi.listRobots(params);
+
+          set((state) => {
+            state.robots = response.robots;
+            state.pagination = response.pagination;
+            state.isLoading = false;
+            state.hasFetched = true;
+          });
+        } catch (error) {
+          const errorMessage = getErrorMessage(error);
+          set((state) => {
+            state.isLoading = false;
+            state.hasFetched = true;
+            state.error = errorMessage;
+          });
+        }
       });
-
-      try {
-        const { filters, pagination } = get();
-        const response = await robotsApi.listRobots({
-          ...filters,
-          page: pagination.page,
-          pageSize: pagination.pageSize,
-        });
-
-        set((state) => {
-          state.robots = response.robots;
-          state.pagination = response.pagination;
-          state.isLoading = false;
-        });
-      } catch (error) {
-        const errorMessage = getErrorMessage(error);
-        set((state) => {
-          state.isLoading = false;
-          state.error = errorMessage;
-        });
-      }
     },
 
     // --------------------------------------------------------------------------
@@ -432,6 +441,7 @@ export const selectPagination = (state: RobotsStore) => state.pagination;
 
 /** Select loading state */
 export const selectIsLoading = (state: RobotsStore) => state.isLoading;
+export const selectHasFetched = (state: RobotsStore) => state.hasFetched;
 
 /** Select error */
 export const selectError = (state: RobotsStore) => state.error;
