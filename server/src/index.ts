@@ -33,6 +33,7 @@ import {
   RustFSConnectionError,
 } from './storage/index.js';
 import { storageCleanupJob } from './jobs/storage-cleanup.js';
+import { multipartUploadSweep } from './jobs/multipart-upload-sweep.js';
 import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
 import { experimentService } from './services/ExperimentService.js';
 import { digitalTwinService } from './services/DigitalTwinService.js';
@@ -187,6 +188,7 @@ async function main() {
   try {
     await initializeRustFSClient();
     storageCleanupJob.startSchedule(24); // Daily at 3 AM
+    multipartUploadSweep.start(); // Now, then every RUSTFS_MULTIPART_SWEEP_INTERVAL_HOURS (TASK-379)
     logger.info('[RustFS] Object storage initialized');
   } catch (error) {
     const errorKind = error instanceof RustFSConnectionError ? error.kind : 'unknown';
@@ -197,6 +199,7 @@ async function main() {
       startRustFSRecovery({
         onReady: () => {
           storageCleanupJob.startSchedule(24);
+          multipartUploadSweep.start();
           logger.info('[RustFS] Object storage recovered');
           void requeueInterruptedValidations();
         },
@@ -236,6 +239,7 @@ async function main() {
     retentionCleanupJob.stopSchedule();
     telemetryCleanupJob.stopSchedule();
     storageCleanupJob.stopSchedule();
+    multipartUploadSweep.stop();
     digitalTwinService.stopReaper();
     trainingJobService.stopAllWatchers();
     await syntheticDataWorker.stop();

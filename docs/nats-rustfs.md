@@ -1562,6 +1562,20 @@ export class JetStreamJobQueue<T = unknown> {
 
 ### 5.4 RustFS Client Implementation
 
+> **Incomplete multipart uploads (TASK-379).** `RustFSClient.upload()` streams
+> through a multipart upload. It takes an `AbortSignal`; a cancelled or failed
+> upload aborts its multipart upload on the store, so no parts stay behind (the
+> Hugging Face importer passes each transfer's signal, so cancelling an import
+> or a transfer timeout cleans up too). An upload cut short by a crash or
+> restart cannot clean up after itself, and RustFS is not relied on for the
+> `AbortIncompleteMultipartUpload` lifecycle rule, so
+> `server/src/jobs/multipart-upload-sweep.ts` lists the in-progress multipart
+> uploads in every server bucket and aborts those started more than
+> `RUSTFS_MULTIPART_MAX_AGE_HOURS` (default `24`) ago. It runs when RustFS
+> becomes ready and every `RUSTFS_MULTIPART_SWEEP_INTERVAL_HOURS` (default `6`),
+> only while RustFS is initialized, and logs failures without ever stopping the
+> server.
+
 ```typescript
 // src/storage/rustfs-client.ts
 import {

@@ -66,7 +66,7 @@ import {
 import { importActivityLog } from '../ImportActivityLog.js';
 import { datasetRepository, robotTypeRepository } from '../../repositories/index.js';
 import { datasetService } from '../DatasetService.js';
-import { isRustFSInitialized } from '../../storage/rustfs-client.js';
+import { getRustFSClient, isRustFSInitialized } from '../../storage/rustfs-client.js';
 import type { DatasetEvent, LeRobotInfoV3 } from '../../types/dataset.types.js';
 
 const DATASET_ID = 'dataset-cancel';
@@ -235,6 +235,43 @@ describe('cancelling a running import (TASK-371)', () => {
     finishValidation('ready');
     await settle(() => expect(service.isRunning(DATASET_ID)).toBe(false));
     expect(events().some((e) => e.type === 'dataset:import:completed')).toBe(true);
+  });
+});
+
+describe('cancelling an import that streams into RustFS (TASK-379)', () => {
+  it('aborts the upload in flight, so its multipart parts do not stay in the bucket', async () => {
+    installFakeHub();
+    const signals = new Map<string, AbortSignal | undefined>();
+    const upload = vi.fn(async (_bucket: string, key: string, body: AsyncIterable<unknown>, options?: { signal?: AbortSignal }) => {
+      signals.set(key, options?.signal);
+      for await (const chunk of body) void chunk;
+    });
+    const deletePrefix = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    vi.mocked(getRustFSClient).mockReturnValue({ upload, deletePrefix } as never);
+    try {
+      await service.importDataset({ repoId: REPO });
+      await hangingStarted;
+      const hangingKey = `storage-id-cancel/${HANGING}`;
+      await settle(() => expect(signals.has(hangingKey)).toBe(true));
+      const signal = signals.get(hangingKey)!;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal.aborted).toBe(false);
+
+      const result = await service.cancelImport(DATASET_ID);
+
+      expect(result).toEqual({ datasetId: DATASET_ID, status: 'cancelled' });
+      // The signal `RustFSClient.upload()` aborts the multipart upload on.
+      expect(signal.aborted).toBe(true);
+      // Files that finished got a signal too, and it was never fired at them.
+      expect(signals.get('storage-id-cancel/meta/info.json')).toBeInstanceOf(AbortSignal);
+      expect(deletePrefix).toHaveBeenCalledWith('training-datasets', 'storage-id-cancel/');
+    } finally {
+      vi.mocked(isRustFSInitialized).mockReturnValue(false);
+      vi.mocked(getRustFSClient).mockImplementation(() => {
+        throw new Error('RustFS must not be reached when it is not initialised');
+      });
+    }
   });
 });
 

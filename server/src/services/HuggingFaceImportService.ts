@@ -267,7 +267,11 @@ interface ImportSink {
   discard(): Promise<void>;
   /** Remove everything this import wrote so far — a cancelled run's partial files (TASK-371). */
   purge(): Promise<void>;
-  write(path: string, response: Response): Promise<void>;
+  /**
+   * `signal` ends the write when the transfer is cancelled or times out; a
+   * sink that stores in parts must not leave them behind (TASK-379).
+   */
+  write(path: string, response: Response, signal?: AbortSignal): Promise<void>;
 }
 
 /**
@@ -373,7 +377,7 @@ class RustFsImportSink implements ImportSink {
     await getRustFSClient().deletePrefix(BUCKETS.TRAINING_DATASETS, this.storagePath);
   }
 
-  async write(path: string, response: Response): Promise<void> {
+  async write(path: string, response: Response, signal?: AbortSignal): Promise<void> {
     const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
     const body = webStream(response, path);
     try {
@@ -381,7 +385,7 @@ class RustFsImportSink implements ImportSink {
         BUCKETS.TRAINING_DATASETS,
         `${this.storagePath}${path}`,
         body,
-        { contentType },
+        { contentType, signal },
       );
     } finally {
       body.destroy();
@@ -1682,10 +1686,12 @@ export class HuggingFaceImportService {
           throw new FileTransferError(path, stage, attempt, sink.kind, `HTTP ${response.status}`, response.status);
         }
         stage = 'write';
+        // The attempt's signal, not the import's: a transfer timeout must stop
+        // the upload as surely as a cancel does.
         await sink.write(path, countingResponse(response, (n) => {
           received += n;
           onBytes(n);
-        }));
+        }), controller.signal);
         return;
       } catch (error) {
         // The attempt's bytes are rewritten by the next one: take them back so
