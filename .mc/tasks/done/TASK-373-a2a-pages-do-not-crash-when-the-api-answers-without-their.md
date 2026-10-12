@@ -3,7 +3,7 @@ id: "TASK-373"
 aliases: []
 title: "A2A pages do not crash when the API answers without their list"
 slug: "a2a-pages-do-not-crash-when-the-api-answers-without-their"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
