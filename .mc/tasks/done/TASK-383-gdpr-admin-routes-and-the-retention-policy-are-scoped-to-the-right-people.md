@@ -3,7 +3,7 @@ id: "TASK-383"
 aliases: []
 title: "GDPR admin routes and the retention policy are scoped to the right people"
 slug: "gdpr-admin-routes-and-the-retention-policy-are-scoped-to-the-right-people"
-status: "review"
+status: done
 priority: 1
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-10-13"
-updated: "2026-10-13"
+updated: 2026-10-13
 ---
 
 # GDPR admin routes and the retention policy are scoped to the right people
