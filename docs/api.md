@@ -117,12 +117,14 @@ hazard must be able to stop it:
 | Method | Path | Why |
 |--------|------|-----|
 | POST | `/api/safety/fleet/estop` | `FleetEmergencyStopButton`, on the dashboard and the safety page |
+| POST | `/api/safety/zones/:id/estop` | Clicking a zone on the site map (fleet page and dashboard), and `ZoneEmergencyStopButton` (TASK-374) |
 | POST | `/api/robots/:id/command` | **Only** with an `emergency_stop` body — `EmergencyStopButton`. The endpoint itself stays `member`: any other command type from a viewer is still a 403, so this cannot be used to drive a robot |
 
 The class is one-way: a viewer may stop, never start. `POST
 /api/safety/fleet/estop/reset` and `POST /api/safety/robots/:id/estop/reset`
-put robots back in motion and stay `member`. The zone and per-robot stops under
-`/api/safety` stay `member` too — no shipped UI fires them.
+put robots back in motion and stay `member` (a zone has no reset route). The
+per-robot stop under `/api/safety` stays `member` too — no shipped UI fires it;
+a viewer's per-robot halt is the `emergency_stop` command above.
 
 **Consequences worth knowing** (classified deliberately, not by oversight):
 
