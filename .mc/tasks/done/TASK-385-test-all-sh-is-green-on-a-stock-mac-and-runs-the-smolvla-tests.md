@@ -16,7 +16,7 @@ spe: 2
 effort: "low"
 due_date: ""
 created: "2026-10-13"
-updated: "2026-10-13"
+updated: 2026-10-13
 ---
 
 # test-all.sh is green on a stock Mac and runs the SmolVLA tests
