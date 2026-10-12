@@ -3,7 +3,7 @@ id: "TASK-359"
 aliases: ["TASK-359"]
 title: "Dataset storage lifecycle survives deletes, restarts and storage outages"
 slug: "dataset-storage-lifecycle-survives-deletes-restarts-and-storage-outages"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -111,23 +111,23 @@ loudly, with the reason recorded.
 
 ## Acceptance Criteria
 
-- [ ] Deleting a dataset whose `storagePath` is `<uuid>/` removes every object under
+- [x] Deleting a dataset whose `storagePath` is `<uuid>/` removes every object under
       that prefix. A non-uuid `storagePath` is never used as a prefix. When the prefix
       cannot be removed, the answer is 503 and the row stays.
-- [ ] After a restart, an `importing` row reads `failed` with importError `Server
+- [x] After a restart, an `importing` row reads `failed` with importError `Server
       restarted during import`. Retrying an orphaned `importing` row is accepted, and
       retrying one this process is running still answers 409.
-- [ ] A connection-closed NATS error leaves a `validating` row `validating` and does not
+- [x] A connection-closed NATS error leaves a `validating` row `validating` and does not
       write `failed`. Such rows are re-queued at startup, and no code path writes
       `status: 'failed'` without a reason.
-- [ ] `/health` reports storage `unavailable` within about 10 s of RustFS going down,
+- [x] `/health` reports storage `unavailable` within about 10 s of RustFS going down,
       while staying HTTP 200. Transfer retries name the stage and the sink in the
       import log.
-- [ ] In production, the server refuses to start when the compliance key is missing,
+- [x] In production, the server refuses to start when the compliance key is missing,
       malformed or the public example value.
-- [ ] `test.sh` kills its own port-forward, and asserts that a deleted dataset leaves no
+- [x] `test.sh` kills its own port-forward, and asserts that a deleted dataset leaves no
       objects behind.
-- [ ] Server typecheck and vitest pass. New unit tests cover each server item above.
+- [x] Server typecheck and vitest pass. New unit tests cover each server item above.
 
 ## Test Strategy
 
