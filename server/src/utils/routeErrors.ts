@@ -5,7 +5,7 @@
  */
 
 import type { Response } from 'express';
-import { isOperationalError, prismaErrorToAppError } from './errors.js';
+import { type AppError, isOperationalError, prismaErrorToAppError } from './errors.js';
 import { logger } from './logger.js';
 
 /**
@@ -44,13 +44,22 @@ export function sendFailure(
   }
 
   if (isOperationalError(error)) {
-    // A storage refusal also carries its stable code and RustFS state, so a
-    // client can tell "object storage is down" from any other 503 (TASK-350).
-    const storage = error.code === 'STORAGE_UNAVAILABLE' ? { code: error.code, ...error.context } : {};
-    res.status(error.statusCode).json({ ...extra, ...storage, error: error.message });
+    res.status(error.statusCode).json({ ...extra, ...storageRefusalFields(error), error: error.message });
     return;
   }
 
   logger.error({ err: error }, fallbackMessage);
   res.status(fallbackStatus).json({ ...extra, error: fallbackMessage });
+}
+
+/**
+ * The body fields a storage refusal adds: its stable code plus the RustFS
+ * `state` and `errorKind`, so a client can tell "object storage is down" from
+ * any other 503 (TASK-350). Empty for every other `AppError`. Exported so a
+ * route with its own error mapper answers a refusal in the same shape.
+ *
+ * @param error - The operational error being answered
+ */
+export function storageRefusalFields(error: AppError): Record<string, unknown> {
+  return error.code === 'STORAGE_UNAVAILABLE' ? { code: error.code, ...error.context } : {};
 }

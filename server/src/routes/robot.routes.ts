@@ -593,8 +593,9 @@ robotRoutes.post('/:id/pointcloud/capture', async (req: Request, res: Response) 
     if (error instanceof Error && error.message.includes('not found')) {
       return res.status(404).json({ error: 'Robot not found' });
     }
-    console.error('[PointCloud] capture error:', error);
-    res.status(500).json({ error: 'Failed to capture scan' });
+    // A storage refusal (TASK-350) answers 503 with its code, state and
+    // errorKind; anything unmapped stays the bare 500 (TASK-381).
+    sendFailure(res, error, 'Failed to capture scan', 500);
   }
 });
 

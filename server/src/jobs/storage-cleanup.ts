@@ -55,7 +55,7 @@ export class StorageCleanupJob {
         // Configured but down: skip the run and say why. The temp uploads
         // live in RustFS, so there is nothing on local disk to clean (TASK-350).
         const { state, errorKind } = getRustFSStatus();
-        const reason = `RustFS configured but unavailable (state=${state}, errorKind=${errorKind ?? 'none'})`;
+        const reason = `RustFS configured but not ready (state=${state}, errorKind=${errorKind ?? 'none'})`;
         console.warn(`[StorageCleanupJob] ${reason}, skipping cleanup`);
         return { deletedCount: 0, deletedSize: 0, errors: [reason] };
       }
