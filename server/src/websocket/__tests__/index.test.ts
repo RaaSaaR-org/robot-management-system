@@ -901,6 +901,36 @@ describe('setupWebSocket', () => {
       expect(types(admin)).toEqual(['dataset:deleted']);
     });
 
+    // TASK-375: the row of a delete event is gone and, after a restart, the
+    // lookup cache holds nothing — the tenant the service read before the
+    // delete routes it.
+    const deletes: Array<[string, () => void, string]> = [
+      ['dataset:deleted', () => services.dataset.cb?.({ type: 'dataset:deleted', datasetId: 'gone', tenantId: 'tenant-a', timestamp: 'now' }), 'dataset:deleted'],
+      ['alert_deleted', () => services.alert.cb?.({ type: 'alert_deleted', alert: { id: 'gone', source: 'system' }, tenantId: 'tenant-a', timestamp: 1 }), 'alert_deleted'],
+      ['robot_unregistered', () => services.robot.cb?.({ type: 'robot_unregistered', robotId: 'gone', tenantId: 'tenant-a', timestamp: 'now' }), 'robot_unregistered'],
+    ];
+
+    it.each(deletes)('routes %s by the tenant it carries, with an empty tenant cache', async (_name, fire, type) => {
+      const { a, b, admin, anonymous } = await sockets();
+      fire();
+      await flush();
+      expect(types(a)).toEqual([type]);
+      expect(types(admin)).toEqual([type]);
+      expect(b.sent).toEqual([]);
+      expect(anonymous.sent).toEqual([]);
+    });
+
+    it('prefers the carried tenant to a lookup and keeps it out of the payload', async () => {
+      const { a, b } = await sockets();
+      // The lookup would answer tenant-b for this robot; the row the service
+      // read before deleting it said tenant-a.
+      services.robot.cb?.({ type: 'robot_unregistered', robotId: 'rb', tenantId: 'tenant-a', timestamp: 'now' });
+      await flush();
+      expect(types(a)).toEqual(['robot_unregistered']);
+      expect(b.sent).toEqual([]);
+      expect(JSON.parse(a.sent[0] as string)).not.toHaveProperty('tenantId');
+    });
+
     it('gives each tenant its own robots of a cross-tenant fleet E-stop', async () => {
       const { a, b, admin } = await sockets();
       services.estop.cb?.({

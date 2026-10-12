@@ -744,6 +744,16 @@ export class DatasetRepository {
     return dataset ? dbDatasetToDomain(dataset) : null;
   }
 
+  /**
+   * The tenant of a dataset row: `undefined` when there is no such row, `null`
+   * when it has no tenant. Read before a delete so `dataset:deleted` can name
+   * the tenant of a row that is gone by the time it is routed (TASK-375).
+   */
+  async tenantOf(id: string): Promise<string | null | undefined> {
+    const row = await prisma.dataset.findUnique({ where: { id }, select: { tenantId: true } });
+    return row ? row.tenantId : undefined;
+  }
+
   async findAll(params?: DatasetQueryParams): Promise<PaginatedResult<Dataset>> {
     const page = params?.page ?? 1;
     const pageSize = params?.pageSize ?? 50;

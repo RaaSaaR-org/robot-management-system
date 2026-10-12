@@ -72,6 +72,7 @@ vi.mock('../../repositories/index.js', () => ({
   datasetRepository: {
     create: vi.fn(),
     findById: vi.fn(),
+    tenantOf: vi.fn(),
     findAll: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
@@ -479,6 +480,23 @@ describe('delete', () => {
     expect(result).toBe(true);
     expect(deleteDatasetFromStorage).not.toHaveBeenCalled();
     expect(events.some((e) => e.type === 'dataset:deleted')).toBe(true);
+    unsub();
+  });
+
+  it('carries the tenant of the row it deleted on dataset:deleted (TASK-375)', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.tenantOf).mockResolvedValue('tenant-a');
+    // The tenant is read before the row goes, not after.
+    vi.mocked(datasetRepository.delete).mockImplementation(async () => {
+      vi.mocked(datasetRepository.tenantOf).mockResolvedValue(undefined);
+      return true;
+    });
+
+    const events: { type: string; tenantId?: string | null }[] = [];
+    const unsub = datasetService.onDatasetEvent((e) => events.push(e));
+
+    await datasetService.delete('ds1');
+    expect(events.find((e) => e.type === 'dataset:deleted')).toMatchObject({ tenantId: 'tenant-a' });
     unsub();
   });
 

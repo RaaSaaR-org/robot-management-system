@@ -26,6 +26,25 @@
  * | `agent:*`, robot events  | Robot (TASK-366)                                   |
  * | `safety:estop`           | each affected robot — sliced per socket            |
  *
+ * A delete event cannot be routed by its row: the row is gone when the event
+ * is routed, and the lookup cache is empty after a restart. So the service
+ * that deletes it reads the row's tenant first and carries it on the event
+ * (`tenantId`, TASK-375), and routing prefers that to any lookup. `null` there
+ * is a row with no tenant — what a lookup of the row would have answered:
+ *
+ * | event                | carries the tenant of                             |
+ * | -------------------- | ------------------------------------------------- |
+ * | `alert_deleted`      | the Alert row (AlertService.deleteAlert)          |
+ * | `dataset:deleted`    | the Dataset row (DatasetService.delete)           |
+ * | `robot_unregistered` | the Robot row (RobotManager.unregisterRobot)      |
+ *
+ * Every other delete emits no event (incidents, processes, robot tasks,
+ * twins, deployments, conversations, teleop sessions, bulk alert clears) or is
+ * routed by a parent that outlives it (`twinZone:deleted` by its twin,
+ * `scan:deleted` by its robot). The field is only ever set by the server from
+ * the database, never from a request, so it cannot name a tenant the row was
+ * not in.
+ *
  * No family on this socket is platform-wide: an event whose entity cannot be
  * named or found goes to super-admins only, never to everyone. Approvals and
  * other features without a WebSocket event are not on this socket at all.

@@ -283,7 +283,7 @@ describe('unregisterRobot', () => {
 
   it('deletes a DB-only robot (not cached) without touching A2A cleanup', async () => {
     const mgr = new RobotManager();
-    robotRepository.getRegisteredRobot.mockResolvedValue(makeRegistered());
+    robotRepository.getRegisteredRobot.mockResolvedValue(makeRegistered({ tenantId: 'tenant-a' }));
     robotRepository.delete.mockResolvedValue(true);
 
     const events: { type: string }[] = [];
@@ -296,7 +296,8 @@ describe('unregisterRobot', () => {
     // not cached => no agent/conversation cleanup
     expect(conversationManager.unregisterAgent).not.toHaveBeenCalled();
     expect(agentCardResolver.clearCache).not.toHaveBeenCalled();
-    expect(events).toEqual([expect.objectContaining({ type: 'robot_unregistered' })]);
+    // The row's tenant rides on the event: it is gone once routed (TASK-375).
+    expect(events).toEqual([expect.objectContaining({ type: 'robot_unregistered', tenantId: 'tenant-a' })]);
   });
 
   it('removes a cached robot, cleans up A2A state and emits an event', async () => {

@@ -26,6 +26,13 @@ export type AlertEventType = 'alert_created' | 'alert_acknowledged' | 'alert_del
 export interface AlertEvent {
   type: AlertEventType;
   alert: Alert;
+  /**
+   * The tenant of the row this event deleted, read from the database before
+   * the delete (TASK-375). Set by the server only, never from a request body;
+   * WebSocket routing prefers it to a lookup, which cannot find a row that is
+   * gone. `undefined` on every other event.
+   */
+  tenantId?: string | null;
   timestamp: string;
 }
 
@@ -147,6 +154,8 @@ export class AlertService {
   async deleteAlert(id: string): Promise<boolean> {
     const alert = await alertRepository.findById(id);
     if (!alert) return false;
+    // Read now: once the row is gone, nothing can say whose it was (TASK-375).
+    const tenantId = await alertRepository.tenantOf(id);
 
     const deleted = await alertRepository.delete(id);
 
@@ -154,6 +163,7 @@ export class AlertService {
       this.emitEvent({
         type: 'alert_deleted',
         alert,
+        ...(tenantId !== undefined && { tenantId }),
         timestamp: new Date().toISOString(),
       });
     }
