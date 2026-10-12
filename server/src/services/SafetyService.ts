@@ -247,8 +247,8 @@ class SafetyService {
         {}
       );
 
-      // Create info alert
-      await alertService.createAlert({
+      // Info alert; a later reset supersedes it instead of stacking a copy.
+      await alertService.replaceAlert({
         severity: 'info',
         title: `E-Stop Reset - ${registered.robot.name}`,
         message: 'Emergency stop has been reset. Robot is ready for operation.',

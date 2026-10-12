@@ -45,6 +45,7 @@ vi.mock('../../repositories/DigitalTwinRepository.js', () => ({
 vi.mock('../AlertService.js', () => ({
   alertService: {
     createAlert: vi.fn(),
+    replaceAlert: vi.fn(),
   },
 }));
 
@@ -92,6 +93,7 @@ beforeEach(() => {
   httpPost.mockReset();
   httpGet.mockReset();
   vi.mocked(alertService.createAlert).mockResolvedValue({} as never);
+  vi.mocked(alertService.replaceAlert).mockResolvedValue({} as never);
   vi.mocked(digitalTwinRepository.findById).mockResolvedValue({ id: 't1' } as never);
 });
 
@@ -172,7 +174,7 @@ describe('resetRobotEStop', () => {
     await expect(safetyService.resetRobotEStop('rZ')).rejects.toThrow('Robot rZ not found');
   });
 
-  it('posts to the reset endpoint and creates an info alert', async () => {
+  it('posts to the reset endpoint and replaces the info alert, not stacking it (TASK-388)', async () => {
     vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
     httpPost.mockResolvedValue({ status: 'armed' });
 
@@ -180,7 +182,8 @@ describe('resetRobotEStop', () => {
 
     expect(result).toEqual({ status: 'armed' });
     expect(httpPost).toHaveBeenCalledWith('/api/v1/robots/r1/safety/estop/reset', {});
-    expect(alertService.createAlert).toHaveBeenCalledWith(
+    expect(alertService.createAlert).not.toHaveBeenCalled();
+    expect(alertService.replaceAlert).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'info', source: 'robot', sourceId: 'r1' })
     );
   });

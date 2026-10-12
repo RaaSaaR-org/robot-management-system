@@ -131,6 +131,26 @@ export class AlertService {
   }
 
   /**
+   * Create an alert that supersedes its own earlier copies: any still-active
+   * alert with the same source, sourceId and title is acknowledged first, so a
+   * repeated event (an E-Stop reset, say) leaves one active row instead of a
+   * stack the operator has to dismiss one by one (TASK-388).
+   */
+  async replaceAlert(input: CreateAlertInput): Promise<Alert> {
+    if (input.sourceId) {
+      const active = await alertRepository.findActive({
+        source: input.source,
+        sourceId: input.sourceId,
+      });
+      await this.acknowledgeAndEmit(
+        active.filter((a) => a.title === input.title),
+        'system:superseded'
+      );
+    }
+    return this.createAlert(input);
+  }
+
+  /**
    * Acknowledge an alert
    */
   async acknowledgeAlert(id: string, userId?: string): Promise<Alert | null> {
