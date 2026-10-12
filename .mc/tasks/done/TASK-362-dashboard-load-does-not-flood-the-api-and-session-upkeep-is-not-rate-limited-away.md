@@ -3,7 +3,7 @@ id: "TASK-362"
 aliases: []
 title: "Dashboard load does not flood the API and session upkeep is not rate limited away"
 slug: "dashboard-load-does-not-flood-the-api-and-session-upkeep-is-not-rate-limited-away"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -63,13 +63,13 @@ identical fetches from several components also each hit the network.
 
 ## Acceptance Criteria
 
-- [ ] One dashboard load with an empty fleet sends each of `/robots`,
+- [x] One dashboard load with an empty fleet sends each of `/robots`,
       `/alerts/active`, `/digital-twins` at most once (vitest counts requests).
-- [ ] `authLimiter` 429s the 6th login within a minute but never `/auth/me`,
+- [x] `authLimiter` 429s the 6th login within a minute but never `/auth/me`,
       `/auth/refresh` or `/auth/logout` (vitest).
-- [ ] A 429 on an API request is retried after back-off instead of failing; a
+- [x] A 429 on an API request is retried after back-off instead of failing; a
       429 on `/auth/refresh` does not clear the tokens (vitest).
-- [ ] typecheck + unit tests green; CI green.
+- [x] typecheck + unit tests green; CI green.
 
 ## Test Strategy
 
