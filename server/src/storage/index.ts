@@ -24,6 +24,7 @@ export type {
   RustFSRecoveryOptions,
   UploadOptions,
   UploadProgress,
+  MultipartUploadInfo,
   ObjectMetadata,
   ListOptions,
   ListResult,

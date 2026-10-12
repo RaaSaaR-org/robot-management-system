@@ -68,6 +68,8 @@ vi.mock('@aws-sdk/client-s3', () => ({
   CopyObjectCommand: h.mkCmd('CopyObject'),
   ListBucketsCommand: h.mkCmd('ListBuckets'),
   HeadBucketCommand: h.mkCmd('HeadBucket'),
+  ListMultipartUploadsCommand: h.mkCmd('ListMultipartUploads'),
+  AbortMultipartUploadCommand: h.mkCmd('AbortMultipartUpload'),
 }));
 
 vi.mock('@aws-sdk/lib-storage', () => ({

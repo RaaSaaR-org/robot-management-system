@@ -14,6 +14,8 @@ import {
   CopyObjectCommand,
   ListBucketsCommand,
   HeadBucketCommand,
+  ListMultipartUploadsCommand,
+  AbortMultipartUploadCommand,
   type PutObjectCommandInput,
   type GetObjectCommandInput,
   type ListObjectsV2CommandInput,
@@ -38,6 +40,18 @@ export interface UploadOptions {
   contentType?: string;
   metadata?: Record<string, string>;
   onProgress?: (progress: UploadProgress) => void;
+  /**
+   * Stops the upload (TASK-379). A multipart upload that already started is
+   * aborted on the store, so its parts do not stay behind in the bucket.
+   */
+  signal?: AbortSignal;
+}
+
+/** A multipart upload that was started and neither completed nor aborted. */
+export interface MultipartUploadInfo {
+  key: string;
+  uploadId: string;
+  initiated?: Date;
 }
 
 export interface UploadProgress {
@@ -73,6 +87,15 @@ export interface ObjectInfo {
   size: number;
   lastModified: Date;
   etag?: string;
+}
+
+function uploadAbortedError(): Error {
+  return Object.assign(new Error('Upload aborted.'), { name: 'AbortError' });
+}
+
+function isReadable(body: unknown): body is Readable {
+  return typeof (body as Readable | null)?.destroy === 'function'
+    && typeof (body as Readable | null)?.pipe === 'function';
 }
 
 // ============================================================================
@@ -115,8 +138,14 @@ export class RustFSClient {
     body: Buffer | Readable | string,
     options?: UploadOptions
   ): Promise<void> {
+    const signal = options?.signal;
+    if (signal?.aborted) throw uploadAbortedError();
+
     const upload = new Upload({
       client: this.client,
+      // The default, stated: a failed part or body aborts the multipart upload
+      // on the store instead of leaving its parts in the bucket (TASK-379).
+      leavePartsOnError: false,
       params: {
         Bucket: bucket,
         Key: key,
@@ -138,7 +167,54 @@ export class RustFSClient {
       });
     }
 
-    await upload.done();
+    // `upload.abort()` rejects `done()` at once, but lib-storage only sends the
+    // AbortMultipartUpload once its part loop notices — and a body stalled on
+    // a dead source never lets it. Ending the body is what makes it notice.
+    const onAbort = () => {
+      void upload.abort();
+      if (isReadable(body)) body.destroy();
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      await upload.done();
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  /**
+   * Every multipart upload in `bucket` that was started and never completed or
+   * aborted — the parts an interrupted upload left behind (TASK-379).
+   */
+  async listMultipartUploads(bucket: string): Promise<MultipartUploadInfo[]> {
+    const uploads: MultipartUploadInfo[] = [];
+    let keyMarker: string | undefined;
+    let uploadIdMarker: string | undefined;
+    for (;;) {
+      const response = await this.client.send(
+        new ListMultipartUploadsCommand({
+          Bucket: bucket,
+          KeyMarker: keyMarker,
+          UploadIdMarker: uploadIdMarker,
+        })
+      );
+      for (const upload of response.Uploads ?? []) {
+        if (!upload.Key || !upload.UploadId) continue;
+        uploads.push({ key: upload.Key, uploadId: upload.UploadId, initiated: upload.Initiated });
+      }
+      if (!response.IsTruncated) return uploads;
+      // A truncated page without markers would ask for the same page forever.
+      if (!response.NextKeyMarker && !response.NextUploadIdMarker) return uploads;
+      keyMarker = response.NextKeyMarker;
+      uploadIdMarker = response.NextUploadIdMarker;
+    }
+  }
+
+  /** Abort one multipart upload, deleting the parts it stored. */
+  async abortMultipartUpload(bucket: string, key: string, uploadId: string): Promise<void> {
+    await this.client.send(
+      new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId })
+    );
   }
 
   /**
