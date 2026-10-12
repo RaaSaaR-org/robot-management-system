@@ -16,7 +16,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Search, XCircle } from 'lucide-react';
+import { AlertTriangle, Search, XCircle } from 'lucide-react';
 import {
   Button, Checkbox, DataTable, EmptyState, FormField, Input, KeyValueList, Modal, Panel, Select,
   SkeletonRows, SkeletonText, StatusTag, Tabs, ToggleChip, toast,
@@ -537,14 +537,17 @@ function AlreadyImported({ existing, resolvedRevision }: { existing: Dataset[]; 
     <p
       role="status"
       data-testid="hf-already-imported"
-      className="rounded-control border border-signal-estimated/40 bg-signal-estimated/10 px-3 py-2 text-sm text-ink-primary"
+      className="flex items-start gap-2 rounded-control border border-signal-estimated/40 bg-signal-estimated/10 px-3 py-2 text-sm text-ink-primary"
     >
-      Already imported at {revisions.join(', ')}.{' '}
-      {same
-        ? 'This is the same commit, so importing again makes a second copy.'
-        : resolvedRevision
-          ? `This would add ${shortRevision(resolvedRevision)} as a separate dataset.`
-          : 'Importing again makes a separate dataset.'}
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-signal-estimated" strokeWidth={1.75} aria-hidden />
+      <span>
+        Already imported at {revisions.join(', ')}.{' '}
+        {same
+          ? 'This is the same commit, so importing again makes a second copy.'
+          : resolvedRevision
+            ? `This would add ${shortRevision(resolvedRevision)} as a separate dataset.`
+            : 'Importing again makes a separate dataset.'}
+      </span>
     </p>
   );
 }

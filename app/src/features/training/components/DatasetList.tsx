@@ -125,6 +125,8 @@ export function DatasetList({
       header: 'Episodes',
       align: 'right',
       sortable: true,
+      // Below `sm` the name and the status are what fits in 400 px (TASK-358).
+      hideBelow: 'sm',
       cell: (d) => formatCount(d.demonstrationCount),
     },
     {

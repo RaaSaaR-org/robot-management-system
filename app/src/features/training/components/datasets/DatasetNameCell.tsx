@@ -79,7 +79,8 @@ export function DatasetNameCell({ dataset, parent }: DatasetNameCellProps) {
           </Tooltip>
         )}
       </div>
-      <span className="truncate text-[13px] text-ink-tertiary" title={datasetOriginLine(dataset, parent)}>
+      {/* Wraps on a phone, where truncating would cut off the commit and version. */}
+      <span className="text-[13px] text-ink-tertiary [overflow-wrap:anywhere] sm:truncate" title={datasetOriginLine(dataset, parent)}>
         {datasetOriginLine(dataset, parent)}
       </span>
     </div>
