@@ -6,7 +6,13 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { deliverEvent, RobotTenantResolver, UNRESOLVED_ROBOT_TENANT } from '../eventFanout.js';
+import {
+  deliverEvent,
+  deliverEventPerSocket,
+  RobotTenantResolver,
+  TenantResolver,
+  UNRESOLVED_ROBOT_TENANT,
+} from '../eventFanout.js';
 import type { SocketIdentity } from '../socketIdentity.js';
 
 type Client = { name: string };
@@ -78,5 +84,40 @@ describe('RobotTenantResolver', () => {
     expect(resolver.peek('r1')).toBeUndefined();
     expect(await resolver.resolve('r1')).toBeNull();
     expect(resolver.peek('r1')).toBeNull();
+  });
+});
+
+describe('TenantResolver (TASK-368)', () => {
+  it('does not remember an entity that was not found, so a later event retries', async () => {
+    const lookup = vi.fn().mockResolvedValueOnce(UNRESOLVED_ROBOT_TENANT).mockResolvedValueOnce('tenant-a');
+    const resolver = new TenantResolver(lookup);
+    expect(await resolver.resolve('dataset:d1')).toBe(UNRESOLVED_ROBOT_TENANT);
+    expect(resolver.peek('dataset:d1')).toBeUndefined();
+    expect(await resolver.resolve('dataset:d1')).toBe('tenant-a');
+    expect(resolver.peek('dataset:d1')).toBe('tenant-a');
+  });
+
+  it('keeps at most maxEntries answers, dropping the oldest first', async () => {
+    const resolver = new TenantResolver(async (key) => `tenant-of-${key}`, 2);
+    await resolver.resolve('a');
+    await resolver.resolve('b');
+    await resolver.resolve('c');
+    expect(resolver.peek('a')).toBeUndefined();
+    expect(resolver.peek('b')).toBe('tenant-of-b');
+    expect(resolver.peek('c')).toBe('tenant-of-c');
+  });
+});
+
+describe('deliverEventPerSocket', () => {
+  it('builds each identified socket its own message and skips a null one', () => {
+    const f = fixture();
+    const sent: string[] = [];
+    deliverEventPerSocket(
+      f.clients,
+      f.identities,
+      (identity) => (identity.tenantId === 'tenant-b' ? null : `for-${identity.userId}`),
+      (_client, message) => sent.push(message)
+    );
+    expect(sent).toEqual(['for-a', 'for-root']);
   });
 });

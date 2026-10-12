@@ -22,10 +22,10 @@ import { digitalTwinService } from '../services/DigitalTwinService.js';
 import { twinZoneService } from '../services/TwinZoneService.js';
 import { agentModeService } from '../services/AgentModeService.js';
 import { authService } from '../services/AuthService.js';
-import { prisma } from '../database/index.js';
-import { runAsPlatform } from '../middleware/tenantContext.js';
 import { MULTI_TENANCY_ENABLED } from '../config/features.js';
-import { deliverEvent, RobotTenantResolver, UNRESOLVED_ROBOT_TENANT } from './eventFanout.js';
+import { deliverEvent, deliverEventPerSocket, TenantResolver, UNRESOLVED_ROBOT_TENANT } from './eventFanout.js';
+import { eStopEventFor, eventTenantKey, tenantKey, type TenantKey } from './eventTenancy.js';
+import { lookupTenant } from './tenantLookups.js';
 import { onControlLeaseTransition } from '../services/controlLeaseEvents.js';
 import {
   deliverControlLeaseTransition,
@@ -74,17 +74,6 @@ function safeSend(client: WebSocket, message: string, clients: Set<WebSocket>): 
   }
 }
 
-/**
- * The tenant of a robot, read as the platform: the event is not raised inside
- * any request, and the answer is used for routing only.
- */
-async function lookupRobotTenant(robotId: string): Promise<string | null> {
-  const row = await runAsPlatform(() =>
-    prisma.robot.findUnique({ where: { id: robotId }, select: { tenantId: true } })
-  );
-  return row?.tenantId ?? null;
-}
-
 const verifyAccessToken: AccessTokenVerifier = (token) => authService.verifyAccessToken(token);
 
 /**
@@ -102,32 +91,39 @@ export function setupWebSocket(server: Server): void {
   // Who each socket proved to be (TASK-318); absent → no tenant-scoped events.
   const clientIdentity = new WeakMap<WebSocket, SocketIdentity>();
 
-  // Event fan-out (TASK-366): identified sockets only, and a robot's events
-  // only to sockets that may observe the robot's tenant.
+  // Event fan-out (TASK-366, TASK-368): identified sockets only, and every
+  // event only to sockets that may observe the tenant of the entity it is
+  // about (eventTenancy.ts names that entity per family).
   const send = (client: WebSocket, message: string): void => {
     safeSend(client, message, clients);
   };
-  const robotTenants = new RobotTenantResolver(lookupRobotTenant);
-  /** An event that names no robot: every identified socket. */
-  const deliver = (message: string): void => {
-    deliverEvent(clients, clientIdentity, message, send);
-  };
-  /** An event about one robot. Without multi-tenancy every robot is visible. */
-  const deliverForRobot = (message: string, robotId: string | undefined): void => {
-    if (!robotId || !MULTI_TENANCY_ENABLED) {
-      deliverEvent(clients, clientIdentity, message, send, robotId ? null : undefined);
+  const tenants = new TenantResolver(lookupTenant);
+  /**
+   * An event about the entity `key` names. Without multi-tenancy every event
+   * goes to every identified socket; with it, an event that names no entity
+   * goes to super-admins only.
+   */
+  const deliverFor = (message: string, key: TenantKey | null): void => {
+    if (!MULTI_TENANCY_ENABLED) {
+      deliverEvent(clients, clientIdentity, message, send, null);
       return;
     }
-    const known = robotTenants.peek(robotId);
+    if (key === null) {
+      deliverEvent(clients, clientIdentity, message, send, UNRESOLVED_ROBOT_TENANT);
+      return;
+    }
+    const known = tenants.peek(key);
     if (known !== undefined) {
       deliverEvent(clients, clientIdentity, message, send, known);
       return;
     }
-    robotTenants.resolve(robotId).then(
+    tenants.resolve(key).then(
       (tenantId) => deliverEvent(clients, clientIdentity, message, send, tenantId),
       () => deliverEvent(clients, clientIdentity, message, send, UNRESOLVED_ROBOT_TENANT)
     );
   };
+  const robotKey = (robotId: string | null | undefined): TenantKey | null =>
+    robotId ? tenantKey('robot', robotId) : null;
 
   // Heartbeat interval to detect dead connections
   const heartbeatInterval = setInterval(() => {
@@ -220,7 +216,7 @@ export function setupWebSocket(server: Server): void {
       event,
       timestamp: Date.now(),
     });
-    deliver(message);
+    deliverFor(message, eventTenantKey.a2aTask(event));
   });
 
   // Subscribe to robot events and fan them out (eventFanout.ts)
@@ -231,9 +227,9 @@ export function setupWebSocket(server: Server): void {
     });
     // A (re-)registration may have moved the robot to another tenant.
     if (event.type === 'robot_registered' || event.type === 'robot_unregistered') {
-      robotTenants.forget(event.robotId);
+      tenants.forget(tenantKey('robot', event.robotId));
     }
-    deliverForRobot(message, event.robotId);
+    deliverFor(message, robotKey(event.robotId));
   });
 
   // Subscribe to alert events and fan them out (eventFanout.ts)
@@ -243,7 +239,7 @@ export function setupWebSocket(server: Server): void {
       alert: event.alert,
       timestamp: event.timestamp,
     });
-    deliver(message);
+    deliverFor(message, eventTenantKey.alert(event));
   });
 
   // Subscribe to process events and fan them out (eventFanout.ts)
@@ -256,7 +252,7 @@ export function setupWebSocket(server: Server): void {
       error: 'error' in event ? event.error : undefined,
       timestamp: Date.now(),
     });
-    deliver(message);
+    deliverFor(message, eventTenantKey.process(event));
   });
 
   // Subscribe to robot task events and fan them out (eventFanout.ts)
@@ -271,7 +267,7 @@ export function setupWebSocket(server: Server): void {
       error: 'error' in event ? event.error : undefined,
       timestamp: Date.now(),
     });
-    deliverForRobot(message, ('robotId' in event ? event.robotId : undefined) ?? undefined);
+    deliverFor(message, eventTenantKey.robotTask(event));
   });
 
   // Handle robot work assignment notifications (push to robot)
@@ -282,7 +278,7 @@ export function setupWebSocket(server: Server): void {
       task: data.task,
       timestamp: Date.now(),
     });
-    deliverForRobot(message, data.robotId);
+    deliverFor(message, robotKey(data.robotId));
   });
 
   // Handle robot work cancellation notifications
@@ -294,17 +290,41 @@ export function setupWebSocket(server: Server): void {
       reason: data.reason,
       timestamp: Date.now(),
     });
-    deliverForRobot(message, data.robotId);
+    deliverFor(message, robotKey(data.robotId));
   });
 
   // Subscribe to E-stop events and fan them out (eventFanout.ts)
+  // A fleet or zone stop can span tenants: each socket gets its own robots'
+  // part of it (eventTenancy.ts `eStopEventFor`).
   safetyService.onEStopEvent((event: EStopEvent) => {
-    const message = JSON.stringify({
-      type: 'safety:estop',
-      event,
-      timestamp: Date.now(),
+    const timestamp = Date.now();
+    const render = (part: EStopEvent): string => JSON.stringify({ type: 'safety:estop', event: part, timestamp });
+    if (!MULTI_TENANCY_ENABLED) {
+      deliverEvent(clients, clientIdentity, render(event), send, null);
+      return;
+    }
+    const robotIds = [...new Set(event.affectedRobots)];
+    void Promise.all(
+      robotIds.map((robotId) =>
+        tenants.resolve(tenantKey('robot', robotId)).then(
+          (tenantId): [string, string | null] => [robotId, tenantId],
+          (): [string, string | null] => [robotId, UNRESOLVED_ROBOT_TENANT]
+        )
+      )
+    ).then((pairs) => {
+      const robotTenants = new Map(pairs);
+      const full = render(event);
+      deliverEventPerSocket(
+        clients,
+        clientIdentity,
+        (identity) => {
+          const part = eStopEventFor(event, identity, robotTenants, UNRESOLVED_ROBOT_TENANT);
+          if (part === null) return null;
+          return part === event ? full : render(part);
+        },
+        send
+      );
     });
-    deliver(message);
   });
 
   // Subscribe to incident events and fan them out (eventFanout.ts)
@@ -315,7 +335,7 @@ export function setupWebSocket(server: Server): void {
       notification: event.notification,
       timestamp: event.timestamp,
     });
-    deliver(message);
+    deliverFor(message, eventTenantKey.incident(event));
   });
 
   // Subscribe to training job events and fan them out (eventFanout.ts)
@@ -328,7 +348,7 @@ export function setupWebSocket(server: Server): void {
       error: event.error,
       timestamp: event.timestamp,
     });
-    deliver(message);
+    deliverFor(message, eventTenantKey.trainingJob(event));
   });
 
   // Subscribe to dataset events and fan them out (eventFanout.ts)
@@ -343,7 +363,7 @@ export function setupWebSocket(server: Server): void {
       error: event.error,
       timestamp: event.timestamp,
     });
-    deliver(message);
+    deliverFor(message, eventTenantKey.dataset(event));
   });
 
   // Subscribe to sensor-scan events (point clouds) and fan them out (eventFanout.ts).
@@ -356,7 +376,7 @@ export function setupWebSocket(server: Server): void {
       scan: event.scan,
       timestamp: event.timestamp,
     });
-    deliverForRobot(message, event.robotId);
+    deliverFor(message, robotKey(event.robotId));
   });
 
   // Subscribe to digital-twin scan-session + build events (TASK-170).
@@ -381,7 +401,7 @@ export function setupWebSocket(server: Server): void {
       base.sessionId = event.sessionId;
       base.error = event.error;
     }
-    deliver(JSON.stringify(base));
+    deliverFor(JSON.stringify(base), eventTenantKey.twin(event));
   };
   scanSessionService.onDigitalTwinEvent(broadcastTwinEvent);
   digitalTwinService.onDigitalTwinEvent(broadcastTwinEvent);
@@ -395,11 +415,11 @@ export function setupWebSocket(server: Server): void {
       zoneId: 'zoneId' in event ? event.zoneId : undefined,
       timestamp: event.timestamp,
     });
-    deliver(message);
+    deliverFor(message, eventTenantKey.twin(event));
   });
 
-  // Subscribe to teleoperation (data collection) events and broadcast to all
-  // clients. Event types are namespaced 'teleop:*' so feature clients can
+  // Subscribe to teleoperation (data collection) events and fan them out to the robot's
+  // tenant. Event types are namespaced 'teleop:*' so feature clients can
   // filter with a simple prefix check (mirrors 'training:job:*').
   teleoperationService.on('teleoperation:event', (event: TeleoperationEvent) => {
     const typeMap: Record<string, string> = {
@@ -426,7 +446,7 @@ export function setupWebSocket(server: Server): void {
       },
       timestamp: Date.now(),
     });
-    deliver(message);
+    deliverFor(message, eventTenantKey.teleop(event));
   });
 
   // Subscribe to Agent Mode events (TASK-194) and fan them out (eventFanout.ts).
@@ -456,7 +476,7 @@ export function setupWebSocket(server: Server): void {
       turn: event.turn,
       timestamp: event.timestamp,
     });
-    deliverForRobot(message, event.robotId);
+    deliverFor(message, robotKey(event.robotId));
   });
 
   // Subscribe to deployment events and fan them out (eventFanout.ts) (Task 47)
@@ -473,7 +493,7 @@ export function setupWebSocket(server: Server): void {
       reason: event.reason,
       timestamp: event.timestamp,
     });
-    deliverForRobot(message, event.robotId);
+    deliverFor(message, eventTenantKey.deployment(event));
   });
 
   console.log('WebSocket server initialized');

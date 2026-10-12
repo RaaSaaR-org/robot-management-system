@@ -137,6 +137,24 @@ vi.mock('../../services/AgentModeService.js', () => ({
   },
 }));
 
+// Multi-tenancy is read per event, so a test can switch it on (TASK-368), and
+// the tenant of every entity comes from this table instead of the database.
+const tenancy = vi.hoisted(() => ({
+  enabled: false,
+  tenants: new Map<string, string | null>(),
+}));
+vi.mock('../../config/features.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../config/features.js')>()),
+  get MULTI_TENANCY_ENABLED() {
+    return tenancy.enabled;
+  },
+}));
+vi.mock('../tenantLookups.js', () => ({
+  lookupTenant: vi.fn(async (key: string) =>
+    tenancy.tenants.has(key) ? tenancy.tenants.get(key) ?? null : '\u0000unresolved'
+  ),
+}));
+
 import { setupWebSocket } from '../index.js';
 import { WebSocketServer } from 'ws';
 
@@ -763,6 +781,127 @@ describe('setupWebSocket', () => {
       client.reset();
       services.alert.cb?.({ type: 'alert:created', alert: { id: 'a1' }, timestamp: 1 });
       expect(client.sent).toHaveLength(1);
+    });
+  });
+
+  describe('with multi-tenancy on (TASK-368)', () => {
+    const previous = process.env.AUTH_DISABLED;
+    beforeEach(() => {
+      process.env.AUTH_DISABLED = 'false';
+      tenancy.enabled = true;
+      tenancy.tenants = new Map<string, string | null>([
+        ['robot:ra', 'tenant-a'],
+        ['robot:rb', 'tenant-b'],
+        ['conversation:c-a', 'tenant-a'],
+        ['alert:al-a', 'tenant-a'],
+        ['processInstance:p-a', 'tenant-a'],
+        ['robotTask:rt-a', 'tenant-a'],
+        ['incident:i-a', 'tenant-a'],
+        ['trainingJob:j-a', 'tenant-a'],
+        ['dataset:d-a', 'tenant-a'],
+        ['digitalTwin:tw-a', 'tenant-a'],
+        ['teleopSession:s-a', 'tenant-a'],
+        ['deployment:dep-a', 'tenant-a'],
+      ]);
+    });
+    afterEach(() => {
+      process.env.AUTH_DISABLED = previous;
+      tenancy.enabled = false;
+    });
+
+    /** Let the async tenant lookups settle. */
+    const flush = async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    };
+
+    async function sockets() {
+      const jwt = (await import('jsonwebtoken')).default;
+      const wss = setup();
+      const as = (role: string, tenantId: string | null) => {
+        const client = connect(wss, makeClient());
+        const token = jwt.sign(
+          { userId: `${role}-${tenantId}`, email: 'u@test', role, tenantId },
+          process.env.JWT_SECRET as string
+        );
+        client.emit('message', Buffer.from(JSON.stringify({ type: 'auth', token })));
+        client.reset();
+        return client;
+      };
+      const a = as('owner', 'tenant-a');
+      const b = as('owner', 'tenant-b');
+      const admin = as('super-admin', null);
+      const anonymous = connect(wss, makeClient());
+      anonymous.reset();
+      return { a, b, admin, anonymous, all: [a, b, admin, anonymous] };
+    }
+
+    const types = (client: ReturnType<typeof makeClient>) =>
+      client.sent.map((m) => (JSON.parse(m) as { type: string }).type);
+
+    const families: Array<[string, () => void, string]> = [
+      ['A2A task events', () => services.task.cb?.({ type: 'status_update', taskId: 't', contextId: 'c-a' }), 'task_event'],
+      ['alerts', () => services.alert.cb?.({ type: 'alert_created', alert: { id: 'al-a', source: 'system' }, timestamp: 1 }), 'alert_created'],
+      ['robot alerts', () => services.alert.cb?.({ type: 'alert_created', alert: { id: 'x', source: 'robot', sourceId: 'ra' }, timestamp: 1 }), 'alert_created'],
+      ['processes', () => services.process.cb?.({ type: 'step:started', processInstanceId: 'p-a', stepInstance: {} }), 'step:started'],
+      ['robot tasks', () => services.robotTask.cb?.({ type: 'task:created', task: { id: 'rt-a', robotId: null } }), 'task:created'],
+      ['incidents', () => services.incident.cb?.({ type: 'incident:created', incident: { id: 'i-a' }, timestamp: 1 }), 'incident:created'],
+      ['training jobs', () => services.job.cb?.({ type: 'training:job:progress', jobId: 'j-a', timestamp: 'now' }), 'training:job:progress'],
+      ['datasets', () => services.dataset.cb?.({ type: 'dataset:import:progress', datasetId: 'd-a', timestamp: 'now' }), 'dataset:import:progress'],
+      ['teleop', () => services.teleopOn['teleoperation:event']?.({ type: 'session:progress', sessionId: 's-a' }), 'teleop:session:progress'],
+      ['deployments', () => services.deployment.cb?.({ type: 'deployment:progress', deploymentId: 'dep-a', timestamp: 'now' }), 'deployment:progress'],
+      ['agent mode', () => services.agentMode.cb?.({ type: 'agent:block:started', robotId: 'ra', timestamp: 'now' }), 'agent:block:started'],
+    ];
+
+    it.each(families)('delivers %s only to the owning tenant and super-admins', async (_name, fire, type) => {
+      const { a, b, admin, anonymous } = await sockets();
+      fire();
+      await flush();
+      expect(types(a)).toEqual([type]);
+      expect(types(admin)).toEqual([type]);
+      expect(b.sent).toEqual([]);
+      expect(anonymous.sent).toEqual([]);
+    });
+
+    it('delivers digital-twin and twin-zone events only within the twin tenant', async () => {
+      const { digitalTwinService } = await import('../../services/DigitalTwinService.js');
+      const { twinZoneService } = await import('../../services/TwinZoneService.js');
+      const { a, b } = await sockets();
+      digitalTwinService.emit('digital-twin:event', { type: 'twin:failed', twinId: 'tw-a', sessionId: 's', error: 'x', timestamp: 'now' });
+      twinZoneService.emit('twin-zone:event', { type: 'twinZone:deleted', twinId: 'tw-a', zoneId: 'z', timestamp: 'now' });
+      await flush();
+      expect(types(a)).toEqual(['twin:failed', 'twinZone:deleted']);
+      expect(b.sent).toEqual([]);
+    });
+
+    it('shows an event whose entity is gone to super-admins only', async () => {
+      const { a, b, admin } = await sockets();
+      services.dataset.cb?.({ type: 'dataset:deleted', datasetId: 'gone', timestamp: 'now' });
+      await flush();
+      expect(a.sent).toEqual([]);
+      expect(b.sent).toEqual([]);
+      expect(types(admin)).toEqual(['dataset:deleted']);
+    });
+
+    it('gives each tenant its own robots of a cross-tenant fleet E-stop', async () => {
+      const { a, b, admin } = await sockets();
+      services.estop.cb?.({
+        id: 'e', scope: 'fleet', action: 'trigger', triggeredAt: 'now', triggeredBy: 'root', reason: 'drill',
+        affectedRobots: ['ra', 'rb'],
+        result: {
+          scope: 'fleet', triggeredAt: 'now', triggeredBy: 'root', reason: 'drill',
+          robotResults: [
+            { robotId: 'ra', robotName: 'A', success: true },
+            { robotId: 'rb', robotName: 'B', success: true },
+          ],
+          successCount: 2, failureCount: 0,
+        },
+      });
+      await flush();
+      const robots = (client: ReturnType<typeof makeClient>) =>
+        (JSON.parse(client.sent[0] as string) as { event: EStopEvent }).event.affectedRobots;
+      expect(robots(a)).toEqual(['ra']);
+      expect(robots(b)).toEqual(['rb']);
+      expect(robots(admin)).toEqual(['ra', 'rb']);
     });
   });
 });

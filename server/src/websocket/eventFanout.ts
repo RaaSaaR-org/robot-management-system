@@ -48,36 +48,81 @@ export function deliverEvent<T extends object>(
 }
 
 /**
- * robot id → tenant, read once per robot and kept, because telemetry arrives
- * several times a second and the tenant of a robot does not change while it
- * stays registered. `forget` on (un)registration; a lookup that throws is not
- * cached, so the next event retries it.
+ * Deliver one event whose payload depends on who receives it: `build` returns
+ * the message for a socket's identity, or `null` for "nothing for you". Used
+ * where one event spans several tenants (a fleet E-stop) and each tenant may
+ * see only its own part of it.
  */
-export class RobotTenantResolver {
+export function deliverEventPerSocket<T extends object>(
+  clients: Iterable<T>,
+  identities: WeakMap<T, SocketIdentity>,
+  build: (identity: SocketIdentity) => string | null,
+  send: (client: T, message: string) => void
+): number {
+  let delivered = 0;
+  for (const client of clients) {
+    const identity = identities.get(client);
+    if (!identity) continue;
+    const message = build(identity);
+    if (message === null) continue;
+    send(client, message);
+    delivered++;
+  }
+  return delivered;
+}
+
+/** How many entity → tenant answers a resolver keeps before dropping the oldest. */
+const DEFAULT_MAX_ENTRIES = 10_000;
+
+/**
+ * key → tenant, read once per key and kept, because telemetry and job progress
+ * arrive several times a second and the tenant of an entity does not change.
+ * `forget` on (un)registration; a lookup that throws, or answers
+ * `UNRESOLVED_ROBOT_TENANT` (row not found), is not cached, so the next event
+ * retries it. The cache is bounded: the oldest answer goes first.
+ */
+export class TenantResolver {
   private readonly known = new Map<string, string | null>();
   private readonly pending = new Map<string, Promise<string | null>>();
 
-  constructor(private readonly lookup: (robotId: string) => Promise<string | null>) {}
+  constructor(
+    private readonly lookup: (key: string) => Promise<string | null>,
+    private readonly maxEntries = DEFAULT_MAX_ENTRIES
+  ) {}
 
   /** The cached tenant; `undefined` = not looked up yet. */
-  peek(robotId: string): string | null | undefined {
-    return this.known.get(robotId);
+  peek(key: string): string | null | undefined {
+    return this.known.get(key);
   }
 
-  resolve(robotId: string): Promise<string | null> {
-    const inFlight = this.pending.get(robotId);
+  resolve(key: string): Promise<string | null> {
+    const cached = this.known.get(key);
+    if (cached !== undefined) return Promise.resolve(cached);
+    const inFlight = this.pending.get(key);
     if (inFlight) return inFlight;
-    const request = this.lookup(robotId)
+    const request = this.lookup(key)
       .then((tenantId) => {
-        this.known.set(robotId, tenantId);
+        if (tenantId !== UNRESOLVED_ROBOT_TENANT) this.remember(key, tenantId);
         return tenantId;
       })
-      .finally(() => this.pending.delete(robotId));
-    this.pending.set(robotId, request);
+      .finally(() => this.pending.delete(key));
+    this.pending.set(key, request);
     return request;
   }
 
-  forget(robotId: string): void {
-    this.known.delete(robotId);
+  forget(key: string): void {
+    this.known.delete(key);
+  }
+
+  private remember(key: string, tenantId: string | null): void {
+    this.known.delete(key);
+    this.known.set(key, tenantId);
+    if (this.known.size > this.maxEntries) {
+      const oldest = this.known.keys().next().value;
+      if (oldest !== undefined) this.known.delete(oldest);
+    }
   }
 }
+
+/** robot id → tenant (TASK-366); the robot-keyed name of `TenantResolver`. */
+export class RobotTenantResolver extends TenantResolver {}
