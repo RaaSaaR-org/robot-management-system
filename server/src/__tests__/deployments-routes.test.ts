@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { ConflictError, NotFoundError } from '../utils/errors.js';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
 const { mockDeploymentService, mockDeploymentMetricsService, mockModelVersionRepository, mockAudit } =
@@ -504,6 +505,50 @@ describe('Deployments Routes', () => {
       expect(response.status).toBe(409);
       expect(response.body.error).toContain('roll it back or cancel it first');
       expect(mockAudit).not.toHaveBeenCalled();
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Typed service errors reach the client (TASK-387)
+  // --------------------------------------------------------------------------
+
+  describe('typed service errors', () => {
+    it('answers 404 for an unknown model version on create', async () => {
+      mockDeploymentService.createDeployment.mockRejectedValue(new NotFoundError('Model version', 'nope'));
+      const response = await request(app).post('/api/deployments').send({ modelVersionId: 'nope' });
+      expect(response.status).toBe(404);
+      expect(response.body.error).toBe("Model version 'nope' not found");
+    });
+
+    it('answers 409 when an active deployment already exists', async () => {
+      mockDeploymentService.createDeployment.mockRejectedValue(
+        new ConflictError('Active deployment already exists for model version: dep-9'),
+      );
+      const response = await request(app).post('/api/deployments').send({ modelVersionId: 'mv-001' });
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe('Active deployment already exists for model version: dep-9');
+    });
+
+    it.each([
+      ['start', 'startCanary', {}],
+      ['progress', 'progressToNextStage', {}],
+      ['promote', 'promoteToProduction', {}],
+      ['rollback', 'rollback', { reason: 'bad' }],
+      ['cancel', 'cancelDeployment', {}],
+    ] as const)('answers 404 for an unknown deployment on /%s, like DELETE', async (verb, method, body) => {
+      mockDeploymentService[method].mockRejectedValue(new NotFoundError('Deployment', 'nope'));
+      const response = await request(app).post(`/api/deployments/nope/${verb}`).send(body);
+      expect(response.status).toBe(404);
+      expect(response.body.error).toBe("Deployment 'nope' not found");
+    });
+
+    it('answers 409 naming the status when a deployment cannot start', async () => {
+      mockDeploymentService.startCanary.mockRejectedValue(
+        new ConflictError('Cannot start deployment in status: canary'),
+      );
+      const response = await request(app).post('/api/deployments/dep-001/start');
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe('Cannot start deployment in status: canary');
     });
   });
 });

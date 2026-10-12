@@ -192,6 +192,55 @@ describe('AlertService — createAlert', () => {
   });
 });
 
+describe('AlertService — replaceAlert (TASK-388)', () => {
+  const input: CreateAlertInput = {
+    severity: 'info',
+    title: 'E-Stop Reset - G1',
+    message: 'Emergency stop has been reset.',
+    source: 'robot',
+    sourceId: 'r1',
+  };
+
+  it('acknowledges the active copies with the same title before creating', async () => {
+    const older = makeAlert({ id: 'old', title: input.title, source: 'robot', sourceId: 'r1' });
+    const other = makeAlert({ id: 'other', title: 'Robot offline - G1', source: 'robot', sourceId: 'r1' });
+    alertRepository.findActive.mockResolvedValue([older, other]);
+    alertRepository.acknowledgeMany.mockResolvedValue(1);
+    const created = makeAlert({ id: 'new', title: input.title });
+    alertRepository.create.mockResolvedValue(created);
+    const callback = vi.fn();
+    service.onAlertEvent(callback);
+
+    const result = await service.replaceAlert(input);
+
+    expect(result).toBe(created);
+    expect(alertRepository.findActive).toHaveBeenCalledWith({ source: 'robot', sourceId: 'r1' });
+    expect(alertRepository.acknowledgeMany).toHaveBeenCalledWith(['old'], 'system:superseded');
+    expect(callback.mock.calls.map((c) => [c[0].type, c[0].alert.id])).toEqual([
+      ['alert_acknowledged', 'old'],
+      ['alert_created', 'new'],
+    ]);
+  });
+
+  it('supersedes whatever the matcher accepts, e.g. a pre-rename title', async () => {
+    const renamed = makeAlert({ id: 'old', title: 'E-Stop Reset - G1-old', source: 'robot', sourceId: 'r1' });
+    alertRepository.findActive.mockResolvedValue([renamed]);
+    alertRepository.acknowledgeMany.mockResolvedValue(1);
+    alertRepository.create.mockResolvedValue(makeAlert({ id: 'new', title: input.title }));
+
+    await service.replaceAlert(input, (t) => t.startsWith('E-Stop Reset - '));
+
+    expect(alertRepository.acknowledgeMany).toHaveBeenCalledWith(['old'], 'system:superseded');
+  });
+
+  it('just creates when the alert has no sourceId', async () => {
+    alertRepository.create.mockResolvedValue(makeAlert());
+    await service.replaceAlert({ ...input, sourceId: undefined });
+    expect(alertRepository.findActive).not.toHaveBeenCalled();
+    expect(alertRepository.create).toHaveBeenCalled();
+  });
+});
+
 describe('AlertService — acknowledgeAlert', () => {
   it('acknowledges and emits an alert_acknowledged event', async () => {
     const alert = makeAlert({ acknowledged: true });

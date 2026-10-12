@@ -133,9 +133,6 @@ type EStopEventCallback = (event: EStopEvent) => void;
 // ============================================================================
 
 /**
- * SafetyService - Manages fleet-wide and zone-based E-stop functionality
- */
-/**
  * Record that a robot answered an E-stop request (TASK-382), without letting a
  * bookkeeping failure — a database write, a throwing event listener — turn a
  * stop or reset the robot already accepted into a reported failure.
@@ -151,6 +148,12 @@ async function noteAnsweredQuietly(
   }
 }
 
+/** Title prefix of the info alert a robot E-stop reset raises. */
+const ESTOP_RESET_TITLE = 'E-Stop Reset - ';
+
+/**
+ * SafetyService - Manages fleet-wide and zone-based E-stop functionality
+ */
 class SafetyService {
   private eventCallbacks: Set<EStopEventCallback> = new Set();
   private estopLog: EStopEvent[] = [];
@@ -283,14 +286,24 @@ class SafetyService {
 
       await noteAnsweredQuietly(registered, statusFromEStopResponse(response));
 
-      // Create info alert
-      await alertService.createAlert({
-        severity: 'info',
-        title: `E-Stop Reset - ${registered.robot.name}`,
-        message: 'Emergency stop has been reset. Robot is ready for operation.',
-        source: 'robot',
-        sourceId: robotId,
-      });
+      // Info alert; a later reset supersedes it instead of stacking a copy.
+      // Matched by prefix so a renamed robot's old row is superseded too. The
+      // reset already happened: a failed alert write is logged, not reported
+      // as a failed reset.
+      try {
+        await alertService.replaceAlert(
+          {
+            severity: 'info',
+            title: `${ESTOP_RESET_TITLE}${registered.robot.name}`,
+            message: 'Emergency stop has been reset. Robot is ready for operation.',
+            source: 'robot',
+            sourceId: robotId,
+          },
+          (title) => title.startsWith(ESTOP_RESET_TITLE)
+        );
+      } catch (err) {
+        console.error('[SafetyService] Failed to create reset alert:', err);
+      }
 
       return { status: response, robotName: registered.robot.name };
     } catch (error) {

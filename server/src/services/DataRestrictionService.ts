@@ -11,6 +11,7 @@
  */
 
 import { prisma } from '../database/index.js';
+import { gdprScopeWhere, type GDPRTenantScope } from './gdprTenantScope.js';
 import type {
   DataRestriction,
   RestrictionScope,
@@ -98,9 +99,9 @@ export class DataRestrictionService {
   /**
    * Get all active restrictions (admin view)
    */
-  async getActiveRestrictions(): Promise<DataRestriction[]> {
+  async getActiveRestrictions(scope?: GDPRTenantScope): Promise<DataRestriction[]> {
     const restrictions = await prisma.dataRestriction.findMany({
-      where: { isActive: true },
+      where: { ...gdprScopeWhere(scope), isActive: true },
       orderBy: { startDate: 'desc' },
     });
 
@@ -152,21 +153,22 @@ export class DataRestrictionService {
   /**
    * Get restriction statistics (admin)
    */
-  async getRestrictionStats(): Promise<{
+  async getRestrictionStats(scope?: GDPRTenantScope): Promise<{
     activeRestrictions: number;
     restrictionsByScope: Record<string, number>;
     restrictionsByReason: Record<string, number>;
   }> {
+    const where = { ...gdprScopeWhere(scope), isActive: true };
     const [activeCount, byScope, byReason] = await Promise.all([
-      prisma.dataRestriction.count({ where: { isActive: true } }),
+      prisma.dataRestriction.count({ where }),
       prisma.dataRestriction.groupBy({
         by: ['scope'],
-        where: { isActive: true },
+        where,
         _count: true,
       }),
       prisma.dataRestriction.groupBy({
         by: ['reason'],
-        where: { isActive: true },
+        where,
         _count: true,
       }),
     ]);

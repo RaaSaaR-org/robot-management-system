@@ -8,7 +8,7 @@
  * @dependencies @/shared/utils/cn, @/features/alerts/hooks
  */
 
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { OctagonAlert } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
@@ -45,13 +45,30 @@ const CRITICAL_BUTTON = 'border-on-stop/60 text-on-stop hover:bg-on-stop/15 hove
 // SUB-COMPONENTS
 // ============================================================================
 
+/**
+ * The unacknowledged alerts that repeat `alert`: same title, severity, source
+ * and sourceId. They read as one line, so they count and clear as one (TASK-388).
+ */
+export function sameAlertGroup(alert: Alert, unacknowledged: Alert[]): Alert[] {
+  return unacknowledged.filter(
+    (a) =>
+      a.id === alert.id ||
+      (a.title === alert.title &&
+        a.severity === alert.severity &&
+        a.source === alert.source &&
+        a.sourceId === alert.sourceId)
+  );
+}
+
 interface AlertBannerContentProps {
   alert: Alert;
+  /** How many identical unacknowledged alerts this line stands for. */
+  count: number;
   onAcknowledge: () => void;
   onDismiss: () => void;
 }
 
-function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerContentProps) {
+function AlertBannerContent({ alert, count, onAcknowledge, onDismiss }: AlertBannerContentProps) {
   const isCritical = alert.severity === 'critical';
   // TASK-212: an alert raised for a patrol finding carries a machine tag
   // `[finding:<id> run:<runId>]` in its message tail. Keep it out of the prose
@@ -80,6 +97,15 @@ function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerCont
         )}
         <div className="min-w-0 truncate text-sm">
           <span className="font-semibold">{alert.title}</span>
+          {count > 1 && (
+            <span
+              className={cn('ml-1.5 font-mono text-xs', isCritical ? 'opacity-90' : 'text-ink-muted')}
+              data-testid="alert-banner-count"
+              title={`${count} identical alerts`}
+            >
+              ×{count}
+            </span>
+          )}
           <span aria-hidden="true" className={cn('mx-1.5 sm:mx-2', isCritical ? 'opacity-70' : 'text-ink-muted')}>
             ·
           </span>
@@ -138,22 +164,26 @@ function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerCont
  */
 export function AlertBanner({ className }: AlertBannerProps) {
   const location = useLocation();
-  const { mostCriticalAlert, acknowledgeAlertAsync, dismissAlert, error } = useAlerts();
+  const { mostCriticalAlert, unacknowledgedAlerts, acknowledgeAlertAsync, dismissAlert, error } =
+    useAlerts();
+
+  // Identical repeats of the shown alert: one click clears them all, otherwise
+  // each Dismiss puts the same line straight back and looks like a no-op.
+  const group = useMemo(
+    () => (mostCriticalAlert ? sameAlertGroup(mostCriticalAlert, unacknowledgedAlerts) : []),
+    [mostCriticalAlert, unacknowledgedAlerts]
+  );
 
   // Hooks must be declared before any early returns (React Rules of Hooks).
   // Both actions go to the server: acknowledging only in memory hides the
   // banner until the next fetch of /alerts/active hands the same alert back.
   const handleAcknowledge = useCallback(() => {
-    if (mostCriticalAlert) {
-      void acknowledgeAlertAsync(mostCriticalAlert.id);
-    }
-  }, [mostCriticalAlert, acknowledgeAlertAsync]);
+    for (const a of group) void acknowledgeAlertAsync(a.id);
+  }, [group, acknowledgeAlertAsync]);
 
   const handleDismiss = useCallback(() => {
-    if (mostCriticalAlert) {
-      void dismissAlert(mostCriticalAlert.id);
-    }
-  }, [mostCriticalAlert, dismissAlert]);
+    for (const a of group) void dismissAlert(a.id);
+  }, [group, dismissAlert]);
 
   // Hide banner on landing page
   if (location.pathname === '/') {
@@ -183,6 +213,7 @@ export function AlertBanner({ className }: AlertBannerProps) {
       <div className={cn('rounded-control border animate-fade-in', SEVERITY_STYLES[mostCriticalAlert.severity])}>
         <AlertBannerContent
           alert={mostCriticalAlert}
+          count={group.length}
           onAcknowledge={handleAcknowledge}
           onDismiss={handleDismiss}
         />

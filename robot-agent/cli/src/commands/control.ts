@@ -10,6 +10,7 @@ import { formatCommand, printError, colors } from '../utils/output.js';
 import type { CliOptions, CommandType } from '../api/types.js';
 import { describeDestination, parseMoveArgs, type MoveDestination } from './move-args.js';
 import { isInFlight, waitForCommand } from './wait-command.js';
+import { commandExitCode } from './exit-code.js';
 
 // Helper to execute a command
 async function executeCommand(
@@ -33,6 +34,9 @@ async function executeCommand(
 
     spinner.stop();
     console.log(formatCommand(command, opts.format));
+    // exitCode, not exit(): the printed result still flushes.
+    const code = commandExitCode(command);
+    if (code !== 0) process.exitCode = code;
   } catch (error) {
     spinner.stop();
     printError(error instanceof Error ? error.message : String(error));

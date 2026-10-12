@@ -46,6 +46,7 @@ vi.mock('../../repositories/DigitalTwinRepository.js', () => ({
 vi.mock('../AlertService.js', () => ({
   alertService: {
     createAlert: vi.fn(),
+    replaceAlert: vi.fn(),
   },
 }));
 
@@ -93,6 +94,7 @@ beforeEach(() => {
   httpPost.mockReset();
   httpGet.mockReset();
   vi.mocked(alertService.createAlert).mockResolvedValue({} as never);
+  vi.mocked(alertService.replaceAlert).mockResolvedValue({} as never);
   vi.mocked(digitalTwinRepository.findById).mockResolvedValue({ id: 't1' } as never);
 });
 
@@ -201,7 +203,7 @@ describe('resetRobotEStop', () => {
     await expect(safetyService.resetRobotEStop('rZ')).rejects.toThrow('Robot rZ not found');
   });
 
-  it('posts to the reset endpoint and creates an info alert', async () => {
+  it('posts to the reset endpoint and replaces the info alert, not stacking it (TASK-388)', async () => {
     vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
     httpPost.mockResolvedValue({ status: 'armed' });
 
@@ -209,9 +211,25 @@ describe('resetRobotEStop', () => {
 
     expect(result).toEqual({ status: 'armed' });
     expect(httpPost).toHaveBeenCalledWith('/api/v1/robots/r1/safety/estop/reset', {});
-    expect(alertService.createAlert).toHaveBeenCalledWith(
-      expect.objectContaining({ severity: 'info', source: 'robot', sourceId: 'r1' })
+    expect(alertService.createAlert).not.toHaveBeenCalled();
+    expect(alertService.replaceAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'info', source: 'robot', sourceId: 'r1' }),
+      expect.any(Function)
     );
+    const supersedes = vi.mocked(alertService.replaceAlert).mock.calls[0][1]!;
+    expect(supersedes('E-Stop Reset - old name')).toBe(true);
+    expect(supersedes('Robot offline - G1')).toBe(false);
+  });
+
+  it('reports a successful reset even when the alert write fails', async () => {
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
+    httpPost.mockResolvedValue({ status: 'armed' });
+    vi.mocked(alertService.replaceAlert).mockRejectedValue(new Error('db down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(safetyService.resetRobotEStop('r1')).resolves.toEqual({ status: 'armed' });
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
   });
 
   it('attempts the reset on a stale isConnected and mirrors the reported status (TASK-382)', async () => {

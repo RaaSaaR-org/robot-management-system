@@ -52,6 +52,7 @@ import type {
 import { analyzeDatasetIds, MixtureIncompatibleError } from './lerobot/datasetCompatibility.js';
 import { datasetViewService, isDatasetView } from './DatasetViewService.js';
 import { prisma } from '../database/index.js';
+import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors.js';
 
 // ============================================================================
 // DEFAULT VALUES
@@ -126,7 +127,7 @@ function checkedWeight(weight: unknown, datasetId: string): number {
     // `JSON.stringify(Infinity)` is the string "null", which would report the
     // one value most likely to be here as the one thing it is not.
     const shown = typeof weight === 'number' ? String(weight) : JSON.stringify(weight);
-    throw new Error(
+    throw new BadRequestError(
       `Mixture weight for ${datasetId} must be a positive number; received ${shown}`,
     );
   }
@@ -188,7 +189,7 @@ interface InitFromColumns {
 function readInitFromId(value: unknown, field: string): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'string') {
-    throw new Error(`${field} must be an id string, or null to start from the base model.`);
+    throw new BadRequestError(`${field} must be an id string, or null to start from the base model.`);
   }
   return value.trim() || null;
 }
@@ -217,7 +218,7 @@ export async function checkInitFrom(
   const checkpointId = readInitFromId(request.initFromCheckpointId, 'initFromCheckpointId');
 
   if (modelVersionId && checkpointId) {
-    throw new Error(
+    throw new BadRequestError(
       'A run starts from one set of weights: pass either initFromModelVersionId or '
       + 'initFromCheckpointId, not both.',
     );
@@ -226,11 +227,11 @@ export async function checkInitFrom(
   if (modelVersionId) {
     const model = await modelVersionRepository.findByIdWithRelations(modelVersionId);
     if (!model) {
-      throw new Error(`Model version not found: ${modelVersionId}`);
+      throw new NotFoundError('Model version', modelVersionId);
     }
     const modelBaseModel = model.trainingJob?.baseModel ?? null;
     if (modelBaseModel && baseModel && modelBaseModel !== baseModel) {
-      throw new Error(
+      throw new ConflictError(
         `This run trains ${baseModel} but "${model.name ?? model.version}" holds `
         + `${modelBaseModel} weights, so it cannot start from that model.`,
       );
@@ -241,7 +242,7 @@ export async function checkInitFrom(
   if (checkpointId) {
     const checkpoint = await modelCheckpointRepository.findById(checkpointId);
     if (!checkpoint) {
-      throw new Error(`Model checkpoint not found: ${checkpointId}`);
+      throw new NotFoundError('Model checkpoint', checkpointId);
     }
     // A checkpoint carries no architecture of its own — the run that wrote it
     // does. Same rule as above, and the same reason: these weights load into
@@ -249,7 +250,7 @@ export async function checkInitFrom(
     const sourceJob = await trainingJobRepository.findById(checkpoint.trainingJobId);
     const sourceBaseModel = sourceJob?.baseModel ?? null;
     if (sourceBaseModel && baseModel && sourceBaseModel !== baseModel) {
-      throw new Error(
+      throw new ConflictError(
         `This run trains ${baseModel} but checkpoint epoch ${checkpoint.epoch} was written by a `
         + `${sourceBaseModel} run, so it cannot start from that checkpoint.`,
       );
@@ -342,16 +343,16 @@ export class TrainingJobService extends EventEmitter {
     // Prisma raises its own argument error, which reaches the operator as an
     // internal message about a `where` clause.
     if (!primaryDatasetId) {
-      throw new Error('A training job must name a dataset, either as datasetId or as a mixture');
+      throw new BadRequestError('A training job must name a dataset, either as datasetId or as a mixture');
     }
 
     // Validate dataset exists and is ready
     const dataset = await datasetRepository.findById(primaryDatasetId);
     if (!dataset) {
-      throw new Error(`Dataset not found: ${primaryDatasetId}`);
+      throw new NotFoundError('Dataset', primaryDatasetId);
     }
     if (dataset.status !== 'ready') {
-      throw new Error(`Dataset not ready: ${primaryDatasetId} (status: ${dataset.status})`);
+      throw new ConflictError(`Dataset not ready: ${primaryDatasetId} (status: ${dataset.status})`);
     }
 
     // Merge with defaults
@@ -631,12 +632,12 @@ export class TrainingJobService extends EventEmitter {
    */
   async submitSimRlJob(request: SubmitSimRlJobRequest): Promise<TrainingJob> {
     if (!request.sceneId) {
-      throw new Error('sceneId is required for a sim_rl job');
+      throw new BadRequestError('sceneId is required for a sim_rl job');
     }
     // Validate the scene exists — it IS the RL environment.
     const scene = await simSceneRepository.findById(request.sceneId);
     if (!scene) {
-      throw new Error(`Sim scene not found: ${request.sceneId}`);
+      throw new NotFoundError('Sim scene', request.sceneId);
     }
 
     const hyperparameters: Hyperparameters = {
@@ -679,10 +680,10 @@ export class TrainingJobService extends EventEmitter {
   async submitRewardModelJob(request: SubmitRewardModelJobRequest): Promise<TrainingJob> {
     const dataset = await datasetRepository.findById(request.datasetId);
     if (!dataset) {
-      throw new Error(`Dataset not found: ${request.datasetId}`);
+      throw new NotFoundError('Dataset', request.datasetId);
     }
     if (dataset.status !== 'ready') {
-      throw new Error(`Dataset not ready: ${request.datasetId} (status: ${dataset.status})`);
+      throw new ConflictError(`Dataset not ready: ${request.datasetId} (status: ${dataset.status})`);
     }
 
     const hyperparameters: RewardModelHyperparameters = {
@@ -725,10 +726,10 @@ export class TrainingJobService extends EventEmitter {
   async submitAnnotateJob(request: SubmitAnnotateJobRequest): Promise<TrainingJob> {
     const dataset = await datasetRepository.findById(request.datasetId);
     if (!dataset) {
-      throw new Error(`Dataset not found: ${request.datasetId}`);
+      throw new NotFoundError('Dataset', request.datasetId);
     }
     if (dataset.status !== 'ready') {
-      throw new Error(`Dataset not ready: ${request.datasetId} (status: ${dataset.status})`);
+      throw new ConflictError(`Dataset not ready: ${request.datasetId} (status: ${dataset.status})`);
     }
 
     const hyperparameters: AnnotateHyperparameters = {
@@ -797,7 +798,7 @@ export class TrainingJobService extends EventEmitter {
 
     // Can only cancel pending or running jobs
     if (!['pending', 'queued', 'running'].includes(job.status)) {
-      throw new Error(`Cannot cancel job with status: ${job.status}`);
+      throw new ConflictError(`Cannot cancel job with status: ${job.status}`);
     }
 
     // Signal cancellation to queue
@@ -834,7 +835,7 @@ export class TrainingJobService extends EventEmitter {
 
     // Can only retry failed or cancelled jobs
     if (!['failed', 'cancelled'].includes(job.status)) {
-      throw new Error(`Cannot retry job with status: ${job.status}`);
+      throw new ConflictError(`Cannot retry job with status: ${job.status}`);
     }
 
     // Reset job status. Explicit nulls: the repository skips undefined

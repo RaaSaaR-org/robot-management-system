@@ -212,7 +212,7 @@ describe('submitJob', () => {
         baseModel: 'smolvla',
         fineTuneMethod: 'lora',
       })
-    ).rejects.toThrow('Dataset not found: missing');
+    ).rejects.toMatchObject({ statusCode: 404, message: "Dataset 'missing' not found" });
     expect(trainingJobRepository.create).not.toHaveBeenCalled();
   });
 
@@ -224,7 +224,10 @@ describe('submitJob', () => {
         baseModel: 'smolvla',
         fineTuneMethod: 'lora',
       })
-    ).rejects.toThrow('Dataset not ready: ds1 (status: validating)');
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Dataset not ready: ds1 (status: validating)',
+    });
     expect(trainingJobRepository.create).not.toHaveBeenCalled();
   });
 
@@ -294,7 +297,7 @@ describe('submitSimRlJob', () => {
     simSceneRepository.findById.mockResolvedValue(null);
     await expect(
       trainingJobService.submitSimRlJob({ kind: 'sim_rl', sceneId: 'missing' })
-    ).rejects.toThrow('Sim scene not found: missing');
+    ).rejects.toMatchObject({ statusCode: 404, message: "Sim scene 'missing' not found" });
     expect(trainingJobRepository.create).not.toHaveBeenCalled();
   });
 
@@ -337,12 +340,15 @@ describe('submitRewardModelJob', () => {
     datasetRepository.findById.mockResolvedValue(null);
     await expect(
       trainingJobService.submitRewardModelJob({ datasetId: 'missing', rewardType: 'robometer' })
-    ).rejects.toThrow('Dataset not found: missing');
+    ).rejects.toMatchObject({ statusCode: 404, message: "Dataset 'missing' not found" });
 
     datasetRepository.findById.mockResolvedValue(makeDataset({ status: 'validating' }));
     await expect(
       trainingJobService.submitRewardModelJob({ datasetId: 'ds1', rewardType: 'robometer' })
-    ).rejects.toThrow('Dataset not ready');
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining('Dataset not ready'),
+    });
     expect(trainingJobRepository.create).not.toHaveBeenCalled();
   });
 
@@ -407,7 +413,7 @@ describe('submitAnnotateJob', () => {
     datasetRepository.findById.mockResolvedValue(null);
     await expect(
       trainingJobService.submitAnnotateJob({ datasetId: 'missing' })
-    ).rejects.toThrow('Dataset not found: missing');
+    ).rejects.toMatchObject({ statusCode: 404, message: "Dataset 'missing' not found" });
   });
 });
 
@@ -476,9 +482,10 @@ describe('cancelJob', () => {
 
   it('throws when the job is in a non-cancellable status', async () => {
     trainingJobRepository.findById.mockResolvedValue(makeJob({ status: 'completed' }));
-    await expect(trainingJobService.cancelJob('job1')).rejects.toThrow(
-      'Cannot cancel job with status: completed'
-    );
+    await expect(trainingJobService.cancelJob('job1')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Cannot cancel job with status: completed',
+    });
   });
 
   it('cancels a running job, updates status and emits a cancelled event', async () => {
@@ -522,9 +529,10 @@ describe('retryJob', () => {
 
   it('throws when the job is not failed or cancelled', async () => {
     trainingJobRepository.findById.mockResolvedValue(makeJob({ status: 'running' }));
-    await expect(trainingJobService.retryJob('job1')).rejects.toThrow(
-      'Cannot retry job with status: running'
-    );
+    await expect(trainingJobService.retryJob('job1')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Cannot retry job with status: running',
+    });
   });
 
   it('resets a failed job, re-enqueues and emits a created event', async () => {
