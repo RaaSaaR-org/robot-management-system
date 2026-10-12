@@ -3,7 +3,7 @@ id: "TASK-387"
 aliases: []
 title: "Training-job and deployment errors say what went wrong"
 slug: "training-job-and-deployment-errors-say-what-went-wrong"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 2
 effort: "low"
 due_date: ""
 created: "2026-10-13"
-updated: 2026-10-13
+updated: "2026-10-13"
 ---
 
 # Training-job and deployment errors say what went wrong
