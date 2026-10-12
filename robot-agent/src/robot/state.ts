@@ -316,6 +316,8 @@ export class RobotStateManager {
   private frameRegistrationKey: string | null = null;
   /** Background poll of the registration (TASK-342). */
   private registrationRefreshPoll: BackoffPoll | null = null;
+  /** The last invalid registration answer logged, so a bad payload is reported once (TASK-380). */
+  private registrationInvalidLogged: string | null = null;
   /** The odometry frame id {@link placeFrame} was assessed for (TASK-342). */
   private placeFrameOdomId: string | null = null;
   /**
@@ -708,14 +710,25 @@ export class RobotStateManager {
    * Both "found" and the server's own "none" are answers and keep the base
    * interval. Only a failure — a platform without the route (bare 404), an
    * unreachable server — backs off, and is logged once, not every 5 s (TASK-372).
+   * An answer that is not a registration keeps what we had but also keeps the
+   * base interval: the platform is reachable, so its fix should arrive within
+   * one poll, not after a five-minute backoff (TASK-380).
    */
   private startFrameRegistrationRefresh(): void {
     const source = new FrameRegistrationSource({ serverUrl: appConfig.serverUrl, robotId: appConfig.robotId });
     const tick = async (): Promise<{ ok: true } | { ok: false; error: string }> => {
       const result = await source.refresh();
-      if (result.kind === 'found') this.setFrameRegistration(result.registration);
-      else if (result.kind === 'none') this.setFrameRegistration(null);
-      return result.kind === 'error' ? { ok: false, error: result.error } : { ok: true };
+      if (result.kind === 'error') return { ok: false, error: result.error };
+      if (result.kind === 'invalid') {
+        if (this.registrationInvalidLogged !== result.error) {
+          this.registrationInvalidLogged = result.error;
+          console.warn(`[FrameRegistration] ${source.url} answered with an invalid registration (${result.error}) — keeping the last one`);
+        }
+        return { ok: true };
+      }
+      this.registrationInvalidLogged = null;
+      this.setFrameRegistration(result.kind === 'found' ? result.registration : null);
+      return { ok: true };
     };
     if (appConfig.place.registrationRefreshMs <= 0) {
       void tick();
@@ -768,9 +781,11 @@ export class RobotStateManager {
             }
             this.dropPlaceGraph();
           }
-          // 'cache' and 'none' mean the platform could not be asked: back off.
+          // 'cache' and 'none' mean the platform could not be asked: back off —
+          // unless it DID answer and only the graph was invalid (TASK-380): then
+          // it is reachable and a fix in the UI must arrive at the base interval.
           // PlaceGraphSource already logs each distinct failure once.
-          return result.origin === 'server' || result.origin === 'unbound'
+          return result.origin === 'server' || result.origin === 'unbound' || result.invalid
             ? ({ ok: true } as const)
             : ({ ok: false, error: result.error ?? 'unavailable' } as const);
         });

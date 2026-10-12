@@ -147,6 +147,16 @@ describe('FrameRegistrationSource', () => {
   it('reports errors instead of throwing', async () => {
     expect((await source(async () => Promise.reject(new Error('ECONNREFUSED'))).src.refresh()).kind).toBe('error');
     expect((await source(async () => new Response('', { status: 500 })).src.refresh()).kind).toBe('error');
-    expect((await source(async () => Response.json({ nope: 1 })).src.refresh()).kind).toBe('error');
+  });
+
+  it('calls a 2xx that is not a registration invalid, not an error (TASK-380)', async () => {
+    expect(await source(async () => Response.json({ nope: 1 })).src.refresh()).toEqual({
+      kind: 'invalid',
+      error: 'malformed registration',
+    });
+    expect(await source(async () => new Response('<html>', { status: 200 })).src.refresh()).toEqual({
+      kind: 'invalid',
+      error: 'body is not JSON',
+    });
   });
 });
