@@ -4,7 +4,13 @@
  * @feature safety
  */
 
-import { robotManager, type Robot, type RobotCommandRequest } from './RobotManager.js';
+import {
+  robotManager,
+  type Robot,
+  type RobotCommandRequest,
+  type RobotStatus,
+} from './RobotManager.js';
+import { RobotStatusSchema } from '../database/schemas.js';
 import { twinPlaceGraphService } from './TwinPlaceGraphService.js';
 import { digitalTwinRepository } from '../repositories/DigitalTwinRepository.js';
 import { robotIsInTwinZone } from './twinPlaceGeometry.js';
@@ -28,6 +34,19 @@ export interface RobotEStopStatus {
   reason?: string;
   stopCategory: number;
   requiresManualReset: boolean;
+}
+
+/**
+ * The robot status an E-stop or reset answer implies (TASK-382): the agent's
+ * own `robotStatus` when it sends a valid one, else `protective_stop` for a
+ * latched stop, else nothing — the next health check fills it in.
+ */
+export function statusFromEStopResponse(
+  response: Partial<RobotEStopStatus> & { robotStatus?: unknown }
+): RobotStatus | undefined {
+  const reported = RobotStatusSchema.safeParse(response?.robotStatus);
+  if (reported.success) return reported.data;
+  return response?.status === 'triggered' ? 'protective_stop' : undefined;
 }
 
 /** Safety status from robot */
@@ -171,10 +190,10 @@ class SafetyService {
       throw new Error(`Robot ${robotId} not found`);
     }
 
-    if (!registered.isConnected) {
-      throw new Error(`Robot ${robotId} is not connected`);
-    }
-
+    // TASK-382: no `isConnected` precondition. That flag flips only on the 30 s
+    // health check and lags a robot that has just come back; an E-stop is
+    // always attempted against the robot's baseUrl, and only a request that
+    // fails says the robot is unreachable.
     try {
       const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.SHORT);
       const response = await httpClient.post<RobotEStopStatus>(
@@ -192,6 +211,8 @@ class SafetyService {
       }).catch((err) => {
         console.error('[SafetyService] Failed to create alert:', err);
       });
+
+      await robotManager.noteRobotAnswered(registered, statusFromEStopResponse(response));
 
       return { status: response, robotName: registered.robot.name };
     } catch (error) {
@@ -236,16 +257,15 @@ class SafetyService {
       throw new Error(`Robot ${robotId} not found`);
     }
 
-    if (!registered.isConnected) {
-      throw new Error(`Robot ${robotId} is not connected`);
-    }
-
+    // TASK-382: attempted whatever the cached `isConnected` says, as the stop is.
     try {
       const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.SHORT);
       const response = await httpClient.post<RobotEStopStatus>(
         `/api/v1/robots/${robotId}/safety/estop/reset`,
         {}
       );
+
+      await robotManager.noteRobotAnswered(registered, statusFromEStopResponse(response));
 
       // Create info alert
       await alertService.createAlert({
@@ -298,15 +318,19 @@ class SafetyService {
     reason: string,
     triggeredBy = 'server'
   ): Promise<FleetEStopResult> {
+    // TASK-382: a stop is attempted against every robot, the cached 'offline'
+    // ones too — that status lags a robot that came back by up to one 30 s
+    // health check. One still offline that does not answer is left out of the
+    // result, as it always was.
     const robots = await robotManager.listRobots();
-    const connectedRobots = robots.filter((r) => r.status !== 'offline');
 
     const results = await Promise.allSettled(
-      connectedRobots.map(async (robot) => {
+      robots.map(async (robot) => {
         try {
           await this.applyRobotEStop(robot.id, reason, triggeredBy);
           return { robotId: robot.id, robotName: robot.name, success: true };
         } catch (error) {
+          if (robot.status === 'offline') return null;
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
           return {
             robotId: robot.id,
@@ -328,7 +352,7 @@ class SafetyService {
         success: false,
         error: 'Promise rejected',
       };
-    });
+    }).filter((r): r is NonNullable<typeof r> => r !== null);
 
     const successCount = robotResults.filter((r) => r.success).length;
     const failureCount = robotResults.filter((r) => !r.success).length;
@@ -439,9 +463,8 @@ class SafetyService {
     }
 
     const allRobots = await robotManager.listRobots();
-    const robotsInZone = allRobots.filter(
-      (robot) => robotIsInTwinZone(robot, zone) && robot.status !== 'offline'
-    );
+    // TASK-382: offline robots are attempted too (see triggerFleetEStop).
+    const robotsInZone = allRobots.filter((robot) => robotIsInTwinZone(robot, zone));
 
     if (robotsInZone.length === 0) {
       return {
@@ -468,6 +491,7 @@ class SafetyService {
           );
           return { robotId: robot.id, robotName: robot.name, success: true };
         } catch (error) {
+          if (robot.status === 'offline') return null;
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
           return {
             robotId: robot.id,
@@ -489,7 +513,7 @@ class SafetyService {
         success: false,
         error: 'Promise rejected',
       };
-    });
+    }).filter((r): r is NonNullable<typeof r> => r !== null);
 
     const successCount = robotResults.filter((r) => r.success).length;
     const failureCount = robotResults.filter((r) => !r.success).length;

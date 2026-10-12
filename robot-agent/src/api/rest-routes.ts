@@ -8,8 +8,8 @@ import { Router } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import type { RobotStateManager } from '../robot/state.js';
 import { ControlBusyError } from '../robot/state.js';
+import { STOP_COMMANDS } from '../robot/CommandExecutor.js';
 import type {
-  CommandType,
   RobotCommandRequest,
   RegistrationInfo,
   PushedTask,
@@ -137,8 +137,8 @@ function timingSafeEquals(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/** `/command` types that stop the robot — never refused by the lease guard (TASK-316). */
-const STOP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['stop', 'emergency_stop']);
+// `STOP_COMMANDS`: the `/command` types that stop the robot — never refused by
+// the lease guard (TASK-316), nor by a latched E-stop (TASK-382).
 
 /** Bounds on a control lease's TTL, in ms (TASK-314). */
 const LEASE_TTL_MIN_MS = 500;
@@ -921,6 +921,9 @@ export function createRestRoutes(
       agentModeStopped,
       ...(agentModeError ? { agentModeError } : {}),
       ...estopState,
+      // TASK-382: the status the stop left the robot in, so the server can
+      // mirror it at once instead of on its next 30 s health check.
+      robotStatus: robotStateManager.getRobotInterface().status,
     });
   });
 
@@ -972,6 +975,7 @@ export function createRestRoutes(
         // the stop route uses for `agentModeStopped`.
         agentModeReset,
         ...estopState,
+        robotStatus: robotStateManager.getRobotInterface().status,
       });
     } else {
       res.status(400).json({

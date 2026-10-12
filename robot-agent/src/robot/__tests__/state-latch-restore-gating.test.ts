@@ -333,3 +333,25 @@ describe('a normal boot of a robot that came back latched (regression)', () => {
     expect(onDisk().agentState.estopLatched).toBe(true);
   });
 });
+
+describe('a restored latch refuses motion from the first instant (TASK-382)', () => {
+  it('refuses a move through executeCommand and moveTo, and the robot stays put', async () => {
+    writeLatchedState();
+    vi.spyOn(hardwareClient, 'locoStop').mockResolvedValue({ ok: true });
+
+    const mgr = new RobotStateManager(makeConfig());
+    expect(mgr.isEStopTriggered()).toBe(true);
+    const before = mgr.getRobotInterface();
+
+    const command = await mgr.executeCommand('move', { destination: { x: 5, y: 5 } });
+    expect(command.status).toBe('failed');
+    expect(command.errorMessage).toMatch(/E-stop latched/);
+
+    const direct = await mgr.moveTo({ x: 5, y: 5 });
+    expect(direct.success).toBe(false);
+
+    const after = mgr.getRobotInterface();
+    expect(after.location).toMatchObject({ x: before.location.x, y: before.location.y });
+    expect(after.status).toBe(before.status);
+  });
+});

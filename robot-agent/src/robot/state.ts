@@ -421,6 +421,10 @@ export class RobotStateManager {
         // TASK-336: a sidecar-backed robot walks for real; a pure-sim one keeps
         // the kinematic SimulationEngine path.
         locomotion: agentModeLocomotion(() => this.isSidecarBacked()),
+        // TASK-382: a latched E-stop refuses every non-stop command. The
+        // monitor is built below; the hook only runs once a command arrives,
+        // and the latch it reads is restored from disk in this constructor.
+        isEStopTriggered: () => this.safetyMonitor.isEStopTriggered(),
       },
       stateGetter,
       stateUpdater

@@ -79,7 +79,18 @@ export interface CommandExecutorConfig {
   agentEstop?: AgentEstop;
   /** Real locomotion for `move` on a sidecar-backed robot; absent = kinematic only. */
   locomotion?: MoveLocomotion;
+  /**
+   * True while the SafetyMonitor's E-stop is latched (TASK-382). Every command
+   * that is not a stop is refused while it is; absent = never latched (tests).
+   */
+  isEStopTriggered?: () => boolean;
 }
+
+/** Commands that only ever stop the robot — never refused, not even by a latched E-stop. */
+export const STOP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['stop', 'emergency_stop']);
+
+/** What a command refused by a latched E-stop says. */
+export const ESTOP_LATCHED_MESSAGE = 'E-stop latched — reset required before the robot accepts commands';
 
 /** A move that was accepted, plus — on real locomotion — when it really ends. */
 interface MoveStart {
@@ -139,6 +150,18 @@ export class CommandExecutor {
 
     let result: CommandResult;
     let walk: Promise<MoveWalkOutcome> | undefined;
+
+    // TASK-382: a latched E-stop refuses everything but a stop, before any
+    // command touches state. The per-method guards below cover the callers
+    // that bypass execute() (tools, A2A, the task queue).
+    const latched = this.estopRefusal();
+    if (latched && !STOP_COMMANDS.has(type)) {
+      command.status = 'failed';
+      command.completedAt = new Date().toISOString();
+      command.result = latched.data;
+      command.errorMessage = latched.message;
+      return command;
+    }
 
     switch (type) {
       case 'move':
@@ -221,6 +244,9 @@ export class CommandExecutor {
    * `walk`, which settles only when the walk ends (TASK-336).
    */
   private async beginMove(location: RobotLocation): Promise<MoveStart> {
+    const latched = this.estopRefusal();
+    if (latched) return { result: latched };
+
     const state = this.stateGetter();
 
     if (state.status === 'charging') {
@@ -306,6 +332,9 @@ export class CommandExecutor {
    * Pick up an object
    */
   async pickup(objectId: string): Promise<CommandResult> {
+    const latched = this.estopRefusal();
+    if (latched) return latched;
+
     const state = this.stateGetter();
 
     if (state.heldObject) {
@@ -332,6 +361,9 @@ export class CommandExecutor {
    * Drop held object
    */
   async drop(): Promise<CommandResult> {
+    const latched = this.estopRefusal();
+    if (latched) return latched;
+
     const state = this.stateGetter();
 
     if (!state.heldObject) {
@@ -457,6 +489,10 @@ export class CommandExecutor {
   }
 
   private async beginCharge(): Promise<MoveStart> {
+    // The latch is the reason the robot will not go, whatever the place lookup says.
+    const latched = this.estopRefusal();
+    if (latched) return { result: latched };
+
     let chargingStation;
     try {
       chargingStation = await getChargingStationLocation();
@@ -478,12 +514,35 @@ export class CommandExecutor {
   }
 
   private async beginReturnHome(): Promise<MoveStart> {
+    // The latch is the reason the robot will not go, whatever the place lookup says.
+    const latched = this.estopRefusal();
+    if (latched) return { result: latched };
+
     const home = await getHomeLocation();
     const start = await this.beginMove(home);
     if (start.result.success) {
       start.result.message = `Returning to home base at (${home.x}, ${home.y})`;
     }
     return start;
+  }
+
+  /**
+   * The refusal a latched E-stop gives every non-stop command (TASK-382), or
+   * null while it is armed. A throwing hook counts as latched: when the latch
+   * cannot be read, the safe answer is "do not move".
+   */
+  private estopRefusal(): CommandResult | null {
+    const hook = this.config.isEStopTriggered;
+    if (!hook) return null;
+    let latched: boolean;
+    try {
+      latched = hook();
+    } catch {
+      latched = true;
+    }
+    return latched
+      ? { success: false, message: ESTOP_LATCHED_MESSAGE, data: { estopLatched: true } }
+      : null;
   }
 
   /**
@@ -509,6 +568,11 @@ export class CommandExecutor {
   async executeVLAAction(action: Action): Promise<ActionResult> {
     const state = this.stateGetter();
     const timestamp = Date.now();
+
+    const latched = this.estopRefusal();
+    if (latched) {
+      return { success: false, error: latched.message, timestamp };
+    }
 
     // Validate robot is in a state that can accept VLA commands
     if (state.status === 'error') {

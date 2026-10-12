@@ -45,6 +45,9 @@ export type RobotStatus =
   | 'maintenance'
   | 'protective_stop';
 
+/** Commands that only stop a robot — attempted whatever the cached connection says (TASK-382). */
+const STOP_COMMAND_TYPES: ReadonlySet<string> = new Set(['stop', 'emergency_stop']);
+
 /** Command execution status */
 export type CommandStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'cancelled';
 
@@ -974,18 +977,62 @@ export class RobotManager {
       throw new Error(`Robot ${robotId} not found`);
     }
 
-    if (!registered.isConnected) {
+    // TASK-382: a stop is always attempted. `isConnected` flips only on the
+    // 30 s health check, so it lags a robot that has just come back; refusing
+    // a stop on that stale flag refuses it against a reachable robot.
+    const isStop = STOP_COMMAND_TYPES.has(command.type);
+    if (!registered.isConnected && !isStop) {
       throw new Error(`Robot ${robotId} is not connected`);
     }
 
+    let result: RobotCommand;
     try {
       console.log(`[RobotManager] Sending command to ${robotId}:`, command);
 
       const httpClient = new HttpClient(undefined, HTTP_TIMEOUTS.LONG);
-      return await httpClient.post<RobotCommand>(registered.endpoints.command, command);
+      result = await httpClient.post<RobotCommand>(registered.endpoints.command, command);
     } catch (error) {
       rethrowRobotCallError('Failed to send command', error);
     }
+    if (!registered.isConnected) await this.noteRobotAnswered(registered);
+    return result;
+  }
+
+  /**
+   * The robot just answered a direct call — an E-stop, a reset, a stop command
+   * (TASK-382). That is fresher evidence than the last 30 s health check: mark
+   * it connected and mirror the status it reported now, persisted and pushed to
+   * the fleet view, instead of on the next poll.
+   */
+  async noteRobotAnswered(registered: RegisteredRobot, status?: RobotStatus): Promise<void> {
+    const now = new Date().toISOString();
+    const wasConnected = registered.isConnected;
+    const statusChanged = status !== undefined && status !== registered.robot.status;
+
+    registered.isConnected = true;
+    registered.robot.lastSeen = now;
+    if (statusChanged) {
+      registered.robot.status = status;
+      registered.robot.updatedAt = now;
+    }
+    if (wasConnected && !statusChanged) return;
+
+    try {
+      await robotRepository.updateHealthCheck(
+        registered.robot.id,
+        true,
+        statusChanged ? status : undefined
+      );
+    } catch (error) {
+      // The cache already holds the truth; the next health check retries the row.
+      console.error(`[RobotManager] Failed to persist status for ${registered.robot.id}:`, error);
+    }
+    this.emitEvent({
+      type: 'robot_status_changed',
+      robotId: registered.robot.id,
+      robot: registered.robot,
+      timestamp: now,
+    });
   }
 
   // ============================================================================
