@@ -247,6 +247,55 @@ describe('a robot loads its site places through its binding (TASK-328)', () => {
     expect(m.getPlaceBelief()).toBeNull();
   });
 
+  describe('an invalid answer does not slow the poll (TASK-380)', () => {
+    const placeCalls = () => fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/places')).length;
+    const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    it('keeps the base interval while the platform serves an invalid graph', async () => {
+      appConfig.place.refreshMs = 10;
+      fetchMock.mockImplementation(async () => json(200, siteGraph({ units: 'cm' })));
+      const { manager: m } = manager();
+      await pause(250);
+      // Backing off (20, 40, 80, 160 ms) would allow ~4 fetches in 250 ms.
+      expect(placeCalls()).toBeGreaterThanOrEqual(8);
+      expect(m.getPlaceFrameRegistration()).toBeNull();
+    });
+
+    it('still backs off while the platform is unreachable', async () => {
+      appConfig.place.refreshMs = 10;
+      fetchMock.mockImplementation(async () => {
+        throw new Error('ECONNREFUSED');
+      });
+      manager();
+      await pause(250);
+      expect(placeCalls()).toBeGreaterThanOrEqual(2);
+      expect(placeCalls()).toBeLessThanOrEqual(6);
+    });
+
+    it('adopts the fixed graph on the next tick after invalid answers', async () => {
+      appConfig.place.refreshMs = 10;
+      fetchMock.mockImplementation(async () => json(200, siteGraph({ units: 'cm' })));
+      const { manager: m } = manager();
+      // Long enough that a backoff would have grown past the wait below.
+      await pause(400);
+      expect(m.getPlaceFrameRegistration()).toBeNull();
+
+      fetchMock.mockImplementation(async () => json(200, siteGraph()));
+      await vi.waitFor(() => expect(m.getPlaceFrameRegistration()).not.toBeNull(), { timeout: 150 });
+    });
+
+    it('keeps the cached graph when the platform starts serving an invalid one', async () => {
+      appConfig.place.refreshMs = 10;
+      const { manager: m } = manager();
+      await vi.waitFor(() => expect(m.getPlaceFrameRegistration()).not.toBeNull());
+      fetchMock.mockImplementation(async () => json(200, siteGraph({ units: 'cm' })));
+      const before = placeCalls();
+      await pause(100);
+      expect(placeCalls() - before).toBeGreaterThanOrEqual(3);
+      expect(m.getPlaceFrameRegistration()).toEqual({ registered: true, how: 'sim-twin-origin' });
+    });
+  });
+
   it('boots from the per-robot disk cache when the server is unreachable', async () => {
     fs.writeFileSync(ROBOT_CACHE, JSON.stringify(siteGraph()), 'utf-8');
     fetchMock.mockImplementation(async () => {

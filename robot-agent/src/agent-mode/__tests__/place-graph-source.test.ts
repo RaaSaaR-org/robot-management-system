@@ -175,6 +175,28 @@ describe('PlaceGraphSource', () => {
 
     expect(result.origin).toBe('cache');
     expect(result.graph?.places.map((p) => p.id)).toEqual(['AISLE-3']);
+    // The platform answered: a poll must not mistake this for an outage (TASK-380).
+    expect(result.invalid).toBe(true);
+    // ...and the bad answer never replaced the cached copy.
+    expect(JSON.parse(readFileSync(bad.cacheFile, 'utf-8')).version).toBe(1);
+  });
+
+  it('flags an invalid 2xx answer, but not an outage or a non-2xx (TASK-380)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    warn.mockClear();
+    const bad = makeSource((async () => okResponse(graphBody({ frame: { units: 'cm' } }))) as unknown as typeof fetch);
+    expect((await bad.refresh()).invalid).toBe(true);
+    await bad.refresh();
+    // Logged once per distinct error, not every tick.
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('invalid graph'))).toHaveLength(1);
+
+    const down = makeSource((async () => {
+      throw new Error('ECONNREFUSED');
+    }) as unknown as typeof fetch);
+    expect((await down.refresh()).invalid).toBeUndefined();
+    const failing = makeSource((async () =>
+      ({ ok: false, status: 503, json: async () => ({}) }) as unknown as Response) as unknown as typeof fetch);
+    expect((await failing.refresh()).invalid).toBeUndefined();
   });
 
   it('loadCached returns null (not a throw) for a corrupt cache', () => {

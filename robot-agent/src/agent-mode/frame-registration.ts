@@ -130,11 +130,14 @@ export const NO_FRAME_REGISTRATION_ERROR = 'no frame registration';
  * - `found`: the platform's registration for this robot.
  * - `none`: the platform says there is none — authoritative, drop any copy.
  * - `error`: the platform could not be asked; keep what you had.
+ * - `invalid`: the platform answered, but not with a registration (TASK-380);
+ *   keep what you had, but the platform is reachable — do not back off.
  */
 export type FrameRegistrationFetch =
   | { kind: 'found'; registration: OdomRegistration }
   | { kind: 'none' }
-  | { kind: 'error'; error: string };
+  | { kind: 'error'; error: string }
+  | { kind: 'invalid'; error: string };
 
 export interface FrameRegistrationSourceOptions {
   serverUrl: string;
@@ -172,8 +175,11 @@ export class FrameRegistrationSource {
           : { kind: 'error', error: 'HTTP 404' };
       }
       if (!res.ok) return { kind: 'error', error: `HTTP ${res.status}` };
-      const registration = parseOdomRegistration(await res.json());
-      return registration ? { kind: 'found', registration } : { kind: 'error', error: 'malformed registration' };
+      const body = await res.json().catch(() => undefined);
+      const registration = parseOdomRegistration(body);
+      return registration
+        ? { kind: 'found', registration }
+        : { kind: 'invalid', error: body === undefined ? 'body is not JSON' : 'malformed registration' };
     } catch (err) {
       return { kind: 'error', error: err instanceof Error ? err.message : String(err) };
     }

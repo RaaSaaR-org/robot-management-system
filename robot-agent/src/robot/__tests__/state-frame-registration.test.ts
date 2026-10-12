@@ -290,4 +290,30 @@ describe('a robot on odometry fences its site once registered (TASK-342)', () =>
     expect(recovered).toHaveLength(1);
     expect(String(recovered[0][0])).toContain('reachable again');
   });
+  it('an invalid answer keeps the last registration and the base interval, logged once (TASK-380)', async () => {
+    registration = REGISTRATION;
+    await loaded();
+    await vi.waitFor(() => expect(m.getPlaceFrameRegistration()?.registered).toBe(true));
+
+    const calls = (): number =>
+      (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((c) => String(c[0]).endsWith('/frame-registration'))
+        .length;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    warn.mockClear();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) =>
+        String(url).endsWith('/frame-registration') ? json(200, { nope: 1 }) : json(200, SITE_GRAPH),
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    const before = calls();
+    await new Promise((r) => setTimeout(r, 300));
+    // Healthy cadence (~30 calls), not a backoff (at most ~4).
+    expect(calls() - before).toBeGreaterThanOrEqual(8);
+    expect(m.getPlaceFrameRegistration()?.registered).toBe(true);
+    const lines = warn.mock.calls.filter((c) => String(c[0]).startsWith('[FrameRegistration]'));
+    expect(lines).toHaveLength(1);
+    expect(String(lines[0][0])).toContain('malformed registration');
+  });
 });

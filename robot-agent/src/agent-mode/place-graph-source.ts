@@ -44,6 +44,13 @@ export interface PlaceGraphResult {
   origin: PlaceGraphOrigin;
   /** Why the server copy was not used, when it was not. */
   error?: string;
+  /**
+   * The platform DID answer, but its graph failed validation (TASK-380). The
+   * result still carries the cached copy (or none); the flag only tells a poll
+   * that the platform is reachable, so a fix made in the UI is picked up at the
+   * normal interval rather than after a backoff meant for an outage.
+   */
+  invalid?: true;
 }
 
 /**
@@ -142,6 +149,9 @@ export class PlaceGraphSource {
    * `origin: 'none'` — which the caller reports as UNKNOWN, the honest answer.
    */
   async refresh(): Promise<PlaceGraphResult> {
+    // Set once the platform has answered 2xx: anything that fails after that is
+    // a bad answer, not an unreachable platform.
+    let answered = false;
     try {
       const res = await this.fetchImpl(this.url, { headers: platformAuthHeaders(), signal: AbortSignal.timeout(this.timeoutMs) });
       if (res.status === 404 && 'robotId' in this.target && (await this.isNoSite(res))) {
@@ -152,6 +162,7 @@ export class PlaceGraphSource {
         return { graph: null, origin: 'unbound' };
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      answered = true;
       const body = (await res.json()) as unknown;
       const graph = this.assertTwin(parsePlaceGraph(body, this.url));
       this.writeCache(body);
@@ -160,6 +171,11 @@ export class PlaceGraphSource {
     } catch (err) {
       const error = message(err);
       const cached = this.loadCached();
+      if (answered) {
+        const kept = cached ? 'keeping the cached copy' : 'no cache — place stays UNKNOWN';
+        this.report('warn', `[PlaceGraph] ${this.url} answered with an invalid graph (${error}) — ${kept}`);
+        return { graph: cached, origin: cached ? 'cache' : 'none', error, invalid: true };
+      }
       if (cached) {
         this.report('warn', `[PlaceGraph] ${this.url} unavailable (${error}) — using the cached copy`);
         return { graph: cached, origin: 'cache', error };
