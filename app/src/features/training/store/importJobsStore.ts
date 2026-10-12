@@ -13,7 +13,7 @@
 
 import { createStore } from '@/store';
 import { toast } from '@/shared/components/ui/toast';
-import { getErrorMessage } from '@/shared/utils';
+import { getErrorMessage, isNotFoundError } from '@/shared/utils';
 import { trainingApi } from '../api/trainingApi';
 import { describeImportFailure } from '../components/datasets/importFormat';
 import type { HFImportProgress, ImportLogLine, ImportLogResponse } from '../types';
@@ -416,11 +416,11 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
           get().applyBackfill(await trainingApi.getImportLog(datasetId));
         } catch (error) {
           // A 404 is a dataset somebody deleted: there is nothing left to watch.
-          const status = (error as { response?: { status?: number } }).response?.status;
-          if (status === 404 && reconciling.has(datasetId)) {
+          const notFound = isNotFoundError(error);
+          if (notFound && reconciling.has(datasetId)) {
             // Persisted from an earlier load: `reconcile` is deciding whether it
             // is a ghost, and a ghost gets no "failed" toast on its way out.
-          } else if (status === 404) {
+          } else if (notFound) {
             update(datasetId, (job) => finish(job, 'failed', 'The dataset no longer exists'));
           } else {
             console.warn('[ImportJobs] backfill failed:', getErrorMessage(error, 'unknown error'));
@@ -445,10 +445,9 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
           try {
             get().applyBackfill(await trainingApi.getImportLog(id));
           } catch (error) {
-            const status = (error as { response?: { status?: number } }).response?.status;
             const job = get().jobs[id];
             // Unknown to this server: a ghost from another one, not a failure.
-            if (status === 404) ghosts.push(id);
+            if (isNotFoundError(error)) ghosts.push(id);
             else if (job?.state === 'running' && age(job.startedAt) > RUNNING_JOB_TTL_MS) ghosts.push(id);
             else console.warn('[ImportJobs] reconcile failed:', getErrorMessage(error, 'unknown error'));
           }

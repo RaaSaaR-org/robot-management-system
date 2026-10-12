@@ -113,7 +113,9 @@ export function RobotCard({ robot, onClick, actions, selected = false, compact =
             </span>
           </div>
           {robot.currentTaskName && (
-            <span className="truncate text-ink-secondary">Task: {robot.currentTaskName}</span>
+            <span className="truncate text-ink-secondary">
+              {robot.status === 'offline' ? 'Last task' : 'Task'}: {robot.currentTaskName}
+            </span>
           )}
         </div>
       )}

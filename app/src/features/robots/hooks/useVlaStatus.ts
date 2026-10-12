@@ -54,7 +54,13 @@ export interface UseVlaStatusReturn {
 
 const VLA_POLL_INTERVAL = 3000;
 
-export function useVlaStatus(robotId: string): UseVlaStatusReturn {
+/**
+ * VLA status of one robot, polled every few seconds.
+ * @param robotId - Robot to watch
+ * @param enabled - Poll only while true; an offline robot has no agent to ask,
+ *                  and every attempt is a 502 in the console (TASK-388)
+ */
+export function useVlaStatus(robotId: string, enabled = true): UseVlaStatusReturn {
   const [isActive, setIsActive] = useState(false);
   const [status, setStatus] = useState<VlaStatusResponse['status']>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -83,6 +89,15 @@ export function useVlaStatus(robotId: string): UseVlaStatusReturn {
   // Initial fetch + polling
   useEffect(() => {
     mountedRef.current = true;
+    if (!enabled) {
+      // Stop polling only. The last known state stays: an "offline" flag can be
+      // one missed health check on a robot still running a skill, and clearing
+      // isActive here would hide the only Stop button (TASK-388 review).
+      setIsLoading(false);
+      return () => {
+        mountedRef.current = false;
+      };
+    }
 
     setIsLoading(true);
     fetchStatus().finally(() => {
@@ -95,7 +110,7 @@ export function useVlaStatus(robotId: string): UseVlaStatusReturn {
       mountedRef.current = false;
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [fetchStatus]);
+  }, [fetchStatus, enabled]);
 
   const startVla = useCallback(async (prompt: string, serverUrl: string) => {
     setIsExecuting(true);

@@ -515,6 +515,7 @@ sign-up; a self-registered account is a `viewer`.
 | `VITE_API_BASE_URL` | No | `http://localhost:3001/api` | Server API URL |
 | `VITE_WS_URL` | No | — | WebSocket URL override |
 | `VITE_A2A_SERVER_URL` | No | — | A2A server URL override |
+| `VITE_VLA_SERVER_URL` | No | — | VLA server URL prefilled in a robot's Skill panel (a viewer's last-used URL wins); empty leaves the field blank |
 
 ---
 

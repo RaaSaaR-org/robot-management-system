@@ -93,7 +93,7 @@ export function OverviewTab({
       </Panel>
 
       <div className="flex flex-col gap-6">
-        <VlaControlSection robotId={robotId} />
+        <VlaControlSection robotId={robotId} online={robot.status !== 'offline'} />
 
         <Panel>
           <Panel.Header title="Quick actions" />
