@@ -3,7 +3,7 @@ id: "TASK-350"
 aliases: ["TASK-350"]
 title: "Storage callers other than the HF importer never fall back to local disk while RustFS is configured"
 slug: "storage-callers-other-than-the-hf-importer-never-fall-back-to-local-disk-while-rustfs-is-configured"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
