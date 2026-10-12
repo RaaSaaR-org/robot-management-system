@@ -404,6 +404,12 @@ warning), not promoted. A set but unusable value (one variable without the
 other, a bad email, a weak password) stops the server from starting. The
 variables are ignored under `AUTH_DISABLED=true`.
 
+The account stays tenant-less across restarts: the boot-time `default` tenant
+backfill (`seedDefaultTenant`) adopts tenant-less users but skips `super-admin`.
+A super-admin stamped into a tenant before that rule (only the
+`AUTH_DISABLED=true` dev user, in practice) keeps its tenant — no migration —
+and the Team page refuses to change its role or deactivate it either way (403).
+
 ### Impersonation
 
 Super-admins can view another tenant's data by selecting it from the `OrganizationSwitcher`

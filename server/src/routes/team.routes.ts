@@ -13,6 +13,7 @@ import { ownerOnly } from '../middleware/auth.middleware.js';
 import {
   teamService,
   LastOwnerError,
+  SuperAdminProtectedError,
   EmailTakenError,
   InvalidRoleError,
   TeamMemberNotFoundError,
@@ -156,6 +157,9 @@ teamRoutes.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
     }
     res.json(member);
   } catch (error) {
+    if (error instanceof SuperAdminProtectedError) {
+      return res.status(403).json({ error: error.message });
+    }
     if (error instanceof LastOwnerError) {
       return res.status(409).json({ error: error.message });
     }
@@ -186,6 +190,9 @@ teamRoutes.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
     });
     res.json(member);
   } catch (error) {
+    if (error instanceof SuperAdminProtectedError) {
+      return res.status(403).json({ error: error.message });
+    }
     if (error instanceof LastOwnerError) {
       return res.status(409).json({ error: error.message });
     }

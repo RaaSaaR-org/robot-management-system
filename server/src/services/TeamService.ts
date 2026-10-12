@@ -59,6 +59,21 @@ export class InvalidRoleError extends Error {
   }
 }
 
+/**
+ * The target is a platform `super-admin`. It can show up in a tenant's member
+ * list (an account stamped into `default` before TASK-367, or the dev user),
+ * but it is not the tenant's to manage: an owner demoting or deactivating it
+ * would lock the platform out of its own admin account.
+ */
+export class SuperAdminProtectedError extends Error {
+  constructor() {
+    super(
+      'This account is a platform super-admin. Its role and status cannot be changed from a tenant\'s team page.'
+    );
+    this.name = 'SuperAdminProtectedError';
+  }
+}
+
 export class TeamMemberNotFoundError extends Error {
   constructor() {
     super('Team member not found');
@@ -281,6 +296,7 @@ export class TeamService {
         where: { id: params.userId, tenantId: params.tenantId },
       });
       if (!existing) throw new TeamMemberNotFoundError();
+      if (existing.role === 'super-admin') throw new SuperAdminProtectedError();
 
       if (existing.role === 'owner' && params.newRole !== 'owner') {
         await assertNotLastOwnerTx(tx, params.tenantId, params.userId);
@@ -318,6 +334,7 @@ export class TeamService {
         where: { id: params.userId, tenantId: params.tenantId },
       });
       if (!existing) throw new TeamMemberNotFoundError();
+      if (existing.role === 'super-admin') throw new SuperAdminProtectedError();
 
       if (existing.role === 'owner') {
         await assertNotLastOwnerTx(tx, params.tenantId, params.userId);

@@ -15,7 +15,14 @@ const {
   EmailTakenError,
   InvalidRoleError,
   TeamMemberNotFoundError,
+  SuperAdminProtectedError,
 } = vi.hoisted(() => {
+  class SuperAdminProtectedError extends Error {
+    constructor() {
+      super('This account is a platform super-admin.');
+      this.name = 'SuperAdminProtectedError';
+    }
+  }
   class LastOwnerError extends Error {
     constructor(message: string) {
       super(message);
@@ -52,6 +59,7 @@ const {
     EmailTakenError,
     InvalidRoleError,
     TeamMemberNotFoundError,
+    SuperAdminProtectedError,
   };
 });
 
@@ -61,6 +69,7 @@ vi.mock('../services/TeamService.js', () => ({
   EmailTakenError,
   InvalidRoleError,
   TeamMemberNotFoundError,
+  SuperAdminProtectedError,
 }));
 
 vi.mock('../middleware/auth.middleware.js', () => ({
@@ -280,6 +289,27 @@ describe('Team Routes', () => {
 
       expect(response.status).toBe(409);
       expect(response.body.error).toContain('last owner');
+    });
+
+    it('returns 403 when the target is a platform super-admin', async () => {
+      mockTeamService.changeRole.mockRejectedValue(new SuperAdminProtectedError());
+
+      const response = await request(app)
+        .patch('/api/team/root')
+        .send({ role: 'viewer' });
+
+      expect(response.status).toBe(403);
+      expect(response.body.error).toContain('super-admin');
+    });
+
+    it('returns 403 when deactivating a platform super-admin', async () => {
+      mockTeamService.deactivate.mockRejectedValue(new SuperAdminProtectedError());
+
+      const patch = await request(app).patch('/api/team/root').send({ isActive: false });
+      const del = await request(app).delete('/api/team/root');
+
+      expect(patch.status).toBe(403);
+      expect(del.status).toBe(403);
     });
 
     it('returns 400 on invalid role', async () => {

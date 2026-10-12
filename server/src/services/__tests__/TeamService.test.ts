@@ -43,6 +43,7 @@ import {
   EmailTakenError,
   InvalidRoleError,
   TeamMemberNotFoundError,
+  SuperAdminProtectedError,
 } from '../TeamService.js';
 import { prisma as _prisma } from '../../database/index.js';
 import { complianceLogService as _complianceLogService } from '../ComplianceLogService.js';
@@ -372,6 +373,34 @@ describe('deactivate', () => {
     await expect(teamService.deactivate(params)).rejects.toThrow(
       TeamMemberNotFoundError
     );
+  });
+});
+
+// ===========================================================================
+// super-admin protection
+// ===========================================================================
+
+describe('a platform super-admin in the tenant', () => {
+  const target = { tenantId: 'default', userId: 'root', actorId: 'owner-1' };
+
+  beforeEach(() => {
+    prisma.user.findFirst.mockResolvedValue(
+      makeRow({ id: 'root', role: 'super-admin' }) as never
+    );
+  });
+
+  it('cannot be demoted', async () => {
+    await expect(
+      teamService.changeRole({ ...target, newRole: 'viewer' })
+    ).rejects.toThrow(SuperAdminProtectedError);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('cannot be deactivated (or removed — DELETE is the same call)', async () => {
+    await expect(teamService.deactivate(target)).rejects.toThrow(
+      SuperAdminProtectedError
+    );
+    expect(prisma.user.update).not.toHaveBeenCalled();
   });
 });
 
