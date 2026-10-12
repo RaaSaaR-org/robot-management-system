@@ -15,6 +15,8 @@ import { apiClient } from '@/api';
 
 export interface FeatureFlags {
   multiTenancyEnabled: boolean;
+  /** Anonymous signup on /register is open (TASK-369: closed by default with auth on). */
+  selfRegistrationEnabled: boolean;
   natsEnabled: boolean;
   rustfsEnabled: boolean;
 }
@@ -29,6 +31,7 @@ interface FeaturesState {
 
 const DEFAULT_FLAGS: FeatureFlags = {
   multiTenancyEnabled: false,
+  selfRegistrationEnabled: false,
   natsEnabled: false,
   rustfsEnabled: false,
 };

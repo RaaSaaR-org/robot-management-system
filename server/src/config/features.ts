@@ -47,6 +47,24 @@ export function controlLeasesEnabled(): boolean {
 }
 
 /**
+ * Anonymous self-service signup through `POST /api/auth/register` (TASK-369).
+ *
+ * With auth on, an open register endpoint lets anyone on the network create an
+ * account, so it is closed unless the operator opts in with
+ * `ALLOW_SELF_REGISTRATION=true`. Under multi-tenancy it is always closed:
+ * a self-registered user would have no tenant (TASK-162), and accounts are
+ * added through the Team page or organization onboarding instead. With
+ * `AUTH_DISABLED=true` (local dev) it stays open, as it always has been.
+ *
+ * Read per call, so tests and the routes see the current environment.
+ */
+export function selfRegistrationEnabled(): boolean {
+  if (MULTI_TENANCY_ENABLED) return false;
+  if (process.env.AUTH_DISABLED === 'true') return true;
+  return readBoolFlag('ALLOW_SELF_REGISTRATION', false);
+}
+
+/**
  * Snapshot of every feature flag — exposed via /api/config/features so
  * the frontend can decide which UI to render before login.
  */
@@ -54,6 +72,7 @@ export function getFeatureFlags(): Record<string, boolean> {
   return {
     multiTenancyEnabled: MULTI_TENANCY_ENABLED,
     controlLeasesEnabled: controlLeasesEnabled(),
+    selfRegistrationEnabled: selfRegistrationEnabled(),
     natsEnabled: process.env.NATS_URL !== undefined,
     rustfsEnabled: process.env.RUSTFS_ENDPOINT !== undefined,
   };

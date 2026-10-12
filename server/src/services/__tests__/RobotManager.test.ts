@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Prisma } from '@prisma/client';
 import type { A2AAgentCard } from '../../types/index.js';
 
 // ---------------------------------------------------------------------------
@@ -61,7 +62,8 @@ vi.mock('../../repositories/index.js', () => ({
   },
 }));
 
-import { RobotManager } from '../RobotManager.js';
+import { RobotManager, ROBOT_ALREADY_REGISTERED_MESSAGE } from '../RobotManager.js';
+import { ConflictError } from '../../utils/errors.js';
 import { RobotStatusSchema } from '../../database/schemas.js';
 import type {
   Robot,
@@ -243,6 +245,26 @@ describe('registerRobot', () => {
     await expect(mgr.registerRobot('http://robot.local')).rejects.toThrow(
       'Failed to register robot: connection refused'
     );
+  });
+
+  it('turns a unique-constraint violation into a 409 that names nothing of the existing robot (TASK-369)', async () => {
+    const mgr = new RobotManager();
+    httpGet.mockResolvedValue(makeRegistrationInfo({ robot: makeRobot({ id: 'r1' }) }));
+    agentCardResolver.fetchAgentCard.mockResolvedValue(makeAgentCard());
+    // The meta and message name the other row's constraint; none of it may leak.
+    const p2002 = new Prisma.PrismaClientKnownRequestError(
+      'Unique constraint failed on the fields: (`id`) tenant-b',
+      { code: 'P2002', clientVersion: 'test', meta: { target: ['id'] } }
+    );
+    robotRepository.upsertWithRegistration.mockRejectedValue(p2002);
+
+    const err = await mgr.registerRobot('http://robot.local').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ConflictError);
+    expect((err as ConflictError).statusCode).toBe(409);
+    expect((err as ConflictError).message).toBe(ROBOT_ALREADY_REGISTERED_MESSAGE);
+    expect((err as ConflictError).message).not.toContain('tenant-b');
+    expect(conversationManager.registerAgent).not.toHaveBeenCalled();
   });
 });
 

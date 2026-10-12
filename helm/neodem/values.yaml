@@ -161,6 +161,11 @@ server:
     # Robot-wide per-user control leases (TASK-321): on by default; "false"
     # turns the lease routes off (GET answers enabled:false, POSTs 404).
     controlLeasesEnabled: "true"
+    # Anonymous sign-up via POST /api/auth/register with auth on (TASK-369):
+    # closed by default; "true" opens it. The first admin comes from
+    # BOOTSTRAP_ADMIN_* instead (TASK-367).
+    # Always closed under multi-tenancy.
+    allowSelfRegistration: "false"
     publicUrl: ""
     corsOrigins: ""
     # V8 sizes its default heap from the machine, not the container, and a

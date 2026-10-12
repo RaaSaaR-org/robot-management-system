@@ -663,6 +663,7 @@ export const handlers = [
 
   http.get('/api/config/features', () => HttpResponse.json({
     multiTenancyEnabled: false,
+    selfRegistrationEnabled: true,
     natsEnabled: false,
     rustfsEnabled: false,
   })),

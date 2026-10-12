@@ -12,7 +12,7 @@ import {
   authMiddleware,
   type AuthenticatedRequest,
 } from '../middleware/auth.middleware.js';
-import { MULTI_TENANCY_ENABLED } from '../config/features.js';
+import { MULTI_TENANCY_ENABLED, selfRegistrationEnabled } from '../config/features.js';
 import { sendFailure } from '../utils/routeErrors.js';
 
 export const authRoutes = Router();
@@ -24,6 +24,9 @@ export const authRoutes = Router();
 // as a validation error and echoed the whole of it at 400.
 const PASSWORD_POLICY_MESSAGE =
   'Password must be at least 8 characters with uppercase, lowercase, and number';
+
+const SELF_REGISTRATION_DISABLED_MESSAGE =
+  'Sign-up is disabled on this server. Ask your administrator to create an account for you.';
 
 const LOGIN_REJECTIONS = new Set([
   'Invalid email or password',
@@ -76,12 +79,22 @@ authRoutes.post('/register', async (req: Request, res: Response) => {
   try {
     // TASK-162: anonymous self-service signup is disabled when multi-tenancy
     // is on — new users must be added via the Team page (TASK-163) so they
-    // inherit a tenantId. Single-tenant deployments keep the legacy flow.
+    // inherit a tenantId.
     if (MULTI_TENANCY_ENABLED) {
       return res.status(403).json({
         error: 'Forbidden',
         message:
           'Signup is invite-only. Ask your organization owner to add you.',
+      });
+    }
+
+    // TASK-369: with auth on, single-tenant signup is closed too unless the
+    // operator set ALLOW_SELF_REGISTRATION=true. Admins add users instead.
+    if (!selfRegistrationEnabled()) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        code: 'SELF_REGISTRATION_DISABLED',
+        message: SELF_REGISTRATION_DISABLED_MESSAGE,
       });
     }
 

@@ -22,7 +22,7 @@ export interface LoginPageProps {
 }
 
 export function LoginPage({ onLoginSuccess, title, tagline }: LoginPageProps) {
-  const { multiTenancyEnabled } = useFeatures();
+  const { selfRegistrationEnabled } = useFeatures();
   const completeMFALogin = useAuthStore((s) => s.completeMFALogin);
   const [challenge, setChallenge] = useState<MFAChallengeRequest | null>(null);
 
@@ -54,8 +54,9 @@ export function LoginPage({ onLoginSuccess, title, tagline }: LoginPageProps) {
       // TASK-164: keep it neutral — the tenant is implicit in the email address.
       description={tagline ?? 'Enter your email and password.'}
       footer={
-        // TASK-164: sign-up is invite-only when multi-tenancy is on.
-        !multiTenancyEnabled && (
+        // TASK-164 / TASK-369: the server says whether anonymous sign-up is
+        // open — never under multi-tenancy, and with auth on only by opt-in.
+        selfRegistrationEnabled && (
           <span>
             No account?{' '}
             <Link to="/register" className={authLinkClass}>Create one</Link>

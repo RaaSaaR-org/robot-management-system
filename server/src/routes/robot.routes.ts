@@ -15,6 +15,7 @@ import http from 'node:http';
 import { agentServiceAuthHeaders } from '../services/agentServiceAuth.js';
 import { signCameraTicket, CAMERA_TICKET_TTL_MS } from '../security/cameraTicket.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const robotRoutes = Router();
 
@@ -58,7 +59,9 @@ robotRoutes.post('/register', async (req: Request, res: Response) => {
     ) {
       return res.status(502).json({ error: 'Unable to connect to robot. Please check the URL and ensure the robot is online.' });
     }
-    res.status(500).json({ error: 'Failed to register robot' });
+    // A curated AppError (the 409 for an already-registered robot, TASK-369)
+    // carries its own status; anything else stays a generic 500.
+    sendFailure(res, error, 'Failed to register robot', 500);
   }
 });
 
