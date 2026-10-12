@@ -9,25 +9,37 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const getImportLog = vi.fn();
 const getDataset = vi.fn();
+const cancelImport = vi.fn();
 
 vi.mock('../../api/trainingApi', () => ({
   trainingApi: {
     getImportLog: (...a: unknown[]) => getImportLog(...a),
     getDataset: (...a: unknown[]) => getDataset(...a),
+    cancelImport: (...a: unknown[]) => cancelImport(...a),
   },
 }));
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
+const toastInfo = vi.fn();
 vi.mock('@/shared/components/ui/toast', () => ({
   toast: {
     success: (...a: unknown[]) => toastSuccess(...a),
     error: (...a: unknown[]) => toastError(...a),
-    info: vi.fn(),
+    info: (...a: unknown[]) => toastInfo(...a),
   },
 }));
 
-import { SERVER_RESTARTED_ERROR, importToastId, mergeLines, selectRunningCount, useImportJobsStore } from '../importJobsStore';
+import {
+  FINISHED_JOB_TTL_MS,
+  RUNNING_JOB_TTL_MS,
+  SERVER_RESTARTED_ERROR,
+  importToastId,
+  mergeLines,
+  selectRunningCount,
+  useImportJobsStore,
+  type ImportJob,
+} from '../importJobsStore';
 import type { ImportLogResponse } from '../../types';
 
 const ID = 'ds-1';
@@ -295,5 +307,138 @@ describe('what the operator sees of an import (TASK-358)', () => {
     expect(store().dismissedIds).toEqual([ID]);
     store().track(ID, 'lerobot/pusht');
     expect(store().dismissedIds).toEqual([]);
+  });
+});
+
+// ============================================================================
+// TASK-371: reconciling what a reload remembers, and cancelling
+// ============================================================================
+
+/** A job as an earlier load left it in localStorage. */
+function remembered(id: string, over: Partial<ImportJob> = {}): void {
+  store().follow(id, `org/${id}`);
+  useImportJobsStore.setState((state) => {
+    Object.assign(state.jobs[id]!, { notify: true, ...over });
+  });
+}
+
+const notFound = () => Object.assign(new Error('Not Found'), { response: { status: 404 } });
+const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+
+describe('reconciling remembered imports with the server (TASK-371)', () => {
+  beforeEach(() => {
+    getImportLog.mockResolvedValue(backfill());
+  });
+
+  it('drops jobs the server does not know, quietly, instead of showing them stuck or failed', async () => {
+    remembered('ghost');
+    remembered('ghost-done', { state: 'failed', endedAt: hoursAgo(1) });
+    remembered('live');
+    getImportLog.mockImplementation((id: string) =>
+      id.startsWith('ghost') ? Promise.reject(notFound()) : Promise.resolve(backfill({ datasetId: id })));
+    // What the layout's feed does at the same moment for running jobs.
+    const reconciling = store().reconcile();
+    await store().backfill('ghost');
+    await reconciling;
+
+    expect(store().order).toEqual(['live']);
+    expect(store().jobs.ghost).toBeUndefined();
+    expect(store().jobs['ghost-done']).toBeUndefined();
+    expect(store().jobs.live!.state).toBe('running');
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it('takes the server\'s word for the ones it knows — an import that finished while the tab was closed', async () => {
+    remembered('done-meanwhile');
+    getImportLog.mockResolvedValue(backfill({ datasetId: 'done-meanwhile', status: 'ready' }));
+
+    await store().reconcile();
+
+    expect(store().jobs['done-meanwhile']!.state).toBe('succeeded');
+  });
+
+  it('expires finished jobs older than a day without asking about them', async () => {
+    remembered('old', { state: 'succeeded', endedAt: new Date(Date.now() - FINISHED_JOB_TTL_MS - 1000).toISOString() });
+    remembered('recent', { state: 'failed', error: 'boom', endedAt: hoursAgo(2) });
+    getImportLog.mockResolvedValue(backfill({ datasetId: 'recent', status: 'failed' }));
+    getImportLog.mockClear(); // `follow` above read both; the reload is what is under test
+
+    await store().reconcile();
+
+    expect(store().order).toEqual(['recent']);
+    expect(getImportLog).not.toHaveBeenCalledWith('old');
+  });
+
+  it('drops a week-old "running" job the server cannot confirm, and keeps a young one', async () => {
+    remembered('ancient', { startedAt: new Date(Date.now() - RUNNING_JOB_TTL_MS - 1000).toISOString() });
+    remembered('young');
+    getImportLog.mockRejectedValue(new Error('Network Error'));
+
+    await store().reconcile();
+
+    expect(store().order).toEqual(['young']);
+  });
+
+  it('still marks a dataset deleted under a live session as gone', async () => {
+    store().track(ID, 'lerobot/pusht');
+    getImportLog.mockRejectedValue(notFound());
+
+    await store().backfill(ID);
+
+    expect(job()).toMatchObject({ state: 'failed', error: 'The dataset no longer exists' });
+  });
+});
+
+describe('cancelling an import (TASK-371)', () => {
+  it('ends the job as cancelled once the server says it stopped', async () => {
+    store().track(ID, 'lerobot/pusht');
+    cancelImport.mockResolvedValue({ datasetId: ID, status: 'cancelled' });
+    getImportLog.mockResolvedValue(backfill({
+      status: 'failed',
+      importError: { phase: 'downloading', error: 'Import cancelled by the operator', failedAt: hoursAgo(0), cancelled: true },
+    }));
+
+    await store().cancel(ID);
+
+    expect(cancelImport).toHaveBeenCalledWith(ID);
+    expect(job()).toMatchObject({ state: 'cancelled', error: null });
+    expect(selectRunningCount(store())).toBe(0);
+    expect(toastInfo).toHaveBeenCalledWith('Dataset import cancelled', expect.objectContaining({ id: importToastId(ID) }));
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it('keeps it running while the server is still unwinding, and ends it on the closing frame', async () => {
+    store().track(ID, 'lerobot/pusht');
+    cancelImport.mockResolvedValue({ datasetId: ID, status: 'cancelling' });
+
+    await store().cancel(ID);
+    expect(job().state).toBe('running');
+
+    store().applyMessage({
+      type: 'dataset:import:progress',
+      datasetId: ID,
+      importProgress: { status: 'failed', phase: 'downloading', progress: 40, error: 'Import cancelled by the operator', cancelled: true },
+    });
+    expect(job().state).toBe('cancelled');
+    // The `failed` event that follows does not turn it into a failure.
+    store().applyMessage({ type: 'dataset:import:failed', datasetId: ID, error: 'Import cancelled by the operator', cancelled: true });
+    expect(job().state).toBe('cancelled');
+  });
+
+  it('reads a cancelled row from the backfill as cancelled, not failed', () => {
+    store().track(ID, 'lerobot/pusht');
+    store().applyBackfill(backfill({
+      status: 'failed',
+      importError: { phase: 'metadata', error: 'Import cancelled by the operator', failedAt: hoursAgo(0), cancelled: true },
+    }));
+    expect(job().state).toBe('cancelled');
+  });
+
+  it('passes the server\'s refusal on and leaves the job alone', async () => {
+    store().track(ID, 'lerobot/pusht');
+    cancelImport.mockRejectedValue(Object.assign(new Error('already validating'), { response: { status: 409 } }));
+
+    await expect(store().cancel(ID)).rejects.toThrow('already validating');
+    expect(job().state).toBe('running');
   });
 });

@@ -7,8 +7,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
+const cancelImport = vi.fn();
 vi.mock('../../api/trainingApi', () => ({
-  trainingApi: { getImportLog: vi.fn(), getDataset: vi.fn().mockRejectedValue(new Error('n/a')) },
+  trainingApi: {
+    getImportLog: vi.fn(),
+    getDataset: vi.fn().mockRejectedValue(new Error('n/a')),
+    cancelImport: (...a: unknown[]) => cancelImport(...a),
+  },
 }));
 
 import { ImportActivity, describeJob } from '../ImportActivity';
@@ -97,5 +102,39 @@ describe('describeJob', () => {
   it('says "Starting" before the first progress frame', () => {
     act(() => store().track('ds-1', 'x'));
     expect(describeJob(store().jobs['ds-1']!)).toBe('Starting');
+  });
+
+  it('cancels a running import from its row and then offers a retry (TASK-371)', async () => {
+    cancelImport.mockResolvedValue({ datasetId: 'ds-1', status: 'cancelled' });
+    act(() => {
+      store().track('ds-1', 'lerobot/pusht');
+      store().openPanel();
+    });
+    render(<ImportActivity />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel lerobot/pusht' }));
+    });
+
+    expect(cancelImport).toHaveBeenCalledWith('ds-1');
+    expect(screen.getByTestId('import-job-ds-1')).toHaveTextContent('Cancelled');
+    expect(screen.queryByTestId('import-job-cancel')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry import' })).toBeInTheDocument();
+    expect(screen.queryByTestId('import-job-error')).not.toBeInTheDocument();
+  });
+
+  it('offers no cancel once the import is validating (TASK-371)', () => {
+    act(() => {
+      store().track('ds-1', 'lerobot/pusht');
+      store().applyMessage({
+        type: 'dataset:import:progress',
+        datasetId: 'ds-1',
+        importProgress: { status: 'validating', phase: 'validating', progress: 90 },
+      });
+      store().openPanel();
+    });
+    render(<ImportActivity />);
+
+    expect(screen.queryByTestId('import-job-cancel')).not.toBeInTheDocument();
   });
 });

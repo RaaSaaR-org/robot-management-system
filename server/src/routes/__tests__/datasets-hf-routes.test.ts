@@ -24,6 +24,7 @@ const hf = vi.hoisted(() => ({
   previewRepo: vi.fn(),
   retryImport: vi.fn(),
   importDataset: vi.fn(),
+  cancelImport: vi.fn(),
 }));
 
 const datasets = vi.hoisted(() => ({
@@ -215,6 +216,50 @@ describe('dataset HuggingFace routes', () => {
       const response = await request(app).post('/api/datasets/nope/import/retry');
 
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/datasets/:id/import/cancel (TASK-371)', () => {
+    it('is a 200 once the import has stopped', async () => {
+      datasets.get.mockResolvedValue({ id: 'ds-1' });
+      hf.cancelImport.mockResolvedValue({ datasetId: 'ds-1', status: 'cancelled' });
+
+      const response = await request(app).post('/api/datasets/ds-1/import/cancel');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ datasetId: 'ds-1', status: 'cancelled' });
+      expect(hf.cancelImport).toHaveBeenCalledWith('ds-1');
+    });
+
+    it('is a 202 while the run is still unwinding', async () => {
+      datasets.get.mockResolvedValue({ id: 'ds-1' });
+      hf.cancelImport.mockResolvedValue({ datasetId: 'ds-1', status: 'cancelling' });
+
+      const response = await request(app).post('/api/datasets/ds-1/import/cancel');
+
+      expect(response.status).toBe(202);
+    });
+
+    it('is a 404, and stops nothing, for a dataset the caller cannot see', async () => {
+      // The tenant-scoped lookup answers null for another organization's row.
+      datasets.get.mockResolvedValue(null);
+
+      const response = await request(app).post('/api/datasets/theirs/import/cancel');
+
+      expect(response.status).toBe(404);
+      expect(hf.cancelImport).not.toHaveBeenCalled();
+    });
+
+    it('is a 409 for an import that has nothing left to stop', async () => {
+      datasets.get.mockResolvedValue({ id: 'ds-1' });
+      hf.cancelImport.mockRejectedValue(
+        new HuggingFaceImportError('NOT_RUNNING', 'Dataset ds-1 is ready; there is no import to cancel', 409),
+      );
+
+      const response = await request(app).post('/api/datasets/ds-1/import/cancel');
+
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('NOT_RUNNING');
     });
   });
 

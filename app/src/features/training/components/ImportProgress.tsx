@@ -39,6 +39,7 @@ export function importProgressView(job: ImportJob): ImportProgressView {
     return { phase: `Stopped${where}`, percent: downloadPercent(job), counts };
   }
   if (job.state === 'succeeded') return { phase: 'Imported', percent: 100, counts };
+  if (job.state === 'cancelled') return { phase: 'Cancelled by the operator', percent: 0, counts: null };
 
   switch (job.phase) {
     case 'downloading':
@@ -77,7 +78,8 @@ export interface ImportProgressProps {
 export function ImportProgress({ job, compact = false, className }: ImportProgressProps) {
   const view = importProgressView(job);
   const failed = job.state === 'failed';
-  const indeterminate = view.percent === null && !failed;
+  // A cancelled import is not still working on something: no moving bar.
+  const indeterminate = view.percent === null && !failed && job.state !== 'cancelled';
   const percentText = view.percent === null ? null : `${Math.floor(view.percent)}%`;
 
   return (

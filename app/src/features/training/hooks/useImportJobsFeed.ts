@@ -4,7 +4,9 @@
  *              WebSocket while any import runs, a backfill from the server's
  *              log route on every (re)connect, and a slow poll as the safety
  *              net for frames a dropped socket never delivered. Imports
- *              started elsewhere are discovered on load and on refocus.
+ *              started elsewhere are discovered on load and on refocus, and
+ *              the ones remembered from an earlier load are reconciled with
+ *              the server (TASK-371).
  * @feature training
  *
  * Mounted once, in the app layout, so it follows an import whichever page the
@@ -36,6 +38,10 @@ export function useImportJobsFeed(): void {
   // until the operator happened to open the datasets page (TASK-358).
   useEffect(() => {
     if (import.meta.env.VITE_DEMO_MODE === 'true') return;
+    // What this browser remembers is checked against this server once per
+    // load, before anything else asks about it: jobs it does not know are
+    // ghosts of an earlier server on this origin (TASK-371).
+    void useImportJobsStore.getState().reconcile();
     let last = 0;
     const discover = () => {
       // Flicking between tabs is not a reason to ask again every time.

@@ -22,7 +22,8 @@ import type { HFImportProgress, ImportLogLine, ImportLogResponse } from '../type
 // TYPES
 // ============================================================================
 
-export type ImportJobState = 'running' | 'succeeded' | 'failed';
+/** `cancelled`: the operator stopped it (TASK-371) — an end, but not a failure. */
+export type ImportJobState = 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface ImportJob {
   datasetId: string;
@@ -59,6 +60,8 @@ export interface ImportFeedMessage {
   type?: string;
   datasetId?: string;
   error?: string;
+  /** On `dataset:import:failed`: the operator cancelled it (TASK-371) */
+  cancelled?: boolean;
   log?: ImportLogLine;
   importProgress?: Partial<HFImportProgress> & { status?: HFImportProgress['status'] };
 }
@@ -109,6 +112,18 @@ interface ImportJobsActions {
   applyBackfill: (response: ImportLogResponse) => void;
   /** Fetch and merge the server's view of one import. */
   backfill: (datasetId: string) => Promise<void>;
+  /**
+   * Check every persisted job against the server, once per load (TASK-371).
+   * Jobs the server does not know (404 — an earlier server or cluster on this
+   * origin, or another organization's) are dropped instead of sitting there
+   * stuck; the rest take the server's word; stale entries expire.
+   */
+  reconcile: () => Promise<void>;
+  /**
+   * Ask the server to stop a running import (TASK-371). Throws what the
+   * server refused with, so the caller can say why.
+   */
+  cancel: (datasetId: string) => Promise<void>;
   dismiss: (datasetId: string) => void;
   clearFinished: () => void;
   openPanel: (datasetId?: string) => void;
@@ -121,6 +136,16 @@ export type ImportJobsStore = ImportJobsState & ImportJobsActions;
 
 /** Lines kept per job in the browser — the server keeps 300. */
 export const MAX_CLIENT_LINES = 500;
+
+/** A finished job older than this is dropped on load (TASK-371). */
+export const FINISHED_JOB_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A job still `running` in this browser, older than this, that the server
+ * cannot confirm either way (it is unreachable) is dropped on load: no Hub
+ * import runs for a week (TASK-371).
+ */
+export const RUNNING_JOB_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Dismissed ids remembered, so `discover` does not resurrect them. */
 export const MAX_DISMISSED = 50;
@@ -195,8 +220,8 @@ export function mergeLines(server: ImportLogLine[], local: ImportLogLine[]): Imp
  * a "completed" that only meant the download finished. True when it changed.
  */
 function finish(job: ImportJob, state: Exclude<ImportJobState, 'running'>, error: string | null): boolean {
-  if (job.state === 'failed') return false;
-  if (job.state === 'succeeded' && state === 'succeeded') return false;
+  if (job.state === 'failed' || job.state === 'cancelled') return false;
+  if (job.state === 'succeeded' && state !== 'failed') return false;
   job.state = state;
   job.error = state === 'failed' ? error ?? 'Import failed' : null;
   job.endedAt = new Date().toISOString();
@@ -213,12 +238,17 @@ function announce(job: ImportJob, openPanel: (id: string) => void): void {
   const id = importToastId(job.datasetId);
   if (job.state === 'succeeded') {
     toast.success('Dataset imported', { id, description: job.label, action });
+  } else if (job.state === 'cancelled') {
+    toast.info('Dataset import cancelled', { id, description: job.label, action });
   } else {
     const cause = describeImportFailure(job.error, job.phase).headline;
     toast.error('Dataset import failed', { id, description: `${job.label}: ${cause}`, action });
   }
   void refreshDatasetRow(job.datasetId);
 }
+
+/** Jobs `reconcile` is checking right now; see `backfill`'s 404. */
+const reconciling = new Set<string>();
 
 async function refreshDatasetRow(datasetId: string): Promise<void> {
   try {
@@ -252,6 +282,17 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
       // One last read: the feed closes once nothing runs, and a line said
       // after the closing frame would otherwise never arrive.
       void get().backfill(datasetId);
+    };
+
+    /** Forget jobs outright — not dismissed, since nothing will bring them back. */
+    const drop = (ids: string[]): void => {
+      if (ids.length === 0) return;
+      set((state) => {
+        for (const id of ids) delete state.jobs[id];
+        state.order = state.order.filter((id) => !ids.includes(id));
+        if (state.focusedId && !state.jobs[state.focusedId]) state.focusedId = null;
+        if (state.order.length === 0) state.panelOpen = false;
+      });
     };
 
     return {
@@ -324,7 +365,7 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
           const ip = message.importProgress;
           update(datasetId, (job) => {
             if (job.state === 'running') applyFrame(job, ip);
-            if (ip.status === 'failed') return finish(job, 'failed', ip.error ?? null);
+            if (ip.status === 'failed') return finish(job, ip.cancelled ? 'cancelled' : 'failed', ip.error ?? null);
           });
         } else if (type === 'dataset:import:completed') {
           // "Completed" is the DOWNLOAD. With NATS the row is still
@@ -338,7 +379,7 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
         } else if (type === 'dataset:validation:completed') {
           update(datasetId, (job) => finish(job, 'succeeded', null));
         } else if (type === 'dataset:import:failed') {
-          update(datasetId, (job) => finish(job, 'failed', message.error ?? null));
+          update(datasetId, (job) => finish(job, message.cancelled ? 'cancelled' : 'failed', message.error ?? null));
         } else if (type === 'dataset:validation:failed') {
           // With NATS, the verdict on a download that finished arrives here.
           update(datasetId, (job) => finish(job, 'failed', `Validation failed: ${message.error ?? 'see the dataset'}`));
@@ -354,6 +395,9 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
           job.lerobotVersion = response.lerobotVersion ?? job.lerobotVersion ?? null;
           const p = response.progress;
           if (p && job.state === 'running') applyFrame(job, p);
+          if (response.status === 'failed' && response.importError?.cancelled) {
+            return finish(job, 'cancelled', null);
+          }
           if (response.status === 'failed') {
             return finish(job, 'failed', response.importError?.error ?? 'Validation failed — see the dataset');
           }
@@ -373,12 +417,51 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
         } catch (error) {
           // A 404 is a dataset somebody deleted: there is nothing left to watch.
           const status = (error as { response?: { status?: number } }).response?.status;
-          if (status === 404) {
+          if (status === 404 && reconciling.has(datasetId)) {
+            // Persisted from an earlier load: `reconcile` is deciding whether it
+            // is a ghost, and a ghost gets no "failed" toast on its way out.
+          } else if (status === 404) {
             update(datasetId, (job) => finish(job, 'failed', 'The dataset no longer exists'));
           } else {
             console.warn('[ImportJobs] backfill failed:', getErrorMessage(error, 'unknown error'));
           }
         }
+      },
+
+      reconcile: async () => {
+        const now = Date.now();
+        const age = (iso: string | null) => (iso ? now - new Date(iso).getTime() : 0);
+        // Old outcomes first: nobody needs yesterday's toast-worthy news, and
+        // there is no reason to ask the server about them.
+        drop(get().order.filter((id) => {
+          const job = get().jobs[id];
+          return job && job.state !== 'running' && age(job.endedAt ?? job.startedAt) > FINISHED_JOB_TTL_MS;
+        }));
+
+        const ghosts: string[] = [];
+        const ids = [...get().order];
+        for (const id of ids) reconciling.add(id);
+        await Promise.all(ids.map(async (id) => {
+          try {
+            get().applyBackfill(await trainingApi.getImportLog(id));
+          } catch (error) {
+            const status = (error as { response?: { status?: number } }).response?.status;
+            const job = get().jobs[id];
+            // Unknown to this server: a ghost from another one, not a failure.
+            if (status === 404) ghosts.push(id);
+            else if (job?.state === 'running' && age(job.startedAt) > RUNNING_JOB_TTL_MS) ghosts.push(id);
+            else console.warn('[ImportJobs] reconcile failed:', getErrorMessage(error, 'unknown error'));
+          }
+        }));
+        drop(ghosts);
+        for (const id of ids) reconciling.delete(id);
+      },
+
+      cancel: async (datasetId) => {
+        const { status } = await trainingApi.cancelImport(datasetId);
+        // `cancelling`: the run is still unwinding, and its closing frame
+        // ends the job; until then it honestly is still running.
+        if (status === 'cancelled') update(datasetId, (job) => finish(job, 'cancelled', null));
       },
 
       dismiss: (datasetId) => {

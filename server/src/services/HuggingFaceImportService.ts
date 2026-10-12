@@ -72,6 +72,7 @@ import type {
   LeRobotInfoV3,
 } from '../types/dataset.types.js';
 import { importActivityLog } from './ImportActivityLog.js';
+import { isLocalStoragePath } from './lerobot/DatasetTree.js';
 
 // ============================================================================
 // CONSTANTS
@@ -85,6 +86,10 @@ const MAX_RETRY_DELAY_MS = 30_000;
 const INITIAL_RETRY_DELAY_MS = 1_000;
 /** What a row cut off mid-import by a restart says (TASK-359). */
 export const INTERRUPTED_IMPORT_ERROR = 'Server restarted during import';
+/** What a row an operator cancelled says (TASK-371). */
+export const CANCELLED_IMPORT_ERROR = 'Import cancelled by the operator';
+/** How long a cancel request waits for the run to unwind before answering `cancelling`. */
+export const CANCEL_WAIT_MS = 10_000;
 
 /** Attempts per file before a dropped connection fails the import (#370). */
 export const MAX_TRANSFER_ATTEMPTS = 6;
@@ -192,6 +197,19 @@ export class HuggingFaceImportError extends Error {
   }
 }
 
+/** Thrown inside a run once its claim was aborted (TASK-371). Never a failure. */
+export class ImportCancelledError extends Error {
+  constructor() {
+    super(CANCELLED_IMPORT_ERROR);
+    this.name = 'ImportCancelledError';
+  }
+}
+
+/** Throw if the import this signal belongs to was cancelled. */
+function throwIfCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new ImportCancelledError();
+}
+
 // ============================================================================
 // WHERE THE BYTES GO
 // ============================================================================
@@ -212,6 +230,31 @@ export interface RepoFile {
  * `isLocalStoragePath` in DatasetTree.ts is what tells them apart, and it keys
  * off exactly that difference.
  */
+/**
+ * This process's hold on one running import (TASK-359), and the handle that
+ * stops it (TASK-371). Identity is the token: a release only frees its own.
+ */
+interface ImportClaim {
+  readonly controller: AbortController;
+  /** False once every file is stored: validation is not interrupted midway. */
+  cancellable: boolean;
+  /** The background run, once launched; settles when it has fully unwound. */
+  done: Promise<void> | null;
+  /**
+   * Set by a retry, which writes into the row's existing storage: what the row
+   * was before it. A cancelled retry keeps those files — they are the earlier
+   * import, not this run's partial ones — and a `ready` row goes back to
+   * `ready` rather than ending `failed` (#395 review).
+   */
+  prior?: PriorImport;
+}
+
+/** The row a retry started from, so cancelling the retry can put it back. */
+interface PriorImport {
+  status: string;
+  importMode: DatasetImportMode | null;
+}
+
 interface ImportSink {
   readonly kind: 'local' | 'rustfs';
   readonly storagePath: string;
@@ -222,6 +265,8 @@ interface ImportSink {
   prepare(): Promise<void>;
   /** Undo `prepare` when the import is refused before its row exists. */
   discard(): Promise<void>;
+  /** Remove everything this import wrote so far — a cancelled run's partial files (TASK-371). */
+  purge(): Promise<void>;
   write(path: string, response: Response): Promise<void>;
 }
 
@@ -289,6 +334,10 @@ class LocalImportSink implements ImportSink {
     await rm(this.root, { recursive: true, force: true });
   }
 
+  async purge(): Promise<void> {
+    await rm(this.root, { recursive: true, force: true });
+  }
+
   async write(path: string, response: Response): Promise<void> {
     const full = safeJoin(this.root, path);
     await mkdir(dirname(full), { recursive: true });
@@ -317,6 +366,11 @@ class RustFsImportSink implements ImportSink {
 
   async discard(): Promise<void> {
     // Nothing was written.
+  }
+
+  async purge(): Promise<void> {
+    // The prefix is a fresh uuid (or the row's own, on a retry): nothing else lives under it.
+    await getRustFSClient().deletePrefix(BUCKETS.TRAINING_DATASETS, this.storagePath);
   }
 
   async write(path: string, response: Response): Promise<void> {
@@ -363,6 +417,18 @@ function createSink(storageId: string): ImportSink {
     );
   }
   return new LocalImportSink(join(datasetStorageRoot(), storageId));
+}
+
+/**
+ * The sink where an existing `storagePath`'s files actually are — not the one
+ * the current storage config would pick, which differs once RustFS has been
+ * configured (or dropped) since that import ran. Null when that store cannot
+ * be reached from here.
+ */
+function sinkAt(storagePath: string): ImportSink | null {
+  if (isLocalStoragePath(storagePath)) return new LocalImportSink(storagePath.replace(/[\\/]+$/, ''));
+  if (storagePath.startsWith('/')) return null; // a local directory that is already gone
+  return isRustFSInitialized() ? new RustFsImportSink(storagePath) : null;
 }
 
 /** The id inside an existing `storagePath`, so a retry reuses its directory. */
@@ -417,20 +483,20 @@ export class HuggingFaceImportService {
    * id. A row that is `importing` and NOT in here was cut off by a restart:
    * the startup sweep fails it and `retryImport` may take it back (TASK-359).
    */
-  private readonly running = new Map<string, object>();
+  private readonly running = new Map<string, ImportClaim>();
 
   /**
    * Own `datasetId` from now on. The token makes the release exact: a run that
    * is still unwinding (its failure recorded, its `finally` not yet reached)
    * must not release the claim of the retry that followed it.
    */
-  private reserve(datasetId: string): object {
-    const token = {};
+  private reserve(datasetId: string): ImportClaim {
+    const token: ImportClaim = { controller: new AbortController(), cancellable: true, done: null };
     this.running.set(datasetId, token);
     return token;
   }
 
-  private release(datasetId: string, token: object): void {
+  private release(datasetId: string, token: ImportClaim): void {
     if (this.running.get(datasetId) === token) this.running.delete(datasetId);
   }
 
@@ -465,11 +531,11 @@ export class HuggingFaceImportService {
   /** Run an import in the background and own it while it runs. */
   private launch(
     datasetId: string,
-    token: object,
+    token: ImportClaim,
     run: () => Promise<void>,
     what: string,
   ): void {
-    run()
+    token.done = run()
       .catch((error) => {
         console.error(`[HFImport] Background ${what} failed for ${datasetId}:`, error);
       })
@@ -551,7 +617,8 @@ export class HuggingFaceImportService {
     });
 
     // Run download in background (don't await)
-    this.launch(datasetId, this.reserve(datasetId), () => this.runImport(datasetId, repoId, sha, sink, info, includeVideos), 'import');
+    const claim = this.reserve(datasetId);
+    this.launch(datasetId, claim, () => this.runImport(datasetId, repoId, sha, sink, info, includeVideos, claim), 'import');
 
     return datasetId;
   }
@@ -612,6 +679,9 @@ export class HuggingFaceImportService {
     // Reserved in this process first, synchronously after the check above, so
     // two retries of one orphan cannot both reclaim it.
     const token = this.reserve(datasetId);
+    if (existing.storagePath) {
+      token.prior = { status: existing.status, importMode: existing.importMode ?? null };
+    }
     let claimed = false;
     try {
       claimed = await datasetService.claimForImport(datasetId, { reclaimOrphan: orphaned });
@@ -661,7 +731,13 @@ export class HuggingFaceImportService {
       // The claim has to be released, or a repo that has been deleted leaves
       // the row `importing` for ever with nothing running.
       this.release(datasetId, token);
-      await this.recordFailure(datasetId, 'metadata', repoId, error);
+      // A cancel that landed while this was talking to the Hub is what ended
+      // it, whatever the round-trip then threw.
+      if (token.controller.signal.aborted) {
+        await this.recordCancellation(datasetId, 'metadata', repoId, null, token.prior);
+      } else {
+        await this.recordFailure(datasetId, 'metadata', repoId, error);
+      }
       throw error;
     }
 
@@ -692,9 +768,78 @@ export class HuggingFaceImportService {
       completedFiles: 0,
     });
 
-    this.launch(datasetId, token, () => this.runImport(datasetId, repoId, sha, sink, info, importMode === 'full'), 'retry');
+    this.launch(datasetId, token, () => this.runImport(datasetId, repoId, sha, sink, info, importMode === 'full', token), 'retry');
 
     return { datasetId, status: 'importing' };
+  }
+
+  /**
+   * Stop an import (TASK-371).
+   *
+   * One this process runs is aborted cooperatively: the download workers stop
+   * taking files, the transfers in flight are aborted, and the run itself
+   * removes what it stored and marks the row — so nothing is still writing
+   * when the row says it stopped. Waits up to `waitMs` for that to happen;
+   * `cancelling` means it is still unwinding and the event will follow.
+   *
+   * An `importing` row nothing here runs (a restart's orphan) is ended
+   * directly. Anything else — validating, ready, failed — has nothing to stop.
+   *
+   * Tenant scoping is the caller's lookup plus `findById` here, both through
+   * the scoped client: the in-memory claim alone is not per tenant.
+   */
+  async cancelImport(
+    datasetId: string,
+    waitMs = CANCEL_WAIT_MS,
+  ): Promise<{ datasetId: string; status: 'cancelled' | 'cancelling' }> {
+    const existing = await datasetRepository.findById(datasetId);
+    if (!existing) {
+      throw new HuggingFaceImportError('NOT_FOUND', `Dataset not found: ${datasetId}`, 404);
+    }
+    const claim = this.running.get(datasetId);
+    if (claim) {
+      if (!claim.cancellable) {
+        throw new HuggingFaceImportError(
+          'NOT_CANCELLABLE',
+          `Dataset ${datasetId} is already downloaded and being validated; it can no longer be cancelled`,
+          409,
+        );
+      }
+      claim.controller.abort();
+      if (!claim.done) {
+        // Reserved by a retry that has not launched yet: its run sees the
+        // abort first thing and records the cancellation itself.
+        return { datasetId, status: 'cancelling' };
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settled = await Promise.race([
+        claim.done.then(() => true),
+        new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), waitMs); }),
+      ]);
+      clearTimeout(timer);
+      return { datasetId, status: settled ? 'cancelled' : 'cancelling' };
+    }
+
+    if (existing.status !== 'importing' || !existing.huggingFaceRepoId) {
+      throw new HuggingFaceImportError(
+        'NOT_RUNNING',
+        `Dataset ${datasetId} is ${existing.status}; there is no import to cancel`,
+        409,
+      );
+    }
+    // An orphan. Held while it is ended, so a retry cannot claim it midway.
+    const token = this.reserve(datasetId);
+    try {
+      const sink = existing.storagePath ? sinkAt(existing.storagePath) : null;
+      if (existing.storagePath && !sink) {
+        console.warn(`[HFImport] Storage of ${datasetId} unreachable; partial files left in place`);
+      }
+      const phase = importActivityLog.get(datasetId)?.progress?.phase ?? 'metadata';
+      await this.recordCancellation(datasetId, phase, existing.huggingFaceRepoId, sink);
+    } finally {
+      this.release(datasetId, token);
+    }
+    return { datasetId, status: 'cancelled' };
   }
 
   /**
@@ -816,15 +961,20 @@ export class HuggingFaceImportService {
     revision: string,
     sink: ImportSink,
     info: LeRobotInfoV3,
-    includeVideos: boolean
+    includeVideos: boolean,
+    claim?: ImportClaim,
   ): Promise<void> {
+    const signal = claim?.controller.signal;
     // Which phase a failure happened in is half of what makes it legible, and
     // the old catch hard-coded 'downloading' for all of them.
     let phase: HuggingFaceImportProgress['phase'] = 'metadata';
     try {
+      // A cancel can land while a retry is still resolving its source.
+      throwIfCancelled(signal);
       // Phase 2: Build file list (from the authoritative repo tree)
       const importMode: DatasetImportMode = includeVideos ? 'full' : 'metadata';
       const files = await this.resolveFileList(repoId, revision, info, includeVideos);
+      throwIfCancelled(signal);
       // Bytes are the honest measure — one video outweighs a thousand parquet
       // files — but only when the Hub sized every file; otherwise count files.
       const totalBytes = files.every((f) => f.size > 0)
@@ -851,7 +1001,13 @@ export class HuggingFaceImportService {
       });
 
       // Phase 3: Download the files into whichever store this deployment has
-      await this.downloadFiles(datasetId, repoId, revision, sink, files, totalBytes, importMode);
+      await this.downloadFiles(datasetId, repoId, revision, sink, files, totalBytes, importMode, signal);
+
+      // Every file is stored: from here the import runs to its verdict. The
+      // check and the flag are one synchronous step, so a cancel either got in
+      // before it or is refused as too late — never half-applied.
+      throwIfCancelled(signal);
+      if (claim) claim.cancellable = false;
 
       // Phase 4: Trigger validation via NATS
       phase = 'validating';
@@ -950,6 +1106,10 @@ export class HuggingFaceImportService {
 
       console.log(`[HFImport] Import completed for ${datasetId} (${repoId})`);
     } catch (error) {
+      if (error instanceof ImportCancelledError || (signal?.aborted && phase !== 'validating')) {
+        await this.recordCancellation(datasetId, phase, repoId, sink, claim?.prior);
+        return;
+      }
       // Every file is stored and the row says `validating`; only the queueing
       // of the validation died, because shutdown closed NATS under it. That is
       // not a failed import: the row stays `validating` and the startup
@@ -1018,6 +1178,74 @@ export class HuggingFaceImportService {
       error: errorMessage,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  /**
+   * End an import the operator cancelled (TASK-371): remove what it stored,
+   * then say so on the row and on the wire.
+   *
+   * The row ends `failed` with `cancelled: true` rather than in a status of its
+   * own, so everything that already understands a stopped import — the card,
+   * the panel, Retry — keeps working, and only the wording changes.
+   */
+  private async recordCancellation(
+    datasetId: string,
+    phase: HuggingFaceImportProgress['phase'],
+    repoId: string,
+    sink: ImportSink | null,
+    prior?: PriorImport,
+  ): Promise<void> {
+    if (prior) {
+      // A retry wrote into the storage an earlier import filled. Purging it
+      // would delete that dataset, not just this run's partial files.
+      this.log(datasetId, 'warn', `Cancelled during ${phase}; the files stored before this retry are kept`);
+    } else {
+      this.log(datasetId, 'warn', `Cancelled during ${phase}; removing the files stored so far`);
+    }
+    if (sink && !prior) {
+      try {
+        await sink.purge();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[HFImport] Could not remove the partial files of ${datasetId}:`, error);
+        this.log(datasetId, 'warn', `Could not remove the partial files at ${sink.storagePath}: ${message}`);
+      }
+    }
+
+    const failedAt = new Date().toISOString();
+    if (prior?.status === 'ready') {
+      // Same sha, files replaced atomically one by one: what was ready still is.
+      await datasetRepository.update(datasetId, {
+        status: 'ready',
+        importError: null,
+        ...(prior.importMode ? { importMode: prior.importMode } : {}),
+      });
+    } else {
+      await datasetRepository.update(datasetId, {
+        status: 'failed',
+        importError: { phase, error: CANCELLED_IMPORT_ERROR, repoId, failedAt, cancelled: true },
+      });
+    }
+
+    const last = importActivityLog.get(datasetId)?.progress;
+    this.emitProgress(datasetId, {
+      ...(last ?? {}),
+      datasetId,
+      status: 'failed',
+      phase,
+      progress: last?.progress ?? 0,
+      currentFile: undefined,
+      error: CANCELLED_IMPORT_ERROR,
+      cancelled: true,
+    });
+    datasetService.emit('dataset:event', {
+      type: 'dataset:import:failed',
+      datasetId,
+      error: CANCELLED_IMPORT_ERROR,
+      cancelled: true,
+      timestamp: failedAt,
+    });
+    console.log(`[HFImport] Import of ${datasetId} (${repoId}) cancelled`);
   }
 
   // ============================================================================
@@ -1316,6 +1544,7 @@ export class HuggingFaceImportService {
     files: RepoFile[],
     totalBytes: number | undefined,
     importMode: DatasetImportMode,
+    signal?: AbortSignal,
   ): Promise<void> {
     let completedFiles = 0;
     let downloadedBytes = 0;
@@ -1374,6 +1603,8 @@ export class HuggingFaceImportService {
       workers.push(
         (async () => {
           while (queue.length > 0) {
+            // A cancel stops every worker the same way a failure does (TASK-371).
+            if (signal?.aborted) failure ??= new ImportCancelledError();
             if (failure) return;
             const next = queue.shift();
             if (!next) break;
@@ -1386,7 +1617,7 @@ export class HuggingFaceImportService {
                 downloadedBytes += n;
                 lastFile = file;
                 emit(false);
-              });
+              }, signal);
             } catch (error) {
               // stats.json is optional — 404 is expected
               if (file === 'meta/stats.json' && error instanceof FileTransferError
@@ -1429,13 +1660,18 @@ export class HuggingFaceImportService {
     path: string,
     sink: ImportSink,
     onBytes: (n: number) => void = () => undefined,
+    signal?: AbortSignal,
   ): Promise<void> {
     // A consumed stream cannot be replayed: each attempt fetches a fresh body
     // and overwrites the same destination, including after an S3 upload fails.
     for (let attempt = 1; attempt <= MAX_TRANSFER_ATTEMPTS; attempt++) {
+      throwIfCancelled(signal);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), TRANSFER_TIMEOUT_MS);
       timeout.unref();
+      // A cancel aborts the transfer in flight, not only the next one (TASK-371).
+      const onCancel = () => controller.abort();
+      signal?.addEventListener('abort', onCancel, { once: true });
       let stage: 'fetch' | 'write' = 'fetch';
       let response: Response | undefined;
       let waitMs = INITIAL_RETRY_DELAY_MS * 2 ** (attempt - 1);
@@ -1455,6 +1691,8 @@ export class HuggingFaceImportService {
         // The attempt's bytes are rewritten by the next one: take them back so
         // the byte total never runs ahead of what is stored.
         if (received > 0) onBytes(-received);
+        // An abort the operator asked for is not a dropped connection to retry.
+        throwIfCancelled(signal);
         const retryable = error instanceof FileTransferError
           ? retryableStatus(error.httpStatus!) : retryableTransferError(error);
         const failure = error instanceof FileTransferError ? error
@@ -1472,13 +1710,14 @@ export class HuggingFaceImportService {
         );
       } finally {
         clearTimeout(timeout);
+        signal?.removeEventListener('abort', onCancel);
         controller.abort();
         // Fetches rejected before a sink got the body must release it too.
         if (response?.body && !response.body.locked) {
           await response.body.cancel().catch(() => {});
         }
       }
-      await this.sleep(waitMs);
+      await this.sleep(waitMs, signal);
     }
   }
 
@@ -1583,8 +1822,21 @@ export class HuggingFaceImportService {
   /**
    * Sleep helper
    */
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    // A cancelled import does not sit out a 30 s backoff first (TASK-371);
+    // the caller's next `throwIfCancelled` turns the early wake into the stop.
+    return new Promise((resolve) => {
+      if (signal?.aborted) return resolve();
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', wake);
+        resolve();
+      }, ms);
+      const wake = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      signal?.addEventListener('abort', wake, { once: true });
+    });
   }
 }
 

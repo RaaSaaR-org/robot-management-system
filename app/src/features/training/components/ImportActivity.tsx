@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, RotateCw, X, XCircle } from 'lucide-react';
+import { Ban, CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, RotateCw, Square, X, XCircle } from 'lucide-react';
 import { Button, StatusTag, Tooltip } from '@/shared/components/ui';
 import { toast } from '@/shared/components/ui/toast';
 import { getErrorMessage } from '@/shared/utils';
@@ -34,12 +34,20 @@ const PHASE_LABEL: Record<NonNullable<ImportJob['phase']>, string> = {
 export function describeJob(job: ImportJob): string {
   if (job.state === 'succeeded') return 'Imported';
   if (job.state === 'failed') return 'Failed';
+  if (job.state === 'cancelled') return 'Cancelled';
   const phase = job.phase ? PHASE_LABEL[job.phase] : 'Starting';
   if (job.phase === 'downloading' && job.totalFiles) {
     return `${phase} ${job.completedFiles ?? 0} / ${job.totalFiles} files`;
   }
   return phase;
 }
+
+const STATE_TAG: Record<ImportJob['state'], { tone: 'success' | 'danger' | 'info' | 'neutral'; label: string }> = {
+  running: { tone: 'info', label: 'Running' },
+  succeeded: { tone: 'success', label: 'Done' },
+  failed: { tone: 'danger', label: 'Failed' },
+  cancelled: { tone: 'neutral', label: 'Cancelled' },
+};
 
 function timeOf(iso: string): string {
   return Number.isNaN(new Date(iso).getTime())
@@ -164,14 +172,10 @@ function ImportJobRow({ job }: { job: ImportJob }) {
             {version && <span data-testid="import-job-version"> · {version}</span>}
           </p>
         </div>
-        <StatusTag
-          size="sm"
-          tone={job.state === 'succeeded' ? 'success' : job.state === 'failed' ? 'danger' : 'info'}
-          pulse={job.state === 'running'}
-          dot
-        >
-          {job.state === 'running' ? 'Running' : job.state === 'succeeded' ? 'Done' : 'Failed'}
+        <StatusTag size="sm" tone={STATE_TAG[job.state].tone} pulse={job.state === 'running'} dot>
+          {STATE_TAG[job.state].label}
         </StatusTag>
+        {job.state === 'running' && <CancelButton job={job} />}
         {job.state !== 'running' && (
           <Button
             size="sm"
@@ -186,7 +190,7 @@ function ImportJobRow({ job }: { job: ImportJob }) {
         )}
       </div>
 
-      {job.state !== 'succeeded' && (
+      {(job.state === 'running' || job.state === 'failed') && (
         <div className="flex flex-col gap-1">
           <ImportProgress job={job} />
           {job.state === 'running' && job.phase === 'downloading' && job.currentFile && (
@@ -194,6 +198,8 @@ function ImportJobRow({ job }: { job: ImportJob }) {
           )}
         </div>
       )}
+
+      {job.state === 'cancelled' && <RetryButton job={job} />}
 
       {failure && (
         <div className="flex flex-col gap-2">
@@ -223,6 +229,44 @@ function ImportJobRow({ job }: { job: ImportJob }) {
       </button>
       {expanded && <ImportLog job={job} />}
     </li>
+  );
+}
+
+/**
+ * Stop a running import (TASK-371). Not offered once it is validating: every
+ * file is stored by then and the server refuses, so the button would only
+ * ever say no.
+ */
+function CancelButton({ job }: { job: ImportJob }) {
+  const cancel = useImportJobsStore((state) => state.cancel);
+  const [busy, setBusy] = useState(false);
+  if (job.phase === 'validating') return null;
+
+  const onCancel = async () => {
+    setBusy(true);
+    try {
+      await cancel(job.datasetId);
+    } catch (error) {
+      toast.error("Couldn't cancel the import", { description: getErrorMessage(error, job.label) });
+      void useImportJobsStore.getState().backfill(job.datasetId);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      iconOnly
+      aria-label={`Cancel ${job.label}`}
+      title="Cancel import"
+      isLoading={busy}
+      onClick={() => void onCancel()}
+      data-testid="import-job-cancel"
+    >
+      <Square className="h-3.5 w-3.5" />
+    </Button>
   );
 }
 
@@ -262,6 +306,7 @@ function RetryButton({ job }: { job: ImportJob }) {
 function StateIcon({ job }: { job: ImportJob }) {
   if (job.state === 'succeeded') return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-signal-measured" />;
   if (job.state === 'failed') return <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-signal-stopped" />;
+  if (job.state === 'cancelled') return <Ban className="mt-0.5 h-4 w-4 shrink-0 text-ink-tertiary" />;
   return <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-ink-secondary" />;
 }
 

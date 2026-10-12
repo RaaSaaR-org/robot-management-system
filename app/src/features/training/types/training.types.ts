@@ -191,6 +191,8 @@ export interface DatasetImportError {
   error: string;
   repoId?: string;
   failedAt: string;
+  /** The operator cancelled it; nothing went wrong (TASK-371). */
+  cancelled?: boolean;
 }
 
 export interface Dataset {
@@ -830,6 +832,8 @@ export interface HFImportProgress {
   /** `metadata` skips the videos; `full` fetches everything */
   importMode?: 'metadata' | 'full';
   error?: string;
+  /** With `failed`: the operator cancelled it (TASK-371) */
+  cancelled?: boolean;
 }
 
 /** One line of an import's activity log (TASK-352) */

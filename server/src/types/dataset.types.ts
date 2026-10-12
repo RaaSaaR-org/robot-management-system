@@ -147,6 +147,8 @@ export interface HuggingFaceImportProgress {
   /** `metadata` imports skip the videos; `full` fetches everything. */
   importMode?: DatasetImportMode;
   error?: string;
+  /** With a `failed` status: the operator cancelled it, nothing went wrong (TASK-371). */
+  cancelled?: boolean;
 }
 
 export type ImportLogLevel = 'info' | 'warn' | 'error';
@@ -560,6 +562,8 @@ export interface DatasetEvent {
   /** One activity line, on `dataset:import:log` (TASK-352) */
   log?: ImportLogLine;
   error?: string;
+  /** On `dataset:import:failed`: the operator cancelled it (TASK-371). */
+  cancelled?: boolean;
   timestamp: string;
 }
 
