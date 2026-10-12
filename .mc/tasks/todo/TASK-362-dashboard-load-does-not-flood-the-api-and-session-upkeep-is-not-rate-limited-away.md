@@ -3,7 +3,7 @@ id: "TASK-362"
 aliases: []
 title: "Dashboard load does not flood the API and session upkeep is not rate limited away"
 slug: "dashboard-load-does-not-flood-the-api-and-session-upkeep-is-not-rate-limited-away"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
