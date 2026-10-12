@@ -24,16 +24,18 @@ export function lastSafetyError(fallback: string): string {
 
 /**
  * Whether the signed-in user holds `robots:command` (member and above). That is
- * who the server admits to the per-robot and zone stops under `/api/safety` and
- * to every resume. It is NOT the gate for the fleet stop: `writeRoleGuard` lets
- * any role fire `POST /api/safety/fleet/estop` (`SAFETY_HALT_WRITES`), so
- * `FleetEmergencyStopButton` uses this for "Resume fleet" only.
+ * who the server admits to the per-robot stop under `/api/safety` and to every
+ * resume. It is NOT the gate for the fleet or zone stop: `writeRoleGuard` lets
+ * any role fire `POST /api/safety/fleet/estop` and
+ * `POST /api/safety/zones/:id/estop` (`SAFETY_HALT_WRITES`), so
+ * `FleetEmergencyStopButton` uses this for "Resume fleet" only and the zone
+ * stops do not use it at all.
  */
 export function useCanStop(): boolean {
   return usePermission('robots:command');
 }
 
-/** Why a robot or zone stop is disabled for a viewer (the fleet stop never is). */
+/** Why the per-robot stop is disabled for a viewer (the fleet and zone stops never are). */
 export const STOP_FORBIDDEN_HINT = "Your role can't use this stop. Use Stop fleet, or ask an operator.";
 
 /** Why a resume is disabled for a viewer: putting robots back in motion is an operator call. */

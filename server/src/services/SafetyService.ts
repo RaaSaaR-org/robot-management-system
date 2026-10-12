@@ -6,6 +6,7 @@
 
 import { robotManager, type Robot, type RobotCommandRequest } from './RobotManager.js';
 import { twinPlaceGraphService } from './TwinPlaceGraphService.js';
+import { digitalTwinRepository } from '../repositories/DigitalTwinRepository.js';
 import { robotIsInTwinZone } from './twinPlaceGeometry.js';
 import { alertService } from './AlertService.js';
 import { HttpClient, HTTP_TIMEOUTS } from './HttpClient.js';
@@ -431,7 +432,9 @@ class SafetyService {
     triggeredBy = 'server'
   ): Promise<ZoneEStopResult> {
     const [zone] = await twinPlaceGraphService.resolveZonePlaces([zoneId]);
-    if (!zone) {
+    // TwinZone is not tenant-scoped, its twin is: a zone of a twin the caller's
+    // tenant cannot see answers 404, not another tenant's zone and twin names.
+    if (!zone || !(await digitalTwinRepository.findById(zone.twinId))) {
       throw new Error(`Zone ${zoneId} not found`);
     }
 

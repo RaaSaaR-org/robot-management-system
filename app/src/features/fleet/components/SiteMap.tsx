@@ -2,7 +2,8 @@
  * @file SiteMap.tsx
  * @description The fleet map is a site map (TASK-331): pick a digital twin, see
  *   it top-down with its zones and the robots bound to it, and E-stop a zone by
- *   clicking it (a role that cannot stop robots sees the zones, not clickable).
+ *   clicking it. Every role may stop a zone, a viewer included: the server
+ *   grants the zone stop as a halt (`SAFETY_HALT_WRITES`, TASK-374).
  *   Only robots whose pose is in the twin frame (`siteAligned`) are
  *   plotted — a pose in any other frame would sit in the wrong room. Bound but
  *   unaligned robots and robots with no site are listed beside the map instead.
@@ -33,7 +34,6 @@ import type { DigitalTwinDTO, TwinZoneDTO } from '@/features/digitaltwin/types/t
 import { useRobots } from '@/features/robots/hooks/useRobots';
 import type { Robot } from '@/features/robots/types/robots.types';
 import { useSafetyStore } from '@/features/safety/store/safetyStore';
-import { STOP_FORBIDDEN_HINT, useCanStop } from '@/features/safety/components/stopStyles';
 
 /** Per-viewer memory of the last site shown (a convenience, never state). */
 export const LAST_SITE_KEY = 'fleet.siteMap.lastTwinId';
@@ -98,7 +98,6 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
   const fetchTwins = useTwinStore((s) => s.fetchTwins);
   const { robots, fetchRobots } = useRobots();
   const triggerZoneEStop = useSafetyStore((s) => s.triggerZoneEStop);
-  const canStop = useCanStop();
 
   const [pickedId, setPickedId] = useState<string | null>(readLastSite);
   const [zones, setZones] = useState<TwinZoneDTO[]>([]);
@@ -204,7 +203,7 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
           <TwinTopDown
             twin={site}
             zones={zones}
-            onZoneClick={canStop ? (z) => void stopZone(z) : undefined}
+            onZoneClick={(z) => void stopZone(z)}
             zoneLabel={(z) => `Stop zone ${z.name} (${ZONE_TYPE_LABELS[z.type] ?? z.type})`}
             aria-label={`Site map of ${site.name}`}
           >
@@ -219,11 +218,6 @@ export function SiteMap({ size = 'full', className }: SiteMapProps) {
         </div>
         <SiteRobotList groups={groups} compact={compact} />
       </div>
-      {!canStop && zones.length > 0 && (
-        <p className="text-[13px] text-ink-tertiary" data-testid="site-map-stop-forbidden">
-          {STOP_FORBIDDEN_HINT}
-        </p>
-      )}
     </div>
   );
 }

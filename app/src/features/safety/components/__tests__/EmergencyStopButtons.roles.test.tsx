@@ -1,11 +1,11 @@
 /**
  * @file EmergencyStopButtons.roles.test.tsx
  * @description Per-role state of the fleet, robot and zone E-stops (TASK-370).
- *              The fleet stop is a halt the server grants every role
- *              (`SAFETY_HALT_WRITES`, TASK-282/284), so it is enabled for a
- *              viewer too. The robot and zone stops under `/api/safety` and
- *              every resume are member-only, so a viewer gets those disabled
- *              with the reason instead of a 403.
+ *              The fleet and zone stops are halts the server grants every role
+ *              (`SAFETY_HALT_WRITES`, TASK-282/284/374), so they are enabled for
+ *              a viewer too. The robot stop under `/api/safety` and every
+ *              resume are member-only, so a viewer gets those disabled with the
+ *              reason instead of a 403.
  * @feature safety
  */
 
@@ -38,11 +38,11 @@ import { ZoneEmergencyStopButton } from '../ZoneEmergencyStopButton';
 import { RESUME_FORBIDDEN_HINT, STOP_FORBIDDEN_HINT } from '../stopStyles';
 
 const FLEET_STOP = { label: 'Emergency stop all robots', el: () => <FleetEmergencyStopButton /> };
+const ZONE_STOP = { label: 'Emergency stop zone Dock', el: () => <ZoneEmergencyStopButton zoneId="z1" zoneName="Dock" /> };
 
 // Member-only on the server: a viewer gets them disabled.
 const GATED_STOPS = [
   { name: 'robot', label: 'Emergency stop Atlas', el: () => <RobotEmergencyStopButton robotId="r1" robotName="Atlas" /> },
-  { name: 'zone', label: 'Emergency stop zone Dock', el: () => <ZoneEmergencyStopButton zoneId="z1" zoneName="Dock" /> },
 ];
 
 beforeEach(() => {
@@ -71,6 +71,21 @@ describe('fleet E-stop', () => {
     render(FLEET_STOP.el());
     expect(screen.getByRole('button', { name: FLEET_STOP.label })).toBeEnabled();
   });
+});
+
+describe('zone E-stop', () => {
+  it.each<UserRole>(['viewer', 'member', 'owner', 'super-admin'])(
+    'fires on one press for a %s — the server grants the zone stop to every role (TASK-374)',
+    (role) => {
+      signInAs(role);
+      render(ZONE_STOP.el());
+      const stop = screen.getByRole('button', { name: ZONE_STOP.label });
+      expect(stop).toBeEnabled();
+      expect(stop.closest(`[title="${STOP_FORBIDDEN_HINT}"]`)).toBeNull();
+      fireEvent.click(stop);
+      expect(safety.triggerEStop).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 describe.each(GATED_STOPS)('$name E-stop', ({ label, el }) => {
