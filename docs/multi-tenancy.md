@@ -433,6 +433,20 @@ current tenant name and a "Stop impersonating" button.
 resources in a single `prisma.$transaction()`. The admin user gets `role: 'owner'` and
 `forcePasswordChange: true`. The frontend wizard has 4 steps: Basics → Admin → Resources → Review.
 
+### Live events on `/api/a2a/ws` (TASK-366, TASK-368)
+
+Every event on the A2A socket goes only to sockets that identified themselves
+(`?token=` or in-band `{type:'auth'}`) and, with multi-tenancy on, only to sockets
+of the tenant of the entity the event is about — a super-admin sees every tenant.
+`server/src/websocket/eventTenancy.ts` names that entity per family: the robot for
+telemetry, agent mode, teleop and robot alerts; the Conversation for A2A tasks; and
+the row itself for other alerts, processes, robot tasks, incidents, training jobs,
+datasets, digital twins (also scan sessions and twin zones) and deployments. A
+fleet or zone E-stop is cut per socket down to the robots of the tenants it may
+see. No event family is platform-wide: one whose entity is gone or cannot be named
+reaches super-admins only. With multi-tenancy off (or `AUTH_DISABLED=true`, where
+every socket is the dev super-admin) every identified socket gets every event.
+
 ---
 
 ## 9. Per-tenant branding (TASK-161)
