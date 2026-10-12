@@ -70,9 +70,22 @@ function capability(enabled: boolean) {
   });
 }
 
+/**
+ * The section's own agent socket. Picked by URL, never by "the last socket
+ * made": with the capability on, the hook also opens an observer socket on
+ * `/api/a2a/ws`, and that effect can run after the Connect click on a busy
+ * machine (TASK-377) — then the last socket is the observer, not this one.
+ */
+function teleopSockets(): FakeSocket[] {
+  return FakeSocket.instances.filter((s) => s.url.endsWith('/ws/keyboard-teleop'));
+}
+
 async function connect(): Promise<FakeSocket> {
+  const before = teleopSockets().length;
   fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));
-  const ws = FakeSocket.instances[FakeSocket.instances.length - 1];
+  const opened = teleopSockets();
+  expect(opened).toHaveLength(before + 1);
+  const ws = opened[opened.length - 1];
   act(() => {
     ws.open();
     ws.receive({
@@ -94,6 +107,14 @@ describe('KeyboardTeleopSection with the control lease', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     Object.values(api).forEach((fn) => fn.mockReset());
     api.releaseControlLease.mockResolvedValue({ released: true });
+    // A renew that fires on a slow run must get an answer, not `undefined.then`.
+    api.renewControlLease.mockResolvedValue({
+      ok: true,
+      generation: 3,
+      expiresAt: 'x',
+      ttlMs: 5000,
+      renewEveryMs: 1000,
+    });
   });
   afterEach(() => {
     vi.unstubAllGlobals();
