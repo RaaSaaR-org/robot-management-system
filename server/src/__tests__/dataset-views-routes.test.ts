@@ -138,6 +138,9 @@ vi.mock('../repositories/index.js', () => ({
         validation: row.validationJson ? JSON.parse(row.validationJson as string) : undefined,
       };
     }),
+    tenantOf: vi.fn(async (id: string) =>
+      store.has(id) ? ((store.get(id) as { tenantId?: string | null }).tenantId ?? null) : undefined
+    ),
     create: vi.fn(),
     findAll: vi.fn(),
     update: vi.fn(),

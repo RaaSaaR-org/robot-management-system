@@ -435,7 +435,7 @@ current tenant name and a "Stop impersonating" button.
 resources in a single `prisma.$transaction()`. The admin user gets `role: 'owner'` and
 `forcePasswordChange: true`. The frontend wizard has 4 steps: Basics → Admin → Resources → Review.
 
-### Live events on `/api/a2a/ws` (TASK-366, TASK-368)
+### Live events on `/api/a2a/ws` (TASK-366, TASK-368, TASK-375)
 
 Every event on the A2A socket goes only to sockets that identified themselves
 (`?token=` or in-band `{type:'auth'}`) and, with multi-tenancy on, only to sockets
@@ -445,8 +445,16 @@ telemetry, agent mode, teleop and robot alerts; the Conversation for A2A tasks; 
 the row itself for other alerts, processes, robot tasks, incidents, training jobs,
 datasets, digital twins (also scan sessions and twin zones) and deployments. A
 fleet or zone E-stop is cut per socket down to the robots of the tenants it may
-see. No event family is platform-wide: one whose entity is gone or cannot be named
-reaches super-admins only. With multi-tenancy off (or `AUTH_DISABLED=true`, where
+see. A delete event cannot be routed by its row, which is gone by then (and the
+tenant cache is empty after a restart), so the deleting service reads the row's
+tenant first and carries it on the event: `dataset:deleted`, `alert_deleted` and
+`robot_unregistered` reach their own tenant this way (TASK-375). That
+`deletedRowTenantId` is only ever set by the server from the database and is not
+sent to clients. Robot alerts never use it: they are routed by their robot, which
+outlives the alert, since a robot alert raised outside a request has no tenant on
+its row. No
+event family is platform-wide: any other event whose entity is gone or cannot be
+named reaches super-admins only. With multi-tenancy off (or `AUTH_DISABLED=true`, where
 every socket is the dev super-admin) every identified socket gets every event.
 
 ---

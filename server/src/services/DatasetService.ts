@@ -1039,6 +1039,9 @@ export class DatasetService extends EventEmitter {
       console.warn(`[DatasetService] Failed to remove the unpacked upload for ${id}:`, error);
     }
 
+    // Read now: once the row is gone, nothing can say whose it was (TASK-375).
+    const tenantId = await datasetRepository.tenantOf(id);
+
     // Delete from database
     const deleted = await datasetRepository.delete(id);
 
@@ -1050,6 +1053,7 @@ export class DatasetService extends EventEmitter {
       this.emitEvent({
         type: 'dataset:deleted',
         datasetId: id,
+        ...(tenantId !== undefined && { deletedRowTenantId: tenantId }),
         timestamp: new Date().toISOString(),
       });
 

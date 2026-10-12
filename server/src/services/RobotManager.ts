@@ -356,6 +356,14 @@ export interface RobotEvent {
   robot?: Robot;
   /** Full frame on `robot_telemetry`, subset frame on `robot_telemetry_fast`. */
   telemetry?: RobotTelemetry | RobotTelemetryFast;
+  /**
+   * The tenant of the row this event deleted, read from the database before
+   * the delete (TASK-375). Named for that one source on purpose: WebSocket
+   * routing trusts it over a lookup, so it must only ever be copied from a row
+   * the server just read, never from a request body or a spread of one.
+   * `undefined` on every other event.
+   */
+  deletedRowTenantId?: string | null;
   timestamp: string;
 }
 
@@ -619,6 +627,9 @@ export class RobotManager {
    */
   async unregisterRobot(robotId: string): Promise<boolean> {
     const registered = this.cachedFor(robotId);
+    // Whose robot this was, for routing `robot_unregistered` once the row is
+    // gone (TASK-375).
+    let tenantId = registered?.tenantId;
     if (!registered) {
       // Not in the cache, or another tenant's: the row decides — and the
       // tenant-scoped lookup does not find another tenant's row either.
@@ -626,6 +637,7 @@ export class RobotManager {
       if (!dbRobot) {
         return false;
       }
+      tenantId = dbRobot.tenantId;
     }
 
     // Delete from database first: a delete the tenant guard refuses must not
@@ -647,6 +659,7 @@ export class RobotManager {
     this.emitEvent({
       type: 'robot_unregistered',
       robotId,
+      ...(tenantId !== undefined && { deletedRowTenantId: tenantId }),
       timestamp: new Date().toISOString(),
     });
 

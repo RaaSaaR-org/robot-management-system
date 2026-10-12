@@ -564,6 +564,14 @@ export interface DatasetEvent {
   error?: string;
   /** On `dataset:import:failed`: the operator cancelled it (TASK-371). */
   cancelled?: boolean;
+  /**
+   * The tenant of the row this event deleted, read from the database before
+   * the delete (TASK-375). Named for that one source on purpose: WebSocket
+   * routing trusts it over a lookup, so it must only ever be copied from a row
+   * the server just read, never from a request body or a spread of one.
+   * `undefined` on every other event.
+   */
+  deletedRowTenantId?: string | null;
   timestamp: string;
 }
 

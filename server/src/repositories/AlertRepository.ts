@@ -99,6 +99,16 @@ export class AlertRepository {
   }
 
   /**
+   * The tenant of an alert row: `undefined` when there is no such row, `null`
+   * when it has no tenant. Read before a delete so the delete event can name
+   * the tenant of a row that is gone by the time it is routed (TASK-375).
+   */
+  async tenantOf(id: string): Promise<string | null | undefined> {
+    const row = await prisma.alert.findUnique({ where: { id }, select: { tenantId: true } });
+    return row ? row.tenantId : undefined;
+  }
+
+  /**
    * Find all alerts with optional filters and pagination
    */
   async findAll(

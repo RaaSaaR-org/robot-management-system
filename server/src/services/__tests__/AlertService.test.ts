@@ -21,6 +21,7 @@ import type {
 vi.mock('../../repositories/index.js', () => ({
   alertRepository: {
     findById: vi.fn(),
+    tenantOf: vi.fn().mockResolvedValue(undefined),
     findAll: vi.fn(),
     findActive: vi.fn(),
     getCountsBySeverity: vi.fn(),
@@ -232,6 +233,35 @@ describe('AlertService — deleteAlert', () => {
     expect(alertRepository.delete).toHaveBeenCalledWith('alert-1');
     expect(callback).toHaveBeenCalledTimes(1);
     expect(callback.mock.calls[0][0].type).toBe('alert_deleted');
+  });
+
+  it('carries the tenant of the row it deleted on alert_deleted (TASK-375)', async () => {
+    alertRepository.findById.mockResolvedValue(makeAlert());
+    alertRepository.tenantOf.mockResolvedValue('tenant-a');
+    // The tenant is read before the row goes, not after.
+    alertRepository.delete.mockImplementation(async () => {
+      alertRepository.tenantOf.mockResolvedValue(undefined);
+      return true;
+    });
+    const callback = vi.fn();
+    service.onAlertEvent(callback);
+
+    await service.deleteAlert('alert-1');
+
+    expect(callback.mock.calls[0][0]).toMatchObject({ type: 'alert_deleted', deletedRowTenantId: 'tenant-a' });
+  });
+
+  it('carries no tenant for a robot alert, which is routed by its robot (TASK-375)', async () => {
+    alertRepository.findById.mockResolvedValue(makeAlert({ source: 'robot', sourceId: 'robot-1' }));
+    alertRepository.tenantOf.mockResolvedValue(null);
+    alertRepository.delete.mockResolvedValue(true);
+    const callback = vi.fn();
+    service.onAlertEvent(callback);
+
+    await service.deleteAlert('alert-1');
+
+    expect(alertRepository.tenantOf).not.toHaveBeenCalled();
+    expect(callback.mock.calls[0][0]).not.toHaveProperty('deletedRowTenantId');
   });
 
   it('returns false without deleting when alert does not exist', async () => {

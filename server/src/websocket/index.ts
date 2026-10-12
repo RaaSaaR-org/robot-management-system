@@ -101,11 +101,17 @@ export function setupWebSocket(server: Server): void {
   /**
    * An event about the entity `key` names. Without multi-tenancy every event
    * goes to every identified socket; with it, an event that names no entity
-   * goes to super-admins only.
+   * goes to super-admins only. `carried` is the tenant a delete event read
+   * from its row before deleting it (TASK-375): it wins over `key`, whose row
+   * is gone and whose tenant the cache may not hold (after a restart).
    */
-  const deliverFor = (message: string, key: TenantKey | null): void => {
+  const deliverFor = (message: string, key: TenantKey | null, carried?: string | null): void => {
     if (!MULTI_TENANCY_ENABLED) {
       deliverEvent(clients, clientIdentity, message, send, null);
+      return;
+    }
+    if (carried !== undefined) {
+      deliverEvent(clients, clientIdentity, message, send, carried);
       return;
     }
     if (key === null) {
@@ -221,15 +227,17 @@ export function setupWebSocket(server: Server): void {
 
   // Subscribe to robot events and fan them out (eventFanout.ts)
   robotManager.onRobotEvent((event: RobotEvent) => {
+    // The carried tenant routes the event; it is not part of the payload.
+    const { deletedRowTenantId: _routedBy, ...payload } = event;
     const message = JSON.stringify({
-      ...event,
+      ...payload,
       type: event.type, // Ensure type comes last to override spread
     });
     // A (re-)registration may have moved the robot to another tenant.
     if (event.type === 'robot_registered' || event.type === 'robot_unregistered') {
       tenants.forget(tenantKey('robot', event.robotId));
     }
-    deliverFor(message, robotKey(event.robotId));
+    deliverFor(message, robotKey(event.robotId), event.deletedRowTenantId);
   });
 
   // Subscribe to alert events and fan them out (eventFanout.ts)
@@ -239,7 +247,14 @@ export function setupWebSocket(server: Server): void {
       alert: event.alert,
       timestamp: event.timestamp,
     });
-    deliverFor(message, eventTenantKey.alert(event));
+    // A robot alert is routed by its robot, which outlives the Alert row: the
+    // row of a robot alert raised outside a request has no tenant, and a
+    // carried `null` would send it to every tenant (TASK-375).
+    deliverFor(
+      message,
+      eventTenantKey.alert(event),
+      event.alert?.source === 'robot' ? undefined : event.deletedRowTenantId
+    );
   });
 
   // Subscribe to process events and fan them out (eventFanout.ts)
@@ -363,7 +378,7 @@ export function setupWebSocket(server: Server): void {
       error: event.error,
       timestamp: event.timestamp,
     });
-    deliverFor(message, eventTenantKey.dataset(event));
+    deliverFor(message, eventTenantKey.dataset(event), event.deletedRowTenantId);
   });
 
   // Subscribe to sensor-scan events (point clouds) and fan them out (eventFanout.ts).
