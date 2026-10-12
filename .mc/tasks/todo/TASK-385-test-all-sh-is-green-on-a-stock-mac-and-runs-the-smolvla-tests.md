@@ -3,7 +3,7 @@ id: "TASK-385"
 aliases: []
 title: "test-all.sh is green on a stock Mac and runs the SmolVLA tests"
 slug: "test-all-sh-is-green-on-a-stock-mac-and-runs-the-smolvla-tests"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -63,17 +63,17 @@ documented entry point green and make it cover what CLAUDE.md says it covers.
 `CLAUDE.md` (Testing section).
 
 ## Acceptance Criteria
-- [ ] `/usr/bin/python3 robot-agent/hardware/verify_isaac_manip_offline.py` and
+- [x] `/usr/bin/python3 robot-agent/hardware/verify_isaac_manip_offline.py` and
       `/usr/bin/python3 robot-agent/hardware/isaac_scenes/verify_factory_scene_offline.py`
       exit 0 on Python 3.9.
-- [ ] The generated USDA from `make_pause_room_door_usda.py` is byte-identical before
+- [x] The generated USDA from `make_pause_room_door_usda.py` is byte-identical before
       and after the change.
-- [ ] With both default venvs present and `HARDWARE_PYTHON` unset, the hardware stage
+- [x] With both default venvs present and `HARDWARE_PYTHON` unset, the hardware stage
       runs on the curation venv and the SmolVLA cases are not skipped.
-- [ ] When the hardware interpreter has no httpx, the stage and the summary say the
+- [x] When the hardware interpreter has no httpx, the stage and the summary say the
       SmolVLA tests did not run.
-- [ ] Stage 3d falls back to a venv before bare `python3`.
-- [ ] `./scripts/test-all.sh --skip-pw` exits 0 on a stock Mac with the default venvs.
+- [x] Stage 3d falls back to a venv before bare `python3`.
+- [x] `./scripts/test-all.sh --skip-pw` exits 0 on a stock Mac with the default venvs.
 
 ## Test Strategy
 Run both verifiers under `/usr/bin/python3` and under the curation venv; diff the
