@@ -72,6 +72,7 @@ import type {
   LeRobotInfoV3,
 } from '../types/dataset.types.js';
 import { importActivityLog } from './ImportActivityLog.js';
+import { isLocalStoragePath } from './lerobot/DatasetTree.js';
 
 // ============================================================================
 // CONSTANTS
@@ -239,6 +240,19 @@ interface ImportClaim {
   cancellable: boolean;
   /** The background run, once launched; settles when it has fully unwound. */
   done: Promise<void> | null;
+  /**
+   * Set by a retry, which writes into the row's existing storage: what the row
+   * was before it. A cancelled retry keeps those files — they are the earlier
+   * import, not this run's partial ones — and a `ready` row goes back to
+   * `ready` rather than ending `failed` (#395 review).
+   */
+  prior?: PriorImport;
+}
+
+/** The row a retry started from, so cancelling the retry can put it back. */
+interface PriorImport {
+  status: string;
+  importMode: DatasetImportMode | null;
 }
 
 interface ImportSink {
@@ -403,6 +417,18 @@ function createSink(storageId: string): ImportSink {
     );
   }
   return new LocalImportSink(join(datasetStorageRoot(), storageId));
+}
+
+/**
+ * The sink where an existing `storagePath`'s files actually are — not the one
+ * the current storage config would pick, which differs once RustFS has been
+ * configured (or dropped) since that import ran. Null when that store cannot
+ * be reached from here.
+ */
+function sinkAt(storagePath: string): ImportSink | null {
+  if (isLocalStoragePath(storagePath)) return new LocalImportSink(storagePath.replace(/[\\/]+$/, ''));
+  if (storagePath.startsWith('/')) return null; // a local directory that is already gone
+  return isRustFSInitialized() ? new RustFsImportSink(storagePath) : null;
 }
 
 /** The id inside an existing `storagePath`, so a retry reuses its directory. */
@@ -653,6 +679,9 @@ export class HuggingFaceImportService {
     // Reserved in this process first, synchronously after the check above, so
     // two retries of one orphan cannot both reclaim it.
     const token = this.reserve(datasetId);
+    if (existing.storagePath) {
+      token.prior = { status: existing.status, importMode: existing.importMode ?? null };
+    }
     let claimed = false;
     try {
       claimed = await datasetService.claimForImport(datasetId, { reclaimOrphan: orphaned });
@@ -702,7 +731,13 @@ export class HuggingFaceImportService {
       // The claim has to be released, or a repo that has been deleted leaves
       // the row `importing` for ever with nothing running.
       this.release(datasetId, token);
-      await this.recordFailure(datasetId, 'metadata', repoId, error);
+      // A cancel that landed while this was talking to the Hub is what ended
+      // it, whatever the round-trip then threw.
+      if (token.controller.signal.aborted) {
+        await this.recordCancellation(datasetId, 'metadata', repoId, null, token.prior);
+      } else {
+        await this.recordFailure(datasetId, 'metadata', repoId, error);
+      }
       throw error;
     }
 
@@ -795,11 +830,9 @@ export class HuggingFaceImportService {
     // An orphan. Held while it is ended, so a retry cannot claim it midway.
     const token = this.reserve(datasetId);
     try {
-      let sink: ImportSink | null = null;
-      try {
-        sink = existing.storagePath ? createSink(storageIdOf(existing.storagePath)) : null;
-      } catch (error) {
-        console.warn(`[HFImport] Storage unavailable; partial files of ${datasetId} left in place:`, error);
+      const sink = existing.storagePath ? sinkAt(existing.storagePath) : null;
+      if (existing.storagePath && !sink) {
+        console.warn(`[HFImport] Storage of ${datasetId} unreachable; partial files left in place`);
       }
       const phase = importActivityLog.get(datasetId)?.progress?.phase ?? 'metadata';
       await this.recordCancellation(datasetId, phase, existing.huggingFaceRepoId, sink);
@@ -1074,7 +1107,7 @@ export class HuggingFaceImportService {
       console.log(`[HFImport] Import completed for ${datasetId} (${repoId})`);
     } catch (error) {
       if (error instanceof ImportCancelledError || (signal?.aborted && phase !== 'validating')) {
-        await this.recordCancellation(datasetId, phase, repoId, sink);
+        await this.recordCancellation(datasetId, phase, repoId, sink, claim?.prior);
         return;
       }
       // Every file is stored and the row says `validating`; only the queueing
@@ -1160,9 +1193,16 @@ export class HuggingFaceImportService {
     phase: HuggingFaceImportProgress['phase'],
     repoId: string,
     sink: ImportSink | null,
+    prior?: PriorImport,
   ): Promise<void> {
-    this.log(datasetId, 'warn', `Cancelled during ${phase}; removing the files stored so far`);
-    if (sink) {
+    if (prior) {
+      // A retry wrote into the storage an earlier import filled. Purging it
+      // would delete that dataset, not just this run's partial files.
+      this.log(datasetId, 'warn', `Cancelled during ${phase}; the files stored before this retry are kept`);
+    } else {
+      this.log(datasetId, 'warn', `Cancelled during ${phase}; removing the files stored so far`);
+    }
+    if (sink && !prior) {
       try {
         await sink.purge();
       } catch (error) {
@@ -1173,10 +1213,19 @@ export class HuggingFaceImportService {
     }
 
     const failedAt = new Date().toISOString();
-    await datasetRepository.update(datasetId, {
-      status: 'failed',
-      importError: { phase, error: CANCELLED_IMPORT_ERROR, repoId, failedAt, cancelled: true },
-    });
+    if (prior?.status === 'ready') {
+      // Same sha, files replaced atomically one by one: what was ready still is.
+      await datasetRepository.update(datasetId, {
+        status: 'ready',
+        importError: null,
+        ...(prior.importMode ? { importMode: prior.importMode } : {}),
+      });
+    } else {
+      await datasetRepository.update(datasetId, {
+        status: 'failed',
+        importError: { phase, error: CANCELLED_IMPORT_ERROR, repoId, failedAt, cancelled: true },
+      });
+    }
 
     const last = importActivityLog.get(datasetId)?.progress;
     this.emitProgress(datasetId, {

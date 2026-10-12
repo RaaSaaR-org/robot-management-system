@@ -66,6 +66,7 @@ import {
 import { importActivityLog } from '../ImportActivityLog.js';
 import { datasetRepository, robotTypeRepository } from '../../repositories/index.js';
 import { datasetService } from '../DatasetService.js';
+import { isRustFSInitialized } from '../../storage/rustfs-client.js';
 import type { DatasetEvent, LeRobotInfoV3 } from '../../types/dataset.types.js';
 
 const DATASET_ID = 'dataset-cancel';
@@ -258,6 +259,22 @@ describe('cancelling an import nothing here runs (TASK-371)', () => {
     expect(await readdir(root)).not.toContain('orphan-storage');
   });
 
+  it('removes a local orphan from the disk even once RustFS is the configured store', async () => {
+    const dir = join(root, 'local-orphan');
+    await mkdir(join(dir, 'meta'), { recursive: true });
+    await writeFile(join(dir, 'meta/info.json'), '{}');
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue({
+      id: 'orphan', status: 'importing', huggingFaceRepoId: REPO, storagePath: `${dir}/`,
+    } as never);
+
+    await service.cancelImport('orphan');
+
+    // `getRustFSClient` throws in this file: reaching it would fail the cancel.
+    expect(existsSync(dir)).toBe(false);
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+  });
+
   it.each(['ready', 'failed', 'validating'])('is a 409 for a %s row', async (status) => {
     vi.mocked(datasetRepository.findById).mockResolvedValue({
       id: 'done', status, huggingFaceRepoId: REPO, storagePath: `${root}/done/`,
@@ -273,5 +290,87 @@ describe('cancelling an import nothing here runs (TASK-371)', () => {
     const error = await service.cancelImport('nope').catch((e: unknown) => e);
     expect(error).toBeInstanceOf(HuggingFaceImportError);
     expect(error).toMatchObject({ code: 'NOT_FOUND', status: 404 });
+  });
+});
+
+describe('cancelling a retry, which writes into the row\'s existing storage (#395 review)', () => {
+  async function seedStoredDataset(name: string): Promise<string> {
+    const dir = join(root, name);
+    await mkdir(join(dir, 'meta'), { recursive: true });
+    await mkdir(join(dir, 'videos'), { recursive: true });
+    await writeFile(join(dir, 'meta/info.json'), JSON.stringify(INFO));
+    await writeFile(join(dir, 'videos/earlier.mp4'), 'v');
+    return dir;
+  }
+
+  it('keeps the files of a ready dataset and puts the row back to ready', async () => {
+    const dir = await seedStoredDataset('ready-storage');
+    vi.mocked(datasetRepository.findById).mockResolvedValue({
+      id: DATASET_ID, status: 'ready', huggingFaceRepoId: REPO, storagePath: `${dir}/`,
+      sourceRevision: SHA, sourceLicense: 'apache-2.0', importMode: 'metadata',
+    } as never);
+    installFakeHub();
+
+    await service.retryImport(DATASET_ID, { includeVideos: true });
+    await hangingStarted;
+    const result = await service.cancelImport(DATASET_ID);
+
+    expect(result).toEqual({ datasetId: DATASET_ID, status: 'cancelled' });
+    expect(existsSync(join(dir, 'videos/earlier.mp4'))).toBe(true);
+    expect(existsSync(join(dir, 'meta/info.json'))).toBe(true);
+    expect(datasetRepository.update).toHaveBeenLastCalledWith(DATASET_ID, {
+      status: 'ready', importError: null, importMode: 'metadata',
+    });
+    expect(datasetRepository.update).not.toHaveBeenCalledWith(DATASET_ID, expect.objectContaining({ status: 'failed' }));
+    expect(importActivityLog.get(DATASET_ID)?.lines.map((l) => l.message))
+      .toContain('Cancelled during downloading; the files stored before this retry are kept');
+  });
+
+  it('keeps the files of a failed dataset and marks the retry cancelled', async () => {
+    const dir = await seedStoredDataset('failed-storage');
+    vi.mocked(datasetRepository.findById).mockResolvedValue({
+      id: DATASET_ID, status: 'failed', huggingFaceRepoId: REPO, storagePath: `${dir}/`,
+      sourceRevision: SHA, sourceLicense: 'apache-2.0', importMode: 'full',
+    } as never);
+    installFakeHub();
+
+    await service.retryImport(DATASET_ID);
+    await hangingStarted;
+    await service.cancelImport(DATASET_ID);
+
+    expect(existsSync(join(dir, 'videos/earlier.mp4'))).toBe(true);
+    expect(datasetRepository.update).toHaveBeenLastCalledWith(DATASET_ID, {
+      status: 'failed',
+      importError: expect.objectContaining({ error: CANCELLED_IMPORT_ERROR, cancelled: true }),
+    });
+  });
+
+  it('records a cancel that lands before the retry launches as a cancel, not a failure', async () => {
+    const dir = await seedStoredDataset('prelaunch-storage');
+    vi.mocked(datasetRepository.findById).mockResolvedValue({
+      id: DATASET_ID, status: 'failed', huggingFaceRepoId: REPO, storagePath: `${dir}/`,
+      sourceRevision: SHA, sourceLicense: 'apache-2.0', importMode: 'metadata',
+    } as never);
+    let askedHub!: () => void;
+    const asked = new Promise<void>((resolve) => { askedHub = resolve; });
+    let failHub!: () => void;
+    const hubFails = new Promise<never>((_, reject) => { failHub = () => reject(new Error('socket hang up')); });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      askedHub();
+      return hubFails;
+    });
+
+    const retry = service.retryImport(DATASET_ID).catch((e: unknown) => e);
+    await asked;
+    expect(await service.cancelImport(DATASET_ID)).toEqual({ datasetId: DATASET_ID, status: 'cancelling' });
+    failHub();
+    await retry;
+
+    expect(datasetRepository.update).toHaveBeenLastCalledWith(DATASET_ID, {
+      status: 'failed',
+      importError: expect.objectContaining({ error: CANCELLED_IMPORT_ERROR, cancelled: true }),
+    });
+    expect(existsSync(join(dir, 'videos/earlier.mp4'))).toBe(true);
+    expect(service.isRunning(DATASET_ID)).toBe(false);
   });
 });

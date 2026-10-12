@@ -39,7 +39,7 @@ export function importProgressView(job: ImportJob): ImportProgressView {
     return { phase: `Stopped${where}`, percent: downloadPercent(job), counts };
   }
   if (job.state === 'succeeded') return { phase: 'Imported', percent: 100, counts };
-  if (job.state === 'cancelled') return { phase: 'Cancelled — its files were removed', percent: 0, counts: null };
+  if (job.state === 'cancelled') return { phase: 'Cancelled by the operator', percent: 0, counts: null };
 
   switch (job.phase) {
     case 'downloading':
