@@ -3,8 +3,9 @@
  * @description The site map (TASK-331): plots only the robots bound to the
  *              chosen site whose pose is in its frame, lists the rest, remembers
  *              the last site per viewer (and survives storage that throws),
- *              E-stops a zone by its TwinZone id after a confirm, and renders
- *              compact on the dashboard.
+ *              E-stops a zone by its TwinZone id after a confirm (for every
+ *              role, a viewer included — TASK-374), and renders compact on the
+ *              dashboard.
  * @feature fleet
  */
 
@@ -198,21 +199,18 @@ describe('SiteMap', () => {
     expect(screen.queryByLabelText('Zone colours')).toBeNull();
   });
 
-  it('shows a viewer the zones but no stop: not clickable, and says why', async () => {
-    signInAs('viewer');
-    const trigger = vi.fn();
-    useSafetyStore.setState({ triggerZoneEStop: trigger });
-    renderMap();
+  it.each(['viewer', 'owner', 'super-admin'] as const)(
+    'lets a %s stop a zone — the server grants the zone stop to every role (TASK-374)',
+    async (role) => {
+      signInAs(role);
+      const trigger = vi.fn().mockResolvedValue(true);
+      useSafetyStore.setState({ triggerZoneEStop: trigger });
+      vi.mocked(confirm).mockResolvedValue(true);
+      renderMap();
 
-    expect(await screen.findByTestId('site-map-stop-forbidden')).toHaveTextContent("Your role can't use this stop");
-    expect(screen.queryByRole('button', { name: /Stop zone Dock/ })).toBeNull();
-    expect(trigger).not.toHaveBeenCalled();
-  });
-
-  it.each(['owner', 'super-admin'] as const)('lets a %s stop a zone', async (role) => {
-    signInAs(role);
-    renderMap();
-    expect(await screen.findByRole('button', { name: /Stop zone Dock/ })).toBeInTheDocument();
-    expect(screen.queryByTestId('site-map-stop-forbidden')).toBeNull();
-  });
+      fireEvent.click(await screen.findByRole('button', { name: /Stop zone Dock/ }));
+      await waitFor(() => expect(trigger).toHaveBeenCalledWith('tz-dock', expect.stringContaining('Dock')));
+      expect(screen.queryByText(/Your role can't use this stop/)).toBeNull();
+    },
+  );
 });

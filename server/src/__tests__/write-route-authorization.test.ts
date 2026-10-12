@@ -418,6 +418,31 @@ describe('safety halts', () => {
     expect(trigger).toHaveBeenCalled();
   });
 
+  it('lets a viewer stop a zone (TASK-374)', async () => {
+    const trigger = vi
+      .spyOn(safetyService, 'triggerZoneEStop')
+      .mockResolvedValue({ zoneName: 'Dock', successCount: 1, failureCount: 0 } as never);
+    const result = await request(app)
+      .post('/api/safety/zones/tz-dock/estop')
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({ reason: 'Hazard in the dock' });
+
+    expect(result.status).toBe(200);
+    expect(trigger).toHaveBeenCalledWith('tz-dock', 'Hazard in the dock', 'server');
+  });
+
+  it('still refuses a viewer the per-robot stop under /api/safety', async () => {
+    const trigger = vi.spyOn(safetyService, 'triggerRobotEStop');
+    const result = await request(app)
+      .post('/api/safety/robots/test-id/estop')
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({ reason: 'Hazard' });
+
+    expect(result.status).toBe(403);
+    expect(result.body.error).toBe('Forbidden');
+    expect(trigger).not.toHaveBeenCalled();
+  });
+
   it('does not let a viewer resume the fleet', async () => {
     const reset = vi.spyOn(safetyService, 'resetFleetEStop');
     const result = await request(app)
@@ -442,9 +467,10 @@ describe('safety halts', () => {
     expect(reset).not.toHaveBeenCalled();
   });
 
-  it('opens the fleet stop by path and the command endpoint by body only', () => {
-    expect(safetyHaltWrites.map((e) => `${e.method} ${e.path}`)).toEqual([
+  it('opens the fleet and zone stops by path and the command endpoint by body only', () => {
+    expect(safetyHaltWrites.map((e) => `${e.method} ${e.path}`).sort()).toEqual([
       'POST /api/safety/fleet/estop',
+      'POST /api/safety/zones/:id/estop',
     ]);
     // The command endpoint drives the robot, so it stays in the enforced sweep:
     // exempting it by path would let a viewer send `move`.
@@ -455,6 +481,12 @@ describe('safety halts', () => {
     // No reset, anywhere.
     expect(isSafetyHalt('/api/safety/fleet/estop/reset', {})).toBe(false);
     expect(isSafetyHalt('/api/safety/robots/test-id/estop/reset', {})).toBe(false);
+    expect(isSafetyHalt('/api/safety/zones/tz-dock/estop/reset', {})).toBe(false);
+    // One zone segment only: nothing nested under a zone rides the exemption.
+    expect(isSafetyHalt('/api/safety/zones/tz-dock/estop', {})).toBe(true);
+    expect(isSafetyHalt('/api/safety/zones/tz-dock/x/estop', {})).toBe(false);
+    // The per-robot stop on /api/safety is not a viewer halt.
+    expect(isSafetyHalt('/api/safety/robots/test-id/estop', {})).toBe(false);
   });
 
   it.each(SAFETY_HALT_WRITES.map((pattern) => [String(pattern), pattern] as const))(

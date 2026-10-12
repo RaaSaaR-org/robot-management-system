@@ -535,11 +535,13 @@ export const POST_SHAPED_READS: RegExp[] = [
  * - Clearing a stop is NOT here. `/api/safety/fleet/estop/reset` and
  *   `/api/safety/robots/:id/estop/reset` put robots back in motion, which is an
  *   operator decision. The `\/?$` anchors are what keep the `/reset` suffix out,
- *   so keep them.
- * - The zone and per-robot stops on `/api/safety` are not here either: no
- *   shipped UI fires them (`RobotEmergencyStopButton` is exported and rendered
- *   nowhere), and this list tracks the buttons a viewer actually has. Add one
- *   only alongside a UI that needs it.
+ *   so keep them. (A zone has no reset route; its robots are resumed one by one
+ *   or with the fleet.)
+ * - The per-robot stop on `/api/safety` is not here: no shipped UI fires it
+ *   (`RobotEmergencyStopButton` is exported and rendered nowhere), and this list
+ *   tracks the buttons a viewer actually has. Add one only alongside a UI that
+ *   needs it. A viewer's per-robot halt goes through the command endpoint
+ *   instead (`HALT_COMMAND_TYPES` below).
  *
  * A stale entry fails `__tests__/write-route-authorization.test.ts`, which
  * requires each one to match a live route.
@@ -548,6 +550,10 @@ export const SAFETY_HALT_WRITES: RegExp[] = [
   // POST /api/safety/fleet/estop — `FleetEmergencyStopButton`, on the dashboard
   // and the safety page (`safety.routes.ts:128`).
   /^\/api\/safety\/fleet\/estop\/?$/,
+  // POST /api/safety/zones/:id/estop — clicking a zone on the site map, on the
+  // fleet page and the dashboard (`SiteMap`, TASK-331); `ZoneEmergencyStopButton`
+  // fires the same route. Granted to a viewer by TASK-374.
+  /^\/api\/safety\/zones\/[^/]+\/estop\/?$/,
 ];
 
 /**
