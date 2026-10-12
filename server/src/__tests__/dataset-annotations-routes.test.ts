@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { ConflictError, NotFoundError } from '../utils/errors.js';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
 const { mockDatasetService, mockTrainingJobService, mockInterventionService } = vi.hoisted(() => ({
@@ -139,23 +140,35 @@ describe('Dataset Annotation + Intervention Routes (TASK-179)', () => {
 
     it('returns 404 when the dataset does not exist', async () => {
       mockTrainingJobService.submitAnnotateJob.mockRejectedValue(
-        new Error('Dataset not found: ds-missing')
+        new NotFoundError('Dataset', 'ds-missing')
       );
 
       const response = await request(app).post('/api/datasets/ds-missing/annotate').send({});
 
       expect(response.status).toBe(404);
-      expect(response.body.error).toContain('not found');
+      expect(response.body.error).toBe("Dataset 'ds-missing' not found");
     });
 
-    it('returns 400 when the dataset is not ready', async () => {
+    it('returns 409 naming the status when the dataset is not ready', async () => {
       mockTrainingJobService.submitAnnotateJob.mockRejectedValue(
-        new Error('Dataset not ready: ds-1 (status: validating)')
+        new ConflictError('Dataset not ready: ds-1 (status: validating)')
+      );
+
+      const response = await request(app).post('/api/datasets/ds-1/annotate').send({});
+
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe('Dataset not ready: ds-1 (status: validating)');
+    });
+
+    it('answers the fallback, unread, for a plain error that merely says "not found"', async () => {
+      mockTrainingJobService.submitAnnotateJob.mockRejectedValue(
+        new Error('ENOENT: /srv/secret/path not found')
       );
 
       const response = await request(app).post('/api/datasets/ds-1/annotate').send({});
 
       expect(response.status).toBe(400);
+      expect(response.body.error).toBe('Failed to queue annotate job');
     });
   });
 

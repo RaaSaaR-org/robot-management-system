@@ -44,6 +44,7 @@ import {
   type RobotMemoryErasureService,
 } from './RobotMemoryErasureService.js';
 import { v4 as uuidv4 } from 'uuid';
+import { gdprScopeWhere, type GDPRTenantScope } from './gdprTenantScope.js';
 
 /**
  * Retained-category marker for "a legal hold pins some of this subject's
@@ -549,8 +550,9 @@ export class GDPRRequestService {
     filters: GDPRRequestFilters = {},
     page = 1,
     limit = 20,
+    scope?: GDPRTenantScope,
   ): Promise<GDPRRequestListResponse> {
-    const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = { ...gdprScopeWhere(scope) };
 
     if (filters.status) {
       where.status = Array.isArray(filters.status) ? { in: filters.status } : filters.status;
@@ -592,9 +594,10 @@ export class GDPRRequestService {
   /**
    * Get overdue requests
    */
-  async getOverdueRequests(): Promise<GDPRRequest[]> {
+  async getOverdueRequests(scope?: GDPRTenantScope): Promise<GDPRRequest[]> {
     const requests = await prisma.gDPRRequest.findMany({
       where: {
+        ...gdprScopeWhere(scope),
         slaDeadline: { lt: new Date() },
         status: { in: ['pending', 'acknowledged', 'in_progress'] },
       },
@@ -607,12 +610,16 @@ export class GDPRRequestService {
   /**
    * Get requests nearing SLA deadline
    */
-  async getRequestsNearingSLA(withinHours: number): Promise<GDPRRequest[]> {
+  async getRequestsNearingSLA(
+    withinHours: number,
+    scope?: GDPRTenantScope,
+  ): Promise<GDPRRequest[]> {
     const deadline = new Date();
     deadline.setHours(deadline.getHours() + withinHours);
 
     const requests = await prisma.gDPRRequest.findMany({
       where: {
+        ...gdprScopeWhere(scope),
         slaDeadline: { gt: new Date(), lt: deadline },
         status: { in: ['pending', 'acknowledged', 'in_progress'] },
       },
@@ -982,7 +989,8 @@ export class GDPRRequestService {
   /**
    * Get GDPR metrics for admin dashboard
    */
-  async getMetrics(): Promise<GDPRMetrics> {
+  async getMetrics(scope?: GDPRTenantScope): Promise<GDPRMetrics> {
+    const inScope = gdprScopeWhere(scope);
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -995,29 +1003,32 @@ export class GDPRRequestService {
       requestsByStatus,
       completedRequests,
     ] = await Promise.all([
-      prisma.gDPRRequest.count(),
+      prisma.gDPRRequest.count({ where: inScope }),
       prisma.gDPRRequest.count({
-        where: { status: { in: ['pending', 'acknowledged', 'in_progress'] } },
+        where: { ...inScope, status: { in: ['pending', 'acknowledged', 'in_progress'] } },
       }),
       prisma.gDPRRequest.count({
         where: {
+          ...inScope,
           slaDeadline: { lt: new Date() },
           status: { in: ['pending', 'acknowledged', 'in_progress'] },
         },
       }),
       prisma.gDPRRequest.count({
-        where: { status: 'completed', completedAt: { gte: thirtyDaysAgo } },
+        where: { ...inScope, status: 'completed', completedAt: { gte: thirtyDaysAgo } },
       }),
       prisma.gDPRRequest.groupBy({
         by: ['requestType'],
+        where: inScope,
         _count: true,
       }),
       prisma.gDPRRequest.groupBy({
         by: ['status'],
+        where: inScope,
         _count: true,
       }),
       prisma.gDPRRequest.findMany({
-        where: { status: 'completed', completedAt: { not: null } },
+        where: { ...inScope, status: 'completed', completedAt: { not: null } },
         select: { submittedAt: true, completedAt: true },
       }),
     ]);
@@ -1064,13 +1075,16 @@ export class GDPRRequestService {
   /**
    * Get SLA compliance report
    */
-  async getSLAReport(): Promise<SLAReport> {
-    const metrics = await this.getMetrics();
-    const nearingDeadline = await this.getRequestsNearingSLA(48);
+  async getSLAReport(scope?: GDPRTenantScope): Promise<SLAReport> {
+    const metrics = await this.getMetrics(scope);
+    const nearingDeadline = await this.getRequestsNearingSLA(48, scope);
 
     // Find longest open request
     const longestOpen = await prisma.gDPRRequest.findFirst({
-      where: { status: { in: ['pending', 'acknowledged', 'in_progress'] } },
+      where: {
+        ...gdprScopeWhere(scope),
+        status: { in: ['pending', 'acknowledged', 'in_progress'] },
+      },
       orderBy: { submittedAt: 'asc' },
     });
 

@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { ConflictError, NotFoundError } from '../utils/errors.js';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
 const {
@@ -959,6 +960,57 @@ describe('Training Routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to list workers');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Typed service errors reach the client (TASK-387)
+  // --------------------------------------------------------------------------
+
+  describe('typed service errors', () => {
+    const SUPERVISED = { datasetId: 'nope', baseModel: 'smolvla', fineTuneMethod: 'lora' };
+
+    it('answers 404 naming an unknown dataset', async () => {
+      mockTrainingJobService.submitJob.mockRejectedValue(new NotFoundError('Dataset', 'nope'));
+      const response = await request(app).post('/api/training/jobs').send(SUPERVISED);
+      expect(response.status).toBe(404);
+      expect(response.body.error).toBe("Dataset 'nope' not found");
+    });
+
+    it('answers 409 naming the status of a dataset that is not ready', async () => {
+      mockTrainingJobService.submitJob.mockRejectedValue(
+        new ConflictError('Dataset not ready: ds-1 (status: uploading)'),
+      );
+      const response = await request(app).post('/api/training/jobs').send(SUPERVISED);
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe('Dataset not ready: ds-1 (status: uploading)');
+    });
+
+    it('answers 404 naming an unknown sim scene', async () => {
+      mockTrainingJobService.submitSimRlJob.mockRejectedValue(new NotFoundError('Sim scene', 'nope'));
+      const response = await request(app)
+        .post('/api/training/jobs')
+        .send({ kind: 'sim_rl', sceneId: 'nope' });
+      expect(response.status).toBe(404);
+      expect(response.body.error).toBe("Sim scene 'nope' not found");
+    });
+
+    it('answers 409 for a job that cannot be cancelled in its status', async () => {
+      mockTrainingJobService.cancelJob.mockRejectedValue(
+        new ConflictError('Cannot cancel job with status: completed'),
+      );
+      const response = await request(app).post('/api/training/jobs/job-001/cancel');
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe('Cannot cancel job with status: completed');
+    });
+
+    it('answers 409 for a job that cannot be retried in its status', async () => {
+      mockTrainingJobService.retryJob.mockRejectedValue(
+        new ConflictError('Cannot retry job with status: running'),
+      );
+      const response = await request(app).post('/api/training/jobs/job-001/retry');
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe('Cannot retry job with status: running');
     });
   });
 });

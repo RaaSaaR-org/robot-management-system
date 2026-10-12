@@ -51,6 +51,16 @@ export const RobotQuickStats = memo(function RobotQuickStats({
   const temperature = live ? round(telemetry?.temperature) : null;
   const cpu = live ? round(telemetry?.cpuUsage) : null;
   const measured = isTelemetryConnected ? 'Measured live' : 'Last telemetry frame';
+  // An offline robot runs nothing: its task name is what it was doing when it
+  // was last seen, not what it is doing now (TASK-388).
+  const offline = robot.status === 'offline';
+  const taskHint = robot.currentTaskName
+    ? offline
+      ? 'Last known — robot offline'
+      : 'Running now'
+    : offline
+      ? 'Robot offline'
+      : 'Idle — no task assigned';
 
   return (
     <StatRow columns={4} className={className}>
@@ -81,7 +91,7 @@ export const RobotQuickStats = memo(function RobotQuickStats({
         label="Current task"
         icon={<ListChecks className={ICON} strokeWidth={1.75} />}
         value={robot.currentTaskName || 'None'}
-        hint={robot.currentTaskName ? 'Running now' : 'Idle — no task assigned'}
+        hint={taskHint}
       />
     </StatRow>
   );

@@ -45,6 +45,7 @@ const { mockGdprRequestService, mockConsentService, mockDataRestrictionService }
   mockDataRestrictionService: {
     getRestrictionStats: vi.fn(),
     getActiveRestrictions: vi.fn(),
+    getRestriction: vi.fn(),
     liftRestriction: vi.fn(),
   },
 }));
@@ -82,6 +83,12 @@ vi.mock('../middleware/auth.middleware.js', () => ({
     };
     next();
   },
+  // The real guard bypasses roles while AUTH_DISABLED is set (as it is in
+  // tests); this one enforces them. Real routing: gdpr-retention-role-routing.test.ts.
+  ownerOnly: (req: any, res: any, next: any) =>
+    ['super-admin', 'owner'].includes(req.user?.role)
+      ? next()
+      : res.status(403).json({ error: 'Forbidden', message: 'Insufficient permissions' }),
   AuthenticatedRequest: {},
 }));
 
@@ -108,6 +115,9 @@ describe('GDPR Routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     currentRole.value = 'super-admin';
+    // An /admin by-id call loads its record first to check the tenant (TASK-383).
+    mockGdprRequestService.getRequest.mockResolvedValue(SAMPLE_REQUEST);
+    mockDataRestrictionService.getRestriction.mockResolvedValue({ id: 'r1', userId: 'user-123' });
     app = createApp();
   });
 
@@ -741,6 +751,7 @@ describe('GDPR Routes', () => {
         expect.objectContaining({ status: 'pending', overdue: true }),
         2,
         5,
+        undefined,
       );
     });
 
@@ -750,7 +761,7 @@ describe('GDPR Routes', () => {
       const response = await request(app).get('/api/gdpr/admin/requests');
 
       expect(response.status).toBe(200);
-      expect(mockGdprRequestService.getAllRequests).toHaveBeenCalledWith({}, 1, 20);
+      expect(mockGdprRequestService.getAllRequests).toHaveBeenCalledWith({}, 1, 20, undefined);
     });
 
     it('returns 500 on service error', async () => {
@@ -777,7 +788,7 @@ describe('GDPR Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.status).toBe('acknowledged');
-      expect(mockGdprRequestService.acknowledgeRequest).toHaveBeenCalledWith('req-001', 'admin-7');
+      expect(mockGdprRequestService.acknowledgeRequest).toHaveBeenCalledWith('req-001', 'user-123');
     });
 
     it('returns 500 on service error', async () => {
@@ -804,7 +815,7 @@ describe('GDPR Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.status).toBe('in_progress');
-      expect(mockGdprRequestService.startProcessing).toHaveBeenCalledWith('req-001', 'admin-7');
+      expect(mockGdprRequestService.startProcessing).toHaveBeenCalledWith('req-001', 'user-123');
     });
 
     it('returns 500 on service error', async () => {
@@ -835,7 +846,7 @@ describe('GDPR Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.status).toBe('completed');
       expect(mockGdprRequestService.generateDataExport).not.toHaveBeenCalled();
-      expect(mockGdprRequestService.completeRequest).toHaveBeenCalledWith('req-001', 'admin-7', {});
+      expect(mockGdprRequestService.completeRequest).toHaveBeenCalledWith('req-001', 'user-123', {});
     });
 
     it('generates an export for access requests then completes', async () => {
@@ -856,13 +867,13 @@ describe('GDPR Routes', () => {
       expect(mockGdprRequestService.generateDataExport).toHaveBeenCalledWith('owner-1', 'csv');
       expect(mockGdprRequestService.completeRequest).toHaveBeenCalledWith(
         'req-001',
-        'admin-7',
+        'user-123',
         expect.objectContaining({ export: { format: 'csv', recordCount: 3 } }),
       );
     });
 
     it('returns 500 on service error', async () => {
-      mockGdprRequestService.getRequest.mockResolvedValue(null);
+      mockGdprRequestService.getRequest.mockResolvedValue({ ...SAMPLE_REQUEST, requestType: 'erasure' });
       mockGdprRequestService.completeRequest.mockRejectedValue(new Error('boom'));
 
       const response = await request(app).post('/api/gdpr/admin/requests/req-001/complete').send({});
@@ -886,7 +897,7 @@ describe('GDPR Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.status).toBe('rejected');
-      expect(mockGdprRequestService.rejectRequest).toHaveBeenCalledWith('req-001', 'admin-7', 'invalid');
+      expect(mockGdprRequestService.rejectRequest).toHaveBeenCalledWith('req-001', 'user-123', 'invalid');
     });
 
     it('returns 400 when reason missing', async () => {
@@ -936,7 +947,7 @@ describe('GDPR Routes', () => {
       expect(mockGdprRequestService.executeErasure).toHaveBeenCalledWith('owner-1', {
         eraseRobotMemory: false,
       });
-      expect(mockGdprRequestService.completeRequest).toHaveBeenCalledWith('req-001', 'admin-7', {
+      expect(mockGdprRequestService.completeRequest).toHaveBeenCalledWith('req-001', 'user-123', {
         erasureResult: { deletedRecords: 4 },
       });
     });
@@ -1100,7 +1111,7 @@ describe('GDPR Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.requests).toHaveLength(1);
-      expect(mockGdprRequestService.getRequestsNearingSLA).toHaveBeenCalledWith(24);
+      expect(mockGdprRequestService.getRequestsNearingSLA).toHaveBeenCalledWith(24, undefined);
     });
 
     it('defaults to 48 hours when not provided', async () => {
@@ -1109,7 +1120,7 @@ describe('GDPR Routes', () => {
       const response = await request(app).get('/api/gdpr/admin/nearing-deadline');
 
       expect(response.status).toBe(200);
-      expect(mockGdprRequestService.getRequestsNearingSLA).toHaveBeenCalledWith(48);
+      expect(mockGdprRequestService.getRequestsNearingSLA).toHaveBeenCalledWith(48, undefined);
     });
 
     it('returns 500 on service error', async () => {
@@ -1208,7 +1219,7 @@ describe('GDPR Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.isActive).toBe(false);
-      expect(mockDataRestrictionService.liftRestriction).toHaveBeenCalledWith('r1', 'admin-7');
+      expect(mockDataRestrictionService.liftRestriction).toHaveBeenCalledWith('r1', 'user-123');
     });
 
     it('returns 500 on service error', async () => {
@@ -1218,6 +1229,113 @@ describe('GDPR Routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to lift restriction');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // /admin is owner-only and confined to the caller's tenant (TASK-383)
+  // --------------------------------------------------------------------------
+
+  describe('admin role and tenant scope', () => {
+    const FOREIGN = { ...SAMPLE_REQUEST, id: 'req-b', userId: 'user-of-b', status: 'in_progress', requestType: 'erasure' };
+
+    const byIdWrites = [
+      { path: 'acknowledge', body: {}, op: () => mockGdprRequestService.acknowledgeRequest },
+      { path: 'start-processing', body: {}, op: () => mockGdprRequestService.startProcessing },
+      { path: 'complete', body: {}, op: () => mockGdprRequestService.completeRequest },
+      { path: 'reject', body: { reason: 'x' }, op: () => mockGdprRequestService.rejectRequest },
+      { path: 'execute-erasure', body: {}, op: () => mockGdprRequestService.executeErasure },
+    ];
+
+    const adminReads = [
+      '/api/gdpr/admin/requests',
+      '/api/gdpr/admin/metrics',
+      '/api/gdpr/admin/sla-report',
+      '/api/gdpr/admin/overdue',
+      '/api/gdpr/admin/nearing-deadline',
+      '/api/gdpr/admin/consent-metrics',
+      '/api/gdpr/admin/restriction-stats',
+      '/api/gdpr/admin/restrictions',
+    ];
+
+    it.each(['member', 'viewer'])('refuses a %s on every admin route', async (role) => {
+      currentRole.value = role;
+      for (const path of adminReads) {
+        expect((await request(app).get(path)).status).toBe(403);
+      }
+      for (const { path, body, op } of byIdWrites) {
+        const response = await request(app).post(`/api/gdpr/admin/requests/req-001/${path}`).send(body);
+        expect(response.status).toBe(403);
+        expect(op()).not.toHaveBeenCalled();
+      }
+      expect((await request(app).post('/api/gdpr/admin/restrictions/r1/lift')).status).toBe(403);
+      expect(mockDataRestrictionService.liftRestriction).not.toHaveBeenCalled();
+    });
+
+    it('confines an owner\'s lists and aggregates to their tenant', async () => {
+      currentRole.value = 'owner';
+      const scope = { tenantId: 'tenant-a' };
+      mockGdprRequestService.getAllRequests.mockResolvedValue({ requests: [], total: 0, page: 1, limit: 20 });
+      for (const path of adminReads) await request(app).get(path);
+
+      expect(mockGdprRequestService.getAllRequests).toHaveBeenCalledWith({}, 1, 20, scope);
+      expect(mockGdprRequestService.getMetrics).toHaveBeenCalledWith(scope);
+      expect(mockGdprRequestService.getSLAReport).toHaveBeenCalledWith(scope);
+      expect(mockGdprRequestService.getOverdueRequests).toHaveBeenCalledWith(scope);
+      expect(mockGdprRequestService.getRequestsNearingSLA).toHaveBeenCalledWith(48, scope);
+      expect(mockConsentService.getConsentMetrics).toHaveBeenCalledWith(scope);
+      expect(mockDataRestrictionService.getRestrictionStats).toHaveBeenCalledWith(scope);
+      expect(mockDataRestrictionService.getActiveRestrictions).toHaveBeenCalledWith(scope);
+    });
+
+    it.each(byIdWrites)('answers an owner 404 on another tenant\'s request: $path', async ({ path, body, op }) => {
+      currentRole.value = 'owner';
+      mockGdprRequestService.getRequest.mockResolvedValue(FOREIGN);
+      mockFindUser.mockResolvedValue({ tenantId: 'tenant-b' });
+
+      const response = await request(app).post(`/api/gdpr/admin/requests/req-b/${path}`).send(body);
+
+      expect(response.status).toBe(404);
+      expect(response.body.error).toBe('Request not found');
+      expect(mockFindUser).toHaveBeenCalledWith({ where: { id: 'user-of-b' }, select: { tenantId: true } });
+      expect(op()).not.toHaveBeenCalled();
+    });
+
+    it('lets an owner act on a request of their own tenant, recorded as the caller', async () => {
+      currentRole.value = 'owner';
+      mockGdprRequestService.getRequest.mockResolvedValue(FOREIGN);
+      mockFindUser.mockResolvedValue({ tenantId: 'tenant-a' });
+      mockGdprRequestService.acknowledgeRequest.mockResolvedValue(FOREIGN);
+
+      const response = await request(app)
+        .post('/api/gdpr/admin/requests/req-b/acknowledge')
+        .send({ adminId: 'someone-else' });
+
+      expect(response.status).toBe(200);
+      expect(mockGdprRequestService.acknowledgeRequest).toHaveBeenCalledWith('req-b', 'user-123');
+    });
+
+    it('answers an owner 404 on another tenant\'s restriction', async () => {
+      currentRole.value = 'owner';
+      mockDataRestrictionService.getRestriction.mockResolvedValue({ id: 'r9', userId: 'user-of-b' });
+      mockFindUser.mockResolvedValue({ tenantId: 'tenant-b' });
+
+      const response = await request(app).post('/api/gdpr/admin/restrictions/r9/lift');
+
+      expect(response.status).toBe(404);
+      expect(mockDataRestrictionService.liftRestriction).not.toHaveBeenCalled();
+    });
+
+    it('lets a super-admin act on any tenant without a tenant lookup', async () => {
+      mockGdprRequestService.getRequest.mockResolvedValue(FOREIGN);
+      mockGdprRequestService.rejectRequest.mockResolvedValue(FOREIGN);
+
+      const response = await request(app)
+        .post('/api/gdpr/admin/requests/req-b/reject')
+        .send({ reason: 'x' });
+
+      expect(response.status).toBe(200);
+      expect(mockFindUser).not.toHaveBeenCalled();
     });
   });
 

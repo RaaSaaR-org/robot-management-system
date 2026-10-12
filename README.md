@@ -148,7 +148,7 @@ provider swap in [Switching to PostgreSQL](#switching-to-postgresql).
 cd robot-agent
 npm install
 cp .env.example .env.g1          # dev:g1 reads .env.g1, not .env
-# in .env.g1 set: ROBOT_TYPE=g1, ROBOT_ID=sim-robot-g1, PORT=41244
+# in .env.g1 set: ROBOT_ID=sim-robot-g1, PORT=41244 (the script sets ROBOT_TYPE=g1)
 npm run dev:g1                   # http://localhost:41244
 ```
 
@@ -323,8 +323,10 @@ Full history: [CHANGELOG.md](CHANGELOG.md).
 | **SO-101 / SO-ARM100 arm** | 6 | The one embodiment proven end-to-end on **real hardware** via LeRobot. Bootstrap embodiment, still supported. | `npm run dev:so101` |
 | Generic fallback | 6 | Hardware-agnostic default, simulation only | `npm run dev` with `ROBOT_TYPE=generic` |
 
-Every profile except the default reads its own env file via `DOTENV_CONFIG_PATH` — `.env.g1`,
-`.env.g1-edu`, `.env.so101`, `.env.h1` — while plain `npm run dev` reads `.env`. The repo ships
+Every profile except the default sets `ROBOT_TYPE` in its npm script and reads its own env file
+via `DOTENV_CONFIG_PATH` — `.env.g1`, `.env.g1-edu`, `.env.so101`, `.env.h1` — while plain
+`npm run dev` reads `.env`. A missing profile file is reported at startup and the agent falls
+back to `.env`, so it still boots the right embodiment, on the default port. The repo ships
 `.env.example`, `.env.so101.example`, `.env.g1-edu-sim.example` and `.env.g1-edu-agent.example`;
 copy the closest one to the filename the profile expects. Embodiment definitions live in
 `robot-agent/src/embodiment/configs/*.yaml`; joint layouts in
@@ -522,7 +524,7 @@ reports SKIPPED, never passed.
 | Robot Agent | `npm run dev` | `npm run build` | `npm run typecheck` | `npm test` |
 
 The robot agent also has per-embodiment dev profiles — `npm run dev:g1`, `dev:g1-edu`,
-`dev:g1-edu-agent` (Agent Mode), `dev:so101`, `dev:h1`, `dev:light`. See
+`dev:g1-edu-agent` (Agent Mode), `dev:so101`, `dev:h1`. See
 [Robots & embodiments](#robots--embodiments).
 
 ### Database

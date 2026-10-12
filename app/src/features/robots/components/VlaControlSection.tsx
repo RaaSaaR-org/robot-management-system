@@ -18,12 +18,36 @@ import { useVlaStatus } from '../hooks/useVlaStatus';
 
 export interface VlaControlSectionProps {
   robotId: string;
+  /** False while the robot is offline: nothing to start, nothing to poll. */
+  online?: boolean;
 }
 
-const DEFAULT_SERVER_URL = 'http://192.168.178.38:8000';
+/**
+ * The VLA server a deployment points at, when it configures one. No address is
+ * baked in: a lab machine's IP means nothing anywhere else (TASK-388).
+ */
+const CONFIGURED_SERVER_URL: string = import.meta.env.VITE_VLA_SERVER_URL ?? '';
+const SERVER_URL_KEY = 'neodem-vla-server-url';
 const ICON = 'h-4 w-4';
 
-export function VlaControlSection({ robotId }: VlaControlSectionProps) {
+/** The URL this viewer used last, else the configured one. */
+function initialServerUrl(): string {
+  try {
+    return localStorage.getItem(SERVER_URL_KEY) || CONFIGURED_SERVER_URL;
+  } catch {
+    return CONFIGURED_SERVER_URL;
+  }
+}
+
+function rememberServerUrl(url: string): void {
+  try {
+    localStorage.setItem(SERVER_URL_KEY, url);
+  } catch {
+    // Storage blocked: the field just starts from the default next time.
+  }
+}
+
+export function VlaControlSection({ robotId, online = true }: VlaControlSectionProps) {
   const {
     isActive,
     status,
@@ -33,11 +57,12 @@ export function VlaControlSection({ robotId }: VlaControlSectionProps) {
     error,
     startVla,
     stopVla,
-  } = useVlaStatus(robotId);
+  } = useVlaStatus(robotId, online);
 
   const [promptInput, setPromptInput] = useState('');
-  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
+  const [serverUrl, setServerUrl] = useState(initialServerUrl);
   const [promptError, setPromptError] = useState<string>();
+  const [urlError, setUrlError] = useState<string>();
 
   const handleStart = useCallback(async () => {
     const trimmed = promptInput.trim();
@@ -46,6 +71,12 @@ export function VlaControlSection({ robotId }: VlaControlSectionProps) {
       return;
     }
     setPromptError(undefined);
+    const url = serverUrl.trim();
+    if (!url) {
+      setUrlError('Enter the VLA server URL.');
+      return;
+    }
+    setUrlError(undefined);
     const ok = await confirm({
       title: 'Start this skill?',
       description: `The robot starts acting on "${trimmed}" on its own until you stop it.`,
@@ -53,7 +84,8 @@ export function VlaControlSection({ robotId }: VlaControlSectionProps) {
     });
     if (!ok) return;
     try {
-      await startVla(trimmed, serverUrl);
+      await startVla(trimmed, url);
+      rememberServerUrl(url);
       setPromptInput('');
       toast.success('Skill started', { description: trimmed });
     } catch (err) {
@@ -79,7 +111,7 @@ export function VlaControlSection({ robotId }: VlaControlSectionProps) {
         description="Vision-language-action inference on this robot."
         actions={
           <StatusTag tone={isActive ? 'live' : 'neutral'} dot pulse={isActive}>
-            {isLoading ? 'Checking…' : isActive ? 'Running' : 'Inactive'}
+            {!online ? 'Robot offline' : isLoading ? 'Checking…' : isActive ? 'Running' : 'Inactive'}
           </StatusTag>
         }
       />
@@ -105,10 +137,10 @@ export function VlaControlSection({ robotId }: VlaControlSectionProps) {
                 onChange={(e) => setPromptInput(e.target.value)}
               />
             </FormField>
-            <FormField label="VLA server URL">
+            <FormField label="VLA server URL" error={urlError}>
               <Input
                 size="sm"
-                placeholder={DEFAULT_SERVER_URL}
+                placeholder="http://vla-server:8000"
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
               />
@@ -138,11 +170,17 @@ export function VlaControlSection({ robotId }: VlaControlSectionProps) {
             size="sm"
             fullWidth
             onClick={() => void handleStart()}
+            disabled={!online}
             isLoading={isExecuting}
             leftIcon={<Play className={ICON} strokeWidth={1.75} />}
           >
             Start skill
           </Button>
+        )}
+        {!online && !isActive && (
+          <p className="text-xs text-ink-tertiary" data-testid="vla-offline-hint">
+            Robot must be online to start a skill.
+          </p>
         )}
       </Panel.Body>
     </Panel>

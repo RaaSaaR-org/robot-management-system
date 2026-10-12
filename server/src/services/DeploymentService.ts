@@ -130,7 +130,7 @@ export class DeploymentService extends EventEmitter {
     // Validate model version exists
     const modelVersion = await modelVersionRepository.findById(request.modelVersionId);
     if (!modelVersion) {
-      throw new Error(`Model version not found: ${request.modelVersionId}`);
+      throw new NotFoundError('Model version', request.modelVersionId);
     }
 
     // targetZones are TwinZone ids (TASK-330); reject any that do not exist.
@@ -139,7 +139,7 @@ export class DeploymentService extends EventEmitter {
       const known = new Set(found.map((z) => z.zoneId));
       const missing = request.targetZones.filter((id) => !known.has(id));
       if (missing.length > 0) {
-        throw new Error(`Target zone not found: ${missing.join(', ')}`);
+        throw new NotFoundError('Target zone', missing.join(', '));
       }
     }
 
@@ -149,7 +149,9 @@ export class DeploymentService extends EventEmitter {
       ['pending', 'deploying', 'canary'].includes(d.status)
     );
     if (activeExisting) {
-      throw new Error(`Active deployment already exists for model version: ${activeExisting.id}`);
+      throw new ConflictError(
+        `Active deployment already exists for model version: ${activeExisting.id}`,
+      );
     }
 
     // Sim-to-Real validation gate (TASK-171 Phase 3). Off by default; enable
@@ -161,7 +163,7 @@ export class DeploymentService extends EventEmitter {
         request.modelVersionId,
       );
       if (!validation) {
-        throw new Error(
+        throw new ConflictError(
           'Sim-to-real validation required before deployment: no validation found for this ' +
             'model version. Run a sim rollout + real evaluation, or set overrideSimValidation.',
         );
@@ -172,13 +174,13 @@ export class DeploymentService extends EventEmitter {
         // instead of fabricating a `real` number that would block good policies.
         const minSuccess = Number(process.env.SIM_MIN_SUCCESS ?? '0.6');
         if (validation.simSuccessRate < minSuccess) {
-          throw new Error(
+          throw new ConflictError(
             `Sim success rate ${validation.simSuccessRate} is below the minimum ${minSuccess} ` +
               '(sim-only policy, no real counterpart). Deployment blocked (override available).',
           );
         }
       } else if (validation.domainGapScore > threshold) {
-        throw new Error(
+        throw new ConflictError(
           `Sim-to-real domain gap ${validation.domainGapScore} exceeds threshold ${threshold}. ` +
             'Deployment blocked (override available).',
         );
@@ -223,11 +225,11 @@ export class DeploymentService extends EventEmitter {
   async startCanary(deploymentId: string): Promise<Deployment> {
     const deployment = await deploymentRepository.findById(deploymentId);
     if (!deployment) {
-      throw new Error(`Deployment not found: ${deploymentId}`);
+      throw new NotFoundError('Deployment', deploymentId);
     }
 
     if (deployment.status !== 'pending') {
-      throw new Error(`Cannot start deployment in status: ${deployment.status}`);
+      throw new ConflictError(`Cannot start deployment in status: ${deployment.status}`);
     }
 
     // Create context
@@ -259,7 +261,13 @@ export class DeploymentService extends EventEmitter {
   async progressToNextStage(deploymentId: string): Promise<Deployment> {
     const context = this.activeDeployments.get(deploymentId);
     if (!context) {
-      throw new Error(`No active deployment context: ${deploymentId}`);
+      const deployment = await deploymentRepository.findById(deploymentId);
+      if (!deployment) {
+        throw new NotFoundError('Deployment', deploymentId);
+      }
+      throw new ConflictError(
+        `Cannot progress deployment in status: ${deployment.status} (no stage is rolling out)`,
+      );
     }
 
     const nextStageIndex = context.currentStageIndex + 1;
@@ -288,8 +296,11 @@ export class DeploymentService extends EventEmitter {
     if (!context) {
       // Try to load from database
       const deployment = await deploymentRepository.findById(deploymentId);
-      if (!deployment || !['deploying', 'canary'].includes(deployment.status)) {
-        throw new Error(`Cannot promote deployment: ${deploymentId}`);
+      if (!deployment) {
+        throw new NotFoundError('Deployment', deploymentId);
+      }
+      if (!['deploying', 'canary'].includes(deployment.status)) {
+        throw new ConflictError(`Cannot promote deployment in status: ${deployment.status}`);
       }
     }
 
@@ -299,7 +310,7 @@ export class DeploymentService extends EventEmitter {
     // Deploy to all remaining robots (100%)
     const deployment = await deploymentRepository.findById(deploymentId);
     if (!deployment) {
-      throw new Error(`Deployment not found: ${deploymentId}`);
+      throw new NotFoundError('Deployment', deploymentId);
     }
 
     // Get all eligible robots
@@ -311,7 +322,7 @@ export class DeploymentService extends EventEmitter {
     // Deploy to remaining robots
     const modelVersion = await modelVersionRepository.findById(deployment.modelVersionId);
     if (!modelVersion) {
-      throw new Error(`Model version not found: ${deployment.modelVersionId}`);
+      throw new NotFoundError('Model version', deployment.modelVersionId);
     }
 
     const results = await this.deployToRobots(
@@ -354,11 +365,11 @@ export class DeploymentService extends EventEmitter {
   async rollback(deploymentId: string, reason: string): Promise<Deployment> {
     const deployment = await deploymentRepository.findById(deploymentId);
     if (!deployment) {
-      throw new Error(`Deployment not found: ${deploymentId}`);
+      throw new NotFoundError('Deployment', deploymentId);
     }
 
     if (!['deploying', 'canary', 'production'].includes(deployment.status)) {
-      throw new Error(`Cannot rollback deployment in status: ${deployment.status}`);
+      throw new ConflictError(`Cannot rollback deployment in status: ${deployment.status}`);
     }
 
     // Clear timers
@@ -429,11 +440,11 @@ export class DeploymentService extends EventEmitter {
   async cancelDeployment(deploymentId: string): Promise<Deployment> {
     const deployment = await deploymentRepository.findById(deploymentId);
     if (!deployment) {
-      throw new Error(`Deployment not found: ${deploymentId}`);
+      throw new NotFoundError('Deployment', deploymentId);
     }
 
     if (!['pending', 'deploying', 'canary'].includes(deployment.status)) {
-      throw new Error(`Cannot cancel deployment in status: ${deployment.status}`);
+      throw new ConflictError(`Cannot cancel deployment in status: ${deployment.status}`);
     }
 
     // Clear timers
@@ -495,7 +506,7 @@ export class DeploymentService extends EventEmitter {
 
     const deployment = await deploymentRepository.findById(deploymentId);
     if (!deployment) {
-      throw new Error(`Deployment not found: ${deploymentId}`);
+      throw new NotFoundError('Deployment', deploymentId);
     }
 
     const stages = deployment.canaryConfig.stages;
@@ -512,7 +523,7 @@ export class DeploymentService extends EventEmitter {
     // Get model version
     const modelVersion = await modelVersionRepository.findById(deployment.modelVersionId);
     if (!modelVersion) {
-      throw new Error(`Model version not found: ${deployment.modelVersionId}`);
+      throw new NotFoundError('Model version', deployment.modelVersionId);
     }
 
     // Get eligible robots and calculate target count

@@ -7,6 +7,7 @@
  */
 
 import { apiClient } from '@/api/client';
+import { isNotFoundError } from '@/shared/utils/error';
 import { robotsApi } from '@/features/robots/api';
 import type { PlaceGraph } from '@/features/digitaltwin/types/twin.types';
 import { placeCentroid, reachablePlaces } from '@/features/digitaltwin/utils/places';
@@ -62,7 +63,7 @@ export async function fetchNamedLocations(robotId: string): Promise<Record<strin
     }
   } catch (error) {
     // 404 = no site bound; anything else is logged. Either way only `home` is known.
-    if ((error as { response?: { status?: number } })?.response?.status !== 404) {
+    if (!isNotFoundError(error)) {
       console.warn('[commandApi] Failed to fetch robot places:', error);
     }
   }

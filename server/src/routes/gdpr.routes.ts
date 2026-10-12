@@ -22,9 +22,9 @@
  * - POST /gdpr/consents - Update consents
  * - DELETE /gdpr/consents/:type - Revoke consent
  *
- * Admin Endpoints:
- * - GET /gdpr/admin/requests - List all requests
- * - PATCH /gdpr/admin/requests/:id - Update status
+ * Admin Endpoints (owner or super-admin; an owner sees only their own tenant's
+ * data subjects, and another tenant's id answers 404 — TASK-383):
+ * - GET /gdpr/admin/requests - List requests
  * - POST /gdpr/admin/requests/:id/acknowledge
  * - POST /gdpr/admin/requests/:id/start-processing
  * - POST /gdpr/admin/requests/:id/complete
@@ -50,6 +50,8 @@ import {
 } from '../types/gdpr.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
 import type { AuthenticatedRequest, AuthUser, UserRole } from '../middleware/auth.middleware.js';
+import { ownerOnly } from '../middleware/auth.middleware.js';
+import type { GDPRTenantScope } from '../services/gdprTenantScope.js';
 import { prisma } from '../database/index.js';
 import { parseIntegerParam } from '../utils/pagination.js';
 
@@ -538,7 +540,65 @@ gdprRoutes.delete('/consents/:type', async (req: Request, res: Response) => {
 // ============================================================================
 
 /**
- * GET /gdpr/admin/requests - List all requests with filters
+ * GDPR administration is the controller's job (TASK-383): a tenant owner for
+ * their own organisation, or a platform super-admin. Members and viewers never
+ * reach /admin.
+ */
+gdprRoutes.use('/admin', ownerOnly);
+
+/**
+ * The tenant an /admin call is confined to (TASK-383). A super-admin works
+ * platform-wide (`undefined`); anyone else only on data subjects of their own
+ * tenant.
+ */
+function adminScope(req: Request): GDPRTenantScope | undefined {
+  const user = (req as AuthenticatedRequest).user;
+  if (user?.role === 'super-admin') return undefined;
+  return { tenantId: user?.tenantId ?? null };
+}
+
+/**
+ * Whether the data subject `userId` lies inside `scope`. Checked explicitly so
+ * it holds whether or not the tenant-isolation extension is enabled.
+ */
+async function subjectInScope(
+  scope: GDPRTenantScope | undefined,
+  userId: string,
+): Promise<boolean> {
+  if (!scope) return true;
+  const subject = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { tenantId: true },
+  });
+  return !!subject && (subject.tenantId ?? null) === scope.tenantId;
+}
+
+/**
+ * Loads a GDPR request for an /admin by-id call (TASK-383). A request whose
+ * data subject is in another tenant answers the same `404 Request not found`
+ * as a missing id, so an owner cannot probe or touch another tenant's requests.
+ * Sends the error response itself and returns null when the call must stop.
+ */
+async function loadAdminRequest(
+  req: Request,
+  res: Response,
+  id: string,
+): Promise<GDPRRequest | null> {
+  const request = await gdprRequestService.getRequest(id);
+  if (!request || !(await subjectInScope(adminScope(req), request.userId))) {
+    res.status(404).json({ error: 'Request not found' });
+    return null;
+  }
+  return request;
+}
+
+/** The administrator recorded on a status change: the authenticated caller. */
+function adminIdOf(req: Request): string {
+  return (req as AuthenticatedRequest).user?.id ?? 'admin';
+}
+
+/**
+ * GET /gdpr/admin/requests - List requests with filters, within the caller's tenant
  */
 gdprRoutes.get('/admin/requests', async (req: Request, res: Response) => {
   try {
@@ -567,6 +627,7 @@ gdprRoutes.get('/admin/requests', async (req: Request, res: Response) => {
       filters,
       parseIntegerParam(page, 'page', { min: 1 }) ?? 1,
       parseIntegerParam(limit, 'limit', { min: 1 }) ?? 20,
+      adminScope(req),
     );
 
     res.json(result);
@@ -582,9 +643,9 @@ gdprRoutes.get('/admin/requests', async (req: Request, res: Response) => {
 gdprRoutes.post('/admin/requests/:id/acknowledge', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const adminId = req.body.adminId || 'admin';
+    if (!(await loadAdminRequest(req, res, id))) return;
 
-    const request = await gdprRequestService.acknowledgeRequest(id, adminId);
+    const request = await gdprRequestService.acknowledgeRequest(id, adminIdOf(req));
     res.json(request);
   } catch (error) {
     console.error('Error acknowledging request:', error);
@@ -598,9 +659,9 @@ gdprRoutes.post('/admin/requests/:id/acknowledge', async (req: Request, res: Res
 gdprRoutes.post('/admin/requests/:id/start-processing', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const adminId = req.body.adminId || 'admin';
+    if (!(await loadAdminRequest(req, res, id))) return;
 
-    const request = await gdprRequestService.startProcessing(id, adminId);
+    const request = await gdprRequestService.startProcessing(id, adminIdOf(req));
     res.json(request);
   } catch (error) {
     console.error('Error starting processing:', error);
@@ -614,15 +675,13 @@ gdprRoutes.post('/admin/requests/:id/start-processing', async (req: Request, res
 gdprRoutes.post('/admin/requests/:id/complete', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const adminId = req.body.adminId || 'admin';
     const responseData = req.body.responseData || {};
 
+    const existingRequest = await loadAdminRequest(req, res, id);
+    if (!existingRequest) return;
+
     // For access/portability requests, generate export
-    const existingRequest = await gdprRequestService.getRequest(id);
-    if (
-      existingRequest &&
-      (existingRequest.requestType === 'access' || existingRequest.requestType === 'portability')
-    ) {
+    if (existingRequest.requestType === 'access' || existingRequest.requestType === 'portability') {
       const format = (existingRequest.requestData as Record<string, unknown>)?.format as
         | 'json'
         | 'csv'
@@ -634,7 +693,7 @@ gdprRoutes.post('/admin/requests/:id/complete', async (req: Request, res: Respon
       responseData.export = exportResult;
     }
 
-    const request = await gdprRequestService.completeRequest(id, adminId, responseData);
+    const request = await gdprRequestService.completeRequest(id, adminIdOf(req), responseData);
     res.json(request);
   } catch (error) {
     console.error('Error completing request:', error);
@@ -648,7 +707,6 @@ gdprRoutes.post('/admin/requests/:id/complete', async (req: Request, res: Respon
 gdprRoutes.post('/admin/requests/:id/reject', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const adminId = req.body.adminId || 'admin';
     const { reason } = req.body;
 
     if (!reason) {
@@ -657,7 +715,9 @@ gdprRoutes.post('/admin/requests/:id/reject', async (req: Request, res: Response
       });
     }
 
-    const request = await gdprRequestService.rejectRequest(id, adminId, reason);
+    if (!(await loadAdminRequest(req, res, id))) return;
+
+    const request = await gdprRequestService.rejectRequest(id, adminIdOf(req), reason);
     res.json(request);
   } catch (error) {
     console.error('Error rejecting request:', error);
@@ -671,12 +731,9 @@ gdprRoutes.post('/admin/requests/:id/reject', async (req: Request, res: Response
 gdprRoutes.post('/admin/requests/:id/execute-erasure', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const adminId = req.body.adminId || 'admin';
 
-    const existingRequest = await gdprRequestService.getRequest(id);
-    if (!existingRequest) {
-      return res.status(404).json({ error: 'Request not found' });
-    }
+    const existingRequest = await loadAdminRequest(req, res, id);
+    if (!existingRequest) return;
 
     if (existingRequest.requestType !== 'erasure') {
       return res.status(400).json({ error: 'This is not an erasure request' });
@@ -695,7 +752,7 @@ gdprRoutes.post('/admin/requests/:id/execute-erasure', async (req: Request, res:
     });
 
     // Complete the request
-    const request = await gdprRequestService.completeRequest(id, adminId, {
+    const request = await gdprRequestService.completeRequest(id, adminIdOf(req), {
       erasureResult,
     });
 
@@ -709,9 +766,9 @@ gdprRoutes.post('/admin/requests/:id/execute-erasure', async (req: Request, res:
 /**
  * GET /gdpr/admin/metrics - Get GDPR metrics dashboard
  */
-gdprRoutes.get('/admin/metrics', async (_req: Request, res: Response) => {
+gdprRoutes.get('/admin/metrics', async (req: Request, res: Response) => {
   try {
-    const metrics = await gdprRequestService.getMetrics();
+    const metrics = await gdprRequestService.getMetrics(adminScope(req));
     res.json(metrics);
   } catch (error) {
     console.error('Error fetching metrics:', error);
@@ -722,9 +779,9 @@ gdprRoutes.get('/admin/metrics', async (_req: Request, res: Response) => {
 /**
  * GET /gdpr/admin/sla-report - Get SLA compliance report
  */
-gdprRoutes.get('/admin/sla-report', async (_req: Request, res: Response) => {
+gdprRoutes.get('/admin/sla-report', async (req: Request, res: Response) => {
   try {
-    const report = await gdprRequestService.getSLAReport();
+    const report = await gdprRequestService.getSLAReport(adminScope(req));
     res.json(report);
   } catch (error) {
     console.error('Error fetching SLA report:', error);
@@ -735,9 +792,9 @@ gdprRoutes.get('/admin/sla-report', async (_req: Request, res: Response) => {
 /**
  * GET /gdpr/admin/overdue - Get overdue requests
  */
-gdprRoutes.get('/admin/overdue', async (_req: Request, res: Response) => {
+gdprRoutes.get('/admin/overdue', async (req: Request, res: Response) => {
   try {
-    const overdueRequests = await gdprRequestService.getOverdueRequests();
+    const overdueRequests = await gdprRequestService.getOverdueRequests(adminScope(req));
     res.json({ requests: overdueRequests });
   } catch (error) {
     console.error('Error fetching overdue requests:', error);
@@ -751,7 +808,7 @@ gdprRoutes.get('/admin/overdue', async (_req: Request, res: Response) => {
 gdprRoutes.get('/admin/nearing-deadline', async (req: Request, res: Response) => {
   try {
     const hours = parseInt(req.query.hours as string) || 48;
-    const requests = await gdprRequestService.getRequestsNearingSLA(hours);
+    const requests = await gdprRequestService.getRequestsNearingSLA(hours, adminScope(req));
     res.json({ requests });
   } catch (error) {
     console.error('Error fetching nearing deadline requests:', error);
@@ -762,9 +819,9 @@ gdprRoutes.get('/admin/nearing-deadline', async (req: Request, res: Response) =>
 /**
  * GET /gdpr/admin/consent-metrics - Get consent statistics
  */
-gdprRoutes.get('/admin/consent-metrics', async (_req: Request, res: Response) => {
+gdprRoutes.get('/admin/consent-metrics', async (req: Request, res: Response) => {
   try {
-    const metrics = await consentService.getConsentMetrics();
+    const metrics = await consentService.getConsentMetrics(adminScope(req));
     res.json(metrics);
   } catch (error) {
     console.error('Error fetching consent metrics:', error);
@@ -775,9 +832,9 @@ gdprRoutes.get('/admin/consent-metrics', async (_req: Request, res: Response) =>
 /**
  * GET /gdpr/admin/restriction-stats - Get restriction statistics
  */
-gdprRoutes.get('/admin/restriction-stats', async (_req: Request, res: Response) => {
+gdprRoutes.get('/admin/restriction-stats', async (req: Request, res: Response) => {
   try {
-    const stats = await dataRestrictionService.getRestrictionStats();
+    const stats = await dataRestrictionService.getRestrictionStats(adminScope(req));
     res.json(stats);
   } catch (error) {
     console.error('Error fetching restriction stats:', error);
@@ -788,9 +845,9 @@ gdprRoutes.get('/admin/restriction-stats', async (_req: Request, res: Response) 
 /**
  * GET /gdpr/admin/restrictions - Get all active restrictions
  */
-gdprRoutes.get('/admin/restrictions', async (_req: Request, res: Response) => {
+gdprRoutes.get('/admin/restrictions', async (req: Request, res: Response) => {
   try {
-    const restrictions = await dataRestrictionService.getActiveRestrictions();
+    const restrictions = await dataRestrictionService.getActiveRestrictions(adminScope(req));
     res.json({ restrictions });
   } catch (error) {
     console.error('Error fetching restrictions:', error);
@@ -804,9 +861,13 @@ gdprRoutes.get('/admin/restrictions', async (_req: Request, res: Response) => {
 gdprRoutes.post('/admin/restrictions/:id/lift', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const adminId = req.body.adminId || 'admin';
 
-    const restriction = await dataRestrictionService.liftRestriction(id, adminId);
+    const existing = await dataRestrictionService.getRestriction(id);
+    if (!existing || !(await subjectInScope(adminScope(req), existing.userId))) {
+      return res.status(404).json({ error: 'Restriction not found' });
+    }
+
+    const restriction = await dataRestrictionService.liftRestriction(id, adminIdOf(req));
     res.json(restriction);
   } catch (error) {
     console.error('Error lifting restriction:', error);
