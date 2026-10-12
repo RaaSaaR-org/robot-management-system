@@ -257,7 +257,7 @@ describe('submitJob — starting from an existing model', () => {
     mockModelVersionRepository.findByIdWithRelations.mockResolvedValue(null);
     await expect(
       trainingJobService.submitJob(submission({ initFromModelVersionId: 'mv-gone' }))
-    ).rejects.toThrow('Model version not found: mv-gone');
+    ).rejects.toMatchObject({ statusCode: 404, message: "Model version 'mv-gone' not found" });
   });
 
   it('persists the model id when the base models agree', async () => {
