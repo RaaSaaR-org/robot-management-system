@@ -3,7 +3,7 @@ id: "TASK-387"
 aliases: []
 title: "Training-job and deployment errors say what went wrong"
 slug: "training-job-and-deployment-errors-say-what-went-wrong"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
@@ -66,12 +66,12 @@ the client.
 tests under `server/src/services/__tests__/` and `server/src/__tests__/`.
 
 ## Acceptance Criteria
-- [ ] `POST /api/training/jobs` with an unknown `datasetId` answers 404 naming the dataset; with a dataset not ready answers 409 naming its status; `sim_rl` with an unknown `sceneId` answers 404.
-- [ ] `POST /api/deployments` with an unknown `modelVersionId` answers 404; with an active deployment for that version answers 409.
-- [ ] `/api/deployments/<unknown>/start|promote|cancel|progress|rollback` answer 404, the same as `DELETE`.
-- [ ] Starting/cancelling/rolling back a deployment in the wrong status answers 409 with the status in the message.
-- [ ] Plain internal errors still answer the generic fallback without echoing the text.
-- [ ] Server typecheck and vitest pass.
+- [x] `POST /api/training/jobs` with an unknown `datasetId` answers 404 naming the dataset; with a dataset not ready answers 409 naming its status; `sim_rl` with an unknown `sceneId` answers 404.
+- [x] `POST /api/deployments` with an unknown `modelVersionId` answers 404; with an active deployment for that version answers 409.
+- [x] `/api/deployments/<unknown>/start|promote|cancel|progress|rollback` answer 404, the same as `DELETE`.
+- [x] Starting/cancelling/rolling back a deployment in the wrong status answers 409 with the status in the message.
+- [x] Plain internal errors still answer the generic fallback without echoing the text.
+- [x] Server typecheck and vitest pass.
 
 ## Test Strategy
 Vitest: service tests assert `statusCode` and message per error class; a route
