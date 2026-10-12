@@ -122,6 +122,75 @@ async function localReadRoot(storagePath: string, res: Response): Promise<string
 const CAMERA_KEY_RE = /^[A-Za-z0-9_.-]+$/;
 
 /**
+ * The camera feature key a video route segment names, or null when it is not a
+ * safe single path segment. The episode browser sends the full feature key
+ * (`observation.images.top`, pusht's singular `observation.image`); a bare
+ * camera name (`top`, older callers) means `observation.images.<name>`.
+ */
+export function cameraFeatureKey(camera: string): string | null {
+  if (!CAMERA_KEY_RE.test(camera) || camera === '.' || camera === '..') return null;
+  return camera.startsWith('observation.') ? camera : `observation.images.${camera}`;
+}
+
+/**
+ * Parse a single-range `Range` header against an object of `size` bytes.
+ * Returns the inclusive window, or 'unsatisfiable' for a malformed or
+ * out-of-bounds range (answered with 416).
+ */
+export function parseByteRange(
+  header: string,
+  size: number,
+): { start: number; end: number } | 'unsatisfiable' {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m || (!m[1] && !m[2])) return 'unsatisfiable';
+  let start: number;
+  let end: number;
+  if (!m[1]) {
+    // suffix range `bytes=-N` → last N bytes
+    start = Math.max(0, size - parseInt(m[2], 10));
+    end = size - 1;
+  } else {
+    start = parseInt(m[1], 10);
+    end = m[2] ? parseInt(m[2], 10) : size - 1;
+  }
+  end = Math.min(end, size - 1);
+  if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) return 'unsatisfiable';
+  return { start, end };
+}
+
+/**
+ * Answer a video request for an object of `size` bytes: 206 with the window
+ * `open` reads when the request carries a `Range`, 416 for one that cannot be
+ * served, 200 with the whole object otherwise. `open` is called once.
+ */
+async function sendVideo(
+  req: Request,
+  res: Response,
+  size: number,
+  open: (range?: { start: number; end: number }) => Readable | Promise<Readable>,
+): Promise<void> {
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Accept-Ranges', 'bytes');
+  const header = req.headers.range;
+  if (!header) {
+    res.setHeader('Content-Length', size);
+    pipeStreamToResponse(await open(), res);
+    return;
+  }
+  const range = parseByteRange(header, size);
+  if (range === 'unsatisfiable') {
+    res.status(416).setHeader('Content-Range', `bytes */${size}`);
+    res.end();
+    return;
+  }
+  const stream = await open(range);
+  res.status(206);
+  res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
+  res.setHeader('Content-Length', range.end - range.start + 1);
+  pipeStreamToResponse(stream, res);
+}
+
+/**
  * Pipe a readable to the response with error handling and abort cleanup.
  * A bare `stream.pipe(res)` leaves the read stream's 'error' unhandled (an I/O
  * error mid-stream then crashes the whole process) and leaks the fd when the
@@ -187,17 +256,18 @@ async function readLocalFrames(
  * when the file is genuinely absent (so the caller can 404). All error/response
  * paths return true because they have already written a response.
  */
-function streamLocalVideo(
+async function streamLocalVideo(
   storagePath: string,
   episodeIndex: number,
   camera: string,
   req: Request,
   res: Response,
-): boolean {
+): Promise<boolean> {
   // Guard against path traversal via the camera segment: Express decodes %2f
   // inside a single param after route matching, so `x%2f..%2f..` would escape
   // the dataset dir once join() normalizes the `..` sequences.
-  if (!CAMERA_KEY_RE.test(camera)) {
+  const featureKey = cameraFeatureKey(camera);
+  if (!featureKey) {
     res.status(400).json({ error: 'Invalid camera key' });
     return true;
   }
@@ -206,8 +276,8 @@ function streamLocalVideo(
   // Cosmos-converter layout: videos/<camera>/chunk-000/episode.mp4;
   // standard LeRobot v2.1 layout: videos/chunk-000/<camera>/episode.mp4.
   const candidates = [
-    resolve(baseDir, 'videos', `observation.images.${camera}`, 'chunk-000', episodeFile),
-    resolve(baseDir, 'videos', 'chunk-000', `observation.images.${camera}`, episodeFile),
+    resolve(baseDir, 'videos', featureKey, 'chunk-000', episodeFile),
+    resolve(baseDir, 'videos', 'chunk-000', featureKey, episodeFile),
   ];
   // Defense in depth: the resolved file must stay within the dataset dir.
   if (candidates.some((f) => f !== baseDir && !f.startsWith(baseDir + sep))) {
@@ -218,39 +288,7 @@ function streamLocalVideo(
   if (!file) return false;
 
   const { size } = statSync(file);
-  res.setHeader('Content-Type', 'video/mp4');
-  res.setHeader('Accept-Ranges', 'bytes');
-
-  const range = req.headers.range;
-  if (range) {
-    const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
-    if (!m || (!m[1] && !m[2])) {
-      res.status(416).setHeader('Content-Range', `bytes */${size}`);
-      return res.end(), true;
-    }
-    let start: number;
-    let end: number;
-    if (!m[1]) {
-      // suffix range `bytes=-N` → last N bytes
-      start = Math.max(0, size - parseInt(m[2], 10));
-      end = size - 1;
-    } else {
-      start = parseInt(m[1], 10);
-      end = m[2] ? parseInt(m[2], 10) : size - 1;
-    }
-    end = Math.min(end, size - 1);
-    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) {
-      res.status(416).setHeader('Content-Range', `bytes */${size}`);
-      return res.end(), true;
-    }
-    res.status(206);
-    res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
-    res.setHeader('Content-Length', end - start + 1);
-    pipeStreamToResponse(createReadStream(file, { start, end }), res);
-  } else {
-    res.setHeader('Content-Length', size);
-    pipeStreamToResponse(createReadStream(file), res);
-  }
+  await sendVideo(req, res, size, (range) => createReadStream(file, range ?? {}));
   return true;
 }
 
@@ -1259,8 +1297,13 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
     if (isLocalDataset(dataset.storagePath)) {
       const root = await localReadRoot(dataset.storagePath, res);
       if (root === null) return;
-      if (streamLocalVideo(root, episodeIndex, camera, req, res)) return;
+      if (await streamLocalVideo(root, episodeIndex, camera, req, res)) return;
       return res.status(404).json({ error: 'Video not found for this dataset' });
+    }
+
+    const featureKey = cameraFeatureKey(camera);
+    if (!featureKey) {
+      return res.status(400).json({ error: 'Invalid camera key' });
     }
 
     // Optional exact chunk/file coordinates from the episodes API's
@@ -1274,59 +1317,58 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
     const pad3 = (n: number) => String(n).padStart(3, '0');
 
     // LeRobot v2.x lays out one mp4 PER EPISODE:
-    //   videos/chunk-{chunk:03d}/observation.images.{camera}/episode_{ep:06d}.mp4
+    //   videos/chunk-{chunk:03d}/{camera key}/episode_{ep:06d}.mp4
     // LeRobot v3 concatenates all episodes of a chunk into one file per camera:
-    //   videos/observation.images.{camera}/chunk-{chunk:03d}/file-{file:03d}.mp4
+    //   videos/{camera key}/chunk-{chunk:03d}/file-{file:03d}.mp4
     // Try the layout matching the dataset's version first, then the other one
     // as a fallback (imports occasionally mislabel the version).
-    const v2Path = `videos/chunk-${pad3(Math.floor(episodeIndex / CHUNKS_SIZE))}/observation.images.${camera}/episode_${String(episodeIndex).padStart(6, '0')}.mp4`;
-    const v3Path = `videos/observation.images.${camera}/chunk-${pad3(chunkIndex)}/file-${pad3(fileIndex)}.mp4`;
+    const v2Path = `videos/chunk-${pad3(Math.floor(episodeIndex / CHUNKS_SIZE))}/${featureKey}/episode_${String(episodeIndex).padStart(6, '0')}.mp4`;
+    const v3Path = `videos/${featureKey}/chunk-${pad3(chunkIndex)}/file-${pad3(fileIndex)}.mp4`;
     const isV2 = (dataset.lerobotVersion ?? '').toLowerCase().startsWith('v2');
     const candidatePaths = isV2 ? [v2Path, v3Path] : [v3Path, v2Path];
     const videoPath = candidatePaths[0];
 
-    // Try to stream from RustFS if available
-    // Check both 'training-datasets' and legacy 'datasets' bucket
-    try {
-      const { isRustFSInitialized, getRustFSClient } = await import('../storage/rustfs-client.js');
-      if (isRustFSInitialized()) {
-        const rustfs = getRustFSClient();
-        const base = dataset.storagePath.endsWith('/') ? dataset.storagePath : `${dataset.storagePath}/`;
-
+    // Stream from RustFS through this server ('training-datasets', then the
+    // legacy 'datasets' bucket). Never redirect to a presigned URL: it names the
+    // in-cluster endpoint (http://neodem-rustfs:9000), which a browser cannot
+    // resolve and an https page may not load. Each Range request reads only its
+    // window, so a v3.0 chunk video is never pulled whole for one episode.
+    const { isRustFSInitialized, getRustFSClient } = await import('../storage/rustfs-client.js');
+    if (isRustFSInitialized()) {
+      const rustfs = getRustFSClient();
+      const base = dataset.storagePath.endsWith('/') ? dataset.storagePath : `${dataset.storagePath}/`;
+      let found: { bucket: string; key: string; size: number } | null = null;
+      try {
         for (const candidate of candidatePaths) {
-          const videoKey = `${base}${candidate}`;
           for (const bucket of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
-            const exists = await rustfs.exists(bucket, videoKey);
-            if (!exists) continue;
-
-            const metadata = await rustfs.getMetadata(bucket, videoKey);
-            const fileSize = metadata.contentLength ?? 0;
-
-            const range = req.headers.range;
-            if (range) {
-              const url = await rustfs.getPresignedDownloadUrl(bucket, videoKey, 3600);
-              return res.redirect(302, url);
-            }
-
-            res.setHeader('Content-Type', 'video/mp4');
-            res.setHeader('Content-Length', fileSize);
-            res.setHeader('Accept-Ranges', 'bytes');
-            const stream = await rustfs.getStream(bucket, videoKey);
-            return pipeStreamToResponse(stream as unknown as Readable, res);
+            const key = `${base}${candidate}`;
+            if (!(await rustfs.exists(bucket, key))) continue;
+            const metadata = await rustfs.getMetadata(bucket, key);
+            found = { bucket, key, size: metadata.contentLength ?? 0 };
+            break;
           }
+          if (found) break;
         }
+      } catch (err) {
+        // RustFS unreachable — fall through to the HF proxy.
+        console.warn('[DatasetRoutes] RustFS video lookup failed:', err instanceof Error ? err.message : err);
       }
-    } catch {
-      // RustFS unavailable — fall through to HF proxy
+      if (found) {
+        const { bucket, key, size } = found;
+        await sendVideo(req, res, size, (range) => rustfs.getStream(bucket, key, range));
+        return;
+      }
     }
 
-    // Fallback: proxy from HuggingFace if we have a repo ID
+    // Fallback: proxy from HuggingFace if we have a repo ID, at the revision
+    // the dataset was imported from (a v2.1 tag is not what `main` holds).
     const repoId = dataset.huggingFaceRepoId;
     if (!repoId) {
       return res.status(404).json({ error: 'Video not found and no HuggingFace repo to proxy from' });
     }
 
-    const hfUrl = `https://huggingface.co/datasets/${repoId}/resolve/main/${videoPath}`;
+    const revision = encodeURIComponent(dataset.sourceRevision || 'main');
+    const hfUrl = `https://huggingface.co/datasets/${repoId}/resolve/${revision}/${videoPath}`;
     const hfResponse = await fetch(hfUrl, {
       headers: req.headers.range ? { Range: req.headers.range } : {},
       redirect: 'follow',
@@ -1351,7 +1393,8 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
     pipeStreamToResponse(nodeStream, res);
   } catch (error) {
     console.error('[DatasetRoutes] Error streaming video:', error);
-    res.status(500).json({ error: 'Failed to stream video' });
+    if (res.headersSent) res.destroy(error instanceof Error ? error : undefined);
+    else res.status(500).json({ error: 'Failed to stream video' });
   }
 });
 

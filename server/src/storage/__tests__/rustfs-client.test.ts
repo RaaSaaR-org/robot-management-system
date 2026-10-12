@@ -367,6 +367,24 @@ describe('RustFSClient.getStream', () => {
 
     await expect(c.getStream('b', 'k')).rejects.toThrow('Empty response body for b/k');
   });
+
+  it('asks for a byte range and returns the served window', async () => {
+    const body = fakeStream([Uint8Array.from([1])]);
+    h.send.mockResolvedValue({ Body: body, ContentRange: 'bytes 2-5/10' });
+    const c = new RustFSClient(cfg);
+
+    const result = await c.getStream('b', 'k', { start: 2, end: 5 });
+
+    expect(result).toBe(body);
+    expect(h.send.mock.calls[0][0].input).toMatchObject({ Bucket: 'b', Key: 'k', Range: 'bytes=2-5' });
+  });
+
+  it('throws when a store ignores the range and sends the whole object', async () => {
+    h.send.mockResolvedValue({ Body: fakeStream([Uint8Array.from([1])]), $metadata: { httpStatusCode: 200 } });
+    const c = new RustFSClient(cfg);
+
+    await expect(c.getStream('b', 'k', { start: 2, end: 5 })).rejects.toThrow('ignored the byte range');
+  });
 });
 
 // ---------------------------------------------------------------------------

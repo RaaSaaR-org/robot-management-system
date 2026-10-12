@@ -36,6 +36,7 @@ import { CuratePanel } from '../components/datasets/CuratePanel';
 import { JointChartPanel, RewardCurvePanel } from '../components/datasets/TrajectoryPanels';
 import { AnnotationsPanel } from '../components/datasets/AnnotationsPanel';
 import { formatDuration } from '../components/datasets/datasetFormat';
+import { cameraKeys, featureNames } from '../components/datasets/episodeFormat';
 import { useDatasetViews } from '../hooks/useDatasetViews';
 import { useTrainingJobs } from '../hooks/useTrainingJobs';
 import { isDatasetView } from '../types';
@@ -100,19 +101,18 @@ export function DatasetEpisodesPage() {
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const { submitJob } = useTrainingJobs();
 
-  // Camera names from the features. State-only datasets have none; the legacy
-  // wrist/top guess applies only when there is no feature metadata at all.
+  // Camera feature keys (dtype video/image). State-only datasets have none; the
+  // legacy wrist/top guess applies only when there is no feature metadata at all.
   const cameraNames = useMemo(() => {
-    if (!dataset?.infoJson?.features) return ['wrist', 'top'];
-    return Object.keys(dataset.infoJson.features as Record<string, unknown>)
-      .filter((k) => k.startsWith('observation.images.'))
-      .map((k) => k.replace('observation.images.', ''));
+    const features = dataset?.infoJson?.features as Record<string, unknown> | undefined;
+    if (!features) return ['observation.images.wrist', 'observation.images.top'];
+    return cameraKeys(features);
   }, [dataset]);
 
   const jointNames = useMemo(() => {
-    const action = (dataset?.infoJson?.features as Record<string, { names?: unknown[] }> | undefined)?.['action'];
-    // Unitree-style datasets nest names as [["kLeftShoulderPitch", ...]] — flatten first
-    const flat = action?.names?.flat(2).filter((n): n is string => typeof n === 'string') ?? [];
+    const action = (dataset?.infoJson?.features as Record<string, { names?: unknown }> | undefined)?.['action'];
+    // names is a flat array, a nested array (Unitree) or an object of arrays (pusht, xarm)
+    const flat = featureNames(action?.names);
     return flat.length ? flat.map((n) => n.replace('.pos', '')) : DEFAULT_JOINTS;
   }, [dataset]);
 
