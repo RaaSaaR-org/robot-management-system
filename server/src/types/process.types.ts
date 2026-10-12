@@ -12,16 +12,20 @@ export type ProcessDefinitionStatus = 'draft' | 'ready' | 'archived';
 
 export type ProcessTriggerType = 'manual' | 'scheduled' | 'event';
 
-export type StepActionType =
-  | 'move_to_location'
-  | 'pickup_object'
-  | 'drop_object'
-  | 'wait'
-  | 'inspect'
-  | 'charge'
-  | 'return_home'
-  | 'execute_skill' // TASK-143: run a SkillDefinition via skillExecutionService
-  | 'custom';
+/** Every step action the executor knows; the runtime list behind StepActionType. */
+export const StepActionTypes = [
+  'move_to_location',
+  'pickup_object',
+  'drop_object',
+  'wait',
+  'inspect',
+  'charge',
+  'return_home',
+  'execute_skill', // TASK-143: run a SkillDefinition via skillExecutionService
+  'custom',
+] as const;
+
+export type StepActionType = (typeof StepActionTypes)[number];
 
 /**
  * actionConfig shape for actionType='execute_skill':

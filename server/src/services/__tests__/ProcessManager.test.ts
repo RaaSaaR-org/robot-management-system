@@ -207,9 +207,43 @@ describe('definition management', () => {
 
   it('publishDefinition sets status to ready', async () => {
     const def = makeDefinition({ status: 'ready' });
+    repo.findDefinitionById.mockResolvedValue(makeDefinition());
     repo.updateDefinition.mockResolvedValue(def);
     await expect(manager.publishDefinition('def1')).resolves.toBe(def);
     expect(repo.updateDefinition).toHaveBeenCalledWith('def1', { status: 'ready' });
+  });
+
+  it('publishDefinition returns null when the definition is missing', async () => {
+    repo.findDefinitionById.mockResolvedValue(null);
+    await expect(manager.publishDefinition('nope')).resolves.toBeNull();
+    expect(repo.updateDefinition).not.toHaveBeenCalled();
+  });
+
+  // TASK-386: a malformed step used to publish fine and then fail every start.
+  it('publishDefinition refuses a stored definition with a malformed step', async () => {
+    repo.findDefinitionById.mockResolvedValue(
+      makeDefinition({ stepTemplates: [{ foo: 1 }] as never })
+    );
+    await expect(manager.publishDefinition('def1')).rejects.toThrow('stepTemplates[0].name');
+    expect(repo.updateDefinition).not.toHaveBeenCalled();
+  });
+
+  it('createDefinition refuses a step with an unknown actionType', async () => {
+    const request = {
+      name: 'X',
+      stepTemplates: [{ name: 's', actionType: 'bogus', actionConfig: {} }],
+    } as never;
+    await expect(manager.createDefinition(request, 'alice')).rejects.toThrow(
+      'stepTemplates[0].actionType must be one of'
+    );
+    expect(repo.createDefinition).not.toHaveBeenCalled();
+  });
+
+  it('updateDefinition refuses a non-array stepTemplates', async () => {
+    await expect(
+      manager.updateDefinition('def1', { stepTemplates: 'x' } as never)
+    ).rejects.toThrow('stepTemplates must be an array');
+    expect(repo.updateDefinition).not.toHaveBeenCalled();
   });
 
   it('archiveDefinition delegates to deleteDefinition', async () => {

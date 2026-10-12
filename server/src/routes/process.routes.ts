@@ -23,7 +23,11 @@ import type {
   CreateRobotTaskRequest,
   RobotTaskListFilters,
 } from '../types/robotTask.types.js';
+import { StepActionTypes } from '../types/process.types.js';
+import { isStepActionType } from '../services/processStepTemplates.js';
 import { BadRequestError } from '../utils/errors.js';
+import { parsePagination } from '../utils/pagination.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const processRoutes = Router();
 
@@ -42,8 +46,7 @@ processRoutes.get('/', async (req: Request, res: Response) => {
       tags: req.query.tags ? (req.query.tags as string).split(',') : undefined,
     };
     const pagination: PaginationParams = {
-      page: req.query.page ? parseInt(req.query.page as string) : 1,
-      limit: req.query.limit ? parseInt(req.query.limit as string) : 20,
+      ...parsePagination(req.query, { defaultLimit: 20 }),
       sortBy: req.query.sortBy as string,
       sortOrder: req.query.sortOrder as 'asc' | 'desc',
     };
@@ -51,8 +54,7 @@ processRoutes.get('/', async (req: Request, res: Response) => {
     const result = await processManager.listDefinitions(filters, pagination);
     res.json(result);
   } catch (error) {
-    console.error('Error listing processes:', error);
-    res.status(500).json({ error: 'Failed to list processes' });
+    sendFailure(res, error, 'Failed to list processes');
   }
 });
 
@@ -179,8 +181,7 @@ processRoutes.post('/:id/publish', async (req: Request, res: Response) => {
     }
     res.json(process);
   } catch (error) {
-    console.error('Error publishing process:', error);
-    res.status(500).json({ error: 'Failed to publish process' });
+    sendFailure(res, error, 'Failed to publish process');
   }
 });
 
@@ -237,8 +238,7 @@ processRoutes.get('/instances/list', async (req: Request, res: Response) => {
       createdBy: req.query.createdBy as string,
     };
     const pagination: PaginationParams = {
-      page: req.query.page ? parseInt(req.query.page as string) : 1,
-      limit: req.query.limit ? parseInt(req.query.limit as string) : 20,
+      ...parsePagination(req.query, { defaultLimit: 20 }),
       sortBy: req.query.sortBy as string,
       sortOrder: req.query.sortOrder as 'asc' | 'desc',
     };
@@ -246,8 +246,7 @@ processRoutes.get('/instances/list', async (req: Request, res: Response) => {
     const result = await processManager.listInstances(filters, pagination);
     res.json(result);
   } catch (error) {
-    console.error('Error listing process instances:', error);
-    res.status(500).json({ error: 'Failed to list process instances' });
+    sendFailure(res, error, 'Failed to list process instances');
   }
 });
 
@@ -367,8 +366,7 @@ processRoutes.get('/tasks/list', async (req: Request, res: Response) => {
       source: req.query.source as RobotTaskListFilters['source'],
     };
     const pagination: PaginationParams = {
-      page: req.query.page ? parseInt(req.query.page as string) : 1,
-      limit: req.query.limit ? parseInt(req.query.limit as string) : 20,
+      ...parsePagination(req.query, { defaultLimit: 20 }),
       sortBy: req.query.sortBy as string,
       sortOrder: req.query.sortOrder as 'asc' | 'desc',
     };
@@ -376,8 +374,7 @@ processRoutes.get('/tasks/list', async (req: Request, res: Response) => {
     const result = await robotTaskRepository.findAll(filters, pagination);
     res.json(result);
   } catch (error) {
-    console.error('Error listing tasks:', error);
-    res.status(500).json({ error: 'Failed to list tasks' });
+    sendFailure(res, error, 'Failed to list tasks');
   }
 });
 
@@ -406,6 +403,11 @@ processRoutes.post('/tasks', async (req: Request, res: Response) => {
 
     if (!request.actionType || !request.instruction) {
       return res.status(400).json({ error: 'actionType and instruction are required' });
+    }
+    if (!isStepActionType(request.actionType)) {
+      return res.status(400).json({
+        error: `actionType must be one of: ${StepActionTypes.join(', ')}`,
+      });
     }
 
     const task = await taskDistributor.createTask(request, 'manual');

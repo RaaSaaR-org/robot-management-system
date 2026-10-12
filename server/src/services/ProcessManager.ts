@@ -10,6 +10,7 @@ import { robotTaskRepository } from '../repositories/RobotTaskRepository.js';
 import { skillExecutionService } from './SkillExecutionService.js';
 import { twinPlaceGraphService } from './TwinPlaceGraphService.js';
 import { readPlaceRef, resolvePlaceRef, validateStepPlaces } from './processPlaceRef.js';
+import { stepTemplatesError } from './processStepTemplates.js';
 import { BadRequestError } from '../utils/errors.js';
 import type {
   ProcessDefinition,
@@ -81,6 +82,7 @@ export class ProcessManager extends EventEmitter {
     request: CreateProcessDefinitionRequest,
     createdBy: string
   ): Promise<ProcessDefinition> {
+    this.assertStepTemplates(request.stepTemplates);
     await this.assertStepPlaces(request.stepTemplates);
     const definition = await processRepository.createDefinition(request, createdBy);
     logger.info(`Created process definition: ${definition.name} (${definition.id})`);
@@ -91,7 +93,10 @@ export class ProcessManager extends EventEmitter {
     id: string,
     request: UpdateProcessDefinitionRequest
   ): Promise<ProcessDefinition | null> {
-    if (request.stepTemplates) await this.assertStepPlaces(request.stepTemplates);
+    if (request.stepTemplates !== undefined) {
+      this.assertStepTemplates(request.stepTemplates);
+      await this.assertStepPlaces(request.stepTemplates);
+    }
     const definition = await processRepository.updateDefinition(id, request);
     if (definition) {
       logger.info(`Updated process definition: ${definition.name} (${definition.id})`);
@@ -112,7 +117,21 @@ export class ProcessManager extends EventEmitter {
     if (error) throw new BadRequestError(error);
   }
 
+  /**
+   * TASK-386: every step needs a name, a known actionType and an actionConfig
+   * object, or the definition cannot start. Throws BadRequestError otherwise.
+   */
+  private assertStepTemplates(stepTemplates: unknown): void {
+    const error = stepTemplatesError(stepTemplates);
+    if (error) throw new BadRequestError(error);
+  }
+
   async publishDefinition(id: string): Promise<ProcessDefinition | null> {
+    // A definition stored before TASK-386 may still carry malformed steps;
+    // publishing it would schedule runs that each fail on start.
+    const existing = await processRepository.findDefinitionById(id);
+    if (!existing) return null;
+    this.assertStepTemplates(existing.stepTemplates);
     return processRepository.updateDefinition(id, { status: 'ready' });
   }
 
