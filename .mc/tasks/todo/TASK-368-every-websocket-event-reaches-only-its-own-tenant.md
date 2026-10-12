@@ -3,7 +3,7 @@ id: "TASK-368"
 aliases: ["TASK-368"]
 title: "Every WebSocket event reaches only its own tenant"
 slug: "every-websocket-event-reaches-only-its-own-tenant"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
