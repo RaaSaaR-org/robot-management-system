@@ -16,7 +16,7 @@ spe: 2
 effort: "low"
 due_date: ""
 created: "2026-10-13"
-updated: "2026-10-13"
+updated: 2026-10-13
 ---
 
 # Training-job and deployment errors say what went wrong
