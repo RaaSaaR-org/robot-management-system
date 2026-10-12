@@ -3,7 +3,7 @@ id: "TASK-374"
 aliases: []
 title: "Viewers can stop a zone and the fleet stop 403 is explained"
 slug: "viewers-can-stop-a-zone-and-the-fleet-stop-403-is-explained"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -74,6 +74,7 @@ up; otherwise record what was tried.
 
 - `server/src/middleware/auth.middleware.ts`
 - `server/src/__tests__/write-route-authorization.test.ts`
+- `docs/api.md` (the halts table)
 - `app/src/features/fleet/components/SiteMap.tsx`
 - `app/src/features/fleet/components/__tests__/SiteMap.test.tsx`
 - `app/src/features/safety/components/ZoneEmergencyStopButton.tsx`
@@ -82,16 +83,16 @@ up; otherwise record what was tried.
 
 ## Acceptance Criteria
 
-- [ ] With auth on, a viewer's `POST /api/safety/zones/:id/estop` is not refused
+- [x] With auth on, a viewer's `POST /api/safety/zones/:id/estop` is not refused
       by the role guard (200, or 404 for an unknown zone).
-- [ ] A viewer still gets 403 on `POST /api/safety/fleet/estop/reset`,
+- [x] A viewer still gets 403 on `POST /api/safety/fleet/estop/reset`,
       `POST /api/safety/robots/:id/estop/reset` and `POST /api/safety/robots/:id/estop`,
       and no `.../zones/:id/estop/reset` or nested path matches the halt list.
-- [ ] The `SAFETY_HALT_WRITES` doc comment no longer says the zone stop is excluded.
-- [ ] On the site map and in `ZoneEmergencyStopButton`, a viewer can stop a zone
+- [x] The `SAFETY_HALT_WRITES` doc comment no longer says the zone stop is excluded.
+- [x] On the site map and in `ZoneEmergencyStopButton`, a viewer can stop a zone
       and sees no "Your role can't use this stop" hint; the per-robot stop and
       every resume stay disabled for a viewer.
-- [ ] The source of the k3d Stop-fleet 403 is fixed with a test, or the task and
+- [x] The source of the k3d Stop-fleet 403 is fixed with a test, or the task and
       the PR record that it does not reproduce on `main` and what was tried.
 
 ## Test Strategy
