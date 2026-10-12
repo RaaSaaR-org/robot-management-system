@@ -3,7 +3,7 @@ id: "TASK-379"
 aliases: []
 title: "RustFS keeps no incomplete multipart uploads"
 slug: "rustfs-keeps-no-incomplete-multipart-uploads"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
