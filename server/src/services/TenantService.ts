@@ -258,7 +258,12 @@ export class TenantService {
 
     const passwordHash = await bcrypt.hash(input.adminUser.password, 12);
 
-    const result = await prisma.$transaction(async (tx) => {
+    // As the platform (TASK-365): the caller is a super-admin, whose request
+    // runs in its own (or an impersonated) tenant, and the tenant-isolation
+    // extension stamps THAT tenant over every `tenantId` written below — the
+    // new owner and the cloned robots would land in the caller's tenant, not
+    // the one this call creates.
+    const result = await runAsPlatform(() => prisma.$transaction(async (tx) => {
       // Step 1: Create tenant
       const tenantRow = await tx.tenant.create({
         data: {
@@ -303,7 +308,7 @@ export class TenantService {
       }
 
       return { tenantRow, userRow };
-    });
+    }));
 
     const counts = await countsFor(result.tenantRow.id);
     return {

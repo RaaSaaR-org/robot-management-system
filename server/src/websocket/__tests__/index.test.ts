@@ -782,6 +782,25 @@ describe('setupWebSocket', () => {
       services.alert.cb?.({ type: 'alert:created', alert: { id: 'a1' }, timestamp: 1 });
       expect(client.sent).toHaveLength(1);
     });
+
+    it('rejects an expired token with an auth error and keeps the socket unidentified', async () => {
+      const jwt = (await import('jsonwebtoken')).default;
+      const token = jwt.sign(
+        { userId: 'u1', email: 'u1@test', role: 'member', tenantId: null, exp: Math.floor(Date.now() / 1000) - 60 },
+        process.env.JWT_SECRET as string
+      );
+      const wss = setup();
+      const client = connect(wss, makeClient());
+      client.emit('message', Buffer.from(JSON.stringify({ type: 'auth', token })));
+      expect(JSON.parse(client.sent.at(-1) as string)).toEqual({
+        type: 'auth',
+        authenticated: false,
+        error: 'invalid_token',
+      });
+      client.reset();
+      services.alert.cb?.({ type: 'alert:created', alert: { id: 'a1' }, timestamp: 1 });
+      expect(client.sent).toEqual([]);
+    });
   });
 
   describe('with multi-tenancy on (TASK-368)', () => {

@@ -61,6 +61,25 @@ Without `--down` the cluster stays up, and the next `run.sh` reuses it:
 production values file ships the public example key, which the server
 refuses to start on in production (TASK-359).
 
+### With auth and multi-tenancy on (`E2E_TENANT=1`)
+
+`values-k3d.yaml` runs `AUTH_DISABLED=true`, and the chart has no value for
+`MULTI_TENANCY_ENABLED` or the bootstrap admin. So `tenant-test.sh` switches
+the installed server over with `kubectl set env` and switches it back when it
+exits. `run.sh` runs it after `test.sh` when `E2E_TENANT=1` is set. It takes
+about 1.5 minutes, most of it two server rollouts. It checks that:
+
+1. An anonymous API call answers `401`.
+2. The bootstrap super-admin (`BOOTSTRAP_ADMIN_EMAIL`/`_PASSWORD`, TASK-367)
+   can sign in and list tenants.
+3. Each of two onboarded tenants has its owner in its own tenant, flagged for
+   a password change. Onboarding a slug a second time answers `409`.
+4. The forced password change clears that flag.
+5. Tenant A registers the demo robot. Tenant B gets `404` on it for GET,
+   telemetry, command and delete, and its robot list is empty.
+6. An anonymous WebSocket receives no events while the robot streams. This
+   check needs node 22+.
+
 A bucket-list drift test runs with the normal server suite, no cluster needed:
 `server/src/storage/__tests__/bucket-provisioning.test.ts` fails when a bucket
 in the server's `BUCKETS` map is missing from `rustfs.buckets` in either chart.
@@ -92,6 +111,7 @@ in the server's `BUCKETS` map is missing from `rustfs.buckets` in either chart.
 | `install.sh` | `helm upgrade --install` of the production chart with `values-k3d.yaml` and the local image tags |
 | `values-k3d.yaml` | only what a laptop cannot provide: `local-path` storage, no HTTPRoute, no pull secret, VLA off, one robot, no demo seed Job. Resource limits stay as production has them |
 | `test.sh` | the assertions above, over a port-forward to the server |
+| `tenant-test.sh` | auth + multi-tenancy checks, opt-in with `E2E_TENANT=1` |
 | `down.sh` | deletes the cluster; `E2E_PRUNE_IMAGES=1` also removes the images |
 | `lib.sh` | shared settings |
 
@@ -105,6 +125,7 @@ in the server's `BUCKETS` map is missing from `rustfs.buckets` in either chart.
 | `E2E_COMPONENTS` | `server app robot-agent` | images `up.sh` builds |
 | `E2E_IMAGE_TAG` | `e2e-<git sha>[-dirty]` | |
 | `E2E_PORT` | `18081` | local port of the server port-forward |
+| `E2E_TENANT` | `0` | `1` adds the auth + multi-tenancy stage |
 | `E2E_IMPORT_TIMEOUT` | `300` | seconds to wait for `ready` |
 | `E2E_AWSCLI_IMAGE` | the aws-cli image the chart renders | image of the bucket-listing pod |
 | `E2E_CLUSTER` / `E2E_NAMESPACE` / `E2E_RELEASE` | `neodem-e2e` / `neodem` / `neodem` | `E2E_CLUSTER` also names the kube context, `k3d-<cluster>` |
