@@ -31,14 +31,14 @@ function makeRobot(over: Partial<Robot> = {}): Robot {
 
 describe('current task of an offline robot', () => {
   it('the Overview tile marks it as last known, not running', () => {
-    render(<RobotQuickStats robot={makeRobot()} />);
+    render(<RobotQuickStats robot={makeRobot()} isTelemetryConnected={false} />);
     expect(screen.getByText('Protective stop')).toBeInTheDocument();
     expect(screen.getByText('Last known — robot offline')).toBeInTheDocument();
     expect(screen.queryByText('Running now')).toBeNull();
   });
 
   it('the Overview tile still says "Running now" for an online robot', () => {
-    render(<RobotQuickStats robot={makeRobot({ status: 'busy' })} />);
+    render(<RobotQuickStats robot={makeRobot({ status: 'busy' })} isTelemetryConnected={false} />);
     expect(screen.getByText('Running now')).toBeInTheDocument();
   });
 
