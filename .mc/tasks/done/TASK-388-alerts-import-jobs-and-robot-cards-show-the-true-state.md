@@ -3,7 +3,7 @@ id: "TASK-388"
 aliases: []
 title: "Alerts, import jobs and robot cards show the true state"
 slug: "alerts-import-jobs-and-robot-cards-show-the-true-state"
-status: "review"         # backlog | todo | in-progress | review | done | cancelled
+status: done
 priority: 3                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "low"
 due_date: ""
 created: "2026-10-13"
-updated: "2026-10-13"
+updated: 2026-10-13
 ---
 
 # Alerts, import jobs and robot cards show the true state
