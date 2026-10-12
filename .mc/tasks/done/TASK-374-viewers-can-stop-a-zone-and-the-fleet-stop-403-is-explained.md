@@ -3,7 +3,7 @@ id: "TASK-374"
 aliases: []
 title: "Viewers can stop a zone and the fleet stop 403 is explained"
 slug: "viewers-can-stop-a-zone-and-the-fleet-stop-403-is-explained"
-status: "review"
+status: done
 priority: 2
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "low"
 due_date: ""
 created: "2026-10-12"
-updated: "2026-10-12"
+updated: 2026-10-12
 ---
 
 # Viewers can stop a zone and the fleet stop 403 is explained
