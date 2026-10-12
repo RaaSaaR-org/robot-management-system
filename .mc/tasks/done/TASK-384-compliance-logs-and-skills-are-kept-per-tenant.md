@@ -3,7 +3,7 @@ id: "TASK-384"
 aliases: []
 title: "Compliance logs and skills are kept per tenant"
 slug: "compliance-logs-and-skills-are-kept-per-tenant"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
