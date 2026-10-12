@@ -2,15 +2,17 @@
  * @file CommandPanel.tsx
  * @description Dashboard panel "Command a robot": pick a robot, then tell it
  *   what to do in plain language through the command feature's CommandBar.
+ *   A role without `robots:command` gets the reason instead of a bar it cannot use.
  * @feature dashboard
  * @dependencies @/shared/components/ui, @/features/command, @/features/fleet
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot } from 'lucide-react';
+import { Bot, Lock } from 'lucide-react';
 import { EmptyState, LinkButton, Panel, Select, statusTone } from '@/shared/components/ui';
 import { CommandBar } from '@/features/command/components/CommandBar';
 import type { RobotMapMarker } from '@/features/fleet';
+import { usePermission } from '@/features/auth/hooks/useAuth';
 
 export interface CommandPanelProps {
   /** Robots of the fleet (from useFleetStatus) */
@@ -26,6 +28,7 @@ function defaultRobotId(robots: RobotMapMarker[]): string {
 /** Robot picker + CommandBar. Shows a calm empty state with no robots. */
 export function CommandPanel({ robots, className }: CommandPanelProps) {
   const [robotId, setRobotId] = useState(() => defaultRobotId(robots));
+  const canCommand = usePermission('robots:command');
 
   // Keep the choice valid as robots arrive or disappear.
   useEffect(() => {
@@ -55,7 +58,14 @@ export function CommandPanel({ robots, className }: CommandPanelProps) {
         }
       />
       <Panel.Body>
-        {robot ? (
+        {robot && !canCommand ? (
+          <EmptyState
+            size="sm"
+            icon={<Lock />}
+            title="View only"
+            description="Your role can watch robots but not command them. Ask an operator."
+          />
+        ) : robot ? (
           <CommandBar key={robot.robotId} robotId={robot.robotId} robotName={robot.name} />
         ) : (
           <EmptyState

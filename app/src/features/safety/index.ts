@@ -41,3 +41,4 @@ export { FleetEmergencyStopButton } from './components/FleetEmergencyStopButton'
 export { ZoneEmergencyStopButton } from './components/ZoneEmergencyStopButton';
 export { RobotEmergencyStopButton } from './components/RobotEmergencyStopButton';
 export { SafetyStatusDashboard } from './components/SafetyStatusDashboard';
+export { useCanStop, STOP_FORBIDDEN_HINT, RESUME_FORBIDDEN_HINT } from './components/stopStyles';

@@ -6,9 +6,10 @@
  * @feature fleet
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { signInAs } from '@/test/utils';
 
 // Every tab body is stubbed: this is a test about the tab switch and the
 // header, not about the map, the robot list or the twin gallery.
@@ -37,6 +38,8 @@ function renderAt(url: string) {
 }
 
 describe('FleetPage tabs', () => {
+  beforeEach(() => signInAs('member'));
+
   it('offers Map · Robots · Sites, in that order', () => {
     renderAt('/fleet');
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Map', 'Robots', 'Sites']);
@@ -65,6 +68,15 @@ describe('FleetPage tabs', () => {
     expect(screen.getByTestId('sites-gallery')).toHaveTextContent('scan modal closed');
     fireEvent.click(screen.getByRole('button', { name: 'New scan' }));
     expect(screen.getByTestId('sites-gallery')).toHaveTextContent('scan modal open');
+  });
+
+  it('disables New scan for a viewer, who may not drive a robot through a room', () => {
+    signInAs('viewer');
+    renderAt('/fleet?tab=sites');
+    const button = screen.getByRole('button', { name: 'New scan' });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(screen.getByTestId('sites-gallery')).toHaveTextContent('scan modal closed');
   });
 
   it('deep-links ?tab=list to the robot list, which brings no header action', () => {

@@ -26,6 +26,7 @@ import {
   toast,
 } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
+import { usePermission } from '@/features/auth/hooks/useAuth';
 import { useScanCapableRobots } from '../hooks/useScanCapableRobots';
 import { useTwinStore, selectTwins } from '../store/twinStore';
 import { twinToSite, type Site } from '../types/twin.types';
@@ -57,6 +58,7 @@ export interface SitesGalleryProps {
 export function SitesGallery({ className, newScanOpen, onNewScanOpenChange }: SitesGalleryProps) {
   const navigate = useNavigate();
   const { robots } = useScanCapableRobots();
+  const canScan = usePermission('robots:command');
   // Select the stable `twins` slice and map to the view model with useMemo —
   // mapping inside a Zustand selector returns a fresh array every render and
   // trips useSyncExternalStore's caching (infinite re-render loop).
@@ -155,6 +157,8 @@ export function SitesGallery({ className, newScanOpen, onNewScanOpenChange }: Si
               <Button
                 leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}
                 onClick={() => onNewScanOpenChange(true)}
+                disabled={!canScan}
+                title={canScan ? undefined : "Your role can't start a scan."}
               >
                 New scan
               </Button>

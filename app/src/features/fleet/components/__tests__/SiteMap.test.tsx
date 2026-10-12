@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { signInAs } from '@/test/utils';
 import type { DigitalTwinDTO, TwinZoneDTO } from '@/features/digitaltwin/types/twin.types';
 import type { Robot } from '@/features/robots/types/robots.types';
 
@@ -74,6 +75,7 @@ function renderMap(size?: 'full' | 'compact') {
 
 beforeEach(() => {
   window.localStorage.clear();
+  signInAs('member');
   useTwinStore.setState({ twins: [], isLoading: false, error: null });
   api.listTwins.mockResolvedValue([WAREHOUSE, LAB]);
   api.listZones.mockResolvedValue([DOCK]);
@@ -194,5 +196,23 @@ describe('SiteMap', () => {
     renderMap('compact');
     expect(await screen.findByRole('button', { name: /Stop zone Dock/ })).toBeInTheDocument();
     expect(screen.queryByLabelText('Zone colours')).toBeNull();
+  });
+
+  it('shows a viewer the zones but no stop: not clickable, and says why', async () => {
+    signInAs('viewer');
+    const trigger = vi.fn();
+    useSafetyStore.setState({ triggerZoneEStop: trigger });
+    renderMap();
+
+    expect(await screen.findByTestId('site-map-stop-forbidden')).toHaveTextContent("Your role can't use this stop");
+    expect(screen.queryByRole('button', { name: /Stop zone Dock/ })).toBeNull();
+    expect(trigger).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner', 'super-admin'] as const)('lets a %s stop a zone', async (role) => {
+    signInAs(role);
+    renderMap();
+    expect(await screen.findByRole('button', { name: /Stop zone Dock/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('site-map-stop-forbidden')).toBeNull();
   });
 });

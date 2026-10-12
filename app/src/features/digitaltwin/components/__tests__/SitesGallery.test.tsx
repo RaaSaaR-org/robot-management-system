@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { signInAs } from '@/test/utils';
 
 // The gallery's plumbing stays out of the test: the REST client (the store's
 // fetch and the occupancy thumbnail), the robot list, and the twin WebSocket.
@@ -69,6 +70,7 @@ const cardNames = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  signInAs('member');
   // The mount refetch resolves to the same rooms, so it cannot race the state
   // the test seeded.
   vi.mocked(twinApi.listTwins).mockResolvedValue(TWINS);
@@ -124,6 +126,19 @@ describe('SitesGallery', () => {
     expect(await screen.findByText('No sites yet')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'New scan' }));
     expect(onNewScanOpenChange).toHaveBeenCalledWith(true);
+  });
+
+  it('keeps "New scan" out of a viewer\'s reach — a scan drives a robot', async () => {
+    signInAs('viewer');
+    useTwinStore.setState({ twins: [], isLoading: false, error: null });
+    vi.mocked(twinApi.listTwins).mockResolvedValue([]);
+    const { onNewScanOpenChange } = renderGallery();
+
+    expect(await screen.findByText('No sites yet')).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: 'New scan' });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onNewScanOpenChange).not.toHaveBeenCalled();
   });
 
   it('shows the error state with a retry when the sites cannot be loaded', async () => {

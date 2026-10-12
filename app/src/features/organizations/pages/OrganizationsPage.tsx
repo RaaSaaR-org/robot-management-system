@@ -2,6 +2,8 @@
  * @file OrganizationsPage.tsx
  * @description Organizations (tenants): list, create, edit, delete, onboard. The route stays
  * mounted with multi-tenancy off so direct navigation works; a gated notice says what that means.
+ * The platform's Default organization always exists, so "no customer yet" is the empty case the
+ * sample offer keys on — never an empty list, which never happens.
  * @feature organizations
  */
 
@@ -20,6 +22,7 @@ import { OrganizationFormModal, orgErrorMessage } from '../components/Organizati
 import type { Organization } from '../types/organizations.types';
 
 const SAMPLE_ORG = { name: 'Acme Robotics', slug: 'acme' };
+const SAMPLE_LABEL = `Load sample (${SAMPLE_ORG.name})`;
 const plus = <Plus className="h-4 w-4" strokeWidth={1.75} />;
 
 export function OrganizationsPage() {
@@ -104,6 +107,10 @@ export function OrganizationsPage() {
   ];
 
   const hasFilters = Boolean(query || plan);
+  // The Default tenant is always listed, so the table's empty state never shows: offer the sample
+  // while no customer organization exists yet (TASK-370 — keying on an empty list hid it for
+  // good). A truly empty list keeps the empty state's own offer, so the two never show together.
+  const noCustomers = listLoaded && list.length > 0 && !list.some((o) => !o.isDefault);
 
   return (
     <div className="flex flex-col gap-6">
@@ -125,6 +132,18 @@ export function OrganizationsPage() {
           Organizations are listed, but tenant isolation only applies when the server runs with{' '}
           <EnvVar>MULTI_TENANCY_ENABLED=true</EnvVar>.
         </GatedNotice>
+      )}
+
+      {noCustomers && (
+        <Panel className="flex flex-wrap items-center justify-between gap-3" data-testid="org-sample-offer">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-ink-primary">No customer organizations yet</p>
+            <p className="text-[13px] text-ink-tertiary">
+              Only the Default organization exists. Create one, or start from a sample for a demo.
+            </p>
+          </div>
+          <Button variant="secondary" onClick={() => openCreate(SAMPLE_ORG)}>{SAMPLE_LABEL}</Button>
+        </Panel>
       )}
 
       <Toolbar
@@ -164,7 +183,7 @@ export function OrganizationsPage() {
               <EmptyState icon={<Building2 />} title="No organizations yet"
                 description="An organization is a tenant with its own users, robots and data."
                 action={<Button leftIcon={plus} onClick={() => openCreate()}>New organization</Button>}
-                secondaryAction={<Button variant="secondary" onClick={() => openCreate(SAMPLE_ORG)}>Load sample</Button>} />
+                secondaryAction={<Button variant="secondary" onClick={() => openCreate(SAMPLE_ORG)}>{SAMPLE_LABEL}</Button>} />
             )
           }
         />

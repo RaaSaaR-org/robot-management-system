@@ -17,9 +17,9 @@ MULTI_TENANCY_ENABLED=true
 ```
 
 Restart the server → `[MULTI_TENANCY] enabled (row-level isolation active)` in the startup
-log → an **Admin › Organizations** entry appears in the sidebar → the TopBar shows the
-current tenant name. That's it. Click **Create organization** or **Load sample (Acme
-Robotics)** to try it.
+log → the TopBar shows an organization pill with the current tenant name; a super-admin
+finds **Organizations** in that pill's menu. That's it. Click **New organization** or
+**Load sample (Acme Robotics)** to try it.
 
 ---
 
@@ -169,8 +169,8 @@ it stamped with the DEFAULT tenant:
 ### Disable it
 
 Set `MULTI_TENANCY_ENABLED=false` (or unset it) and restart. Startup log reads
-`[MULTI_TENANCY] disabled (single-tenant mode)`, the Organizations UI disappears from the
-sidebar, the TopBar badge hides, and all queries run without tenant filtering. Existing
+`[MULTI_TENANCY] disabled (single-tenant mode)`, the TopBar organization pill (and with it
+the menu link to Organizations) hides, and all queries run without tenant filtering. Existing
 `tenantId` columns are ignored — data created under either mode continues to work.
 
 ### Dev mode (`AUTH_DISABLED=true`)
@@ -181,7 +181,7 @@ real auth.
 
 ### Environment matrix
 
-| Flag state                | `AUTH_DISABLED` | Badge | Sidebar entry | Extension active |
+| Flag state                | `AUTH_DISABLED` | Pill  | Menu entry    | Extension active |
 |---------------------------|-----------------|-------|---------------|------------------|
 | `false` (default)          | either           | ❌     | ❌             | ❌ (passthrough)  |
 | `true`                     | `true` (dev)     | ✅     | ✅             | ✅ (scopes as DEFAULT)|
@@ -193,20 +193,21 @@ real auth.
 
 ### Finding it
 
-When multi-tenancy is enabled, a new **Admin** group appears at the bottom of the
-sidebar with a single **Organizations** entry. The top bar shows a compact pill (e.g.
-`🏢 Default Tenant`) indicating which organization you're currently operating as.
+When multi-tenancy is enabled, the top bar shows a compact pill (e.g.
+`🏢 Default Tenant`) indicating which organization you're currently operating as. For a
+super-admin, the pill's menu ends with an **Organizations** link to `/organizations`.
 
 ### Creating an organization
 
 Two paths:
 
-1. **Custom**: click **Create organization** at the top of the page. Fill in the
+1. **Custom**: click **New organization** at the top of the page. Fill in the
    organization name (e.g. "Contoso Logistics") — the URL slug auto-fills (`contoso-logistics`)
    but is editable. Click **Create organization** in the modal.
-2. **Sample (one click)**: when there are no customer tenants yet, the empty state
-   offers a **Load sample (Acme Robotics)** button that prefills the form and submits
-   it for you. Designed for live demos.
+2. **Sample**: while the Default organization is the only one, a banner above the table
+   offers a **Load sample (Acme Robotics)** button. It opens the create form prefilled
+   with `Acme Robotics` / `acme`; click **Create organization** to save it. Designed for
+   live demos. The banner goes away once any customer organization exists.
 
 Slug rules: lowercase letters, digits, and hyphens only, max 64 chars, must be unique.
 Validation errors surface the **server's** message directly (e.g. `Slug "acme" is already
@@ -381,7 +382,8 @@ The `super-admin` role is platform-wide (not tied to a specific tenant). It gran
 - Ability to create, delete, and onboard new tenants
 - Tenant impersonation (see below)
 
-The sidebar gates the Organizations entry to `super-admin` via `requiresRole`. The
+The `/organizations` route is gated to `super-admin` via `requiresRole`, and the TopBar
+pill shows its link to super-admins only. The
 `superAdminOnly` middleware protects all `/api/tenants/*` endpoints except
 `GET /api/tenants/current`.
 

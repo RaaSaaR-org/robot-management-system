@@ -3,6 +3,7 @@
  * @description Per-robot emergency stop. Fires on one press (the E-stop never
  *              confirms); while stopped it shows the stopped tag and a
  *              "Resume robot" act that confirms first, because it moves the robot.
+ *              A role without `robots:command` sees both, disabled, with the reason.
  * @feature safety
  */
 
@@ -11,7 +12,9 @@ import { OctagonX, Play } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { Button, StatusTag, confirm, toast } from '@/shared/components/ui';
 import { useRobotSafety } from '../hooks/useSafety';
-import { STOP_BUTTON_CLASS, STOP_ICON_CLASS, lastSafetyError } from './stopStyles';
+import {
+  RESUME_FORBIDDEN_HINT, STOP_BUTTON_CLASS, STOP_FORBIDDEN_HINT, STOP_ICON_CLASS, lastSafetyError, useCanStop,
+} from './stopStyles';
 
 export interface RobotEmergencyStopButtonProps {
   /** Robot ID */
@@ -38,6 +41,7 @@ export function RobotEmergencyStopButton({
 }: RobotEmergencyStopButtonProps) {
   const { isTriggered, isTriggering, isResetting, triggerEStop, resetEStop } =
     useRobotSafety(robotId);
+  const canStop = useCanStop();
 
   const displayName = robotName || robotId;
 
@@ -81,7 +85,8 @@ export function RobotEmergencyStopButton({
             leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />}
             onClick={() => void handleResume()}
             isLoading={isResetting}
-            disabled={busy}
+            disabled={busy || !canStop}
+            title={canStop ? undefined : RESUME_FORBIDDEN_HINT}
           >
             Resume robot
           </Button>
@@ -92,11 +97,11 @@ export function RobotEmergencyStopButton({
         iconOnly={compact}
         onClick={() => void handleStop()}
         isLoading={isTriggering}
-        disabled={busy}
+        disabled={busy || !canStop}
         className={STOP_BUTTON_CLASS}
         leftIcon={compact ? undefined : <OctagonX className={STOP_ICON_CLASS} strokeWidth={1.75} />}
         aria-label={`Emergency stop ${displayName}`}
-        title={`Emergency stop ${displayName}`}
+        title={canStop ? `Emergency stop ${displayName}` : STOP_FORBIDDEN_HINT}
       >
         {compact ? <OctagonX className={STOP_ICON_CLASS} strokeWidth={1.75} /> : 'Stop robot'}
       </Button>
