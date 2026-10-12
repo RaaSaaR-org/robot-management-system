@@ -44,7 +44,7 @@ import { TrainingJobWizard } from '../components/TrainingJobWizard';
 import { CompatibilityModal } from '../components/datasets/CompatibilityModal';
 import { datasetViewsApi, trainingApi } from '../api';
 import { useDatasetsAutoFetch, useTrainingJobs } from '../hooks';
-import { useImportJobsStore, useTrainingStore } from '../store';
+import { importToastId, useImportJobsStore, useTrainingStore } from '../store';
 import { isDatasetView } from '../types';
 import type {
   CreateDatasetViewInput,
@@ -137,7 +137,7 @@ function DatasetsHub() {
   useEffect(() => {
     for (const d of datasets) {
       if (d.huggingFaceRepoId && (d.status === 'importing' || d.status === 'validating')) {
-        followImport(d.id, d.huggingFaceRepoId);
+        followImport(d.id, d.huggingFaceRepoId, { revision: d.sourceRevision, lerobotVersion: d.lerobotVersion });
       }
     }
   }, [datasets, followImport]);
@@ -146,8 +146,9 @@ function DatasetsHub() {
     try {
       await retryImport(d.id);
       // Followed in the background like a fresh import (TASK-352).
-      trackImport(d.id, d.huggingFaceRepoId ?? d.name);
+      trackImport(d.id, d.huggingFaceRepoId ?? d.name, { revision: d.sourceRevision, lerobotVersion: d.lerobotVersion });
       toast.info('Import restarted in the background', {
+        id: importToastId(d.id),
         description: d.name,
         action: { label: 'Show progress', onClick: () => showImport(d.id, d.name) },
       });

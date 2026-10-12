@@ -23,8 +23,9 @@ import {
 } from '@/shared/components/ui';
 import type { DataTableColumn, Tab } from '@/shared/components/ui';
 import { trainingApi } from '../api';
-import { useImportJobsStore } from '../store/importJobsStore';
+import { importToastId, useImportJobsStore } from '../store/importJobsStore';
 import { formatBytes } from './datasets/datasetFormat';
+import { formatLerobotVersion, formatRepoAtRevision, parseHubReference, shortRevision } from './datasets/importFormat';
 import type {
   Dataset,
   HFDataset,
@@ -209,34 +210,15 @@ export function HFDatasetBrowserModal({
     return () => { cancelled = true; };
   }, [isOpen, robotTypes.length]);
 
-  // Parse HF URL into repo ID
-  useEffect(() => {
-    if (!directUrl.trim()) {
-      setParsedRepoId(null);
-      return;
-    }
-
-    // Match patterns:
-    // https://huggingface.co/datasets/lerobot/svla_so101_pickplace
-    // huggingface.co/datasets/lerobot/svla_so101_pickplace
-    // lerobot/svla_so101_pickplace
-    const urlMatch = directUrl.match(
-      /(?:https?:\/\/)?(?:huggingface\.co\/)?datasets\/([^/\s]+\/[^/\s]+)/
-    );
-    if (urlMatch) {
-      setParsedRepoId(urlMatch[1]);
-      return;
-    }
-
-    // Direct repo ID format: org/name
-    const repoMatch = directUrl.trim().match(/^([^/\s]+\/[^/\s]+)$/);
-    if (repoMatch) {
-      setParsedRepoId(repoMatch[1]);
-      return;
-    }
-
-    setParsedRepoId(null);
-  }, [directUrl]);
+  // Parse the pasted link. A `/tree/<rev>` or `/blob/<rev>/…` link names the
+  // revision the operator was looking at on the Hub; it fills the Revision
+  // field rather than being dropped, so the import pins what was seen (TASK-358).
+  const onDirectUrlChange = (value: string) => {
+    setDirectUrl(value);
+    const ref = parseHubReference(value);
+    setParsedRepoId(ref?.repoId ?? null);
+    if (ref?.revision) setRevision(ref.revision);
+  };
 
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim()) return;
@@ -307,9 +289,11 @@ export function HFDatasetBrowserModal({
         robotTypeId: robotTypeId || undefined,
         includeVideos,
       });
-      track(datasetId, repoId);
+      track(datasetId, repoId, { revision: preview?.resolvedRevision, lerobotVersion: preview?.lerobotVersion });
       toast.info('Import running in the background', {
-        description: repoId,
+        // The outcome replaces this toast in place when the import ends.
+        id: importToastId(datasetId),
+        description: formatRepoAtRevision(repoId, preview?.resolvedRevision ?? (revision.trim() || null)),
         action: { label: 'Show progress', onClick: () => openPanel(datasetId) },
       });
       onSuccess?.();
@@ -321,7 +305,7 @@ export function HFDatasetBrowserModal({
       setImportError(message);
       if (!isOpenRef.current) toast.error("Couldn't start the import", { description: `${repoId}: ${message}` });
     }
-  }, [pendingRepoId, revision, robotTypeId, includeVideos, track, openPanel, onSuccess, handleClose]);
+  }, [pendingRepoId, preview, revision, robotTypeId, includeVideos, track, openPanel, onSuccess, handleClose]);
 
 
   const isDatasetImported = useCallback(
@@ -392,11 +376,11 @@ export function HFDatasetBrowserModal({
       <FormField
         label="Hugging Face URL or repo ID"
         error={directUrl.trim() && !parsedRepoId ? 'Enter a dataset URL or an owner/name repo ID.' : undefined}
-        hint={parsedRepoId ? `Repo: ${parsedRepoId}` : 'e.g. lerobot/svla_so101_pickplace'}
+        hint={parsedRepoId ? `Repo: ${formatRepoAtRevision(parsedRepoId, revision.trim() || null)}` : 'e.g. lerobot/svla_so101_pickplace'}
       >
         <Input
           value={directUrl}
-          onChange={(e) => setDirectUrl(e.target.value)}
+          onChange={(e) => onDirectUrlChange(e.target.value)}
           placeholder="https://huggingface.co/datasets/nvidia/GR00T-N1.7-AppleToPlate"
         />
       </FormField>
@@ -477,8 +461,19 @@ export function HFDatasetBrowserModal({
         <div className="flex flex-col gap-4" data-testid="hf-preview-step">
           <div>
             <p className="text-xs text-ink-tertiary">About to import</p>
-            <p className="break-all text-sm font-medium text-ink-primary">{pendingRepoId}</p>
+            <p className="break-all text-sm font-medium text-ink-primary" data-testid="hf-preview-target">
+              {pendingRepoId && formatRepoAtRevision(pendingRepoId, preview?.resolvedRevision ?? (revision.trim() || null))}
+              {preview && formatLerobotVersion(preview.lerobotVersion) && (
+                <span className="font-normal text-ink-tertiary"> · {formatLerobotVersion(preview.lerobotVersion)}</span>
+              )}
+            </p>
           </div>
+          {pendingRepoId && (
+            <AlreadyImported
+              existing={existingDatasets.filter((d) => d.huggingFaceRepoId === pendingRepoId && d.status !== 'failed')}
+              resolvedRevision={preview?.resolvedRevision ?? null}
+            />
+          )}
           {previewLoading && (
             <div className="flex flex-col gap-2" aria-busy="true">
               <p className="text-sm text-ink-secondary">Reading the repository…</p>
@@ -528,6 +523,31 @@ export function HFDatasetBrowserModal({
 // ============================================================================
 // SUBCOMPONENTS
 // ============================================================================
+
+/**
+ * A second import of a repo is allowed — another revision is a real need — but
+ * never by accident: say which commits are already here, and whether the one
+ * about to come down is one of them (TASK-358).
+ */
+function AlreadyImported({ existing, resolvedRevision }: { existing: Dataset[]; resolvedRevision: string | null }) {
+  if (existing.length === 0) return null;
+  const revisions = [...new Set(existing.map((d) => shortRevision(d.sourceRevision) ?? 'an unknown revision'))];
+  const same = resolvedRevision !== null && existing.some((d) => d.sourceRevision === resolvedRevision);
+  return (
+    <p
+      role="status"
+      data-testid="hf-already-imported"
+      className="rounded-control border border-signal-estimated/40 bg-signal-estimated/10 px-3 py-2 text-sm text-ink-primary"
+    >
+      Already imported at {revisions.join(', ')}.{' '}
+      {same
+        ? 'This is the same commit, so importing again makes a second copy.'
+        : resolvedRevision
+          ? `This would add ${shortRevision(resolvedRevision)} as a separate dataset.`
+          : 'Importing again makes a separate dataset.'}
+    </p>
+  );
+}
 
 interface ImportOptionsProps {
   revision: string;

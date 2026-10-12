@@ -182,6 +182,29 @@ describe('DatasetExpectationsPanel', () => {
     })));
   });
 
+  it('collapses to one line when the verdict passes, and opens on demand (TASK-358)', async () => {
+    const passing = failedDataset({
+      status: 'ready',
+      robotTypeId: 'rt-43',
+      robotType: { id: 'rt-43', name: 'Unitree G1 EDU (Dex3-1)', manufacturer: 'Unitree', model: 'x', actionDim: 43, proprioceptionDim: 43 },
+      validation: { ...failedDataset().validation!, valid: true, errors: [] },
+    });
+    render(<DatasetExpectationsPanel dataset={passing} onDatasetChange={vi.fn()} />);
+
+    expect(screen.getByTestId('expectations-summary')).toHaveTextContent('Matches Unitree G1 EDU (Dex3-1) — state 43, action 43');
+    expect(screen.queryByTestId('width-table')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('expectations-expand'));
+    expect(screen.getByTestId('width-table')).toBeInTheDocument();
+    await waitFor(() => expect(api.listRobotTypes).toHaveBeenCalled());
+  });
+
+  it('stays open while the verdict fails', () => {
+    render(<DatasetExpectationsPanel dataset={failedDataset()} onDatasetChange={vi.fn()} />);
+    expect(screen.queryByTestId('expectations-summary')).toBeNull();
+    expect(screen.getByTestId('width-table')).toBeInTheDocument();
+  });
+
   it('says when the old verdict was voided and lists the history', () => {
     const change = {
       at: '2026-10-12T10:00:00.000Z', actorId: 'u1', fromRobotTypeId: 'rt-28', fromRobotTypeName: 'Unitree_G1',

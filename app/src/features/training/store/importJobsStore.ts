@@ -15,6 +15,7 @@ import { createStore } from '@/store';
 import { toast } from '@/shared/components/ui/toast';
 import { getErrorMessage } from '@/shared/utils';
 import { trainingApi } from '../api/trainingApi';
+import { describeImportFailure } from '../components/datasets/importFormat';
 import type { HFImportProgress, ImportLogLine, ImportLogResponse } from '../types';
 
 // ============================================================================
@@ -39,6 +40,9 @@ export interface ImportJob {
   importMode: HFImportProgress['importMode'] | null;
   /** Why it failed, in the server's words */
   error: string | null;
+  /** The commit the import pinned, and the LeRobot version it declares (TASK-358) */
+  revision: string | null;
+  lerobotVersion: string | null;
   lines: ImportLogLine[];
   /** Lines the server's bounded ring dropped before we saw them */
   dropped: number;
@@ -59,8 +63,20 @@ export interface ImportFeedMessage {
   importProgress?: Partial<HFImportProgress> & { status?: HFImportProgress['status'] };
 }
 
+/** What is known about an import beyond its label, when the caller knows it. */
+export interface ImportJobMeta {
+  revision?: string | null;
+  lerobotVersion?: string | null;
+}
+
 interface ImportJobsState {
   jobs: Record<string, ImportJob>;
+  /**
+   * Imports the operator dismissed. `discover` would otherwise bring back a
+   * row the server still calls `importing` — one a restart orphaned — on every
+   * page load. Bounded; newest last.
+   */
+  dismissedIds: string[];
   /** Newest first */
   order: string[];
   panelOpen: boolean;
@@ -70,17 +86,23 @@ interface ImportJobsState {
 
 interface ImportJobsActions {
   /** Start following an import the server has accepted. */
-  track: (datasetId: string, label: string) => void;
+  track: (datasetId: string, label: string, meta?: ImportJobMeta) => void;
   /**
    * Follow an import found running (the datasets list after a reload, another
    * tab's import) — quietly: no panel, no toast. A no-op when already tracked.
    */
-  follow: (datasetId: string, label: string) => void;
+  follow: (datasetId: string, label: string, meta?: ImportJobMeta) => void;
+  /**
+   * Ask the server which Hub imports are running and follow the ones this
+   * browser does not know about — started in another tab, on another machine,
+   * or over the API (TASK-358). Skips what the operator dismissed.
+   */
+  discover: () => Promise<void>;
   /**
    * Open the panel on a dataset's import — following it first if it is not
    * already, quietly: whoever asks to read a log needs no toast about it.
    */
-  show: (datasetId: string, label: string) => void;
+  show: (datasetId: string, label: string, meta?: ImportJobMeta) => void;
   /** Apply one socket frame. Frames about untracked datasets are ignored. */
   applyMessage: (message: ImportFeedMessage) => void;
   /** Merge in what the server says (GET /datasets/:id/import/log). */
@@ -100,11 +122,20 @@ export type ImportJobsStore = ImportJobsState & ImportJobsActions;
 /** Lines kept per job in the browser — the server keeps 300. */
 export const MAX_CLIENT_LINES = 500;
 
+/** Dismissed ids remembered, so `discover` does not resurrect them. */
+export const MAX_DISMISSED = 50;
+
+/**
+ * One toast per import: "running in the background" and the outcome share it,
+ * so the outcome replaces the stale one in place instead of stacking below it.
+ */
+export const importToastId = (datasetId: string): string => `dataset-import-${datasetId}`;
+
 // ============================================================================
 // HELPERS
 // ============================================================================
 
-function newJob(datasetId: string, label: string, notify = true): ImportJob {
+function newJob(datasetId: string, label: string, notify = true, meta: ImportJobMeta = {}): ImportJob {
   return {
     datasetId,
     label,
@@ -118,6 +149,8 @@ function newJob(datasetId: string, label: string, notify = true): ImportJob {
     totalBytes: null,
     importMode: null,
     error: null,
+    revision: meta.revision ?? null,
+    lerobotVersion: meta.lerobotVersion ?? null,
     lines: [],
     dropped: 0,
     logRetained: true,
@@ -177,10 +210,12 @@ function finish(job: ImportJob, state: Exclude<ImportJobState, 'running'>, error
  */
 function announce(job: ImportJob, openPanel: (id: string) => void): void {
   const action = { label: 'Details', onClick: () => openPanel(job.datasetId) };
+  const id = importToastId(job.datasetId);
   if (job.state === 'succeeded') {
-    toast.success('Dataset imported', { description: job.label, action });
+    toast.success('Dataset imported', { id, description: job.label, action });
   } else {
-    toast.error('Dataset import failed', { description: `${job.label}: ${job.error}`, action });
+    const cause = describeImportFailure(job.error, job.phase).headline;
+    toast.error('Dataset import failed', { id, description: `${job.label}: ${cause}`, action });
   }
   void refreshDatasetRow(job.datasetId);
 }
@@ -222,31 +257,52 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
     return {
       jobs: {},
       order: [],
+      dismissedIds: [],
       panelOpen: false,
       focusedId: null,
 
-      track: (datasetId, label) => {
+      track: (datasetId, label, meta) => {
         set((state) => {
-          // A retry of a tracked import starts over in the same slot.
-          state.jobs[datasetId] = newJob(datasetId, label);
+          // A retry of a tracked import starts over in the same slot, and
+          // keeps what it knew about the source when the caller passes nothing.
+          const known = state.jobs[datasetId];
+          state.jobs[datasetId] = newJob(datasetId, label, true, {
+            revision: meta?.revision ?? known?.revision,
+            lerobotVersion: meta?.lerobotVersion ?? known?.lerobotVersion,
+          });
+          state.dismissedIds = state.dismissedIds.filter((id) => id !== datasetId);
           state.order = [datasetId, ...state.order.filter((id) => id !== datasetId)];
           state.focusedId = datasetId;
         });
       },
 
-      follow: (datasetId, label) => {
+      follow: (datasetId, label, meta) => {
         if (get().jobs[datasetId]) return;
         set((state) => {
-          state.jobs[datasetId] = newJob(datasetId, label, false);
+          state.jobs[datasetId] = newJob(datasetId, label, false, meta);
           state.order = [...state.order, datasetId];
         });
         void get().backfill(datasetId);
       },
 
-      show: (datasetId, label) => {
+      discover: async () => {
+        try {
+          const { datasets } = await trainingApi.listDatasets({ status: ['importing', 'validating'] });
+          const { dismissedIds, follow } = get();
+          for (const d of datasets ?? []) {
+            if (!d.huggingFaceRepoId || dismissedIds.includes(d.id)) continue;
+            follow(d.id, d.huggingFaceRepoId, { revision: d.sourceRevision, lerobotVersion: d.lerobotVersion });
+          }
+        } catch (error) {
+          // The panel just shows less; the datasets page still follows what it lists.
+          console.warn('[ImportJobs] discover failed:', getErrorMessage(error, 'unknown error'));
+        }
+      },
+
+      show: (datasetId, label, meta) => {
         if (!get().jobs[datasetId]) {
           set((state) => {
-            state.jobs[datasetId] = newJob(datasetId, label, false);
+            state.jobs[datasetId] = newJob(datasetId, label, false, meta);
             state.order = [datasetId, ...state.order];
           });
         }
@@ -294,6 +350,8 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
           job.lines = mergeLines(response.lines, job.lines);
           job.dropped = response.dropped;
           job.logRetained = response.retained;
+          job.revision = response.sourceRevision ?? job.revision ?? null;
+          job.lerobotVersion = response.lerobotVersion ?? job.lerobotVersion ?? null;
           const p = response.progress;
           if (p && job.state === 'running') applyFrame(job, p);
           if (response.status === 'failed') {
@@ -325,6 +383,7 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
 
       dismiss: (datasetId) => {
         set((state) => {
+          state.dismissedIds = [...state.dismissedIds.filter((id) => id !== datasetId), datasetId].slice(-MAX_DISMISSED);
           delete state.jobs[datasetId];
           state.order = state.order.filter((id) => id !== datasetId);
           if (state.focusedId === datasetId) state.focusedId = null;
@@ -334,6 +393,8 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
 
       clearFinished: () => {
         set((state) => {
+          const finished = state.order.filter((id) => state.jobs[id] && state.jobs[id].state !== 'running');
+          state.dismissedIds = [...state.dismissedIds.filter((id) => !finished.includes(id)), ...finished].slice(-MAX_DISMISSED);
           state.order = state.order.filter((id) => state.jobs[id]?.state === 'running');
           for (const id of Object.keys(state.jobs)) {
             if (state.jobs[id].state !== 'running') delete state.jobs[id];
@@ -365,6 +426,7 @@ export const useImportJobsStore = createStore<ImportJobsStore>(
     // again, so they are not written to localStorage.
     partialize: (state) => ({
       order: state.order,
+      dismissedIds: state.dismissedIds,
       jobs: Object.fromEntries(
         Object.entries(state.jobs).map(([id, job]) => [id, { ...job, lines: [] }]),
       ),

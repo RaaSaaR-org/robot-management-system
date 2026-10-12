@@ -9,14 +9,15 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, RotateCw, X, XCircle } from 'lucide-react';
-import { Button, StatusTag } from '@/shared/components/ui';
+import { Button, StatusTag, Tooltip } from '@/shared/components/ui';
 import { toast } from '@/shared/components/ui/toast';
 import { getErrorMessage } from '@/shared/utils';
 import { cn } from '@/shared/utils/cn';
-import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { formatDateTime } from '@/shared/utils/format';
 import { selectRunningCount, useImportJobsStore, type ImportJob } from '../store/importJobsStore';
 import { useTrainingStore } from '../store/trainingStore';
 import { ImportProgress } from './ImportProgress';
+import { describeImportFailure, formatLerobotVersion, shortRevision } from './datasets/importFormat';
 
 // ============================================================================
 // HELPERS
@@ -41,10 +42,9 @@ export function describeJob(job: ImportJob): string {
 }
 
 function timeOf(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime())
+  return Number.isNaN(new Date(iso).getTime())
     ? ''
-    : date.toLocaleTimeString(UI_DATE_LOCALE, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    : formatDateTime(iso, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 // ============================================================================
@@ -146,14 +146,23 @@ function ImportJobRow({ job }: { job: ImportJob }) {
   const dismiss = useImportJobsStore((state) => state.dismiss);
   const expanded = focusedId === job.datasetId;
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const rev = shortRevision(job.revision);
+  const version = formatLerobotVersion(job.lerobotVersion);
+  const failure = job.state === 'failed' && job.error ? describeImportFailure(job.error, job.phase) : null;
 
   return (
     <li className="flex flex-col gap-2 px-3 py-3" data-testid={`import-job-${job.datasetId}`}>
       <div className="flex items-start gap-2">
         <StateIcon job={job} />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-ink-primary" title={job.label}>{job.label}</p>
-          <p className="text-xs text-ink-tertiary">{describeJob(job)}</p>
+          <p className="truncate text-sm font-medium text-ink-primary" title={job.revision ? `${job.label}@${job.revision}` : job.label}>
+            {job.label}
+            {rev && <span data-testid="import-job-revision" className="font-mono text-xs font-normal text-ink-tertiary">@{rev}</span>}
+          </p>
+          <p className="text-xs text-ink-tertiary">
+            {describeJob(job)}
+            {version && <span data-testid="import-job-version"> · {version}</span>}
+          </p>
         </div>
         <StatusTag
           size="sm"
@@ -186,11 +195,19 @@ function ImportJobRow({ job }: { job: ImportJob }) {
         </div>
       )}
 
-      {job.state === 'failed' && job.error && (
+      {failure && (
         <div className="flex flex-col gap-2">
-          <p role="alert" data-testid="import-job-error" className="break-words rounded-control bg-inset px-2 py-1.5 text-xs text-ink-secondary">
-            {job.error}
-          </p>
+          {/* The cause first; the server's full sentence, file name and all, on hover. */}
+          <Tooltip content={failure.detail}>
+            <p
+              role="alert"
+              tabIndex={0}
+              data-testid="import-job-error"
+              className="break-words rounded-control bg-inset px-2 py-1.5 text-xs font-medium text-ink-primary"
+            >
+              {failure.headline}
+            </p>
+          </Tooltip>
           <RetryButton job={job} />
         </div>
       )}

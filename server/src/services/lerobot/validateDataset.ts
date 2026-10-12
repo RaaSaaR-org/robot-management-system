@@ -630,6 +630,8 @@ export async function validateDatasetStructure(
     presentData.push({ path, size: entry.size });
   }
 
+  /** Camera files a metadata-only import was asked not to fetch — one warning for all of them. */
+  const notFetched: string[] = [];
   for (const path of expectedPaths.video) {
     let entry = videoListing.get(path);
     let found = path;
@@ -645,12 +647,10 @@ export async function validateDatasetStructure(
       // the operator's decision rather than a broken dataset. Recorded as a
       // warning that NAMES the mode, because the same missing file in a `full`
       // import is a real failure and the two must stay distinguishable.
+      // Collected, not warned one by one: a 402-episode repo would otherwise
+      // say the same sentence 402 times (TASK-358).
       if (metadataOnly) {
-        warn(
-          'VIDEO_NOT_IMPORTED',
-          `${path} was not fetched: this dataset was imported with importMode 'metadata', which `
-          + 'takes meta/ and data/ and no video. Re-import with includeVideos to train a vision policy on it.',
-        );
+        notFetched.push(path);
       } else {
         error('MISSING_VIDEO_FILE', `info.json declares a camera feature and ${path} is not there`);
       }
@@ -697,12 +697,7 @@ export async function validateDatasetStructure(
       // decision. `dtype: 'image'` needs its own branch because these frames
       // live under `images/`, not `videos/`, and are selected separately.
       if (metadataOnly) {
-        warn(
-          'VIDEO_NOT_IMPORTED',
-          `images/${key}/ was not fetched: this dataset was imported with importMode 'metadata', `
-          + 'which takes meta/ and data/ and no camera frames. Re-import with includeVideos to '
-          + 'train a vision policy on it.',
-        );
+        notFetched.push(`images/${key}/`);
       } else {
         error(
           'MISSING_IMAGE_FILES',
@@ -714,6 +709,18 @@ export async function validateDatasetStructure(
     for (const entry of entries.slice(0, 4)) {
       report.files.push({ path: entry.path, size: entry.size, kind: 'video' });
     }
+  }
+  if (notFetched.length > 0) {
+    // The mode stays IN the message: whoever reads it must be able to act on
+    // it without going back to the row to find out what was asked for.
+    const what = notFetched.length === 1
+      ? `${notFetched[0]} was`
+      : `${notFetched.length} camera files (${notFetched[0]} and ${notFetched.length - 1} more) were`;
+    warn(
+      'VIDEO_NOT_IMPORTED',
+      `${what} not fetched: this dataset was imported with importMode 'metadata', which `
+      + 'takes meta/ and data/ and no camera frames. Re-import with includeVideos to train a vision policy on it.',
+    );
   }
 
   // ---- open the data ------------------------------------------------------

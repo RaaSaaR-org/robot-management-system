@@ -27,7 +27,7 @@ vi.mock('@/shared/components/ui/toast', () => ({
   },
 }));
 
-import { SERVER_RESTARTED_ERROR, mergeLines, selectRunningCount, useImportJobsStore } from '../importJobsStore';
+import { SERVER_RESTARTED_ERROR, importToastId, mergeLines, selectRunningCount, useImportJobsStore } from '../importJobsStore';
 import type { ImportLogResponse } from '../../types';
 
 const ID = 'ds-1';
@@ -54,7 +54,7 @@ function backfill(over: Partial<ImportLogResponse> = {}): ImportLogResponse {
 beforeEach(() => {
   vi.clearAllMocks();
   getDataset.mockRejectedValue(new Error('not in this test'));
-  useImportJobsStore.setState({ jobs: {}, order: [], panelOpen: false, focusedId: null });
+  useImportJobsStore.setState({ jobs: {}, order: [], dismissedIds: [], panelOpen: false, focusedId: null });
 });
 
 describe('following an import', () => {
@@ -255,5 +255,45 @@ describe('tidying up', () => {
     store().applyMessage({ type: 'dataset:validation:completed', datasetId: 'a' });
     store().clearFinished();
     expect(store().order).toEqual(['b']);
+    expect(store().dismissedIds).toEqual(['a']);
+  });
+});
+
+describe('what the operator sees of an import (TASK-358)', () => {
+  it('replaces the "running in the background" toast in place with the outcome', () => {
+    store().track(ID, 'lerobot/pusht');
+    store().applyMessage({ type: 'dataset:validation:completed', datasetId: ID });
+    expect(toastSuccess.mock.calls[0]![1]).toMatchObject({ id: importToastId(ID) });
+  });
+
+  it('says the cause first in the failure toast', () => {
+    store().track(ID, 'lerobot/pusht');
+    store().applyMessage({
+      type: 'dataset:import:failed',
+      datasetId: ID,
+      error: 'File data/chunk-000/episode_000001.parquet: write to rustfs failed after 3 attempt(s): connect ECONNREFUSED 10.0.0.1:9000',
+    });
+    expect(toastError.mock.calls[0]![1]).toMatchObject({
+      id: importToastId(ID),
+      description: 'lerobot/pusht: Storage unreachable (ECONNREFUSED)',
+    });
+  });
+
+  it('learns the pinned commit and LeRobot version from the server, and keeps them across a retry', () => {
+    store().track(ID, 'lerobot/pusht');
+    store().applyBackfill(backfill({ sourceRevision: 'f'.repeat(40), lerobotVersion: 'v3.0' }));
+    expect(job()).toMatchObject({ revision: 'f'.repeat(40), lerobotVersion: 'v3.0' });
+
+    store().track(ID, 'lerobot/pusht');
+    expect(job()).toMatchObject({ state: 'running', revision: 'f'.repeat(40), lerobotVersion: 'v3.0' });
+  });
+
+  it('remembers a dismissal until the import is started again', () => {
+    store().track(ID, 'lerobot/pusht');
+    store().applyMessage({ type: 'dataset:import:failed', datasetId: ID, error: 'x' });
+    store().dismiss(ID);
+    expect(store().dismissedIds).toEqual([ID]);
+    store().track(ID, 'lerobot/pusht');
+    expect(store().dismissedIds).toEqual([]);
   });
 });

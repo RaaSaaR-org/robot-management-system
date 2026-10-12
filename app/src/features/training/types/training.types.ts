@@ -849,7 +849,9 @@ export interface ImportLogResponse {
   lines: ImportLogLine[];
   dropped: number;
   /** False when the server holds no log for it (restarted since, or evicted) */
-  retained: boolean;
+  retained: boolean;  /** The commit the import pinned, and the LeRobot version it declares (TASK-358) */
+  sourceRevision?: string | null;
+  lerobotVersion?: string | null;
 }
 
 // ============================================================================

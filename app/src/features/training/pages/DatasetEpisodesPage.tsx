@@ -36,6 +36,7 @@ import { CuratePanel } from '../components/datasets/CuratePanel';
 import { JointChartPanel, RewardCurvePanel } from '../components/datasets/TrajectoryPanels';
 import { AnnotationsPanel } from '../components/datasets/AnnotationsPanel';
 import { formatDuration } from '../components/datasets/datasetFormat';
+import { formatLerobotVersion, formatRepoAtRevision } from '../components/datasets/importFormat';
 import { useDatasetViews } from '../hooks/useDatasetViews';
 import { useTrainingJobs } from '../hooks/useTrainingJobs';
 import { isDatasetView } from '../types';
@@ -466,6 +467,19 @@ export function DatasetEpisodesPage() {
               <StatusTag status={dataset.status} dot />
               {isView && <StatusTag tone="accent">View</StatusTag>}
               {dataset.infoJson?._synthetic && <StatusTag tone="sim">Synthetic</StatusTag>}
+              {/* Which format and which commit this is (TASK-358) */}
+              {formatLerobotVersion(dataset.lerobotVersion) && (
+                <StatusTag tone="neutral" data-testid="dataset-lerobot-version">{formatLerobotVersion(dataset.lerobotVersion)}</StatusTag>
+              )}
+              {dataset.huggingFaceRepoId && (
+                <span
+                  className="break-all font-mono text-xs text-ink-tertiary"
+                  title={dataset.sourceRevision ? `${dataset.huggingFaceRepoId}@${dataset.sourceRevision}` : dataset.huggingFaceRepoId}
+                  data-testid="dataset-source"
+                >
+                  {formatRepoAtRevision(dataset.huggingFaceRepoId, dataset.sourceRevision)}
+                </span>
+              )}
             </>
           )
         }

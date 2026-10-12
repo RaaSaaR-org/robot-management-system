@@ -3,7 +3,8 @@
  * @description Keeps the background-import tracker live (TASK-352): one
  *              WebSocket while any import runs, a backfill from the server's
  *              log route on every (re)connect, and a slow poll as the safety
- *              net for frames a dropped socket never delivered.
+ *              net for frames a dropped socket never delivered. Imports
+ *              started elsewhere are discovered on load and on refocus.
  * @feature training
  *
  * Mounted once, in the app layout, so it follows an import whichever page the
@@ -27,6 +28,20 @@ function backfillRunning(): void {
 }
 
 export function useImportJobsFeed(): void {
+  // Imports this browser did not start — another tab, another machine, the
+  // API — are found by asking, on load and whenever the tab comes back into
+  // view. Without this the panel only knew what this browser had started,
+  // until the operator happened to open the datasets page (TASK-358).
+  useEffect(() => {
+    if (import.meta.env.VITE_DEMO_MODE === 'true') return;
+    const discover = () => {
+      if (document.visibilityState !== 'hidden') void useImportJobsStore.getState().discover();
+    };
+    discover();
+    document.addEventListener('visibilitychange', discover);
+    return () => document.removeEventListener('visibilitychange', discover);
+  }, []);
+
   const anyRunning = useImportJobsStore((state) =>
     state.order.some((id) => state.jobs[id]?.state === 'running'),
   );

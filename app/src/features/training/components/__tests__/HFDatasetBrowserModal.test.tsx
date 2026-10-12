@@ -16,7 +16,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { HFDatasetBrowserModal } from '../HFDatasetBrowserModal';
 import { useImportJobsStore } from '../../store/importJobsStore';
-import type { HFDatasetPreview } from '../../types';
+import type { Dataset, HFDatasetPreview } from '../../types';
 
 const listRobotTypes = vi.fn();
 const previewHuggingFace = vi.fn();
@@ -148,6 +148,37 @@ describe('what the modal shows before committing to a download', () => {
       expect.objectContaining({ revision: 'v1.1', robotTypeId: 'rt-g1' })
     );
   });
+  it('takes the revision out of a pasted /tree/ link and names repo@rev (TASK-358)', async () => {
+    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Direct link' }));
+    fireEvent.change(screen.getByLabelText('Hugging Face URL or repo ID'), {
+      target: { value: 'https://huggingface.co/datasets/lerobot/xarm_lift_medium/tree/v2.1' },
+    });
+
+    expect(screen.getByLabelText('Revision')).toHaveValue('v2.1');
+    expect(screen.getByText('Repo: lerobot/xarm_lift_medium@v2.1')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await screen.findByTestId('hf-preview-facts');
+    expect(previewHuggingFace).toHaveBeenCalledWith('lerobot/xarm_lift_medium', 'v2.1');
+    // The preview names the commit it resolved to and the format version.
+    expect(screen.getByTestId('hf-preview-target')).toHaveTextContent('lerobot/xarm_lift_medium@a1b2c3d4 · LeRobot v2.1');
+  });
+
+  it('warns when the repo is already imported, and at which commit (TASK-358)', async () => {
+    const existing = [{
+      id: 'ds-old', huggingFaceRepoId: 'nvidia/GR00T-N1.7-AppleToPlate', status: 'ready',
+      sourceRevision: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+    }] as unknown as Dataset[];
+    render(<HFDatasetBrowserModal isOpen onClose={() => {}} existingDatasets={existing} />);
+    await openPreview();
+    await screen.findByTestId('hf-preview-facts');
+
+    expect(screen.getByTestId('hf-already-imported')).toHaveTextContent(
+      'Already imported at a1b2c3d4. This is the same commit, so importing again makes a second copy.',
+    );
+  });
+
   it('says "unknown" for a width the repo does not declare', async () => {
     // The server sends `declaredFeatureWidth(...) || null`, so a repo whose
     // info.json declares no shape has no width. Typed as `number` on the

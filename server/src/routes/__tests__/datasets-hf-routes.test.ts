@@ -285,6 +285,21 @@ describe('dataset HuggingFace routes', () => {
       expect(response.body).toMatchObject({ status: 'failed', importError, lines: [], retained: false });
     });
 
+    it('names the pinned commit and the LeRobot version, so the panel can show them (TASK-358)', async () => {
+      importActivityLog.forget('ds-rev');
+      datasets.get.mockResolvedValue({
+        id: 'ds-rev', status: 'importing', importError: null,
+        sourceRevision: '89d5752c021e580d26d90ceec7e8192ef01e7c30', lerobotVersion: 'v2.1',
+      });
+
+      const response = await request(app).get('/api/datasets/ds-rev/import/log');
+
+      expect(response.body).toMatchObject({
+        sourceRevision: '89d5752c021e580d26d90ceec7e8192ef01e7c30',
+        lerobotVersion: 'v2.1',
+      });
+    });
+
     it('404s for a dataset that does not exist', async () => {
       datasets.get.mockResolvedValue(null);
       const response = await request(app).get('/api/datasets/nope/import/log');

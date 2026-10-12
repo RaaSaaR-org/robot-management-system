@@ -8,6 +8,7 @@ import { AlertTriangle, CameraOff, Lock } from 'lucide-react';
 import { StatusTag, Tooltip } from '@/shared/components/ui';
 import { describeSelectionOrigin, isDatasetView } from '../../types';
 import type { Dataset, DatasetParentSummary } from '../../types';
+import { formatLerobotVersion, formatRepoAtRevision } from './importFormat';
 
 export interface DatasetNameCellProps {
   dataset: Dataset;
@@ -27,7 +28,13 @@ export function datasetOriginLine(dataset: Dataset, parent?: DatasetParentSummar
     const rule = dataset.selection ? ` · ${describeSelectionOrigin(dataset.selection.origin)}` : '';
     return `View of ${viewParent?.name ?? 'another dataset'} · ${count}${rule}`;
   }
-  if (dataset.huggingFaceRepoId) return dataset.huggingFaceRepoId;
+  // The commit and the format version tell two imports of one repo apart
+  // (a v3.0 main and a v2.1 tag of the same dataset) — TASK-358.
+  if (dataset.huggingFaceRepoId) {
+    const version = formatLerobotVersion(dataset.lerobotVersion);
+    const source = formatRepoAtRevision(dataset.huggingFaceRepoId, dataset.sourceRevision);
+    return version ? `${source} · ${version}` : source;
+  }
   return dataset.description ?? `LeRobot ${dataset.lerobotVersion}`;
 }
 
