@@ -43,4 +43,8 @@ trap 'exit 130' INT TERM
 stage up      "$E2E_DIR/up.sh"
 stage install "$E2E_DIR/install.sh"
 stage test    "$E2E_DIR/test.sh"
+# Auth + multi-tenancy (TASK-367): opt-in, ~1.5 min — two server rollouts.
+if [ "${E2E_TENANT:-0}" = 1 ]; then
+  stage tenant "$E2E_DIR/tenant-test.sh"
+fi
 COMPLETED=1

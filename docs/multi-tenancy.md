@@ -385,6 +385,31 @@ The sidebar gates the Organizations entry to `super-admin` via `requiresRole`. T
 `superAdminOnly` middleware protects all `/api/tenants/*` endpoints except
 `GET /api/tenants/current`.
 
+### The first super-admin (TASK-367)
+
+With auth on, nothing in the product creates a super-admin: signup makes a
+tenant-less `viewer` (and is closed under multi-tenancy), and the Team page adds
+users only to the caller's own tenant. Set these on the server, once:
+
+```bash
+BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+BOOTSTRAP_ADMIN_PASSWORD=ChangeMe2026   # 8+ chars, upper, lower, digit
+BOOTSTRAP_ADMIN_NAME="Platform Admin"   # optional
+```
+
+At startup the server creates that account as `super-admin` with no tenant —
+only when no account has the email. It never resets the password, and an
+existing non-admin account with the same email is left alone (logged as a
+warning), not promoted. A set but unusable value (one variable without the
+other, a bad email, a weak password) stops the server from starting. The
+variables are ignored under `AUTH_DISABLED=true`.
+
+The account stays tenant-less across restarts: the boot-time `default` tenant
+backfill (`seedDefaultTenant`) adopts tenant-less users but skips `super-admin`.
+A super-admin stamped into a tenant before that rule (only the
+`AUTH_DISABLED=true` dev user, in practice) keeps its tenant — no migration —
+and the Team page refuses to change its role or deactivate it either way (403).
+
 ### Impersonation
 
 Super-admins can view another tenant's data by selecting it from the `OrganizationSwitcher`

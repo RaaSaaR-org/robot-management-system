@@ -43,6 +43,7 @@ import { tourTranscriptCleanupJob } from './jobs/tour-transcript-cleanup.js';
 import { ControlLeaseSweeper } from './jobs/control-lease-sweeper.js';
 import { getDefaultControlLeaseService } from './routes/control-lease.routes.js';
 import { MULTI_TENANCY_ENABLED } from './config/features.js';
+import { bootstrapSuperAdmin } from './database/bootstrapSuperAdmin.js';
 import { assertComplianceKeyUsable } from './security/encryption.js';
 import { huggingFaceImportService } from './services/HuggingFaceImportService.js';
 
@@ -96,6 +97,9 @@ async function main() {
   // initialises its in-memory cache so cached reads see tenantId-stamped
   // rows from the start.
   await seedDefaultTenant();
+
+  // First super-admin of an auth-on install, from BOOTSTRAP_ADMIN_* (TASK-367)
+  await bootstrapSuperAdmin();
 
   // Seed the "Demo Warehouse" site matching the sim's warehouse scene (TASK-327)
   await seedDemoWarehouse();

@@ -115,8 +115,14 @@ export async function seedDefaultTenant(): Promise<void> {
   const sensorScans = await backfillPaged(prisma.sensorScan, 'sensorScans');
 
   const results = await Promise.all([
-    // Wave 1
-    backfill(prisma.user),
+    // Wave 1. Users skip `super-admin`: that role is platform-level and
+    // belongs to no tenant (docs/multi-tenancy.md §8). Adopting it here would
+    // move the BOOTSTRAP_ADMIN_* account (TASK-367) into `default` on the
+    // second boot, where that tenant's owner could demote it.
+    prisma.user.updateMany({
+      where: { tenantId: null, NOT: { role: 'super-admin' } },
+      data: { tenantId: DEFAULT_TENANT_ID },
+    }),
     backfill(prisma.robot),
     backfill(prisma.dataset),
     backfill(prisma.trainingJob),
