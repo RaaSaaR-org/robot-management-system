@@ -3,7 +3,7 @@ id: "TASK-370"
 aliases: []
 title: "Viewers get disabled stop and command controls, and Load sample is reachable again"
 slug: "viewers-get-disabled-stop-and-command-controls-and-load"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
