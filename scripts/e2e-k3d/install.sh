@@ -21,6 +21,19 @@ TIMEOUT="${E2E_INSTALL_TIMEOUT:-15m}"
 # so logs written by one install stay readable after the next.
 COMPLIANCE_KEY="$(printf 'neodem-e2e-compliance-%s' "$CLUSTER" | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-64)"
 
+# Helm 4 applies server-side. On a reused cluster where someone ran
+# `kubectl set image` (or `kubectl edit`), those fields belong to that field
+# manager and the upgrade fails with "conflict ... with kubectl-set". The chart
+# is the source of truth here, so take the fields back. Helm 3 merges
+# client-side, never conflicts, and has no such flag.
+conflict_args=()
+# Help text into a variable first: `helm ... | grep -q` under pipefail can
+# fail on the SIGPIPE helm takes when grep exits early.
+upgrade_help="$(helm upgrade --help 2>/dev/null || true)"
+if grep -q -e '--force-conflicts' <<<"$upgrade_help"; then
+  conflict_args+=(--force-conflicts)
+fi
+
 log "installing $NEODEM_CHART as $RELEASE into $KUBE_CONTEXT/$NAMESPACE (images $TAG)"
 start=$(now)
 # --wait covers the Deployments/StatefulSets; the post-install hook (RustFS
@@ -28,6 +41,7 @@ start=$(now)
 helm upgrade --install "$RELEASE" "$NEODEM_CHART" \
   --kube-context "$KUBE_CONTEXT" \
   --namespace "$NAMESPACE" --create-namespace \
+  ${conflict_args[@]+"${conflict_args[@]}"} \
   -f "$VALUES_FILE" \
   --set server.image.repository=neodem-server \
   --set server.image.tag="$TAG" \

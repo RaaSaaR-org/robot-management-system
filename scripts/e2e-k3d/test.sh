@@ -14,7 +14,8 @@
 #
 # Knobs: E2E_DATASET (default lerobot/svla_so101_pickplace, ~450 KB without
 # videos), E2E_INCLUDE_VIDEOS=1 (adds ~86 MB of mp4), E2E_PORT (local port for
-# the server port-forward, default 18081), E2E_IMPORT_TIMEOUT (default 300).
+# the server port-forward, default 18081), E2E_IMPORT_TIMEOUT (default 300),
+# E2E_AWSCLI_IMAGE (default: the aws-cli image the chart renders).
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -30,11 +31,24 @@ API="http://127.0.0.1:$PORT"
 WORK="$(mktemp -d)"
 PF_PID=""
 
+# Kill the port-forward and WAIT for it: kill only sends the signal, and a
+# script that exits right after can leave kubectl holding the port for the
+# next run. INT/TERM go through exit so the EXIT trap runs on Ctrl-C too.
 cleanup() {
-  [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
+  if [ -n "$PF_PID" ]; then
+    kill "$PF_PID" 2>/dev/null || true
+    # `kill -0` cannot tell an exited child from a live one until it is
+    # reaped, so wait on it — with a watchdog for a kubectl that ignores TERM.
+    ( sleep 5; kill -9 "$PF_PID" 2>/dev/null ) &
+    local watchdog=$!
+    wait "$PF_PID" 2>/dev/null || true
+    kill "$watchdog" 2>/dev/null || true
+  fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # On any failure, the server's own account of it is the first thing wanted.
 dump_server_logs() {
@@ -49,6 +63,13 @@ SERVER_DEPLOY="$(kc get deploy -l app.kubernetes.io/component=server -o jsonpath
 [ -n "$SERVER_SVC" ] || fail "no server Service in $NAMESPACE — run install.sh first"
 
 # --- port-forward ------------------------------------------------------------
+# A port someone else holds (an orphan from an older run, another service)
+# would make the forward fail, or worse, the curl below answer from the wrong
+# process. Say who holds it instead.
+if command -v lsof >/dev/null 2>&1; then
+  holder="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+  [ -z "$holder" ] || fail "port $PORT is already in use by PID $holder ($(ps -o command= -p "$holder" 2>/dev/null | cut -c1-80)) — stop it or set E2E_PORT"
+fi
 # kubectl itself, not `kc`: a shell function in the background runs in a
 # subshell, so `$!` was the subshell's PID, `cleanup` killed that, and the
 # kubectl port-forward under it lived on as an orphan holding the port.
@@ -127,7 +148,10 @@ jq -r --argjson v "$videos" 'select(.type=="file")
 
 # What the bucket holds, listed from INSIDE the cluster with the same
 # credentials and endpoint the server uses — a throwaway aws-cli pod, the image
-# the chart's bucket-init Job already pulled.
+# the chart's bucket-init Job already pulled (up.sh imported it), read off the
+# chart rather than hardcoded so a pin there is honoured here.
+AWSCLI_IMAGE="${E2E_AWSCLI_IMAGE:-$(chart_images 2>/dev/null | grep -E '(^|/)aws-cli:' | head -1 || true)}"
+AWSCLI_IMAGE="${AWSCLI_IMAGE:-amazon/aws-cli:2.37.4}"
 ENDPOINT="$(kc get configmap -l app.kubernetes.io/instance="$RELEASE" -o json 2>/dev/null \
   | jq -r '[.items[].data.RUSTFS_ENDPOINT // empty][0]' || true)"
 SECRET="$(kc get secret -l app.kubernetes.io/instance="$RELEASE" -o json 2>/dev/null \
@@ -141,7 +165,7 @@ SK="$(kc get secret "$SECRET" -o jsonpath='{.data.RUSTFS_SECRET_KEY}' | base64 -
 # list_objects <out-file>: the training-datasets objects under $STORAGE_PATH, as JSON.
 list_objects() {
   local out="$1" pod="e2e-s3ls-$$-$RANDOM" phase=""
-  kc run "$pod" --restart=Never --image=amazon/aws-cli:latest --image-pull-policy=IfNotPresent \
+  kc run "$pod" --restart=Never --image="$AWSCLI_IMAGE" --image-pull-policy=IfNotPresent \
     --env="AWS_ACCESS_KEY_ID=$AK" --env="AWS_SECRET_ACCESS_KEY=$SK" --env=AWS_DEFAULT_REGION=us-east-1 \
     -- --endpoint-url "$ENDPOINT" s3api list-objects-v2 --bucket training-datasets \
        --prefix "$STORAGE_PATH" --output json >/dev/null

@@ -26,6 +26,37 @@ spec:
       serviceAccountName: {{ include "neodem.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if or .Values.postgres.enabled .Values.postgres.external.enabled }}
+      # The server migrates on start and cannot reach a database that is still
+      # coming up (P1001), which restarted the pod on every fresh install. The
+      # server's start script retries too (server/scripts/start-prod.sh); this
+      # keeps the wait out of the restart count and the logs (TASK-364).
+      initContainers:
+        - name: wait-for-postgres
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          command: ['sh', '-c']
+          args:
+            - |
+              until pg_isready -q -h "$PGHOST" -p "$PGPORT"; do
+                echo "waiting for PostgreSQL at $PGHOST:$PGPORT"
+                sleep 2
+              done
+          env:
+            - name: PGHOST
+              value: {{ ternary .Values.postgres.external.host (include "neodem.postgres.fullname" .) .Values.postgres.external.enabled | quote }}
+            - name: PGPORT
+              value: {{ ternary .Values.postgres.external.port 5432 .Values.postgres.external.enabled | quote }}
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+      {{- end }}
       containers:
         - name: server
           securityContext:

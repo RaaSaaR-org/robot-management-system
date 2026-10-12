@@ -104,7 +104,9 @@ rustfs:
     region: "us-east-1"
   image:
     repository: rustfs/rustfs
-    tag: "latest"
+    # Pinned: `latest` changed under running installs. 1.0.0 is the newest
+    # release at least two weeks old on 2026-10-12 (TASK-364).
+    tag: "1.0.0"
     pullPolicy: IfNotPresent
   storage:
     size: 50Gi
@@ -129,7 +131,8 @@ rustfs:
   init:
     image:
       repository: amazon/aws-cli
-      tag: "latest"
+      # Pinned like RustFS above (TASK-364).
+      tag: "2.37.4"
       pullPolicy: IfNotPresent
   resources:
     requests:

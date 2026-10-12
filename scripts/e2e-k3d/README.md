@@ -13,6 +13,29 @@ scripts/e2e-k3d/down.sh         # delete the cluster
 
 `run.sh` exits non-zero on the first failing stage and prints per-stage timings.
 
+Give a run a cluster of its own with `E2E_CLUSTER` — two sessions on one
+laptop otherwise share `neodem-e2e`, and `--down` deletes it under the other:
+
+```bash
+E2E_CLUSTER=neodem-e2e-mine scripts/e2e-k3d/run.sh --down
+```
+
+## Reusing a cluster
+
+Without `--down` the cluster stays up, and the next `run.sh` reuses it:
+`up.sh` imports the new images, `install.sh` runs `helm upgrade`.
+
+- **A Deployment changed by hand.** Helm 4 applies server-side, so once
+  `kubectl set image` (or `kubectl edit`) touched a field, the next upgrade
+  failed with `UPGRADE FAILED: conflict ... with "kubectl-set" ...
+  .spec.template.spec.containers[name="server"].image`. `install.sh` passes
+  `--force-conflicts` whenever the installed helm has it: the chart wins and
+  takes those fields back. Helm 3 merges client-side and never hit this.
+- **The port-forward.** `test.sh` forwards the server on `E2E_PORT` (18081),
+  kills the forward and waits for it on every exit — pass, fail, Ctrl-C — and
+  refuses to start when the port is already taken, naming the process holding
+  it, instead of talking to whatever answers there.
+
 ## What it checks
 
 `test.sh`, against the running cluster:
@@ -83,7 +106,8 @@ in the server's `BUCKETS` map is missing from `rustfs.buckets` in either chart.
 | `E2E_IMAGE_TAG` | `e2e-<git sha>[-dirty]` | |
 | `E2E_PORT` | `18081` | local port of the server port-forward |
 | `E2E_IMPORT_TIMEOUT` | `300` | seconds to wait for `ready` |
-| `E2E_CLUSTER` / `E2E_NAMESPACE` / `E2E_RELEASE` | `neodem-e2e` / `neodem` / `neodem` | |
+| `E2E_AWSCLI_IMAGE` | the aws-cli image the chart renders | image of the bucket-listing pod |
+| `E2E_CLUSTER` / `E2E_NAMESPACE` / `E2E_RELEASE` | `neodem-e2e` / `neodem` / `neodem` | `E2E_CLUSTER` also names the kube context, `k3d-<cluster>` |
 
 ## Poking at a running cluster
 

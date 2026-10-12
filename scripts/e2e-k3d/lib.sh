@@ -49,6 +49,14 @@ need() {
   command -v "$1" >/dev/null 2>&1 || fail "'$1' not found on PATH${2:+ — $2}"
 }
 
+# The third-party images the chart renders with values-k3d.yaml, one per line
+# (everything but the neodem-* images built from this checkout).
+chart_images() {
+  helm template e2e "$NEODEM_CHART" -f "$VALUES_FILE" \
+    | sed -nE 's/^[[:space:]]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' \
+    | grep -v -E '(^|/)neodem-' | sort -u
+}
+
 kc() { kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" "$@"; }
 
 # Seconds since the epoch, for the timings run.sh prints.
