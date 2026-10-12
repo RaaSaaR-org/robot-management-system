@@ -3,7 +3,7 @@ id: "TASK-369"
 aliases: []
 title: "Anonymous self-signup is closed with auth on and a duplicate robot registration answers 409"
 slug: "anonymous-self-signup-is-closed-with-auth-on-and-a-duplicate"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
