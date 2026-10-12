@@ -3,7 +3,7 @@
  * @description Gallery card for a scanned site (server digital twin): an
  *   occupancy-grid thumbnail, name, robot, status tag, footprint and point
  *   count, a live build-progress bar while it builds, and RowActions (Open,
- *   Delete). The whole card opens the viewer.
+ *   and Delete when the caller passes `onDelete`). The whole card opens the viewer.
  * @feature digitaltwin
  */
 
@@ -22,7 +22,8 @@ export interface SiteCardProps {
   /** Live build progress 0..100 while the twin is recording/processing. */
   buildProgress?: number;
   onOpen: (id: string) => void;
-  onDelete: (site: Site) => void;
+  /** Omitted for a role that cannot delete a site — the card then offers no Delete. */
+  onDelete?: (site: Site) => void;
 }
 
 /** Display label + tone per twin status (shared with the viewer page). */
@@ -98,7 +99,9 @@ export const SiteCard = memo(function SiteCard({ site, robotName, buildProgress,
           label={`Actions for ${site.name}`}
           items={[
             { label: 'Open', icon: <ArrowUpRight />, onSelect: () => onOpen(site.id) },
-            { label: 'Delete', icon: <Trash2 />, tone: 'danger', separatorBefore: true, onSelect: () => onDelete(site) },
+            ...(onDelete
+              ? [{ label: 'Delete', icon: <Trash2 />, tone: 'danger' as const, separatorBefore: true, onSelect: () => onDelete(site) }]
+              : []),
           ]}
         />
       </div>

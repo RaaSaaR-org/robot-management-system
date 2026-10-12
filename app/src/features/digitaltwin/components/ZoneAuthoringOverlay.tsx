@@ -9,7 +9,8 @@
  *   The world↔screen transform is driven by the twin's worldOrigin + a derived
  *   world bounds box (its `bounds`, or the live cloud's XY extent as a fallback
  *   before occupancy exists). Existing zones render as filled polygons and are
- *   editable (double-click to edit, click select). Emits zones via the store.
+ *   editable (double-click to edit, click select) for a role that may change
+ *   sites; a viewer can only select (TASK-376). Emits zones via the store.
  *   The read-only drawing (bounds, transform, cloud, polygons) lives in
  *   `TwinTopDown`, which the fleet site map shares.
  * @feature digitaltwin
@@ -24,6 +25,7 @@ import {
   selectTwinDraftPoints,
 } from '../store/twinZoneStore';
 import type { AccumulatedCloud, DigitalTwinDTO, TwinPoint } from '../types/twin.types';
+import { useCanEditSites } from '../hooks/useCanEditSites';
 import {
   TwinTopDown,
   deriveWorldBounds,
@@ -53,6 +55,7 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
   const cancelDraft = useTwinZoneStore((s) => s.cancelDraft);
   const selectZone = useTwinZoneStore((s) => s.selectZone);
   const startEditingZone = useTwinZoneStore((s) => s.startEditingZone);
+  const canEdit = useCanEditSites();
 
   const [hover, setHover] = useState<TwinPoint | null>(null);
 
@@ -140,7 +143,7 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
       zones={zones}
       selectedZoneId={selectedZoneId}
       onZoneClick={(z) => selectZone(z.id)}
-      onZoneDoubleClick={(z) => startEditingZone(z)}
+      onZoneDoubleClick={canEdit ? (z) => startEditingZone(z) : undefined}
       svgRef={svgRef}
       cursor={mode === 'draw' ? 'crosshair' : 'default'}
       onClick={handleClick}

@@ -1,7 +1,8 @@
 /**
  * @file TwinViewerPage.tsx
  * @description A single site's digital twin, framed like every detail page:
- *   PageHeader (status, Simulate in this room, Delete site) and two tabs in
+ *   PageHeader (status, Simulate in this room, Delete site — the writes only
+ *   for a role that may change sites, TASK-376) and two tabs in
  *   `?tab=`:
  *   - Scan (default): run a server-driven sweep and watch the room fill in live
  *     (client preview cloud + walked path + live robot pose); on `twin:ready`
@@ -38,6 +39,7 @@ import { TwinZoneFormModal } from '../components/TwinZoneFormModal';
 import { ExportPanel } from '../components/ExportPanel';
 import { TWIN_STATUS_TAG } from '../components/SiteCard';
 import { twinApi } from '../api/twinApi';
+import { useCanEditSites, SITE_EDIT_FORBIDDEN_HINT } from '../hooks/useCanEditSites';
 import { useOccupancyImage } from '../utils/occupancy';
 import { twinGridSize } from '../types/twin.types';
 
@@ -60,6 +62,7 @@ const BACK = { to: SITES_TAB, label: 'Fleet' };
 export function TwinViewerPage() {
   const { siteId } = useParams<{ siteId: string }>();
   const navigate = useNavigate();
+  const canEdit = useCanEditSites();
   const [params, setParams] = useSearchParams();
   const tab: Tab = params.get('tab') === 'zones' ? 'zones' : 'scan';
   const setTab = (id: string) =>
@@ -234,11 +237,18 @@ export function TwinViewerPage() {
 
   const statusTag = TWIN_STATUS_TAG[twin.status] ?? TWIN_STATUS_TAG.draft;
   const canSimulate = twin.hasSimScene || twin.status === 'ready';
+  // Opening an existing scene is a read; building one is a POST a viewer is refused.
+  const simulateForbidden = !twin.hasSimScene && !canEdit;
+  const simulateHint = !canSimulate
+    ? 'Finish scanning this room first'
+    : simulateForbidden
+      ? "Your role can't build a simulation scene. Ask an operator."
+      : null;
   const simulateButton = (
     <Button
       variant="secondary"
       leftIcon={<FlaskConical className="h-4 w-4" strokeWidth={1.75} />}
-      disabled={!canSimulate}
+      disabled={simulateHint !== null}
       isLoading={generatingScene}
       loadingText="Building scene…"
       onClick={() => void handleSimulate()}
@@ -263,17 +273,19 @@ export function TwinViewerPage() {
         }
         actions={
           <>
-            {canSimulate ? (
+            {simulateHint === null ? (
               simulateButton
             ) : (
-              <Tooltip content="Finish scanning this room first">
+              <Tooltip content={simulateHint}>
                 <span tabIndex={0} className="inline-flex rounded-control">{simulateButton}</span>
               </Tooltip>
             )}
-            <RowActions
-              label="More actions"
-              items={[{ label: 'Delete site', icon: <Trash2 />, tone: 'danger', onSelect: () => void askDeleteSite() }]}
-            />
+            {canEdit && (
+              <RowActions
+                label="More actions"
+                items={[{ label: 'Delete site', icon: <Trash2 />, tone: 'danger', onSelect: () => void askDeleteSite() }]}
+              />
+            )}
           </>
         }
       />
@@ -323,6 +335,7 @@ export function TwinViewerPage() {
               onStop={handleStop}
               onImport={(file) => void handleImport(file)}
               importing={importing}
+              forbiddenHint={canEdit ? undefined : SITE_EDIT_FORBIDDEN_HINT}
             />
           ) : (
             <>

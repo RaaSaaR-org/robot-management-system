@@ -3,7 +3,8 @@
  * @description The Sites tab of Fleet keeps every view the standalone Digital
  *              Twin page had: the search, the five status filters, the card grid
  *              with a building room's live progress, and the empty state that
- *              offers "New scan" a second time.
+ *              offers "New scan" a second time. A site card offers Delete only
+ *              to a role that may change sites (TASK-376).
  * @feature digitaltwin
  */
 
@@ -139,6 +140,23 @@ describe('SitesGallery', () => {
     expect(button).toBeDisabled();
     fireEvent.click(button);
     expect(onNewScanOpenChange).not.toHaveBeenCalled();
+  });
+
+  // TASK-376: the server refuses a viewer's DELETE (writeRoleGuard), so the
+  // card must not offer it.
+  it('offers a viewer no Delete on a site card, only Open', () => {
+    signInAs('viewer');
+    renderGallery();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Warehouse aisle' }));
+    expect(screen.getByRole('menuitem', { name: 'Open' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Delete' })).not.toBeInTheDocument();
+  });
+
+  it.each(['member', 'owner'] as const)('offers a %s Delete on a site card', (role) => {
+    signInAs(role);
+    renderGallery();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Warehouse aisle' }));
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument();
   });
 
   it('shows the error state with a retry when the sites cannot be loaded', async () => {
