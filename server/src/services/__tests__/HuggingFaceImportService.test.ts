@@ -1023,7 +1023,7 @@ describe('HuggingFaceImportService', () => {
         vi.mocked(natsClient.getJetStream).mockReturnValue(null as never);
       }
 
-      expect(datasetRepository.update).toHaveBeenCalledWith('ds-1', { status: 'validating' });
+      expect(datasetRepository.update).toHaveBeenCalledWith('ds-1', { status: 'validating', importError: null });
       expect(datasetRepository.update).not.toHaveBeenCalledWith('ds-1', expect.objectContaining({ status: 'failed' }));
     });
 

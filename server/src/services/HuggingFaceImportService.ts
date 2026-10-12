@@ -870,7 +870,10 @@ export class HuggingFaceImportService {
         ...stored,
       });
 
-      await datasetRepository.update(datasetId, { status: 'validating' });
+      // `importError: null`: during a rolling update the NEW pod's startup
+      // sweep can mark this row failed while this (old) pod is still finishing
+      // it (TASK-359). If it does finish, the stale reason must not outlive it.
+      await datasetRepository.update(datasetId, { status: 'validating', importError: null });
       this.log(datasetId, 'info', `All ${files.length} files stored; validating the dataset`);
 
       if (natsClient.isConnected()) {
