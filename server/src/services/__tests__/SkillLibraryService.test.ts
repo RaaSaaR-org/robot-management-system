@@ -111,6 +111,8 @@ function makeRobot(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // createSkill asks for a (name, version) duplicate first (TASK-384).
+  skillDefinitionRepository.findByNameAndVersion.mockResolvedValue(null);
 });
 
 // ===========================================================================
@@ -148,6 +150,23 @@ describe('createSkill', () => {
       skillId: 'new-id',
     });
     unsubscribe();
+  });
+
+  it('refuses a duplicate name and version with a 409 and creates nothing (TASK-384)', async () => {
+    skillDefinitionRepository.findByNameAndVersion.mockResolvedValue(makeSkill());
+
+    await expect(
+      skillLibraryService.createSkill({ name: 'place', version: '1.0.0' })
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(skillDefinitionRepository.findByNameAndVersion).toHaveBeenCalledWith('place', '1.0.0');
+    expect(skillDefinitionRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('answers an id it cannot see with a 404 (TASK-384)', async () => {
+    skillDefinitionRepository.findById.mockResolvedValue(null);
+
+    await expect(skillLibraryService.updateSkill('other-tenant', { description: 'x' }))
+      .rejects.toMatchObject({ statusCode: 404, message: 'Skill not found: other-tenant' });
   });
 
   it('validates compatible robot types exist and throws when one is missing', async () => {

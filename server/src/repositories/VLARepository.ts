@@ -545,8 +545,11 @@ export class SkillDefinitionRepository {
   }
 
   async findByNameAndVersion(name: string, version: string): Promise<SkillDefinition | null> {
-    const skill = await prisma.skillDefinition.findUnique({
-      where: { name_version: { name, version } },
+    // findFirst, not the compound-unique findUnique: the tenant-isolation
+    // extension can scope a findFirst, and (name, version) is unique per tenant
+    // (TASK-384).
+    const skill = await prisma.skillDefinition.findFirst({
+      where: { name, version },
     });
     return skill ? dbSkillDefinitionToDomain(skill) : null;
   }
@@ -1606,6 +1609,12 @@ export class SkillChainRepository {
 
   async update(id: string, input: UpdateSkillChainInput): Promise<SkillChain | null> {
     try {
+      // Ownership first (TASK-384): the steps below are written through
+      // SkillChainStep, which carries no tenantId, so the extension cannot guard
+      // them. The scoped lookup returns null for another tenant's chain.
+      const owned = await prisma.skillChain.findUnique({ where: { id }, select: { id: true, tenantId: true } });
+      if (!owned) return null;
+
       // If steps are being updated, we need to replace them all
       if (input.steps !== undefined) {
         // Delete existing steps

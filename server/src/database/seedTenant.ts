@@ -96,6 +96,68 @@ export async function backfillPaged(
   return { count: total };
 }
 
+/**
+ * Stamp unowned compliance logs with their robot's tenant, else their
+ * operator's (TASK-384). Returns the number of rows stamped.
+ *
+ * Not a wholesale DEFAULT backfill like the other models: a row with no
+ * owner is a platform event (tenant impersonation, for one) and must stay
+ * `null`, which shows it to super-admins only. `tenantId` is outside the hash
+ * input, so stamping it leaves the chain verifiable.
+ *
+ * Idempotent and cheap on later boots: only the distinct robot and operator
+ * ids still on null rows are looked up.
+ */
+export async function backfillComplianceLogTenants(): Promise<number> {
+  let stamped = 0;
+
+  const robotIds = (
+    await prisma.complianceLog.findMany({
+      where: { tenantId: null },
+      select: { robotId: true },
+      distinct: ['robotId'],
+    })
+  ).map((row) => row.robotId);
+  const robots = robotIds.length
+    ? await prisma.robot.findMany({
+        where: { id: { in: robotIds }, tenantId: { not: null } },
+        select: { id: true, tenantId: true },
+      })
+    : [];
+  for (const robot of robots) {
+    const { count } = await prisma.complianceLog.updateMany({
+      where: { tenantId: null, robotId: robot.id },
+      data: { tenantId: robot.tenantId },
+    });
+    stamped += count;
+  }
+
+  const operatorIds = (
+    await prisma.complianceLog.findMany({
+      where: { tenantId: null, operatorId: { not: null } },
+      select: { operatorId: true },
+      distinct: ['operatorId'],
+    })
+  )
+    .map((row) => row.operatorId)
+    .filter((id): id is string => id !== null);
+  const users = operatorIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: operatorIds }, tenantId: { not: null } },
+        select: { id: true, tenantId: true },
+      })
+    : [];
+  for (const user of users) {
+    const { count } = await prisma.complianceLog.updateMany({
+      where: { tenantId: null, operatorId: user.id },
+      data: { tenantId: user.tenantId },
+    });
+    stamped += count;
+  }
+
+  return stamped;
+}
+
 export async function seedDefaultTenant(): Promise<void> {
   if (!MULTI_TENANCY_ENABLED) {
     return;
@@ -155,9 +217,16 @@ export async function seedDefaultTenant(): Promise<void> {
     // TASK-286 — SensorScan is handled above, in pages
     backfill(prisma.motionClip),
     backfill(prisma.vlaSession),
+    // TASK-384
+    backfill(prisma.skillDefinition),
+    backfill(prisma.skillChain),
   ]);
 
   results.push(sensorScans);
+
+  // After the robots and users above carry their tenant — compliance logs take
+  // theirs from them, never DEFAULT wholesale (see backfillComplianceLogTenants).
+  results.push({ count: await backfillComplianceLogTenants() });
 
   const labels = [
     'users', 'robots', 'datasets', 'trainingJobs',
@@ -169,8 +238,10 @@ export async function seedDefaultTenant(): Promise<void> {
     'episodeRewards', 'interventionEpisodes',
     'digitalTwins', 'scanSessions', 'simScenes',
     'motionClips', 'vlaSessions',
-    // Last, matching the `results.push(sensorScans)` above.
+    'skillDefinitions', 'skillChains',
+    // Last, matching the two `results.push` calls above, in order.
     'sensorScans',
+    'complianceLogs',
   ];
 
   const total = results.reduce((sum, r) => sum + r.count, 0);

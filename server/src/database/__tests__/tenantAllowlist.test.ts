@@ -27,10 +27,16 @@ import { TENANT_SCOPED_MODELS } from '../client.js';
  * auto-filtered by the extension — for example a model only ever written under
  * `runAsPlatform`, where injecting the caller's tenantId would be wrong.
  *
- * Empty today. It exists so that a future exception is a deliberate, reviewed
- * edit with a comment next to it, not a silent omission from the allowlist.
+ * Each entry is a deliberate, reviewed edit with a comment next to it, not a
+ * silent omission from the allowlist.
  */
-const EXCEPTIONS = new Set<string>([]);
+const EXCEPTIONS = new Set<string>([
+  // TASK-384: one global hash chain. ComplianceLogRepository.create reads the
+  // chain head across every tenant's rows; the extension would scope that read
+  // and fork the chain. Reads filter by tenantId explicitly instead
+  // (complianceTenantWhere in ComplianceLogRepository, LogExportService).
+  'ComplianceLog',
+]);
 
 function modelsWithTenantId(): string[] {
   return Prisma.dmmf.datamodel.models
@@ -81,7 +87,7 @@ describe('TENANT_SCOPED_MODELS vs the Prisma schema', () => {
     }
   });
 
-  it('derives 39 scoped models including control leases, comments, ratings, experiments and frame registrations', () => {
+  it('derives 41 scoped models including control leases, comments, ratings, experiments, frame registrations and skills', () => {
     // A count, not a list: it catches a model quietly *added* to the allowlist
     // with a column nobody reviewed, which neither test above would notice.
     // Moving this number is fine — it is a prompt to say why in the PR.
@@ -90,7 +96,9 @@ describe('TENANT_SCOPED_MODELS vs the Prisma schema', () => {
     // 39th: Experiment (TASK-242).
     // Back to 38: the fleet Zone is gone (TASK-334).
     // 39th: RobotFrameRegistration (TASK-341), stamped from the caller's tenant.
-    expect(TENANT_SCOPED_MODELS.size).toBe(39);
-    expect(modelsWithTenantId()).toHaveLength(39);
+    // 40th/41st: SkillDefinition and SkillChain (TASK-384). ComplianceLog also
+    // gained the column but is an EXCEPTION, hence 42 models carry it.
+    expect(TENANT_SCOPED_MODELS.size).toBe(41);
+    expect(modelsWithTenantId()).toHaveLength(42);
   });
 });

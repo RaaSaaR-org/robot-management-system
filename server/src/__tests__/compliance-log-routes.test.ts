@@ -49,6 +49,7 @@ vi.mock('../middleware/auth.middleware.js', () => ({
     next();
   },
   AuthenticatedRequest: {},
+  platformScopeForSuperAdmin: (_req: any, _res: any, next: any) => next(),
 }));
 
 import { complianceLogRoutes } from '../routes/compliance-log.routes.js';

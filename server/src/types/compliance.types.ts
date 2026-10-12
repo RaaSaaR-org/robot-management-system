@@ -139,6 +139,12 @@ export interface CreateComplianceLogInput {
   inputHash?: string;
   outputHash?: string;
   decisionId?: string;
+  /**
+   * Owning tenant (TASK-384). Omit to take it from the request's tenant context,
+   * else from the robot's or operator's tenant. `null` marks a platform event
+   * (visible to super-admins only).
+   */
+  tenantId?: string | null;
 }
 
 /**
@@ -164,6 +170,8 @@ export interface ComplianceLog {
   sessionId: string;
   robotId: string;
   operatorId: string | null;
+  /** Owning tenant (TASK-384); null for platform events and unstamped rows. */
+  tenantId?: string | null;
   eventType: ComplianceEventType;
   severity: ComplianceSeverity;
   payload: CompliancePayload;

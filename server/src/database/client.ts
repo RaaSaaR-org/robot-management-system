@@ -21,6 +21,7 @@
  * Wave 3f: EpisodeReward, InterventionEpisode (TASK-179).
  * TASK-285: DigitalTwin, ScanSession, SimScene.
  * TASK-286: SensorScan, MotionClip, VlaSession.
+ * TASK-384: SkillDefinition, SkillChain.
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -88,6 +89,11 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   'Experiment',
   // TASK-341 frame registrations — reached only through a robot of the tenant
   'RobotFrameRegistration',
+  // TASK-384 skill library (SkillChainStep is reached only through its chain).
+  // ComplianceLog carries a tenantId too but is filtered explicitly — see
+  // EXCEPTIONS in __tests__/tenantAllowlist.test.ts.
+  'SkillDefinition',
+  'SkillChain',
 ]);
 
 const globalForPrisma = globalThis as unknown as {

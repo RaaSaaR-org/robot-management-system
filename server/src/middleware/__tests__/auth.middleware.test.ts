@@ -63,10 +63,11 @@ import {
   memberOrAbove,
   viewerOrAbove,
   writeRoleGuard,
+  platformScopeForSuperAdmin,
   type AuthenticatedRequest,
   type AuthUser,
 } from '../auth.middleware.js';
-import { getTenantId } from '../tenantContext.js';
+import { getTenantId, tenantStore } from '../tenantContext.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -733,4 +734,43 @@ describe('pre-bound role guards', () => {
       });
     }
   }
+});
+
+// ===========================================================================
+// platformScopeForSuperAdmin (TASK-384)
+// ===========================================================================
+
+describe('platformScopeForSuperAdmin', () => {
+  /** Run the middleware inside a tenant scope, as authMiddleware leaves it. */
+  function tenantSeenBy(req: AuthenticatedRequest): string | undefined {
+    let seen: string | undefined = 'not-called';
+    tenantStore.run({ tenantId: 'default' }, () => {
+      platformScopeForSuperAdmin(req, makeRes(), () => {
+        seen = getTenantId();
+      });
+    });
+    return seen;
+  }
+
+  beforeEach(() => {
+    mocks.multiTenancyEnabled = true;
+  });
+
+  it('runs a non-impersonating super-admin as platform', () => {
+    const req = makeReq({ user: { id: 'sa', email: 'sa@x', role: 'super-admin', tenantId: null } as AuthUser });
+    expect(tenantSeenBy(req)).toBeUndefined();
+  });
+
+  it('keeps the impersonated tenant scope for an impersonating super-admin', () => {
+    const req = makeReq({
+      user: { id: 'sa', email: 'sa@x', role: 'super-admin', tenantId: null } as AuthUser,
+      headers: { 'x-impersonate-tenant': 'tenant-b' },
+    } as Partial<AuthenticatedRequest>);
+    expect(tenantSeenBy(req)).toBe('default');
+  });
+
+  it('leaves every other role in its tenant', () => {
+    const req = makeReq({ user: { id: 'o', email: 'o@x', role: 'owner', tenantId: 'default' } as AuthUser });
+    expect(tenantSeenBy(req)).toBe('default');
+  });
 });

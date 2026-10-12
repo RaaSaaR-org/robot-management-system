@@ -273,6 +273,8 @@ export class ComplianceLogService {
     robotId: string;
     payload: SystemEventPayload;
     severity?: ComplianceSeverity;
+    /** Owning tenant; `null` for a platform event (TASK-384). See CreateComplianceLogInput. */
+    tenantId?: string | null;
   }): Promise<ComplianceLog> {
     const log = await complianceLogRepository.create({
       sessionId: params.sessionId,
@@ -280,6 +282,7 @@ export class ComplianceLogService {
       eventType: 'system_event',
       severity: params.severity ?? 'info',
       payload: params.payload,
+      tenantId: params.tenantId,
     });
 
     this.incrementSessionLogCount(params.sessionId);
