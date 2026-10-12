@@ -72,11 +72,11 @@ chart runs RustFS and the aws CLI from `latest`.
 
 ## Acceptance Criteria
 
-- [ ] `install.sh` succeeds on a reused cluster after `kubectl set image` changed the server Deployment
-- [ ] `test.sh` leaves no process listening on `E2E_PORT` after it exits, passing or failing
-- [ ] a fresh install's server pod reaches Ready with 0 restarts
-- [ ] `helm/neodem` renders no `:latest` image for RustFS or the aws CLI
-- [ ] `scripts/e2e-k3d/run.sh --down` passes with `E2E_CLUSTER` set to a cluster of its own
+- [x] `install.sh` succeeds on a reused cluster after `kubectl set image` changed the server Deployment
+- [x] `test.sh` leaves no process listening on `E2E_PORT` after it exits, passing or failing
+- [x] a fresh install's server pod reaches Ready with 0 restarts
+- [x] `helm/neodem` renders no `:latest` image for RustFS or the aws CLI
+- [x] `scripts/e2e-k3d/run.sh --down` passes with `E2E_CLUSTER` set to a cluster of its own
 
 ## Test Strategy
 
@@ -84,3 +84,21 @@ chart runs RustFS and the aws CLI from `latest`.
 server's restart count; `kubectl set image` the server Deployment, run
 `run.sh --down` again on the same cluster; `lsof -iTCP:18081` afterwards.
 `helm template helm/neodem | grep image:`.
+
+## Results (2026-10-12)
+
+On helm v4.3.0, k3d v5.9.0, commit 9683f811:
+
+- Fresh `E2E_CLUSTER=neodem-e2e-t364 run.sh`: PASS (up 96s, install 57s,
+  test 13s). Server pod `RESTARTS 0`; its log shows `start-prod.sh` waiting out
+  four P1001s (about 14 s) before migrating. That run installs the production
+  chart from `deployments`, so the wait is the image's, not an initContainer's.
+- `kubectl set image deploy/neodem-server ...`, then plain `helm upgrade`
+  reproduced `UPGRADE FAILED: conflict ... with "kubectl-set" ...
+  containers[name="server"].image`. `run.sh --down` on the same cluster:
+  PASS (install 24s), cluster deleted, nothing listening on the forward port.
+- `helm template helm/neodem`: `rustfs/rustfs:1.0.0`, `amazon/aws-cli:2.37.4`;
+  `helm lint` clean; the initContainer renders the external host/port when
+  `postgres.external.enabled`.
+- Out of scope, still `latest`: `docker-compose.yml` (rustfs, aws-cli) and the
+  production chart in `deployments` (owner notified separately).
