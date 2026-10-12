@@ -3,7 +3,7 @@ id: "TASK-385"
 aliases: []
 title: "test-all.sh is green on a stock Mac and runs the SmolVLA tests"
 slug: "test-all-sh-is-green-on-a-stock-mac-and-runs-the-smolvla-tests"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
