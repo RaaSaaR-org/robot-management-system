@@ -84,6 +84,20 @@ function getEncryptionKey(): Buffer {
   return _cachedKey;
 }
 
+/**
+ * Throw now if the compliance key would make `encrypt` throw later.
+ *
+ * Called first thing at startup (TASK-359). The key used to be checked only on
+ * the first audit write, so a production server with the public example key —
+ * which the production values file shipped — started, served traffic, and
+ * failed EVERY audit write afterwards: an audit trail that silently does not
+ * exist. Refusing to start says it once, before anything is accepted.
+ * Outside production this only produces the existing warnings.
+ */
+export function assertComplianceKeyUsable(): void {
+  getEncryptionKey();
+}
+
 // ============================================================================
 // ENCRYPTION FUNCTIONS
 // ============================================================================

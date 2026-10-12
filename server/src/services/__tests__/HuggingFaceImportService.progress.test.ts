@@ -309,7 +309,7 @@ describe('a dropped connection mid-download (#370: `terminated`)', () => {
 
     expect(events().some((e) => e.type === 'dataset:import:completed')).toBe(true);
     expect(requests.filter((p) => p === 'data/chunk-000/file-001.parquet')).toHaveLength(3);
-    const retries = messages().filter((m) => m.startsWith('data/chunk-000/file-001.parquet: TypeError — retrying'));
+    const retries = messages().filter((m) => m.startsWith('data/chunk-000/file-001.parquet: write to local failed (TypeError) — retrying'));
     expect(retries).toHaveLength(2);
     const last = frames().filter((f) => f.phase === 'downloading').at(-1)!;
     expect(last.downloadedBytes).toBe(last.totalBytes);

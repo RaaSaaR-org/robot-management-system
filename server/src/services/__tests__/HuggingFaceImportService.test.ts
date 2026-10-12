@@ -78,6 +78,7 @@ vi.mock('../DatasetService.js', () => ({
     emit: vi.fn(),
     validateAndUpdateDataset: vi.fn().mockResolvedValue('ready'),
     claimForImport: vi.fn().mockResolvedValue(true),
+    failOrphanedImports: vi.fn().mockResolvedValue([]),
   },
   datasetStorageRoot: () => env.storageRoot,
 }));
@@ -95,6 +96,7 @@ import {
   retryAfterMs,
 } from '../HuggingFaceImportService.js';
 import { datasetService } from '../DatasetService.js';
+import { natsClient } from '../../messaging/index.js';
 import { datasetRepository, robotTypeRepository } from '../../repositories/index.js';
 import type { LeRobotInfoV3 } from '../../types/dataset.types.js';
 import type { RobotType } from '../../types/vla.types.js';
@@ -908,7 +910,7 @@ describe('HuggingFaceImportService', () => {
       // `null`, not absent — a stale reason left standing on a row that is
       // importing again is worse than none.
       // The claim clears it (`DatasetService.claimForImport`, TASK-353).
-      expect(datasetService.claimForImport).toHaveBeenCalledWith('ds-1');
+      expect(datasetService.claimForImport).toHaveBeenCalledWith('ds-1', { reclaimOrphan: false });
       const pinned = updateWith((u) => u.sourceRevision === SHA);
       expect(pinned).toBeDefined();
       // The same directory, rather than a second copy of the dataset on disk.
@@ -966,15 +968,104 @@ describe('HuggingFaceImportService', () => {
       expect((failed!.importError as { phase: string }).phase).toBe('metadata');
     });
 
-    it('is a 409 while an import is already running', async () => {
+    it('is a 409 while this process is running the import', async () => {
+      const owner = service as unknown as {
+        reserve(id: string): object;
+        release(id: string, token: object): void;
+      };
+      const token = owner.reserve('ds-1');
       vi.mocked(datasetRepository.findById).mockResolvedValue({
         ...failedRow, status: 'importing', storagePath: 'store-1/',
       } as never);
 
-      await expect(service.retryImport('ds-1')).rejects.toMatchObject({
-        code: 'IN_PROGRESS',
-        status: 409,
-      });
+      try {
+        await expect(service.retryImport('ds-1')).rejects.toMatchObject({
+          code: 'IN_PROGRESS',
+          status: 409,
+        });
+      } finally {
+        owner.release('ds-1', token);
+      }
+    });
+
+    // TASK-359: a restart cut the import off. The row says `importing`, nothing
+    // runs it, and the retry used to answer 409 for ever.
+    it('reclaims an importing row no import in this process is running', async () => {
+      vi.mocked(datasetRepository.findById).mockResolvedValue({
+        ...failedRow,
+        status: 'importing',
+        storagePath: `${join(env.storageRoot, 'store-1')}/`,
+      } as never);
+      mockHub();
+
+      const result = await service.retryImport('ds-1');
+      await settled();
+
+      expect(result).toEqual({ datasetId: 'ds-1', status: 'importing' });
+      expect(datasetService.claimForImport).toHaveBeenCalledWith('ds-1', { reclaimOrphan: true });
+    });
+
+    it('NATS closing before the validation is queued leaves the row validating, not failed', async () => {
+      const closed = Object.assign(new Error('CONNECTION_CLOSED'), { code: 'CONNECTION_CLOSED' });
+      vi.mocked(natsClient.isConnected).mockReturnValue(true);
+      vi.mocked(natsClient.getJetStream).mockReturnValue({ publish: vi.fn().mockRejectedValue(closed) } as never);
+      vi.mocked(datasetRepository.findById).mockResolvedValue({
+        ...failedRow,
+        storagePath: `${join(env.storageRoot, 'store-1')}/`,
+      } as never);
+      mockHub();
+
+      try {
+        await service.retryImport('ds-1');
+        await settled();
+      } finally {
+        vi.mocked(natsClient.isConnected).mockReturnValue(false);
+        vi.mocked(natsClient.getJetStream).mockReturnValue(null as never);
+      }
+
+      expect(datasetRepository.update).toHaveBeenCalledWith('ds-1', { status: 'validating' });
+      expect(datasetRepository.update).not.toHaveBeenCalledWith('ds-1', expect.objectContaining({ status: 'failed' }));
+    });
+
+    it('the startup sweep fails every importing row except the ones this process runs', async () => {
+      const owner = service as unknown as {
+        reserve(id: string): object;
+        release(id: string, token: object): void;
+      };
+      const token = owner.reserve('running-here');
+      vi.mocked(datasetService.failOrphanedImports).mockResolvedValueOnce(['ce4cd156']);
+
+      try {
+        expect(await service.failInterruptedImports()).toEqual(['ce4cd156']);
+      } finally {
+        owner.release('running-here', token);
+      }
+
+      const [owned, reason] = vi.mocked(datasetService.failOrphanedImports).mock.calls[0];
+      expect([...owned]).toEqual(['running-here']);
+      expect(reason).toBe('Server restarted during import');
+      // The operator's open page hears it, not only the next reload.
+      expect(datasetService.emit).toHaveBeenCalledWith('dataset:event', expect.objectContaining({
+        type: 'dataset:import:failed',
+        datasetId: 'ce4cd156',
+        error: 'Server restarted during import',
+      }));
+    });
+
+    it('a second retry of the same orphan, fired before the first is claimed, is a 409', async () => {
+      vi.mocked(datasetRepository.findById).mockResolvedValue({
+        ...failedRow,
+        status: 'importing',
+        storagePath: `${join(env.storageRoot, 'store-1')}/`,
+      } as never);
+      mockHub();
+
+      const first = service.retryImport('ds-1');
+      const second = service.retryImport('ds-1');
+      await expect(second).rejects.toMatchObject({ code: 'IN_PROGRESS', status: 409 });
+      await first;
+      await settled();
+      expect(datasetService.claimForImport).toHaveBeenCalledTimes(1);
     });
 
     it('refuses a dataset that never came from the Hub', async () => {

@@ -754,7 +754,7 @@ describe('retryImport', () => {
     // `DatasetService.claimForImport`, TASK-353) before the Hub round-trips, so
     // a second retry or a robot-type change inside that window is refused; the
     // commit and the directory are written once they are known.
-    expect(datasetService.claimForImport).toHaveBeenCalledWith(DATASET_ID);
+    expect(datasetService.claimForImport).toHaveBeenCalledWith(DATASET_ID, { reclaimOrphan: false });
     expect(datasetRepository.update).toHaveBeenCalledWith(
       DATASET_ID,
       expect.objectContaining({ status: 'importing', sourceRevision: SHA }),
@@ -787,10 +787,18 @@ describe('retryImport', () => {
     } as never);
     await expect(service.retryImport(DATASET_ID)).rejects.toMatchObject({ code: 'NOT_AN_IMPORT' });
 
+    // `importing` AND run by this process: a real conflict. (An `importing`
+    // row nothing here runs is an orphan of a restart — see TASK-359 below.)
+    const owner = service as unknown as {
+      reserve(id: string): object;
+      release(id: string, token: object): void;
+    };
+    const token = owner.reserve(DATASET_ID);
     vi.mocked(datasetRepository.findById).mockResolvedValue({
       ...failedRow, status: 'importing',
     } as never);
     await expect(service.retryImport(DATASET_ID)).rejects.toMatchObject({ code: 'IN_PROGRESS' });
+    owner.release(DATASET_ID, token);
 
     vi.mocked(datasetRepository.findById).mockResolvedValue(null);
     await expect(service.retryImport(DATASET_ID)).rejects.toMatchObject({ code: 'NOT_FOUND' });

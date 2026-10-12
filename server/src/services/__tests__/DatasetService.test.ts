@@ -27,6 +27,8 @@ const {
   findMixtureMembers,
   findDerivedViews,
   findDatasetRow,
+  deleteDatasetPrefix,
+  updateManyDatasets,
 } = vi.hoisted(() => ({
   getDatasetUploadUrl: vi.fn(),
   deleteDatasetFromStorage: vi.fn(),
@@ -49,6 +51,10 @@ const {
   // Default: none, so every pre-existing case is an ordinary dataset.
   findDerivedViews: vi.fn(async () => [] as { id: string; name: string }[]),
   findDatasetRow: vi.fn(async () => null),
+  // TASK-359: the import's own `<uuid>/` prefix, removed on delete.
+  deleteDatasetPrefix: vi.fn(async (_prefix: string) => 0),
+  // TASK-359: the conditional writes of the startup sweep.
+  updateManyDatasets: vi.fn(async (_args: unknown) => ({ count: 1 })),
 }));
 
 vi.mock('../../database/index.js', () => ({
@@ -58,7 +64,7 @@ vi.mock('../../database/index.js', () => ({
     // that `dbDatasetToDomain` does not carry, and asks which views were
     // forked from a dataset before deleting it. Empty by default, so every
     // pre-existing case still describes an ordinary materialized dataset.
-    dataset: { findMany: findDerivedViews, findUnique: findDatasetRow },
+    dataset: { findMany: findDerivedViews, findUnique: findDatasetRow, updateMany: updateManyDatasets },
   },
 }));
 
@@ -88,6 +94,7 @@ vi.mock('../../storage/model-storage.js', () => ({
   modelStorage: {
     getDatasetUploadUrl,
     deleteDataset: deleteDatasetFromStorage,
+    deleteDatasetPrefix,
     // The upload is streamed to the scratch file rather than buffered whole:
     // a multi-GB dataset tarball was materialised twice in the API process
     // before a byte reached disk.
@@ -100,6 +107,7 @@ vi.mock('../../storage/model-storage.js', () => ({
 
 vi.mock('../../storage/rustfs-client.js', () => ({
   isRustFSInitialized: vi.fn(),
+  isRustFSConfigured: vi.fn(() => false),
   getRustFSClient: vi.fn(() => ({
     exists: rustfsExists,
     download: rustfsDownload,
@@ -162,13 +170,13 @@ vi.mock('uuid', () => ({
 }));
 
 import { existsSync } from 'fs';
-import { datasetService, DatasetService, datasetStorageRoot } from '../DatasetService.js';
+import { datasetService, DatasetService, datasetStorageRoot, objectStoragePrefixOf } from '../DatasetService.js';
 import {
   datasetRepository,
   robotTypeRepository,
   skillDefinitionRepository,
 } from '../../repositories/index.js';
-import { isRustFSInitialized } from '../../storage/rustfs-client.js';
+import { isRustFSConfigured, isRustFSInitialized } from '../../storage/rustfs-client.js';
 import { natsClient } from '../../messaging/index.js';
 import { kvGet } from '../../messaging/kv-stores.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -281,6 +289,9 @@ beforeEach(() => {
   // makes a dataset a mixture member would otherwise make every later test's
   // delete refuse.
   findMixtureMembers.mockResolvedValue([]);
+  findDerivedViews.mockResolvedValue([]);
+  vi.mocked(isRustFSConfigured).mockReturnValue(false);
+  deleteDatasetPrefix.mockResolvedValue(0);
 });
 
 // ===========================================================================
@@ -735,7 +746,11 @@ describe('completeUpload', () => {
 
     await datasetService.completeUpload('ds1');
 
-    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'failed' });
+    // The reason is on the row, not only in the progress channel (TASK-359).
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', expect.objectContaining({
+      status: 'failed',
+      validation: expect.objectContaining({ error: expect.stringMatching(/^Could not unpack the uploaded archive: /) }),
+    }));
     expect(jsPublish).not.toHaveBeenCalled();
   });
 
@@ -752,8 +767,12 @@ describe('completeUpload', () => {
     await datasetService.completeUpload('ds1');
 
     expect(jsPublish).not.toHaveBeenCalled();
-    // Synchronous validation path marks dataset failed (storage unavailable).
-    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'failed' });
+    // Synchronous validation path marks dataset failed (storage unavailable),
+    // and says why on the row (TASK-359).
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', expect.objectContaining({
+      status: 'failed',
+      validation: expect.objectContaining({ error: expect.any(String) }),
+    }));
   });
 });
 
@@ -1591,5 +1610,140 @@ describe('requestValidation', () => {
 
     expect(await datasetService.requestValidation('ds-again', `${treeDir}/`)).toBe('started');
     await vi.waitFor(() => expect(datasetService.isValidating('ds-again')).toBe(false));
+  });
+});
+
+// ===========================================================================
+// TASK-359 — the storage lifecycle at its edges
+// ===========================================================================
+
+describe('TASK-359: delete removes the import prefix', () => {
+  const STORE = '0b6f3c1e-2a4d-4e8f-9c1a-5d7e3f2b1a90';
+
+  it('only a bare uuid is ever a prefix', () => {
+    expect(objectStoragePrefixOf(`${STORE}/`)).toBe(`${STORE}/`);
+    expect(objectStoragePrefixOf(STORE)).toBe(`${STORE}/`);
+    expect(objectStoragePrefixOf('')).toBeNull();
+    expect(objectStoragePrefixOf('/')).toBeNull();
+    expect(objectStoragePrefixOf('ds1/')).toBeNull();
+    expect(objectStoragePrefixOf(`/data/datasets/${STORE}/`)).toBeNull();
+    expect(objectStoragePrefixOf(`${STORE}/upload/data.bin`)).toBeNull();
+    expect(objectStoragePrefixOf(`../${STORE}/`)).toBeNull();
+    expect(objectStoragePrefixOf(null)).toBeNull();
+  });
+
+  it('removes every object under storagePath before the row', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ storagePath: `${STORE}/` }));
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+    deleteDatasetPrefix.mockResolvedValue(42);
+
+    expect(await datasetService.delete('ds1')).toBe(true);
+    expect(deleteDatasetPrefix).toHaveBeenCalledWith(`${STORE}/`);
+    expect(deleteDatasetPrefix.mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(datasetRepository.delete).mock.invocationCallOrder[0]);
+  });
+
+  it('never turns a non-uuid storagePath into a prefix', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ storagePath: '/' }));
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+
+    await datasetService.delete('ds1');
+    expect(deleteDatasetPrefix).not.toHaveBeenCalled();
+  });
+
+  it('keeps the row (503) when the prefix cannot be removed', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ storagePath: `${STORE}/` }));
+    deleteDatasetPrefix.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    await expect(datasetService.delete('ds1')).rejects.toMatchObject({ statusCode: 503 });
+    expect(datasetRepository.delete).not.toHaveBeenCalled();
+  });
+
+  it('keeps the row (503) while configured storage is not connected', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+    vi.mocked(isRustFSConfigured).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ storagePath: `${STORE}/` }));
+
+    await expect(datasetService.delete('ds1')).rejects.toMatchObject({ statusCode: 503 });
+    expect(datasetRepository.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('TASK-359: work a previous process left half-done', () => {
+  it('fails orphaned imports with the reason, skipping the ones this process runs', async () => {
+    findDerivedViews.mockResolvedValueOnce([
+      { id: 'orphan', huggingFaceRepoId: 'lerobot/xarm' },
+      { id: 'mine', huggingFaceRepoId: 'lerobot/pusht' },
+    ] as never);
+
+    const failed = await datasetService.failOrphanedImports(new Set(['mine']), 'Server restarted during import');
+
+    expect(failed).toEqual(['orphan']);
+    expect(updateManyDatasets).toHaveBeenCalledTimes(1);
+    const args = updateManyDatasets.mock.calls[0][0] as {
+      where: { id: string; status: string };
+      data: { status: string; importErrorJson: string };
+    };
+    expect(args.where).toEqual({ id: 'orphan', status: 'importing' });
+    expect(args.data.status).toBe('failed');
+    expect(JSON.parse(args.data.importErrorJson)).toMatchObject({
+      error: 'Server restarted during import',
+      repoId: 'lerobot/xarm',
+      phase: 'downloading',
+    });
+  });
+
+  it('a row that moved on since it was listed is not counted', async () => {
+    findDerivedViews.mockResolvedValueOnce([{ id: 'orphan', huggingFaceRepoId: null }] as never);
+    updateManyDatasets.mockResolvedValueOnce({ count: 0 });
+
+    expect(await datasetService.failOrphanedImports(new Set(), 'x')).toEqual([]);
+  });
+
+  it('claimForImport takes an importing row only when reclaiming an orphan', async () => {
+    await datasetService.claimForImport('ds1');
+    await datasetService.claimForImport('ds1', { reclaimOrphan: true });
+    const wheres = updateManyDatasets.mock.calls.map((c) => (c[0] as { where: unknown }).where);
+    expect(wheres[0]).toEqual({ id: 'ds1', status: { notIn: ['importing', 'validating'] } });
+    expect(wheres[1]).toEqual({ id: 'ds1', status: { notIn: ['validating'] } });
+  });
+
+  it('requeues validating rows, and counts the ones whose store is not up yet', async () => {
+    findDerivedViews.mockResolvedValueOnce([{ id: 'v1', storagePath: 'v1/' }] as never);
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+
+    const result = await datasetService.requeueInterruptedValidations();
+    expect(result).toEqual({ requeued: [], waiting: ['v1'] });
+  });
+});
+
+describe('TASK-359: NATS closing is not a verdict', () => {
+  it('leaves the row alone when NATS closes mid-validation', async () => {
+    const closed = Object.assign(new Error('CONNECTION_CLOSED'), { code: 'CONNECTION_CLOSED' });
+    vi.mocked(datasetRepository.findById).mockRejectedValue(closed);
+
+    const outcome = await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
+
+    expect(outcome).toBe('unavailable');
+    expect(datasetRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('a failure before the row was read still records the reason on it', async () => {
+    vi.mocked(datasetRepository.findById)
+      .mockRejectedValueOnce(new Error('db hiccup'))
+      .mockResolvedValue(makeDataset({ status: 'validating' }));
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+
+    const outcome = await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
+
+    expect(outcome).toBe('failed');
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', expect.objectContaining({
+      status: 'failed',
+      validation: expect.objectContaining({ error: 'Validation error: db hiccup' }),
+    }));
+    expect(datasetRepository.update).not.toHaveBeenCalledWith('ds1', { status: 'failed' });
   });
 });

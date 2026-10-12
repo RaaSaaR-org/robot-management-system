@@ -150,13 +150,20 @@ async function handleMessage(msg: JsMsg): Promise<void> {
 
     // Check if we should retry or move to DLQ
     const deliveryCount = msg.info.redeliveryCount ?? 0;
-    if (deliveryCount >= 3) {
-      // Move to dead letter queue (nak with termination)
-      msg.term();
-      console.log(`[DatasetValidationWorker] Message terminated after ${deliveryCount} retries`);
-    } else {
-      // Retry with delay
-      msg.nak(30000); // 30 second delay
+    try {
+      if (deliveryCount >= 3) {
+        // Move to dead letter queue (nak with termination)
+        msg.term();
+        console.log(`[DatasetValidationWorker] Message terminated after ${deliveryCount} retries`);
+      } else {
+        // Retry with delay
+        msg.nak(30000); // 30 second delay
+      }
+    } catch (replyError) {
+      // The connection is gone (shutdown). An unanswered message is redelivered
+      // once its ack wait runs out, and the dataset's row is requeued at startup
+      // either way (TASK-359), so there is nothing more to do here.
+      console.warn('[DatasetValidationWorker] Could not answer the message:', replyError);
     }
   }
 }

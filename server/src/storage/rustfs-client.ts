@@ -13,6 +13,7 @@ import {
   ListObjectsV2Command,
   CopyObjectCommand,
   ListBucketsCommand,
+  HeadBucketCommand,
   type PutObjectCommandInput,
   type GetObjectCommandInput,
   type ListObjectsV2CommandInput,
@@ -272,6 +273,31 @@ export class RustFSClient {
   }
 
   /**
+   * Delete every object under `prefix`, and return how many there were.
+   *
+   * One DeleteObject per key rather than a DeleteObjects batch: the batch call
+   * needs a Content-MD5/checksum header that S3-compatible stores do not all
+   * accept, and a dataset of a few thousand files is seconds either way. The
+   * empty prefix is refused outright — it would mean "the whole bucket".
+   */
+  async deletePrefix(bucket: string, prefix: string, concurrency = 16): Promise<number> {
+    if (!prefix) throw new Error('deletePrefix refuses an empty prefix');
+    let deleted = 0;
+    let batch: string[] = [];
+    const flush = async () => {
+      await Promise.all(batch.map((key) => this.delete(bucket, key)));
+      deleted += batch.length;
+      batch = [];
+    };
+    for await (const obj of this.listAll(bucket, prefix)) {
+      batch.push(obj.key);
+      if (batch.length >= concurrency) await flush();
+    }
+    await flush();
+    return deleted;
+  }
+
+  /**
    * Check if an object exists
    */
   async exists(bucket: string, key: string): Promise<boolean> {
@@ -420,6 +446,22 @@ export class RustFSClient {
   ): Promise<void> {
     await this.copy(srcBucket, srcKey, destBucket, destKey);
     await this.delete(srcBucket, srcKey);
+  }
+
+  /**
+   * HeadBucket with a deadline, throwing a {@link RustFSConnectionError} that
+   * says why. This is the live check behind `/health`: a client that connected
+   * once says nothing about whether the store is still there.
+   */
+  async headBucket(bucket: string, timeoutMs: number): Promise<void> {
+    try {
+      await this.client.send(new HeadBucketCommand({ Bucket: bucket }), {
+        abortSignal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      const { kind, detail } = classifyS3Error(err);
+      throw new RustFSConnectionError(kind, detail, `RustFS at ${this.config.endpoint} did not answer HeadBucket ${bucket}: ${detail}`);
+    }
   }
 
   /**
@@ -576,6 +618,58 @@ export function getRustFSStatus(): RustFSStatus {
     status.errorDetail = lastError.detail;
   }
   return status;
+}
+
+/** What the last live probe of the store found. */
+export interface RustFSProbe {
+  ok: boolean;
+  /** ISO-8601, when the probe was sent. */
+  checkedAt: string;
+  errorKind?: RustFSErrorKind;
+  errorDetail?: string;
+}
+
+/**
+ * The bucket the probe asks about. Named here rather than imported from
+ * `model-storage`, which imports this module. Every dataset lives in it, so
+ * "it answers" is the question the import path cares about.
+ */
+const PROBE_BUCKET = 'training-datasets';
+const PROBE_TIMEOUT_MS = 2_000;
+/** How long one probe answers for. `/health` is polled by kubelet and by people. */
+export const PROBE_TTL_MS = 10_000;
+
+let probeCache: { at: number; result: Promise<RustFSProbe> } | null = null;
+
+/**
+ * Ask the store whether it is there NOW — a HeadBucket with a 2 s deadline,
+ * cached for {@link PROBE_TTL_MS} and shared by concurrent callers.
+ *
+ * `getRustFSStatus` only knows whether a client was ever published, so once
+ * RustFS had connected `/health` said `ready` for ever, including while the
+ * store was scaled to zero (measured on the production chart). `undefined`
+ * when there is no client to probe with: the status already says why.
+ */
+export async function probeRustFS(now = Date.now()): Promise<RustFSProbe | undefined> {
+  const client = rustfsClient;
+  if (!client) return undefined;
+  if (probeCache && now - probeCache.at < PROBE_TTL_MS) return probeCache.result;
+  const checkedAt = new Date(now).toISOString();
+  const result = client.headBucket(PROBE_BUCKET, PROBE_TIMEOUT_MS).then(
+    (): RustFSProbe => ({ ok: true, checkedAt }),
+    (err: unknown): RustFSProbe => {
+      const { kind, detail } = err instanceof RustFSConnectionError
+        ? { kind: err.kind, detail: err.detail } : classifyS3Error(err);
+      return { ok: false, checkedAt, errorKind: kind, errorDetail: detail };
+    },
+  );
+  probeCache = { at: now, result };
+  return result;
+}
+
+/** Forget the cached probe — for tests, and after the client is replaced. */
+export function resetRustFSProbe(): void {
+  probeCache = null;
 }
 
 /**

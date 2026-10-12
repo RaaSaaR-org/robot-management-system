@@ -58,6 +58,7 @@ import {
 import { BUCKETS } from '../storage/model-storage.js';
 import { natsClient } from '../messaging/index.js';
 import { datasetService, datasetStorageRoot } from './DatasetService.js';
+import { isNatsConnectionClosed } from '../messaging/connection-errors.js';
 import type {
   CreateDatasetInput,
   DatasetImportMode,
@@ -82,6 +83,9 @@ const DATASET_VALIDATION_SUBJECT = 'jobs.dataset.validate';
 const MAX_CONCURRENT_DOWNLOADS = 5;
 const MAX_RETRY_DELAY_MS = 30_000;
 const INITIAL_RETRY_DELAY_MS = 1_000;
+/** What a row cut off mid-import by a restart says (TASK-359). */
+export const INTERRUPTED_IMPORT_ERROR = 'Server restarted during import';
+
 /** Attempts per file before a dropped connection fails the import (#370). */
 export const MAX_TRANSFER_ATTEMPTS = 6;
 // Unitree's multi-gigabyte videos can legitimately take longer than ten minutes.
@@ -408,7 +412,71 @@ export function declaredFeatureWidth(info: LeRobotInfoV3, key: string): number {
 export class HuggingFaceImportService {
   private static instance: HuggingFaceImportService;
 
+  /**
+   * Imports this process is running (or has reserved for a retry), by dataset
+   * id. A row that is `importing` and NOT in here was cut off by a restart:
+   * the startup sweep fails it and `retryImport` may take it back (TASK-359).
+   */
+  private readonly running = new Map<string, object>();
+
+  /**
+   * Own `datasetId` from now on. The token makes the release exact: a run that
+   * is still unwinding (its failure recorded, its `finally` not yet reached)
+   * must not release the claim of the retry that followed it.
+   */
+  private reserve(datasetId: string): object {
+    const token = {};
+    this.running.set(datasetId, token);
+    return token;
+  }
+
+  private release(datasetId: string, token: object): void {
+    if (this.running.get(datasetId) === token) this.running.delete(datasetId);
+  }
+
   private constructor() {}
+
+  /** Whether this process is running the import of `datasetId`. */
+  isRunning(datasetId: string): boolean {
+    return this.running.has(datasetId);
+  }
+
+  /**
+   * Fail every `importing` row this process is not running (TASK-359).
+   *
+   * Called once at startup. Without it an import cut off by a restart read
+   * "importing" for ever, and the retry refused it as in progress — measured
+   * on the production chart with a pod restart mid-download.
+   */
+  async failInterruptedImports(): Promise<string[]> {
+    const failed = await datasetService.failOrphanedImports(new Set(this.running.keys()), INTERRUPTED_IMPORT_ERROR);
+    for (const datasetId of failed) {
+      console.warn(`[HFImport] ${datasetId} was importing when the server stopped; marked failed`);
+      datasetService.emit('dataset:event', {
+        type: 'dataset:import:failed',
+        datasetId,
+        error: INTERRUPTED_IMPORT_ERROR,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    return failed;
+  }
+
+  /** Run an import in the background and own it while it runs. */
+  private launch(
+    datasetId: string,
+    token: object,
+    run: () => Promise<void>,
+    what: string,
+  ): void {
+    run()
+      .catch((error) => {
+        console.error(`[HFImport] Background ${what} failed for ${datasetId}:`, error);
+      })
+      .finally(() => {
+        this.release(datasetId, token);
+      });
+  }
 
   static getInstance(): HuggingFaceImportService {
     if (!HuggingFaceImportService.instance) {
@@ -483,11 +551,7 @@ export class HuggingFaceImportService {
     });
 
     // Run download in background (don't await)
-    this.runImport(datasetId, repoId, sha, sink, info, includeVideos).catch(
-      (error) => {
-        console.error(`[HFImport] Background import failed for ${datasetId}:`, error);
-      }
-    );
+    this.launch(datasetId, this.reserve(datasetId), () => this.runImport(datasetId, repoId, sha, sink, info, includeVideos), 'import');
 
     return datasetId;
   }
@@ -516,7 +580,10 @@ export class HuggingFaceImportService {
         400,
       );
     }
-    if (existing.status === 'importing' || existing.status === 'validating') {
+    // An `importing` row nothing in this process is running is an orphan of a
+    // restart (TASK-359): retrying it is the way out, not a conflict.
+    const orphaned = existing.status === 'importing' && !this.running.has(datasetId);
+    if ((existing.status === 'importing' && !orphaned) || existing.status === 'validating') {
       throw new HuggingFaceImportError(
         'IN_PROGRESS',
         `Dataset ${datasetId} is already ${existing.status}`,
@@ -538,7 +605,16 @@ export class HuggingFaceImportService {
     // attempt.
     // Conditional (TASK-353): a robot-type change or a validation may have
     // taken the row since it was read above.
-    if (!(await datasetService.claimForImport(datasetId))) {
+    // Reserved in this process first, synchronously after the check above, so
+    // two retries of one orphan cannot both reclaim it.
+    const token = this.reserve(datasetId);
+    let claimed = false;
+    try {
+      claimed = await datasetService.claimForImport(datasetId, { reclaimOrphan: orphaned });
+    } finally {
+      if (!claimed) this.release(datasetId, token);
+    }
+    if (!claimed) {
       throw new HuggingFaceImportError(
         'IN_PROGRESS',
         `Dataset ${datasetId} is being validated or its robot type is being changed`,
@@ -580,21 +656,28 @@ export class HuggingFaceImportService {
     } catch (error) {
       // The claim has to be released, or a repo that has been deleted leaves
       // the row `importing` for ever with nothing running.
+      this.release(datasetId, token);
       await this.recordFailure(datasetId, 'metadata', repoId, error);
       throw error;
     }
 
-    await datasetRepository.update(datasetId, {
-      status: 'importing',
-      storagePath: sink.storagePath,
-      sourceRevision: sha,
-      robotTypeId: resolvedRobotTypeId,
-      // Only when this attempt actually learned one. A retry against a pinned
-      // sha makes no card request, and `null` there means "did not ask", so
-      // writing it would erase a licence the first import recorded.
-      ...(license === null ? {} : { sourceLicense: license }),
-      importMode,
-    });
+    try {
+      await datasetRepository.update(datasetId, {
+        status: 'importing',
+        storagePath: sink.storagePath,
+        sourceRevision: sha,
+        robotTypeId: resolvedRobotTypeId,
+        // Only when this attempt actually learned one. A retry against a pinned
+        // sha makes no card request, and `null` there means "did not ask", so
+        // writing it would erase a licence the first import recorded.
+        ...(license === null ? {} : { sourceLicense: license }),
+        importMode,
+      });
+    } catch (error) {
+      // Not running after all: an orphan the next retry can take back.
+      this.release(datasetId, token);
+      throw error;
+    }
 
     this.emitProgress(datasetId, {
       datasetId,
@@ -605,9 +688,7 @@ export class HuggingFaceImportService {
       completedFiles: 0,
     });
 
-    this.runImport(datasetId, repoId, sha, sink, info, importMode === 'full').catch((error) => {
-      console.error(`[HFImport] Background retry failed for ${datasetId}:`, error);
-    });
+    this.launch(datasetId, token, () => this.runImport(datasetId, repoId, sha, sink, info, importMode === 'full'), 'retry');
 
     return { datasetId, status: 'importing' };
   }
@@ -862,6 +943,15 @@ export class HuggingFaceImportService {
 
       console.log(`[HFImport] Import completed for ${datasetId} (${repoId})`);
     } catch (error) {
+      // Every file is stored and the row says `validating`; only the queueing
+      // of the validation died, because shutdown closed NATS under it. That is
+      // not a failed import: the row stays `validating` and the startup
+      // recovery queues the validation again (TASK-359).
+      if (phase === 'validating' && isNatsConnectionClosed(error)) {
+        console.warn(`[HFImport] NATS closed before the validation of ${datasetId} was queued; left for the startup requeue`);
+        this.log(datasetId, 'warn', 'Server shutting down — validation will be queued again when it restarts');
+        return;
+      }
       console.error(`[HFImport] Import failed for ${datasetId}:`, error);
 
       await this.recordFailure(datasetId, phase, repoId, error);
@@ -1369,7 +1459,8 @@ export class HuggingFaceImportService {
         this.log(
           datasetId,
           'warn',
-          `${path}: ${failure.detail} — retrying in ${Math.round(waitMs / 1000)}s `
+          `${path}: ${failure.transferStage === 'write' ? `write to ${failure.sink}` : 'fetch from the Hub'} failed `
+            + `(${failure.detail}) — retrying in ${Math.round(waitMs / 1000)}s `
             + `(attempt ${attempt + 1}/${MAX_TRANSFER_ATTEMPTS})`,
         );
       } finally {

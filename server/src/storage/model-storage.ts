@@ -244,6 +244,14 @@ export class ModelStorageClient {
   }
 
   /**
+   * Delete every object of a dataset stored under `prefix` (`<uuid>/`), and
+   * return how many there were. The caller validates the prefix: this does not.
+   */
+  async deleteDatasetPrefix(prefix: string): Promise<number> {
+    return getRustFSClient().deletePrefix(BUCKETS.TRAINING_DATASETS, prefix);
+  }
+
+  /**
    * Check if dataset exists
    */
   async datasetExists(name: string, version: string): Promise<boolean> {

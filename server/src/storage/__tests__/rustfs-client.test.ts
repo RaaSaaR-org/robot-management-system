@@ -67,6 +67,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   ListObjectsV2Command: h.mkCmd('ListObjectsV2'),
   CopyObjectCommand: h.mkCmd('CopyObject'),
   ListBucketsCommand: h.mkCmd('ListBuckets'),
+  HeadBucketCommand: h.mkCmd('HeadBucket'),
 }));
 
 vi.mock('@aws-sdk/lib-storage', () => ({
@@ -1034,5 +1035,72 @@ describe('static singleton exports', () => {
     expect(typeof getRustFSClient).toBe('function');
     expect(typeof isRustFSInitialized).toBe('function');
     expect(typeof initializeRustFSClient).toBe('function');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-359: prefix delete and the live probe
+// ---------------------------------------------------------------------------
+
+describe('RustFSClient.deletePrefix', () => {
+  it('lists every page under the prefix and deletes each key', async () => {
+    h.send.mockImplementation(async (cmd: { __cmd: string; input: Record<string, unknown> }) => {
+      if (cmd.__cmd === 'ListObjectsV2') {
+        return cmd.input.ContinuationToken
+          ? { Contents: [{ Key: 'u/c' }], IsTruncated: false }
+          : { Contents: [{ Key: 'u/a' }, { Key: 'u/b' }], IsTruncated: true, NextContinuationToken: 't' };
+      }
+      return {};
+    });
+    const client = new RustFSClient(cfg);
+
+    expect(await client.deletePrefix('training-datasets', 'u/', 2)).toBe(3);
+    const deleted = h.send.mock.calls
+      .map(([c]) => c as { __cmd: string; input: { Key?: string; Prefix?: string } })
+      .filter((c) => c.__cmd === 'DeleteObject')
+      .map((c) => c.input.Key);
+    expect(deleted.sort()).toEqual(['u/a', 'u/b', 'u/c']);
+    const prefixes = h.send.mock.calls
+      .map(([c]) => c as { __cmd: string; input: { Prefix?: string } })
+      .filter((c) => c.__cmd === 'ListObjectsV2')
+      .map((c) => c.input.Prefix);
+    expect(prefixes).toEqual(['u/', 'u/']);
+  });
+
+  it('refuses the empty prefix, which would be the whole bucket', async () => {
+    const client = new RustFSClient(cfg);
+    await expect(client.deletePrefix('training-datasets', '')).rejects.toThrow(/empty prefix/);
+    expect(h.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('probeRustFS', () => {
+  it('is undefined with no client, then caches a failed HeadBucket for the TTL', async () => {
+    vi.resetModules();
+    const mod = await import('../rustfs-client.js');
+    expect(await mod.probeRustFS()).toBeUndefined();
+
+    h.send.mockResolvedValue({}); // ListBuckets during initialize
+    await mod.initializeRustFSClient(cfg);
+    h.send.mockReset();
+    const refused = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    h.send.mockRejectedValue(refused);
+
+    const t0 = 1_000_000;
+    const first = await mod.probeRustFS(t0);
+    expect(first).toMatchObject({ ok: false, errorKind: 'connectivity' });
+    expect(h.send).toHaveBeenCalledWith(
+      { __cmd: 'HeadBucket', input: { Bucket: 'training-datasets' } },
+      expect.objectContaining({ abortSignal: expect.any(Object) }),
+    );
+
+    // Within the TTL: the cached answer, no second request.
+    expect(await mod.probeRustFS(t0 + mod.PROBE_TTL_MS - 1)).toBe(first);
+    expect(h.send).toHaveBeenCalledTimes(1);
+
+    // After it: asked again, and the store is back.
+    h.send.mockResolvedValue({});
+    expect(await mod.probeRustFS(t0 + mod.PROBE_TTL_MS)).toMatchObject({ ok: true });
+    expect(h.send).toHaveBeenCalledTimes(2);
   });
 });

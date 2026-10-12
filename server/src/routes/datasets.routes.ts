@@ -54,7 +54,7 @@ import {
 } from '../services/lerobot/RemoteDatasetReader.js';
 // TASK-220 — POST /compatibility, at the bottom of this file.
 import { analyzeDatasetIds, UnknownDatasetError } from '../services/lerobot/datasetCompatibility.js';
-import { ConflictError } from '../utils/errors.js';
+import { ConflictError, ServiceUnavailableError } from '../utils/errors.js';
 import { ownerOnly } from '../middleware/auth.middleware.js';
 import { sendFailure } from '../utils/routeErrors.js';
 
@@ -981,6 +981,10 @@ datasetRoutes.delete('/:id', async (req: Request, res: Response) => {
     // behind "Failed to delete dataset".
     if (error instanceof ConflictError) {
       return res.status(409).json({ error: error.message });
+    }
+    // Object storage could not remove its files, so the row was kept: retry later.
+    if (error instanceof ServiceUnavailableError) {
+      return res.status(503).json({ error: error.message });
     }
     console.error('[DatasetRoutes] Error deleting dataset:', error);
     res.status(500).json({ error: 'Failed to delete dataset' });

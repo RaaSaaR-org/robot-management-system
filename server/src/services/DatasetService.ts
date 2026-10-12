@@ -22,7 +22,7 @@ import {
 // episode-flag repository the same way.)
 import { episodeRewardRepository } from '../repositories/EpisodeRewardRepository.js';
 import { modelStorage, BUCKETS } from '../storage/model-storage.js';
-import { getRustFSClient, isRustFSInitialized } from '../storage/rustfs-client.js';
+import { getRustFSClient, isRustFSConfigured, isRustFSInitialized } from '../storage/rustfs-client.js';
 import { DatasetStoreError, openDatasetTree } from './lerobot/DatasetTree.js';
 
 /**
@@ -105,7 +105,7 @@ import type {
   ValidationContext,
 } from './lerobot/validateDataset.js';
 import { prisma } from '../database/index.js';
-import { ConflictError, NotFoundError } from '../utils/errors.js';
+import { ConflictError, NotFoundError, ServiceUnavailableError } from '../utils/errors.js';
 import {
   datasetViewService,
   DatasetViewError,
@@ -118,10 +118,12 @@ import type {
   SelectedEpisode,
 } from '../types/dataset-view.types.js';
 import { natsClient } from '../messaging/index.js';
+import { isNatsConnectionClosed } from '../messaging/connection-errors.js';
 import { kvPut, kvGet, KV_STORE_NAMES } from '../messaging/kv-stores.js';
 import type { KV } from 'nats';
 import type {
   Dataset,
+  DatasetImportError,
   DatasetStatus,
   CreateDatasetInput,
   UpdateDatasetInput,
@@ -189,6 +191,21 @@ const LOCAL_PROGRESS_MAX = 200;
  * the ONE place that string is decided. It used to be decided in three.
  */
 const UPLOAD_VERSION = 'upload';
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The object-store prefix a `storagePath` names, or null when it names none.
+ *
+ * Only a bare uuid qualifies — `<uuid>` or `<uuid>/`, which is exactly what
+ * the Hub importer writes. Anything else (an absolute local path, an upload
+ * key, a column a bug filled in) is never used as a prefix: a delete keyed on
+ * an unvalidated column is how `""` becomes "the whole bucket".
+ */
+export function objectStoragePrefixOf(storagePath: string | null | undefined): string | null {
+  const bare = (storagePath ?? '').replace(/\/$/, '');
+  return UUID_PATTERN.test(bare) ? `${bare}/` : null;
+}
 function uploadObjectKey(id: string): string {
   return `${id}/${UPLOAD_VERSION}/data.bin`;
 }
@@ -935,6 +952,40 @@ export class DatasetService extends EventEmitter {
     // `<id>/upload/data.bin` since TASK-217 and the delete still asked for
     // `<id>/latest/data.bin` — so every uploaded dataset ever deleted left its
     // full archive in the bucket, paid for forever.
+    //
+    // And the import's own prefix. The Hub importer writes under a fresh uuid
+    // (`storagePath = "<uuid>/"`), so the two keys above never held any of an
+    // imported dataset's objects: every one of them stayed in the bucket after
+    // the delete (measured on the production chart). The prefix is only used
+    // when the column is exactly a uuid — a column that is anything else is
+    // never turned into "delete everything under this".
+    //
+    // Unlike the two legacy keys, failing here REFUSES the delete: the row is
+    // the only record of where those bytes are, so deleting it while they stay
+    // would orphan them for good. A 503 keeps the row, and the delete can be
+    // retried once the store is back.
+    const storagePrefix = objectStoragePrefixOf(dataset.storagePath);
+    if (storagePrefix) {
+      if (!isRustFSInitialized()) {
+        if (isRustFSConfigured()) {
+          throw new ServiceUnavailableError(
+            `"${dataset.name}" is stored in object storage, which is unavailable right now; `
+            + 'its files cannot be removed, so the dataset was kept. Try again once storage is back.',
+          );
+        }
+      } else {
+        try {
+          const removed = await modelStorage.deleteDatasetPrefix(storagePrefix);
+          console.log(`[DatasetService] Removed ${removed} objects under ${storagePrefix} for ${id}`);
+        } catch (error) {
+          console.warn(`[DatasetService] Failed to remove ${storagePrefix} for ${id}:`, error);
+          throw new ServiceUnavailableError(
+            `Could not remove the files of "${dataset.name}" from object storage; the dataset was kept. `
+            + 'Try again once storage is reachable.',
+          );
+        }
+      }
+    }
     if (isRustFSInitialized() && dataset.storagePath) {
       for (const version of ['latest', UPLOAD_VERSION]) {
         try {
@@ -1072,7 +1123,7 @@ export class DatasetService extends EventEmitter {
       const code = error instanceof ExtractError ? error.code : 'UNPACK_FAILED';
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[DatasetService] Unpacking upload for ${id} failed: ${code}: ${detail}`);
-      await datasetRepository.update(id, { status: 'failed' });
+      await this.recordUnverified(dataset, `Could not unpack the uploaded archive: ${code}: ${detail}`);
       await this.updateValidationProgress(id, {
         datasetId: id,
         status: 'failed',
@@ -1475,7 +1526,8 @@ export class DatasetService extends EventEmitter {
     if (revalidation === 'store-unavailable') {
       // Nothing is running, so `validating` would be a lie nothing clears. Not
       // `ready` either: the old verdict is void and no new one exists.
-      await datasetRepository.update(datasetId, { status: 'failed' });
+      const row = await datasetRepository.findById(datasetId);
+      if (row) await this.recordUnverified(row, 'Storage unavailable — the dataset was not revalidated after the robot-type change');
     }
 
     const response = await this.get(datasetId);
@@ -1501,14 +1553,82 @@ export class DatasetService extends EventEmitter {
    * already `importing`/`validating`. The status condition is in the WHERE
    * clause so a reassociation that wrote `validating` a moment ago is seen
    * even when both requests read the row before either wrote it.
+   *
+   * `reclaimOrphan` also takes a row that is `importing` — only for a caller
+   * that has established no import in this process is running it (TASK-359):
+   * an import cut off by a restart left it there, and nothing else ever will.
    */
-  async claimForImport(datasetId: string): Promise<boolean> {
+  async claimForImport(datasetId: string, options: { reclaimOrphan?: boolean } = {}): Promise<boolean> {
     if (this.reassociating.has(datasetId) || this.isValidating(datasetId)) return false;
+    const busy = options.reclaimOrphan ? ['validating'] : ['importing', 'validating'];
     const { count } = await prisma.dataset.updateMany({
-      where: { id: datasetId, status: { notIn: ['importing', 'validating'] } },
+      where: { id: datasetId, status: { notIn: busy } },
       data: { status: 'importing', importErrorJson: null },
     });
     return count > 0;
+  }
+
+  /**
+   * Mark every `importing` row that `owned` does not name as `failed`, with the
+   * reason on the row (TASK-359). Returns the ids it marked.
+   *
+   * Run at startup, when this process owns no import at all: a row still
+   * `importing` then belongs to a process that is gone. The server runs as one
+   * replica, so "not owned here" means "owned by nobody". Conditional on the
+   * status, so a row that moved on since it was listed is left alone.
+   */
+  async failOrphanedImports(owned: ReadonlySet<string>, reason: string): Promise<string[]> {
+    const rows = await prisma.dataset.findMany({
+      where: { status: 'importing' },
+      select: { id: true, huggingFaceRepoId: true },
+    });
+    const failed: string[] = [];
+    for (const row of rows) {
+      if (owned.has(row.id)) continue;
+      const importError: DatasetImportError = {
+        phase: 'downloading',
+        error: reason,
+        ...(row.huggingFaceRepoId ? { repoId: row.huggingFaceRepoId } : {}),
+        failedAt: new Date().toISOString(),
+      };
+      const { count } = await prisma.dataset.updateMany({
+        where: { id: row.id, status: 'importing' },
+        data: { status: 'failed', importErrorJson: JSON.stringify(importError) },
+      });
+      if (count > 0) failed.push(row.id);
+    }
+    return failed;
+  }
+
+  /**
+   * Queue a validation for every row left `validating` (TASK-359).
+   *
+   * A pass that NATS closed under during shutdown leaves its row `validating`
+   * on purpose (see `validateAndUpdateDataset`), and so does an import whose
+   * validation publish never got out. This is what takes them out of it: run
+   * once storage is up at startup, and again when RustFS recovers. Rows whose
+   * store cannot be opened yet are counted as waiting and left for the next
+   * call. A second pass over a row that still had a message on the stream is
+   * harmless: both reach the same verdict.
+   */
+  async requeueInterruptedValidations(): Promise<{ requeued: string[]; waiting: string[] }> {
+    const rows = await prisma.dataset.findMany({
+      where: { status: 'validating' },
+      select: { id: true, storagePath: true },
+    });
+    const requeued: string[] = [];
+    const waiting: string[] = [];
+    for (const row of rows) {
+      try {
+        const state = await this.requestValidation(row.id, row.storagePath);
+        if (state === 'queued' || state === 'started') requeued.push(row.id);
+        else if (state === 'store-unavailable') waiting.push(row.id);
+      } catch (error) {
+        console.warn(`[DatasetService] Could not requeue the validation of ${row.id}:`, error);
+        waiting.push(row.id);
+      }
+    }
+    return { requeued, waiting };
   }
 
   /**
@@ -1749,9 +1869,8 @@ export class DatasetService extends EventEmitter {
         } else if (existing) {
           // No report to store, so the reason goes on the row instead.
           await this.recordUnverified(existing, validation.errors.join('; ') || 'Validation failed');
-        } else {
-          await datasetRepository.update(datasetId, { status: 'failed' });
         }
+        // No row: nothing to mark. A bare `status: 'failed'` is never written.
 
         await this.updateValidationProgress(datasetId, {
           datasetId,
@@ -1827,12 +1946,24 @@ export class DatasetService extends EventEmitter {
       return 'ready';
 
     } catch (error) {
+      // The process is shutting down and took NATS with it (a progress write
+      // or the worker's own connection). That says nothing about the dataset:
+      // the row is left as it was — `validating` stays `validating` — and the
+      // startup recovery queues it again (`requeueInterruptedValidations`).
+      // Marking it `failed` here failed good datasets on every rollout.
+      if (isNatsConnectionClosed(error)) {
+        console.warn(`[DatasetService] NATS closed during validation of ${datasetId}; left for the startup requeue`);
+        return 'unavailable';
+      }
+
       console.error(`[DatasetService] Validation error for ${datasetId}:`, error);
 
-      if (existing) {
-        await this.recordUnverified(existing, `Validation error: ${error instanceof Error ? error.message : String(error)}`);
-      } else {
-        await datasetRepository.update(datasetId, { status: 'failed' });
+      // `existing` is read inside the try, so a failure before that line
+      // leaves it null for a row that does exist — which used to write a bare
+      // `status: 'failed'` with no reason anywhere. Read it here instead.
+      const row = existing ?? await datasetRepository.findById(datasetId).catch(() => null);
+      if (row) {
+        await this.recordUnverified(row, `Validation error: ${error instanceof Error ? error.message : String(error)}`);
       }
 
       await this.updateValidationProgress(datasetId, {

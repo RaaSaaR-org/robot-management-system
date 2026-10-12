@@ -42,11 +42,42 @@ import { tourTranscriptCleanupJob } from './jobs/tour-transcript-cleanup.js';
 import { ControlLeaseSweeper } from './jobs/control-lease-sweeper.js';
 import { getDefaultControlLeaseService } from './routes/control-lease.routes.js';
 import { MULTI_TENANCY_ENABLED } from './config/features.js';
+import { assertComplianceKeyUsable } from './security/encryption.js';
+import { huggingFaceImportService } from './services/HuggingFaceImportService.js';
 
 const PORT = process.env.PORT || 3001;
 
+/**
+ * Take dataset work a previous process left half-done out of limbo (TASK-359):
+ * fail the imports it was running, and queue again the validations NATS closed
+ * under. Never throws — recovery failing must not stop the server.
+ */
+async function recoverInterruptedDatasetWork(): Promise<void> {
+  try {
+    const failed = await huggingFaceImportService.failInterruptedImports();
+    if (failed.length > 0) logger.warn({ datasetIds: failed }, '[Datasets] Imports cut off by a restart marked failed');
+  } catch (error) {
+    logger.warn({ err: error instanceof Error ? error.message : error }, '[Datasets] Could not sweep interrupted imports');
+  }
+  await requeueInterruptedValidations();
+}
+
+async function requeueInterruptedValidations(): Promise<void> {
+  try {
+    const { requeued, waiting } = await datasetService.requeueInterruptedValidations();
+    if (requeued.length > 0) logger.info({ datasetIds: requeued }, '[Datasets] Interrupted validations queued again');
+    if (waiting.length > 0) logger.warn({ datasetIds: waiting }, '[Datasets] Validations waiting for storage');
+  } catch (error) {
+    logger.warn({ err: error instanceof Error ? error.message : error }, '[Datasets] Could not requeue interrupted validations');
+  }
+}
+
 async function main() {
   logger.info('Starting A2A Server...');
+
+  // Before anything is accepted: a production key that cannot encrypt would
+  // otherwise fail every audit write for the life of the process (TASK-359).
+  assertComplianceKeyUsable();
 
   // Multi-tenancy flag (TASK-155) — mirrors NATS/RustFS pattern so
   // single-tenant deployments see a clear "disabled" line at boot.
@@ -159,12 +190,15 @@ async function main() {
         onReady: () => {
           storageCleanupJob.startSchedule(24);
           logger.info('[RustFS] Object storage recovered');
+          void requeueInterruptedValidations();
         },
       });
     } else {
       logger.warn({ err: error instanceof Error ? error.message : error, errorKind }, '[RustFS] Failed to initialize (storage features disabled)');
     }
   }
+
+  await recoverInterruptedDatasetWork();
 
   // Create Express app
   const app = createApp();

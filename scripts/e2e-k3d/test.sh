@@ -10,6 +10,7 @@
 #      training-datasets bucket under the row's storagePath, with the Hub's size
 #   5. the episodes and frames endpoints serve what is in those objects — not
 #      the synthetic fallback they print when storage cannot be read
+#   6. deleting the dataset removes every object under its storagePath (TASK-359)
 #
 # Knobs: E2E_DATASET (default lerobot/svla_so101_pickplace, ~450 KB without
 # videos), E2E_INCLUDE_VIDEOS=1 (adds ~86 MB of mp4), E2E_PORT (local port for
@@ -48,7 +49,10 @@ SERVER_DEPLOY="$(kc get deploy -l app.kubernetes.io/component=server -o jsonpath
 [ -n "$SERVER_SVC" ] || fail "no server Service in $NAMESPACE — run install.sh first"
 
 # --- port-forward ------------------------------------------------------------
-kc port-forward "svc/$SERVER_SVC" "$PORT:3001" >"$WORK/pf.log" 2>&1 &
+# kubectl itself, not `kc`: a shell function in the background runs in a
+# subshell, so `$!` was the subshell's PID, `cleanup` killed that, and the
+# kubectl port-forward under it lived on as an orphan holding the port.
+kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" port-forward "svc/$SERVER_SVC" "$PORT:3001" >"$WORK/pf.log" 2>&1 &
 PF_PID=$!
 for _ in $(seq 1 30); do
   curl -fsS -o /dev/null "$API/health" 2>/dev/null && break
@@ -134,21 +138,24 @@ SK="$(kc get secret "$SECRET" -o jsonpath='{.data.RUSTFS_SECRET_KEY}' | base64 -
 # Run detached and read the pod's log afterwards: `kubectl run -i` loses the
 # race with a command this short and, falling back to streaming the log,
 # printed the listing twice (measured).
-LS_POD="e2e-s3ls-$$"
-kc run "$LS_POD" --restart=Never --image=amazon/aws-cli:latest --image-pull-policy=IfNotPresent \
-  --env="AWS_ACCESS_KEY_ID=$AK" --env="AWS_SECRET_ACCESS_KEY=$SK" --env=AWS_DEFAULT_REGION=us-east-1 \
-  -- --endpoint-url "$ENDPOINT" s3api list-objects-v2 --bucket training-datasets \
-     --prefix "$STORAGE_PATH" --output json >/dev/null
-phase=""
-for _ in $(seq 1 60); do
-  phase="$(kc get pod "$LS_POD" -o jsonpath='{.status.phase}')"
-  case "$phase" in Succeeded|Failed) break ;; esac
-  sleep 1
-done
-kc logs "$LS_POD" >"$WORK/objects.json" 2>&1 || true
-kc delete pod "$LS_POD" --wait=false >/dev/null 2>&1 || true
-[ "$phase" = Succeeded ] \
-  || fail "listing s3://training-datasets/$STORAGE_PATH ended '$phase': $(cat "$WORK/objects.json")"
+# list_objects <out-file>: the training-datasets objects under $STORAGE_PATH, as JSON.
+list_objects() {
+  local out="$1" pod="e2e-s3ls-$$-$RANDOM" phase=""
+  kc run "$pod" --restart=Never --image=amazon/aws-cli:latest --image-pull-policy=IfNotPresent \
+    --env="AWS_ACCESS_KEY_ID=$AK" --env="AWS_SECRET_ACCESS_KEY=$SK" --env=AWS_DEFAULT_REGION=us-east-1 \
+    -- --endpoint-url "$ENDPOINT" s3api list-objects-v2 --bucket training-datasets \
+       --prefix "$STORAGE_PATH" --output json >/dev/null
+  for _ in $(seq 1 60); do
+    phase="$(kc get pod "$pod" -o jsonpath='{.status.phase}')"
+    case "$phase" in Succeeded|Failed) break ;; esac
+    sleep 1
+  done
+  kc logs "$pod" >"$out" 2>&1 || true
+  kc delete pod "$pod" --wait=false >/dev/null 2>&1 || true
+  [ "$phase" = Succeeded ] \
+    || fail "listing s3://training-datasets/$STORAGE_PATH ended '$phase': $(cat "$out")"
+}
+list_objects "$WORK/objects.json"
 jq -r --arg p "$STORAGE_PATH" '(.Contents // [])[] | "\(.Key | ltrimstr($p)) \(.Size)"' \
   "$WORK/objects.json" | sort >"$WORK/actual.txt"
 
@@ -192,4 +199,15 @@ grep -q "Read $EP0_LEN frames from parquet for episode $EP0_IDX" "$WORK/server.l
   || fail "the server never logged reading episode $EP0_IDX from parquet — those frames were synthesised"
 ok "episode $EP0_IDX: $n_frames frames read from data/ parquet in RustFS"
 
-ok "E2E passed: $DATASET imported into RustFS and read back (dataset $DATASET_ID)"
+# --- 6. delete removes the objects ------------------------------------------
+# The importer writes under a fresh uuid prefix, and the delete used to remove
+# only `<id>/latest` and `<id>/upload` — every imported object stayed behind.
+code="$(curl -sS -o "$WORK/delete.json" -w '%{http_code}' -X DELETE "$API/api/datasets/$DATASET_ID")"
+[ "$code" = 200 ] || { dump_server_logs; fail "delete answered $code: $(cat "$WORK/delete.json")"; }
+list_objects "$WORK/after-delete.json"
+# -s: an empty listing may print nothing at all, which is still zero objects.
+left="$(jq -s '[.[] | (.Contents // [])[]] | length' "$WORK/after-delete.json" 2>/dev/null || echo unparsable)"
+[ "$left" = 0 ] || fail "$left objects left under s3://training-datasets/$STORAGE_PATH after the delete"
+ok "dataset deleted and s3://training-datasets/$STORAGE_PATH is empty"
+
+ok "E2E passed: $DATASET imported into RustFS, read back and deleted (dataset $DATASET_ID)"
