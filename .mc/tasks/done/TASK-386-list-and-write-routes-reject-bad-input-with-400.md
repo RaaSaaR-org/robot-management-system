@@ -3,7 +3,7 @@ id: "TASK-386"
 aliases: []
 title: "List and write routes reject bad input with 400"
 slug: "list-and-write-routes-reject-bad-input-with-400"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 5
 effort: "medium"
 due_date: ""
 created: "2026-10-13"
-updated: 2026-10-13
+updated: "2026-10-13"
 ---
 
 # List and write routes reject bad input with 400
