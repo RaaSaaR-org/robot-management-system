@@ -3,7 +3,7 @@ id: "TASK-382"
 aliases: []
 title: "A latched E-stop refuses moves and a returning robot can be stopped at once"
 slug: "a-latched-e-stop-refuses-moves-and-a-returning-robot-can-be-stopped-at-once"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
