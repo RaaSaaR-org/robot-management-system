@@ -246,4 +246,32 @@ describe('a robot on odometry fences its site once registered (TASK-342)', () =>
     await new Promise((r) => setTimeout(r, 40));
     expect(m.getPlaceFrameRegistration()?.registered).toBe(true);
   });
+
+  it('a platform without the route backs off and says so once; its own "none" keeps the base interval (TASK-372)', async () => {
+    const calls = (): number =>
+      (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((c) => String(c[0]).endsWith('/frame-registration'))
+        .length;
+
+    // The server's authoritative "none" (404 + body) is an answer: base 10 ms cadence.
+    let before = calls();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(calls() - before).toBeGreaterThanOrEqual(6);
+
+    // A bare 404 — a platform that predates the route — is a failure: 10 ms
+    // doubling (20, 40, 80, 160 ms…) makes at most a handful of calls in 300 ms.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) =>
+        String(url).endsWith('/frame-registration') ? json(404, { error: 'Not Found' }) : json(200, SITE_GRAPH),
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 30)); // let the in-flight base-cadence tick land on the new fetch
+    before = calls();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls() - before).toBeLessThanOrEqual(5);
+    const lines = warn.mock.calls.filter((c) => String(c[0]).startsWith('[FrameRegistration]'));
+    expect(lines).toHaveLength(1);
+    expect(String(lines[0][0])).toContain('HTTP 404');
+  });
 });

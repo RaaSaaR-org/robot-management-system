@@ -583,7 +583,7 @@ Erasure Coding: EC:4 (4 data + 4 parity shards)
 version: "3.9"
 
 x-rustfs-common: &rustfs-common
-    image: rustfs/rustfs:latest
+    image: rustfs/rustfs:1.0.0
     restart: unless-stopped
     environment:
         RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-emaifleetadmin}
@@ -658,7 +658,7 @@ services:
     # Bucket Initialization
     # ═══════════════════════════════════════════════════════════════════════════
     rustfs-init:
-        image: rustfs/rustfs:latest
+        image: rustfs/rustfs:1.0.0
         container_name: rustfs-init
         depends_on:
             rustfs-1:
@@ -861,7 +861,7 @@ spec:
                           topologyKey: kubernetes.io/hostname
             containers:
                 - name: rustfs
-                  image: rustfs/rustfs:latest
+                  image: rustfs/rustfs:1.0.0
                   args:
                       - server
                       - http://rustfs-{0...3}.rustfs.robot-fleet.svc.cluster.local:9000/data
@@ -3407,7 +3407,7 @@ services:
     # RustFS Cluster
     # ═══════════════════════════════════════════════════════════════════════════
     rustfs-1:
-        image: rustfs/rustfs:latest
+        image: rustfs/rustfs:1.0.0
         container_name: rustfs-1
         hostname: rustfs-1
         command: server http://rustfs-{1...4}:9000/data --console-address ":9001"
@@ -3429,7 +3429,7 @@ services:
             retries: 3
 
     rustfs-2:
-        image: rustfs/rustfs:latest
+        image: rustfs/rustfs:1.0.0
         container_name: rustfs-2
         hostname: rustfs-2
         command: server http://rustfs-{1...4}:9000/data --console-address ":9001"
@@ -3442,7 +3442,7 @@ services:
             - fleet-network
 
     rustfs-3:
-        image: rustfs/rustfs:latest
+        image: rustfs/rustfs:1.0.0
         container_name: rustfs-3
         hostname: rustfs-3
         command: server http://rustfs-{1...4}:9000/data --console-address ":9001"
@@ -3455,7 +3455,7 @@ services:
             - fleet-network
 
     rustfs-4:
-        image: rustfs/rustfs:latest
+        image: rustfs/rustfs:1.0.0
         container_name: rustfs-4
         hostname: rustfs-4
         command: server http://rustfs-{1...4}:9000/data --console-address ":9001"

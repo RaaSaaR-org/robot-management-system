@@ -186,7 +186,10 @@ describe('RobotStateManager — teleop reaches the robot', () => {
       mgr.enableTeleop();
       await tick(6);
       expect(hw.sendAction.mock.calls.length).toBeGreaterThan(2);
-      expect(warn).toHaveBeenCalledTimes(1);
+      // Only the teleop line counts: the platform polls (place graph, frame
+      // registration) log their own one-off "unavailable" line (TASK-372).
+      const teleopWarns = warn.mock.calls.filter((c) => String(c[0]).startsWith('[RobotStateManager/Teleop]'));
+      expect(teleopWarns).toHaveLength(1);
       warn.mockRestore();
     });
   });
