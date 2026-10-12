@@ -3,7 +3,7 @@ id: "TASK-355"
 aliases: ["TASK-355"]
 title: "Episode frames read the real parquet without exhausting server memory"
 slug: "episode-frames-read-the-real-parquet-without-exhausting-server-memory"
-status: "review"
+status: "done"
 priority: 1
 owner: "claude"
 projects: []
