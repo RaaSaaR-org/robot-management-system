@@ -32,6 +32,13 @@ export type {
 } from './rustfs-client.js';
 
 export {
+  StorageUnavailableError,
+  storageUnavailableMessage,
+  isObjectStorageDown,
+  refuseWhileObjectStorageDown,
+} from './availability.js';
+
+export {
   ModelStorageClient,
   modelStorage,
   BUCKETS,

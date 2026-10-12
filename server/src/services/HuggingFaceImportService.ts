@@ -56,6 +56,7 @@ import {
   isRustFSInitialized,
 } from '../storage/rustfs-client.js';
 import { BUCKETS } from '../storage/model-storage.js';
+import { storageUnavailableMessage } from '../storage/availability.js';
 import { natsClient } from '../messaging/index.js';
 import { datasetService, datasetStorageRoot } from './DatasetService.js';
 import { isNatsConnectionClosed } from '../messaging/connection-errors.js';
@@ -408,15 +409,9 @@ class RustFsImportSink implements ImportSink {
 function createSink(storageId: string): ImportSink {
   if (isRustFSInitialized()) return new RustFsImportSink(`${storageId}/`);
   if (isRustFSConfigured()) {
-    const { errorKind } = getRustFSStatus();
-    // A `config` failure is not retried — the environment will not change
-    // under a running process — so "try again shortly" would never come true.
-    const next = errorKind === 'config'
-      ? 'its configuration is incomplete; set RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY and restart.'
-      : 'the server is retrying — try again shortly.';
     throw new HuggingFaceImportError(
       'STORAGE_UNAVAILABLE',
-      `Object storage (RustFS) is configured but unavailable (${errorKind ?? 'connecting'}); ${next}`,
+      storageUnavailableMessage(getRustFSStatus().errorKind),
       503,
     );
   }

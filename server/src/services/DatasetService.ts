@@ -23,6 +23,7 @@ import {
 import { episodeRewardRepository } from '../repositories/EpisodeRewardRepository.js';
 import { modelStorage, BUCKETS } from '../storage/model-storage.js';
 import { getRustFSClient, isRustFSConfigured, isRustFSInitialized } from '../storage/rustfs-client.js';
+import { refuseWhileObjectStorageDown } from '../storage/availability.js';
 import { DatasetStoreError, openDatasetTree } from './lerobot/DatasetTree.js';
 
 /**
@@ -1084,6 +1085,9 @@ export class DatasetService extends EventEmitter {
       throw new Error(`Dataset upload already completed or in progress: ${id}`);
     }
 
+    // Configured but down is a 503 naming the errorKind (TASK-350);
+    // unconfigured keeps its old refusal — an upload has no local-disk path.
+    refuseWhileObjectStorageDown();
     if (!isRustFSInitialized()) {
       throw new Error('Storage service not available');
     }
@@ -1122,6 +1126,11 @@ export class DatasetService extends EventEmitter {
     if (dataset.status !== 'uploading') {
       throw new Error(`Dataset not in uploading state: ${id} (status: ${dataset.status})`);
     }
+
+    // Before the status moves: the archive is in RustFS, so while RustFS is
+    // down the unpack below could only fail and mark a good upload `failed`.
+    // A 503 leaves the row `uploading`, and the client retries (TASK-350).
+    refuseWhileObjectStorageDown();
 
     // Update status to validating
     await datasetRepository.update(id, { status: 'validating' });

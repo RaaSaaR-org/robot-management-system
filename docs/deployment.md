@@ -468,7 +468,7 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `NATS_SERVERS` | No | `nats://localhost:4222` | NATS connection URL |
 | `NATS_USER` | No | — | NATS auth user |
 | `NATS_PASS` | No | — | NATS auth password |
-| `RUSTFS_ENDPOINT` | No | `http://localhost:9000` | S3-compatible storage endpoint |
+| `RUSTFS_ENDPOINT` | No | `http://localhost:9000` | S3-compatible storage endpoint. Set means required: while RustFS is down, writes (dataset imports and uploads, twin artifacts, incident clips, sensor scans, patrol photos) answer 503 `STORAGE_UNAVAILABLE` naming the `errorKind` instead of falling back to local disk. Unset, they use local disk |
 | `RUSTFS_ACCESS_KEY` | No | `rustfsadmin` | S3 access key |
 | `RUSTFS_SECRET_KEY` | No | `rustfsadmin` | S3 secret key |
 | `RUSTFS_MULTIPART_MAX_AGE_HOURS` | No | `24` | Age after which the server aborts an incomplete multipart upload (parts an interrupted upload left in a bucket). Keep it above the longest single-file upload |

@@ -3,20 +3,20 @@ id: "TASK-350"
 aliases: ["TASK-350"]
 title: "Storage callers other than the HF importer never fall back to local disk while RustFS is configured"
 slug: "storage-callers-other-than-the-hf-importer-never-fall-back-to-local-disk-while-rustfs-is-configured"
-status: "backlog"
+status: "in-progress"
 priority: 3
-owner: "FlrnFrmm"
+owner: "huhn511"
 projects: []
 customers: []
 tags: ["core", "storage"]
 sprint: ""
 parent: ""
 depends_on: []
-spe:
+spe: 3
 effort: ""
 due_date: ""
 created: "2026-10-11"
-updated: "2026-10-11"
+updated: "2026-10-12"
 ---
 
 # Storage callers other than the HF importer never fall back to local disk while RustFS is configured
@@ -29,8 +29,7 @@ HuggingFace importer: with `RUSTFS_ENDPOINT` set, it answers 503
 other storage callers still make the old "initialized? else local disk" choice,
 so while RustFS is recovering they can write to an unwritable `/app/data` in
 production, or store data where nothing will look for it once RustFS is back.
-Filed as `backlog`: whether each caller should refuse, queue or wait is not
-decided yet — run `/grill` before building.
+The decisions below (2026-10-12) settle refuse/queue/wait per caller.
 
 ## Details
 
@@ -49,17 +48,59 @@ The pattern to copy is `createSink()` in
 `getRustFSStatus().errorKind`; local disk only when not configured. Both helpers
 come from `server/src/storage/index.ts`.
 
-### Open decisions (for `/grill`)
+### Additional callers (found by grepping `isRustFSInitialized` and local-disk writes)
 
-- Whether the cleanup job should skip silently, log, or fail while RustFS is down.
-- Whether `model-storage.ts` callers (training artifacts) should refuse or wait for
-  recovery.
+Same rule — refuse while configured but down, local disk only when unconfigured:
+
+- `server/src/storage/model-storage.ts` `uploadTwinArtifact` and
+  `uploadIncidentClip` — the two local-disk fallbacks inside model storage
+  (callers: `twin.routes.ts` artifact upload, `SimulationService`,
+  `TwinExportService` best-effort cache, `IncidentService.storeClip`).
+- `server/src/services/SensorScanService.ts` `persistFrame` — local `.pcd` fallback.
+- `server/src/services/PatrolPhotoStore.ts` `put` — local photo fallback
+  (`forceLocal` still writes locally, for tests).
+- `server/src/routes/incident.routes.ts` — the clip upload answered every failure
+  with a bare 500; it now goes through `sendFailure`, so the 503 reaches the robot.
+
+Read-only callers that already refuse or fall through to another source and write
+nothing locally are left as they are: `TeleoperationService` (info.json read),
+`MarketplaceService` (presign), `DatasetCurationService` (refuses already),
+`lerobot/DatasetTree.ts`, the dataset video and episode readers, and
+`multipart-upload-sweep.ts` (RustFS only).
+
+## Decisions
+
+Made 2026-10-12 on the user's go-ahead, extending ADR-346 decision 2
+("configured ⇒ required"):
+
+1. **Dataset uploads refuse.** `POST /api/datasets/:id/upload/initiate` and
+   `/upload/complete` (`DatasetService.initiateUpload` / `completeUpload`) answer
+   503 `STORAGE_UNAVAILABLE` naming `getRustFSStatus().errorKind`, exactly like
+   `createSink()` in `HuggingFaceImportService.ts`. `completeUpload` refuses before
+   the row moves to `validating`, so a good upload is not marked `failed` and the
+   client can retry.
+2. **`model-storage.ts` refuses too.** Every bucket operation goes through one
+   guarded client that throws the same typed `StorageUnavailableError`, so a
+   training or eval job fails visibly with the reason instead of hanging or
+   writing to local disk.
+3. **The cleanup job skips.** `storage-cleanup.ts` skips the run and logs one
+   warning with `state`/`errorKind` while RustFS is configured but down; no
+   local-disk cleanup then.
+
+The rule lives in `server/src/storage/availability.ts`
+(`StorageUnavailableError`, `refuseWhileObjectStorageDown()`,
+`storageUnavailableMessage()`); `createSink()` uses the same message.
+`sendFailure` adds `code`, `state` and `errorKind` to the body of a
+`STORAGE_UNAVAILABLE` error.
 
 ## Acceptance Criteria
 
-- [ ] With `RUSTFS_ENDPOINT` set and RustFS down, none of the callers above writes to local disk.
-- [ ] Each one answers or logs with the RustFS `state`/`errorKind` instead of an EACCES.
-- [ ] Without `RUSTFS_ENDPOINT`, local-disk behavior is unchanged.
+- [x] With `RUSTFS_ENDPOINT` set and RustFS down, none of the callers above writes to local disk.
+- [x] Each one answers or logs with the RustFS `state`/`errorKind` instead of an EACCES.
+- [x] Both dataset upload routes answer 503 `STORAGE_UNAVAILABLE` with `state` and `errorKind` in the body.
+- [x] A `model-storage` read or write while down throws `StorageUnavailableError`, not "client not initialized".
+- [x] The cleanup job logs exactly one warning with `state`/`errorKind` and skips.
+- [x] Without `RUSTFS_ENDPOINT`, local-disk behavior is unchanged.
 
 ## Test Strategy
 

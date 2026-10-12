@@ -137,3 +137,37 @@ describe('PatrolPhotoStore (local disk)', () => {
     expect(photoRetentionFromEnv({ PATROL_PHOTO_RETENTION_H: '-1' })).toEqual({ controlHours: 72, keepDays: 30 });
   });
 });
+
+// TASK-350: configured ⇒ required. The real rustfs-client has no client in a
+// test process, so RUSTFS_ENDPOINT alone puts it in the "configured, down" window.
+describe('PatrolPhotoStore while RustFS is configured but down', () => {
+  let dir: string;
+  const saved = process.env.RUSTFS_ENDPOINT;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'patrol-photos-'));
+  });
+  afterEach(async () => {
+    if (saved === undefined) delete process.env.RUSTFS_ENDPOINT;
+    else process.env.RUSTFS_ENDPOINT = saved;
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const photo = { robotId: 'robot-001', runId: 'run-1', key: 'cp-1.jpg', data: JPEG, kind: 'control' as const };
+
+  it('refuses a put with STORAGE_UNAVAILABLE and writes nothing to local disk', async () => {
+    process.env.RUSTFS_ENDPOINT = 'http://rustfs.invalid:9000';
+    const store = new PatrolPhotoStore({ localDir: dir });
+
+    await expect(store.put(photo)).rejects.toMatchObject({ statusCode: 503, code: 'STORAGE_UNAVAILABLE' });
+    expect(await fs.readdir(dir)).toEqual([]);
+  });
+
+  it('still writes to local disk when RustFS is not configured', async () => {
+    delete process.env.RUSTFS_ENDPOINT;
+    const store = new PatrolPhotoStore({ localDir: dir });
+
+    await store.put(photo);
+    expect(await fs.readdir(path.join(dir, 'robot-001', 'run-1'))).toContain('cp-1.jpg');
+  });
+});

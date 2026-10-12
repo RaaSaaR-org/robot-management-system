@@ -17,11 +17,15 @@ import type { CleanupResult } from '../../storage/index.js';
 // ---------------------------------------------------------------------------
 const hoisted = vi.hoisted(() => ({
   isRustFSInitialized: vi.fn<() => boolean>(),
+  isRustFSConfigured: vi.fn<() => boolean>(),
+  getRustFSStatus: vi.fn(),
   cleanupTempUploads: vi.fn<(maxAgeHours?: number) => Promise<CleanupResult>>(),
 }));
 
 vi.mock('../../storage/index.js', () => ({
   isRustFSInitialized: hoisted.isRustFSInitialized,
+  isRustFSConfigured: hoisted.isRustFSConfigured,
+  getRustFSStatus: hoisted.getRustFSStatus,
   modelStorage: {
     cleanupTempUploads: hoisted.cleanupTempUploads,
   },
@@ -52,6 +56,7 @@ describe('StorageCleanupJob', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     isRustFSInitialized.mockReturnValue(true);
+    hoisted.isRustFSConfigured.mockReturnValue(false);
     cleanupTempUploads.mockResolvedValue(makeResult());
   });
 
@@ -77,6 +82,23 @@ describe('StorageCleanupJob', () => {
       });
       expect(cleanupTempUploads).not.toHaveBeenCalled();
       // Stats untouched on a skip.
+      expect(job.getCleanupStats().runCount).toBe(0);
+    });
+
+    // TASK-350: configured but down skips with one warning naming the state.
+    it('skips with the RustFS state and errorKind while configured but down', async () => {
+      isRustFSInitialized.mockReturnValue(false);
+      hoisted.isRustFSConfigured.mockReturnValue(true);
+      hoisted.getRustFSStatus.mockReturnValue({ configured: true, state: 'unavailable', errorKind: 'connectivity', attempts: 3 });
+      const job = new StorageCleanupJob();
+
+      const result = await job.runCleanup();
+
+      const reason = 'RustFS configured but unavailable (state=unavailable, errorKind=connectivity)';
+      expect(result).toEqual({ deletedCount: 0, deletedSize: 0, errors: [reason] });
+      expect(cleanupTempUploads).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledTimes(1);
+      expect(console.warn).toHaveBeenCalledWith(`[StorageCleanupJob] ${reason}, skipping cleanup`);
       expect(job.getCleanupStats().runCount).toBe(0);
     });
 

@@ -109,6 +109,7 @@ vi.mock('../../storage/model-storage.js', () => ({
 vi.mock('../../storage/rustfs-client.js', () => ({
   isRustFSInitialized: vi.fn(),
   isRustFSConfigured: vi.fn(() => false),
+  getRustFSStatus: vi.fn(() => ({ configured: true, state: 'unavailable', errorKind: 'connectivity', attempts: 1 })),
   getRustFSClient: vi.fn(() => ({
     exists: rustfsExists,
     download: rustfsDownload,
@@ -178,6 +179,7 @@ import {
   skillDefinitionRepository,
 } from '../../repositories/index.js';
 import { isRustFSConfigured, isRustFSInitialized } from '../../storage/rustfs-client.js';
+import { StorageUnavailableError } from '../../storage/availability.js';
 import { natsClient } from '../../messaging/index.js';
 import { kvGet } from '../../messaging/kv-stores.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -686,6 +688,17 @@ describe('initiateUpload', () => {
     );
   });
 
+  // TASK-350: configured ⇒ required — a 503 naming the errorKind.
+  it('refuses with STORAGE_UNAVAILABLE while RustFS is configured but down', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+    vi.mocked(isRustFSConfigured).mockReturnValue(true);
+    const err = await datasetService.initiateUpload('ds1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StorageUnavailableError);
+    expect(err).toMatchObject({ statusCode: 503, code: 'STORAGE_UNAVAILABLE', errorKind: 'connectivity' });
+    expect(getDatasetUploadUrl).not.toHaveBeenCalled();
+  });
+
   it('returns a presigned upload URL and emits upload:initiated', async () => {
     vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
     vi.mocked(isRustFSInitialized).mockReturnValue(true);
@@ -729,6 +742,17 @@ describe('completeUpload', () => {
     await expect(datasetService.completeUpload('ds1')).rejects.toThrow(
       'Dataset not in uploading state: ds1 (status: ready)'
     );
+  });
+
+  // TASK-350: refused before the status moves, so the row stays `uploading`
+  // and nothing is downloaded or unpacked onto local disk.
+  it('refuses with STORAGE_UNAVAILABLE, touching nothing, while RustFS is configured but down', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+    vi.mocked(isRustFSConfigured).mockReturnValue(true);
+    await expect(datasetService.completeUpload('ds1')).rejects.toBeInstanceOf(StorageUnavailableError);
+    expect(datasetRepository.update).not.toHaveBeenCalled();
+    expect(rustfsDownload).not.toHaveBeenCalled();
   });
 
   it('unpacks the uploaded archive, then queues validation against the tree', async () => {
