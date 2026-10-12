@@ -3,7 +3,7 @@ id: "TASK-383"
 aliases: []
 title: "GDPR admin routes and the retention policy are scoped to the right people"
 slug: "gdpr-admin-routes-and-the-retention-policy-are-scoped-to-the-right-people"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
@@ -73,13 +73,13 @@ a super-admin); the retention policy is platform-level and belongs to a super-ad
 
 ## Acceptance Criteria
 
-- [ ] A `member` or `viewer` gets 403 on every `/api/gdpr/admin/*` route; `owner` and `super-admin` reach them.
-- [ ] An owner of tenant B listing `/api/gdpr/admin/requests` sees only requests of tenant B users; metrics, SLA report, overdue, nearing-deadline, consent metrics, restriction stats and restrictions are confined the same way.
-- [ ] An owner of tenant B acknowledging, starting, completing, rejecting or erasing a tenant A request gets 404 and the service is never called; the same for lifting a tenant A restriction.
-- [ ] A super-admin still lists and acts on every tenant's requests.
-- [ ] The recorded `adminId` is the caller's id, not a body field.
-- [ ] A `member` or `owner` gets 403 on retention `PUT`, `DELETE` and `POST /cleanup`; a super-admin reaches them; GETs are unchanged.
-- [ ] No schema change; server typecheck and vitest pass.
+- [x] A `member` or `viewer` gets 403 on every `/api/gdpr/admin/*` route; `owner` and `super-admin` reach them.
+- [x] An owner of tenant B listing `/api/gdpr/admin/requests` sees only requests of tenant B users; metrics, SLA report, overdue, nearing-deadline, consent metrics, restriction stats and restrictions are confined the same way.
+- [x] An owner of tenant B acknowledging, starting, completing, rejecting or erasing a tenant A request gets 404 and the service is never called; the same for lifting a tenant A restriction.
+- [x] A super-admin still lists and acts on every tenant's requests.
+- [x] The recorded `adminId` is the caller's id, not a body field.
+- [x] A `member` or `owner` gets 403 on retention `PUT`, `DELETE` and `POST /cleanup`; a super-admin reaches them; GETs are unchanged.
+- [x] No schema change; server typecheck and vitest pass.
 
 ## Test Strategy
 
