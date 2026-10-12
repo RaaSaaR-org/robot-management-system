@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
+import { getWebSocketUrl, openServerSocket } from '@/shared/utils/websocket';
 import { useDataCollectionStore } from '../store/datacollectionStore';
 import type { TeleopWsEvent } from '../types/datacollection.types';
 
@@ -43,7 +43,7 @@ export function useTeleopEvents(): UseTeleopEventsReturn {
     intentionalCloseRef.current = false;
 
     try {
-      const ws = new WebSocket(getWebSocketUrl());
+      const ws = openServerSocket(getWebSocketUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {

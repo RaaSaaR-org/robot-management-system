@@ -7,7 +7,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useTrainingStore } from '../store';
 import type { TrainingJobEvent, JobProgress } from '../types';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
+import { getWebSocketUrl, openServerSocket } from '@/shared/utils/websocket';
 
 export interface UseTrainingProgressReturn {
   isConnected: boolean;
@@ -57,7 +57,7 @@ export function useTrainingProgress(): UseTrainingProgressReturn {
     intentionalCloseRef.current = false;
 
     try {
-      const ws = new WebSocket(getWebSocketUrl());
+      const ws = openServerSocket(getWebSocketUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {

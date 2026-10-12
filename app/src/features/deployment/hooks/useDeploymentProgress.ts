@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useDeploymentStore } from '../store';
 import type { DeploymentEvent } from '../types';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
+import { getWebSocketUrl, openServerSocket } from '@/shared/utils/websocket';
 
 export interface UseDeploymentProgressOptions {
   url?: string;
@@ -93,7 +93,7 @@ export function useDeploymentProgress(
 
     intentionalCloseRef.current = false;
     try {
-      const ws = new WebSocket(url);
+      const ws = openServerSocket(url);
 
       ws.onopen = () => {
         isConnectedRef.current = true;

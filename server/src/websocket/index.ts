@@ -22,6 +22,10 @@ import { digitalTwinService } from '../services/DigitalTwinService.js';
 import { twinZoneService } from '../services/TwinZoneService.js';
 import { agentModeService } from '../services/AgentModeService.js';
 import { authService } from '../services/AuthService.js';
+import { prisma } from '../database/index.js';
+import { runAsPlatform } from '../middleware/tenantContext.js';
+import { MULTI_TENANCY_ENABLED } from '../config/features.js';
+import { deliverEvent, RobotTenantResolver, UNRESOLVED_ROBOT_TENANT } from './eventFanout.js';
 import { onControlLeaseTransition } from '../services/controlLeaseEvents.js';
 import {
   deliverControlLeaseTransition,
@@ -71,12 +75,14 @@ function safeSend(client: WebSocket, message: string, clients: Set<WebSocket>): 
 }
 
 /**
- * Broadcast message to all connected clients with error handling
+ * The tenant of a robot, read as the platform: the event is not raised inside
+ * any request, and the answer is used for routing only.
  */
-function broadcast(clients: Set<WebSocket>, message: string): void {
-  clients.forEach((client) => {
-    safeSend(client, message, clients);
-  });
+async function lookupRobotTenant(robotId: string): Promise<string | null> {
+  const row = await runAsPlatform(() =>
+    prisma.robot.findUnique({ where: { id: robotId }, select: { tenantId: true } })
+  );
+  return row?.tenantId ?? null;
 }
 
 const verifyAccessToken: AccessTokenVerifier = (token) => authService.verifyAccessToken(token);
@@ -95,6 +101,33 @@ export function setupWebSocket(server: Server): void {
   const clientAliveStatus = new WeakMap<WebSocket, boolean>();
   // Who each socket proved to be (TASK-318); absent → no tenant-scoped events.
   const clientIdentity = new WeakMap<WebSocket, SocketIdentity>();
+
+  // Event fan-out (TASK-366): identified sockets only, and a robot's events
+  // only to sockets that may observe the robot's tenant.
+  const send = (client: WebSocket, message: string): void => {
+    safeSend(client, message, clients);
+  };
+  const robotTenants = new RobotTenantResolver(lookupRobotTenant);
+  /** An event that names no robot: every identified socket. */
+  const deliver = (message: string): void => {
+    deliverEvent(clients, clientIdentity, message, send);
+  };
+  /** An event about one robot. Without multi-tenancy every robot is visible. */
+  const deliverForRobot = (message: string, robotId: string | undefined): void => {
+    if (!robotId || !MULTI_TENANCY_ENABLED) {
+      deliverEvent(clients, clientIdentity, message, send, robotId ? null : undefined);
+      return;
+    }
+    const known = robotTenants.peek(robotId);
+    if (known !== undefined) {
+      deliverEvent(clients, clientIdentity, message, send, known);
+      return;
+    }
+    robotTenants.resolve(robotId).then(
+      (tenantId) => deliverEvent(clients, clientIdentity, message, send, tenantId),
+      () => deliverEvent(clients, clientIdentity, message, send, UNRESOLVED_ROBOT_TENANT)
+    );
+  };
 
   // Heartbeat interval to detect dead connections
   const heartbeatInterval = setInterval(() => {
@@ -180,36 +213,40 @@ export function setupWebSocket(server: Server): void {
     });
   });
 
-  // Subscribe to task events and broadcast to all clients
+  // Subscribe to task events and fan them out (eventFanout.ts)
   conversationManager.onTaskEvent((event: A2ATaskEvent) => {
     const message = JSON.stringify({
       type: 'task_event',
       event,
       timestamp: Date.now(),
     });
-    broadcast(clients, message);
+    deliver(message);
   });
 
-  // Subscribe to robot events and broadcast to all clients
+  // Subscribe to robot events and fan them out (eventFanout.ts)
   robotManager.onRobotEvent((event: RobotEvent) => {
     const message = JSON.stringify({
       ...event,
       type: event.type, // Ensure type comes last to override spread
     });
-    broadcast(clients, message);
+    // A (re-)registration may have moved the robot to another tenant.
+    if (event.type === 'robot_registered' || event.type === 'robot_unregistered') {
+      robotTenants.forget(event.robotId);
+    }
+    deliverForRobot(message, event.robotId);
   });
 
-  // Subscribe to alert events and broadcast to all clients
+  // Subscribe to alert events and fan them out (eventFanout.ts)
   alertService.onAlertEvent((event: AlertEvent) => {
     const message = JSON.stringify({
       type: event.type,
       alert: event.alert,
       timestamp: event.timestamp,
     });
-    broadcast(clients, message);
+    deliver(message);
   });
 
-  // Subscribe to process events and broadcast to all clients
+  // Subscribe to process events and fan them out (eventFanout.ts)
   processManager.onProcessEvent((event: ProcessEvent) => {
     const message = JSON.stringify({
       type: event.type,
@@ -219,10 +256,10 @@ export function setupWebSocket(server: Server): void {
       error: 'error' in event ? event.error : undefined,
       timestamp: Date.now(),
     });
-    broadcast(clients, message);
+    deliver(message);
   });
 
-  // Subscribe to robot task events and broadcast to all clients
+  // Subscribe to robot task events and fan them out (eventFanout.ts)
   taskDistributor.onTaskEvent((event: TaskEvent) => {
     const message = JSON.stringify({
       type: event.type,
@@ -234,7 +271,7 @@ export function setupWebSocket(server: Server): void {
       error: 'error' in event ? event.error : undefined,
       timestamp: Date.now(),
     });
-    broadcast(clients, message);
+    deliverForRobot(message, ('robotId' in event ? event.robotId : undefined) ?? undefined);
   });
 
   // Handle robot work assignment notifications (push to robot)
@@ -245,7 +282,7 @@ export function setupWebSocket(server: Server): void {
       task: data.task,
       timestamp: Date.now(),
     });
-    broadcast(clients, message);
+    deliverForRobot(message, data.robotId);
   });
 
   // Handle robot work cancellation notifications
@@ -257,20 +294,20 @@ export function setupWebSocket(server: Server): void {
       reason: data.reason,
       timestamp: Date.now(),
     });
-    broadcast(clients, message);
+    deliverForRobot(message, data.robotId);
   });
 
-  // Subscribe to E-stop events and broadcast to all clients
+  // Subscribe to E-stop events and fan them out (eventFanout.ts)
   safetyService.onEStopEvent((event: EStopEvent) => {
     const message = JSON.stringify({
       type: 'safety:estop',
       event,
       timestamp: Date.now(),
     });
-    broadcast(clients, message);
+    deliver(message);
   });
 
-  // Subscribe to incident events and broadcast to all clients
+  // Subscribe to incident events and fan them out (eventFanout.ts)
   incidentService.onIncidentEvent((event: IncidentEvent) => {
     const message = JSON.stringify({
       type: event.type,
@@ -278,10 +315,10 @@ export function setupWebSocket(server: Server): void {
       notification: event.notification,
       timestamp: event.timestamp,
     });
-    broadcast(clients, message);
+    deliver(message);
   });
 
-  // Subscribe to training job events and broadcast to all clients
+  // Subscribe to training job events and fan them out (eventFanout.ts)
   trainingJobService.onJobEvent((event: TrainingJobEvent) => {
     const message = JSON.stringify({
       type: event.type,
@@ -291,10 +328,10 @@ export function setupWebSocket(server: Server): void {
       error: event.error,
       timestamp: event.timestamp,
     });
-    broadcast(clients, message);
+    deliver(message);
   });
 
-  // Subscribe to dataset events and broadcast to all clients
+  // Subscribe to dataset events and fan them out (eventFanout.ts)
   datasetService.onDatasetEvent((event: DatasetEvent) => {
     const message = JSON.stringify({
       type: event.type,
@@ -306,10 +343,10 @@ export function setupWebSocket(server: Server): void {
       error: event.error,
       timestamp: event.timestamp,
     });
-    broadcast(clients, message);
+    deliver(message);
   });
 
-  // Subscribe to sensor-scan events (point clouds) and broadcast to all clients.
+  // Subscribe to sensor-scan events (point clouds) and fan them out (eventFanout.ts).
   // Lightweight notifications only — the point bytes are fetched on demand.
   sensorScanService.onSensorScanEvent((event: SensorScanEvent) => {
     const message = JSON.stringify({
@@ -319,7 +356,7 @@ export function setupWebSocket(server: Server): void {
       scan: event.scan,
       timestamp: event.timestamp,
     });
-    broadcast(clients, message);
+    deliverForRobot(message, event.robotId);
   });
 
   // Subscribe to digital-twin scan-session + build events (TASK-170).
@@ -344,7 +381,7 @@ export function setupWebSocket(server: Server): void {
       base.sessionId = event.sessionId;
       base.error = event.error;
     }
-    broadcast(clients, JSON.stringify(base));
+    deliver(JSON.stringify(base));
   };
   scanSessionService.onDigitalTwinEvent(broadcastTwinEvent);
   digitalTwinService.onDigitalTwinEvent(broadcastTwinEvent);
@@ -358,7 +395,7 @@ export function setupWebSocket(server: Server): void {
       zoneId: 'zoneId' in event ? event.zoneId : undefined,
       timestamp: event.timestamp,
     });
-    broadcast(clients, message);
+    deliver(message);
   });
 
   // Subscribe to teleoperation (data collection) events and broadcast to all
@@ -389,10 +426,10 @@ export function setupWebSocket(server: Server): void {
       },
       timestamp: Date.now(),
     });
-    broadcast(clients, message);
+    deliver(message);
   });
 
-  // Subscribe to Agent Mode events (TASK-194) and broadcast to all clients.
+  // Subscribe to Agent Mode events (TASK-194) and fan them out (eventFanout.ts).
   // Event types are namespaced 'agent:*' so the /agent feature can filter with
   // a simple prefix check (mirrors 'teleop:*'). The envelope is flat and the
   // event's own ISO timestamp is preserved; absent fields drop out of the JSON.
@@ -419,10 +456,10 @@ export function setupWebSocket(server: Server): void {
       turn: event.turn,
       timestamp: event.timestamp,
     });
-    broadcast(clients, message);
+    deliverForRobot(message, event.robotId);
   });
 
-  // Subscribe to deployment events and broadcast to all clients (Task 47)
+  // Subscribe to deployment events and fan them out (eventFanout.ts) (Task 47)
   deploymentService.onDeploymentEvent((event: DeploymentEvent) => {
     const message = JSON.stringify({
       type: event.type,
@@ -436,7 +473,7 @@ export function setupWebSocket(server: Server): void {
       reason: event.reason,
       timestamp: event.timestamp,
     });
-    broadcast(clients, message);
+    deliverForRobot(message, event.robotId);
   });
 
   console.log('WebSocket server initialized');
@@ -472,7 +509,7 @@ function handleClientMessage(
 
     case 'subscribe':
       // Client wants to subscribe to specific events
-      // For now, all clients receive all events
+      // No per-topic subscriptions: an identified client gets every event it may see
       ws.send(JSON.stringify({
         type: 'subscribed',
         message: 'Subscribed to all events',

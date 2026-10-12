@@ -12,7 +12,7 @@
  */
 
 import { useEffect } from 'react';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
+import { getWebSocketUrl, openServerSocket } from '@/shared/utils/websocket';
 import { useImportJobsStore, type ImportFeedMessage } from '../store/importJobsStore';
 
 /** How long a dropped socket waits before it tries again. */
@@ -61,7 +61,7 @@ export function useImportJobsFeed(): void {
 
     const connect = () => {
       try {
-        socket = new WebSocket(getWebSocketUrl());
+        socket = openServerSocket(getWebSocketUrl());
       } catch {
         reconnect = setTimeout(connect, IMPORT_FEED_RECONNECT_MS);
         return;
