@@ -3,7 +3,7 @@ id: "TASK-384"
 aliases: []
 title: "Compliance logs and skills are kept per tenant"
 slug: "compliance-logs-and-skills-are-kept-per-tenant"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -84,20 +84,20 @@ tenant on each row and scope every read and write by it.
 
 ## Acceptance Criteria
 
-- [ ] With multi-tenancy on, `GET /api/compliance/logs` (and detail, session,
+- [x] With multi-tenancy on, `GET /api/compliance/logs` (and detail, session,
       decision, access history, metrics, export, export history) returns only the
       caller's tenant's rows; another tenant's log id returns 404.
-- [ ] Null-tenant compliance rows are returned to a non-impersonating
+- [x] Null-tenant compliance rows are returned to a non-impersonating
       super-admin and to nobody else.
-- [ ] A compliance log written in a tenant's request scope, or for a robot of a
+- [x] A compliance log written in a tenant's request scope, or for a robot of a
       tenant, carries that tenant's id; the hash chain still verifies across rows
       written before and after the column was added.
-- [ ] A skill or skill chain created in tenant A is not listed for tenant B, and
+- [x] A skill or skill chain created in tenant A is not listed for tenant B, and
       tenant B's GET/PUT/DELETE on its id returns 404 and changes nothing.
-- [ ] Two tenants can each create a skill with the same name and version.
-- [ ] Existing skills/chains are backfilled to DEFAULT; existing compliance logs
+- [x] Two tenants can each create a skill with the same name and version.
+- [x] Existing skills/chains are backfilled to DEFAULT; existing compliance logs
       to their robot's or operator's tenant.
-- [ ] Server typecheck and the full server vitest suite pass.
+- [x] Server typecheck and the full server vitest suite pass.
 
 ## Test Strategy
 
