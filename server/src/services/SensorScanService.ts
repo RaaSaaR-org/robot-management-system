@@ -13,6 +13,7 @@ import type { Readable } from 'stream';
 import { robotManager } from './RobotManager.js';
 import { HttpClient, HTTP_TIMEOUTS } from './HttpClient.js';
 import { modelStorage, BUCKETS } from '../storage/model-storage.js';
+import { refuseWhileObjectStorageDown } from '../storage/availability.js';
 import { encodePcdBinary, computeBounds } from '../storage/pcd.js';
 import {
   sensorScanRepository,
@@ -138,6 +139,9 @@ export class SensorScanService extends EventEmitter {
       const scanId = `${robotId}-${frame.sequence}-${Date.now()}`;
       storageKey = await modelStorage.uploadSensorScan(robotId, scanId, pcd);
     } else {
+      // Local disk only without RUSTFS_ENDPOINT; configured but down is a
+      // 503 StorageUnavailableError (TASK-350).
+      refuseWhileObjectStorageDown();
       storageBackend = 'local';
       storageBucket = 'local';
       const fileName = `${robotId}-${frame.sequence}-${Date.now()}.pcd`;

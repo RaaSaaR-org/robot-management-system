@@ -60,6 +60,7 @@ Four decisions, made 2026-10-10:
 | TASK-347 | #369 | `RustFSConnectionError` with a kind, `getRustFSStatus()`, background recovery with backoff |
 | TASK-349 | #371 | importer 503 `STORAGE_UNAVAILABLE` instead of a local fallback; storage prepared before metadata |
 | TASK-348 | #373 | `/health` `dependencies.storage`; storage routes' 503 carries `state` and `errorKind` |
+| TASK-350 | — | decision 2 extended to every other caller with a local-disk fallback: dataset uploads, `model-storage` (twin artifacts, incident clips, every bucket read), sensor scans, patrol photos; the storage cleanup job skips with one warning |
 
 ## Consequences
 

@@ -18,6 +18,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { BUCKETS } from '../storage/model-storage.js';
 import { getRustFSClient, isRustFSInitialized } from '../storage/rustfs-client.js';
+import { refuseWhileObjectStorageDown } from '../storage/availability.js';
 
 // ============================================================================
 // TYPES
@@ -202,6 +203,9 @@ export class PatrolPhotoStore {
       return meta;
     }
 
+    // Local disk only without RUSTFS_ENDPOINT (or when forced, in tests);
+    // configured but down is a 503 StorageUnavailableError (TASK-350).
+    if (!this.forceLocal) refuseWhileObjectStorageDown();
     const file = this.localPath(meta.robotId, meta.runId, meta.key);
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, input.data);

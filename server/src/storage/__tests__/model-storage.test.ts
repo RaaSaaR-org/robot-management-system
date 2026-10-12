@@ -8,7 +8,10 @@
  * @feature storage
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { promises as fsPromises } from 'fs';
+import path from 'path';
+import { StorageUnavailableError } from '../availability.js';
 import type { ObjectInfo } from '../rustfs-client.js';
 
 // ---------------------------------------------------------------------------
@@ -30,12 +33,16 @@ const mocks = vi.hoisted(() => {
     client,
     getRustFSClient: vi.fn(() => client),
     isRustFSInitialized: vi.fn(() => true),
+    isRustFSConfigured: vi.fn(() => false),
+    getRustFSStatus: vi.fn(() => ({ configured: true, state: 'unavailable', errorKind: 'connectivity', attempts: 2 })),
   };
 });
 
 vi.mock('../rustfs-client.js', () => ({
   getRustFSClient: mocks.getRustFSClient,
   isRustFSInitialized: mocks.isRustFSInitialized,
+  isRustFSConfigured: mocks.isRustFSConfigured,
+  getRustFSStatus: mocks.getRustFSStatus,
 }));
 
 import {
@@ -74,6 +81,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getRustFSClient.mockReturnValue(client);
   mocks.isRustFSInitialized.mockReturnValue(true);
+  mocks.isRustFSConfigured.mockReturnValue(false);
 });
 
 describe('constants', () => {
@@ -740,5 +748,58 @@ describe('incident clips (TASK-179)', () => {
       BUCKETS.INCIDENT_CLIPS,
       'incidents/inc-1/clip.json'
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-350: configured ⇒ required. Local disk only without RUSTFS_ENDPOINT.
+// ---------------------------------------------------------------------------
+
+describe('local-disk fallback while RustFS is configured but down (TASK-350)', () => {
+  const svc = new ModelStorageClient();
+  let writeFile: ReturnType<typeof vi.spyOn>;
+  let mkdir: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    writeFile = vi.spyOn(fsPromises, 'writeFile').mockResolvedValue(undefined);
+    mkdir = vi.spyOn(fsPromises, 'mkdir').mockResolvedValue(undefined);
+    mocks.isRustFSInitialized.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    writeFile.mockRestore();
+    mkdir.mockRestore();
+  });
+
+  it('refuses a twin artifact with a 503 naming the errorKind and writes nothing', async () => {
+    mocks.isRustFSConfigured.mockReturnValue(true);
+    const err = await svc.uploadTwinArtifact('twin-1', 'mesh.glb', Buffer.from('x')).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StorageUnavailableError);
+    expect(err).toMatchObject({ statusCode: 503, code: 'STORAGE_UNAVAILABLE', state: 'unavailable', errorKind: 'connectivity' });
+    expect((err as Error).message).toContain('(connectivity)');
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(mkdir).not.toHaveBeenCalled();
+  });
+
+  it('refuses an incident clip the same way', async () => {
+    mocks.isRustFSConfigured.mockReturnValue(true);
+    await expect(svc.uploadIncidentClip('inc-1', Buffer.from('{}'))).rejects.toBeInstanceOf(StorageUnavailableError);
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bucket operation with the typed error instead of "not initialized"', async () => {
+    mocks.isRustFSConfigured.mockReturnValue(true);
+    await expect(svc.getModelCheckpointStream('job-1/policy.onnx')).rejects.toBeInstanceOf(StorageUnavailableError);
+    expect(mocks.getRustFSClient).not.toHaveBeenCalled();
+  });
+
+  it('still writes to local disk when RustFS is not configured', async () => {
+    const key = await svc.uploadTwinArtifact('twin-1', 'mesh.glb', Buffer.from('x'));
+    expect(path.isAbsolute(key)).toBe(true);
+    expect(key.endsWith(path.join('twin-1', 'mesh.glb'))).toBe(true);
+    expect(writeFile).toHaveBeenCalledWith(key, Buffer.from('x'));
+
+    const clipKey = await svc.uploadIncidentClip('inc-1', Buffer.from('{}'));
+    expect(clipKey.endsWith(path.join('inc-1', 'clip.json'))).toBe(true);
   });
 });

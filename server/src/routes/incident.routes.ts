@@ -10,6 +10,7 @@ import { breachAssessmentService } from '../services/BreachAssessmentService.js'
 import { notificationWorkflowService } from '../services/NotificationWorkflowService.js';
 import { SIZE_LIMITS } from '../storage/model-storage.js';
 import { prismaErrorToAppError } from '../utils/errors.js';
+import { sendFailure } from '../utils/routeErrors.js';
 import type {
   IncidentType,
   IncidentSeverity,
@@ -607,7 +608,7 @@ incidentRoutes.put('/:id/clip', async (req: Request, res: Response) => {
         await storeClipAndRespond(id, Buffer.concat(chunks), res);
       } catch (err) {
         console.error('Error storing incident clip:', err);
-        if (!res.headersSent) res.status(500).json({ error: 'Failed to store clip' });
+        if (!res.headersSent) sendFailure(res, err, 'Failed to store clip', 500);
       }
     });
     req.on('error', () => {
@@ -615,7 +616,7 @@ incidentRoutes.put('/:id/clip', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Error uploading incident clip:', error);
-    if (!res.headersSent) res.status(500).json({ error: 'Failed to store clip' });
+    if (!res.headersSent) sendFailure(res, error, 'Failed to store clip', 500);
   }
 });
 

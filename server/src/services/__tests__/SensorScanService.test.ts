@@ -22,6 +22,14 @@ const mocks = vi.hoisted(() => ({
   mkdir: vi.fn().mockResolvedValue(undefined),
   writeFile: vi.fn().mockResolvedValue(undefined),
   unlink: vi.fn().mockResolvedValue(undefined),
+  isRustFSConfigured: vi.fn(() => false),
+}));
+
+// The real availability rule runs; only its RustFS boundary is stubbed (TASK-350).
+vi.mock('../../storage/rustfs-client.js', () => ({
+  isRustFSConfigured: mocks.isRustFSConfigured,
+  isRustFSInitialized: () => false,
+  getRustFSStatus: () => ({ configured: true, state: 'unavailable', errorKind: 'auth', attempts: 1 }),
 }));
 
 vi.mock('../RobotManager.js', () => ({
@@ -62,6 +70,7 @@ vi.mock('fs', () => ({
 }));
 
 import { SensorScanService } from '../SensorScanService.js';
+import { StorageUnavailableError } from '../../storage/availability.js';
 
 const FRAME = {
   robotId: 'robot-001',
@@ -104,6 +113,7 @@ describe('SensorScanService', () => {
     service = new (SensorScanService as unknown as { new (): SensorScanService })();
     mocks.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://localhost:41244' });
     mocks.httpGet.mockResolvedValue(FRAME);
+    mocks.isRustFSConfigured.mockReturnValue(false);
   });
 
   it('getLiveSnapshot proxies the agent and returns the frame', async () => {
@@ -134,6 +144,19 @@ describe('SensorScanService', () => {
     expect(summary.downloadUrl).toContain('/api/sensor-scans/');
     expect(events).toHaveLength(1);
     expect((events[0] as { type: string }).type).toBe('scan:created');
+  });
+
+  it('captureScan refuses, writing nothing, while RustFS is configured but down (TASK-350)', async () => {
+    mocks.isAvailable.mockReturnValue(false);
+    mocks.isRustFSConfigured.mockReturnValue(true);
+
+    const err = await service.captureScan('robot-001').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(StorageUnavailableError);
+    expect(err).toMatchObject({ statusCode: 503, code: 'STORAGE_UNAVAILABLE', errorKind: 'auth' });
+    expect(mocks.mkdir).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+    expect(mocks.repoCreate).not.toHaveBeenCalled();
   });
 
   it('captureScan uploads to RustFS when available', async () => {

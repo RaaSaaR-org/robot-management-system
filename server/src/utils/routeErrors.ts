@@ -44,7 +44,10 @@ export function sendFailure(
   }
 
   if (isOperationalError(error)) {
-    res.status(error.statusCode).json({ ...extra, error: error.message });
+    // A storage refusal also carries its stable code and RustFS state, so a
+    // client can tell "object storage is down" from any other 503 (TASK-350).
+    const storage = error.code === 'STORAGE_UNAVAILABLE' ? { code: error.code, ...error.context } : {};
+    res.status(error.statusCode).json({ ...extra, ...storage, error: error.message });
     return;
   }
 

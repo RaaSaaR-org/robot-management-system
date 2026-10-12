@@ -4,7 +4,8 @@
  * @feature storage
  */
 
-import { getRustFSClient, isRustFSInitialized, type ObjectInfo } from './rustfs-client.js';
+import { getRustFSClient, isRustFSInitialized, type ObjectInfo, type RustFSClient } from './rustfs-client.js';
+import { refuseWhileObjectStorageDown } from './availability.js';
 import { promises as fs, createReadStream } from 'fs';
 import path from 'path';
 import type { Readable } from 'stream';
@@ -147,6 +148,17 @@ export class ModelStorageClient {
     return isRustFSInitialized();
   }
 
+  /**
+   * The live client, or {@link StorageUnavailableError} (503, naming the
+   * `errorKind`) while RustFS is configured but down — so a training or eval
+   * job reading a checkpoint fails with the reason, not with "client not
+   * initialized" (TASK-350). Unconfigured, the old error stands.
+   */
+  private client(): RustFSClient {
+    refuseWhileObjectStorageDown();
+    return getRustFSClient();
+  }
+
   // ==========================================================================
   // DATASET OPERATIONS
   // ==========================================================================
@@ -160,7 +172,7 @@ export class ModelStorageClient {
     data: Buffer,
     metadata?: Partial<DatasetMetadata>
   ): Promise<string> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getDatasetKey(name, version);
 
     await client.upload(BUCKETS.TRAINING_DATASETS, key, data, {
@@ -179,7 +191,7 @@ export class ModelStorageClient {
    * Get dataset as stream
    */
   async getDatasetStream(name: string, version: string): Promise<Readable> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getDatasetKey(name, version);
     return client.getStream(BUCKETS.TRAINING_DATASETS, key);
   }
@@ -192,7 +204,7 @@ export class ModelStorageClient {
     version: string,
     expiresIn = URL_EXPIRY.DOWNLOAD
   ): Promise<string> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getDatasetKey(name, version);
     return client.getPresignedDownloadUrl(BUCKETS.TRAINING_DATASETS, key, expiresIn);
   }
@@ -206,7 +218,7 @@ export class ModelStorageClient {
     contentType = 'application/octet-stream',
     expiresIn = URL_EXPIRY.UPLOAD
   ): Promise<string> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getDatasetKey(name, version);
     return client.getPresignedUploadUrl(BUCKETS.TRAINING_DATASETS, key, expiresIn, contentType);
   }
@@ -215,7 +227,7 @@ export class ModelStorageClient {
    * List datasets
    */
   async listDatasets(prefix?: string): Promise<DatasetInfo[]> {
-    const client = getRustFSClient();
+    const client = this.client();
     const datasets: DatasetInfo[] = [];
 
     for await (const obj of client.listAll(BUCKETS.TRAINING_DATASETS, prefix)) {
@@ -238,7 +250,7 @@ export class ModelStorageClient {
    * Delete a dataset
    */
   async deleteDataset(name: string, version: string): Promise<void> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getDatasetKey(name, version);
     await client.delete(BUCKETS.TRAINING_DATASETS, key);
   }
@@ -248,14 +260,14 @@ export class ModelStorageClient {
    * return how many there were. The caller validates the prefix: this does not.
    */
   async deleteDatasetPrefix(prefix: string): Promise<number> {
-    return getRustFSClient().deletePrefix(BUCKETS.TRAINING_DATASETS, prefix);
+    return this.client().deletePrefix(BUCKETS.TRAINING_DATASETS, prefix);
   }
 
   /**
    * Check if dataset exists
    */
   async datasetExists(name: string, version: string): Promise<boolean> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getDatasetKey(name, version);
     return client.exists(BUCKETS.TRAINING_DATASETS, key);
   }
@@ -273,7 +285,7 @@ export class ModelStorageClient {
     data: Buffer,
     metrics?: Record<string, number>
   ): Promise<string> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getCheckpointKey(jobId, epoch);
 
     await client.upload(BUCKETS.MODEL_CHECKPOINTS, key, data, {
@@ -292,7 +304,7 @@ export class ModelStorageClient {
    * List checkpoints for a job
    */
   async listCheckpoints(jobId: string): Promise<CheckpointInfo[]> {
-    const client = getRustFSClient();
+    const client = this.client();
     const prefix = `${jobId}/epoch-`;
     const checkpoints: CheckpointInfo[] = [];
 
@@ -320,7 +332,7 @@ export class ModelStorageClient {
     epoch: number,
     expiresIn = URL_EXPIRY.DOWNLOAD
   ): Promise<string> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getCheckpointKey(jobId, epoch);
     return client.getPresignedDownloadUrl(BUCKETS.MODEL_CHECKPOINTS, key, expiresIn);
   }
@@ -335,7 +347,7 @@ export class ModelStorageClient {
     if (this.isLocalKey(key)) {
       return createReadStream(key);
     }
-    const client = getRustFSClient();
+    const client = this.client();
     return client.getStream(BUCKETS.MODEL_CHECKPOINTS, key);
   }
 
@@ -343,7 +355,7 @@ export class ModelStorageClient {
    * Delete all checkpoints for a job
    */
   async deleteJobCheckpoints(jobId: string): Promise<number> {
-    const client = getRustFSClient();
+    const client = this.client();
     let deletedCount = 0;
 
     for await (const obj of client.listAll(BUCKETS.MODEL_CHECKPOINTS, `${jobId}/`)) {
@@ -367,7 +379,7 @@ export class ModelStorageClient {
     onnxBuffer: Buffer,
     metadata?: Partial<ModelMetadata>
   ): Promise<string> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getModelKey(modelName, version);
 
     await client.upload(BUCKETS.PRODUCTION_MODELS, key, onnxBuffer, {
@@ -390,7 +402,7 @@ export class ModelStorageClient {
     version: string,
     expiresIn = URL_EXPIRY.DOWNLOAD
   ): Promise<string> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getModelKey(modelName, version);
     return client.getPresignedDownloadUrl(BUCKETS.PRODUCTION_MODELS, key, expiresIn);
   }
@@ -399,7 +411,7 @@ export class ModelStorageClient {
    * List model versions
    */
   async listModelVersions(modelName: string): Promise<ModelVersionInfo[]> {
-    const client = getRustFSClient();
+    const client = this.client();
     const prefix = `${modelName}/`;
     const versions: ModelVersionInfo[] = [];
 
@@ -424,7 +436,7 @@ export class ModelStorageClient {
    * Check if model version exists
    */
   async modelExists(modelName: string, version: string): Promise<boolean> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getModelKey(modelName, version);
     return client.exists(BUCKETS.PRODUCTION_MODELS, key);
   }
@@ -442,7 +454,7 @@ export class ModelStorageClient {
     logType: string,
     data: Buffer
   ): Promise<string> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getRobotLogKey(robotId, date, logType);
 
     await client.upload(BUCKETS.ROBOT_LOGS, key, data, {
@@ -461,7 +473,7 @@ export class ModelStorageClient {
    * List robot logs
    */
   async listRobotLogs(robotId: string, options?: LogListOptions): Promise<LogInfo[]> {
-    const client = getRustFSClient();
+    const client = this.client();
     const prefix = options?.logType
       ? `${robotId}/${options.logType}/`
       : `${robotId}/`;
@@ -501,7 +513,7 @@ export class ModelStorageClient {
    * Upload a recorded point-cloud scan (e.g. binary PCD).
    */
   async uploadSensorScan(robotId: string, scanId: string, data: Buffer): Promise<string> {
-    const client = getRustFSClient();
+    const client = this.client();
     const key = this.getSensorScanKey(robotId, scanId);
     await client.upload(BUCKETS.SENSOR_SCANS, key, data, {
       contentType: 'application/octet-stream',
@@ -514,7 +526,7 @@ export class ModelStorageClient {
    * Get a recorded scan as a stream.
    */
   async getSensorScanStream(key: string): Promise<Readable> {
-    const client = getRustFSClient();
+    const client = this.client();
     return client.getStream(BUCKETS.SENSOR_SCANS, key);
   }
 
@@ -522,7 +534,7 @@ export class ModelStorageClient {
    * Get a presigned download URL for a recorded scan.
    */
   async getSensorScanDownloadUrl(key: string, expiresIn = URL_EXPIRY.DOWNLOAD): Promise<string> {
-    const client = getRustFSClient();
+    const client = this.client();
     return client.getPresignedDownloadUrl(BUCKETS.SENSOR_SCANS, key, expiresIn);
   }
 
@@ -530,7 +542,7 @@ export class ModelStorageClient {
    * Delete a recorded scan.
    */
   async deleteSensorScan(key: string): Promise<void> {
-    const client = getRustFSClient();
+    const client = this.client();
     await client.delete(BUCKETS.SENSOR_SCANS, key);
   }
 
@@ -543,9 +555,10 @@ export class ModelStorageClient {
   // ==========================================================================
   //
   // One backend per twin. When RustFS is up, artifacts live in the
-  // DIGITAL_TWINS bucket keyed `<twinId>/<name>`. When it is down, they fall
-  // back to the local filesystem (`server/data/twins/<twinId>/<name>`) and the
-  // returned "key" is the absolute file path — mirroring the SensorScan
+  // DIGITAL_TWINS bucket keyed `<twinId>/<name>`. Without RUSTFS_ENDPOINT they
+  // go to the local filesystem (`server/data/twins/<twinId>/<name>`) and the
+  // returned "key" is the absolute file path; configured but down is a 503
+  // StorageUnavailableError, never local disk (TASK-350) — mirroring the SensorScan
   // local-vs-rustfs split. Callers persist the returned key onto the
   // DigitalTwin row and stream it back via getTwinArtifactStream().
 
@@ -555,7 +568,7 @@ export class ModelStorageClient {
    */
   async uploadTwinArtifact(twinId: string, name: string, data: Buffer): Promise<string> {
     if (this.isAvailable()) {
-      const client = getRustFSClient();
+      const client = this.client();
       const key = this.getTwinArtifactKey(twinId, name);
       await client.upload(BUCKETS.DIGITAL_TWINS, key, data, {
         contentType: 'application/octet-stream',
@@ -563,6 +576,8 @@ export class ModelStorageClient {
       });
       return key;
     }
+    // Configured ⇒ required (TASK-350): local disk only without RUSTFS_ENDPOINT.
+    refuseWhileObjectStorageDown();
     const dir = path.join(LOCAL_TWINS_DIR, twinId);
     await fs.mkdir(dir, { recursive: true });
     const filePath = path.join(dir, name);
@@ -579,7 +594,7 @@ export class ModelStorageClient {
     if (this.isLocalKey(key)) {
       return createReadStream(key);
     }
-    const client = getRustFSClient();
+    const client = this.client();
     return client.getStream(BUCKETS.DIGITAL_TWINS, key);
   }
 
@@ -591,7 +606,7 @@ export class ModelStorageClient {
     if (this.isLocalKey(key)) {
       throw new Error('Cannot presign a local-filesystem twin artifact key');
     }
-    const client = getRustFSClient();
+    const client = this.client();
     return client.getPresignedDownloadUrl(BUCKETS.DIGITAL_TWINS, key, expiresIn);
   }
 
@@ -608,7 +623,7 @@ export class ModelStorageClient {
       });
       return;
     }
-    const client = getRustFSClient();
+    const client = this.client();
     await client.delete(BUCKETS.DIGITAL_TWINS, key);
   }
 
@@ -627,8 +642,8 @@ export class ModelStorageClient {
   //
   // Highlight clips are small JSON documents ({ format: 'jpeg-frames', ... })
   // uploaded by the robot agent when a rollout fails. Mirrors the digital-twin
-  // artifact split: RustFS bucket when available, local filesystem fallback
-  // otherwise (the returned "key" is then the absolute file path).
+  // artifact split: RustFS bucket when available, local filesystem only when
+  // RustFS is not configured at all (the returned "key" is then the absolute file path).
 
   /**
    * Store an incident highlight clip (raw JSON bytes). Returns the storage
@@ -636,7 +651,7 @@ export class ModelStorageClient {
    */
   async uploadIncidentClip(incidentId: string, data: Buffer): Promise<string> {
     if (this.isAvailable()) {
-      const client = getRustFSClient();
+      const client = this.client();
       const key = this.getIncidentClipKey(incidentId);
       await client.upload(BUCKETS.INCIDENT_CLIPS, key, data, {
         contentType: 'application/json',
@@ -644,6 +659,7 @@ export class ModelStorageClient {
       });
       return key;
     }
+    refuseWhileObjectStorageDown();
     const dir = path.join(LOCAL_INCIDENT_CLIPS_DIR, incidentId);
     await fs.mkdir(dir, { recursive: true });
     const filePath = path.join(dir, 'clip.json');
@@ -659,7 +675,7 @@ export class ModelStorageClient {
     if (this.isLocalKey(key)) {
       return createReadStream(key);
     }
-    const client = getRustFSClient();
+    const client = this.client();
     return client.getStream(BUCKETS.INCIDENT_CLIPS, key);
   }
 
@@ -671,7 +687,7 @@ export class ModelStorageClient {
       await fs.unlink(key).catch(() => {});
       return;
     }
-    const client = getRustFSClient();
+    const client = this.client();
     await client.delete(BUCKETS.INCIDENT_CLIPS, key);
   }
 
@@ -687,7 +703,7 @@ export class ModelStorageClient {
    * Clean up temporary uploads older than specified hours
    */
   async cleanupTempUploads(maxAgeHours = 24): Promise<CleanupResult> {
-    const client = getRustFSClient();
+    const client = this.client();
     const result: CleanupResult = {
       deletedCount: 0,
       deletedSize: 0,
@@ -720,7 +736,7 @@ export class ModelStorageClient {
    * Get storage statistics for a bucket
    */
   async getBucketStats(bucket: BucketName): Promise<StorageStats> {
-    const client = getRustFSClient();
+    const client = this.client();
     let objectCount = 0;
     let totalSize = 0;
 
@@ -779,7 +795,7 @@ export class ModelStorageClient {
       );
     }
 
-    const client = getRustFSClient();
+    const client = this.client();
     const url = await client.getPresignedUploadUrl(
       bucket,
       key,
@@ -800,7 +816,7 @@ export class ModelStorageClient {
     bucket: BucketName,
     key: string
   ): Promise<{ url: string; expiresIn: number }> {
-    const client = getRustFSClient();
+    const client = this.client();
     const url = await client.getPresignedDownloadUrl(bucket, key, URL_EXPIRY.DOWNLOAD);
 
     return {

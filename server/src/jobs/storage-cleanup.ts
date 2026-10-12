@@ -4,7 +4,13 @@
  * @feature storage
  */
 
-import { modelStorage, isRustFSInitialized, type CleanupResult } from '../storage/index.js';
+import {
+  modelStorage,
+  isRustFSInitialized,
+  isRustFSConfigured,
+  getRustFSStatus,
+  type CleanupResult,
+} from '../storage/index.js';
 
 // ============================================================================
 // TYPES
@@ -45,6 +51,14 @@ export class StorageCleanupJob {
    */
   async runCleanup(maxAgeHours = 24): Promise<CleanupResult> {
     if (!isRustFSInitialized()) {
+      if (isRustFSConfigured()) {
+        // Configured but down: skip the run and say why. The temp uploads
+        // live in RustFS, so there is nothing on local disk to clean (TASK-350).
+        const { state, errorKind } = getRustFSStatus();
+        const reason = `RustFS configured but unavailable (state=${state}, errorKind=${errorKind ?? 'none'})`;
+        console.warn(`[StorageCleanupJob] ${reason}, skipping cleanup`);
+        return { deletedCount: 0, deletedSize: 0, errors: [reason] };
+      }
       console.warn('[StorageCleanupJob] Storage not initialized, skipping cleanup');
       return {
         deletedCount: 0,
