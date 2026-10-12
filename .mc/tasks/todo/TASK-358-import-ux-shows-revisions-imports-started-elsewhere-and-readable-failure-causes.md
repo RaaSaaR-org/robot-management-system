@@ -3,7 +3,7 @@ id: "TASK-358"
 aliases: ["TASK-358"]
 title: "Import UX shows revisions, imports started elsewhere and readable failure causes"
 slug: "import-ux-shows-revisions-imports-started-elsewhere-and-readable-failure-causes"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "claude"
 projects: []
