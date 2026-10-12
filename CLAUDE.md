@@ -99,12 +99,18 @@ may have run none of them:
   that exists, so creating it there needs no env var. The server looks in the
   same place when it converts a v3.0 dataset to a readable view.
 - `HARDWARE_PYTHON` → `robot-agent/hardware/tests/` (the `g1_sidecar.py`
-  point-cloud/frame-convention tests). Needs only numpy + pytest, and falls back
-  to either venv above when neither env var is set, so it usually needs no
-  setup. The whole of `tests/` runs; the cases in `test_backends.py` and
-  `test_vla_runner.py` that drive `SmolVLABackend` skip themselves when the
-  interpreter has no `httpx` (the sim venv), and run when it does (the curation
-  venv), so pick the curation venv to cover them.
+  point-cloud/frame-convention tests). Needs only numpy + pytest, and when unset
+  falls back to `CURATION_PYTHON`, the curation venv, `SIM_PYTHON`, the sim venv
+  — preferring the first that also has `httpx`, so it usually needs no setup. The
+  whole of `tests/` runs; the cases in `test_backends.py` and `test_vla_runner.py`
+  that drive `SmolVLABackend` skip themselves when the interpreter has no `httpx`
+  (the sim venv), and the run prints a note in the stage and the summary when
+  that happens.
+
+The Isaac offline verifiers are stdlib-only and never skip: they run on
+`HARDWARE_PYTHON`, else the same venvs, else `python3` — which on a stock Mac is
+3.9, so code under `robot-agent/hardware/` must not use 3.12-only f-string syntax
+(`tests/test_fstring_portability.py` enforces it).
 
 ### Environment Setup
 

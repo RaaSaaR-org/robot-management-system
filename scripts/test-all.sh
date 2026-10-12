@@ -148,19 +148,40 @@ fi
 # The whole of tests/ runs — no file is excluded from here, so nothing can be
 # masked by this script and any new file dropped in there is picked up
 # automatically. The httpx-dependent cases in test_backends.py / test_vla_runner.py
-# skip themselves on an interpreter without httpx (the sim venv), and run on one
-# that has it (the curation venv), which is the interpreter's business, not this
-# script's.
+# (the SmolVLA backend and runner) skip themselves on an interpreter without httpx.
+# So when HARDWARE_PYTHON is unset the candidates are tried curation-first —
+# CURATION_PYTHON, the curation venv, SIM_PYTHON, the sim venv — and the first one
+# with numpy+pytest+httpx wins; only when none has httpx does the first with
+# numpy+pytest run, and the run then SAYS the SmolVLA tests did not (TASK-385: the
+# sim venv used to win, and 17 cases skipped on every default run without a word).
 HW_DIR="$REPO_ROOT/robot-agent/hardware"
+hw_candidates() {
+  local c
+  for c in "${CURATION_PYTHON:-}" "$REPO_ROOT/server/curation/.venv/bin/python" \
+           "${SIM_PYTHON:-}" "$HW_DIR/sim_g1_dds/.venv/bin/python"; do
+    [ -n "$c" ] && command -v "$c" >/dev/null 2>&1 && echo "$c"
+  done
+  return 0
+}
 HW_PY="${HARDWARE_PYTHON:-}"
-if [ -z "$HW_PY" ] && [ -x "$HW_DIR/sim_g1_dds/.venv/bin/python" ]; then
-  HW_PY="$HW_DIR/sim_g1_dds/.venv/bin/python"
+if [ -z "$HW_PY" ]; then
+  HW_FALLBACK=""
+  while IFS= read -r cand; do
+    if "$cand" -c 'import numpy, pytest, httpx' >/dev/null 2>&1; then HW_PY="$cand"; break; fi
+    if [ -z "$HW_FALLBACK" ] && "$cand" -c 'import numpy, pytest' >/dev/null 2>&1; then
+      HW_FALLBACK="$cand"
+    fi
+  done < <(hw_candidates)
+  [ -n "$HW_PY" ] || HW_PY="$HW_FALLBACK"
 fi
-if [ -z "$HW_PY" ] && [ -x "$REPO_ROOT/server/curation/.venv/bin/python" ]; then
-  HW_PY="$REPO_ROOT/server/curation/.venv/bin/python"
-fi
+SMOLVLA_NOTE=""
 if [ -n "$HW_PY" ] && "$HW_PY" -c 'import numpy' >/dev/null 2>&1; then
   step "Hardware sidecar (pytest)"
+  echo "  interpreter: $HW_PY"
+  if ! "$HW_PY" -c 'import httpx' >/dev/null 2>&1; then
+    SMOLVLA_NOTE="SmolVLA backend/runner tests did NOT run: $HW_PY has no httpx (point HARDWARE_PYTHON or CURATION_PYTHON at the curation venv)"
+    echo "  note: $SMOLVLA_NOTE"
+  fi
   (cd "$HW_DIR" && "$HW_PY" -m pytest tests -q -rs) \
     || { echo "  hardware pytest FAILED"; FAILURES=$((FAILURES + 1)); }
 else
@@ -198,8 +219,16 @@ step "Isaac offline verifiers"
 # know the interpreter they configured is not the one that ran.
 VERIFY_PY="${HARDWARE_PYTHON:-}"
 if [ -n "$VERIFY_PY" ] && ! "$VERIFY_PY" -c '' >/dev/null 2>&1; then
-  echo "  HARDWARE_PYTHON=$VERIFY_PY does not run — falling back to python3"
+  echo "  HARDWARE_PYTHON=$VERIFY_PY does not run — falling back to the venvs, then python3"
   VERIFY_PY=""
+fi
+# Then the same venvs as 3c before bare python3: they are known-good interpreters, and
+# python3 on a stock Mac is 3.9. The verifiers must still parse there (TASK-385; the
+# tests/test_fstring_portability.py guard keeps them so), but a venv is the better bet.
+if [ -z "$VERIFY_PY" ]; then
+  while IFS= read -r cand; do
+    if "$cand" -c '' >/dev/null 2>&1; then VERIFY_PY="$cand"; break; fi
+  done < <(hw_candidates)
 fi
 if [ -z "$VERIFY_PY" ] && command -v python3 >/dev/null 2>&1; then VERIFY_PY="python3"; fi
 if [ -n "$VERIFY_PY" ]; then
@@ -254,6 +283,7 @@ fi
 # ---------------------------------------------------------------- 5. Summary
 echo
 step "Results"
+[ -z "$SMOLVLA_NOTE" ] || echo "  note: $SMOLVLA_NOTE"
 if [ "$FAILURES" -eq 0 ]; then
   ok "All executed stages passed ($SKIPPED_STAGES Python stages skipped; see suite output for individual skips)"
   exit 0

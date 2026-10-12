@@ -215,6 +215,11 @@ def build_usda(L) -> str:
         links += "\n" + _link(link_name, leaf_local, size, L.DOOR_LEAF_MASS,
                               _LEAF_COLOUR, "        ")
 
+    # Built outside the f-string: a backslash inside an f-string expression is a
+    # SyntaxError before Python 3.12, and this file must run on any python3 (TASK-385).
+    rail_link = _link("door_frame", rail_local, rail["size"], L.DOOR_RAIL_MASS,
+                      _RAIL_COLOUR, "        ", extra="\n" + joints)
+
     return f'''#usda 1.0
 (
     doc = """Pause-room automatic sliding door for Isaac-Factory-PauseRoom-G129-Dex3-Wholebody.
@@ -255,7 +260,7 @@ def Xform "Root"
             quatf physics:localRot1 = (1, 0, 0, 0)
         }}
 
-{_link("door_frame", rail_local, rail["size"], L.DOOR_RAIL_MASS, _RAIL_COLOUR, "        ", extra="\n" + joints)}{links}    }}
+{rail_link}{links}    }}
 }}
 '''
 
