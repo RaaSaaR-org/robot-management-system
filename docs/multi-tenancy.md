@@ -118,6 +118,10 @@ one shot is a large blast-radius migration. Instead, multi-tenancy rolls out in 
 - **TASK-285** (shipped): `DigitalTwin`, `ScanSession`, `SimScene`.
 - **TASK-286** (shipped): `SensorScan`, `MotionClip`, `VlaSession` — the first wave that had
   to *add* the `tenantId` column rather than allowlist an existing one.
+- **TASK-384** (shipped): `SkillDefinition`, `SkillChain` (`SkillChainStep` is reached only
+  through its chain). `(name, version)` is unique per tenant, as `Zone` became in TASK-288.
+- **Filtered explicitly, not allowlisted** (TASK-384): `ComplianceLog` — see
+  [Compliance logs](#compliance-logs-filtered-explicitly-task-384) below.
 - **Not scoped** (by design): `Fleet` (no DB model), `Message` (implicit via `Conversation` FK).
 
 The list above is prose and rots; the ratchet is a test.
@@ -320,6 +324,34 @@ await prisma.alert.updateMany({
 Restart the server; the seeder logs the backfill count and the Prisma extension
 immediately starts scoping the new model.
 
+### Compliance logs: filtered explicitly (TASK-384)
+
+`ComplianceLog` carries a `tenantId` but is **not** in `TENANT_SCOPED_MODELS` — it is the one
+entry in `EXCEPTIONS` in `tenantAllowlist.test.ts`. The log is a single global hash chain:
+`ComplianceLogRepository.create` reads the chain head (highest `seq`) across every tenant's
+rows, and the extension would scope that read to one tenant and fork the chain. Instead:
+
+- **Write.** `create` stamps `tenantId` from the explicit input, else the request's tenant
+  context, else (a writer outside a request) the tenant of the row's `robotId`, then of its
+  `operatorId`, else `null`. `tenantId` is not part of the hash input
+  (`previousHash|timestamp|payloadHash|eventType`), so rows written before the column existed
+  still verify.
+- **Read.** Every repository read and `LogExportService` spread `complianceTenantWhere()`,
+  which is `{ tenantId: <caller> }` inside a tenant scope and `{}` when multi-tenancy is off,
+  under `runAsPlatform`, or outside a request. Detail lookups answer another tenant's id as
+  missing and record no access for it.
+- **`null` = platform event.** The tenant-impersonation audit (§8) is written with
+  `tenantId: null`. A tenant never sees those rows. On the compliance-log routes
+  (`/logs`, `/verify`, `/metrics`, `/export`), `platformScopeForSuperAdmin` runs a
+  super-admin who is **not** impersonating as platform, so they read the whole trail; with
+  `X-Impersonate-Tenant` set they see exactly what that tenant sees.
+- **Verify** walks the whole chain (a link can only be checked against the row before it),
+  so `isValid` describes the shared chain; a tenant caller sees only its own rows in the
+  counts and in `brokenLinks`.
+- **Backfill.** `backfillComplianceLogTenants()` in `seedTenant.ts` stamps unowned rows with
+  their robot's tenant, then their operator's — never DEFAULT wholesale, since an unowned row
+  is a platform event. Rows that match neither stay `null`.
+
 ### What the extension does per operation
 
 For any call on an allowlisted model, while `getTenantId()` is non-undefined:
@@ -424,7 +456,8 @@ dropdown in the TopBar. This works via the `X-Impersonate-Tenant` header:
 
 Every impersonation is logged to `ComplianceLog` as a `system_event` with
 `eventName: 'tenant_impersonation'` (EU AI Act Art. 12). The log captures
-actor ID/email, original tenant, and impersonated tenant.
+actor ID/email, original tenant, and impersonated tenant. It is written with
+`tenantId: null` — a platform event, read by super-admins only (TASK-384).
 
 A prominent amber banner appears below the TopBar during impersonation, showing the
 current tenant name and a "Stop impersonating" button.
@@ -483,16 +516,20 @@ pipeline for v1.
 
 ## 10. Current limitations
 
-- **33 models are tenant-scoped** — every model that carries a `tenantId` column:
+- **41 models are tenant-scoped** — every model that carries a `tenantId` column except
+  `ComplianceLog`. Among them:
   `User`, `Robot`, `Dataset`, `TrainingJob`, `Alert`, `Incident`, `RobotTask`,
   `RobotCommand`, `ProcessDefinition`, `ProcessInstance`, `ApprovalRequest`, `Event`,
   `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`, `Zone`,
   `Conversation`, `ApiToken`, `EpisodeReward`, `InterventionEpisode`, `PatrolRoute`,
   `PatrolRun`, `PatrolFinding`, `DatasetEpisodeFlag`, `TourRoute`, `TourRun`,
-  `DigitalTwin`, `ScanSession`, `SimScene`, `SensorScan`, `MotionClip`, `VlaSession`.
+  `DigitalTwin`, `ScanSession`, `SimScene`, `SensorScan`, `MotionClip`, `VlaSession`,
+  `SkillDefinition`, `SkillChain`.
   Read the live list off `TENANT_SCOPED_MODELS` in `server/src/database/client.ts` —
   `tenantAllowlist.test.ts` keeps the two in step.
-  Models with no `tenantId` column (e.g. `ComplianceLog`) still show global counts.
+  `ComplianceLog` also carries a `tenantId` (TASK-384) but is filtered explicitly rather than
+  allowlisted — see §6. Legal holds, GDPR erasure and the retention job still act on
+  compliance logs platform-wide.
   `SensorScan` is backfilled in pages rather than one `updateMany` — it holds one row per
   LiDAR frame, so an unbounded stamp would lock the table during startup
   (`backfillPaged()` in `server/src/database/seedTenant.ts`).
