@@ -964,7 +964,21 @@ export class DatasetService extends EventEmitter {
     // the only record of where those bytes are, so deleting it while they stay
     // would orphan them for good. A 503 keeps the row, and the delete can be
     // retried once the store is back.
-    const storagePrefix = objectStoragePrefixOf(dataset.storagePath);
+    let storagePrefix = objectStoragePrefixOf(dataset.storagePath);
+    if (storagePrefix) {
+      // Nothing writes two rows onto one prefix today; if anything ever does,
+      // the other row's bytes are not this delete's to remove.
+      const bare = storagePrefix.slice(0, -1);
+      const sharing = await prisma.dataset.findMany({
+        where: { id: { not: id }, storagePath: { in: [bare, storagePrefix] } },
+        select: { id: true },
+        take: 1,
+      });
+      if (sharing.length > 0) {
+        console.warn(`[DatasetService] ${storagePrefix} is also the storagePath of ${sharing[0].id}; left in place`);
+        storagePrefix = null;
+      }
+    }
     if (storagePrefix) {
       if (!isRustFSInitialized()) {
         if (isRustFSConfigured()) {

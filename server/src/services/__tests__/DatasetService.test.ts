@@ -289,6 +289,7 @@ beforeEach(() => {
   // makes a dataset a mixture member would otherwise make every later test's
   // delete refuse.
   findMixtureMembers.mockResolvedValue([]);
+  findDerivedViews.mockReset();
   findDerivedViews.mockResolvedValue([]);
   vi.mocked(isRustFSConfigured).mockReturnValue(false);
   deleteDatasetPrefix.mockResolvedValue(0);
@@ -1650,6 +1651,18 @@ describe('TASK-359: delete removes the import prefix', () => {
     vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
 
     await datasetService.delete('ds1');
+    expect(deleteDatasetPrefix).not.toHaveBeenCalled();
+  });
+
+  it('leaves a prefix another row also names', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset({ storagePath: `${STORE}/` }));
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+    // Only the prefix lookup finds anything: no views, one row sharing the prefix.
+    findDerivedViews.mockImplementation((async (args: { where?: { storagePath?: unknown } }) =>
+      (args?.where?.storagePath ? [{ id: 'other' }] : [])) as never);
+
+    expect(await datasetService.delete('ds1')).toBe(true);
     expect(deleteDatasetPrefix).not.toHaveBeenCalled();
   });
 

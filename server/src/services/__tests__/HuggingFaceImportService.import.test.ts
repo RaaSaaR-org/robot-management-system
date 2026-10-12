@@ -190,6 +190,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // Every case is a fresh process: an earlier case's background run, still
+  // unwinding on the shared DATASET_ID, must not read as an import in progress.
+  (service as unknown as { running: Map<string, object> }).running.clear();
   vi.spyOn(service as unknown as { sleep(ms: number): Promise<void> }, 'sleep').mockResolvedValue();
   vi.mocked(isRustFSInitialized).mockReturnValue(false);
   vi.mocked(natsClient.isConnected).mockReturnValue(false);

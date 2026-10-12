@@ -582,11 +582,15 @@ export class HuggingFaceImportService {
     }
     // An `importing` row nothing in this process is running is an orphan of a
     // restart (TASK-359): retrying it is the way out, not a conflict.
-    const orphaned = existing.status === 'importing' && !this.running.has(datasetId);
-    if ((existing.status === 'importing' && !orphaned) || existing.status === 'validating') {
+    // And whatever its status says, one this process is running (or another
+    // retry has just reserved) is in progress: a second claim would download
+    // into the same prefix twice.
+    const runningHere = this.running.has(datasetId);
+    const orphaned = existing.status === 'importing' && !runningHere;
+    if (runningHere || existing.status === 'validating') {
       throw new HuggingFaceImportError(
         'IN_PROGRESS',
-        `Dataset ${datasetId} is already ${existing.status}`,
+        `Dataset ${datasetId} is already ${runningHere ? 'importing' : existing.status}`,
         409,
       );
     }
