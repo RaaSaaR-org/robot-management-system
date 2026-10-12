@@ -3,7 +3,7 @@ id: "TASK-375"
 aliases: ["TASK-375"]
 title: "Delete events reach their tenant after a server restart"
 slug: "delete-events-reach-their-tenant-after-a-server-restart"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -76,17 +76,17 @@ both of which outlive the deleted row.
 
 ## Acceptance Criteria
 
-- [ ] With an empty tenant cache and the row gone, `dataset:deleted`,
+- [x] With an empty tenant cache and the row gone, `dataset:deleted`,
       `alert_deleted` and `robot_unregistered` reach a same-tenant member socket and
       super-admins, and not another tenant's socket or an anonymous one.
-- [ ] A carried tenant wins over a key lookup and is not part of the payload sent
+- [x] A carried tenant wins over a key lookup and is not part of the payload sent
       to clients.
-- [ ] `DatasetService.delete`, `AlertService.deleteAlert` and
+- [x] `DatasetService.delete`, `AlertService.deleteAlert` and
       `RobotManager.unregisterRobot` read the tenant before the row is deleted and
       put it on the event.
-- [ ] Events without a carried tenant are routed exactly as before (fail-closed for
+- [x] Events without a carried tenant are routed exactly as before (fail-closed for
       anything unknown).
-- [ ] `eventTenancy.ts` and `docs/multi-tenancy.md` describe the carried tenant.
+- [x] `eventTenancy.ts` and `docs/multi-tenancy.md` describe the carried tenant.
 
 ## Test Strategy
 
