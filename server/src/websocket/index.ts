@@ -500,10 +500,17 @@ function handleClientMessage(
 
     case 'auth': {
       // In-band identification for clients that cannot put the token on the
-      // upgrade URL. A bad token clears nothing and grants nothing.
+      // upgrade URL. A bad token clears nothing and grants nothing. A socket
+      // may send `auth` again at any time (after a token refresh) to
+      // re-identify. A rejection says why, so the client can refresh its
+      // token and try once more instead of staying unidentified (TASK-366).
       const identity = identityFromToken(msg.token, verifyAccessToken);
-      if (identity) identities.set(ws, identity);
-      ws.send(JSON.stringify({ type: 'auth', authenticated: identity !== null }));
+      if (identity) {
+        identities.set(ws, identity);
+        ws.send(JSON.stringify({ type: 'auth', authenticated: true }));
+      } else {
+        ws.send(JSON.stringify({ type: 'auth', authenticated: false, error: 'invalid_token' }));
+      }
       break;
     }
 
