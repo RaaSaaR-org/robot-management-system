@@ -8,6 +8,9 @@ import { render, type RenderOptions } from '@testing-library/react';
 import { MemoryRouter, type MemoryRouterProps } from 'react-router-dom';
 import { ThemeProvider } from '@/app/providers/ThemeProvider';
 import { AuthProvider } from '@/app/providers/AuthProvider';
+import { useAuthStore } from '@/features/auth/store/authStore';
+import type { UserRole } from '@/features/auth/types/auth.types';
+import { MOCK_USER } from '@/mocks/mockData';
 
 interface WrapperOptions {
   /** Initial route entries for MemoryRouter */
@@ -64,3 +67,15 @@ export function renderWithProviders(
 // Re-export testing library utilities
 export { screen, within, waitFor, act } from '@testing-library/react';
 export { default as userEvent } from '@testing-library/user-event';
+
+/**
+ * Sign the real auth store in as `role`, so permission gates (`usePermission`)
+ * render the way they do for that role. No mocking of `useAuth` involved.
+ */
+export function signInAs(role: UserRole): void {
+  useAuthStore.setState({
+    user: { ...MOCK_USER, role },
+    isAuthenticated: true,
+    isInitialized: true,
+  });
+}

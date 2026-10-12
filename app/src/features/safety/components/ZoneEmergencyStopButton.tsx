@@ -2,6 +2,7 @@
  * @file ZoneEmergencyStopButton.tsx
  * @description Zone emergency stop: halts every robot in one zone on a single
  *              press (the E-stop never confirms) and reports the result as a toast.
+ *              Disabled, with the reason, for a role without `robots:command`.
  * @feature safety
  */
 
@@ -10,7 +11,9 @@ import { OctagonX } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { Button, toast } from '@/shared/components/ui';
 import { useZoneSafety } from '../hooks/useSafety';
-import { STOP_BUTTON_CLASS, STOP_ICON_CLASS, lastSafetyError } from './stopStyles';
+import {
+  STOP_BUTTON_CLASS, STOP_FORBIDDEN_HINT, STOP_ICON_CLASS, lastSafetyError, useCanStop,
+} from './stopStyles';
 
 export interface ZoneEmergencyStopButtonProps {
   /** Zone ID */
@@ -33,6 +36,7 @@ export function ZoneEmergencyStopButton({
   className,
 }: ZoneEmergencyStopButtonProps) {
   const { isTriggering, triggerEStop } = useZoneSafety(zoneId);
+  const canStop = useCanStop();
 
   const handleStop = useCallback(async () => {
     if (await triggerEStop(`Zone emergency stop for ${zoneName}`)) {
@@ -50,7 +54,8 @@ export function ZoneEmergencyStopButton({
       size={size}
       onClick={() => void handleStop()}
       isLoading={isTriggering}
-      disabled={isTriggering}
+      disabled={isTriggering || !canStop}
+      title={canStop ? undefined : STOP_FORBIDDEN_HINT}
       className={cn(STOP_BUTTON_CLASS, className)}
       leftIcon={<OctagonX className={STOP_ICON_CLASS} strokeWidth={1.75} />}
       aria-label={`Emergency stop zone ${zoneName}`}

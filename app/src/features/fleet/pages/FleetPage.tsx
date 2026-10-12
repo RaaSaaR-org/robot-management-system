@@ -12,6 +12,7 @@ import { useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { Button, PageHeader, Panel, Tabs } from '@/shared/components/ui';
+import { usePermission } from '@/features/auth/hooks/useAuth';
 import { SiteMap } from '../components/SiteMap';
 import { RobotsPage } from '@/features/robots/pages/RobotsPage';
 // By path, not through the feature barrel: that barrel re-exports the three.js
@@ -52,12 +53,19 @@ export function FleetPage({ className }: FleetPageProps) {
   // The Sites tab's "New scan" button lives in this header, so the flag lives
   // here too and the gallery renders the modal from it.
   const [scanOpen, setScanOpen] = useState(false);
+  // A scan drives a robot through the room, so it takes the command permission.
+  const canScan = usePermission('robots:command');
 
   // Every tab brings its own actions; the Robots tab has none in the header.
   let headerActions: ReactNode;
   if (tab === 'sites') {
     headerActions = (
-      <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => setScanOpen(true)}>
+      <Button
+        leftIcon={<Plus className="h-4 w-4" />}
+        onClick={() => setScanOpen(true)}
+        disabled={!canScan}
+        title={canScan ? undefined : "Your role can't start a scan."}
+      >
         New scan
       </Button>
     );
