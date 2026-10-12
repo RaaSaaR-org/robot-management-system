@@ -863,7 +863,8 @@ describe('ComplianceLogRepository', () => {
       const result = await repo.getAccessHistory('log-1');
 
       expect(mockPrisma.complianceLogAccess.findMany).toHaveBeenCalledWith({
-        where: { logId: 'log-1' },
+        // Outside a tenant scope the log filter is empty (TASK-384).
+        where: { logId: 'log-1', log: {} },
         orderBy: { timestamp: 'desc' },
       });
       expect(result).toHaveLength(1);

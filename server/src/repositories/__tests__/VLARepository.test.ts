@@ -27,6 +27,7 @@ const prismaMock = vi.hoisted(() => ({
   skillDefinition: {
     create: vi.fn(),
     findUnique: vi.fn(),
+    findFirst: vi.fn(),
     findMany: vi.fn(),
     count: vi.fn(),
     update: vi.fn(),
@@ -482,16 +483,16 @@ describe('SkillDefinitionRepository', () => {
     expect(await repo.findByIdWithRelations('x')).toBeNull();
   });
 
-  it('findByNameAndVersion() uses the composite unique key', async () => {
-    prismaMock.skillDefinition.findUnique.mockResolvedValue(makeDbSkill());
+  it('findByNameAndVersion() asks with findFirst so the tenant extension can scope it', async () => {
+    prismaMock.skillDefinition.findFirst.mockResolvedValue(makeDbSkill());
     await repo.findByNameAndVersion('pick_object', '1.0.0');
-    expect(prismaMock.skillDefinition.findUnique).toHaveBeenCalledWith({
-      where: { name_version: { name: 'pick_object', version: '1.0.0' } },
+    expect(prismaMock.skillDefinition.findFirst).toHaveBeenCalledWith({
+      where: { name: 'pick_object', version: '1.0.0' },
     });
   });
 
   it('findByNameAndVersion() returns null when missing', async () => {
-    prismaMock.skillDefinition.findUnique.mockResolvedValue(null);
+    prismaMock.skillDefinition.findFirst.mockResolvedValue(null);
     expect(await repo.findByNameAndVersion('a', 'b')).toBeNull();
   });
 
@@ -1225,6 +1226,11 @@ describe('DeploymentRepository', () => {
 // ===========================================================================
 
 describe('SkillChainRepository', () => {
+  // update() checks ownership before writing steps (TASK-384).
+  beforeEach(() => {
+    prismaMock.skillChain.findUnique.mockResolvedValue({ id: 'sc-1', tenantId: null });
+  });
+
   const repo = new SkillChainRepository();
 
   it('exports a singleton instance', () => {
@@ -1348,6 +1354,15 @@ describe('SkillChainRepository', () => {
       orderBy: { name: 'asc' },
       include: { steps: { orderBy: { order: 'asc' }, include: { skill: true } } },
     });
+  });
+
+  it('update() touches nothing when the chain is not visible to the caller (TASK-384)', async () => {
+    prismaMock.skillChain.findUnique.mockResolvedValue(null);
+    const result = await repo.update('sc-1', { steps: [{ skillId: 'sk-9' }] });
+    expect(result).toBeNull();
+    expect(prismaMock.skillChainStep.deleteMany).not.toHaveBeenCalled();
+    expect(prismaMock.skillChainStep.createMany).not.toHaveBeenCalled();
+    expect(prismaMock.skillChain.update).not.toHaveBeenCalled();
   });
 
   it('update() replaces steps (deleteMany + createMany) then updates chain fields', async () => {

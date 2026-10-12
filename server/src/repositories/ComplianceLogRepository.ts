@@ -14,6 +14,8 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '../database/index.js';
+import { MULTI_TENANCY_ENABLED } from '../config/features.js';
+import { getTenantId } from '../middleware/tenantContext.js';
 import type { ComplianceLog as DbComplianceLog, ComplianceLogAccess as DbLogAccess } from '@prisma/client';
 import { encrypt, decrypt, sha256, generateLogHash } from '../security/encryption.js';
 import { DEFAULT_RETENTION_DAYS } from '../types/retention.types.js';
@@ -111,6 +113,7 @@ function dbToDomain(db: DbComplianceLog): ComplianceLog {
     sessionId: db.sessionId,
     robotId: db.robotId,
     operatorId: db.operatorId,
+    tenantId: db.tenantId,
     eventType: db.eventType as ComplianceEventType,
     severity: db.severity as ComplianceSeverity,
     payload: JSON.parse(decryptedPayload) as CompliancePayload,
@@ -170,6 +173,60 @@ function accessDbToDomain(db: DbLogAccess): ComplianceLogAccess {
 }
 
 // ============================================================================
+// TENANT SCOPE (TASK-384)
+// ============================================================================
+
+/**
+ * The `where` fragment that limits a compliance-log read to the caller's tenant.
+ *
+ * `ComplianceLog` is deliberately NOT in `TENANT_SCOPED_MODELS`: the hash chain
+ * is global, and the extension would scope `create`'s chain-head read to one
+ * tenant and fork the chain. Every read therefore spreads this fragment itself.
+ *
+ * Empty (every row) when multi-tenancy is off, under `runAsPlatform` (how a
+ * non-impersonating super-admin reaches these routes), and outside a request
+ * scope. Inside a tenant's scope it matches that tenant's rows only, so rows
+ * with a null `tenantId` — platform events — are never shown to a tenant.
+ */
+export function complianceTenantWhere(): { tenantId?: string } {
+  const tenantId = getTenantId();
+  return tenantId === undefined ? {} : { tenantId };
+}
+
+/** Whether the caller may see a row owned by `rowTenantId`. */
+function visibleToCaller(rowTenantId: string | null): boolean {
+  const tenantId = getTenantId();
+  return tenantId === undefined || rowTenantId === tenantId;
+}
+
+/**
+ * The tenant a new row belongs to: the explicit input, else the request's
+ * tenant, else — for writers outside a request (services, jobs) — the tenant
+ * of the robot, then of the operator. `null` when none applies.
+ */
+async function resolveLogTenant(input: CreateComplianceLogInput): Promise<string | null> {
+  if (input.tenantId !== undefined) return input.tenantId;
+  const contextTenant = getTenantId();
+  if (contextTenant !== undefined) return contextTenant;
+  if (!MULTI_TENANCY_ENABLED) return null;
+
+  const robot = await prisma.robot.findUnique({
+    where: { id: input.robotId },
+    select: { tenantId: true },
+  });
+  if (robot?.tenantId) return robot.tenantId;
+
+  if (input.operatorId) {
+    const user = await prisma.user.findUnique({
+      where: { id: input.operatorId },
+      select: { tenantId: true },
+    });
+    if (user?.tenantId) return user.tenantId;
+  }
+  return null;
+}
+
+// ============================================================================
 // REPOSITORY CLASS
 // ============================================================================
 
@@ -197,6 +254,8 @@ export class ComplianceLogRepository {
     const payloadHash = sha256(payloadJson);
     const { ciphertext, iv } = encrypt(payloadJson);
     const retentionDays = DEFAULT_RETENTION_DAYS[input.eventType] ?? 365;
+    // Outside the hash input, so stamping it changes no hash (TASK-384).
+    const tenantId = await resolveLogTenant(input);
 
     for (let attempt = 1; ; attempt++) {
       try {
@@ -246,6 +305,7 @@ export class ComplianceLogRepository {
                 currentHash,
                 seq,
                 decisionId: input.decisionId,
+                tenantId,
                 timestamp,
                 immutable: true,
                 retentionExpiresAt,
@@ -294,7 +354,9 @@ export class ComplianceLogRepository {
       where: { id },
     });
 
-    if (!log) return null;
+    // Another tenant's row reads exactly like a missing one, and is not
+    // recorded as accessed.
+    if (!log || !visibleToCaller(log.tenantId)) return null;
 
     // Record access for audit trail
     if (accessorUserId !== undefined || ipAddress) {
@@ -317,7 +379,7 @@ export class ComplianceLogRepository {
     const log = await prisma.complianceLog.findUnique({
       where: { id },
     });
-    return log ? dbToEncrypted(log) : null;
+    return log && visibleToCaller(log.tenantId) ? dbToEncrypted(log) : null;
   }
 
   /**
@@ -329,7 +391,7 @@ export class ComplianceLogRepository {
     const skip = (page - 1) * limit;
 
     // Build where clause
-    const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = { ...complianceTenantWhere() };
     if (params?.sessionId) where.sessionId = params.sessionId;
     if (params?.robotId) where.robotId = params.robotId;
     if (params?.operatorId) where.operatorId = params.operatorId;
@@ -376,7 +438,7 @@ export class ComplianceLogRepository {
    */
   async findBySessionId(sessionId: string): Promise<ComplianceLog[]> {
     const logs = await prisma.complianceLog.findMany({
-      where: { sessionId },
+      where: { sessionId, ...complianceTenantWhere() },
       orderBy: { timestamp: 'asc' },
     });
     return logs.map(dbToDomain);
@@ -389,7 +451,7 @@ export class ComplianceLogRepository {
    */
   async findByDecisionId(decisionId: string): Promise<ComplianceLog[]> {
     const logs = await prisma.complianceLog.findMany({
-      where: { decisionId },
+      where: { decisionId, ...complianceTenantWhere() },
       orderBy: { timestamp: 'asc' },
     });
     return logs.map(dbToDomain);
@@ -409,6 +471,9 @@ export class ComplianceLogRepository {
     startDate?: Date,
     endDate?: Date,
   ): Promise<HashChainVerificationResult> {
+    // The whole chain, every tenant's rows: a link can only be checked against
+    // the row before it, whoever owns that row. What the caller is shown is
+    // narrowed to its own rows below (TASK-384).
     const where: Record<string, unknown> = {};
     if (startDate || endDate) {
       where.timestamp = {};
@@ -458,13 +523,22 @@ export class ComplianceLogRepository {
       previousHash = log.currentHash;
     }
 
+    // A tenant caller learns whether the shared chain holds (`isValid`), but sees
+    // only its own rows in the counts and the broken links — another tenant's
+    // log ids and hashes are not its to read.
+    const ownLogIds = new Set(
+      logs.filter((log) => visibleToCaller(log.tenantId)).map((log) => log.id),
+    );
+    const ownLogs = logs.filter((log) => ownLogIds.has(log.id));
+    const ownBrokenLinks = brokenLinks.filter((link) => ownLogIds.has(link.logId));
+
     return {
       isValid: brokenLinks.length === 0,
-      totalLogs: logs.length,
-      verifiedLogs: logs.length - brokenLinks.length,
-      firstLogTimestamp: logs[0]?.timestamp,
-      lastLogTimestamp: logs[logs.length - 1]?.timestamp,
-      brokenLinks,
+      totalLogs: ownLogs.length,
+      verifiedLogs: ownLogs.length - ownBrokenLinks.length,
+      firstLogTimestamp: ownLogs[0]?.timestamp,
+      lastLogTimestamp: ownLogs[ownLogs.length - 1]?.timestamp,
+      brokenLinks: ownBrokenLinks,
       verifiedAt: new Date(),
     };
   }
@@ -476,7 +550,7 @@ export class ComplianceLogRepository {
     startDate?: Date,
     endDate?: Date,
   ): Promise<EventTypeMetrics[]> {
-    const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = { ...complianceTenantWhere() };
     if (startDate || endDate) {
       where.timestamp = {};
       if (startDate) (where.timestamp as Record<string, Date>).gte = startDate;
@@ -504,7 +578,7 @@ export class ComplianceLogRepository {
     startDate?: Date,
     endDate?: Date,
   ): Promise<ComplianceMetricsSummary> {
-    const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = { ...complianceTenantWhere() };
     if (startDate || endDate) {
       where.timestamp = {};
       if (startDate) (where.timestamp as Record<string, Date>).gte = startDate;
@@ -590,7 +664,7 @@ export class ComplianceLogRepository {
    */
   async getAccessHistory(logId: string): Promise<ComplianceLogAccess[]> {
     const accesses = await prisma.complianceLogAccess.findMany({
-      where: { logId },
+      where: { logId, log: complianceTenantWhere() },
       orderBy: { timestamp: 'desc' },
     });
     return accesses.map(accessDbToDomain);
@@ -600,7 +674,7 @@ export class ComplianceLogRepository {
    * Count logs with optional filters
    */
   async count(params?: Pick<ComplianceLogQueryParams, 'sessionId' | 'robotId' | 'eventType'>): Promise<number> {
-    const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = { ...complianceTenantWhere() };
     if (params?.sessionId) where.sessionId = params.sessionId;
     if (params?.robotId) where.robotId = params.robotId;
     if (params?.eventType) where.eventType = params.eventType;

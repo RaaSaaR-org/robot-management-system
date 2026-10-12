@@ -55,10 +55,12 @@ const { db, mockPrisma } = vi.hoisted(() => {
     'processDefinition', 'processInstance', 'approvalRequest', 'event',
     'modelVersion', 'deployment', 'simulationJob', 'syntheticJob', 'conversation',
     'apiToken', 'episodeReward', 'interventionEpisode', 'digitalTwin', 'scanSession',
-    'simScene', 'motionClip', 'vlaSession',
+    'simScene', 'motionClip', 'vlaSession', 'skillDefinition', 'skillChain',
   ]) {
     prisma[model] = noop();
   }
+  // TASK-384: the compliance-log backfill reads distinct owners first; none here.
+  prisma.complianceLog = { findMany: vi.fn().mockResolvedValue([]), updateMany: vi.fn() };
   return { db, mockPrisma: prisma };
 });
 

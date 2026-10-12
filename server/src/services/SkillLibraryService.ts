@@ -13,6 +13,7 @@ import {
   robotTypeRepository,
 } from '../repositories/index.js';
 import { robotManager } from './RobotManager.js';
+import { AppError } from '../utils/errors.js';
 import type {
   SkillDefinition,
   CreateSkillDefinitionInput,
@@ -40,6 +41,15 @@ import type {
 // ============================================================================
 // SKILL LIBRARY SERVICE
 // ============================================================================
+
+/**
+ * A skill or chain the caller cannot see. 404 rather than a generic 400, so an
+ * id from another tenant (hidden by the tenant-isolation extension, TASK-384)
+ * reads exactly like an id that does not exist.
+ */
+function notFound(message: string): AppError {
+  return new AppError(message, 404, 'NOT_FOUND');
+}
 
 /**
  * Service for managing skills and skill chains
@@ -116,6 +126,17 @@ export class SkillLibraryService extends EventEmitter {
       }
     }
 
+    // (name, version) is unique per tenant (TASK-384). The lookup is tenant-scoped,
+    // so another tenant's skill of the same name never collides; with multi-tenancy
+    // off the index holds NULL tenantIds and this check is the only guard.
+    if (await skillDefinitionRepository.findByNameAndVersion(input.name, input.version)) {
+      throw new AppError(
+        `Skill ${input.name}@${input.version} already exists`,
+        409,
+        'CONFLICT',
+      );
+    }
+
     const skill = await skillDefinitionRepository.create(input);
 
     this.emitEvent('skill:execution:completed', { skillId: skill.id });
@@ -179,7 +200,7 @@ export class SkillLibraryService extends EventEmitter {
   async updateSkill(id: string, input: UpdateSkillDefinitionInput): Promise<SkillDefinition | null> {
     const existing = await skillDefinitionRepository.findById(id);
     if (!existing) {
-      throw new Error(`Skill not found: ${id}`);
+      throw notFound(`Skill not found: ${id}`);
     }
 
     // Prevent updates to published skills unless deprecating/archiving
@@ -239,7 +260,7 @@ export class SkillLibraryService extends EventEmitter {
   async publishSkill(id: string): Promise<SkillDefinition> {
     const existing = await skillDefinitionRepository.findById(id);
     if (!existing) {
-      throw new Error(`Skill not found: ${id}`);
+      throw notFound(`Skill not found: ${id}`);
     }
 
     if (existing.status !== 'draft') {
@@ -267,7 +288,7 @@ export class SkillLibraryService extends EventEmitter {
   async deprecateSkill(id: string): Promise<SkillDefinition> {
     const existing = await skillDefinitionRepository.findById(id);
     if (!existing) {
-      throw new Error(`Skill not found: ${id}`);
+      throw notFound(`Skill not found: ${id}`);
     }
 
     if (existing.status !== 'published') {
@@ -289,7 +310,7 @@ export class SkillLibraryService extends EventEmitter {
   async archiveSkill(id: string): Promise<SkillDefinition> {
     const existing = await skillDefinitionRepository.findById(id);
     if (!existing) {
-      throw new Error(`Skill not found: ${id}`);
+      throw notFound(`Skill not found: ${id}`);
     }
 
     if (!['deprecated', 'draft'].includes(existing.status)) {
@@ -379,7 +400,7 @@ export class SkillLibraryService extends EventEmitter {
   async checkRobotCompatibility(skillId: string, robotId: string): Promise<RobotCompatibility> {
     const skill = await skillDefinitionRepository.findByIdWithRelations(skillId);
     if (!skill) {
-      throw new Error(`Skill not found: ${skillId}`);
+      throw notFound(`Skill not found: ${skillId}`);
     }
 
     const robot = await robotManager.getRobot(robotId);
@@ -419,7 +440,7 @@ export class SkillLibraryService extends EventEmitter {
   async getCompatibleRobots(skillId: string): Promise<CompatibilityCheckResult> {
     const skill = await skillDefinitionRepository.findByIdWithRelations(skillId);
     if (!skill) {
-      throw new Error(`Skill not found: ${skillId}`);
+      throw notFound(`Skill not found: ${skillId}`);
     }
 
     const allRobots = await robotManager.listRobots();
@@ -537,7 +558,7 @@ export class SkillLibraryService extends EventEmitter {
   async updateChain(id: string, input: UpdateSkillChainInput): Promise<SkillChain | null> {
     const existing = await skillChainRepository.findById(id);
     if (!existing) {
-      throw new Error(`Skill chain not found: ${id}`);
+      throw notFound(`Skill chain not found: ${id}`);
     }
 
     // Validate new steps if provided
@@ -589,7 +610,7 @@ export class SkillLibraryService extends EventEmitter {
   async activateChain(id: string): Promise<SkillChain> {
     const existing = await skillChainRepository.findById(id);
     if (!existing) {
-      throw new Error(`Skill chain not found: ${id}`);
+      throw notFound(`Skill chain not found: ${id}`);
     }
 
     if (existing.status !== 'draft') {
@@ -611,7 +632,7 @@ export class SkillLibraryService extends EventEmitter {
   async archiveChain(id: string): Promise<SkillChain> {
     const existing = await skillChainRepository.findById(id);
     if (!existing) {
-      throw new Error(`Skill chain not found: ${id}`);
+      throw notFound(`Skill chain not found: ${id}`);
     }
 
     const chain = await skillChainRepository.updateStatus(id, 'archived');

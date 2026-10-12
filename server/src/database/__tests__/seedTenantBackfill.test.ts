@@ -29,6 +29,7 @@ const UNPAGED_MODELS = [
   'episodeReward', 'interventionEpisode',
   'digitalTwin', 'scanSession', 'simScene',
   'motionClip', 'vlaSession',
+  'skillDefinition', 'skillChain',
 ] as const;
 
 const { mockPrisma, mockLogger, mockEnsureDefaultTenant } = vi.hoisted(() => {
@@ -43,10 +44,15 @@ const { mockPrisma, mockLogger, mockEnsureDefaultTenant } = vi.hoisted(() => {
     'episodeReward', 'interventionEpisode',
     'digitalTwin', 'scanSession', 'simScene',
     'motionClip', 'vlaSession',
+    'skillDefinition', 'skillChain',
   ]) {
     prisma[model] = { updateMany: vi.fn().mockResolvedValue({ count: 0 }) };
   }
   prisma.sensorScan = { findMany: vi.fn(), updateMany: vi.fn() };
+  // TASK-384: compliance logs take their tenant from robots and operators.
+  prisma.complianceLog = { findMany: vi.fn(), updateMany: vi.fn() };
+  (prisma.robot as Record<string, unknown>).findMany = vi.fn();
+  (prisma.user as Record<string, unknown>).findMany = vi.fn();
 
   return {
     mockPrisma: prisma as Record<
@@ -107,6 +113,50 @@ beforeEach(() => {
   }
   mockPrisma.sensorScan.findMany!.mockResolvedValue([]);
   mockPrisma.sensorScan.updateMany.mockResolvedValue({ count: 0 });
+  mockPrisma.complianceLog.findMany!.mockResolvedValue([]);
+  mockPrisma.complianceLog.updateMany.mockResolvedValue({ count: 0 });
+  mockPrisma.robot.findMany!.mockResolvedValue([]);
+  mockPrisma.user.findMany!.mockResolvedValue([]);
+});
+
+describe('seedDefaultTenant — TASK-384 tables', () => {
+  it('backfills skillDefinition and skillChain to DEFAULT', async () => {
+    await seedDefaultTenant();
+
+    for (const model of ['skillDefinition', 'skillChain'] as const) {
+      expect(mockPrisma[model].updateMany).toHaveBeenCalledWith({
+        where: { tenantId: null },
+        data: { tenantId: 'default' },
+      });
+    }
+  });
+
+  it('never stamps compliance logs to DEFAULT wholesale', async () => {
+    await seedDefaultTenant();
+
+    for (const [args] of mockPrisma.complianceLog.updateMany.mock.calls) {
+      expect(args.data.tenantId).not.toBe('default');
+    }
+    expect(mockPrisma.complianceLog.updateMany).not.toHaveBeenCalledWith({
+      where: { tenantId: null },
+      data: { tenantId: 'default' },
+    });
+  });
+
+  it("stamps a compliance log with its robot's tenant", async () => {
+    mockPrisma.complianceLog.findMany!
+      .mockResolvedValueOnce([{ robotId: 'r1' }])
+      .mockResolvedValueOnce([]);
+    mockPrisma.robot.findMany!.mockResolvedValue([{ id: 'r1', tenantId: 'tenant-a' }]);
+    mockPrisma.complianceLog.updateMany.mockResolvedValue({ count: 3 });
+
+    await seedDefaultTenant();
+
+    expect(mockPrisma.complianceLog.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: null, robotId: 'r1' },
+      data: { tenantId: 'tenant-a' },
+    });
+  });
 });
 
 describe('backfillPaged (TASK-286)', () => {

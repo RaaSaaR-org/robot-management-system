@@ -971,9 +971,17 @@ model ComplianceLog {
   retentionExpiresAt DateTime? // When this log can be deleted
   legalHoldId        String? // If under legal hold, references LegalHold.id
 
+  // Owning tenant (TASK-384). Not in TENANT_SCOPED_MODELS: the hash chain is
+  // global, so the chain-head read must not be tenant-scoped. Reads filter by
+  // it explicitly (ComplianceLogRepository, LogExportService). Null = platform
+  // event, visible to super-admins only. Not part of the hash input.
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   // Relations
   accessLogs ComplianceLogAccess[]
 
+  @@index([tenantId, timestamp])
   @@index([sessionId])
   @@index([retentionExpiresAt])
   @@index([robotId])
@@ -2286,6 +2294,8 @@ model SkillDefinition {
   maxRetries           Int      @default(3)
   status               String   @default("draft") // 'draft' | 'published' | 'deprecated' | 'archived'
   linkedModelVersionId String? // Optional link to a trained model version
+  tenantId             String? // TASK-384: owning tenant
+  tenant               Tenant?  @relation(fields: [tenantId], references: [id])
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -2295,7 +2305,9 @@ model SkillDefinition {
   modelVersions        ModelVersion[]
   skillChainSteps      SkillChainStep[]
 
-  @@unique([name, version])
+  // Per tenant (TASK-384), like Zone in TASK-288. NULLs are distinct inside a
+  // unique index, so with multi-tenancy off the service pre-check is the guard.
+  @@unique([tenantId, name, version])
   @@index([status])
   @@index([linkedModelVersionId])
 }
@@ -2307,6 +2319,8 @@ model SkillChain {
   description       String?
   status            String   @default("draft") // 'draft' | 'active' | 'archived'
   estimatedDuration Int? // Total estimated duration in seconds
+  tenantId          String? // TASK-384: owning tenant (steps are reached only through the chain)
+  tenant            Tenant?  @relation(fields: [tenantId], references: [id])
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -2315,6 +2329,7 @@ model SkillChain {
 
   @@index([status])
   @@index([name])
+  @@index([tenantId])
 }
 
 // SkillChainStep - Individual step in a skill chain
@@ -3183,6 +3198,11 @@ model Tenant {
   vlaSessions VlaSession[]
   researchRecords ResearchRecord[]
   researchModelPublications ResearchModelPublication[]
+
+  // TASK-384
+  complianceLogs   ComplianceLog[]
+  skillDefinitions SkillDefinition[]
+  skillChains      SkillChain[]
 
   @@index([slug])
 }

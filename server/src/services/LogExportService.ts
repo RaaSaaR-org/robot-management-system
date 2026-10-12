@@ -9,6 +9,7 @@
 
 import { prisma } from '../database/index.js';
 import { decrypt } from '../security/encryption.js';
+import { complianceTenantWhere } from '../repositories/ComplianceLogRepository.js';
 import type { ExportOptions, ExportResult, ExportedLog } from '../types/retention.types.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -25,7 +26,9 @@ export class LogExportService {
     const exportedAt = new Date();
 
     // Build query filters
-    const where: Record<string, unknown> = {};
+    // The caller's tenant only (TASK-384) — ComplianceLog is filtered explicitly,
+    // not by the tenant-isolation extension.
+    const where: Record<string, unknown> = { ...complianceTenantWhere() };
 
     if (options.startDate) {
       where.timestamp = { ...(where.timestamp as object || {}), gte: options.startDate };
@@ -136,7 +139,7 @@ export class LogExportService {
   > {
     // Group export accesses by timestamp (within 1 second window)
     const exports = await prisma.complianceLogAccess.findMany({
-      where: { accessType: 'export' },
+      where: { accessType: 'export', log: complianceTenantWhere() },
       orderBy: { timestamp: 'desc' },
       take: limit * 10, // Get more to group
     });

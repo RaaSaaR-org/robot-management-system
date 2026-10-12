@@ -12,10 +12,18 @@
 import { Router, type Request, type Response } from 'express';
 import { complianceLogService } from '../services/ComplianceLogService.js';
 import { logExportService } from '../services/LogExportService.js';
+import { platformScopeForSuperAdmin } from '../middleware/auth.middleware.js';
 import type { ComplianceEventType, ComplianceSeverity } from '../types/compliance.types.js';
 import type { ExportOptions } from '../types/retention.types.js';
 
 export const complianceLogRoutes = Router();
+
+// Every read below is limited to the caller's tenant by the repository
+// (TASK-384); a super-admin who is not impersonating reads the whole trail,
+// platform events included. Limited to this router's own paths: the router is
+// mounted at /api/compliance ahead of the retention, legal-hold, RoPA, provider
+// and tracker routers, and a bare `use` would carry the platform scope into them.
+complianceLogRoutes.use(['/logs', '/verify', '/metrics', '/export'], platformScopeForSuperAdmin);
 
 // ============================================================================
 // LOG ENDPOINTS

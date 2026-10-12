@@ -7,7 +7,7 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { authService, type TokenPayload } from '../services/AuthService.js';
 import { authenticateServiceToken } from '../services/ServiceAccountService.js';
 import { DEFAULT_TENANT_ID, MULTI_TENANCY_ENABLED } from '../config/features.js';
-import { tenantStore } from './tenantContext.js';
+import { PLATFORM_TENANT, tenantStore } from './tenantContext.js';
 import { complianceLogService } from '../services/ComplianceLogService.js';
 import { verifyCameraTicket } from '../security/cameraTicket.js';
 
@@ -109,6 +109,8 @@ function continueWithTenant(
       complianceLogService.logSystemEvent({
         sessionId: `impersonation-${user.id}`,
         robotId: 'platform',
+        // A platform event: no tenant owns it, so only super-admins read it (TASK-384).
+        tenantId: null,
         payload: {
           description: `Super-admin impersonated tenant ${override}`,
           eventName: 'tenant_impersonation',
@@ -396,6 +398,31 @@ export function roleMiddleware(...roles: UserRole[]): RequestHandler {
 
     next();
   };
+}
+
+/**
+ * Runs a non-impersonating super-admin's request as platform (TASK-384).
+ *
+ * A super-admin normally lands in the DEFAULT tenant's scope, which suits the
+ * product pages but not the compliance log: platform events (tenant
+ * impersonation, for one) carry `tenantId = null` and exist for super-admins
+ * alone. Mounted on the compliance-log routes so a super-admin reads the whole
+ * audit trail there. With `X-Impersonate-Tenant` set, the request keeps the
+ * impersonated tenant's scope and sees exactly what that tenant sees. Every
+ * other role passes through untouched. Must run after `authMiddleware`.
+ */
+export function platformScopeForSuperAdmin(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): void {
+  const user = (req as AuthenticatedRequest).user;
+  const override = req.headers[IMPERSONATE_HEADER];
+  const impersonating = typeof override === 'string' && override.length > 0;
+  if (!MULTI_TENANCY_ENABLED || user?.role !== 'super-admin' || impersonating) {
+    return next();
+  }
+  tenantStore.run({ tenantId: PLATFORM_TENANT }, () => next());
 }
 
 /**
