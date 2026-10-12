@@ -823,7 +823,7 @@ describe('Process Routes', () => {
   describe('POST /api/processes/tasks', () => {
     it('creates a robot task', async () => {
       mockTaskDistributor.createTask.mockResolvedValue(SAMPLE_TASK);
-      const body = { actionType: 'navigate', instruction: 'Go to zone A' };
+      const body = { actionType: 'move_to_location', instruction: 'Go to zone A' };
 
       const response = await request(app).post('/api/processes/tasks').send(body);
 
@@ -856,7 +856,7 @@ describe('Process Routes', () => {
 
       const response = await request(app)
         .post('/api/processes/tasks')
-        .send({ actionType: 'navigate', instruction: 'Go' });
+        .send({ actionType: 'move_to_location', instruction: 'Go' });
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to create task');

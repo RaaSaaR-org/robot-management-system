@@ -22,6 +22,8 @@ import {
   type InspectionType,
   type RiskAssessmentType,
 } from '../services/ComplianceTrackerService.js';
+import { parseIntegerParam } from '../utils/pagination.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const complianceTrackerRoutes = Router();
 
@@ -541,12 +543,12 @@ complianceTrackerRoutes.put('/risk-assessments/:id/update', async (req: Request,
  */
 complianceTrackerRoutes.get('/activity', async (req: Request, res: Response) => {
   try {
-    const limit = parseInt(req.query.limit as string) || 20;
+    const limit = parseIntegerParam(req.query.limit, 'limit', { min: 1 }) ?? 20;
     const activity = await complianceTrackerService.getRecentActivity(limit);
     res.json({ activity });
   } catch (error) {
     console.error('Error fetching activity:', error);
-    res.status(500).json({ error: 'Failed to fetch compliance activity' });
+    sendFailure(res, error, 'Failed to fetch compliance activity');
   }
 });
 

@@ -7,6 +7,7 @@ import { Router, type Request, type Response } from 'express';
 import { commandInterpreter } from '../services/CommandInterpreter.js';
 import { commandRepository } from '../repositories/index.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parseIntegerParam } from '../utils/pagination.js';
 
 export const commandRoutes = Router();
 
@@ -63,8 +64,8 @@ commandRoutes.get('/history', async (req: Request, res: Response) => {
     const { page, pageSize, robotId } = req.query;
 
     const pagination = {
-      page: page ? parseInt(page as string, 10) : 1,
-      pageSize: pageSize ? parseInt(pageSize as string, 10) : 50,
+      page: parseIntegerParam(page, 'page', { min: 1 }) ?? 1,
+      pageSize: parseIntegerParam(pageSize, 'pageSize', { min: 1 }) ?? 50,
     };
 
     let result;
@@ -99,8 +100,7 @@ commandRoutes.get('/history', async (req: Request, res: Response) => {
 
     res.json({ entries, pagination: result.pagination });
   } catch (error) {
-    console.error('Error fetching command history:', error);
-    res.status(500).json({ error: 'Failed to fetch command history' });
+    sendFailure(res, error, 'Failed to fetch command history');
   }
 });
 

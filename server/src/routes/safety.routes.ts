@@ -6,6 +6,8 @@
 
 import { Router, type Request, type Response } from 'express';
 import { safetyService } from '../services/SafetyService.js';
+import { parseIntegerParam } from '../utils/pagination.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const safetyRoutes = Router();
 
@@ -215,7 +217,7 @@ safetyRoutes.post('/zones/:id/estop', async (req: Request, res: Response) => {
  */
 safetyRoutes.get('/events', (req: Request, res: Response) => {
   try {
-    const limit = parseInt(req.query.limit as string) || 50;
+    const limit = parseIntegerParam(req.query.limit, 'limit', { min: 1 }) ?? 50;
     const events = safetyService.getEStopLog(limit);
 
     res.json({
@@ -224,7 +226,7 @@ safetyRoutes.get('/events', (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Error getting E-stop events:', error);
-    res.status(500).json({ error: 'Failed to get E-stop events' });
+    sendFailure(res, error, 'Failed to get E-stop events');
   }
 });
 

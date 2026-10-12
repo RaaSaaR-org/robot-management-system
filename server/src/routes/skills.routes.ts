@@ -23,6 +23,7 @@ import type {
   ValidateParametersRequest,
 } from '../types/skill.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parseIntegerParam } from '../utils/pagination.js';
 
 export const skillsRoutes = Router();
 
@@ -67,8 +68,8 @@ chainsRoutes.get('/', async (req: Request, res: Response) => {
 
     const params: SkillChainQueryParams = {
       name: query.name,
-      page: query.page ? parseInt(query.page, 10) : undefined,
-      pageSize: query.pageSize ? parseInt(query.pageSize, 10) : undefined,
+      page: parseIntegerParam(query.page, 'page', { min: 1 }),
+      pageSize: parseIntegerParam(query.pageSize, 'pageSize', { min: 1 }),
     };
 
     if (query.status) {
@@ -282,8 +283,8 @@ skillsRoutes.get('/', async (req: Request, res: Response) => {
 
     const params: SkillDefinitionQueryParams = {
       name: query.name,
-      page: query.page ? parseInt(query.page, 10) : undefined,
-      pageSize: query.pageSize ? parseInt(query.pageSize, 10) : undefined,
+      page: parseIntegerParam(query.page, 'page', { min: 1 }),
+      pageSize: parseIntegerParam(query.pageSize, 'pageSize', { min: 1 }),
       robotTypeId: query.robotTypeId,
       capability: query.capability,
       linkedModelVersionId: query.linkedModelVersionId,

@@ -15,6 +15,8 @@ import type {
   CollectionTargetType,
   CollectionTargetStatus,
 } from '../types/active-learning.types.js';
+import { parseIntegerParam } from '../utils/pagination.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const activeLearningRoutes = Router();
 
@@ -99,7 +101,7 @@ activeLearningRoutes.get('/predictions', async (req: Request, res: Response) => 
     }
 
     const logs = await activeLearningService.getPredictionLogs(query.modelId, {
-      limit: query.limit ? parseInt(query.limit, 10) : 100,
+      limit: parseIntegerParam(query.limit, 'limit', { min: 1 }) ?? 100,
       taskCategory: query.taskCategory,
       environment: query.environment,
       minConfidence: query.minConfidence ? parseFloat(query.minConfidence) : undefined,
@@ -113,7 +115,7 @@ activeLearningRoutes.get('/predictions', async (req: Request, res: Response) => 
     });
   } catch (error) {
     console.error('[ActiveLearningRoutes] Error getting predictions:', error);
-    res.status(500).json({ error: 'Failed to get predictions' });
+    sendFailure(res, error, 'Failed to get predictions');
   }
 });
 
@@ -195,7 +197,7 @@ activeLearningRoutes.get('/priorities', async (req: Request, res: Response) => {
     let filteredPriorities = priorities.priorities;
 
     if (query.limit) {
-      filteredPriorities = filteredPriorities.slice(0, parseInt(query.limit, 10));
+      filteredPriorities = filteredPriorities.slice(0, parseIntegerParam(query.limit, 'limit', { min: 1 }));
     }
 
     if (query.minPriorityScore) {
@@ -215,7 +217,7 @@ activeLearningRoutes.get('/priorities', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('[ActiveLearningRoutes] Error getting priorities:', error);
-    res.status(500).json({ error: 'Failed to get collection priorities' });
+    sendFailure(res, error, 'Failed to get collection priorities');
   }
 });
 

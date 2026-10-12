@@ -62,6 +62,7 @@ vi.mock('../../database/index.js', () => ({
 }));
 
 import { prisma as _prisma } from '../../database/index.js';
+import { Prisma } from '@prisma/client';
 import {
   IncidentRepository,
   IncidentNotificationRepository,
@@ -557,9 +558,21 @@ describe('IncidentRepository', () => {
       );
     });
 
-    it('returns null when prisma.update throws', async () => {
-      prisma.incident.update.mockRejectedValue(new Error('not found'));
+    it('returns null when the incident does not exist (P2025)', async () => {
+      prisma.incident.update.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Record to update not found.', {
+          code: 'P2025',
+          clientVersion: '5.0.0',
+        })
+      );
       expect(await repo.update('missing', { title: 'x' })).toBeNull();
+    });
+
+    // TASK-386: a wrong-typed field used to be swallowed here and answered 404.
+    it('rethrows any other prisma failure', async () => {
+      const err = new Prisma.PrismaClientValidationError('Invalid value', { clientVersion: '5.0.0' });
+      prisma.incident.update.mockRejectedValue(err);
+      await expect(repo.update('inc-1', { title: 'x' })).rejects.toBe(err);
     });
   });
 

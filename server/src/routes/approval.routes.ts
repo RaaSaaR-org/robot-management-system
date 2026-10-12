@@ -22,6 +22,7 @@ import type {
 } from '../types/approval.types.js';
 import { APPROVAL_TYPE_MAP } from '../types/approval.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parsePagination } from '../utils/pagination.js';
 
 export const approvalRoutes = Router();
 
@@ -71,8 +72,7 @@ approvalRoutes.get('/', async (req: Request, res: Response) => {
     if (fromDate) filters.fromDate = new Date(fromDate as string);
     if (toDate) filters.toDate = new Date(toDate as string);
 
-    const pageNum = page ? parseInt(page as string, 10) : 1;
-    const limitNum = limit ? parseInt(limit as string, 10) : 20;
+    const { page: pageNum, limit: limitNum } = parsePagination({ page, limit }, { defaultLimit: 20 });
 
     const result = await approvalWorkflowService.getApprovalRequests(filters, pageNum, limitNum);
     res.json(result);
@@ -525,8 +525,7 @@ approvalRoutes.get('/contests', async (req: Request, res: Response) => {
     if (fromDate) filters.fromDate = new Date(fromDate as string);
     if (toDate) filters.toDate = new Date(toDate as string);
 
-    const pageNum = page ? parseInt(page as string, 10) : 1;
-    const limitNum = limit ? parseInt(limit as string, 10) : 20;
+    const { page: pageNum, limit: limitNum } = parsePagination({ page, limit }, { defaultLimit: 20 });
 
     const result = await approvalWorkflowService.getContests(filters, pageNum, limitNum);
     res.json(result);

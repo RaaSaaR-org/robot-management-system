@@ -27,6 +27,7 @@ import type {
   DatasetSourceType,
 } from '../types/training-docs.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parseIntegerParam } from '../utils/pagination.js';
 
 export const trainingDocsRoutes = Router();
 
@@ -289,8 +290,8 @@ trainingDocsRoutes.get('/updates-due', async (req: Request, res: Response) => {
 
     const params: SummariesDueQuery = {
       daysAhead: query.daysAhead ? parseInt(query.daysAhead, 10) : undefined,
-      page: query.page ? parseInt(query.page, 10) : undefined,
-      limit: query.limit ? parseInt(query.limit, 10) : undefined,
+      page: parseIntegerParam(query.page, 'page', { min: 1 }),
+      limit: parseIntegerParam(query.limit, 'limit', { min: 1 }),
     };
 
     const result = await trainingDataDocService.getSummariesDue(params);
@@ -298,7 +299,7 @@ trainingDocsRoutes.get('/updates-due', async (req: Request, res: Response) => {
     res.json(result);
   } catch (error) {
     console.error('[TrainingDocsRoutes] Error getting updates due:', error);
-    res.status(500).json({ error: 'Failed to get updates due' });
+    sendFailure(res, error, 'Failed to get updates due');
   }
 });
 

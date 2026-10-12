@@ -13,6 +13,7 @@ import type {
   VerificationStatus,
 } from '../types/oversight.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
+import { parseIntegerParam } from '../utils/pagination.js';
 
 export const oversightRoutes = Router();
 
@@ -264,8 +265,8 @@ oversightRoutes.get('/anomalies', async (req: Request, res: Response) => {
 
     if (startDate) params.startDate = new Date(startDate as string);
     if (endDate) params.endDate = new Date(endDate as string);
-    if (page) params.page = parseInt(page as string, 10);
-    if (limit) params.limit = parseInt(limit as string, 10);
+    params.page = parseIntegerParam(page, 'page', { min: 1 });
+    params.limit = parseIntegerParam(limit, 'limit', { min: 1 });
 
     const result = await oversightService.getAnomalies(params);
     res.json(result);
@@ -409,8 +410,8 @@ oversightRoutes.get('/logs', async (req: Request, res: Response) => {
 
     if (startDate) params.startDate = new Date(startDate as string);
     if (endDate) params.endDate = new Date(endDate as string);
-    if (page) params.page = parseInt(page as string, 10);
-    if (limit) params.limit = parseInt(limit as string, 10);
+    params.page = parseIntegerParam(page, 'page', { min: 1 });
+    params.limit = parseIntegerParam(limit, 'limit', { min: 1 });
 
     const result = await oversightService.getOversightLogs(params);
     res.json(result);

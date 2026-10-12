@@ -28,7 +28,7 @@ import type {
   TwinZoneType,
   TwinZonePoint,
 } from '../types/twin.types.js';
-import { TwinZoneTypes, isTwinZoneType } from '../types/twin.types.js';
+import { TwinZoneTypes, isTwinZoneType, isZonePolygon } from '../types/twin.types.js';
 import { sendFailure } from '../utils/routeErrors.js';
 
 // ScanSessionService's own sentence (ScanSessionService.ts:166), matched by its
@@ -401,6 +401,9 @@ digitalTwinRoutes.get('/:id/zones', async (req: Request, res: Response) => {
   }
 });
 
+/** Why a zone's points were refused (TASK-386). */
+const ZONE_POINTS_ERROR = 'points must be at least 3 {x, y} vertices with finite numbers';
+
 digitalTwinRoutes.post('/:id/zones', async (req: Request, res: Response) => {
   try {
     if (!(await twinZoneService.twinExists(req.params.id))) {
@@ -416,11 +419,14 @@ digitalTwinRoutes.post('/:id/zones', async (req: Request, res: Response) => {
     if (!isTwinZoneType(type)) {
       return res.status(400).json({ error: `type must be one of ${TwinZoneTypes.join(' | ')}` });
     }
+    if (!isZonePolygon(points)) {
+      return res.status(400).json({ error: ZONE_POINTS_ERROR });
+    }
     const zone = await twinZoneService.createZone({
       twinId: req.params.id,
       name,
       type: type as TwinZoneType,
-      points: points as TwinZonePoint[],
+      points,
       minZ: typeof minZ === 'number' ? minZ : undefined,
       maxZ: typeof maxZ === 'number' ? maxZ : undefined,
       color: typeof color === 'string' ? color : undefined,
@@ -439,10 +445,13 @@ digitalTwinRoutes.put('/:id/zones/:zoneId', async (req: Request, res: Response) 
     if (type !== undefined && !isTwinZoneType(type)) {
       return res.status(400).json({ error: `type must be one of ${TwinZoneTypes.join(' | ')}` });
     }
+    if (points !== undefined && !isZonePolygon(points)) {
+      return res.status(400).json({ error: ZONE_POINTS_ERROR });
+    }
     const zone = await twinZoneService.updateZone(req.params.id, req.params.zoneId, {
       name: typeof name === 'string' ? name : undefined,
       type: typeof type === 'string' ? (type as TwinZoneType) : undefined,
-      points: Array.isArray(points) ? (points as TwinZonePoint[]) : undefined,
+      points: points as TwinZonePoint[] | undefined,
       minZ: typeof minZ === 'number' ? minZ : undefined,
       maxZ: typeof maxZ === 'number' ? maxZ : undefined,
       color: typeof color === 'string' ? color : undefined,

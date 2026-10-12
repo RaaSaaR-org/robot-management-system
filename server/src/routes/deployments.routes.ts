@@ -17,6 +17,7 @@ import type { DeploymentStatus, DeploymentStrategy } from '../types/vla.types.js
 import { sendFailure } from '../utils/routeErrors.js';
 import { auditBuildAct } from '../services/buildAudit.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { parseIntegerParam } from '../utils/pagination.js';
 
 export const deploymentsRoutes = Router();
 
@@ -67,8 +68,8 @@ deploymentsRoutes.get('/', async (req: Request, res: Response) => {
     // Parse query parameters
     const params = {
       modelVersionId: query.modelVersionId,
-      page: query.page ? parseInt(query.page, 10) : undefined,
-      pageSize: query.pageSize ? parseInt(query.pageSize, 10) : undefined,
+      page: parseIntegerParam(query.page, 'page', { min: 1 }),
+      pageSize: parseIntegerParam(query.pageSize, 'pageSize', { min: 1 }),
       status: undefined as DeploymentStatus | DeploymentStatus[] | undefined,
       strategy: undefined as DeploymentStrategy | DeploymentStrategy[] | undefined,
     };

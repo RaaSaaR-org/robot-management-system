@@ -6,6 +6,8 @@
 
 import { Router, type Request, type Response } from 'express';
 import { prisma } from '../database/index.js';
+import { parseIntegerParam } from '../utils/pagination.js';
+import { sendFailure } from '../utils/routeErrors.js';
 
 export const vlaSessionRoutes = Router();
 
@@ -85,7 +87,7 @@ vlaSessionRoutes.patch('/:robotId/vla-sessions/:sessionId/stop', async (req: Req
 vlaSessionRoutes.get('/:robotId/vla-sessions', async (req: Request, res: Response) => {
   try {
     const { robotId } = req.params;
-    const limit = parseInt(req.query.limit as string) || 20;
+    const limit = parseIntegerParam(req.query.limit, 'limit', { min: 1 }) ?? 20;
 
     const sessions = await prisma.vlaSession.findMany({
       where: { robotId },
@@ -96,7 +98,7 @@ vlaSessionRoutes.get('/:robotId/vla-sessions', async (req: Request, res: Respons
     res.json({ sessions });
   } catch (error) {
     console.error('[VlaSession] Error listing sessions:', error);
-    res.status(500).json({ error: 'Failed to list VLA sessions' });
+    sendFailure(res, error, 'Failed to list VLA sessions');
   }
 });
 
