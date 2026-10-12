@@ -43,6 +43,15 @@ import { createReadStream, existsSync, statSync } from 'fs';
 import { readFile } from 'fs/promises';
 import type { Readable } from 'stream';
 import { DatasetViewError, resolveLocalView } from '../services/lerobot/LocalDatasetView.js';
+import {
+  DatasetReadError,
+  parseEpisodeRecords,
+  readRemoteEpisodes,
+  readRemoteFrames,
+  toEpisodeMeta,
+  toNumberArray,
+  type DatasetObjectStore,
+} from '../services/lerobot/RemoteDatasetReader.js';
 // TASK-220 — POST /compatibility, at the bottom of this file.
 import { analyzeDatasetIds, UnknownDatasetError } from '../services/lerobot/datasetCompatibility.js';
 import { ConflictError } from '../utils/errors.js';
@@ -126,47 +135,18 @@ function pipeStreamToResponse(stream: Readable, res: Response): void {
   stream.pipe(res);
 }
 
-/** pyarrow list<float32> may surface as a plain array or parquetjs `{list:[{element}]}`. */
-function toNumberArray(value: unknown): number[] {
-  if (Array.isArray(value)) {
-    return value.map((x) => Number((x as { element?: number })?.element ?? x));
-  }
-  const list = (value as { list?: Array<{ element?: number }> })?.list;
-  if (Array.isArray(list)) return list.map((it) => Number(it?.element ?? 0));
-  return [];
-}
-
 async function readLocalEpisodes(storagePath: string, fps: number): Promise<EpisodeMeta[] | null> {
   // Cosmos-converter output ships meta/episodes.json (one JSON array);
   // standard LeRobot v2.1 datasets ship meta/episodes.jsonl (JSON Lines).
-  let arr: Array<{ episode_index?: number; length?: number }> | null = null;
-  try {
-    const raw = await readFile(join(storagePath, 'meta', 'episodes.json'), 'utf8');
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) arr = parsed;
-  } catch {
-    /* fall through to episodes.jsonl */
-  }
-  if (!arr) {
+  for (const name of ['episodes.json', 'episodes.jsonl']) {
     try {
-      const raw = await readFile(join(storagePath, 'meta', 'episodes.jsonl'), 'utf8');
-      arr = raw
-        .split('\n')
-        .filter((line) => line.trim().length > 0)
-        .map((line) => JSON.parse(line) as { episode_index?: number; length?: number });
+      const raw = await readFile(join(storagePath, 'meta', name), 'utf8');
+      return toEpisodeMeta(parseEpisodeRecords(raw), fps);
     } catch {
-      return null;
+      /* try the next file */
     }
   }
-  return arr.map((e, i) => {
-    const frameCount = Number(e.length ?? 0);
-    return {
-      index: Number(e.episode_index ?? i),
-      frameCount,
-      durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
-      flagged: false,
-    };
-  });
+  return null;
 }
 
 async function readLocalFrames(
@@ -272,30 +252,78 @@ function streamLocalVideo(
 }
 
 /**
- * Read a parquet file from RustFS, trying both 'training-datasets' and legacy 'datasets' buckets.
- * Returns a Buffer, or null if the file is not found or RustFS is unavailable.
+ * Object access to one RustFS dataset, for the episodes and frames readers.
+ *
+ * Returns null when RustFS is not running. The bucket is the first of
+ * 'training-datasets' and the legacy 'datasets' that holds anything under the
+ * dataset's prefix; a dataset in neither is a 422, not an empty listing.
+ * Storage errors propagate — the reader turns them into a 502 naming the file.
  */
-async function readParquetFromRustFS(storagePath: string, relativePath: string): Promise<Buffer | null> {
-  try {
-    const { isRustFSInitialized, getRustFSClient } = await import('../storage/rustfs-client.js');
-    if (!isRustFSInitialized()) return null;
+async function rustfsDatasetStore(storagePath: string): Promise<DatasetObjectStore | null> {
+  const { isRustFSInitialized, getRustFSClient } = await import('../storage/rustfs-client.js');
+  if (!isRustFSInitialized()) return null;
+  const rustfs = getRustFSClient();
+  const base = storagePath.endsWith('/') ? storagePath : `${storagePath}/`;
 
-    const rustfs = getRustFSClient();
-    const base = storagePath.endsWith('/') ? storagePath : `${storagePath}/`;
-    const key = `${base}${relativePath}`;
-
-    for (const bucket of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
-      try {
-        const exists = await rustfs.exists(bucket, key);
-        if (!exists) continue;
-        const stream = await rustfs.getStream(bucket, key);
-        const chunks: Buffer[] = [];
-        for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-        return Buffer.concat(chunks);
-      } catch { /* try next bucket */ }
+  let bucket: string | null = null;
+  let firstError: unknown = null;
+  let listedAny = false;
+  for (const candidate of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
+    try {
+      const probe = await rustfs.list(candidate, { prefix: base, maxKeys: 1 });
+      listedAny = true;
+      if (probe.objects.length > 0) {
+        bucket = candidate;
+        break;
+      }
+    } catch (error) {
+      // The legacy bucket may not exist at all; only an error on every
+      // bucket says storage itself is failing.
+      firstError ??= error;
     }
-  } catch { /* RustFS unavailable */ }
-  return null;
+  }
+  if (!bucket) {
+    if (!listedAny) {
+      throw new DatasetReadError(502, `Could not list ${base} in object storage: ${(firstError as Error).message}`);
+    }
+    throw new DatasetReadError(422, `No files for this dataset in object storage (prefix ${base})`, base);
+  }
+  const from = bucket;
+  return {
+    async read(path) {
+      const key = `${base}${path}`;
+      if (!(await rustfs.exists(from, key))) return null;
+      return rustfs.download(from, key);
+    },
+    async list(prefix) {
+      const paths: string[] = [];
+      for await (const obj of rustfs.listAll(from, `${base}${prefix}`)) {
+        paths.push(obj.key.slice(base.length));
+      }
+      return paths;
+    },
+  };
+}
+
+/**
+ * Answer a failed episodes/frames read. A {@link DatasetReadError} carries
+ * its own status and a sentence naming the file; anything else is a 500.
+ */
+function sendDatasetReadError(res: Response, datasetId: string, error: unknown, fallback: string): void {
+  if (error instanceof DatasetReadError) {
+    console.error(`[DatasetRoutes] dataset ${datasetId}: ${error.message}${error.detail ? ` (${error.detail})` : ''}`);
+    res.status(error.status).json({
+      error: error.message,
+      // The app's API client shows `message` and drops `detail`, so the
+      // reason travels in the sentence it does show.
+      message: error.detail ? `${error.message} (${error.detail})` : error.message,
+      ...(error.file ? { file: error.file } : {}),
+      ...(error.detail ? { detail: error.detail } : {}),
+    });
+    return;
+  }
+  console.error(`[DatasetRoutes] dataset ${datasetId}: ${fallback}:`, error);
+  sendFailure(res, error, fallback);
 }
 
 /**
@@ -1107,76 +1135,26 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
       const root = await localReadRoot(dataset.storagePath, res);
       if (root === null) return;
       const local = await readLocalEpisodes(root, fps);
-      if (local && local.length > 0) {
-        return res.json({
-          episodes: local.map((e) => ({ ...e, flagged: flags.has(e.index) })),
-        });
+      if (local === null) {
+        return res
+          .status(422)
+          .json({ error: 'No episode metadata on disk: meta/episodes.jsonl is missing', file: 'meta/episodes.jsonl' });
       }
+      return res.json({
+        episodes: local.map((e) => ({ ...e, flagged: flags.has(e.index) })),
+      });
     }
 
-    // Try to read real episode metadata from parquet
-    const episodes: EpisodeMeta[] = [];
-    try {
-      const parquetBuf = await readParquetFromRustFS(dataset.storagePath, 'meta/episodes/chunk-000/file-000.parquet');
-      if (parquetBuf) {
-        const { ParquetReader } = await import('@dsnp/parquetjs');
-        const reader = await ParquetReader.openBuffer(parquetBuf);
-        const cursor = reader.getCursor();
-        let row: Record<string, unknown> | null;
-        while ((row = await cursor.next() as Record<string, unknown> | null)) {
-          const frameCount = Number(row['length'] ?? row['num_frames'] ?? 0);
-          const epIndex = Number(row['episode_index'] ?? episodes.length);
-
-          // v3.0 chunked video: per-camera playback windows so the client can
-          // play just this episode's slice of the concatenated chunk mp4
-          // (columns: videos/observation.images.<cam>/{from,to,chunk,file}).
-          const videoWindows: Record<string, { from: number; to: number; chunk: number; file: number }> = {};
-          for (const col of Object.keys(row)) {
-            const m = /^videos\/observation\.images\.(.+)\/from_timestamp$/.exec(col);
-            if (!m) continue;
-            const cam = m[1];
-            const base = `videos/observation.images.${cam}`;
-            videoWindows[cam] = {
-              from: Number(row[col] ?? 0),
-              to: Number(row[`${base}/to_timestamp`] ?? 0),
-              chunk: Number(row[`${base}/chunk_index`] ?? 0),
-              file: Number(row[`${base}/file_index`] ?? 0),
-            };
-          }
-
-          episodes.push({
-            index: epIndex,
-            frameCount,
-            durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
-            flagged: flags.has(epIndex),
-            ...(Object.keys(videoWindows).length > 0 ? { videoWindows } : {}),
-          });
-        }
-        await reader.close();
-      }
-    } catch (err) {
-      console.log('[DatasetRoutes] Could not read episodes parquet, using fallback:', (err as Error).message);
+    // RustFS: read whatever layout the dataset has — never fabricate
+    // episodes when that fails (TASK-354).
+    const store = await rustfsDatasetStore(dataset.storagePath);
+    if (!store) {
+      return res.status(503).json({ error: 'Object storage is unavailable, so episodes cannot be read' });
     }
-
-    // Fallback: generate from info.json metadata
-    if (episodes.length === 0) {
-      const totalEpisodes = info?.total_episodes ?? dataset.demonstrationCount ?? 0;
-      const totalFrames = info?.total_frames ?? dataset.totalFrames ?? 0;
-      const avgFrames = totalEpisodes > 0 ? Math.floor(totalFrames / totalEpisodes) : 0;
-      for (let i = 0; i < totalEpisodes; i++) {
-        episodes.push({
-          index: i,
-          frameCount: avgFrames,
-          durationSeconds: fps > 0 ? parseFloat((avgFrames / fps).toFixed(2)) : 0,
-          flagged: flags.has(i),
-        });
-      }
-    }
-
-    res.json({ episodes });
+    const episodes = await readRemoteEpisodes(store, info, fps, dataset.lerobotVersion);
+    res.json({ episodes: episodes.map((e) => ({ ...e, flagged: flags.has(e.index) })) });
   } catch (error) {
-    console.error('[DatasetRoutes] Error getting episodes:', error);
-    res.status(500).json({ error: 'Failed to get episodes' });
+    sendDatasetReadError(res, req.params.id, error, 'Failed to get episodes');
   }
 });
 
@@ -1212,8 +1190,8 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
     const fps = info?.fps ?? dataset.fps ?? 30;
 
     // Local synthetic datasets (TASK-178): read per-episode parquet from disk.
-    // Branch decisively — never fall through to the fabricated-frame generator
-    // below: a missing parquet is a 404, a present one returns its real frames
+    // Branch decisively — never fall through to the RustFS reader below,
+    // which cannot serve a local dataset: a missing parquet is a 404, a present one returns its real frames
     // (even if the requested offset slice is empty) with the true episode total.
     if (isLocalDataset(dataset.storagePath)) {
       const root = await localReadRoot(dataset.storagePath, res);
@@ -1225,66 +1203,20 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
       return res.json({ frames: local.frames, total: local.total });
     }
 
-    // Read real frame data from parquet
-    let frames: FrameData[] = [];
-    try {
-      const chunkIndex = Math.floor(episodeIndex / (info?.chunks_size ?? 1000));
-      const chunkStr = String(chunkIndex).padStart(3, '0');
-      const parquetBuf = await readParquetFromRustFS(dataset.storagePath, `data/chunk-${chunkStr}/file-000.parquet`);
-      if (parquetBuf) {
-        const { ParquetReader } = await import('@dsnp/parquetjs');
-        const reader = await ParquetReader.openBuffer(parquetBuf);
-        const cursor = reader.getCursor();
-        let row: Record<string, unknown> | null;
-        const allFrames: FrameData[] = [];
-
-        while ((row = await cursor.next() as Record<string, unknown> | null)) {
-          const rowEpisode = Number(row['episode_index'] ?? 0);
-          if (rowEpisode !== episodeIndex) continue;
-
-          // Columns may be pyarrow LIST ({list: [{element}]}) or parquetjs
-          // repeated fields (plain arrays) — toNumberArray handles both.
-          const observationState = toNumberArray(row['observation.state']);
-          const action = toNumberArray(row['action']);
-
-          allFrames.push({
-            frameIndex: Number(row['frame_index'] ?? allFrames.length),
-            timestamp: Number(row['timestamp'] ?? (allFrames.length / fps)),
-            observationState,
-            action,
-          });
-        }
-        await reader.close();
-
-        frames = allFrames.slice(offset, offset + limit);
-        console.log(`[DatasetRoutes] Read ${allFrames.length} frames from parquet for episode ${episodeIndex}, returning ${frames.length}`);
-      }
-    } catch (err) {
-      console.log('[DatasetRoutes] Could not read frames parquet, using fallback:', (err as Error).message);
+    // RustFS: the parquet holding this episode, or an error naming the file
+    // that could not be read — never generated frames (TASK-354).
+    const store = await rustfsDatasetStore(dataset.storagePath);
+    if (!store) {
+      return res.status(503).json({ error: 'Object storage is unavailable, so frames cannot be read' });
     }
-
-    // Fallback: synthetic data
-    if (frames.length === 0) {
-      const totalEpisodes = info?.total_episodes ?? dataset.demonstrationCount ?? 0;
-      const totalFrames = info?.total_frames ?? dataset.totalFrames ?? 0;
-      const avgFrames = totalEpisodes > 0 ? Math.floor(totalFrames / totalEpisodes) : 0;
-      const frameCount = Math.min(avgFrames, limit);
-      for (let i = offset; i < offset + frameCount; i++) {
-        const timestamp = fps > 0 ? i / fps : 0;
-        const observationState = [
-          Math.sin(timestamp * 0.5) * 30, Math.cos(timestamp * 0.3) * 45 - 10,
-          Math.sin(timestamp * 0.7 + 1) * 60, Math.cos(timestamp * 0.4 + 2) * 40,
-          Math.sin(timestamp * 0.6 + 3) * 20, Math.sin(timestamp * 0.2) * 50 + 50,
-        ];
-        const action = observationState.map((v, j) => v + Math.sin(timestamp * 2 + j) * 5);
-        frames.push({ frameIndex: i, timestamp, observationState, action });
-      }
-    }
-
-    res.json({ frames, total: frames.length });
+    const page = await readRemoteFrames(store, info, episodeIndex, fps, { offset, limit }, dataset.lerobotVersion);
+    // scripts/e2e-k3d/test.sh greps this line; keep its wording.
+    console.log(
+      `[DatasetRoutes] Read ${page.total} frames from parquet for episode ${episodeIndex}, returning ${page.frames.length} (${page.source})`,
+    );
+    res.json({ frames: page.frames, total: page.total });
   } catch (error) {
-    console.error('[DatasetRoutes] Error getting episode frames:', error);
-    res.status(500).json({ error: 'Failed to get episode frames' });
+    sendDatasetReadError(res, req.params.id, error, 'Failed to get episode frames');
   }
 });
 

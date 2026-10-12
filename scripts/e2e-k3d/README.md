@@ -25,11 +25,12 @@ scripts/e2e-k3d/down.sh         # delete the cluster
    object under the row's `storagePath` in the `training-datasets` bucket, with
    the Hub's size. Listed from inside the cluster with the aws CLI, using the
    server's own endpoint and credentials.
-5. The episodes and frames endpoints serve what is in those objects. Both
-   endpoints answer `200` with **synthetic** data when they cannot read storage,
-   so the test checks content: the episode lengths sum to the Hub's
-   `total_frames`, and episode 0 serves exactly as many frames as its metadata
-   says, read from parquet (the server logs it).
+5. The episodes and frames endpoints serve what is in those objects. Until
+   TASK-354 both endpoints answered `200` with **synthetic** data when they
+   could not read storage; they now fail with a non-2xx instead, and the test
+   still checks content: the episode lengths sum to the Hub's `total_frames`,
+   and episode 0 serves exactly as many frames as its metadata says, read from
+   parquet (the server logs it).
 
 A bucket-list drift test runs with the normal server suite, no cluster needed:
 `server/src/storage/__tests__/bucket-provisioning.test.ts` fails when a bucket

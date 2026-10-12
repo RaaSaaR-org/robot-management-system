@@ -607,9 +607,9 @@ export interface EpisodeMeta {
 export interface FrameData {
   frameIndex: number;
   timestamp: number;
-  /** 6 DOF: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper */
+  /** The dataset's `action` row, as wide as the robot's action space (6 on an SO-101, 43 on a G1 EDU). */
   action: number[];
-  /** 6 DOF: same joint ordering as action */
+  /** The dataset's `observation.state` row, as wide as its state space. */
   observationState: number[];
 }
 
