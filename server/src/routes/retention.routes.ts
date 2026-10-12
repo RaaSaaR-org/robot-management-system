@@ -2,11 +2,16 @@
  * @file retention.routes.ts
  * @description REST API routes for retention policy management
  * @feature compliance
+ *
+ * The retention policy and the cleanup it drives are platform-wide: they cover
+ * every tenant's compliance logs. Changing either is therefore a super-admin
+ * act (TASK-383); reading the policy is not.
  */
 
 import { Router, type Request, type Response } from 'express';
 import { retentionPolicyService } from '../services/RetentionPolicyService.js';
 import { retentionCleanupJob } from '../jobs/RetentionCleanupJob.js';
+import { superAdminOnly } from '../middleware/auth.middleware.js';
 import type { ComplianceEventType } from '../types/compliance.types.js';
 
 export const retentionRoutes = Router();
@@ -52,7 +57,7 @@ retentionRoutes.get('/:eventType', async (req: Request, res: Response) => {
  *   - retentionDays: number (required)
  *   - description: string (optional)
  */
-retentionRoutes.put('/:eventType', async (req: Request, res: Response) => {
+retentionRoutes.put('/:eventType', superAdminOnly, async (req: Request, res: Response) => {
   try {
     const { eventType } = req.params;
     const { retentionDays, description } = req.body;
@@ -87,7 +92,7 @@ retentionRoutes.put('/:eventType', async (req: Request, res: Response) => {
 /**
  * DELETE /retention/:eventType - Delete custom policy (reverts to default)
  */
-retentionRoutes.delete('/:eventType', async (req: Request, res: Response) => {
+retentionRoutes.delete('/:eventType', superAdminOnly, async (req: Request, res: Response) => {
   try {
     const { eventType } = req.params;
     const deleted = await retentionPolicyService.deletePolicy(eventType as ComplianceEventType);
@@ -108,7 +113,7 @@ retentionRoutes.delete('/:eventType', async (req: Request, res: Response) => {
 /**
  * POST /retention/cleanup - Trigger manual cleanup
  */
-retentionRoutes.post('/cleanup', async (_req: Request, res: Response) => {
+retentionRoutes.post('/cleanup', superAdminOnly, async (_req: Request, res: Response) => {
   try {
     const result = await retentionCleanupJob.runCleanup();
     res.json(result);

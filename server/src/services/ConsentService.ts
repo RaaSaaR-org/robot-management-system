@@ -8,6 +8,7 @@
  */
 
 import { prisma } from '../database/index.js';
+import { gdprScopeWhere, type GDPRTenantScope } from './gdprTenantScope.js';
 import type {
   UserConsent,
   ConsentType,
@@ -210,14 +211,17 @@ export class ConsentService {
   /**
    * Get consent metrics (admin)
    */
-  async getConsentMetrics(): Promise<{
+  async getConsentMetrics(scope?: GDPRTenantScope): Promise<{
     totalUsers: number;
     consentsByType: Record<string, { granted: number; revoked: number }>;
   }> {
     const [totalUsers, consentStats] = await Promise.all([
-      prisma.user.count({ where: { isActive: true } }),
+      prisma.user.count({
+        where: { isActive: true, ...(scope ? { tenantId: scope.tenantId } : {}) },
+      }),
       prisma.userConsent.groupBy({
         by: ['consentType', 'granted'],
+        where: gdprScopeWhere(scope),
         _count: true,
       }),
     ]);

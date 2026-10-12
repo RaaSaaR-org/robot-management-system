@@ -13,11 +13,15 @@ For development and demos, the agent includes a **simulation mode** that emulate
 ### Development
 
 ```bash
-npm run dev          # Start agent with hot reload (default: SimBot-01, port 41243)
-npm run dev:light    # Start as NimbleBot (lightweight, port 41243)
-npm run dev:heavy    # Start as TitanBot (heavy-duty, port 41244)
-npm run dev:so101    # Start as ArmBot (SO-ARM100, port 41245)
+npm run dev          # Start agent with hot reload (reads .env; port 41243)
+npm run dev:g1       # Unitree G1 (ROBOT_TYPE=g1, reads .env.g1)
+npm run dev:g1-edu   # G1 EDU + Dex3-1 (ROBOT_TYPE=g1_edu, reads .env.g1-edu)
+npm run dev:h1       # Unitree H1 (ROBOT_TYPE=h1, reads .env.h1)
+npm run dev:so101    # SO-ARM100 arm (ROBOT_TYPE=so101, reads .env.so101)
 ```
+
+Each profile sets `ROBOT_TYPE` in its script and loads its env file through
+`src/config/load-env.ts`; a missing profile file logs a warning and falls back to `.env`.
 
 ### Build
 
@@ -756,12 +760,18 @@ are off by default because the sim's shadow pass is what costs the tick its budg
 
 ### Pre-configured Profiles
 
-| File          | Robot     | Class       | Type  | Port  | Payload |
-| ------------- | --------- | ----------- | ----- | ----- | ------- |
-| `.env`        | SimBot-01 | standard    | h1    | 41243 | 10kg    |
-| `.env.light`  | NimbleBot | lightweight | h1    | 41243 | 5kg     |
-| `.env.heavy`  | TitanBot  | heavy-duty  | h1    | 41244 | 50kg    |
-| `.env.so101`  | ArmBot    | lightweight | SO101 | 41245 | 0.5kg   |
+Each `dev:*` script sets `ROBOT_TYPE` inline and reads its own env file; a
+missing file falls back to `.env` with a warning. Templates ship as `*.example`.
+
+| Script                  | Env file             | `ROBOT_TYPE` | Template                    |
+| ----------------------- | -------------------- | ------------ | --------------------------- |
+| `dev`                   | `.env`               | from `.env`  | `.env.example`              |
+| `dev:so101`             | `.env.so101`         | `so101`      | `.env.so101.example`        |
+| `dev:h1`                | `.env.h1`            | `h1`         | —                           |
+| `dev:g1`                | `.env.g1`            | `g1`         | —                           |
+| `dev:g1-edu`            | `.env.g1-edu`        | `g1_edu`     | —                           |
+| `dev:g1-edu-sim`        | `.env.g1-edu-sim`    | `g1_edu`     | `.env.g1-edu-sim.example`   |
+| `dev:g1-edu-agent`      | `.env.g1-edu-agent`  | `g1_edu`     | `.env.g1-edu-agent.example` |
 
 ## Voice Service (`voice/`)
 
