@@ -760,12 +760,18 @@ are off by default because the sim's shadow pass is what costs the tick its budg
 
 ### Pre-configured Profiles
 
-| File          | Robot     | Class       | Type  | Port  | Payload |
-| ------------- | --------- | ----------- | ----- | ----- | ------- |
-| `.env`        | SimBot-01 | standard    | h1    | 41243 | 10kg    |
-| `.env.light`  | NimbleBot | lightweight | h1    | 41243 | 5kg     |
-| `.env.heavy`  | TitanBot  | heavy-duty  | h1    | 41244 | 50kg    |
-| `.env.so101`  | ArmBot    | lightweight | SO101 | 41245 | 0.5kg   |
+Each `dev:*` script sets `ROBOT_TYPE` inline and reads its own env file; a
+missing file falls back to `.env` with a warning. Templates ship as `*.example`.
+
+| Script                  | Env file             | `ROBOT_TYPE` | Template                    |
+| ----------------------- | -------------------- | ------------ | --------------------------- |
+| `dev`                   | `.env`               | from `.env`  | `.env.example`              |
+| `dev:so101`             | `.env.so101`         | `so101`      | `.env.so101.example`        |
+| `dev:h1`                | `.env.h1`            | `h1`         | —                           |
+| `dev:g1`                | `.env.g1`            | `g1`         | —                           |
+| `dev:g1-edu`            | `.env.g1-edu`        | `g1_edu`     | —                           |
+| `dev:g1-edu-sim`        | `.env.g1-edu-sim`    | `g1_edu`     | `.env.g1-edu-sim.example`   |
+| `dev:g1-edu-agent`      | `.env.g1-edu-agent`  | `g1_edu`     | `.env.g1-edu-agent.example` |
 
 ## Voice Service (`voice/`)
 
