@@ -551,8 +551,8 @@ export const SAFETY_HALT_WRITES: RegExp[] = [
   // and the safety page (`safety.routes.ts:128`).
   /^\/api\/safety\/fleet\/estop\/?$/,
   // POST /api/safety/zones/:id/estop — clicking a zone on the site map, on the
-  // fleet page and the dashboard (`SiteMap`, TASK-331); `ZoneEmergencyStopButton`
-  // fires the same route. Granted to a viewer by TASK-374.
+  // fleet page and the dashboard (`SiteMap`, TASK-331) — the only UI that fires
+  // it today. Granted to a viewer by TASK-374.
   /^\/api\/safety\/zones\/[^/]+\/estop\/?$/,
 ];
 

@@ -117,7 +117,7 @@ hazard must be able to stop it:
 | Method | Path | Why |
 |--------|------|-----|
 | POST | `/api/safety/fleet/estop` | `FleetEmergencyStopButton`, on the dashboard and the safety page |
-| POST | `/api/safety/zones/:id/estop` | Clicking a zone on the site map (fleet page and dashboard), and `ZoneEmergencyStopButton` (TASK-374) |
+| POST | `/api/safety/zones/:id/estop` | Clicking a zone on the site map (fleet page and dashboard) (TASK-374). The zone's twin must be visible to the caller's tenant, else 404 |
 | POST | `/api/robots/:id/command` | **Only** with an `emergency_stop` body — `EmergencyStopButton`. The endpoint itself stays `member`: any other command type from a viewer is still a 403, so this cannot be used to drive a robot |
 
 The class is one-way: a viewer may stop, never start. `POST

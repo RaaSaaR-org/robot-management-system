@@ -36,6 +36,12 @@ vi.mock('../TwinPlaceGraphService.js', () => ({
   },
 }));
 
+vi.mock('../../repositories/DigitalTwinRepository.js', () => ({
+  digitalTwinRepository: {
+    findById: vi.fn(),
+  },
+}));
+
 vi.mock('../AlertService.js', () => ({
   alertService: {
     createAlert: vi.fn(),
@@ -46,6 +52,7 @@ import { safetyService } from '../SafetyService.js';
 import { robotManager } from '../RobotManager.js';
 import { twinPlaceGraphService } from '../TwinPlaceGraphService.js';
 import { alertService } from '../AlertService.js';
+import { digitalTwinRepository } from '../../repositories/DigitalTwinRepository.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -85,6 +92,7 @@ beforeEach(() => {
   httpPost.mockReset();
   httpGet.mockReset();
   vi.mocked(alertService.createAlert).mockResolvedValue({} as never);
+  vi.mocked(digitalTwinRepository.findById).mockResolvedValue({ id: 't1' } as never);
 });
 
 // ===========================================================================
@@ -313,6 +321,16 @@ describe('triggerZoneEStop', () => {
     await expect(safetyService.triggerZoneEStop('z1', 'reason')).rejects.toThrow(
       'Zone z1 not found'
     );
+  });
+
+  it("throws when the zone's twin is not visible to the caller's tenant", async () => {
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([ZONE_A]);
+    vi.mocked(digitalTwinRepository.findById).mockResolvedValueOnce(null);
+    vi.mocked(robotManager.listRobots).mockClear();
+    await expect(safetyService.triggerZoneEStop('z1', 'reason')).rejects.toThrow(
+      'Zone z1 not found'
+    );
+    expect(robotManager.listRobots).not.toHaveBeenCalled();
   });
 
   it('returns empty result when no robots are in the zone', async () => {
