@@ -781,9 +781,12 @@ else:
           "there is an EXIT trap, and it can only reach pids this script recorded")
     check("ISAAC_UP" in scode and "did not announce its image server" in scode,
           "the Isaac readiness loop now DIES on timeout instead of falling through")
-    check(scode.count('watch_pid "$') >= 5,
+    # Counted outside the f-string: a backslash inside an f-string expression is a
+    # SyntaxError before Python 3.12, and this verifier must run on any python3.
+    n_watch = scode.count('watch_pid "$')
+    check(n_watch >= 5,
           "every background process started is checked for liveness afterwards",
-          f"{scode.count('watch_pid \"$')} call sites")
+          f"{n_watch} call sites")
 
 # --------------------------------------------------------------------------------
 print("\n(14) the HTTP command inlet — the vocabulary, as a pure function")
