@@ -3,7 +3,7 @@ id: "TASK-354"
 aliases: ["TASK-354"]
 title: "Episodes and frames of a RustFS dataset read real data or fail"
 slug: "episodes-and-frames-of-a-rustfs-dataset-read-real-data-or-fail"
-status: "review"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
