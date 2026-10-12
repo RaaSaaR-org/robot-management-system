@@ -74,7 +74,8 @@ robot's resulting `robotStatus` so the server can mirror it.
 ## Acceptance Criteria
 - [x] With the E-stop latched, `execute()` of `move`, `charge`, `return_home`, `pickup`, `drop` returns `failed` with an E-stop message; location, target and status are unchanged.
 - [x] `moveTo`, `goToCharge`, `returnHome`, `pickup`, `drop` and `executeVLAAction` refuse while latched (tools, A2A, task queue), and no walk is started on real locomotion.
-- [x] `stop` and `emergency_stop` still run while latched.
+- [x] `stop` and `emergency_stop` still run while latched, and leave the status `protective_stop` (never `online`).
+- [x] The simulation's own battery drives to the charger (low and critical) do not start while latched.
 - [x] A `RobotStateManager` whose persisted latch was restored on construction refuses a move.
 - [x] The server's robot E-stop and reset are attempted even when the cached `isConnected` is false; a successful answer marks the robot connected and updates its status and emits `robot_status_changed` at once.
 - [x] `sendCommand` attempts `stop`/`emergency_stop` regardless of `isConnected`; other commands keep the precondition.

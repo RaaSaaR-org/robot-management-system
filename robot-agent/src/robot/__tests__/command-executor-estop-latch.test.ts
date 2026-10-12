@@ -105,9 +105,28 @@ describe('CommandExecutor — a latched E-stop refuses motion (TASK-382)', () =>
   it('still runs stop and emergency_stop', async () => {
     const stop = await h.executor.execute('stop');
     expect(stop.status).toBe('completed');
+    expect(h.state.status).toBe('protective_stop');
 
     await h.executor.execute('emergency_stop');
     expect(h.agentEstop).toHaveBeenCalledOnce();
+    expect(h.state.status).toBe('protective_stop');
+  });
+
+  it('keeps protective_stop when the direct stop methods run on a busy-looking state', async () => {
+    h.state.status = 'busy' as SimulatedRobotState['status'];
+    await h.executor.stop();
+    expect(h.state.status).toBe('protective_stop');
+
+    h.state.status = 'online' as SimulatedRobotState['status'];
+    await h.executor.emergencyStop();
+    expect(h.state.status).toBe('protective_stop');
+  });
+
+  it('reports online after an emergency stop when nothing is latched', async () => {
+    const free = rig(() => false);
+    free.state.status = 'busy' as SimulatedRobotState['status'];
+    await free.executor.emergencyStop();
+    expect(free.state.status).toBe('online');
   });
 
   it('treats a latch that cannot be read as latched', async () => {

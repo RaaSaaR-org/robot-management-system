@@ -437,6 +437,8 @@ export class RobotStateManager {
       changeNotifier,
       SIMULATION_CONFIG
     );
+    // TASK-382: the battery logic's own drives to the charger honour the latch.
+    this.simulation.setEStopLatch(() => this.safetyMonitor.isEStopTriggered());
 
     // Initialize task queue with command functions
     this.taskQueue = new TaskQueue(

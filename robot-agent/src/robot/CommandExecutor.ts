@@ -394,11 +394,13 @@ export class CommandExecutor {
     // the kinematic target below would not stop it.
     const walkStopped = this.config.locomotion?.stop('Stop command received') ?? false;
 
+    // TASK-382: a stop never lifts a latched E-stop's protective_stop.
+    const latched = this.estopRefusal() !== null;
     this.stateUpdater((s) => {
       s.targetLocation = undefined;
       s.speed = 0;
       if (s.status === 'busy') {
-        s.status = 'online';
+        s.status = latched ? 'protective_stop' : 'online';
       }
       s.currentTaskName = undefined;
       s.updatedAt = new Date().toISOString();
@@ -433,10 +435,14 @@ export class CommandExecutor {
     // of those requests is bounded by an AbortSignal.timeout, but "bounded" still
     // means seconds. Nothing about an E-Stop should wait on a network round trip
     // that a slow or dead sidecar can stretch out.
+    // TASK-382: repeating the E-stop while it is latched must not report the
+    // robot 'online' — that both misstates it and re-opens the simulation's
+    // own battery drives, which start only from 'online'.
+    const latched = this.estopRefusal() !== null;
     this.stateUpdater((s) => {
       s.targetLocation = undefined;
       s.speed = 0;
-      s.status = 'online';
+      s.status = latched ? 'protective_stop' : 'online';
       s.currentTaskName = 'Emergency stop activated';
       s.warnings.push('Emergency stop was activated');
       s.updatedAt = new Date().toISOString();

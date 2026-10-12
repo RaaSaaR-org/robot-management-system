@@ -16,7 +16,7 @@
  * state file, before losing the port and exiting without a trace.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, onTestFinished } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -338,6 +338,10 @@ describe('a restored latch refuses motion from the first instant (TASK-382)', ()
   it('refuses a move through executeCommand and moveTo, and the robot stays put', async () => {
     writeLatchedState();
     vi.spyOn(hardwareClient, 'locoStop').mockResolvedValue({ ok: true });
+    // Hermetic: the manager's background polls (frame registration, place
+    // graph) must not reach whatever answers on the default server port.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
+    onTestFinished(() => { vi.unstubAllGlobals(); });
 
     const mgr = new RobotStateManager(makeConfig());
     expect(mgr.isEStopTriggered()).toBe(true);

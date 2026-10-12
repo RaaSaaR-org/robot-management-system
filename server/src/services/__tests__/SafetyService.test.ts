@@ -124,6 +124,15 @@ describe('triggerRobotEStop', () => {
     expect(robotManager.noteRobotAnswered).toHaveBeenCalledWith(registered, 'protective_stop');
   });
 
+  it('reports an accepted E-stop as triggered even when recording the answer throws (TASK-382)', async () => {
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered({ isConnected: false }));
+    httpPost.mockResolvedValue({ robotId: 'r1', status: 'triggered', robotStatus: 'protective_stop' });
+    vi.mocked(robotManager.noteRobotAnswered).mockRejectedValueOnce(new Error('listener blew up'));
+
+    const result = await safetyService.triggerRobotEStop('r1', 'test');
+    expect(result.status).toBe('triggered');
+  });
+
   it('still fails when the robot does not answer — never reported as stopped', async () => {
     vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(
       makeRegistered({ isConnected: false })
@@ -431,6 +440,23 @@ describe('triggerZoneEStop', () => {
     );
     // top-level result still carries the original triggeredBy
     expect(result.triggeredBy).toBe('guard');
+  });
+
+  it('logs no event and raises no alert when only cached-offline robots are in the zone and none answer (TASK-382)', async () => {
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([ZONE_A]);
+    vi.mocked(robotManager.listRobots).mockResolvedValue([
+      makeRobot({ id: 'off', status: 'offline', twinId: 't1', location: at('ZONE-A') }),
+    ]);
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered({ isConnected: false }));
+    httpPost.mockRejectedValue(new Error('ECONNREFUSED'));
+    const before = safetyService.getEStopLog(100).length;
+
+    const result = await safetyService.triggerZoneEStop('z1', 'spill');
+
+    expect(httpPost).toHaveBeenCalledOnce();
+    expect(result.robotResults).toHaveLength(0);
+    expect(alertService.createAlert).not.toHaveBeenCalled();
+    expect(safetyService.getEStopLog(100).length).toBe(before);
   });
 
   it('reports a performed zone E-stop as success even when its alert cannot be written', async () => {

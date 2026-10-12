@@ -135,6 +135,22 @@ type EStopEventCallback = (event: EStopEvent) => void;
 /**
  * SafetyService - Manages fleet-wide and zone-based E-stop functionality
  */
+/**
+ * Record that a robot answered an E-stop request (TASK-382), without letting a
+ * bookkeeping failure — a database write, a throwing event listener — turn a
+ * stop or reset the robot already accepted into a reported failure.
+ */
+async function noteAnsweredQuietly(
+  registered: Parameters<typeof robotManager.noteRobotAnswered>[0],
+  status: Parameters<typeof robotManager.noteRobotAnswered>[1]
+): Promise<void> {
+  try {
+    await robotManager.noteRobotAnswered(registered, status);
+  } catch (err) {
+    console.error('[SafetyService] Failed to record the robot answer:', err);
+  }
+}
+
 class SafetyService {
   private eventCallbacks: Set<EStopEventCallback> = new Set();
   private estopLog: EStopEvent[] = [];
@@ -212,7 +228,7 @@ class SafetyService {
         console.error('[SafetyService] Failed to create alert:', err);
       });
 
-      await robotManager.noteRobotAnswered(registered, statusFromEStopResponse(response));
+      await noteAnsweredQuietly(registered, statusFromEStopResponse(response));
 
       return { status: response, robotName: registered.robot.name };
     } catch (error) {
@@ -265,7 +281,7 @@ class SafetyService {
         {}
       );
 
-      await robotManager.noteRobotAnswered(registered, statusFromEStopResponse(response));
+      await noteAnsweredQuietly(registered, statusFromEStopResponse(response));
 
       // Create info alert
       await alertService.createAlert({
@@ -530,6 +546,10 @@ class SafetyService {
       successCount,
       failureCount,
     };
+
+    // TASK-382: every robot in the zone was cached offline and none answered —
+    // the same nothing-to-stop outcome as an empty zone, so no event or alert.
+    if (robotResults.length === 0) return zoneResult;
 
     // Log the event
     this.logEStopEvent('zone', 'trigger', triggeredBy, reason, robotResults.map((r) => r.robotId), zoneResult);
