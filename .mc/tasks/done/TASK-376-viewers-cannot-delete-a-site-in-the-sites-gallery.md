@@ -3,7 +3,7 @@ id: "TASK-376"
 aliases: []
 title: "Viewers cannot delete a site in the Sites gallery"
 slug: "viewers-cannot-delete-a-site-in-the-sites-gallery"
-status: "review"              # backlog | todo | in-progress | review | done | cancelled
+status: done
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "low"
 due_date: ""
 created: "2026-10-12"
-updated: "2026-10-12"
+updated: 2026-10-12
 ---
 
 # Viewers cannot delete a site in the Sites gallery
