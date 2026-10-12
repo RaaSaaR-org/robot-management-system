@@ -3,7 +3,7 @@ id: "TASK-381"
 aliases: []
 title: "A scan capture says why storage refused it and .env.example does not require RustFS"
 slug: "a-scan-capture-says-why-storage-refused-it-and-env-example-does-not-require-rustfs"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
