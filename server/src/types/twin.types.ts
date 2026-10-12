@@ -25,6 +25,25 @@ export function isTwinZoneType(value: unknown): value is TwinZoneType {
   return typeof value === 'string' && (TwinZoneTypes as readonly string[]).includes(value);
 }
 
+/**
+ * Narrow an untrusted value to a zone polygon: at least 3 `{x, y}` vertices
+ * with finite numbers. Anything less never reaches the Nav2 keep-out mask or
+ * the place graph, so a zone stored with it exists in the UI only (TASK-386).
+ */
+export function isZonePolygon(value: unknown): value is TwinZonePoint[] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 3 &&
+    value.every(
+      (p) =>
+        typeof p === 'object' &&
+        p !== null &&
+        Number.isFinite((p as { x?: unknown }).x) &&
+        Number.isFinite((p as { y?: unknown }).y)
+    )
+  );
+}
+
 export type TwinStorageBackend = 'rustfs' | 'local';
 
 // ============================================================================
