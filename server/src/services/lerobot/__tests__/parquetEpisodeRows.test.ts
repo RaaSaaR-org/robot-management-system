@@ -4,7 +4,7 @@
  * @feature datasets
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ParquetReader } from '@dsnp/parquetjs';
 import { readParquetRows, type ByteSource } from '../parquetEpisodeRows.js';
 import { FRAME_FIELDS, frameRows, parquetBuffer } from './parquetFixtures.js';
@@ -129,5 +129,52 @@ describe('readParquetRows', () => {
       filter: { column: 'episode_index', equals: 0 },
     });
     expect(Object.keys(rows[0]).sort()).toEqual(['episode_index', 'frame_index', 'timestamp']);
+  });
+
+  describe('page skipping', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    /** Five episodes of 40 frames in ONE row group, as pyarrow writes a LeRobot file. */
+    async function singleGroupFile(dataPageV1: boolean, width: (frame: number) => number = () => 12): Promise<Buffer> {
+      const rows = [0, 1, 2, 3, 4].flatMap((ep) =>
+        frameRows(ep, 40, 12).map((r, f) => ({
+          ...r,
+          action: Array.from({ length: width(ep * 40 + f) }, (_, j) => ep * 1000 + f + j / 100),
+        })),
+      );
+      return parquetBuffer(FRAME_FIELDS, rows, { rowGroupSize: 1000, pageSize: 7, dataPageV1 });
+    }
+
+    for (const dataPageV1 of [false, true]) {
+      it(`steps over the pages before a late episode without decoding them (data page ${dataPageV1 ? 'v1' : 'v2'})`, async () => {
+        const buf = await singleGroupFile(dataPageV1);
+        const decode = vi.spyOn(ParquetReader.prototype, 'decodePages');
+        const { rows } = await readParquetRows(countingSource(buf), {
+          columns: FRAME_COLUMNS,
+          filter: { column: 'episode_index', equals: 4 },
+        });
+        expect(rows.map((r) => Number(r.frame_index))).toEqual(Array.from({ length: 40 }, (_, f) => f));
+        expect(rows[0].action).toEqual(Array.from({ length: 12 }, (_, j) => 4000 + j / 100));
+        expect(rows[39]['observation.state']).toEqual(frameRows(4, 40, 12)[39]['observation.state']);
+        // 200 rows in 7-row pages is 29 pages per column; the filter column is
+        // read whole, the four others only from row 160 on (~6 pages each).
+        expect(decode.mock.calls.length).toBeLessThan(29 + 4 * 10);
+      });
+    }
+
+    it('reads the column again when list widths vary and the skip miscounted', async () => {
+      // Widths 1 and 3 alternate: the average (2) divides the level count evenly,
+      // so the header-based skip runs and lands on the wrong rows.
+      const buf = await singleGroupFile(true, (i) => (i % 2 === 0 ? 1 : 3));
+      const { rows } = await readParquetRows(countingSource(buf), {
+        columns: ['frame_index', 'action'],
+        filter: { column: 'episode_index', equals: 3 },
+      });
+      expect(rows).toHaveLength(40);
+      rows.forEach((r, f) => {
+        const i = 3 * 40 + f;
+        expect(r.action).toEqual(Array.from({ length: i % 2 === 0 ? 1 : 3 }, (_, j) => 3000 + f + j / 100));
+      });
+    });
   });
 });

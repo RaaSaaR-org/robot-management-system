@@ -99,10 +99,11 @@ class ByteWindow {
     private readonly end: number,
   ) {}
 
-  async slice(offset: number, length: number): Promise<Buffer> {
+  /** `length` bytes at `offset`; on a miss, fetches at least `prefetch` bytes from there. */
+  async slice(offset: number, length: number, prefetch = WINDOW_BYTES): Promise<Buffer> {
     const want = Math.min(length, this.end - offset);
     if (offset < this.bufStart || offset + want > this.bufStart + this.buf.length) {
-      const len = Math.min(Math.max(want, WINDOW_BYTES), this.end - offset);
+      const len = Math.min(Math.max(want, prefetch), this.end - offset);
       this.buf = await this.source.read(offset, len);
       this.bufStart = offset;
       if (this.buf.length < want) {
@@ -132,17 +133,41 @@ function statsExclude(column: ColumnMeta, value: number): boolean {
   return (min !== undefined && value < min) || (max !== undefined && value > max);
 }
 
+/** Thrift PageType values. */
+const DATA_PAGE = 0;
+const DATA_PAGE_V2 = 3;
+
+/** After a skip, the next decoded page did not start where the row count said it would. */
+class MisalignedSkip extends Error {}
+
+/** Levels (values, nulls and empty lists) in a data page, from its header; undefined for any other page. */
+function pageLevels(header: NewPageHeader): number | undefined {
+  const type = Number(header.type);
+  if (type === DATA_PAGE) return toNumber(header.data_page_header?.num_values);
+  if (type === DATA_PAGE_V2) return toNumber(header.data_page_header_v2?.num_values);
+  return undefined;
+}
+
 /**
  * Feed `visit` every level of one column chunk, page by page. `row` is the
  * row index within the row group; `value` is undefined for a null / empty
  * list. Stops once `visit` returns 'stop' or the chunk is exhausted.
+ *
+ * Pages that lie wholly before row `skip.before` are stepped over on their
+ * header — neither decompressed nor decoded. A flat column has one level
+ * per row; a list column is skipped only when `skip.width` says every row
+ * holds that many values, so row r starts at level r × width. Pages may end
+ * mid-row (pyarrow's do), which is why the count is kept in levels. A late
+ * episode of a large file otherwise costs decoding the whole column.
+ * Returns whether any page was skipped.
  */
 async function streamColumn(
   reader: ParquetReader,
   source: ByteSource,
   column: ColumnMeta,
   visit: (row: number, value: unknown, present: boolean, rowStart: boolean) => void | 'stop',
-): Promise<void> {
+  skip: { before: number; width?: number } = { before: 0 },
+): Promise<boolean> {
   const field = reader.schema.findField(column.path_in_schema) as unknown as FieldMeta;
   const dataOffset = Number(column.data_page_offset);
   const dictOffset = toNumber(column.dictionary_page_offset);
@@ -159,28 +184,51 @@ async function streamColumn(
     column: field,
   };
 
+  const width = field.rLevelMax === 0 ? 1 : skip.width;
   let pos = start;
   let row = -1;
   let seen = 0;
+  let skipped = false;
+  let realign = false;
   while (pos < end && seen < totalValues) {
     const header = new NewPageHeader();
-    const headerSize = decodeThrift(header, await window.slice(pos, MAX_HEADER_BYTES));
+    // A header read that misses the window fetches only the header's bytes,
+    // so the bodies of skipped pages are never downloaded.
+    const headerSize = decodeThrift(header, await window.slice(pos, MAX_HEADER_BYTES, MAX_HEADER_BYTES));
     const pageSize = headerSize + Number(header.compressed_page_size);
+    const levels = pageLevels(header);
+    if (width && levels !== undefined && seen + levels <= skip.before * width) {
+      seen += levels;
+      pos += pageSize;
+      skipped = realign = true;
+      continue;
+    }
     const page = (await reader.decodePages(
       await window.slice(pos, pageSize),
       opts as unknown as Parameters<ParquetReader['decodePages']>[1],
     )) as unknown as DecodedPages;
     pos += pageSize;
+    if (realign && width) {
+      // Rows 0..ceil(seen/width)-1 have started; the next starts here.
+      const nextStart = (width - (seen % width)) % width;
+      const firstStart = page.rlevels.indexOf(0);
+      if (firstStart !== nextStart && !(firstStart === -1 && nextStart >= page.rlevels.length)) {
+        throw new MisalignedSkip();
+      }
+      row = Math.ceil(seen / width) - 1;
+      realign = false;
+    }
     let valueIndex = 0;
     for (let i = 0; i < page.rlevels.length; i++) {
       const rowStart = page.rlevels[i] === 0;
       if (rowStart) row++;
       const present = page.dlevels[i] === field.dLevelMax;
       const value = present ? page.values[valueIndex++] : undefined;
-      if (visit(row, value, present, rowStart) === 'stop') return;
+      if (visit(row, value, present, rowStart) === 'stop') return skipped;
     }
     seen += page.rlevels.length;
   }
+  return skipped;
 }
 
 /**
@@ -234,6 +282,7 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
       }
 
       // Slot of each kept row in `rows`, by row offset from `first`.
+      const groupStart = rows.length;
       const slots = new Int32Array(last - first + 1).fill(-1);
       for (let r = first; r <= last; r++) {
         if (mask && !mask[r - first]) continue;
@@ -241,11 +290,18 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
         rows.push({});
       }
 
+      const groupRows = rows.slice(groupStart);
       for (const name of columns) {
         const column = columnOf(rowGroup, name);
         if (!column) continue;
         const repeated = (reader.schema.findField(column.path_in_schema) as unknown as FieldMeta).rLevelMax > 0;
-        await streamColumn(reader, source, column, (row, value, present, rowStart) => {
+        // A list column is skipped through only on the premise that every row
+        // holds the same number of values (true of LeRobot's fixed-shape
+        // features): the chunk's level count must divide evenly by its rows,
+        // and every row read is checked against it below.
+        const levels = Number(column.num_values);
+        const width = repeated && levels % numRows === 0 ? levels / numRows : undefined;
+        const visit = (row: number, value: unknown, present: boolean, rowStart: boolean): void | 'stop' => {
           if (row > last) return 'stop';
           if (row < first) return;
           const slot = slots[row - first];
@@ -257,7 +313,25 @@ export async function readParquetRows(source: ByteSource, options: ReadRowsOptio
           }
           if (rowStart) target[name] = [];
           if (present) (target[name] as unknown[]).push(value);
-        });
+        };
+        // Verify the premise on what was read: a skip that landed off a row
+        // boundary, or a kept row of another width, means the rows were
+        // miscounted — read the column again from its first page.
+        let consistent: boolean;
+        try {
+          const skipped = await streamColumn(reader, source, column, visit, { before: first, width });
+          consistent =
+            !skipped ||
+            !repeated ||
+            groupRows.every((r) => Array.isArray(r[name]) && (r[name] as unknown[]).length === width);
+        } catch (error) {
+          if (!(error instanceof MisalignedSkip)) throw error;
+          consistent = false;
+        }
+        if (!consistent) {
+          for (const r of groupRows) delete r[name];
+          await streamColumn(reader, source, column, visit);
+        }
       }
     }
   } finally {
