@@ -3,7 +3,7 @@ id: "TASK-368"
 aliases: ["TASK-368"]
 title: "Every WebSocket event reaches only its own tenant"
 slug: "every-websocket-event-reaches-only-its-own-tenant"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
@@ -81,11 +81,11 @@ super-admins only. Multi-tenancy off and `AUTH_DISABLED=true` behave as before.
 
 ## Acceptance Criteria
 
-- [ ] With multi-tenancy on, each event family reaches only identified sockets of
+- [x] With multi-tenancy on, each event family reaches only identified sockets of
       the owning tenant and super-admins (tested per family).
-- [ ] A cross-tenant fleet E-stop gives each tenant only its own robots.
-- [ ] An event whose entity is gone reaches super-admins only.
-- [ ] Multi-tenancy off / `AUTH_DISABLED=true`: every identified socket gets every
+- [x] A cross-tenant fleet E-stop gives each tenant only its own robots.
+- [x] An event whose entity is gone reaches super-admins only.
+- [x] Multi-tenancy off / `AUTH_DISABLED=true`: every identified socket gets every
       event, as before (existing tests unchanged).
 
 ## Test Strategy
