@@ -3,7 +3,7 @@ id: "TASK-365"
 aliases: ["TASK-365"]
 title: "Onboarding and robot access respect the tenant boundary"
 slug: "onboarding-and-robot-access-respect-the-tenant-boundary"
-status: "in-progress"
+status: "done"
 priority: 1
 owner: "claude"
 projects: []
