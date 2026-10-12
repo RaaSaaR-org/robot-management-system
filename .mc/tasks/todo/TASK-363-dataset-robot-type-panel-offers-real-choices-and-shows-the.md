@@ -3,7 +3,7 @@ id: "TASK-363"
 aliases: []
 title: "Dataset robot-type panel offers real choices and shows the true validation state"
 slug: "dataset-robot-type-panel-offers-real-choices-and-shows-the"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
