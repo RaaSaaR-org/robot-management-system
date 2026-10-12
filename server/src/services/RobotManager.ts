@@ -293,6 +293,14 @@ export interface RegisteredRobot {
    * and the row would silently stop being written at all.
    */
   lastPersistedLocation?: RobotLocation;
+  /**
+   * The tenant the robot's row belongs to (TASK-365). The cache is one map for
+   * the whole process, so every lookup made on behalf of a request checks this
+   * against the request's tenant — without it, a robot id is all another
+   * tenant needs to read, command or delete a robot. `null` = a row with no
+   * tenant, which a tenant-scoped query never returns either.
+   */
+  tenantId?: string | null;
 }
 
 /** Below this, a pose "change" is sim jitter, not motion — no event, no write. */
@@ -556,6 +564,9 @@ export class RobotManager {
         registeredAt: now,
         // `upsertWithRegistration` above wrote this pose, so cache = row.
         lastPersistedLocation: robotWithA2A.location,
+        // The upsert stamped the request's tenant on the row (tenant-isolation
+        // extension); outside a tenant scope it wrote none.
+        tenantId: getTenantId() ?? null,
       };
 
       // Cache in memory
@@ -588,20 +599,24 @@ export class RobotManager {
    * Unregister a robot by ID
    */
   async unregisterRobot(robotId: string): Promise<boolean> {
-    const registered = this.robotCache.get(robotId);
+    const registered = this.cachedFor(robotId);
     if (!registered) {
-      // Check database
+      // Not in the cache, or another tenant's: the row decides — and the
+      // tenant-scoped lookup does not find another tenant's row either.
       const dbRobot = await robotRepository.getRegisteredRobot(robotId);
       if (!dbRobot) {
         return false;
       }
     }
 
+    // Delete from database first: a delete the tenant guard refuses must not
+    // have already dropped the live connection of the robot it did not delete.
+    if (!(await robotRepository.delete(robotId))) {
+      return false;
+    }
+
     // Remove from cache
     this.robotCache.delete(robotId);
-
-    // Delete from database
-    await robotRepository.delete(robotId);
 
     // Also unregister from A2A agents
     if (registered) {
@@ -633,7 +648,7 @@ export class RobotManager {
    * are left untouched.
    */
   private normalizePresentedStatus(robot: Robot): Robot {
-    const cached = this.robotCache.get(robot.id);
+    const cached = this.cachedFor(robot.id);
     const isLive = cached !== undefined && cached.isConnected;
     if (!isLive && (robot.status === 'online' || robot.status === 'busy')) {
       return { ...robot, status: 'offline' };
@@ -658,7 +673,7 @@ export class RobotManager {
    * robot's live location is laid over it.
    */
   private withLiveLocation(robot: Robot): Robot {
-    const cached = this.robotCache.get(robot.id);
+    const cached = this.cachedFor(robot.id);
     if (!cached?.isConnected) return robot;
     return { ...robot, location: cached.robot.location };
   }
@@ -668,7 +683,7 @@ export class RobotManager {
    */
   async getRobot(robotId: string): Promise<Robot | undefined> {
     // Check cache first
-    const cached = this.robotCache.get(robotId);
+    const cached = this.cachedFor(robotId);
     if (cached) {
       return this.normalizePresentedStatus(cached.robot);
     }
@@ -682,9 +697,11 @@ export class RobotManager {
    */
   async getRegisteredRobot(robotId: string): Promise<RegisteredRobot | undefined> {
     // Check cache first
-    if (this.robotCache.has(robotId)) {
-      return this.robotCache.get(robotId);
-    }
+    const cached = this.cachedFor(robotId);
+    if (cached) return cached;
+    // Cached for another tenant: the tenant-scoped row lookup below cannot
+    // find it either, and must not replace the owner's live entry.
+    if (this.robotCache.has(robotId)) return undefined;
 
     // Load from database
     const registered = await robotRepository.getRegisteredRobot(robotId);
@@ -695,6 +712,27 @@ export class RobotManager {
   }
 
   /**
+   * The cache entry for `robotId` as the current request may see it
+   * (TASK-365). The cache is one map for the whole process; outside a tenant
+   * scope (multi-tenancy off, startup, jobs, `runAsPlatform`) every entry is
+   * visible, inside one only the request's own tenant's robots are — the
+   * same answer the tenant-scoped row lookup gives.
+   */
+  private cachedFor(robotId: string): RegisteredRobot | undefined {
+    const entry = this.robotCache.get(robotId);
+    if (!entry) return undefined;
+    const tenantId = getTenantId();
+    return tenantId === undefined || entry.tenantId === tenantId ? entry : undefined;
+  }
+
+  /** Every cache entry the current request may see — see {@link cachedFor}. */
+  private visibleCached(): RegisteredRobot[] {
+    const tenantId = getTenantId();
+    const all = Array.from(this.robotCache.values());
+    return tenantId === undefined ? all : all.filter((r) => r.tenantId === tenantId);
+  }
+
+  /**
    * TASK-327: bind a robot to a site, or unbind it with `null`. Writes the row
    * and the cache together, so `GET /:id` (served from the cache) agrees at
    * once. Returns `undefined` when the robot does not exist for this tenant.
@@ -702,7 +740,7 @@ export class RobotManager {
   async setRobotSite(robotId: string, twinId: string | null): Promise<Robot | undefined> {
     const updated = await robotRepository.setTwin(robotId, twinId);
     if (!updated) return undefined;
-    const cached = this.robotCache.get(robotId);
+    const cached = this.cachedFor(robotId);
     if (cached) cached.robot.twinId = twinId;
     return this.normalizePresentedStatus(cached ? cached.robot : updated);
   }
@@ -722,7 +760,7 @@ export class RobotManager {
    * Used by orchestrator to route messages only to online robots
    */
   getConnectedAgents(): A2AAgentCard[] {
-    return Array.from(this.robotCache.values())
+    return this.visibleCached()
       .filter((r) => r.isConnected)
       .map((r) => r.agentCard);
   }
