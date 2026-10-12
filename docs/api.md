@@ -72,6 +72,15 @@ account or their own personal data:
 | DELETE | `/api/gdpr/consents/:type` | Withdraw it again |
 
 `/api/gdpr/admin/*` is **not** exempt — it acts on other people's requests.
+It is also limited to `owner` and `super-admin` (TASK-383): an owner lists,
+counts and acts only on requests, consents and restrictions of users in their own
+tenant, and a by-id call on another tenant's record answers `404` like a missing
+id; a super-admin works platform-wide. The `adminId` recorded on a status change
+is the caller's id.
+
+The compliance-log retention policy is platform-wide, so its writes
+(`PUT`/`DELETE /api/compliance/retention/:eventType`,
+`POST /api/compliance/retention/cleanup`) are `super-admin` only; reading it is not.
 
 "One's own" is enforced in the handlers, not only by the guard (TASK-270): the
 data subject of every `/api/gdpr/requests*` and `/api/gdpr/consents*` call is the
