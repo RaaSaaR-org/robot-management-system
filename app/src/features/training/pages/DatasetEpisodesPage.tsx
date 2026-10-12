@@ -69,6 +69,8 @@ export function DatasetEpisodesPage() {
   const requestedEpisodeRef = useRef(searchParams.get('episode'));
   const [frames, setFrames] = useState<FrameData[]>([]);
   const [framesLoading, setFramesLoading] = useState(false);
+  const [framesError, setFramesError] = useState<string | null>(null);
+  const [framesReloadKey, setFramesReloadKey] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -203,12 +205,20 @@ export function DatasetEpisodesPage() {
     if (!datasetId || selectedEpisode === null) return;
     const ep = episodes.find((e) => e.index === selectedEpisode);
     if (ep) setDuration(ep.durationSeconds);
+    let cancelled = false;
     setFramesLoading(true);
+    setFramesError(null);
     trainingApi.getEpisodeFrames(datasetId, selectedEpisode, 0, 2000)
-      .then((r) => setFrames(r.frames))
-      .catch(() => setFrames([]))
-      .finally(() => setFramesLoading(false));
-  }, [datasetId, selectedEpisode, episodes]);
+      .then((r) => { if (!cancelled) setFrames(r.frames); })
+      .catch((err) => {
+        if (cancelled) return;
+        // An empty chart here used to hide a read failure (TASK-354).
+        setFrames([]);
+        setFramesError(errorMessage(err, 'unknown error'));
+      })
+      .finally(() => { if (!cancelled) setFramesLoading(false); });
+    return () => { cancelled = true; };
+  }, [datasetId, selectedEpisode, episodes, framesReloadKey]);
 
   useEffect(() => {
     for (const ref of Object.values(videoRefs.current)) if (ref) ref.playbackRate = Number(speed);
@@ -573,7 +583,14 @@ export function DatasetEpisodesPage() {
                 onApply={applySuggestion}
                 onDismiss={(i) => setSuggestions((prev) => prev.filter((_, j) => j !== i))}
               />
-              <JointChartPanel frames={frames} jointNames={jointNames} isLoading={framesLoading} currentTime={currentTime} />
+              <JointChartPanel
+                frames={frames}
+                jointNames={jointNames}
+                isLoading={framesLoading}
+                currentTime={currentTime}
+                error={framesError}
+                onRetry={() => setFramesReloadKey((k) => k + 1)}
+              />
               {selectedReward && (
                 <RewardCurvePanel reward={selectedReward} fallbackFps={dataset?.fps ?? 30} currentTime={currentTime} />
               )}

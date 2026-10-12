@@ -7,7 +7,7 @@
 import { useMemo } from 'react';
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Activity } from 'lucide-react';
-import { EmptyState, Panel, SkeletonText, StatusTag, chartColors, chartSeriesColor, chartTheme } from '@/shared/components/ui';
+import { EmptyState, ErrorState, Panel, SkeletonText, StatusTag, chartColors, chartSeriesColor, chartTheme } from '@/shared/components/ui';
 import type { EpisodeReward } from '@/features/evaluation/types/evaluation.types';
 import type { FrameData } from '../../types';
 import { scoreTone } from './episodeFormat';
@@ -17,12 +17,15 @@ export interface JointChartPanelProps {
   jointNames: string[];
   isLoading: boolean;
   currentTime: number;
+  /** Why the frames could not be loaded; shown instead of the chart. */
+  error?: string | null;
+  onRetry?: () => void;
 }
 
 const tsFormat = (v: number) => v.toFixed(1);
 const labelFormat = (v: unknown) => `t = ${Number(v).toFixed(2)}s`;
 
-export function JointChartPanel({ frames, jointNames, isLoading, currentTime }: JointChartPanelProps) {
+export function JointChartPanel({ frames, jointNames, isLoading, currentTime, error, onRetry }: JointChartPanelProps) {
   const data = useMemo(
     () =>
       frames.map((frame) => {
@@ -46,6 +49,8 @@ export function JointChartPanel({ frames, jointNames, isLoading, currentTime }: 
       <Panel.Body>
         {isLoading ? (
           <SkeletonText lines={5} />
+        ) : error ? (
+          <ErrorState size="sm" title="Couldn't load this episode's frames" message={error} onRetry={onRetry} />
         ) : data.length === 0 ? (
           <EmptyState size="sm" icon={<Activity />} title="No trajectory data for this episode" />
         ) : (
