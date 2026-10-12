@@ -20,6 +20,8 @@ const storage = vi.hoisted(() => ({
   // bucket → key → bytes
   buckets: {} as Record<string, Record<string, Buffer>>,
   listError: null as Error | null,
+  // Every object read, whole or ranged, as `key` or `key@offset+length`.
+  reads: [] as string[],
 }));
 
 vi.mock('../../services/DatasetService.js', () => ({
@@ -48,13 +50,22 @@ vi.mock('../../storage/rustfs-client.js', () => {
       return Boolean(storage.buckets[bucket]?.[key]);
     },
     async download(bucket: string, key: string) {
+      storage.reads.push(key);
       return storage.buckets[bucket][key];
+    },
+    async getMetadata(bucket: string, key: string) {
+      return { contentLength: storage.buckets[bucket][key].length };
+    },
+    async downloadRange(bucket: string, key: string, start: number, length: number) {
+      storage.reads.push(`${key}@${start}+${length}`);
+      return storage.buckets[bucket][key].subarray(start, start + length);
     },
   };
   return { isRustFSInitialized: () => storage.initialized, getRustFSClient: () => client };
 });
 
 import { datasetRoutes } from '../datasets.routes.js';
+import { episodeFramesCache } from '../../services/lerobot/RemoteDatasetReader.js';
 
 const INFO_V21 = { codebase_version: 'v2.1', fps: 30, chunks_size: 1000, total_episodes: 3, total_frames: 17 };
 const LENGTHS = [5, 9, 3];
@@ -99,6 +110,8 @@ describe('RustFS dataset episodes and frames', () => {
     vi.clearAllMocks();
     storage.initialized = true;
     storage.listError = null;
+    storage.reads = [];
+    episodeFramesCache.clear();
     storage.buckets = { 'training-datasets': { ...v21Files } };
     datasets.get.mockResolvedValue(DATASET);
     app = createApp();
@@ -162,6 +175,30 @@ describe('RustFS dataset episodes and frames', () => {
     const res = await request(app).get('/api/datasets/ds-apple/episodes/0/frames');
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/ECONNREFUSED/);
+  });
+
+  it('reads a data file in byte ranges and serves the next page of the episode from the cache', async () => {
+    const first = await request(app).get('/api/datasets/ds-apple/episodes/1/frames?offset=0&limit=4');
+    expect(first.status).toBe(200);
+    expect(first.body.total).toBe(9);
+    expect(first.body.frames).toHaveLength(4);
+    const dataReads = storage.reads.filter((r) => r.includes('/data/'));
+    expect(dataReads.length).toBeGreaterThan(0);
+    expect(dataReads.every((r) => r.includes('@'))).toBe(true);
+
+    storage.reads = [];
+    const second = await request(app).get('/api/datasets/ds-apple/episodes/1/frames?offset=4&limit=4');
+    expect(second.status).toBe(200);
+    expect(second.body.total).toBe(9);
+    expect(second.body.frames.map((f: { frameIndex: number }) => f.frameIndex)).toEqual([4, 5, 6, 7]);
+    expect(storage.reads).toEqual([]);
+  });
+
+  it('does not cache a failed read', async () => {
+    storage.initialized = false;
+    expect((await request(app).get('/api/datasets/ds-apple/episodes/0/frames')).status).toBe(503);
+    storage.initialized = true;
+    expect((await request(app).get('/api/datasets/ds-apple/episodes/0/frames')).status).toBe(200);
   });
 
   it('answers 503 when RustFS is not running', async () => {

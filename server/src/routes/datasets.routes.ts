@@ -46,8 +46,11 @@ import { DatasetViewError, resolveLocalView } from '../services/lerobot/LocalDat
 import {
   DatasetReadError,
   parseEpisodeRecords,
+  episodeFramesCache,
+  episodeWeight,
+  pageOf,
+  readRemoteEpisodeFrames,
   readRemoteEpisodes,
-  readRemoteFrames,
   toEpisodeMeta,
   toNumberArray,
   type DatasetObjectStore,
@@ -301,6 +304,16 @@ async function rustfsDatasetStore(storagePath: string): Promise<DatasetObjectSto
         paths.push(obj.key.slice(base.length));
       }
       return paths;
+    },
+    // Ranged access, so a 60 MB data file is never pulled into the heap whole (TASK-355).
+    async stat(path) {
+      const key = `${base}${path}`;
+      if (!(await rustfs.exists(from, key))) return null;
+      const meta = await rustfs.getMetadata(from, key);
+      return { size: Number(meta.contentLength ?? 0) };
+    },
+    readRange(path, offset, length) {
+      return rustfs.downloadRange(from, `${base}${path}`, offset, length);
     },
   };
 }
@@ -1205,11 +1218,15 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
 
     // RustFS: the parquet holding this episode, or an error naming the file
     // that could not be read — never generated frames (TASK-354).
-    const store = await rustfsDatasetStore(dataset.storagePath);
-    if (!store) {
-      return res.status(503).json({ error: 'Object storage is unavailable, so frames cannot be read' });
-    }
-    const page = await readRemoteFrames(store, info, episodeIndex, fps, { offset, limit }, dataset.lerobotVersion);
+    // The decoded episode is cached, keyed by the record's updatedAt, so
+    // paging through it reads storage once (TASK-355).
+    const cacheKey = `${dataset.id}@${new Date(dataset.updatedAt).getTime()}#${episodeIndex}`;
+    const episode = await episodeFramesCache.getOrLoad(cacheKey, episodeWeight, async () => {
+      const store = await rustfsDatasetStore(dataset.storagePath);
+      if (!store) throw new DatasetReadError(503, 'Object storage is unavailable, so frames cannot be read');
+      return readRemoteEpisodeFrames(store, info, episodeIndex, fps, dataset.lerobotVersion);
+    });
+    const page = pageOf(episode, { offset, limit });
     // scripts/e2e-k3d/test.sh greps this line; keep its wording.
     console.log(
       `[DatasetRoutes] Read ${page.total} frames from parquet for episode ${episodeIndex}, returning ${page.frames.length} (${page.source})`,

@@ -37,6 +37,10 @@ spec:
               containerPort: 3001
               protocol: TCP
           env:
+            {{- with .Values.server.env.nodeOptions }}
+            - name: NODE_OPTIONS
+              value: {{ . | quote }}
+            {{- end }}
             # Core configuration from ConfigMap
             - name: NODE_ENV
               valueFrom:
