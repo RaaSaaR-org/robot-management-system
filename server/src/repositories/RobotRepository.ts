@@ -195,6 +195,7 @@ export class RobotRepository {
       lastHealthCheck: robot.lastHealthCheck?.toISOString() ?? new Date().toISOString(),
       isConnected: robot.isConnected,
       registeredAt: robot.registeredAt?.toISOString() ?? new Date().toISOString(),
+      tenantId: robot.tenantId ?? null,
     };
   }
 
@@ -241,6 +242,7 @@ export class RobotRepository {
         lastHealthCheck: robot.lastHealthCheck?.toISOString() ?? new Date().toISOString(),
         isConnected: robot.isConnected,
         registeredAt: robot.registeredAt?.toISOString() ?? new Date().toISOString(),
+        tenantId: robot.tenantId ?? null,
       }));
   }
 
