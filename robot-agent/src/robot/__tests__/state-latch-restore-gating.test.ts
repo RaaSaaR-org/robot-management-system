@@ -16,7 +16,7 @@
  * state file, before losing the port and exiting without a trace.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, onTestFinished } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -331,5 +331,31 @@ describe('a normal boot of a robot that came back latched (regression)', () => {
 
     vi.advanceTimersByTime(AFTER_THE_DEBOUNCE_MS);
     expect(onDisk().agentState.estopLatched).toBe(true);
+  });
+});
+
+describe('a restored latch refuses motion from the first instant (TASK-382)', () => {
+  it('refuses a move through executeCommand and moveTo, and the robot stays put', async () => {
+    writeLatchedState();
+    vi.spyOn(hardwareClient, 'locoStop').mockResolvedValue({ ok: true });
+    // Hermetic: the manager's background polls (frame registration, place
+    // graph) must not reach whatever answers on the default server port.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+
+    const mgr = new RobotStateManager(makeConfig());
+    expect(mgr.isEStopTriggered()).toBe(true);
+    const before = mgr.getRobotInterface();
+
+    const command = await mgr.executeCommand('move', { destination: { x: 5, y: 5 } });
+    expect(command.status).toBe('failed');
+    expect(command.errorMessage).toMatch(/E-stop latched/);
+
+    const direct = await mgr.moveTo({ x: 5, y: 5 });
+    expect(direct.success).toBe(false);
+
+    const after = mgr.getRobotInterface();
+    expect(after.location).toMatchObject({ x: before.location.x, y: before.location.y });
+    expect(after.status).toBe(before.status);
   });
 });

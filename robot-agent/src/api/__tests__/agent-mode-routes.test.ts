@@ -700,7 +700,12 @@ describe('Agent Mode REST contract', () => {
     expect(mocks.estop.mock.calls[0][0]).toContain('operator hit the fleet E-Stop');
     // The existing safety path still latches, with the true trigger source.
     expect(state.triggerEmergencyStop).toHaveBeenCalledWith('remote', 'operator hit the fleet E-Stop');
-    expect(await res.json()).toMatchObject({ agentModeStopped: true, ...ESTOP_STATE });
+    expect(await res.json()).toMatchObject({
+      agentModeStopped: true,
+      ...ESTOP_STATE,
+      // TASK-382: the server mirrors this into the fleet view at once.
+      robotStatus: 'idle',
+    });
   });
 
   it('POST /safety/estop still latches when the Agent Mode stop fails, and says so', async () => {

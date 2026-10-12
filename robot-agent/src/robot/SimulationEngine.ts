@@ -51,6 +51,8 @@ export class SimulationEngine {
   private simulationInterval: NodeJS.Timeout | null = null;
   /** See {@link SimulationEngine.setPoseAuthority}. Null = simulation owns the position. */
   private poseAuthority: (() => boolean) | null = null;
+  /** See {@link SimulationEngine.setEStopLatch}. Null = no latch to honour. */
+  private estopLatch: (() => boolean) | null = null;
   private readonly config: SimulationConfig;
   private stateGetter: () => SimulatedRobotState;
   private stateUpdater: StateUpdater;
@@ -132,6 +134,26 @@ export class SimulationEngine {
    */
   setPoseAuthority(probe: (() => boolean) | null): void {
     this.poseAuthority = probe;
+  }
+
+  /**
+   * Tell the engine where the E-stop latch lives (TASK-382).
+   *
+   * The battery logic starts its own drives to the charger without going
+   * through the CommandExecutor, so the executor's latch gate does not cover
+   * them. While the probe reports latched — or throws — no such drive starts.
+   */
+  setEStopLatch(probe: (() => boolean) | null): void {
+    this.estopLatch = probe;
+  }
+
+  private isEStopLatched(): boolean {
+    if (!this.estopLatch) return false;
+    try {
+      return this.estopLatch();
+    } catch {
+      return true;
+    }
   }
 
   /**
@@ -323,6 +345,8 @@ export class SimulationEngine {
   private startReturnToCharger(taskName: string, critical = false): boolean {
     const charger = this.chargingStation;
     if (!charger) return false;
+    // TASK-382: a latched E-stop holds the robot where it is, battery or not.
+    if (this.isEStopLatched()) return false;
 
     const state = this.stateGetter();
     console.log(

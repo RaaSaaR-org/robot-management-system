@@ -27,6 +27,7 @@ vi.mock('../RobotManager.js', () => ({
   robotManager: {
     getRegisteredRobot: vi.fn(),
     listRobots: vi.fn(),
+    noteRobotAnswered: vi.fn(),
   },
 }));
 
@@ -49,7 +50,7 @@ vi.mock('../AlertService.js', () => ({
   },
 }));
 
-import { safetyService } from '../SafetyService.js';
+import { safetyService, statusFromEStopResponse } from '../SafetyService.js';
 import { robotManager } from '../RobotManager.js';
 import { twinPlaceGraphService } from '../TwinPlaceGraphService.js';
 import { alertService } from '../AlertService.js';
@@ -109,13 +110,41 @@ describe('triggerRobotEStop', () => {
     );
   });
 
-  it('throws when robot is not connected', async () => {
+  it('attempts the E-stop even when the cached isConnected is stale (TASK-382)', async () => {
+    const registered = makeRegistered({ isConnected: false });
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(registered);
+    httpPost.mockResolvedValue({ robotId: 'r1', status: 'triggered', robotStatus: 'protective_stop' });
+
+    const result = await safetyService.triggerRobotEStop('r1', 'test');
+
+    expect(result.status).toBe('triggered');
+    expect(httpPost).toHaveBeenCalledWith(
+      '/api/v1/robots/r1/safety/estop',
+      expect.objectContaining({ reason: 'test' })
+    );
+    // The answer marks the robot connected and mirrors its status at once.
+    expect(robotManager.noteRobotAnswered).toHaveBeenCalledWith(registered, 'protective_stop');
+  });
+
+  it('reports an accepted E-stop as triggered even when recording the answer throws (TASK-382)', async () => {
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered({ isConnected: false }));
+    httpPost.mockResolvedValue({ robotId: 'r1', status: 'triggered', robotStatus: 'protective_stop' });
+    vi.mocked(robotManager.noteRobotAnswered).mockRejectedValueOnce(new Error('listener blew up'));
+
+    const result = await safetyService.triggerRobotEStop('r1', 'test');
+    expect(result.status).toBe('triggered');
+  });
+
+  it('still fails when the robot does not answer — never reported as stopped', async () => {
     vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(
       makeRegistered({ isConnected: false })
     );
+    httpPost.mockRejectedValue(new Error('ECONNREFUSED'));
+
     await expect(safetyService.triggerRobotEStop('r1', 'test')).rejects.toThrow(
-      'Robot r1 is not connected'
+      'Failed to trigger E-stop: ECONNREFUSED'
     );
+    expect(robotManager.noteRobotAnswered).not.toHaveBeenCalled();
   });
 
   it('posts to the robot estop endpoint and returns the status', async () => {
@@ -203,6 +232,17 @@ describe('resetRobotEStop', () => {
     err.mockRestore();
   });
 
+  it('attempts the reset on a stale isConnected and mirrors the reported status (TASK-382)', async () => {
+    const registered = makeRegistered({ isConnected: false });
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(registered);
+    httpPost.mockResolvedValue({ status: 'armed', robotStatus: 'online' });
+
+    await safetyService.resetRobotEStop('r1');
+
+    expect(httpPost).toHaveBeenCalledWith('/api/v1/robots/r1/safety/estop/reset', {});
+    expect(robotManager.noteRobotAnswered).toHaveBeenCalledWith(registered, 'online');
+  });
+
   it('wraps HTTP errors', async () => {
     vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
     httpPost.mockRejectedValue(new Error('boom'));
@@ -250,7 +290,25 @@ describe('getRobotSafetyStatus', () => {
 // ===========================================================================
 
 describe('triggerFleetEStop', () => {
-  it('skips offline robots and aggregates success/failure counts', async () => {
+  it('stops a robot whose cached status is still offline but that answers (TASK-382)', async () => {
+    const robots = [
+      makeRobot({ id: 'a', name: 'A', status: 'online' }),
+      makeRobot({ id: 'back', name: 'Back', status: 'offline' }),
+    ];
+    vi.mocked(robotManager.listRobots).mockResolvedValue(robots);
+    vi.mocked(robotManager.getRegisteredRobot).mockImplementation(async (id: string) =>
+      makeRegistered({ robot: robots.find((r) => r.id === id)!, isConnected: id === 'a' })
+    );
+    httpPost.mockResolvedValue({ status: 'triggered' });
+
+    const result = await safetyService.triggerFleetEStop('emergency', 'admin');
+
+    expect(httpPost).toHaveBeenCalledWith('/api/v1/robots/back/safety/estop', expect.anything());
+    expect(result.robotResults.map((r) => r.robotId).sort()).toEqual(['a', 'back']);
+    expect(result.successCount).toBe(2);
+  });
+
+  it('leaves out offline robots that do not answer and aggregates success/failure counts', async () => {
     const robots = [
       makeRobot({ id: 'a', name: 'A', status: 'online' }),
       makeRobot({ id: 'b', name: 'B', status: 'online' }),
@@ -378,7 +436,12 @@ describe('triggerZoneEStop', () => {
     ];
     vi.mocked(robotManager.listRobots).mockResolvedValue(robots);
     vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
-    httpPost.mockResolvedValue({ ok: true });
+    // The cached-offline robot is attempted (TASK-382) but does not answer, so
+    // it stays out of the result as before.
+    httpPost.mockImplementation(async (url: string) => {
+      if (url.includes('/robots/off/')) throw new Error('ECONNREFUSED');
+      return { ok: true };
+    });
 
     const result = await safetyService.triggerZoneEStop('z1', 'spill', 'guard');
 
@@ -395,6 +458,23 @@ describe('triggerZoneEStop', () => {
     );
     // top-level result still carries the original triggeredBy
     expect(result.triggeredBy).toBe('guard');
+  });
+
+  it('logs no event and raises no alert when only cached-offline robots are in the zone and none answer (TASK-382)', async () => {
+    vi.mocked(twinPlaceGraphService.resolveZonePlaces).mockResolvedValue([ZONE_A]);
+    vi.mocked(robotManager.listRobots).mockResolvedValue([
+      makeRobot({ id: 'off', status: 'offline', twinId: 't1', location: at('ZONE-A') }),
+    ]);
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered({ isConnected: false }));
+    httpPost.mockRejectedValue(new Error('ECONNREFUSED'));
+    const before = safetyService.getEStopLog(100).length;
+
+    const result = await safetyService.triggerZoneEStop('z1', 'spill');
+
+    expect(httpPost).toHaveBeenCalledOnce();
+    expect(result.robotResults).toHaveLength(0);
+    expect(alertService.createAlert).not.toHaveBeenCalled();
+    expect(safetyService.getEStopLog(100).length).toBe(before);
   });
 
   it('reports a performed zone E-stop as success even when its alert cannot be written', async () => {
@@ -593,5 +673,24 @@ describe('event log and subscriptions', () => {
 
     u1();
     u2();
+  });
+});
+
+// ===========================================================================
+// statusFromEStopResponse (TASK-382)
+// ===========================================================================
+
+describe('statusFromEStopResponse', () => {
+  it('prefers the status the agent reports', () => {
+    expect(statusFromEStopResponse({ status: 'armed', robotStatus: 'online' })).toBe('online');
+  });
+
+  it('falls back to protective_stop for a latched stop from an agent that reports none', () => {
+    expect(statusFromEStopResponse({ status: 'triggered' })).toBe('protective_stop');
+  });
+
+  it('ignores an unknown status and says nothing about an armed robot', () => {
+    expect(statusFromEStopResponse({ status: 'triggered', robotStatus: 'estop' })).toBe('protective_stop');
+    expect(statusFromEStopResponse({ status: 'armed' })).toBeUndefined();
   });
 });

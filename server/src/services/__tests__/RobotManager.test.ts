@@ -494,14 +494,47 @@ describe('sendCommand', () => {
     await expect(mgr.sendCommand('rX', { type: 'stop' })).rejects.toThrow('Robot rX not found');
   });
 
-  it('throws when the robot is not connected', async () => {
+  it('refuses a motion command while the robot is not connected', async () => {
     const mgr = new RobotManager();
     robotRepository.getRegisteredRobot.mockResolvedValue(
       makeRegistered({ isConnected: false })
     );
-    await expect(mgr.sendCommand('r1', { type: 'stop' })).rejects.toThrow(
+    await expect(mgr.sendCommand('r1', { type: 'move' })).rejects.toThrow(
       'Robot r1 is not connected'
     );
+    expect(httpPost).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'emergency_stop'] as const)(
+    'attempts %s on a stale isConnected and marks the answering robot connected (TASK-382)',
+    async (type) => {
+      const mgr = new RobotManager();
+      const registered = makeRegistered({ isConnected: false });
+      registered.robot.status = 'offline';
+      robotRepository.getRegisteredRobot.mockResolvedValue(registered);
+      robotRepository.updateHealthCheck.mockResolvedValue(true as never);
+      httpPost.mockResolvedValue({ id: 'cmd1', status: 'completed' });
+      const events: string[] = [];
+      mgr.onRobotEvent((e) => events.push(e.type));
+
+      await mgr.sendCommand('r1', { type });
+
+      expect(httpPost).toHaveBeenCalledWith('http://robot.local/api/v1/command', { type });
+      expect(registered.isConnected).toBe(true);
+      expect(events).toContain('robot_status_changed');
+    }
+  );
+
+  it('still fails a stop the robot does not answer', async () => {
+    const mgr = new RobotManager();
+    const registered = makeRegistered({ isConnected: false });
+    robotRepository.getRegisteredRobot.mockResolvedValue(registered);
+    httpPost.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    await expect(mgr.sendCommand('r1', { type: 'emergency_stop' })).rejects.toThrow(
+      'Failed to send command: ECONNREFUSED'
+    );
+    expect(registered.isConnected).toBe(false);
   });
 
   it('posts the command to the robot command endpoint and returns the result', async () => {
@@ -731,5 +764,40 @@ describe('health-check lifecycle', () => {
 
     expect(robotRepository.updateHealthCheck).toHaveBeenCalledWith('r1', false, 'offline');
     expect(events.some((e) => e.type === 'robot_status_changed')).toBe(true);
+  });
+});
+
+// ===========================================================================
+// noteRobotAnswered (TASK-382)
+// ===========================================================================
+
+describe('noteRobotAnswered', () => {
+  it('marks the robot connected, mirrors the reported status, persists and emits at once', async () => {
+    const mgr = new RobotManager();
+    const registered = makeRegistered({ isConnected: false });
+    registered.robot.status = 'online';
+    robotRepository.updateHealthCheck.mockResolvedValue(true as never);
+    const events: Array<{ type: string; status?: string }> = [];
+    mgr.onRobotEvent((e) => events.push({ type: e.type, status: (e as { robot?: { status: string } }).robot?.status }));
+
+    await mgr.noteRobotAnswered(registered, 'protective_stop');
+
+    expect(registered.isConnected).toBe(true);
+    expect(registered.robot.status).toBe('protective_stop');
+    expect(robotRepository.updateHealthCheck).toHaveBeenCalledWith('r1', true, 'protective_stop');
+    expect(events).toEqual([{ type: 'robot_status_changed', status: 'protective_stop' }]);
+  });
+
+  it('writes and emits nothing when a connected robot reports the status it already has', async () => {
+    const mgr = new RobotManager();
+    const registered = makeRegistered({ isConnected: true });
+    registered.robot.status = 'online';
+    const events: string[] = [];
+    mgr.onRobotEvent((e) => events.push(e.type));
+
+    await mgr.noteRobotAnswered(registered, 'online');
+
+    expect(robotRepository.updateHealthCheck).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
   });
 });
