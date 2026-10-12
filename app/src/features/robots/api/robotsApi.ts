@@ -6,6 +6,7 @@
  */
 
 import { apiClient } from '@/api/client';
+import { isNotFoundError } from '@/shared/utils/error';
 import type {
   Robot,
   RobotTelemetry,
@@ -37,9 +38,6 @@ const ENDPOINTS = {
   places: (id: string) => `/robots/${id}/places`,
 } as const;
 
-function isNotFound(error: unknown): boolean {
-  return (error as { response?: { status?: number } })?.response?.status === 404;
-}
 
 // ============================================================================
 // API FUNCTIONS
@@ -130,7 +128,7 @@ export const robotsApi = {
       const response = await apiClient.get<FrameRegistration>(ENDPOINTS.frameRegistration(robotId));
       return response.data;
     } catch (error) {
-      if (isNotFound(error)) return null;
+      if (isNotFoundError(error)) return null;
       throw error;
     }
   },
@@ -157,7 +155,7 @@ export const robotsApi = {
       const response = await apiClient.get<{ places?: SitePlace[] }>(ENDPOINTS.places(robotId));
       return (response.data?.places ?? []).map((p) => ({ id: p.id, name: p.name, keepout: p.keepout === true }));
     } catch (error) {
-      if (isNotFound(error)) return [];
+      if (isNotFoundError(error)) return [];
       throw error;
     }
   },

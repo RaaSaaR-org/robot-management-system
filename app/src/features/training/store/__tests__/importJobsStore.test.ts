@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ApiRequestError } from '@/api/client';
 
 const getImportLog = vi.fn();
 const getDataset = vi.fn();
@@ -322,7 +323,10 @@ function remembered(id: string, over: Partial<ImportJob> = {}): void {
   });
 }
 
-const notFound = () => Object.assign(new Error('Not Found'), { response: { status: 404 } });
+// What apiClient really rejects with: its interceptor turns the axios error into
+// an ApiRequestError, which carries `statusCode` and no `response` (TASK-388).
+const notFound = () =>
+  new ApiRequestError({ code: 'NOT_FOUND', message: 'Dataset not found', statusCode: 404 });
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 
 describe('reconciling remembered imports with the server (TASK-371)', () => {
