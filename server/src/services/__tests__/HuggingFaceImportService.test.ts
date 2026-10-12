@@ -285,6 +285,8 @@ describe('HuggingFaceImportService', () => {
     vi.mocked(robotTypeRepository.findAll).mockResolvedValue([G1_EDU, SO101, PUSHT]);
     vi.mocked(robotTypeRepository.findById).mockResolvedValue(G1_EDU);
     vi.mocked(robotTypeRepository.create).mockResolvedValue({ ...G1_EDU, id: 'rt-new' });
+      // A transient download failure is retried with backoff (#370); not in real time here.
+    vi.spyOn(service as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(undefined);
   });
 
   afterEach(async () => {

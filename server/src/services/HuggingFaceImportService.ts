@@ -67,8 +67,10 @@ import type {
   HuggingFaceImportRequest,
   HuggingFaceImportProgress,
   HuggingFacePreview,
+  ImportLogLevel,
   LeRobotInfoV3,
 } from '../types/dataset.types.js';
+import { importActivityLog } from './ImportActivityLog.js';
 
 // ============================================================================
 // CONSTANTS
@@ -80,7 +82,8 @@ const DATASET_VALIDATION_SUBJECT = 'jobs.dataset.validate';
 const MAX_CONCURRENT_DOWNLOADS = 5;
 const MAX_RETRY_DELAY_MS = 30_000;
 const INITIAL_RETRY_DELAY_MS = 1_000;
-const MAX_TRANSFER_ATTEMPTS = 6;
+/** Attempts per file before a dropped connection fails the import (#370). */
+export const MAX_TRANSFER_ATTEMPTS = 6;
 // Unitree's multi-gigabyte videos can legitimately take longer than ten minutes.
 const TRANSFER_TIMEOUT_MS = 30 * 60_000;
 
@@ -131,6 +134,36 @@ class FileTransferError extends Error {
     super(`File ${file}: ${transferStage} to ${sink} failed after ${attempts} attempt(s): ${detail}`);
     this.name = 'FileTransferError';
   }
+}
+/** At most this often a byte-progress frame goes out while a file streams. */
+export const BYTE_PROGRESS_INTERVAL_MS = 500;
+
+/** `1536` → `1.5 KB`; for log lines. */
+export function formatBytes(bytes: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
+}
+
+/** A copy of `response` whose body reports every chunk it hands on. */
+function countingResponse(response: Response, onBytes: (n: number) => void): Response {
+  if (!response.body) return response;
+  const counter = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      onBytes(chunk.byteLength);
+      controller.enqueue(chunk);
+    },
+  });
+  return new Response(response.body.pipeThrough(counter), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 /** A git object id, which needs no resolving. */
@@ -431,6 +464,14 @@ export class HuggingFaceImportService {
     const created = await datasetRepository.create(input);
     const datasetId = created.id;
 
+    importActivityLog.start(datasetId);
+    this.log(
+      datasetId,
+      'info',
+      `Import of ${repoId} started (${includeVideos ? 'data and videos' : 'metadata only'})`,
+    );
+    this.logSource(datasetId, revision, sha, info, sink);
+
     // Emit import started event
     this.emitProgress(datasetId, {
       datasetId,
@@ -504,6 +545,12 @@ export class HuggingFaceImportService {
         409,
       );
     }
+    importActivityLog.start(datasetId);
+    this.log(
+      datasetId,
+      'info',
+      `Retry of ${repoId} started (${importMode === 'full' ? 'data and videos' : 'metadata only'})`,
+    );
 
     let sha: string;
     let license: string | null = null;
@@ -524,6 +571,7 @@ export class HuggingFaceImportService {
       info = await this.fetchInfoJson(repoId, sha);
       sink = createSink(storageIdOf(existing.storagePath));
       await sink.prepare();
+      this.logSource(datasetId, existing.sourceRevision ?? 'main', sha, info, sink);
       const currentType = existing.robotTypeId
         ? await robotTypeRepository.findById(existing.robotTypeId) : null;
       // Repair historical name-only associations without changing the shared type.
@@ -690,7 +738,19 @@ export class HuggingFaceImportService {
     let phase: HuggingFaceImportProgress['phase'] = 'metadata';
     try {
       // Phase 2: Build file list (from the authoritative repo tree)
+      const importMode: DatasetImportMode = includeVideos ? 'full' : 'metadata';
       const files = await this.resolveFileList(repoId, revision, info, includeVideos);
+      // Bytes are the honest measure — one video outweighs a thousand parquet
+      // files — but only when the Hub sized every file; otherwise count files.
+      const totalBytes = files.every((f) => f.size > 0)
+        ? files.reduce((sum, f) => sum + f.size, 0)
+        : undefined;
+      this.log(
+        datasetId,
+        'info',
+        `Downloading ${files.length} files from the Hub`
+          + (totalBytes !== undefined ? ` (${formatBytes(totalBytes)})` : ''),
+      );
 
       phase = 'downloading';
       this.emitProgress(datasetId, {
@@ -700,23 +760,33 @@ export class HuggingFaceImportService {
         progress: 10,
         totalFiles: files.length,
         completedFiles: 0,
+        downloadedBytes: 0,
+        totalBytes,
+        importMode,
       });
 
       // Phase 3: Download the files into whichever store this deployment has
-      await this.downloadFiles(datasetId, repoId, revision, sink, files);
+      await this.downloadFiles(datasetId, repoId, revision, sink, files, totalBytes, importMode);
 
       // Phase 4: Trigger validation via NATS
       phase = 'validating';
+      const stored = {
+        totalFiles: files.length,
+        completedFiles: files.length,
+        downloadedBytes: totalBytes,
+        totalBytes,
+        importMode,
+      };
       this.emitProgress(datasetId, {
         datasetId,
         status: 'validating',
         phase,
         progress: 90,
-        totalFiles: files.length,
-        completedFiles: files.length,
+        ...stored,
       });
 
       await datasetRepository.update(datasetId, { status: 'validating' });
+      this.log(datasetId, 'info', `All ${files.length} files stored; validating the dataset`);
 
       if (natsClient.isConnected()) {
         const js = natsClient.getJetStream();
@@ -736,10 +806,40 @@ export class HuggingFaceImportService {
             msgID: `validate-${datasetId}-${uuidv4()}`,
           });
           console.log(`[HFImport] Queued validation job for ${datasetId}`);
+          this.log(datasetId, 'info', 'Validation queued for the validation worker');
         }
       } else {
         // Run validation synchronously if NATS not available
-        await datasetService.validateAndUpdateDataset(datasetId, sink.storagePath);
+        const outcome = await datasetService.validateAndUpdateDataset(datasetId, sink.storagePath);
+        if (outcome === 'failed') {
+          // The download worked and the dataset did not: saying "completed"
+          // here is what left the operator with a green toast and a red card.
+          // Validation already marked the row and kept its report.
+          const error = 'Validation failed — open the dataset for the validation report';
+          this.log(datasetId, 'error', 'Validation failed — the files do not form a valid LeRobot dataset');
+          // The last frame says it stopped, so the backfill a reloaded page
+          // reads agrees with the event it missed.
+          this.emitProgress(datasetId, {
+            datasetId,
+            status: 'failed',
+            phase: 'validating',
+            progress: 90,
+            ...stored,
+            error,
+          });
+          datasetService.emit('dataset:event', {
+            type: 'dataset:import:failed',
+            datasetId,
+            error,
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+        this.log(
+          datasetId,
+          outcome === 'ready' ? 'info' : 'warn',
+          outcome === 'ready' ? 'Validation passed' : 'Storage unavailable — the dataset was not validated',
+        );
       }
 
       // Emit completion
@@ -748,10 +848,12 @@ export class HuggingFaceImportService {
         status: 'validating',
         phase: 'validating',
         progress: 95,
-        totalFiles: files.length,
-        completedFiles: files.length,
+        ...stored,
       });
 
+      // The line before the event: a browser stops listening once it hears
+      // the import has ended, so anything said after that is never seen.
+      this.log(datasetId, 'info', 'Import finished');
       datasetService.emit('dataset:event', {
         type: 'dataset:import:completed',
         datasetId,
@@ -781,6 +883,7 @@ export class HuggingFaceImportService {
     error: unknown,
   ): Promise<void> {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    this.log(datasetId, 'error', `Failed during ${phase}: ${errorMessage}`);
 
     await datasetRepository.update(datasetId, {
       status: 'failed',
@@ -800,11 +903,15 @@ export class HuggingFaceImportService {
       },
     });
 
+    // Where the bar stopped, not a reset to 0 — "failed at 63 %" is information.
+    const last = importActivityLog.get(datasetId)?.progress;
     this.emitProgress(datasetId, {
+      ...(last ?? {}),
       datasetId,
       status: 'failed',
       phase,
-      progress: 0,
+      progress: last?.progress ?? 0,
+      currentFile: undefined,
       error: errorMessage,
     });
 
@@ -955,7 +1062,7 @@ export class HuggingFaceImportService {
     revision: string,
     info: LeRobotInfoV3,
     includeVideos: boolean
-  ): Promise<string[]> {
+  ): Promise<RepoFile[]> {
     let tree: RepoFile[] = [];
     try {
       tree = await this.listRepoFiles(repoId, revision);
@@ -967,10 +1074,11 @@ export class HuggingFaceImportService {
     }
 
     if (tree.length === 0) {
-      return this.buildFileList(info, includeVideos);
+      // Size 0 = unknown: progress then counts files instead of bytes.
+      return this.buildFileList(info, includeVideos).map((path) => ({ path, size: 0 }));
     }
 
-    return selectRepoFiles(tree, includeVideos).map((file) => file.path);
+    return selectRepoFiles(tree, includeVideos);
   }
 
   /**
@@ -1108,9 +1216,14 @@ export class HuggingFaceImportService {
     repoId: string,
     revision: string,
     sink: ImportSink,
-    files: string[]
+    files: RepoFile[],
+    totalBytes: number | undefined,
+    importMode: DatasetImportMode,
   ): Promise<void> {
     let completedFiles = 0;
+    let downloadedBytes = 0;
+    let lastFile: string | undefined;
+    let lastEmit = 0;
     const totalFiles = files.length;
 
     // Concurrency-limited parallel download.
@@ -1135,23 +1248,54 @@ export class HuggingFaceImportService {
     const concurrency = Number.isInteger(configuredConcurrency) && configuredConcurrency > 0
       ? Math.min(configuredConcurrency, MAX_CONCURRENT_DOWNLOADS) : MAX_CONCURRENT_DOWNLOADS;
 
+    // Byte-based while every size is known, file-count otherwise (#370). The
+    // frame used to go out only when a file finished, so a single 900 MB video
+    // sat at the same number for minutes.
+    const emit = (force: boolean) => {
+      if (failure) return;
+      const now = Date.now();
+      if (!force && now - lastEmit < BYTE_PROGRESS_INTERVAL_MS) return;
+      lastEmit = now;
+      const fraction = totalBytes
+        ? Math.min(downloadedBytes / totalBytes, 1)
+        : totalFiles > 0 ? completedFiles / totalFiles : 0;
+      this.emitProgress(datasetId, {
+        datasetId,
+        status: 'importing',
+        phase: 'downloading',
+        progress: 10 + Math.round(fraction * 80),
+        currentFile: lastFile,
+        totalFiles,
+        completedFiles,
+        downloadedBytes,
+        totalBytes,
+        importMode,
+      });
+    };
+
     for (let i = 0; i < concurrency; i++) {
       workers.push(
         (async () => {
           while (queue.length > 0) {
             if (failure) return;
-            const file = queue.shift();
-            if (!file) break;
+            const next = queue.shift();
+            if (!next) break;
+            const file = next.path;
 
             const hfUrl = `${HF_BASE_URL}/${repoId}/resolve/${revision}/${file}`;
 
             try {
-              await this.downloadFileToSink(hfUrl, file, sink);
+              await this.downloadFileToSink(datasetId, hfUrl, file, sink, (n) => {
+                downloadedBytes += n;
+                lastFile = file;
+                emit(false);
+              });
             } catch (error) {
               // stats.json is optional — 404 is expected
               if (file === 'meta/stats.json' && error instanceof FileTransferError
                 && error.transferStage === 'fetch' && error.httpStatus === 404) {
                 console.log(`[HFImport] stats.json not found (optional), skipping`);
+                this.log(datasetId, 'warn', 'meta/stats.json is not in the repo (optional), skipped');
               } else {
                 failure ??= error;
                 return;
@@ -1163,17 +1307,9 @@ export class HuggingFaceImportService {
             if (failure) return;
 
             completedFiles++;
-            const downloadProgress = 10 + Math.round((completedFiles / totalFiles) * 80);
-
-            this.emitProgress(datasetId, {
-              datasetId,
-              status: 'importing',
-              phase: 'downloading',
-              progress: downloadProgress,
-              currentFile: file,
-              totalFiles,
-              completedFiles,
-            });
+            lastFile = file;
+            this.log(datasetId, 'info', `Downloaded ${file} (${completedFiles}/${totalFiles})`);
+            emit(true);
           }
         })()
       );
@@ -1184,9 +1320,19 @@ export class HuggingFaceImportService {
   }
 
   /**
-   * Download a single file from HuggingFace and stream it into the sink.
+   * Download a single file from HuggingFace and stream it into the sink,
+   * retrying a dropped connection with backoff (#370).
+   *
+   * `onBytes` hears every chunk; an attempt that fails takes its bytes back
+   * (a negative count), so the total never runs ahead of what is stored.
    */
-  private async downloadFileToSink(url: string, path: string, sink: ImportSink): Promise<void> {
+  private async downloadFileToSink(
+    datasetId: string,
+    url: string,
+    path: string,
+    sink: ImportSink,
+    onBytes: (n: number) => void = () => undefined,
+  ): Promise<void> {
     // A consumed stream cannot be replayed: each attempt fetches a fresh body
     // and overwrites the same destination, including after an S3 upload fails.
     for (let attempt = 1; attempt <= MAX_TRANSFER_ATTEMPTS; attempt++) {
@@ -1196,23 +1342,36 @@ export class HuggingFaceImportService {
       let stage: 'fetch' | 'write' = 'fetch';
       let response: Response | undefined;
       let waitMs = INITIAL_RETRY_DELAY_MS * 2 ** (attempt - 1);
+      let received = 0;
       try {
         response = await fetch(url, { signal: controller.signal });
         if (!response.ok) {
           throw new FileTransferError(path, stage, attempt, sink.kind, `HTTP ${response.status}`, response.status);
         }
         stage = 'write';
-        await sink.write(path, response);
+        await sink.write(path, countingResponse(response, (n) => {
+          received += n;
+          onBytes(n);
+        }));
         return;
       } catch (error) {
+        // The attempt's bytes are rewritten by the next one: take them back so
+        // the byte total never runs ahead of what is stored.
+        if (received > 0) onBytes(-received);
         const retryable = error instanceof FileTransferError
           ? retryableStatus(error.httpStatus!) : retryableTransferError(error);
         const failure = error instanceof FileTransferError ? error
           : new FileTransferError(path, stage, attempt, sink.kind, transferCause(error),
             (error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata?.httpStatusCode);
         if (!retryable || attempt === MAX_TRANSFER_ATTEMPTS) throw failure;
-        waitMs = retryAfterMs(response?.headers.get('retry-after') ?? null) ?? waitMs;
+        waitMs = Math.min(retryAfterMs(response?.headers.get('retry-after') ?? null) ?? waitMs, MAX_RETRY_DELAY_MS);
         console.warn(`[HFImport] ${failure.message}; retrying`);
+        this.log(
+          datasetId,
+          'warn',
+          `${path}: ${failure.detail} — retrying in ${Math.round(waitMs / 1000)}s `
+            + `(attempt ${attempt + 1}/${MAX_TRANSFER_ATTEMPTS})`,
+        );
       } finally {
         clearTimeout(timeout);
         controller.abort();
@@ -1221,7 +1380,7 @@ export class HuggingFaceImportService {
           await response.body.cancel().catch(() => {});
         }
       }
-      await this.sleep(Math.min(waitMs, MAX_RETRY_DELAY_MS));
+      await this.sleep(waitMs);
     }
   }
 
@@ -1276,12 +1435,51 @@ export class HuggingFaceImportService {
    * Emit import progress via DatasetService events
    */
   private emitProgress(datasetId: string, progress: HuggingFaceImportProgress): void {
+    importActivityLog.setProgress(datasetId, progress);
     datasetService.emit('dataset:event', {
       type: 'dataset:import:progress',
       datasetId,
       importProgress: progress,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  /**
+   * Write one line to the import's activity log and put it on the wire.
+   *
+   * The ring keeps it for a page that attaches late; the broadcast is what a
+   * page already watching shows as it happens. (TASK-352)
+   */
+  private log(datasetId: string, level: ImportLogLevel, message: string): void {
+    const line = importActivityLog.append(datasetId, level, message);
+    datasetService.emit('dataset:event', {
+      type: 'dataset:import:log',
+      datasetId,
+      log: line,
+      timestamp: line.at,
+    });
+  }
+
+  /** What was pinned, what info.json says, and where the bytes will go. */
+  private logSource(
+    datasetId: string,
+    revision: string,
+    sha: string,
+    info: LeRobotInfoV3,
+    sink: ImportSink,
+  ): void {
+    this.log(datasetId, 'info', `Pinned ${revision} to commit ${sha.slice(0, 12)}`);
+    this.log(
+      datasetId,
+      'info',
+      `info.json: LeRobot ${info.codebase_version ?? 'unknown'}, robot ${info.robot_type ?? 'unknown'}, `
+        + `${info.total_episodes ?? 0} episodes, ${info.total_frames ?? 0} frames at ${info.fps ?? 0} fps`,
+    );
+    this.log(
+      datasetId,
+      'info',
+      `Storage: ${sink.kind === 'rustfs' ? 'RustFS' : 'local disk'} at ${sink.storagePath}`,
+    );
   }
 
   /**

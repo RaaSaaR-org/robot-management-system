@@ -817,9 +817,39 @@ export interface HFDataset {
 export interface HFImportProgress {
   datasetId: string;
   status: 'importing' | 'validating' | 'ready' | 'failed';
+  /** Where the import is: metadata → downloading → validating */
+  phase?: 'metadata' | 'downloading' | 'storing' | 'validating';
   progress: number;
   currentFile?: string;
+  totalFiles?: number;
+  completedFiles?: number;
+  /** Bytes stored so far (#370) */
+  downloadedBytes?: number;
+  /** Bytes selected for download; absent when the Hub did not size every file */
+  totalBytes?: number;
+  /** `metadata` skips the videos; `full` fetches everything */
+  importMode?: 'metadata' | 'full';
   error?: string;
+}
+
+/** One line of an import's activity log (TASK-352) */
+export interface ImportLogLine {
+  /** ISO timestamp */
+  at: string;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+}
+
+/** GET /datasets/:id/import/log — the backfill for a page that attaches late */
+export interface ImportLogResponse {
+  datasetId: string;
+  status: Dataset['status'];
+  importError: DatasetImportError | null;
+  progress: HFImportProgress | null;
+  lines: ImportLogLine[];
+  dropped: number;
+  /** False when the server holds no log for it (restarted since, or evicted) */
+  retained: boolean;
 }
 
 // ============================================================================

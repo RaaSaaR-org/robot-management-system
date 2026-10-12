@@ -32,6 +32,7 @@ import type {
   CreateRobotConfigurationInput,
   HFDatasetPreview,
   HFImportOptions,
+  ImportLogResponse,
   CompatibilityReport,
   TrainingRunManifest,
 } from '../types';
@@ -73,6 +74,7 @@ const ENDPOINTS = {
   huggingFaceImport: '/datasets/import/huggingface',
   huggingFacePreview: '/datasets/hf/preview',
   datasetImportRetry: (id: string) => `/datasets/${id}/import/retry`,
+  datasetImportLog: (id: string) => `/datasets/${id}/import/log`,
   datasetPushToHub: (id: string) => `/datasets/${id}/push-to-hub`,
   datasetPushStatus: (id: string) => `/datasets/${id}/push-status`,
 
@@ -493,6 +495,15 @@ export const trainingApi = {
     const response = await apiClient.post<{ datasetId: string; status: string }>(
       ENDPOINTS.datasetImportRetry(datasetId)
     );
+    return response.data;
+  },
+
+  /**
+   * What an import has done so far: status, failure reason, last progress
+   * frame and the activity log. The backfill behind the live feed. (TASK-352)
+   */
+  async getImportLog(datasetId: string): Promise<ImportLogResponse> {
+    const response = await apiClient.get<ImportLogResponse>(ENDPOINTS.datasetImportLog(datasetId));
     return response.data;
   },
 

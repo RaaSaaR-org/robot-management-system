@@ -1,7 +1,7 @@
 /**
  * @file HFDatasetBrowserModal.test.tsx
  * @description What the import modal shows before it spends a gigabyte, and
- *              what it hears while the POST is still in flight.
+ *              how it hands a started import to the background tracker.
  * @feature training
  *
  * Every case here is a TASK-220 defect reproduced against the running app: an
@@ -13,8 +13,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { HFDatasetBrowserModal } from '../HFDatasetBrowserModal';
+import { useImportJobsStore } from '../../store/importJobsStore';
 import type { HFDatasetPreview } from '../../types';
 
 const listRobotTypes = vi.fn();
@@ -30,40 +31,6 @@ vi.mock('../../api', () => ({
     searchHuggingFace: (...a: unknown[]) => searchHuggingFace(...a),
   },
 }));
-
-/** Records every socket that gets opened, and lets a test push frames down it. */
-class FakeWebSocket {
-  static instances: FakeWebSocket[] = [];
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onerror: (() => void) | null = null;
-  onclose: (() => void) | null = null;
-  closed = false;
-
-  constructor(readonly url: string) {
-    FakeWebSocket.instances.push(this);
-  }
-
-  close(): void {
-    this.closed = true;
-  }
-
-  // Both wrap the handler in act(): a frame or a close arrives outside React's
-  // event system, and the state update it causes otherwise logs an act()
-  // warning on every run.
-  emit(payload: unknown): void {
-    act(() => {
-      this.onmessage?.({ data: JSON.stringify(payload) });
-    });
-  }
-
-  /** The server going away, a proxy timing out, a laptop lid closing. */
-  drop(): void {
-    this.closed = true;
-    act(() => {
-      this.onclose?.();
-    });
-  }
-}
 
 /** The real numbers off nvidia/GR00T-N1.7-AppleToPlate. */
 function grootPreview(over: Partial<HFDatasetPreview> = {}): HFDatasetPreview {
@@ -98,14 +65,8 @@ async function openPreview(repoId = 'nvidia/GR00T-N1.7-AppleToPlate'): Promise<v
 }
 
 beforeEach(() => {
-  // Installed here, not at module scope: the global test setup starts msw in a
-  // `beforeAll`, and msw's WebSocket interceptor overwrites `globalThis.WebSocket`
-  // with its own class — swallowing a stub installed during import. Stubbing
-  // after `server.listen()` (which the setup leaves writable on purpose) keeps
-  // this fake in place.
-  vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.clearAllMocks();
-  FakeWebSocket.instances = [];
+  useImportJobsStore.setState({ jobs: {}, order: [], panelOpen: false, focusedId: null });
   listRobotTypes.mockResolvedValue([]);
   previewHuggingFace.mockResolvedValue(grootPreview());
   importFromHuggingFace.mockResolvedValue({ datasetId: 'ds-new' });
@@ -204,137 +165,40 @@ describe('what the modal shows before committing to a download', () => {
   });
 });
 
-describe('the progress socket', () => {
-  it('is open before the POST is issued', async () => {
-    let socketsWhenPosted = -1;
-    importFromHuggingFace.mockImplementation(() => {
-      socketsWhenPosted = FakeWebSocket.instances.length;
-      return new Promise(() => { /* never settles */ });
-    });
-
-    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
-    await openPreview();
-    await screen.findByTestId('hf-preview-facts');
-    fireEvent.click(screen.getByRole('button', { name: /^Import/ }));
-
-    await waitFor(() => expect(importFromHuggingFace).toHaveBeenCalled());
-    expect(socketsWhenPosted).toBe(1);
-  });
-
-  it('does not miss a failure that lands before the POST resolves', async () => {
-    // The bug this replaces: subscribing after the POST returned meant an
-    // import that died in its first second published its failure frame into a
-    // socket that did not exist yet, and the modal spun forever.
-    let resolvePost: ((value: { datasetId: string }) => void) | undefined;
-    importFromHuggingFace.mockImplementation(
-      () => new Promise<{ datasetId: string }>((resolve) => { resolvePost = resolve; })
-    );
-
-    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
-    await openPreview();
-    await screen.findByTestId('hf-preview-facts');
-    fireEvent.click(screen.getByRole('button', { name: /^Import/ }));
-
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-    FakeWebSocket.instances[0].emit({
-      type: 'dataset:import:failed',
-      datasetId: 'ds-new',
-      error: 'RustFS is unreachable at http://localhost:9000',
-    });
-
-    resolvePost?.({ datasetId: 'ds-new' });
-
-    expect(await screen.findByTestId('hf-import-error')).toHaveTextContent(
-      'RustFS is unreachable'
-    );
-  });
-
-  it('ignores frames about somebody else’s import', async () => {
-    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
-    await openPreview();
-    await screen.findByTestId('hf-preview-facts');
-    fireEvent.click(screen.getByRole('button', { name: /^Import/ }));
-
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-    await waitFor(() => expect(importFromHuggingFace).toHaveBeenCalled());
-    FakeWebSocket.instances[0].emit({
-      type: 'dataset:import:failed',
-      datasetId: 'some-other-dataset',
-      error: 'not ours',
-    });
-
-    await waitFor(() => expect(screen.queryByTestId('hf-import-error')).not.toBeInTheDocument());
-  });
-
-  // -------------------------------------------------------------------------
-  // …and when the socket goes away on its own.
-  //
-  // `onclose` was unhandled, so a server restart, a proxy timeout or a closed
-  // laptop lid left the modal on a spinner that would never move again — and
-  // the modal refuses backdrop and Escape while importing, so there was no way
-  // out of it. The import is unaffected: it runs detached on the server.
-  // -------------------------------------------------------------------------
-
-  it('says so when the feed drops, instead of spinning for ever', async () => {
-    importFromHuggingFace.mockResolvedValue({ datasetId: 'ds-new' });
-
-    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
-    await openPreview();
-    await screen.findByTestId('hf-preview-facts');
-    fireEvent.click(screen.getByRole('button', { name: /^Import/ }));
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-
-    FakeWebSocket.instances[0].drop();
-
-    const notice = await screen.findByTestId('hf-import-feed-lost');
-    // The distinction that matters: the feed died, the import did not.
-    expect(notice).toHaveTextContent(/still running/i);
-    expect(screen.queryByText('Importing dataset…')).not.toBeInTheDocument();
-  });
-
-  it('lets the operator out once the feed is gone', async () => {
+describe('handing the import to the background (TASK-352)', () => {
+  it('closes as soon as the server accepts it, and leaves it to the tracker', async () => {
     const onClose = vi.fn();
-    importFromHuggingFace.mockResolvedValue({ datasetId: 'ds-new' });
+    const onSuccess = vi.fn();
+    render(<HFDatasetBrowserModal isOpen onClose={onClose} onSuccess={onSuccess} />);
+    await openPreview();
+    await screen.findByTestId('hf-preview-facts');
+    fireEvent.click(screen.getByRole('button', { name: /^Import/ }));
 
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onSuccess).toHaveBeenCalled();
+    const job = useImportJobsStore.getState().jobs['ds-new'];
+    expect(job).toMatchObject({ state: 'running', label: 'nvidia/GR00T-N1.7-AppleToPlate' });
+  });
+
+  it('keeps a refusal in the modal, with the reason, and tracks nothing', async () => {
+    const onClose = vi.fn();
+    importFromHuggingFace.mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status: 503, data: { error: 'Object storage is configured but not reachable' } },
+      }),
+    );
     render(<HFDatasetBrowserModal isOpen onClose={onClose} />);
     await openPreview();
     await screen.findByTestId('hf-preview-facts');
     fireEvent.click(screen.getByRole('button', { name: /^Import/ }));
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
 
-    FakeWebSocket.instances[0].drop();
-    await screen.findByTestId('hf-import-feed-lost');
-
-    // Escape works again — it is deliberately refused only while there is
-    // still a live import to watch.
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
-    expect(onClose).toHaveBeenCalled();
+    expect(await screen.findByTestId('hf-import-error')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(useImportJobsStore.getState().order).toEqual([]);
   });
 
-  it('does not cry about a socket the modal closed itself', async () => {
-    // The success path closes the socket on purpose. That must not be reported
-    // as a lost connection.
-    importFromHuggingFace.mockResolvedValue({ datasetId: 'ds-new' });
-
-    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
-    await openPreview();
-    await screen.findByTestId('hf-preview-facts');
-    fireEvent.click(screen.getByRole('button', { name: /^Import/ }));
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-
-    FakeWebSocket.instances[0].emit({
-      type: 'dataset:import:completed',
-      datasetId: 'ds-new',
-    });
-
-    await waitFor(() =>
-      expect(screen.queryByTestId('hf-import-feed-lost')).not.toBeInTheDocument()
-    );
-  });
-});
-
-describe('while an import is running', () => {
-  it('does not close on Escape', async () => {
+  it('can be closed while the server is still deciding', async () => {
     const onClose = vi.fn();
     importFromHuggingFace.mockImplementation(() => new Promise(() => {}));
 
@@ -345,7 +209,7 @@ describe('while an import is running', () => {
     await waitFor(() => expect(importFromHuggingFace).toHaveBeenCalled());
 
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
   });
 
   it('still closes on Escape when nothing is running', async () => {

@@ -172,6 +172,7 @@ import { isRustFSInitialized } from '../../storage/rustfs-client.js';
 import { natsClient } from '../../messaging/index.js';
 import { kvGet } from '../../messaging/kv-stores.js';
 import { v4 as uuidv4 } from 'uuid';
+import { importActivityLog } from '../ImportActivityLog.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -467,6 +468,16 @@ describe('delete', () => {
     expect(deleteDatasetFromStorage).not.toHaveBeenCalled();
     expect(events.some((e) => e.type === 'dataset:deleted')).toBe(true);
     unsub();
+  });
+
+  it('forgets the import log, so the log route stops answering for a deleted id', async () => {
+    importActivityLog.start('ds1');
+    importActivityLog.append('ds1', 'info', 'Downloading 3 files from the Hub');
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+
+    await datasetService.delete('ds1');
+    expect(importActivityLog.get('ds1')).toBeNull();
   });
 
   it('attempts storage deletion when RustFS is initialized', async () => {

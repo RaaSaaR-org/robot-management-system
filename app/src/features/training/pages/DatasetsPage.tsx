@@ -16,6 +16,7 @@ import {
   Play,
   Plus,
   RotateCw,
+  ScrollText,
   Sparkles,
   Trash2,
   Upload,
@@ -43,7 +44,7 @@ import { TrainingJobWizard } from '../components/TrainingJobWizard';
 import { CompatibilityModal } from '../components/datasets/CompatibilityModal';
 import { datasetViewsApi, trainingApi } from '../api';
 import { useDatasetsAutoFetch, useTrainingJobs } from '../hooks';
-import { useTrainingStore } from '../store';
+import { useImportJobsStore, useTrainingStore } from '../store';
 import { isDatasetView } from '../types';
 import type {
   CreateDatasetViewInput,
@@ -126,10 +127,30 @@ function DatasetsHub() {
     }
   };
 
+  const trackImport = useImportJobsStore((state) => state.track);
+  const showImport = useImportJobsStore((state) => state.show);
+  const followImport = useImportJobsStore((state) => state.follow);
+
+  // A Hub import this browser is not following yet — started in another tab,
+  // or before localStorage was cleared — is followed quietly, so its row shows
+  // a live bar rather than a bare "Importing" (#370).
+  useEffect(() => {
+    for (const d of datasets) {
+      if (d.huggingFaceRepoId && (d.status === 'importing' || d.status === 'validating')) {
+        followImport(d.id, d.huggingFaceRepoId);
+      }
+    }
+  }, [datasets, followImport]);
+
   const retry = async (d: Dataset) => {
     try {
       await retryImport(d.id);
-      toast.success('Import restarted', { description: d.name });
+      // Followed in the background like a fresh import (TASK-352).
+      trackImport(d.id, d.huggingFaceRepoId ?? d.name);
+      toast.info('Import restarted in the background', {
+        description: d.name,
+        action: { label: 'Show progress', onClick: () => showImport(d.id, d.name) },
+      });
     } catch (err) {
       toast.error("Couldn't restart the import", { description: getErrorMessage(err, d.name) });
     }
@@ -161,6 +182,13 @@ function DatasetsHub() {
     }
     if (d.status === 'failed' && d.huggingFaceRepoId) {
       items.push({ label: 'Retry import', icon: <RotateCw />, onSelect: () => void retry(d) });
+    }
+    if (d.huggingFaceRepoId && d.status !== 'ready') {
+      items.push({
+        label: 'Import log',
+        icon: <ScrollText />,
+        onSelect: () => showImport(d.id, d.huggingFaceRepoId ?? d.name),
+      });
     }
     if (!frozen) {
       items.push({

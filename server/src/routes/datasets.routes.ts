@@ -18,12 +18,14 @@ import type {
   FrameData,
   PushToHubRequest,
   PushToHubJobState,
+  ImportLogResponse,
 } from '../types/dataset.types.js';
 import type { DatasetStatus } from '../types/vla.types.js';
 import {
   HuggingFaceImportError,
   huggingFaceImportService,
 } from '../services/HuggingFaceImportService.js';
+import { importActivityLog } from '../services/ImportActivityLog.js';
 import { datasetEpisodeFlagRepository } from '../repositories/DatasetEpisodeFlagRepository.js';
 import type { EpisodeFlag } from '../repositories/DatasetEpisodeFlagRepository.js';
 import { robotTypeRepository } from '../repositories/index.js';
@@ -520,6 +522,39 @@ datasetRoutes.post('/:id/import/retry', async (req: Request, res: Response) => {
 });
 
 // ============================================================================
+// GET /api/datasets/:id/import/log - What a running (or ended) import did
+// ============================================================================
+//
+// The browser follows an import over the WebSocket, but a page that attaches
+// late — a reload, a second tab, the top-bar panel opened after the fact —
+// has missed every frame. This is the backfill: status and failure reason
+// from the row (they survive a restart), lines and the last progress frame
+// from memory (they do not; `retained` says which). (TASK-352)
+
+datasetRoutes.get('/:id/import/log', async (req: Request, res: Response) => {
+  try {
+    const dataset = await datasetService.get(req.params.id);
+    if (!dataset) {
+      return res.status(404).json({ error: 'Dataset not found' });
+    }
+    const activity = importActivityLog.get(dataset.id);
+    const body: ImportLogResponse = {
+      datasetId: dataset.id,
+      status: dataset.status,
+      importError: dataset.importError ?? null,
+      progress: activity?.progress ?? null,
+      lines: activity?.lines ?? [],
+      dropped: activity?.dropped ?? 0,
+      retained: activity !== null,
+    };
+    res.json(body);
+  } catch (error) {
+    console.error(`[DatasetRoutes] Error reading import log for ${req.params.id}:`, error);
+    res.status(500).json({ error: 'Failed to read import log' });
+  }
+});
+
+// ============================================================================
 // INTERVENTION EPISODES (lerobot-rollout 'dagger', TASK-179 §7)
 // NOTE: registered before the '/:id' routes so 'interventions' is not
 // swallowed as a dataset id.
@@ -996,6 +1031,15 @@ datasetRoutes.get('/:id/progress', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
+    // A Hub import in flight answers with its own frame: phase, files and
+    // bytes. This route used to know only validation progress, so for the
+    // whole of a download it fell through to the row and said `progress: 0`
+    // (#370). Read first and from memory: the frame is this process's.
+    const importFrame = importActivityLog.get(id)?.progress ?? null;
+    if (importFrame?.status === 'importing') {
+      return res.json(importFrame);
+    }
+
     const progress = await datasetService.getUploadProgress(id);
 
     if (!progress) {
@@ -1005,11 +1049,25 @@ datasetRoutes.get('/:id/progress', async (req: Request, res: Response) => {
         return res.status(404).json({ error: 'Dataset not found' });
       }
 
-      // No active progress, return current status
+      // An import that has stopped downloading (validating, or ended) still
+      // reports where it got to, with the row's status as the verdict.
+      if (importFrame && dataset.huggingFaceRepoId) {
+        return res.json({
+          ...importFrame,
+          status: dataset.status,
+          ...(dataset.importError ? { error: dataset.importError.error } : {}),
+        });
+      }
+
+      // No active progress, return current status. Something in flight that
+      // this process cannot measure (a restart lost its frame) is `null`, not
+      // a 0 % that reads like "nothing has happened".
+      const unmeasured = dataset.status === 'importing' || dataset.status === 'validating';
       return res.json({
         datasetId: id,
         status: dataset.status,
-        progress: dataset.status === 'ready' ? 100 : 0,
+        progress: dataset.status === 'ready' ? 100 : unmeasured ? null : 0,
+        ...(dataset.importError ? { error: dataset.importError.error } : {}),
       });
     }
 

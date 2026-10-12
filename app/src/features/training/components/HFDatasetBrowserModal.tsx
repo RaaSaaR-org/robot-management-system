@@ -9,22 +9,26 @@
  * while nothing was listening, and a "successful" import of
  * nvidia/GR00T-N1.7-AppleToPlate downloaded 73 MB of parquet and none of the
  * 929 MB of video the dataset is mostly made of. (TASK-220)
+ *
+ * It then held the operator on a spinner until the download ended. Now it only
+ * starts the import and closes; `useImportJobsStore` and the top-bar
+ * `ImportActivity` panel follow it from there. (TASK-352)
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { CheckCircle2, Search, XCircle } from 'lucide-react';
+import { Search, XCircle } from 'lucide-react';
 import {
-  Button, Checkbox, DataTable, EmptyState, FormField, Input, KeyValueList, Modal, Panel, ProgressBar, Select,
-  SkeletonRows, SkeletonText, Spinner, StatusTag, Tabs, ToggleChip, toast,
+  Button, Checkbox, DataTable, EmptyState, FormField, Input, KeyValueList, Modal, Panel, Select,
+  SkeletonRows, SkeletonText, StatusTag, Tabs, ToggleChip, toast,
 } from '@/shared/components/ui';
 import type { DataTableColumn, Tab } from '@/shared/components/ui';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
 import { trainingApi } from '../api';
+import { useImportJobsStore } from '../store/importJobsStore';
+import { formatBytes } from './datasets/datasetFormat';
 import type {
   Dataset,
   HFDataset,
   HFDatasetPreview,
-  HFImportProgress,
   RobotType,
 } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
@@ -121,21 +125,7 @@ export interface HFDatasetBrowserModalProps {
   existingDatasets?: Dataset[];
 }
 
-type ImportState = 'idle' | 'preview' | 'importing' | 'done' | 'error';
-
-/** One frame off the import progress socket. Only these fields are read. */
-interface ImportSocketMessage {
-  type?: string;
-  datasetId?: string;
-  error?: string;
-  importProgress?: {
-    datasetId: string;
-    status: HFImportProgress['status'];
-    progress?: number;
-    currentFile?: string;
-    error?: string;
-  };
-}
+type ImportState = 'idle' | 'preview' | 'error';
 
 /**
  * Modal for searching, previewing and importing HuggingFace datasets
@@ -169,25 +159,17 @@ export function HFDatasetBrowserModal({
   const [includeVideos, setIncludeVideos] = useState(true);
   const [videosTouched, setVideosTouched] = useState(false);
 
-  // Import state
+  // Import state. The import itself runs on the server and is followed by the
+  // top-bar tracker (TASK-352); this modal only starts it and gets out of the way.
   const [importState, setImportState] = useState<ImportState>('idle');
-  const [importProgress, setImportProgress] = useState<HFImportProgress | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
-  // The progress socket went away while an import was still running. Not an
-  // import failure — the import runs detached on the server and carries on —
-  // just the end of our ability to watch it.
-  const [feedLost, setFeedLost] = useState(false);
-
-  const wsRef = useRef<WebSocket | null>(null);
-  // Null until the POST comes back with an id. Everything the socket says
-  // before that is held in `bufferRef` rather than thrown away.
-  const datasetIdRef = useRef<string | null>(null);
-  const bufferRef = useRef<ImportSocketMessage[]>([]);
-
-  const closeSocket = useCallback(() => {
-    wsRef.current?.close();
-    wsRef.current = null;
-  }, []);
+  const [starting, setStarting] = useState(false);
+  // An import started and then closed on keeps going; a refusal that arrives
+  // after the modal is gone is said as a toast instead.
+  const isOpenRef = useRef(isOpen);
+  useEffect(() => { isOpenRef.current = isOpen; }, [isOpen]);
+  const track = useImportJobsStore((state) => state.track);
+  const openPanel = useImportJobsStore((state) => state.openPanel);
 
   const resetState = useCallback(() => {
     setSearchQuery('');
@@ -205,14 +187,10 @@ export function HFDatasetBrowserModal({
     setPreviewError(null);
     setIncludeVideos(true);
     setVideosTouched(false);
-    setFeedLost(false);
     setImportState('idle');
-    setImportProgress(null);
     setImportError(null);
-    datasetIdRef.current = null;
-    bufferRef.current = [];
-    closeSocket();
-  }, [closeSocket]);
+    setStarting(false);
+  }, []);
 
   const handleClose = useCallback(() => {
     resetState();
@@ -314,134 +292,37 @@ export function HFDatasetBrowserModal({
     void loadPreview(repoId, revision, false);
   }, [loadPreview, revision]);
 
-  const applyMessage = useCallback((data: ImportSocketMessage) => {
-    if (data.type === 'dataset:import:progress' && data.importProgress) {
-      const ip = data.importProgress;
-      setImportProgress({
-        datasetId: ip.datasetId,
-        status: ip.status,
-        progress: ip.progress ?? 0,
-        currentFile: ip.currentFile,
-        error: ip.error,
-      });
-
-      if (ip.status === 'failed') {
-        setImportState('error');
-        setImportError(ip.error ?? 'Import failed');
-        closeSocket();
-      }
-    } else if (data.type === 'dataset:import:completed') {
-      setImportState('done');
-      closeSocket();
-    } else if (data.type === 'dataset:import:failed') {
-      setImportState('error');
-      setImportError(data.error ?? 'Import failed');
-      closeSocket();
-    }
-  }, [closeSocket]);
-
-  const handleSocketData = useCallback((data: ImportSocketMessage) => {
-    if (datasetIdRef.current === null) {
-      bufferRef.current.push(data);
-      return;
-    }
-    if (data.datasetId !== datasetIdRef.current) return;
-    applyMessage(data);
-  }, [applyMessage]);
-
-  const openSocket = useCallback(() => {
-    if (import.meta.env.VITE_DEMO_MODE === 'true') return;
-
-    try {
-      const ws = new WebSocket(getWebSocketUrl());
-      wsRef.current = ws;
-      ws.onmessage = (event: MessageEvent) => {
-        try {
-          handleSocketData(JSON.parse(event.data as string) as ImportSocketMessage);
-        } catch {
-          // Non-JSON frames are not ours.
-        }
-      };
-      ws.onerror = () => {
-        console.error('[HFImport] WebSocket error');
-      };
-      // A socket that closes mid-import used to leave the modal on the spinner
-      // for ever: no further frames, no error, and the modal refuses backdrop
-      // and Escape while importing — so the operator was trapped watching a
-      // progress bar that would never move again. The import itself is
-      // unaffected (it runs detached on the server), so the honest thing is to
-      // say the feed is gone and let them out to the dataset list.
-      ws.onclose = () => {
-        // Every deliberate close goes through `closeSocket`, which nulls the
-        // ref first — on success, on failure, on cancel, on unmount. So a close
-        // arriving while the ref still points at THIS socket is one nobody
-        // asked for, and the import it was reporting on is still in flight.
-        if (wsRef.current !== ws) return;
-        wsRef.current = null;
-        setFeedLost(true);
-      };
-    } catch {
-      console.error('[HFImport] Failed to create WebSocket');
-      setFeedLost(true);
-    }
-  }, [handleSocketData]);
-
+  // Start the import and hand it to the background tracker. The POST returns
+  // as soon as the server has pinned the commit and created the row (a sink it
+  // cannot write to is refused right here, 503); the download runs on.
   const handleImport = useCallback(async () => {
     const repoId = pendingRepoId;
     if (!repoId) return;
 
-    setImportState('importing');
+    setStarting(true);
     setImportError(null);
-    setImportProgress({ datasetId: '', status: 'importing', progress: 0 });
-    datasetIdRef.current = null;
-    bufferRef.current = [];
-
-    // BEFORE the POST. An import that fails in its first second — a repo the
-    // server cannot reach, an object store that is down — publishes its failure
-    // frame before this promise resolves, and subscribing afterwards missed it
-    // entirely: the modal sat on "Importing…" forever.
-    openSocket();
-
     try {
       const { datasetId } = await trainingApi.importFromHuggingFace(repoId, {
         revision: revision.trim() || undefined,
         robotTypeId: robotTypeId || undefined,
         includeVideos,
       });
-
-      setImportProgress((prev) => (prev ? { ...prev, datasetId } : {
-        datasetId,
-        status: 'importing',
-        progress: 0,
-      }));
-
-      datasetIdRef.current = datasetId;
-      const buffered = bufferRef.current;
-      bufferRef.current = [];
-      for (const message of buffered) {
-        if (message.datasetId === datasetId) applyMessage(message);
-      }
+      track(datasetId, repoId);
+      toast.info('Import running in the background', {
+        description: repoId,
+        action: { label: 'Show progress', onClick: () => openPanel(datasetId) },
+      });
+      onSuccess?.();
+      if (isOpenRef.current) handleClose();
     } catch (err) {
+      const message = getErrorMessage(err, 'Import failed');
+      setStarting(false);
       setImportState('error');
-      setImportError(getErrorMessage(err, 'Import failed'));
-      closeSocket();
+      setImportError(message);
+      if (!isOpenRef.current) toast.error("Couldn't start the import", { description: `${repoId}: ${message}` });
     }
-  }, [pendingRepoId, revision, robotTypeId, includeVideos, openSocket, applyMessage, closeSocket]);
+  }, [pendingRepoId, revision, robotTypeId, includeVideos, track, openPanel, onSuccess, handleClose]);
 
-  const handleDone = useCallback(() => {
-    toast.success('Dataset imported', { description: pendingRepoId ?? undefined });
-    onSuccess?.();
-    handleClose();
-  }, [onSuccess, handleClose, pendingRepoId]);
-
-  // Cleanup WebSocket on unmount
-  useEffect(() => {
-    return () => {
-      wsRef.current?.close();
-    };
-  }, []);
-
-  const isImporting = importState === 'importing';
 
   const isDatasetImported = useCallback(
     (repoId: string) => existingDatasets.some((d) => d.huggingFaceRepoId === repoId),
@@ -484,7 +365,7 @@ export function HFDatasetBrowserModal({
       {!isSearching && searchResults.length > 0 && (
         <HubTable
           caption="Search results"
-          disabled={isImporting}
+          disabled={starting}
           onPreview={beginPreview}
           rows={searchResults.map((ds) => ({
             repoId: ds.id,
@@ -527,7 +408,7 @@ export function HFDatasetBrowserModal({
         robotTypes={robotTypes}
       />
       <div className="flex justify-end">
-        <Button type="submit" disabled={!parsedRepoId || isImporting}>Preview</Button>
+        <Button type="submit" disabled={!parsedRepoId || starting}>Preview</Button>
       </div>
     </form>
   );
@@ -535,7 +416,7 @@ export function HFDatasetBrowserModal({
   const featuredTab = (
     <HubTable
       caption="Featured datasets"
-      disabled={isImporting}
+      disabled={starting}
       onPreview={beginPreview}
       rows={FEATURED_DATASETS.map((ds) => ({
         repoId: ds.repoId,
@@ -564,23 +445,19 @@ export function HFDatasetBrowserModal({
         <Button
           variant="secondary"
           onClick={() => pendingRepoId && void loadPreview(pendingRepoId, revision, videosTouched)}
-          disabled={previewLoading}
+          disabled={previewLoading || starting}
         >
           Re-check
         </Button>
-        <Button onClick={handleImport} disabled={previewLoading}>
+        <Button onClick={handleImport} disabled={previewLoading} isLoading={starting}>
           {preview ? `Import ${formatBytes(preview.dataBytes + (includeVideos ? preview.videoBytes : 0))}` : 'Import anyway'}
         </Button>
       </>
-    ) : importState === 'done' ? (
-      <Button onClick={handleDone}>Done</Button>
     ) : importState === 'error' ? (
       <>
         <Button variant="ghost" onClick={handleClose}>Close</Button>
         <Button onClick={() => { setImportState('preview'); setImportError(null); }}>Try again</Button>
       </>
-    ) : feedLost ? (
-      <Button variant="secondary" onClick={handleClose}>Close</Button>
     ) : undefined;
 
   return (
@@ -590,10 +467,8 @@ export function HFDatasetBrowserModal({
       title="Import from Hugging Face"
       description={importState === 'idle' ? 'Pick a LeRobot dataset on the Hub, check what it holds, then import it.' : undefined}
       size="lg"
-      // An import is a download of up to a gigabyte with no resume.
-      closeOnBackdrop={!isImporting || feedLost}
-      closeOnEscape={!isImporting || feedLost}
-      showCloseButton={!isImporting || feedLost}
+      // Never trapped: the import runs on the server, and the top-bar
+      // tracker follows it wherever the operator goes next (TASK-352).
       footer={footer}
     >
       {importState === 'idle' && <Tabs tabs={tabs} defaultTab="featured" />}
@@ -634,40 +509,6 @@ export function HFDatasetBrowserModal({
             checked={includeVideos}
             onChange={(e) => { setVideosTouched(true); setIncludeVideos(e.target.checked); }}
           />
-        </div>
-      )}
-
-      {importState === 'importing' && feedLost && (
-        <div className="flex flex-col items-center gap-2 py-8 text-center" data-testid="hf-import-feed-lost">
-          <p className="text-sm font-medium text-ink-primary">Lost the live connection to the server</p>
-          <p className="max-w-md text-sm text-ink-secondary">
-            The import itself is still running — it does not depend on this window. Close this
-            and the dataset will show how it ended, with the reason if it failed.
-          </p>
-        </div>
-      )}
-
-      {importState === 'importing' && !feedLost && (
-        <div className="flex flex-col items-center gap-3 py-8 text-center">
-          <Spinner size="lg" color="primary" />
-          <p className="text-sm font-medium text-ink-primary">Importing dataset…</p>
-          {importProgress && (
-            <div className="flex w-full flex-col gap-2">
-              <ProgressBar value={importProgress.progress} showValue />
-              {importProgress.currentFile && (
-                <p className="truncate font-mono text-xs text-ink-tertiary">{importProgress.currentFile}</p>
-              )}
-              <StatusTag status={importProgress.status} className="self-center" />
-            </div>
-          )}
-        </div>
-      )}
-
-      {importState === 'done' && (
-        <div className="flex flex-col items-center gap-2 py-8 text-center">
-          <CheckCircle2 className="h-8 w-8 text-signal-measured" strokeWidth={1.75} />
-          <p className="text-base font-medium text-ink-primary">Dataset imported</p>
-          <p className="text-sm text-ink-secondary">It is ready for training.</p>
         </div>
       )}
 
@@ -806,11 +647,3 @@ function HubTable({ rows, onPreview, disabled, caption }: {
   );
 }
 
-/** Sizes in the units the Hub itself quotes, so they can be compared by eye. */
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  const value = bytes / Math.pow(1024, exponent);
-  return `${value.toFixed(value >= 100 || exponent === 0 ? 0 : 1)} ${units[exponent]}`;
-}

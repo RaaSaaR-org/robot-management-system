@@ -12,6 +12,7 @@ import { ReactNode, useState } from 'react';
 import { CommandPalette, usePaletteHotkey } from '@/components/palette';
 import { useUIStore } from '@/features/settings/store/uiStore';
 import { useRobotWebSocket } from '@/features/robots/hooks/useRobotWebSocket';
+import { useImportJobsFeed } from '@/features/training/hooks/useImportJobsFeed';
 import { AlertBanner } from '@/features/alerts/components/AlertBanner';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
@@ -53,6 +54,8 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   // Real-time robot updates for every page in the shell
   useRobotWebSocket();
+  // Background dataset imports are followed from every page (TASK-352).
+  useImportJobsFeed();
 
   return (
     <div data-app-shell className="min-h-screen bg-canvas text-ink-primary">

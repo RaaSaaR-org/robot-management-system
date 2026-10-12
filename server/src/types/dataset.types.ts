@@ -137,7 +137,39 @@ export interface HuggingFaceImportProgress {
   currentFile?: string;
   totalFiles?: number;
   completedFiles?: number;
+  /**
+   * Bytes stored so far and the total of the files selected for download
+   * (#370). `totalBytes` is absent when the Hub did not report a size for
+   * every file; the UI then measures by `completedFiles / totalFiles`.
+   */
+  downloadedBytes?: number;
+  totalBytes?: number;
+  /** `metadata` imports skip the videos; `full` fetches everything. */
+  importMode?: DatasetImportMode;
   error?: string;
+}
+
+export type ImportLogLevel = 'info' | 'warn' | 'error';
+
+/** One line of an import's activity log (TASK-352). */
+export interface ImportLogLine {
+  /** ISO timestamp */
+  at: string;
+  level: ImportLogLevel;
+  message: string;
+}
+
+/** GET /api/datasets/:id/import/log */
+export interface ImportLogResponse {
+  datasetId: string;
+  status: string;
+  importError: DatasetImportError | null;
+  progress: HuggingFaceImportProgress | null;
+  lines: ImportLogLine[];
+  /** Lines that fell off the front of the bounded ring. */
+  dropped: number;
+  /** False when this server holds no log for the import (restart, eviction). */
+  retained: boolean;
 }
 
 // ============================================================================
@@ -505,6 +537,7 @@ export type DatasetEventType =
   | 'dataset:validation:failed'
   | 'dataset:import:started'
   | 'dataset:import:progress'
+  | 'dataset:import:log'
   | 'dataset:import:completed'
   | 'dataset:import:failed'
   | 'dataset:push-hf:started'
@@ -521,6 +554,8 @@ export interface DatasetEvent {
   dataset?: DatasetResponse;
   progress?: DatasetValidationProgress;
   importProgress?: HuggingFaceImportProgress;
+  /** One activity line, on `dataset:import:log` (TASK-352) */
+  log?: ImportLogLine;
   error?: string;
   timestamp: string;
 }

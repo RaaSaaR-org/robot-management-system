@@ -28,6 +28,7 @@ const hf = vi.hoisted(() => ({
 
 const datasets = vi.hoisted(() => ({
   get: vi.fn(),
+  getUploadProgress: vi.fn(),
 }));
 
 vi.mock('../../services/HuggingFaceImportService.js', async () => {
@@ -45,6 +46,7 @@ vi.mock('../../services/HuggingFaceImportService.js', async () => {
 vi.mock('../../services/DatasetService.js', () => ({
   datasetService: {
     get: datasets.get,
+    getUploadProgress: datasets.getUploadProgress,
     list: vi.fn().mockResolvedValue({ data: [], pagination: {} }),
     on: vi.fn(),
     off: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock('../../services/DatasetService.js', () => ({
 
 import { datasetRoutes } from '../datasets.routes.js';
 import { HuggingFaceImportError } from '../../services/HuggingFaceImportService.js';
+import { importActivityLog } from '../../services/ImportActivityLog.js';
 
 const PREVIEW = {
   repoId: 'nvidia/GR00T-N1.7-AppleToPlate',
@@ -247,6 +250,87 @@ describe('dataset HuggingFace routes', () => {
       expect(hf.importDataset).toHaveBeenCalledWith(
         expect.objectContaining({ repoId: PREVIEW.repoId, includeVideos: true }),
       );
+    });
+  });
+
+  describe('GET /:id/import/log (TASK-352)', () => {
+    it('backfills the lines and the last progress frame of an import this server is running', async () => {
+      importActivityLog.start('ds-log');
+      importActivityLog.append('ds-log', 'info', 'Downloading 3 files from the Hub');
+      importActivityLog.setProgress('ds-log', {
+        datasetId: 'ds-log', status: 'importing', phase: 'downloading', progress: 40,
+      });
+      datasets.get.mockResolvedValue({ id: 'ds-log', status: 'importing', importError: null });
+
+      const response = await request(app).get('/api/datasets/ds-log/import/log');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        datasetId: 'ds-log',
+        status: 'importing',
+        retained: true,
+        progress: { progress: 40 },
+        lines: [{ level: 'info', message: 'Downloading 3 files from the Hub' }],
+      });
+    });
+
+    it('still gives the status and the reason after a restart lost the lines', async () => {
+      importActivityLog.forget('ds-old');
+      const importError = { phase: 'downloading', error: '500 Server Error', repoId: 'a/b', failedAt: '2026-10-12T00:00:00Z' };
+      datasets.get.mockResolvedValue({ id: 'ds-old', status: 'failed', importError });
+
+      const response = await request(app).get('/api/datasets/ds-old/import/log');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ status: 'failed', importError, lines: [], retained: false });
+    });
+
+    it('404s for a dataset that does not exist', async () => {
+      datasets.get.mockResolvedValue(null);
+      const response = await request(app).get('/api/datasets/nope/import/log');
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe('GET /:id/progress during a Hub import (#370)', () => {
+    const DOWNLOADING = {
+      datasetId: 'ds-dl', status: 'importing' as const, phase: 'downloading' as const, progress: 42,
+      totalFiles: 40, completedFiles: 12, downloadedBytes: 400, totalBytes: 1000, importMode: 'full' as const,
+    };
+
+    it('answers with the download frame, not the 0 it fell through to before', async () => {
+      importActivityLog.start('ds-dl');
+      importActivityLog.setProgress('ds-dl', DOWNLOADING);
+      datasets.getUploadProgress.mockResolvedValue(null);
+
+      const response = await request(app).get('/api/datasets/ds-dl/progress');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(DOWNLOADING);
+      // The validation-progress store was not even asked: a download has none.
+      expect(datasets.getUploadProgress).not.toHaveBeenCalled();
+    });
+
+    it('says null (unmeasured) for an import whose frame a restart lost', async () => {
+      importActivityLog.forget('ds-lost');
+      datasets.getUploadProgress.mockResolvedValue(null);
+      datasets.get.mockResolvedValue({ id: 'ds-lost', status: 'importing', huggingFaceRepoId: 'a/b', importError: null });
+
+      const response = await request(app).get('/api/datasets/ds-lost/progress');
+
+      expect(response.body).toEqual({ datasetId: 'ds-lost', status: 'importing', progress: null });
+    });
+
+    it('keeps where a failed import stopped, with the persisted reason', async () => {
+      importActivityLog.start('ds-f');
+      importActivityLog.setProgress('ds-f', { ...DOWNLOADING, datasetId: 'ds-f', status: 'failed', error: 'terminated' });
+      datasets.getUploadProgress.mockResolvedValue(null);
+      const importError = { phase: 'downloading', error: 'terminated', repoId: 'a/b', failedAt: '2026-10-12T00:00:00Z' };
+      datasets.get.mockResolvedValue({ id: 'ds-f', status: 'failed', huggingFaceRepoId: 'a/b', importError });
+
+      const response = await request(app).get('/api/datasets/ds-f/progress');
+
+      expect(response.body).toMatchObject({ status: 'failed', progress: 42, completedFiles: 12, error: 'terminated' });
     });
   });
 });
