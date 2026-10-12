@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
+import { getWebSocketUrl, openServerSocket } from '@/shared/utils/websocket';
 import { useAgentModeStore } from '../store/agentmodeStore';
 import { usePatrolStore } from '@/features/patrol/store/patrolStore';
 import { isAgentModeEvent } from '../types/agentmode.types';
@@ -110,7 +110,7 @@ export function useAgentModeSocket(robotId: string | null): UseAgentModeSocketRe
       actions.setConnectionStatus('connecting');
 
       try {
-        const ws = new WebSocket(getWebSocketUrl('/api/a2a/ws'));
+        const ws = openServerSocket(getWebSocketUrl('/api/a2a/ws'));
         wsRef.current = ws;
 
         ws.onopen = () => {

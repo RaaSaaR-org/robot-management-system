@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
+import { getWebSocketUrl, openServerSocket } from '@/shared/utils/websocket';
 import type {
   TwinWebSocketEvent,
   SessionProgressEvent,
@@ -90,7 +90,7 @@ export function useTwinEvents(handlers: UseTwinEventsHandlers): { isConnected: b
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     try {
-      const ws = new WebSocket(getWebSocketUrl());
+      const ws = openServerSocket(getWebSocketUrl());
       ws.onopen = () => {
         connectedRef.current = true;
       };

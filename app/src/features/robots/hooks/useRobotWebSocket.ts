@@ -10,7 +10,7 @@ import { pushFastTelemetry } from '../store/telemetryLive';
 import { useSafetyStore } from '@/features/safety';
 import type { Robot, RobotTelemetry } from '../types/robots.types';
 import type { EStopEvent } from '@/features/safety/types/safety.types';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
+import { getWebSocketUrl, openServerSocket } from '@/shared/utils/websocket';
 
 // ============================================================================
 // TYPES
@@ -176,7 +176,7 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
     intentionalCloseRef.current = false;
 
     try {
-      const ws = new WebSocket(url);
+      const ws = openServerSocket(url);
 
       ws.onopen = () => {
         isConnectedRef.current = true;

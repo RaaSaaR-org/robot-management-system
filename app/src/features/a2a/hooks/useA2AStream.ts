@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useA2AStore } from '../store';
 import type { A2ATaskEvent } from '../types';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
+import { getWebSocketUrl, openServerSocket } from '@/shared/utils/websocket';
 
 /** Dev-only debug logging for WebSocket lifecycle events */
 function debugLog(...args: unknown[]): void {
@@ -106,7 +106,7 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
     intentionalCloseRef.current = false;
 
     try {
-      const ws = new WebSocket(getWebSocketUrl());
+      const ws = openServerSocket(getWebSocketUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {

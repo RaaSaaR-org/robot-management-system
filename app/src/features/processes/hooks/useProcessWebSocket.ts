@@ -7,7 +7,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useTasksStore } from '../store/tasksStore';
 import type { Process, ProcessStep } from '../types';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
+import { getWebSocketUrl, openServerSocket } from '@/shared/utils/websocket';
 
 // ============================================================================
 // TYPES
@@ -210,7 +210,7 @@ export function useProcessWebSocket(options: UseProcessWebSocketOptions = {}) {
     }
 
     try {
-      const ws = new WebSocket(url);
+      const ws = openServerSocket(url);
       intentionalCloseRef.current = false;
 
       ws.onopen = () => {

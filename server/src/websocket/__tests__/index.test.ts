@@ -734,4 +734,54 @@ describe('setupWebSocket', () => {
       expect(msg.metrics).toEqual({ latency: 10 });
     });
   });
+
+  // TASK-366: with auth on, an event reaches only a socket that proved who it is.
+  describe('with auth enabled', () => {
+    const previous = process.env.AUTH_DISABLED;
+    beforeEach(() => { process.env.AUTH_DISABLED = 'false'; });
+    afterEach(() => { process.env.AUTH_DISABLED = previous; });
+
+    it('sends nothing to an anonymous socket', () => {
+      const wss = setup();
+      const anonymous = connect(wss, makeClient());
+      anonymous.reset();
+      services.robot.cb?.({ type: 'robot_telemetry', robotId: 'r1', timestamp: 'now' });
+      services.alert.cb?.({ type: 'alert:created', alert: { id: 'a1' }, timestamp: 1 });
+      expect(anonymous.sent).toEqual([]);
+    });
+
+    it('starts sending once the socket authenticates in-band', async () => {
+      const jwt = (await import('jsonwebtoken')).default;
+      const token = jwt.sign(
+        { userId: 'u1', email: 'u1@test', role: 'member', tenantId: null },
+        process.env.JWT_SECRET as string
+      );
+      const wss = setup();
+      const client = connect(wss, makeClient());
+      client.emit('message', Buffer.from(JSON.stringify({ type: 'auth', token })));
+      expect(JSON.parse(client.sent.at(-1) as string)).toEqual({ type: 'auth', authenticated: true });
+      client.reset();
+      services.alert.cb?.({ type: 'alert:created', alert: { id: 'a1' }, timestamp: 1 });
+      expect(client.sent).toHaveLength(1);
+    });
+
+    it('rejects an expired token with an auth error and keeps the socket unidentified', async () => {
+      const jwt = (await import('jsonwebtoken')).default;
+      const token = jwt.sign(
+        { userId: 'u1', email: 'u1@test', role: 'member', tenantId: null, exp: Math.floor(Date.now() / 1000) - 60 },
+        process.env.JWT_SECRET as string
+      );
+      const wss = setup();
+      const client = connect(wss, makeClient());
+      client.emit('message', Buffer.from(JSON.stringify({ type: 'auth', token })));
+      expect(JSON.parse(client.sent.at(-1) as string)).toEqual({
+        type: 'auth',
+        authenticated: false,
+        error: 'invalid_token',
+      });
+      client.reset();
+      services.alert.cb?.({ type: 'alert:created', alert: { id: 'a1' }, timestamp: 1 });
+      expect(client.sent).toEqual([]);
+    });
+  });
 });

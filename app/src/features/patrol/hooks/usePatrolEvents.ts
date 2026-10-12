@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { getWebSocketUrl } from '@/shared/utils/websocket';
+import { getWebSocketUrl, openServerSocket } from '@/shared/utils/websocket';
 import { isAgentModeEvent } from '@/features/agentmode/types/agentmode.types';
 import type { AgentModeEvent } from '@/features/agentmode/types/agentmode.types';
 import { usePatrolStore } from '../store/patrolStore';
@@ -58,7 +58,7 @@ export function usePatrolEvents(robotId?: string | null, enabled = true): UsePat
     const connect = () => {
       if (!mounted) return;
       try {
-        const ws = new WebSocket(getWebSocketUrl('/api/a2a/ws'));
+        const ws = openServerSocket(getWebSocketUrl('/api/a2a/ws'));
         wsRef.current = ws;
         ws.onopen = () => {
           if (!mounted) return;

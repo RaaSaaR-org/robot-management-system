@@ -58,6 +58,21 @@ const DEFAULT_CONFIG: ApiClientConfig = {
  * Default token storage implementation using localStorage.
  * Can be replaced with a custom implementation for different storage strategies.
  */
+const accessTokenListeners = new Set<(token: string) => void>();
+
+/**
+ * Subscribe to access-token changes made through `tokenStorage.setTokens` —
+ * a refresh, a login. Long-lived connections that carry the token in-band
+ * (the server event socket, TASK-366) use it to re-identify themselves.
+ * Returns the unsubscribe function.
+ */
+export function onAccessTokenChange(listener: (token: string) => void): () => void {
+  accessTokenListeners.add(listener);
+  return () => {
+    accessTokenListeners.delete(listener);
+  };
+}
+
 export const tokenStorage: TokenStorage = {
   getAccessToken: () => {
     if (typeof window === 'undefined') return null;
@@ -69,8 +84,18 @@ export const tokenStorage: TokenStorage = {
   },
   setTokens: (access: string, refresh: string) => {
     if (typeof window === 'undefined') return;
+    const previous = localStorage.getItem('access_token');
     localStorage.setItem('access_token', access);
     localStorage.setItem('refresh_token', refresh);
+    if (access !== previous) {
+      for (const listener of [...accessTokenListeners]) {
+        try {
+          listener(access);
+        } catch {
+          // A listener's failure must not break the token write.
+        }
+      }
+    }
   },
   clearTokens: () => {
     if (typeof window === 'undefined') return;
@@ -78,6 +103,75 @@ export const tokenStorage: TokenStorage = {
     localStorage.removeItem('refresh_token');
   },
 };
+
+// ============================================================================
+// TOKEN REFRESH (shared, single-flight)
+// ============================================================================
+
+// One refresh at a time, process-wide: with rotating refresh tokens, a second
+// concurrent refresh would present an already-rotated token and end the
+// session. The HTTP 401 interceptor and the event socket share this flight.
+let refreshInFlight: Promise<string> | null = null;
+
+/**
+ * Exchange the stored refresh token for a new access token, joining a refresh
+ * that is already under way. Rejects when there is no refresh token or the
+ * refresh fails; only a rejected refresh token (401/403) ends the session —
+ * a 429, a 5xx or a network error leaves the tokens for the next attempt.
+ */
+export function refreshAccessToken(baseURL: string = DEFAULT_CONFIG.baseURL): Promise<string> {
+  if (!refreshInFlight) {
+    const refreshToken = tokenStorage.getRefreshToken();
+    if (!refreshToken) return Promise.reject(new Error('No refresh token'));
+    refreshInFlight = axios
+      .post<{ accessToken: string; refreshToken: string }>(`${baseURL}/auth/refresh`, { refreshToken })
+      .then(({ data }) => {
+        tokenStorage.setTokens(data.accessToken, data.refreshToken);
+        return data.accessToken;
+      })
+      .catch((error: unknown) => {
+        const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+        if (status === 401 || status === 403) tokenStorage.clearTokens();
+        throw error;
+      })
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
+/** Seconds-since-epoch `exp` of a JWT, or null when it has none / is not a JWT. */
+function tokenExpiry(token: string): number | null {
+  const payload = token.split('.')[1];
+  if (!payload) return null;
+  try {
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const json = JSON.parse(atob(base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=')));
+    return typeof json?.exp === 'number' ? json.exp : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The stored access token, refreshed first when it is expired or expires
+ * within `minValidityMs`. Never rejects: null when signed out or the refresh
+ * ended the session; the current (possibly stale) token when the refresh
+ * failed transiently, so the caller behaves exactly as it did before.
+ */
+export async function ensureFreshAccessToken(minValidityMs = 30_000): Promise<string | null> {
+  const token = tokenStorage.getAccessToken();
+  if (!token) return null;
+  const exp = tokenExpiry(token);
+  if (exp === null || exp * 1000 - Date.now() > minValidityMs) return token;
+  if (!tokenStorage.getRefreshToken()) return token;
+  try {
+    return await refreshAccessToken();
+  } catch {
+    return tokenStorage.getAccessToken();
+  }
+}
 
 // ============================================================================
 // IMPERSONATION (super-admin only, client-side preference)
@@ -145,26 +239,6 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
   // Response Interceptor
   // --------------------------------------------------------------------------
 
-  // One refresh at a time: with rotating refresh tokens, a second concurrent
-  // refresh would present an already-rotated token and end the session.
-  let refreshInFlight: Promise<string> | null = null;
-  const refreshAccessToken = (refreshToken: string): Promise<string> => {
-    if (!refreshInFlight) {
-      refreshInFlight = axios
-        .post<{ accessToken: string; refreshToken: string }>(`${config.baseURL}/auth/refresh`, {
-          refreshToken,
-        })
-        .then(({ data }) => {
-          tokenStorage.setTokens(data.accessToken, data.refreshToken);
-          return data.accessToken;
-        })
-        .finally(() => {
-          refreshInFlight = null;
-        });
-    }
-    return refreshInFlight;
-  };
-
   const maxRateLimitRetries = config.maxRetries ?? DEFAULT_CONFIG.maxRetries ?? 3;
   const rateLimitBaseDelay = config.retryDelay ?? DEFAULT_CONFIG.retryDelay ?? 1000;
 
@@ -191,7 +265,7 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
 
         if (refreshToken) {
           try {
-            const accessToken = await refreshAccessToken(refreshToken);
+            const accessToken = await refreshAccessToken(config.baseURL);
 
             // Mark request to prevent infinite retry loop
             originalRequest._retryAfterRefresh = true;
@@ -201,13 +275,9 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
               originalRequest.headers.Authorization = `Bearer ${accessToken}`;
             }
             return client.request(originalRequest);
-          } catch (refreshError) {
-            // Only a rejected refresh token ends the session. A 429, a 5xx or
-            // a network error leaves the tokens for the next attempt.
-            const status = axios.isAxiosError(refreshError) ? refreshError.response?.status : undefined;
-            if (status === 401 || status === 403) {
-              tokenStorage.clearTokens();
-            }
+          } catch {
+            // refreshAccessToken already cleared the tokens if the refresh
+            // token itself was rejected; anything else keeps them.
             return Promise.reject(createApiError(error));
           }
         }
