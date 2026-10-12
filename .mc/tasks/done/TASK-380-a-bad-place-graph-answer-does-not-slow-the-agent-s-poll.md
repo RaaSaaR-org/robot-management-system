@@ -3,7 +3,7 @@ id: "TASK-380"
 aliases: []
 title: "A bad place-graph answer does not slow the agent's poll"
 slug: "a-bad-place-graph-answer-does-not-slow-the-agent-s-poll"
-status: "review"
+status: "done"
 priority: 3
 owner: "huhn511"
 projects: []
