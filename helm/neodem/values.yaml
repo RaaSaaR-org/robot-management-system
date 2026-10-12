@@ -160,6 +160,10 @@ server:
     controlLeasesEnabled: "true"
     publicUrl: ""
     corsOrigins: ""
+    # V8 sizes its default heap from the machine, not the container, and a
+    # 512Mi pod ended up with ~240 MB of it. 384 MB leaves room for buffers and
+    # native memory under the limit below; keep the two in step (TASK-355).
+    nodeOptions: "--max-old-space-size=384"
   resources:
     requests:
       memory: "256Mi"

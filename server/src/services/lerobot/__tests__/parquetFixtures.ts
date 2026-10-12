@@ -9,15 +9,24 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { DatasetObjectStore } from '../RemoteDatasetReader.js';
 
-type Field = { type: 'INT64' | 'DOUBLE'; repeated?: boolean };
+type Field = { type: 'INT64' | 'DOUBLE'; repeated?: boolean; optional?: boolean };
 
 /** Write `rows` with `fields` to a parquet buffer. */
-export async function parquetBuffer(fields: Record<string, Field>, rows: Array<Record<string, unknown>>): Promise<Buffer> {
+export async function parquetBuffer(
+  fields: Record<string, Field>,
+  rows: Array<Record<string, unknown>>,
+  layout: { rowGroupSize?: number; pageSize?: number; dataPageV1?: boolean } = {},
+): Promise<Buffer> {
   const { ParquetSchema, ParquetWriter } = await import('@dsnp/parquetjs');
   const dir = await mkdtemp(join(tmpdir(), 'lerobot-fixture-'));
   const file = join(dir, 'f.parquet');
   try {
-    const writer = await ParquetWriter.openFile(new ParquetSchema(fields), file);
+    const writer = await ParquetWriter.openFile(new ParquetSchema(fields), file, {
+      ...(layout.pageSize ? { pageSize: layout.pageSize } : {}),
+      // pyarrow writes v1 data pages; parquetjs defaults to v2.
+      ...(layout.dataPageV1 ? { useDataPageV2: false } : {}),
+    });
+    if (layout.rowGroupSize) writer.setRowGroupSize(layout.rowGroupSize);
     for (const row of rows) await writer.appendRow(row);
     await writer.close();
     return await readFile(file);
