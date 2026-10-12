@@ -3,7 +3,7 @@ id: "TASK-378"
 aliases: []
 title: "Cancelling an import asks for confirmation"
 slug: "cancelling-an-import-asks-for-confirmation"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "huhn511"
 projects: []
