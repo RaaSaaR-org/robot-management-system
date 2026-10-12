@@ -601,6 +601,29 @@ datasetRoutes.post('/:id/import/retry', async (req: Request, res: Response) => {
 });
 
 // ============================================================================
+// POST /api/datasets/:id/import/cancel - Stop a running Hub import (TASK-371)
+// ============================================================================
+//
+// The lookup comes first and goes through the tenant-scoped service: the
+// importer's record of what it is running is process-wide, so without it a
+// caller could stop another organization's import by guessing its id.
+
+datasetRoutes.post('/:id/import/cancel', async (req: Request, res: Response) => {
+  try {
+    const dataset = await datasetService.get(req.params.id);
+    if (!dataset) {
+      return res.status(404).json({ error: 'Dataset not found', code: 'NOT_FOUND' });
+    }
+    const result = await huggingFaceImportService.cancelImport(dataset.id);
+    // 200 once the run has unwound; 202 while it is still stopping.
+    res.status(result.status === 'cancelled' ? 200 : 202).json(result);
+  } catch (error) {
+    console.error(`[DatasetRoutes] Cancel failed for ${req.params.id}:`, error);
+    sendImportError(res, error, 'Failed to cancel import');
+  }
+});
+
+// ============================================================================
 // GET /api/datasets/:id/import/log - What a running (or ended) import did
 // ============================================================================
 //

@@ -396,6 +396,8 @@ export interface DatasetImportError {
   sink?: 'local' | 'rustfs';
   cause?: string;
   httpStatus?: number;
+  /** True when an operator cancelled the import rather than it failing (TASK-371). */
+  cancelled?: boolean;
 }
 
 /**
