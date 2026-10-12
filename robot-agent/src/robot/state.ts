@@ -778,7 +778,15 @@ export class RobotStateManager {
       void tick().catch(() => undefined);
       return;
     }
-    this.placeRefreshPoll = startBackoffPoll({ baseMs: appConfig.place.refreshMs, run: tick });
+    this.placeRefreshPoll = startBackoffPoll({
+      baseMs: appConfig.place.refreshMs,
+      run: tick,
+      // PlaceGraphSource already reports each distinct failure, so only the
+      // recovery is logged here — once, when the platform answers again.
+      onTransition: (t) => {
+        if (t.kind === 'recovered') logPollTransition('PlaceGraph', source.url, t);
+      },
+    });
   }
 
   /**

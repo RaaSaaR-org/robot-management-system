@@ -35,7 +35,7 @@ export type BackoffTransition =
 export type BackoffAttempt = { ok: true } | { ok: false; error: string };
 
 export interface BackoffPollOptions {
-  /** The healthy interval, and the first retry delay. Must be > 0. */
+  /** The healthy interval. Retry delays grow from `baseMs * factor` (see `backoffDelayMs`). Must be > 0. */
   baseMs: number;
   /** The longest delay between attempts while failing. */
   maxMs?: number;
