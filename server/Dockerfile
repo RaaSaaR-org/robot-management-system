@@ -41,6 +41,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/scripts/start-prod.sh ./scripts/start-prod.sh
 
 # Run as the base image's `node` user, UID/GID 1000 — the UID both Helm
 # charts force (`securityContext.runAsUser: 1000`). A UID of its own (it was
@@ -57,5 +58,6 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
 
-# Start server (runs Prisma migrations, then starts Node.js)
+# Start server: waits for the database, runs Prisma migrations, then starts
+# Node.js (scripts/start-prod.sh).
 CMD ["npm", "run", "start:prod"]

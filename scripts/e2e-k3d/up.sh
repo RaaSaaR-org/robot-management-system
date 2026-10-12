@@ -51,15 +51,14 @@ for c in $COMPONENTS; do images+=("neodem-$c:$TAG"); done
 # to the node, every run re-downloads ~600 MB, and the first run measured over
 # ten minutes of pulls — past helm's --wait, so the bucket-init hook never ran.
 # `docker pull` of a cached tag only checks the digest, so `latest` (RustFS)
-# still tracks upstream the way production's IfNotPresent pull does on a fresh node.
+# still tracks upstream the way production's IfNotPresent pull does on a fresh
+# node, for whatever the chart leaves unpinned.
 if [ -f "$NEODEM_CHART/Chart.yaml" ]; then
   while read -r img; do
     log "pulling $img"
     docker pull -q "$img" >/dev/null
     images+=("$img")
-  done < <(helm template e2e "$NEODEM_CHART" -f "$VALUES_FILE" \
-    | sed -nE 's/^[[:space:]]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' \
-    | grep -v -E '(^|/)neodem-' | sort -u)
+  done < <(chart_images)
 fi
 # Saved to a tarball for ONE platform, then imported. A pulled image is a
 # multi-arch index whose other platforms' layers Docker (containerd store)
