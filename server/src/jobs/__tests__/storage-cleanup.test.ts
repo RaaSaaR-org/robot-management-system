@@ -94,7 +94,7 @@ describe('StorageCleanupJob', () => {
 
       const result = await job.runCleanup();
 
-      const reason = 'RustFS configured but unavailable (state=unavailable, errorKind=connectivity)';
+      const reason = 'RustFS configured but not ready (state=unavailable, errorKind=connectivity)';
       expect(result).toEqual({ deletedCount: 0, deletedSize: 0, errors: [reason] });
       expect(cleanupTempUploads).not.toHaveBeenCalled();
       expect(console.warn).toHaveBeenCalledTimes(1);

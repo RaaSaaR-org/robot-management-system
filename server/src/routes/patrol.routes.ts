@@ -17,6 +17,7 @@ import { patrolService } from '../services/PatrolService.js';
 import { patrolPhotoStore, PatrolPhotoKinds, isSafeIdSegment, isSafePhotoKey, type PatrolPhotoKind } from '../services/PatrolPhotoStore.js';
 import { HttpClientError } from '../services/HttpClient.js';
 import { AppError } from '../utils/errors.js';
+import { storageRefusalFields } from '../utils/routeErrors.js';
 import { PatrolFindingStatuses, PatrolRunStatuses, type PatrolFindingStatus, type PatrolRunStatus } from '../types/agent-mode.types.js';
 
 export const patrolRoutes = Router();
@@ -49,7 +50,7 @@ function limitOf(req: Request, dflt: number): number {
  */
 function respondError(res: Response, error: unknown, action: string): void {
   if (error instanceof AppError) {
-    res.status(error.statusCode).json({ error: error.message, code: error.code });
+    res.status(error.statusCode).json({ error: error.message, code: error.code, ...storageRefusalFields(error) });
     return;
   }
   if (error instanceof HttpClientError) {

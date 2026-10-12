@@ -60,6 +60,7 @@ import { agentModeRoutes } from '../routes/agent-mode.routes.js';
 import { agentModeService } from '../services/AgentModeService.js';
 import { NotFoundError, BadRequestError } from '../utils/errors.js';
 import { HttpClientError } from '../services/HttpClient.js';
+import { StorageUnavailableError } from '../storage/availability.js';
 
 function createApp() {
   const app = express();
@@ -98,6 +99,15 @@ describe('patrol routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual([ROUTE]);
     expect(mockPatrolService.listRoutes).toHaveBeenCalledWith({ robotId: 'robot-001' });
+  });
+
+  // TASK-381: a storage refusal carries the same body fields sendFailure gives it.
+  it('a storage refusal answers 503 with code, state and errorKind', async () => {
+    mockPatrolService.listRoutes.mockRejectedValueOnce(new StorageUnavailableError({ state: 'unavailable', errorKind: 'auth' }));
+    const res = await request(app).get('/api/patrol/routes');
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ code: 'STORAGE_UNAVAILABLE', state: 'unavailable', errorKind: 'auth' });
+    expect(res.body.error).toContain('(auth)');
   });
 
   it('POST /api/patrol/routes → 201; validation errors → 400', async () => {

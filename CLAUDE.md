@@ -431,4 +431,4 @@ Guidelines:
 - **Simulation only**: Robot agent runs in simulation mode for development
 - **SQLite locally**: Prisma schema targets PostgreSQL but local dev uses SQLite with JSON-encoded arrays
 - **Auth disabled in dev**: JWT auth exists but bypassed via `AUTH_DISABLED=true`
-- **Optional infra**: NATS and RustFS are optional — services log warnings and disable features when unavailable
+- **Optional infra**: NATS and RustFS are optional — without NATS, services log warnings and disable features. RustFS is optional only while `RUSTFS_ENDPOINT` is unset (storage callers then use their local-disk path where they have one); once it is set, RustFS is required and storage callers refuse with 503 `STORAGE_UNAVAILABLE` while it is down — there is no local-disk fallback

@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { Readable } from 'stream';
+import { StorageUnavailableError } from '../storage/availability.js';
 
 // In-memory clip store + repository state (the mocked I/O boundaries)
 const { clipStore, mockIncidentRepository, mockStorage } = vi.hoisted(() => {
@@ -196,6 +197,26 @@ describe('Incident Clip Routes (TASK-179 §6)', () => {
       expect(response.status).toBe(413);
       expect(response.body.error).toMatch(/exceeds maximum size/);
       expect(mockStorage.uploadIncidentClip).not.toHaveBeenCalled();
+    });
+
+    // TASK-381: a storage refusal reaches the client as the TASK-350 503 shape.
+    it('answers 503 with the RustFS state and errorKind while storage is down', async () => {
+      mockStorage.uploadIncidentClip.mockRejectedValueOnce(
+        new StorageUnavailableError({ state: 'unavailable', errorKind: 'connectivity' })
+      );
+
+      const response = await request(app)
+        .put('/api/incidents/inc-001/clip')
+        .set('Content-Type', 'application/octet-stream')
+        .send(Buffer.from(JSON.stringify(CLIP)));
+
+      expect(response.status).toBe(503);
+      expect(response.body).toMatchObject({
+        code: 'STORAGE_UNAVAILABLE',
+        state: 'unavailable',
+        errorKind: 'connectivity',
+      });
+      expect(mockIncidentRepository.updateClipKey).not.toHaveBeenCalled();
     });
   });
 
