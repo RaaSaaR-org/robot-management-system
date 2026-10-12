@@ -30,11 +30,19 @@ vi.mock('../jobs/RetentionCleanupJob.js', () => ({
   retentionCleanupJob: mockRetentionCleanupJob,
 }));
 
+const currentRole = vi.hoisted(() => ({ value: 'super-admin' }));
+
 vi.mock('../middleware/auth.middleware.js', () => ({
   authMiddleware: (req: any, _res: any, next: any) => {
-    req.user = { id: 'user-123', email: 'test@example.com', name: 'Test', role: 'admin' };
+    req.user = { id: 'user-123', email: 'test@example.com', name: 'Test', role: currentRole.value };
     next();
   },
+  // The real guard bypasses roles while AUTH_DISABLED is set (as it is in
+  // tests); this one enforces them. Real routing: gdpr-retention-role-routing.test.ts.
+  superAdminOnly: (req: any, res: any, next: any) =>
+    ['super-admin'].includes(req.user?.role)
+      ? next()
+      : res.status(403).json({ error: 'Forbidden', message: 'Insufficient permissions' }),
   AuthenticatedRequest: {},
 }));
 
@@ -60,6 +68,7 @@ describe('Retention Routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    currentRole.value = 'super-admin';
     app = createApp();
   });
 
@@ -275,6 +284,36 @@ describe('Retention Routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to fetch retention stats');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // The policy is platform-wide: only a super-admin changes it (TASK-383)
+  // --------------------------------------------------------------------------
+
+  describe('platform-level writes', () => {
+    const writes = [
+      { method: 'put', path: '/ai_decision', body: { retentionDays: 1 }, op: () => mockRetentionPolicyService.setPolicy },
+      { method: 'delete', path: '/ai_decision', body: {}, op: () => mockRetentionPolicyService.deletePolicy },
+      { method: 'post', path: '/cleanup', body: {}, op: () => mockRetentionCleanupJob.runCleanup },
+    ] as const;
+
+    it.each(['owner', 'member', 'viewer'])('refuses a tenant %s every write', async (role) => {
+      currentRole.value = role;
+      for (const { method, path, body, op } of writes) {
+        const response = await request(app)[method](`/api/compliance/retention${path}`).send(body);
+        expect(response.status).toBe(403);
+        expect(op()).not.toHaveBeenCalled();
+      }
+    });
+
+    it('still lets a tenant member read the policy', async () => {
+      currentRole.value = 'member';
+      mockRetentionPolicyService.getAllPolicies.mockResolvedValue([SAMPLE_POLICY]);
+
+      const response = await request(app).get('/api/compliance/retention');
+
+      expect(response.status).toBe(200);
     });
   });
 });
