@@ -3,7 +3,7 @@ id: "TASK-364"
 aliases: ["TASK-364"]
 title: "k3d E2E reuses clusters safely and the server waits for Postgres"
 slug: "k3d-e2e-reuses-clusters-safely-and-the-server-waits-for"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "claude"
 projects: []
