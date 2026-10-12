@@ -3,7 +3,7 @@ id: "TASK-371"
 aliases: []
 title: "Dataset import jobs reconcile stale entries and can be cancelled"
 slug: "dataset-import-jobs-reconcile-stale-entries-and-can-be-cancelled"
-status: "review"
+status: done
 priority: 2
 owner: "huhn511"
 projects: []
