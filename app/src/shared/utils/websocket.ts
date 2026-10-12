@@ -4,6 +4,8 @@
  * @feature shared
  */
 
+import { tokenStorage } from '@/api/client';
+
 /**
  * Get the WebSocket URL for the API server.
  * Uses wss:// for HTTPS, ws:// for HTTP.
@@ -63,4 +65,28 @@ export function getWebSocketUrl(path: string = '/api/a2a/ws'): string {
   // Production same-origin deployments: dynamic URL based on current host
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${protocol}//${window.location.host}${path}`;
+}
+
+/**
+ * Open a socket to the API server's event stream and identify it (TASK-366).
+ *
+ * The server sends events only to a socket that proved who it is, and only
+ * those its tenant may see. The access token goes in-band as the first frame —
+ * never in the URL, where proxies and access logs would keep it (the same rule
+ * as the control-lease socket, TASK-318). A socket opened without a token
+ * (signed out, or auth disabled) simply sends nothing; under
+ * `AUTH_DISABLED=true` the server identifies every socket itself.
+ *
+ * Registered with `addEventListener` before the caller can set `onopen`, so
+ * the auth frame is the first thing the server reads.
+ */
+export function openServerSocket(url: string = getWebSocketUrl()): WebSocket {
+  const ws = new WebSocket(url);
+  if (typeof ws.addEventListener === 'function') {
+    ws.addEventListener('open', () => {
+      const token = tokenStorage.getAccessToken();
+      if (token) ws.send(JSON.stringify({ type: 'auth', token }));
+    });
+  }
+  return ws;
 }
