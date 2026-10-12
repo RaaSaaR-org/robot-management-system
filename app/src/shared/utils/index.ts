@@ -19,3 +19,4 @@ export {
   getResourceVariant,
 } from './thresholds';
 export { UI_DATE_LOCALE, formatDateTime, formatTimeAgo, formatPercent, formatWithUnit } from './format';
+export { createSingleFlight, type SingleFlight } from './inFlight';

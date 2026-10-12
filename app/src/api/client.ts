@@ -12,7 +12,32 @@ import type { ApiError, ApiClientConfig, TokenStorage } from '@/shared/types/api
 // Extended request config to track refresh attempts
 interface ExtendedAxiosRequestConfig extends AxiosRequestConfig {
   _retryAfterRefresh?: boolean;
+  /** How many times this request was already retried after a 429. */
+  _rateLimitRetries?: number;
 }
+
+/** Longest a single 429 back-off may wait, whatever Retry-After says. */
+const MAX_RATE_LIMIT_DELAY_MS = 10_000;
+
+/**
+ * Delay before retrying a 429: the server's `Retry-After` (seconds or an
+ * HTTP date) when it sent one, else exponential back-off from `baseDelay`.
+ */
+export function rateLimitDelayMs(retryAfter: unknown, attempt: number, baseDelay: number): number {
+  let ms: number | null = null;
+  if (typeof retryAfter === 'string' && retryAfter.trim() !== '') {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) ms = seconds * 1000;
+    else {
+      const date = Date.parse(retryAfter);
+      if (!Number.isNaN(date)) ms = date - Date.now();
+    }
+  }
+  if (ms === null || ms < 0) ms = baseDelay * 2 ** attempt;
+  return Math.min(ms, MAX_RATE_LIMIT_DELAY_MS);
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // ============================================================================
 // CONFIGURATION
@@ -120,10 +145,45 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
   // Response Interceptor
   // --------------------------------------------------------------------------
 
+  // One refresh at a time: with rotating refresh tokens, a second concurrent
+  // refresh would present an already-rotated token and end the session.
+  let refreshInFlight: Promise<string> | null = null;
+  const refreshAccessToken = (refreshToken: string): Promise<string> => {
+    if (!refreshInFlight) {
+      refreshInFlight = axios
+        .post<{ accessToken: string; refreshToken: string }>(`${config.baseURL}/auth/refresh`, {
+          refreshToken,
+        })
+        .then(({ data }) => {
+          tokenStorage.setTokens(data.accessToken, data.refreshToken);
+          return data.accessToken;
+        })
+        .finally(() => {
+          refreshInFlight = null;
+        });
+    }
+    return refreshInFlight;
+  };
+
+  const maxRateLimitRetries = config.maxRetries ?? DEFAULT_CONFIG.maxRetries ?? 3;
+  const rateLimitBaseDelay = config.retryDelay ?? DEFAULT_CONFIG.retryDelay ?? 1000;
+
   client.interceptors.response.use(
     (response) => response,
     async (error: AxiosError<ApiError>) => {
       const originalRequest = error.config as ExtendedAxiosRequestConfig | undefined;
+
+      // 429 Too Many Requests — back off and retry; never a reason to end the
+      // session (TASK-362).
+      if (error.response?.status === 429 && originalRequest) {
+        const attempt = originalRequest._rateLimitRetries ?? 0;
+        if (attempt < maxRateLimitRetries) {
+          originalRequest._rateLimitRetries = attempt + 1;
+          await sleep(rateLimitDelayMs(error.response.headers?.['retry-after'], attempt, rateLimitBaseDelay));
+          return client.request(originalRequest);
+        }
+        return Promise.reject(createApiError(error));
+      }
 
       // Handle 401 Unauthorized - attempt token refresh (only once)
       if (error.response?.status === 401 && originalRequest && !originalRequest._retryAfterRefresh) {
@@ -131,14 +191,7 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
 
         if (refreshToken) {
           try {
-            // Attempt to refresh the token
-            const refreshResponse = await axios.post<{ accessToken: string; refreshToken: string }>(
-              `${config.baseURL}/auth/refresh`,
-              { refreshToken }
-            );
-
-            const { accessToken, refreshToken: newRefreshToken } = refreshResponse.data;
-            tokenStorage.setTokens(accessToken, newRefreshToken);
+            const accessToken = await refreshAccessToken(refreshToken);
 
             // Mark request to prevent infinite retry loop
             originalRequest._retryAfterRefresh = true;
@@ -148,9 +201,13 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
               originalRequest.headers.Authorization = `Bearer ${accessToken}`;
             }
             return client.request(originalRequest);
-          } catch {
-            // Refresh failed - clear tokens and reject
-            tokenStorage.clearTokens();
+          } catch (refreshError) {
+            // Only a rejected refresh token ends the session. A 429, a 5xx or
+            // a network error leaves the tokens for the next attempt.
+            const status = axios.isAxiosError(refreshError) ? refreshError.response?.status : undefined;
+            if (status === 401 || status === 403) {
+              tokenStorage.clearTokens();
+            }
             return Promise.reject(createApiError(error));
           }
         }

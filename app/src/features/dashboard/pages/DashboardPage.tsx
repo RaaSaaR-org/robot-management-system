@@ -31,7 +31,7 @@ import { OrchestratorDrawer } from '../components/OrchestratorDrawer';
  * redirect target of the legacy /orchestrator route).
  */
 export function DashboardPage() {
-  const { status, robotMarkers, isLoading, error, refresh } = useFleetStatus();
+  const { status, robotMarkers, isLoading, hasLoaded, error, refresh } = useFleetStatus();
 
   const [searchParams, setSearchParams] = useSearchParams();
   const chatOpen = searchParams.get('drawer') === 'chat';
@@ -49,7 +49,10 @@ export function DashboardPage() {
   );
   const closeChat = useCallback(() => setDrawer(false), [setDrawer]);
 
-  const firstLoad = isLoading && robotMarkers.length === 0;
+  // Skeleton only until the first fetch settles. Keying it on `isLoading` with
+  // an empty fleet unmounted the map and panels on every refetch, and their
+  // remount fetched again — a request loop (TASK-362).
+  const firstLoad = !hasLoaded && robotMarkers.length === 0;
 
   const header = (
     <PageHeader
@@ -81,17 +84,14 @@ export function DashboardPage() {
     />
   );
 
+  // The site map mounts once, with the page: it loads its own data, and its
+  // robots fetch joins the one above in flight. Only the robot-driven panels
+  // wait for the first load (TASK-362).
   let body: React.ReactNode;
   if (error && robotMarkers.length === 0) {
     body = (
       <Panel>
         <ErrorState title="Couldn't load the fleet" message={error} onRetry={() => void refresh()} />
-      </Panel>
-    );
-  } else if (firstLoad) {
-    body = (
-      <Panel>
-        <SkeletonText lines={6} />
       </Panel>
     );
   } else {
@@ -112,9 +112,15 @@ export function DashboardPage() {
             />
             <SiteMap size="compact" />
           </Panel>
-          <NeedsAttentionPanel robots={robotMarkers} />
+          {firstLoad ? (
+            <Panel>
+              <SkeletonText lines={6} />
+            </Panel>
+          ) : (
+            <NeedsAttentionPanel robots={robotMarkers} />
+          )}
         </div>
-        <CommandPanel robots={robotMarkers} />
+        {!firstLoad && <CommandPanel robots={robotMarkers} />}
       </>
     );
   }

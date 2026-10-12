@@ -8,6 +8,7 @@
 
 import { useMemo, useEffect } from 'react';
 import { useRobots } from '@/features/robots/hooks';
+import { useRobotsStore, selectHasFetched } from '@/features/robots/store';
 import { useAlerts } from '@/features/alerts/hooks';
 import type { RobotStatus } from '@/features/robots/types';
 import type { AlertSeverity } from '@/features/alerts/types';
@@ -26,6 +27,8 @@ export interface UseFleetStatusReturn {
   floors: string[];
   /** Whether data is loading */
   isLoading: boolean;
+  /** Whether the robot list has settled at least once (first load is over) */
+  hasLoaded: boolean;
   /** Error message if any */
   error: string | null;
   /** Refresh fleet data */
@@ -83,6 +86,7 @@ export function useFleetStatus(): UseFleetStatusReturn {
     error: robotsError,
     fetchRobots,
   } = useRobots();
+  const hasLoaded = useRobotsStore(selectHasFetched);
 
   const {
     alerts,
@@ -193,6 +197,7 @@ export function useFleetStatus(): UseFleetStatusReturn {
     robotMarkers,
     floors,
     isLoading: robotsLoading,
+    hasLoaded,
     error: robotsError,
     refresh,
   };

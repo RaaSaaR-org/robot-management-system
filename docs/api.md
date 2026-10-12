@@ -159,7 +159,13 @@ fires the `emergency_stop` body and demands the stop goes through.
 
 ### Auth (`/api/auth`)
 
-Rate limited: 20 requests per 15 minutes.
+Credential endpoints (`/login`, `/register`, `/forgot-password`,
+`/reset-password`, `/change-password`) share a strict limit of 5 requests per
+minute per client. Session upkeep (`/me`, `/refresh`, `/logout`, `/mfa/status`)
+is not counted there and falls under the general API limit (100/min in
+production) — limiting it ended live sessions (TASK-362). MFA code entry has its
+own limiters. The app retries a 429 with back-off and never treats one as a
+logout.
 
 | Method | Path | Description |
 |--------|------|-------------|
