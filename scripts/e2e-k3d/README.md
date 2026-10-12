@@ -31,6 +31,12 @@ scripts/e2e-k3d/down.sh         # delete the cluster
    still checks content: the episode lengths sum to the Hub's `total_frames`,
    and episode 0 serves exactly as many frames as its metadata says, read from
    parquet (the server logs it).
+6. Deleting the dataset removes every object under its `storagePath`
+   (TASK-359): the bucket listing for that prefix is empty afterwards.
+
+`install.sh` passes a compliance-log key derived from the cluster name. The
+production values file ships the public example key, which the server
+refuses to start on in production (TASK-359).
 
 A bucket-list drift test runs with the normal server suite, no cluster needed:
 `server/src/storage/__tests__/bucket-provisioning.test.ts` fails when a bucket

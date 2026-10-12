@@ -154,7 +154,7 @@ fires the `emergency_stop` body and demands the stop goes through.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Health check. Always 200 with `status: 'ok'`; `dependencies.storage` reports RustFS as `{configured, state, errorKind?, lastAttemptAt?, attempts}`, `state` one of `disabled`·`connecting`·`ready`·`unavailable` |
+| GET | `/health` | Health check. Always 200 with `status: 'ok'`; `dependencies.storage` reports RustFS as `{configured, state, errorKind?, lastAttemptAt?, attempts, checkedAt?}`, `state` one of `disabled`·`connecting`·`ready`·`unavailable`. A connected store is probed live (HeadBucket, cached 10 s); a failed probe reports `unavailable` with `checkedAt` |
 | GET | `/.well-known/a2a/agent_card.json` | A2A agent discovery card |
 
 ### Auth (`/api/auth`)

@@ -276,6 +276,33 @@ describe('encryption key resolution (env branches)', () => {
     expect(() => mod.encrypt('x')).toThrow('public example value');
   });
 
+  // TASK-359: checked at startup, so a bad production key stops the server
+  // instead of failing every audit write it would ever make.
+  it('assertComplianceKeyUsable throws in production on the public example value', async () => {
+    process.env.COMPLIANCE_LOG_ENCRYPTION_KEY =
+      '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    process.env.NODE_ENV = 'production';
+
+    const mod = await import('../encryption.js');
+    expect(() => mod.assertComplianceKeyUsable()).toThrow('public example value');
+  });
+
+  it('assertComplianceKeyUsable throws in production when no key is set', async () => {
+    delete process.env.COMPLIANCE_LOG_ENCRYPTION_KEY;
+    process.env.NODE_ENV = 'production';
+
+    const mod = await import('../encryption.js');
+    expect(() => mod.assertComplianceKeyUsable()).toThrow('required in production');
+  });
+
+  it('assertComplianceKeyUsable passes a unique production key', async () => {
+    process.env.COMPLIANCE_LOG_ENCRYPTION_KEY = 'a1'.repeat(32);
+    process.env.NODE_ENV = 'production';
+
+    const mod = await import('../encryption.js');
+    expect(() => mod.assertComplianceKeyUsable()).not.toThrow();
+  });
+
   it('warns but works outside production when the key is the public example value', async () => {
     process.env.COMPLIANCE_LOG_ENCRYPTION_KEY =
       '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';

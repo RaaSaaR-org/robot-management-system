@@ -53,7 +53,7 @@ import { approvalRoutes } from './routes/approval.routes.js';
 import { complianceTrackerRoutes } from './routes/compliance-tracker.routes.js';
 import { trainingRoutes, trainingWorkerRoutes } from './routes/training.routes.js';
 import { storageRoutes } from './routes/storage.routes.js';
-import { getRustFSStatus } from './storage/index.js';
+import { getRustFSStatus, probeRustFS } from './storage/index.js';
 import { datasetRoutes } from './routes/datasets.routes.js';
 import { datasetViewRoutes } from './routes/dataset-views.routes.js';
 import { deploymentsRoutes } from './routes/deployments.routes.js';
@@ -217,13 +217,31 @@ export function createApp(): Express {
   // Stays 200 whatever storage says: it is the liveness/readiness probe, and a
   // pod restart does not bring RustFS back. `errorDetail` is left out because
   // this route is unauthenticated.
-  app.get('/health', (_req: Request, res: Response) => {
-    const { configured, state, errorKind, lastAttemptAt, attempts } = getRustFSStatus();
+  //
+  // `ready` is checked live (TASK-359): the client existing only means RustFS
+  // answered ONCE, and the route said `ready` for as long as the process lived,
+  // including with the store scaled to zero. A failed probe (HeadBucket, 2 s,
+  // cached 10 s) reports `unavailable` with its errorKind and `checkedAt`.
+  app.get('/health', async (_req: Request, res: Response) => {
+    const status = getRustFSStatus();
+    let { state, errorKind } = status;
+    let checkedAt: string | undefined;
+    if (state === 'ready') {
+      const probe = await probeRustFS().catch(() => undefined);
+      if (probe) {
+        checkedAt = probe.checkedAt;
+        if (!probe.ok) {
+          state = 'unavailable';
+          errorKind = probe.errorKind;
+        }
+      }
+    }
+    const { configured, lastAttemptAt, attempts } = status;
     res.json({
       status: 'ok', timestamp: new Date().toISOString(), version: pkg.version, startedAt,
       uptimeSeconds: Math.floor((Date.now() - startedAtMs) / 1000), nodeVersion: process.version,
       environment: process.env.NODE_ENV || 'development',
-      dependencies: { storage: { configured, state, errorKind, lastAttemptAt, attempts } },
+      dependencies: { storage: { configured, state, errorKind, lastAttemptAt, attempts, checkedAt } },
     });
   });
 

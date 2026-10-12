@@ -15,6 +15,12 @@ need kubectl
 TAG="$(image_tag)"
 TIMEOUT="${E2E_INSTALL_TIMEOUT:-15m}"
 
+# The production values file ships the public example compliance key, and the
+# server refuses to start on it in production (TASK-359). A key derived from the
+# cluster name is unique to this throwaway cluster and stable across re-installs,
+# so logs written by one install stay readable after the next.
+COMPLIANCE_KEY="$(printf 'neodem-e2e-compliance-%s' "$CLUSTER" | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-64)"
+
 log "installing $NEODEM_CHART as $RELEASE into $KUBE_CONTEXT/$NAMESPACE (images $TAG)"
 start=$(now)
 # --wait covers the Deployments/StatefulSets; the post-install hook (RustFS
@@ -29,6 +35,7 @@ helm upgrade --install "$RELEASE" "$NEODEM_CHART" \
   --set app.image.tag="$TAG" \
   --set robotAgent.image.repository=neodem-robot-agent \
   --set robotAgent.image.tag="$TAG" \
+  --set secrets.complianceLogEncryptionKey="$COMPLIANCE_KEY" \
   --wait --timeout "$TIMEOUT" || {
     log "helm install failed — pod state:"
     kc get pods -o wide || true
