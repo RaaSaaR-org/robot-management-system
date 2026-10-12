@@ -3,7 +3,7 @@ id: "TASK-371"
 aliases: []
 title: "Dataset import jobs reconcile stale entries and can be cancelled"
 slug: "dataset-import-jobs-reconcile-stale-entries-and-can-be-cancelled"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -74,17 +74,18 @@ to finish or fail.
 - `app/src/features/training/api/trainingApi.ts`, `types/training.types.ts`
 
 ## Acceptance Criteria
-- [ ] Persisted import jobs the server answers 404 for are dropped on load, not shown as stuck or failed
-- [ ] Persisted jobs the server knows are updated on load (finished ones show their outcome)
-- [ ] Stale persisted entries expire (finished > 24 h; running > 7 days and unconfirmed)
-- [ ] `POST /api/datasets/:id/import/cancel` stops a running import cooperatively, removes partial files, and marks it cancelled
-- [ ] The endpoint is tenant-scoped: a dataset not visible to the caller is a 404
-- [ ] Cancelling a finished or validating import is a 409
-- [ ] The import panel has a Cancel button on a running import and shows the cancelled state with Retry
-- [ ] Tests cover reconcile, expiry, the cancel service path, the route and the store action
+- [x] Persisted import jobs the server answers 404 for are dropped on load, not shown as stuck or failed
+- [x] Persisted jobs the server knows are updated on load (finished ones show their outcome)
+- [x] Stale persisted entries expire (finished > 24 h; running > 7 days and unconfirmed)
+- [x] `POST /api/datasets/:id/import/cancel` stops a running import cooperatively, removes partial files, and marks it cancelled
+- [x] The endpoint is tenant-scoped: a dataset not visible to the caller is a 404
+- [x] Cancelling a finished or validating import is a 409
+- [x] The import panel has a Cancel button on a running import and shows the cancelled state with Retry
+- [x] Tests cover reconcile, expiry, the cancel service path, the route and the store action
 
 ## Test Strategy
 - Server vitest: `HuggingFaceImportService.cancel.test.ts` (abort mid-download → files removed, row failed+cancelled, event emitted; orphan; 409), route tests in `datasets-hf-routes.test.ts` (202/404/409).
 - App vitest: `importJobsStore.test.ts` (reconcile drops 404, updates known, expiry; cancel action; cancelled frame).
 
 ## Notes
+- PR #395. Playwright's `/a2a/*` app-routes specs fail identically on `origin/main` (pre-existing, not this change).
