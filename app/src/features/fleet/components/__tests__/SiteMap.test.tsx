@@ -204,7 +204,7 @@ describe('SiteMap', () => {
     useSafetyStore.setState({ triggerZoneEStop: trigger });
     renderMap();
 
-    expect(await screen.findByTestId('site-map-stop-forbidden')).toHaveTextContent("Your role can't stop");
+    expect(await screen.findByTestId('site-map-stop-forbidden')).toHaveTextContent("Your role can't use this stop");
     expect(screen.queryByRole('button', { name: /Stop zone Dock/ })).toBeNull();
     expect(trigger).not.toHaveBeenCalled();
   });

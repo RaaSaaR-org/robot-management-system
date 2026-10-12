@@ -32,8 +32,12 @@ promises a **Load sample (Acme Robotics)** button on Organizations that never ap
 
 ### Current state
 
-- The server admits every write (incl. all `/api/safety/*/estop` routes) to
-  member and above only: `writeRoleGuard` in `server/src/middleware/auth.middleware.ts`.
+- The server admits writes to member and above: `writeRoleGuard` in
+  `server/src/middleware/auth.middleware.ts`. The exception is the halt class
+  (`SAFETY_HALT_WRITES`, TASK-282/284): `POST /api/safety/fleet/estop` and an
+  `emergency_stop` body on `POST /api/robots/:id/command` are granted to a viewer,
+  because a read-only operator who sees a hazard must be able to stop it. The
+  per-robot and zone stops under `/api/safety` and every resume stay member-only.
   The client mirror of that is the `robots:command` permission
   (`app/src/features/auth/types/auth.types.ts` — owner/super-admin/member hold it,
   viewer does not), already used by the robot detail panel through
@@ -54,9 +58,11 @@ promises a **Load sample (Acme Robotics)** button on Organizations that never ap
 
 ### Frontend
 
-- `stopStyles.ts` gains `useCanStop()` (= `robots:command`) and `STOP_FORBIDDEN_HINT`;
-  all three E-stop buttons disable stop and resume for a role without it and say why.
-  Operators (member), owners and super-admins keep the stop enabled at all times.
+- `stopStyles.ts` gains `useCanStop()` (= `robots:command`), `STOP_FORBIDDEN_HINT`
+  and `RESUME_FORBIDDEN_HINT`. **Stop fleet stays enabled for every role**, viewer
+  included (it is a halt the server grants them); only Resume fleet is gated.
+  Stop robot / Stop zone and Resume robot are disabled for a viewer, with the
+  reason on the button itself. Member, owner and super-admin keep every stop enabled.
 - Site map: zones are not clickable for a viewer, with the same hint under the map.
 - CommandPanel: a viewer gets a "View only" note instead of the command bar.
 - New scan (header and gallery empty state): disabled for a viewer.
@@ -70,11 +76,12 @@ promises a **Load sample (Acme Robotics)** button on Organizations that never ap
 
 ## Acceptance Criteria
 
-- [ ] A viewer sees Stop fleet / Stop robot / Stop zone (and Resume) disabled with a reason; member, owner and super-admin see them enabled
-- [ ] Site-map zone stop, dashboard command bar and New scan are not offered to a viewer
-- [ ] Load sample (Acme Robotics) is reachable for a super-admin while only the Default organization exists, and prefills Acme Robotics / acme
-- [ ] Docs describe how to reach Organizations and the sample as they are
-- [ ] Vitest covers each role gate and the sample offer
+- [x] Stop fleet is enabled and fires for every role, viewer included (TASK-284's AC)
+- [x] A viewer sees Stop robot / Stop zone and every Resume disabled with a reason; member, owner and super-admin see them enabled
+- [x] Site-map zone stop, dashboard command bar and New scan are not offered to a viewer
+- [x] Load sample (Acme Robotics) is reachable for a super-admin while only the Default organization exists, and prefills Acme Robotics / acme
+- [x] Docs describe how to reach Organizations and the sample as they are
+- [x] Vitest covers each role gate and the sample offer
 
 ## Test Strategy
 
@@ -84,6 +91,22 @@ Vitest: `EmergencyStopButtons.roles.test.tsx`, `CommandPanel.roles.test.tsx`,
 `e2e/demo-smoke.spec.ts` (PLAYWRIGHT_PORT=4187).
 
 ## Notes
+
+Decisions from review (PR #393):
+
+- **The k3d 403 on Stop fleet was not the role guard.** `writeRoleGuard` exempts
+  `POST /api/safety/fleet/estop` for a viewer, and
+  `server/src/__tests__/write-route-authorization.test.ts` proves it returns 200.
+  Disabling the button would have been a safety regression, so it was reverted.
+  The 403's real source (a stale image without the TASK-284 exemption, a path
+  prefix in `originalUrl` that misses the `^/api/safety` anchor, or another
+  route) is not found here and needs its own task, reproduced on k3d.
+- **Zone stop stays member-only for now.** `SAFETY_HALT_WRITES` says to add the
+  zone route "alongside a UI that needs it", and the TASK-331 site map is such a
+  UI, so granting viewers `POST /api/safety/zones/:id/estop` is the likely next
+  step. It widens server authorization, so it is left to a follow-up task rather
+  than this UI fix; until then the zone stop is disabled for a viewer, matching
+  today's server, and the hint points them at Stop fleet.
 
 Out of scope, left as-is: deleting a site from the Sites gallery is still offered to a
 viewer (a management action, not a command).

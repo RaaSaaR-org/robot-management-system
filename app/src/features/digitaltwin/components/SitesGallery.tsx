@@ -158,6 +158,7 @@ export function SitesGallery({ className, newScanOpen, onNewScanOpenChange }: Si
                 leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}
                 onClick={() => onNewScanOpenChange(true)}
                 disabled={!canScan}
+                title={canScan ? undefined : "Your role can't start a scan."}
               >
                 New scan
               </Button>

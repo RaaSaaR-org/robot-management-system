@@ -1,9 +1,11 @@
 /**
  * @file EmergencyStopButtons.roles.test.tsx
  * @description Per-role state of the fleet, robot and zone E-stops (TASK-370).
- *              The server admits every E-stop write to member and above, so a
- *              viewer gets the stop disabled with the reason instead of a 403 —
- *              and every role that can stop must always find it enabled.
+ *              The fleet stop is a halt the server grants every role
+ *              (`SAFETY_HALT_WRITES`, TASK-282/284), so it is enabled for a
+ *              viewer too. The robot and zone stops under `/api/safety` and
+ *              every resume are member-only, so a viewer gets those disabled
+ *              with the reason instead of a 403.
  * @feature safety
  */
 
@@ -33,10 +35,12 @@ vi.mock('../../hooks/useSafety', () => ({
 import { FleetEmergencyStopButton } from '../FleetEmergencyStopButton';
 import { RobotEmergencyStopButton } from '../RobotEmergencyStopButton';
 import { ZoneEmergencyStopButton } from '../ZoneEmergencyStopButton';
-import { STOP_FORBIDDEN_HINT } from '../stopStyles';
+import { RESUME_FORBIDDEN_HINT, STOP_FORBIDDEN_HINT } from '../stopStyles';
 
-const STOPS = [
-  { name: 'fleet', label: 'Emergency stop all robots', el: () => <FleetEmergencyStopButton /> },
+const FLEET_STOP = { label: 'Emergency stop all robots', el: () => <FleetEmergencyStopButton /> };
+
+// Member-only on the server: a viewer gets them disabled.
+const GATED_STOPS = [
   { name: 'robot', label: 'Emergency stop Atlas', el: () => <RobotEmergencyStopButton robotId="r1" robotName="Atlas" /> },
   { name: 'zone', label: 'Emergency stop zone Dock', el: () => <ZoneEmergencyStopButton zoneId="z1" zoneName="Dock" /> },
 ];
@@ -47,7 +51,29 @@ beforeEach(() => {
   safety.isTriggered = false;
 });
 
-describe.each(STOPS)('$name E-stop', ({ label, el }) => {
+describe('fleet E-stop', () => {
+  it.each<UserRole>(['viewer', 'member', 'owner', 'super-admin'])(
+    'fires on one press for a %s — a viewer who sees a hazard can stop the fleet',
+    (role) => {
+      signInAs(role);
+      render(FLEET_STOP.el());
+      const stop = screen.getByRole('button', { name: FLEET_STOP.label });
+      expect(stop).toBeEnabled();
+      expect(stop.closest(`[title="${STOP_FORBIDDEN_HINT}"]`)).toBeNull();
+      fireEvent.click(stop);
+      expect(safety.triggerEStop).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('stays enabled for a viewer while the fleet is stopped', () => {
+    safety.hasTriggeredEStop = true;
+    signInAs('viewer');
+    render(FLEET_STOP.el());
+    expect(screen.getByRole('button', { name: FLEET_STOP.label })).toBeEnabled();
+  });
+});
+
+describe.each(GATED_STOPS)('$name E-stop', ({ label, el }) => {
   it('is disabled for a viewer, with the reason, and fires nothing', () => {
     signInAs('viewer');
     render(el());
@@ -78,7 +104,9 @@ describe('resume while stopped', () => {
 
     signInAs('viewer');
     const { unmount } = render(el());
-    expect(screen.getByRole('button', { name: resume })).toBeDisabled();
+    const disabled = screen.getByRole('button', { name: resume });
+    expect(disabled).toBeDisabled();
+    expect(disabled).toHaveAttribute('title', RESUME_FORBIDDEN_HINT);
     unmount();
 
     signInAs('member');

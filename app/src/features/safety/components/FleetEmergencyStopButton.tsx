@@ -3,7 +3,9 @@
  * @description Fleet-wide emergency stop. Fires on one press (the E-stop never
  *              confirms); while stopped it shows the stopped tag and a
  *              "Resume fleet" act that does confirm, because resuming moves robots.
- *              A role without `robots:command` sees both, disabled, with the reason.
+ *              Stop fleet is enabled for every role: the server lets a viewer
+ *              halt the fleet (`SAFETY_HALT_WRITES`, TASK-282/284). Only
+ *              "Resume fleet" is gated, because resuming is an operator decision.
  * @feature safety
  */
 
@@ -14,7 +16,7 @@ import { Button, StatusTag, confirm, toast } from '@/shared/components/ui';
 import { useFleetSafety } from '../hooks/useSafety';
 import { useSafetyStore } from '../store/safetyStore';
 import {
-  STOP_BUTTON_CLASS, STOP_FORBIDDEN_HINT, STOP_ICON_CLASS, lastSafetyError, useCanStop,
+  RESUME_FORBIDDEN_HINT, STOP_BUTTON_CLASS, STOP_ICON_CLASS, lastSafetyError, useCanStop,
 } from './stopStyles';
 
 export interface FleetEmergencyStopButtonProps {
@@ -32,7 +34,8 @@ const plural = (n: number) => `${n} robot${n === 1 ? '' : 's'}`;
 export function FleetEmergencyStopButton({ size = 'lg', className }: FleetEmergencyStopButtonProps) {
   const { hasTriggeredEStop, triggeredCount, isTriggering, isResetting, triggerEStop, resetEStop } =
     useFleetSafety();
-  const canStop = useCanStop();
+  // Gates the resume only — the fleet stop is never refused, whatever the role.
+  const canResume = useCanStop();
 
   const handleStop = useCallback(async () => {
     const robotCount = useSafetyStore.getState().fleetStatus?.robots.length ?? 0;
@@ -69,10 +72,7 @@ export function FleetEmergencyStopButton({ size = 'lg', className }: FleetEmerge
   const busy = isTriggering || isResetting;
 
   return (
-    <div
-      className={cn('flex flex-wrap items-center gap-2', className)}
-      title={canStop ? undefined : STOP_FORBIDDEN_HINT}
-    >
+    <div className={cn('flex flex-wrap items-center gap-2', className)}>
       {hasTriggeredEStop && (
         <>
           <StatusTag tone="stopped" dot>
@@ -84,7 +84,8 @@ export function FleetEmergencyStopButton({ size = 'lg', className }: FleetEmerge
             leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />}
             onClick={() => void handleResume()}
             isLoading={isResetting}
-            disabled={busy || !canStop}
+            disabled={busy || !canResume}
+            title={canResume ? undefined : RESUME_FORBIDDEN_HINT}
           >
             Resume fleet
           </Button>
@@ -94,7 +95,7 @@ export function FleetEmergencyStopButton({ size = 'lg', className }: FleetEmerge
         size={size}
         onClick={() => void handleStop()}
         isLoading={isTriggering}
-        disabled={busy || !canStop}
+        disabled={busy}
         className={STOP_BUTTON_CLASS}
         leftIcon={<OctagonX className={STOP_ICON_CLASS} strokeWidth={1.75} />}
         aria-label="Emergency stop all robots"

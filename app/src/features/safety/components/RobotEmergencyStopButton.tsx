@@ -13,7 +13,7 @@ import { cn } from '@/shared/utils/cn';
 import { Button, StatusTag, confirm, toast } from '@/shared/components/ui';
 import { useRobotSafety } from '../hooks/useSafety';
 import {
-  STOP_BUTTON_CLASS, STOP_FORBIDDEN_HINT, STOP_ICON_CLASS, lastSafetyError, useCanStop,
+  RESUME_FORBIDDEN_HINT, STOP_BUTTON_CLASS, STOP_FORBIDDEN_HINT, STOP_ICON_CLASS, lastSafetyError, useCanStop,
 } from './stopStyles';
 
 export interface RobotEmergencyStopButtonProps {
@@ -73,10 +73,7 @@ export function RobotEmergencyStopButton({
   const busy = isTriggering || isResetting;
 
   return (
-    <div
-      className={cn('flex flex-wrap items-center gap-2', className)}
-      title={canStop ? undefined : STOP_FORBIDDEN_HINT}
-    >
+    <div className={cn('flex flex-wrap items-center gap-2', className)}>
       {isTriggered && (
         <>
           <StatusTag tone="stopped" dot>
@@ -89,6 +86,7 @@ export function RobotEmergencyStopButton({
             onClick={() => void handleResume()}
             isLoading={isResetting}
             disabled={busy || !canStop}
+            title={canStop ? undefined : RESUME_FORBIDDEN_HINT}
           >
             Resume robot
           </Button>
