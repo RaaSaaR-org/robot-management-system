@@ -29,6 +29,7 @@ data:
   NODE_ENV: {{ .Values.server.env.nodeEnv | quote }}
   AUTH_DISABLED: {{ .Values.server.env.authDisabled | quote }}
   CONTROL_LEASES_ENABLED: {{ .Values.server.env.controlLeasesEnabled | quote }}
+  ALLOW_SELF_REGISTRATION: {{ .Values.server.env.allowSelfRegistration | default "false" | quote }}
   {{- if .Values.server.env.publicUrl }}
   PUBLIC_URL: {{ .Values.server.env.publicUrl | quote }}
   {{- end }}

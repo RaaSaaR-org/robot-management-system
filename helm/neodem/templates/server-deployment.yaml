@@ -88,6 +88,11 @@ spec:
                 configMapKeyRef:
                   name: {{ include "neodem.fullname" . }}-config
                   key: CONTROL_LEASES_ENABLED
+            - name: ALLOW_SELF_REGISTRATION
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "neodem.fullname" . }}-config
+                  key: ALLOW_SELF_REGISTRATION
             # Database
             - name: DATABASE_URL
               valueFrom:

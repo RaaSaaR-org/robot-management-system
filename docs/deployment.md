@@ -478,6 +478,16 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `PUBLIC_URL` | No | — | Server's public URL for agent discovery |
 | `CONTROL_LEASES_ENABLED` | No | `true` | Grant robot-wide per-user control leases; `false` opts out (see [Control leases](#control-leases)) |
 
+**The first account on an install with auth on.** Sign-up is closed by default
+and only an `owner` or `super-admin` can add users through the Team page, so set
+`BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` (optionally
+`BOOTSTRAP_ADMIN_NAME`) on the first start: the server creates that account as
+`super-admin` once, single-tenant or not (see
+[The first super-admin](multi-tenancy.md#the-first-super-admin-task-367)). Everyone
+else is added from the Team page. `ALLOW_SELF_REGISTRATION=true` (Helm:
+`server.env.allowSelfRegistration: "true"`) is only for installs that want open
+sign-up; a self-registered account is a `viewer`.
+
 ### Robot Agent (`robot-agent/.env`)
 
 | Variable | Required | Default | Description |

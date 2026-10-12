@@ -18,6 +18,7 @@ import { getTenantId } from '../middleware/tenantContext.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from './HttpClient.js';
 // Safe to import directly: AlertService only depends on repositories (no service cycle)
 import { alertService } from './AlertService.js';
+import { Prisma } from '@prisma/client';
 import { ConflictError } from '../utils/errors.js';
 
 // ============================================================================
@@ -460,7 +461,7 @@ export const ROBOT_ALREADY_REGISTERED_MESSAGE =
 
 /** Prisma P2002: a unique constraint (robot id, agent card name, ...) refused the write. */
 function isUniqueViolation(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 /**

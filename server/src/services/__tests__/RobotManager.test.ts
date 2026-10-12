@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Prisma } from '@prisma/client';
 import type { A2AAgentCard } from '../../types/index.js';
 
 // ---------------------------------------------------------------------------
@@ -250,11 +251,11 @@ describe('registerRobot', () => {
     const mgr = new RobotManager();
     httpGet.mockResolvedValue(makeRegistrationInfo({ robot: makeRobot({ id: 'r1' }) }));
     agentCardResolver.fetchAgentCard.mockResolvedValue(makeAgentCard());
-    // Shape of a PrismaClientKnownRequestError: the meta names the other row's constraint.
-    const p2002 = Object.assign(new Error('Unique constraint failed on the fields: (`id`) tenant-b'), {
-      code: 'P2002',
-      meta: { target: ['id'] },
-    });
+    // The meta and message name the other row's constraint; none of it may leak.
+    const p2002 = new Prisma.PrismaClientKnownRequestError(
+      'Unique constraint failed on the fields: (`id`) tenant-b',
+      { code: 'P2002', clientVersion: 'test', meta: { target: ['id'] } }
+    );
     robotRepository.upsertWithRegistration.mockRejectedValue(p2002);
 
     const err = await mgr.registerRobot('http://robot.local').catch((e: unknown) => e);

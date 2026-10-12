@@ -77,3 +77,35 @@ describe('POST /api/auth/register gate (TASK-369)', () => {
     expect(selfRegistrationEnabled()).toBe(true);
   });
 });
+
+describe('POST /api/auth/register gate under multi-tenancy (TASK-369)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('stays closed even when ALLOW_SELF_REGISTRATION=true', async () => {
+    // MULTI_TENANCY_ENABLED is read once at module load, so re-import fresh.
+    vi.stubEnv('MULTI_TENANCY_ENABLED', 'true');
+    vi.stubEnv('AUTH_DISABLED', 'false');
+    vi.stubEnv('ALLOW_SELF_REGISTRATION', 'true');
+    vi.resetModules();
+    mockAuthService.register.mockReset();
+
+    const features = await import('../../config/features.js');
+    const { authRoutes: mtAuthRoutes } = await import('../auth.routes.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/auth', mtAuthRoutes);
+
+    const res = await request(app).post('/api/auth/register').send(SIGNUP);
+
+    expect(features.MULTI_TENANCY_ENABLED).toBe(true);
+    expect(res.status).toBe(403);
+    // The TASK-162 branch answers first, with its own invite-only wording.
+    expect(res.body.message).toMatch(/invite-only/);
+    expect(mockAuthService.register).not.toHaveBeenCalled();
+    expect(features.selfRegistrationEnabled()).toBe(false);
+    expect(features.getFeatureFlags().selfRegistrationEnabled).toBe(false);
+  });
+});

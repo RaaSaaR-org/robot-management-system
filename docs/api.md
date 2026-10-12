@@ -189,7 +189,7 @@ logout.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/register` | Register robot from URL — 409 when a robot with that identity is already registered (in any tenant; the answer names nothing of it) |
+| POST | `/register` | Register robot from URL — 409 when a robot with that identity is already registered (in any tenant; the answer names nothing of it). Accepted trade-off: the 409 confirms to a caller that an id exists somewhere, but that id is reported by the robot itself, so the caller already holds it |
 | GET | `/` | List all robots |
 | GET | `/:id` | Get robot details |
 | DELETE | `/:id` | Unregister robot |
