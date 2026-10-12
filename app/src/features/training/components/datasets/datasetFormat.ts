@@ -48,3 +48,17 @@ export function formatRelative(iso: string): string {
 export function shortId(id: string): string {
   return id.slice(0, 8);
 }
+
+/**
+ * Names an import gives a robot type when the manifest says nothing useful:
+ * `robot_type: "unknown"` becomes a row called `unknown`, or
+ * `unknown (action 6, state 6)` when that name was already taken.
+ */
+const PLACEHOLDER_ROBOT_NAME = /^\s*(unknown|none|null|n\/a)?\s*(\(.*\))?\s*$/i;
+
+/** A robot type's name for display: "Unidentified robot" instead of a raw `unknown`. */
+export function robotTypeLabel(robotType: { name?: string | null } | null | undefined): string {
+  if (!robotType) return 'No robot type';
+  const name = robotType.name ?? '';
+  return PLACEHOLDER_ROBOT_NAME.test(name) ? 'Unidentified robot' : name;
+}

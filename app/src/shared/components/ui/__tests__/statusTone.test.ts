@@ -15,6 +15,7 @@ describe('statusTone', () => {
     ['queued', 'info'],
     ['in_progress', 'info'],
     ['rolling_out', 'info'],
+    ['validating', 'info'],
     ['charging', 'warning'],
     ['pending_review', 'warning'],
     ['draft_review', 'warning'],
