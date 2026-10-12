@@ -3,7 +3,7 @@ id: "TASK-366"
 aliases: ["TASK-366"]
 title: "WebSocket events reach only signed-in users of the robot's tenant"
 slug: "websocket-events-reach-only-signed-in-users-of-the-robot-s"
-status: "in-progress"
+status: "done"
 priority: 1
 owner: "claude"
 projects: []
