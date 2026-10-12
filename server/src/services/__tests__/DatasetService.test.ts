@@ -492,11 +492,11 @@ describe('delete', () => {
       return true;
     });
 
-    const events: { type: string; tenantId?: string | null }[] = [];
+    const events: { type: string; deletedRowTenantId?: string | null }[] = [];
     const unsub = datasetService.onDatasetEvent((e) => events.push(e));
 
     await datasetService.delete('ds1');
-    expect(events.find((e) => e.type === 'dataset:deleted')).toMatchObject({ tenantId: 'tenant-a' });
+    expect(events.find((e) => e.type === 'dataset:deleted')).toMatchObject({ deletedRowTenantId: 'tenant-a' });
     unsub();
   });
 

@@ -248,7 +248,20 @@ describe('AlertService — deleteAlert', () => {
 
     await service.deleteAlert('alert-1');
 
-    expect(callback.mock.calls[0][0]).toMatchObject({ type: 'alert_deleted', tenantId: 'tenant-a' });
+    expect(callback.mock.calls[0][0]).toMatchObject({ type: 'alert_deleted', deletedRowTenantId: 'tenant-a' });
+  });
+
+  it('carries no tenant for a robot alert, which is routed by its robot (TASK-375)', async () => {
+    alertRepository.findById.mockResolvedValue(makeAlert({ source: 'robot', sourceId: 'robot-1' }));
+    alertRepository.tenantOf.mockResolvedValue(null);
+    alertRepository.delete.mockResolvedValue(true);
+    const callback = vi.fn();
+    service.onAlertEvent(callback);
+
+    await service.deleteAlert('alert-1');
+
+    expect(alertRepository.tenantOf).not.toHaveBeenCalled();
+    expect(callback.mock.calls[0][0]).not.toHaveProperty('deletedRowTenantId');
   });
 
   it('returns false without deleting when alert does not exist', async () => {

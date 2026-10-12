@@ -297,7 +297,7 @@ describe('unregisterRobot', () => {
     expect(conversationManager.unregisterAgent).not.toHaveBeenCalled();
     expect(agentCardResolver.clearCache).not.toHaveBeenCalled();
     // The row's tenant rides on the event: it is gone once routed (TASK-375).
-    expect(events).toEqual([expect.objectContaining({ type: 'robot_unregistered', tenantId: 'tenant-a' })]);
+    expect(events).toEqual([expect.objectContaining({ type: 'robot_unregistered', deletedRowTenantId: 'tenant-a' })]);
   });
 
   it('removes a cached robot, cleans up A2A state and emits an event', async () => {

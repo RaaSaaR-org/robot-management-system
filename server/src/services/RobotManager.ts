@@ -358,11 +358,12 @@ export interface RobotEvent {
   telemetry?: RobotTelemetry | RobotTelemetryFast;
   /**
    * The tenant of the row this event deleted, read from the database before
-   * the delete (TASK-375). Set by the server only, never from a request body;
-   * WebSocket routing prefers it to a lookup, which cannot find a row that is
-   * gone. `undefined` on every other event.
+   * the delete (TASK-375). Named for that one source on purpose: WebSocket
+   * routing trusts it over a lookup, so it must only ever be copied from a row
+   * the server just read, never from a request body or a spread of one.
+   * `undefined` on every other event.
    */
-  tenantId?: string | null;
+  deletedRowTenantId?: string | null;
   timestamp: string;
 }
 
@@ -658,7 +659,7 @@ export class RobotManager {
     this.emitEvent({
       type: 'robot_unregistered',
       robotId,
-      ...(tenantId !== undefined && { tenantId }),
+      ...(tenantId !== undefined && { deletedRowTenantId: tenantId }),
       timestamp: new Date().toISOString(),
     });
 

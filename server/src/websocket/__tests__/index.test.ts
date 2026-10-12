@@ -905,9 +905,9 @@ describe('setupWebSocket', () => {
     // lookup cache holds nothing — the tenant the service read before the
     // delete routes it.
     const deletes: Array<[string, () => void, string]> = [
-      ['dataset:deleted', () => services.dataset.cb?.({ type: 'dataset:deleted', datasetId: 'gone', tenantId: 'tenant-a', timestamp: 'now' }), 'dataset:deleted'],
-      ['alert_deleted', () => services.alert.cb?.({ type: 'alert_deleted', alert: { id: 'gone', source: 'system' }, tenantId: 'tenant-a', timestamp: 1 }), 'alert_deleted'],
-      ['robot_unregistered', () => services.robot.cb?.({ type: 'robot_unregistered', robotId: 'gone', tenantId: 'tenant-a', timestamp: 'now' }), 'robot_unregistered'],
+      ['dataset:deleted', () => services.dataset.cb?.({ type: 'dataset:deleted', datasetId: 'gone', deletedRowTenantId: 'tenant-a', timestamp: 'now' }), 'dataset:deleted'],
+      ['alert_deleted', () => services.alert.cb?.({ type: 'alert_deleted', alert: { id: 'gone', source: 'system' }, deletedRowTenantId: 'tenant-a', timestamp: 1 }), 'alert_deleted'],
+      ['robot_unregistered', () => services.robot.cb?.({ type: 'robot_unregistered', robotId: 'gone', deletedRowTenantId: 'tenant-a', timestamp: 'now' }), 'robot_unregistered'],
     ];
 
     it.each(deletes)('routes %s by the tenant it carries, with an empty tenant cache', async (_name, fire, type) => {
@@ -924,11 +924,50 @@ describe('setupWebSocket', () => {
       const { a, b } = await sockets();
       // The lookup would answer tenant-b for this robot; the row the service
       // read before deleting it said tenant-a.
-      services.robot.cb?.({ type: 'robot_unregistered', robotId: 'rb', tenantId: 'tenant-a', timestamp: 'now' });
+      services.robot.cb?.({ type: 'robot_unregistered', robotId: 'rb', deletedRowTenantId: 'tenant-a', timestamp: 'now' });
       await flush();
       expect(types(a)).toEqual(['robot_unregistered']);
       expect(b.sent).toEqual([]);
-      expect(JSON.parse(a.sent[0] as string)).not.toHaveProperty('tenantId');
+      expect(JSON.parse(a.sent[0] as string)).not.toHaveProperty('deletedRowTenantId');
+    });
+
+    // A carried `null` is the one value that can reach beyond a key lookup
+    // (a tenant-less row is visible to every tenant), so it must never stand
+    // in for a key that names a tenant.
+    it.each([null, 'tenant-b'])(
+      'routes a robot alert_deleted by its robot, not by a carried %s',
+      async (carried) => {
+        const { a, b, admin, anonymous } = await sockets();
+        services.alert.cb?.({
+          type: 'alert_deleted',
+          alert: { id: 'gone', source: 'robot', sourceId: 'ra', title: 'secret' },
+          deletedRowTenantId: carried,
+          timestamp: 1,
+        });
+        await flush();
+        expect(types(a)).toEqual(['alert_deleted']);
+        expect(types(admin)).toEqual(['alert_deleted']);
+        expect(b.sent).toEqual([]);
+        expect(anonymous.sent).toEqual([]);
+      }
+    );
+
+    const nullDeletes: Array<[string, () => void, string]> = [
+      ['dataset:deleted', () => services.dataset.cb?.({ type: 'dataset:deleted', datasetId: 'gone', deletedRowTenantId: null, timestamp: 'now' }), 'dataset:deleted'],
+      ['alert_deleted', () => services.alert.cb?.({ type: 'alert_deleted', alert: { id: 'gone', source: 'system' }, deletedRowTenantId: null, timestamp: 1 }), 'alert_deleted'],
+      ['robot_unregistered', () => services.robot.cb?.({ type: 'robot_unregistered', robotId: 'gone', deletedRowTenantId: null, timestamp: 'now' }), 'robot_unregistered'],
+    ];
+
+    // A row without a tenant: what a lookup of that row would have answered,
+    // so every identified socket — still never an anonymous one.
+    it.each(nullDeletes)('routes %s with a carried null like a tenant-less row', async (_name, fire, type) => {
+      const { a, b, admin, anonymous } = await sockets();
+      fire();
+      await flush();
+      expect(types(a)).toEqual([type]);
+      expect(types(b)).toEqual([type]);
+      expect(types(admin)).toEqual([type]);
+      expect(anonymous.sent).toEqual([]);
     });
 
     it('gives each tenant its own robots of a cross-tenant fleet E-stop', async () => {

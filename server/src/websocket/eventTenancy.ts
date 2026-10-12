@@ -29,12 +29,15 @@
  * A delete event cannot be routed by its row: the row is gone when the event
  * is routed, and the lookup cache is empty after a restart. So the service
  * that deletes it reads the row's tenant first and carries it on the event
- * (`tenantId`, TASK-375), and routing prefers that to any lookup. `null` there
- * is a row with no tenant — what a lookup of the row would have answered:
+ * (`deletedRowTenantId`, TASK-375), and routing prefers that to any lookup.
+ * `null` there is a row with no tenant — what a lookup of the row would have
+ * answered. A robot alert is the exception: it is routed by its robot, which
+ * outlives the row, and never by a carried tenant — its row is tenant-less when
+ * the alert was raised outside a request, and that `null` would reach everyone:
  *
  * | event                | carries the tenant of                             |
  * | -------------------- | ------------------------------------------------- |
- * | `alert_deleted`      | the Alert row (AlertService.deleteAlert)          |
+ * | `alert_deleted`      | a non-robot Alert row (AlertService.deleteAlert)  |
  * | `dataset:deleted`    | the Dataset row (DatasetService.delete)           |
  * | `robot_unregistered` | the Robot row (RobotManager.unregisterRobot)      |
  *

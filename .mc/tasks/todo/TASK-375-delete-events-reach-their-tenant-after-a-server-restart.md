@@ -16,7 +16,7 @@ spe: 2
 effort: "low"
 due_date: ""
 created: "2026-10-12"
-updated: "2026-10-12"
+updated: 2026-10-12
 ---
 
 # Delete events reach their tenant after a server restart
@@ -53,16 +53,21 @@ both of which outlive the deleted row.
 ### Server
 
 - The deleting service reads the row's tenant **before** the delete and carries it
-  on the event as an optional `tenantId?: string | null` (`DatasetEvent`,
-  `AlertEvent`, `RobotEvent`). It is only ever set by the server from the database,
-  never from a request; `undefined` on every other event.
+  on the event as an optional `deletedRowTenantId?: string | null` (`DatasetEvent`,
+  `AlertEvent`, `RobotEvent`). The name says where it may come from: only ever set
+  by the server from the row it just read, never from a request; `undefined` on
+  every other event.
+- A **robot** alert carries no tenant: it is routed by its robot, which outlives the
+  Alert row, and a robot alert raised outside a request (telemetry, tours) has a
+  tenant-less row whose carried `null` would reach every tenant. `AlertService`
+  does not read it, and the router ignores a carried tenant on a robot alert.
 - `alertRepository.tenantOf(id)` and `datasetRepository.tenantOf(id)` return the
   row's `tenantId` (`undefined` when there is no row, `null` for a row without a
   tenant). `RobotManager` takes it from the cached/DB `RegisteredRobot.tenantId`.
 - `deliverFor(message, key, carried?)` delivers by `carried` when it is set and
   falls back to the key lookup otherwise; everything genuinely unknown stays
-  super-admin-only. The robot event payload strips `tenantId` (routing data, not
-  payload).
+  super-admin-only. The robot event payload strips `deletedRowTenantId` (routing
+  data, not payload).
 - Doc table in `server/src/websocket/eventTenancy.ts`; `docs/multi-tenancy.md`
   live-events section.
 
@@ -86,13 +91,18 @@ both of which outlive the deleted row.
       put it on the event.
 - [x] Events without a carried tenant are routed exactly as before (fail-closed for
       anything unknown).
+- [x] Robot alerts are routed by their robot whatever they carry: a robot
+      `alert_deleted` carrying `null` (or another tenant) reaches the robot's tenant
+      only. A carried `null` on any other delete reaches every identified socket, as
+      a lookup of that tenant-less row would, never an anonymous one.
 - [x] `eventTenancy.ts` and `docs/multi-tenancy.md` describe the carried tenant.
 
 ## Test Strategy
 
 - `server/src/websocket/__tests__/index.test.ts`: multi-tenancy block, delete events
   whose key the lookup cannot resolve, carrying `tenant-a`; a carried tenant
-  overriding a lookup that would say `tenant-b`.
+  overriding a lookup that would say `tenant-b`; a robot `alert_deleted` carrying
+  `null`/`tenant-b` reaching tenant-a only; a carried `null` per family.
 - `AlertService.test.ts`, `DatasetService.test.ts`, `RobotManager.test.ts`: the event
   carries the tenant read before `delete`.
 - `cd server && npm run typecheck && npx vitest run`.

@@ -228,7 +228,7 @@ export function setupWebSocket(server: Server): void {
   // Subscribe to robot events and fan them out (eventFanout.ts)
   robotManager.onRobotEvent((event: RobotEvent) => {
     // The carried tenant routes the event; it is not part of the payload.
-    const { tenantId: _routedBy, ...payload } = event;
+    const { deletedRowTenantId: _routedBy, ...payload } = event;
     const message = JSON.stringify({
       ...payload,
       type: event.type, // Ensure type comes last to override spread
@@ -237,7 +237,7 @@ export function setupWebSocket(server: Server): void {
     if (event.type === 'robot_registered' || event.type === 'robot_unregistered') {
       tenants.forget(tenantKey('robot', event.robotId));
     }
-    deliverFor(message, robotKey(event.robotId), event.tenantId);
+    deliverFor(message, robotKey(event.robotId), event.deletedRowTenantId);
   });
 
   // Subscribe to alert events and fan them out (eventFanout.ts)
@@ -247,7 +247,14 @@ export function setupWebSocket(server: Server): void {
       alert: event.alert,
       timestamp: event.timestamp,
     });
-    deliverFor(message, eventTenantKey.alert(event), event.tenantId);
+    // A robot alert is routed by its robot, which outlives the Alert row: the
+    // row of a robot alert raised outside a request has no tenant, and a
+    // carried `null` would send it to every tenant (TASK-375).
+    deliverFor(
+      message,
+      eventTenantKey.alert(event),
+      event.alert?.source === 'robot' ? undefined : event.deletedRowTenantId
+    );
   });
 
   // Subscribe to process events and fan them out (eventFanout.ts)
@@ -371,7 +378,7 @@ export function setupWebSocket(server: Server): void {
       error: event.error,
       timestamp: event.timestamp,
     });
-    deliverFor(message, eventTenantKey.dataset(event), event.tenantId);
+    deliverFor(message, eventTenantKey.dataset(event), event.deletedRowTenantId);
   });
 
   // Subscribe to sensor-scan events (point clouds) and fan them out (eventFanout.ts).

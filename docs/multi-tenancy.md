@@ -448,8 +448,11 @@ fleet or zone E-stop is cut per socket down to the robots of the tenants it may
 see. A delete event cannot be routed by its row, which is gone by then (and the
 tenant cache is empty after a restart), so the deleting service reads the row's
 tenant first and carries it on the event: `dataset:deleted`, `alert_deleted` and
-`robot_unregistered` reach their own tenant this way (TASK-375). That `tenantId`
-is only ever set by the server from the database and is not sent to clients. No
+`robot_unregistered` reach their own tenant this way (TASK-375). That
+`deletedRowTenantId` is only ever set by the server from the database and is not
+sent to clients. Robot alerts never use it: they are routed by their robot, which
+outlives the alert, since a robot alert raised outside a request has no tenant on
+its row. No
 event family is platform-wide: any other event whose entity is gone or cannot be
 named reaches super-admins only. With multi-tenancy off (or `AUTH_DISABLED=true`, where
 every socket is the dev super-admin) every identified socket gets every event.

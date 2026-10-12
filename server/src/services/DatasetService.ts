@@ -1053,7 +1053,7 @@ export class DatasetService extends EventEmitter {
       this.emitEvent({
         type: 'dataset:deleted',
         datasetId: id,
-        ...(tenantId !== undefined && { tenantId }),
+        ...(tenantId !== undefined && { deletedRowTenantId: tenantId }),
         timestamp: new Date().toISOString(),
       });
 
