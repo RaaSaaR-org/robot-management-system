@@ -23,6 +23,21 @@ const A2A_BASE_URL = import.meta.env.VITE_A2A_SERVER_URL || '';
 // When server is running, we want to use real API calls
 const USE_MOCK = import.meta.env.VITE_A2A_USE_MOCK === 'true';
 
+/**
+ * Read the list a list endpoint wraps, or throw. A body without that array —
+ * an HTML page some other process on the port served, an error envelope, a
+ * server of another version — must reach the store's `catch` path, not land
+ * in state as `undefined` and crash the page on its first `.length`.
+ */
+export function readList<T>(data: unknown, key: string, endpoint: string): T[] {
+  const value =
+    data !== null && typeof data === 'object' ? (data as Record<string, unknown>)[key] : undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`Unexpected response from ${endpoint}: no "${key}" list`);
+  }
+  return value as T[];
+}
+
 // ============================================================================
 // MOCK DATA (for development without server)
 // ============================================================================
@@ -109,7 +124,7 @@ export const a2aApi = {
     const response = await apiClient.post<{ conversations: A2AConversation[] }>(
       `${A2A_BASE_URL}/a2a/conversation/list`
     );
-    return response.data.conversations;
+    return readList(response.data, 'conversations', '/a2a/conversation/list');
   },
 
   /**
@@ -324,7 +339,7 @@ export const a2aApi = {
       `${A2A_BASE_URL}/a2a/message/list`,
       { conversationId }
     );
-    return response.data.messages;
+    return readList(response.data, 'messages', '/a2a/message/list');
   },
 
   // ===========================================================================
@@ -343,7 +358,7 @@ export const a2aApi = {
     const response = await apiClient.post<{ tasks: A2ATask[] }>(
       `${A2A_BASE_URL}/a2a/task/list`
     );
-    return response.data.tasks;
+    return readList(response.data, 'tasks', '/a2a/task/list');
   },
 
   /**
@@ -403,7 +418,7 @@ export const a2aApi = {
     const response = await apiClient.post<{ agents: A2AAgentCard[] }>(
       `${A2A_BASE_URL}/a2a/agent/list`
     );
-    return response.data.agents;
+    return readList(response.data, 'agents', '/a2a/agent/list');
   },
 
   /**
@@ -438,7 +453,7 @@ export const a2aApi = {
     const response = await apiClient.post<{ events: A2AEvent[] }>(
       `${A2A_BASE_URL}/a2a/events/get`
     );
-    return response.data.events;
+    return readList(response.data, 'events', '/a2a/events/get');
   },
 
   // ===========================================================================

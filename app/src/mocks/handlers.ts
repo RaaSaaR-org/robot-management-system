@@ -750,6 +750,16 @@ export const handlers = [
   // which is true here, rather than a fabricated set of counts.
   http.get('/api/robots/:id/agent-mode/memory', () => HttpResponse.json(null)),
 
+  // A2A reads are POSTs, which the GET catch-all below does not see: unhandled,
+  // they left the page through the preview's /api proxy and the A2A pages
+  // rendered whatever answered on :3001 (TASK-373). The demo has no A2A peers,
+  // so every list is empty.
+  http.post('/api/a2a/agent/list', () => HttpResponse.json({ agents: [] })),
+  http.post('/api/a2a/task/list', () => HttpResponse.json({ tasks: [] })),
+  http.post('/api/a2a/events/get', () => HttpResponse.json({ events: [] })),
+  http.post('/api/a2a/conversation/list', () => HttpResponse.json({ conversations: [] })),
+  http.post('/api/a2a/message/list', () => HttpResponse.json({ messages: [] })),
+
   // ========================================================================
   // Catch-all: a GET /api/* nobody wrote a handler for is a 404, loudly.
   //
