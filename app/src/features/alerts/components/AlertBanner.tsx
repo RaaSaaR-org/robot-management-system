@@ -46,14 +46,17 @@ const CRITICAL_BUTTON = 'border-on-stop/60 text-on-stop hover:bg-on-stop/15 hove
 // ============================================================================
 
 /**
- * The unacknowledged alerts that repeat `alert`: same title, source and
- * sourceId. They read as one line, so they count and clear as one (TASK-388).
+ * The unacknowledged alerts that repeat `alert`: same title, severity, source
+ * and sourceId. They read as one line, so they count and clear as one (TASK-388).
  */
 export function sameAlertGroup(alert: Alert, unacknowledged: Alert[]): Alert[] {
   return unacknowledged.filter(
     (a) =>
       a.id === alert.id ||
-      (a.title === alert.title && a.source === alert.source && a.sourceId === alert.sourceId)
+      (a.title === alert.title &&
+        a.severity === alert.severity &&
+        a.source === alert.source &&
+        a.sourceId === alert.sourceId)
   );
 }
 

@@ -116,6 +116,9 @@ type EStopEventCallback = (event: EStopEvent) => void;
 /**
  * SafetyService - Manages fleet-wide and zone-based E-stop functionality
  */
+/** Title prefix of the info alert a robot E-stop reset raises. */
+const ESTOP_RESET_TITLE = 'E-Stop Reset - ';
+
 class SafetyService {
   private eventCallbacks: Set<EStopEventCallback> = new Set();
   private estopLog: EStopEvent[] = [];
@@ -248,13 +251,23 @@ class SafetyService {
       );
 
       // Info alert; a later reset supersedes it instead of stacking a copy.
-      await alertService.replaceAlert({
-        severity: 'info',
-        title: `E-Stop Reset - ${registered.robot.name}`,
-        message: 'Emergency stop has been reset. Robot is ready for operation.',
-        source: 'robot',
-        sourceId: robotId,
-      });
+      // Matched by prefix so a renamed robot's old row is superseded too. The
+      // reset already happened: a failed alert write is logged, not reported
+      // as a failed reset.
+      try {
+        await alertService.replaceAlert(
+          {
+            severity: 'info',
+            title: `${ESTOP_RESET_TITLE}${registered.robot.name}`,
+            message: 'Emergency stop has been reset. Robot is ready for operation.',
+            source: 'robot',
+            sourceId: robotId,
+          },
+          (title) => title.startsWith(ESTOP_RESET_TITLE)
+        );
+      } catch (err) {
+        console.error('[SafetyService] Failed to create reset alert:', err);
+      }
 
       return { status: response, robotName: registered.robot.name };
     } catch (error) {

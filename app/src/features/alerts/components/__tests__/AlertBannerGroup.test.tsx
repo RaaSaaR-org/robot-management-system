@@ -11,7 +11,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '@/test/utils';
 import { alertsApi } from '../../api/alertsApi';
-import { AlertBanner } from '../AlertBanner';
+import { AlertBanner, sameAlertGroup } from '../AlertBanner';
 import { useAlertsStore } from '../../store/alertsStore';
 import type { Alert } from '../../types/alerts.types';
 
@@ -75,5 +75,11 @@ describe('AlertBanner grouping', () => {
 
     expect(await screen.findByText('E-Stop Reset - H1')).toBeInTheDocument();
     expect(screen.queryByTestId('alert-banner-count')).toBeNull();
+  });
+
+  it('does not group the same title at a different severity', () => {
+    const info = reset('r-1');
+    const warning = reset('r-2', { severity: 'warning' });
+    expect(sameAlertGroup(info, [info, warning]).map((a) => a.id)).toEqual(['r-1']);
   });
 });

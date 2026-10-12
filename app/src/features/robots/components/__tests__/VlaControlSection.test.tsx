@@ -61,4 +61,25 @@ describe('VlaControlSection', () => {
     expect(screen.getByText('Robot offline')).toBeInTheDocument();
     expect(get).not.toHaveBeenCalled();
   });
+  it('keeps Stop when a running robot flips to offline', async () => {
+    get.mockResolvedValue({
+      data: { active: true, status: { phase: 'running', prompt: 'pick' } },
+    });
+    const { rerender } = render(<VlaControlSection robotId="r1" online />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.getByRole('button', { name: /Stop skill/ })).toBeEnabled();
+
+    get.mockClear();
+    rerender(<VlaControlSection robotId="r1" online={false} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    const stop = screen.getByRole('button', { name: /Stop skill/ });
+    expect(stop).toBeEnabled();
+    expect(screen.queryByTestId('vla-offline-hint')).not.toBeInTheDocument();
+    expect(get).not.toHaveBeenCalled();
+  });
 });

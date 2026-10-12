@@ -90,8 +90,9 @@ export function useVlaStatus(robotId: string, enabled = true): UseVlaStatusRetur
   useEffect(() => {
     mountedRef.current = true;
     if (!enabled) {
-      setIsActive(false);
-      setStatus(null);
+      // Stop polling only. The last known state stays: an "offline" flag can be
+      // one missed health check on a robot still running a skill, and clearing
+      // isActive here would hide the only Stop button (TASK-388 review).
       setIsLoading(false);
       return () => {
         mountedRef.current = false;

@@ -222,6 +222,17 @@ describe('AlertService — replaceAlert (TASK-388)', () => {
     ]);
   });
 
+  it('supersedes whatever the matcher accepts, e.g. a pre-rename title', async () => {
+    const renamed = makeAlert({ id: 'old', title: 'E-Stop Reset - G1-old', source: 'robot', sourceId: 'r1' });
+    alertRepository.findActive.mockResolvedValue([renamed]);
+    alertRepository.acknowledgeMany.mockResolvedValue(1);
+    alertRepository.create.mockResolvedValue(makeAlert({ id: 'new', title: input.title }));
+
+    await service.replaceAlert(input, (t) => t.startsWith('E-Stop Reset - '));
+
+    expect(alertRepository.acknowledgeMany).toHaveBeenCalledWith(['old'], 'system:superseded');
+  });
+
   it('just creates when the alert has no sourceId', async () => {
     alertRepository.create.mockResolvedValue(makeAlert());
     await service.replaceAlert({ ...input, sourceId: undefined });

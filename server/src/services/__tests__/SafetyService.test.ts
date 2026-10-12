@@ -184,8 +184,23 @@ describe('resetRobotEStop', () => {
     expect(httpPost).toHaveBeenCalledWith('/api/v1/robots/r1/safety/estop/reset', {});
     expect(alertService.createAlert).not.toHaveBeenCalled();
     expect(alertService.replaceAlert).toHaveBeenCalledWith(
-      expect.objectContaining({ severity: 'info', source: 'robot', sourceId: 'r1' })
+      expect.objectContaining({ severity: 'info', source: 'robot', sourceId: 'r1' }),
+      expect.any(Function)
     );
+    const supersedes = vi.mocked(alertService.replaceAlert).mock.calls[0][1]!;
+    expect(supersedes('E-Stop Reset - old name')).toBe(true);
+    expect(supersedes('Robot offline - G1')).toBe(false);
+  });
+
+  it('reports a successful reset even when the alert write fails', async () => {
+    vi.mocked(robotManager.getRegisteredRobot).mockResolvedValue(makeRegistered());
+    httpPost.mockResolvedValue({ status: 'armed' });
+    vi.mocked(alertService.replaceAlert).mockRejectedValue(new Error('db down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(safetyService.resetRobotEStop('r1')).resolves.toEqual({ status: 'armed' });
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
   });
 
   it('wraps HTTP errors', async () => {
