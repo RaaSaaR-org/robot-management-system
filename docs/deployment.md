@@ -468,9 +468,9 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `NATS_SERVERS` | No | `nats://localhost:4222` | NATS connection URL |
 | `NATS_USER` | No | — | NATS auth user |
 | `NATS_PASS` | No | — | NATS auth password |
-| `RUSTFS_ENDPOINT` | No | `http://localhost:9000` | S3-compatible storage endpoint. Set means required: while RustFS is down, writes (dataset imports and uploads, twin artifacts, incident clips, sensor scans, patrol photos) answer 503 `STORAGE_UNAVAILABLE` naming the `errorKind` instead of falling back to local disk. Unset, they use local disk |
-| `RUSTFS_ACCESS_KEY` | No | `rustfsadmin` | S3 access key |
-| `RUSTFS_SECRET_KEY` | No | `rustfsadmin` | S3 secret key |
+| `RUSTFS_ENDPOINT` | No | — | S3-compatible storage endpoint, e.g. `http://localhost:9000`. Set means required: while RustFS is down, writes (dataset imports and uploads, twin artifacts, incident clips, sensor scans, patrol photos) answer 503 `STORAGE_UNAVAILABLE` naming the `errorKind` instead of falling back to local disk. Unset, they use local disk |
+| `RUSTFS_ACCESS_KEY` | With `RUSTFS_ENDPOINT` | — | S3 access key; no built-in default |
+| `RUSTFS_SECRET_KEY` | With `RUSTFS_ENDPOINT` | — | S3 secret key; no built-in default |
 | `RUSTFS_MULTIPART_MAX_AGE_HOURS` | No | `24` | Age after which the server aborts an incomplete multipart upload (parts an interrupted upload left in a bucket). Keep it above the longest single-file upload |
 | `RUSTFS_MULTIPART_SWEEP_INTERVAL_HOURS` | No | `6` | How often that sweep runs; it also runs whenever RustFS becomes ready |
 | `HF_IMPORT_CONCURRENCY` | No | `5` | Concurrent HuggingFace file transfers, capped at 5; use `1` when storage has limited room for temporary multipart uploads |
