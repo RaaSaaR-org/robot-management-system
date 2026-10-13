@@ -3,7 +3,7 @@ id: "TASK-390"
 aliases: []
 title: "The deployment guide lists no RustFS defaults the code does not have"
 slug: "the-deployment-guide-lists-no-rustfs-defaults-the-code-does-not-have"
-status: "review"
+status: "done"
 priority: 4
 owner: "huhn511"
 projects: []
@@ -38,8 +38,8 @@ nothing set to reach RustFS on `localhost:9000`.
 - **Key files:** `docs/deployment.md`.
 
 ## Acceptance Criteria
-- [ ] The three rows list no default value.
-- [ ] Each row matches `server/src/storage/rustfs-client.ts` (`getConfigFromEnv`, `isRustFSConfigured`).
+- [x] The three rows list no default value.
+- [x] Each row matches `server/src/storage/rustfs-client.ts` (`getConfigFromEnv`, `isRustFSConfigured`).
 
 ## Test Strategy
 Docs only: compare the rows with `getConfigFromEnv()` and `features.ts:77`.
