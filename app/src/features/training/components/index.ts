@@ -19,6 +19,8 @@ export { DatasetUploadModal } from './DatasetUploadModal';
 export type { DatasetUploadModalProps } from './DatasetUploadModal';
 export { GenerateSyntheticModal } from './GenerateSyntheticModal';
 export type { GenerateSyntheticModalProps } from './GenerateSyntheticModal';
+export { PublishDatasetDialog } from './PublishDatasetDialog';
+export type { PublishDatasetDialogProps } from './PublishDatasetDialog';
 
 // Training job components
 export { TrainingJobCard } from './TrainingJobCard';

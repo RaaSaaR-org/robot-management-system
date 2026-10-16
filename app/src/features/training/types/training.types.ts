@@ -1138,3 +1138,59 @@ export interface GenerateSyntheticInput {
   /** Defaults to 'forward-dynamics' on the server (backward compatible). */
   mode?: SyntheticGeneratorMode;
 }
+
+// ============================================================================
+// Hugging Face publish (TASK-394)
+// ============================================================================
+
+/** Whether the server can publish to the Hub, and as whom. Never carries the token. */
+export interface HubPublishStatus {
+  configured: boolean;
+  source: 'env' | 'file' | null;
+  user: string | null;
+  orgs: string[];
+  defaultNamespace: string | null;
+  error?: string;
+}
+
+export interface PublishDatasetInput {
+  repoId: string;
+  private?: boolean;
+  license?: string;
+  tags?: string[];
+  description?: string;
+  force?: boolean;
+}
+
+export type PublishPhase = 'preparing' | 'creating_repo' | 'uploading' | 'committing' | 'done' | 'failed';
+
+/** A running or finished publish, as `GET /datasets/:id/publish` returns it. */
+export interface DatasetPublishJob {
+  datasetId: string;
+  repoId: string;
+  private: boolean;
+  license: string;
+  status: 'running' | 'done' | 'failed';
+  phase: PublishPhase;
+  message: string;
+  filesTotal: number;
+  filesDone: number;
+  bytesTotal: number;
+  bytesDone: number;
+  card: 'generated' | 'local' | 'kept' | null;
+  repoCreated: boolean | null;
+  url: string;
+  commitOid?: string;
+  commitUrl?: string;
+  warnings: string[];
+  error?: string;
+  forced: boolean;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+/** What the server remembers when no job is in memory. */
+export type DatasetPublishState =
+  | DatasetPublishJob
+  | { status: 'none' }
+  | { status: 'done'; url: string; repoId: string };
