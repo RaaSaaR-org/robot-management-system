@@ -3,7 +3,7 @@ id: "TASK-394"
 aliases: []
 title: "A recorded dataset can be published to Hugging Face from the app"
 slug: "a-recorded-dataset-can-be-published-to-hugging-face-from-the-app"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
