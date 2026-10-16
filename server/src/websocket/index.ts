@@ -26,6 +26,10 @@ import { MULTI_TENANCY_ENABLED } from '../config/features.js';
 import { deliverEvent, deliverEventPerSocket, TenantResolver, UNRESOLVED_ROBOT_TENANT } from './eventFanout.js';
 import { eStopEventFor, eventTenantKey, tenantKey, type TenantKey } from './eventTenancy.js';
 import { lookupTenant } from './tenantLookups.js';
+import { attachUpgradeRoutes, type UpgradeRoute } from './teleopProxy.js';
+
+/** The A2A event socket's path. */
+const A2A_WS_PATH = '/api/a2a/ws';
 import { onControlLeaseTransition } from '../services/controlLeaseEvents.js';
 import {
   deliverControlLeaseTransition,
@@ -79,11 +83,18 @@ const verifyAccessToken: AccessTokenVerifier = (token) => authService.verifyAcce
 /**
  * Setup WebSocket server for real-time communication
  */
-export function setupWebSocket(server: Server): void {
-  const wss = new WebSocketServer({
-    server,
-    path: '/api/a2a/ws',
-  });
+export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRoute[] = []): void {
+  // noServer + one dispatcher (TASK-393): a `ws` server attached with
+  // `{ server, path }` aborts every OTHER path's upgrade with a 400, which left
+  // no room for the same-origin teleop socket on this port.
+  const wss = new WebSocketServer({ noServer: true });
+  const a2aRoute: UpgradeRoute = {
+    matches: (pathname) => pathname === A2A_WS_PATH,
+    handle: (req, socket, head) => {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    },
+  };
+  attachUpgradeRoutes(server, [a2aRoute, ...extraRoutes]);
 
   const clients = new Set<WebSocket>();
   // Track alive status for heartbeat - use WeakMap to avoid memory leaks
