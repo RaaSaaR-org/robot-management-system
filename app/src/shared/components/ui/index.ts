@@ -54,6 +54,8 @@ export { FormModal } from './FormModal';
 export type { FormModalProps } from './FormModal';
 export { ChoiceCard, ChoiceCardGroup, choiceSurface } from './ChoiceCard';
 export type { ChoiceCardProps, ChoiceCardGroupProps } from './ChoiceCard';
+export { Disclosure } from './Disclosure';
+export type { DisclosureProps } from './Disclosure';
 
 // Feedback
 export { Modal } from './Modal';

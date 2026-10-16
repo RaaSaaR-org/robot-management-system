@@ -240,7 +240,9 @@ styled with the tokens and sit inside kit panels.
 - **Actions:** `Button`, `LinkButton`, `RowActions` / `DropdownMenu`,
   `SegmentedControl` (+ `ToggleChip`).
 - **Forms:** `FormField`, `Input`, `SearchInput`, `Textarea`, `Select`,
-  `Checkbox`, `Switch`, `ChoiceCard` / `ChoiceCardGroup`, `FormModal`.
+  `Checkbox`, `Switch`, `ChoiceCard` / `ChoiceCardGroup`, `FormModal`,
+  `Disclosure` (optional settings behind a header button, with a summary of
+  what is set while closed — never a safety control).
 - **Feedback:** `Modal`, `ConfirmDialog` / `confirm()`, `toast` / `useToast`,
   `errorMessage()`, `EmptyState`, `ErrorState`, `Skeleton` (+ `SkeletonText`,
   `SkeletonRows`), `Spinner`, `PageLoader`, `ProgressBar` (+ `indeterminate`),
