@@ -8,6 +8,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   composeHud,
+  hudArmSuffix,
+  hudHandWarning,
   hudMode,
   isPoseFrame,
   markerAppearance,
@@ -345,5 +347,41 @@ describe('isPoseFrame — what counts as an RTT probe', () => {
     ]) {
       expect(isPoseFrame(payload)).toBe(false);
     }
+  });
+});
+
+// TASK-393: the real robot's arms on the plate.
+describe('the arm path on the HUD', () => {
+  const ARM = { armed: true, arming: false, armWeight: 1, teleopMode: 'arms+hands' };
+
+  it('folds the arm state into MODE and adds no line', () => {
+    const lines = composeHud({ ...BASE, armLeft: true, arm: ARM });
+    expect(lines.find((l) => l.id === 'mode')?.text).toBe('MODE ARM-L ARMED');
+    expect(lines.length).toBe(composeHud(BASE).length);
+  });
+
+  it('says ARMING with the weight, and warns while an arm is held but not under control', () => {
+    expect(hudArmSuffix({ ...ARM, armWeight: 0.42 })).toBe('ARMING 42%');
+    const lines = composeHud({ ...BASE, armRight: true, arm: { ...ARM, armed: false } });
+    const mode = lines.find((l) => l.id === 'mode')!;
+    expect(mode.text).toBe('MODE ARM-R ARMS OFF');
+    expect(mode.color).toBe(HUD_COLORS.warn);
+  });
+
+  it('puts a missing hand where TURN was, and never a fifth line', () => {
+    const lines = composeHud({ ...BASE, arm: { ...ARM, teleopMode: 'arms+left_hand' } });
+    expect(lines.find((l) => l.id === 'hands')?.text).toBe('NO RIGHT HAND — arms + left');
+    expect(lines.find((l) => l.id === 'turn')).toBeUndefined();
+    const recording = composeHud({ ...BASE, recording: { episode: 1, frames: 3 }, arm: { ...ARM, teleopMode: 'arms_only' } });
+    expect(recording.length).toBeLessThanOrEqual(HUD_MAX_LINES - 1);
+  });
+
+  it('has no hand warning when both hands are there or nobody said', () => {
+    expect(hudHandWarning('arms+hands')).toBeNull();
+    expect(hudHandWarning(null)).toBeNull();
+  });
+
+  it('looks exactly as before without an arm path', () => {
+    expect(composeHud({ ...BASE, arm: null })).toEqual(composeHud(BASE));
   });
 });

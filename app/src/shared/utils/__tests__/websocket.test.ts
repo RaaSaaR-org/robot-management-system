@@ -118,13 +118,33 @@ describe('getWebSocketUrl', () => {
     });
   });
 
-  describe('dev fallback (no absolute API base)', () => {
-    it('targets the API dev port on the page host instead of the Vite origin', () => {
+  describe('dev (no absolute API base) — TASK-393', () => {
+    it('stays on the page origin, which the Vite dev server proxies to the API', () => {
       clearEnvInputs();
       vi.stubEnv('DEV', true);
       const restore = stubLocation('http:', '192.168.178.67:1420');
 
-      expect(getWebSocketUrl()).toBe('ws://192.168.178.67:3001/api/a2a/ws');
+      expect(getWebSocketUrl()).toBe('ws://192.168.178.67:1420/api/a2a/ws');
+
+      restore();
+    });
+
+    it('needs no second port inside a headset on adb reverse', () => {
+      clearEnvInputs();
+      vi.stubEnv('DEV', true);
+      const restore = stubLocation('http:', 'localhost:1420');
+
+      expect(getWebSocketUrl('/api/robots/r1/teleop/ws')).toBe('ws://localhost:1420/api/robots/r1/teleop/ws');
+
+      restore();
+    });
+
+    it('follows an https page to wss', () => {
+      clearEnvInputs();
+      vi.stubEnv('DEV', true);
+      const restore = stubLocation('https:', 'neodem.tailnet.ts.net');
+
+      expect(getWebSocketUrl()).toBe('wss://neodem.tailnet.ts.net/api/a2a/ws');
 
       restore();
     });

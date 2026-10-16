@@ -77,7 +77,7 @@ function capability(enabled: boolean) {
  * machine (TASK-377) — then the last socket is the observer, not this one.
  */
 function teleopSockets(): FakeSocket[] {
-  return FakeSocket.instances.filter((s) => s.url.endsWith('/ws/keyboard-teleop'));
+  return FakeSocket.instances.filter((s) => /\/teleop\/ws$|\/ws\/keyboard-teleop$/.test(s.url));
 }
 
 async function connect(): Promise<FakeSocket> {

@@ -76,6 +76,8 @@ export interface HeadsetTarget {
   url: string;
   /** What the operator has to do first, if anything. */
   command?: string;
+  /** The bare command `command` wraps, for a machine without the repo checked out. */
+  fallbackCommand?: string;
   note: string;
   /**
    * True when this URL is a plain-http non-loopback origin, i.e. WebXR will be
@@ -107,6 +109,16 @@ function buildUrl(loc: LocationLike, protocol: string, host: string): string {
  * when the page is already being served from loopback there is no network
  * target at all — there is no address to give.
  */
+/** The dev server port `scripts/quest-connect.sh` reverses unless told otherwise. */
+export const QUEST_DEFAULT_PORT = '1420';
+
+/** `scripts/quest-connect.sh`, with `--port` only when the page is not on the default. */
+export function questConnectCommand(port: string): string {
+  return port && port !== QUEST_DEFAULT_PORT
+    ? `./scripts/quest-connect.sh --port ${port}`
+    : './scripts/quest-connect.sh';
+}
+
 export function headsetTargets(loc: LocationLike): HeadsetTarget[] {
   const targets: HeadsetTarget[] = [];
   const port = loc.port ?? '';
@@ -120,8 +132,14 @@ export function headsetTargets(loc: LocationLike): HeadsetTarget[] {
       id: 'usb',
       label: 'USB (adb reverse)',
       url: buildUrl(loc, 'http:', `localhost:${port}`),
-      command: `adb reverse tcp:${port} tcp:${port}`,
-      note: 'Plug the headset in, run the command, then open this URL in the headset browser. localhost is a secure context, so WebXR and the camera proxy both work.',
+      // The script (TASK-393) finds adb, checks the headset has accepted USB
+      // debugging and says so when it has not — the step that silently fails
+      // with a bare `adb reverse` ("unauthorized") — then reverses the port.
+      command: questConnectCommand(port),
+      fallbackCommand: `adb reverse tcp:${port} tcp:${port}`,
+      note: 'Plug the headset in, accept "Allow USB debugging" inside it, run the command on this computer, then '
+        + 'open this URL in the headset browser. localhost is a secure context, and the teleop socket, the '
+        + 'camera and the event stream all go through this one port — nothing else needs forwarding.',
       insecure: false,
     });
   }

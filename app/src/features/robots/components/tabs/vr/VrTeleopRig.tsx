@@ -15,6 +15,7 @@ import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState } from '@react-three/xr';
 import * as THREE from 'three';
 import { retargetArm, type RetargetResult, type VrJointMap } from './vrRetarget';
+import type { HudArm } from './vrHud';
 import {
   handKeypointsToRobotFrame,
   isStopPinch,
@@ -122,7 +123,24 @@ export interface VrRigTelemetry {
    * server's number. `VrWristHud` hands this straight to `composeHud`.
    */
   recording: { episode: number; frames: number } | null;
+  /**
+   * The real robot's arm write path, from the agent's `{type:'arm'}` frame
+   * (TASK-393). Null on the sim / an older sidecar, which need no arming.
+   */
+  arm: HudArm | null;
 }
+
+/**
+ * How often the rig tells the agent it is alive, in ms (TASK-393).
+ *
+ * 10 Hz against the agent's 1 s dead-man (`HEARTBEAT_TIMEOUT_MS` in
+ * `robot-agent/src/api/keyboard-teleop.ts`): ten beats of slack, so Wi-Fi
+ * jitter never trips it, and a render loop that stalls — headset off, tab
+ * backgrounded, the browser hung — has the arms handed back within a second.
+ * Sent from `useFrame` on purpose: the beat is proof that the thing reading the
+ * controllers is running, which a `setInterval` would not be.
+ */
+export const HEARTBEAT_INTERVAL_MS = 100;
 
 export function createRigTelemetry(): VrRigTelemetry {
   return {
@@ -145,6 +163,7 @@ export function createRigTelemetry(): VrRigTelemetry {
     msSinceState: null,
     rttMs: null,
     recording: null,
+    arm: null,
   };
 }
 
@@ -263,6 +282,21 @@ export function VrTeleopRig({
   // taking the headset off.
   const recenterHeld = useRef(false);
   const estopHeld = useRef(false);
+  /** When the last `{hb}` went out (performance.now), and its sequence number. */
+  const lastBeatAt = useRef(-Infinity);
+  const beatSeq = useRef(0);
+
+  // The arm dead-man's other half (TASK-393): beat while this rig may stream.
+  // A gated stream (E-stop, no lease, link down) sends nothing — the agent has
+  // nothing to keep alive then, and must not be told otherwise.
+  useFrame(() => {
+    if (!canStreamRef.current) return;
+    const now = performance.now();
+    if (now - lastBeatAt.current < HEARTBEAT_INTERVAL_MS) return;
+    lastBeatAt.current = now;
+    beatSeq.current += 1;
+    send({ hb: beatSeq.current });
+  });
   /**
    * When both hands started making the stop gesture, or null.
    *

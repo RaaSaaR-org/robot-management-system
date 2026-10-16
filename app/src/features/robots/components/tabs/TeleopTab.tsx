@@ -12,6 +12,7 @@ import type { TeleopTabProps } from './types';
 import { VRTeleopSection } from './vr/VRTeleopSection';
 import { ControlLeaseBar } from './ControlLeaseBar';
 import { useControlLease, type LeaseSocket } from '../../hooks/useControlLease';
+import { openTeleopSocket } from './vr/vrUrls';
 
 // ============================================================================
 // TYPES & HELPERS
@@ -39,19 +40,14 @@ function prettyJoint(name: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-function getAgentBaseUrl(robot: TeleopTabProps['robot']): string {
-  if (robot.a2aAgentUrl) {
-    return robot.a2aAgentUrl.replace(/\/$/, '');
-  }
-  // 41243 is the robot agent's default port (robot-agent/src/config/config.ts).
-  return 'http://localhost:41243';
-}
-
-function getWsBaseUrl(robot: TeleopTabProps['robot']): string {
-  // Keyboard teleop WebSocket is served by the robot agent itself (same host/port
-  // as the REST/A2A API), driving the simulated joint state.
-  return getAgentBaseUrl(robot).replace(/^http/, 'ws');
-}
+/**
+ * How often the keyboard console tells the agent it is alive, in ms (TASK-393).
+ * Without a heartbeat a console may not drive a real robot's arms; a background
+ * tab throttles this interval to ~1 Hz, which the agent's 1 s dead-man then
+ * treats as the operator having gone — exactly right for a keyboard nobody is
+ * looking at.
+ */
+const HEARTBEAT_MS = 100;
 
 function Kbd({ children }: { children: string }) {
   return (
@@ -98,14 +94,19 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
   useEffect(() => { jointsRef.current = joints; }, [joints]);
 
   const connect = useCallback(() => {
-    const wsUrl = `${getWsBaseUrl(robot)}/ws/keyboard-teleop`;
     let opened = false;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let beat = 0;
     setConnecting(true);
-    const ws = new WebSocket(wsUrl);
+    // Through the server's same-origin proxy (TASK-393), like the VR console.
+    const ws = openTeleopSocket(robot);
     wsRef.current = ws;
 
     ws.onopen = () => {
       opened = true;
+      heartbeat = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ hb: ++beat }));
+      }, HEARTBEAT_MS);
       const socket: LeaseSocket = {
         send: (payload) => {
           if (ws.readyState !== WebSocket.OPEN) return false;
@@ -120,12 +121,14 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
       toast.success('Keyboard teleop connected', { description: robot.name });
     };
     ws.onclose = () => {
+      if (heartbeat) clearInterval(heartbeat);
       if (wsRef.current === ws) leaseRef.current.attachSocket(null);
       setConnecting(false);
       setConnected(false);
       wsRef.current = null;
     };
     ws.onerror = () => {
+      if (heartbeat) clearInterval(heartbeat);
       if (wsRef.current === ws) leaseRef.current.attachSocket(null);
       setConnecting(false);
       setConnected(false);

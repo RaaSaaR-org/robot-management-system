@@ -483,3 +483,56 @@ describe('VRTeleopModalBody — a damped base', () => {
     expect(screen.getByTestId('vr-base-damped')).toHaveTextContent('link is down');
   });
 });
+
+// TASK-393: the real robot's arm write path, as the agent reports it.
+describe('VRTeleopModalBody — the real G1 arm path', () => {
+  it('connects through the server, not to the agent, by default', () => {
+    renderModal();
+    expect(FakeSocket.instances[0].url).toMatch(/\/api\/robots\/[^/]+\/teleop\/ws$/);
+  });
+
+  it('shows nothing about arming on a sidecar that needs none', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({ type: 'arm', writeMode: null, armed: false, arming: false, armWeight: 0 }));
+    expect(screen.queryByTestId('vr-arm-status')).toBeNull();
+    expect(screen.queryByTestId('vr-arm-notices')).toBeNull();
+  });
+
+  it('shows the arms ramping in, then armed', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({ type: 'arm', writeMode: 'arm_sdk', armed: true, arming: false, armWeight: 0.4 }));
+    expect(screen.getByTestId('vr-arm-status')).toHaveTextContent('Arming 40%');
+    act(() => socket.deliver({ type: 'arm', writeMode: 'arm_sdk', armed: true, arming: false, armWeight: 1 }));
+    expect(screen.getByTestId('vr-arm-status')).toHaveTextContent('Arms armed');
+  });
+
+  it('warns — and does not block — when a Dex3 hand is missing', () => {
+    renderModal();
+    const socket = openLink(G1_ARM_JOINTS);
+    act(() => socket.deliver({
+      type: 'arm', writeMode: 'arm_sdk', armed: false, arming: false, armWeight: 0,
+      hands: { left: true, right: false }, teleopMode: 'arms+left_hand',
+    }));
+    const notices = screen.getByTestId('vr-arm-notices');
+    expect(notices).toHaveTextContent('right Dex3 hand reports no state');
+    expect(screen.getByRole('button', { name: 'Enter VR' })).toBeEnabled();
+  });
+
+  it('says plainly when the sidecar is read-only', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({ type: 'arm', writeMode: 'read_only', armed: false, arming: false, armWeight: 0 }));
+    expect(screen.getByTestId('vr-arm-notices')).toHaveTextContent('G1_WRITE_MODE=arm_sdk');
+  });
+
+  it('takes heartbeat_lost back out when the agent says the heartbeat is live again', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({ type: 'error', code: 'heartbeat_lost', message: 'no heartbeat', at: 'now' }));
+    expect(screen.getByTestId('vr-agent-errors')).toHaveTextContent('heartbeat_lost');
+    act(() => socket.deliver({ type: 'heartbeat', state: 'live' }));
+    expect(screen.queryByTestId('vr-agent-errors')).toBeNull();
+  });
+});
