@@ -119,40 +119,43 @@ TASK-391, built in parallel against the shared contract below.
 ### Key files
 
 - `robot-agent/src/api/keyboard-teleop.ts`
-- `robot-agent/src/teleop/arm-registry.ts` (new)
-- `robot-agent/src/hardware/HardwareClient.ts`
+- `robot-agent/src/teleop/arm-registry.ts` (new), `robot-agent/src/teleop/forward-joints.ts` (new)
+- `robot-agent/src/hardware/HardwareClient.ts`, `robot-agent/src/hardware/arm-status.ts` (new)
 - `robot-agent/src/robot/state.ts`
 - `robot-agent/src/recording/EpisodeRecorder.ts`, `dex3-layout.ts`, `recording-controller.ts`, `lerobot-writer.ts`
-- `server/src/websocket/index.ts`, `server/src/websocket/teleopProxy.ts` (new), `server/src/index.ts`
+- `server/src/websocket/index.ts`, `server/src/websocket/teleopProxy.ts` (new),
+  `server/src/websocket/teleopProxyRoute.ts` (new), `server/src/index.ts`
 - `app/src/features/robots/components/tabs/vr/{vrUrls.ts,vrAvailability.ts,VRTeleopModal.tsx,VrTeleopRig.tsx,vrHud.ts,QuestConnectHelp.tsx}`
-- `app/src/features/datacollection/components/VRSessionPanel.tsx`
+- `app/src/features/robots/components/tabs/vr/VRTeleopSection.tsx` (hosts the Quest helper, which
+  `VRSessionPanel.tsx` renders unchanged), `app/src/features/robots/components/tabs/TeleopTab.tsx`
+- `app/src/features/datacollection/hooks/{useSessionControlLease,useGamepadJoints,useSimulatedVrInput}.ts`
 - `app/src/shared/utils/websocket.ts`, `app/vite.config.ts`
 - `scripts/quest-connect.sh` (new), `docs/vr-teleop-data-collection.md`
 
 ## Acceptance Criteria
 
-- [ ] With leases advertised by the server and `CONTROL_LEASE_REQUIRED` unset, `{bind}`
+- [x] With leases advertised by the server and `CONTROL_LEASE_REQUIRED` unset, `{bind}`
       with a valid lease answers `{type:'lease', state:'bound'}`; an invalid one answers
       `lease_invalid`; a bound socket loses motion on fence/expiry.
-- [ ] The VR modal connects through `/api/robots/:id/teleop/ws` by default; with auth on,
+- [x] The VR modal connects through `/api/robots/:id/teleop/ws` by default; with auth on,
       a socket without a valid token is refused before the upgrade; added latency measured.
-- [ ] In dev the A2A socket uses same-origin `/api/a2a/ws`; only port 1420 needs
+- [x] In dev the A2A socket uses same-origin `/api/a2a/ws`; only port 1420 needs
       `adb reverse`.
-- [ ] On a G1 / G1 EDU the forwarder never sends a leg or waist joint.
-- [ ] A heartbeating socket that goes silent for 1 s is halted and its arm claim released
+- [x] On a G1 / G1 EDU the forwarder never sends a leg or waist joint.
+- [x] A heartbeating socket that goes silent for 1 s is halted and its arm claim released
       (sidecar `/disarm`), and the client is told `heartbeat_lost`.
-- [ ] On an `arm_sdk` sidecar: engaging under a bound lease with a live heartbeat POSTs
+- [x] On an `arm_sdk` sidecar: engaging under a bound lease with a live heartbeat POSTs
       `/arm` with the lease generation before any `/action`; teleop end, E-stop, lease
       loss and heartbeat loss POST `/disarm`; E-stop reset POSTs `/estop/reset`; no
       `/action` is sent while disarmed.
-- [ ] Without a bound lease an `arm_sdk` sidecar is never armed (`arm_requires_lease`).
-- [ ] The VR panel and HUD show armed / arm weight and warn (not block) on
+- [x] Without a bound lease an `arm_sdk` sidecar is never armed (`arm_requires_lease`).
+- [x] The VR panel and HUD show armed / arm weight and warn (not block) on
       `arms_only` / one-hand `teleop_mode`.
-- [ ] The VR panel has a "Connect Meta Quest" helper; `scripts/quest-connect.sh` sets up
+- [x] The VR panel has a "Connect Meta Quest" helper; `scripts/quest-connect.sh` sets up
       `adb reverse` and reports an unauthorised device clearly.
-- [ ] The recorder stores what was sent to the sidecar, refuses a read-only real sidecar,
+- [x] The recorder stores what was sent to the sidecar, refuses a read-only real sidecar,
       records arms-only / one-hand when a hand is missing and says so in the metadata.
-- [ ] Typecheck + vitest green in robot-agent, server and app.
+- [x] Typecheck + vitest green in robot-agent, server and app.
 
 ## Test Strategy
 
@@ -168,6 +171,29 @@ TASK-391, built in parallel against the shared contract below.
 - Real robot (2026-10-18, needs TASK-391): runbook in `docs/vr-teleop-data-collection.md`.
 
 ## Notes
+
+- 2026-10-17 implementation evidence (branch
+  `feat/task-393-a-meta-quest-3-teleoperates-the-real-g1-through-the-neodem`):
+  - Gates: robot-agent typecheck + vitest 2614/2614; app tsc + vitest 2865/2865; server
+    typecheck + vitest 7045 pass, 3 fail in `ScanSessionService.test.ts`
+    (`StorageUnavailableError`) — fails identically with this diff stashed, so not caused here.
+  - End to end on loopback, own processes only: a fake contract sidecar (:8791) → own agent
+    (:41251, `g1_edu`) → the real `createTeleopProxy` (:3011) → own Vite dev server (:1431,
+    `VITE_PROXY_TARGET`). A client that mimics `VrTeleopRig` bound the lease, heartbeated at
+    10 Hz and streamed poses: `/arm` with the lease generation came before the first `/action`;
+    0 leg keys in 1080 `/action`s; stopping the heartbeat disarmed in ~1 s and the client was
+    told `heartbeat_lost`; resuming re-armed; closing disarmed. A recording with the right hand
+    absent wrote 58 frames, `observation.state` shape [21], `robot_type`
+    `Unitree_G1_Dex3_LeftHand`, `_neodem.source = neodem-real-teleop`, `simulated: false`.
+  - Against an own MuJoCo DDS sim (domain 1, `lo`, :8781) through own agent + proxy: no
+    arming (sim advertises no write mode), arm joints followed, legs and the untouched arm held.
+  - RTT `{positions}` → `{type:'state'}` (loopback, n = 103): direct p50 0.31 / p95 0.50 ms,
+    server proxy 0.56 / 0.97 ms, Vite + server proxy 0.92 / 1.52 ms.
+  - The A2A socket through the Vite proxy answered `connected` from the running dev server.
+  - Found by the e2e run and fixed: a protective stop that clears on its own left the sidecar's
+    `/estop` latch set, so the arms could never be armed again; the clear edge now resets it.
+- Not verified here: anything on the real robot (needs TASK-391's `G1_WRITE_MODE=arm_sdk`),
+  a real Quest browser, auth-enabled mode end to end (unit-tested only).
 
 - Needs TASK-391's sidecar `arm_sdk` mode to move the real robot; until then an
   `arm_sdk`-less sidecar behaves exactly as before (no arming, legacy release).
