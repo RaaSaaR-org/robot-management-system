@@ -84,6 +84,19 @@ def test_dds_domain_and_iface_names():
     assert g1_sidecar._dds_iface_env({"G1_DDS_IFACE": "lo", "G1_NET_INTERFACE": "enp131s0"}) == "lo"
 
 
+@pytest.mark.parametrize("env,host", [
+    ({}, "0.0.0.0"),
+    ({"G1_WRITE_MODE": "read_only"}, "0.0.0.0"),
+    ({"G1_WRITE_MODE": "arm_sdk", "G1_DDS_DOMAIN": "1"}, "127.0.0.1"),
+    ({"G1_WRITE_MODE": "ARM_SDK", "G1_DDS_DOMAIN": "0"}, "127.0.0.1"),
+    ({"G1_WRITE_MODE": "arm_sdk", "G1_SIDECAR_HOST": "0.0.0.0"}, "0.0.0.0"),
+])
+def test_arm_sdk_listens_on_loopback_unless_told_otherwise(env, host):
+    """/arm and /action are unauthenticated: in arm_sdk mode they must not be
+    reachable from the lab network by default."""
+    assert g1_sidecar._bind_host(env) == host
+
+
 @pytest.mark.parametrize("env,needle", [
     ({"G1_READ_ONLY": "0"}, "rt/lowcmd"),
     ({"G1_WRITE_MODE": "arm_sdk"}, "explicit DDS domain"),

@@ -138,6 +138,12 @@ both modes (it spawned `lerobot-record`, i.e. the same `rt/lowcmd` driver).
 | SIGTERM / SIGINT | Disarm ramp starts at the signal; the process exits after weight 0 (~1.2 s). |
 | `GET /health`, `/state` | `write_mode`, `armed`, `arm_state`, `arm_weight`, `estop_latched`, `hands {left,right}`, `teleop_mode`, `dds_domain`, `dds_iface`. |
 
+In arm_sdk mode the HTTP API listens on **127.0.0.1 only** (read_only keeps
+`0.0.0.0`): the routes are unauthenticated and `/arm` + `/action` move the arms,
+so they must not be reachable from the lab Wi-Fi or the robot LAN. The agent
+reaches it at `http://localhost:8767` as before. `G1_SIDECAR_HOST` overrides
+the address, and the sidecar warns at start when it is not loopback.
+
 What one `rt/arm_sdk` frame carries: the 14 arm joints (the only operator
 targets, kp 80/kd 3 shoulders+elbows, kp 40/kd 1.5 wrists); the waist **held at
 the pose measured at `/arm`** (kp 300/kd 3, xr_teleoperate's motion-mode lock —
@@ -223,3 +229,10 @@ sidecar whose `/health` reports another domain.
 - `mode_machine` taken from `rt/lowstate`, as bridge.py and xr_teleoperate do.
 - The Dex3 RIS mode byte and kp 1.5 / kd 0.2 (from xr_teleoperate's
   Dex3_1_Controller), and whether the right hand publishes state at all.
+- What the robot does when `rt/arm_sdk` goes silent at a weight above 0. Every
+  exit the sidecar controls (disarm, e-stop, dead-man, stale state, publish
+  error, SIGTERM/SIGINT) ramps to 0 first, but a `kill -9`, an OOM kill or a
+  power loss of this box cannot. Keep the hardware e-stop / remote staffed, and
+  stop the sidecar with SIGTERM or Ctrl-C, never `kill -9`.
+- Dex3 commands have no blend weight: after a disarm each hand keeps its last
+  commanded position at kp 1.5 until something else commands it.

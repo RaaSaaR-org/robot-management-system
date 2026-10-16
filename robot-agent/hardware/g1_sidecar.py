@@ -20,7 +20,9 @@ G1_WRITE_MODE=arm_sdk now refuses to start.
 yet against the physical G1 — robot day runs it on the gantry first
 (docs/g1-edu-lab-bringup.md, "Arm teleop through arm_sdk").
 
-Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_URL):
+Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_URL),
+on every interface in read_only mode and on 127.0.0.1 only in arm_sdk mode
+(G1_SIDECAR_HOST overrides — see _bind_host):
   GET  /health        → {"status": "ok", "connected": true/false, + WRITE STATUS}
   GET  /state         → {"joints": [...], "imu": {...}, "touch": {...},
                          "battery": {...}, "odometry": {...}, "timestamp": ...,
@@ -160,6 +162,22 @@ def _dds_iface_env(env=None) -> str:
         if raw:
             return raw
     return ""
+
+
+def _bind_host(env=None) -> str:
+    """The address the HTTP API listens on.
+
+    G1_SIDECAR_HOST wins when set. Otherwise read_only keeps listening on every
+    interface, as before, while arm_sdk listens on loopback only: the routes are
+    unauthenticated, and in arm_sdk mode `/arm` + `/action` move the robot's
+    arms, so they must not be reachable from the lab Wi-Fi or the robot LAN.
+    Every caller (the robot-agent's HARDWARE_SIDECAR_URL) is on this host."""
+    env = os.environ if env is None else env
+    explicit = (env.get("G1_SIDECAR_HOST") or "").strip()
+    if explicit:
+        return explicit
+    mode = (env.get("G1_WRITE_MODE") or "").strip().lower()
+    return "127.0.0.1" if mode == "arm_sdk" else "0.0.0.0"
 
 
 def _write_mode_error(env=None) -> "str | None":
@@ -2884,7 +2902,11 @@ def main() -> None:
             "[G1 Sidecar] /loco/* disabled (G1_LOCO_ENABLED=0) — locomotion endpoints answer 403",
             flush=True,
         )
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    host = _bind_host()
+    if not READ_ONLY and host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"[G1 Sidecar] ⚠️  arm_sdk routes listen on {host} (G1_SIDECAR_HOST) — "
+              "/arm and /action are unauthenticated and reachable from that network", flush=True)
+    server = ThreadingHTTPServer((host, PORT), Handler)
 
     # SIGTERM / SIGINT: start the disarm ramp AT ONCE, stop serving, and only
     # let the process go once the weight is 0 (_shutdown_arm_sdk). The ramp is

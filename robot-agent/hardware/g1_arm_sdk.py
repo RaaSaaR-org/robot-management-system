@@ -41,7 +41,7 @@ Python 3.8-compatible on purpose (the robot's PC2 ships 3.8): no PEP 604/701
 syntax at runtime.
 
 @status new — unit-tested with fakes; integration-checked against the MuJoCo
-        DDS sim (domain 1, lo). Not yet run against the physical G1.
+        DDS sim (domain 41, lo). Not yet run against the physical G1.
 """
 
 from __future__ import annotations
@@ -306,9 +306,13 @@ class ArmSdkController:
         lease = body.pop("lease_generation", None)
         values = {}
         for name, v in body.items():
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)):
+            try:
+                fv = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+            except OverflowError:  # a JSON integer too large for a float
+                fv = None
+            if fv is None or not math.isfinite(fv):
                 return 400, {"ok": False, "error": "'%s' must be a finite number (radians)" % name}
-            values[name] = float(v)
+            values[name] = fv
         with self._lock:
             if not self._engaged:
                 return 409, self._reply(False, error="not_armed",

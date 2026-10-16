@@ -132,7 +132,7 @@ Each row is one connection, listed from the side that opens it.
 | workers → server | HTTP poll | `/api/training/workers/*`, `/api/twin/workers/*` | Bearer `WORKER_API_TOKEN` |
 | Prometheus → server | HTTP | `:3001 /metrics` | no auth |
 | **Robot edge** | | | |
-| agent → g1_sidecar | HTTP | `:8767 /state /arm /disarm /action /estop /estop/reset /cameras/* /record/* /loco/*` | `G1_WRITE_MODE=read_only` and `G1_LOCO_ENABLED=0` by default |
+| agent → g1_sidecar | HTTP | `:8767 /state /arm /disarm /action /estop /estop/reset /cameras/* /record/* /loco/*` | `G1_WRITE_MODE=read_only` and `G1_LOCO_ENABLED=0` by default; no auth, so `arm_sdk` mode binds 127.0.0.1 only (`G1_SIDECAR_HOST` overrides) |
 | agent → sim facade | HTTP | `:8777` (second sim `:8778`) | same contract as the sidecar |
 | agent → SO-101 sidecar | HTTP | `:8765` | bootstrap arm |
 | agent · server → voice | HTTP | `:8768 /say`, `/voices` | Agent Mode narration, voice packs |

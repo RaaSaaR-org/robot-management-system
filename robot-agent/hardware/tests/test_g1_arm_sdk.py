@@ -205,7 +205,7 @@ def test_unknown_joints_are_counted_and_bad_values_rejected():
     ctrl.arm()
     status, body = ctrl.action({"left_tail_joint": 1.0})
     assert status == 200 and body["ignored"]["unknown"] == 1 and body["applied"] == 0
-    for bad in (float("nan"), float("inf"), "1.0", True, None):
+    for bad in (float("nan"), float("inf"), "1.0", True, None, 10 ** 400):
         status, body = ctrl.action({LEFT_ELBOW: bad})
         assert status == 400, bad
     assert ctrl.action([1, 2])[0] == 400

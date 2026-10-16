@@ -121,6 +121,8 @@ exit path.
 - [x] SIGTERM/SIGINT ramp the weight to 0 before the process exits.
 - [x] Against the MuJoCo DDS sim on domain 1 / `lo`: arm, 3 s shoulder
       sinusoid, the arm moves, the legs do not, disarm → weight 0.
+      (Run on domain **41** / `lo` instead — the dev stack's own sim occupies
+      domain 1; same loopback-only guarantee.)
 - [x] The robot-day start command is documented (written, not run).
 - [ ] First armed run on the physical G1 (gantry, e-stop staffed) — robot day,
       not part of this branch's verification.
@@ -190,6 +192,22 @@ The first run failed two checks and changed the code: SIGTERM reached weight 0
 only at +1.49 s (the ramp waited for `serve_forever`'s 0.5 s poll — now the
 signal starts the ramp at once), and the waist bound was 0.02 rad against a
 measured 0.0245 rad sway that the frames do not command (bound now 0.05 rad).
+
+### Review, 2026-10-17
+
+Changes made in review: in arm_sdk mode the HTTP API binds 127.0.0.1 unless
+`G1_SIDECAR_HOST` says otherwise (the routes are unauthenticated and `/arm` +
+`/action` move the arms; read_only keeps `0.0.0.0`); a JSON integer too large
+for a float in `/action` is a 400, not an unhandled `OverflowError`; docs name
+the residual risks (`kill -9` cannot ramp down; Dex3 has no blend weight).
+
+Re-run after those changes: hardware pytest 288 passed / 17 skipped (py3.12,
+`unitree_sim_env6`) and 279 / 18 (py3.14, curation venv); `sim_g1_dds` pytest
+146 passed with `SIM_PYTHON=~/anaconda3/envs/unitree_sim_env6/bin/python` (CPU
+render env); `arm_sdk_sim_check.py` on domain 41 / `lo` (sim :8782, sidecar
+:8792, sidecar bound to 127.0.0.1): 13/13 PASS — ramp up 1.48 s, shoulder p2p
+0.592 rad of 0.600, legs ≤ 0.0065 rad, waist ≤ 0.0208 rad, disarm 0.98 s,
+dead-man 1.00 s → 0 at 1.99 s, SIGTERM weight 0 at +1.013 s, exit +1.164 s.
 
 ## Notes
 
