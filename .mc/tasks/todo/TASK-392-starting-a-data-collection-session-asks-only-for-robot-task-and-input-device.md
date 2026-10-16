@@ -101,16 +101,16 @@ Out of scope: `SessionCompleted.tsx` (TASK-394), `VRSessionPanel.tsx` and
 - `docs/brand.md`
 
 ## Acceptance Criteria
-- [ ] The New session page shows exactly four fields by default: robot, task, input device (three cards) and episodes; one primary button "Start session".
-- [ ] "Advanced options" is collapsed by default and, while collapsed, summarises the values that differ from the defaults.
-- [ ] Episode length, frame rate, dataset name and Vision Pro / ALOHA / kinesthetic input are reachable under Advanced options; no option the page offered before is gone.
-- [ ] Advanced values (except the dataset name) and the last robot and device are remembered per user and survive a reload; storage failures do not break the page.
-- [ ] The submitted request carries every advanced value, including `datasetRepoId` when set.
-- [ ] Robot and task are validated inline; an invalid advanced value opens the disclosure and blocks submit.
-- [ ] Online robots are listed first with their status; recent task instructions appear as chips that fill the task field.
-- [ ] A `created` session shows a pre-flight checklist (robot, recorder, camera, input, control) with blocking vs warning states and one named next action; a blocking item disables Start recording and the Space hotkey.
-- [ ] The Cameras panel shows the cameras the robot actually serves.
-- [ ] Design-drift test, app typecheck and app vitest pass.
+- [x] The New session page shows exactly four fields by default: robot, task, input device (three cards) and episodes; one primary button "Start session".
+- [x] "Advanced options" is collapsed by default and, while collapsed, summarises the values that differ from the defaults.
+- [x] Episode length, frame rate, dataset name and Vision Pro / ALOHA / kinesthetic input are reachable under Advanced options; no option the page offered before is gone.
+- [x] Advanced values (except the dataset name) and the last robot and device are remembered per user and survive a reload; storage failures do not break the page.
+- [x] The submitted request carries every advanced value, including `datasetRepoId` when set.
+- [x] Robot and task are validated inline; an invalid advanced value opens the disclosure and blocks submit.
+- [x] Online robots are listed first with their status; recent task instructions appear as chips that fill the task field.
+- [x] A `created` session shows a pre-flight checklist (robot, recorder, camera, input, control) with blocking vs warning states and one named next action; a blocking item disables Start recording and the Space hotkey.
+- [x] The Cameras panel shows the cameras the robot actually serves.
+- [x] Design-drift test, app typecheck and app vitest pass.
 
 ## Test Strategy
 - Vitest + Testing Library: `NewSessionPage.test.tsx` (default fields, advanced collapsed, summary line, persistence across remount, submitted request, validation, storage throwing), `Disclosure` in the kit tests, `preflight.test.ts` for the pure checklist logic, `PreflightChecklist.test.tsx` for rendering.
@@ -119,3 +119,7 @@ Out of scope: `SessionCompleted.tsx` (TASK-394), `VRSessionPanel.tsx` and
 
 ## Notes
 - 2026-10-17: built for the 2026-10-18 real-robot collection run (G1 EDU + Meta Quest 3); TASK-391/393/394 run in parallel.
+- 2026-10-17: implemented on the branch. Gates: app `tsc` clean, app vitest 214 files / 2868+ tests green (incl. design-drift),
+  Playwright `app-routes`, `demo-api-contract`, `demo-smoke` green (153). `e2e/live/datacollection-vr.spec.ts` updated but not run
+  (needs a live stack; the running one is in use). The default episode count is now 10 (was 3); frame rate stays 10 fps.
+- The robot is not preselected when more than one robot is online (real and sim side by side) — choosing between them stays explicit.
