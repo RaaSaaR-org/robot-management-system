@@ -1182,6 +1182,8 @@ export interface DatasetPublishJob {
   url: string;
   commitOid?: string;
   commitUrl?: string;
+  /** The LeRobot codebase-version tag set on the commit, e.g. `v3.0`. */
+  versionTag?: string;
   warnings: string[];
   error?: string;
   forced: boolean;

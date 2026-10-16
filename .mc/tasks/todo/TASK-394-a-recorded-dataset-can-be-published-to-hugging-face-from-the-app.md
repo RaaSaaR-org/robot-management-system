@@ -89,7 +89,8 @@ the final link, straight from the dataset directory on local disk.
 
 - `POST /api/datasets/:id/publish` — body `{ repoId, private = true, license = "apache-2.0",
   tags = [], description?, force = false }`. `repoId` is `<namespace>/<name>`; a bare name gets
-  the default namespace (`HF_PUBLISH_NAMESPACE`, default `zemarobotik`). Validated with zod
+  the default namespace (`HF_PUBLISH_NAMESPACE`, else the token's user — no organisation name is
+  hardcoded; the lab box sets `HF_PUBLISH_NAMESPACE=zemarobotik`). Validated with zod
   (400 naming the field). Answers 202 with the job.
 - `GET /api/datasets/:id/publish` — the current or last job, else `{ status: 'none' }` or, for a
   dataset published before a restart, `{ status: 'done', url }` from `huggingFaceRepoId`.
@@ -126,22 +127,36 @@ the final link, straight from the dataset directory on local disk.
 
 ## Acceptance Criteria
 
-- [ ] `POST /api/datasets/:id/publish` uploads a local LeRobot dataset's `meta/`, `data/`,
+- [x] `POST /api/datasets/:id/publish` uploads a local LeRobot dataset's `meta/`, `data/`,
       `videos/` and a dataset card to a Hub dataset repo, creating it (private by default) only
       when it does not exist; a second publish makes a new commit
-- [ ] The token comes from `HF_TOKEN` / `HF_TOKEN_PATH` / `$HF_HOME/token` /
+      — `HuggingFacePublishService.ts` `run()` (repoExists/createRepo, uploadFilesWithProgress);
+      review added the LeRobot codebase-version tag on the commit (`replaceTag`), without which
+      `LeRobotDataset(repo_id)` refuses the repo
+- [x] The token comes from `HF_TOKEN` / `HF_TOKEN_PATH` / `$HF_HOME/token` /
       `~/.cache/huggingface/token`, never from the request, and never appears in a response or log
-- [ ] `GET /api/datasets/publish/status` says whether a token is configured and which Hub user
-- [ ] Not-ready, degraded (without `force`), view, non-local datasets, missing token, a foreign
+      — `resolveToken()`, `scrubToken()` on every kept/logged error; the zod schema is `.strict()`
+- [x] `GET /api/datasets/publish/status` says whether a token is configured and which Hub user
+      — `getStatus()`, route in `datasets.routes.ts`
+- [x] Not-ready, degraded (without `force`), view, non-local datasets, missing token, a foreign
       namespace and a concurrent publish are refused with the codes above; bad input is 400
-- [ ] Progress (phase, files, bytes) and the final URL are readable from `GET /api/datasets/:id/publish`;
-      a failure keeps its reason
-- [ ] Start and outcome of each publish are in the compliance log
-- [ ] A generated card names the task instructions, robot type, fps, episodes, frames, cameras,
+      — `publish()`/`start()`; review closed a double-click race (two starts in one tick both passed
+      the in-progress check across the awaits)
+- [x] Progress (phase, files, bytes) and the final URL are readable from `GET /api/datasets/:id/publish`;
+      a failure keeps its reason — `getJob()`, `job.error`
+- [x] Start and outcome of each publish are in the compliance log
+      — `publish.huggingface.start` / `publish.huggingface` via `auditDatasetAction`
+- [x] A generated card names the task instructions, robot type, fps, episodes, frames, cameras,
       features, real/sim provenance, NeoDEM/ZeMA attribution and license; a hand-written card is kept
-- [ ] The app's "Publish to Hugging Face" dialog is on the completed-session view and the dataset
-      detail page, private by default, shows progress and the link
-- [ ] Server and app vitest cover it with the Hub client mocked — no network, no repo created
+      — `huggingface/datasetCard.ts`; provenance reads `info._neodem.simulated`, so it is only as
+      right as the recorder that writes it
+- [x] The app's "Publish to Hugging Face" dialog is on the completed-session view and the dataset
+      detail page, private by default, shows progress and the link — `PublishDatasetDialog.tsx`,
+      `SessionCompleted.tsx` (`publish-dataset`), `DatasetEpisodesPage.tsx`, `DatasetsPage.tsx`
+- [x] Server and app vitest cover it with the Hub client mocked — no network, no repo created
+      — `HuggingFacePublishService.test.ts` (fake client; the real client and `fetch` both rigged
+      to throw), `dataset-publish-routes.test.ts`, `PublishDatasetDialog.test.tsx`,
+      `SessionCompleted.test.tsx`
 
 ## Test Strategy
 

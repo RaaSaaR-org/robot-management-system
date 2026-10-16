@@ -29,10 +29,22 @@ vi.mock('@huggingface/hub', () => {
   return { whoAmI: refuse, repoExists: refuse, createRepo: refuse, downloadFile: refuse, uploadFilesWithProgress: refuse };
 });
 
+// The default client tags over plain REST; nothing in this file may reach it.
+const realFetch = globalThis.fetch;
+beforeEach(() => {
+  globalThis.fetch = (() => {
+    throw new Error('fetch must not be called from a test');
+  }) as typeof fetch;
+});
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
+
 import {
   HuggingFacePublishService,
   normalizeRepoId,
   PublishError,
+  replaceTagOverRest,
   scrubToken,
   type HubClient,
 } from '../HuggingFacePublishService.js';
@@ -91,12 +103,20 @@ function dataset(overrides: Record<string, unknown> = {}) {
 interface FakeHub extends HubClient {
   uploads: Array<{ repo: unknown; files: Array<{ path: string; content: Blob | URL }>; commitTitle: string }>;
   created: Array<{ repo: unknown; visibility: string; license?: string }>;
+  tags: Array<{ repo: unknown; tag: string; revision: string }>;
 }
 
-function fakeHub(opts: { exists?: boolean; remoteReadme?: string | null; fail?: Error; orgs?: string[] } = {}): FakeHub {
+function fakeHub(
+  opts: { exists?: boolean; remoteReadme?: string | null; fail?: Error; orgs?: string[]; tagFail?: Error } = {},
+): FakeHub {
   const hub: FakeHub = {
     uploads: [],
     created: [],
+    tags: [],
+    replaceTag: vi.fn(async (p) => {
+      if (opts.tagFail) throw opts.tagFail;
+      hub.tags.push({ repo: p.repo, tag: p.tag, revision: p.revision });
+    }),
     whoAmI: vi.fn(async () => ({ name: 'huhn511', type: 'user', orgs: (opts.orgs ?? ['zemarobotik']).map((name) => ({ name })) })),
     repoExists: vi.fn(async () => opts.exists ?? false),
     createRepo: vi.fn(async (p) => {
@@ -152,8 +172,11 @@ describe('HuggingFacePublishService.publish', () => {
       commitOid: 'abc123',
       url: 'https://huggingface.co/datasets/zemarobotik/g1-apple-pick',
       filesTotal: 6,
+      versionTag: 'v3.0',
     });
     expect(done.bytesDone).toBe(done.bytesTotal);
+    // LeRobotDataset(repo_id) refuses a repo without the codebase-version tag.
+    expect(hub.tags).toEqual([{ repo: { type: 'dataset', name: 'zemarobotik/g1-apple-pick' }, tag: 'v3.0', revision: 'abc123' }]);
 
     expect(hub.created).toEqual([
       { repo: { type: 'dataset', name: 'zemarobotik/g1-apple-pick' }, visibility: 'private', license: 'apache-2.0' },
@@ -308,6 +331,32 @@ describe('HuggingFacePublishService.publish', () => {
     expect(error).toMatchObject({ status: 403, code: 'NAMESPACE_FORBIDDEN' });
   });
 
+  it('still finishes when the version tag cannot be set, and says what that breaks', async () => {
+    const hub = fakeHub({ tagFail: new Error(`HTTP 403 for ${TOKEN}`) });
+    const svc = service(hub);
+    await svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null);
+    await svc.settled('ds-1');
+    const job = (await svc.getJob('ds-1')) as { status: string; versionTag?: string; warnings: string[] };
+    expect(job.status).toBe('done');
+    expect(job.versionTag).toBeUndefined();
+    expect(job.warnings.join(' ')).toMatch(/v3\.0 tag could not be set.*LeRobotDataset/);
+    expect(job.warnings.join(' ')).not.toContain(TOKEN);
+  });
+
+  it('refuses a double click: two starts in the same tick make one publish', async () => {
+    const hub = fakeHub();
+    const svc = service(hub);
+    const results = await Promise.allSettled([
+      svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null),
+      svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ code: 'PUBLISH_IN_PROGRESS' });
+    await svc.settled('ds-1');
+    expect(hub.uploads).toHaveLength(1);
+  });
+
   it('refuses a second publish while one is running', async () => {
     const svc = service(fakeHub());
     const first = svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null);
@@ -357,6 +406,40 @@ describe('HuggingFacePublishService.getStatus', () => {
     expect(status.configured).toBe(true);
     expect(status.error).toContain('401');
     expect(status.error).not.toContain(TOKEN);
+  });
+});
+
+describe('replaceTagOverRest', () => {
+  it('moves the tag the way huggingface_hub does: DELETE the old one (404 is fine), then POST on the revision', async () => {
+    const calls: Array<{ url: string; method?: string; body?: unknown; auth?: string }> = [];
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push({
+        url,
+        method: init?.method,
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        auth: (init?.headers as Record<string, string>)?.Authorization,
+      });
+      return new Response('', { status: init?.method === 'DELETE' ? 404 : 200 });
+    }) as typeof fetch;
+    await replaceTagOverRest({
+      repo: { type: 'dataset', name: 'zemarobotik/g1' },
+      tag: 'v3.0',
+      revision: 'abc123',
+      accessToken: TOKEN,
+      hubUrl: 'http://127.0.0.1:9/',
+    });
+    expect(calls).toEqual([
+      { url: 'http://127.0.0.1:9/api/datasets/zemarobotik/g1/tag/v3.0', method: 'DELETE', body: undefined, auth: `Bearer ${TOKEN}` },
+      { url: 'http://127.0.0.1:9/api/datasets/zemarobotik/g1/tag/abc123', method: 'POST', body: { tag: 'v3.0' }, auth: `Bearer ${TOKEN}` },
+    ]);
+  });
+
+  it('throws when the Hub refuses the tag', async () => {
+    globalThis.fetch = (async (_url: string, init?: RequestInit) =>
+      new Response('forbidden', { status: init?.method === 'DELETE' ? 404 : 403 })) as typeof fetch;
+    await expect(
+      replaceTagOverRest({ repo: { type: 'dataset', name: 'a/b' }, tag: 'v3.0', revision: 'main', accessToken: TOKEN }),
+    ).rejects.toThrow(/HTTP 403/);
   });
 });
 

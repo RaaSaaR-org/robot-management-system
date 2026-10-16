@@ -51,6 +51,12 @@ refused it or could not be reached.
     loading snippet and NeoDEM/ZeMA attribution;
   - a card on the Hub that NeoDEM did not generate is kept, never overwritten.
 
+The commit is then tagged with the dataset's LeRobot codebase version from
+`meta/info.json` (`v3.0`), as `lerobot`'s own `push_to_hub` does:
+`LeRobotDataset("<repo>")` refuses a repo without that tag. When tagging
+fails the publish still ends `done`, with a warning saying so; tag it by hand
+with `hf repos tag create <repo> v3.0 --repo-type dataset`.
+
 The repository is created when it does not exist — **private by default**,
 with the chosen license. Publishing again to the same repository makes a new
 commit; it never deletes files already on the Hub, and it leaves an existing
@@ -99,7 +105,7 @@ Role: the same as every other dataset write — member or above.
 The running or last job: `status` (`running` · `done` · `failed`), `phase`
 (`preparing` · `creating_repo` · `uploading` · `committing` · `done` ·
 `failed`), `filesDone/filesTotal`, `bytesDone/bytesTotal`, `url`,
-`commitOid`, `card` (`generated` · `local` · `kept`), `repoCreated`,
+`commitOid`, `versionTag`, `card` (`generated` · `local` · `kept`), `repoCreated`,
 `warnings`, and `error` when it failed. Jobs live in memory; after a restart
 a published dataset answers `{ "status": "done", "url": … }` from its
 `huggingFaceRepoId`. A dataset that was itself imported from the Hub keeps

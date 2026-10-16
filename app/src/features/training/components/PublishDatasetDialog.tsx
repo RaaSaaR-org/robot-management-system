@@ -236,7 +236,7 @@ export function PublishDatasetDialog({ isOpen, onClose, datasetId, datasetName, 
             </p>
           ) : (
             <Panel variant="inset" padding="sm" className="flex items-start gap-3" role="alert" data-testid="publish-not-configured">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-signal-estimated" strokeWidth={1.75} />
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-signal-unknown" strokeWidth={1.75} />
               <p className="text-[13px] text-ink-secondary">
                 {status?.error || statusError ||
                   'The server has no Hugging Face token. Run `hf auth login` on the server host, or set HF_TOKEN, then open this again.'}
@@ -268,7 +268,7 @@ export function PublishDatasetDialog({ isOpen, onClose, datasetId, datasetName, 
           {degraded && (
             <Panel variant="inset" padding="sm" className="flex flex-col gap-2" data-testid="publish-degraded">
               <div className="flex items-start gap-3">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-signal-estimated" strokeWidth={1.75} />
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-signal-unknown" strokeWidth={1.75} />
                 <p className="text-[13px] text-ink-secondary">{degraded}</p>
               </div>
               <Checkbox label="Publish anyway" checked={force} onChange={(e) => setForce(e.target.checked)} />

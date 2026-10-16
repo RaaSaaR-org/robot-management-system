@@ -86,6 +86,8 @@ export interface PublishJob {
   url: string;
   commitOid?: string;
   commitUrl?: string;
+  /** The LeRobot codebase-version tag set on the commit, e.g. `v3.0`. */
+  versionTag?: string;
   warnings: string[];
   error?: string;
   forced: boolean;
@@ -123,6 +125,15 @@ export interface HubClient {
     commitDescription?: string;
     hubUrl?: string;
   }): AsyncGenerator<hub.CommitProgressEvent, hub.CommitOutput | undefined>;
+  /** Point `tag` at `revision`, moving it when it already exists. */
+  replaceTag(params: {
+    repo: hub.RepoDesignation;
+    tag: string;
+    revision: string;
+    message?: string;
+    accessToken: string;
+    hubUrl?: string;
+  }): Promise<void>;
 }
 
 export interface PublishServiceOptions {
@@ -198,12 +209,38 @@ function isHubImport(dataset: DatasetResponse): boolean {
   return Boolean(dataset.sourceRevision || dataset.importMode);
 }
 
+/**
+ * `@huggingface/hub` has no tag API, so this is the two calls
+ * `huggingface_hub.HfApi.delete_tag` / `create_tag` make. Delete-then-create is
+ * what `lerobot`'s own `push_to_hub` does to move the version tag to a new commit.
+ */
+export async function replaceTagOverRest(params: Parameters<HubClient['replaceTag']>[0]): Promise<void> {
+  const { repo, tag, revision, message, accessToken } = params;
+  const name = typeof repo === 'string' ? repo : repo.name;
+  const base = `${(params.hubUrl ?? 'https://huggingface.co').replace(/\/+$/, '')}/api/datasets/${name}/tag`;
+  const auth = { Authorization: `Bearer ${accessToken}` };
+  const removed = await fetch(`${base}/${encodeURIComponent(tag)}`, { method: 'DELETE', headers: auth });
+  if (!removed.ok && removed.status !== 404) {
+    throw new Error(`removing the old ${tag} tag answered HTTP ${removed.status}`);
+  }
+  const created = await fetch(`${base}/${encodeURIComponent(revision)}`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify(message ? { tag, message } : { tag }),
+  });
+  if (!created.ok) {
+    const detail = await created.text().catch(() => '');
+    throw new Error(`creating the ${tag} tag answered HTTP ${created.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`);
+  }
+}
+
 const defaultHub: HubClient = {
   whoAmI: (p) => hub.whoAmI(p) as unknown as ReturnType<HubClient['whoAmI']>,
   repoExists: (p) => hub.repoExists(p),
   createRepo: (p) => hub.createRepo(p),
   downloadFile: (p) => hub.downloadFile(p),
   uploadFilesWithProgress: (p) => hub.uploadFilesWithProgress(p),
+  replaceTag: replaceTagOverRest,
 };
 
 // ============================================================================
@@ -217,6 +254,8 @@ export class HuggingFacePublishService {
   private readonly now: () => Date;
   private readonly jobs = new Map<string, PublishJob>();
   private readonly runs = new Map<string, Promise<void>>();
+  /** Datasets between the in-progress check and the job being stored — the awaits in between. */
+  private readonly starting = new Set<string>();
   private whoamiCache: { token: string; at: number; value: { name: string; type: string; orgs: string[] } } | null = null;
 
   constructor(options: PublishServiceOptions = {}) {
@@ -297,10 +336,11 @@ export class HuggingFacePublishService {
 
   /** The current or last job for a dataset, or what the row remembers. */
   async getJob(datasetId: string): Promise<PublishJob | { status: 'none' } | { status: 'done'; url: string; repoId: string } | null> {
-    const job = this.jobs.get(datasetId);
-    if (job) return { ...job, warnings: [...job.warnings] };
+    // The row first: it is what the caller's tenant may see, and the job map is not scoped.
     const dataset = await datasetService.get(datasetId);
     if (!dataset) return null;
+    const job = this.jobs.get(datasetId);
+    if (job) return { ...job, warnings: [...job.warnings] };
     if (dataset.huggingFaceRepoId && !isHubImport(dataset)) {
       return { status: 'done', repoId: dataset.huggingFaceRepoId, url: this.repoUrl(dataset.huggingFaceRepoId) };
     }
@@ -316,7 +356,20 @@ export class HuggingFacePublishService {
     if (running?.status === 'running') {
       throw new PublishError(`A publish to ${running.repoId} is already running for this dataset`, 409, 'PUBLISH_IN_PROGRESS');
     }
+    // The check above and this mark are one synchronous step: the checks below
+    // await the database and the Hub, and a double click used to pass both.
+    if (this.starting.has(datasetId)) {
+      throw new PublishError('A publish is already being started for this dataset', 409, 'PUBLISH_IN_PROGRESS');
+    }
+    this.starting.add(datasetId);
+    try {
+      return await this.start(datasetId, request, actorId);
+    } finally {
+      this.starting.delete(datasetId);
+    }
+  }
 
+  private async start(datasetId: string, request: PublishRequest, actorId: string | null): Promise<PublishJob> {
     const dataset = await datasetService.get(datasetId);
     if (!dataset) throw new PublishError('Dataset not found', 404, 'DATASET_NOT_FOUND');
     if (dataset.kind === 'view') {
@@ -414,6 +467,7 @@ export class HuggingFacePublishService {
   ): Promise<void> {
     const repo: hub.RepoDesignation = { type: 'dataset', name: job.repoId };
     try {
+      const info = await readJson(join(root, 'meta', 'info.json'));
       const { files, skipped } = await collectFiles(root);
       if (skipped > 0) job.warnings.push(`${skipped} symlink(s) or special file(s) were left out`);
       if (!files.some((f) => f.path.startsWith('data/'))) {
@@ -475,7 +529,7 @@ export class HuggingFacePublishService {
             description: request.description,
             license: job.license,
             tags: request.tags ?? [],
-            info: await readJson(join(root, 'meta', 'info.json')),
+            info,
             tasks: await readTasks(root),
             robotTypeName: dataset.robotType?.name ?? null,
             publishedAt: this.now().toISOString(),
@@ -523,12 +577,41 @@ export class HuggingFacePublishService {
         }
       }
 
-      job.phase = 'done';
-      job.status = 'done';
       job.filesDone = job.filesTotal;
       job.bytesDone = job.bytesTotal;
       job.commitOid = output?.commit.oid;
       job.commitUrl = output?.commit.url;
+
+      // `LeRobotDataset(repo_id)` refuses a repo without a codebase-version
+      // tag ("Your dataset must be tagged with a codebase version"), so the
+      // data would be on the Hub and unloadable. Tag the commit just made, as
+      // lerobot's own push_to_hub does. The upload itself already succeeded,
+      // so a failed tag is a warning that says what it breaks, not a failure.
+      const version = typeof info.codebase_version === 'string' ? info.codebase_version.trim() : '';
+      if (!version) {
+        job.warnings.push('meta/info.json names no codebase_version, so no version tag was set; LeRobotDataset will not load this repo without one');
+      } else {
+        job.message = `Tagging ${version}`;
+        try {
+          await this.hub.replaceTag({
+            repo,
+            tag: version,
+            revision: job.commitOid ?? 'main',
+            message: `LeRobot codebase ${version}, published from NeoDEM`,
+            accessToken: token,
+            ...this.hubParams(),
+          });
+          job.versionTag = version;
+        } catch (error) {
+          job.warnings.push(
+            `The ${version} tag could not be set (${scrubToken(errorMessage(error), token)}); ` +
+              `LeRobotDataset will not load this repo until it is — publish again or run \`hf repos tag create ${job.repoId} ${version} --repo-type dataset\``,
+          );
+        }
+      }
+
+      job.phase = 'done';
+      job.status = 'done';
       job.message = 'Published';
       job.finishedAt = this.now().toISOString();
 
@@ -557,6 +640,7 @@ export class HuggingFacePublishService {
       files: job.filesTotal,
       bytes: job.bytesTotal,
       commit: job.commitOid ?? null,
+      versionTag: job.versionTag ?? null,
       url: job.url,
       error: job.error ?? null,
     });
