@@ -449,11 +449,25 @@ export class HuggingFacePublishService {
         uploads.push({ path: 'README.md', content: pathToFileURL(localReadme), size: statSync(localReadme).size });
         job.card = 'local';
       } else {
-        const remote = exists ? await this.hub.downloadFile({ repo, path: 'README.md', accessToken: token, ...this.hubParams() }) : null;
-        const remoteText = remote ? await remote.text() : null;
-        if (remoteText !== null && !remoteText.includes(NEODEM_CARD_MARKER)) {
+        // A card that cannot be read is treated like a hand-written one:
+        // overwriting what we could not see is worse than a stale card.
+        let remoteText: string | null = null;
+        let unreadable = false;
+        if (exists) {
+          try {
+            const remote = await this.hub.downloadFile({ repo, path: 'README.md', accessToken: token, ...this.hubParams() });
+            remoteText = remote ? await remote.text() : null;
+          } catch {
+            unreadable = true;
+          }
+        }
+        if (unreadable || (remoteText !== null && !remoteText.includes(NEODEM_CARD_MARKER))) {
           job.card = 'kept';
-          job.warnings.push('The repository has a hand-written README.md; it was kept');
+          job.warnings.push(
+            unreadable
+              ? 'The repository\'s README.md could not be read; it was left as it is'
+              : 'The repository has a hand-written README.md; it was kept',
+          );
         } else {
           const card = buildDatasetCard({
             repoId: job.repoId,

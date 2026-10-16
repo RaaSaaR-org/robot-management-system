@@ -189,6 +189,16 @@ describe('HuggingFacePublishService.publish', () => {
     expect(await svc.getJob('ds-1')).toMatchObject({ status: 'done', repoCreated: false, card: 'kept' });
   });
 
+  it('leaves the card alone when the Hub one cannot be read', async () => {
+    const hub = fakeHub({ exists: true });
+    (hub.downloadFile as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('500'));
+    const svc = service(hub);
+    await svc.publish('ds-1', { repoId: 'zemarobotik/g1-apple-pick' }, null);
+    await svc.settled('ds-1');
+    expect(hub.uploads[0].files.map((f) => f.path)).not.toContain('README.md');
+    expect(await svc.getJob('ds-1')).toMatchObject({ status: 'done', card: 'kept' });
+  });
+
   it('replaces a card NeoDEM generated earlier', async () => {
     const hub = fakeHub({ exists: true, remoteReadme: `---\n---\n${NEODEM_CARD_MARKER}\n# old` });
     const svc = service(hub);
