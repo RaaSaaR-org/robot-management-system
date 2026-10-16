@@ -1,6 +1,8 @@
 /**
  * @file CameraStreamView.tsx
- * @description MJPEG camera stream viewer with recording-aware state
+ * @description MJPEG camera stream viewer with recording-aware state. Opens
+ *              the stream with a camera ticket (TASK-214) and takes any camera
+ *              name the robot serves (TASK-392), not only top/wrist.
  * @feature datacollection
  */
 
@@ -8,10 +10,12 @@ import { useState, useEffect, useRef } from 'react';
 import { VideoOff } from 'lucide-react';
 import { Button, StatusTag } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
+import { useCameraStreamUrl } from '../../robots/hooks/useCameraStreamUrl';
 
 interface CameraStreamViewProps {
   robotId: string;
-  cameraName: 'wrist' | 'top';
+  /** A camera the robot serves (`head_camera`, `top`, `wrist`, …). */
+  cameraName: string;
   label?: string;
   className?: string;
   /** When true, shows "Recording" state instead of "offline" on error */
@@ -25,18 +29,21 @@ const FRAME =
 
 export function CameraStreamView({ robotId, cameraName, label, className, isRecording, offline }: CameraStreamViewProps) {
   const [streamError, setHasError] = useState(false);
-  const hasError = streamError || !!offline;
-  const streamUrl = `/api/robots/${robotId}/camera/${cameraName}`;
+  // A fresh ticket per attempt: the last one may have expired.
+  const [attempt, setAttempt] = useState(0);
+  const { url: streamUrl, denied } = useCameraStreamUrl(offline ? null : robotId, offline ? null : cameraName, undefined, attempt);
+  const hasError = streamError || denied || !!offline;
   const retryRef = useRef<ReturnType<typeof setInterval>>(undefined);
   const name = label ?? cameraName;
+  const retry = () => { setHasError(false); setAttempt((n) => n + 1); };
 
   // Auto-retry every 3s when recording stops (camera becomes available again)
   useEffect(() => {
-    if (hasError && !isRecording) {
-      retryRef.current = setInterval(() => setHasError(false), 3000);
+    if (hasError && !offline && !isRecording) {
+      retryRef.current = setInterval(retry, 3000);
     }
     return () => { if (retryRef.current) clearInterval(retryRef.current); };
-  }, [hasError, isRecording]);
+  }, [hasError, isRecording, offline]);
 
   // Recording state — camera is busy but that's expected
   if (hasError && isRecording) {
@@ -56,9 +63,13 @@ export function CameraStreamView({ robotId, cameraName, label, className, isReco
         <VideoOff className="h-4 w-4 text-ink-tertiary" strokeWidth={1.75} />
         <span className="text-[13px] font-medium text-ink-secondary">{name} offline</span>
         <span className="text-xs text-ink-tertiary">Start the robot agent to see this stream.</span>
-        {!offline && <Button variant="ghost" size="sm" onClick={() => setHasError(false)}>Retry</Button>}
+        {!offline && <Button variant="ghost" size="sm" onClick={retry}>Retry</Button>}
       </div>
     );
+  }
+
+  if (!streamUrl) {
+    return <div className={cn(FRAME, className)}><span className="text-xs text-ink-tertiary">Connecting to {name}…</span></div>;
   }
 
   return (

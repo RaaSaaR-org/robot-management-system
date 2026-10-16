@@ -4,11 +4,13 @@
  *              (start, pause, resume, end through confirm), live HUD, robot
  *              viewer, cameras, episodes, and the completed-session review.
  *              Under the control lease the page holds one lease that its
- *              gamepad and simulated-VR inputs join (TASK-320).
+ *              gamepad and simulated-VR inputs join (TASK-320). A created
+ *              session shows a pre-flight checklist; a blocking item (robot
+ *              offline) disables Start recording and its hotkey (TASK-392).
  * @feature datacollection
  */
 
-import { useState, Suspense, lazy, useEffect, useRef, useCallback } from 'react';
+import { useState, Suspense, lazy, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { ArrowRight, Database, Pause, Play, Plus, Square } from 'lucide-react';
 import {
@@ -20,6 +22,7 @@ import { QualityIndicator } from '../components/QualityIndicator';
 import { CameraStreamView } from '../components/CameraStreamView';
 import { SessionStepIndicator } from '../components/SessionStepIndicator';
 import { EpisodePanel } from '../components/EpisodePanel';
+import { PreflightChecklist } from '../components/PreflightChecklist';
 import { VRSessionPanel } from '../components/VRSessionPanel';
 import { SessionHud } from '../components/session/SessionHud';
 import { SessionCompleted } from '../components/session/SessionCompleted';
@@ -32,6 +35,9 @@ import { JointStateGrid } from '../../robots/components/visualization';
 import { KeyboardTeleopSection } from '../../robots/components/tabs/TeleopTab';
 import { useGamepadJoints } from '../hooks/useGamepadJoints';
 import { useSessionControlLease } from '../hooks/useSessionControlLease';
+import { useInputPresence } from '../hooks/useInputPresence';
+import { useRobotCameras } from '../../robots/hooks/useRobotCameras';
+import { buildPreflight, summarizePreflight } from '../utils/preflight';
 import { ControlLeaseBar } from '../../robots/components/tabs/ControlLeaseBar';
 import { jointPositionUnit } from '../../robots/types/robots.types';
 import type { RobotType } from '../../robots/types/robots.types';
@@ -41,6 +47,13 @@ import { sessionName } from '../utils/sessionFormat';
 const Robot3DViewer = lazy(() =>
   import('../../robots/components/visualization/Robot3DViewer').then((m) => ({ default: m.Robot3DViewer }))
 );
+
+/** `head_camera` → "Head camera". */
+const cameraLabel = (name: string) => {
+  const words = name.replace(/[_-]+/g, ' ').trim();
+  const text = /camera$/i.test(words) ? words : `${words} camera`;
+  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
+};
 
 const formatElapsed = (secs: number) => `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
 const BACK = { to: '/data-collection', label: 'Data collection' };
@@ -177,7 +190,7 @@ export function SessionDetailPage() {
       if (ev.code === 'Space') {
         ev.preventDefault();
         if (canPauseSession(session)) void handlePause();
-        else if (canStartSession(session)) void handleStart();
+        else if (canStartSession(session) && !startBlockedRef.current) void handleStart();
       } else if ((ev.key === 'e' || ev.key === 'E') && canEndSession(session)) {
         ev.preventDefault(); void handleEnd();
       } else if ((ev.key === 'n' || ev.key === 'N') && session.status === 'recording') {
@@ -208,6 +221,28 @@ export function SessionDetailPage() {
     enabled: gamepadEligible && (session?.status === 'recording' || session?.status === 'paused'),
     lease,
   });
+
+  // TASK-392: what the page can check before recording, and the cameras the
+  // robot really serves (a G1 has a head camera, not top/wrist).
+  const cameras = useRobotCameras(sessionIsLive && robotOnline ? session!.robotId : null, 5000);
+  const isCreated = session?.status === 'created';
+  const presence = useInputPresence(isCreated && sessionIsVr, isCreated && session?.type === 'gamepad');
+  const preflightItems = useMemo(() => (session && isCreated ? buildPreflight({
+    robot: robot ? { name: robot.name, online: robotOnline } : null,
+    agentConnected: isTelemetryConnected,
+    cameras: { loading: cameras.loading, names: cameras.cameras, source: cameras.source, detail: cameras.detail },
+    sessionType: session.type,
+    secureContext: presence.secureContext,
+    vrSupported: presence.vrSupported,
+    gamepadConnected: presence.gamepadConnected,
+    lease: leaseInputs ? { enabled: lease.enabled, bound: lease.state === 'bound' } : undefined,
+  }) : []), [session, isCreated, robot, robotOnline, isTelemetryConnected, cameras.loading, cameras.cameras,
+    cameras.source, cameras.detail, presence.secureContext, presence.vrSupported, presence.gamepadConnected,
+    leaseInputs, lease.enabled, lease.state]);
+  const preflight = summarizePreflight(preflightItems);
+  // Read by the hotkey handler, which binds once per status change.
+  const startBlockedRef = useRef(false);
+  startBlockedRef.current = isCreated && preflight.blocking;
 
   const handleAnnotate = async () => {
     if (!annotationText.trim()) { setModalError('Describe the task the robot should learn.'); return; }
@@ -256,7 +291,17 @@ export function SessionDetailPage() {
 
   const actions = (() => {
     if (session.status === 'created') {
-      return <Button isLoading={pending === 'start'} leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handleStart()}>Start recording</Button>;
+      return (
+        <Button
+          isLoading={pending === 'start'}
+          disabled={preflight.blocking}
+          title={preflight.blocking ? preflight.next : undefined}
+          leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />}
+          onClick={() => void handleStart()}
+        >
+          Start recording
+        </Button>
+      );
     }
     const end = (variant: 'danger' | 'secondary') => (
       <Button variant={variant} isLoading={pending === 'end'} leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handleEnd()}>End session</Button>
@@ -312,6 +357,8 @@ export function SessionDetailPage() {
         </Panel>
       )}
 
+      {isCreated && <PreflightChecklist items={preflightItems} summary={preflight} />}
+
       {isLive && lease.enabled && leaseInputs && robot && (
         <Panel data-testid="session-control-lease">
           <Panel.Header title="Control" description="Gamepad and simulated VR input drive the robot only while you hold control." />
@@ -339,8 +386,28 @@ export function SessionDetailPage() {
             <Panel>
               <Panel.Header title="Cameras" />
               <Panel.Body className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <CameraStreamView robotId={session.robotId} cameraName="top" label="Top camera" className="h-44" isRecording={isRecording} offline={!robotOnline} />
-                <CameraStreamView robotId={session.robotId} cameraName="wrist" label="Wrist camera" className="h-44" isRecording={isRecording} offline={!robotOnline} />
+                {robotOnline && cameras.loading ? (
+                  <Skeleton className="h-44 w-full sm:col-span-2" />
+                ) : robotOnline && cameras.cameras.length === 0 ? (
+                  <EmptyState
+                    size="sm"
+                    className="sm:col-span-2"
+                    title="No camera"
+                    description={cameras.detail ? `The robot serves no camera: ${cameras.detail}` : 'The robot serves no camera. Episodes record without video.'}
+                  />
+                ) : (
+                  (cameras.cameras.length > 0 ? cameras.cameras.slice(0, 4) : ['top', 'wrist']).map((name) => (
+                    <CameraStreamView
+                      key={name}
+                      robotId={session.robotId}
+                      cameraName={name}
+                      label={cameraLabel(name)}
+                      className="h-44"
+                      isRecording={isRecording}
+                      offline={!robotOnline}
+                    />
+                  ))
+                )}
               </Panel.Body>
             </Panel>
           </div>
