@@ -46,12 +46,16 @@ test.describe('VR data collection in simulation', () => {
       .getByPlaceholder(/Pick up the red block/i)
       .fill('Pick up the cube and place it on the plate (e2e)');
 
-    await page.getByRole('button', { name: /Create Session/i }).click();
+    // The advanced options stay collapsed: the default view is enough.
+    await expect(page.getByRole('button', { name: /^Advanced options/ })).toHaveAttribute('aria-expanded', 'false');
+    await page.getByRole('button', { name: /^Start session$/ }).click();
 
     // Lands on the session detail page — step 1 (Connect input) is active
     await expect(page).toHaveURL(/data-collection\/[0-9a-f-]+/, { timeout: 15_000 });
     await expect(page.getByTestId('session-steps')).toBeVisible();
     await expect(page.getByTestId('vr-session-panel')).toBeVisible();
+    // Pre-flight checklist: the sim robot is online, nothing blocks Start.
+    await expect(page.getByTestId('preflight-robot')).toHaveAttribute('data-level', 'ok', { timeout: 15_000 });
 
     // ── 2. Start recording ────────────────────────────────────────────────
     await page.getByRole('button', { name: /^Start recording$/ }).click();

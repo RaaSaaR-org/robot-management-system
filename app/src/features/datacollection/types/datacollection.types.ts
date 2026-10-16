@@ -245,8 +245,8 @@ export const TELEOPERATION_TYPE_LABELS: Record<TeleoperationType, string> = {
   vr_quest: 'Meta Quest VR',
   vr_vision_pro: 'Vision Pro',
   bilateral_aloha: 'Bilateral ALOHA',
-  kinesthetic: 'Kinesthetic Teaching',
-  keyboard_mouse: 'Keyboard & Mouse',
+  kinesthetic: 'Kinesthetic teaching',
+  keyboard_mouse: 'Keyboard & mouse',
   gamepad: 'Gamepad',
 };
 
