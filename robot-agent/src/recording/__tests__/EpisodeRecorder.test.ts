@@ -306,15 +306,80 @@ describe('EpisodeRecorder', () => {
     expect(rec.status().frames).toBe(3);
   });
 
-  it('refuses to start when the sidecar does not report every joint', async () => {
-    // Exactly the state the sim was in before /state learned the hands: the
-    // fingers would have been recorded as a constant zero column.
+  it('refuses to start when the sidecar does not report an arm joint', async () => {
+    // A missing ARM joint is a broken state stream, not an unplugged hand: it
+    // would have been recorded as a constant zero column.
+    const partial = { ...fullPose(0.2) };
+    delete partial.left_elbow_joint;
+    h.measured = partial;
+    await expect(rec.start({ sessionId: 's1', cameras: [] })).rejects.toThrow(
+      /does not report 1 of 28 joints/,
+    );
+  });
+
+  it('refuses a hand that reports only some of its joints', async () => {
+    const partial = { ...fullPose(0.2) };
+    delete partial.right_hand_index_0_joint;
+    h.measured = partial;
+    await expect(rec.start({ sessionId: 's1', cameras: [] })).rejects.toThrow(/does not report 1 of 28/);
+  });
+
+  // -- TASK-393: the real robot ---------------------------------------------
+
+  it('records arms-only when no Dex3 hand reports state, and says so', async () => {
     const partial = { ...fullPose(0.2) };
     for (const name of G1_DEX3_JOINTS) if (name.includes('_hand_')) delete partial[name];
     h.measured = partial;
-    await expect(rec.start({ sessionId: 's1', cameras: [] })).rejects.toThrow(
-      /does not report 14 of 28 joints/,
-    );
+    h.commanded = Object.fromEntries(Object.entries(fullPose(0.1)).filter(([n]) => !n.includes('_hand_')));
+    const status = await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
+    expect(status.recordingMode).toBe('arms_only');
+    expect(status.omittedJoints).toHaveLength(14);
+    await run(h, rec, 200);
+    expect(rec.status().frames).toBeGreaterThan(0);
+    vi.useRealTimers();
+    const result = await rec.stop();
+    expect(result.robotType).toBe('Unitree_G1_Dex3_ArmsOnly');
+    const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
+    expect(info.features['observation.state'].shape).toEqual([14]);
+    expect(info._neodem).toMatchObject({ recordingMode: 'arms_only' });
+  });
+
+  it('records the arms and the left hand when only the right hand is silent', async () => {
+    const partial = { ...fullPose(0.2) };
+    for (const name of G1_DEX3_JOINTS) if (name.startsWith('right_hand_')) delete partial[name];
+    h.measured = partial;
+    const status = await rec.start({ sessionId: 's1', cameras: [] });
+    expect(status.recordingMode).toBe('arms+left_hand');
+    expect(status.omittedJoints.every((j) => j.startsWith('right_hand_'))).toBe(true);
+  });
+
+  it('refuses a real robot behind a read-only sidecar, and says how to fix it', async () => {
+    h.hooks.describeSidecar = async () => ({
+      scene: null, bootId: 'b', behindS: null, arm: { readOnly: true, sim: false, writeMode: 'read_only' },
+    });
+    await expect(rec.start({ sessionId: 's1', cameras: [] })).rejects.toThrow(/G1_WRITE_MODE=arm_sdk/);
+  });
+
+  it('labels a real-robot dataset as real', async () => {
+    h.hooks.describeSidecar = async () => ({
+      scene: null, bootId: 'sidecar-1', behindS: null, arm: { readOnly: false, sim: false, writeMode: 'arm_sdk' },
+    });
+    await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
+    await run(h, rec, 200);
+    vi.useRealTimers();
+    const result = await rec.stop();
+    const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
+    expect(info._neodem).toMatchObject({
+      source: 'neodem-real-teleop', simulated: false, simBootId: null,
+      sidecarBootId: 'sidecar-1', sidecarWriteMode: 'arm_sdk', recordingMode: 'full',
+    });
+  });
+
+  it('says plainly when no command reached the robot', async () => {
+    h.commanded = {};
+    await rec.start({ sessionId: 's1', cameras: [] });
+    await run(h, rec, 100);
+    expect(rec.status().lastDropReason).toMatch(/no command reached the robot/);
   });
 
   it('refuses a second session while one is running', async () => {

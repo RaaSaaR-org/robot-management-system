@@ -393,21 +393,65 @@ describe('CONTROL_LEASE_REQUIRED on — several sockets on one generation', () =
   });
 });
 
-describe('CONTROL_LEASE_REQUIRED off — unchanged', () => {
-  it('claims on connect, sends no lease frames and ignores {bind}', async () => {
-    leases.install(installReq(1));
+describe('CONTROL_LEASE_REQUIRED off — the server still hands leases out (TASK-393)', () => {
+  it('claims on connect and drives unbound, exactly as before', async () => {
     controlOwnerLock.claim('agent');
     const { state, connect } = makeServer(false);
     const ws = connect();
     expect(controlOwnerLock.get()).toBe('teleop');
     expect(state.enableTeleop).toHaveBeenCalledTimes(1);
     expect(ws.ofType('control')).toEqual([{ type: 'control', owner: 'teleop', preempted: 'agent' }]);
-
-    await bind(ws, 1);
     expect(ws.ofType('lease')).toHaveLength(0);
-    expect(ws.ofType('error')).toHaveLength(0);
-    expect(leases.observe().bound).toBe(0);
 
+    send(ws, { move: { vx: 0.3, vy: 0, omega: 0 } });
+    await settle();
+    expect(movesSent().length).toBeGreaterThan(0);
+  });
+
+  it('answers a valid {bind} with bound — the bug that kept "Take control" from ever finishing', async () => {
+    leases.install(installReq(1));
+    const { connect } = makeServer(false);
+    const ws = connect();
+    await bind(ws, 1);
+    expect(ws.ofType('lease')).toEqual([{ type: 'lease', state: 'bound', generation: 1 }]);
+    expect(leases.observe().bound).toBe(1);
+  });
+
+  it('does not take a second teleop holder: closing the bound socket frees the lock', async () => {
+    leases.install(installReq(1));
+    const { connect } = makeServer(false);
+    const ws = connect();
+    await bind(ws, 1);
+    close(ws);
+    expect(controlOwnerLock.get()).toBe('idle');
+    expect(leases.observe().bound).toBe(0);
+  });
+
+  it('refuses a wrong secret with lease_invalid', async () => {
+    leases.install(installReq(1));
+    const { connect } = makeServer(false);
+    const ws = connect();
+    await bind(ws, 1, 'not-the-secret');
+    expect(ws.errors('lease_invalid')).toHaveLength(1);
+    expect(ws.ofType('lease')).toHaveLength(0);
+  });
+
+  it('a socket that bound and was fenced may not drive on — the lease gates it from then on', async () => {
+    leases.install(installReq(1));
+    const { connect } = makeServer(false);
+    const ws = connect();
+    await bind(ws, 1);
+    leases.install(installReq(2));
+    expect(ws.ofType('lease').at(-1)).toEqual({ type: 'lease', state: 'revoked', generation: 1 });
+
+    locoMove.mockClear();
+    send(ws, { move: { vx: 0.3, vy: 0, omega: 0 } });
+    await settle();
+    expect(movesSent()).toHaveLength(0);
+    expect(ws.errors('lease_required')).toHaveLength(1);
+
+    // Rebinding to the new generation gives the controls back.
+    await bind(ws, 2);
     send(ws, { move: { vx: 0.3, vy: 0, omega: 0 } });
     await settle();
     expect(movesSent().length).toBeGreaterThan(0);

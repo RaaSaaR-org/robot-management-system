@@ -10,7 +10,13 @@
 import { mkdir, writeFile, link, copyFile, rm } from 'fs/promises';
 import { join } from 'path';
 import type { RobotType } from '../robot/types.js';
-import { layoutFor, extractVector } from './dex3-layout.js';
+import {
+  layoutFor,
+  extractVector,
+  reduceG1Layout,
+  type G1RecordingMode,
+  type RecordingLayout,
+} from './dex3-layout.js';
 import { mapCameras } from './camera-map.js';
 import {
   writeLeRobotV3,
@@ -64,7 +70,16 @@ export interface RecorderHooks {
    */
   snapshot: (camera: string, opts: { shadows: boolean; quality: number }) => Promise<Buffer>;
   listCameras: () => Promise<string[]>;
-  describeSidecar: () => Promise<{ scene: string | null; bootId: string | null; behindS: number | null }>;
+  describeSidecar: () => Promise<{
+    scene: string | null;
+    bootId: string | null;
+    behindS: number | null;
+    /**
+     * The sidecar's arm write path (TASK-393). Optional so a hook that predates
+     * it still works — it is then treated as the simulation it always was.
+     */
+    arm?: { readOnly: boolean; sim: boolean; writeMode?: string | null };
+  }>;
   now?: () => number;
 }
 
@@ -119,6 +134,13 @@ export interface RecordingStatus {
   /** Sim seconds behind the wall clock, when the sidecar reports it. */
   behindS: number | null;
   episodes: EpisodeReport[];
+  /**
+   * TASK-393: `full`, or which reduced G1 layout this session records because a
+   * Dex3 hand reports no state (`arms_only`, `arms+left_hand`, `arms+right_hand`).
+   */
+  recordingMode: G1RecordingMode | 'full';
+  /** Joints left out of the dataset because the robot did not report them. */
+  omittedJoints: string[];
 }
 
 export interface StopRecordingResult {
@@ -247,6 +269,21 @@ export class EpisodeRecorder {
   private scene: string | null = null;
   private bootId: string | null = null;
   private behindS: number | null = null;
+  /**
+   * The joints this session records (TASK-393). The embodiment's full layout,
+   * or — on a G1 EDU whose Dex3 hand reports nothing — the arms and the hands
+   * that are there. Fixed at `start()`: every episode of a dataset has to be
+   * the same width.
+   */
+  private layout: RecordingLayout | null = null;
+  /** Which reduced layout, or null for the full one. */
+  private layoutMode: G1RecordingMode | null = null;
+  /** Full-layout joints left out because the robot did not report them. */
+  private omittedJoints: string[] = [];
+  /** Whether the sidecar is the MuJoCo sim (provenance). */
+  private simulated = true;
+  /** The sidecar's write mode as reported at start, for provenance. */
+  private writeMode: string | null = null;
   private imageSize: { width: number; height: number } | null = null;
 
   private episodes: LiveEpisode[] = [];
@@ -311,7 +348,7 @@ export class EpisodeRecorder {
     }
 
     const fps = Number.isFinite(req.fps) && (req.fps as number) > 0 ? Math.min(60, req.fps as number) : 30;
-    const layout = layoutFor(this.robotType);
+    let layout: RecordingLayout = layoutFor(this.robotType);
 
     const health = await this.hooks.describeSidecar().catch(() => ({
       scene: null,
@@ -321,6 +358,22 @@ export class EpisodeRecorder {
     this.scene = health.scene;
     this.bootId = health.bootId;
     this.behindS = health.behindS;
+
+    // A REAL robot behind a read-only sidecar (TASK-393). Every teleop command
+    // is refused there, so `action` would be what the operator wanted and not
+    // what the robot did — a dataset of intentions. Refused up front, in words
+    // that say how to fix it, rather than discovered as a column of drops.
+    const arm = 'arm' in health ? health.arm : undefined;
+    if (arm && arm.readOnly && !arm.sim) {
+      throw new RecordingError(
+        'the robot\'s sidecar is read-only, so teleop cannot move the robot and nothing it records would be a ' +
+          'real demonstration — restart g1_sidecar.py with G1_WRITE_MODE=arm_sdk',
+        'RECORDING_REFUSED',
+        409,
+      );
+    }
+    this.simulated = arm ? arm.sim : true;
+    this.writeMode = arm?.writeMode ?? null;
 
     let wanted = req.cameras;
     if (wanted === undefined) {
@@ -341,7 +394,19 @@ export class EpisodeRecorder {
     // which is what the drop counter is for.
     const measured = await this.hooks.getMeasured();
     const missingMeasured = extractVector(layout.joints, measured).missing;
-    if (missingMeasured.length > 0) {
+    // A whole Dex3 hand that reports nothing is a peripheral that is missing,
+    // not a broken robot: record the arms and whatever hand is there, and say
+    // so (TASK-393). Anything else missing is still a refusal.
+    const reduced = reduceG1Layout(layout, missingMeasured);
+    this.layoutMode = reduced?.mode ?? null;
+    this.omittedJoints = reduced?.omitted ?? [];
+    if (reduced) {
+      console.warn(
+        `[EpisodeRecorder] recording ${reduced.mode}: the robot reports no state for ${reduced.omitted.length} ` +
+          `Dex3 joints, which are left out of the dataset (robot_type ${reduced.robotType})`,
+      );
+      layout = reduced;
+    } else if (missingMeasured.length > 0) {
       throw new RecordingError(
         `the sidecar does not report ${missingMeasured.length} of ${layout.joints.length} joints ` +
           `(${missingMeasured.slice(0, 3).join(', ')}…) — recording them would store zeros`,
@@ -350,6 +415,7 @@ export class EpisodeRecorder {
       );
     }
 
+    this.layout = { robotType: layout.robotType, joints: layout.joints };
     this.sessionId = req.sessionId;
     this.fpsTarget = fps;
     this.task = req.task?.trim() || 'teleoperation';
@@ -546,7 +612,7 @@ export class EpisodeRecorder {
       });
     }
 
-    const layout = layoutFor(this.robotType);
+    const layout = this.activeLayout();
     const writerEpisodes: WriterEpisode[] = kept.map((ep) => ({
       episodeIndex: ep.index,
       task: this.task,
@@ -576,11 +642,17 @@ export class EpisodeRecorder {
         episodes: writerEpisodes,
         cameras: writerCameras,
         provenance: {
-          source: 'neodem-sim-teleop',
+          source: this.simulated ? 'neodem-sim-teleop' : 'neodem-real-teleop',
           sessionId,
           scene: this.scene,
-          simBootId: this.bootId,
-          simulated: true,
+          simBootId: this.simulated ? this.bootId : null,
+          sidecarBootId: this.bootId,
+          simulated: this.simulated,
+          sidecarWriteMode: this.writeMode,
+          // TASK-393: which part of the layout this dataset covers, and what
+          // was left out because the robot did not report it.
+          recordingMode: this.layoutMode ?? 'full',
+          omittedJoints: this.omittedJoints,
           inputMode: this.inputMode,
           // Session-level union, for a glance. The authority is per episode,
           // in `meta/episodes`.
@@ -672,7 +744,7 @@ export class EpisodeRecorder {
     const episode = this.current;
     const epoch = episode.epoch;
     try {
-      const layout = layoutFor(this.robotType);
+      const layout = this.activeLayout();
       const commandedPose = this.hooks.getCommanded();
       const [measuredPose, ...shots] = await Promise.all([
         this.hooks.getMeasured(),
@@ -683,7 +755,11 @@ export class EpisodeRecorder {
       const action = extractVector(layout.joints, commandedPose);
       const state = extractVector(layout.joints, measuredPose);
       if (action.missing.length > 0) {
-        this.drop(`commanded pose is missing ${action.missing.length} joints`);
+        this.drop(
+          action.missing.length === layout.joints.length
+            ? 'no command reached the robot (arms not armed yet, or the sidecar refused the pose)'
+            : `commanded pose is missing ${action.missing.length} joints`,
+        );
         return;
       }
       if (state.missing.length > 0) {
@@ -815,6 +891,8 @@ export class EpisodeRecorder {
       scene: this.scene,
       behindS: this.behindS,
       episodes: this.episodeReports(kept),
+      recordingMode: this.layoutMode ?? 'full',
+      omittedJoints: [...this.omittedJoints],
     };
   }
 
@@ -843,6 +921,11 @@ export class EpisodeRecorder {
         retargetModes: [...ep.modes].sort(),
       };
     });
+  }
+
+  /** The layout this session records — fixed at `start()`. */
+  private activeLayout(): RecordingLayout {
+    return this.layout ?? layoutFor(this.robotType);
   }
 
   private openEpisode(index: number): LiveEpisode {
@@ -883,7 +966,7 @@ export class EpisodeRecorder {
     return {
       ok: false,
       datasetPath: null,
-      robotType: layoutFor(this.robotType).robotType,
+      robotType: this.activeLayout().robotType,
       totalEpisodes: 0,
       totalFrames: 0,
       totalDropped: this.totalDropped,

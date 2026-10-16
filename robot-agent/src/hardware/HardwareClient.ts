@@ -38,6 +38,12 @@ import type {
   TouchPad,
 } from '../robot/types.js';
 import { getJointConfig } from '../robot/joint-configs/index.js';
+import {
+  parseArmStatus,
+  sameArmStatus,
+  UNKNOWN_ARM_STATUS,
+  type SidecarArmStatus,
+} from './arm-status.js';
 import { config } from '../config/config.js';
 // The ONE radians→degrees constant in this repo. Imported rather than
 // re-declared: `LocoOdometry.yaw` is radians (DDS convention) and everything
@@ -434,6 +440,21 @@ export function scanSessionHeaderValue(sessionId: string | undefined): string | 
 // Idle watchdog in the sidecar disconnects after 5s without requests, releasing the port.
 const POLL_INTERVAL_MS = 2000;
 
+/**
+ * The arm fields an `/arm` answer carried, and only those — an answer that says
+ * nothing about `hands` must not wipe what `/health` reported.
+ */
+function parseArmStatusPatch(body: Record<string, unknown>): Partial<SidecarArmStatus> {
+  const parsed = parseArmStatus(body);
+  const patch: Partial<SidecarArmStatus> = {};
+  if (typeof body.arm_weight === 'number') patch.armWeight = parsed.armWeight;
+  if (body.hands !== undefined && parsed.hands) patch.hands = parsed.hands;
+  if (parsed.teleopMode && (body.teleop_mode !== undefined || body.hands !== undefined)) {
+    patch.teleopMode = parsed.teleopMode;
+  }
+  return patch;
+}
+
 export class HardwareClient {
   private connected = false;
   private sidecarAvailable = false;
@@ -478,6 +499,21 @@ export class HardwareClient {
    * outstanding request per tick forever.
    */
   private poseFetchInFlight = false;
+  /**
+   * The sidecar's arm write path as last reported (TASK-393), from `/health`
+   * at connect, every `/state` poll that carries it, and `refreshArmStatus()`.
+   */
+  private armStatus: SidecarArmStatus = { ...UNKNOWN_ARM_STATUS };
+  private armStatusListeners = new Set<(status: SidecarArmStatus) => void>();
+  /**
+   * Whether THIS agent armed the sidecar and has not disarmed it since.
+   *
+   * Local, not read off the poll: the forwarder gates on it 50 times a second,
+   * and a 2 s poll would let it stream for up to two seconds into a sidecar
+   * that had already been told to disarm. A 409 `not_armed` from `/action`
+   * (the sidecar's own dead-man fired) clears it as well.
+   */
+  private armedLocal = false;
 
   /**
    * Ordered list of joint names for the active embodiment (ROBOT_TYPE),
@@ -522,6 +558,144 @@ export class HardwareClient {
     }
   }
 
+  // ────────────────────────────────────────────────────────────────
+  // TASK-393: the arm-only write path (shared contract with TASK-391)
+  //
+  // A sidecar in `G1_WRITE_MODE=arm_sdk` refuses `/action` until it is ARMED,
+  // ramps its blend weight in from the measured pose on `/arm`, and back out on
+  // `/disarm`. Everything that does not advertise a write mode (the MuJoCo sim,
+  // older sidecars) is driven exactly as before: no arming, `/estop` to release.
+  // ────────────────────────────────────────────────────────────────
+
+  /** The sidecar's arm write path as last reported. */
+  getArmStatus(): SidecarArmStatus {
+    return this.armStatus;
+  }
+
+  /** Subscribe to arm-status changes (not to polls). Returns an unsubscribe. */
+  onArmStatusChange(cb: (status: SidecarArmStatus) => void): () => void {
+    this.armStatusListeners.add(cb);
+    return () => this.armStatusListeners.delete(cb);
+  }
+
+  private setArmStatus(next: SidecarArmStatus): void {
+    // The sidecar disarmed itself (its own dead-man, an E-stop from the
+    // robot's remote) — the forwarder must stop at once, not at our next
+    // explicit disarm.
+    if (!next.armed && this.armStatus.armed) this.armedLocal = false;
+    if (next.estopLatched) this.armedLocal = false;
+    const changed = !sameArmStatus(this.armStatus, next);
+    this.armStatus = next;
+    if (!changed) return;
+    for (const cb of this.armStatusListeners) {
+      try {
+        cb(next);
+      } catch (err) {
+        console.error('[Hardware] Arm-status listener error:', err);
+      }
+    }
+  }
+
+  /** The sidecar only accepts `/action` while armed. */
+  requiresArming(): boolean {
+    return this.armStatus.writeMode === 'arm_sdk';
+  }
+
+  /** Whether this agent armed the sidecar and has not disarmed it since. */
+  isArmedLocally(): boolean {
+    return this.armedLocal;
+  }
+
+  /** Whether the teleop forwarder may post `/action` right now. */
+  mayStreamAction(): boolean {
+    return !this.requiresArming() || this.armedLocal;
+  }
+
+  /** Re-read `/health` for the arm fields. Null when the sidecar did not answer. */
+  async refreshArmStatus(timeoutMs = 1000): Promise<SidecarArmStatus | null> {
+    try {
+      const res = await fetch(`${getSidecarUrl()}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) return null;
+      const status = parseArmStatus(await res.json());
+      this.setArmStatus(status);
+      return status;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * `POST /arm` — start the weight ramp 0→1, seeded by the sidecar from the
+   * measured arm pose. `leaseGeneration` is the control lease the operator
+   * drives under, so the sidecar's log can tie the motion to a person.
+   */
+  async arm(leaseGeneration: number | null): Promise<{ ok: boolean; error?: string; status?: number }> {
+    try {
+      const res = await fetch(`${getSidecarUrl()}/arm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lease_generation: leaseGeneration }),
+        signal: AbortSignal.timeout(2000),
+      });
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok || body.ok === false) {
+        this.armedLocal = false;
+        const error = typeof body.error === 'string' ? body.error : `sidecar /arm returned HTTP ${res.status}`;
+        return { ok: false, error, status: res.status };
+      }
+      this.armedLocal = true;
+      this.setArmStatus({ ...this.armStatus, ...parseArmStatusPatch(body), armed: true });
+      return { ok: true, status: res.status };
+    } catch (err) {
+      this.armedLocal = false;
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * `POST /disarm` — ramp the weight 1→0 and stop publishing: the arms go back
+   * under Unitree's own controller. The local flag drops FIRST so the forwarder
+   * stops before the request is even on the wire.
+   */
+  async disarm(): Promise<{ ok: boolean; error?: string }> {
+    this.armedLocal = false;
+    try {
+      const res = await fetch(`${getSidecarUrl()}/disarm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(1500),
+      });
+      if (!res.ok) return { ok: false, error: `sidecar /disarm returned HTTP ${res.status}` };
+      this.setArmStatus({ ...this.armStatus, armed: false });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * `POST /estop/reset` — clear the sidecar's own latch after the agent's
+   * E-stop was reset. Best effort: a sidecar without the route (the sim, an
+   * older sidecar) answers 404 and has no latch to clear.
+   */
+  async resetEstop(): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${getSidecarUrl()}/estop/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(1500),
+      });
+      if (res.status === 404) return { ok: true };
+      if (!res.ok) return { ok: false, error: `sidecar /estop/reset returned HTTP ${res.status}` };
+      this.setArmStatus({ ...this.armStatus, estopLatched: false });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   async init(): Promise<boolean> {
     const ok = await this._tryConnect();
     if (!ok) {
@@ -549,6 +723,7 @@ export class HardwareClient {
       this.sidecarIsSim = data.sim === true;
       this.sidecarOdomFromBoot = data.odom_frame === 'boot';
       this.sidecarScene = typeof data.scene === 'string' && data.scene ? data.scene : null;
+      this.setArmStatus(parseArmStatus(data));
       if (this.sidecarAvailable) {
         console.log(`[Hardware] Sidecar reachable — arm connected: ${this.connected}`);
         if (!this.pollTimer) this.startPolling();
@@ -600,6 +775,12 @@ export class HardwareClient {
         this.touch = _parseTouch(data.touch);
         this.battery = _parseBattery(data.battery);
         this.odometry = _parseOdometry(data.odometry);
+        // TASK-393: the arm fields ride the same poll when the sidecar sends
+        // them. A `/state` WITHOUT them (the sim, an older sidecar) leaves the
+        // status from `/health` alone rather than resetting it to "unknown".
+        if (data.write_mode !== undefined) {
+          this.setArmStatus({ ...parseArmStatus(data), sim: this.armStatus.sim || data.sim === true });
+        }
         // TASK-195: same tick, no second timer. Deliberately NOT awaited — the
         // fallback leg can take up to 2 s and the poll must not slip behind it.
         void this.refreshBasePose();
@@ -853,6 +1034,10 @@ export class HardwareClient {
     // only thing that tells an operator WHICH of the refusals they hit.
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok || body.ok === false) {
+      // 409 `not_armed`: the sidecar is not (or no longer) armed — its own
+      // dead-man fired, or the robot's remote stopped it. Stop streaming until
+      // somebody arms it again.
+      if (res.status === 409) this.armedLocal = false;
       const detail = typeof body.error === 'string' ? body.error : `sidecar /action returned HTTP ${res.status}`;
       throw new HardwareActionError(detail, res.status);
     }
@@ -889,6 +1074,13 @@ export class HardwareClient {
    */
   async releaseAction(): Promise<void> {
     if (!this.sidecarAvailable) return;
+    // On an arm-only sidecar `/estop` LATCHES (it needs `/estop/reset`), so
+    // ending a teleop session there is a disarm, never a stop.
+    if (this.requiresArming()) {
+      const res = await this.disarm();
+      if (!res.ok) throw new Error(res.error ?? 'sidecar /disarm failed');
+      return;
+    }
     await fetch(`${getSidecarUrl()}/estop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1070,6 +1262,8 @@ export class HardwareClient {
     scene: string | null;
     bootId: string | null;
     behindS: number | null;
+    /** TASK-393: the arm write path, so a recorder can refuse a read-only robot. */
+    arm: SidecarArmStatus;
   }> {
     const res = await fetch(`${getSidecarUrl()}/health`, {
       signal: AbortSignal.timeout(timeoutMs),
@@ -1080,10 +1274,13 @@ export class HardwareClient {
       boot_id?: unknown;
       behind_s?: unknown;
     };
+    const arm = parseArmStatus(data);
+    this.setArmStatus(arm);
     return {
       scene: typeof data.scene === 'string' ? data.scene : null,
       bootId: typeof data.boot_id === 'string' ? data.boot_id : null,
       behindS: typeof data.behind_s === 'number' ? data.behind_s : null,
+      arm,
     };
   }
 
@@ -1588,6 +1785,8 @@ export class HardwareClient {
    * still needs Unitree's damping/E-stop mode + a safety gantry.
    */
   async sendEstop(): Promise<void> {
+    // The forwarder stops now, whether or not the request gets through.
+    this.armedLocal = false;
     try {
       await fetch(`${getSidecarUrl()}/estop`, {
         method: 'POST',
