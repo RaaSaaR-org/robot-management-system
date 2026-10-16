@@ -135,12 +135,15 @@ server :3001  ── teleop proxy (token in Sec-WebSocket-Protocol) ──►  r
 ### Bring-up (the computer wired to the robot)
 
 ```bash
-# 1. sidecar — arm-only writes, PC2 head camera (names per TASK-391)
-G1_WRITE_MODE=arm_sdk G1_CAMERA_SOURCE=pc2cam G1_NET_INTERFACE=<robot LAN iface> \
+# 1. sidecar — arm-only writes, PC2 head camera. Full procedure and env:
+#    docs/g1-edu-lab-bringup.md, "Arm teleop through arm_sdk" (TASK-391).
+#    arm_sdk REFUSES to start without an explicit G1_DDS_DOMAIN (0 = the robot)
+#    and with G1_READ_ONLY=1; it listens on 127.0.0.1 only.
+G1_WRITE_MODE=arm_sdk G1_DDS_DOMAIN=0 G1_CAMERA_SOURCE=pc2cam G1_NET_INTERFACE=<robot LAN iface> \
   python robot-agent/hardware/g1_sidecar.py          # :8767
 
 # 2. robot agent, server, app
-cd robot-agent && npm run dev:g1-edu                  # HARDWARE_SIDECAR_URL defaults to :8767
+cd robot-agent && npm run dev:g1-edu                  # .env.g1-edu: HARDWARE_SIDECAR_URL=http://localhost:8767
 cd server && npm run dev                              # :3001
 cd app && npm run dev                                 # :1420
 
@@ -157,6 +160,11 @@ transport, not the cable); `--remove` undoes it. No SSH tunnel and no second
 `adb reverse` for :3001 or the agent: the app reaches the API, the event socket
 and the robot's teleop socket through its own origin. The robot page's VR card
 has the same steps under **Connect Meta Quest**.
+
+**Headset plugged into another computer** (e.g. a laptop, with the stack on the
+robot computer): run `quest-connect.sh` on the laptop, and forward that one port
+to the robot computer — `ssh -N -L 1420:localhost:1420 <user>@<robot computer>`.
+Still one port: the API and both sockets ride the page's origin.
 
 ### Driving and recording
 
@@ -209,6 +217,7 @@ A missing **arm** joint, or a hand with only some joints, still refuses.
 | `arm_requires_lease` | this console does not hold the lease — **Take control** |
 | `arm_requires_heartbeat` | a console that sends no heartbeat (an old cached app: reload) — keyboard and VR send one; *Simulate VR input* deliberately does not, so it can never drive real arms |
 | `heartbeat_lost` | the render loop stalled for 1 s; move again once the link is back |
+| `home_unavailable` | **Home** is refused on the real arms (all-zeros swings them forward); end teleop to hand the arms back to the robot's controller |
 | `arm_failed` / `arm_estop_latched` | the sidecar refused `/arm`; the message is its own words |
 | *The robot will not move* | sidecar is read-only — restart it with `G1_WRITE_MODE=arm_sdk` |
 | `adb` lists the Quest as `unauthorized` | accept *Allow USB debugging* inside the headset (`quest-connect.sh` exits 4) |

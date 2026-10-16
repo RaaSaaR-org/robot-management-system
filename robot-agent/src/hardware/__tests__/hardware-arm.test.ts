@@ -127,6 +127,33 @@ describe('HardwareClient on an arm-only sidecar', () => {
     expect((await without.c.resetEstop()).ok).toBe(true);
   });
 
+  it('a status read that was on the wire when /arm landed does not disarm the forwarder', async () => {
+    const { c } = await client({ write_mode: 'arm_sdk', armed: false });
+    // A /health sent before /arm and answered after it: the sidecar's answer
+    // predates the arm.
+    let answer!: (v: unknown) => void;
+    const late = new Promise((resolve) => { answer = resolve; });
+    const inner = globalThis.fetch as unknown as (url: string, init?: unknown) => Promise<unknown>;
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: unknown) => {
+      if (new URL(String(url)).pathname === '/health') {
+        await late;
+        return { ok: true, status: 200, json: async () => ({ status: 'ok', write_mode: 'arm_sdk', armed: false }) };
+      }
+      return inner(url, init);
+    }));
+    const stale = c.refreshArmStatus();
+    expect((await c.arm(1)).ok).toBe(true);
+    answer(undefined);
+    await stale;
+    expect(c.mayStreamAction()).toBe(true);
+
+    // A read sent AFTER the arm that says "not armed" is the sidecar's own
+    // dead-man, and does stop the stream.
+    const fresh = c.refreshArmStatus();
+    await fresh;
+    expect(c.mayStreamAction()).toBe(false);
+  });
+
   it('describeSidecar carries the arm status for the recorder', async () => {
     const { c } = await client({ write_mode: 'read_only', scene: null });
     const d = await c.describeSidecar();

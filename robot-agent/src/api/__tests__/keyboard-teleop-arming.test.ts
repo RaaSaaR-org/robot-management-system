@@ -342,6 +342,39 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
     expect(ws.errors('arm_failed')[0]?.message).toContain('estop latched on the sidecar');
   });
 
+  it('a held key stops integrating once the sidecar disarmed itself', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws);
+    send(ws, { joint: 'left_elbow_joint', direction: 1 });
+    await flush();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(state.applyTeleopDelta).toHaveBeenCalled();
+
+    // The sidecar's own dead-man fired (a 409 not_armed cleared the flag).
+    sidecar.armedLocal = false;
+    send(ws, { hb: 2 });
+    await vi.advanceTimersByTimeAsync(40);
+    state.applyTeleopDelta.mockClear();
+    send(ws, { hb: 3 });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(state.applyTeleopDelta).not.toHaveBeenCalled();
+    // Nothing re-armed on its own: re-arming takes a new frame from the operator.
+    expect(sidecar.armCalls).toEqual([1]);
+  });
+
+  it('refuses Home on the real arms, every time, and moves nothing', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws);
+    send(ws, { preset: 'home' });
+    send(ws, { preset: 'home' });
+    await flush();
+    expect(ws.errors('home_unavailable')).toHaveLength(2);
+    expect(state.homeTeleopJoints).not.toHaveBeenCalled();
+    expect(sidecar.armCalls).toHaveLength(0);
+  });
+
   it('a latched sidecar E-stop refuses before any /arm is attempted', async () => {
     sidecar.status = { ...sidecar.status, estopLatched: true };
     const { connect } = makeServer();

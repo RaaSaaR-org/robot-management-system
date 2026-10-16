@@ -27,9 +27,6 @@ import { deliverEvent, deliverEventPerSocket, TenantResolver, UNRESOLVED_ROBOT_T
 import { eStopEventFor, eventTenantKey, tenantKey, type TenantKey } from './eventTenancy.js';
 import { lookupTenant } from './tenantLookups.js';
 import { attachUpgradeRoutes, type UpgradeRoute } from './teleopProxy.js';
-
-/** The A2A event socket's path. */
-const A2A_WS_PATH = '/api/a2a/ws';
 import { onControlLeaseTransition } from '../services/controlLeaseEvents.js';
 import {
   deliverControlLeaseTransition,
@@ -49,6 +46,9 @@ import type { TaskEvent } from '../types/robotTask.types.js';
 import type { TrainingJobEvent } from '../types/training.types.js';
 import type { DatasetEvent } from '../types/dataset.types.js';
 import type { TeleoperationEvent } from '../types/teleoperation.types.js';
+
+/** The A2A event socket's path. */
+const A2A_WS_PATH = '/api/a2a/ws';
 
 // Configuration
 const MAX_CLIENTS = 1000;

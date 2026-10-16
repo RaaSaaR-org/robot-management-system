@@ -197,3 +197,20 @@ TASK-391, built in parallel against the shared contract below.
 
 - Needs TASK-391's sidecar `arm_sdk` mode to move the real robot; until then an
   `arm_sdk`-less sidecar behaves exactly as before (no arming, legacy release).
+
+- 2026-10-17 review (`/review`, range `origin/main...HEAD` from `cd3c8f04`), checked
+  against TASK-391's sidecar on PR #417 (`g1_arm_sdk.py`): `/arm` (idempotent while
+  engaged, 409 `estop_latched`, 503 `no_state`), `/disarm`, `/estop` (latches),
+  `/estop/reset`, `/action` (partial dicts, 409 `not_armed`, leg/waist ignored), and the
+  `/health` + `/state` fields all match what the agent sends and parses. Fixed in review:
+  - A held key kept integrating its target after the sidecar disarmed itself (its
+    dead-man or a 409), and the next frame's re-arm shipped the whole drift at once. The
+    tick now drops held-key velocity while `ArmRegistry.isLive()` is false.
+  - A `/health` or `/state` read already on the wire when `/arm` landed could report
+    `armed: false` and stop the forwarder of a freshly armed sidecar. Status reads are now
+    dropped when an arm-path transition overtook them (`armOpSeq`).
+  - `{preset:'home'}` is refused on an `arm_sdk` sidecar (`home_unavailable`, every
+    press): the all-zeros pose swings a real G1's arms forward.
+  - Runbook: the `arm_sdk` sidecar refuses to start without `G1_DDS_DOMAIN`; the
+    bring-up line now sets `G1_DDS_DOMAIN=0` and points at TASK-391's procedure; the
+    headset-on-another-computer case (one `ssh -L 1420`) is written down.

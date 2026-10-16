@@ -172,6 +172,10 @@ export function clampPlanar(vx: number, vy: number, limit: number): { vx: number
  * - `arm_requires_heartbeat` — same, but the socket sends no live heartbeat.
  * - `arm_estop_latched` — the sidecar's own E-stop is latched.
  * - `arm_failed` — the sidecar refused `/arm`; the message carries its words.
+ * - `home_unavailable` — `{preset:'home'}` on an arm-only sidecar. Home is the
+ *   all-zeros pose, which on a real G1 swings both arms forward; the robot's
+ *   own controller is the home there, reached by ending teleop (disarm). Sent
+ *   for every refused press: it is a deliberate act, not a stream.
  */
 export type TeleopErrorCode =
   | 'loco_unavailable'
@@ -190,7 +194,8 @@ export type TeleopErrorCode =
   | 'arm_requires_lease'
   | 'arm_requires_heartbeat'
   | 'arm_estop_latched'
-  | 'arm_failed';
+  | 'arm_failed'
+  | 'home_unavailable';
 
 interface DirectionMessage {
   joint: string;
@@ -982,9 +987,6 @@ export function createKeyboardTeleopWebSocket(
 
     // Integrate held-key motion, and advance the base ramp, at a fixed tick.
     const timer = setInterval(() => {
-      // Edge-detect the latch in both directions, so a client that is sitting
-      // still still learns the robot stopped, and learns when it may drive
-      // again without having to poke it to find out.
       // The arm dead-man runs before everything else in the tick, latch or not.
       if (lastHeartbeatAt !== null && !heartbeatLost && Date.now() - lastHeartbeatAt > heartbeatTimeoutMs) {
         heartbeatLost = true;
@@ -999,6 +1001,9 @@ export function createKeyboardTeleopWebSocket(
         );
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'heartbeat', state: 'lost' }));
       }
+      // Edge-detect the latch in both directions, so a client that is sitting
+      // still still learns the robot stopped, and learns when it may drive
+      // again without having to poke it to find out.
       const latched = robotStateManager.isEStopTriggered();
       if (latched !== wasEStopped) {
         wasEStopped = latched;
@@ -1037,6 +1042,12 @@ export function createKeyboardTeleopWebSocket(
         haltMotion();
         return;
       }
+      // A held key on an arm-only sidecar that disarmed itself (its dead-man,
+      // a 409 `not_armed`) would keep integrating a target nothing is sending,
+      // and the next frame's re-arm would ship the whole drift at once — the
+      // arm swinging toward a joint limit after the key was let go. The key is
+      // dropped instead; pressing it again re-arms from the measured pose.
+      if (velocity.size > 0 && !arms.isLive()) velocity.clear();
       let moved = false;
       for (const [joint, vel] of velocity) {
         if (vel !== 0) {
@@ -1220,6 +1231,19 @@ export function createKeyboardTeleopWebSocket(
         // a wire value is not a type.
         if (msg.preset !== 'home') return;
         if (refusedByEStop()) return;
+        // A real G1's arms (TASK-393): the all-zeros "home" is a large swing
+        // forward, not a rest pose. Refused on every press, never deduplicated.
+        if (arms.requiresArming()) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'error',
+              code: 'home_unavailable',
+              message: 'Home is disabled on the real robot\'s arms — end teleop to hand them back to the robot\'s own controller',
+              at: new Date().toISOString(),
+            }));
+          }
+          return;
+        }
         if (!armGate()) return;
         // Homing is a large commanded motion, so it is gated like any other.
         robotStateManager.homeTeleopJoints();

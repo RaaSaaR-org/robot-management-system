@@ -105,6 +105,16 @@ export class ArmRegistry {
     return typeof this.client.getArmStatus === 'function' ? this.client.getArmStatus() : null;
   }
 
+  /**
+   * Whether a commanded joint target can reach the robot right now: nothing to
+   * arm, armed by this agent, or an `/arm` on its way. False once the sidecar
+   * disarmed itself (its dead-man, a 409 `not_armed`) — a target that keeps
+   * moving then is a target the robot will be sent all at once on re-arm.
+   */
+  isLive(): boolean {
+    return !this.requiresArming() || this.armedLocally() || this.armInFlight !== null;
+  }
+
   /** Whether `id` holds a claim. */
   has(id: string): boolean {
     return this.claims.has(id);

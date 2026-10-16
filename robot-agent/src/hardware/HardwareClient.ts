@@ -514,6 +514,15 @@ export class HardwareClient {
    * (the sidecar's own dead-man fired) clears it as well.
    */
   private armedLocal = false;
+  /**
+   * Bumped by every explicit arm-path transition (`/arm`, `/disarm`, `/estop`,
+   * `/estop/reset`, a 409 from `/action`). A status read that was already on
+   * the wire when one happened describes the sidecar BEFORE it, and is dropped:
+   * a `/state` poll sent just before `/arm` and answered just after would
+   * otherwise report `armed: false` and stop the forwarder of a sidecar that
+   * had just been armed.
+   */
+  private armOpSeq = 0;
 
   /**
    * Ordered list of joint names for the active embodiment (ROBOT_TYPE),
@@ -596,6 +605,12 @@ export class HardwareClient {
     }
   }
 
+  /** Apply a polled status unless an arm-path transition overtook the read. */
+  private applyPolledArmStatus(next: SidecarArmStatus, seqAtRequest: number): void {
+    if (seqAtRequest !== this.armOpSeq) return;
+    this.setArmStatus(next);
+  }
+
   /** The sidecar only accepts `/action` while armed. */
   requiresArming(): boolean {
     return this.armStatus.writeMode === 'arm_sdk';
@@ -613,11 +628,12 @@ export class HardwareClient {
 
   /** Re-read `/health` for the arm fields. Null when the sidecar did not answer. */
   async refreshArmStatus(timeoutMs = 1000): Promise<SidecarArmStatus | null> {
+    const seq = this.armOpSeq;
     try {
       const res = await fetch(`${getSidecarUrl()}/health`, { signal: AbortSignal.timeout(timeoutMs) });
       if (!res.ok) return null;
       const status = parseArmStatus(await res.json());
-      this.setArmStatus(status);
+      this.applyPolledArmStatus(status, seq);
       return status;
     } catch {
       return null;
@@ -630,6 +646,7 @@ export class HardwareClient {
    * drives under, so the sidecar's log can tie the motion to a person.
    */
   async arm(leaseGeneration: number | null): Promise<{ ok: boolean; error?: string; status?: number }> {
+    this.armOpSeq += 1;
     try {
       const res = await fetch(`${getSidecarUrl()}/arm`, {
         method: 'POST',
@@ -659,6 +676,7 @@ export class HardwareClient {
    */
   async disarm(): Promise<{ ok: boolean; error?: string }> {
     this.armedLocal = false;
+    this.armOpSeq += 1;
     try {
       const res = await fetch(`${getSidecarUrl()}/disarm`, {
         method: 'POST',
@@ -680,6 +698,7 @@ export class HardwareClient {
    * older sidecar) answers 404 and has no latch to clear.
    */
   async resetEstop(): Promise<{ ok: boolean; error?: string }> {
+    this.armOpSeq += 1;
     try {
       const res = await fetch(`${getSidecarUrl()}/estop/reset`, {
         method: 'POST',
@@ -707,6 +726,7 @@ export class HardwareClient {
   }
 
   private async _tryConnect(): Promise<boolean> {
+    const seq = this.armOpSeq;
     try {
       const res = await fetch(`${getSidecarUrl()}/health`, { signal: AbortSignal.timeout(2000) });
       const data = (await res.json()) as {
@@ -723,7 +743,7 @@ export class HardwareClient {
       this.sidecarIsSim = data.sim === true;
       this.sidecarOdomFromBoot = data.odom_frame === 'boot';
       this.sidecarScene = typeof data.scene === 'string' && data.scene ? data.scene : null;
-      this.setArmStatus(parseArmStatus(data));
+      this.applyPolledArmStatus(parseArmStatus(data), seq);
       if (this.sidecarAvailable) {
         console.log(`[Hardware] Sidecar reachable — arm connected: ${this.connected}`);
         if (!this.pollTimer) this.startPolling();
@@ -744,6 +764,7 @@ export class HardwareClient {
 
   private startPolling() {
     this.pollTimer = setInterval(async () => {
+      const seq = this.armOpSeq;
       try {
         const res = await fetch(`${getSidecarUrl()}/state`, { signal: AbortSignal.timeout(500) });
         const data = (await res.json()) as Record<string, unknown>;
@@ -779,7 +800,7 @@ export class HardwareClient {
         // them. A `/state` WITHOUT them (the sim, an older sidecar) leaves the
         // status from `/health` alone rather than resetting it to "unknown".
         if (data.write_mode !== undefined) {
-          this.setArmStatus({ ...parseArmStatus(data), sim: this.armStatus.sim || data.sim === true });
+          this.applyPolledArmStatus({ ...parseArmStatus(data), sim: this.armStatus.sim || data.sim === true }, seq);
         }
         // TASK-195: same tick, no second timer. Deliberately NOT awaited — the
         // fallback leg can take up to 2 s and the poll must not slip behind it.
@@ -1037,7 +1058,10 @@ export class HardwareClient {
       // 409 `not_armed`: the sidecar is not (or no longer) armed — its own
       // dead-man fired, or the robot's remote stopped it. Stop streaming until
       // somebody arms it again.
-      if (res.status === 409) this.armedLocal = false;
+      if (res.status === 409) {
+        this.armedLocal = false;
+        this.armOpSeq += 1;
+      }
       const detail = typeof body.error === 'string' ? body.error : `sidecar /action returned HTTP ${res.status}`;
       throw new HardwareActionError(detail, res.status);
     }
@@ -1265,6 +1289,7 @@ export class HardwareClient {
     /** TASK-393: the arm write path, so a recorder can refuse a read-only robot. */
     arm: SidecarArmStatus;
   }> {
+    const seq = this.armOpSeq;
     const res = await fetch(`${getSidecarUrl()}/health`, {
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -1275,7 +1300,7 @@ export class HardwareClient {
       behind_s?: unknown;
     };
     const arm = parseArmStatus(data);
-    this.setArmStatus(arm);
+    this.applyPolledArmStatus(arm, seq);
     return {
       scene: typeof data.scene === 'string' ? data.scene : null,
       bootId: typeof data.boot_id === 'string' ? data.boot_id : null,
@@ -1787,6 +1812,7 @@ export class HardwareClient {
   async sendEstop(): Promise<void> {
     // The forwarder stops now, whether or not the request gets through.
     this.armedLocal = false;
+    this.armOpSeq += 1;
     try {
       await fetch(`${getSidecarUrl()}/estop`, {
         method: 'POST',
