@@ -3,7 +3,7 @@ id: "TASK-391"
 aliases: []
 title: "The G1 sidecar drives the real arms and hands through arm_sdk, armed only on request"
 slug: "the-g1-sidecar-drives-the-real-arms-and-hands-through-arm"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
