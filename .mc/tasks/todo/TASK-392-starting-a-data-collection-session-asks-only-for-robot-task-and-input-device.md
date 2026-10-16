@@ -101,15 +101,15 @@ Out of scope: `SessionCompleted.tsx` (TASK-394), `VRSessionPanel.tsx` and
 - `docs/brand.md`
 
 ## Acceptance Criteria
-- [x] The New session page shows exactly four fields by default: robot, task, input device (three cards) and episodes; one primary button "Start session".
-- [x] "Advanced options" is collapsed by default and, while collapsed, summarises the values that differ from the defaults.
-- [x] Episode length, frame rate, dataset name and Vision Pro / ALOHA / kinesthetic input are reachable under Advanced options; no option the page offered before is gone.
-- [x] Advanced values (except the dataset name) and the last robot and device are remembered per user and survive a reload; storage failures do not break the page.
-- [x] The submitted request carries every advanced value, including `datasetRepoId` when set.
-- [x] Robot and task are validated inline; an invalid advanced value opens the disclosure and blocks submit.
-- [x] Online robots are listed first with their status; recent task instructions appear as chips that fill the task field.
-- [x] A `created` session shows a pre-flight checklist (robot, recorder, camera, input, control) with blocking vs warning states and one named next action; a blocking item disables Start recording and the Space hotkey.
-- [x] The Cameras panel shows the cameras the robot actually serves.
+- [x] The New session page shows exactly four fields by default: robot, task, input device (three cards) and episodes; one primary button "Start session". — `NewSessionPage.tsx:199` (robot), `:292` (episodes), `:387` (button)
+- [x] "Advanced options" is collapsed by default and, while collapsed, summarises the values that differ from the defaults. — `NewSessionPage.tsx:117`, `:311`; `Disclosure.tsx`
+- [x] Episode length, frame rate, dataset name and Vision Pro / ALOHA / kinesthetic input are reachable under Advanced options; no option the page offered before is gone. — `NewSessionPage.tsx:311-374`
+- [x] Advanced values (except the dataset name) and the last robot and device are remembered per user and survive a reload; storage failures do not break the page. — `newSessionPrefs.ts:48`, `NewSessionPage.tsx:161`
+- [x] The submitted request carries every advanced value, including `datasetRepoId` when set. — `NewSessionPage.tsx:158`
+- [x] Robot and task are validated inline; an invalid advanced value opens the disclosure and blocks submit. — `NewSessionPage.tsx:147`
+- [x] Online robots are listed first with their status; recent task instructions appear as chips that fill the task field. — `NewSessionPage.tsx:86`, `:236`
+- [x] A `created` session shows a pre-flight checklist (robot, recorder, camera, input, control) with blocking vs warning states and one named next action; a blocking item disables Start recording and the Space hotkey. — `preflight.ts:96`, `SessionDetailPage.tsx:360`, `:297`, `:193`
+- [x] The Cameras panel shows the cameras the robot actually serves. — `SessionDetailPage.tsx:399`
 - [x] Design-drift test, app typecheck and app vitest pass.
 
 ## Test Strategy
@@ -123,3 +123,6 @@ Out of scope: `SessionCompleted.tsx` (TASK-394), `VRSessionPanel.tsx` and
   Playwright `app-routes`, `demo-api-contract`, `demo-smoke` green (153). `e2e/live/datacollection-vr.spec.ts` updated but not run
   (needs a live stack; the running one is in use). The default episode count is now 10 (was 3); frame rate stays 10 fps.
 - The robot is not preselected when more than one robot is online (real and sim side by side) — choosing between them stays explicit.
+- 2026-10-17: reviewed (range `origin/main...HEAD`). One fix: the Recorder row no longer claims "it records every frame" when all it knows is
+  that the agent's live stream is connected. "Recorder ready" is a proxy until the real recorder's state (TASK-391 sidecar health) reaches the app.
+  Open for a human: frame rate default stays 10 fps (LeRobot G1 datasets usually use 30); `e2e/live/datacollection-vr.spec.ts` not run.

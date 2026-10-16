@@ -111,7 +111,7 @@ export function buildPreflight(inp: PreflightInputs): PreflightItem[] {
     !online
       ? { id: 'recorder', label: 'Recorder', level: 'unknown', detail: 'Waits for the robot.' }
       : inp.agentConnected
-        ? { id: 'recorder', label: 'Recorder', level: 'ok', detail: 'The robot agent is streaming; it records every frame.' }
+        ? { id: 'recorder', label: 'Recorder', level: 'ok', detail: "The robot agent's live stream is connected." }
         : {
           id: 'recorder', label: 'Recorder', level: 'warning',
           detail: "No live stream from the robot agent yet.",
