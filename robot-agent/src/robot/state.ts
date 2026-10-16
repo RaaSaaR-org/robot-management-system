@@ -2143,6 +2143,14 @@ export class RobotStateManager {
             void hardwareClient.sendEstop();
           }
         } else {
+          // The stop has cleared — by an operator reset, or a protective stop
+          // that recovered on its own (server comm restored). The arm-only
+          // sidecar latches the `/estop` above until told otherwise (TASK-393),
+          // so without this edge a recovered protective stop left the real
+          // arms un-armable with nothing in the UI that could clear it.
+          // Clearing the sidecar's latch moves nothing: arming still needs a
+          // bound lease, a live heartbeat and a fresh motion frame.
+          if (this.estopPropagated) this.clearSidecarEstop();
           this.estopPropagated = false;
         }
       }, HUMANOID_SAFETY_POLL_MS);
@@ -2231,17 +2239,26 @@ export class RobotStateManager {
       this.setAgentSafetyState({ estopLatched: false, estopReason: null, estopAt: null });
       // TASK-393: the arm-only sidecar latches its own `/estop` until told
       // otherwise, so the robot's arms stay un-armable after an agent reset
-      // unless the reset reaches the sidecar too. Best effort and never
-      // awaited: a sidecar without the route has no latch to clear.
-      try {
-        void hardwareClient.resetEstop().then((res) => {
-          if (!res.ok) console.warn(`[RobotStateManager] sidecar E-stop reset failed: ${res.error ?? 'unknown'}`);
-        }).catch(() => { /* sidecar unreachable */ });
-      } catch {
-        /* a hardware client without an arm path */
-      }
+      // unless the reset reaches the sidecar too.
+      this.clearSidecarEstop();
     }
     return cleared;
+  }
+
+  /**
+   * Clear the sidecar's own E-stop latch (TASK-393). Best effort and never
+   * awaited: a sidecar without the route (the sim, an older sidecar) has no
+   * latch to clear, and a sidecar that is down will be latched-or-not when it
+   * comes back on its own terms.
+   */
+  private clearSidecarEstop(): void {
+    try {
+      void hardwareClient.resetEstop().then((res) => {
+        if (!res.ok) console.warn(`[RobotStateManager] sidecar E-stop reset failed: ${res.error ?? 'unknown'}`);
+      }).catch(() => { /* sidecar unreachable */ });
+    } catch {
+      /* a hardware client without an arm path */
+    }
   }
 
   /**

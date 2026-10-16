@@ -535,4 +535,14 @@ describe('VRTeleopModalBody — the real G1 arm path', () => {
     act(() => socket.deliver({ type: 'heartbeat', state: 'live' }));
     expect(screen.queryByTestId('vr-agent-errors')).toBeNull();
   });
+
+  it('offers a reset when only the sidecar is still E-stopped', async () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({ type: 'arm', writeMode: 'arm_sdk', armed: false, arming: false, armWeight: 0, estopLatched: true }));
+    const notices = screen.getByTestId('vr-arm-notices');
+    expect(notices).toHaveTextContent('still E-stopped');
+    await act(async () => { fireEvent.click(within(notices).getByRole('button', { name: 'Reset E-stop' })); });
+    expect(resetRobotEStop).toHaveBeenCalledTimes(1);
+  });
 });

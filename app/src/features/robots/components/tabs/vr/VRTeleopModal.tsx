@@ -431,6 +431,10 @@ export function VRTeleopModalBody({
         const next = parseArmFrame(frame);
         if (!next) break;
         setArm(next);
+        // Refusals about arming are past facts once the arms are actually up.
+        if (next.armed) {
+          setAgentErrors((prev) => prev.filter((e) => !e.code.startsWith('arm_') && e.code !== 'heartbeat_lost'));
+        }
         telemetryRef.current.arm = next.writeMode === 'arm_sdk'
           ? { armed: next.armed, arming: next.arming, armWeight: next.armWeight, teleopMode: next.teleopMode }
           : null;
@@ -1014,7 +1018,12 @@ export function VRTeleopModalBody({
         </ul>
       )}
 
-      <ArmNotices arm={arm} />
+      <ArmNotices
+        arm={arm}
+        robotLatched={estopLatched}
+        resetting={resetting}
+        onReset={() => void resetEstop()}
+      />
 
       {control?.preempted && (
         <p className="text-xs text-ink-tertiary">
@@ -1214,9 +1223,31 @@ export function ArmStatusTag({ arm }: { arm: ArmFrame }) {
  * arms-only. Here the session goes on with what is there and says so, and the
  * recorder leaves the missing hand out of the dataset rather than storing zeros.
  */
-export function ArmNotices({ arm }: { arm: ArmFrame | null }) {
+export function ArmNotices({
+  arm,
+  robotLatched = false,
+  resetting = false,
+  onReset,
+}: {
+  arm: ArmFrame | null;
+  /** The agent's own latch — its banner already offers the reset. */
+  robotLatched?: boolean;
+  resetting?: boolean;
+  onReset?: () => void;
+}) {
   if (!arm) return null;
-  const notes: { id: string; title: string; body: string }[] = [];
+  const notes: { id: string; title: string; body: string; reset?: boolean }[] = [];
+  // The sidecar keeps its own latch. When the agent's has cleared but the
+  // sidecar's has not (a stop from before an agent restart), nothing else on
+  // this page would say why the arms refuse to arm.
+  if (arm.writeMode === 'arm_sdk' && arm.estopLatched && !robotLatched) {
+    notes.push({
+      id: 'sidecar-estop',
+      title: 'The robot\'s sidecar is still E-stopped',
+      body: 'Its own latch survived the stop that set it, so the arms will not arm. Reset it once the robot is safe.',
+      reset: true,
+    });
+  }
   if (arm.writeMode === 'read_only') {
     notes.push({
       id: 'read-only',
@@ -1247,8 +1278,17 @@ export function ArmNotices({ arm }: { arm: ArmFrame | null }) {
     <div className="flex flex-col gap-2" data-testid="vr-arm-notices">
       {notes.map((n) => (
         <Panel key={n.id} variant="inset" padding="sm" className="border-signal-unknown/50" role="status">
-          <p className="text-sm font-semibold text-signal-unknown">{n.title}</p>
-          <p className="mt-0.5 text-xs text-ink-secondary">{n.body}</p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-signal-unknown">{n.title}</p>
+              <p className="mt-0.5 text-xs text-ink-secondary">{n.body}</p>
+            </div>
+            {n.reset && onReset && (
+              <Button variant="secondary" size="sm" disabled={resetting} onClick={onReset}>
+                {resetting ? 'Resetting…' : 'Reset E-stop'}
+              </Button>
+            )}
+          </div>
         </Panel>
       ))}
     </div>

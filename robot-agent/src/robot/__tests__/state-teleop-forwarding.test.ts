@@ -80,6 +80,7 @@ vi.mock('../../hardware/HardwareClient.js', () => ({
     mayStreamAction: () => hw.mayStream,
     getArmStatus: () => ({ hands: hw.hands }),
     resetEstop: () => hw.resetEstop(),
+    getImuNow: async () => null,
     releaseAction: () => hw.releaseAction(),
     locoStop: () => hw.locoStop(),
     sendEstop: async () => {},
@@ -498,6 +499,23 @@ describe('RobotStateManager — teleop reaches the robot', () => {
       hw.sendAction.mockRejectedValue(new HardwareActionError('not_armed', 409));
       await tick(2);
       expect(g1.getRecordedCommand()).toEqual({});
+      warn.mockRestore();
+    });
+
+    it('a protective stop that recovers on its own clears the sidecar latch too', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      g1.startSafetyMonitoring();
+      g1.updateServerHeartbeat();
+      const monitor = (g1 as unknown as { safetyMonitor: { simulateConnectionLoss(): void } }).safetyMonitor;
+      monitor.simulateConnectionLoss();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(g1.isEStopTriggered()).toBe(true);
+      expect(hw.resetEstop).not.toHaveBeenCalled();
+      g1.updateServerHeartbeat();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(g1.isEStopTriggered()).toBe(false);
+      expect(hw.resetEstop).toHaveBeenCalledTimes(1);
+      g1.stopSafetyMonitoring();
       warn.mockRestore();
     });
 

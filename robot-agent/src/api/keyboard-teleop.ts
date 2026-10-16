@@ -1142,6 +1142,7 @@ export function createKeyboardTeleopWebSocket(
       // Never gated: liveness is what un-gates everything else.
       if ('hb' in msg) {
         lastHeartbeatAt = Date.now();
+        errorsSent.delete('arm_requires_heartbeat');
         if (heartbeatLost) {
           heartbeatLost = false;
           errorsSent.delete('heartbeat_lost');
