@@ -98,6 +98,128 @@ SSH PC2: `unitree@192.168.123.164` (Passwort beim Owner). Windows-Falle: Prozess
    - lerobot + unitree_sdk2py mit `unitree_g1`-Klassen installieren (Stage-0-Restpunkt).
    - Native Unitree-Teleop via `lerobot-record`; kleines LeRobot-v2.1-Dataset aufnehmen; Import/Playback/Kuration im RMS prüfen.
    - Erst hier braucht es einen Kommandopfad — **nur nach expliziter Owner-Freigabe** (`G1_READ_ONLY=0` + E-Stop besetzt).
+   - *Superseded 2026-10-17 (TASK-391):* the `G1_READ_ONLY=0` / lerobot `rt/lowcmd` path is removed. The command path is now `G1_WRITE_MODE=arm_sdk` — see "Arm teleop through arm_sdk" below.
 4. **Optional Stufe 1.5:** Dex3-Hand-Telemetrie ergänzen (separate DDS-Topics `rt/dex3/left|right/state` subscriben) → 43 echte jointStates.
 5. **Stage 3 (off-robot):** G1 in die MuJoCo-Sim-Eval-Pipeline; USD-Modelle aus `temp/unitree_model` für Isaac-Sim-Arbeiten (WSL2).
 6. **Aufräumen (nice-to-have):** `Model3DTab` toter Code — entfernen oder als Tab mounten.
+
+---
+
+## Arm teleop through arm_sdk (TASK-391)
+
+*Written 2026-10-17 for the first NeoDEM-driven teleop session on the real G1.
+The commands below have been run against the MuJoCo DDS sim only — not yet
+against the robot.*
+
+### What the sidecar does now
+
+`robot-agent/hardware/g1_sidecar.py` has two write modes, chosen at start:
+
+| `G1_WRITE_MODE` | What exists in the process |
+| --- | --- |
+| unset / `read_only` (default) | Telemetry only. No joint-command publisher. `/action`, `/arm`, `/record/start` → 403. Unchanged from stage 1. |
+| `arm_sdk` | `rt/arm_sdk` (`unitree_hg LowCmd_`) + `rt/dex3/{left,right}/cmd` (`HandCmd_`) publishers — silent until `POST /arm`. |
+
+`rt/arm_sdk` is Unitree's arm-only channel: it is blended into the running
+balance controller through a weight in `motor_cmd[29].q`. The legs stay under
+Unitree's control whatever the weight is. This replaces the old
+`G1_READ_ONLY=0` path, which loaded lerobot's driver and wrote `rt/lowcmd`
+(debug mode, no balance — a standing robot falls). `G1_READ_ONLY=0` without
+`G1_WRITE_MODE=arm_sdk` now refuses to start, and `/record/start` is refused in
+both modes (it spawned `lerobot-record`, i.e. the same `rt/lowcmd` driver).
+
+| Route | Behaviour |
+| --- | --- |
+| `POST /arm {"lease_generation": n}` | Seeds every target from the **measured** pose, weight 0→1 over 1.5 s. 409 `estop_latched`, 503 `no_state` (no fresh `rt/lowstate`). |
+| `POST /action {"<joint>": rad}` | Only while armed (else 409 `not_armed`). Clamped to the joint limits minus 0.05 rad, slewed at ≤ 3 rad/s (arms) / 6 rad/s (fingers). Leg and waist keys are ignored and counted. |
+| `POST /disarm` | Weight 1→0 over 1 s, five explicit weight-0 frames, then silence. |
+| `POST /estop` | The same ramp, plus a latch: `/arm` → 409 until `POST /estop/reset`. |
+| dead-man | No `/action` for 0.5 s → hold; 1.0 s → disarm (`last_disarm_reason: "deadman"`). The agent must keep `/action` flowing (≥ 20 Hz) while engaged, even when the pose does not change. |
+| SIGTERM / SIGINT | Disarm ramp starts at the signal; the process exits after weight 0 (~1.2 s). |
+| `GET /health`, `/state` | `write_mode`, `armed`, `arm_state`, `arm_weight`, `estop_latched`, `hands {left,right}`, `teleop_mode`, `dds_domain`, `dds_iface`. |
+
+What one `rt/arm_sdk` frame carries: the 14 arm joints (the only operator
+targets, kp 80/kd 3 shoulders+elbows, kp 40/kd 1.5 wrists); the waist **held at
+the pose measured at `/arm`** (kp 300/kd 3, xr_teleoperate's motion-mode lock —
+the waist is part of the arm_sdk blend, so kp 0 would hand the blend a limp
+waist); the legs at their measured pose with kp = kd = 0 (ignored by the
+robot's blender). Dex3 commands go out only for a hand whose state arrived in
+the last 0.5 s: with the right hand silent (as on 2026-10-16) `/arm` still
+succeeds and reports `teleop_mode: "arms+left_hand"` instead of blocking.
+
+### Before you start
+
+- The robot must be in its **normal (motion) mode, not debug mode**: arm_sdk
+  blends into the balance controller, so that controller must be running.
+  xr_teleoperate leaves the robot in debug mode on exit — switch back with the
+  remote or reboot.
+- Gantry attached for the first session. One person on the hardware e-stop.
+- The read-only bridge keeps running (`g1_state_bridge_readonly.py --iface
+  enp131s0 --domain 0`, ZMQ :6001): `/state` reads BMS and odometry from it.
+- Stop the read-only sidecar on :8767 first — the arm_sdk sidecar takes the
+  same port, so the g1-edu-4 agent needs no change.
+- Do not reuse the stage-1 environment as is: it sets `G1_READ_ONLY=1`, and
+  `G1_READ_ONLY=1` + `G1_WRITE_MODE=arm_sdk` refuses to start on purpose.
+
+### Start (robot day — written, not run)
+
+```bash
+cd ~/develop/robot-management-system/robot-agent/hardware
+export CYCLONEDDS_HOME=/home/humanoid/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/cyclonedds/install
+env G1_WRITE_MODE=arm_sdk \
+    G1_DDS_DOMAIN=0 G1_DDS_IFACE=enp131s0 G1_NET_INTERFACE=enp131s0 \
+    G1_LOWSTATE_ENDPOINT=tcp://127.0.0.1:6001 \
+    G1_CAMERA_SOURCE=pc2cam G1_PC2_CAMERA_HOST=192.168.123.164 G1_PC2_CAMERA_PORT=5600 \
+    G1_ALLOW_LIDAR_SWITCH=0 G1_LOCO_ENABLED=0 \
+    G1_ROBOT_ID=g1-edu-4 G1_ROBOT_IP=192.168.123.164 \
+    G1_ARM_SDK_MAX_JOINT_VEL=1.0 \
+    ~/anaconda3/envs/unitree_sim_env6/bin/python -u g1_sidecar.py
+```
+
+`G1_ARM_SDK_MAX_JOINT_VEL=1.0` is a deliberately slow first session; the
+default is 3.0 rad/s. Raise it once the arms have been seen to follow.
+
+Smoke test, in this order, before the Quest is involved:
+
+```bash
+curl -s localhost:8767/health   # write_mode arm_sdk, dds_domain 0, armed false, hands, teleop_mode
+# 1. arm with NO /action: the arms ramp in, hold where they are, and the dead-man
+#    hands them back after 1 s. Nothing should visibly move.
+curl -s -XPOST localhost:8767/arm -d '{"lease_generation": null}'
+sleep 3; curl -s localhost:8767/health   # arm_state disarmed, last_disarm_reason deadman
+# 2. e-stop latch
+curl -s -XPOST localhost:8767/estop; curl -s -XPOST localhost:8767/arm   # -> 409 estop_latched
+curl -s -XPOST localhost:8767/estop/reset
+```
+
+Then teleop through the app (the agent arms under its control lease and streams
+`/action`).
+
+### Rehearsal against the MuJoCo DDS sim
+
+Domain 41 on loopback: domain 1 is where the dev stack's own sim lives, and two
+sims on one domain would read each other's state.
+
+```bash
+cd robot-agent/hardware/sim_g1_dds
+export CYCLONEDDS_HOME=/home/humanoid/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/cyclonedds/install
+MUJOCO_GL=egl PYOPENGL_PLATFORM=egl LIBGL_ALWAYS_SOFTWARE=1 CUDA_VISIBLE_DEVICES= \
+  ~/anaconda3/envs/unitree_sim_env6/bin/python sim_node.py --domain 41 --iface lo --http-port 8781 &
+(cd .. && G1_WRITE_MODE=arm_sdk G1_DDS_DOMAIN=41 G1_DDS_IFACE=lo G1_SIDECAR_PORT=8791 \
+  G1_LOWSTATE_ENDPOINT=tcp://127.0.0.1:1 G1_ALLOW_LIDAR_SWITCH=0 \
+  ~/anaconda3/envs/unitree_sim_env6/bin/python -u g1_sidecar.py &)
+~/anaconda3/envs/unitree_sim_env6/bin/python arm_sdk_sim_check.py --domain 41 --iface lo \
+  --sim http://127.0.0.1:8781 --sidecar http://127.0.0.1:8791 --sidecar-pid <sidecar pid>
+```
+
+`arm_sdk_sim_check.py` refuses domain 0, any non-loopback interface, and a
+sidecar whose `/health` reports another domain.
+
+### Not yet verified on the robot
+
+- That the robot's arm_sdk blender ignores the leg slots (Unitree's examples
+  and xr_teleoperate's motion mode say so; the sim blends all 29).
+- The waist hold at kp 300 / kd 3 while the balance controller is running.
+- `mode_machine` taken from `rt/lowstate`, as bridge.py and xr_teleoperate do.
+- The Dex3 RIS mode byte and kp 1.5 / kd 0.2 (from xr_teleoperate's
+  Dex3_1_Controller), and whether the right hand publishes state at all.

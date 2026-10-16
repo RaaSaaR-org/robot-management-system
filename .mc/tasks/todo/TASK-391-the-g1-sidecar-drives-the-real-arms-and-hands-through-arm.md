@@ -105,31 +105,103 @@ exit path.
 
 ## Acceptance Criteria
 
-- [ ] Default start (no env) is read-only exactly as before: `/action` and
+- [x] Default start (no env) is read-only exactly as before: `/action` and
       `/record/start` → 403, no DDS publisher is constructed.
-- [ ] `G1_READ_ONLY=0` without `G1_WRITE_MODE=arm_sdk` refuses to start with a
+- [x] `G1_READ_ONLY=0` without `G1_WRITE_MODE=arm_sdk` refuses to start with a
       message naming the removed `rt/lowcmd` path; no lerobot import remains.
-- [ ] arm_sdk mode refuses to start without an explicit DDS domain.
-- [ ] `/arm` seeds every arm target from the measured pose and ramps the weight
+- [x] arm_sdk mode refuses to start without an explicit DDS domain.
+- [x] `/arm` seeds every arm target from the measured pose and ramps the weight
       0→1 in ~1.5 s; `/disarm` ramps 1→0 in ~1 s and then stops publishing.
-- [ ] `/action` before `/arm` → 409 `not_armed`; leg/waist keys are ignored and
+- [x] `/action` before `/arm` → 409 `not_armed`; leg/waist keys are ignored and
       counted; targets are clamped and slew-limited.
-- [ ] Dead-man holds at 0.5 s and disarms at 1.0 s without `/action`.
-- [ ] `/estop` disarms and latches; `/arm` → 409 until `/estop/reset`.
-- [ ] A missing Dex3 state stream arms anyway, reports `teleop_mode`, and never
+- [x] Dead-man holds at 0.5 s and disarms at 1.0 s without `/action`.
+- [x] `/estop` disarms and latches; `/arm` → 409 until `/estop/reset`.
+- [x] A missing Dex3 state stream arms anyway, reports `teleop_mode`, and never
       publishes a command for that hand.
-- [ ] SIGTERM/SIGINT ramp the weight to 0 before the process exits.
-- [ ] Against the MuJoCo DDS sim on domain 1 / `lo`: arm, 3 s shoulder
+- [x] SIGTERM/SIGINT ramp the weight to 0 before the process exits.
+- [x] Against the MuJoCo DDS sim on domain 1 / `lo`: arm, 3 s shoulder
       sinusoid, the arm moves, the legs do not, disarm → weight 0.
-- [ ] The robot-day start command is documented (written, not run).
+- [x] The robot-day start command is documented (written, not run).
+- [ ] First armed run on the physical G1 (gantry, e-stop staffed) — robot day,
+      not part of this branch's verification.
 
 ## Test Strategy
 
-- `pytest robot-agent/hardware/tests/test_g1_arm_sdk.py
-  robot-agent/hardware/tests/test_g1_sidecar_write_mode.py` with a fake clock,
-  fake wire and fake state source.
-- Full `robot-agent/hardware/tests/` (incl. `test_fstring_portability.py`).
-- Integration against the MuJoCo DDS sim on domain 1 / `lo` — commands and
-  results below.
+Unit (fake clock, fake state source, fake wire — no DDS):
+
+```bash
+cd robot-agent/hardware
+server/curation/.venv/bin/python -m pytest tests -q          # 270 passed, 18 skipped (py3.14)
+~/anaconda3/envs/unitree_sim_env6/bin/python -m pytest tests -q   # 279 passed, 17 skipped (py3.12)
+```
+
+`tests/test_g1_arm_sdk.py` (32): seed frame = measured pose (arms, waist, legs,
+hands, mode_machine); weight 0→1 in 1.48–1.52 s; 503 without state; waist kp
+300/kd 3, legs kp 0; clamp to limit − 0.05 rad; slew exactly 3 rad/s × dt per
+tick; leg/waist keys ignored + counted + logged; unknown keys counted, NaN/inf/
+strings/bools → 400; lease mismatch → 409; dead-man hold at 0.5 s (pose frozen)
+and disarm at 1.0 s; disarm ramp 1→0 in ~1 s, exactly 5 zero frames, then
+silence and 409 on /action; e-stop latch and reset; stale lowstate → disarm;
+re-arm mid-ramp re-seeds; four hand-presence cases → teleop_mode, no frames for
+a missing hand; a hand lost mid-session stops being commanded; runner shutdown
+ramps to 0 in < 1.5 s and ends on weight-0 frames; a runner that never armed
+writes nothing; a failing wire forces weight 0.
+`tests/test_g1_sidecar_write_mode.py` (23): config matrix (`G1_READ_ONLY=0`
+alone, unknown mode, arm_sdk without domain, arm_sdk + `G1_READ_ONLY=1` refuse);
+`python g1_sidecar.py` exits 2 before binding anything; no lerobot import left;
+read_only answers 403 on `/action` `/arm` `/record/start`, 200 on the stop
+routes, and carries the write status on `/health` + `/state`; the arm_sdk
+routes over real HTTP against a real controller.
+`sim_g1_dds` pytest: 146 passed (unchanged). New files parse as Python 3.8.
+
+Integration against the MuJoCo DDS sim, 2026-10-17. Domain **41** on `lo`, not
+domain 1: the dev stack's own sim (`sim_node.py --domain 1 --iface lo`, :8777)
+was running, and a second sim plus this sidecar on the same domain would have
+driven its arms and mixed its `rt/lowstate` into the test.
+
+```bash
+cd robot-agent/hardware/sim_g1_dds
+export CYCLONEDDS_HOME=~/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/cyclonedds/install
+MUJOCO_GL=egl PYOPENGL_PLATFORM=egl LIBGL_ALWAYS_SOFTWARE=1 CUDA_VISIBLE_DEVICES= \
+  ~/anaconda3/envs/unitree_sim_env6/bin/python sim_node.py --domain 41 --iface lo --http-port 8781 &
+(cd .. && G1_WRITE_MODE=arm_sdk G1_DDS_DOMAIN=41 G1_DDS_IFACE=lo G1_NET_INTERFACE=lo \
+  G1_SIDECAR_PORT=8791 G1_LOWSTATE_ENDPOINT=tcp://127.0.0.1:1 G1_ALLOW_LIDAR_SWITCH=0 \
+  ~/anaconda3/envs/unitree_sim_env6/bin/python -u g1_sidecar.py &)
+~/anaconda3/envs/unitree_sim_env6/bin/python arm_sdk_sim_check.py --domain 41 --iface lo \
+  --sim http://127.0.0.1:8781 --sidecar http://127.0.0.1:8791 --sidecar-pid <pid>
+```
+
+Result (second run, all 13 PASS; a passive DDS subscriber recorded every frame):
+
+| Check | Measured |
+| --- | --- |
+| /action before /arm | 409 `not_armed`, 0 frames on `rt/arm_sdk` |
+| first frame vs measured pose | max diff 0.0 rad, weight 0.013 |
+| arm ramp 0→1 | 1.48 s |
+| 3 s sinusoid, A 0.3 rad @ 0.5 Hz, left shoulder pitch | sim shoulder p2p 0.584 rad (cmd 0.600) |
+| legs during the sinusoid | max deviation 0.0026 rad |
+| waist during the sinusoid | max 0.0122 rad (frames hold it exactly; actuator compliance) |
+| frames' leg + waist slots vs measured | 0.0000 rad |
+| /disarm ramp 1→0 | 1.0 s, then 0 frames in 0.5 s, last weight 0 |
+| dead-man | ramp starts 0.98 s, weight 0 at 1.96 s after the last /action |
+| SIGTERM while armed | weight 0 at +0.983 s, process gone at +1.174 s |
+
+The first run failed two checks and changed the code: SIGTERM reached weight 0
+only at +1.49 s (the ramp waited for `serve_forever`'s 0.5 s poll — now the
+signal starts the ramp at once), and the waist bound was 0.02 rad against a
+measured 0.0245 rad sway that the frames do not command (bound now 0.05 rad).
 
 ## Notes
+
+- 2026-10-17 — Decisions taken while implementing (huhn511 to confirm):
+  waist held at the `/arm` pose with kp 300/kd 3 rather than left at kp 0;
+  slew defaults 3 rad/s arms / 6 rad/s fingers (xr_teleoperate allows
+  20–30 rad/s; the doc's robot-day command starts at 1 rad/s); arm_sdk mode
+  refuses to start without an explicit DDS domain; `G1_READ_ONLY=1` + arm_sdk refuses to start;
+  `/record/start` refused in both modes; `/action` may carry an optional
+  `lease_generation` (409 `lease_mismatch` when it differs).
+- For TASK-393: `HardwareClient.releaseAction()` posts `/estop` on teleop end.
+  `/estop` now LATCHES — the agent must call `/disarm` there, and `/estop` only
+  for a real stop. Keep `/action` flowing ≥ 20 Hz while engaged (hold pose when
+  idle) or the dead-man disarms after 1 s.
+

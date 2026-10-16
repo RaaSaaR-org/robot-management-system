@@ -132,12 +132,13 @@ Each row is one connection, listed from the side that opens it.
 | workers → server | HTTP poll | `/api/training/workers/*`, `/api/twin/workers/*` | Bearer `WORKER_API_TOKEN` |
 | Prometheus → server | HTTP | `:3001 /metrics` | no auth |
 | **Robot edge** | | | |
-| agent → g1_sidecar | HTTP | `:8767 /state /action /estop /cameras/* /record/* /loco/*` | `G1_READ_ONLY=1` and `G1_LOCO_ENABLED=0` by default |
+| agent → g1_sidecar | HTTP | `:8767 /state /arm /disarm /action /estop /estop/reset /cameras/* /record/* /loco/*` | `G1_WRITE_MODE=read_only` and `G1_LOCO_ENABLED=0` by default |
 | agent → sim facade | HTTP | `:8777` (second sim `:8778`) | same contract as the sidecar |
 | agent → SO-101 sidecar | HTTP | `:8765` | bootstrap arm |
 | agent · server → voice | HTTP | `:8768 /say`, `/voices` | Agent Mode narration, voice packs |
 | g1_sidecar → state bridge | ZMQ SUB | `tcp://<robot>:6001` | lowstate, hands, battery, odometry |
 | g1_sidecar → G1 | Unitree DDS | domain 0, `rt/api/sport/*`, `rt/utlidar/*` | loco RPC, odometry, LiDAR |
+| g1_sidecar → G1 | Unitree DDS | domain 0, `rt/arm_sdk`, `rt/dex3/*/cmd` (+ `rt/lowstate`, `rt/dex3/*/state` read) | arm + hand teleop, only with `G1_WRITE_MODE=arm_sdk` and only between `/arm` and disarm (TASK-391) |
 | g1_sidecar → G1 PC2 | ZMQ · TCP | `:60000` (teleimager) · `:5600` | head cameras |
 | G1 → voice | UDP multicast | `239.168.123.161:5555` | microphone |
 | **Inference and egress** | | | |
