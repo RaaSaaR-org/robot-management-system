@@ -8,6 +8,10 @@ import them into NeoDEM — plus how to test the entire path **without a headset
 or robot**. Verified end-to-end (headset-free) on the lab box `GPU_BOX` on
 2026-07-12; synthetic proof dataset: "VR Teleop Pipeline Test (synthetic)".
 
+**Recording on the real robot through NeoDEM** (Quest browser → app → server →
+robot-agent → `g1_sidecar.py`) has its own runbook below:
+[Quest 3 on the real G1 via NeoDEM](#quest-3-on-the-real-g1-via-neodem-task-393).
+
 Related: [`docs/architecture.md`](architecture.md) · in-app sim recording for
 VR sessions lives in the datacollection feature (Teleoperation Sessions) ·
 robot-day sequencing: `.mc` TASK-169 "Robot-day checklist", item 4.
@@ -97,6 +101,128 @@ Same as A, but: no sim; robot in debug mode (L2+R2); Ethernet
 `192.168.123.x`; `teleimager-server` running on PC2; drop `--sim` and use
 `--img-server-ip=192.168.123.164`. E-stop verified and in reach (TASK-169
 Stage-1 gate) **before** pressing `r`; `q` returns the arms home.
+
+## Quest 3 on the real G1 via NeoDEM (TASK-393)
+
+Sections A and B drive the robot with Unitree's `xr_teleoperate`, outside
+NeoDEM: nothing is recorded, no control lease, no NeoDEM E-stop. This is the
+path that goes **through** NeoDEM and records a LeRobot v3.0 dataset as it goes:
+
+```
+Quest 3 browser  http://localhost:1420   (adb reverse — the ONLY forwarded port)
+   │ page, /api, /api/a2a/ws, /api/robots/<id>/teleop/ws   (Vite dev proxy)
+   ▼
+server :3001  ── teleop proxy (token in Sec-WebSocket-Protocol) ──►  robot-agent /ws/keyboard-teleop
+                                                                       │ lease + heartbeat → POST /arm
+                                                                       │ /action ≥ 20 Hz (arms + present hands only)
+                                                                       ▼
+                                          g1_sidecar.py  G1_WRITE_MODE=arm_sdk  →  rt/arm_sdk + rt/dex3/*/cmd
+                                          (legs and waist stay under Unitree's balance controller)
+```
+
+### Before you start
+
+- **The sidecar's arm-only write mode (TASK-391) is required.** A sidecar in the
+  default read-only mode streams telemetry and the head camera but refuses every
+  command; the VR panel then says *"The robot will not move"* and the recorder
+  refuses to start. The old `rt/lowcmd` write path is gone — it bypassed the
+  balance controller, so a standing robot fell.
+- Robot on the gantry, in **normal** mode (not debug mode — `xr_teleoperate`
+  leaves it in debug mode; use the remote or reboot). E-stop in reach.
+- Head camera: PC2's `g1-head-cam` service on `192.168.123.164:5600`
+  (`G1_CAMERA_SOURCE=pc2cam` on the sidecar).
+
+### Bring-up (the computer wired to the robot)
+
+```bash
+# 1. sidecar — arm-only writes, PC2 head camera (names per TASK-391)
+G1_WRITE_MODE=arm_sdk G1_CAMERA_SOURCE=pc2cam G1_NET_INTERFACE=<robot LAN iface> \
+  python robot-agent/hardware/g1_sidecar.py          # :8767
+
+# 2. robot agent, server, app
+cd robot-agent && npm run dev:g1-edu                  # HARDWARE_SIDECAR_URL defaults to :8767
+cd server && npm run dev                              # :3001
+cd app && npm run dev                                 # :1420
+
+# 3. the headset (USB-C into THIS computer, Developer Mode on)
+./scripts/quest-connect.sh --open
+```
+
+`quest-connect.sh` finds adb (PATH, `~/.local/opt/platform-tools`, the Android
+SDK, Homebrew), stops with the fix when the headset has not accepted *Allow USB
+debugging* yet (exit 4 — the step a bare `adb reverse` fails silently on),
+reverses **only** port 1420, checks the dev server answers and prints the URL.
+`--wireless` switches to Wi-Fi adb afterwards (the reverse rule rides the adb
+transport, not the cable); `--remove` undoes it. No SSH tunnel and no second
+`adb reverse` for :3001 or the agent: the app reaches the API, the event socket
+and the robot's teleop socket through its own origin. The robot page's VR card
+has the same steps under **Connect Meta Quest**.
+
+### Driving and recording
+
+1. Data collection → new VR session for the G1 EDU → **Launch VR**.
+2. **Take control** (the control lease). The agent now answers `bound` whether or
+   not `CONTROL_LEASE_REQUIRED` is set — before TASK-393 it ignored `{bind}` and
+   "Take control" timed out.
+3. In the headset: **Enter VR**. The rig sends a heartbeat at 10 Hz from its
+   render loop. Grip a controller: the first joint frame from a console that
+   holds the lease *and* is heartbeating arms the sidecar — weight ramps 0→1
+   over ~1.5 s from the **measured** arm pose. The wrist HUD's MODE line reads
+   `ARMING 40%`, then `ARMED`; the desktop shows *Arming …* / *Arms armed*.
+4. Record as usual (L-stick click = next episode). `action` is what the sidecar
+   **accepted**, not what the operator wanted — frames before the arms are armed
+   are dropped and counted ("no command reached the robot").
+
+### What hands the arms back (disarm, weight 1→0 over ~1 s)
+
+| Event | Who | Latency |
+|-------|-----|---------|
+| Exit VR, headset off (session hidden), **Release** | app releases the lease → agent fences the socket | immediate |
+| B / Y / pinch-stop, desktop **Emergency stop** | agent: disarm, then latch (sidecar `/estop` latches too) | immediate |
+| Render loop stalls (tab hidden, browser hung, Wi-Fi gone) | agent heartbeat dead-man | 1.0 s |
+| Agent stops sending `/action` | sidecar dead-man: hold at 0.5 s, disarm at 1.0 s | 1.0 s |
+| Teleop socket closes (last engaged console) | agent | immediate |
+| Lease expires / taken over by someone else | agent lease fence | immediate |
+
+After an E-stop, **Reset E-stop** clears the agent's latch and the sidecar's.
+A protective stop that clears on its own (server connection restored) now clears
+the sidecar's latch too; if the sidecar is still latched for any other reason
+(e.g. from before an agent restart) the VR panel says *"The robot's sidecar is
+still E-stopped"* with its own reset button.
+
+### A Dex3 hand that sends nothing
+
+On 2026-10-16 the right hand published no state and `xr_teleoperate` hung until
+it was switched to arms-only. NeoDEM goes on: the sidecar reports
+`teleop_mode` (`arms+hands` | `arms+left_hand` | `arms+right_hand` |
+`arms_only`), the VR panel and the HUD warn (*NO RIGHT HAND — arms + left*), the
+forwarder never commands the missing hand, and the recorder leaves it out of the
+dataset rather than storing zeros: `robot_type` becomes
+`Unitree_G1_Dex3_LeftHand` / `_RightHand` / `_ArmsOnly` (21 / 21 / 14 dims) and
+`meta/info.json` → `_neodem.recordingMode` / `omittedJoints` say what is missing.
+A missing **arm** joint, or a hand with only some joints, still refuses.
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| `arm_requires_lease` | this console does not hold the lease — **Take control** |
+| `arm_requires_heartbeat` | a console that sends no heartbeat (an old cached app: reload) — keyboard and VR send one; *Simulate VR input* deliberately does not, so it can never drive real arms |
+| `heartbeat_lost` | the render loop stalled for 1 s; move again once the link is back |
+| `arm_failed` / `arm_estop_latched` | the sidecar refused `/arm`; the message is its own words |
+| *The robot will not move* | sidecar is read-only — restart it with `G1_WRITE_MODE=arm_sdk` |
+| `adb` lists the Quest as `unauthorized` | accept *Allow USB debugging* inside the headset (`quest-connect.sh` exits 4) |
+| teleop socket 401 | token expired with auth on — the link refreshes and retries on its own |
+
+The teleop socket goes through the server by default. `VITE_TELEOP_DIRECT=true`
+connects the browser to the agent directly (the pre-TASK-393 behaviour; breaks
+over `adb reverse`, Tailscale and https). `VITE_PROXY_TARGET` points the Vite dev
+proxy at another API server.
+
+Measured on loopback (2026-10-17, `{positions}` → `{type:'state'}` round trip,
+n = 103): direct to the agent p50 0.31 ms / p95 0.50 ms; through the server
+proxy 0.56 / 0.97 ms; through Vite + server proxy (the Quest path) 0.92 / 1.52 ms.
+The stream runs at 20 Hz, so the extra hop is well under 1 % of the frame budget.
 
 ## C) Convert raw JSON → LeRobot v3.0
 
