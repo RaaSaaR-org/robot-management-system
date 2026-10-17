@@ -18,13 +18,16 @@ import type { TeleoperationType } from '../types/datacollection.types';
  * request names none. The head camera (pc2cam) delivers about 15 fps; the
  * recorder samples the sidecar's newest frame on every tick, so a slower camera
  * repeats its last picture rather than dropping rows.
+ *
+ * There is no episode count (TASK-406): a session records as many takes as the
+ * operator wants and ends when they press End.
  */
 export const NEW_SESSION_DEFAULTS = {
   type: 'vr_quest' as TeleoperationType,
-  numEpisodes: 10,
-  episodeTimeS: 30,
+  /** Per-take auto-stop in seconds; null = off, the operator ends each take (TASK-406). */
+  episodeTimeS: null as number | null,
   fps: 30,
-} as const;
+};
 
 /** The three devices the default view offers; the rest live under Advanced options. */
 export const PRIMARY_INPUT_TYPES: TeleoperationType[] = ['vr_quest', 'keyboard_mouse', 'gamepad'];
@@ -35,7 +38,11 @@ export const RECENT_TASKS_MAX = 5;
 export interface NewSessionPrefs {
   robotId?: string;
   type?: TeleoperationType;
-  numEpisodes?: number;
+  /**
+   * Per-take auto-stop in seconds, stored as `autoStopS`. The old
+   * "Episode length" (`episodeTimeS`, which the G1 recorder never honoured) is
+   * deliberately not carried over: it would silently become a real auto-stop.
+   */
   episodeTimeS?: number;
   fps?: number;
   /** Newest first, deduplicated, at most RECENT_TASKS_MAX. */
@@ -73,8 +80,8 @@ export function loadNewSessionPrefs(userId: string | null | undefined): NewSessi
     return {
       robotId: typeof data.robotId === 'string' && data.robotId ? data.robotId : undefined,
       type,
-      numEpisodes: positiveInt(data.numEpisodes),
-      episodeTimeS: positiveInt(data.episodeTimeS),
+      // `numEpisodes` from before TASK-406 is ignored.
+      episodeTimeS: positiveInt(data.autoStopS),
       fps: positiveInt(data.fps),
       recentTasks,
     };
@@ -91,13 +98,11 @@ export function loadNewSessionPrefs(userId: string | null | undefined): NewSessi
  * them to today's default after the default moves.
  */
 export function saveNewSessionPrefs(userId: string | null | undefined, prefs: NewSessionPrefs): void {
-  const choice = (key: 'numEpisodes' | 'episodeTimeS' | 'fps') =>
-    prefs[key] === NEW_SESSION_DEFAULTS[key] ? undefined : prefs[key];
-  const stored: NewSessionPrefs = {
-    ...prefs,
-    numEpisodes: choice('numEpisodes'),
-    episodeTimeS: choice('episodeTimeS'),
-    fps: choice('fps'),
+  const { episodeTimeS, ...rest } = prefs;
+  const stored = {
+    ...rest,
+    autoStopS: positiveInt(episodeTimeS),
+    fps: prefs.fps === NEW_SESSION_DEFAULTS.fps ? undefined : prefs.fps,
   };
   try {
     window.localStorage.setItem(prefsKey(userId), JSON.stringify(stored));
