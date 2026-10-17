@@ -31,6 +31,7 @@ import { robotManager } from '../services/RobotManager.js';
 import { complianceLogService } from '../services/ComplianceLogService.js';
 import { HttpClient, HttpClientError } from '../services/HttpClient.js';
 import { agentServiceAuthHeaders } from '../services/agentServiceAuth.js';
+import { getRobotReadinessService } from '../services/robot-supervisor/index.js';
 
 /** The three modes an operator may command. */
 export const BASE_MODES = ['limp', 'stand', 'balance'] as const;
@@ -72,6 +73,17 @@ export interface BaseModeRoutesOptions {
   resolveRobot?: (robotId: string) => Promise<{ baseUrl: string } | null>;
   agent?: BaseModeAgentPort;
   audit?: (entry: BaseModeAuditEntry) => Promise<void> | void;
+  /**
+   * Whether the robot's sidecar answers, from a fresh cached readiness
+   * snapshot (TASK-409); null when none is cached. Lets the app say "sidecar
+   * not reachable" instead of "mode control is off".
+   */
+  sidecarReachable?: (robotId: string) => boolean | null;
+}
+
+function cachedSidecarReachable(robotId: string): boolean | null {
+  const agent = getRobotReadinessService().cachedAgentReadiness(robotId);
+  return agent?.readiness?.sidecar.reachable ?? null;
 }
 
 class AgentUnreachableError extends Error {}
@@ -157,6 +169,7 @@ export function createBaseModeRoutes(options: BaseModeRoutesOptions = {}): Route
   const resolveRobot = options.resolveRobot ?? defaultResolveRobot;
   const agent = options.agent ?? httpBaseModeAgent;
   const audit = options.audit ?? auditBaseModeAttempt;
+  const sidecarReachable = options.sidecarReachable ?? cachedSidecarReachable;
 
   router.get('/:id/base-mode', viewerOrAbove, async (req: Request, res: Response) => {
     const robot = await resolveRobot(req.params.id).catch(() => null);
@@ -166,7 +179,7 @@ export function createBaseModeRoutes(options: BaseModeRoutesOptions = {}): Route
     }
     try {
       const answer = await agent.get(robot.baseUrl, req.params.id);
-      res.status(answer.status).json(answer.body);
+      res.status(answer.status).json({ ...answer.body, sidecarReachable: sidecarReachable(req.params.id) });
     } catch {
       res.status(503).json({ code: 'agent_unreachable', error: 'the robot agent did not answer' });
     }

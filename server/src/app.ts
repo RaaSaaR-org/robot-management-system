@@ -35,6 +35,7 @@ import { voiceRoutes } from './routes/voice.routes.js';
 import { agentModeRoutes } from './routes/agent-mode.routes.js';
 import { controlLeaseDenialAudit, controlLeaseRoutes } from './routes/control-lease.routes.js';
 import { baseModeRoutes } from './routes/base-mode.routes.js';
+import { bringupDenialAudit, robotBringupRoutes } from './routes/robot-bringup.routes.js';
 import { patrolRoutes, patrolRobotRoutes } from './routes/patrol.routes.js';
 import { tourRoutes } from './routes/tour.routes.js';
 import { wellKnownRoutes } from './routes/wellknown.routes.js';
@@ -283,6 +284,8 @@ export function createApp(): Express {
   // write right here, on the robotRoutes mount, before the lease router below
   // is ever reached. It only watches the two lease write paths.
   app.use('/api/robots', controlLeaseDenialAudit());
+  // Same for a viewer's robot-side Start/Stop (TASK-409): audited, then refused.
+  app.use('/api/robots', bringupDenialAudit());
   app.use('/api/robots', cameraStreamTicket, ...protect, robotRoutes);
 
   // Voice service proxy (say / events / volume) — robot-scoped, live-only
@@ -299,6 +302,11 @@ export function createApp(): Express {
   // Robot mode without the Unitree remote (TASK-398): limp / stand / balance,
   // proxied to the agent with the lease, audited once per attempt.
   app.use('/api/robots', ...protect, baseModeRoutes);
+
+  // Robot readiness + robot-side Start/Stop through the robot supervisor
+  // (TASK-409): one merged snapshot, and audited, role- and lease-checked
+  // proxies to the supervisor named in ROBOT_SUPERVISORS.
+  app.use('/api/robots', ...protect, robotBringupRoutes);
 
   // Patrol (TASK-212): routes/runs/findings at /api/patrol, the robot's photo
   // upload + the spec-named /agent-mode/patrol aliases at /api/robots.
