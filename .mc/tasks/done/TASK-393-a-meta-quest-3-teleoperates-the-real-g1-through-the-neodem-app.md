@@ -3,7 +3,7 @@ id: "TASK-393"
 aliases: []
 title: "A Meta Quest 3 teleoperates the real G1 through the NeoDEM app"
 slug: "a-meta-quest-3-teleoperates-the-real-g1-through-the-neodem-app"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
