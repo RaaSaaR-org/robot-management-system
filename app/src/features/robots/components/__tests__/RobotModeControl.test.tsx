@@ -89,9 +89,21 @@ describe('modeDisabledReason — the precedence table', () => {
     expect(modeDisabledReason('balance', ctx({ status: standing, standHeldS: 2.5 }))).toBeNull();
   });
 
-  it('8. a change in progress', () => {
+  it('3b. leases off on the server: no lease can be taken, and the reason says so', () => {
+    const c = ctx({ needsControl: true, leasesOff: true });
+    for (const m of ['limp', 'stand', 'balance'] as const) {
+      expect(modeDisabledReason(m, c)).toBe(
+        'Mode changes need a control lease, and control leases are off on this server.',
+      );
+    }
+  });
+
+  it('8. a change in progress — but Limp stays available to preempt it', () => {
     expect(modeDisabledReason('stand', ctx({ pending: true }))).toBe('A change is in progress.');
-    expect(modeDisabledReason('limp', ctx({ status: status({ inFlight: 'stand' }) }))).toBe('A change is in progress.');
+    const standing = status({ inFlight: 'balance' }, { mode: 'stand', fsmId: 4 });
+    expect(modeDisabledReason('balance', ctx({ status: standing, standHeldS: 3 }))).toBe('A change is in progress.');
+    expect(modeDisabledReason('limp', ctx({ status: status({ inFlight: 'stand' }) }))).toBeNull();
+    expect(modeDisabledReason('limp', ctx({ status: standing, pending: true }))).toBeNull();
   });
 
   it('labels the measured modes', () => {
@@ -123,6 +135,24 @@ describe('RobotModeControl', () => {
     expect(screen.getByTestId('robot-mode-readout')).toHaveTextContent('Limp');
     expect(screen.getByTestId('robot-mode-stand')).toBeDisabled();
     expect(screen.getByTestId('robot-mode-reasons')).toHaveTextContent('Stand up: Take control first.');
+  });
+
+  it('with leases off on the server, every button is disabled and says why', () => {
+    render(<RobotModeControl robotId="r1" lease={{ enabled: false, state: 'idle', grant: () => null }} baseMode={fakeHook()} />);
+    for (const id of ['robot-mode-limp', 'robot-mode-stand', 'robot-mode-balance']) {
+      expect(screen.getByTestId(id)).toBeDisabled();
+    }
+    expect(screen.getByTestId('robot-mode-reasons')).toHaveTextContent('control leases are off on this server');
+  });
+
+  it('keeps Limp clickable while this console waits on a Balance', () => {
+    const hook = fakeHook({
+      status: status({ inFlight: 'balance' }, { mode: 'stand', fsmId: 4 }),
+      pending: 'balance',
+    });
+    render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={hook} />);
+    expect(screen.getByTestId('robot-mode-limp')).toBeEnabled();
+    expect(screen.getByTestId('robot-mode-balance')).toBeDisabled();
   });
 
   it('asks for confirmation before it posts, then posts with the lease read at click time', async () => {

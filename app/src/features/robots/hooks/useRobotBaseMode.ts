@@ -56,6 +56,7 @@ export function useRobotBaseMode(robotId: string, options: UseRobotBaseModeOptio
   const [pending, setPending] = useState<BaseModeCommand | null>(null);
   const [lastResult, setLastResult] = useState<BaseModeResult | null>(null);
   const inFlightRef = useRef(false);
+  const requestSeqRef = useRef(0);
   const robotRef = useRef(robotId);
   robotRef.current = robotId;
 
@@ -100,6 +101,11 @@ export function useRobotBaseMode(robotId: string, options: UseRobotBaseModeOptio
         setLastResult(refused);
         return refused;
       }
+      // Limp may be sent while a Stand up / Balance is still pending (it
+      // preempts it on the sidecar). Only the LATEST request owns `pending`
+      // and `lastResult`: the preempted one answering late must neither clear
+      // the Limp's pending state nor overwrite its result.
+      const seq = ++requestSeqRef.current;
       setPending(mode);
       setLastResult(null);
       let result: BaseModeResult;
@@ -109,10 +115,11 @@ export function useRobotBaseMode(robotId: string, options: UseRobotBaseModeOptio
         result = {
           ok: false, status: 0, code: 'network', error: err instanceof Error ? err.message : String(err),
         };
-      } finally {
-        setPending(null);
       }
-      setLastResult(result);
+      if (seq === requestSeqRef.current) {
+        setPending(null);
+        setLastResult(result);
+      }
       void refresh();
       return result;
     },

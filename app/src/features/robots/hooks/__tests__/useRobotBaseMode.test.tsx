@@ -100,3 +100,44 @@ describe('useRobotBaseMode', () => {
     expect(hook.result.current.lastResult).toMatchObject({ ok: true, fsmId: 4 });
   });
 });
+
+describe('useRobotBaseMode — Limp preempting a pending change', () => {
+  it('a preempted Balance answering late neither clears the Limp pending nor overwrites its result', async () => {
+    const { api } = makeApi();
+    let finishBalance: (r: unknown) => void = () => {};
+    let finishLimp: (r: unknown) => void = () => {};
+    api.setBaseMode.mockImplementation(((_id: string, mode: string) =>
+      new Promise((resolve) => {
+        if (mode === 'balance') finishBalance = resolve;
+        else finishLimp = resolve;
+      })) as unknown as typeof api.setBaseMode);
+    const grant = { leaseId: 'l', generation: 1 };
+    const hook = renderHook(() => useRobotBaseMode('robot-1', { api }));
+    await flush();
+
+    let balance: Promise<unknown> = Promise.resolve();
+    let limp: Promise<unknown> = Promise.resolve();
+    act(() => {
+      balance = hook.result.current.request('balance', grant);
+    });
+    expect(hook.result.current.pending).toBe('balance');
+    act(() => {
+      limp = hook.result.current.request('limp', grant);
+    });
+    expect(hook.result.current.pending).toBe('limp');
+
+    await act(async () => {
+      finishBalance({ ok: false, status: 409, code: 'preempted', error: 'a Limp request preempted this change' });
+      await balance;
+    });
+    expect(hook.result.current.pending).toBe('limp');
+    expect(hook.result.current.lastResult).toBeNull();
+
+    await act(async () => {
+      finishLimp({ ok: true, status: 200, fsmId: 1, tookMs: 500 });
+      await limp;
+    });
+    expect(hook.result.current.pending).toBeNull();
+    expect(hook.result.current.lastResult).toMatchObject({ ok: true, fsmId: 1 });
+  });
+});

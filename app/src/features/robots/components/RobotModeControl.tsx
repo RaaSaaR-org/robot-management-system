@@ -58,8 +58,14 @@ export function modeLabel(mode: BaseModeName, fsmId: number | null): string {
 
 export interface ModeReasonContext {
   status: BaseModeStatus | null;
-  /** Leases are advertised and this console is not bound. */
+  /**
+   * This console holds no bound control lease. Mode changes always need one —
+   * the server refuses a request without it — so this is set whether or not
+   * leases are advertised; see `leasesOff` for the reason text.
+   */
   needsControl: boolean;
+  /** Control leases are off or unknown on this server, so none can be taken. */
+  leasesOff?: boolean;
   /** The arm_sdk path is engaged (armed or ramping). */
   armsEngaged: boolean;
   /** A request from this console is in flight. */
@@ -71,8 +77,9 @@ export interface ModeReasonContext {
 /**
  * Why `mode` cannot be requested right now — the FIRST reason that applies, in
  * the spec's order — or null when it can. Limp is exempt from the unknown-mode,
- * E-stop and arms reasons: it is the safe direction and the sidecar always
- * accepts it.
+ * E-stop, arms and in-flight reasons: it is the safe direction, the sidecar
+ * always accepts it, and it preempts a Stand up or Balance still waiting for
+ * the robot to confirm — the moment the operator most needs it.
  */
 export function modeDisabledReason(mode: BaseModeCommand, ctx: ModeReasonContext): string | null {
   const status = ctx.status;
@@ -85,7 +92,11 @@ export function modeDisabledReason(mode: BaseModeCommand, ctx: ModeReasonContext
   if (measured === 'unknown' && mode !== 'limp') {
     return `The robot mode is unknown${base?.error ? ` — ${base.error}` : ''}.`;
   }
-  if (ctx.needsControl) return 'Take control first.';
+  if (ctx.needsControl) {
+    return ctx.leasesOff
+      ? 'Mode changes need a control lease, and control leases are off on this server.'
+      : 'Take control first.';
+  }
   if (mode !== 'limp' && (status.estopLatched || status.sidecarEstopLatched)) {
     return 'Reset the E-stop first.';
   }
@@ -100,7 +111,7 @@ export function modeDisabledReason(mode: BaseModeCommand, ctx: ModeReasonContext
       return `Balance needs Stand — wait ${Math.max(0.1, STAND_SETTLE_S - held).toFixed(1)} s more.`;
     }
   }
-  if (ctx.pending || status.inFlight) return 'A change is in progress.';
+  if (mode !== 'limp' && (ctx.pending || status.inFlight)) return 'A change is in progress.';
   return null;
 }
 
@@ -146,7 +157,10 @@ export function RobotModeControl({ robotId, lease, armsEngaged = false, baseMode
   const standHeldS = mode === 'stand' && bm.standSince !== null ? Math.max(0, now - bm.standSince) / 1000 : null;
   const ctx: ModeReasonContext = {
     status: bm.status,
-    needsControl: lease.enabled && lease.state !== 'bound',
+    // Always: the server refuses a mode change without a lease, so a console
+    // that cannot present one must not offer the buttons (TASK-398 AC).
+    needsControl: !lease.enabled || lease.state !== 'bound',
+    leasesOff: !lease.enabled,
     armsEngaged,
     pending: bm.pending !== null,
     standHeldS,
