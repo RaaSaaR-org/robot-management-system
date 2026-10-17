@@ -87,6 +87,8 @@ export class RecordingController {
         // and the commanded/measured distinction would be an artefact of the
         // cache rather than of the robot.
         getMeasured: () => hardwareClient.getJointMapNow(),
+        // TASK-415: with the sample clock, so a repeated state is counted.
+        getMeasuredSample: () => hardwareClient.getMeasuredSample(),
         snapshot: (camera, opts) =>
           hardwareClient.snapshotRaw(camera, { shadows: opts.shadows, quality: opts.quality }),
         listCameras: () => hardwareClient.getCameras(),

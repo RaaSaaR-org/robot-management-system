@@ -73,6 +73,13 @@ export interface RecorderHooks {
   /** A FRESH measured pose, name-keyed. Missing joints must be absent, not 0. */
   getMeasured: () => Promise<Record<string, number>>;
   /**
+   * The same read with the sidecar's sample clock (TASK-415). When given, the
+   * tick uses it instead of `getMeasured`, and a frame whose `sampleTime`
+   * equals the previous frame's is counted as a repeat: the tick came round,
+   * the state did not. A null `sampleTime` means "no clock", never a repeat.
+   */
+  getMeasuredSample?: () => Promise<{ joints: Record<string, number>; sampleTime: number | null }>;
+  /**
    * Raw JPEG for one scene camera. The render options come from the recorder
    * so the choice that shapes the picture is made in one place and recorded in
    * the dataset, not buried in whatever wired the hook up.
@@ -159,7 +166,14 @@ export interface EpisodeReport {
   episodeIndex: number;
   frames: number;
   dropped: number;
+  /**
+   * Frames whose measured state repeated the previous frame's sample (TASK-415).
+   * They stay in the episode — the camera picture may well be new, and a hole
+   * would desynchronise the videos — but they are not new samples.
+   */
+  repeated: number;
   durationS: number;
+  /** DISTINCT measured samples per second, not ticks (TASK-415). */
   fpsActual: number;
   /**
    * How the joint targets in THIS episode were produced, observed from the
@@ -191,7 +205,11 @@ export interface RecordingStatus {
   totalFrames: number;
   dropped: number;
   totalDropped: number;
+  /** Frames in the CURRENT episode whose measured sample repeated the last one. */
+  repeated: number;
+  totalRepeated: number;
   fpsTarget: number;
+  /** DISTINCT measured samples per second across the takes (TASK-415). */
   fpsActual: number;
   degraded: boolean;
   /** Last reason a tick produced nothing, or null. */
@@ -251,6 +269,10 @@ interface LiveEpisode {
   /** Per-camera JPEG paths, index-aligned with `frames`. */
   images: Map<string, string[]>;
   dropped: number;
+  /** Accepted frames whose measured sample was the previous frame's (TASK-415). */
+  repeated: number;
+  /** The sample clock of the last accepted frame, or null (none yet, or no clock). */
+  lastSampleTime: number | null;
   startedAtMs: number;
   endedAtMs: number | null;
   /**
@@ -278,7 +300,14 @@ interface LiveEpisode {
   /** Discarded while not the open take; kept in the list so its number stays taken. */
   discarded: boolean;
   /** Last quick check, reused while the frames have not changed. */
-  check: { frames: number; epoch: number; dropped: number; durationS: number; value: EpisodeQuickCheck } | null;
+  check: {
+    frames: number;
+    epoch: number;
+    dropped: number;
+    repeated: number;
+    durationS: number;
+    value: EpisodeQuickCheck;
+  } | null;
 }
 
 /**
@@ -403,6 +432,7 @@ export class EpisodeRecorder {
   private lastFrameAtMs: number | null = null;
   private acceptedFrames = 0;
   private totalDropped = 0;
+  private totalRepeated = 0;
   private consecutiveDrops = 0;
   private lastDropReason: string | null = null;
 
@@ -541,6 +571,7 @@ export class EpisodeRecorder {
     this.episodes = [];
     this.acceptedFrames = 0;
     this.totalDropped = 0;
+    this.totalRepeated = 0;
     this.consecutiveDrops = 0;
     this.lastDropReason = null;
     this.stopping = false;
@@ -700,6 +731,9 @@ export class EpisodeRecorder {
     // so its number is never handed out twice (TASK-402 D2).
     if (found !== this.current) found.discarded = true;
     this.acceptedFrames -= found.frames.length;
+    this.totalRepeated -= found.repeated;
+    found.repeated = 0;
+    found.lastSampleTime = null;
     found.frames = [];
     found.images = new Map();
     found.firstFrameAtMs = null;
@@ -857,6 +891,8 @@ export class EpisodeRecorder {
           fpsTarget: this.fpsTarget,
           fpsActual: fpsMeasured,
           droppedFrames: this.totalDropped,
+          // Kept frames that re-read the previous sample (TASK-415).
+          repeatedFrames: this.totalRepeated,
           shadows: this.shadows,
           snapshotQuality: SNAPSHOT_QUALITY,
           recordedAt: new Date(this.startedAtMs).toISOString(),
@@ -1009,14 +1045,14 @@ export class EpisodeRecorder {
     try {
       const layout = this.activeLayout();
       const commandedPose = this.hooks.getCommanded();
-      const [measuredPose, ...shots] = await Promise.all([
-        this.hooks.getMeasured(),
+      const [measured, ...shots] = await Promise.all([
+        this.readMeasured(),
         ...this.cameras.map((c) =>
           this.hooks.snapshot(c.camera, { shadows: this.shadows, quality: SNAPSHOT_QUALITY })),
       ]);
 
       const action = extractVector(layout.joints, commandedPose);
-      const state = extractVector(layout.joints, measuredPose);
+      const state = extractVector(layout.joints, measured.joints);
       if (action.missing.length > 0) {
         this.drop(
           action.missing.length === layout.joints.length
@@ -1086,6 +1122,15 @@ export class EpisodeRecorder {
 
       const at = this.now();
       episode.frames.push({ state: state.values, action: action.values });
+      // The tick came round but the state did not move on: physics had not
+      // stepped since the last read. Kept (the frame is still whole and the
+      // picture may be new), but counted, so the rate reported is the rate of
+      // new samples and not of ticks (TASK-415).
+      if (measured.sampleTime !== null && measured.sampleTime === episode.lastSampleTime) {
+        episode.repeated += 1;
+        this.totalRepeated += 1;
+      }
+      episode.lastSampleTime = measured.sampleTime;
       if (episode.firstFrameAtMs === null) episode.firstFrameAtMs = at;
       episode.lastFrameAtMs = at;
       if (this.firstFrameAtMs === null) this.firstFrameAtMs = at;
@@ -1097,6 +1142,12 @@ export class EpisodeRecorder {
     } finally {
       this.tickInFlight = false;
     }
+  }
+
+  /** The measured pose, with the sidecar's sample clock when the hook has one. */
+  private async readMeasured(): Promise<{ joints: Record<string, number>; sampleTime: number | null }> {
+    if (this.hooks.getMeasuredSample) return this.hooks.getMeasuredSample();
+    return { joints: await this.hooks.getMeasured(), sampleTime: null };
   }
 
   /** The episode defaults to the open one; a straggler names the take it belonged to. */
@@ -1112,9 +1163,13 @@ export class EpisodeRecorder {
   // -------------------------------------------------------------------------
 
   /**
-   * The rate the accepted frames actually arrived at, from the first to the
-   * last. `n - 1` because n frames span n-1 intervals; with fewer than two there
-   * is no interval to measure and the target is the only honest answer left.
+   * The rate NEW measured samples arrived at, from the first frame to the last.
+   * `n - 1` because n frames span n-1 intervals; with fewer than two there is
+   * no interval to measure and the target is the only honest answer left.
+   *
+   * A repeated frame is an interval in which nothing new was sampled, so it is
+   * taken off the count (TASK-415). Counting ticks instead let a recorder that
+   * stored the same state twice report the rate it ticked at.
    */
   private measuredFps(): number {
     // Summed over the EPISODES, not taken from the session's first frame to its
@@ -1130,7 +1185,7 @@ export class EpisodeRecorder {
       if (ep.frames.length < 2 || ep.firstFrameAtMs === null || ep.lastFrameAtMs === null) continue;
       const span = (ep.lastFrameAtMs - ep.firstFrameAtMs - ep.pausedMs) / 1000;
       if (span <= 0) continue;
-      frames += ep.frames.length - 1; // n frames span n-1 intervals
+      frames += Math.max(0, ep.frames.length - 1 - ep.repeated); // n frames span n-1 intervals
       spanS += span;
     }
     if (frames === 0 || spanS <= 0) return this.fpsTarget;
@@ -1149,6 +1204,8 @@ export class EpisodeRecorder {
       totalFrames: this.acceptedFrames,
       dropped: this.current?.dropped ?? 0,
       totalDropped: this.totalDropped,
+      repeated: this.current?.repeated ?? 0,
+      totalRepeated: this.totalRepeated,
       fpsTarget: this.fpsTarget,
       fpsActual: this.acceptedFrames === 0 ? 0 : Math.round(this.measuredFps() * 100) / 100,
       degraded: this.consecutiveDrops >= DEGRADED_AFTER_CONSECUTIVE_DROPS,
@@ -1211,12 +1268,14 @@ export class EpisodeRecorder {
         ep.firstFrameAtMs !== null && ep.lastFrameAtMs !== null
           ? Math.max(0, ep.lastFrameAtMs - ep.firstFrameAtMs - ep.pausedMs) / 1000
           : 0;
-      const fps = ep.frames.length > 1 && spanS > 0 ? (ep.frames.length - 1) / spanS : 0;
+      const fps =
+        ep.frames.length > 1 && spanS > 0 ? Math.max(0, ep.frames.length - 1 - ep.repeated) / spanS : 0;
       const durationS = Math.round(spanS * 100) / 100;
       return {
         episodeIndex: ep.index,
         frames: ep.frames.length,
         dropped: ep.dropped,
+        repeated: ep.repeated,
         durationS,
         fpsActual: Math.round(fps * 100) / 100,
         retargetModes: [...ep.modes].sort(),
@@ -1235,6 +1294,7 @@ export class EpisodeRecorder {
       c.frames === ep.frames.length &&
       c.epoch === ep.epoch &&
       c.dropped === ep.dropped &&
+      c.repeated === ep.repeated &&
       c.durationS === durationS
     ) {
       return c.value;
@@ -1242,8 +1302,16 @@ export class EpisodeRecorder {
     const value = summarizeEpisode(ep.frames, this.activeLayout().joints, G1_MOTION_GROUPS, {
       durationS,
       dropped: ep.dropped,
+      repeated: ep.repeated,
     });
-    ep.check = { frames: ep.frames.length, epoch: ep.epoch, dropped: ep.dropped, durationS, value };
+    ep.check = {
+      frames: ep.frames.length,
+      epoch: ep.epoch,
+      dropped: ep.dropped,
+      repeated: ep.repeated,
+      durationS,
+      value,
+    };
     return value;
   }
 
@@ -1258,6 +1326,8 @@ export class EpisodeRecorder {
       frames: [],
       images: new Map(),
       dropped: 0,
+      repeated: 0,
+      lastSampleTime: null,
       startedAtMs: this.now(),
       endedAtMs: null,
       firstFrameAtMs: null,

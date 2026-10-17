@@ -74,6 +74,14 @@ import { config } from '../config/config.js';
 import { RAD_TO_DEG } from '../agent-mode/types.js';
 import { resolveStateJointOrder } from '../vla/action-contracts.js';
 
+/** One fresh `/state/fast` read: the measured pose and the clock it was sampled on. */
+export interface MeasuredSample {
+  /** Name-keyed positions; a joint the sidecar did not report is absent, never 0. */
+  joints: Record<string, number>;
+  /** The simulator's `sim_time`, or null when the sidecar has no sample clock. */
+  sampleTime: number | null;
+}
+
 /**
  * A single IMU reading from the robot's base, as carried in the sidecar's
  * `/state` response under the `"imu"` key. Orientation is in radians (roll,
@@ -1494,6 +1502,22 @@ export class HardwareClient {
    * tell the difference and refuse.
    */
   async getJointMapNow(timeoutMs = 1500): Promise<Record<string, number>> {
+    return (await this.getMeasuredSample(timeoutMs)).joints;
+  }
+
+  /**
+   * {@link getJointMapNow} plus WHEN the sample was taken, so a recorder can
+   * tell a new sample from the same one read twice (TASK-415).
+   *
+   * `sampleTime` is the simulator's `sim_time` (MuJoCo `data.time`): it moves
+   * only when physics steps, so two reads that return the same value returned
+   * the same state, however far apart on the wall clock they were. The real
+   * sidecar reports no sample clock — its `timestamp` is the moment it built
+   * the reply, which changes on every read — so there it is null, and nothing
+   * can be called a repeat. That is the honest answer, not a gap: its lowstate
+   * arrives at 500 Hz, far above any recorder rate.
+   */
+  async getMeasuredSample(timeoutMs = 1500): Promise<MeasuredSample> {
     const res = await fetch(`${getSidecarUrl()}/state/fast`, {
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -1502,15 +1526,18 @@ export class HardwareClient {
     }
     const data = (await res.json()) as {
       joints?: Array<{ name?: unknown; position?: unknown }>;
+      sim_time?: unknown;
     };
-    const out: Record<string, number> = {};
+    const joints: Record<string, number> = {};
     for (const joint of data.joints ?? []) {
       if (typeof joint?.name === 'string' && typeof joint.position === 'number'
           && Number.isFinite(joint.position)) {
-        out[joint.name] = joint.position;
+        joints[joint.name] = joint.position;
       }
     }
-    return out;
+    const sampleTime =
+      typeof data.sim_time === 'number' && Number.isFinite(data.sim_time) ? data.sim_time : null;
+    return { joints, sampleTime };
   }
 
   /**
