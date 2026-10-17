@@ -30,6 +30,7 @@ import { INTENT_MAX_CHARS } from '../agent-mode/intents.js';
 import { getIdentityStore } from '../agent-mode/identity.js';
 import { lastPlatformAuthRejection } from '../utils/platform-auth.js';
 import { controlLease, type ControlLeaseRegistry } from '../control-lease/control-lease.js';
+import { isBaseModeCommand } from '../hardware/base-mode.js';
 import { refuseIfLeaseHeld } from '../control-lease/motion-guard.js';
 
 /**
@@ -884,11 +885,16 @@ export function createRestRoutes(
     const { reason, triggeredBy } = req.body;
     const stopReason = reason || 'Remote E-stop triggered';
 
-    // Latched FIRST: it is synchronous and cannot fail, while the Agent Mode
-    // stop below goes over HTTP to the sidecar. The latch keeps the real trigger
-    // source because SafetyMonitor records the first trigger and ignores the
-    // 'local' one that agentModeController.estop() raises a moment later.
-    robotStateManager.triggerEmergencyStop(triggeredBy || 'remote', stopReason);
+    // Latched FIRST, and its hardware half AWAITED (TASK-398): the trigger
+    // latches synchronously and starts the sidecar's `/estop` — latch, disarm
+    // the arms, THEN damp. Agent Mode's stop runs only after it, in sequence:
+    // the two used to race, and Agent Mode's own StopMove + Damp could land
+    // before the arms were disarmed. The latch keeps the real trigger source
+    // because SafetyMonitor records the first trigger and ignores the 'local'
+    // one that agentModeController.estop() raises a moment later.
+    const hardwareStop = await Promise.resolve(
+      robotStateManager.triggerEmergencyStop(triggeredBy || 'remote', stopReason),
+    ).catch(() => null);
 
     // TASK-194: the platform E-Stop has to reach Agent Mode. SafetyMonitor's
     // stop only zeroes the simulated speed and raises a warning — it never
@@ -920,6 +926,8 @@ export function createRestRoutes(
       // Honest report of what this stop actually reached.
       agentModeStopped,
       ...(agentModeError ? { agentModeError } : {}),
+      // TASK-398: what the sidecar did — arms disarmed, robot damped or not.
+      ...(hardwareStop ? { hardwareStop } : {}),
       ...estopState,
       // TASK-382: the status the stop left the robot in, so the server can
       // mirror it at once instead of on its next 30 s health check.
@@ -984,6 +992,99 @@ export function createRestRoutes(
         ...estopState,
       });
     }
+  });
+
+  // ============================================================================
+  // ROBOT MODE (TASK-398) — limp / stand / balance without the Unitree remote
+  // ============================================================================
+  //
+  // The sidecar is the authority for the transition table and the E-stop order
+  // (g1_loco_mode.py): it measures the FSM, refuses a stand that is not from
+  // limp or a balance before a settled stand, refuses both while the arms are
+  // engaged or its latch is set, and confirms every change. This route adds
+  // the lease, the agent's own latch and Agent Mode on top — it cannot bypass
+  // the sidecar.
+
+  // GET /robots/:id/base/mode — capability, measured mode, latches
+  router.get('/robots/:id/base/mode', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({ code: 'ROBOT_NOT_FOUND', message: `This agent serves robot ${robot.id}` });
+      return;
+    }
+    // A fresh reading for a 1 Hz UI poll; the cached /state one is up to 2 s old.
+    const live = await hardwareClient.fetchLocoMode();
+    const arm = hardwareClient.getArmStatus();
+    res.json({
+      robotId: robot.id,
+      capability: hardwareClient.getLocoCapability(),
+      base: hardwareClient.getBaseState(),
+      inFlight: live?.inFlight ?? null,
+      estopLatched: robotStateManager.isEStopTriggered(),
+      sidecarEstopLatched: live?.estopLatched ?? arm.estopLatched,
+      armed: arm.armed,
+      armWeight: arm.armWeight,
+      agentModeRunning: agentModeController.isRunning(),
+      hardwareStop: robotStateManager.getLastHardwareStop(),
+    });
+  });
+
+  // POST /robots/:id/base/mode {mode, leaseId, generation}
+  router.post('/robots/:id/base/mode', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({ code: 'ROBOT_NOT_FOUND', message: `This agent serves robot ${robot.id}` });
+      return;
+    }
+    const body = (req.body ?? {}) as { mode?: unknown; leaseId?: unknown; generation?: unknown };
+    const mode = body.mode;
+    if (!isBaseModeCommand(mode)) {
+      res.status(400).json({ code: 'bad_mode', error: 'mode must be one of limp, stand, balance' });
+      return;
+    }
+    // The lease: a presented lease must be the installed one; none at all is
+    // refused only while leases are enforced (CONTROL_LEASE_REQUIRED).
+    const hasLease = body.leaseId !== undefined || body.generation !== undefined;
+    if (hasLease) {
+      const ok = typeof body.leaseId === 'string' && Number.isInteger(body.generation)
+        && leases.verify(body.leaseId, body.generation as number);
+      if (!ok) {
+        res.status(403).json({ code: 'lease_invalid', error: 'the control lease presented is not the one installed on this robot' });
+        return;
+      }
+    } else if (leases.observe().enforced) {
+      res.status(403).json({ code: 'lease_required', error: 'take control first — mode changes need the control lease' });
+      return;
+    }
+    const capability = hardwareClient.getLocoCapability();
+    if (capability.gate !== 'fsm' && capability.gate !== 'full') {
+      res.status(409).json({
+        code: 'mode_control_unavailable',
+        error: capability.gate === 'off'
+          ? 'mode control is off on this robot\'s sidecar (G1_LOCO_ENABLED)'
+          : 'this robot\'s sidecar does not offer mode control',
+      });
+      return;
+    }
+    if (mode !== 'limp' && robotStateManager.isEStopTriggered()) {
+      res.status(409).json({ code: 'estop_latched', error: 'reset the E-stop first (Limp is still allowed)' });
+      return;
+    }
+    if (mode !== 'limp' && agentModeController.isRunning()) {
+      res.status(409).json({ code: 'agent_mode_running', error: 'an Agent Mode plan is running — stop it first' });
+      return;
+    }
+    const from = hardwareClient.getBaseState();
+    const result = await hardwareClient.locoMode(mode);
+    console.log(
+      `[REST] base mode ${mode} (from ${from?.mode ?? 'unknown'}${from?.fsmId != null ? `/${from.fsmId}` : ''}) ` +
+        `-> ${result.status} ${result.ok ? 'ok' : result.code ?? 'failed'}`,
+    );
+    res.status(result.status === 0 ? 502 : result.status).json({
+      ...result.body,
+      ...(result.code ? { code: result.code } : {}),
+      fromMode: from?.mode ?? 'unknown',
+    });
   });
 
   // GET /robots/:id/safety/events - Get safety event log

@@ -470,4 +470,18 @@ export interface SafetyStatus {
 
   /** Timestamp of last safety check */
   lastCheckTimestamp: string;
+
+  /**
+   * What the sidecar's `/estop` reported for the last emergency stop
+   * (TASK-398): whether the arms were disarmed and the robot damped. Absent
+   * until the first emergency stop of this process.
+   */
+  hardwareStop?: {
+    at: string;
+    reached: boolean;
+    disarmed: boolean;
+    damped: boolean;
+    dampConfirmed: boolean;
+    dampError: string | null;
+  };
 }

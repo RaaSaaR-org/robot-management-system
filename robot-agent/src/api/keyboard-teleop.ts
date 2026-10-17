@@ -13,6 +13,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { RobotStateManager } from '../robot/state.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
+import type { BaseModeName } from '../hardware/base-mode.js';
 import { config } from '../config/config.js';
 import { WristTeleop, parseWristPose } from '../teleop/wrist-teleop.js';
 import { FingerRetargeter, gripPose, type HandKeypoints } from '../teleop/dexpilot.js';
@@ -373,6 +374,45 @@ function isStopFrame(msg: object): boolean {
   return zero(m.move.vx) && zero(m.move.vy) && zero(m.move.omega);
 }
 
+/** The `{type:'base'}` frame (TASK-398 adds the measured mode and the gate). */
+export interface BaseFrame {
+  type: 'base';
+  /** The base is in a non-locomoting FSM — measured when fresh, else commanded. */
+  damped: boolean;
+  fsmId: number | null;
+  /** The measured mode, `unknown` when the sidecar has no fresh reading. */
+  mode: BaseModeName;
+  /** `mode`/`fsmId` come from a fresh sidecar reading, not from a command. */
+  measured: boolean;
+  /** The sidecar would execute `{move}`; false = do not send it at all. */
+  moveEnabled: boolean;
+  /** Whether the robot's mode can be changed from NeoDEM (`off` when not). */
+  modeControl: 'off' | 'fsm' | 'full';
+}
+
+/** Build the base frame from the measured mode, the gate and the agent's record. */
+export function baseFrame(agent: { damped: boolean; lastFsmId: number | null }): BaseFrame {
+  const capability = hardwareClient.getLocoCapability();
+  const measuredId = hardwareClient.getMeasuredFsmId();
+  const reading = hardwareClient.getBaseState();
+  const measured = measuredId !== null && reading !== null;
+  const mode: BaseModeName = measured ? reading.mode : 'unknown';
+  return {
+    type: 'base',
+    damped: measured ? mode === 'limp' || mode === 'zero_torque' : agent.damped,
+    fsmId: measured ? measuredId : agent.lastFsmId,
+    mode,
+    measured,
+    moveEnabled: hardwareClient.mayMoveBase(),
+    modeControl: capability.gate === 'fsm' || capability.gate === 'full' ? capability.gate : 'off',
+  };
+}
+
+/** What makes two base frames different enough to send again. */
+function baseFrameKey(f: BaseFrame): string {
+  return `${f.damped}|${f.fsmId}|${f.mode}|${f.measured}|${f.moveEnabled}|${f.modeControl}`;
+}
+
 /** Injected so this module does not import the Agent Mode controller. */
 export interface KeyboardTeleopDeps {
   /**
@@ -525,13 +565,19 @@ export function createKeyboardTeleopWebSocket(
      * HUD went on reading `SPEED 0.00`, and the operator was left pushing a
      * stick at a robot that had no intention of walking.
      */
-    let wasDamped = robotStateManager.getAgentSafetyState().damped;
-    const sendBaseState = (damped: boolean): void => {
+    //
+    // TASK-398: the frame also carries the MEASURED mode and what the sidecar
+    // allows — `moveEnabled: false` tells the client to stop sending `{move}`
+    // at all (head turns, thumbsticks) on a robot whose sidecar only changes
+    // modes, and `modeControl` whether the mode panel applies.
+    let lastBaseKey = '';
+    const sendBaseState = (): void => {
       if (ws.readyState !== WebSocket.OPEN) return;
-      const agent = robotStateManager.getAgentSafetyState();
-      ws.send(JSON.stringify({ type: 'base', damped, fsmId: agent.lastFsmId }));
+      const frame = baseFrame(robotStateManager.getAgentSafetyState());
+      lastBaseKey = baseFrameKey(frame);
+      ws.send(JSON.stringify(frame));
     };
-    sendBaseState(wasDamped);
+    sendBaseState();
 
     // Per-joint angular velocity (rad/s) for currently-held keys.
     const velocity = new Map<string, number>();
@@ -1022,6 +1068,17 @@ export function createKeyboardTeleopWebSocket(
     };
 
     const drive = async (vx: number, vy: number, omega: number, ttlS: number): Promise<void> => {
+      // TASK-398: a sidecar that only changes modes (G1_LOCO_ENABLED=fsm) or
+      // has locomotion off refuses every velocity. Treat it as idle: no HTTP
+      // call, no log line, one sticky error per socket — head turns and
+      // thumbsticks in a headset would otherwise post ten refusals a second.
+      if (!hardwareClient.mayMoveBase()) {
+        sendError(
+          'loco_disabled',
+          'base walking is disabled on this robot (the sidecar changes modes only) — head turns and thumbsticks do not move it',
+        );
+        return;
+      }
       if (moveInFlight) {
         pendingMove = { velocity: { vx, vy, omega }, ttlS };
         return;
@@ -1150,10 +1207,8 @@ export function createKeyboardTeleopWebSocket(
       // client that only learned about its own commands would show a stale
       // "walking is fine" to an operator whose robot had been damped from the
       // fleet page.
-      const damped = robotStateManager.getAgentSafetyState().damped;
-      if (damped !== wasDamped) {
-        wasDamped = damped;
-        sendBaseState(damped);
+      if (baseFrameKey(baseFrame(robotStateManager.getAgentSafetyState())) !== lastBaseKey) {
+        sendBaseState();
       }
       if (latched) {
         velocity.clear();
@@ -1260,18 +1315,21 @@ export function createKeyboardTeleopWebSocket(
         // Anything already queued behind a blocked RPC is cancelled here too,
         // rather than left for the drain to deliver after the stop.
         pendingMove = null;
-        // DIRECT, deliberately bypassing `drive`'s in-flight guard and its
-        // pending slot. Everything else may be coalesced; this may not be
-        // delayed behind an RPC that is allowed to block for seconds, and it is
-        // the one message that must never be dropped.
-        void hardwareClient.locoMove(0, 0, 0, 0);
-        // `triggeredBy: 'remote'` — the human is at a headset somewhere else,
-        // the same source the fleet's `POST /safety/estop` records. This is the
-        // durable latch: it survives a reboot and needs a deliberate reset.
-        // The arms first (TASK-393): a stop that disarms only after the latch
-        // has been written to disk is a stop that arrived late.
+        // TASK-398 order. FIRST the latch, whose actuation sends the sidecar's
+        // `/estop` synchronously — the sidecar latches, starts the arm disarm
+        // ramp and THEN damps the robot, in one process. `triggeredBy:
+        // 'remote'` — the human is at a headset somewhere else, the same source
+        // the fleet's `POST /safety/estop` records. This is the durable latch:
+        // it survives a reboot and needs a deliberate reset.
+        void robotStateManager.triggerEmergencyStop('remote', reason);
+        // Zero the base velocity only where the sidecar walks (the sim): DIRECT,
+        // bypassing `drive`'s in-flight guard and its pending slot, because it
+        // must not wait behind an RPC that may block for seconds. A sidecar
+        // that only changes modes gets no call.
+        if (hardwareClient.mayMoveBase()) void hardwareClient.locoMove(0, 0, 0, 0);
+        // Then this agent's own arm bookkeeping (the sidecar is already
+        // disarming): the registry drops every holder.
         arms.releaseAll('operator E-stop');
-        robotStateManager.triggerEmergencyStop('remote', reason);
         robotStateManager.disableTeleop();
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'estop', active: true, reason }));
@@ -1342,10 +1400,9 @@ export function createKeyboardTeleopWebSocket(
             sendError('stand_failed', result.error ?? 'the locomotion sidecar refused to stand the base');
             return;
           }
-          // Report the OUTCOME, not the request. `wasDamped` is updated here so
-          // the tick's edge detector does not send a second, identical frame.
-          wasDamped = robotStateManager.getAgentSafetyState().damped;
-          sendBaseState(wasDamped);
+          // Report the OUTCOME, not the request. `lastBaseKey` is updated here
+          // so the tick's edge detector does not send a second, identical frame.
+          sendBaseState();
         }).catch((error: unknown) => {
           sendError('stand_failed', error instanceof Error ? error.message : String(error));
         });

@@ -17,6 +17,7 @@ import type { ServerMirror } from '../server-mirror.js';
 import type { VisionClient, VisionObservation } from '../vision.js';
 import type { AgentModeEvent } from '../types.js';
 import type { RobotStateManager } from '../../robot/state.js';
+import type { LocoCapability, SidecarEstopResult } from '../../hardware/base-mode.js';
 
 const EMPTY_VIEW: VisionObservation = {
   currentView: 'ein leerer Raum',
@@ -42,6 +43,8 @@ interface Harness {
   fsms: number[];
   actions: string[];
   estopCalls: Array<{ by: string; reason: string }>;
+  /** Hardware-path calls in the order they happened (TASK-398). */
+  order: string[];
   /** How often the SafetyMonitor's own latch was asked to clear. */
   estopResets: number;
   /** Fire the SafetyMonitor's `onSafetyEvent` feed / the state `subscribe` feed. */
@@ -75,6 +78,10 @@ function makeController(
     idleWatchIntervalMs?: number;
     /** What `robotStateManager.getState()` reports as the battery level. */
     batteryLevel?: number | null;
+    /** TASK-398: the sidecar's gate and measured FSM (default: no gate, nothing measured). */
+    baseMode?: { capability: () => LocoCapability; measuredFsmId: () => number | null };
+    /** TASK-398: what the safety path's `/estop` reported (the trigger's promise). */
+    hardwareStop?: SidecarEstopResult;
   } = {}
 ): Harness {
   const lock = opts.lock ?? new ControlOwnerLock();
@@ -83,6 +90,7 @@ function makeController(
   const fsms: number[] = [];
   const actions: string[] = [];
   const estopCalls: Harness['estopCalls'] = [];
+  const order: string[] = [];
   const resets = { count: 0 };
   const safetyListeners: Array<() => void> = [];
   const stateListeners: Array<(state: unknown) => void> = [];
@@ -114,10 +122,12 @@ function makeController(
       move: opts.move ?? (async () => ({ ok: true })),
       action: async (name) => {
         actions.push(name);
+        order.push(`action:${name}`);
         return opts.action ? opts.action(name) : { ok: true };
       },
       fsm: async (id) => {
         fsms.push(id);
+        order.push(`fsm:${id}`);
         return opts.fsm ? opts.fsm(id) : { ok: true };
       },
       standHeight: async () => ({ ok: true }),
@@ -134,10 +144,15 @@ function makeController(
       : { idleWatchIntervalMs: opts.idleWatchIntervalMs }),
     sleep: async () => {},
     now: () => 1e12,
+    ...(opts.baseMode ? { baseMode: opts.baseMode } : {}),
   });
 
   controller.attach({
-    triggerEmergencyStop: (by: string, reason: string) => estopCalls.push({ by, reason }),
+    triggerEmergencyStop: (by: string, reason: string) => {
+      estopCalls.push({ by, reason });
+      order.push('trigger');
+      return Promise.resolve(opts.hardwareStop ?? null);
+    },
     resetEmergencyStop: () => {
       resets.count++;
       return opts.estopResetResult ?? true;
@@ -175,6 +190,7 @@ function makeController(
     fsms,
     actions,
     estopCalls,
+    order,
     get estopResets() {
       return resets.count;
     },
@@ -310,6 +326,63 @@ describe('AgentModeController — E-Stop', () => {
     expect(h.estopCalls).toEqual([
       { by: 'local', reason: 'Agent Mode E-Stop: operator pressed STOPP' },
     ]);
+  });
+
+  describe('TASK-398: disarm, then damp — through the sidecar first', () => {
+    const FSM_GATE = {
+      capability: () => ({ gate: 'fsm' as const, moveEnabled: false, idsVerified: false, ids: null }),
+      measuredFsmId: () => null,
+    };
+    const DAMPED = { reached: true, disarmed: true, damped: true, dampConfirmed: true, dampError: null };
+
+    it('triggers the safety path (sidecar /estop) BEFORE any StopMove or Damp of its own', async () => {
+      const h = makeController([speakBlock('eins')]);
+      await h.controller.estop('operator pressed STOPP');
+      expect(h.order).toEqual(['trigger', 'action:stop', `fsm:${G1_FSM_DAMP}`]);
+    });
+
+    it('sends no StopMove and no Damp under the fsm gate, and reports the sidecar damp', async () => {
+      const h = makeController([speakBlock('eins')], { baseMode: FSM_GATE, hardwareStop: DAMPED });
+      const result = await h.controller.estop('operator pressed STOPP');
+      expect(h.order).toEqual(['trigger']);
+      expect(result.delivered).toBe(true);
+      expect(h.controller.isDamped()).toBe(true);
+    });
+
+    it('under the fsm gate an undamped stop is reported as not delivered, with the reason', async () => {
+      const h = makeController([], {
+        baseMode: FSM_GATE,
+        hardwareStop: { ...DAMPED, damped: false, dampConfirmed: false, dampError: 'rpc 3104' },
+      });
+      const result = await h.controller.estop('x');
+      expect(h.order).toEqual(['trigger']);
+      expect(result.delivered).toBe(false);
+      expect(result.deliveryError).toBe('rpc 3104');
+    });
+
+    it('skips the legacy damp when the sidecar already damped, even on a walking sidecar', async () => {
+      const h = makeController([], { hardwareStop: DAMPED });
+      const result = await h.controller.estop('x');
+      expect(h.order).toEqual(['trigger']);
+      expect(result.delivered).toBe(true);
+    });
+
+    it('reads damp from the MEASURED mode when there is one', () => {
+      let measured: number | null = 1;
+      const h = makeController([], {
+        baseMode: { capability: FSM_GATE.capability, measuredFsmId: () => measured },
+      });
+      expect(h.controller.isDamped()).toBe(true);
+      measured = 500;
+      expect(h.controller.isDamped()).toBe(false);
+    });
+
+    it('refuses the 1 -> 500 stand-up jump under the fsm gate', async () => {
+      const h = makeController([], { baseMode: FSM_GATE });
+      const result = await h.controller.standBase();
+      expect(result).toMatchObject({ ok: false, code: 'two_step_required' });
+      expect(h.fsms).toEqual([]);
+    });
   });
 
   it('treats a stop word as an E-Stop without going near the planner', async () => {

@@ -23,7 +23,14 @@ import { WebSocket } from 'ws';
 
 const locoMove = vi.hoisted(() => vi.fn(async (..._args: number[]) => ({ ok: true })));
 vi.mock('../../hardware/HardwareClient.js', () => ({
-  hardwareClient: { locoMove },
+  hardwareClient: {
+    locoMove,
+    // TASK-398: a sidecar that reports no gate — moves go out as before.
+    getLocoCapability: () => ({ gate: 'unknown', moveEnabled: null, idsVerified: false, ids: null }),
+    getMeasuredFsmId: () => null,
+    getBaseState: () => null,
+    mayMoveBase: () => true,
+  },
   getSidecarUrl: () => 'http://localhost:0',
 }));
 
@@ -331,18 +338,23 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
     expect(ws.ofType('lease').at(-1)).toMatchObject({ state: 'revoked' });
   });
 
-  it('an E-stop from the socket disarms before it latches', async () => {
+  it('an E-stop from the socket latches first, then releases the arm claims', async () => {
+    // TASK-398: the latch's actuation is what reaches the sidecar's `/estop`
+    // (latch, disarm, THEN damp — one sequence in the sidecar), so it goes
+    // first; this agent's own arm bookkeeping follows.
     const { state, connect } = makeServer();
     const ws = connect();
     await bindAndBeat(ws);
     send(ws, POSE);
     await flush();
-    let disarmedBeforeLatch = false;
+    let disarmCallsAtLatch = -1;
     state.triggerEmergencyStop.mockImplementation(() => {
-      disarmedBeforeLatch = sidecar.disarmCalls === 1;
+      disarmCallsAtLatch = sidecar.disarmCalls;
     });
     send(ws, { estop: { reason: 'test' } });
-    expect(disarmedBeforeLatch).toBe(true);
+    await flush();
+    expect(disarmCallsAtLatch).toBe(0);
+    expect(sidecar.disarmCalls).toBe(1);
   });
 
   it('an E-stop latched elsewhere releases this socket\'s claim', async () => {

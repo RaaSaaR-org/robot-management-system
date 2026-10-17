@@ -224,17 +224,32 @@ describe('restoring an E-Stop latch — the constructor half', () => {
   });
 });
 
+/** Let the async stop actuation (sidecar `/estop` first, TASK-398) run through. */
+async function flushActuation(): Promise<void> {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}
+
+const ESTOP_REPLY = {
+  reached: true, disarmed: true, damped: true, dampConfirmed: true, dampError: null,
+};
+
 describe('restoring an E-Stop latch — the port-owned half', () => {
-  it('commands the base and persists the restored latch once the port is owned', () => {
+  it('commands the base and persists the restored latch once the port is owned', async () => {
     writeLatchedState();
     const locoStop = vi.spyOn(hardwareClient, 'locoStop').mockResolvedValue({ ok: true });
+    const sendEstop = vi.spyOn(hardwareClient, 'sendEstop').mockResolvedValue(ESTOP_REPLY);
     const mgr = new RobotStateManager(makeConfig());
     expect(locoStop).not.toHaveBeenCalled();
+    expect(sendEstop).not.toHaveBeenCalled();
 
     expect(mgr.reassertRestoredSafetyStop()).toBe(true);
+    await flushActuation();
 
-    // The requirement that must survive the fix: the robot really is stopped.
+    // The requirement that must survive the fix: the robot really is stopped —
+    // the sidecar's /estop (disarm, then damp) first, StopMove after (TASK-398).
+    expect(sendEstop).toHaveBeenCalledTimes(1);
     expect(locoStop).toHaveBeenCalledTimes(1);
+    expect(sendEstop.mock.invocationCallOrder[0]).toBeLessThan(locoStop.mock.invocationCallOrder[0]);
 
     vi.advanceTimersByTime(AFTER_THE_DEBOUNCE_MS);
     const written = onDisk();
@@ -244,15 +259,18 @@ describe('restoring an E-Stop latch — the port-owned half', () => {
     expect(hasStopWarning(written.robotState.warnings)).toBe(true);
   });
 
-  it('re-asserts once, so a repeated call cannot undo an operator reset', () => {
+  it('re-asserts once, so a repeated call cannot undo an operator reset', async () => {
     writeLatchedState();
     const locoStop = vi.spyOn(hardwareClient, 'locoStop').mockResolvedValue({ ok: true });
+    const sendEstop = vi.spyOn(hardwareClient, 'sendEstop').mockResolvedValue(ESTOP_REPLY);
     const mgr = new RobotStateManager(makeConfig());
 
     expect(mgr.reassertRestoredSafetyStop()).toBe(true);
     expect(mgr.reassertRestoredSafetyStop()).toBe(false);
+    await flushActuation();
 
     expect(locoStop).toHaveBeenCalledTimes(1);
+    expect(sendEstop).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the reset MANUAL: a restored latch does not auto-clear on a heartbeat', () => {
@@ -300,9 +318,10 @@ describe('a process that never owns its port', () => {
 });
 
 describe('a normal boot of a robot that came back latched (regression)', () => {
-  it('ends up stopped AND damped, with the latch on disk', () => {
+  it('ends up stopped AND damped, with the latch on disk', async () => {
     writeLatchedState();
     const locoStop = vi.spyOn(hardwareClient, 'locoStop').mockResolvedValue({ ok: true });
+    vi.spyOn(hardwareClient, 'sendEstop').mockResolvedValue(ESTOP_REPLY);
 
     const mgr = new RobotStateManager(makeConfig());
     const controller = makeController();
@@ -318,6 +337,7 @@ describe('a normal boot of a robot that came back latched (regression)', () => {
     );
 
     runtime.onPortOwned();
+    await flushActuation();
 
     // Stopped: the base was told, exactly once, by the process that owns it.
     expect(locoStop).toHaveBeenCalledTimes(1);
