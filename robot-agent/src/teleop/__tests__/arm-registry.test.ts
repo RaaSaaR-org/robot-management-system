@@ -152,3 +152,43 @@ describe('ArmRegistry', () => {
     off();
   });
 });
+
+describe('ArmRegistry view — TASK-405 diagnostics', () => {
+  it('passes the sidecar\'s dead-man, disarm reason, tracking error and hand health through', () => {
+    const client = fakeClient('arm_sdk');
+    const hand = { present: false, ageS: 2, error: null, motorFaults: [], powerV: null };
+    Object.assign(client.getArmStatus(), {
+      armState: 'disarmed', deadman: 'hold', lastDisarmReason: 'tracking_error',
+      trackErrRad: 0.41, trackErrJoint: 'left_elbow_joint', handHealth: { left: hand, right: hand },
+    });
+    const view = new ArmRegistry(client as ArmClient).view();
+    expect(view).toMatchObject({
+      armState: 'disarmed', deadman: 'hold', lastDisarmReason: 'tracking_error',
+      trackErrRad: 0.41, trackErrJoint: 'left_elbow_joint', handHealth: { left: hand, right: hand },
+    });
+  });
+
+  it('reports null, not "ok", for diagnostics the sidecar does not send', () => {
+    const view = new ArmRegistry(fakeClient(null) as ArmClient).view();
+    expect(view).toMatchObject({ armState: null, deadman: null, lastDisarmReason: null, handHealth: null });
+  });
+
+  it('a ticking hand age is not a change listeners hear about; a hand going missing is', async () => {
+    const client = fakeClient('arm_sdk');
+    const reg = new ArmRegistry(client as ArmClient);
+    const seen: unknown[] = [];
+    const status = client.getArmStatus();
+    const hand = (present: boolean, ageS: number) => ({ present, ageS, error: null, motorFaults: [], powerV: null });
+    status.handHealth = { left: hand(true, 0.01), right: hand(true, 0.01) };
+    reg.subscribe((v) => seen.push(v));
+    await vi.advanceTimersByTimeAsync(0);
+    const before = seen.length;
+    status.handHealth = { left: hand(true, 0.03), right: hand(true, 0.02) };
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(seen.length).toBe(before);
+    status.handHealth = { left: hand(true, 0.03), right: hand(false, 0.6) };
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(seen.length).toBe(before + 1);
+    reg.reset();
+  });
+});

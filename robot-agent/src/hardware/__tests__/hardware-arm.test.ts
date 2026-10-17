@@ -50,6 +50,10 @@ describe('parseArmStatus', () => {
     })).toEqual({
       writeMode: 'arm_sdk', armed: true, armWeight: 0.4, estopLatched: false,
       hands: { left: true, right: false }, teleopMode: 'arms+left_hand', sim: false, readOnly: false,
+      // TASK-405 diagnostics the body did not carry: unknown, never "ok".
+      armState: null, deadman: null, lastDisarmReason: null, trackErrRad: null, trackErrJoint: null,
+      fsm: null, leaseGeneration: null, ignoredJoints: null, ddsDomain: null, lowstateAgeS: null,
+      handHealth: null,
     });
   });
 
