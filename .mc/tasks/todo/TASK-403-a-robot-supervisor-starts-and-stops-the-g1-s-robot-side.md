@@ -167,3 +167,21 @@ This task builds a small standalone supervisor on the robot PC. It starts, stops
 - Never run `xr_teleoperate` and the arm_sdk sidecar together.
 - The E-stop stays reachable: B/Y and the two-hand pinch in VR, and a visible E-STOP on the desktop session page.
 - Development and tests use the sim stack only: the sim agent :41246 and sim sidecar :8777, or branch builds on free ports. Never the real g1-edu-4 (:41245/:8767). Do not stop or restart the running dev stack.
+
+## Implementation notes (2026-10-17)
+
+Decisions made while building it:
+- **I1 Sim profile: the `link` step starts the simulator.** The step ids stay fixed; in a `robot: sim` profile, `link` owns the `sim` process (sim_node.py on the profile's domain / `lo`), and readiness is the sim's own `/health`. Sim profiles must use `iface: lo`.
+- **I2 `adopt` and `leave`.** Adopt = use the foreign process as that step's process (`owned:false`, readiness checks still apply, never signalled, forgotten on stop). Leave = keep it untouched; the step stays `foreign` and start stays blocked until it is gone.
+- **I3 Children log to files, not pipes.** A supervisor restart must not hand a running sidecar a broken pipe. The ring buffer follows the file.
+- **I4 Re-adoption identity** = PID + `/proc` start time (rules out PID reuse) + command line, where a command line is also accepted if it still holds the requested command and ends with the requested args. `tsx` re-execs through `#!/usr/bin/env node` after the PID file is written, and the exact match orphaned the agent in the first live run.
+- **I5 Stop with a hung sidecar leaves the bridge running**, so the operator still sees the robot's state. The bridge gets SIGINT, then SIGTERM after 5 s. The real bridge often swallows the SIGINT (the KeyboardInterrupt lands in a cyclonedds `__del__`), so it exits on the SIGTERM. That is for TASK-404, which owns the bridge.
+- **I6 No auto-restart for any sidecar**, not only arm_sdk ones. The bridge gets ≤3 restarts with 1/2/4 s backoff and the agent 1; an explicit start resets the budget.
+- **I7 Extra loader rules:**
+  - G1_LOCO_ENABLED=1 (walking) is refused in a real profile.
+  - `tsx watch` is refused for the agent.
+  - The supervisor composes the ports, domain, iface and robot id itself, and refuses profile values that would contradict them.
+  - `${REPO}` expands as well as `${HOME}`.
+  - The bridge may take an `env:` block.
+- **I8 A start in the other mode** while a sidecar runs fails `mode_mismatch`. Only the confirmed `/sidecar/mode` switches modes. The switch does not compare `base.mode` across it, because read_only without mode control reads "unknown".
+- **I9 CI.** A step for the supervisor in `.github/workflows/check.yml` was written, but the push bot may not change workflows. It needs a human push.
