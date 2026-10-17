@@ -15,7 +15,7 @@ import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState } from '@react-three/xr';
 import * as THREE from 'three';
 import { retargetArm, type RetargetResult, type VrJointMap } from './vrRetarget';
-import { sameClutch, type HudArm, type RigClutch } from './vrHud';
+import { sameClutch, type HudArm, type HudBaseMode, type RigClutch } from './vrHud';
 import {
   handKeypointsToRobotFrame,
   isStopPinch,
@@ -26,7 +26,7 @@ import {
   type RobotWristPose,
   type XrRigidTransform,
 } from './vrWrist';
-import { isStickClick, pickDriveStick, stickAxis } from './vrDrive';
+import { isStickClick, pickDriveStick, shouldSendDrive, stickAxis } from './vrDrive';
 import {
   headingController,
   headingFromCamera,
@@ -110,6 +110,16 @@ export interface VrRigTelemetry {
    * is simply standing against a wall.
    */
   baseDamped: boolean;
+  /**
+   * False while the agent says the base will not walk (TASK-398: a sidecar
+   * that only changes modes). The rig then sends no `{move}` at all — not for
+   * the head-follow yaw, not for a thumbstick — and holds the robot heading.
+   * Written by the modal from `{type:'base'}` or an `error loco_disabled`.
+   */
+  moveEnabled: boolean;
+  /** The measured mode and whether NeoDEM can change it — for the HUD only. */
+  baseMode: HudBaseMode;
+  modeControl: 'off' | 'fsm' | 'full';
   link: LinkState;
   /** Age of the last `{type:'state'}` frame, ms. */
   msSinceState: number | null;
@@ -163,6 +173,11 @@ export function createRigTelemetry(): VrRigTelemetry {
     // "BASE DAMPED" on the plate of every robot for the first tick of every
     // session, and a warning that is usually wrong is a warning nobody reads.
     baseDamped: false,
+    // True until the agent says otherwise: an older agent never sends the
+    // field, and the sim walks.
+    moveEnabled: true,
+    baseMode: 'unknown',
+    modeControl: 'off',
     // 'lost' until a state frame proves otherwise — the fail-safe direction for
     // a control link, and the same rule `linkState()` applies.
     link: 'lost',
@@ -562,6 +577,10 @@ export function VrTeleopRig({
     // ref still says where the base really points. When streaming resumes the
     // error is real again and the robot turns to follow, capped as always.
     const streaming = canStreamRef.current;
+    // TASK-398: a base that will not walk must not be TURNED either — and the
+    // heading loop must not believe it turned, or the arm retargeting would
+    // subtract a yaw the robot never made. Hold it, exactly like a gated stream.
+    const baseMoves = telemetryRef.current.moveEnabled;
     // The write-back is conditional on the robot heading being KNOWN. With a
     // degenerate camera quaternion the seed above never runs, and
     // `headingController` answers a non-finite input by holding at 0 — writing
@@ -569,7 +588,7 @@ export function VrTeleopRig({
     // finite, stop the seed from ever running again. The arm retargeting would
     // then subtract a heading nobody measured.
     const robotHeadingKnown = Number.isFinite(robotHeadingRef.current);
-    const turn = streaming
+    const turn = streaming && baseMoves
       ? headingController({
           wearer: headingRef.current,
           robot: robotHeadingRef.current,
@@ -577,7 +596,7 @@ export function VrTeleopRig({
           maxRate: TURN_MAX_RAD_S,
         })
       : { omega: 0, robotHeading: robotHeadingRef.current, error: 0 };
-    if (streaming && robotHeadingKnown) robotHeadingRef.current = turn.robotHeading;
+    if (streaming && baseMoves && robotHeadingKnown) robotHeadingRef.current = turn.robotHeading;
 
     // ---- driving ---------------------------------------------------------
     // Runs before the arm work: an operator holding a pose still has to be able
@@ -592,7 +611,7 @@ export function VrTeleopRig({
       // left, so both axes invert on the way to a base velocity.
       return { fwd: -stickAxis(stick.yAxis), left: -stickAxis(stick.xAxis) };
     };
-    const stick = pickDriveStick([handStick(left), handStick(right)]);
+    const stick = baseMoves ? pickDriveStick([handStick(left), handStick(right)]) : null;
     // The operator pushes the stick where they are LOOKING; the base takes
     // velocities in its own frame. While the closed loop is still catching up
     // those differ by exactly `turn.error`, and without this rotation a forward
@@ -607,15 +626,20 @@ export function VrTeleopRig({
     const stickDriving = vx !== 0 || vy !== 0;
     const moving = stickDriving || omega !== 0;
 
-    if (now - lastDriveRef.current >= DRIVE_SEND_INTERVAL_S && streaming) {
-      // Send while moving, plus exactly one zero on the way back to rest. The
-      // agent's dead-man would stop the robot on its own, but only after another
-      // third of a second of floor.
-      if (moving || wasDriving.current) {
-        lastDriveRef.current = now;
-        send({ move: { vx, vy, omega } });
-        wasDriving.current = moving;
-      }
+    // Send while moving, plus exactly one zero on the way back to rest. The
+    // agent's dead-man would stop the robot on its own, but only after another
+    // third of a second of floor. Nothing at all while the base does not walk.
+    if (shouldSendDrive({
+      sinceLastS: now - lastDriveRef.current,
+      streaming,
+      moveEnabled: baseMoves,
+      moving,
+      wasDriving: wasDriving.current,
+      intervalS: DRIVE_SEND_INTERVAL_S,
+    })) {
+      lastDriveRef.current = now;
+      send({ move: { vx, vy, omega } });
+      wasDriving.current = moving;
     }
 
     // ---- arms ------------------------------------------------------------

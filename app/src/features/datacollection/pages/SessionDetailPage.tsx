@@ -39,6 +39,8 @@ import { useInputPresence } from '../hooks/useInputPresence';
 import { useRobotCameras } from '../../robots/hooks/useRobotCameras';
 import { buildPreflight, summarizePreflight } from '../utils/preflight';
 import { ControlLeaseBar } from '../../robots/components/tabs/ControlLeaseBar';
+import { RobotModeControl } from '../../robots/components/RobotModeControl';
+import { useRobotBaseMode } from '../../robots/hooks/useRobotBaseMode';
 import { jointPositionUnit } from '../../robots/types/robots.types';
 import type { RobotType } from '../../robots/types/robots.types';
 import { TELEOPERATION_TYPE_LABELS, formatDuration, canStartSession, canPauseSession, canEndSession } from '../types/datacollection.types';
@@ -225,6 +227,13 @@ export function SessionDetailPage() {
     enabled: gamepadEligible && (session?.status === 'recording' || session?.status === 'paused'),
     lease,
   });
+  // TASK-398: the robot's measured mode (limp / stand / balance) for a VR
+  // session, polled at 1 Hz. The panel shows only on a robot whose sidecar can
+  // change the mode.
+  const baseMode = useRobotBaseMode(session?.robotId ?? '', {
+    enabled: !!session && sessionIsVr && sessionIsLive && robotOnline,
+  });
+  const modeControlOn = baseMode.status?.capability.gate === 'fsm' || baseMode.status?.capability.gate === 'full';
 
   // TASK-392: what the page can check before recording, and the cameras the
   // robot really serves (a G1 has a head camera, not top/wrist).
@@ -368,6 +377,18 @@ export function SessionDetailPage() {
           <Panel.Header title="Control" description="Gamepad and simulated VR input drive the robot only while you hold control." />
           <Panel.Body>
             <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={leaseConnected} />
+          </Panel.Body>
+        </Panel>
+      )}
+
+      {isLive && isVrSession && modeControlOn && robot && (
+        <Panel data-testid="session-robot-mode">
+          <Panel.Header
+            title="Robot mode"
+            description="Limp, Stand up and Balance without the remote. The changes need control — take it in the VR window (or here, for simulated input)."
+          />
+          <Panel.Body>
+            <RobotModeControl robotId={robot.id} lease={lease} baseMode={baseMode} />
           </Panel.Body>
         </Panel>
       )}

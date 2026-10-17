@@ -23,8 +23,26 @@ import type { Robot } from '../../../../types/robots.types';
 // ---------------------------------------------------------------------------
 
 /** The scene is the whole three.js half of this feature — stubbed wholesale. */
+const scene = vi.hoisted(() => ({ send: null as null | ((payload: unknown) => boolean) }));
 vi.mock('../VrScene', () => ({
-  VrScene: () => <div data-testid="vr-scene" />,
+  VrScene: (props: { send?: (payload: unknown) => boolean }) => {
+    scene.send = props.send ?? null;
+    return <div data-testid="vr-scene" />;
+  },
+}));
+
+/** TASK-398: the mode control polls the agent; answer as a robot in limp. */
+vi.mock('../../../../api/baseModeApi', () => ({
+  baseModeApi: {
+    getBaseMode: vi.fn(async () => ({
+      capability: { gate: 'fsm', moveEnabled: false, idsVerified: false, ids: null },
+      base: { fsmId: 1, mode: 'limp', ageS: 0.2, error: null },
+      inFlight: null,
+      estopLatched: false,
+      armed: false,
+    })),
+    setBaseMode: vi.fn(),
+  },
 }));
 
 /** A minimal XR store: enough to enter/leave a session and end one. */
@@ -52,7 +70,7 @@ vi.mock('@/features/safety/api/safetyApi', () => ({
   },
 }));
 
-import { ArmNotices, VRTeleopModalBody, parseArmFrame } from '../VRTeleopModal';
+import { ArmNotices, VRTeleopModalBody, parseArmFrame, parseBaseFrame } from '../VRTeleopModal';
 
 /**
  * A WebSocket stand-in. `createTeleopLink` refuses to send unless
@@ -584,5 +602,81 @@ describe('ArmNotices — hand tracking on the real robot', () => {
     const sim = parseArmFrame({ type: 'arm', writeMode: null })!;
     render(<ArmNotices arm={sim} handTracking />);
     expect(screen.queryByTestId('vr-arm-notices')).toBeNull();
+  });
+});
+
+describe('VRTeleopModalBody — robot mode without the remote (TASK-398)', () => {
+  it('shows the mode control instead of the damped panel when the sidecar controls the mode', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => {
+      socket.deliver({
+        type: 'base', damped: true, fsmId: 1, mode: 'limp', measured: true, moveEnabled: false, modeControl: 'fsm',
+      });
+    });
+    expect(screen.getByTestId('vr-robot-mode')).toBeInTheDocument();
+    expect(screen.queryByTestId('vr-base-damped')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('vr-stand-base')).not.toBeInTheDocument();
+  });
+
+  it('keeps the older damped panel on a robot without mode control', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => { socket.deliver({ type: 'base', damped: true, fsmId: 1 }); });
+    expect(screen.queryByTestId('vr-robot-mode')).not.toBeInTheDocument();
+    expect(screen.getByTestId('vr-base-damped')).toBeInTheDocument();
+  });
+
+  it('parses the base frame defensively', () => {
+    expect(parseBaseFrame({ type: 'base', damped: true })).toEqual({
+      damped: true, mode: 'unknown', measured: false, moveEnabled: true, modeControl: 'off',
+    });
+    expect(parseBaseFrame({ type: 'base', mode: 'balance', measured: true, moveEnabled: false, modeControl: 'fsm' }))
+      .toMatchObject({ mode: 'balance', moveEnabled: false, modeControl: 'fsm' });
+    expect(parseBaseFrame({ type: 'base', mode: 'flying', modeControl: 'yes' }))
+      .toMatchObject({ mode: 'unknown', modeControl: 'off' });
+  });
+});
+
+describe('VRTeleopModalBody — the link meter and {move} frames (TASK-398)', () => {
+  it('stays live across 5 s of head-turn moves the agent never echoes', () => {
+    vi.useFakeTimers();
+    try {
+      renderModal();
+      const socket = openLink();
+      act(() => { socket.deliver({ type: 'state', positions: {} }); });
+      expect(scene.send).not.toBeNull();
+      for (let i = 0; i < 50; i++) {
+        act(() => {
+          scene.send!({ move: { vx: 0, vy: 0, omega: 0.3 } });
+          vi.advanceTimersByTime(100);
+        });
+      }
+      expect(socket.frames().filter((f) => 'move' in f).length).toBe(50);
+      expect(screen.getByText('Link live')).toBeInTheDocument();
+      expect(screen.queryByText('Link lost')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still notices a pose frame that goes unanswered', () => {
+    vi.useFakeTimers();
+    try {
+      renderModal();
+      const socket = openLink();
+      act(() => { socket.deliver({ type: 'state', positions: {} }); });
+      // Pose frames ARE answered, so a stream of them with no reply is a link
+      // that stopped answering — the meter must still say so.
+      for (let i = 0; i < 50; i++) {
+        act(() => {
+          scene.send!({ positions: { left_elbow_joint: 0.1 } });
+          vi.advanceTimersByTime(100);
+        });
+      }
+      expect(screen.queryByText('Link live')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -103,6 +103,12 @@ export interface UseControlLeaseReturn {
   /** Join an extra socket to the current lease (TASK-320). */
   bindSocket(socket: LeaseSocket): boolean;
   dismissNotice(): void;
+  /**
+   * The bound lease's `{leaseId, generation}` for a request that must prove
+   * control (TASK-398: the robot-mode buttons), or null when not bound. Read
+   * at click time and sent in the body only — never keep it.
+   */
+  grant(): { leaseId: string; generation: number } | null;
 }
 
 interface ActiveLease {
@@ -589,6 +595,11 @@ export function useControlLease(
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
+  const grant = useCallback((): { leaseId: string; generation: number } | null => {
+    const lease = activeRef.current;
+    return lease && lease.bound ? { leaseId: lease.leaseId, generation: lease.generation } : null;
+  }, []);
+
   return {
     capability,
     enabled,
@@ -601,5 +612,6 @@ export function useControlLease(
     handleSocketMessage,
     bindSocket,
     dismissNotice,
+    grant,
   };
 }

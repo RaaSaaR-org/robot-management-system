@@ -35,7 +35,8 @@ import { createLoopHealth, isPoseFrame, onPositionsSent, onStateReceived, type L
 import { EMULATOR_ACTIVE, XR_EMULATOR, XR_PROFILES_BASE } from './vrConstants';
 import { getTeleopSocketUrl, teleopSocketProtocols } from './vrUrls';
 import { ensureFreshAccessToken, tokenStorage } from '@/api/client';
-import { hudHandWarning, hudNeedsRelease, type HudEngage } from './vrHud';
+import { hudHandWarning, hudNeedsRelease, type HudBaseMode, type HudEngage } from './vrHud';
+import { RobotModeControl } from '../../RobotModeControl';
 import { VrScene } from './VrScene';
 import { createRigTelemetry } from './VrTeleopRig';
 
@@ -87,6 +88,29 @@ export interface ArmFrame {
 }
 
 const ENGAGE_STATES: readonly HudEngage[] = ['need_release', 'need_press', 'ready', 'holding'];
+
+/** What a `{type:'base'}` frame says (TASK-398 adds the measured mode and the gate). */
+export interface BaseFrameInfo {
+  damped: boolean;
+  mode: HudBaseMode;
+  measured: boolean;
+  /** False only when the agent SAYS walking is off; an older agent omits it. */
+  moveEnabled: boolean;
+  modeControl: 'off' | 'fsm' | 'full';
+}
+
+const HUD_BASE_MODES: readonly HudBaseMode[] = ['limp', 'stand', 'balance', 'zero_torque', 'other', 'unknown'];
+
+/** Parse a `{type:'base'}` frame defensively. */
+export function parseBaseFrame(frame: Record<string, unknown>): BaseFrameInfo {
+  return {
+    damped: frame.damped === true,
+    mode: HUD_BASE_MODES.includes(frame.mode as HudBaseMode) ? (frame.mode as HudBaseMode) : 'unknown',
+    measured: frame.measured === true,
+    moveEnabled: frame.moveEnabled !== false,
+    modeControl: frame.modeControl === 'fsm' || frame.modeControl === 'full' ? frame.modeControl : 'off',
+  };
+}
 
 /** Parse an `{type:'arm'}` frame defensively; null when it is not one. */
 export function parseArmFrame(frame: Record<string, unknown>): ArmFrame | null {
@@ -312,6 +336,12 @@ export function VRTeleopModalBody({
   const [resetting, setResetting] = useState(false);
   /** The base sits in a non-locomoting FSM — see the `{type:'base'}` frame. */
   const [baseDamped, setBaseDamped] = useState(false);
+  /**
+   * TASK-398: whether this robot's mode can be changed from NeoDEM (the
+   * sidecar's gate), from the same frame. `off` keeps the older damped panel;
+   * `fsm` / `full` show the mode control instead.
+   */
+  const [modeControl, setModeControl] = useState<BaseFrameInfo['modeControl']>('off');
   const [standing, setStanding] = useState(false);
   const [standNote, setStandNote] = useState<string | null>(null);
   const [agentErrors, setAgentErrors] = useState<AgentError[]>([]);
@@ -420,12 +450,15 @@ export function VRTeleopModalBody({
     // counting it as a send would make every idle second in VR read as a
     // link that stopped answering (see `meterLink`).
     if (typeof payload === 'object' && payload !== null && 'hb' in payload) return true;
+    // Only a pose frame is a request the agent ANSWERS — with a `{type:'state'}`
+    // in the same handler, which is also what makes the RTT a real round trip.
+    // A `{move}` from a head turn or a thumbstick gets no echo, so stamping it
+    // as a send aged the link meter to "Link lost" while the operator simply
+    // turned their head (TASK-398). Only pose frames stamp the send clock.
+    if (!isPoseFrame(payload)) return true;
     const now = Date.now();
     lastSendAtRef.current = now;
-    // Only a pose frame is a round-trip probe: the agent answers those with a
-    // `{type:'state'}` in the same handler, which is what makes the measurement
-    // a real round trip and not an estimate.
-    if (isPoseFrame(payload)) healthRef.current = onPositionsSent(healthRef.current, now);
+    healthRef.current = onPositionsSent(healthRef.current, now);
     return true;
   }, []);
 
@@ -511,9 +544,16 @@ export function VRTeleopModalBody({
         // console has to carry both. `damped !== false` is the fail-safe read:
         // an agent old enough to omit the field is not one to believe about
         // locomotion being fine.
-        const damped = frame.damped === true;
-        setBaseDamped(damped);
-        telemetryRef.current.baseDamped = damped;
+        const info = parseBaseFrame(frame);
+        setBaseDamped(info.damped);
+        setModeControl(info.modeControl);
+        telemetryRef.current.baseDamped = info.damped;
+        // TASK-398: a sidecar that only changes modes refuses every `{move}`;
+        // the rig stops sending them instead of feeding the agent ten refusals
+        // a second, and the HUD says walking is disabled.
+        telemetryRef.current.moveEnabled = info.moveEnabled;
+        telemetryRef.current.baseMode = info.mode;
+        telemetryRef.current.modeControl = info.modeControl;
         break;
       }
       case 'error': {
@@ -540,6 +580,8 @@ export function VRTeleopModalBody({
           setEstopLatched(true);
           setEstopNote(entry.message);
         }
+        // Walking is off on this robot (an older agent says so only this way).
+        if (code === 'loco_disabled') telemetryRef.current.moveEnabled = false;
         // An error is the agent saying it will not answer that frame — it sends
         // no `{type:'state'}` for one it refused. `onPositionsSent` keeps the
         // OLDEST outstanding send on purpose, so leaving the probe pending here
@@ -992,7 +1034,22 @@ export function VRTeleopModalBody({
           clears only the latch, and what is left is a robot whose arms work and
           whose legs will not. Amber rather than red — it is not a stop, and the
           operator can go on manipulating. */}
-      {baseDamped && (
+      {/* Robot mode without the remote (TASK-398): the measured mode and the
+          Limp / Stand up / Balance buttons, each behind a confirmation. Only
+          here on the desktop — the headset shows the mode, never buttons. */}
+      {modeControl !== 'off' && (
+        <Panel variant="inset" padding="sm" data-testid="vr-robot-mode">
+          <RobotModeControl
+            robotId={robot.id}
+            lease={lease}
+            armsEngaged={arm?.writeMode === 'arm_sdk' && (arm.armed || arm.arming)}
+          />
+        </Panel>
+      )}
+
+      {/* The older damped panel, for a robot whose sidecar has no mode control
+          (the MuJoCo sim): Stand there goes through Agent Mode's posture. */}
+      {baseDamped && modeControl === 'off' && (
         <Panel
           variant="inset"
           padding="sm"
