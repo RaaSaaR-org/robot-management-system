@@ -9,6 +9,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   ARM_REFUSAL_FRESH_MS,
+  PANEL_COLORS,
+  cameraPanelLine,
+  pickWhyLine,
+  type ServerWhy,
+  type WhyNotFollowing as Why,
   composeRobotPanel,
   shortJoint,
   whyNotFollowingVr,
@@ -205,5 +210,52 @@ describe('composeRobotPanel', () => {
   it('shortens joint names', () => {
     expect(shortJoint('left_hand_index_0_joint')).toBe('INDEX_0');
     expect(shortJoint('thumb_1')).toBe('THUMB_1');
+  });
+});
+
+// ---- TASK-413: the robot panel's camera line and the server's reason --------
+
+describe('cameraPanelLine', () => {
+  const base = { robotId: 'sim-robot-g1-edu', state: 'live' as const, retryInS: null, fps: 27.6 };
+
+  it('reads live and the frame rate', () => {
+    expect(cameraPanelLine(base, 'sim-robot-g1-edu')).toMatchObject({ id: 'camera', text: 'CAMERA live 28 fps', color: PANEL_COLORS.ok });
+  });
+
+  it('says when an offline stream retries', () => {
+    expect(cameraPanelLine({ ...base, state: 'offline', fps: null, retryInS: 4 }, 'sim-robot-g1-edu'))
+      .toMatchObject({ text: 'CAMERA offline · retrying in 4 s', color: PANEL_COLORS.bad });
+    expect(cameraPanelLine({ ...base, state: 'stale', retryInS: 2 }, 'sim-robot-g1-edu')?.text).toBe('CAMERA stale · retrying in 2 s');
+  });
+
+  it('is absent when no head-camera panel shows this robot', () => {
+    expect(cameraPanelLine({ ...base, robotId: null }, 'sim-robot-g1-edu')).toBeNull();
+    expect(cameraPanelLine(base, 'another-robot')).toBeNull();
+  });
+});
+
+describe('pickWhyLine (D4)', () => {
+  const localGrip: Why = { code: 'not_engaged', severity: 'warn', text: 'Hold the grip to take an arm', short: 'Hold grip' };
+  const localOk: Why = { code: 'following', severity: 'ok', text: 'Following', short: 'Following' };
+  const serverBlock: ServerWhy = { code: 'sidecar_down', severity: 'block', text: 'The hardware sidecar is not running', source: 'server' };
+
+  it('shows the server reason when it blocks — the desktop says the same', () => {
+    expect(pickWhyLine(localGrip, serverBlock)).toEqual({ text: serverBlock.text, severity: 'block', from: 'server' });
+    expect(pickWhyLine(localOk, { ...serverBlock, source: 'agent' }).from).toBe('server');
+  });
+
+  it('keeps the local reason, which knows the grip, when the server does not block', () => {
+    expect(pickWhyLine(localGrip, { ...serverBlock, severity: 'ok', text: 'Ready' })).toMatchObject({ from: 'local', text: localGrip.text });
+    expect(pickWhyLine(localGrip, { ...serverBlock, severity: 'warn', source: 'agent', text: 'x' }).from).toBe('local');
+    expect(pickWhyLine(localGrip, null).from).toBe('local');
+  });
+
+  it('lets a server-sourced warning through only when it is at least as serious', () => {
+    expect(pickWhyLine(localOk, { ...serverBlock, severity: 'warn', text: 'Camera stream is down' }).from).toBe('server');
+  });
+
+  it('never outranks a latched E-stop', () => {
+    const latched: Why = { code: 'estop_latched', severity: 'block', text: 'E-stop latched', short: 'E-STOP' };
+    expect(pickWhyLine(latched, serverBlock).from).toBe('local');
   });
 });

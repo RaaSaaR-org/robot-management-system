@@ -9,6 +9,7 @@
  */
 
 import type { LinkState } from './vrSession';
+import { formatTakeClock, type HudTake } from './vrSessionBridge';
 
 /** One line of the HUD. `color` is a CSS colour the renderer can use as-is. */
 export interface HudLine {
@@ -123,19 +124,14 @@ export interface HudState {
    */
   modeControl?: 'off' | 'fsm' | 'full';
   /**
-   * The episode being captured right now, or null/absent when nothing is being
-   * recorded.
-   *
-   * `episode` is the number the operator saw on the desktop before they put the
-   * headset on — `SessionDetailPage`'s "Recording episode N of M", which is
-   * 1-based — NOT the 0-based `episodeIndex` the review table lists. The wearer
-   * cannot see either readout while in VR, so the HUD matches the one they were
-   * last shown live.
+   * The session's take (TASK-413), or null/absent outside a recording session.
+   * `REC ● T7 00:42` while a take runs, `READY T8` between takes — the number
+   * is 1-based, as every screen says it, and the timer is the server's.
    *
    * Optional so that the robot-detail page's teleop modal, which has no session
    * behind it, does not have to invent a value.
    */
-  recording?: { episode: number; frames: number } | null;
+  recording?: HudTake | null;
   /**
    * The real robot's arm write path (TASK-393), from the agent's
    * `{type:'arm'}` frame. Absent / null on the sim and on older sidecars,
@@ -294,6 +290,15 @@ function modeLine(state: HudState): HudLine {
   return { id: 'mode', text: `MODE ${mode} ${suffix}`, color };
 }
 
+/** `REC ● T7 00:42` (red) while a take runs, `READY T8` between takes. */
+export function hudTakeLine(rec: HudTake): HudLine {
+  const n = Number.isFinite(rec.takeNumber) && rec.takeNumber >= 1 ? count(rec.takeNumber) : '--';
+  if (rec.phase === 'between') return { id: 'rec', text: `READY T${n}`, color: HUD_COLORS.ok };
+  // No timer from a recorder without explicit takes: a frozen 00:00 would lie.
+  const clock = rec.elapsedS === null ? '' : ` ${formatTakeClock(rec.elapsedS)}`;
+  return { id: 'rec', text: `REC ● T${n}${clock}`, color: HUD_COLORS.bad };
+}
+
 export function composeHud(state: HudState): HudLine[] {
   if (state.estopLatched) {
     return [
@@ -311,9 +316,7 @@ export function composeHud(state: HudState): HudLine[] {
 
   const rec = state.recording;
   const hand = state.arm ? hudHandWarning(state.arm.teleopMode) : null;
-  const recLine: HudLine[] = rec
-    ? [{ id: 'rec', text: `REC ● ep ${count(rec.episode)} · ${count(rec.frames)} fr`, color: HUD_COLORS.bad }]
-    : [];
+  const recLine: HudLine[] = rec ? [hudTakeLine(rec)] : [];
   const linkLine: HudLine = {
     id: 'link',
     text: `LINK ${state.link.toUpperCase()} ${age}`,

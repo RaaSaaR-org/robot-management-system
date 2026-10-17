@@ -6,7 +6,20 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { pulse, pulsePreset, resetHaptics, HAPTICS, HAPTIC_MIN_GAP_MS } from '../vrHaptics';
+import {
+  pulse,
+  pulsePreset,
+  resetHaptics,
+  HAPTICS,
+  HAPTIC_MIN_GAP_MS,
+  HAPTIC_QUEUE_WINDOW_MS,
+  TAKE_ACCEPTED,
+  TAKE_REFUSED,
+  clearHapticQueue,
+  drainHapticQueue,
+  pendingHaptics,
+  queueHaptics,
+} from '../vrHaptics';
 
 function withPulse(handedness: string) {
   const spy = vi.fn(() => Promise.resolve(true));
@@ -133,11 +146,25 @@ describe('HAPTICS presets', () => {
       'clutchRelease',
       'episodeMark',
       'estop',
+      'holdConfirm',
+      'holdTick',
       'linkLost',
+      'refusedTap',
       'saturation',
       'uiClick',
       'uiHover',
     ]);
+  });
+
+  it('keeps the take answers apart from each other and from the stop (TASK-413)', () => {
+    // A refusal is two short taps; a success is one long mark. Neither may
+    // approach the E-stop, the one buzz that must stay unmistakable.
+    expect(HAPTICS.refusedTap.ms * 2).toBeLessThan(HAPTICS.episodeMark.ms);
+    expect(HAPTICS.holdTick.intensity).toBeLessThan(HAPTICS.holdConfirm.intensity);
+    for (const p of [HAPTICS.refusedTap, HAPTICS.holdTick, HAPTICS.holdConfirm]) {
+      expect(p.intensity).toBeLessThan(HAPTICS.estop.intensity);
+      expect(p.ms).toBeLessThan(HAPTICS.estop.ms);
+    }
   });
 
   it('keeps the in-VR UI ticks below anything that means an arm (TASK-407)', () => {
@@ -191,5 +218,36 @@ describe('HAPTICS presets', () => {
     const { source, spy } = withPulse('left');
     expect(pulsePreset(source, HAPTICS.estop, 0)).toBe(true);
     expect(spy).toHaveBeenCalledWith(HAPTICS.estop.intensity, HAPTICS.estop.ms);
+  });
+});
+
+describe('the haptic queue (TASK-413)', () => {
+  const pulses: number[] = [];
+  const source = {
+    handedness: 'left',
+    gamepad: { hapticActuators: [{ pulse: (v: number) => { pulses.push(v); return Promise.resolve(true); } }] },
+  };
+
+  beforeEach(() => {
+    pulses.length = 0;
+    clearHapticQueue();
+    resetHaptics();
+  });
+
+  it('plays a pattern step by step, never two in one frame', () => {
+    queueHaptics(TAKE_REFUSED, 0);
+    expect(drainHapticQueue([source], 0)).toBe(1);
+    expect(drainHapticQueue([source], 100)).toBe(0); // the second tap is not due yet
+    expect(drainHapticQueue([source], 200)).toBe(1);
+    expect(pulses).toHaveLength(2);
+    expect(pendingHaptics()).toBe(0);
+  });
+
+  it('waits for the rate limit, and drops a pulse no controller takes within the window', () => {
+    queueHaptics(TAKE_ACCEPTED, 0);
+    expect(drainHapticQueue([null], 0)).toBe(0);
+    expect(pendingHaptics()).toBe(1);
+    expect(drainHapticQueue([null], HAPTIC_QUEUE_WINDOW_MS)).toBe(0);
+    expect(pendingHaptics()).toBe(0);
   });
 });

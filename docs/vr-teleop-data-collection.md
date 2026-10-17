@@ -181,7 +181,10 @@ Still one port: the API and both sockets ride the page's origin.
    line reads `ARMING 40%`, then `ARMED`; the desktop shows *Arming …* /
    *Arms armed*. A grip already held when the console connects does not count:
    let go once, then squeeze.
-4. Record as usual (L-stick click = next episode). `action` is what the sidecar
+4. Record from the headset (TASK-413): the session board left of the robot
+   has Start/Stop, Next and a 1 s hold-to-discard; L-stick click starts and
+   stops a take, R-stick click goes to the next, R-stick held 1.5 s discards
+   the last take. `action` is what the sidecar
    **accepted**, not what the operator wanted — frames before the arms are armed
    are dropped and counted ("no command reached the robot").
 

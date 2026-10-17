@@ -22,6 +22,7 @@ import { resolveXrAvailability, type XrAvailability } from './vrAvailability';
 import { VRTeleopModalBody } from './VRTeleopModal';
 import { QuestConnectHelp } from './QuestConnectHelp';
 import { RobotReadinessPanel } from '../../readiness/RobotReadinessPanel';
+import type { VrSessionBridge } from './vrSessionBridge';
 
 // ============================================================================
 // LAUNCHER — compact card shown in the Teleop tab
@@ -38,17 +39,11 @@ const AVAILABILITY_HINT: Record<XrAvailability, string> = {
 export interface VRTeleopSectionProps {
   robot: TeleopTabProps['robot'];
   /**
-   * End the current episode and start the next — bound to the LEFT stick click
-   * inside the headset, and listed on the modal's mapping card only when it is
-   * supplied. Absent on the robot detail page, which has no session.
+   * The recording session (TASK-413): the session board, the stick shortcuts
+   * and the wrist HUD's take line inside the headset. Absent on the robot
+   * detail page, which has no session — then none of them exist.
    */
-  /**
-   * Resolves to whether the boundary was actually drawn — the rig only
-   * buzzes the controller when it was. See `VrTeleopRig`.
-   */
-  onNextEpisode?: () => boolean | Promise<boolean>;
-  /** The episode being captured, for the wrist HUD's REC line. */
-  recording?: { episode: number; frames: number } | null;
+  vrSession?: VrSessionBridge;
   /**
    * Set while another input drives the robot (the session page's simulated VR,
    * TASK-396): "Launch VR" is disabled and this line replaces the hint.
@@ -56,7 +51,7 @@ export interface VRTeleopSectionProps {
   launchDisabledReason?: string;
 }
 
-export function VRTeleopSection({ robot, onNextEpisode, recording, launchDisabledReason }: VRTeleopSectionProps) {
+export function VRTeleopSection({ robot, vrSession, launchDisabledReason }: VRTeleopSectionProps) {
   const [open, setOpen] = useState(false);
   const [sessionSupported, setSessionSupported] = useState<boolean | null>(null);
 
@@ -145,8 +140,7 @@ export function VRTeleopSection({ robot, onNextEpisode, recording, launchDisable
           availability={availability}
           sessionSupported={sessionSupported}
           onClose={() => setOpen(false)}
-          onNextEpisode={onNextEpisode}
-          recording={recording}
+          vrSession={vrSession}
         />
       </Modal>
     </>

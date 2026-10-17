@@ -59,6 +59,7 @@ export function resetVrUiRegistry(): void {
   vrUiGate.estopLatched = false;
   vrUiDebug.clicks.length = 0;
   vrUiDebug.panel = [];
+  vrUiDebug.board = [];
   vrUiDebug.rays.left = { ...EMPTY_RAY };
   vrUiDebug.rays.right = { ...EMPTY_RAY };
 }
@@ -269,9 +270,12 @@ export const vrUiDebug: {
   targets: () => Array<{ id: string; live: boolean; center: [number, number, number] | null }>;
   /** The robot panel's lines as last drawn — the canvas is not readable from a test. */
   panel: string[];
+  /** The session board's lines as last drawn (TASK-413); empty without a session. */
+  board: string[];
 } = {
   clicks: [],
   rays: { left: { ...EMPTY_RAY }, right: { ...EMPTY_RAY } },
   targets: () => [],
   panel: [],
+  board: [],
 };

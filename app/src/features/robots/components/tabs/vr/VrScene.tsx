@@ -8,6 +8,7 @@
  * @feature robots
  */
 
+import { useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Grid, Center } from '@react-three/drei';
 import { XR, type XRStore } from '@react-three/xr';
@@ -22,6 +23,8 @@ import { VrOrigin } from './VrOrigin';
 import { VrTeleopRig, type VrRigTelemetry } from './VrTeleopRig';
 import { VrRobotPanel } from './VrRobotPanel';
 import { VrUiRig } from './VrUiRig';
+import { VrSessionBoard } from './VrSessionBoard';
+import { withTakeHaptics, type VrSessionBridge } from './vrSessionBridge';
 
 export interface VrSceneProps {
   store: XRStore;
@@ -57,23 +60,19 @@ export interface VrSceneProps {
    */
   onResetEstop?: () => void | Promise<void>;
   /**
-   * End the current episode and start the next — bound to the LEFT stick click.
-   * Absent on the robot detail page, which has no session behind it, and the rig
-   * leaves the binding unwired when it is.
+   * The recording session (TASK-413), or absent on the robot detail page. When
+   * present: the session board left of the robot, the stick shortcuts and the
+   * wrist HUD's take line. One object read through a getter (D2).
    */
-  /**
-   * Resolves to whether the boundary was actually drawn — the rig only
-   * buzzes the controller when it was. See `VrTeleopRig`.
-   */
-  onNextEpisode?: () => boolean | Promise<boolean>;
+  vrSession?: VrSessionBridge;
 }
 
 /*
- * There is deliberately no `recording` prop here. The REC line reaches the wrist
- * HUD through `telemetryRef`, which the modal already mirrors it onto — the same
- * route `estopLatched`, `link` and `rttMs` take, and for the same reason: this
- * scene re-renders the whole R3F tree, so a frame counter arriving as a prop
- * would rebuild the canvas every time the server ticked it.
+ * There is deliberately no `recording` prop here. The take reaches the board,
+ * the wrist HUD and the rig through `vrSession.getState()`, read in their own
+ * frame loops — the same reason `telemetryRef` is a ref: this scene re-renders
+ * the whole R3F tree, so a timer arriving as a prop would rebuild the canvas
+ * every time the server ticked it.
  */
 
 export function VrScene({
@@ -97,8 +96,10 @@ export function VrScene({
   onRecenter,
   onEstop,
   onResetEstop,
-  onNextEpisode,
+  vrSession,
 }: VrSceneProps) {
+  // Every take action is felt: `episodeMark` when it lands, two taps when refused.
+  const session = useMemo(() => (vrSession ? withTakeHaptics(vrSession) : undefined), [vrSession]);
   const cameraPos: [number, number, number] = modelType === 'so101' ? [0.5, 0.4, 0.5] : [1.5, 1.0, 1.5];
 
   return (
@@ -135,11 +136,14 @@ export function VrScene({
               the camera screen, so a recenter brings it round with the robot;
               outside `modelRef` for the same reason the screen is. */}
           <VrRobotPanel
+            robotId={robotId}
             telemetryRef={telemetryRef}
             onRecenter={onRecenter}
-            onNextEpisode={onNextEpisode}
             onResetEstop={onResetEstop}
           />
+          {/* TASK-413: the session board, mirrored on the robot's left (D3).
+              Only with a session — the robot detail page has none. */}
+          {session && <VrSessionBoard vrSession={session} telemetryRef={telemetryRef} />}
         </group>
 
         {/* Puts the headset in the robot's head. Inert outside a session.
@@ -154,7 +158,7 @@ export function VrScene({
           robotHeadingRef={robotHeadingRef}
           recenterKey={recenterKey}
         >
-          <VrWristHud telemetryRef={telemetryRef} />
+          <VrWristHud telemetryRef={telemetryRef} vrSession={session} />
           {/* The controller ray. Inside the origin for the HUD's reason: the
               poses it reads are relative to the reference space. */}
           <VrUiRig telemetryRef={telemetryRef} />
@@ -211,7 +215,7 @@ export function VrScene({
           send={send}
           onRecenter={onRecenter}
           onEstop={onEstop}
-          onNextEpisode={onNextEpisode}
+          vrSession={session}
           headingRef={headingRef}
           robotHeadingRef={robotHeadingRef}
           robotPositionsRef={robotPositionsRef}

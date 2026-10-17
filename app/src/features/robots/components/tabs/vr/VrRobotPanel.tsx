@@ -1,18 +1,30 @@
 /**
  * @file VrRobotPanel.tsx
  * @description The robot panel in the headset (TASK-407): mode, arms, dead-man,
- *              grip, hands, lease and link, and one line saying why the arms are
- *              not following — plus Recenter, Next take and a hold-to-confirm
+ *              grip, hands, lease and link, the head camera (TASK-413), and one
+ *              line saying why the arms are not following — the server's
+ *              reason when it blocks (D4) — plus Recenter and a hold-to-confirm
  *              Reset E-stop. World-locked beside the head-camera screen, inside
  *              the yaw group, so it follows a recenter.
  * @feature robots
  */
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { VrPanel, type VrPanelContent } from './VrPanel';
 import { VrButton, VR_BUTTON_HEIGHT_M } from './VrButton';
-import { composeRobotPanel, panelFactsFromTelemetry, whyFromTelemetry } from './vrWhy';
+import {
+  SEVERITY_COLOR,
+  cameraPanelLine,
+  composeRobotPanel,
+  panelFactsFromTelemetry,
+  pickWhyLine,
+  whyFromTelemetry,
+  type ServerWhy,
+} from './vrWhy';
+import { useVrCameraStatus } from './vrCameraStatus';
+import { useReadinessStore } from '../../../store/readinessStore';
+import { READINESS_STALE_MS } from '../../../hooks/useRobotReadiness';
 import type { VrRigTelemetry } from './VrTeleopRig';
 import { vrUiDebug } from './vrUiRegistry';
 
@@ -33,50 +45,84 @@ const CENTRE_Y_M = 0.08;
 const EYE_Y_M = 0.43;
 
 /**
- * Where the panel sits and how it is turned, in the yaw group's frame.
+ * Where a side panel sits and how it is turned, in the yaw group's frame, at
+ * `bearingRad` RIGHT of the robot's forward (negative: left).
  *
  * The model's forward is three +X and its LEFT is -Z (`RobotModel` turns the
- * URDF's +Y-left into -Z), so 30° to the right is towards +Z. The plane faces
- * back at the head: yawed to point its +Z normal at the origin, then pitched up
- * toward the eyes.
+ * URDF's +Y-left into -Z), so a bearing to the right is towards +Z. The plane
+ * faces back at the head: yawed to point its +Z normal at the origin, then
+ * pitched up toward the eyes.
  */
-export function robotPanelPlacement(): { position: [number, number, number]; rotation: THREE.Euler } {
-  const x = DISTANCE_M * Math.cos(BEARING_RAD);
-  const z = DISTANCE_M * Math.sin(BEARING_RAD);
+export function sidePanelPlacement(bearingRad: number): { position: [number, number, number]; rotation: THREE.Euler } {
+  const x = DISTANCE_M * Math.cos(bearingRad);
+  const z = DISTANCE_M * Math.sin(bearingRad);
   const yaw = Math.atan2(-x, -z);
   const pitch = -Math.atan2(EYE_Y_M - CENTRE_Y_M, DISTANCE_M);
   return { position: [x, CENTRE_Y_M, z], rotation: new THREE.Euler(pitch, yaw, 0, 'YXZ') };
+}
+
+/** The robot panel: 30° to the right. The session board mirrors it on the left (TASK-413, D3). */
+export function robotPanelPlacement(): { position: [number, number, number]; rotation: THREE.Euler } {
+  return sidePanelPlacement(BEARING_RAD);
 }
 
 const BG = 'rgba(9,11,17,0.86)';
 const BG_LATCHED = 'rgba(96,14,14,0.92)';
 
 export interface VrRobotPanelProps {
+  /** The robot whose camera status and server readiness the panel reads. */
+  robotId: string;
   telemetryRef: { current: VrRigTelemetry };
   onRecenter: () => void;
-  /** Absent outside a data-collection session: no Next take button then. */
-  onNextEpisode?: () => boolean | Promise<boolean>;
   /** The modal's `resetEstop` — the same path as the desktop banner's button. */
   onResetEstop?: () => void | Promise<void>;
 }
 
-export function VrRobotPanel({ telemetryRef, onRecenter, onNextEpisode, onResetEstop }: VrRobotPanelProps) {
+/** How often the server's readiness reason is read into the panel. */
+const READINESS_READ_MS = 1_000;
+
+/**
+ * The server's reason for this robot, or null when there is none or it is
+ * stale. Read from the readiness store, which the launcher card's readiness
+ * panel (`VRTeleopSection`) keeps fresh for as long as this modal is open.
+ */
+function serverWhyOf(robotId: string, now: number): ServerWhy | null {
+  const entry = useReadinessStore.getState().byRobot[robotId];
+  if (!entry || now - entry.receivedAt > READINESS_STALE_MS) return null;
+  const reason = entry.readiness.reason;
+  return reason ? { code: reason.code, severity: reason.severity, text: reason.text, source: reason.source } : null;
+}
+
+export function VrRobotPanel({ robotId, telemetryRef, onRecenter, onResetEstop }: VrRobotPanelProps) {
   const placement = useMemo(robotPanelPlacement, []);
+
+  // TASK-413: the server's reason, read once a second into a ref — never a
+  // subscription, which would re-render inside the canvas.
+  const serverWhy = useRef<ServerWhy | null>(null);
+  useEffect(() => {
+    const read = () => { serverWhy.current = serverWhyOf(robotId, Date.now()); };
+    read();
+    const timer = setInterval(read, READINESS_READ_MS);
+    return () => clearInterval(timer);
+  }, [robotId]);
 
   const compose = useCallback((): VrPanelContent => {
     const t = telemetryRef.current;
     const now = Date.now();
-    const why = whyFromTelemetry(t, now);
-    const lines = composeRobotPanel(panelFactsFromTelemetry(t), why, now);
+    const local = whyFromTelemetry(t, now);
+    const picked = pickWhyLine(local, serverWhy.current);
+    const lines = composeRobotPanel(panelFactsFromTelemetry(t), local, now);
+    // The why line is last; the camera line goes just above it.
+    const whyLine = lines.pop()!;
+    const camera = cameraPanelLine(useVrCameraStatus.getState(), robotId);
+    if (camera) lines.push(camera);
+    lines.push({ ...whyLine, text: picked.text, color: SEVERITY_COLOR[picked.severity] });
     if (import.meta.env.DEV) vrUiDebug.panel = lines.map((l) => l.text);
     return t.estopLatched
       ? { title: 'ROBOT — E-STOP LATCHED', titleColor: 'white', lines, background: BG_LATCHED, highlight: 'salmon' }
       : { title: 'ROBOT', lines, background: BG };
-  }, [telemetryRef]);
+  }, [telemetryRef, robotId]);
 
-  const nextTake = useCallback(() => {
-    if (onNextEpisode) void Promise.resolve(onNextEpisode()).catch(() => { /* the session says why */ });
-  }, [onNextEpisode]);
   const reset = useCallback(() => {
     if (onResetEstop) void Promise.resolve(onResetEstop()).catch(() => { /* the banner says why */ });
   }, [onResetEstop]);
@@ -96,11 +142,9 @@ export function VrRobotPanel({ telemetryRef, onRecenter, onNextEpisode, onResetE
         position={[0, textY, 0]}
         compose={compose}
       />
-      {/* 1 mm in front of the panel plane, so a button is never z-fighting it. */}
+      {/* 1 mm in front of the panel plane, so a button is never z-fighting it.
+          Next take moved to the session board (TASK-413, D3). */}
       <VrButton id="recenter" label="Recenter" position={[-0.16, buttonY, 0.001]} onClick={onRecenter} />
-      {onNextEpisode && (
-        <VrButton id="next-take" label="Next take" position={[0, buttonY, 0.001]} onClick={nextTake} />
-      )}
       <VrButton
         id="reset-estop"
         label="Reset E-stop"

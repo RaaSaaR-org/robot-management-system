@@ -83,6 +83,7 @@ vi.mock('@/features/safety/api/safetyApi', () => ({
   },
 }));
 
+import type { VrSessionBridge } from '../vrSessionBridge';
 import { ArmNotices, VRTeleopModalBody, meterLink, parseArmFrame, parseBaseFrame, parseHeldFrame } from '../VRTeleopModal';
 
 /**
@@ -158,6 +159,20 @@ function renderModal(
 }
 
 /** The fourteen arm joints the agent needs a chain for, as the agent asks it. */
+/** A session the modal only checks for presence (TASK-413). */
+const FAKE_SESSION: VrSessionBridge = {
+  getState: () => ({
+    status: 'recording', phase: 'between', take: null, takeElapsedS: null, kept: 0, discarded: 0,
+    frames: 0, fpsActual: null, degraded: false, autoStopInS: null, lastQuickCheck: null, pending: false,
+  }),
+  actions: {
+    start: () => Promise.resolve('ok'),
+    stop: () => Promise.resolve('ok'),
+    next: () => Promise.resolve('ok'),
+    discardLast: () => Promise.resolve('ok'),
+  },
+};
+
 const G1_ARM_JOINTS = (['left', 'right'] as const).flatMap((side) =>
   ['shoulder_pitch', 'shoulder_roll', 'shoulder_yaw', 'elbow', 'wrist_roll', 'wrist_pitch', 'wrist_yaw']
     .map((j) => ({ name: `${side}_${j}_joint`, min: -2, max: 2 })),
@@ -377,24 +392,27 @@ describe('VRTeleopModalBody — controller mapping card', () => {
     // only finds out about by pressing it and watching nothing happen.
     renderModal();
     expect(screen.queryByText('L-Stick')).not.toBeInTheDocument();
+    expect(screen.queryByText('R-Stick')).not.toBeInTheDocument();
     expect(screen.getByText('Safety and view')).toBeInTheDocument();
   });
 
-  it('lists the L-Stick episode control when the session supplies one', () => {
-    renderModal({ onNextEpisode: () => true });
+  it('lists the stick take controls when the session supplies one (TASK-413, D1)', () => {
+    renderModal({ vrSession: FAKE_SESSION });
     expect(screen.getByText('L-Stick')).toBeInTheDocument();
-    expect(
-      screen.getByText('Click to end this episode and start the next'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Click to start a take, click again to stop it')).toBeInTheDocument();
+    expect(screen.getByText('R-Stick')).toBeInTheDocument();
+    expect(screen.getByText('Click to end this take and start the next')).toBeInTheDocument();
+    // Discard is a hold, never a click: an accidental click must not destroy a take.
+    expect(screen.getByText('R-Stick hold')).toBeInTheDocument();
     // The heading moves with the rows.
     expect(screen.getByText('Safety, view and recording')).toBeInTheDocument();
     expect(screen.queryByText('Safety and view')).not.toBeInTheDocument();
   });
 
   it('leaves both face-button bindings exactly where they were', () => {
-    // Both are bound on BOTH hands on purpose. The stick click exists precisely
-    // so that adding a recording control did not have to buy a face button back.
-    renderModal({ onNextEpisode: () => true });
+    // Both are bound on BOTH hands on purpose. The stick clicks exist precisely
+    // so that adding recording controls did not have to buy a face button back.
+    renderModal({ vrSession: FAKE_SESSION });
     expect(screen.getByText('B / Y')).toBeInTheDocument();
     expect(screen.getByText('E-STOP — either hand, either button')).toBeInTheDocument();
     expect(screen.getByText('A / X')).toBeInTheDocument();

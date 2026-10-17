@@ -16,6 +16,7 @@ import { whyFromTelemetry } from './vrWhy';
 import { useTextPlate } from './VrTextPlate';
 import { GRIP_THRESHOLD } from './vrConstants';
 import type { VrRigTelemetry } from './VrTeleopRig';
+import { hudTakeOf, type VrSessionBridge } from './vrSessionBridge';
 
 /**
  * Panel size in metres — 12 x 6 cm, the size of a large smartwatch.
@@ -101,7 +102,14 @@ function applyMarker(mesh: THREE.Mesh | null, squeeze: number, saturated: boolea
  * hands with no clutch. A side with no controller falls back to that hand's
  * `wrist` joint space.
  */
-export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTelemetry } }) {
+export function VrWristHud({
+  telemetryRef,
+  vrSession,
+}: {
+  telemetryRef: { current: VrRigTelemetry };
+  /** The recording session (TASK-413): its take is the HUD's first line. */
+  vrSession?: VrSessionBridge;
+}) {
   const left = useXRInputSourceState('controller', 'left');
   const right = useXRInputSourceState('controller', 'right');
   const leftHand = useXRInputSourceState('hand', 'left');
@@ -170,7 +178,7 @@ export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTel
       moveEnabled: t.moveEnabled,
       baseMode: t.baseMode,
       modeControl: t.modeControl,
-      recording: t.recording,
+      recording: hudTakeOf(vrSession?.getState()),
       arm: t.arm,
       clutchHeld: t.clutch.left || t.clutch.right,
       handTracked: t.left.tracked === 'hand' || t.right.tracked === 'hand',
