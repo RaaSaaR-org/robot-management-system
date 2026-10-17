@@ -27,7 +27,7 @@ describe('buildPreflight', () => {
       ['robot', 'ok'], ['recorder', 'ok'], ['camera', 'ok'], ['input', 'ok'],
     ]);
     expect(items.find((i) => i.id === 'camera')?.detail).toBe('head_camera (pc2cam)');
-    expect(summarizePreflight(items)).toEqual({ blocking: false, warnings: 0, next: 'Ready. Press Start recording (Space).' });
+    expect(summarizePreflight(items)).toEqual({ blocking: false, warnings: 0, next: 'Ready. Press Start session (Space).' });
   });
 
   it('blocks on an offline robot and names that as the next action', () => {

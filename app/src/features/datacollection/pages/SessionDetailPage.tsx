@@ -1,16 +1,21 @@
 /**
  * @file SessionDetailPage.tsx
  * @description Session detail and recording cockpit: status-driven acts
- *              (start, pause, resume, end through confirm), live HUD, robot
- *              viewer, cameras, episodes, and the completed-session review.
+ *              (start, end through confirm), live HUD, robot viewer, cameras,
+ *              takes, and the completed-session review. TASK-410: a started
+ *              session is Ready; takes start and stop explicitly (button,
+ *              Space, or the headset), every client shows the same take and
+ *              timer from the server's live state, a quick check follows each
+ *              take, and the robot's E-STOP is always in the header (Escape
+ *              twice). Pause stays only for recorders without explicit takes.
  *              Under the control lease the page holds one lease that its
  *              gamepad and simulated-VR inputs join (TASK-320). A created
  *              session shows a pre-flight checklist; a blocking item (robot
- *              offline) disables Start recording and its hotkey (TASK-392).
+ *              offline) disables Start session and its hotkey (TASK-392).
  * @feature datacollection
  */
 
-import { useState, Suspense, lazy, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, Suspense, lazy, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useParams } from 'react-router-dom';
 import { ArrowRight, Database, Pause, Play, Plus, Square } from 'lucide-react';
 import {
@@ -24,11 +29,15 @@ import { SessionStepIndicator } from '../components/SessionStepIndicator';
 import { EpisodePanel } from '../components/EpisodePanel';
 import { PreflightChecklist } from '../components/PreflightChecklist';
 import { VRSessionPanel } from '../components/VRSessionPanel';
-import { SessionHud } from '../components/session/SessionHud';
+import { SessionHud, type HudPhase } from '../components/session/SessionHud';
 import { SessionCompleted } from '../components/session/SessionCompleted';
+import { QuickCheckCard } from '../components/session/QuickCheckCard';
+import { SessionEStopButton } from '../components/session/SessionEStopButton';
+import { isDialogOpen, isTypingTarget } from '../utils/hotkeys';
+import { isCueMuted, scheduleAutoStopWarning, setCueMuted, subscribeCueMuted } from '@/shared/utils/sessionCues';
 import { useSessionDetail } from '../hooks/datacollection';
 import { useTeleopEvents } from '../hooks/useTeleopEvents';
-import { useDataCollectionStore } from '../store/datacollectionStore';
+import { useDataCollectionStore, selectKept, selectTakeElapsedS } from '../store/datacollectionStore';
 import { useRobotsStore } from '../../robots/store/robotsStore';
 import { useTelemetryStream } from '../../robots/hooks/useTelemetryStream';
 import { JointStateGrid } from '../../robots/components/visualization';
@@ -45,6 +54,7 @@ import { jointPositionUnit } from '../../robots/types/robots.types';
 import type { RobotType } from '../../robots/types/robots.types';
 import { TELEOPERATION_TYPE_LABELS, formatDuration, canStartSession, canPauseSession, canEndSession } from '../types/datacollection.types';
 import { sessionName } from '../utils/sessionFormat';
+import { takeLabel } from '../utils/takeFormat';
 
 const Robot3DViewer = lazy(() =>
   import('../../robots/components/visualization/Robot3DViewer').then((m) => ({ default: m.Robot3DViewer }))
@@ -73,6 +83,20 @@ export function SessionDetailPage() {
   const storeFetchEpisodes = useDataCollectionStore((s) => s.fetchEpisodes);
   const storeNextEpisode = useDataCollectionStore((s) => s.nextEpisode);
   const storeDiscardEpisode = useDataCollectionStore((s) => s.discardEpisode);
+  // TASK-410: explicit takes against the one live state.
+  const live = useDataCollectionStore((s) => (s.live && s.live.sessionId === id ? s.live : null));
+  const clockOffsetMs = useDataCollectionStore((s) => s.liveClockOffsetMs);
+  const lastQuickCheck = useDataCollectionStore((s) => s.lastQuickCheck);
+  const takePending = useDataCollectionStore((s) => s.takePending);
+  const kept = useDataCollectionStore(selectKept);
+  const storeFetchLive = useDataCollectionStore((s) => s.fetchLive);
+  const storeStartTake = useDataCollectionStore((s) => s.startTake);
+  const storeStopTake = useDataCollectionStore((s) => s.stopTake);
+  const storeNextTake = useDataCollectionStore((s) => s.nextTake);
+  const storeDiscardLast = useDataCollectionStore((s) => s.discardLastTake);
+  const storeDiscardTake = useDataCollectionStore((s) => s.discardTake);
+  const dismissQuickCheck = useDataCollectionStore((s) => s.dismissQuickCheck);
+  const muted = useSyncExternalStore(subscribeCueMuted, isCueMuted, isCueMuted);
 
   // Live progress via the app WebSocket; REST polling backs it up while it is down.
   const { isConnected: isWsConnected } = useTeleopEvents();
@@ -110,16 +134,26 @@ export function SessionDetailPage() {
     setElapsedSeconds(0);
   }, [session?.status, session?.startedAt]);
 
-  // Episode summaries: fetch on load, poll (3s) while recording.
+  // Episode summaries and the live state: fetched on load. While recording the
+  // WebSocket carries every change, so the poll is a 10 s safety net; with the
+  // socket down it is the only source and runs every 3 s.
   const sessionStatus = session?.status;
+  const sessionLoaded = !!session;
   useEffect(() => {
-    if (!id || !sessionStatus) return;
+    if (!id || !sessionLoaded) return;
     storeFetchEpisodes(id);
-    if (sessionStatus === 'recording') {
-      const timer = setInterval(() => storeFetchEpisodes(id), 3000);
+    storeFetchLive(id);
+    if (sessionStatus === 'recording' || sessionStatus === 'paused') {
+      const timer = setInterval(() => {
+        storeFetchEpisodes(id);
+        storeFetchLive(id);
+      }, isWsConnected ? 10_000 : 3_000);
       return () => clearInterval(timer);
     }
-  }, [id, sessionStatus, storeFetchEpisodes]);
+  }, [id, sessionLoaded, sessionStatus, isWsConnected, storeFetchEpisodes, storeFetchLive]);
+
+  // A quick check belongs to the session it was taken in.
+  useEffect(() => { dismissQuickCheck(); }, [id, dismissQuickCheck]);
 
   // Fallback polling while the WebSocket is down.
   useEffect(() => {
@@ -128,23 +162,68 @@ export function SessionDetailPage() {
     return () => clearInterval(timer);
   }, [id, isWsConnected, sessionStatus, fetchSession]);
 
+  // The take timer ticks on the server's clock (D5): 4 Hz while a take runs.
+  const capturing = sessionStatus === 'recording' && live?.phase === 'capturing';
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (sessionStatus !== 'recording') return;
+    const timer = setInterval(() => setNowMs(Date.now()), capturing ? 250 : 1000);
+    return () => clearInterval(timer);
+  }, [sessionStatus, capturing]);
+  const serverNowMs = nowMs + clockOffsetMs;
+  const takeElapsedS = live ? selectTakeElapsedS(serverNowMs)({ live }) : null;
+  const autoStopInS = capturing && live?.autoStopS && takeElapsedS !== null ? live.autoStopS - takeElapsedS : null;
+
+  // The auto-stop warning tick, 3 s before the robot stops the take itself.
+  const autoStopS = live?.autoStopS ?? null;
+  const liveTakeStartedAt = capturing ? live?.takeStartedAt ?? null : null;
+  useEffect(() => {
+    if (!autoStopS || !liveTakeStartedAt) return;
+    const started = Date.parse(liveTakeStartedAt);
+    if (!Number.isFinite(started)) return;
+    const elapsed = (Date.now() + clockOffsetMs - started) / 1000;
+    return scheduleAutoStopWarning(autoStopS - elapsed);
+    // Re-arm per take only; the offset moves by milliseconds between events.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStopS, liveTakeStartedAt]);
+
+  /** True when the recorder takes explicit start/stop (agent and sim sessions). */
+  const takeMode = !!live && live.phase !== null;
+
+  const handleStartTake = useCallback((source: 'desktop' | 'hotkey' | 'vr' = 'desktop') =>
+    (session ? storeStartTake(session.id, source) : Promise.resolve(false)), [session, storeStartTake]);
+  const handleStopTake = useCallback((source: 'desktop' | 'hotkey' | 'vr' = 'desktop') =>
+    (session ? storeStopTake(session.id, source) : Promise.resolve(false)), [session, storeStopTake]);
+  const handleNextTake = useCallback((source: 'desktop' | 'hotkey' | 'vr' = 'desktop') =>
+    (session ? storeNextTake(session.id, source) : Promise.resolve(false)), [session, storeNextTake]);
+  const handleDiscardLast = useCallback((expectedTake: number) =>
+    (session ? storeDiscardLast(session.id, 'desktop', expectedTake) : Promise.resolve(false)), [session, storeDiscardLast]);
+  const handleDiscardTake = useCallback((take: number) =>
+    (session ? storeDiscardTake(session.id, take, 'desktop') : Promise.resolve(false)), [session, storeDiscardTake]);
+
   /**
-   * Returns whether the boundary was actually drawn. The VR rig buzzes the
-   * controller only when it was, so a refused boundary must return false.
+   * The headset's one button. Returns whether the boundary was actually drawn:
+   * the VR rig buzzes the controller only when it was, so a refused boundary
+   * must return false. Between takes it starts one; while recording it moves
+   * to the next. Recorders without explicit takes keep the old boundary.
    */
   const handleNextEpisode = useCallback(async (): Promise<boolean> => {
     if (!session || session.status !== 'recording') return false;
+    if (takeMode) {
+      return live?.phase === 'capturing' ? storeNextTake(session.id, 'vr') : storeStartTake(session.id, 'vr');
+    }
     try { await storeNextEpisode(session.id); return true; } catch { return false; }
-  }, [session, storeNextEpisode]);
+  }, [session, takeMode, live?.phase, storeNextEpisode, storeNextTake, storeStartTake]);
 
+  /** A recorder without explicit takes discards through the old route. */
   const handleDiscardEpisode = useCallback(async (episodeIndex: number) => {
     if (!session) return;
     try {
       await storeDiscardEpisode(session.id, episodeIndex);
       await fetchSession();
-      toast.success('Episode discarded', { description: `Episode ${episodeIndex}` });
+      toast.success(`You discarded ${takeLabel(episodeIndex).toLowerCase()}`);
     } catch (err) {
-      toast.error("Couldn't discard episode", { description: errorMessage(err) });
+      toast.error("Couldn't discard the take", { description: errorMessage(err) });
     }
   }, [session, storeDiscardEpisode, fetchSession]);
 
@@ -161,11 +240,11 @@ export function SessionDetailPage() {
       return run('start', () => storeResume(session.id), 'Recording resumed', "Couldn't resume recording");
     }
     const ok = await confirm({
-      title: `Start recording on ${robotName}?`,
-      description: "The robot follows the operator's input and every frame is captured.",
-      confirmLabel: 'Start recording',
+      title: `Start the session on ${robotName}?`,
+      description: "The robot follows the operator's input. Nothing is recorded until a take starts.",
+      confirmLabel: 'Start session',
     });
-    if (ok) await run('start', () => storeStart(session.id), 'Recording started', "Couldn't start recording");
+    if (ok) await run('start', () => storeStart(session.id), 'Session started — ready for take 1', "Couldn't start the session");
   };
 
   const handlePause = () => session && run('pause', () => storePause(session.id), 'Session paused', "Couldn't pause session");
@@ -174,28 +253,33 @@ export function SessionDetailPage() {
     if (!session) return;
     const ok = await confirm({
       title: 'End this session?',
-      description: 'Recording stops and the episodes are saved. You can review them afterwards.',
+      description: 'Recording stops and the kept takes are saved. You can review them afterwards.',
       confirmLabel: 'End session',
       tone: 'danger',
     });
     if (ok) await run('end', () => storeEnd(session.id), 'Session ended', "Couldn't end session");
   };
 
-  // TASK-117 shortcuts: Space = start/pause, E = end, N = next episode.
+  // Session shortcuts: Space starts a created session (or resumes a paused
+  // one), E ends it (through the confirm). While recording with explicit
+  // takes, Space / N / Backspace belong to the take panel. Recorders without
+  // explicit takes keep TASK-117's Space = pause and N = next episode.
   // Ignored inside text fields and while any dialog is open.
+  const takeModeRef = useRef(false);
+  takeModeRef.current = takeMode;
   useEffect(() => {
     if (!session) return;
     const onKey = (ev: KeyboardEvent) => {
-      const t = ev.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-      if (document.querySelector('[role="dialog"],[role="alertdialog"]')) return;
+      if (ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      if (isTypingTarget(ev.target)) return;
+      if (isDialogOpen()) return;
+      const legacy = session.status === 'recording' && !takeModeRef.current;
       if (ev.code === 'Space') {
-        ev.preventDefault();
-        if (canPauseSession(session)) void handlePause();
-        else if (canStartSession(session) && !startBlockedRef.current) void handleStart();
+        if (canStartSession(session) && !startBlockedRef.current) { ev.preventDefault(); void handleStart(); }
+        else if (legacy && canPauseSession(session)) { ev.preventDefault(); void handlePause(); }
       } else if ((ev.key === 'e' || ev.key === 'E') && canEndSession(session)) {
         ev.preventDefault(); void handleEnd();
-      } else if ((ev.key === 'n' || ev.key === 'N') && session.status === 'recording') {
+      } else if ((ev.key === 'n' || ev.key === 'N') && legacy) {
         ev.preventDefault(); void handleNextEpisode();
       }
     };
@@ -297,8 +381,17 @@ export function SessionDetailPage() {
   const isLive = isRecording || isPaused || session.status === 'created';
   const isVrSession = session.type === 'vr_quest' || session.type === 'vr_vision_pro';
   const isSim = !!robot && (robot.id.startsWith('sim-') || /sim/i.test(robot.model ?? ''));
-  const liveFrameCount = isRecording && typeof recordingProgress?.frameCount === 'number' ? recordingProgress.frameCount : session.frameCount;
-  const currentEpisode = recordingProgress?.currentEpisode ?? Math.max(0, episodes.length - 1);
+  const liveFrameCount = live && (isRecording || isPaused)
+    ? live.totalFrames
+    : isRecording && typeof recordingProgress?.frameCount === 'number' ? recordingProgress.frameCount : session.frameCount;
+  const currentEpisode = live?.take ?? recordingProgress?.currentEpisode ?? Math.max(0, episodes.length - 1);
+  const hudPhase: HudPhase = isPaused ? 'paused' : !isRecording ? 'idle' : takeMode && live?.phase === 'between' ? 'between' : 'capturing';
+  // Session time: the recorder's own clock carried forward on the server's, else the start stamp.
+  const liveElapsedS = live && typeof live.elapsedS === 'number'
+    ? live.elapsedS + (isRecording ? Math.max(0, (serverNowMs - Date.parse(live.at)) / 1000) : 0)
+    : null;
+  const sessionElapsedS = liveElapsedS ?? (typeof recordingProgress?.elapsedS === 'number' ? recordingProgress.elapsedS : elapsedSeconds);
+  const degraded = !!(live?.degraded || recordingProgress?.degraded);
   const robotType = (telemetry?.robotType as RobotType) ?? ((robot?.metadata as Record<string, unknown>)?.robotType as RobotType) ?? 'generic';
   const openExport = () => { setModalError(undefined); setExportOpen(true); };
 
@@ -312,7 +405,7 @@ export function SessionDetailPage() {
           leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />}
           onClick={() => void handleStart()}
         >
-          Start recording
+          Start session
         </Button>
       );
     }
@@ -320,6 +413,8 @@ export function SessionDetailPage() {
       <Button variant={variant} isLoading={pending === 'end'} leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handleEnd()}>End session</Button>
     );
     if (isRecording) {
+      // Between takes IS the pause for a recorder with explicit takes (TASK-408 D6).
+      if (takeMode) return end('secondary');
       return <><Button variant="secondary" isLoading={pending === 'pause'} leftIcon={<Pause className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handlePause()}>Pause</Button>{end('danger')}</>;
     }
     if (isPaused) {
@@ -347,24 +442,43 @@ export function SessionDetailPage() {
           {isSim && <StatusTag tone="sim">Sim</StatusTag>}
           {isTelemetryConnected && <StatusTag tone="live" dot pulse>Live</StatusTag>}
         </>}
-        actions={actions}
+        actions={<>
+          <SessionEStopButton robotId={session.robotId} robotName={robotName} />
+          {actions}
+        </>}
       >
         <SessionStepIndicator session={session} />
       </PageHeader>
 
       {isLive && (
         <SessionHud
-          duration={isRecording ? formatElapsed(typeof recordingProgress?.elapsedS === 'number' ? Math.floor(recordingProgress.elapsedS) : elapsedSeconds) : formatDuration(session.duration)}
+          phase={hudPhase}
+          take={live ? live.take : isRecording ? currentEpisode : null}
+          takeElapsedS={takeMode ? takeElapsedS : isRecording ? sessionElapsedS : null}
+          duration={isRecording ? formatElapsed(Math.floor(sessionElapsedS)) : formatDuration(session.duration)}
           frames={liveFrameCount}
           fps={session.fps}
-          fpsActual={isRecording ? recordingProgress?.fpsActual : undefined}
-          episode={currentEpisode + 1}
-          kept={episodes.length}
+          fpsActual={isRecording ? live?.fpsActual ?? recordingProgress?.fpsActual : undefined}
+          kept={kept}
+          degraded={isRecording && degraded}
+          autoStopInS={autoStopInS}
+          muted={muted}
+          onToggleMute={() => setCueMuted(!muted)}
           tone={isRecording ? 'live' : undefined}
         />
       )}
 
-      {isRecording && recordingProgress?.degraded && (
+      {isLive && lastQuickCheck && (
+        <QuickCheckCard
+          key={lastQuickCheck.take}
+          sessionId={session.id}
+          quickCheck={lastQuickCheck}
+          onKeep={dismissQuickCheck}
+          onDiscard={handleDiscardTake}
+        />
+      )}
+
+      {isRecording && degraded && (
         <Panel variant="inset" padding="sm" className="text-[13px] text-ink-secondary">
           <span className="font-medium text-signal-estimated">Frames are being missed.</span> The robot agent is unreachable; retrying automatically.
         </Panel>
@@ -436,14 +550,21 @@ export function SessionDetailPage() {
               </Panel.Body>
             </Panel>
           </div>
-          <div className="flex flex-col gap-6">
+          {/* Takes first below xl: on a tablet the controls must not sit under the 3D view. */}
+          <div className="order-first flex flex-col gap-6 xl:order-none">
             <EpisodePanel
+              sessionId={session.id}
               episodes={episodes}
-              currentEpisode={currentEpisode}
+              live={live}
               isRecording={isRecording}
               canDiscard={isLive}
+              pending={takePending}
+              onStartTake={() => handleStartTake()}
+              onStopTake={() => handleStopTake()}
+              onNextTake={() => handleNextTake()}
+              onDiscardLast={handleDiscardLast}
+              onDiscardTake={(take) => (takeMode ? handleDiscardTake(take) : handleDiscardEpisode(take))}
               onNextEpisode={handleNextEpisode}
-              onDiscardEpisode={handleDiscardEpisode}
             />
             <Panel>
               <Panel.Header title="Quality" />
@@ -463,7 +584,7 @@ export function SessionDetailPage() {
           // 1-based, matching the HUD; frames are the CURRENT take's count.
           recording={isRecording ? {
             episode: currentEpisode + 1,
-            frames: episodes.find((e) => e.episodeIndex === currentEpisode)?.frameCount ?? liveFrameCount,
+            frames: live ? live.takeFrames : episodes.find((e) => e.episodeIndex === currentEpisode)?.frameCount ?? liveFrameCount,
           } : null}
         />
       )}

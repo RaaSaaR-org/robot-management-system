@@ -57,12 +57,15 @@ test.describe('VR data collection in simulation', () => {
     // Pre-flight checklist: the sim robot is online, nothing blocks Start.
     await expect(page.getByTestId('preflight-robot')).toHaveAttribute('data-level', 'ok', { timeout: 15_000 });
 
-    // ── 2. Start recording ────────────────────────────────────────────────
-    await page.getByRole('button', { name: /^Start recording$/ }).click();
-    await page.getByRole('alertdialog').getByRole('button', { name: /^Start recording$/ }).click();
+    // ── 2. Start the session, then the first take (TASK-410) ──────────────
+    await page.getByRole('button', { name: /^Start session$/ }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: /^Start session$/ }).click();
     await expect(page.getByText('Recording', { exact: true }).first()).toBeVisible({
       timeout: 15_000,
     });
+    await expect(page.getByTestId('hud-phase')).toHaveText('READY', { timeout: 15_000 });
+    await page.getByTestId('take-primary').click();
+    await expect(page.getByTestId('hud-phase')).toHaveText('● REC', { timeout: 10_000 });
 
     // ── 3. Enable "Simulate VR input" and watch frames rise ──────────────
     await page.getByTestId('simulate-vr-toggle').click();
@@ -75,9 +78,9 @@ test.describe('VR data collection in simulation', () => {
       .poll(async () => readFrameCount(page), { timeout: 30_000, intervals: [1000] })
       .toBeGreaterThan(before + 5);
 
-    // ── 4. Next episode ──────────────────────────────────────────────────
+    // ── 4. Next take ─────────────────────────────────────────────────────
     await expect(page.getByTestId('hud-episode')).toContainText('1');
-    await page.getByTestId('episode-next').click();
+    await page.getByTestId('take-next').click();
     await expect(page.getByTestId('hud-episode')).toContainText('2', { timeout: 10_000 });
 
     // Let episode 1 collect some frames so the session survives the discard of ep 0
@@ -86,7 +89,7 @@ test.describe('VR data collection in simulation', () => {
     // ── 5. Discard episode 0 (kit confirm dialog, not window.confirm) ────
     await expect(page.getByTestId('episode-row-0')).toBeVisible({ timeout: 15_000 });
     await page.getByTestId('episode-discard-0').click();
-    const discardDialog = page.getByRole('alertdialog', { name: /Discard episode 0/i });
+    const discardDialog = page.getByRole('alertdialog', { name: /Discard take 1/i });
     await expect(discardDialog).toBeVisible();
     await discardDialog.getByRole('button', { name: /^Discard$/ }).click();
     await expect(page.getByTestId('episode-row-0')).toHaveCount(0, { timeout: 15_000 });

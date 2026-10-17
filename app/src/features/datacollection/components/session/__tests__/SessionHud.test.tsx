@@ -1,22 +1,55 @@
 /**
  * @file SessionHud.test.tsx
- * @description The live HUD names the take and how many are kept, never a
- *              target count (TASK-406).
+ * @description The live HUD: the phase pill, "Take N" (1-based) with its
+ *              timer, the auto-stop countdown, the DEGRADED chip and the mute
+ *              toggle; never a target count (TASK-406, TASK-410).
  * @feature datacollection
  */
 
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { SessionHud } from '../SessionHud';
+import { describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { SessionHud, formatTakeTimer, type SessionHudProps } from '../SessionHud';
 
-describe('SessionHud take tile', () => {
-  it('reads "Take N" with the kept count and no "of N"', () => {
-    render(<SessionHud duration="00:12" frames={360} fps={30} episode={3} kept={2} />);
-    expect(screen.getByText('Take')).toBeInTheDocument();
-    expect(screen.getByTestId('hud-episode')).toHaveTextContent('3');
-    expect(screen.getByTestId('hud-kept')).toHaveTextContent('kept 2');
+const base: SessionHudProps = {
+  phase: 'between', take: null, takeElapsedS: null, duration: '0:12', frames: 360, fps: 30, kept: 2,
+};
+
+describe('SessionHud', () => {
+  it('reads READY and the next take, 1-based, before the first take', () => {
+    render(<SessionHud {...base} />);
+    expect(screen.getByTestId('hud-phase')).toHaveTextContent('READY');
+    expect(screen.getByTestId('hud-take')).toHaveTextContent('Take 1');
+    expect(screen.getByTestId('hud-take-timer')).toHaveTextContent('00:00');
+    expect(screen.getByTestId('hud-kept')).toHaveTextContent('2');
     expect(document.body).not.toHaveTextContent(/\bof \d/);
-    // "Target rate" on the fps tile is the frame rate, not an episode target.
-    expect(document.body).not.toHaveTextContent(/target:/i);
+  });
+
+  it('reads ● REC, the live take and its timer while capturing', () => {
+    render(<SessionHud {...base} phase="capturing" take={4} takeElapsedS={83.7} autoStopInS={12.2} />);
+    expect(screen.getByTestId('hud-phase')).toHaveTextContent('● REC');
+    expect(screen.getByTestId('hud-take')).toHaveTextContent('Take 5');
+    expect(screen.getByTestId('hud-take-timer')).toHaveTextContent('01:23');
+    expect(screen.getByTestId('hud-autostop')).toHaveTextContent('auto-stop in 13s');
+  });
+
+  it('shows the take after the last one between takes, so a discarded number is never reused', () => {
+    render(<SessionHud {...base} take={4} />);
+    expect(screen.getByTestId('hud-take')).toHaveTextContent('Take 6');
+  });
+
+  it('shows DEGRADED and the mute state', () => {
+    const onToggleMute = vi.fn();
+    render(<SessionHud {...base} degraded muted onToggleMute={onToggleMute} />);
+    expect(screen.getByTestId('hud-degraded')).toBeInTheDocument();
+    expect(screen.getByTestId('hud-mute')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByTestId('hud-mute'));
+    expect(onToggleMute).toHaveBeenCalledTimes(1);
+  });
+
+  it('formats the timer as mm:ss', () => {
+    expect(formatTakeTimer(0)).toBe('00:00');
+    expect(formatTakeTimer(59.9)).toBe('00:59');
+    expect(formatTakeTimer(600)).toBe('10:00');
+    expect(formatTakeTimer(null)).toBe('00:00');
   });
 });

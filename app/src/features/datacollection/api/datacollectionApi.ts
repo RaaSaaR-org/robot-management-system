@@ -16,6 +16,10 @@ import type {
   ExportSessionRequest,
   ExportResultResponse,
   EpisodeSummary,
+  EpisodeActionBody,
+  EpisodeActionResult,
+  LiveState,
+  QuickCheck,
   LogPredictionRequest,
   GetUncertaintyParams,
   GetPrioritiesParams,
@@ -40,11 +44,57 @@ const ENDPOINTS = {
   sessionEpisodesNext: (id: string) => `/teleoperation/sessions/${id}/episodes/next`,
   sessionEpisode: (id: string, episodeIndex: number) =>
     `/teleoperation/sessions/${id}/episodes/${episodeIndex}`,
+  sessionLive: (id: string) => `/teleoperation/sessions/${id}/live`,
+  sessionEpisodesStart: (id: string) => `/teleoperation/sessions/${id}/episodes/start`,
+  sessionEpisodesStop: (id: string) => `/teleoperation/sessions/${id}/episodes/stop`,
+  sessionEpisodesDiscardLast: (id: string) => `/teleoperation/sessions/${id}/episodes/discard-last`,
+  sessionEpisodeThumbnail: (id: string, take: number) =>
+    `/teleoperation/sessions/${id}/episodes/${take}/thumbnail`,
   // Active Learning
   predictions: '/active-learning/predictions',
   uncertainty: '/active-learning/uncertainty',
   priorities: '/active-learning/priorities',
 } as const;
+
+// ============================================================================
+// EPISODE ACTION HELPERS
+// ============================================================================
+
+/** Episode actions read a 409 body instead of throwing on it. */
+const ACCEPT_CONFLICT = {
+  validateStatus: (status: number) => (status >= 200 && status < 300) || status === 409,
+};
+
+interface EpisodeActionResponse {
+  live?: LiveState | null;
+  quickCheck?: QuickCheck | null;
+  take?: number;
+  episodeIndex?: number;
+  restarted?: boolean;
+  code?: string;
+  error?: string;
+}
+
+async function episodeAction(
+  call: () => Promise<{ status: number; data: EpisodeActionResponse }>
+): Promise<EpisodeActionResult> {
+  const { status, data } = await call();
+  if (status === 409) {
+    return { ok: false, code: data.code ?? 'episode_conflict', error: data.error ?? 'Conflict', live: data.live ?? null };
+  }
+  if (!data.live) {
+    // A 2xx without a live state is a server older than TASK-408.
+    return { ok: false, code: 'no_live_state', error: 'The server did not return the live session state', live: null };
+  }
+  const take = data.take ?? data.episodeIndex;
+  return {
+    ok: true,
+    live: data.live,
+    ...(data.quickCheck !== undefined ? { quickCheck: data.quickCheck } : {}),
+    ...(take !== undefined ? { take } : {}),
+    ...(data.restarted !== undefined ? { restarted: data.restarted } : {}),
+  };
+}
 
 // ============================================================================
 // API FUNCTIONS
@@ -216,6 +266,65 @@ export const datacollectionApi = {
       frameCount: number;
     }>(ENDPOINTS.sessionEpisode(id, episodeIndex));
     return response.data;
+  },
+
+  // --------------------------------------------------------------------------
+  // Takes (TASK-408 server routes; TASK-410 client)
+  //
+  // Every action sends the take this client believes is live. A 409 is not
+  // an error to the caller: it answers `{ ok: false, code, live }` so the
+  // store can adopt the server's state instead of showing an error page.
+  // --------------------------------------------------------------------------
+
+  /** The session's one live state. */
+  async getLive(id: string): Promise<LiveState> {
+    const response = await apiClient.get<LiveState>(ENDPOINTS.sessionLive(id));
+    return response.data;
+  },
+
+  /** Begin a take. */
+  async startEpisode(id: string, body: EpisodeActionBody): Promise<EpisodeActionResult> {
+    return episodeAction(() => apiClient.post(ENDPOINTS.sessionEpisodesStart(id), body, ACCEPT_CONFLICT));
+  },
+
+  /** End the take being recorded; the result carries its quick check. */
+  async stopEpisode(id: string, body: EpisodeActionBody): Promise<EpisodeActionResult> {
+    return episodeAction(() => apiClient.post(ENDPOINTS.sessionEpisodesStop(id), body, ACCEPT_CONFLICT));
+  },
+
+  /** End the take being recorded and begin the next one, guarded by `expectedTake`. */
+  async nextEpisodeGuarded(id: string, body: EpisodeActionBody): Promise<EpisodeActionResult> {
+    return episodeAction(() => apiClient.post(ENDPOINTS.sessionEpisodesNext(id), body, ACCEPT_CONFLICT));
+  },
+
+  /** Discard the last take (ending it first when it is being recorded). */
+  async discardLast(id: string, body: EpisodeActionBody): Promise<EpisodeActionResult> {
+    return episodeAction(() => apiClient.post(ENDPOINTS.sessionEpisodesDiscardLast(id), body, ACCEPT_CONFLICT));
+  },
+
+  /** Discard one take by its 0-based number; the live take is restarted instead. */
+  async discardTake(id: string, take: number, body: EpisodeActionBody): Promise<EpisodeActionResult> {
+    return episodeAction(() =>
+      apiClient.delete(ENDPOINTS.sessionEpisode(id, take), { ...ACCEPT_CONFLICT, data: body })
+    );
+  },
+
+  /** The API path of a take's thumbnail (relative to the API base). */
+  thumbnailUrl(id: string, take: number): string {
+    return ENDPOINTS.sessionEpisodeThumbnail(id, take);
+  },
+
+  /**
+   * The take's thumbnail as a Blob, fetched with the bearer token (the route
+   * is behind auth, so a bare `<img src>` only works with auth disabled).
+   * Null when the take has none (404).
+   */
+  async fetchThumbnail(id: string, take: number): Promise<Blob | null> {
+    const response = await apiClient.get<Blob>(ENDPOINTS.sessionEpisodeThumbnail(id, take), {
+      responseType: 'blob',
+      validateStatus: (status) => (status >= 200 && status < 300) || status === 404,
+    });
+    return response.status === 404 ? null : response.data;
   },
 
   // --------------------------------------------------------------------------
