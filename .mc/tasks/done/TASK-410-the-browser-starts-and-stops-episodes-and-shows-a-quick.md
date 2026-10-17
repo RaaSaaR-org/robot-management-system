@@ -3,7 +3,7 @@ id: "TASK-410"
 aliases: []
 title: "The browser starts and stops episodes and shows a quick check after each one"
 slug: "the-browser-starts-and-stops-episodes-and-shows-a-quick"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
