@@ -46,7 +46,9 @@ import {
   PublishError,
   replaceTagOverRest,
   scrubToken,
+  writableNamespaces,
   type HubClient,
+  type HubWhoAmI,
 } from '../HuggingFacePublishService.js';
 import { buildDatasetCard, NEODEM_CARD_MARKER } from '../huggingface/datasetCard.js';
 
@@ -107,7 +109,14 @@ interface FakeHub extends HubClient {
 }
 
 function fakeHub(
-  opts: { exists?: boolean; remoteReadme?: string | null; fail?: Error; orgs?: string[]; tagFail?: Error } = {},
+  opts: {
+    exists?: boolean;
+    remoteReadme?: string | null;
+    fail?: Error;
+    orgs?: string[];
+    tagFail?: Error;
+    me?: Partial<HubWhoAmI>;
+  } = {},
 ): FakeHub {
   const hub: FakeHub = {
     uploads: [],
@@ -117,7 +126,13 @@ function fakeHub(
       if (opts.tagFail) throw opts.tagFail;
       hub.tags.push({ repo: p.repo, tag: p.tag, revision: p.revision });
     }),
-    whoAmI: vi.fn(async () => ({ name: 'huhn511', type: 'user', orgs: (opts.orgs ?? ['zemarobotik']).map((name) => ({ name })) })),
+    whoAmI: vi.fn(async () => ({
+      name: 'huhn511',
+      type: 'user',
+      orgs: (opts.orgs ?? ['zemarobotik']).map((name) => ({ name, roleInOrg: 'write' })),
+      auth: { accessToken: { role: 'write' } },
+      ...opts.me,
+    })),
     repoExists: vi.fn(async () => opts.exists ?? false),
     createRepo: vi.fn(async (p) => {
       hub.created.push({ repo: p.repo, visibility: p.visibility, license: p.license });
@@ -331,6 +346,35 @@ describe('HuggingFacePublishService.publish', () => {
     expect(error).toMatchObject({ status: 403, code: 'NAMESPACE_FORBIDDEN' });
   });
 
+  // Seen against the real Hub on 2026-10-17: the box's token was `read`, the
+  // status said configured, the publish was accepted with 202, and only
+  // `repos/create` said no — after the start had been audited.
+  it('refuses a read-only token before anything starts, and says how to fix it', async () => {
+    const hub = fakeHub({ me: { auth: { accessToken: { role: 'read' } } } });
+    const error = await refusal(service(hub).publish('ds-1', { repoId: 'huhn511/g1' }, null));
+    expect(error).toMatchObject({ status: 403, code: 'HF_TOKEN_READ_ONLY' });
+    expect(error.message).toMatch(/read-only.*write access/);
+    expect(hub.repoExists).not.toHaveBeenCalled();
+    expect(hub.createRepo).not.toHaveBeenCalled();
+    expect(mockDatasetService.auditDatasetAction).not.toHaveBeenCalled();
+  });
+
+  it('refuses an org where the account is only a reader, even with a write token', async () => {
+    const hub = fakeHub({ me: { orgs: [{ name: 'zemarobotik', roleInOrg: 'read' }] } });
+    const error = await refusal(service(hub).publish('ds-1', { repoId: 'zemarobotik/g1' }, null));
+    expect(error).toMatchObject({ status: 403, code: 'NAMESPACE_FORBIDDEN' });
+    expect(error.message).toContain('can write to: huhn511');
+    expect(hub.createRepo).not.toHaveBeenCalled();
+  });
+
+  it('lets the Hub decide when the whoami answer has no token role', async () => {
+    const hub = fakeHub({ me: { auth: undefined } });
+    const svc = service(hub);
+    await svc.publish('ds-1', { repoId: 'zemarobotik/g1' }, null);
+    await svc.settled('ds-1');
+    expect(hub.uploads).toHaveLength(1);
+  });
+
   it('still finishes when the version tag cannot be set, and says what that breaks', async () => {
     const hub = fakeHub({ tagFail: new Error(`HTTP 403 for ${TOKEN}`) });
     const svc = service(hub);
@@ -382,6 +426,8 @@ describe('HuggingFacePublishService.getStatus', () => {
       user: 'huhn511',
       orgs: ['zemarobotik'],
       defaultNamespace: 'huhn511',
+      tokenRole: 'write',
+      writableNamespaces: ['huhn511', 'zemarobotik'],
     });
     expect(hub.whoAmI).toHaveBeenCalledWith({ accessToken: TOKEN });
     expect(JSON.stringify(status)).not.toContain(TOKEN);
@@ -393,6 +439,19 @@ describe('HuggingFacePublishService.getStatus', () => {
     const hub = fakeHub();
     await service(hub, { HF_TOKEN_PATH: path }).getStatus();
     expect(hub.whoAmI).toHaveBeenCalledWith({ accessToken: 'hf_fromPATHfile00000000' });
+  });
+
+  it('warns when the token is read-only, or cannot write to the default namespace', async () => {
+    const readOnly = await service(fakeHub({ me: { auth: { accessToken: { role: 'read' } } } })).getStatus();
+    expect(readOnly).toMatchObject({ configured: true, tokenRole: 'read', writableNamespaces: [] });
+    expect(readOnly.warning).toMatch(/read-only/);
+
+    const orgReader = await service(
+      fakeHub({ me: { orgs: [{ name: 'zemarobotik', roleInOrg: 'read' }] } }),
+      { HF_TOKEN: TOKEN, HF_PUBLISH_NAMESPACE: 'zemarobotik' },
+    ).getStatus();
+    expect(orgReader).toMatchObject({ defaultNamespace: 'zemarobotik', writableNamespaces: ['huhn511'] });
+    expect(orgReader.warning).toMatch(/cannot write to zemarobotik/);
   });
 
   it('says not configured when there is no token anywhere', async () => {
@@ -440,6 +499,27 @@ describe('replaceTagOverRest', () => {
     await expect(
       replaceTagOverRest({ repo: { type: 'dataset', name: 'a/b' }, tag: 'v3.0', revision: 'main', accessToken: TOKEN }),
     ).rejects.toThrow(/HTTP 403/);
+  });
+});
+
+describe('writableNamespaces', () => {
+  const base = { name: 'huhn511', type: 'user', orgs: [{ name: 'zemarobotik', roleInOrg: 'read' }, { name: 'lab', roleInOrg: 'contributor' }] };
+  it('reads the token role and the org roles', () => {
+    expect(writableNamespaces({ ...base, auth: { accessToken: { role: 'read' } } })).toEqual([]);
+    expect(writableNamespaces({ ...base, auth: { accessToken: { role: 'write' } } })).toEqual(['huhn511', 'lab']);
+    expect(writableNamespaces({ ...base })).toBeNull();
+  });
+  it('takes repo.write scopes from a fine-grained token, and gives up on single-repo scopes', () => {
+    const fg = (scoped: { entity: { type: string; name: string }; permissions: string[] }[]) =>
+      writableNamespaces({ ...base, auth: { accessToken: { role: 'fineGrained', fineGrained: { scoped } } } });
+    expect(
+      fg([
+        { entity: { type: 'user', name: 'huhn511' }, permissions: ['repo.content.read', 'repo.write'] },
+        { entity: { type: 'org', name: 'zemarobotik' }, permissions: ['repo.write'] },
+        { entity: { type: 'org', name: 'lab' }, permissions: ['repo.content.read'] },
+      ]),
+    ).toEqual(['huhn511']);
+    expect(fg([{ entity: { type: 'dataset', name: 'huhn511/x' }, permissions: ['repo.write'] }])).toBeNull();
   });
 });
 

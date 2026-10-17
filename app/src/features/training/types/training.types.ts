@@ -1150,6 +1150,12 @@ export interface HubPublishStatus {
   user: string | null;
   orgs: string[];
   defaultNamespace: string | null;
+  /** The token's role on the Hub (`read`, `write`, `fineGrained`, …); null when unknown. */
+  tokenRole?: string | null;
+  /** Namespaces the token can create repos in; empty for a read-only token, null when unknown. */
+  writableNamespaces?: string[] | null;
+  /** Why the token cannot publish, or cannot publish to `defaultNamespace`. */
+  warning?: string;
   error?: string;
 }
 

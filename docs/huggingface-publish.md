@@ -30,11 +30,17 @@ any error text the server keeps. Check the setup without uploading anything:
 
 ```bash
 curl -s localhost:3001/api/datasets/publish/status
-# {"configured":true,"source":"file","user":"huhn511","orgs":["zemarobotik"],"defaultNamespace":"zemarobotik"}
+# {"configured":true,"source":"file","user":"huhn511","orgs":["zemarobotik"],"defaultNamespace":"zemarobotik",
+#  "tokenRole":"write","writableNamespaces":["huhn511","zemarobotik"]}
 ```
 
 `configured: false` means no token was found; an `error` means the Hub
-refused it or could not be reached.
+refused it or could not be reached. `writableNamespaces` is where the token can
+create a repo and push: empty for a `read` token (the dialog then refuses to
+publish), and without an org whose `roleInOrg` is `read` — being a member is not
+enough. A `warning` says why the token cannot publish, or cannot publish to
+`defaultNamespace`. `hf auth login` with a read token gives a box that looks set
+up and cannot publish anything; check `tokenRole` before relying on it.
 
 ## What gets published
 
@@ -88,7 +94,8 @@ Only `repoId` is required; a bare name takes the default namespace. Answers
 | ------ | ------ | ---- |
 | 400 | `INVALID_PUBLISH_REQUEST` | a field is malformed or unknown (`fields` names it) |
 | 400 | `INVALID_REPO_ID` | not `<namespace>/<name>` in the Hub's rules |
-| 403 | `NAMESPACE_FORBIDDEN` | the server's account is neither the namespace nor a member of it |
+| 403 | `HF_TOKEN_READ_ONLY` | the server's token cannot write anywhere (a `read` token) |
+| 403 | `NAMESPACE_FORBIDDEN` | the server's account is neither the namespace nor a member of it with write rights (an org `read` role is refused) |
 | 404 | `DATASET_NOT_FOUND` | |
 | 409 | `DATASET_NOT_READY` | status is not `ready` |
 | 409 | `DATASET_DEGRADED` | its last validation found errors, or a robot-type change invalidated it — send `force: true` to publish anyway (recorded in the job and the audit entry) |

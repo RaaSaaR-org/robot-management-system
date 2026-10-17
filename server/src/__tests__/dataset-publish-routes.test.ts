@@ -92,6 +92,7 @@ describe('Dataset publish routes', () => {
       [409, 'DATASET_NOT_READY'],
       [503, 'HF_TOKEN_MISSING'],
       [403, 'NAMESPACE_FORBIDDEN'],
+      [403, 'HF_TOKEN_READ_ONLY'],
       [404, 'DATASET_NOT_FOUND'],
     ])('passes a %i %s refusal through with its code', async (status, code) => {
       mockPublish.publish.mockRejectedValue(new MockPublishError('refused', status, code));

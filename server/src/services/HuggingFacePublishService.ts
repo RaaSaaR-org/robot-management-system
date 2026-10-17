@@ -102,12 +102,36 @@ export interface PublishStatus {
   user: string | null;
   orgs: string[];
   defaultNamespace: string | null;
+  /** The token's role as the Hub reports it (`read`, `write`, `fineGrained`, …); null when unknown. */
+  tokenRole: string | null;
+  /**
+   * The namespaces this token can create repos in and push to. Null when the
+   * Hub's answer does not say (then a publish is tried and the Hub decides).
+   */
+  writableNamespaces: string[] | null;
+  /** Why this token cannot publish anywhere, or cannot publish to `defaultNamespace`. */
+  warning?: string;
   error?: string;
+}
+
+/** The parts of the Hub's `whoami-v2` answer that decide where a token may write. */
+export interface HubWhoAmI {
+  name: string;
+  type: string;
+  orgs?: { name: string; roleInOrg?: string }[];
+  auth?: {
+    accessToken?: {
+      role?: string;
+      fineGrained?: {
+        scoped?: { entity?: { type?: string; name?: string }; permissions?: string[] }[];
+      };
+    };
+  };
 }
 
 /** The slice of `@huggingface/hub` this service uses — injectable for tests. */
 export interface HubClient {
-  whoAmI(params: { accessToken: string; hubUrl?: string }): Promise<{ name: string; type: string; orgs?: { name: string }[] }>;
+  whoAmI(params: { accessToken: string; hubUrl?: string }): Promise<HubWhoAmI>;
   repoExists(params: { repo: hub.RepoDesignation; accessToken: string; hubUrl?: string }): Promise<boolean>;
   createRepo(params: {
     repo: hub.RepoDesignation;
@@ -192,6 +216,75 @@ export function scrubToken(message: string, token: string | null): string {
   return out.replace(/hf_[A-Za-z0-9]{8,}/g, 'hf_***');
 }
 
+interface Account {
+  name: string;
+  type: string;
+  orgs: string[];
+  tokenRole: string | null;
+  writable: string[] | null;
+}
+
+/** Org roles that may create and push repos; `read` may not. */
+const ORG_WRITE_ROLES = new Set(['admin', 'write', 'contributor']);
+
+/**
+ * Where this token may create repos and push, from the Hub's whoami answer.
+ *
+ * A `read` token can do neither anywhere, and an org member whose role is
+ * `read` cannot write to that org even with a write token — the Hub only says
+ * so at `repos/create`, after the job has started. A fine-grained token writes
+ * where it holds `repo.write` on the user or org. Null means the answer does
+ * not settle it (no role, or write rights scoped to single repos), and the Hub
+ * is left to decide.
+ */
+export function writableNamespaces(me: HubWhoAmI): string[] | null {
+  const role = me.auth?.accessToken?.role;
+  if (!role) return null;
+  const orgRole = new Map((me.orgs ?? []).map((o) => [o.name, o.roleInOrg]));
+  const orgMayWrite = (org: string) => {
+    const r = orgRole.get(org);
+    return r === undefined || ORG_WRITE_ROLES.has(r);
+  };
+  if (role === 'read') return [];
+  if (role === 'write' || role === 'admin') {
+    return [me.name, ...(me.orgs ?? []).map((o) => o.name).filter(orgMayWrite)];
+  }
+  if (role === 'fineGrained') {
+    const scoped = me.auth?.accessToken?.fineGrained?.scoped ?? [];
+    const writes = scoped.filter((s) => (s.permissions ?? []).includes('repo.write'));
+    if (writes.some((s) => s.entity?.type !== 'user' && s.entity?.type !== 'org')) return null;
+    const names = writes.map((s) => s.entity?.name).filter((n): n is string => Boolean(n));
+    return [...new Set(names)].filter((n) => n === me.name || (orgRole.has(n) && orgMayWrite(n)));
+  }
+  return null;
+}
+
+/** Why `account` cannot write to `namespace`, or null when it can (or the Hub has to say). */
+function writeRefusal(account: Account, namespace: string): { code: string; message: string } | null {
+  if (account.writable === null) {
+    if (account.type === 'user' && namespace !== account.name && !account.orgs.includes(namespace)) {
+      return {
+        code: 'NAMESPACE_FORBIDDEN',
+        message: `The server's Hub account ${account.name} cannot write to ${namespace} (member of: ${account.orgs.join(', ') || 'no organisations'})`,
+      };
+    }
+    return null;
+  }
+  if (account.writable.includes(namespace)) return null;
+  if (account.writable.length === 0) {
+    return {
+      code: 'HF_TOKEN_READ_ONLY',
+      message:
+        `The server's Hugging Face token (account ${account.name}) is ${account.tokenRole === 'read' ? 'read-only' : 'not allowed to write to any namespace'}. ` +
+        'Create a token with write access at https://huggingface.co/settings/tokens and log in with it on the server host (`hf auth login`), or set HF_TOKEN.',
+    };
+  }
+  return {
+    code: 'NAMESPACE_FORBIDDEN',
+    message: `The server's Hub account ${account.name} cannot write to ${namespace} (this token can write to: ${account.writable.join(', ')})`,
+  };
+}
+
 /** A dataset is degraded when its last validation found errors or a type change invalidated it. */
 export function degradedReason(dataset: DatasetResponse): string | null {
   if (dataset.validation && dataset.validation.valid === false) {
@@ -256,7 +349,7 @@ export class HuggingFacePublishService {
   private readonly runs = new Map<string, Promise<void>>();
   /** Datasets between the in-progress check and the job being stored — the awaits in between. */
   private readonly starting = new Set<string>();
-  private whoamiCache: { token: string; at: number; value: { name: string; type: string; orgs: string[] } } | null = null;
+  private whoamiCache: { token: string; at: number; value: Account } | null = null;
 
   constructor(options: PublishServiceOptions = {}) {
     this.hub = options.hub ?? defaultHub;
@@ -304,11 +397,17 @@ export class HuggingFacePublishService {
     return this.env.HF_PUBLISH_NAMESPACE?.trim() || user;
   }
 
-  private async whoami(token: string): Promise<{ name: string; type: string; orgs: string[] }> {
+  private async whoami(token: string): Promise<Account> {
     const cached = this.whoamiCache;
     if (cached && cached.token === token && this.now().getTime() - cached.at < WHOAMI_TTL_MS) return cached.value;
     const me = await this.hub.whoAmI({ accessToken: token, ...this.hubParams() });
-    const value = { name: me.name, type: me.type, orgs: (me.orgs ?? []).map((o) => o.name) };
+    const value: Account = {
+      name: me.name,
+      type: me.type,
+      orgs: (me.orgs ?? []).map((o) => o.name),
+      tokenRole: me.auth?.accessToken?.role ?? null,
+      writable: writableNamespaces(me),
+    };
     this.whoamiCache = { token, at: this.now().getTime(), value };
     return value;
   }
@@ -317,11 +416,30 @@ export class HuggingFacePublishService {
   async getStatus(): Promise<PublishStatus> {
     const { token, source } = this.resolveToken();
     if (!token) {
-      return { configured: false, source: null, user: null, orgs: [], defaultNamespace: this.defaultNamespace(null) };
+      return {
+        configured: false,
+        source: null,
+        user: null,
+        orgs: [],
+        defaultNamespace: this.defaultNamespace(null),
+        tokenRole: null,
+        writableNamespaces: null,
+      };
     }
     try {
       const me = await this.whoami(token);
-      return { configured: true, source, user: me.name, orgs: me.orgs, defaultNamespace: this.defaultNamespace(me.name) };
+      const defaultNamespace = this.defaultNamespace(me.name);
+      const refusal = defaultNamespace ? writeRefusal(me, defaultNamespace) : null;
+      return {
+        configured: true,
+        source,
+        user: me.name,
+        orgs: me.orgs,
+        defaultNamespace,
+        tokenRole: me.tokenRole,
+        writableNamespaces: me.writable ? [...me.writable] : null,
+        ...(refusal ? { warning: refusal.message } : {}),
+      };
     } catch (error) {
       return {
         configured: true,
@@ -329,6 +447,8 @@ export class HuggingFacePublishService {
         user: null,
         orgs: [],
         defaultNamespace: this.defaultNamespace(null),
+        tokenRole: null,
+        writableNamespaces: null,
         error: `The Hub did not accept the token or could not be reached: ${scrubToken(errorMessage(error), token)}`,
       };
     }
@@ -400,7 +520,7 @@ export class HuggingFacePublishService {
       );
     }
 
-    let me: { name: string; type: string; orgs: string[] };
+    let me: Account;
     try {
       me = await this.whoami(token);
     } catch (error) {
@@ -415,14 +535,8 @@ export class HuggingFacePublishService {
     if (!repoId) {
       throw new PublishError('repoId must be <namespace>/<name> with letters, digits, "-", "_" or "."', 400, 'INVALID_REPO_ID');
     }
-    const namespace = repoId.split('/')[0];
-    if (me.type === 'user' && namespace !== me.name && !me.orgs.includes(namespace)) {
-      throw new PublishError(
-        `The server's Hub account ${me.name} cannot write to ${namespace} (member of: ${me.orgs.join(', ') || 'no organisations'})`,
-        403,
-        'NAMESPACE_FORBIDDEN',
-      );
-    }
+    const refusal = writeRefusal(me, repoId.split('/')[0]);
+    if (refusal) throw new PublishError(refusal.message, 403, refusal.code);
 
     const job: PublishJob = {
       datasetId,

@@ -135,6 +135,31 @@ describe('PublishDatasetDialog', () => {
     expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
   });
 
+  it('does not let a read-only token publish, and says how to fix it', async () => {
+    getHubPublishStatus.mockResolvedValue({
+      ...STATUS,
+      tokenRole: 'read',
+      writableNamespaces: [],
+      warning: "The server's Hugging Face token (account huhn511) is read-only. Create a token with write access…",
+    });
+    renderDialog();
+    expect(await screen.findByTestId('publish-not-configured')).toHaveTextContent('read-only');
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+  });
+
+  it('prefills a namespace the token can write to when the default one is read-only for it', async () => {
+    getHubPublishStatus.mockResolvedValue({
+      ...STATUS,
+      tokenRole: 'write',
+      writableNamespaces: ['huhn511'],
+      warning: "The server's Hub account huhn511 cannot write to zemarobotik (this token can write to: huhn511)",
+    });
+    renderDialog();
+    expect(await screen.findByDisplayValue('huhn511/g1-pick-apple')).toBeInTheDocument();
+    expect(screen.getByTestId('publish-namespace-warning')).toHaveTextContent('cannot write to zemarobotik');
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
+  });
+
   it('rejects a malformed repo id before calling the server', async () => {
     renderDialog();
     const input = await screen.findByDisplayValue('zemarobotik/g1-pick-apple');

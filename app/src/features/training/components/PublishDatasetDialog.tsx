@@ -142,7 +142,12 @@ export function PublishDatasetDialog({ isOpen, onClose, datasetId, datasetName, 
       if (cancelled) return;
       setStatus(hub);
       const slug = repoNameFrom(name || datasetId);
-      const namespace = hub?.defaultNamespace;
+      // The default namespace, unless the token cannot write there and can write somewhere else.
+      const writable = hub?.writableNamespaces;
+      const namespace =
+        writable && writable.length > 0 && hub?.defaultNamespace && !writable.includes(hub.defaultNamespace)
+          ? writable[0]
+          : hub?.defaultNamespace;
       setRepoId((prev) => prev || (namespace ? `${namespace}/${slug}` : slug));
       if (current && 'phase' in current && current.status === 'running') {
         follow(current);
@@ -190,7 +195,9 @@ export function PublishDatasetDialog({ isOpen, onClose, datasetId, datasetName, 
     }
   };
 
-  const configured = status?.configured === true && !status.error;
+  // A read-only token is set up but cannot publish anywhere: the Hub would refuse at repos/create.
+  const readOnly = status?.writableNamespaces?.length === 0;
+  const configured = status?.configured === true && !status.error && !readOnly;
   const canSubmit = configured && !submitting && (!degraded || force);
 
   const footer =
@@ -232,13 +239,18 @@ export function PublishDatasetDialog({ isOpen, onClose, datasetId, datasetName, 
           ) : configured ? (
             <p className="text-[13px] text-ink-secondary" data-testid="publish-account">
               Publishing as <span className="font-medium text-ink-primary">{status?.user ?? 'unknown'}</span>
-              {status && status.orgs.length > 0 && <> · member of {status.orgs.join(', ')}</>}
+              {status?.writableNamespaces
+                ? <> · can write to {status.writableNamespaces.join(', ')}</>
+                : status && status.orgs.length > 0 && <> · member of {status.orgs.join(', ')}</>}
+              {status?.warning && (
+                <span className="mt-1 block text-ink-tertiary" data-testid="publish-namespace-warning">{status.warning}</span>
+              )}
             </p>
           ) : (
             <Panel variant="inset" padding="sm" className="flex items-start gap-3" role="alert" data-testid="publish-not-configured">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-signal-unknown" strokeWidth={1.75} />
               <p className="text-[13px] text-ink-secondary">
-                {status?.error || statusError ||
+                {status?.error || (readOnly && status?.warning) || statusError ||
                   'The server has no Hugging Face token. Run `hf auth login` on the server host, or set HF_TOKEN, then open this again.'}
               </p>
             </Panel>
