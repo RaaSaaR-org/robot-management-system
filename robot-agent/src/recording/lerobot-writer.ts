@@ -62,7 +62,13 @@ export interface WriteDatasetOptions {
   robotType: string;
   /** Ordered joint names — the `names` of `observation.state` and `action`. */
   jointNames: readonly string[];
-  /** The fps actually achieved. Declared fps is a lie the timestamps inherit. */
+  /**
+   * The dataset's declared rate: a positive INTEGER (TASK-402). It sets
+   * `info.json.fps`, every `video.fps`, ffmpeg's `-framerate` and every
+   * `timestamp = i/fps`, and LeRobot loaders expect a whole number there. The
+   * recorder passes its target and keeps the measured rate as provenance
+   * (`_neodem.fpsActual`); a measured 30.21 here is what broke loaders.
+   */
   fps: number;
   episodes: WriterEpisode[];
   cameras: WriterCamera[];
@@ -387,6 +393,9 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
   const kept = options.episodes.filter((e) => e.frames.length > 0);
   if (kept.length === 0) throw new Error('nothing to write: every episode is empty');
   if (!(options.fps > 0)) throw new Error(`fps must be positive, got ${options.fps}`);
+  if (!Number.isInteger(options.fps)) {
+    throw new Error(`fps must be an integer (the declared rate, not a measured one), got ${options.fps}`);
+  }
   const dim = options.jointNames.length;
   for (const ep of kept) {
     for (const f of ep.frames) {
@@ -438,10 +447,10 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
       await dataWriter.appendRow({
         'observation.state': asList(f.state),
         action: asList(f.action),
-        // Uniform, from the MEASURED fps — the same convention
-        // `curation/neural_traj/convert.py` uses, and the one that makes a row
-        // land on the video frame it was taken from. Real wall duration is
-        // reported per episode instead of smuggled in here.
+        // Uniform, `i/fps` at the declared integer fps — the convention LeRobot
+        // and `curation/neural_traj/convert.py` use, and the one that makes a
+        // row land on the video frame it was taken from. Real wall duration and
+        // the measured rate are reported as metadata instead of smuggled in here.
         timestamp: Math.round((i / options.fps) * 1e6) / 1e6,
         frame_index: i,
         episode_index: ep.episodeIndex,

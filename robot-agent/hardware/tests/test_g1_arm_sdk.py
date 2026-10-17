@@ -648,3 +648,178 @@ def test_wait_frames_returns_after_the_next_tick():
     t.start()
     assert ctrl.wait_frames(1, timeout_s=1.0) is True
     t.join()
+
+
+# ------------------------------------------------- hand health (TASK-404)
+
+from types import SimpleNamespace as _NS  # noqa: E402
+
+
+def _dds_source(clock):
+    """A real DdsStateSource without its DDS subscriptions: the callbacks
+    (`_on_lowstate`, `_on_hand`) are what the test drives."""
+    src = object.__new__(arm_sdk.DdsStateSource)
+    src._clock = clock
+    src._lock = threading.Lock()
+    src._body = None
+    src._hand = {}
+    src._mode_machine = 0
+    src.crc_failures = 0
+    src._crc = None
+    src._subs = []
+    return src
+
+
+def _hand_msg(words, error=(0, 0), power_v=24.2):
+    motors = [_NS(q=0.05 * i, dq=0.0, tau_est=0.0, temperature=[30, 30], motorstate=w)
+              for i, w in enumerate(words)]
+    return _NS(motor_state=motors, error=list(error), power_v=power_v)
+
+
+def _lowstate_msg():
+    motors = [_NS(q=0.01 * i, dq=0.0, tau_est=0.0, temperature=[40, 40], motorstate=0)
+              for i in range(35)]
+    imu = _NS(rpy=[0, 0, 0], gyroscope=[0, 0, 0], accelerometer=[0, 0, 9.8], temperature=35)
+    return _NS(motor_state=motors, imu_state=imu, mode_machine=5)
+
+
+def test_on_hand_keeps_error_motorstate_and_receive_time():
+    clock = FakeClock()
+    src = _dds_source(clock)
+    src._on_hand("right", _hand_msg([0, 0x200, 0, 0, 0, 0, 0], error=(2, 0)))
+    data, age = src.hand_detail("right")
+    assert data["error"] == [2, 0]
+    assert data["motor_state"][1]["motorstate"] == 0x200
+    assert data["power_v"] == pytest.approx(24.2)
+    assert age == 0.0
+    clock.advance(0.3)
+    assert src.hand_detail("right")[1] == pytest.approx(0.3)
+    assert src.hand_detail("left") == (None, None)
+
+
+def test_snapshot_hand_health_goes_absent_half_a_second_after_the_last_message():
+    clock = FakeClock()
+    src = _dds_source(clock)
+    ctrl, _, _, _ = make(clock=clock, state=src)
+    src._on_lowstate(_lowstate_msg())
+    src._on_hand("left", _hand_msg([0] * 7))
+    src._on_hand("right", _hand_msg([0, 0x200, 0, 0, 0, 0, 0]))
+
+    snap = ctrl.snapshot()
+    right = snap["hand_health"]["right"]
+    assert right["present"] is True and right["age_s"] == 0.0
+    assert right["error"] == [0, 0] and right["power_v"] == pytest.approx(24.2)
+    assert right["motor_faults"] == [{"motor": 1, "joint": "right_hand_thumb_1_joint",
+                                      "code": "0x200", "bits": ["0x200:latched"]}]
+    assert snap["hand_health"]["left"]["motor_faults"] == []
+    assert snap["hands"] == {"left": True, "right": True}  # D1: unchanged shape
+    assert snap["lowstate_age_s"] == 0.0
+
+    clock.advance(0.4)
+    src._on_hand("left", _hand_msg([0] * 7))   # left keeps publishing, right went quiet
+    assert ctrl.snapshot()["hand_health"]["right"]["present"] is True
+    clock.advance(0.2)                          # 0.6 s since the right hand's last message
+    snap = ctrl.snapshot()
+    right = snap["hand_health"]["right"]
+    assert right["present"] is False and snap["hands"]["right"] is False
+    assert right["age_s"] == pytest.approx(0.6)
+    assert right["motor_faults"][0]["code"] == "0x200"  # the last fault stays visible
+    assert snap["hand_health"]["left"]["present"] is True
+    assert snap["lowstate_age_s"] == pytest.approx(0.6)  # lowstate stopped too
+    clock.advance(1.0)
+    snap = ctrl.snapshot()
+    assert snap["hand_health"]["right"]["age_s"] == pytest.approx(1.6)
+    assert snap["lowstate_age_s"] == pytest.approx(1.6)
+
+
+def test_a_hand_that_never_published_is_absent_with_a_null_age():
+    clock = FakeClock()
+    src = _dds_source(clock)
+    ctrl, _, _, _ = make(clock=clock, state=src)
+    snap = ctrl.snapshot()
+    assert snap["lowstate_age_s"] is None
+    assert snap["hand_health"]["left"] == {"present": False, "age_s": None, "error": None,
+                                           "motor_faults": [], "power_v": None}
+
+
+def test_a_state_source_without_detail_reports_unknown_not_ok():
+    ctrl, _, _, _ = make()  # FakeState: hands present, no hand_detail / lowstate age
+    snap = ctrl.snapshot()
+    assert snap["hand_health"]["left"]["present"] is True
+    assert snap["hand_health"]["left"]["error"] is None
+    assert snap["lowstate_age_s"] is None
+
+
+def test_sidecar_write_status_carries_the_arm_sdk_hand_health(monkeypatch):
+    clock = FakeClock()
+    src = _dds_source(clock)
+    ctrl, _, _, _ = make(clock=clock, state=src)
+    src._on_hand("right", _hand_msg([0, 0x200, 0, 0, 0, 0, 0]))
+    monkeypatch.setattr(g1_sidecar, "_arm_controller", ctrl)
+    status = g1_sidecar.write_status()
+    assert status["hand_health"]["right"]["motor_faults"][0]["joint"] == "right_hand_thumb_1_joint"
+    assert status["hand_health"]["left"]["present"] is False
+    assert status["lowstate_age_s"] is None
+
+
+def _readonly_health(monkeypatch, cache):
+    """GET /health from the sidecar's real Handler in read-only mode, fed by a
+    real _LowStateReader whose cache the test fills (no ZMQ socket)."""
+    import json
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    reader = g1_sidecar._LowStateReader("tcp://127.0.0.1:1")
+    reader._started = True  # start() is then a no-op: no socket is opened
+    now = time.time()
+    reader._cache = {topic: (data, now - age) for topic, (data, age) in cache.items()}
+    monkeypatch.setattr(g1_sidecar, "_lowstate_reader", reader)
+    monkeypatch.setattr(g1_sidecar, "_dds_state", None)
+    monkeypatch.setattr(g1_sidecar, "_arm_controller", None)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), g1_sidecar.Handler)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        url = "http://127.0.0.1:%d/health" % srv.server_address[1]
+        with urllib.request.urlopen(url, timeout=5) as r:
+            return json.loads(r.read())
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def _bridge_hand(words, error=(0, 0)):
+    return {"motor_state": [{"q": 0.0, "motorstate": w} for w in words],
+            "error": list(error), "power_v": 24.0}
+
+
+def test_readonly_health_reports_hand_faults_and_staleness(monkeypatch):
+    fault = [0, 0x200, 0, 0, 0, 0, 0]
+    body = _readonly_health(monkeypatch, {
+        g1_sidecar.TOPIC_LOWSTATE: ({"motor_state": []}, 0.1),
+        g1_sidecar.TOPIC_LEFT_HAND: (_bridge_hand([0] * 7), 0.1),
+        g1_sidecar.TOPIC_RIGHT_HAND: (_bridge_hand(fault), 0.6),
+    })
+    assert body["connected"] is True and body["write_mode"] == "read_only"
+    assert body["hands"] == {"left": True, "right": False}
+    left, right = body["hand_health"]["left"], body["hand_health"]["right"]
+    assert left["present"] is True and left["motor_faults"] == [] and left["error"] == [0, 0]
+    assert right["present"] is False and right["age_s"] >= 0.6
+    assert right["motor_faults"][0] == {"motor": 1, "joint": "right_hand_thumb_1_joint",
+                                        "code": "0x200", "bits": ["0x200:latched"]}
+    assert right["power_v"] == 24.0
+    assert 0.1 <= body["lowstate_age_s"] < 0.5
+
+
+def test_readonly_health_lowstate_age_grows_when_lowstate_stops(monkeypatch):
+    body = _readonly_health(monkeypatch, {g1_sidecar.TOPIC_LOWSTATE: ({"motor_state": []}, 5.0)})
+    assert body["connected"] is False  # meaning unchanged: no FRESH lowstate
+    assert body["lowstate_age_s"] >= 5.0
+    assert body["hand_health"]["left"] == {"present": False, "age_s": None, "error": None,
+                                           "motor_faults": [], "power_v": None}
+
+
+def test_readonly_health_with_no_feed_at_all(monkeypatch):
+    body = _readonly_health(monkeypatch, {})
+    assert body["lowstate_age_s"] is None
+    assert body["hand_health"]["right"]["present"] is False

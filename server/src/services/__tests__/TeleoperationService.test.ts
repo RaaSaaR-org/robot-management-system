@@ -33,6 +33,7 @@ const { mockPrisma, mockDatasetRepository, mockRobotTypeRepository } = vi.hoiste
   },
   mockDatasetRepository: {
     create: vi.fn().mockResolvedValue({ id: 'ds-created-id' }),
+    findById: vi.fn().mockResolvedValue(null),
   },
   mockRobotTypeRepository: {
     findById: vi.fn(),
@@ -165,6 +166,7 @@ describe('TeleoperationService', () => {
     vi.clearAllMocks();
     // Reset default mock implementations after clearAllMocks
     mockDatasetRepository.create.mockResolvedValue({ id: 'ds-created-id' });
+    mockDatasetRepository.findById.mockResolvedValue(null);
     mockRobotTypeRepository.findAll.mockResolvedValue([
       { id: 'rt-so101', name: 'SO-101 Follower', manufacturer: 'TheRobotStudio', model: 'SO-ARM100', actionDim: 6, proprioceptionDim: 6 },
       { id: 'rt-aloha', name: 'ALOHA', manufacturer: 'Google', model: 'ALOHA', actionDim: 14, proprioceptionDim: 14 },
@@ -552,6 +554,155 @@ describe('TeleoperationService', () => {
         });
         await service.deleteSession('session-1');
       }
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Open-ended sessions (TASK-406): no episode count up front
+  // --------------------------------------------------------------------------
+
+  describe('open-ended sessions (TASK-406)', () => {
+    const SIDECAR_ROBOT = { id: 'robot-1', model: 'SO-101', a2aAgentUrl: 'http://pi.local:41243' };
+    const CREATED = {
+      ...COMPLETED_SESSION,
+      status: 'created',
+      startedAt: null,
+      sidecarDatasetPath: null,
+      recorderKind: null,
+      numEpisodes: null,
+      episodeTimeS: null,
+      datasetRepoId: null,
+    };
+
+    /** Fetch stub keyed by sidecar route; records every request body. */
+    function stubSidecar(routes: Record<string, unknown>) {
+      const bodies: Record<string, unknown> = {};
+      const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (init?.body) bodies[path] = JSON.parse(String(init.body));
+        return { json: async () => routes[path] ?? {} } as Response;
+      });
+      return { spy, bodies };
+    }
+
+    async function startWithSidecar(session: Record<string, unknown>) {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue(session);
+      mockPrisma.robot.findUnique.mockResolvedValue(SIDECAR_ROBOT);
+      mockPrisma.teleoperationSession.update.mockImplementation(
+        async (args: { data: Record<string, unknown> }) => ({ ...session, ...args.data }),
+      );
+      const { spy, bodies } = stubSidecar({ '/record/start': { ok: true, dataset_path: '/data/lerobot/pick' } });
+      try {
+        await service.startSession('session-1');
+      } finally {
+        spy.mockRestore();
+        // Tear down the sidecar poller the start began.
+        mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+          ...session, status: 'recording', sidecarDatasetPath: '/data/lerobot/pick',
+        });
+        await service.deleteSession('session-1');
+      }
+      return bodies['/record/start'] as Record<string, unknown>;
+    }
+
+    it('gives lerobot-record a 1000-episode cap and no episode length when the session has neither', async () => {
+      const body = await startWithSidecar(CREATED);
+      expect(body.num_episodes).toBe(1000);
+      expect(body).not.toHaveProperty('episode_time_s');
+    });
+
+    it('passes a set auto-stop to the sidecar, and an old session keeps its own count', async () => {
+      const body = await startWithSidecar({ ...CREATED, numEpisodes: 5, episodeTimeS: 45 });
+      expect(body.num_episodes).toBe(5);
+      expect(body.episode_time_s).toBe(45);
+    });
+
+    describe('agent recorder', () => {
+      beforeEach(() => {
+        mockPrisma.robot.findUnique.mockResolvedValue({ id: 'robot-1', model: 'G1 EDU', a2aAgentUrl: null });
+        mockAgentRecording.start.mockResolvedValue({ ok: true, cameras: [], fpsTarget: 30 });
+      });
+
+      afterEach(async () => {
+        mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...CREATED, status: 'recording', recorderKind: 'agent' });
+        mockPrisma.teleoperationFrame.count.mockResolvedValue(0);
+        await service.endSession('session-1').catch(() => {});
+      });
+
+      it('carries the auto-stop to the agent when it is set', async () => {
+        const session = { ...CREATED, type: 'vr_quest', episodeTimeS: 90 };
+        mockPrisma.teleoperationSession.findUnique.mockResolvedValue(session);
+        mockPrisma.teleoperationSession.update.mockImplementation(
+          async (args: { data: Record<string, unknown> }) => ({ ...session, ...args.data }),
+        );
+        await service.startSession('session-1');
+        expect(mockAgentRecording.start).toHaveBeenCalledWith('robot-1', expect.objectContaining({ episodeTimeS: 90 }));
+      });
+
+      it('sends no auto-stop to the agent when none is set', async () => {
+        const session = { ...CREATED, type: 'vr_quest' };
+        mockPrisma.teleoperationSession.findUnique.mockResolvedValue(session);
+        mockPrisma.teleoperationSession.update.mockImplementation(
+          async (args: { data: Record<string, unknown> }) => ({ ...session, ...args.data }),
+        );
+        await service.startSession('session-1');
+        expect(mockAgentRecording.start.mock.calls[0]![1]).not.toHaveProperty('episodeTimeS');
+      });
+    });
+
+    it('a session that asked for 10 episodes and kept 1 ends with demonstrationCount 1', async () => {
+      const recording = {
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'sidecar',
+        numEpisodes: 10,
+        sidecarDatasetPath: '/data/lerobot/pick',
+      };
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue(recording);
+      mockPrisma.robot.findUnique.mockResolvedValue(SIDECAR_ROBOT);
+      mockPrisma.teleoperationFrame.count.mockResolvedValue(0);
+      mockPrisma.teleoperationFrame.findMany.mockResolvedValue([]);
+      mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([{ episodeIndex: 0 }]);
+      mockPrisma.teleoperationSession.update.mockImplementation(
+        async (args: { data: Record<string, unknown> }) => ({ ...recording, ...args.data }),
+      );
+      // The recorder stopped and uploaded, but reported no episode count.
+      const { spy } = stubSidecar({
+        '/record/stop': { ok: true, exit_code: 0 },
+        '/record/status': { running: false, upload_status: 'done', upload_result: { s3_path: 'datasets/pick' } },
+      });
+      try {
+        await service.endSession('session-1');
+      } finally {
+        spy.mockRestore();
+      }
+      expect(mockDatasetRepository.create).toHaveBeenCalledWith(expect.objectContaining({ demonstrationCount: 1 }));
+    });
+
+    it('exports a sidecar session with the counted episodes, never numEpisodes', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...COMPLETED_SESSION, numEpisodes: 10, sidecarDatasetPath: '/data/lerobot/pick', datasetRepoId: null,
+      });
+      mockPrisma.teleoperationSession.update.mockResolvedValue({});
+      mockPrisma.robot.findUnique.mockResolvedValue({ id: 'robot-1', model: 'SO-101' });
+      mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([{ episodeIndex: 0 }, { episodeIndex: 1 }]);
+
+      const result = await service.exportToLeRobot('session-1', {});
+      expect(result.trajectoryCount).toBe(2);
+      expect(mockDatasetRepository.create.mock.calls[0][0].demonstrationCount).toBe(2);
+    });
+
+    it('falls back to the count the recorder reported when the session has no episode rows', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...COMPLETED_SESSION, numEpisodes: 10, sidecarDatasetPath: '/data/lerobot/pick', exportedDatasetId: 'ds-auto',
+      });
+      mockPrisma.teleoperationSession.update.mockResolvedValue({});
+      mockPrisma.robot.findUnique.mockResolvedValue({ id: 'robot-1', model: 'SO-101' });
+      mockDatasetRepository.findById.mockResolvedValue({ id: 'ds-auto', demonstrationCount: 3 });
+
+      const result = await service.exportToLeRobot('session-1', {});
+      expect(mockDatasetRepository.findById).toHaveBeenCalledWith('ds-auto');
+      expect(result.trajectoryCount).toBe(3);
     });
   });
 
