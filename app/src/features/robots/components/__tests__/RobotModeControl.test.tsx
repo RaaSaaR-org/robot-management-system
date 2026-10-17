@@ -46,6 +46,18 @@ describe('modeDisabledReason — the precedence table', () => {
     expect(modeDisabledReason('limp', ctx({ status: null }))).toMatch(/Mode control is off/);
   });
 
+  it('0. an unreachable sidecar says so instead of "mode control is off" (TASK-411)', () => {
+    const c = ctx({
+      status: status({ capability: { gate: 'unknown', moveEnabled: null, idsVerified: false, ids: null }, sidecarReachable: false }),
+    });
+    for (const m of ['limp', 'stand', 'balance'] as const) {
+      expect(modeDisabledReason(m, c)).toBe("Can't reach the robot sidecar. Start the robot side.");
+    }
+    // Reachable (or not reported) keeps the old line for a gate that really is off.
+    const off = ctx({ status: status({ capability: { gate: 'unknown', moveEnabled: null, idsVerified: false, ids: null }, sidecarReachable: true }) });
+    expect(modeDisabledReason('stand', off)).toBe("Mode control is off on this robot's sidecar.");
+  });
+
   it('2. an unknown mode, with the sidecar reason — but Limp stays available', () => {
     const c = ctx({ status: status({}, { mode: 'unknown', fsmId: null, error: 'sport service not answering' }), needsControl: true });
     expect(modeDisabledReason('stand', c)).toBe('The robot mode is unknown — sport service not answering.');
@@ -135,6 +147,13 @@ describe('RobotModeControl', () => {
     expect(screen.getByTestId('robot-mode-readout')).toHaveTextContent('Limp');
     expect(screen.getByTestId('robot-mode-stand')).toBeDisabled();
     expect(screen.getByTestId('robot-mode-reasons')).toHaveTextContent('Stand up: Take control first.');
+  });
+
+  it('says the sidecar cannot be reached when the server reports sidecarReachable:false (TASK-411)', () => {
+    const unreachable = status({ capability: { gate: 'unknown', moveEnabled: null, idsVerified: false, ids: null }, sidecarReachable: false });
+    render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={fakeHook({ status: unreachable })} />);
+    expect(screen.getByTestId('robot-mode-reasons')).toHaveTextContent("Can't reach the robot sidecar. Start the robot side.");
+    expect(screen.getByTestId('robot-mode-reasons')).not.toHaveTextContent('Mode control is off');
   });
 
   it('with leases off on the server, every button is disabled and says why', () => {

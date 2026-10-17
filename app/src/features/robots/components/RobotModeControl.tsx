@@ -84,6 +84,10 @@ export interface ModeReasonContext {
 export function modeDisabledReason(mode: BaseModeCommand, ctx: ModeReasonContext): string | null {
   const status = ctx.status;
   const gate = status?.capability.gate;
+  // An unreachable sidecar reports gate `unknown` too — that is not "off".
+  if (status?.sidecarReachable === false) {
+    return "Can't reach the robot sidecar. Start the robot side.";
+  }
   if (!status || (gate !== 'fsm' && gate !== 'full')) {
     return "Mode control is off on this robot's sidecar.";
   }
