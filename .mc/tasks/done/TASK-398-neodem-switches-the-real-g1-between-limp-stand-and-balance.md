@@ -82,7 +82,7 @@ pytest with a fake LocoClient for the sidecar gate, transitions, E-stop order an
 
 ## Notes
 - Too big to grow: if the implementing session nears the ceiling, keep §2 (sidecar, arm_sdk, sim, pytest) and §3.2 (E-stop order) as the first commits. They make the robot safe on their own, and the curl fallbacks in the runbook work with them alone. §4/§5 can then move to a child task without leaving anything unsafe.
-- Follow-up TASK-399 (backlog): MotionSwitcher CheckMode, passive lowcmd kp cross-check, per-hand state-rate logging, sim damp/stand physics and odom mode, in-headset mode controls, flipping `FSM_STAND_VERIFIED` after the robot check.
+- Follow-up TASK-400 (backlog): MotionSwitcher CheckMode, passive lowcmd kp cross-check, per-hand state-rate logging, sim damp/stand physics and odom mode, in-headset mode controls, flipping `FSM_STAND_VERIFIED` after the robot check.
 - Right Dex3 publishes nothing on rt/dex3/right/state (driver alive, no samples). Reseat the right wrist connector and power-cycle. This is not a NeoDEM change.
 - FSM 4: unitree_sdk2 (C++) `include/unitree/robot/g1/loco/g1_loco_client.hpp` maps `StandUp()` to `SetFsmId(4)` on the G1 (checked 2026-10-17, cited in `g1_loco_mode.py`). Whether that is the remote's L2+Up lock stand is still settled on the robot (runbook step 4).
 
@@ -95,7 +95,17 @@ pytest with a fake LocoClient for the sidecar gate, transitions, E-stop order an
 - **Session page.** For a real headset the lease lives in the VR window (TASK-396), so the session page's mode panel reads "Take control first" unless the page holds the lease (simulated VR input); the VR window header is the working place for the buttons.
 - **Compliance entry.** The typed `AccessAuditPayload.result` is `allowed`/`denied`; the three-way `ok`/`denied`/`failed` is in `metadata.result`.
 - **FSM 4.** unitree_sdk2 (C++) `include/unitree/robot/g1/loco/g1_loco_client.hpp` maps `StandUp()` to `SetFsmId(4)` on the G1 (cited in `g1_loco_mode.py`). `FSM_STAND_VERIFIED` stays `False` until the on-robot check below.
-- Follow-up: TASK-399 (backlog).
+- Follow-up: TASK-400 (backlog). (Filed as TASK-399 first; renumbered because #423 took that id on `main`.)
+
+## Review fixes (2026-10-17)
+
+- **A Stand up / Balance can no longer go out after an E-stop's damp.** `ModeController` reads the Limp generation before its checks, refuses while a Limp runs, and re-checks the generation and the E-stop latch under the RPC lock right before `SetFsmId`; a change that loses that race answers `409` with `sent: false`.
+- **Limp stays clickable while a Stand up / Balance is in flight**, so it can preempt it; the hook lets only the latest request own `pending` and `lastResult`.
+- **Mode changes always need a lease.** With control leases off on the server the buttons are disabled and say why (the server already refused a lease-less request).
+- **One sidecar `/estop` per platform E-stop.** The REST route hands its result to Agent Mode instead of triggering a second `/estop`; the server's E-stop call waits 10 s (it was 5 s, shorter than the agent's own 7 s sidecar timeout).
+- **A protective stop never damps, whatever the agent caches.** It posts `/estop {"damp": false}`, which the sidecar honours.
+- **Domain 0 is compared as an integer** (`00`, `+0`, unset all mean the robot) when deciding whether `/arm` needs a measured Balance.
+- **FSM 4 counts as non-locomoting** in Agent Mode, mirroring the sim; the VR frame's `damped` stays "limp/zero torque" because the headset reads it as "ROBOT LIMP".
 
 ## On-robot verification (runbook "Mode changes without the remote", steps 2–5)
 
