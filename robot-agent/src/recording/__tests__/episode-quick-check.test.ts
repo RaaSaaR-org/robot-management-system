@@ -65,6 +65,17 @@ describe('summarizeEpisode', () => {
     ]);
   });
 
+  it('counts frames that repeated the last sample against the 5 % like drops (TASK-415)', () => {
+    const still = frames(Array.from({ length: 20 }, () => [0, 0, 0, 0]));
+    // 1 of 20 brought nothing new: exactly 5 %, not above it.
+    expect(summarizeEpisode(still, NAMES, G1_MOTION_GROUPS, { repeated: 1 }).warnings).toEqual(['no_motion']);
+    // 1 repeated + 1 dropped of 21 wanted is.
+    expect(summarizeEpisode(still, NAMES, G1_MOTION_GROUPS, { repeated: 1, dropped: 1 }).warnings).toEqual([
+      'no_motion',
+      'dropped_frames',
+    ]);
+  });
+
   it('reports no_motion for an empty take and ignores non-finite values', () => {
     expect(summarizeEpisode([], NAMES).warnings).toEqual(['no_motion']);
     const check = summarizeEpisode(frames([[0, NaN, 0, 0], [0, 5, 0, 0]]), NAMES);
