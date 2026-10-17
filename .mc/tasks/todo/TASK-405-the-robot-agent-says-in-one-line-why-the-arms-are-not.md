@@ -3,7 +3,7 @@ id: "TASK-405"
 aliases: []
 title: "The robot agent says in one line why the arms are not following"
 slug: "the-robot-agent-says-in-one-line-why-the-arms-are-not"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
