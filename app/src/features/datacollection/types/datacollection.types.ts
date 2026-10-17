@@ -577,6 +577,8 @@ export interface DataCollectionState {
   lastQuickCheck: QuickCheck | null;
   /** The take action this tab has in flight, if any. */
   takePending: TakeAction | null;
+  /** This tab's id, sent with every take action so it can tell its own events apart. Fixed per tab. */
+  clientId: string;
   sessionFilters: SessionFilters;
   sessionPagination: SessionPagination;
   // Active Learning

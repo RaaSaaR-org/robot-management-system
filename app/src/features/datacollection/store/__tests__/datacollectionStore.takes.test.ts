@@ -27,6 +27,7 @@ import type {
 } from '../../types/datacollection.types';
 
 vi.mock('@/shared/utils/sessionCues', () => ({ playCue: vi.fn() }));
+vi.mock('../../utils/takeThumbnailCache', () => ({ forgetThumbnail: vi.fn() }));
 vi.mock('../../api/datacollectionApi', () => ({
   datacollectionApi: {
     listEpisodes: vi.fn().mockResolvedValue([]),
@@ -40,6 +41,7 @@ vi.mock('../../api/datacollectionApi', () => ({
 }));
 
 import { playCue } from '@/shared/utils/sessionCues';
+import { forgetThumbnail } from '../../utils/takeThumbnailCache';
 import { datacollectionApi } from '../../api/datacollectionApi';
 
 const api = vi.mocked(datacollectionApi);
@@ -158,6 +160,17 @@ describe('teleop:episode:* from another client', () => {
     expect(store().lastQuickCheck).toBeNull();
     expect(cue).toHaveBeenCalledWith('discarded');
     expect(getToasts().map((t) => t.title)).toContain('Anna discarded take 4');
+    expect(forgetThumbnail).toHaveBeenCalledWith('s1', 3);
+  });
+
+  it('a started take forgets the old thumbnail of its number once, not again on the echo', () => {
+    const payload = {
+      take: 3, startedAt: '2026-10-17T12:00:00.000Z', by: HEADSET,
+      live: live({ phase: 'capturing', take: 3, takeStartedAt: '2026-10-17T12:00:00.000Z' }),
+    };
+    store().handleTeleopEvent(event('teleop:episode:started', payload));
+    store().handleTeleopEvent(event('teleop:episode:started', payload));
+    expect(vi.mocked(forgetThumbnail).mock.calls).toEqual([['s1', 3]]);
   });
 
   it('ignores episode events of a session that is not on screen', () => {
@@ -168,6 +181,12 @@ describe('teleop:episode:* from another client', () => {
 });
 
 describe('take actions', () => {
+  it('exposes this tab\'s client id in state, the same one every action sends', () => {
+    expect(store().clientId).toBe(CLIENT_ID);
+    store().reset();
+    expect(store().clientId).toBe(CLIENT_ID);
+  });
+
   it('start sends the take this tab believes is live, its client id and source', async () => {
     store().handleTeleopEvent(event('teleop:session:live', { live: live({ take: 1 }) }));
     api.startEpisode.mockResolvedValue({ ok: true, live: live({ phase: 'capturing', take: 2, takeStartedAt: '2026-10-17T12:00:00.000Z' }) });

@@ -3,8 +3,8 @@
  * @description The middle frame of a take. The server route is behind auth,
  *              so the image is fetched through the API client (bearer token)
  *              and shown from a blob URL; a bare `<img src>` would only work
- *              with auth disabled. Fetched once per take per page load, and
- *              only when the row scrolls into view. A take without a frame
+ *              with auth disabled. Fetched once per take (utils/takeThumbnailCache),
+ *              and only when the row scrolls into view. A take without a frame
  *              (no camera, or not stopped yet) reads "No thumbnail".
  * @feature datacollection
  */
@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ImageOff } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
-import { datacollectionApi } from '../../api/datacollectionApi';
+import { loadThumbnail } from '../../utils/takeThumbnailCache';
 import { takeLabel } from '../../utils/takeFormat';
 
 export interface TakeThumbnailProps {
@@ -22,30 +22,6 @@ export interface TakeThumbnailProps {
   /** False when the server already said there is none (quick check `thumbnailUrl: null`) */
   available?: boolean;
   className?: string;
-}
-
-/** One request per take; the promise resolves to a blob URL, or null when there is none. */
-const cache = new Map<string, Promise<string | null>>();
-
-function loadThumbnail(sessionId: string, take: number): Promise<string | null> {
-  const key = `${sessionId}:${take}`;
-  let entry = cache.get(key);
-  if (!entry) {
-    entry = datacollectionApi
-      .fetchThumbnail(sessionId, take)
-      .then((blob) => (blob && typeof URL.createObjectURL === 'function' ? URL.createObjectURL(blob) : null))
-      .catch(() => {
-        cache.delete(key); // a failed fetch may succeed later; a 404 is cached as null
-        return null;
-      });
-    cache.set(key, entry);
-  }
-  return entry;
-}
-
-/** Forget a take's thumbnail (it was discarded or restarted). */
-export function forgetThumbnail(sessionId: string, take: number): void {
-  cache.delete(`${sessionId}:${take}`);
 }
 
 export function TakeThumbnail({ sessionId, take, available = true, className }: TakeThumbnailProps) {

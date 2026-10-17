@@ -13,6 +13,7 @@ import { playCue } from '@/shared/utils/sessionCues';
 import { datacollectionApi } from '../api/datacollectionApi';
 import { DEFAULT_SESSION_PAGINATION } from '../types/datacollection.types';
 import { describeConflict, describeRemoteAction, takeLabel } from '../utils/takeFormat';
+import { forgetThumbnail } from '../utils/takeThumbnailCache';
 import type {
   DataCollectionStore,
   TeleoperationSession,
@@ -46,6 +47,16 @@ import type {
 // INITIAL STATE
 // ============================================================================
 
+/** One id per tab, so this tab can tell its own events from everyone else's. */
+export const CLIENT_ID: string = (() => {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  } catch {
+    /* insecure context: fall through */
+  }
+  return `tab-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+})();
+
 const initialState = {
   // Teleoperation
   sessions: [] as TeleoperationSession[],
@@ -58,6 +69,7 @@ const initialState = {
   liveClockOffsetMs: 0,
   lastQuickCheck: null as QuickCheck | null,
   takePending: null as TakeAction | null,
+  clientId: CLIENT_ID,
   sessionFilters: {} as SessionFilters,
   sessionPagination: { ...DEFAULT_SESSION_PAGINATION } as SessionPagination,
   // Active Learning
@@ -154,6 +166,9 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
       if (announced.has(key)) return;
       announced.add(key);
       if (announced.size > 200) announced.delete(announced.values().next().value as string);
+      // The number is reused (a restart, or the take after a discard): drop the old frame.
+      // Once per event, so a late WebSocket echo cannot drop a frame loaded since.
+      if (kind === 'started' || kind === 'discarded') forgetThumbnail(sessionId, take);
 
       playCue(kind);
       const own = !by || by.clientId === CLIENT_ID;
@@ -832,16 +847,6 @@ const TAKE_VERB: Record<TakeAction, string> = {
   next: 'move to the next take',
   discard: 'discard the last take',
 };
-
-/** One id per tab, so this tab can tell its own events from everyone else's. */
-export const CLIENT_ID: string = (() => {
-  try {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-  } catch {
-    /* insecure context: fall through */
-  }
-  return `tab-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
-})();
 
 /** Events already announced (cue + toast), so REST and WebSocket do not both play. */
 const announced = new Set<string>();
