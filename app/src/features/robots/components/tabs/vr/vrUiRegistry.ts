@@ -58,6 +58,7 @@ export function resetVrUiRegistry(): void {
   registry.clear();
   vrUiGate.estopLatched = false;
   vrUiDebug.clicks.length = 0;
+  vrUiDebug.panel = [];
   vrUiDebug.rays.left = { ...EMPTY_RAY };
   vrUiDebug.rays.right = { ...EMPTY_RAY };
 }
@@ -252,9 +253,11 @@ export interface VrUiRayDebug {
   hitId: string | null;
   /** Ray origin in REFERENCE-space coordinates (where IWER places controllers). */
   origin: [number, number, number] | null;
+  /** Ray direction in the same coordinates. */
+  direction: [number, number, number] | null;
 }
 
-const EMPTY_RAY: VrUiRayDebug = { visible: false, active: false, hitId: null, origin: null };
+const EMPTY_RAY: VrUiRayDebug = { visible: false, active: false, hitId: null, origin: null, direction: null };
 
 /**
  * What the ray rig did, for the Playwright spec (`window.__neodemVrUi`, DEV only).
@@ -264,8 +267,11 @@ export const vrUiDebug: {
   clicks: Array<{ id: string; at: number }>;
   rays: { left: VrUiRayDebug; right: VrUiRayDebug };
   targets: () => Array<{ id: string; live: boolean; center: [number, number, number] | null }>;
+  /** The robot panel's lines as last drawn — the canvas is not readable from a test. */
+  panel: string[];
 } = {
   clicks: [],
   rays: { left: { ...EMPTY_RAY }, right: { ...EMPTY_RAY } },
   targets: () => [],
+  panel: [],
 };

@@ -165,7 +165,7 @@ describe('composeRobotPanel', () => {
       'LEASE you · LINK live 42 ms',
       'Following.',
     ]);
-    expect(lines.at(-1)).toMatchObject({ id: 'why', bold: true, wrap: true });
+    expect(lines[lines.length - 1]).toMatchObject({ id: 'why', bold: true, wrap: true });
   });
 
   it('shows the held side and reason, the disarm reason, and — for an absent dead-man', () => {

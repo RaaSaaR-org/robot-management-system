@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { createXRStore } from '@react-three/xr';
+import { createXRStore, type XRStore } from '@react-three/xr';
 import * as THREE from 'three';
 import { Badge, Button, Panel, StatusTag, errorMessage } from '@/shared/components/ui';
 import { safetyApi } from '@/features/safety/api/safetyApi';
@@ -400,6 +400,38 @@ export interface VRTeleopModalProps {
   recording?: { episode: number; frames: number } | null;
 }
 
+function makeXrStore(): XRStore {
+  return createXRStore({
+    offerSession: false,
+    emulate: XR_EMULATOR,
+    controller: { model: false, rayPointer: false, grabPointer: false, teleportPointer: false },
+    hand: { model: false, rayPointer: false, grabPointer: false, touchPointer: false, teleportPointer: false },
+    // The library registers a controller only once its input profile has
+    // loaded, from jsdelivr by default. A headset on a network without
+    // internet then never reports a grip, so the arms never arm: serve the
+    // profiles from the app itself (`public/xr-profiles/`).
+    baseAssetPath: XR_PROFILES_BASE,
+  });
+}
+
+let devEmulatorStore: XRStore | null = null;
+
+/**
+ * The store when the dev WebXR emulator is on: created ONCE per page.
+ *
+ * Each `createXRStore({emulate})` installs its own IWER device as
+ * `navigator.xr`, and StrictMode runs the `useMemo` factory twice — so a dev
+ * page had two emulated headsets, and whichever installed LAST owned the
+ * session. Half the time that was not the one in the store this modal kept:
+ * buttons pressed on `store.getState().emulator` never reached the session
+ * (found by the TASK-407 Playwright spec, which drives that emulator).
+ * Dev-only — a real headset never takes this path.
+ */
+function emulatorXrStore(): XRStore {
+  devEmulatorStore ??= makeXrStore();
+  return devEmulatorStore;
+}
+
 /**
  * The modal body is mounted only while the modal is open, so the link and the
  * (heavy) XR canvas connect on open and tear down on close.
@@ -477,18 +509,8 @@ export function VRTeleopModalBody({
   // teleop reads controller input directly, so the rays/gizmos only add clutter to
   // the headset view. Input tracking is unaffected.
   const xrStore = useMemo(
-    () =>
-      createXRStore({
-        offerSession: false,
-        emulate: XR_EMULATOR,
-        controller: { model: false, rayPointer: false, grabPointer: false, teleportPointer: false },
-        hand: { model: false, rayPointer: false, grabPointer: false, touchPointer: false, teleportPointer: false },
-        // The library registers a controller only once its input profile has
-        // loaded, from jsdelivr by default. A headset on a network without
-        // internet then never reports a grip, so the arms never arm: serve the
-        // profiles from the app itself (`public/xr-profiles/`).
-        baseAssetPath: XR_PROFILES_BASE,
-      }),
+    // With the dev emulator on, ONE store per page (see `emulatorXrStore`).
+    () => (XR_EMULATOR !== false ? emulatorXrStore() : makeXrStore()),
     [],
   );
   // DEV only (TASK-407): the Playwright live spec drives the IWER emulator

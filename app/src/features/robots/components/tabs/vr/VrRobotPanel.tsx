@@ -14,6 +14,7 @@ import { VrPanel, type VrPanelContent } from './VrPanel';
 import { VrButton, VR_BUTTON_HEIGHT_M } from './VrButton';
 import { composeRobotPanel, panelFactsFromTelemetry, whyFromTelemetry } from './vrWhy';
 import type { VrRigTelemetry } from './VrTeleopRig';
+import { vrUiDebug } from './vrUiRegistry';
 
 /** Panel size, metres: 0.5 x 0.32 overall, text above a row of buttons. */
 export const ROBOT_PANEL_WIDTH_M = 0.5;
@@ -25,10 +26,10 @@ const BEARING_RAD = (30 * Math.PI) / 180;
 /**
  * Height of the panel's centre in the robot's (centred) model frame. The G1's
  * eyes sit at about +0.43 (`EYE_BELOW_CROWN_M`) and the head-camera screen spans
- * +0.1..+0.7 a little further out; this keeps the panel below the screen's
- * corner, looked down at like a desk display.
+ * +0.1..+0.7 a little further out; this keeps the panel mostly below the
+ * screen's bottom-right corner, looked down at like a desk display.
  */
-const CENTRE_Y_M = 0;
+const CENTRE_Y_M = 0.08;
 const EYE_Y_M = 0.43;
 
 /**
@@ -67,6 +68,7 @@ export function VrRobotPanel({ telemetryRef, onRecenter, onNextEpisode, onResetE
     const now = Date.now();
     const why = whyFromTelemetry(t, now);
     const lines = composeRobotPanel(panelFactsFromTelemetry(t), why, now);
+    if (import.meta.env.DEV) vrUiDebug.panel = lines.map((l) => l.text);
     return t.estopLatched
       ? { title: 'ROBOT — E-STOP LATCHED', titleColor: 'white', lines, background: BG_LATCHED, highlight: 'salmon' }
       : { title: 'ROBOT', lines, background: BG };

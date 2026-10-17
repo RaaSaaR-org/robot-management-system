@@ -20,6 +20,7 @@ import {
   pickVrUiHit,
   rayFromPose,
   stepPress,
+  targetIsLive,
   vrUiDebug,
   vrUiGate,
   vrUiTargets,
@@ -92,7 +93,7 @@ export function VrUiRig({ telemetryRef }: { telemetryRef: { current: VrRigTeleme
         a.worldToLocal(c);
         return {
           id: t.id,
-          live: !t.disabled && t.object.visible,
+          live: targetIsLive(t, vrUiGate.estopLatched),
           center: [c.x, c.y, c.z] as [number, number, number],
         };
       });
@@ -121,11 +122,15 @@ export function VrUiRig({ telemetryRef }: { telemetryRef: { current: VrRigTeleme
     for (const side of SIDES) {
       const ctrl = side === 'left' ? left : right;
       const { line, cursor } = visuals[side];
-      const hide = (active: boolean, origin: [number, number, number] | null = null): void => {
+      const hide = (
+        active: boolean,
+        origin: [number, number, number] | null = null,
+        direction: [number, number, number] | null = null,
+      ): void => {
         line.visible = false;
         cursor.visible = false;
         hoverId.current[side] = null;
-        vrUiDebug.rays[side] = { visible: false, active, hitId: null, origin };
+        vrUiDebug.rays[side] = { visible: false, active, hitId: null, origin, direction };
       };
       if (!frame || !ctrl || !referenceSpace || !a) {
         press.current[side] = IDLE_PRESS;
@@ -154,7 +159,11 @@ export function VrUiRig({ telemetryRef }: { telemetryRef: { current: VrRigTeleme
         continue;
       }
       const p = pose.transform.position;
+      const o = pose.transform.orientation;
+      quat.set(o.x, o.y, o.z, o.w);
+      localDir.set(0, 0, -1).applyQuaternion(quat);
       const origin: [number, number, number] = [p.x, p.y, p.z];
+      const direction: [number, number, number] = [localDir.x, localDir.y, localDir.z];
       rayFromPose(pose.transform, a.matrixWorld, ray);
       const hit = pickVrUiHit(ray, targets, { estopLatched });
       const step = stepPress(press.current[side], {
@@ -191,14 +200,11 @@ export function VrUiRig({ telemetryRef }: { telemetryRef: { current: VrRigTeleme
       }
 
       if (!hit) {
-        hide(true, origin);
+        hide(true, origin, direction);
         continue;
       }
       // Drawn in the anchor's (= reference space's) frame: from the controller
       // to where the ray meets the button.
-      const o = pose.transform.orientation;
-      quat.set(o.x, o.y, o.z, o.w);
-      localDir.set(0, 0, -1).applyQuaternion(quat);
       const positions = line.geometry.getAttribute('position') as THREE.BufferAttribute;
       positions.setXYZ(0, p.x, p.y, p.z);
       positions.setXYZ(1, p.x + localDir.x * hit.distance, p.y + localDir.y * hit.distance, p.z + localDir.z * hit.distance);
@@ -206,7 +212,7 @@ export function VrUiRig({ telemetryRef }: { telemetryRef: { current: VrRigTeleme
       cursor.position.set(positions.getX(1), positions.getY(1), positions.getZ(1));
       line.visible = true;
       cursor.visible = true;
-      vrUiDebug.rays[side] = { visible: true, active: true, hitId, origin };
+      vrUiDebug.rays[side] = { visible: true, active: true, hitId, origin, direction };
     }
 
     for (const target of targets) {
