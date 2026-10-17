@@ -32,7 +32,7 @@ import {
 import { useControlLease } from '../../../hooks/useControlLease';
 import { ControlLeaseBar } from '../ControlLeaseBar';
 import { createLoopHealth, isPoseFrame, onPositionsSent, onStateReceived, type LoopHealth } from './vrHud';
-import { EMULATOR_ACTIVE, XR_EMULATOR } from './vrConstants';
+import { EMULATOR_ACTIVE, XR_EMULATOR, XR_PROFILES_BASE } from './vrConstants';
 import { getTeleopSocketUrl, teleopSocketProtocols } from './vrUrls';
 import { ensureFreshAccessToken, tokenStorage } from '@/api/client';
 import { hudHandWarning, hudNeedsRelease, type HudEngage } from './vrHud';
@@ -365,6 +365,11 @@ export function VRTeleopModalBody({
         emulate: XR_EMULATOR,
         controller: { model: false, rayPointer: false, grabPointer: false, teleportPointer: false },
         hand: { model: false, rayPointer: false, grabPointer: false, touchPointer: false, teleportPointer: false },
+        // The library registers a controller only once its input profile has
+        // loaded, from jsdelivr by default. A headset on a network without
+        // internet then never reports a grip, so the arms never arm: serve the
+        // profiles from the app itself (`public/xr-profiles/`).
+        baseAssetPath: XR_PROFILES_BASE,
       }),
     [],
   );
