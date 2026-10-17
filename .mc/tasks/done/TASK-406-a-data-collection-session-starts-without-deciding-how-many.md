@@ -3,7 +3,7 @@ id: "TASK-406"
 aliases: []
 title: "A data-collection session starts without deciding how many episodes to record"
 slug: "a-data-collection-session-starts-without-deciding-how-many"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
