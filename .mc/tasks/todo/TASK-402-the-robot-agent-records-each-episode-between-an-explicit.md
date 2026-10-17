@@ -3,7 +3,7 @@ id: "TASK-402"
 aliases: []
 title: "The robot agent records each episode between an explicit start and stop at an integer frame rate"
 slug: "the-robot-agent-records-each-episode-between-an-explicit"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
