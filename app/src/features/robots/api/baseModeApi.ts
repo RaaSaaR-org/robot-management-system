@@ -45,6 +45,11 @@ export interface BaseModeStatus {
   armed: boolean;
   armWeight?: number;
   agentModeRunning?: boolean;
+  /**
+   * Whether the robot sidecar answered, from the server's cached readiness
+   * snapshot (TASK-409); null/absent when the server has none.
+   */
+  sidecarReachable?: boolean | null;
 }
 
 export type BaseModeResult =

@@ -7,6 +7,8 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useRobotsStore } from '../store/robotsStore';
 import { pushFastTelemetry } from '../store/telemetryLive';
+import { useReadinessStore } from '../store/readinessStore';
+import type { RobotReadiness } from '../api/readinessApi';
 import { useSafetyStore } from '@/features/safety';
 import type { Robot, RobotTelemetry } from '../types/robots.types';
 import type { EStopEvent } from '@/features/safety/types/safety.types';
@@ -25,8 +27,11 @@ interface RobotWebSocketEvent {
     | 'robot_telemetry_fast'
     | 'connected'
     | 'task_event'
-    | 'safety:estop';
+    | 'safety:estop'
+    | 'robot:readiness';
   robotId?: string;
+  /** The merged readiness snapshot on `robot:readiness` (TASK-409/411). */
+  data?: RobotReadiness;
   robot?: Robot;
   /** Full telemetry frame on `robot_telemetry` events (TASK-184) */
   telemetry?: RobotTelemetry;
@@ -138,6 +143,13 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
             break;
           }
 
+          case 'robot:readiness':
+            // The merged supervisor + agent snapshot of a watched robot (TASK-411).
+            if (data.data && typeof data.data.robotId === 'string') {
+              useReadinessStore.getState().put(data.data);
+            }
+            break;
+
           case 'connected':
             break;
 
@@ -180,6 +192,7 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
 
       ws.onopen = () => {
         isConnectedRef.current = true;
+        useReadinessStore.getState().setSocketOpen(true);
       };
 
       ws.onmessage = handleMessage;
@@ -192,6 +205,7 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
         const superseded = wsRef.current !== ws;
         if (!superseded) {
           wsRef.current = null;
+          useReadinessStore.getState().setSocketOpen(false);
         }
 
         // Don't reconnect on an intentional close (unmount/disconnect) or a
@@ -232,6 +246,7 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
     }
 
     isConnectedRef.current = false;
+    useReadinessStore.getState().setSocketOpen(false);
   }, []);
 
   // Connect on mount, disconnect on unmount

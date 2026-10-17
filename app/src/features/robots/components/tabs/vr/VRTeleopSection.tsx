@@ -21,6 +21,7 @@ import { EMULATOR_ACTIVE } from './vrConstants';
 import { resolveXrAvailability, type XrAvailability } from './vrAvailability';
 import { VRTeleopModalBody } from './VRTeleopModal';
 import { QuestConnectHelp } from './QuestConnectHelp';
+import { RobotReadinessPanel } from '../../readiness/RobotReadinessPanel';
 
 // ============================================================================
 // LAUNCHER — compact card shown in the Teleop tab
@@ -115,6 +116,9 @@ export function VRTeleopSection({ robot, onNextEpisode, recording, launchDisable
           }
         />
         <Panel.Body>
+          {/* TASK-411: why the arms would not follow, before anyone puts the
+              headset on — the session page gets it through this section (D5). */}
+          <RobotReadinessPanel robotId={robot.id} variant="compact" className="mb-3" />
           <div className="flex flex-wrap items-center gap-3">
             <StatusTag tone={EMULATOR_ACTIVE || (availability === 'ready' && sessionSupported) ? 'live' : 'neutral'} dot>
               {EMULATOR_ACTIVE

@@ -37,6 +37,7 @@ import { getTeleopSocketUrl, teleopSocketProtocols } from './vrUrls';
 import { ensureFreshAccessToken, tokenStorage } from '@/api/client';
 import { hudHandWarning, hudNeedsRelease, type HudBaseMode, type HudEngage } from './vrHud';
 import { RobotModeControl } from '../../RobotModeControl';
+import { RobotReadinessPanel } from '../../readiness/RobotReadinessPanel';
 import { VrScene } from './VrScene';
 import { createRigTelemetry } from './VrTeleopRig';
 import { ARM_HELD_REASONS, isArmRefusalCode, type ArmHeldReason, type VrArmInfo, type VrHandHealth } from './vrWhy';
@@ -1186,6 +1187,9 @@ export function VRTeleopModalBody({
       {/* Robot mode without the remote (TASK-398): the measured mode and the
           Limp / Stand up / Balance buttons, each behind a confirmation. Only
           here on the desktop — the headset shows the mode, never buttons. */}
+      {/* TASK-411: the one line that says why the arms are not following. */}
+      <RobotReadinessPanel robotId={robot.id} variant="line" />
+
       {modeControl !== 'off' && (
         <Panel variant="inset" padding="sm" data-testid="vr-robot-mode">
           <RobotModeControl
