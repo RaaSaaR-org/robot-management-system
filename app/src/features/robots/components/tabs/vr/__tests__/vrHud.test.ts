@@ -170,6 +170,11 @@ describe('composeHud', () => {
     expect(lines.some((l) => l.id === 'rec')).toBe(false);
   });
 
+  it('drops the timer for a recorder without explicit takes rather than freezing it at 00:00', () => {
+    const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 3, elapsedS: null } });
+    expect(lines[0].text).toBe('REC ● T3');
+  });
+
   it('shows -- rather than NaN, and never a negative count, on the REC line', () => {
     const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: Number.NaN, elapsedS: -3 } });
     expect(lines[0].text).toBe('REC ● T-- 00:00');

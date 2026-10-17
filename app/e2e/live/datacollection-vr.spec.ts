@@ -1,21 +1,34 @@
 /**
  * @file datacollection-vr.spec.ts
- * @description Full VR-in-simulation data collection flow (TASK: VR teleop
- *   sessions record in simulation): create a vr_quest session on a sim robot,
- *   start recording, enable the synthetic "Simulate VR input" driver, watch
- *   the live frame count rise, advance an episode, discard episode 0, end the
- *   session, and verify the auto-exported dataset card links into the
- *   dataset episode viewer.
+ * @description Full VR-in-simulation data collection flow: create a vr_quest
+ *   session on a SIM robot from the New Session page, start it, take control
+ *   and enable the synthetic "Simulate VR input" driver, start a take and
+ *   watch the live frame count rise, advance to the next take, discard take 1,
+ *   end the session, and verify the auto-exported dataset card links into the
+ *   dataset episode viewer. The in-headset take controls are covered by
+ *   `vr-session-board.spec.ts` (TASK-413).
  *
- *   Requires a LIVE stack (server :3001 + robot-agent + app) — the sim frame
- *   recorder and the keyboard-teleop WebSocket are real backends here, not
- *   MSW mocks. Run with the app's baseURL pointing at the live frontend.
+ *   Requires a LIVE stack (server + robot-agent + sim sidecar + app) — the
+ *   sim frame recorder and the keyboard-teleop WebSocket are real backends
+ *   here, not MSW mocks:
+ *     PLAYWRIGHT_LIVE_URL=http://localhost:1443 VR_ROBOT_ID=sim-robot-g1-edu \
+ *       npx playwright test --config=playwright.live.config.ts datacollection-vr
+ *   Never point it at a real robot.
  */
 import { test, expect, type Page } from '@playwright/test';
+
+const ROBOT_ID = process.env.VR_ROBOT_ID ?? 'sim-robot-g1-edu';
 
 test.describe('VR data collection in simulation', () => {
   test.describe.configure({ mode: 'serial' });
   test.setTimeout(180_000);
+
+  // A failed run must not leave the robot recording: the next session on it
+  // would be refused ("busy recording session …").
+  let sessionId: string | null = null;
+  test.afterEach(async ({ request, baseURL }) => {
+    if (sessionId) await request.post(`${baseURL}/api/teleoperation/sessions/${sessionId}/end`).catch(() => {});
+  });
 
   async function readFrameCount(page: Page): Promise<number> {
     const text = (await page.getByTestId('hud-frames').textContent()) ?? '0';
@@ -24,7 +37,7 @@ test.describe('VR data collection in simulation', () => {
 
   test('record a VR session end-to-end with simulated input', async ({ page }) => {
     // ── 1. Create a vr_quest session on a sim robot ──────────────────────
-    await page.goto('/#/data-collection/new');
+    await page.goto('/data-collection/new');
     await expect(page.getByRole('heading', { name: /New Session/i })).toBeVisible({
       timeout: 15_000,
     });
@@ -34,13 +47,12 @@ test.describe('VR data collection in simulation', () => {
     // VR prerequisites panel appears for VR types
     await expect(page.getByTestId('vr-prerequisites')).toBeVisible();
 
-    // Pick the first available robot from the dropdown
+    // The SIM robot, never whichever robot happens to be listed first.
     const robotSelect = page.locator('select');
     await expect
-      .poll(async () => (await robotSelect.locator('option').count()), { timeout: 15_000 })
-      .toBeGreaterThan(1);
-    const firstRobot = await robotSelect.locator('option').nth(1).getAttribute('value');
-    await robotSelect.selectOption(firstRobot!);
+      .poll(async () => (await robotSelect.locator(`option[value="${ROBOT_ID}"]`).count()), { timeout: 15_000 })
+      .toBe(1);
+    await robotSelect.selectOption(ROBOT_ID);
 
     await page
       .getByPlaceholder(/Pick up the red block/i)
@@ -52,6 +64,7 @@ test.describe('VR data collection in simulation', () => {
 
     // Lands on the session detail page — step 1 (Connect input) is active
     await expect(page).toHaveURL(/data-collection\/[0-9a-f-]+/, { timeout: 15_000 });
+    sessionId = /data-collection\/([0-9a-f-]+)/.exec(page.url())?.[1] ?? null;
     await expect(page.getByTestId('session-steps')).toBeVisible();
     await expect(page.getByTestId('vr-session-panel')).toBeVisible();
     // Pre-flight checklist: the sim robot is online, nothing blocks Start.
@@ -67,11 +80,19 @@ test.describe('VR data collection in simulation', () => {
     await page.getByTestId('take-primary').click();
     await expect(page.getByTestId('hud-phase')).toHaveText('● REC', { timeout: 10_000 });
 
-    // ── 3. Enable "Simulate VR input" and watch frames rise ──────────────
+    // ── 3. Take control, enable "Simulate VR input" and watch frames rise ──
+    // The agent records frames only while commands reach the robot, and the
+    // simulated input streams only while this page holds the control lease.
     await page.getByTestId('simulate-vr-toggle').click();
-    await expect(page.getByTestId('sim-input-status')).toContainText(/Streaming|Connecting/i, {
-      timeout: 10_000,
-    });
+    const takeControl = page.getByTestId('session-control-lease').getByRole('button', { name: /Take control/ });
+    if (await takeControl.isVisible({ timeout: 10_000 }).catch(() => false)) {
+      await takeControl.click();
+      const confirmTake = page.getByRole('alertdialog');
+      if (await confirmTake.isVisible({ timeout: 1_500 }).catch(() => false)) {
+        await confirmTake.getByRole('button').last().click();
+      }
+    }
+    await expect(page.getByTestId('sim-input-status')).toContainText(/Streaming/i, { timeout: 15_000 });
 
     const before = await readFrameCount(page);
     await expect

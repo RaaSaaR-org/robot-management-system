@@ -126,3 +126,20 @@ This task adds a world-space **session board** (built on the TASK-407 toolkit) w
 - Never run `xr_teleoperate` and the arm_sdk sidecar together.
 - The E-stop stays reachable: B/Y and the two-hand pinch in VR, and a visible E-STOP on the desktop session page.
 - Development and tests use the sim stack only: the sim agent :41246 and sim sidecar :8777, or branch builds on free ports. Never the real g1-edu-4 (:41245/:8767). Do not stop or restart the running dev stack.
+
+## Implementation notes (2026-10-18)
+
+Decisions made while implementing, and where the code differs from the spec:
+
+- **The bridge answers `ok` or `refused`.** The TASK-410 store's take actions return a boolean, so a 409 it adopted, a busy store (`takePending`) and an error all read as `refused` (two short taps, `TAKE_REFUSED`); success plays `episodeMark`. `withTakeHaptics` wraps the bridge once in `VrScene`, so board buttons and stick shortcuts feel the same answer. The store is unchanged.
+- **Right-stick Next fires on release.** A press that is held becomes the Discard countdown (ticks at 0.375/0.75/1.125 s, confirm at 1.5 s) and never also advances.
+- **Shortcuts follow the board.** While the E-stop is latched or the session is not recording, a stick press does nothing but buzz `refused`, like the greyed-out buttons.
+- **Next take left the robot panel.** Its slot was the TASK-407 placeholder; Next is on the session board now (D3).
+- **Why-line rule (D4), concretely:** the server reason wins when it blocks, or when the server itself (not the agent it relays) says something at least as serious as the local reason; a latched E-stop is never outranked. The reason is read once a second from the readiness store, which the launcher card's `RobotReadinessPanel` keeps fresh while the modal is open — no second poll.
+- **Recorder without explicit takes** (`phase` null): Start and Next draw the old boundary (`nextEpisode`), Stop and Discard are refused. The wrist HUD then shows `REC ● T3` without a timer.
+- **No help overlay exists** in the VR code; the controls card in `VRTeleopModal.tsx` carries the new rows.
+- **`SessionDetailPage`** keeps `handleNextEpisode` for the legacy N hotkey and the episode panel; its source changed from `vr` to `desktop`, since the headset no longer calls it.
+- **`VrButton` gained `isDisabled()`**, read per frame like `isVisible()`, so a session button greys out without a React render.
+- **AC "kept is unchanged"** is checked as: take 1 kept, take 2 started with the left stick, then discarded by the 1.5 s hold while open — `kept` stays 1, `discarded` becomes 1.
+- **`datacollection-vr.spec.ts`**: route fixed (`/#/` → `/`), the robot picked by `VR_ROBOT_ID` instead of the first option, control taken before the simulated input can stream, and the session ended after a failure. The in-headset flow lives in the new `vr-session-board.spec.ts`.
+- **Live check on this box:** the sim's head-camera render core-dumps under the mesa EGL override over ssh; started without `__EGL_VENDOR_LIBRARY_*`/`LIBGL_ALWAYS_SOFTWARE`, it renders.

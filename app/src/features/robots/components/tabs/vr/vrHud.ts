@@ -293,9 +293,10 @@ function modeLine(state: HudState): HudLine {
 /** `REC ● T7 00:42` (red) while a take runs, `READY T8` between takes. */
 export function hudTakeLine(rec: HudTake): HudLine {
   const n = Number.isFinite(rec.takeNumber) && rec.takeNumber >= 1 ? count(rec.takeNumber) : '--';
-  return rec.phase === 'capturing'
-    ? { id: 'rec', text: `REC ● T${n} ${formatTakeClock(rec.elapsedS)}`, color: HUD_COLORS.bad }
-    : { id: 'rec', text: `READY T${n}`, color: HUD_COLORS.ok };
+  if (rec.phase === 'between') return { id: 'rec', text: `READY T${n}`, color: HUD_COLORS.ok };
+  // No timer from a recorder without explicit takes: a frozen 00:00 would lie.
+  const clock = rec.elapsedS === null ? '' : ` ${formatTakeClock(rec.elapsedS)}`;
+  return { id: 'rec', text: `REC ● T${n}${clock}`, color: HUD_COLORS.bad };
 }
 
 export function composeHud(state: HudState): HudLine[] {
