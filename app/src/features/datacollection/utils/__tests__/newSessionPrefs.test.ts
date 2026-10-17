@@ -20,8 +20,23 @@ describe('newSessionPrefs', () => {
   });
 
   it('stores the recording numbers only where they differ from the default', () => {
-    saveNewSessionPrefs('u1', { fps: NEW_SESSION_DEFAULTS.fps, episodeTimeS: 60, numEpisodes: NEW_SESSION_DEFAULTS.numEpisodes });
-    expect(JSON.parse(window.localStorage.getItem(prefsKey('u1'))!)).toEqual({ episodeTimeS: 60 });
+    saveNewSessionPrefs('u1', { fps: NEW_SESSION_DEFAULTS.fps, episodeTimeS: 60 });
+    expect(JSON.parse(window.localStorage.getItem(prefsKey('u1'))!)).toEqual({ autoStopS: 60 });
+    expect(loadNewSessionPrefs('u1')).toMatchObject({ episodeTimeS: 60 });
+  });
+
+  it('starts with no auto-stop and no episode count', () => {
+    expect(NEW_SESSION_DEFAULTS.episodeTimeS).toBeNull();
+    expect(NEW_SESSION_DEFAULTS).not.toHaveProperty('numEpisodes');
+  });
+
+  it('loads prefs stored before TASK-406 without their episode count or episode length', () => {
+    // The old form stored the count and an "Episode length" the G1 recorder
+    // never honoured; neither may come back as a choice.
+    window.localStorage.setItem(prefsKey('u1'), JSON.stringify({ numEpisodes: 25, episodeTimeS: 60, fps: 15, type: 'gamepad' }));
+    const prefs = loadNewSessionPrefs('u1');
+    expect(prefs).toMatchObject({ fps: 15, type: 'gamepad', episodeTimeS: undefined });
+    expect(prefs).not.toHaveProperty('numEpisodes');
   });
 
   it('ignores what the v1 form stored, defaults included', () => {
@@ -31,8 +46,8 @@ describe('newSessionPrefs', () => {
   });
 
   it('drops malformed values', () => {
-    window.localStorage.setItem(prefsKey('u1'), JSON.stringify({ fps: -3, type: 'telepathy', numEpisodes: 2.5, recentTasks: [1, ' ', 'ok'] }));
-    expect(loadNewSessionPrefs('u1')).toEqual({ robotId: undefined, type: undefined, numEpisodes: undefined, episodeTimeS: undefined, fps: undefined, recentTasks: ['ok'] });
+    window.localStorage.setItem(prefsKey('u1'), JSON.stringify({ fps: -3, type: 'telepathy', autoStopS: 2.5, recentTasks: [1, ' ', 'ok'] }));
+    expect(loadNewSessionPrefs('u1')).toEqual({ robotId: undefined, type: undefined, episodeTimeS: undefined, fps: undefined, recentTasks: ['ok'] });
     window.localStorage.setItem(prefsKey('u1'), '{not json');
     expect(loadNewSessionPrefs('u1')).toEqual({});
   });
