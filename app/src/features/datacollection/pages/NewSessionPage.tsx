@@ -1,9 +1,11 @@
 /**
  * @file NewSessionPage.tsx
  * @description New recording session (TASK-392). The default view asks only
- *              what every recording needs — robot, task, input device and how
- *              many episodes — with one primary "Start session". Episode
- *              length, frame rate, the dataset name, the less common input
+ *              what every recording needs — robot, task and input device —
+ *              with one primary "Start session". There is no episode count
+ *              (TASK-406): record as many takes as you like and End when done.
+ *              The optional per-take auto-stop, frame rate, the dataset name,
+ *              the less common input
  *              devices and the operator sit under a collapsed "Advanced
  *              options" disclosure that summarises what differs from the
  *              defaults. Robot, device and the advanced values are remembered
@@ -32,7 +34,6 @@ import {
 interface Errors {
   robotId?: string;
   languageInstr?: string;
-  numEpisodes?: string;
   episodeTimeS?: string;
   fps?: string;
   datasetRepoId?: string;
@@ -72,8 +73,8 @@ export function NewSessionPage() {
   const [type, setType] = useState<TeleoperationType>(prefs.type ?? NEW_SESSION_DEFAULTS.type);
   const [robotId, setRobotId] = useState('');
   const [task, setTask] = useState('');
-  const [numEpisodes, setNumEpisodes] = useState(String(prefs.numEpisodes ?? NEW_SESSION_DEFAULTS.numEpisodes));
-  const [episodeTimeS, setEpisodeTimeS] = useState(String(prefs.episodeTimeS ?? NEW_SESSION_DEFAULTS.episodeTimeS));
+  // Empty = no auto-stop: the operator ends each take.
+  const [episodeTimeS, setEpisodeTimeS] = useState(String(prefs.episodeTimeS ?? NEW_SESSION_DEFAULTS.episodeTimeS ?? ''));
   const [fps, setFps] = useState(String(prefs.fps ?? NEW_SESSION_DEFAULTS.fps));
   const [datasetRepoId, setDatasetRepoId] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -116,7 +117,7 @@ export function NewSessionPage() {
   // What differs from a fresh form, for the closed disclosure.
   const advancedSummary = [
     advancedType && `Input ${TELEOPERATION_TYPE_LABELS[type]}`,
-    episodeTimeS !== String(NEW_SESSION_DEFAULTS.episodeTimeS) && `Episode length ${episodeTimeS || '—'} s`,
+    episodeTimeS.trim() && `Auto-stop after ${episodeTimeS.trim()} s`,
     fps !== String(NEW_SESSION_DEFAULTS.fps) && `Frame rate ${fps || '—'} fps`,
     datasetRepoId.trim() && `Dataset ${datasetRepoId.trim()}`,
   ].filter(Boolean).join(' · ');
@@ -127,8 +128,7 @@ export function NewSessionPage() {
     const next: Errors = {
       robotId: robotId ? undefined : 'Choose the robot to record.',
       languageInstr: task.trim() ? undefined : 'Describe the task the robot should learn.',
-      numEpisodes: intInRange(numEpisodes, 1, 100, 'Episodes'),
-      episodeTimeS: intInRange(episodeTimeS, 5, 300, 'Episode length'),
+      episodeTimeS: episodeTimeS.trim() ? intInRange(episodeTimeS, 5, 600, 'Auto-stop') : undefined,
       fps: intInRange(fps, 1, 120, 'Frame rate'),
       datasetRepoId:
         datasetRepoId.trim() && !DATASET_REPO_ID.test(datasetRepoId.trim())
@@ -153,15 +153,13 @@ export function NewSessionPage() {
       type,
       fps: Number(fps),
       languageInstr: task.trim(),
-      numEpisodes: Number(numEpisodes),
-      episodeTimeS: Number(episodeTimeS),
+      ...(episodeTimeS.trim() ? { episodeTimeS: Number(episodeTimeS) } : {}),
       ...(datasetRepoId.trim() ? { datasetRepoId: datasetRepoId.trim() } : {}),
     };
     // The dataset name is not remembered: it names one dataset.
     saveNewSessionPrefs(userId, {
       robotId,
       type,
-      numEpisodes: request.numEpisodes,
       episodeTimeS: request.episodeTimeS,
       fps: request.fps,
       recentTasks: withRecentTask(prefs.recentTasks, task),
@@ -287,40 +285,30 @@ export function NewSessionPage() {
               </p>
             </Panel>
           )}
-
-          <FormField
-            label="Episodes"
-            error={errors.numEpisodes}
-            hint="How many takes to record. You can end early."
-            className="sm:max-w-xs"
-          >
-            <Input
-              type="number"
-              min={1}
-              max={100}
-              value={numEpisodes}
-              disabled={saving}
-              onChange={(e) => { setNumEpisodes(e.target.value); clearFieldError('numEpisodes'); }}
-            />
-          </FormField>
         </Panel.Body>
       </Panel>
 
       <Panel>
         <Disclosure
           title="Advanced options"
-          summary={advancedSummary || 'Episode length, frame rate, dataset name and other input devices'}
+          summary={advancedSummary || 'Auto-stop, frame rate, dataset name and other input devices'}
           open={advancedOpen}
           onOpenChange={setAdvancedOpen}
           data-testid="advanced-options"
           contentClassName="flex flex-col gap-6"
         >
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <FormField label="Episode length" error={errors.episodeTimeS} hint="Seconds; recording stops after this">
+            <FormField
+              label="Stop each take automatically after (s)"
+              aside="Optional"
+              error={errors.episodeTimeS}
+              hint="Leave empty to stop takes yourself."
+            >
               <Input
                 type="number"
                 min={5}
-                max={300}
+                max={600}
+                placeholder="Off"
                 value={episodeTimeS}
                 disabled={saving}
                 onChange={(e) => { setEpisodeTimeS(e.target.value); clearFieldError('episodeTimeS'); }}

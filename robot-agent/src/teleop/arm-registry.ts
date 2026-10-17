@@ -22,7 +22,7 @@
  */
 
 import { hardwareClient } from '../hardware/HardwareClient.js';
-import type { SidecarArmStatus, TeleopHandMode } from '../hardware/arm-status.js';
+import { handHealthKey, type SidecarArmStatus, type TeleopHandMode } from '../hardware/arm-status.js';
 
 /** The slice of `HardwareClient` this module drives. */
 export interface ArmClient {
@@ -58,6 +58,19 @@ export interface TeleopArmView {
   claims: number;
   /** Why the last arm attempt failed, or null. */
   lastError: string | null;
+  // ── TASK-405: why the arms are (not) following, straight from the sidecar.
+  // Optional so a view built elsewhere still type-checks; `view()` always sets
+  // them, `null` when the sidecar does not report the field.
+  /** `disarmed` / `arming` / `armed` / `disarming`. */
+  armState?: SidecarArmStatus['armState'];
+  /** `hold` while the sidecar's dead-man holds the last pose. */
+  deadman?: SidecarArmStatus['deadman'];
+  /** Why the sidecar last dropped the arms (`deadman`, `tracking_error`, …). */
+  lastDisarmReason?: string | null;
+  trackErrRad?: number | null;
+  trackErrJoint?: string | null;
+  /** Each Dex3 hand's health (TASK-404), or null when not reported. */
+  handHealth?: SidecarArmStatus['handHealth'];
 }
 
 export interface ArmRegistryOptions {
@@ -239,6 +252,12 @@ export class ArmRegistry {
       teleopMode: s?.teleopMode ?? null,
       claims: this.claims.size,
       lastError: this.lastError,
+      armState: s?.armState ?? null,
+      deadman: s?.deadman ?? null,
+      lastDisarmReason: s?.lastDisarmReason ?? null,
+      trackErrRad: s?.trackErrRad ?? null,
+      trackErrJoint: s?.trackErrJoint ?? null,
+      handHealth: s?.handHealth ?? null,
     };
   }
 
@@ -268,7 +287,14 @@ export class ArmRegistry {
 
   private emit(): void {
     const view = this.view();
-    const key = JSON.stringify({ ...view, armWeight: Math.round(view.armWeight * 20) / 20 });
+    // Ages, voltages and the tracking error tick on every poll — a listener
+    // hears about a change of meaning, not about each poll.
+    const key = JSON.stringify({
+      ...view,
+      armWeight: Math.round(view.armWeight * 20) / 20,
+      trackErrRad: view.trackErrRad == null ? null : Math.round(view.trackErrRad * 20) / 20,
+      handHealth: handHealthKey(view.handHealth),
+    });
     if (key === this.lastViewKey) return;
     this.lastViewKey = key;
     for (const cb of this.listeners) {

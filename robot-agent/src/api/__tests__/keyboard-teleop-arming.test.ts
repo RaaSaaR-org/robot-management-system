@@ -682,3 +682,41 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
     expect(sidecar.disarmCalls).toBe(1);
   });
 });
+
+describe('TASK-405: the arm frame says why the arms are not following', () => {
+  it('carries deadman, lastDisarmReason and handHealth when the sidecar reports them', async () => {
+    const right = {
+      present: true, ageS: 0.02, error: [0x200, 0] as [number, number], powerV: 24.1,
+      motorFaults: [{ motor: 1, joint: 'right_hand_thumb_1_joint', code: '0x200', bits: ['overcurrent'] }],
+    };
+    const left = { present: false, ageS: 3.5, error: null, powerV: null, motorFaults: [] };
+    sidecar.status = {
+      ...sidecar.status,
+      deadman: 'hold',
+      lastDisarmReason: 'tracking_error',
+      trackErrRad: 0.41,
+      trackErrJoint: 'left_elbow_joint',
+      handHealth: { left, right },
+    };
+    const { connect } = makeServer();
+    const ws = connect();
+    send(ws, POSE);
+    await flush();
+    expect(ws.ofType('arm').at(-1)).toMatchObject({
+      type: 'arm',
+      deadman: 'hold',
+      lastDisarmReason: 'tracking_error',
+      trackErrRad: 0.41,
+      trackErrJoint: 'left_elbow_joint',
+      handHealth: { left, right },
+    });
+  });
+
+  it('sends null for each field an older sidecar does not report', async () => {
+    const { connect } = makeServer();
+    const ws = connect();
+    send(ws, POSE);
+    await flush();
+    expect(ws.ofType('arm').at(-1)).toMatchObject({ deadman: null, lastDisarmReason: null, handHealth: null });
+  });
+});

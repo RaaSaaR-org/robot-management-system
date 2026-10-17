@@ -74,6 +74,11 @@ export interface StartAgentRecordingDto {
   task?: string;
   shadows?: boolean;
   inputMode?: string;
+  /**
+   * Per-take auto-stop in seconds (TASK-406); absent = the operator ends each
+   * take. Agents before TASK-402 ignore it.
+   */
+  episodeTimeS?: number | null;
 }
 
 /** Minimal robot lookup; `RobotManager` satisfies it. */

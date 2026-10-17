@@ -85,6 +85,12 @@ except ImportError:  # plain-script invocation
         BALANCE_FSM, UINT32_MAX, LocoState, pose_relative_to, wrap_angle,
     )
 
+# dex3_faults lives one level up (hardware/), shared with g1_sidecar.py.
+_HW_DIR = str(Path(__file__).resolve().parents[1])
+if _HW_DIR not in sys.path:
+    sys.path.insert(0, _HW_DIR)
+import dex3_faults  # noqa: E402
+
 DEFAULT_SCENE = (
     Path(__file__).resolve().parents[1]
     / "sim_evaluator" / "mjcf" / "g1_dex3_room_scene.xml"
@@ -526,6 +532,17 @@ def _loco_health(node) -> dict:
         "arm_sdk_frames": getattr(node, "arm_cmd_count", 0),
         "arm_sdk_ignored_frames": getattr(node, "arm_sdk_ignored_frames", 0),
     }
+
+
+def _hand_health_fields(node) -> dict:
+    """The TASK-404 /health fields. The sim's lowstate is produced in-process,
+    so it is never stale; the hands are both present and fault-free unless
+    SIM_DEX3_FAULT / SIM_DEX3_MISSING were set at startup (`node.hand_health`,
+    filled once in main()). Test doubles without it get the default."""
+    health = getattr(node, "hand_health", None)
+    if health is None:
+        health = dex3_faults.sim_hand_health({})
+    return {"lowstate_age_s": 0.0, "hand_health": health}
 
 
 def arm_sdk_honoured(fsm_id: int) -> bool:
@@ -1698,7 +1715,9 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                                  # TASK-398: the loco FSM, every SetFsmId the
                                  # sport service took (wall clock), and the
                                  # arm_sdk frames dropped outside balance.
-                                 **_loco_health(node)})
+                                 **_loco_health(node),
+                                 # TASK-404: freshness + Dex3 faults.
+                                 **_hand_health_fields(node)})
             elif path == "/cameras":
                 self._send(200, {"cameras": node.camera_names()})
             elif path == "/record":
@@ -2084,12 +2103,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[SimNode] scene not found: {args.scene}", file=sys.stderr)
         return 2
 
+    # TASK-404: Dex3 fault injection, read once here and never again (no
+    # runtime route: one write surface fewer on a sidecar-shaped server). A
+    # spec that does not parse stops the sim rather than injecting nothing.
+    try:
+        hand_health = dex3_faults.sim_hand_health(os.environ)
+    except ValueError as exc:
+        print(f"[SimNode] {exc}", file=sys.stderr)
+        return 2
+
     if args.iface:
         ChannelFactoryInitialize(args.domain, args.iface)
     else:
         ChannelFactoryInitialize(args.domain)
 
     node = SimNode(args.scene, args.domain, verbose=not args.quiet)
+    node.hand_health = hand_health
+    for side in ("left", "right"):
+        h = hand_health[side]
+        if not h["present"] or h["motor_faults"]:
+            print(f"[SimNode]   Dex3 {side}: "
+                  + ("ABSENT (SIM_DEX3_MISSING)" if not h["present"] else
+                     "fault " + ", ".join(f["joint"] + "=" + f["code"] for f in h["motor_faults"])
+                     + " (SIM_DEX3_FAULT)"))
     if args.initial_fsm != node.loco.fsm_id:
         node.loco.set_fsm_id(args.initial_fsm)
         print(f"[SimNode]   initial loco FSM {args.initial_fsm} "

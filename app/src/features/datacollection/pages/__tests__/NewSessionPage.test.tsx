@@ -1,9 +1,10 @@
 /**
  * @file NewSessionPage.test.tsx
- * @description The New session default view (TASK-392): four fields and one
+ * @description The New session default view (TASK-392): three fields and one
  *              primary button, Advanced options collapsed with a summary of
  *              non-default values, per-user persistence, the submitted
- *              request and validation.
+ *              request and validation. No episode count, and the per-take
+ *              auto-stop is optional and off by default (TASK-406).
  * @feature datacollection
  */
 
@@ -50,10 +51,12 @@ beforeEach(() => {
 const render = () => renderWithProviders(<NewSessionPage />);
 
 describe('NewSessionPage default view', () => {
-  it('asks only for robot, task, input device and episodes', () => {
+  it('asks only for robot, task and input device — no episode count', () => {
     render();
-    const fields = screen.getAllByRole('combobox').length + screen.getAllByRole('textbox').length + screen.getAllByRole('spinbutton').length;
-    expect(fields).toBe(3); // robot select, task, episodes
+    const fields = screen.getAllByRole('combobox').length + screen.getAllByRole('textbox').length + screen.queryAllByRole('spinbutton').length;
+    expect(fields).toBe(2); // robot select, task
+    expect(screen.queryByLabelText(/Episodes/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/How many takes/)).not.toBeInTheDocument();
     expect(screen.getByRole('radiogroup', { name: 'Input device' })).toBeInTheDocument();
     const devices = within(screen.getByRole('radiogroup', { name: 'Input device' })).getAllByRole('radio');
     expect(devices.map((d) => d.textContent)).toEqual([
@@ -62,11 +65,11 @@ describe('NewSessionPage default view', () => {
       expect.stringContaining('Gamepad'),
     ]);
     expect(screen.queryByLabelText('Frame rate')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Episode length')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Stop each take automatically/)).not.toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: /Vision Pro/ })).not.toBeInTheDocument();
     const advanced = screen.getByRole('button', { name: /^Advanced options/ });
     expect(advanced).toHaveAttribute('aria-expanded', 'false');
-    expect(advanced).toHaveTextContent('Episode length, frame rate, dataset name and other input devices');
+    expect(advanced).toHaveTextContent('Auto-stop, frame rate, dataset name and other input devices');
     expect(screen.getByRole('button', { name: 'Start session' })).toHaveAttribute('type', 'submit');
   });
 
@@ -111,13 +114,12 @@ describe('NewSessionPage default view', () => {
     await user.click(screen.getByRole('button', { name: /Advanced options/ }));
     await user.clear(screen.getByLabelText('Frame rate'));
     await user.type(screen.getByLabelText('Frame rate'), '15');
-    await user.clear(screen.getByLabelText('Episode length'));
-    await user.type(screen.getByLabelText('Episode length'), '60');
+    await user.type(screen.getByLabelText(/Stop each take automatically/), '60');
     await user.type(screen.getByLabelText(/Dataset name/), 'neodem/g1-pick');
     await user.click(screen.getByRole('radio', { name: /Vision Pro/ }));
     await user.click(screen.getByRole('button', { name: /Advanced options/ }));
     expect(screen.getByTestId('advanced-options')).toHaveTextContent(
-      'Input Vision Pro · Episode length 60 s · Frame rate 15 fps · Dataset neodem/g1-pick',
+      'Input Vision Pro · Auto-stop after 60 s · Frame rate 15 fps · Dataset neodem/g1-pick',
     );
     expect(screen.getByTestId('advanced-input-note')).toHaveTextContent('Using Vision Pro');
 
@@ -131,7 +133,6 @@ describe('NewSessionPage default view', () => {
       type: 'vr_vision_pro',
       fps: 15,
       languageInstr: 'Pick up the apple',
-      numEpisodes: 10,
       episodeTimeS: 60,
       datasetRepoId: 'neodem/g1-pick',
     });
@@ -140,7 +141,7 @@ describe('NewSessionPage default view', () => {
 
     // A new visit starts from the remembered values, collapsed, without the dataset name.
     render();
-    expect(screen.getByTestId('advanced-options')).toHaveTextContent('Input Vision Pro · Episode length 60 s · Frame rate 15 fps');
+    expect(screen.getByTestId('advanced-options')).toHaveTextContent('Input Vision Pro · Auto-stop after 60 s · Frame rate 15 fps');
     expect(screen.getByTestId('advanced-options')).not.toHaveTextContent('Dataset');
     expect(screen.getByRole('button', { name: /Advanced options/ })).toHaveAttribute('aria-expanded', 'false');
     // The last task comes back as a chip that fills the field.
@@ -159,7 +160,11 @@ describe('NewSessionPage default view', () => {
     await user.type(screen.getByPlaceholderText(/Pick up the red block/), 'Wave');
     await user.click(screen.getByRole('button', { name: 'Start session' }));
     await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
-    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ fps: 30, episodeTimeS: 30, numEpisodes: 10 }));
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ fps: 30 }));
+    // Open-ended by default: no episode count and no auto-stop are sent.
+    const request = createSession.mock.calls[0][0];
+    expect(request).not.toHaveProperty('numEpisodes');
+    expect(request).not.toHaveProperty('episodeTimeS');
     // An untouched value is not a choice: a later default change must reach this operator.
     expect(JSON.parse(window.localStorage.getItem(prefsKey('user-7')) ?? '{}')).not.toHaveProperty('fps');
   });
@@ -180,6 +185,36 @@ describe('NewSessionPage default view', () => {
     await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
     get.mockRestore();
     set.mockRestore();
+  });
+
+  it('shows the auto-stop empty with its hint and validates 5 to 600 when set', async () => {
+    const user = userEvent.setup();
+    render();
+    await user.click(screen.getByRole('button', { name: /Advanced options/ }));
+    const autoStop = screen.getByLabelText(/Stop each take automatically/);
+    expect(autoStop).toHaveValue(null);
+    expect(screen.getByText('Leave empty to stop takes yourself.')).toBeInTheDocument();
+    await user.type(autoStop, '601');
+    await user.type(screen.getByPlaceholderText(/Pick up the red block/), 'Wave');
+    await user.click(screen.getByRole('button', { name: 'Start session' }));
+    expect(await screen.findByText('Auto-stop must be a whole number from 5 to 600.')).toBeInTheDocument();
+    expect(createSession).not.toHaveBeenCalled();
+    await user.clear(autoStop);
+    await user.type(autoStop, '600');
+    await user.click(screen.getByRole('button', { name: 'Start session' }));
+    await waitFor(() => expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ episodeTimeS: 600 })));
+  });
+
+  it('ignores an episode count remembered before TASK-406', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(prefsKey('user-7'), JSON.stringify({ numEpisodes: 25, episodeTimeS: 60 }));
+    render();
+    expect(screen.getByTestId('advanced-options')).not.toHaveTextContent('Auto-stop after');
+    await user.type(screen.getByPlaceholderText(/Pick up the red block/), 'Wave');
+    await user.click(screen.getByRole('button', { name: 'Start session' }));
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+    expect(createSession.mock.calls[0][0]).not.toHaveProperty('numEpisodes');
+    expect(createSession.mock.calls[0][0]).not.toHaveProperty('episodeTimeS');
   });
 
   it('rejects a malformed dataset name', async () => {

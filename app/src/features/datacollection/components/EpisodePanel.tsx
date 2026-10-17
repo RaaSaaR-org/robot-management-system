@@ -2,8 +2,8 @@
  * @file EpisodePanel.tsx
  * @description Episode controls during recording: "Next episode" button
  *              (shortcut N), episode list with per-episode discard (through
- *              the kit's confirm dialog), and progress toward the session's
- *              episode target.
+ *              the kit's confirm dialog), and the current take with how many
+ *              are kept. Sessions are open-ended (TASK-406): no target.
  * @feature datacollection
  */
 
@@ -17,8 +17,6 @@ export interface EpisodePanelProps {
   episodes: EpisodeSummary[];
   /** Episode currently being recorded (from live progress) */
   currentEpisode: number;
-  /** Target episode count for the session (null = no target) */
-  numEpisodes: number | null;
   /** True while the session is recording (controls Next/Discard availability) */
   isRecording: boolean;
   /** True while created/recording/paused — discard allowed */
@@ -32,7 +30,7 @@ function formatSeconds(s: number): string {
 }
 
 export function EpisodePanel({
-  episodes, currentEpisode, numEpisodes, isRecording, canDiscard, onNextEpisode, onDiscardEpisode,
+  episodes, currentEpisode, isRecording, canDiscard, onNextEpisode, onDiscardEpisode,
 }: EpisodePanelProps) {
   const [busy, setBusy] = useState(false);
 
@@ -77,14 +75,13 @@ export function EpisodePanel({
         <p className="text-[13px] text-ink-tertiary" data-testid="episode-progress">
           {isRecording ? (
             <>
-              Recording episode <span className="font-semibold text-ink-primary">{currentEpisode + 1}</span>
-              {numEpisodes ? <> of {numEpisodes}</> : null}
+              Recording take <span className="font-semibold text-ink-primary">{currentEpisode + 1}</span>
+              {' · '}kept {episodes.length}
               <span className="hidden sm:inline"> · press N for the next one</span>
             </>
           ) : (
             <>
-              {episodes.length} episode{episodes.length === 1 ? '' : 's'} recorded
-              {numEpisodes ? <> (target: {numEpisodes})</> : null}
+              Kept {episodes.length} take{episodes.length === 1 ? '' : 's'}
             </>
           )}
         </p>
