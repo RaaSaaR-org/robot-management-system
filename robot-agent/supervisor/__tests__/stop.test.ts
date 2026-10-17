@@ -161,6 +161,38 @@ describe('stop sequence', () => {
     expect(h.readCalls().filter((c) => c.startsWith('sidecar:start')).length).toBe(1);
   });
 
+  it('a stop during the restart backoff cancels the restart — nothing is spawned after stop', async () => {
+    h = await makeHarness();
+    await h.sup.init();
+    const st = await startAndWait(h);
+    const bridgePid = step(st, 'bridge').pid as number;
+    realKill(bridgePid, 'SIGKILL'); // e.g. the cable was pulled and the bridge died
+    await waitFor(() => h!.sup.status(), (s) => step(s, 'bridge').code === 'restarting', 5000, 'restart scheduled');
+
+    h.sup.stop(); // inside the 1 s backoff
+    await h.sup.waitIdle();
+    expect(h.sup.status().overall).toBe('stopped');
+    await new Promise((r) => setTimeout(r, 3000)); // past the backoff and a spawn
+    const later = h.sup.status();
+    expect(later.overall).toBe('stopped');
+    expect(step(later, 'bridge').pid).toBeNull();
+    expect(step(later, 'bridge').state).toBe('idle');
+    expect(h.readCalls().filter((c) => c.startsWith('bridge:args:')).length).toBe(1);
+    expect(existsSync(join(h.stateDir, 'stub-g1', 'bridge.pid'))).toBe(false);
+  });
+
+  it('a stop during a start ends stopped, not error', async () => {
+    h = await makeHarness({ bridgeEnv: { STUB_SILENT: '1' } }); // the bridge never publishes rt/lowstate
+    h.sup.start('read_only');
+    await waitFor(() => h!.sup.status(), (s) => step(s, 'bridge').state === 'running' && step(s, 'bridge').pid !== null, 10_000, 'bridge waiting');
+    h.sup.stop();
+    await h.sup.waitIdle();
+    const after = h.sup.status();
+    expect(after.overall).toBe('stopped');
+    for (const s of after.steps) expect(s.state).not.toBe('failed');
+    for (const s of after.steps) expect(s.pid).toBeNull();
+  });
+
   it('matches a re-exec\'d command line by command and arguments, not by any PID', () => {
     const data = { cmdline: ['/usr/bin/env', 'node', '/r/node_modules/.bin/tsx', 'src/index.ts'], argv: ['/r/node_modules/.bin/tsx', 'src/index.ts'] };
     expect(cmdlineMatches(['node', '/r/node_modules/.bin/tsx', 'src/index.ts'], data)).toBe(true);

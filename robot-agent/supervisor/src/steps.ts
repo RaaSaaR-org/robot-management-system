@@ -232,7 +232,14 @@ export class Supervisor {
   private lastBase: Status['lastBase'] = null;
   private monitor: NodeJS.Timeout | null = null;
   private readonly monitorMs: number;
-  private monitorBusy = false;
+  /** The liveness check in flight, including an automatic restart it is running. */
+  private liveness: Promise<void> | null = null;
+  /**
+   * Bumped by every start and stop. An automatic restart remembers the value it
+   * began with and gives up once it changes, so a restart scheduled before a
+   * Stop never spawns anything after it.
+   */
+  private epoch = 0;
 
   constructor(opts: SupervisorOptions) {
     const d = opts.deps ?? {};
@@ -272,7 +279,12 @@ export class Supervisor {
       this.log(`re-adopted ${proc} pid ${rec.pid} (${rec.owned ? 'owned' : 'adopted, never signalled'})`);
     }
     await this.verifyAdopted();
-    this.monitor = setInterval(() => void this.checkLiveness(), this.monitorMs);
+    this.monitor = setInterval(() => {
+      if (this.liveness) return;
+      this.liveness = this.checkLiveness().finally(() => {
+        this.liveness = null;
+      });
+    }, this.monitorMs);
     this.monitor.unref();
   }
 
@@ -357,6 +369,9 @@ export class Supervisor {
     this.beginOp('stopping', async () => {
       if (running) await running.catch(() => undefined);
       this.abortRequested = false;
+      // The aborted start recorded "aborted by stop"; that is not an error of
+      // this stop. runStop sets lastError again if it cannot stop something.
+      this.lastError = null;
       await this.runStop();
     }, true);
   }
@@ -365,10 +380,17 @@ export class Supervisor {
     if (this.busy && !force) throw new SupervisorError(409, 'busy', `the supervisor is ${this.busy}`);
     this.busy = kind;
     this.lastError = null;
+    // A start or stop owns every child from here on: cancel any automatic
+    // restart and wait until it has let go, so the two never spawn or stop
+    // the same process. A mode switch only touches the sidecar, which is
+    // never restarted automatically.
+    const owns = kind !== 'switching';
+    if (owns) this.epoch++;
     const token = Symbol(kind);
     this.opToken = token;
     this.op = (async () => {
       try {
+        if (owns) await this.settleLiveness();
         await fn();
       } catch (e) {
         this.lastError = (e as Error).message;
@@ -531,12 +553,15 @@ export class Supervisor {
   private async safetyAbort(id: StepId, why: string): Promise<void> {
     const s = this.steps[id];
     const proc = this.procOf(id);
+    const owned = proc ? this.recs[proc]?.owned !== false : true;
     const stopped = proc ? await this.stopProc(proc, { disarm: proc === 'sidecar', keepStep: true }) : true;
     if (s.code !== 'sidecar_hung') {
       s.state = 'failed';
       s.code = 'safety_abort';
-      s.detail = `safety check failed after this step: ${why}. The sequence stopped` +
-        (proc ? (stopped ? ` and the ${proc} was stopped.` : ` but the ${proc} is still running.`) : '.');
+      let what = '.';
+      if (proc && !owned) what = ` and the ${proc} was left running (not started by the supervisor).`;
+      else if (proc) what = stopped ? ` and the ${proc} was stopped.` : ` but the ${proc} is still running.`;
+      s.detail = `safety check failed after this step: ${why}. The sequence stopped${what}`;
     }
     this.lastError = `${id}: ${s.detail}`;
   }
@@ -765,7 +790,7 @@ export class Supervisor {
     return ok;
   }
 
-  private async bridgeReady(s: StepStatus, rec: ChildRecord, timeoutS: number): Promise<boolean> {
+  private async bridgeReady(s: StepStatus, rec: ChildRecord, timeoutS: number, cancelled: () => boolean = () => false): Promise<boolean> {
     const deadline = this.clock.now() + timeoutS * 1000;
     let lastErr: string | null = null;
     while (true) {
@@ -783,7 +808,7 @@ export class Supervisor {
         return true;
       }
       lastErr = p.error;
-      if (this.abortRequested) return this.failStep(s, 'aborted', 'aborted by stop');
+      if (this.abortRequested || cancelled()) return this.failStep(s, 'aborted', 'aborted by stop');
       if (this.clock.now() >= deadline) {
         return this.failStep(s, 'no_lowstate',
           `no rt/lowstate on :${this.profile.ports.bridge} within ${timeoutS} s — robot off, wrong interface or DDS domain ` +
@@ -873,7 +898,7 @@ export class Supervisor {
     return this.agentReady(s, rec, this.profile.timeouts.agentS);
   }
 
-  private async agentReady(s: StepStatus, rec: ChildRecord, timeoutS: number): Promise<boolean> {
+  private async agentReady(s: StepStatus, rec: ChildRecord, timeoutS: number, cancelled: () => boolean = () => false): Promise<boolean> {
     const url = `http://127.0.0.1:${this.profile.ports.agent}/api/v1/health`;
     s.detail = `waiting for ${url}`;
     const deadline = this.clock.now() + timeoutS * 1000;
@@ -888,7 +913,7 @@ export class Supervisor {
         s.detail = `healthy on :${this.profile.ports.agent}`;
         return true;
       }
-      if (this.abortRequested) return this.failStep(s, 'aborted', 'aborted by stop');
+      if (this.abortRequested || cancelled()) return this.failStep(s, 'aborted', 'aborted by stop');
       if (this.clock.now() >= deadline) {
         return this.failStep(s, 'agent_not_ready', `the agent was not healthy within ${timeoutS} s on ${url}`);
       }
@@ -1085,19 +1110,18 @@ export class Supervisor {
   // ---------------------------------------------------------- liveness
 
   private async checkLiveness(): Promise<void> {
-    if (this.monitorBusy) return;
-    this.monitorBusy = true;
-    try {
-      for (const proc of PROC_NAMES) {
-        const rec = this.recs[proc];
-        if (!rec || this.stopping.has(proc) || recAlive(rec, this.procRoot)) continue;
-        const step = this.steps[this.stepOf(proc)];
-        if (step.state !== 'ok' && step.state !== 'warn') continue; // a step in progress handles its own child
-        await this.onUnexpectedExit(proc, rec, step);
-      }
-    } finally {
-      this.monitorBusy = false;
+    for (const proc of PROC_NAMES) {
+      const rec = this.recs[proc];
+      if (!rec || this.stopping.has(proc) || recAlive(rec, this.procRoot)) continue;
+      const step = this.steps[this.stepOf(proc)];
+      if (step.state !== 'ok' && step.state !== 'warn') continue; // a step in progress handles its own child
+      await this.onUnexpectedExit(proc, rec, step);
     }
+  }
+
+  /** Wait until no liveness check (and no automatic restart) is running. */
+  private async settleLiveness(): Promise<void> {
+    while (this.liveness) await this.liveness.catch(() => undefined);
   }
 
   private async onUnexpectedExit(proc: ProcName, rec: ChildRecord, step: StepStatus): Promise<void> {
@@ -1117,16 +1141,33 @@ export class Supervisor {
     this.restarts[proc] = used + 1;
     const wait = BACKOFF_MS[Math.min(used, BACKOFF_MS.length - 1)];
     Object.assign(step, { state: 'running', code: 'restarting', detail: `${why}; restart ${used + 1}/${max} in ${wait / 1000} s` });
-    await this.clock.sleep(wait);
-    if (this.busy) return;
+    // A start or stop since this restart was scheduled cancels it. Before the
+    // spawn any operation does (the original rule); after it only a start or
+    // stop does, and that operation then owns the fresh child (it waits for
+    // this restart to let go before it touches anything).
+    const epoch = this.epoch;
+    const stale = () => this.epoch !== epoch;
+    const giveUp = (): void => {
+      if (step.code === 'restarting' && !this.recs[proc]) {
+        Object.assign(step, emptyStep(step.id), { detail: `${why}; the automatic restart was cancelled by a start or stop` });
+      }
+      this.log(`${proc}: automatic restart cancelled`);
+    };
+    const until = this.clock.now() + wait;
+    while (this.clock.now() < until) {
+      if (stale() || this.busy) return giveUp();
+      await this.clock.sleep(Math.min(100, until - this.clock.now()));
+    }
+    if (stale() || this.busy) return giveUp();
     try {
       if (proc === 'bridge') {
         const bind = await this.bridgeSupportsBind();
+        if (stale() || this.busy) return giveUp();
         const fresh = await this.spawn('bridge', bridgeSpec(this.profile, bind, this.parentEnv));
-        await this.bridgeReady(step, fresh, this.profile.timeouts.bridgeS);
+        await this.bridgeReady(step, fresh, this.profile.timeouts.bridgeS, stale);
       } else if (proc === 'agent') {
         const fresh = await this.spawn('agent', agentSpec(this.profile, this.parentEnv));
-        await this.agentReady(step, fresh, this.profile.timeouts.agentS);
+        await this.agentReady(step, fresh, this.profile.timeouts.agentS, stale);
       }
     } catch (e) {
       Object.assign(step, { state: 'failed', code: `${proc}_restart_failed`, detail: (e as Error).message });
