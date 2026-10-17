@@ -11,6 +11,7 @@ import {
   FingerRetargeter,
   PROJECT_DIST_M,
   gripPose,
+  GRIP_DEPTH,
   jointNames,
   openHandReference,
   type HandKeypoints,
@@ -231,7 +232,10 @@ describe('an open hand is an open hand', () => {
     // without re-tuning. What it must never approach again is the 1.57 rad of
     // the full-trigger fist.
     expect(worst, `worst joint ${worstJoint}`).toBeLessThan(0.3);
-    expect(worst).toBeLessThan(Math.abs(fist) / 4);
+    // The fist is half travel since TASK-399 (0.87 rad on index_1), so a
+    // quarter of it no longer clears 0.22; a third still keeps a flat hand
+    // clearly apart from a squeezed trigger.
+    expect(worst).toBeLessThan(Math.abs(fist) / 3);
   });
 
   it('still curls when the human hand curls — the fix is not a hand held open', () => {
@@ -410,7 +414,25 @@ describe('gripPose — the trigger as one grasp axis', () => {
     const closed = gripPose('left', 1);
     const link = G1_FINGER_CHAINS.left.index.links[1]!;
     expect(closed.left_hand_index_1_joint!).toBeGreaterThan(link.lower);
-    expect(Math.abs(closed.left_hand_index_1_joint!)).toBeGreaterThan(Math.abs(link.lower) * 0.8);
+    // Still a real squeeze, not a twitch.
+    expect(Math.abs(closed.left_hand_index_1_joint!)).toBeGreaterThan(Math.abs(link.lower) * 0.4);
+  });
+
+  it('closes at most half way, so the thumb never reaches the fingers (TASK-399)', () => {
+    // A MuJoCo contact sweep of the Dex3 MJCF puts thumb_1 THROUGH index_1
+    // from about 0.7 of the travel on; at 0.5 the closest approach along the
+    // whole squeeze is 14 mm on both hands. At 0.9 three real left-hand motors
+    // stalled into each other and latched a fault until the robot restarted.
+    expect(GRIP_DEPTH).toBeLessThanOrEqual(0.5);
+    for (const side of ['left', 'right'] as const) {
+      const closed = gripPose(side, 1);
+      for (const finger of ['thumb', 'index', 'middle'] as const) {
+        for (const link of G1_FINGER_CHAINS[side][finger].links) {
+          const stop = Math.max(Math.abs(link.lower), Math.abs(link.upper));
+          expect(Math.abs(closed[link.joint]!)).toBeLessThanOrEqual(stop * 0.5 + 1e-9);
+        }
+      }
+    }
   });
 
   it('stays inside every limit, for any trigger value including nonsense', () => {

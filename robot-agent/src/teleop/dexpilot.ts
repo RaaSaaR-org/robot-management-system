@@ -517,8 +517,16 @@ export class FingerRetargeter {
  * Not 1: a position-controlled joint commanded exactly to its mechanical limit
  * sits there fighting the stop, which on the real Dex3 is heat rather than
  * grip.
+ *
+ * And not 0.9, which it was until the first real-robot session (2026-10-17):
+ * on the way to 0.9 the thumb's `thumb_1` link passes THROUGH the index finger's
+ * (MuJoCo contact sweep of the G1 Dex3 MJCF: 0 mm closest approach from about
+ * 0.7 on, both hands). On the real left hand three motors — both thumb flexion
+ * joints and one finger base — stalled against each other and latched a fault
+ * (`motorstate` 0x200, mode 0) that holds until the robot restarts. At 0.5 the
+ * closest approach along the whole squeeze is 14 mm.
  */
-const GRIP_DEPTH = 0.9;
+export const GRIP_DEPTH = 0.5;
 
 /**
  * The single-axis grasp — the controller fallback when there is no hand
