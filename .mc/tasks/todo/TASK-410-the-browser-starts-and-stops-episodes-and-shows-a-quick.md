@@ -16,7 +16,7 @@ spe: 8
 effort: "high"
 due_date: ""
 created: "2026-10-17"
-updated: "2026-10-17"
+updated: "2026-10-18"
 ---
 
 # The browser starts and stops episodes and shows a quick check after each one
@@ -147,3 +147,27 @@ Recording should feel like "press, do, press, glance, next" rather than paperwor
 - **vitest:** store reducers for every event, the 409 adopt path, timer selectors with a server offset, `QuickCheckCard`, `EpisodePanel` hotkeys, and the `sessionCues` scheduling (mocked `AudioContext`).
 - **Playwright demo build** with MSW handlers for the new routes, plus a two-context test.
 - **Live run** with branch builds on free ports against the sim robot only.
+
+## Implementation notes (2026-10-18)
+
+Decisions made while implementing, and where the code differs from the spec above:
+
+- **Store actions take the session id first**: `startTake(id, source)`, `stopTake`, `nextTake`, `discardLastTake(id, source, expectedTake?)`, `discardTake(id, take, source)`. Each returns whether the server took it; a refusal or a network error is a toast, never a thrown error or `state.error`. A second press while one is in flight is refused locally.
+- **API names**: `getLive`, `startEpisode`, `stopEpisode`, `nextEpisodeGuarded` (the old `nextEpisode` stays for recorders without explicit takes), `discardLast`, `discardTake` (DELETE with the guard body), `thumbnailUrl`, `fetchThumbnail`. Episode actions read a 409 body as `{ ok: false, code, live }` via `validateStatus`; the shared API client would otherwise drop `live`.
+- **The 409 body has no `by`.** The conflict toast is chosen by `code`, and names the actor ("Already started from the headset") from the last `teleop:episode:*` event this tab saw for that take, when it saw one.
+- **Cues and toasts fire exactly once per event**, whichever of the REST answer and its WebSocket echo arrives first (keyed by session, kind, take and start stamp). The tab's own start/stop gets a cue but no toast; its own discard toasts "You discarded take N"; everyone else's actions toast in words ("Take 5 started from the headset", "Anna discarded take 4", "Take 6 stopped automatically").
+- **`confirm()` is already the shared `ConfirmDialog`** (the imperative host from `@/shared/components/ui`), so Start session and End session keep it. The session's Start button is renamed **Start session**: starting no longer records anything.
+- **Discard last** (button and Backspace) uses the 5 s Undo toast and no dialog; the request is sent only when the window closes, pinned to the take that was last when it was asked for (`expectedTake`), so a take started in the meantime answers 409 instead of being discarded. The per-row trash keeps a confirm dialog; on the live row it reads **Restart take N** because the server restarts the take being recorded (TASK-408).
+- **Pause** is hidden whenever the live state has a phase (agent and sim recorders); a recorder without explicit takes (SO-101 sidecar, `phase: null`) keeps Pause, Space-to-pause, N and the old Next episode button.
+- **HUD**: the top bar carries the phase pill, `Take N` (between takes the number is the NEXT take, so a discarded number is never shown again), the take timer, `auto-stop in Ns`, `DEGRADED` and the mute toggle; the tiles are Session time, Frames, Frame rate and Kept.
+- **Quick-check card**: hover or focus holds it past its 8 s; `no_motion` / `short` pre-focus Discard and turn it red, and nothing is ever discarded automatically (D3).
+- **Thumbnails** are fetched through the API client as blobs (the route is behind auth) and cached per take; a take with `thumbnailUrl: null` or a 404 shows "No thumbnail". Rows only fetch once they scroll into view.
+- **E-STOP** calls `safetyApi.triggerRobotEStop` with a reason naming the session page. Escape twice within 1 s fires it; Escape pressed while typing does not count, so closing a field cannot drop the robot.
+- **Fixed on the way — every session hotkey was dead on a real page.** The shell keeps its closed mobile navigation drawer in the DOM as `role="dialog"` with `aria-hidden` + `inert`, and the old "a dialog is open" check matched it, so Space/E/N never fired outside unit tests. `utils/hotkeys.ts#isDialogOpen` ignores hidden, inert dialogs.
+- **Layout**: below `xl` the Takes panel comes before the robot view and cameras, so an assistant on a tablet does not scroll for the controls.
+- **The two-tab check is a live spec** (`app/e2e/live/datacollection-takes-sync.spec.ts`), not a demo spec: the demo build turns the WebSocket off, and two browser contexts share no MSW state. The demo spec (`app/e2e/datacollection-takes.spec.ts`) covers one tab end to end against new MSW handlers (`app/src/mocks/teleopTakesDemoHandlers.ts`, session `demo-session-takes`).
+- `app/e2e/live/datacollection-vr.spec.ts` was updated to the new names (Start session, Start take, `take-next`, "Discard take 1") but not run; it already picked "the first robot" and used hash routes against a non-hash build.
+
+Live check (2026-10-18, branch builds only: server :3110 on a copy of the dev DB with every robot and agent-card URL repointed to a dead port, agent :41310 `sim-t410-g1`, sim `sim_g1_dds` :8810 on DDS domain 60 / `lo`, app :1440). Before any write, a GET through the branch server showed the robot's sidecar at :8810 with the branch sim's boot id.
+- Two browsers on one `vr_quest` session (simulated VR input driving the sim arms; the agent records only while commands reach the robot): A's Start take showed `● REC` and "Dev User started take 1" in B within 1.5 s; the two take timers differed by ≤ 1 s; Stop showed the quick check in both, with the head-camera thumbnail, 130 frames and L/R arm and hand moved; B's Discard removed the row in A and told A who discarded it; the header E-STOP latched the agent's E-stop.
+- The 409 adopt path is covered by store tests only.
