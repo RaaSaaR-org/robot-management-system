@@ -519,7 +519,9 @@ export type EpisodeConflictCode =
   | 'not_recording'
   | 'unsupported_recorder'
   | 'no_take'
-  | 'already_discarded';
+  | 'already_discarded'
+  /** DELETE of a take number this session never had → 404. */
+  | 'unknown_take';
 
 export interface JointMoved {
   name: string;

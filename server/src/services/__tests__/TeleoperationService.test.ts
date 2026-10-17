@@ -1472,6 +1472,72 @@ describe('TeleoperationService — episode control (TASK-408)', () => {
     );
   });
 
+  it('DELETE of the take being recorded restarts it — no flag, no episode:discarded', async () => {
+    const { st } = fakeAgent();
+    // The agent's semantics (TASK-402 D2): the live take is restarted, not retired.
+    mockAgentRecording.discardEpisode.mockImplementation(async (_r: string, i: number) => {
+      if (st.open?.episodeIndex === i) return true;
+      const ep = st.episodes.find((e) => e.episodeIndex === i);
+      if (!ep) return false;
+      ep.discarded = true;
+      return true;
+    });
+    await service.startEpisode('session-1', CTX);
+    events = [];
+    mockPrisma.teleoperationEpisode.upsert.mockClear();
+    mockCompliance.logAccess.mockClear();
+    mockPrisma.teleoperationFrame.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.teleoperationFrame.count.mockResolvedValue(0);
+    mockPrisma.teleoperationSession.update.mockResolvedValue({});
+
+    const result = await service.discardEpisode('session-1', 0, CTX);
+    expect(result).toMatchObject({ episodeIndex: 0, restarted: true, live: { phase: 'capturing', take: 0, discarded: 0 } });
+    expect(ofType('episode:discarded')).toHaveLength(0);
+    expect(mockPrisma.teleoperationEpisode.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ update: { discarded: true } }),
+    );
+    // A fresh start stamp, attributed to whoever restarted it.
+    const restart = mockPrisma.teleoperationEpisode.upsert.mock.calls.at(-1)![0];
+    expect(restart.update).toMatchObject({ startedAt: expect.any(Date) });
+    expect(mockCompliance.logAccess.mock.calls[0]![0].payload.action).toBe('episode.restart');
+    expect(ofType('session:live').at(-1)!.live).toMatchObject({ phase: 'capturing', take: 0 });
+  });
+
+  it('DELETE of a take the session never had answers 404 unknown_take and writes nothing', async () => {
+    fakeAgent();
+    await service.startEpisode('session-1', CTX);
+    await service.stopEpisode('session-1', CTX);
+    events = [];
+    mockPrisma.teleoperationEpisode.upsert.mockClear();
+    mockCompliance.logAccess.mockClear();
+    mockPrisma.teleoperationFrame.count.mockResolvedValue(0);
+
+    await expect(service.discardEpisode('session-1', 999, CTX)).rejects.toMatchObject({
+      code: 'unknown_take',
+      status: 404,
+      live: { take: 0 },
+    });
+    expect(mockAgentRecording.discardEpisode).not.toHaveBeenCalled();
+    expect(mockPrisma.teleoperationEpisode.upsert).not.toHaveBeenCalled();
+    expect(ofType('episode:discarded')).toHaveLength(0);
+    expect(mockCompliance.logAccess).not.toHaveBeenCalled();
+  });
+
+  it('DELETE that the robot does not carry out answers 502 and flags nothing', async () => {
+    fakeAgent();
+    await service.startEpisode('session-1', CTX);
+    await service.stopEpisode('session-1', CTX);
+    mockAgentRecording.discardEpisode.mockResolvedValueOnce(false);
+    mockPrisma.teleoperationEpisode.upsert.mockClear();
+    events = [];
+    await expect(service.discardEpisode('session-1', 0, CTX)).rejects.toMatchObject({
+      code: 'recorder_unavailable',
+      status: 502,
+    });
+    expect(mockPrisma.teleoperationEpisode.upsert).not.toHaveBeenCalled();
+    expect(ofType('episode:discarded')).toHaveLength(0);
+  });
+
   it('the list hides discarded takes unless asked', async () => {
     mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...SESSION, status: 'completed' });
     mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([
@@ -1539,6 +1605,46 @@ describe('TeleoperationService — episode control (TASK-408)', () => {
       await vi.advanceTimersByTimeAsync(1000);
       expect(ofType('episode:stopped')).toHaveLength(0);
       expect(st.lastStop?.reason).toBe('operator');
+    } finally {
+      (service as unknown as { stopAgentProgressPoller(id: string): void }).stopAgentProgressPoller('session-1');
+      vi.useRealTimers();
+    }
+  });
+
+  it('an auto-stop an action reads before the poller does is still reported, once, as by auto', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { end } = fakeAgent();
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...SESSION, status: 'created', recorderKind: null, startedAt: null });
+      mockPrisma.teleoperationSession.update.mockImplementation(async (a: { data: Record<string, unknown> }) => ({ ...SESSION, ...a.data }));
+      mockPrisma.robot.findUnique.mockResolvedValue({ id: 'robot-1', model: 'G1 EDU', a2aAgentUrl: null });
+      mockAgentRecording.start.mockImplementation(async () => mockAgentRecording.status());
+      await service.startSession('session-1');
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...SESSION, episodeTimeS: 3 });
+      await service.startEpisode('session-1', CTX);
+      events = [];
+      mockPrisma.teleoperationEpisode.upsert.mockClear();
+
+      // The robot auto-stops take 0, and the operator presses Start before the next poll.
+      end('time_limit');
+      const { take } = await service.startEpisode('session-1', CTX);
+      expect(take).toBe(1);
+      const stopped = ofType('episode:stopped');
+      expect(stopped).toHaveLength(1);
+      expect(stopped[0]).toMatchObject({ take: 0, reason: 'time_limit', by: { source: 'auto' } });
+      // The take's row got the quick check and who stopped it.
+      const row = mockPrisma.teleoperationEpisode.upsert.mock.calls
+        .map((c) => c[0])
+        .find((a) => a.where.sessionId_episodeIndex.episodeIndex === 0);
+      expect(row.update).toMatchObject({ frameCount: 90, stopReason: 'time_limit' });
+      expect(JSON.parse(row.update.stoppedBy)).toMatchObject({ source: 'auto' });
+      // The stop comes before the start, and the poller does not repeat it.
+      expect(events.findIndex((e) => e.type === 'episode:stopped')).toBeLessThan(
+        events.findIndex((e) => e.type === 'episode:started'),
+      );
+      events = [];
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(ofType('episode:stopped')).toHaveLength(0);
     } finally {
       (service as unknown as { stopAgentProgressPoller(id: string): void }).stopAgentProgressPoller('session-1');
       vi.useRealTimers();

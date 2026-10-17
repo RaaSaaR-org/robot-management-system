@@ -131,7 +131,7 @@ export class EpisodeActionError extends Error {
   ) {
     super(message);
     this.name = 'EpisodeActionError';
-    this.status = code === 'recorder_unavailable' ? 502 : 409;
+    this.status = code === 'recorder_unavailable' ? 502 : code === 'unknown_take' ? 404 : 409;
   }
 }
 
@@ -151,6 +151,8 @@ function conflictMessage(code: EpisodeConflictCode): string {
       return 'There is no take to discard';
     case 'already_discarded':
       return 'The last take is already discarded';
+    case 'unknown_take':
+      return 'This session has no take with that number';
   }
 }
 
@@ -576,7 +578,7 @@ export class TeleoperationService extends EventEmitter {
     });
     // Every client learns the session is open and between takes (D3).
     try {
-      this.emitLive((await this.readLive(updated as TeleoperationSession, true)).live);
+      this.emitLive((await this.readLive(updated as TeleoperationSession)).live);
     } catch (err) {
       console.warn(`[TeleoperationService] could not publish the live state of ${sessionId}:`, err);
     }
@@ -997,7 +999,7 @@ export class TeleoperationService extends EventEmitter {
       const startedAtMs = Date.now();
       this.takeStamps.set(sessionId, { take: begun.take, atMs: startedAtMs });
       await this.persistTakeStart(sessionId, begun.take, startedAtMs, by);
-      const { live } = await this.readLive(session, true);
+      const { live } = await this.readLive(session);
       this.emitEpisode('episode:started', sessionId, live, {
         take: begun.take,
         startedAt: new Date(startedAtMs).toISOString(),
@@ -1027,7 +1029,7 @@ export class TeleoperationService extends EventEmitter {
       }
       await this.persistTakeStop(sessionId, ended.quickCheck, by, ended.retargetModes);
       this.takeStamps.delete(sessionId);
-      const { live } = await this.readLive(session, true);
+      const { live } = await this.readLive(session, ended.quickCheck.take);
       this.emitEpisode('episode:stopped', sessionId, live, {
         take: ended.quickCheck.take,
         quickCheck: ended.quickCheck,
@@ -1059,7 +1061,7 @@ export class TeleoperationService extends EventEmitter {
       const startedAtMs = Date.now();
       this.takeStamps.set(sessionId, { take: result.take, atMs: startedAtMs });
       await this.persistTakeStart(sessionId, result.take, startedAtMs, by);
-      const { live } = await this.readLive(session, true);
+      const { live } = await this.readLive(session, result.stopped?.quickCheck.take ?? null);
       if (result.stopped) {
         this.emitEpisode('episode:stopped', sessionId, live, {
           take: result.stopped.quickCheck.take,
@@ -1091,16 +1093,18 @@ export class TeleoperationService extends EventEmitter {
       const by = actorOf(ctx);
       const take = before.take as number; // the guard refused a null take
       const backend = this.takeBackend(session);
+      let stoppedTake: number | null = null;
       if (before.phase === 'capturing') {
         const ended = await backend.end('operator');
         if (ended.ok) {
           await this.persistTakeStop(sessionId, ended.quickCheck, by, ended.retargetModes);
           this.takeStamps.delete(sessionId);
+          stoppedTake = ended.quickCheck.take;
         }
       }
       await backend.discard(take);
       await this.markTakeDiscarded(sessionId, take);
-      const { live } = await this.readLive(session, true);
+      const { live } = await this.readLive(session, stoppedTake);
       this.emitEpisode('episode:discarded', sessionId, live, { take, by });
       await this.auditEpisode(session, 'episode.discard', take, ctx);
       this.emitLive(live);
@@ -1110,27 +1114,46 @@ export class TeleoperationService extends EventEmitter {
 
   /**
    * Discard one take by number. Only valid before the session is completed.
-   * The take's row is KEPT, flagged (D4); frames the server holds are deleted.
+   *
+   * A FINISHED take is discarded: its row is kept, flagged (D4), and the frames
+   * the server holds are deleted. The OPEN take is restarted instead — every
+   * recorder (the agent's, the SimFrameRecorder's ledger, a client ledger)
+   * treats "discard the live take" as "record this take again" (TASK-402 D2),
+   * so it goes on recording under the same number and may well be kept. Its
+   * row is therefore not flagged and no `episode:discarded` is sent; it gets a
+   * fresh start stamp and every client a new live state. Which of the two
+   * happened is read back from the recorder, not assumed from the state before
+   * — a take the robot auto-stopped in between is a finished one.
+   *
+   * A take number the session never had answers 404 `unknown_take`; a robot
+   * that does not discard a take it has answers 502 `recorder_unavailable`.
    */
   async discardEpisode(
     sessionId: string,
     episodeIndex: number,
     ctx: EpisodeActionContext = SYSTEM_CONTEXT
-  ): Promise<{ episodeIndex: number; deletedFrames: number; frameCount: number; live: LiveState }> {
+  ): Promise<{ episodeIndex: number; deletedFrames: number; frameCount: number; restarted: boolean; live: LiveState }> {
     return this.serializeEpisodes(sessionId, async () => {
-      const session = await this.prisma.teleoperationSession.findUnique({
+      const found = await this.prisma.teleoperationSession.findUnique({
         where: { id: sessionId },
       });
 
-      if (!session) {
+      if (!found) {
         throw new Error(`Session ${sessionId} not found`);
       }
+      const session = found as TeleoperationSession;
       if (!['created', 'recording', 'paused'].includes(session.status)) {
         throw new Error(
           `Cannot discard episode: session status is ${session.status}. Episodes can only be discarded before the session is completed.`
         );
       }
       const by = actorOf(ctx);
+
+      const { live: before, agent } = await this.readLive(session);
+      if (agent) await this.reportUnseenStop(sessionId, before, agent);
+      if (!(await this.takeExists(sessionId, episodeIndex, before))) {
+        throw new EpisodeActionError('unknown_take', before, conflictMessage('unknown_take'));
+      }
 
       // Drop any not-yet-persisted frames of this episode from the live recorder
       // and wait for an in-flight persist batch, so no frame of this episode can
@@ -1144,11 +1167,18 @@ export class TeleoperationService extends EventEmitter {
         // happen there. The deleteMany below is still correct and still runs — it
         // is a no-op for an agent-recorded session, and it is what cleans up a
         // session that fell back to the sim recorder partway through.
-        await agentRecordingService.discardEpisode(session.robotId, episodeIndex);
+        const done = await agentRecordingService.discardEpisode(session.robotId, episodeIndex);
+        if (!done) {
+          const { live } = await this.readLive(session);
+          throw new EpisodeActionError(
+            'recorder_unavailable',
+            live,
+            `The robot did not discard take ${episodeIndex} — check that its agent is running`
+          );
+        }
       } else if (!liveRecorder) {
         this.clientLedgers.get(sessionId)?.discard(episodeIndex);
       }
-      await this.markTakeDiscarded(sessionId, episodeIndex);
 
       const deleted = await this.prisma.teleoperationFrame.deleteMany({
         where: { sessionId, episodeIndex },
@@ -1160,13 +1190,42 @@ export class TeleoperationService extends EventEmitter {
         data: { frameCount },
       });
 
-      const { live } = await this.readLive(session as TeleoperationSession, true);
-      this.emitEpisode('episode:discarded', sessionId, live, { take: episodeIndex, by });
-      await this.auditEpisode(session as TeleoperationSession, 'episode.discard', episodeIndex, ctx);
+      let { live } = await this.readLive(session);
+      const restarted = live.phase === 'capturing' && live.take === episodeIndex;
+      if (restarted) {
+        // D5: the re-recorded take's clock starts now, on this server.
+        const startedAtMs = Date.now();
+        this.takeStamps.set(sessionId, { take: episodeIndex, atMs: startedAtMs });
+        await this.persistTakeStart(sessionId, episodeIndex, startedAtMs, by);
+        ({ live } = await this.readLive(session));
+        await this.auditEpisode(session, 'episode.restart', episodeIndex, ctx);
+      } else {
+        await this.markTakeDiscarded(sessionId, episodeIndex);
+        this.emitEpisode('episode:discarded', sessionId, live, { take: episodeIndex, by });
+        await this.auditEpisode(session, 'episode.discard', episodeIndex, ctx);
+      }
       this.emitLive(live);
 
-      return { episodeIndex, deletedFrames: deleted.count, frameCount, live };
+      return { episodeIndex, deletedFrames: deleted.count, frameCount, restarted, live };
     });
+  }
+
+  /**
+   * Whether this session ever had take `take`: a number the recorder has
+   * handed out (takes are numbered upward from 0, so any up to the live one),
+   * or one a row or a stored frame names — the takes a client ledger rebuilt
+   * after a restart does not list.
+   */
+  private async takeExists(sessionId: string, take: number, live: LiveState): Promise<boolean> {
+    if (take < 0) return false;
+    if (live.take !== null && take <= live.take) return true;
+    const [rows, frames] = await Promise.all([
+      this.prisma.teleoperationEpisode
+        .findMany({ where: { sessionId, episodeIndex: take }, select: { episodeIndex: true } })
+        .catch(() => []),
+      this.prisma.teleoperationFrame.count({ where: { sessionId, episodeIndex: take } }).catch(() => 0),
+    ]);
+    return (Array.isArray(rows) && rows.length > 0) || (typeof frames === 'number' && frames > 0);
   }
 
   /**
@@ -1325,7 +1384,11 @@ export class TeleoperationService extends EventEmitter {
         'Episodes are managed by the hardware sidecar for this session'
       );
     }
-    const { live: before } = await this.readLive(session);
+    const { live: before, agent } = await this.readLive(session);
+    // A stop the robot made on its own since the last poll is reported now,
+    // before this action draws a boundary of its own — else the action's
+    // readLive would be the first to see it and the poller never would.
+    if (agent) await this.reportUnseenStop(sessionId, before, agent);
     if (session.status !== 'recording') {
       throw new EpisodeActionError(
         'not_recording',
@@ -1347,12 +1410,15 @@ export class TeleoperationService extends EventEmitter {
 
   /**
    * The live state, and the agent status it was built from when there is one.
-   * `afterMutation` records the agent's last stop as seen, so the poller does
-   * not report a stop this server just made as one it did not.
+   * `stoppedTake` is the take the calling action itself just stopped: the
+   * agent's last stop is recorded as seen only when it is THAT take's, so the
+   * poller does not report this server's own stop as one it did not make —
+   * and still reports a stop it did not make (the robot's `time_limit`) that
+   * an action happened to read first.
    */
   private async readLive(
     session: TeleoperationSession,
-    afterMutation = false
+    stoppedTake: number | null = null
   ): Promise<{ live: LiveState; agent: AgentRecordingStatus | null }> {
     const nowMs = Date.now();
     const base: LiveBase = {
@@ -1367,7 +1433,7 @@ export class TeleoperationService extends EventEmitter {
     if (active && session.recorderKind === 'agent') {
       const agent = await agentRecordingService.status(session.robotId).catch(() => null);
       if (agent && (agent.sessionId === null || agent.sessionId === session.id)) {
-        if (afterMutation) this.noteStopSeen(session.id, agent);
+        if (stoppedTake !== null) this.noteStopSeen(session.id, agent, stoppedTake);
         const stamp = this.takeStamps.get(session.id);
         const live = liveFromAgent(
           base,
@@ -1539,12 +1605,34 @@ export class TeleoperationService extends EventEmitter {
     };
   }
 
-  /** Remember the robot's last stop as one this server knows about. */
-  private noteStopSeen(sessionId: string, agent: AgentRecordingStatus): void {
-    const atMs = agent.lastStop?.atMs;
-    if (typeof atMs === 'number' && atMs > (this.seenStops.get(sessionId) ?? 0)) {
-      this.seenStops.set(sessionId, atMs);
-    }
+  /** Remember the robot's last stop as one this server made — only if it is the take it stopped. */
+  private noteStopSeen(sessionId: string, agent: AgentRecordingStatus, stoppedTake: number): void {
+    const stop = agent.lastStop;
+    if (!stop || stop.episodeIndex !== stoppedTake) return;
+    if (stop.atMs > (this.seenStops.get(sessionId) ?? 0)) this.seenStops.set(sessionId, stop.atMs);
+  }
+
+  /**
+   * Report a stop the robot made that this server has not reported yet — its
+   * own `time_limit` auto-stop, most often: write the take's row with the
+   * quick check and say so as `episode:stopped` by `auto`. Called by the
+   * poller and by an action's prelude; the seen-mark is set before the first
+   * await, so only one of them ever reports a given stop.
+   */
+  private async reportUnseenStop(sessionId: string, live: LiveState, agent: AgentRecordingStatus): Promise<void> {
+    const stop = agent.lastStop ?? null;
+    if (!stop || stop.atMs <= (this.seenStops.get(sessionId) ?? 0)) return;
+    this.seenStops.set(sessionId, stop.atMs);
+    if (this.takeStamps.get(sessionId)?.take === stop.episodeIndex) this.takeStamps.delete(sessionId);
+    const report = agent.episodes.find((e) => e.episodeIndex === stop.episodeIndex);
+    const quickCheck = report ? quickCheckFromReport(sessionId, report, stop.reason) : null;
+    if (quickCheck) await this.persistTakeStop(sessionId, quickCheck, AUTO_ACTOR, report?.retargetModes);
+    this.emitEpisode('episode:stopped', sessionId, live, {
+      take: stop.episodeIndex,
+      quickCheck,
+      reason: stop.reason,
+      by: AUTO_ACTOR,
+    });
   }
 
   private async persistTakeStart(sessionId: string, take: number, startedAtMs: number, by: EpisodeActor): Promise<void> {
@@ -2439,20 +2527,8 @@ export class TeleoperationService extends EventEmitter {
     if (!agent) return;
     if (!this.agentPollers.has(sessionId)) return; // stopped while asking
 
-    const stop = agent.lastStop ?? null;
-    if (stop && !this.mutating.has(sessionId) && stop.atMs > (this.seenStops.get(sessionId) ?? 0)) {
-      this.seenStops.set(sessionId, stop.atMs);
-      if (this.takeStamps.get(sessionId)?.take === stop.episodeIndex) this.takeStamps.delete(sessionId);
-      const report = agent.episodes.find((e) => e.episodeIndex === stop.episodeIndex);
-      const quickCheck = report ? quickCheckFromReport(sessionId, report, stop.reason) : null;
-      if (quickCheck) await this.persistTakeStop(sessionId, quickCheck, AUTO_ACTOR, report?.retargetModes);
-      this.emitEpisode('episode:stopped', sessionId, live, {
-        take: stop.episodeIndex,
-        quickCheck,
-        reason: stop.reason,
-        by: AUTO_ACTOR,
-      });
-    }
+    // An action in flight reports (or claims) the stop itself.
+    if (!this.mutating.has(sessionId)) await this.reportUnseenStop(sessionId, live, agent);
 
     this.emitLive(live);
     if (agent.degraded && agent.lastDropReason) {

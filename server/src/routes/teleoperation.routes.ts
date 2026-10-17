@@ -554,16 +554,15 @@ teleoperationRoutes.delete(
 
       res.json({
         ...result,
-        message: `Discarded episode ${parsedIndex} (${result.deletedFrames} frames)`,
+        message: result.restarted
+          ? `Restarted take ${parsedIndex} (${result.deletedFrames} frames dropped)`
+          : `Discarded episode ${parsedIndex} (${result.deletedFrames} frames)`,
       });
     } catch (error) {
       console.error('[TeleoperationRoutes] Error discarding episode:', error);
-      // "not found" is this repo's own sentence, so that one is echoed;
-      // every other failure answers with the fallback, unread.
-      if (error instanceof Error && error.message.includes('not found')) {
-        return res.status(404).json({ error: error.message });
-      }
-      sendFailure(res, error, 'Failed to discard episode', 400);
+      // 404 unknown_take / 502 recorder_unavailable carry the live state;
+      // "not found" is echoed; every other failure answers with the fallback.
+      await sendEpisodeFailure(res, req.params.id, error, 'Failed to discard episode');
     }
   }
 );

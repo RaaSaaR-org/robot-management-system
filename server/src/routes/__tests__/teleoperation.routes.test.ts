@@ -19,7 +19,7 @@ const svc = vi.hoisted(() => {
       message: string
     ) {
       super(message);
-      this.status = code === 'recorder_unavailable' ? 502 : 409;
+      this.status = code === 'recorder_unavailable' ? 502 : code === 'unknown_take' ? 404 : 409;
     }
   }
   return {
@@ -160,6 +160,22 @@ describe('episode control routes (TASK-408)', () => {
     const del = await request(app(ANA)).delete('/api/teleoperation/sessions/s1/episodes/2');
     expect(del.status).toBe(200);
     expect(svc.service.discardEpisode).toHaveBeenCalledWith('s1', 2, expect.objectContaining({ user: { userId: 'user-7', displayName: 'Ana' } }));
+  });
+
+  it('DELETE of a take the session never had answers 404 with its code and the live state', async () => {
+    svc.service.discardEpisode.mockRejectedValue(
+      new svc.EpisodeActionError('unknown_take', LIVE, 'This session has no take with that number')
+    );
+    const res = await request(app(ANA)).delete('/api/teleoperation/sessions/s1/episodes/999');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ code: 'unknown_take', error: 'This session has no take with that number', live: LIVE });
+  });
+
+  it('DELETE of the live take says it restarted', async () => {
+    svc.service.discardEpisode.mockResolvedValue({ episodeIndex: 4, deletedFrames: 0, frameCount: 0, restarted: true, live: LIVE });
+    const res = await request(app(ANA)).delete('/api/teleoperation/sessions/s1/episodes/4');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ restarted: true, message: expect.stringMatching(/^Restarted take 4/) });
   });
 
   it('DELETE refuses a take number parseInt would have bent', async () => {
