@@ -3,7 +3,7 @@ id: "TASK-392"
 aliases: []
 title: "Starting a data collection session asks only for robot, task and input device"
 slug: "starting-a-data-collection-session-asks-only-for-robot-task-and-input-device"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
