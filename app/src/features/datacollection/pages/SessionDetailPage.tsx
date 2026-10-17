@@ -210,7 +210,11 @@ export function SessionDetailPage() {
   // advertise leases.
   const sessionIsLive = !!session && ['created', 'recording', 'paused'].includes(session.status);
   const sessionIsVr = session?.type === 'vr_quest' || session?.type === 'vr_vision_pro';
-  const leaseInputs = gamepadEligible || sessionIsVr;
+  // TASK-396: a real headset drives through the VR window, which holds its own
+  // lease and "Take control". The page's lease would contend with it for the
+  // robot's one lease, so a VR session joins it only for the simulated input.
+  const [simulateVr, setSimulateVr] = useState(false);
+  const leaseInputs = gamepadEligible || (sessionIsVr && simulateVr);
   const { lease, connected: leaseConnected } = useSessionControlLease(
     session?.robotId ?? '',
     robot?.a2aAgentUrl,
@@ -433,6 +437,8 @@ export function SessionDetailPage() {
         <VRSessionPanel
           robot={robot}
           lease={lease}
+          simulate={simulateVr}
+          onSimulateChange={setSimulateVr}
           onNextEpisode={handleNextEpisode}
           // 1-based, matching the HUD; frames are the CURRENT take's count.
           recording={isRecording ? {

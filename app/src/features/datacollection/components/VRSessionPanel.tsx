@@ -7,6 +7,9 @@
  *              motion to the robot agent for headset-less testing, and a
  *              collapsed keyboard fallback. The simulated input joins the
  *              session page's control lease when one is passed (TASK-320).
+ *              The page owns the switch (TASK-396): it holds its lease only
+ *              while simulating, and the headset path is closed meanwhile, so
+ *              the operator only ever sees one "Take control".
  * @feature datacollection
  */
 
@@ -32,6 +35,9 @@ export interface VRSessionPanelProps {
   recording?: { episode: number; frames: number } | null;
   /** The session page's control lease; the simulated input streams only while it is bound. */
   lease?: InputLease;
+  /** "Simulate VR input" switch, when the page owns it; local state otherwise. */
+  simulate?: boolean;
+  onSimulateChange?: (on: boolean) => void;
 }
 
 const STATUS: Record<SimInputStatus | 'off', { label: string; tone: StatusTagTone }> = {
@@ -42,8 +48,15 @@ const STATUS: Record<SimInputStatus | 'off', { label: string; tone: StatusTagTon
   streaming: { label: 'Streaming synthetic motion', tone: 'sim' },
 };
 
-export function VRSessionPanel({ robot, onNextEpisode, recording, lease }: VRSessionPanelProps) {
-  const [simulate, setSimulate] = useState(false);
+export function VRSessionPanel({
+  robot, onNextEpisode, recording, lease, simulate: simulateProp, onSimulateChange,
+}: VRSessionPanelProps) {
+  const [simulateLocal, setSimulateLocal] = useState(false);
+  const simulate = simulateProp ?? simulateLocal;
+  const setSimulate = (on: boolean): void => {
+    setSimulateLocal(on);
+    onSimulateChange?.(on);
+  };
   const [showKeyboard, setShowKeyboard] = useState(false);
   const simStatus = useSimulatedVrInput({ robot, enabled: simulate, lease });
   const status = STATUS[simulate ? simStatus : 'off'];
@@ -62,7 +75,12 @@ export function VRSessionPanel({ robot, onNextEpisode, recording, lease }: VRSes
   return (
     <div className="flex flex-col gap-6" data-testid="vr-session-panel">
       {/* Real headset path: WebXR rig (launcher card + full-screen modal) */}
-      <VRTeleopSection robot={robot} onNextEpisode={onNextEpisode} recording={recording} />
+      <VRTeleopSection
+        robot={robot}
+        onNextEpisode={onNextEpisode}
+        recording={recording}
+        launchDisabledReason={simulate ? 'Simulated VR input is driving the robot. Switch it off to use a headset.' : undefined}
+      />
 
       <Panel>
         <Panel.Header title="Test without a headset" />
