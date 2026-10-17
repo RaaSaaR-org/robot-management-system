@@ -1622,6 +1622,20 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
         # teleop at 50 Hz. `handle_one_request` turns the resulting socket
         # timeout into `close_connection`, which ends the thread.
         timeout = 30
+        # ...and the reply must leave the moment it is written (TASK-415).
+        # `end_headers()` writes the status line and headers, then `_send`
+        # writes the body: two small segments on one socket. With Nagle on, the
+        # body waits for the client to ACK the headers, and the client delays
+        # that ACK by ~40 ms on a connection that is no longer in quick-ACK
+        # mode -- which a keep-alive connection is, from its second request on.
+        # Measured from Node `fetch` against `/state/fast` on this facade: every
+        # other request took 43 ms (median 2.4 ms, mean 22 ms), capping a
+        # 30 fps recorder at 11-15 fps of distinct samples. curl never saw it
+        # because it opens a fresh connection per run. HTTP/1.0 hid it too:
+        # closing the socket pushes the held segment out at once.
+        # `StreamRequestHandler.setup()` sets TCP_NODELAY on the accepted
+        # socket when this is true.
+        disable_nagle_algorithm = True
 
         def _send(self, code: int, payload: dict) -> None:
             body = json.dumps(payload).encode()

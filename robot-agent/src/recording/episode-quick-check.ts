@@ -16,7 +16,7 @@ export const JOINTS_MOVED_LIMIT = 12;
 /** A take shorter than this is flagged `short`. */
 export const SHORT_TAKE_S = 2;
 
-/** Dropped ticks above this share of the ticks the take wanted flag it. */
+/** Ticks with no new sample (dropped or repeated) above this share of the ticks the take wanted flag it. */
 export const DROPPED_FRAMES_RATIO = 0.05;
 
 export type MotionGroup = 'left_arm' | 'right_arm' | 'left_hand' | 'right_hand' | 'waist' | 'legs';
@@ -67,6 +67,12 @@ export interface QuickCheckExtras {
   durationS?: number;
   /** Ticks of this take that produced no frame. */
   dropped?: number;
+  /**
+   * Frames of this take that re-read the previous measured sample (TASK-415).
+   * They count against the rate like drops: a tick that stored the same state
+   * twice delivered no new sample, whatever the frame count says.
+   */
+  repeated?: number;
 }
 
 /** Which group a joint name belongs to, or null. */
@@ -124,10 +130,12 @@ export function summarizeEpisode(
   if (extras.durationS !== undefined && extras.durationS < SHORT_TAKE_S) warnings.push('short');
   if (moved.length === 0) warnings.push('no_motion');
   const dropped = extras.dropped ?? 0;
+  const repeated = extras.repeated ?? 0;
   // Every tick of an open, unpaused take is either a frame or a drop, so the
-  // ticks the take WANTED are the two together.
+  // ticks the take WANTED are the two together. Of those, the ones that brought
+  // no new sample are the drops plus the frames that repeated the last one.
   const wanted = frames.length + dropped;
-  if (wanted > 0 && dropped / wanted > DROPPED_FRAMES_RATIO) warnings.push('dropped_frames');
+  if (wanted > 0 && (dropped + repeated) / wanted > DROPPED_FRAMES_RATIO) warnings.push('dropped_frames');
 
   return { jointsMoved: moved.slice(0, JOINTS_MOVED_LIMIT), groupsMoved, warnings };
 }

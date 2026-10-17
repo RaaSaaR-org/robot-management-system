@@ -2989,6 +2989,18 @@ def _with_base(state: dict) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
+    # TCP_NODELAY on every accepted socket (TASK-415). `_send` writes the
+    # headers and the body as two segments; with Nagle on, the body waits for
+    # the client's ACK of the headers, and a client in delayed-ACK mode holds
+    # that ACK ~40 ms. sim_node.py's facade, which keeps connections alive,
+    # lost every other `/state/fast` request to exactly that. This handler
+    # still answers HTTP/1.0 and closes after each reply, and closing pushes
+    # the held segment out at once -- measured offline at 0.6 ms median, which
+    # is why the first real-robot recording reached 30.21 fps -- so today this
+    # is insurance: it keeps the stall from appearing the day this handler
+    # moves to keep-alive. `StreamRequestHandler.setup()` applies it.
+    disable_nagle_algorithm = True
+
     def _send(self, code: int, payload: dict) -> None:
         data = json.dumps(payload).encode()
         self.send_response(code)

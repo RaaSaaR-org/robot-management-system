@@ -1280,6 +1280,76 @@ describe('takes between an explicit begin and end (TASK-402)', () => {
     expect(rec.status().dropped).toBe(0);
   });
 
+  // -- distinct samples, not ticks (TASK-415) ---------------------------------
+
+  /** A sample clock that moves only every `every`-th read: physics that steps slower than the recorder ticks. */
+  function sampleClock(every: number): void {
+    let reads = 0;
+    h.hooks.getMeasuredSample = async () => {
+      h.captureStarts += 1;
+      reads += 1;
+      return { joints: h.measured, sampleTime: Math.floor((reads - 1) / every) * 0.002 };
+    };
+  }
+
+  it('reports distinct samples per second when the state repeats, and flags it', async () => {
+    sampleClock(2); // every second read returns the sample the previous one did
+    await rec.start({ sessionId: 's', fps: 30, cameras: [], startBetweenTakes: true });
+    const begun = await rec.beginEpisode();
+    if (!begun.ok) throw new Error('begin refused');
+    await run(h, rec, 3_000);
+    const live = rec.status();
+    expect(live.dropped).toBe(0);
+    // Every frame is kept — the row count is the tick count …
+    expect(live.frames).toBeGreaterThanOrEqual(89);
+    // … but half of them carried no new sample, and the rate says so.
+    expect(live.repeated).toBe(Math.floor(live.frames / 2));
+    expect(live.totalRepeated).toBe(live.repeated);
+    expect(live.fpsActual).toBeGreaterThan(14);
+    expect(live.fpsActual).toBeLessThan(16);
+    const ended = rec.endEpisode('operator');
+    if (!ended.ok) throw new Error('end refused');
+    expect(ended.report.repeated).toBe(live.repeated);
+    expect(ended.report.fpsActual).toBeLessThan(16);
+    // No tick was dropped, yet half brought nothing new: the warning has to fire.
+    expect(ended.report.warnings).toContain('dropped_frames');
+    vi.useRealTimers();
+    const result = await rec.stop();
+    const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
+    expect(info.fps).toBe(30); // the declared rate is still the integer target
+    expect(info._neodem.fpsActual).toBeLessThan(16);
+    expect(info._neodem.repeatedFrames).toBe(live.repeated);
+  });
+
+  it('counts nothing as repeated when every read is a new sample', async () => {
+    sampleClock(1);
+    await rec.start({ sessionId: 's', fps: 30, cameras: [] });
+    await run(h, rec, 2_000);
+    const status = rec.status();
+    expect(status.repeated).toBe(0);
+    expect(Math.abs(status.fpsActual - 30)).toBeLessThan(0.5);
+  });
+
+  it('calls nothing a repeat when the sidecar has no sample clock', async () => {
+    h.hooks.getMeasuredSample = async () => {
+      h.captureStarts += 1;
+      return { joints: h.measured, sampleTime: null };
+    };
+    await rec.start({ sessionId: 's', fps: 30, cameras: [] });
+    await run(h, rec, 1_000);
+    expect(rec.status().totalRepeated).toBe(0);
+  });
+
+  it('forgets a discarded take\'s repeats along with its frames', async () => {
+    sampleClock(2);
+    await rec.start({ sessionId: 's', fps: 30, cameras: [], startBetweenTakes: true });
+    const idx = await take(1_000);
+    expect(rec.status().totalRepeated).toBeGreaterThan(0);
+    expect(await rec.discardEpisode(idx)).toBe(true);
+    expect(rec.status().totalRepeated).toBe(0);
+    expect(rec.status().episodes[0]!.repeated).toBe(0);
+  });
+
   it('does not count missed ticks between takes as drops', async () => {
     await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
     await advance(h, rec, 500);
