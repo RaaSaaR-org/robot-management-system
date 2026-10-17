@@ -71,8 +71,9 @@ describe('useGamepadJoints with the control lease', () => {
     let lease = stubLease('observing');
     const { rerender } = renderHook(() => useGamepadJoints({ robot, enabled: true, lease }));
     const ws = FakeSocket.last();
-    // Under a lease the input goes to the agent, which enforces it.
-    expect(ws.url).toBe('ws://agent:41243/ws/keyboard-teleop');
+    // Under a lease the input goes to the agent, which enforces it — through
+    // the server's same-origin proxy (TASK-393).
+    expect(ws.url).toBe(`ws://${window.location.host}/api/robots/${robot.id}/teleop/ws`);
     act(() => ws.open());
     panX = 1;
     frame();

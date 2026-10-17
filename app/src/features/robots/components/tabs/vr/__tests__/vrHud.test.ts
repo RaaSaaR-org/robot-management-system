@@ -8,6 +8,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   composeHud,
+  hudArmSuffix,
+  hudHandWarning,
+  hudNeedsRelease,
+  sameClutch,
+  HUD_RELEASE_GRIP,
+  HUD_USE_CONTROLLERS,
   hudMode,
   isPoseFrame,
   markerAppearance,
@@ -345,5 +351,89 @@ describe('isPoseFrame — what counts as an RTT probe', () => {
     ]) {
       expect(isPoseFrame(payload)).toBe(false);
     }
+  });
+});
+
+// TASK-393: the real robot's arms on the plate.
+describe('the arm path on the HUD', () => {
+  const ARM = { armed: true, arming: false, armWeight: 1, teleopMode: 'arms+hands' };
+
+  it('folds the arm state into MODE and adds no line', () => {
+    const lines = composeHud({ ...BASE, armLeft: true, arm: ARM });
+    expect(lines.find((l) => l.id === 'mode')?.text).toBe('MODE ARM-L ARMED');
+    expect(lines.length).toBe(composeHud(BASE).length);
+  });
+
+  it('says ARMING with the weight, and warns while an arm is held but not under control', () => {
+    expect(hudArmSuffix({ ...ARM, armWeight: 0.42 })).toBe('ARMING 42%');
+    const lines = composeHud({ ...BASE, armRight: true, arm: { ...ARM, armed: false } });
+    const mode = lines.find((l) => l.id === 'mode')!;
+    expect(mode.text).toBe('MODE ARM-R ARMS OFF');
+    expect(mode.color).toBe(HUD_COLORS.warn);
+  });
+
+  it('puts a missing hand where TURN was, and never a fifth line', () => {
+    const lines = composeHud({ ...BASE, arm: { ...ARM, teleopMode: 'arms+left_hand' } });
+    expect(lines.find((l) => l.id === 'hands')?.text).toBe('NO RIGHT HAND — arms + left');
+    expect(lines.find((l) => l.id === 'turn')).toBeUndefined();
+    const recording = composeHud({ ...BASE, recording: { episode: 1, frames: 3 }, arm: { ...ARM, teleopMode: 'arms_only' } });
+    expect(recording.length).toBeLessThanOrEqual(HUD_MAX_LINES - 1);
+  });
+
+  it('has no hand warning when both hands are there or nobody said', () => {
+    expect(hudHandWarning('arms+hands')).toBeNull();
+    expect(hudHandWarning(null)).toBeNull();
+  });
+
+  it('looks exactly as before without an arm path', () => {
+    expect(composeHud({ ...BASE, arm: null })).toEqual(composeHud(BASE));
+  });
+});
+
+// TASK-393 review: the arms never re-arm on a grip that was already held.
+describe('the re-engage latch on the HUD', () => {
+  const OFF = { armed: false, arming: false, armWeight: 0, teleopMode: 'arms+hands' };
+
+  it('asks for the grip to be let go while the agent waits for it', () => {
+    const lines = composeHud({ ...BASE, armLeft: true, clutchHeld: true, arm: { ...OFF, engage: 'need_release' } });
+    const mode = lines.find((l) => l.id === 'mode')!;
+    expect(mode.text).toBe(HUD_RELEASE_GRIP);
+    expect(mode.color).toBe(HUD_COLORS.warn);
+    expect(lines.length).toBe(composeHud(BASE).length);
+  });
+
+  it('goes back to the normal readout once released, and to ARMING on the squeeze', () => {
+    const released = composeHud({ ...BASE, clutchHeld: false, arm: { ...OFF, engage: 'need_release' } });
+    expect(released.find((l) => l.id === 'mode')?.text).toBe('MODE IDLE ARMS OFF');
+    const arming = composeHud({
+      ...BASE, armLeft: true, clutchHeld: true,
+      arm: { ...OFF, arming: true, armWeight: 0.2, engage: 'holding' },
+    });
+    expect(arming.find((l) => l.id === 'mode')?.text).toBe('MODE ARM-L ARMING 20%');
+  });
+
+  it('never asks for a release while the arms are up or arming', () => {
+    expect(hudNeedsRelease({ ...OFF, armed: true, engage: 'need_release' }, true)).toBe(false);
+    expect(hudNeedsRelease({ ...OFF, arming: true, engage: 'need_release' }, true)).toBe(false);
+    expect(hudNeedsRelease({ ...OFF, engage: 'need_press' }, true)).toBe(false);
+    expect(hudNeedsRelease({ ...OFF, engage: null }, true)).toBe(false);
+  });
+
+  it('tells a hand-tracking operator to use the controllers, in at most four lines', () => {
+    const lines = composeHud({ ...BASE, handTracked: true, recording: { episode: 1, frames: 2 }, arm: OFF });
+    expect(lines.map((l) => l.text)).toContain(HUD_USE_CONTROLLERS[0]);
+    expect(lines.map((l) => l.text)).toContain(HUD_USE_CONTROLLERS[1]);
+    expect(`${HUD_USE_CONTROLLERS[0]} ${HUD_USE_CONTROLLERS[1]}`).toBe('Use controllers to drive the real robot');
+    expect(lines.length).toBeLessThanOrEqual(HUD_MAX_LINES - 1);
+  });
+
+  it('leaves hand tracking alone on the sim', () => {
+    expect(composeHud({ ...BASE, handTracked: true })).toEqual(composeHud(BASE));
+  });
+
+  it('compares clutch reports, with never-sent equal to nothing', () => {
+    expect(sameClutch({ left: true, right: false }, { left: true, right: false })).toBe(true);
+    expect(sameClutch({ left: true, right: false }, { left: false, right: false })).toBe(false);
+    expect(sameClutch({ left: false, right: false }, null)).toBe(false);
   });
 });

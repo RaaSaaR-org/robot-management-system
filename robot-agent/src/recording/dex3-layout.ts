@@ -143,3 +143,58 @@ export function extractVector(
   }
   return { values, missing };
 }
+
+/** Which part of the G1 EDU layout a recording could actually fill (TASK-393). */
+export type G1RecordingMode = 'arms+hands' | 'arms+left_hand' | 'arms+right_hand' | 'arms_only';
+
+export interface ReducedLayout extends RecordingLayout {
+  /** What the layout covers; null when it is the embodiment's full layout. */
+  mode: G1RecordingMode | null;
+  /** Full-layout joints left out because the robot did not report them. */
+  omitted: string[];
+}
+
+/**
+ * The G1 EDU layout with a missing Dex3 hand taken out, or null when that is not
+ * what is wrong.
+ *
+ * Yesterday's session (2026-10-16) is the case this exists for: the right Dex3
+ * hand published no state at all, and the recorder refused to start on 7 missing
+ * joints. An arm demonstration with one hand — or none — is still a real
+ * demonstration, and a refusal threw it away. What a recorder must never do is
+ * store zeros for the missing hand, so the hand is LEFT OUT: the columns that
+ * exist are real, the `robot_type` says which layout this is, and the episode
+ * metadata names what is missing.
+ *
+ * Only a whole missing HAND is forgiven. A missing arm joint means the robot's
+ * state is broken, not that a peripheral is unplugged, and stays a refusal; so
+ * does a hand with SOME of its joints, which is a broken stream, not an absent
+ * hand.
+ */
+export function reduceG1Layout(layout: RecordingLayout, missing: readonly string[]): ReducedLayout | null {
+  if (layout.robotType !== G1_DEX3_ROBOT_TYPE || missing.length === 0) return null;
+  const miss = new Set(missing);
+  if (G1_ARM_JOINTS.some((j) => miss.has(j))) return null;
+  const leftGone = G1_LEFT_HAND_JOINTS.every((j) => miss.has(j));
+  const rightGone = G1_RIGHT_HAND_JOINTS.every((j) => miss.has(j));
+  const leftPartial = !leftGone && G1_LEFT_HAND_JOINTS.some((j) => miss.has(j));
+  const rightPartial = !rightGone && G1_RIGHT_HAND_JOINTS.some((j) => miss.has(j));
+  if (leftPartial || rightPartial || (!leftGone && !rightGone)) return null;
+  const mode: G1RecordingMode = leftGone && rightGone
+    ? 'arms_only'
+    : leftGone
+      ? 'arms+right_hand'
+      : 'arms+left_hand';
+  const joints = [
+    ...G1_ARM_JOINTS,
+    ...(leftGone ? [] : G1_LEFT_HAND_JOINTS),
+    ...(rightGone ? [] : G1_RIGHT_HAND_JOINTS),
+  ];
+  const suffix = mode === 'arms_only' ? 'ArmsOnly' : mode === 'arms+left_hand' ? 'LeftHand' : 'RightHand';
+  return {
+    robotType: `${G1_DEX3_ROBOT_TYPE}_${suffix}`,
+    joints,
+    mode,
+    omitted: [...(leftGone ? G1_LEFT_HAND_JOINTS : []), ...(rightGone ? G1_RIGHT_HAND_JOINTS : [])],
+  };
+}

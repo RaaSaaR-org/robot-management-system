@@ -77,7 +77,7 @@ function capability(enabled: boolean) {
  * machine (TASK-377) — then the last socket is the observer, not this one.
  */
 function teleopSockets(): FakeSocket[] {
-  return FakeSocket.instances.filter((s) => s.url.endsWith('/ws/keyboard-teleop'));
+  return FakeSocket.instances.filter((s) => /\/teleop\/ws$|\/ws\/keyboard-teleop$/.test(s.url));
 }
 
 async function connect(): Promise<FakeSocket> {
@@ -130,6 +130,25 @@ describe('KeyboardTeleopSection with the control lease', () => {
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     expect(moves(ws)).toEqual([{ joint: 'left_elbow_joint', direction: 1 }]);
     expect(ws.sent.some((m) => (m as { bind?: unknown }).bind)).toBe(false);
+  });
+
+  it('reports its clutch: closed before the frame that drives, opened after the one that stops (TASK-393)', async () => {
+    capability(false);
+    render(<KeyboardTeleopSection robot={robot} />);
+    await waitFor(() => expect(api.getControlLease).toHaveBeenCalledWith('g1-1'));
+    const ws = await connect();
+    const frames = () => ws.sent.filter((m) => {
+      const f = m as { joint?: string; clutch?: unknown };
+      return f.joint !== undefined || f.clutch !== undefined;
+    });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    // Auto-repeat is not a second edge.
+    fireEvent.keyDown(window, { key: 'ArrowRight', repeat: true });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(frames().map((m) => {
+      const f = m as { hb?: number; clutch?: boolean; direction?: number };
+      return f.hb !== undefined ? `clutch:${f.clutch}` : `dir:${f.direction}`;
+    })).toEqual(['clutch:true', 'dir:1', 'dir:0', 'clutch:false']);
   });
 
   it('ignores motion keys until bound, then drives', async () => {

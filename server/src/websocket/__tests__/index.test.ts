@@ -192,7 +192,7 @@ type FakeServer = InstanceType<typeof wsMock.FakeWebSocketServer>;
 /** Run setupWebSocket and return the created fake WebSocketServer instance. */
 function setup(): FakeServer {
   // The http Server is passed straight through to WebSocketServer options; a stub is fine.
-  setupWebSocket({} as never);
+  setupWebSocket({ on: vi.fn() } as never);
   return wsMock.instances[wsMock.instances.length - 1] as FakeServer;
 }
 
@@ -221,10 +221,25 @@ describe('setupWebSocket', () => {
   // Server creation
   // -------------------------------------------------------------------------
   describe('server creation', () => {
-    it('creates a WebSocketServer bound to the http server on the A2A path', () => {
-      const wss = setup();
+    it('creates a noServer WebSocketServer and routes the A2A path to it (TASK-393)', () => {
+      const server = { on: vi.fn() };
+      setupWebSocket(server as never);
+      const wss = wsMock.instances[wsMock.instances.length - 1] as FakeServer & {
+        handleUpgrade?: (...args: unknown[]) => void;
+      };
       expect(WebSocketServer).toHaveBeenCalledTimes(1);
-      expect(wss.options).toMatchObject({ path: '/api/a2a/ws' });
+      expect(wss.options).toMatchObject({ noServer: true });
+      // One `upgrade` listener for the whole server: the A2A path goes to this
+      // socket server, any other path is refused rather than aborted by `ws`.
+      expect(server.on).toHaveBeenCalledWith('upgrade', expect.any(Function));
+      const dispatch = server.on.mock.calls[0][1] as (req: unknown, socket: unknown, head: unknown) => void;
+      wss.handleUpgrade = vi.fn();
+      dispatch({ url: '/api/a2a/ws?x=1' }, {}, Buffer.alloc(0));
+      expect(wss.handleUpgrade).toHaveBeenCalledTimes(1);
+      const other = { write: vi.fn(), destroy: vi.fn(), destroyed: false };
+      dispatch({ url: '/elsewhere' }, other, Buffer.alloc(0));
+      expect(other.destroy).toHaveBeenCalled();
+      expect(String(other.write.mock.calls[0][0])).toMatch(/^HTTP\/1.1 404/);
     });
   });
 

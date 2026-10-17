@@ -74,7 +74,9 @@ export class RecordingController {
       scratchRoot: defaultScratchRoot(config.robotId),
       datasetRoot: defaultDatasetRoot(config.robotId),
       hooks: {
-        getCommanded: () => sm.getTeleopPositions(),
+        // TASK-393: what the sidecar ACCEPTED, not the operator's intent — on a
+        // real robot those differ whenever it is not armed or refuses a pose.
+        getCommanded: () => sm.getRecordedCommand(),
         isTeleopActive: () => sm.isTeleopActive(),
         isEStopTriggered: () => sm.isEStopTriggered(),
         // NOT `getJointStates()`: that answers from the 2 s poll cache, so a

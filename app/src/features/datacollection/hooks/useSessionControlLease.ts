@@ -18,16 +18,12 @@ import {
   type UseControlLeaseOptions,
   type UseControlLeaseReturn,
 } from '../../robots/hooks/useControlLease';
+import { openTeleopSocket } from '../../robots/components/tabs/vr/vrUrls';
 
 export interface UseSessionControlLeaseReturn {
   lease: UseControlLeaseReturn;
   /** The page's lease socket is open — "Take control" needs it to bind. */
   connected: boolean;
-}
-
-function agentWsUrl(a2aAgentUrl: string | undefined): string {
-  const agent = a2aAgentUrl?.replace(/\/$/, '') ?? 'http://localhost:41243';
-  return `${agent.replace(/^http/, 'ws')}/ws/keyboard-teleop`;
 }
 
 /**
@@ -54,7 +50,9 @@ export function useSessionControlLease(
   useEffect(() => {
     if (!enabled || !active || !robotId) return;
     let disposed = false;
-    const ws = new WebSocket(agentWsUrl(a2aAgentUrl));
+    // Through the server's same-origin teleop proxy (TASK-393): over adb
+    // reverse or Tailscale the agent's own address is not reachable.
+    const ws = openTeleopSocket({ id: robotId, a2aAgentUrl });
 
     const socket: LeaseSocket = {
       send: (payload) => {
