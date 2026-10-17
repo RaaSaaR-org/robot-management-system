@@ -16,7 +16,7 @@ const httpPost = vi.fn();
 const httpGet = vi.fn();
 
 vi.mock('../HttpClient.js', () => ({
-  HTTP_TIMEOUTS: { SHORT: 5000 },
+  HTTP_TIMEOUTS: { SHORT: 5000, MEDIUM: 10000 },
   HttpClient: class {
     post = httpPost;
     get = httpGet;
