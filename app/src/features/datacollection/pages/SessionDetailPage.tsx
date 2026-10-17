@@ -359,7 +359,7 @@ export function SessionDetailPage() {
           fps={session.fps}
           fpsActual={isRecording ? recordingProgress?.fpsActual : undefined}
           episode={currentEpisode + 1}
-          numEpisodes={session.numEpisodes}
+          kept={episodes.length}
           tone={isRecording ? 'live' : undefined}
         />
       )}
@@ -440,7 +440,6 @@ export function SessionDetailPage() {
             <EpisodePanel
               episodes={episodes}
               currentEpisode={currentEpisode}
-              numEpisodes={session.numEpisodes ?? null}
               isRecording={isRecording}
               canDiscard={isLive}
               onNextEpisode={handleNextEpisode}
