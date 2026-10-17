@@ -7,8 +7,8 @@
  * @status live
  */
 
-import { mkdir, writeFile, link, copyFile, rm } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, writeFile, link, copyFile, rm, readFile } from 'fs/promises';
+import { join, resolve, sep } from 'path';
 import type { RobotType } from '../robot/types.js';
 import {
   layoutFor,
@@ -26,6 +26,15 @@ import {
   type WriterFrame,
 } from './lerobot-writer.js';
 import { takeTeleopModes, type TeleopMode } from '../teleop/teleop-mode.js';
+import {
+  summarizeEpisode,
+  middleFrame,
+  G1_MOTION_GROUPS,
+  type EpisodeQuickCheck,
+  type EpisodeWarning,
+  type JointMoved,
+  type MotionGroup,
+} from './episode-quick-check.js';
 
 /**
  * A refusal the caller can act on, carried as a type rather than as a sentence.
@@ -85,7 +94,12 @@ export interface RecorderHooks {
 
 export interface StartRecordingRequest {
   sessionId: string;
-  /** Target rate. What is achieved is measured and reported, never assumed. */
+  /**
+   * Target rate, rounded to an integer: it is the rate the dataset declares
+   * (`info.json.fps`, every video's fps, `timestamp = i/fps`), and LeRobot
+   * expects a whole number there. What is achieved is measured and kept as
+   * provenance, never written as the dataset's rate.
+   */
   fps?: number;
   /** Scene camera names. Empty records joints only — and says so. */
   cameras?: string[];
@@ -94,6 +108,51 @@ export interface StartRecordingRequest {
   shadows?: boolean;
   /** How the operator is driving, for the episode metadata. */
   inputMode?: string;
+  /**
+   * Start between takes: the clock runs but no episode is open until
+   * `beginEpisode()`. Without it episode 0 opens at once, as it always has —
+   * the SO-101 and simulator paths rely on that (TASK-402 D1).
+   */
+  startBetweenTakes?: boolean;
+  /**
+   * End a take by itself after this many seconds (pauses excluded). Never
+   * begins the next one: the operator resets the scene between takes. Null, 0
+   * or absent: no limit.
+   */
+  episodeTimeS?: number | null;
+}
+
+/** Why a take ended. */
+export type EpisodeEndReason = 'operator' | 'time_limit' | 'next' | 'session_end';
+
+export type RecorderPhase = 'between' | 'capturing';
+
+export interface LastStop {
+  episodeIndex: number;
+  reason: EpisodeEndReason;
+  atMs: number;
+}
+
+/** The middle picture of a take, served by the thumbnail route while the session lives. */
+export interface EpisodeThumbnail {
+  /** The camera's dataset key, e.g. `cam_right_high`. */
+  camera: string;
+  /** Frame number within the take. */
+  frame: number;
+}
+
+export type BeginEpisodeResult =
+  | { ok: true; episodeIndex: number; phase: 'capturing'; startedAtMs: number }
+  | { ok: false; code: 'already_capturing' | 'not_recording' };
+
+export type EndEpisodeResult =
+  | { ok: true; episodeIndex: number; phase: 'between'; report: EpisodeReport }
+  | { ok: false; code: 'not_capturing' | 'not_recording' };
+
+/** A take number, and the episode it became in the written dataset (null: not kept). */
+export interface EpisodeIndexMapEntry {
+  take: number;
+  datasetEpisode: number | null;
 }
 
 export interface EpisodeReport {
@@ -112,6 +171,14 @@ export interface EpisodeReport {
    * whoever trains on it.
    */
   retargetModes: TeleopMode[];
+  /** Discarded takes stay listed, with no frames, so their number stays taken. */
+  discarded: boolean;
+  /** TASK-402 quick check: joints whose measured range exceeded 0.05 rad. */
+  jointsMoved: JointMoved[];
+  groupsMoved: MotionGroup[];
+  /** The middle frame of the first camera, or null (no camera, no frames). */
+  thumbnail: EpisodeThumbnail | null;
+  warnings: EpisodeWarning[];
 }
 
 export interface RecordingStatus {
@@ -141,6 +208,16 @@ export interface RecordingStatus {
   recordingMode: G1RecordingMode | 'full';
   /** Joints left out of the dataset because the robot did not report them. */
   omittedJoints: string[];
+  /** Null when not recording. */
+  phase: RecorderPhase | null;
+  /** When the open take began, or null between takes. */
+  episodeStartedAtMs: number | null;
+  episodeElapsedS: number | null;
+  /** Seconds since `start()`, or null when not recording. */
+  elapsedS: number | null;
+  /** The per-take time limit, or null for none. */
+  autoStopS: number | null;
+  lastStop: LastStop | null;
 }
 
 export interface StopRecordingResult {
@@ -156,8 +233,14 @@ export interface StopRecordingResult {
   videoFeatures: string[];
   scene: string | null;
   bootId: string | null;
+  /** Whether the sidecar was the simulator (provenance; TASK-408 labels with it). */
+  simulated: boolean;
+  /** Every take of the session and the dataset episode it became. */
+  indexMap: EpisodeIndexMapEntry[];
   /** Set when the session produced no dataset, with the reason. */
   error?: string;
+  /** Machine-readable reason for `ok:false`. `no_episodes`: nothing was kept. */
+  code?: 'no_episodes' | 'not_recording' | 'write_failed';
 }
 
 interface LiveEpisode {
@@ -192,6 +275,10 @@ interface LiveEpisode {
    * away — and whose image the discard deleted.
    */
   epoch: number;
+  /** Discarded while not the open take; kept in the list so its number stays taken. */
+  discarded: boolean;
+  /** Last quick check, reused while the frames have not changed. */
+  check: { frames: number; epoch: number; dropped: number; durationS: number; value: EpisodeQuickCheck } | null;
 }
 
 /**
@@ -238,8 +325,17 @@ export function jpegSize(buf: Buffer): { width: number; height: number } | null 
  * - **`action` and `observation.state` are different arrays.** Commanded pose
  *   comes from the teleop socket, measured pose from the sidecar, each tick.
  *   Conflating them is what made the old recorder's data untrainable.
- * - **fps is measured.** The target is what was asked for; `info.json` gets
- *   what happened.
+ * - **The dataset's fps is the integer target; the measured rate is
+ *   provenance** (TASK-402 D3). LeRobot expects a whole-number fps and derives
+ *   every timestamp as `i/fps`, and a measured 30.21 written there broke both.
+ *   The tick is a deadline scheduler, so what is achieved sits at the target;
+ *   a tick the event loop could not serve on time is a counted drop, never a
+ *   burst of catch-up frames. The measured rate goes to `_neodem.fpsActual`.
+ * - **A session has takes, and time between them** (TASK-402). Started with
+ *   `startBetweenTakes`, the clock runs with no episode open until
+ *   `beginEpisode()`; ticks between takes are neither frames nor drops. Take
+ *   numbers are never reused within a session — a discarded take keeps its
+ *   number — and only `stop()` maps them onto the dense dataset indices.
  */
 export class EpisodeRecorder {
   private readonly hooks: RecorderHooks;
@@ -248,7 +344,12 @@ export class EpisodeRecorder {
   private readonly datasetRoot: string;
   private readonly robotType: RobotType;
 
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  /** Between `start()` and `stop()`. The timer handle alone cannot say: it is null between two timeouts. */
+  private running = false;
+  /** The deadline scheduler's origin and the number of the last tick it served. */
+  private clockT0Ms = 0;
+  private tickNo = 0;
   private tickInFlight = false;
   private stopping = false;
   /**
@@ -288,6 +389,14 @@ export class EpisodeRecorder {
 
   private episodes: LiveEpisode[] = [];
   private current: LiveEpisode | null = null;
+  /** The number the next take gets. Monotonic for the session (TASK-402 D2). */
+  private nextTakeIndex = 0;
+  /** `beginEpisode()` is preparing directories; a second begin is refused. */
+  private beginning = false;
+  /** Whether this session was started between takes. */
+  private betweenTakes = false;
+  private autoStopS: number | null = null;
+  private lastStop: LastStop | null = null;
   private startedAtMs = 0;
   private pausedAtMs: number | null = null;
   private firstFrameAtMs: number | null = null;
@@ -313,7 +422,7 @@ export class EpisodeRecorder {
   }
 
   isRecording(): boolean {
-    return this.timer !== null;
+    return this.running;
   }
 
   getSessionId(): string | null {
@@ -337,7 +446,7 @@ export class EpisodeRecorder {
         503,
       );
     }
-    if (this.timer) {
+    if (this.running) {
       throw new RecordingError(
         this.sessionId === req.sessionId
           ? `already recording session ${req.sessionId}`
@@ -347,7 +456,15 @@ export class EpisodeRecorder {
       );
     }
 
-    const fps = Number.isFinite(req.fps) && (req.fps as number) > 0 ? Math.min(60, req.fps as number) : 30;
+    // An integer: it becomes the dataset's declared rate (TASK-402 D3).
+    const fps =
+      Number.isFinite(req.fps) && (req.fps as number) > 0
+        ? Math.max(1, Math.round(Math.min(60, req.fps as number)))
+        : 30;
+    const autoStopS =
+      typeof req.episodeTimeS === 'number' && Number.isFinite(req.episodeTimeS) && req.episodeTimeS > 0
+        ? req.episodeTimeS
+        : null;
     let layout: RecordingLayout = layoutFor(this.robotType);
 
     const health = await this.hooks.describeSidecar().catch(() => ({
@@ -432,10 +549,21 @@ export class EpisodeRecorder {
     this.startedAtMs = this.now();
     this.firstFrameAtMs = null;
     this.lastFrameAtMs = null;
+    this.betweenTakes = req.startBetweenTakes === true;
+    this.autoStopS = autoStopS;
+    this.lastStop = null;
+    this.nextTakeIndex = 0;
+    this.current = null;
+    this.beginning = false;
 
     await discardScratch(this.scratchDir());
     await mkdir(this.scratchDir(), { recursive: true });
-    this.current = this.openEpisode(0);
+    // Between takes: the clock runs, nothing is open. The operator is still
+    // putting the headset on, and that is not an episode (TASK-402).
+    if (!this.betweenTakes) {
+      this.current = this.openEpisode(this.nextTakeIndex++);
+      await this.prepareEpisodeDirs(this.current);
+    }
     // Discard whatever the socket saw BEFORE the operator pressed Start. The
     // tracker is module-level and is only emptied by a recorder tick, so
     // without this the first episode inherits every mode used while the
@@ -444,31 +572,87 @@ export class EpisodeRecorder {
     // minutes earlier. An episode is labelled with what drove it, not with what
     // the session has ever done.
     takeTeleopModes();
-    await this.prepareEpisodeDirs(this.current);
 
-    this.timer = setInterval(() => {
-      void this.tick();
-    }, Math.max(10, Math.round(1000 / fps)));
-    this.timer.unref?.();
+    this.running = true;
+    this.clockT0Ms = this.now();
+    this.tickNo = 0;
+    this.scheduleTick();
 
     return this.status();
   }
 
-  /** Close the current episode and open the next. Cheap; no flush. */
+  /**
+   * Open a take. Refused while one is open: two "begin" presses must not
+   * silently end the first take. AWAITS its directories before the take
+   * becomes current — a tick that lands before they exist would drop with an
+   * ENOENT nobody asked for.
+   */
+  async beginEpisode(): Promise<BeginEpisodeResult> {
+    if (!this.running || this.stopping) return { ok: false, code: 'not_recording' };
+    if (this.current || this.beginning) return { ok: false, code: 'already_capturing' };
+    this.beginning = true;
+    try {
+      const ep = this.openEpisode(this.nextTakeIndex++);
+      await this.prepareEpisodeDirs(ep);
+      if (!this.running || this.stopping) return { ok: false, code: 'not_recording' };
+      // Whatever drove the robot between takes is not this take's provenance.
+      takeTeleopModes();
+      // A pause that spans the boundary counts toward this take only from now.
+      if (this.paused) this.pausedAtMs = this.now();
+      ep.startedAtMs = this.now();
+      this.current = ep;
+      return { ok: true, episodeIndex: ep.index, phase: 'capturing', startedAtMs: ep.startedAtMs };
+    } finally {
+      this.beginning = false;
+    }
+  }
+
+  /**
+   * Close the open take and go between takes. Synchronous: nothing is flushed,
+   * the frames stay in memory and the images on disk until `stop()`.
+   */
+  endEpisode(reason: EpisodeEndReason = 'operator'): EndEpisodeResult {
+    if (!this.running && !this.current) return { ok: false, code: 'not_recording' };
+    const finished = this.current;
+    if (!finished) return { ok: false, code: 'not_capturing' };
+    const at = this.now();
+    if (this.paused && this.pausedAtMs !== null) {
+      finished.pausedMs += at - this.pausedAtMs;
+      this.pausedAtMs = at;
+    }
+    finished.endedAtMs = at;
+    // Marks since the last tick belong to the take that was open while they
+    // happened.
+    for (const mode of takeTeleopModes()) finished.modes.add(mode);
+    this.episodes.push(finished);
+    this.current = null;
+    this.lastStop = { episodeIndex: finished.index, reason, atMs: at };
+    return {
+      ok: true,
+      episodeIndex: finished.index,
+      phase: 'between',
+      report: this.episodeReports([finished])[0]!,
+    };
+  }
+
+  /**
+   * Close the current take and open the next — or, between takes, just open
+   * one. Kept for the callers that predate `beginEpisode`/`endEpisode`.
+   */
   async nextEpisode(): Promise<number> {
-    if (!this.current) {
+    if (!this.running) {
       throw new RecordingError('not recording', 'RECORDING_REFUSED', 409);
     }
-    const finished = this.current;
-    finished.endedAtMs = this.now();
-    this.episodes.push(finished);
-    const next = this.openEpisode(finished.index + 1);
-    // AWAITED, not fired and forgotten: a tick that lands before the
-    // directories exist drops with an ENOENT nobody asked for, and a mkdir that
-    // rejects with no handler takes the agent process down.
-    await this.prepareEpisodeDirs(next);
-    this.current = next;
-    return next.index;
+    if (this.current) this.endEpisode('next');
+    const begun = await this.beginEpisode();
+    if (!begun.ok) {
+      throw new RecordingError(
+        begun.code === 'already_capturing' ? 'a take is already being opened' : 'not recording',
+        'RECORDING_REFUSED',
+        409,
+      );
+    }
+    return begun.episodeIndex;
   }
 
   /**
@@ -480,7 +664,7 @@ export class EpisodeRecorder {
    * waiting.
    */
   pause(): void {
-    if (this.paused || !this.timer) return;
+    if (this.paused || !this.running) return;
     this.paused = true;
     this.pausedAtMs = this.now();
   }
@@ -511,6 +695,10 @@ export class EpisodeRecorder {
     // False, not a silent success: an operator UI cannot tell "deleted take 3"
     // from "there was no take 3" if both answer the same.
     if (!found) return false;
+    // The live take is restarted, not retired: the panel's discard on the live
+    // row means "do this take again". Any other take is gone, but stays listed
+    // so its number is never handed out twice (TASK-402 D2).
+    if (found !== this.current) found.discarded = true;
     this.acceptedFrames -= found.frames.length;
     found.frames = [];
     found.images = new Map();
@@ -547,12 +735,13 @@ export class EpisodeRecorder {
    * a session that has ended.
    */
   async stop(): Promise<StopRecordingResult> {
-    if (!this.timer && !this.current) {
-      return this.emptyResult('not recording');
+    if (!this.running && !this.current) {
+      return { ...this.emptyResult('not recording'), code: 'not_recording' };
     }
     this.stopping = true;
     this.encoding = true;
-    if (this.timer) clearInterval(this.timer);
+    this.running = false;
+    if (this.timer) clearTimeout(this.timer);
     this.timer = null;
 
     // Let an in-flight tick finish rather than half-writing its images.
@@ -560,24 +749,30 @@ export class EpisodeRecorder {
       await new Promise((r) => setTimeout(r, 25));
     }
 
-    if (this.current) {
-      this.current.endedAtMs = this.now();
-      this.episodes.push(this.current);
-      this.current = null;
-    }
+    if (this.current) this.endEpisode('session_end');
 
-    const kept = this.episodes.filter((e) => e.frames.length > 0);
+    const kept = this.episodes.filter((e) => !e.discarded && e.frames.length > 0);
     const fpsActual = this.measuredFps();
+    // Take number -> dataset episode. The writer re-indexes densely, in order.
+    const indexMap: EpisodeIndexMapEntry[] = this.episodes.map((e) => {
+      const i = kept.indexOf(e);
+      return { take: e.index, datasetEpisode: i >= 0 ? i : null };
+    });
 
     if (kept.length === 0) {
       await discardScratch(this.scratchDir());
       this.encoding = false;
-      const result = this.emptyResult(
-        this.lastDropReason
-          ? `no frames recorded — ${this.lastDropReason}`
-          : 'no frames recorded',
-      );
+      // A refusal with a code, not an exception: a between-takes session the
+      // operator ended without keeping a take is a normal outcome.
+      const why =
+        this.betweenTakes && this.episodes.length === 0
+          ? 'no episodes recorded — no take was begun'
+          : this.lastDropReason
+            ? `no frames recorded — ${this.lastDropReason}`
+            : 'no frames recorded';
+      const result = { ...this.emptyResult(why), code: 'no_episodes' as const, indexMap };
       this.sessionId = null;
+      this.episodes = [];
       return result;
     }
 
@@ -629,9 +824,11 @@ export class EpisodeRecorder {
       retargetModes: [...ep.modes].sort(),
     }));
 
-    // fps has to be positive for the timestamps to mean anything; a session
-    // that produced one frame in ten seconds still gets an honest number.
-    const fpsForFile = Math.max(0.1, Math.round(fpsActual * 100) / 100);
+    // The dataset declares the integer TARGET (TASK-402 D3): `info.json.fps`,
+    // every `video.fps`, ffmpeg's `-framerate` and `timestamp = i/fps` all come
+    // from this one value. What was achieved is provenance, below.
+    const fpsForFile = Math.round(this.fpsTarget);
+    const fpsMeasured = Math.round(fpsActual * 100) / 100;
 
     try {
       const written = await writeLeRobotV3({
@@ -658,7 +855,7 @@ export class EpisodeRecorder {
           // in `meta/episodes`.
           retargetModes: [...new Set(kept.flatMap((ep) => [...ep.modes]))].sort(),
           fpsTarget: this.fpsTarget,
-          fpsActual: fpsForFile,
+          fpsActual: fpsMeasured,
           droppedFrames: this.totalDropped,
           shadows: this.shadows,
           snapshotQuality: SNAPSHOT_QUALITY,
@@ -690,11 +887,13 @@ export class EpisodeRecorder {
         totalEpisodes: written.totalEpisodes,
         totalFrames: written.totalFrames,
         totalDropped: this.totalDropped,
-        fpsActual: fpsForFile,
+        fpsActual: fpsMeasured,
         episodes: reports,
         videoFeatures: written.videoFeatures,
         scene: this.scene,
         bootId: this.bootId,
+        simulated: this.simulated,
+        indexMap,
       };
     } catch (err) {
       // The frames are still on disk. Say so, and say where — a session that
@@ -705,7 +904,7 @@ export class EpisodeRecorder {
         `the dataset could not be written: ${why}. The captured frames are still ` +
           `at ${this.scratchDir()}`,
       );
-      return { ...result, totalFrames: this.acceptedFrames };
+      return { ...result, totalFrames: this.acceptedFrames, code: 'write_failed', indexMap };
     } finally {
       this.encoding = false;
       this.sessionId = null;
@@ -717,8 +916,64 @@ export class EpisodeRecorder {
   // The tick
   // -------------------------------------------------------------------------
 
+  /**
+   * Arm the timer for the next deadline, `t0 + n·1000/fps` on the recorder's
+   * clock. A `setInterval` of `round(1000/fps)` ticks at 33 ms for 30 fps —
+   * 30.30 Hz, every session, forever — and fires a burst of catch-up ticks
+   * after a stall. Deadlines do neither.
+   */
+  private scheduleTick(): void {
+    if (!this.running) return;
+    const due = this.clockT0Ms + ((this.tickNo + 1) * 1000) / this.fpsTarget;
+    const delay = Math.max(0, Math.ceil(due - this.now()));
+    this.timer = setTimeout(() => this.onTimer(), delay);
+    this.timer.unref?.();
+  }
+
+  private onTimer(): void {
+    this.timer = null;
+    if (!this.running) return;
+    const period = 1000 / this.fpsTarget;
+    // Which tick is due now. A small epsilon so a deadline met to the
+    // millisecond is not read as one tick early by float rounding.
+    const due = Math.floor((this.now() - this.clockT0Ms) / period + 1e-6);
+    if (due <= this.tickNo) {
+      // Woke early (timer granularity): wait for the deadline, do not tick.
+      this.scheduleTick();
+      return;
+    }
+    const missed = due - this.tickNo - 1;
+    this.tickNo = due;
+    // More than a period late: the ticks in between were never served. They
+    // are counted as drops and skipped — never replayed as a burst, which
+    // would put frames milliseconds apart under timestamps 33 ms apart.
+    if (missed > 0) this.missTicks(missed);
+    this.scheduleTick();
+    void this.tick();
+  }
+
+  /** Ticks the event loop could not serve. Drops only while a take is capturing. */
+  private missTicks(n: number): void {
+    if (!this.current || this.paused || this.stopping) return;
+    this.current.dropped += n;
+    this.totalDropped += n;
+    this.consecutiveDrops += n;
+    this.lastDropReason = `late: ${n} tick(s) missed while the agent was busy`;
+  }
+
   private async tick(): Promise<void> {
-    if (this.stopping || !this.current) return;
+    if (this.stopping || !this.current) return; // between takes: not a frame, not a drop
+    // Auto-stop (TASK-402): the tick that crosses the limit ends the take and
+    // captures nothing. It never begins the next one (D5).
+    if (this.autoStopS !== null) {
+      const at = this.now();
+      const ep = this.current;
+      const pausedMs = ep.pausedMs + (this.paused && this.pausedAtMs !== null ? at - this.pausedAtMs : 0);
+      if (at >= ep.startedAtMs + this.autoStopS * 1000 + pausedMs) {
+        this.endEpisode('time_limit');
+        return;
+      }
+    }
     // Before the pause and drop checks: the marks describe what has ALREADY
     // driven the robot, and they belong to the episode that was open when it
     // happened whether or not this particular tick produces a frame.
@@ -772,7 +1027,7 @@ export class EpisodeRecorder {
       // episode the writer already owns, or images in a directory that has been
       // removed.
       if (this.stopping || this.current !== episode || episode.epoch !== epoch) {
-        this.drop('the episode ended while the frame was still being captured');
+        this.drop('the episode ended while the frame was still being captured', episode);
         return;
       }
 
@@ -810,7 +1065,7 @@ export class EpisodeRecorder {
       // that has already been emptied.
       if (this.stopping || this.current !== episode || episode.epoch !== epoch) {
         await Promise.all(written.map((f) => rm(f, { force: true }).catch(() => {})));
-        this.drop('the episode ended while the frame was still being written');
+        this.drop('the episode ended while the frame was still being written', episode);
         return;
       }
 
@@ -836,8 +1091,9 @@ export class EpisodeRecorder {
     }
   }
 
-  private drop(reason: string): void {
-    if (this.current) this.current.dropped += 1;
+  /** The episode defaults to the open one; a straggler names the take it belonged to. */
+  private drop(reason: string, episode: LiveEpisode | null = this.current): void {
+    if (episode) episode.dropped += 1;
     this.totalDropped += 1;
     this.consecutiveDrops += 1;
     this.lastDropReason = reason;
@@ -875,10 +1131,12 @@ export class EpisodeRecorder {
 
   status(): RecordingStatus {
     const kept = this.current ? [...this.episodes, this.current] : [...this.episodes];
+    const now = this.now();
+    const live = this.current;
     return {
-      recording: this.timer !== null,
+      recording: this.running,
       sessionId: this.sessionId,
-      episodeIndex: this.current?.index ?? Math.max(0, this.episodes.length - 1),
+      episodeIndex: live?.index ?? this.episodes[this.episodes.length - 1]?.index ?? 0,
       frames: this.current?.frames.length ?? 0,
       totalFrames: this.acceptedFrames,
       dropped: this.current?.dropped ?? 0,
@@ -893,7 +1151,41 @@ export class EpisodeRecorder {
       episodes: this.episodeReports(kept),
       recordingMode: this.layoutMode ?? 'full',
       omittedJoints: [...this.omittedJoints],
+      phase: this.running ? (live ? 'capturing' : 'between') : null,
+      episodeStartedAtMs: live?.startedAtMs ?? null,
+      episodeElapsedS: live ? Math.round((now - live.startedAtMs) / 10) / 100 : null,
+      elapsedS: this.running ? Math.round((now - this.startedAtMs) / 10) / 100 : null,
+      autoStopS: this.autoStopS,
+      lastStop: this.lastStop,
     };
+  }
+
+  /**
+   * The thumbnail JPEG of take `index`, from scratch — so only while the
+   * session lives. The path is the one the recorder wrote, never built from
+   * the caller's input, and is still checked to sit inside the take's own
+   * directory before it is read.
+   */
+  async episodeThumbnail(index: number): Promise<Buffer | null> {
+    if (!Number.isSafeInteger(index) || index < 0 || !this.sessionId || this.encoding) return null;
+    const all = this.current ? [...this.episodes, this.current] : this.episodes;
+    const ep = all.find((e) => e.index === index);
+    if (!ep || ep.discarded) return null;
+    const thumb = this.thumbnailOf(ep);
+    if (!thumb) return null;
+    const path = ep.images.get(thumb.camera)?.[thumb.frame];
+    if (!path) return null;
+    const dir = resolve(this.episodeDir(index));
+    const file = resolve(path);
+    if (!file.startsWith(dir + sep)) return null;
+    return readFile(file).catch(() => null);
+  }
+
+  private thumbnailOf(ep: LiveEpisode): EpisodeThumbnail | null {
+    const cam = this.cameras[0];
+    if (!cam) return null;
+    const frame = middleFrame(Math.min(ep.frames.length, ep.images.get(cam.key)?.length ?? 0));
+    return frame === null ? null : { camera: cam.key, frame };
   }
 
   /** Refresh `behind_s` without blocking a tick. Called by the status route. */
@@ -912,15 +1204,39 @@ export class EpisodeRecorder {
           ? Math.max(0, ep.lastFrameAtMs - ep.firstFrameAtMs - ep.pausedMs) / 1000
           : 0;
       const fps = ep.frames.length > 1 && spanS > 0 ? (ep.frames.length - 1) / spanS : 0;
+      const durationS = Math.round(spanS * 100) / 100;
       return {
         episodeIndex: ep.index,
         frames: ep.frames.length,
         dropped: ep.dropped,
-        durationS: Math.round(spanS * 100) / 100,
+        durationS,
         fpsActual: Math.round(fps * 100) / 100,
         retargetModes: [...ep.modes].sort(),
+        discarded: ep.discarded,
+        ...this.quickCheck(ep, durationS),
+        thumbnail: ep.discarded ? null : this.thumbnailOf(ep),
       };
     });
+  }
+
+  /** The quick check, recomputed only when the take's frames or drops changed. */
+  private quickCheck(ep: LiveEpisode, durationS: number): EpisodeQuickCheck {
+    const c = ep.check;
+    if (
+      c &&
+      c.frames === ep.frames.length &&
+      c.epoch === ep.epoch &&
+      c.dropped === ep.dropped &&
+      c.durationS === durationS
+    ) {
+      return c.value;
+    }
+    const value = summarizeEpisode(ep.frames, this.activeLayout().joints, G1_MOTION_GROUPS, {
+      durationS,
+      dropped: ep.dropped,
+    });
+    ep.check = { frames: ep.frames.length, epoch: ep.epoch, dropped: ep.dropped, durationS, value };
+    return value;
   }
 
   /** The layout this session records — fixed at `start()`. */
@@ -941,6 +1257,8 @@ export class EpisodeRecorder {
       pausedMs: 0,
       epoch: 0,
       modes: new Set(),
+      discarded: false,
+      check: null,
     };
     return ep;
   }
@@ -975,6 +1293,8 @@ export class EpisodeRecorder {
       videoFeatures: [],
       scene: this.scene,
       bootId: this.bootId,
+      simulated: this.simulated,
+      indexMap: [],
       error,
     };
   }

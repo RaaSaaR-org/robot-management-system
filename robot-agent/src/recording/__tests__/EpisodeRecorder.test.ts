@@ -559,7 +559,10 @@ describe('EpisodeRecorder', () => {
     expect(result.ok).toBe(true);
     expect(result.fpsActual).toBeLessThan(50);
     const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
-    expect(info.fps).toBe(result.fpsActual);
+    // TASK-402 D3: the dataset declares the integer target; what was achieved
+    // is provenance, not the rate every timestamp is derived from.
+    expect(info.fps).toBe(50);
+    expect(info._neodem.fpsActual).toBe(result.fpsActual);
     expect(info._neodem.fpsTarget).toBe(50);
   });
 
@@ -818,7 +821,8 @@ describe.skipIf(!HAVE_FFMPEG)('EpisodeRecorder with cameras', () => {
     expect(result.fpsActual).toBeGreaterThan(25);
     expect(result.fpsActual).toBeLessThan(35);
     const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
-    expect(info.fps).toBe(result.fpsActual);
+    expect(info.fps).toBe(30); // the integer target (TASK-402 D3)
+    expect(info._neodem.fpsActual).toBe(result.fpsActual);
     const mp4 = join(result.datasetPath!, 'videos', 'observation.images.cam_right_high', 'chunk-000', 'file-000.mp4');
     const probe = spawnSync('ffprobe', [
       '-v', 'error', '-count_frames', '-select_streams', 'v:0',
@@ -973,4 +977,368 @@ describe('per-episode retargeting labels (TASK-216)', () => {
     expect(episodes[0]!.retarget_modes).toBe('ik');
     expect(episodes[1]!.retarget_modes).toBe('hand-tracking+ik');
   });
+});
+
+describe('takes between an explicit begin and end (TASK-402)', () => {
+  let dir: string;
+  let h: Harness;
+  let rec: EpisodeRecorder;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'episode-takes-'));
+    h = harness();
+    rec = new EpisodeRecorder({
+      hooks: h.hooks,
+      robotType: 'g1_edu',
+      scratchRoot: join(dir, 'scratch'),
+      datasetRoot: join(dir, 'datasets'),
+    });
+    resetTeleopModes();
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    if (rec.isRecording()) await rec.stop().catch(() => {});
+    await rm(dir, { recursive: true, force: true });
+    resetTeleopModes();
+  });
+
+  /** One take of `ms` of ticks, begun and ended by the operator. */
+  async function take(ms: number): Promise<number> {
+    const begun = await rec.beginEpisode();
+    if (!begun.ok) throw new Error(`begin refused: ${begun.code}`);
+    await run(h, rec, ms);
+    const ended = rec.endEpisode('operator');
+    if (!ended.ok) throw new Error(`end refused: ${ended.code}`);
+    return begun.episodeIndex;
+  }
+
+  it('opens nothing until begin: between-take ticks are neither frames nor drops', async () => {
+    const started = await rec.start({ sessionId: 's', fps: 30, cameras: [], startBetweenTakes: true });
+    expect(started.phase).toBe('between');
+    expect(started.episodes).toEqual([]);
+    // Teleop is not engaged yet either: in the old order every one of these
+    // ticks was a drop on an episode 0 the operator never meant to record.
+    h.flags.teleop = false;
+    await run(h, rec, 3000);
+    let status = rec.status();
+    expect(status.phase).toBe('between');
+    expect(status.frames).toBe(0);
+    expect(status.totalFrames).toBe(0);
+    expect(status.dropped).toBe(0);
+    expect(status.totalDropped).toBe(0);
+    expect(status.episodes).toEqual([]);
+    expect(status.elapsedS).toBeCloseTo(3, 1);
+    expect(status.episodeStartedAtMs).toBeNull();
+
+    h.flags.teleop = true;
+    const begun = await rec.beginEpisode();
+    expect(begun).toEqual({ ok: true, episodeIndex: 0, phase: 'capturing', startedAtMs: h.clock.ms });
+    await run(h, rec, 500);
+    status = rec.status();
+    expect(status.phase).toBe('capturing');
+    expect(status.frames).toBeGreaterThan(10);
+    expect(status.episodeElapsedS).toBeCloseTo(0.5, 1);
+
+    const ended = rec.endEpisode('operator');
+    expect(ended.ok).toBe(true);
+    if (!ended.ok) return;
+    expect(ended.phase).toBe('between');
+    expect(ended.report.episodeIndex).toBe(0);
+    expect(ended.report.frames).toBe(status.frames);
+    status = rec.status();
+    expect(status.phase).toBe('between');
+    expect(status.lastStop).toEqual({ episodeIndex: 0, reason: 'operator', atMs: h.clock.ms });
+    expect(status.episodes.map((e) => e.discarded)).toEqual([false]);
+  });
+
+  it('refuses a second begin and an end between takes; next between takes begins one', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
+    expect(rec.endEpisode('operator')).toEqual({ ok: false, code: 'not_capturing' });
+    expect((await rec.beginEpisode()).ok).toBe(true);
+    expect(await rec.beginEpisode()).toEqual({ ok: false, code: 'already_capturing' });
+    await run(h, rec, 200);
+    expect(rec.endEpisode('operator').ok).toBe(true);
+    expect(rec.endEpisode('operator')).toEqual({ ok: false, code: 'not_capturing' });
+
+    expect(await rec.nextEpisode()).toBe(1);
+    expect(rec.status().phase).toBe('capturing');
+    // …and next while capturing ends this take with reason `next`.
+    await run(h, rec, 200);
+    expect(await rec.nextEpisode()).toBe(2);
+    expect(rec.status().lastStop?.reason).toBe('next');
+  });
+
+  it('refuses two concurrent begins rather than opening two takes', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: ['head_camera'], startBetweenTakes: true });
+    const [a, b] = await Promise.all([rec.beginEpisode(), rec.beginEpisode()]);
+    expect([a.ok, b.ok].sort()).toEqual([false, true]);
+    expect(rec.status().phase).toBe('capturing');
+  });
+
+  it('ends a take by itself at the time limit, and does not begin the next', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true, episodeTimeS: 2 });
+    expect(rec.status().autoStopS).toBe(2);
+    await rec.beginEpisode();
+    await run(h, rec, 2500);
+    let status = rec.status();
+    expect(status.phase).toBe('between');
+    expect(status.lastStop?.reason).toBe('time_limit');
+    expect(status.lastStop?.episodeIndex).toBe(0);
+    expect(status.episodes).toHaveLength(1);
+    expect(status.episodes[0]!.durationS).toBeGreaterThan(1.8);
+    expect(status.episodes[0]!.durationS).toBeLessThanOrEqual(2);
+
+    await run(h, rec, 3000);
+    status = rec.status();
+    expect(status.phase).toBe('between');
+    expect(status.episodes).toHaveLength(1);
+  });
+
+  it('does not count a pause against the time limit', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true, episodeTimeS: 2 });
+    await rec.beginEpisode();
+    await run(h, rec, 1000);
+    rec.pause();
+    await run(h, rec, 3000);
+    rec.resume();
+    expect(rec.status().phase).toBe('capturing');
+    await run(h, rec, 1200);
+    expect(rec.status().lastStop?.reason).toBe('time_limit');
+  });
+
+  it('keeps take numbers through a discard and maps them onto the dataset at stop', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
+    await take(200);
+    await take(200);
+    await take(200);
+    expect(await rec.discardEpisode(1)).toBe(true);
+
+    const status = rec.status();
+    expect(status.episodes.map((e) => e.episodeIndex)).toEqual([0, 1, 2]);
+    expect(status.episodes.map((e) => e.discarded)).toEqual([false, true, false]);
+    expect(status.episodes[2]!.frames).toBeGreaterThan(0);
+    // The next take is 3, not a reused 1.
+    expect((await rec.beginEpisode()).ok && rec.status().episodeIndex).toBe(3);
+    // Left open: stop ends it with `session_end` and keeps it.
+    await run(h, rec, 200);
+
+    vi.useRealTimers();
+    const result = await rec.stop();
+    expect(result.ok).toBe(true);
+    expect(result.simulated).toBe(true);
+    expect(result.indexMap).toEqual([
+      { take: 0, datasetEpisode: 0 },
+      { take: 1, datasetEpisode: null },
+      { take: 2, datasetEpisode: 1 },
+      { take: 3, datasetEpisode: 2 },
+    ]);
+    expect(result.episodes.map((e) => e.episodeIndex)).toEqual([0, 1, 2]);
+    const lines = (await readFile(join(result.datasetPath!, 'meta/episodes.jsonl'), 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { episode_index: number });
+    expect(lines.map((l) => l.episode_index)).toEqual([0, 1, 2]);
+  });
+
+  it('stops a between-takes session that kept nothing with no_episodes, not an exception', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
+    await run(h, rec, 500);
+    vi.useRealTimers();
+    const result = await rec.stop();
+    expect(result).toMatchObject({ ok: false, code: 'no_episodes', datasetPath: null, simulated: true });
+    expect(existsSync(join(dir, 'datasets', 's'))).toBe(false);
+    expect(rec.isRecording()).toBe(false);
+  });
+
+  it('says no_episodes when every take was discarded', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
+    await take(200);
+    await rec.discardEpisode(0);
+    vi.useRealTimers();
+    const result = await rec.stop();
+    expect(result).toMatchObject({ ok: false, code: 'no_episodes' });
+    expect(result.indexMap).toEqual([{ take: 0, datasetEpisode: null }]);
+  });
+
+  it('opens episode 0 at once without the flag, as it always has', async () => {
+    const status = await rec.start({ sessionId: 's', fps: 20, cameras: [] });
+    expect(status.phase).toBe('capturing');
+    expect(status.episodeStartedAtMs).toBe(h.clock.ms);
+    expect(status.autoStopS).toBeNull();
+  });
+
+  it('labels a real-robot stop result as not simulated', async () => {
+    h.hooks.describeSidecar = async () => ({
+      scene: null,
+      bootId: 'boot-real',
+      behindS: null,
+      arm: { readOnly: false, sim: false, writeMode: 'arm_sdk' },
+    });
+    await rec.start({ sessionId: 's', fps: 20, cameras: [] });
+    await run(h, rec, 200);
+    vi.useRealTimers();
+    const result = await rec.stop();
+    expect(result.ok).toBe(true);
+    expect(result.simulated).toBe(false);
+  });
+
+  // -- the quick check --------------------------------------------------------
+
+  it('reports which joints and groups moved, and warns about a short take', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
+    await rec.beginEpisode();
+    await run(h, rec, 200);
+    h.measured = {
+      ...h.measured,
+      left_elbow_joint: h.measured.left_elbow_joint! + 0.5,
+      right_hand_thumb_0_joint: h.measured.right_hand_thumb_0_joint! + 0.1,
+      // Below the threshold: sensor noise, not motion.
+      waist_yaw_joint: (h.measured.waist_yaw_joint ?? 0) + 0.01,
+    };
+    await run(h, rec, 200);
+    const ended = rec.endEpisode('operator');
+    expect(ended.ok).toBe(true);
+    if (!ended.ok) return;
+    expect(ended.report.jointsMoved).toEqual([
+      { name: 'left_elbow_joint', rangeRad: 0.5 },
+      { name: 'right_hand_thumb_0_joint', rangeRad: 0.1 },
+    ]);
+    expect(ended.report.groupsMoved).toEqual(['left_arm', 'right_hand']);
+    expect(ended.report.warnings).toEqual(['short']);
+    expect(ended.report.thumbnail).toBeNull(); // no camera
+    expect(rec.status().episodes[0]!.jointsMoved).toEqual(ended.report.jointsMoved);
+  });
+
+  it('warns no_motion and dropped_frames on a take that did nothing well', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
+    await rec.beginEpisode();
+    await run(h, rec, 2500); // frames span 2.45 s: not short
+    h.flags.estop = true;
+    await run(h, rec, 1500); // 30 of 80 ticks dropped
+    const ended = rec.endEpisode('operator');
+    if (!ended.ok) throw new Error('end refused');
+    expect(ended.report.warnings).toEqual(['no_motion', 'dropped_frames']);
+    expect(ended.report.jointsMoved).toEqual([]);
+  });
+
+  // -- integer fps and the deadline scheduler ---------------------------------
+
+  it('declares the integer target fps and measures ~30 over a 10 s fake-clock run', async () => {
+    await rec.start({ sessionId: 's', fps: 30, cameras: [] });
+    await run(h, rec, 10_000);
+    const status = rec.status();
+    expect(status.totalDropped).toBe(0);
+    // A 33 ms interval would have produced 303 here.
+    expect(status.frames).toBeGreaterThanOrEqual(299);
+    expect(status.frames).toBeLessThanOrEqual(300);
+    vi.useRealTimers();
+    const result = await rec.stop();
+    expect(result.ok).toBe(true);
+    const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
+    expect(info.fps).toBe(30);
+    expect(Number.isInteger(info.fps)).toBe(true);
+    expect(Math.abs(info._neodem.fpsActual - 30)).toBeLessThan(0.5);
+    expect(info._neodem.fpsTarget).toBe(30);
+    const rows = await readParquet(join(result.datasetPath!, 'data/chunk-000/file-000.parquet'));
+    expect(rows.length).toBe(result.totalFrames);
+    rows.forEach((row, i) => expect(Number(row.timestamp)).toBeCloseTo(i / 30, 5));
+  });
+
+  it('rounds a fractional fps request to the integer it will declare', async () => {
+    const status = await rec.start({ sessionId: 's', fps: 29.97, cameras: [] });
+    expect(status.fpsTarget).toBe(30);
+  });
+
+  it('counts ticks the event loop missed as drops and does not burst to catch up', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [] });
+    await run(h, rec, 100);
+    expect(rec.status().frames).toBe(2);
+    const startsBefore = h.captureStarts;
+    // The agent was busy for half a second: ten deadlines went by unserved.
+    await advance(h, rec, 500);
+    const status = rec.status();
+    // One tick, not ten fired back to back.
+    expect(h.captureStarts - startsBefore).toBe(1);
+    expect(status.frames).toBe(3);
+    expect(status.dropped).toBe(9);
+    expect(status.lastDropReason).toMatch(/missed/);
+    // And the cadence resumes on the original grid.
+    await run(h, rec, 100);
+    expect(rec.status().frames).toBe(5);
+  });
+
+  it('does not count missed ticks between takes as drops', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
+    await advance(h, rec, 500);
+    expect(rec.status().totalDropped).toBe(0);
+  });
+});
+
+describe.skipIf(!HAVE_FFMPEG)('take thumbnails and video fps (TASK-402)', () => {
+  let dir: string;
+  let h: Harness;
+  let rec: EpisodeRecorder;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'episode-thumbs-'));
+    h = harness();
+    rec = new EpisodeRecorder({
+      hooks: h.hooks,
+      robotType: 'g1_edu',
+      scratchRoot: join(dir, 'scratch'),
+      datasetRoot: join(dir, 'datasets'),
+    });
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    if (rec.isRecording()) await rec.stop().catch(() => {});
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('names the middle frame of the first camera and serves it while the session lives', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: ['head_camera', 'house_iso'], startBetweenTakes: true });
+    await rec.beginEpisode();
+    await runUntilFrames(h, rec, 3);
+    rec.pause();
+    await advance(h, rec, 10);
+    const ended = rec.endEpisode('operator');
+    if (!ended.ok) throw new Error('end refused');
+    const frames = ended.report.frames;
+    expect(ended.report.thumbnail).toEqual({ camera: 'cam_right_high', frame: Math.floor((frames - 1) / 2) });
+    vi.useRealTimers();
+
+    const jpeg = await rec.episodeThumbnail(0);
+    expect(jpeg?.equals(JPEG)).toBe(true);
+    expect(await rec.episodeThumbnail(7)).toBeNull();
+    expect(await rec.episodeThumbnail(-1)).toBeNull();
+    expect(await rec.episodeThumbnail(0.5)).toBeNull();
+
+    await rec.discardEpisode(0);
+    expect(await rec.episodeThumbnail(0)).toBeNull();
+    expect(rec.status().episodes[0]!.thumbnail).toBeNull();
+  }, 60_000);
+
+  it('encodes every camera at the integer fps, video.fps and -framerate alike', async () => {
+    await rec.start({ sessionId: 's', fps: 30, cameras: ['head_camera', 'house_iso'] });
+    await runUntilFrames(h, rec, 4);
+    vi.useRealTimers();
+    const result = await rec.stop();
+    expect(result.ok).toBe(true);
+    const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
+    expect(info.fps).toBe(30);
+    for (const key of ['cam_right_high', 'cam_third_person']) {
+      const feature = info.features[`observation.images.${key}`];
+      expect(feature.info['video.fps'], key).toBe(30);
+      const mp4 = join(result.datasetPath!, 'videos', `observation.images.${key}`, 'chunk-000', 'file-000.mp4');
+      const probe = spawnSync('ffprobe', [
+        '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream=r_frame_rate', '-of', 'csv=p=0', mp4,
+      ]);
+      if (probe.status === 0) expect(probe.stdout.toString().trim(), key).toBe('30/1');
+    }
+  }, 60_000);
 });

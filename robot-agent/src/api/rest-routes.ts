@@ -1454,14 +1454,17 @@ export function createRestRoutes(
   };
 
   // POST /robots/:id/recording/start
-  //   {sessionId, fps?, cameras?, task?, shadows?, inputMode?}
+  //   {sessionId, fps?, cameras?, task?, shadows?, inputMode?,
+  //    startBetweenTakes?, episodeTimeS?}
   router.post('/robots/:id/recording/start', async (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
     const sessionId = req.body?.sessionId;
     if (typeof sessionId !== 'string' || !sessionId.trim()) {
       res.status(400).json({
         code: 'INVALID_REQUEST',
-        message: 'body must be {sessionId: string, fps?, cameras?, task?, shadows?, inputMode?}',
+        message:
+          'body must be {sessionId: string, fps?, cameras?, task?, shadows?, inputMode?, ' +
+          'startBetweenTakes?, episodeTimeS?}',
       });
       return;
     }
@@ -1476,6 +1479,7 @@ export function createRestRoutes(
       ['task', req.body?.task, 'string'],
       ['shadows', req.body?.shadows, 'boolean'],
       ['inputMode', req.body?.inputMode, 'string'],
+      ['startBetweenTakes', req.body?.startBetweenTakes, 'boolean'],
     ] as const) {
       if (wrongType(name, value, want)) {
         res.status(400).json({ code: 'INVALID_REQUEST', message: `${name} must be a ${want}` });
@@ -1487,6 +1491,19 @@ export function createRestRoutes(
       res.status(400).json({ code: 'INVALID_REQUEST', message: 'cameras must be string[]' });
       return;
     }
+    // null is a legal "no limit", so it cannot go through `wrongType`.
+    const episodeTimeS = req.body?.episodeTimeS;
+    if (
+      episodeTimeS !== undefined &&
+      episodeTimeS !== null &&
+      !(typeof episodeTimeS === 'number' && Number.isFinite(episodeTimeS) && episodeTimeS >= 0)
+    ) {
+      res.status(400).json({
+        code: 'INVALID_REQUEST',
+        message: 'episodeTimeS must be a non-negative number or null',
+      });
+      return;
+    }
     try {
       const status = await recordingController.start({
         sessionId: sessionId.trim(),
@@ -1495,6 +1512,10 @@ export function createRestRoutes(
         ...(typeof req.body?.task === 'string' ? { task: req.body.task } : {}),
         ...(typeof req.body?.shadows === 'boolean' ? { shadows: req.body.shadows } : {}),
         ...(typeof req.body?.inputMode === 'string' ? { inputMode: req.body.inputMode } : {}),
+        ...(typeof req.body?.startBetweenTakes === 'boolean'
+          ? { startBetweenTakes: req.body.startBetweenTakes }
+          : {}),
+        ...(episodeTimeS !== undefined ? { episodeTimeS: episodeTimeS as number | null } : {}),
       });
       res.json({ ok: true, ...status });
     } catch (err) {
@@ -1507,6 +1528,60 @@ export function createRestRoutes(
     if (wrongRobot(req, res)) return;
     try {
       res.json({ ok: true, episodeIndex: await recordingController.nextEpisode() });
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // POST /robots/:id/recording/episodes/begin -> open a take (TASK-402)
+  //   200 {ok, episodeIndex, phase, startedAtMs} | 409 {ok:false, code}
+  router.post('/robots/:id/recording/episodes/begin', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    try {
+      const result = await recordingController.beginEpisode();
+      res.status(result.ok ? 200 : 409).json(result);
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // POST /robots/:id/recording/episodes/end {reason?: 'operator'|'time_limit'}
+  //   200 {ok, episodeIndex, phase, report} | 409 {ok:false, code}
+  router.post('/robots/:id/recording/episodes/end', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const reason = req.body?.reason ?? 'operator';
+    if (reason !== 'operator' && reason !== 'time_limit') {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: "reason must be 'operator' or 'time_limit'" });
+      return;
+    }
+    try {
+      const result = recordingController.endEpisode(reason);
+      res.status(result.ok ? 200 : 409).json(result);
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // GET /robots/:id/recording/episodes/:index/thumbnail -> image/jpeg
+  //   The middle frame of that take's first camera, from scratch — only while
+  //   the session lives. 404 {code:'no_thumbnail'} otherwise.
+  router.get('/robots/:id/recording/episodes/:index/thumbnail', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    // Strict integer, as for discard: the index is the only input, and it never
+    // becomes part of a path — the recorder serves the file it wrote itself.
+    const raw = req.params.index ?? '';
+    if (!/^\d+$/.test(raw)) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'index must be a non-negative integer' });
+      return;
+    }
+    try {
+      const jpeg = await recordingController.episodeThumbnail(Number.parseInt(raw, 10));
+      if (!jpeg) {
+        res.status(404).json({ code: 'no_thumbnail', message: `take ${raw} has no thumbnail` });
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.type('image/jpeg').send(jpeg);
     } catch (err) {
       recordingError(res, err);
     }
