@@ -3,7 +3,7 @@ id: "TASK-413"
 aliases: []
 title: "The Quest operator starts, stops and discards episodes from inside VR"
 slug: "the-quest-operator-starts-stops-and-discards-episodes-from"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
