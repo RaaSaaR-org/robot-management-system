@@ -3,7 +3,7 @@ id: "TASK-404"
 aliases: []
 title: "The G1 sidecar reports each Dex3 hand's motor faults and how fresh the robot state is"
 slug: "the-g1-sidecar-reports-each-dex3-hand-s-motor-faults-and-how"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
