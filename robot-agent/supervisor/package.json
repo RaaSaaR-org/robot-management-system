@@ -1,0 +1,22 @@
+{
+  "name": "@neodem/robot-supervisor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Starts, stops and reports the G1's robot-side processes (bridge, sidecar, agent) under fixed safety rules",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "node --import tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^4.0.17"
+  }
+}
