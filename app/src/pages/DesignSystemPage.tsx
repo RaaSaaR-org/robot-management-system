@@ -35,6 +35,7 @@ import {
   Checkbox,
   ChoiceCard,
   ChoiceCardGroup,
+  Disclosure,
   ConfirmDialog,
   ConfirmHost,
   DataTable,
@@ -725,6 +726,11 @@ export function DesignSystemPage() {
                 description="Train a locomotion policy in a simulation scene."
               />
             </ChoiceCardGroup>
+          </Demo>
+          <Demo label="Disclosure — optional settings, summarised while closed" className="block">
+            <Disclosure title="Advanced options" summary="Frame rate 30 fps · Episode length 60 s">
+              <p className="text-sm text-ink-secondary">Settings most people never change.</p>
+            </Disclosure>
           </Demo>
         </Section>
 
