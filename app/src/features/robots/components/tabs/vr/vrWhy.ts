@@ -450,3 +450,63 @@ export function panelFactsFromTelemetry(t: VrWhyTelemetry): RobotPanelFacts {
     rttMs: t.rttMs,
   };
 }
+
+// ---- TASK-413: the camera line and the server's reason ----------------------
+
+/** What the robot panel reads off `useVrCameraStatus`. */
+export interface CameraLineInput {
+  /** The robot the head-camera panel shows; null when none is mounted. */
+  robotId: string | null;
+  state: 'live' | 'stale' | 'offline' | 'connecting';
+  retryInS: number | null;
+  fps: number | null;
+}
+
+/**
+ * `CAMERA live 28 fps` / `CAMERA offline · retrying in 4 s` — or null when no
+ * head-camera panel is showing this robot (the SO-101 has none).
+ */
+export function cameraPanelLine(camera: CameraLineInput, robotId: string): PanelLine | null {
+  if (camera.robotId !== robotId) return null;
+  const retry = camera.retryInS !== null && Number.isFinite(camera.retryInS)
+    ? ` · retrying in ${Math.max(0, Math.round(camera.retryInS))} s`
+    : '';
+  switch (camera.state) {
+    case 'live': {
+      const fps = camera.fps !== null && Number.isFinite(camera.fps) ? ` ${Math.round(camera.fps)} fps` : '';
+      return { id: 'camera', text: `CAMERA live${fps}`, color: PANEL_COLORS.ok };
+    }
+    case 'stale':
+      return { id: 'camera', text: `CAMERA stale${retry}`, color: PANEL_COLORS.warn };
+    case 'offline':
+      return { id: 'camera', text: `CAMERA offline${retry}`, color: PANEL_COLORS.bad };
+    default:
+      return { id: 'camera', text: `CAMERA connecting${retry}`, color: PANEL_COLORS.dim };
+  }
+}
+
+/** The server's readiness reason (TASK-411) as far as the why line needs it. */
+export interface ServerWhy {
+  code: string;
+  severity: WhySeverity;
+  text: string;
+  source: 'server' | 'agent';
+}
+
+const SEVERITY_RANK: Record<WhySeverity, number> = { ok: 0, warn: 1, block: 2 };
+
+/**
+ * The robot panel's why line (D4): the server's reason when it BLOCKS — so the
+ * headset and the desktop show the same verdict — and when the server itself
+ * (not the agent it relays) says something at least as serious as the local
+ * reason. Otherwise the local reason, which alone knows the grip and the
+ * controller tracking. A latched E-stop is the one local reason never
+ * outranked: the panel is red and its title already says so.
+ */
+export function pickWhyLine(local: WhyNotFollowing, server: ServerWhy | null): { text: string; severity: WhySeverity; from: 'server' | 'local' } {
+  const localLine = { text: local.text, severity: local.severity, from: 'local' as const };
+  if (!server || local.code === 'estop_latched') return localLine;
+  const serverWins = server.severity === 'block'
+    || (server.source === 'server' && server.severity !== 'ok' && SEVERITY_RANK[server.severity] >= SEVERITY_RANK[local.severity]);
+  return serverWins ? { text: server.text, severity: server.severity, from: 'server' } : localLine;
+}

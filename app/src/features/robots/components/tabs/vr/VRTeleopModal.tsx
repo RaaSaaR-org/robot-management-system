@@ -39,6 +39,7 @@ import { hudHandWarning, hudNeedsRelease, type HudBaseMode, type HudEngage } fro
 import { RobotModeControl } from '../../RobotModeControl';
 import { RobotReadinessPanel } from '../../readiness/RobotReadinessPanel';
 import { VrScene } from './VrScene';
+import type { VrSessionBridge } from './vrSessionBridge';
 import { createRigTelemetry } from './VrTeleopRig';
 import { ARM_HELD_REASONS, isArmRefusalCode, type ArmHeldReason, type VrArmInfo, type VrHandHealth } from './vrWhy';
 
@@ -294,7 +295,7 @@ interface ControlGroup {
  */
 function controlGroups(
   trigger: EndEffectorMode,
-  hasNextEpisode: boolean,
+  hasSession: boolean,
   retargetMode: 'orientation' | 'ik',
   handTracking: boolean,
 ): ControlGroup[] {
@@ -341,7 +342,7 @@ function controlGroups(
       // The title moves with the rows. A card headed "Safety and view" that
       // lists an episode control is as wrong as one that lists a control the
       // session does not have.
-      title: hasNextEpisode ? 'Safety, view and recording' : 'Safety and view',
+      title: hasSession ? 'Safety, view and recording' : 'Safety and view',
       rows: [
         { id: 'estop', keys: 'B / Y', label: 'E-STOP — either hand, either button' },
         // The hands-only stop, listed whenever hand tracking is armed. An
@@ -362,15 +363,20 @@ function controlGroups(
         {
           id: 'ui-click',
           keys: 'Trigger',
-          label: 'Grip free: point at the robot panel and pull to press a button (Reset E-stop: hold 1 s)',
+          label: 'Grip free: point at a panel and pull to press a button (Reset E-stop: hold 1 s)',
         },
-        // Listed ONLY when the host actually wired one up. This modal is opened
-        // from the robot detail page too, where there is no session and no
-        // episode to advance, and a mapping card that names a control the
-        // session does not have is a lie the operator finds out about by
-        // pressing it.
-        ...(hasNextEpisode
-          ? [{ id: 'next-episode', keys: 'L-Stick', label: 'Click to end this episode and start the next' }]
+        // Listed ONLY when the host actually has a session. This modal is
+        // opened from the robot detail page too, where there is no session and
+        // no take to start, and a mapping card that names a control the session
+        // does not have is a lie the operator finds out about by pressing it.
+        // TASK-413 (D1): Discard is a HOLD, never a click.
+        ...(hasSession
+          ? [
+            { id: 'take-start-stop', keys: 'L-Stick', label: 'Click to start a take, click again to stop it' },
+            { id: 'take-next', keys: 'R-Stick', label: 'Click to end this take and start the next' },
+            { id: 'take-discard', keys: 'R-Stick hold', label: 'Hold 1.5 s (three ticks) to discard the last take' },
+            { id: 'session-board', keys: 'Board', label: 'The session board left of the robot: Start/Stop, Next, Discard last (hold 1 s)' },
+          ]
           : []),
       ],
     },
@@ -385,20 +391,12 @@ export interface VRTeleopModalProps {
   sessionSupported: boolean | null;
   onClose: () => void;
   /**
-   * End the current episode and start the next one, for the LEFT stick click
-   * inside the headset. Only the data-collection session page supplies it; when
-   * it is absent the binding and its row on the mapping card both disappear.
+   * The recording session (TASK-413) — only the data-collection session page
+   * supplies it. With it: the session board in the headset, the stick
+   * shortcuts, the wrist HUD's take line and the recording rows on the mapping
+   * card. Without it, none of those exist.
    */
-  /**
-   * Resolves to whether the boundary was actually drawn — the rig only
-   * buzzes the controller when it was. See `VrTeleopRig`.
-   */
-  onNextEpisode?: () => boolean | Promise<boolean>;
-  /**
-   * The episode being captured right now, for the wrist HUD's REC line. Null
-   * (or absent) when nothing is recording.
-   */
-  recording?: { episode: number; frames: number } | null;
+  vrSession?: VrSessionBridge;
 }
 
 function makeXrStore(): XRStore {
@@ -442,8 +440,7 @@ export function VRTeleopModalBody({
   availability,
   sessionSupported,
   onClose,
-  onNextEpisode,
-  recording,
+  vrSession,
 }: VRTeleopModalProps) {
   const [status, setStatus] = useState<LinkStatus>('closed');
   const [robotType, setRobotType] = useState('');
@@ -868,10 +865,7 @@ export function VRTeleopModalBody({
     t.link = meters.link;
     t.msSinceState = meters.msSinceState;
     t.rttMs = meters.rttMs;
-    // `?? null` because the prop is optional: `undefined` would leave the HUD's
-    // REC line switched on by an absent value.
-    t.recording = recording ?? null;
-  }, [estopLatched, meters, recording]);
+  }, [estopLatched, meters]);
 
   /**
    * Raise the E-Stop. One implementation for both entry points — the B/Y buttons
@@ -1300,13 +1294,13 @@ export function VRTeleopModalBody({
           onRecenter={recenter}
           onEstop={onStopButton}
           onResetEstop={resetEstop}
-          onNextEpisode={onNextEpisode}
+          vrSession={vrSession}
         />
       </div>
 
       {/* Controller mapping */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        {controlGroups(trigger, Boolean(onNextEpisode), retargetMode, handTracking).map((group) => (
+        {controlGroups(trigger, Boolean(vrSession), retargetMode, handTracking).map((group) => (
           <Panel key={group.id} variant="inset" padding="sm">
             <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em] text-ink-tertiary">
               {group.title}

@@ -36,7 +36,22 @@ import {
   type StickVector,
 } from './vrHeading';
 import { advanceTargets, type JointTargets } from './vrSmoothing';
-import { HAPTICS, pulsePreset, type HapticPreset, type HapticSource } from './vrHaptics';
+import {
+  HAPTICS,
+  TAKE_REFUSED,
+  clearHapticQueue,
+  drainHapticQueue,
+  pulsePreset,
+  queueHaptics,
+  type HapticPreset,
+  type HapticSource,
+} from './vrHaptics';
+import {
+  IDLE_SESSION_KEYS,
+  stepSessionKeys,
+  type SessionKeysState,
+  type VrSessionBridge,
+} from './vrSessionBridge';
 import type { LinkState } from './vrSession';
 import { routeControllerInput } from './vrInput';
 import type { ArmHeld, ArmRefusal, VrArmInfo } from './vrWhy';
@@ -152,14 +167,6 @@ export interface VrRigTelemetry {
   /** Smoothed control-loop round trip, ms. */
   rttMs: number | null;
   /**
-   * The episode being captured, or null when nothing is recording.
-   *
-   * Written by the modal, not the rig: the rig can ASK for the next episode but
-   * it is the session that decides one started, and the frame count is the
-   * server's number. `VrWristHud` hands this straight to `composeHud`.
-   */
-  recording: { episode: number; frames: number } | null;
-  /**
    * The real robot's arm write path, from the agent's `{type:'arm'}` frame
    * (TASK-393). Null on the sim / an older sidecar, which need no arming.
    */
@@ -217,7 +224,6 @@ export function createRigTelemetry(): VrRigTelemetry {
     armInfo: null,
     baseMeasured: false,
     rttMs: null,
-    recording: null,
     arm: null,
     clutch: { left: false, right: false },
   };
@@ -236,15 +242,13 @@ export interface VrTeleopRigProps {
    */
   onEstop: () => void;
   /**
-   * End the current episode and start the next one. Bound to the LEFT thumbstick
-   * CLICK — see the frame loop.
-   *
-   * OPTIONAL, and the binding only exists when it is passed. The same rig is
-   * mounted from the robot detail page, where there is no session and no episode
-   * to advance; a click there must do nothing rather than throw or, worse, buzz
-   * a confirmation for something that did not happen.
+   * The recording session (TASK-413), or absent. Its stick shortcuts — LEFT
+   * click Start/Stop, RIGHT click Next, RIGHT held 1.5 s Discard last — exist
+   * only when it is passed. The same rig is mounted from the robot detail page,
+   * where there is no session; a click there must do nothing rather than throw
+   * or, worse, buzz a confirmation for something that did not happen.
    */
-  onNextEpisode?: () => boolean | Promise<boolean>;
+  vrSession?: VrSessionBridge;
   /**
    * WEARER heading — the compass bearing the operator's body is facing. Seeded
    * by `VrOrigin` on a recenter and kept current here every frame.
@@ -318,7 +322,7 @@ export function VrTeleopRig({
   send,
   onRecenter,
   onEstop,
-  onNextEpisode,
+  vrSession,
   headingRef,
   robotHeadingRef,
   robotPositionsRef,
@@ -371,10 +375,8 @@ export function VrTeleopRig({
    */
   const stopPinchSince = useRef<number | null>(null);
   const stopPinchFired = useRef(false);
-  /** Left stick click last frame — the episode boundary is edge-triggered too. */
-  const nextEpisodeHeld = useRef(false);
-  /** The XR clock, readable from the async episode-boundary callback. */
-  const clockRef = useRef(0);
+  /** The stick shortcuts' edge and hold state — see `stepSessionKeys`. */
+  const sessionKeys = useRef<SessionKeysState>(IDLE_SESSION_KEYS);
 
   // Smoothed absolute targets we actually stream.
   const targetsRef = useRef<JointTargets>({});
@@ -424,11 +426,10 @@ export function VrTeleopRig({
    * are initialised once at mount and the rig outlives every session. End a
    * session with B/Y still held and `estopHeld` stayed true, so the edge
    * detector below swallowed a press made on the FIRST frame of the next
-   * session — a narrow window, but it is the E-Stop's edge. `nextEpisodeHeld` is
+   * session — a narrow window, but it is the E-Stop's edge. `sessionKeys` is
    * in that list for the same reason: an operator whose thumb is resting on a
    * clicked stick as one session ends would otherwise have the first deliberate
-   * episode boundary of the next one swallowed, with nothing on the plate to say
-   * why.
+   * Start/Stop of the next one swallowed, with nothing on the plate to say why.
    */
   useEffect(() => {
     prevHeading.current = Number.NaN;
@@ -439,8 +440,11 @@ export function VrTeleopRig({
     sentClutch.current = null;
     recenterHeld.current = false;
     estopHeld.current = false;
-    nextEpisodeHeld.current = false;
+    sessionKeys.current = IDLE_SESSION_KEYS;
   }, [recenterKey, inVr, robotHeadingRef]);
+
+  // A pattern still queued when the rig goes away must not buzz the next one.
+  useEffect(() => clearHapticQueue, []);
 
   // Read the controller orientation straight from the WebXR frame's grip space.
   // We deliberately do NOT use `ctrl.object` (the default controller model): that
@@ -468,7 +472,6 @@ export function VrTeleopRig({
       return isStopPinch(at(HAND_JOINT_NAMES.thumbTip), at(HAND_JOINT_NAMES.pinkyTip));
     };
     const now = state.clock.elapsedTime;
-    clockRef.current = now;
     const telemetry = telemetryRef.current;
     // No cast: `XRInputSource` satisfies `HapticSource` structurally
     // (`handedness` is a string, `gamepad` is typed `unknown` there precisely
@@ -486,6 +489,9 @@ export function VrTeleopRig({
     if (buzz) {
       const fired = [pulsePreset(leftSource, buzz.preset), pulsePreset(rightSource, buzz.preset)];
       if (fired.some(Boolean) || now >= buzz.until) pendingBuzz.current = null;
+    } else {
+      // Session pulses (a take's answer, a refusal) wait for any stop buzz.
+      drainHapticQueue([leftSource, rightSource]);
     }
 
     // ---- buttons ---------------------------------------------------------
@@ -496,35 +502,36 @@ export function VrTeleopRig({
     if (recenterPressed && !recenterHeld.current) onRecenter();
     recenterHeld.current = recenterPressed;
 
-    // ---- next episode ----------------------------------------------------
-    // LEFT thumbstick CLICK, and only when the host actually has episodes. The
-    // four face buttons are taken by recenter and the E-Stop, both bound on BOTH
-    // hands on purpose (see below), and freeing one of those for a recording
-    // control would trade a safety property for a convenience. The stick click
-    // is unused, takes a deliberate push rather than a nudge — a deflected stick
-    // reads 'touched', never 'pressed', see `isStickClick` — and a mis-hit costs
-    // an episode boundary rather than a stop.
+    // ---- session shortcuts (TASK-413, D1) --------------------------------
+    // LEFT stick click: Start between takes, Stop while capturing. RIGHT stick
+    // click: Next, on release. RIGHT stick held 1.5 s: Discard last, after a
+    // three-tick countdown. Only when the host has a session. The four face
+    // buttons are taken by recenter and the E-Stop on BOTH hands on purpose,
+    // and a stick click takes a deliberate push rather than a nudge — a
+    // deflected stick reads 'touched', never 'pressed', see `isStickClick` —
+    // so driving can never start, stop or discard a take. Discard is a HOLD:
+    // an accidental click must never destroy a take.
     //
     // Handled BEFORE the E-Stop so a frame carrying both leaves the STOP's buzz
-    // in `pendingBuzz`: there is one slot, and the stop confirmation is the one
-    // the operator will be waiting for.
-    const nextEpisodePressed = isStickClick(left?.gamepad['xr-standard-thumbstick']);
-    if (nextEpisodePressed && !nextEpisodeHeld.current && onNextEpisode) {
-      // Buzz on the ANSWER, not on the press. A buzz is a promise the operator
-      // acts on — they stop watching and start the next take — so confirming a
-      // boundary the session refused (paused, or the robot said no) is worse
-      // than confirming nothing. `state.clock.elapsedTime` is read again inside
-      // the callback because the frame that resolves is not this one.
-      void Promise.resolve(onNextEpisode()).then((accepted) => {
-        if (accepted) {
-          pendingBuzz.current = {
-            preset: HAPTICS.episodeMark,
-            until: clockRef.current + BUZZ_RETRY_WINDOW_S,
-          };
-        }
+    // in `pendingBuzz`, which outranks the queued session pulses below.
+    if (vrSession) {
+      const view = vrSession.getState();
+      const keys = stepSessionKeys(sessionKeys.current, {
+        leftClick: isStickClick(left?.gamepad['xr-standard-thumbstick']),
+        rightClick: isStickClick(right?.gamepad['xr-standard-thumbstick']),
+        now: Date.now(),
+        phase: view.phase,
+        enabled: !telemetry.estopLatched && view.status === 'recording',
       });
+      sessionKeys.current = keys.state;
+      if (keys.buzz === 'tick') pulsePreset(rightSource, HAPTICS.holdTick);
+      else if (keys.buzz === 'confirm') pulsePreset(rightSource, HAPTICS.holdConfirm);
+      else if (keys.buzz === 'refused') queueHaptics(TAKE_REFUSED);
+      // Buzz on the ANSWER, not on the press: a buzz is a promise the operator
+      // acts on, so confirming an action the session refused is worse than
+      // confirming nothing. The bridge queues the answer's pattern itself.
+      if (keys.action) void vrSession.actions[keys.action]();
     }
-    nextEpisodeHeld.current = nextEpisodePressed;
 
     // B on the right hand OR Y on the left. Both, either hand, on purpose: an
     // operator reaching for a stop is not going to recall which controller owns

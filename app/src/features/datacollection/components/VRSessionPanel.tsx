@@ -10,29 +10,29 @@
  *              The page owns the switch (TASK-396): it holds its lease only
  *              while simulating, and the headset path is closed meanwhile, so
  *              the operator only ever sees one "Take control".
+ *              TASK-413: the headset reads the session's shared live state and
+ *              starts, stops, advances and discards takes through one
+ *              `VrSessionBridge` built here from the data-collection store.
  * @feature datacollection
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Button, Panel, StatusTag, Switch, type StatusTagTone } from '@/shared/components/ui';
 import { VRTeleopSection } from '../../robots/components/tabs/vr/VRTeleopSection';
 import { KeyboardTeleopSection } from '../../robots/components/tabs/TeleopTab';
 import { useSimulatedVrInput, type SimInputStatus } from '../hooks/useSimulatedVrInput';
 import type { Robot } from '../../robots/types/robots.types';
 import type { InputLease } from '../hooks/inputLease';
+import { useDataCollectionStore, selectKept } from '../store/datacollectionStore';
+import { groupLabel, warningLabel } from '../utils/takeFormat';
+import {
+  buildVrSessionView,
+  type VrSessionBridge,
+  type VrTakeOutcome,
+} from '../../robots/components/tabs/vr/vrSessionBridge';
 
 export interface VRSessionPanelProps {
   robot: Robot | null;
-  /**
-   * End the current episode and start the next one. Threaded down to the WebXR
-   * rig, which binds it to the LEFT thumbstick click — an operator wearing a
-   * Quest cannot reach the "Next episode" button on this page.
-   * Resolves to whether the boundary was actually drawn — the rig only
-   * buzzes the controller when it was. See `VrTeleopRig`.
-   */
-  onNextEpisode?: () => boolean | Promise<boolean>;
-  /** The episode being captured, for the in-headset REC line. Null when idle. */
-  recording?: { episode: number; frames: number } | null;
   /** The session page's control lease; the simulated input streams only while it is bound. */
   lease?: InputLease;
   /** "Simulate VR input" switch, when the page owns it; local state otherwise. */
@@ -49,8 +49,12 @@ const STATUS: Record<SimInputStatus | 'off', { label: string; tone: StatusTagTon
 };
 
 export function VRSessionPanel({
-  robot, onNextEpisode, recording, lease, simulate: simulateProp, onSimulateChange,
+  robot, lease, simulate: simulateProp, onSimulateChange,
 }: VRSessionPanelProps) {
+  const sessionId = useDataCollectionStore((s) => s.selectedSession?.id ?? null);
+  // TASK-413 (D2): one object for the headset, read through a getter from the
+  // scene's frame loops — the canvas never re-renders because a take ticked.
+  const vrSession = useMemo(() => (sessionId ? createVrSessionBridge(sessionId) : undefined), [sessionId]);
   const [simulateLocal, setSimulateLocal] = useState(false);
   const simulate = simulateProp ?? simulateLocal;
   const setSimulate = (on: boolean): void => {
@@ -77,8 +81,7 @@ export function VRSessionPanel({
       {/* Real headset path: WebXR rig (launcher card + full-screen modal) */}
       <VRTeleopSection
         robot={robot}
-        onNextEpisode={onNextEpisode}
-        recording={recording}
+        vrSession={vrSession}
         launchDisabledReason={simulate ? 'Simulated VR input is driving the robot. Switch it off to use a headset.' : undefined}
       />
 
@@ -117,4 +120,73 @@ export function VRSessionPanel({
       </Panel>
     </div>
   );
+}
+
+// ============================================================================
+// THE HEADSET'S VIEW OF THE SESSION (TASK-413)
+// ============================================================================
+
+const toOutcome = (ok: boolean): VrTakeOutcome => (ok ? 'ok' : 'refused');
+
+/**
+ * The bridge for one session, over the store's shared live state (TASK-410).
+ * Every action is sent with `source: 'vr'`, so the desktop names the headset;
+ * a 409 is adopted by the store and answers `refused`.
+ *
+ * A recorder without explicit takes (`phase` null) keeps the old boundary:
+ * Start and Next draw it through the legacy next-episode route.
+ */
+export function createVrSessionBridge(sessionId: string): VrSessionBridge {
+  const store = useDataCollectionStore;
+  const isLive = (): boolean => store.getState().selectedSession?.id === sessionId;
+  const legacy = (): boolean => {
+    const live = store.getState().live;
+    return !live || live.sessionId !== sessionId || live.phase === null;
+  };
+  const legacyBoundary = async (): Promise<VrTakeOutcome> => {
+    try {
+      await store.getState().nextEpisode(sessionId);
+      return 'ok';
+    } catch {
+      return 'refused';
+    }
+  };
+  return {
+    getState: () => {
+      const state = store.getState();
+      const live = state.live?.sessionId === sessionId ? state.live : null;
+      return buildVrSessionView(
+        {
+          sessionStatus: state.selectedSession?.id === sessionId ? state.selectedSession.status : 'unknown',
+          live,
+          lastQuickCheck: live ? state.lastQuickCheck : null,
+          keptFallback: selectKept(state),
+          pending: state.takePending !== null,
+        },
+        Date.now() + state.liveClockOffsetMs,
+        { group: groupLabel, warning: warningLabel },
+      );
+    },
+    actions: {
+      start: async () => {
+        if (!isLive()) return 'refused';
+        if (legacy()) return legacyBoundary();
+        return toOutcome(await store.getState().startTake(sessionId, 'vr'));
+      },
+      stop: async () => {
+        if (!isLive() || legacy()) return 'refused';
+        return toOutcome(await store.getState().stopTake(sessionId, 'vr'));
+      },
+      next: async () => {
+        if (!isLive()) return 'refused';
+        if (legacy()) return legacyBoundary();
+        return toOutcome(await store.getState().nextTake(sessionId, 'vr'));
+      },
+      discardLast: async () => {
+        if (!isLive() || legacy()) return 'refused';
+        const live = store.getState().live;
+        return toOutcome(await store.getState().discardLastTake(sessionId, 'vr', live?.take ?? null));
+      },
+    },
+  };
 }

@@ -36,6 +36,12 @@ export interface VrButtonProps {
    * Reset button appears only while latched) must not cost a React render.
    */
   isVisible?: () => boolean;
+  /**
+   * Read every frame, like `isVisible`: greyed out and not hittable while it
+   * returns true (TASK-413 — a session button while nothing is recording).
+   * ORed with `disabled`.
+   */
+  isDisabled?: () => boolean;
   tone?: 'default' | 'danger';
   onClick: () => void;
 }
@@ -58,6 +64,7 @@ export function VrButton({
   allowWhenEstopped = false,
   disabled = false,
   isVisible,
+  isDisabled,
   tone = 'default',
   onClick,
 }: VrButtonProps) {
@@ -94,6 +101,8 @@ export function VrButton({
     const visible = isVisible ? isVisible() : true;
     if (groupRef.current) groupRef.current.visible = visible;
     if (!visible) return;
+    // The ray rig reads `target.disabled` on its own frame: at worst one frame late.
+    target.disabled = disabled || (isDisabled ? isDisabled() : false);
     const dead = target.disabled || (vrUiGate.estopLatched && !target.allowWhenEstopped);
     const { hovered, pressed, progress } = target.ui;
     const danger = tone === 'danger';

@@ -202,15 +202,15 @@ export function SessionDetailPage() {
     (session ? storeDiscardTake(session.id, take, 'desktop') : Promise.resolve(false)), [session, storeDiscardTake]);
 
   /**
-   * The headset's one button. Returns whether the boundary was actually drawn:
-   * the VR rig buzzes the controller only when it was, so a refused boundary
-   * must return false. Between takes it starts one; while recording it moves
-   * to the next. Recorders without explicit takes keep the old boundary.
+   * The legacy N hotkey and the episode panel's Next. Returns whether the
+   * boundary was actually drawn. Between takes it starts one; while recording
+   * it moves to the next. Recorders without explicit takes keep the old
+   * boundary. (The headset has its own path since TASK-413: `VRSessionPanel`.)
    */
   const handleNextEpisode = useCallback(async (): Promise<boolean> => {
     if (!session || session.status !== 'recording') return false;
     if (takeMode) {
-      return live?.phase === 'capturing' ? storeNextTake(session.id, 'vr') : storeStartTake(session.id, 'vr');
+      return live?.phase === 'capturing' ? storeNextTake(session.id, 'desktop') : storeStartTake(session.id, 'desktop');
     }
     try { await storeNextEpisode(session.id); return true; } catch { return false; }
   }, [session, takeMode, live?.phase, storeNextEpisode, storeNextTake, storeStartTake]);
@@ -580,12 +580,6 @@ export function SessionDetailPage() {
           lease={lease}
           simulate={simulateVr}
           onSimulateChange={setSimulateVr}
-          onNextEpisode={handleNextEpisode}
-          // 1-based, matching the HUD; frames are the CURRENT take's count.
-          recording={isRecording ? {
-            episode: currentEpisode + 1,
-            frames: live ? live.takeFrames : episodes.find((e) => e.episodeIndex === currentEpisode)?.frameCount ?? liveFrameCount,
-          } : null}
         />
       )}
 

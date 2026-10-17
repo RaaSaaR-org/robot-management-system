@@ -59,6 +59,7 @@ vi.mock('../VrOrigin', () => ({
 }));
 vi.mock('../VrRobotPanel', () => ({ VrRobotPanel: () => <div data-testid="robot-panel" /> }));
 vi.mock('../VrUiRig', () => ({ VrUiRig: () => <div data-testid="ui-rig" /> }));
+vi.mock('../VrSessionBoard', () => ({ VrSessionBoard: () => <div data-testid="session-board" /> }));
 vi.mock('../VrTeleopRig', () => ({
   VrTeleopRig: () => <div data-testid="rig" />,
   createRigTelemetry: () => ({}),
@@ -112,5 +113,32 @@ describe('VrScene orbit controls', () => {
   it('lets go of the camera inside a session, or the arm never receives a pose', () => {
     render(<VrScene {...makeProps({ inVr: true })} />);
     expect(screen.getByTestId('orbit-controls')).toHaveAttribute('data-enabled', 'false');
+  });
+});
+
+describe('VrScene session board (TASK-413)', () => {
+  const session: NonNullable<VrSceneProps['vrSession']> = {
+    getState: () => ({
+      status: 'recording', phase: 'between', take: null, takeElapsedS: null, kept: 0, discarded: 0,
+      frames: 0, fpsActual: null, degraded: false, autoStopInS: null, lastQuickCheck: null, pending: false,
+    }),
+    actions: {
+      start: () => Promise.resolve('ok'),
+      stop: () => Promise.resolve('ok'),
+      next: () => Promise.resolve('ok'),
+      discardLast: () => Promise.resolve('ok'),
+    },
+  };
+
+  it('renders no session board without a session (the robot page Teleop tab)', () => {
+    render(<VrScene {...makeProps()} />);
+    expect(screen.queryByTestId('session-board')).not.toBeInTheDocument();
+    expect(screen.getByTestId('robot-panel')).toBeInTheDocument();
+  });
+
+  it('renders the session board beside the robot panel when the session page passes one', () => {
+    render(<VrScene {...makeProps({ vrSession: session })} />);
+    expect(screen.getByTestId('session-board')).toBeInTheDocument();
+    expect(screen.getByTestId('robot-panel')).toBeInTheDocument();
   });
 });

@@ -72,6 +72,11 @@ export interface HapticPreset {
  *  - `uiClick` — a button press registered. Firmer than a hover, shorter and
  *    weaker than a clutch engage, so a UI press is never mistaken for taking
  *    an arm.
+ *  - `holdTick` / `holdConfirm` (TASK-413) — the right-stick Discard hold
+ *    counts down in three light ticks, then one firm confirm when it fires.
+ *  - `refusedTap` — played twice, 160 ms apart (`TAKE_REFUSED`): the session
+ *    refused a take action (someone else got there first, or it is not
+ *    recording). Two short taps read as "no", never as a success.
  */
 export const HAPTICS = {
   clutchEngage: { intensity: 0.6, ms: 40 },
@@ -82,6 +87,9 @@ export const HAPTICS = {
   episodeMark: { intensity: 0.5, ms: 150 },
   uiHover: { intensity: 0.12, ms: 12 },
   uiClick: { intensity: 0.45, ms: 30 },
+  holdTick: { intensity: 0.3, ms: 25 },
+  holdConfirm: { intensity: 0.7, ms: 60 },
+  refusedTap: { intensity: 0.55, ms: 35 },
 } as const satisfies Record<string, HapticPreset>;
 
 /**
@@ -201,4 +209,78 @@ export function pulsePreset(
   now?: number,
 ): boolean {
   return pulse(source, preset.intensity, preset.ms, now);
+}
+
+// ---- queued patterns (TASK-413) -------------------------------------------
+
+/** One pulse of a pattern, `atMs` after the pattern starts. */
+export interface HapticStep {
+  preset: HapticPreset;
+  atMs: number;
+}
+
+/** The session refused a take action: two short taps. */
+export const TAKE_REFUSED: readonly HapticStep[] = [
+  { preset: HAPTICS.refusedTap, atMs: 0 },
+  { preset: HAPTICS.refusedTap, atMs: 160 },
+];
+
+/** A take action landed. */
+export const TAKE_ACCEPTED: readonly HapticStep[] = [{ preset: HAPTICS.episodeMark, atMs: 0 }];
+
+/** How long a queued pulse waits for the rate limit before it is dropped, ms. */
+export const HAPTIC_QUEUE_WINDOW_MS = 1_000;
+
+interface QueuedPulse {
+  preset: HapticPreset;
+  dueAt: number;
+  until: number;
+}
+
+/**
+ * Pulses asked for from outside the frame loop — a take action answers
+ * asynchronously, long after the click that sent it. The rig drains this every
+ * frame (`drainHapticQueue`) and plays each due pulse on both controllers.
+ */
+const queue: QueuedPulse[] = [];
+
+/** Queue a pattern to start at `now` (ms, `Date.now()` clock). */
+export function queueHaptics(pattern: readonly HapticStep[], now: number = Date.now()): void {
+  for (const step of pattern) {
+    queue.push({ preset: step.preset, dueAt: now + step.atMs, until: now + step.atMs + HAPTIC_QUEUE_WINDOW_MS });
+  }
+  queue.sort((a, b) => a.dueAt - b.dueAt);
+}
+
+/**
+ * Play what is due, on whichever of `sources` takes it. A pulse the rate limit
+ * swallows stays queued until it lands or its window passes. Returns how many
+ * pulses landed.
+ */
+export function drainHapticQueue(sources: ReadonlyArray<HapticSource | null | undefined>, now: number = Date.now()): number {
+  let landed = 0;
+  for (let i = 0; i < queue.length; ) {
+    const item = queue[i]!;
+    if (item.dueAt > now) break;
+    const fired = sources.map((s) => pulsePreset(s, item.preset, now)).some(Boolean);
+    if (fired || now >= item.until) {
+      queue.splice(i, 1);
+      if (fired) landed += 1;
+      // One pulse per frame: two in one frame would collide on the rate limit.
+      if (fired) break;
+    } else {
+      i += 1;
+    }
+  }
+  return landed;
+}
+
+/** Pulses still queued. Tests only. */
+export function pendingHaptics(): number {
+  return queue.length;
+}
+
+/** Drop every queued pulse. Tests only, and when the rig unmounts. */
+export function clearHapticQueue(): void {
+  queue.length = 0;
 }

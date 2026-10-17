@@ -112,14 +112,21 @@ describe('composeHud', () => {
     expect(composeHud({ ...BASE, recording: null }).some((l) => l.id === 'rec')).toBe(false);
   });
 
-  it('puts REC first while an episode is being captured', () => {
-    const lines = composeHud({ ...BASE, recording: { episode: 3, frames: 412 } });
+  it('puts REC first while a take is being captured, with the server-clock timer', () => {
+    const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 7, elapsedS: 42.6 } });
     expect(lines[0].id).toBe('rec');
-    expect(lines[0].text).toBe('REC ● ep 3 · 412 fr');
+    expect(lines[0].text).toBe('REC ● T7 00:42');
+  });
+
+  it('reads READY and the next take between takes, in the same slot', () => {
+    const lines = composeHud({ ...BASE, recording: { phase: 'between', takeNumber: 8, elapsedS: null } });
+    expect(lines[0]).toMatchObject({ id: 'rec', text: 'READY T8', color: HUD_COLORS.ok });
+    expect(lines.length).toBeLessThanOrEqual(HUD_MAX_LINES - 1);
+    expect(lines.some((l) => l.id === 'turn')).toBe(false);
   });
 
   it('colours REC red — what every camera ever built means by "capturing"', () => {
-    const lines = composeHud({ ...BASE, recording: { episode: 1, frames: 0 } });
+    const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 1, elapsedS: 5 } });
     expect(lines[0].color).toBe(HUD_COLORS.bad);
   });
 
@@ -131,7 +138,7 @@ describe('composeHud', () => {
   it('drops TURN to pay for REC rather than overflowing the plate', () => {
     const driving = { ...BASE, driving: true, vx: 0.3, omega: -0.4 };
     expect(composeHud(driving).map((l) => l.id)).toEqual(['link', 'mode', 'speed', 'turn']);
-    expect(composeHud({ ...driving, recording: { episode: 2, frames: 9 } }).map((l) => l.id)).toEqual(
+    expect(composeHud({ ...driving, recording: { phase: 'capturing', takeNumber: 2, elapsedS: 5 } }).map((l) => l.id)).toEqual(
       ['rec', 'link', 'mode', 'speed'],
     );
   });
@@ -140,8 +147,8 @@ describe('composeHud', () => {
     const states: HudState[] = [
       BASE,
       { ...BASE, armLeft: true, armRight: true, driving: true, vx: 1, vy: 1, omega: 1 },
-      { ...BASE, recording: { episode: 12, frames: 99999 } },
-      { ...BASE, estopLatched: true, recording: { episode: 12, frames: 99999 } },
+      { ...BASE, recording: { phase: 'capturing', takeNumber: 12, elapsedS: 5 } },
+      { ...BASE, estopLatched: true, recording: { phase: 'capturing', takeNumber: 12, elapsedS: 5 } },
     ];
     for (const state of states) {
       expect(composeHud(state).length).toBeLessThanOrEqual(HUD_MAX_LINES);
@@ -155,7 +162,7 @@ describe('composeHud', () => {
     const lines = composeHud({
       ...BASE,
       estopLatched: true,
-      recording: { episode: 3, frames: 412 },
+      recording: { phase: 'capturing', takeNumber: 3, elapsedS: 5 },
     });
     expect(lines).toHaveLength(2);
     expect(lines[0].text).toBe('E-STOP LATCHED');
@@ -164,13 +171,13 @@ describe('composeHud', () => {
   });
 
   it('shows -- rather than NaN, and never a negative count, on the REC line', () => {
-    const lines = composeHud({ ...BASE, recording: { episode: Number.NaN, frames: -3 } });
-    expect(lines[0].text).toBe('REC ● ep -- · 0 fr');
+    const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: Number.NaN, elapsedS: -3 } });
+    expect(lines[0].text).toBe('REC ● T-- 00:00');
   });
 
-  it('rounds a fractional frame count instead of printing a float at the wrist', () => {
-    const lines = composeHud({ ...BASE, recording: { episode: 1.4, frames: 412.6 } });
-    expect(lines[0].text).toBe('REC ● ep 1 · 413 fr');
+  it('rounds a fractional take number instead of printing a float at the wrist', () => {
+    const lines = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 1.4, elapsedS: 65.9 } });
+    expect(lines[0].text).toBe('REC ● T1 01:05');
   });
 });
 
@@ -209,7 +216,7 @@ describe('composeHud — a damped base', () => {
 
   it('still fits the plate while recording, which spends a line of its own', () => {
     const lines = composeHud({
-      ...BASE, baseDamped: true, recording: { episode: 3, frames: 120 },
+      ...BASE, baseDamped: true, recording: { phase: 'capturing', takeNumber: 3, elapsedS: 5 },
     });
     // REC, LINK, MODE, DAMPED — four, leaving the fifth for the modal's RTT.
     expect(lines.map((l) => l.id)).toEqual(['rec', 'link', 'mode', 'damped']);
@@ -377,7 +384,7 @@ describe('the arm path on the HUD', () => {
     const lines = composeHud({ ...BASE, arm: { ...ARM, teleopMode: 'arms+left_hand' } });
     expect(lines.find((l) => l.id === 'hands')?.text).toBe('NO RIGHT HAND — arms + left');
     expect(lines.find((l) => l.id === 'turn')).toBeUndefined();
-    const recording = composeHud({ ...BASE, recording: { episode: 1, frames: 3 }, arm: { ...ARM, teleopMode: 'arms_only' } });
+    const recording = composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 1, elapsedS: 5 }, arm: { ...ARM, teleopMode: 'arms_only' } });
     expect(recording.length).toBeLessThanOrEqual(HUD_MAX_LINES - 1);
   });
 
@@ -421,7 +428,7 @@ describe('the re-engage latch on the HUD', () => {
   });
 
   it('tells a hand-tracking operator to use the controllers, in at most four lines', () => {
-    const lines = composeHud({ ...BASE, handTracked: true, recording: { episode: 1, frames: 2 }, arm: OFF });
+    const lines = composeHud({ ...BASE, handTracked: true, recording: { phase: 'capturing', takeNumber: 1, elapsedS: 5 }, arm: OFF });
     expect(lines.map((l) => l.text)).toContain(HUD_USE_CONTROLLERS[0]);
     expect(lines.map((l) => l.text)).toContain(HUD_USE_CONTROLLERS[1]);
     expect(`${HUD_USE_CONTROLLERS[0]} ${HUD_USE_CONTROLLERS[1]}`).toBe('Use controllers to drive the real robot');
