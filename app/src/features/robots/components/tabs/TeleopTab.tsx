@@ -13,6 +13,7 @@ import { VRTeleopSection } from './vr/VRTeleopSection';
 import { ControlLeaseBar } from './ControlLeaseBar';
 import { useControlLease, type LeaseSocket } from '../../hooks/useControlLease';
 import { openTeleopSocket } from './vr/vrUrls';
+import { RobotReadinessPanel, type ReadinessLease } from '../readiness/RobotReadinessPanel';
 
 // ============================================================================
 // TYPES & HELPERS
@@ -61,7 +62,14 @@ function Kbd({ children }: { children: string }) {
 // KEYBOARD TELEOP SECTION
 // ============================================================================
 
-export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'] }) {
+export function KeyboardTeleopSection({
+  robot,
+  onLeaseChange,
+}: {
+  robot: TeleopTabProps['robot'];
+  /** This section's control lease, for the readiness panel's lease-gated steps (TASK-411). */
+  onLeaseChange?: (lease: ReadinessLease) => void;
+}) {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [robotType, setRobotType] = useState('');
@@ -91,6 +99,11 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
   const leaseRef = useRef(lease);
   leaseRef.current = lease;
   const canDrive = !lease.enabled || lease.state === 'bound';
+  // The readiness panel sits outside this section; it reads the grant at
+  // click time through the ref, never a stale copy.
+  useEffect(() => {
+    onLeaseChange?.({ enabled: lease.enabled, state: lease.state, grant: () => leaseRef.current.grant() });
+  }, [lease.enabled, lease.state, onLeaseChange]);
   const canDriveRef = useRef(canDrive);
   canDriveRef.current = canDrive;
 
@@ -373,9 +386,11 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
 // teleop, which drives the agent's simulated joint state directly, and VR teleop.
 
 export function TeleopTab({ robot }: TeleopTabProps) {
+  const [lease, setLease] = useState<ReadinessLease | null>(null);
   return (
     <div className="flex flex-col gap-6">
-      <KeyboardTeleopSection robot={robot} />
+      <KeyboardTeleopSection robot={robot} onLeaseChange={setLease} />
+      <RobotReadinessPanel robotId={robot.id} lease={lease} />
       <VRTeleopSection robot={robot} />
     </div>
   );
