@@ -50,6 +50,8 @@ import math
 import threading
 import time
 
+import dex3_faults
+
 # ---------------------------------------------------------------------------
 # Wire layout (unitree_hg LowCmd_, G1 29-DoF order — see bridge.py)
 # ---------------------------------------------------------------------------
@@ -579,6 +581,38 @@ class ArmSdkController:
             out[side] = _finite_list(q, NUM_HAND) is not None
         return out
 
+    def hand_health(self, present=None):
+        """TASK-404 `hand_health`: per hand present / age / error words /
+        decoded motor faults / supply voltage. `present` is the same rule as
+        `hands` (pass it in to keep the two consistent within one snapshot).
+        A state source without `hand_detail` (a test double, an older
+        source) yields present + nulls — "unknown", never "fault-free"."""
+        if present is None:
+            present = self.hands_present()
+        detail = getattr(self._state, "hand_detail", None)
+        out = {}
+        for side in ("left", "right"):
+            data, age = None, None
+            if detail is not None:
+                try:
+                    data, age = detail(side)
+                except Exception:  # noqa: BLE001
+                    data, age = None, None
+            out[side] = dex3_faults.hand_health(side, data, age, bool(present.get(side)),
+                                                self._hand_names[side])
+        return out
+
+    def lowstate_age_s(self):
+        """Seconds since the last rt/lowstate (None: never, or unknown)."""
+        fn = getattr(self._state, "lowstate_age_s", None)
+        if fn is None:
+            return None
+        try:
+            age = fn()
+        except Exception:  # noqa: BLE001
+            return None
+        return None if age is None else round(max(0.0, float(age)), 3)
+
     def snapshot(self):
         """The contract fields for /health and /state."""
         present = self.hands_present()
@@ -621,6 +655,10 @@ class ArmSdkController:
             "track_err_joint": (None if self._track_err_joint is None
                                 else self._body_names[self._track_err_joint]),
             "fsm": self._fsm_snapshot(),
+            # TASK-404, additive: `hands` above stays the boolean pair.
+            # Safe under our lock: the state source has its own and never takes ours.
+            "hand_health": self.hand_health(present),
+            "lowstate_age_s": self.lowstate_age_s(),
         }
 
     def _fsm_snapshot(self):
@@ -876,6 +914,14 @@ class DdsStateSource:
                      "tau_est": float(getattr(m, "tau_est", 0.0))}
             if t is not None:
                 entry["temperature"] = t
+            # TASK-404: the per-motor status word (a latched Dex3 fault reads
+            # 0x200 here). Omitted when the IDL lacks it, never zero-filled.
+            word = getattr(m, "motorstate", None)
+            if word is not None:
+                try:
+                    entry["motorstate"] = int(word) & 0xFFFFFFFF
+                except (TypeError, ValueError):
+                    pass
             out.append(entry)
         return out
 
@@ -899,8 +945,40 @@ class DdsStateSource:
 
     def _on_hand(self, side, msg):
         data = {"motor_state": self._motors(msg.motor_state, NUM_HAND)}
+        # TASK-404: HandState_.error[2] and the supply voltage, kept for
+        # /health's hand_health. The receive time is the tuple's second item.
+        error = getattr(msg, "error", None)
+        if error is not None:
+            try:
+                words = [int(w) & 0xFFFFFFFF for w in error]
+            except (TypeError, ValueError):
+                words = []
+            if len(words) >= 2:
+                data["error"] = words[:2]
+        power_v = getattr(msg, "power_v", None)
+        if power_v is not None:
+            try:
+                data["power_v"] = float(power_v)
+            except (TypeError, ValueError):
+                pass
         with self._lock:
             self._hand[side] = (data, self._clock())
+
+    def hand_detail(self, side):
+        """(newest hand dict, age_s) whatever its age, or (None, None) if this
+        hand never published (TASK-404 hand_health)."""
+        with self._lock:
+            entry = self._hand.get(side)
+            if entry is None:
+                return None, None
+            return entry[0], self._clock() - entry[1]
+
+    def lowstate_age_s(self):
+        """Seconds since the last CRC-valid rt/lowstate, None if none yet."""
+        with self._lock:
+            if self._body is None:
+                return None
+            return self._clock() - self._body[1]
 
     def _fresh(self, entry, max_age_s):
         if entry is None or self._clock() - entry[1] > max_age_s:

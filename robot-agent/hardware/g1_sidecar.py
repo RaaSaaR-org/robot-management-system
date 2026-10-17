@@ -34,6 +34,9 @@ on every interface in read_only mode and on 127.0.0.1 only in arm_sdk mode
                         "estop_latched", "hands": {"left","right"} (Dex3 state
                         within 0.5 s), "teleop_mode" ("arms+hands" |
                         "arms+left_hand" | "arms+right_hand" | "arms_only")
+                        FRESHNESS (TASK-404): "lowstate_age_s" (s | null),
+                        "hand_health": {"left","right"} -> {present, age_s,
+                        error[2], motor_faults[], power_v} (dex3_faults.py)
   GET  /state/fast    → same as /state
   POST /arm           → {"lease_generation": int|null} → weight 0→1 over ~1.5 s,
                         seeded from the MEASURED arm pose. 403 read_only,
@@ -589,6 +592,16 @@ class _LowStateReader:
                 return None
             return entry[0]
 
+    def entry(self, topic: str):
+        """(newest dict, age_s) for `topic` WHATEVER its age, or (None, None)
+        when nothing ever arrived — for the TASK-404 freshness fields, which
+        must say how stale a feed is rather than just that it is."""
+        with self._lock:
+            hit = self._cache.get(topic)
+            if hit is None:
+                return None, None
+            return hit[0], time.time() - hit[1]
+
 
 _lowstate_reader = _LowStateReader(LOWSTATE_ENDPOINT)
 
@@ -788,8 +801,37 @@ def _hands_present_zmq() -> dict:
     }
 
 
+def _state_entry(topic: str):
+    """(newest dict, age_s) for `topic` from the read-only bridge, whatever its
+    age; (None, None) when nothing arrived. Never STARTS the subscriber: a
+    status read must not open a connection of its own — /health and /state
+    already started it through _state_latest before this runs."""
+    if not _lowstate_reader._started:
+        return None, None
+    return _lowstate_reader.entry(topic)
+
+
+def _readonly_health(hands: dict) -> dict:
+    """TASK-404 `hand_health` + `lowstate_age_s` from the bridge's messages.
+    `hands` is the boolean pair already computed for this reply, so
+    `hand_health.<side>.present` and `hands.<side>` can never disagree."""
+    import dex3_faults
+
+    health = {}
+    for side, topic, wire in (("left", TOPIC_LEFT_HAND, LEFT_HAND_WIRE),
+                              ("right", TOPIC_RIGHT_HAND, RIGHT_HAND_WIRE)):
+        data, age = _state_entry(topic)
+        health[side] = dex3_faults.hand_health(side, data, age, bool(hands.get(side)), wire)
+    _, body_age = _state_entry(TOPIC_LOWSTATE)
+    return {
+        "hand_health": health,
+        "lowstate_age_s": None if body_age is None else round(max(0.0, body_age), 3),
+    }
+
+
 def write_status() -> dict:
-    """The contract's write fields for /health and /state."""
+    """The contract's write fields for /health and /state, plus the TASK-404
+    freshness fields (`hand_health`, `lowstate_age_s`)."""
     from g1_arm_sdk import teleop_mode
 
     if _arm_controller is not None:
@@ -801,7 +843,7 @@ def write_status() -> dict:
         status["dds_iface"] = _dds_iface_env() or None
         return status
     hands = _hands_present_zmq()
-    return {
+    status = {
         "write_mode": WRITE_MODE,
         "armed": False,
         "arm_weight": 0.0,
@@ -809,6 +851,8 @@ def write_status() -> dict:
         "hands": hands,
         "teleop_mode": teleop_mode(hands["left"], hands["right"]),
     }
+    status.update(_readonly_health(hands))
+    return status
 
 
 def start_arm_sdk() -> None:
