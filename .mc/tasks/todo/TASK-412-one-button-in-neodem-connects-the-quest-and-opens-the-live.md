@@ -3,7 +3,7 @@ id: "TASK-412"
 aliases: []
 title: "One button in NeoDEM connects the Quest and opens the live session on it"
 slug: "one-button-in-neodem-connects-the-quest-and-opens-the-live"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
