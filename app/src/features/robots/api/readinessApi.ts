@@ -4,7 +4,8 @@
  *              from TASK-409): the merged supervisor + agent snapshot, Start /
  *              Stop of the robot-side processes, the sidecar write mode,
  *              adopt / leave of a foreign process, bringing the robot LAN up
- *              and the per-process logs. Refusals come back as values with the
+ *              and the per-process logs, and the Meta Quest on the robot PC's
+ *              USB (TASK-412). Refusals come back as values with the
  *              server's or supervisor's machine `code`, never as throws, so the
  *              panel can say exactly why.
  * @feature robots
@@ -116,6 +117,24 @@ export interface AgentReadiness {
   reason: { code: string; severity: ReadinessSeverity; text: string };
 }
 
+/** The Meta Quest on the robot PC's USB — the supervisor's `GET /quest` (TASK-412). */
+export type QuestDeviceState = 'device' | 'unauthorized' | 'offline';
+
+export interface QuestDevice {
+  serial: string;
+  state: QuestDeviceState;
+  model: string | null;
+}
+
+export interface QuestReport {
+  /** The adb binary on the robot PC; null when none was found. */
+  adb: string | null;
+  devices: QuestDevice[];
+  reversed: Array<{ remote: string; local: string }>;
+  /** What to do next; null when the headset is connected and the port forwarded. */
+  hint: string | null;
+}
+
 export interface ReadinessReason {
   code: string;
   severity: ReadinessSeverity;
@@ -132,6 +151,8 @@ export interface RobotReadiness {
   bringup: BringupStatus | null;
   /** Null when the robot has no supervisor configured. */
   supervisor: { reachable: boolean; error: string | null } | null;
+  /** The Quest on the robot PC's USB; null without a supervisor (absent from older servers). */
+  quest?: QuestReport | null;
   reason: ReadinessReason;
 }
 
@@ -160,8 +181,12 @@ export async function getReadiness(robotId: string): Promise<RobotReadiness> {
 }
 
 async function post(robotId: string, sub: string, body: Record<string, unknown>, timeout = 20_000): Promise<BringupResult> {
+  return postTo(`${robotPath(robotId)}/bringup/${sub}`, body, timeout);
+}
+
+async function postTo(url: string, body: Record<string, unknown>, timeout: number): Promise<BringupResult> {
   try {
-    const response = await apiClient.post<Record<string, unknown>>(`${robotPath(robotId)}/bringup/${sub}`, body, {
+    const response = await apiClient.post<Record<string, unknown>>(url, body, {
       validateStatus: acceptAll,
       timeout,
     });
@@ -214,6 +239,29 @@ export function leaveStep(robotId: string, step: BringupStepId): Promise<Bringup
 /** `nmcli con up` on the supervisor may take up to 30 s. */
 export function lanUp(robotId: string): Promise<BringupResult> {
   return post(robotId, 'lan-up', {}, 40_000);
+}
+
+// ---------------------------------------------------------------- the Quest
+
+/** The page port the headset reaches through `adb reverse`; the dev server's 1420 by default. */
+export function questPagePort(location: { port?: string } = typeof window !== 'undefined' ? window.location : {}): number {
+  const p = Number(location.port);
+  return Number.isInteger(p) && p >= 1024 && p <= 65535 ? p : 1420;
+}
+
+/** The headset's stable entry: always lands on the robot's live session (D2). */
+export function questLivePath(robotId: string): string | null {
+  return /^[A-Za-z0-9_-]+$/.test(robotId) ? `/data-collection/live?robot=${robotId}` : null;
+}
+
+/** `adb reverse tcp:<port> tcp:<port>` on the robot PC. */
+export function questConnect(robotId: string, port: number = questPagePort()): Promise<BringupResult> {
+  return postTo(`${robotPath(robotId)}/quest/connect`, { port }, 25_000);
+}
+
+/** Open an allowlisted path in the Quest browser. */
+export function questOpen(robotId: string, path: string, port: number = questPagePort()): Promise<BringupResult> {
+  return postTo(`${robotPath(robotId)}/quest/open`, { path, port }, 25_000);
 }
 
 /** The last `tail` lines of one robot-side process. */
@@ -298,5 +346,7 @@ export const readinessApi = {
   lanUp,
   getBringupLogs,
   streamBringupLogs,
+  questConnect,
+  questOpen,
 };
 export type ReadinessApi = typeof readinessApi;

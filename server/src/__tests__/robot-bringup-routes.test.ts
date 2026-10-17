@@ -20,11 +20,12 @@ import {
 import { writeRoleGuard } from '../middleware/auth.middleware.js';
 import { RobotReadinessService } from '../services/robot-supervisor/RobotReadinessService.js';
 import { SupervisorClient } from '../services/robot-supervisor/SupervisorClient.js';
-import { readAgentReadiness, readSupervisorStatus } from '../services/robot-supervisor/index.js';
+import { readAgentReadiness, readQuestStatus, readSupervisorStatus } from '../services/robot-supervisor/index.js';
 import {
   agentReadiness,
   fakeAgent,
   fakeSupervisor,
+  questStatus,
   step,
   supStatus,
   TOKEN,
@@ -50,7 +51,11 @@ let servers: FakeHttp[] = [];
 let audits: BringupAuditEntry[] = [];
 let sup: FakeHttp;
 let agent: FakeHttp;
-let supState: { status: ReturnType<typeof supStatus>; answer?: { status: number; body: unknown } };
+let supState: {
+  status: ReturnType<typeof supStatus>;
+  answer?: { status: number; body: unknown };
+  quest?: ReturnType<typeof questStatus>;
+};
 let registered: Set<string>;
 let registerCalls: Array<{ url: string; tenantId: string | null }>;
 let service: RobotReadinessService;
@@ -71,6 +76,7 @@ function buildApp(rig: Rig = {}) {
     registeredAgentUrl: async (id) => (registered.has(id) ? agent.url : null),
     supervisorAgentUrl: (_id, status) => (supervised ? client.agentUrlFor(status) : null),
     readAgent: readAgentReadiness,
+    readQuest: () => readQuestStatus(client),
     register: async (url, tenantId) => {
       registerCalls.push({ url, tenantId });
       registered.add(ROBOT);
@@ -387,5 +393,94 @@ describe('logs', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/event-stream');
     expect(res.text).toBe('data: "line one"\n\ndata: "line two"\n\n');
+  });
+});
+
+describe('the Quest routes (TASK-412)', () => {
+  const SESSION = '0b6f1c2e-9a4d-4f5e-8c1b-2d3e4f5a6b7c';
+
+  beforeEach(() => {
+    supState.quest = questStatus(false);
+  });
+
+  it('GET /:id/quest proxies the supervisor for a member, not for a viewer', async () => {
+    const app = buildApp();
+    let res = await request(app).get(`${base}/quest`).set('x-test-user', 'alice');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(questStatus(false));
+    res = await request(app).get(`${base}/quest`).set('x-test-user', 'vera');
+    expect(res.status).toBe(403);
+  });
+
+  it('readiness carries quest', async () => {
+    const res = await request(buildApp()).get(`${base}/readiness`).set('x-test-user', 'vera');
+    expect(res.status).toBe(200);
+    expect(res.body.quest).toEqual(questStatus(false));
+    expect(res.body.reason.code).toBe('following');
+  });
+
+  it('readiness carries quest: null without a supervisor', async () => {
+    const res = await request(buildApp({ supervised: false })).get(`${base}/readiness`).set('x-test-user', 'vera');
+    expect(res.body.quest).toBeNull();
+  });
+
+  it('connect proxies {port} for a member and is audited once', async () => {
+    const res = await request(buildApp()).post(`${base}/quest/connect`).set('x-test-user', 'alice').send({ port: 1442 });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, quest: { reversed: [{ remote: 'tcp:1420' }] } });
+    await settle();
+    expect(sup.requests.filter((r) => r.method === 'POST')).toEqual([
+      expect.objectContaining({ path: '/quest/connect', body: { port: 1442 } }),
+    ]);
+    expect(audits).toEqual([expect.objectContaining({ action: 'quest_connect', result: 'ok', status: 200, userId: 'alice' })]);
+  });
+
+  it('connect without a port sends no port (the supervisor default, 1420)', async () => {
+    await request(buildApp()).post(`${base}/quest/connect`).set('x-test-user', 'alice').send({});
+    expect(sup.requests.find((r) => r.method === 'POST')?.body).toEqual({});
+  });
+
+  it('open proxies an allowlisted path', async () => {
+    const app = buildApp();
+    for (const path of [`/data-collection/live?robot=${ROBOT}`, `/data-collection/${SESSION}`]) {
+      const res = await request(app).post(`${base}/quest/open`).set('x-test-user', 'alice').send({ path });
+      expect(res.status, path).toBe(200);
+    }
+    expect(sup.requests.filter((r) => r.method === 'POST').map((r) => r.body)).toEqual([
+      { path: `/data-collection/live?robot=${ROBOT}` },
+      { path: `/data-collection/${SESSION}` },
+    ]);
+  });
+
+  it('open refuses any other path with 400 before the supervisor is asked', async () => {
+    const app = buildApp();
+    for (const path of ['http://evil.example/', '/data-collection/live?robot=x;reboot', '/settings', 42]) {
+      const res = await request(app).post(`${base}/quest/open`).set('x-test-user', 'alice').send({ path });
+      expect(res.status, String(path)).toBe(400);
+      expect(res.body.code).toBe('bad_path');
+    }
+    const res = await request(app).post(`${base}/quest/connect`).set('x-test-user', 'alice').send({ port: '1420; reboot' });
+    expect(res.status).toBe(400);
+    expect(sup.requests.filter((r) => r.method === 'POST')).toEqual([]);
+  });
+
+  it('refuses a viewer with 403 and audits it', async () => {
+    const app = buildApp();
+    let res = await request(app).post(`${base}/quest/connect`).set('x-test-user', 'vera').send({});
+    expect(res.status).toBe(403);
+    res = await request(app).post(`${base}/quest/open`).set('x-test-user', 'vera').send({ path: `/data-collection/live?robot=${ROBOT}` });
+    expect(res.status).toBe(403);
+    await settle();
+    expect(sup.requests.filter((r) => r.method === 'POST')).toEqual([]);
+    expect(audits.map((a) => [a.action, a.result, a.status])).toEqual([
+      ['quest_connect', 'denied', 403],
+      ['quest_open', 'denied', 403],
+    ]);
+  });
+
+  it('404 no_supervisor without ROBOT_SUPERVISORS', async () => {
+    const res = await request(buildApp({ supervised: false })).post(`${base}/quest/connect`).set('x-test-user', 'alice').send({});
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('no_supervisor');
   });
 });

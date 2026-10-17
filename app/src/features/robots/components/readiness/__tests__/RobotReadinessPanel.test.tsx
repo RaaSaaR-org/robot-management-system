@@ -12,11 +12,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/mocks/server';
-import { READINESS_FIXTURES, readinessFor, type ReadinessFixtureName } from '@/mocks/readinessDemoHandlers';
+import { demoQuest, READINESS_FIXTURES, readinessFor, type ReadinessFixtureName } from '@/mocks/readinessDemoHandlers';
 import { useReadinessStore } from '../../../store/readinessStore';
 import { RobotReadinessPanel } from '../RobotReadinessPanel';
 import { BringupLogsDrawer } from '../BringupLogsDrawer';
-import type { RobotReadiness } from '../../../api/readinessApi';
+import { QuestControls } from '../QuestControls';
+import { questPagePort, type RobotReadiness } from '../../../api/readinessApi';
 
 const ROBOT = 'r1';
 const BOUND = { enabled: true, state: 'bound', grant: () => ({ leaseId: 'lease-secret', generation: 7 }) };
@@ -368,4 +369,94 @@ it('every fixture is a complete snapshot', () => {
   for (const f of Object.values(READINESS_FIXTURES)) {
     expect(f.reason.text.length).toBeGreaterThan(0);
   }
+});
+
+describe('RobotReadinessPanel — the Quest row (TASK-412)', () => {
+  it('shows the headset and whether the port is forwarded; Connect reverses it through the server', async () => {
+    const bodies: unknown[] = [];
+    let forwarded = false;
+    // The page port (jsdom serves on its own port): what Connect forwards.
+    const PORT = questPagePort();
+    const quest = () => demoQuest(forwarded, PORT);
+    server.use(
+      http.get(`/api/robots/${ROBOT}/readiness`, () => HttpResponse.json({ ...readinessFor(ROBOT, 'not_engaged'), quest: quest() })),
+      http.post(`/api/robots/${ROBOT}/quest/connect`, async ({ request }) => {
+        bodies.push(await request.json());
+        forwarded = true;
+        return HttpResponse.json({ ok: true, status: 200, quest: quest() });
+      }),
+    );
+    render(<RobotReadinessPanel robotId={ROBOT} lease={BOUND} />);
+    const row = await screen.findByTestId('readiness-row-quest');
+    await waitFor(() => expect(row).toHaveTextContent(`Quest 3 (serial 2G0Y…0123) connected · port ${PORT} not forwarded`));
+    expect(row).toHaveAttribute('data-status', 'idle');
+    // Display-only: the reason is still the agent's.
+    expect(screen.getByTestId('readiness-reason')).toHaveAttribute('data-code', 'not_engaged');
+
+    fireEvent.click(within(row).getByTestId('quest-connect'));
+    await waitFor(() => expect(row).toHaveAttribute('data-status', 'ok'));
+    expect(row).toHaveTextContent(`port ${PORT} forwarded`);
+    expect(bodies).toEqual([{ port: PORT }]);
+    expect(within(row).getByTestId('quest-open')).toBeEnabled();
+  });
+
+  it('asks for USB debugging on an unauthorized headset, and has no row without a supervisor', async () => {
+    serve({
+      ...readinessFor(ROBOT, 'not_engaged'),
+      quest: { ...demoQuest(false), devices: [{ serial: 'X1', state: 'unauthorized', model: null }], hint: 'Put on the headset and allow USB debugging.' },
+    });
+    const { unmount } = render(<RobotReadinessPanel robotId={ROBOT} lease={BOUND} />);
+    const row = await screen.findByTestId('readiness-row-quest');
+    await waitFor(() => expect(row).toHaveTextContent('Put on the headset and allow USB debugging'));
+    expect(row).toHaveAttribute('data-status', 'warn');
+    expect(within(row).getByTestId('quest-connect')).toBeDisabled();
+    unmount();
+    useReadinessStore.getState().reset();
+    serve({ ...readinessFor(ROBOT, 'not_engaged'), bringup: null, supervisor: null, quest: null });
+    render(<RobotReadinessPanel robotId={ROBOT} lease={BOUND} />);
+    await screen.findByTestId('readiness-row-arms');
+    expect(screen.queryByTestId('readiness-row-quest')).toBeNull();
+  });
+
+  it('says it has no report, without guessing why, when the supervisor sent none', async () => {
+    serve({ ...readinessFor(ROBOT, 'not_engaged'), quest: null });
+    render(<RobotReadinessPanel robotId={ROBOT} lease={BOUND} />);
+    const row = await screen.findByTestId('readiness-row-quest');
+    await waitFor(() => expect(row).toHaveTextContent('no report from the supervisor'));
+    expect(row).toHaveAttribute('data-status', 'unknown');
+  });
+});
+
+describe('QuestControls — Copy viewer link (TASK-412)', () => {
+  const SESSION = '00000000-0000-4000-8000-000000000412';
+  const ORIGIN = 'http://192.168.1.20:1420';
+
+  it('shows the link when the page has no clipboard (plain-http LAN origin)', () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    try {
+      render(<QuestControls robotId={ROBOT} quest={demoQuest(true)} sessionId={SESSION} origin={ORIGIN} />);
+      fireEvent.click(screen.getByTestId('quest-copy-viewer-link'));
+      expect(screen.getByTestId('quest-message')).toHaveTextContent(`${ORIGIN}/data-collection/${SESSION}`);
+    } finally {
+      if (original) Object.defineProperty(navigator, 'clipboard', original);
+      else delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+
+  it('copies the link when the clipboard is there', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    try {
+      render(<QuestControls robotId={ROBOT} quest={demoQuest(true)} sessionId={SESSION} origin={ORIGIN} />);
+      fireEvent.click(screen.getByTestId('quest-copy-viewer-link'));
+      expect(writeText).toHaveBeenCalledWith(`${ORIGIN}/data-collection/${SESSION}`);
+      await waitFor(() => expect(screen.getByTestId('quest-copy-viewer-link')).toHaveTextContent('Copied'));
+      expect(screen.queryByTestId('quest-message')).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(navigator, 'clipboard', original);
+      else delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
 });

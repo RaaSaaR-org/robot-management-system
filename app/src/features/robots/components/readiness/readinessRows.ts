@@ -14,6 +14,8 @@ import type {
   BringupStep,
   BringupStepId,
   HandHealth,
+  QuestDevice,
+  QuestReport,
   RobotReadiness,
 } from '../../api/readinessApi';
 
@@ -391,13 +393,82 @@ function controlRow(a: AgentReadiness | null): ReadinessRowModel {
   };
 }
 
-function questRow(): ReadinessRowModel {
-  // TASK-412 fills this from the headset's own report.
-  return { id: 'quest', label: 'Quest', status: 'idle', value: 'not reported yet', detail: null, bringup: false, step: null };
+export type QuestPhase = 'no_adb' | 'none' | 'unauthorized' | 'offline' | 'connected' | 'forwarded';
+
+export interface QuestSummary {
+  phase: QuestPhase;
+  /** The headset Connect and Open act on (state `device`), else the first one listed. */
+  device: QuestDevice | null;
+  /** The page port is reversed on that headset. */
+  forwarded: boolean;
+  /** One line: "Quest 3 (serial 2G0Y…) connected", "No headset on USB", … */
+  text: string;
+  /** What to do next; null when nothing. */
+  hint: string | null;
+}
+
+/** The serial shortened for one line: `2G0YC5ZG8X0123` → `2G0Y…0123`. */
+export function shortSerial(serial: string): string {
+  return serial.length > 10 ? `${serial.slice(0, 4)}…${serial.slice(-4)}` : serial;
+}
+
+/** The Quest report in the words the operator reads (TASK-412). Pure. */
+export function questSummary(q: QuestReport, port = 1420): QuestSummary {
+  const ready = q.devices.filter((d) => d.state === 'device');
+  const device = ready.find((d) => /quest/i.test(d.model ?? '')) ?? ready[0] ?? q.devices[0] ?? null;
+  const name = device?.model ?? 'Headset';
+  const forwarded = device?.state === 'device' && q.reversed.some((r) => r.remote === `tcp:${port}`);
+  if (!q.adb) return { phase: 'no_adb', device: null, forwarded: false, text: 'adb not found on the robot PC', hint: q.hint };
+  if (!device) return { phase: 'none', device: null, forwarded: false, text: 'No headset on USB', hint: q.hint };
+  if (device.state === 'unauthorized') {
+    return { phase: 'unauthorized', device, forwarded: false, text: 'Put on the headset and allow USB debugging', hint: q.hint };
+  }
+  if (device.state === 'offline') {
+    return { phase: 'offline', device, forwarded: false, text: `${name} is offline to adb — replug the cable`, hint: q.hint };
+  }
+  const base = `${name} (serial ${shortSerial(device.serial)}) connected`;
+  return forwarded
+    ? { phase: 'forwarded', device, forwarded, text: `${base} · port ${port} forwarded`, hint: null }
+    : { phase: 'connected', device, forwarded, text: base, hint: `Press Connect to forward port ${port}.` };
+}
+
+const QUEST_ROW_STATUS: Record<QuestPhase, RowStatus> = {
+  no_adb: 'unknown',
+  none: 'idle',
+  unauthorized: 'warn',
+  offline: 'warn',
+  connected: 'idle',
+  forwarded: 'ok',
+};
+
+/** The Quest row, from the supervisor's report. Display-only: it never changes the reason. */
+function questRow(r: RobotReadiness, port: number): ReadinessRowModel | null {
+  const q = r.quest;
+  if (!q) {
+    // A supervisor that answered but sent no Quest report: either it predates
+    // TASK-412, or its last `/quest` read failed or timed out (adb hiccup). The
+    // two look the same from here, so the row claims neither.
+    if (!r.bringup) return null;
+    return {
+      id: 'quest', label: 'Quest', status: 'unknown', value: 'no report from the supervisor',
+      detail: 'Its last Quest read failed or timed out, or this supervisor has no Quest support.',
+      bringup: true, step: null,
+    };
+  }
+  const s = questSummary(q, port);
+  return {
+    id: 'quest',
+    label: 'Quest',
+    status: QUEST_ROW_STATUS[s.phase],
+    value: s.phase === 'connected' ? `${s.text} · port ${port} not forwarded` : s.text,
+    detail: s.hint,
+    bringup: true,
+    step: null,
+  };
 }
 
 /** The checklist, in display order. Supervisor rows are absent without a supervisor. */
-export function readinessRows(r: RobotReadiness): ReadinessRowModel[] {
+export function readinessRows(r: RobotReadiness, questPort = 1420): ReadinessRowModel[] {
   const a = r.agent.readiness;
   const rows: Array<ReadinessRowModel | null> = [
     preflightRow(r),
@@ -411,7 +482,7 @@ export function readinessRows(r: RobotReadiness): ReadinessRowModel[] {
     handRow(a, 'right'),
     cameraRow(r, a),
     controlRow(a),
-    questRow(),
+    questRow(r, questPort),
   ];
   return rows.filter((x): x is ReadinessRowModel => x !== null);
 }

@@ -119,6 +119,15 @@ export function questConnectCommand(port: string): string {
     : './scripts/quest-connect.sh';
 }
 
+/**
+ * The session a data-collection page shows, from its location — the path in
+ * the app, or the hash route in the demo build. Null on any other page.
+ */
+export function sessionIdFromLocation(loc: LocationLike): string | null {
+  const re = /\/data-collection\/(?:record\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[/?#]|$)/i;
+  return re.exec(loc.pathname ?? '')?.[1] ?? re.exec(loc.hash ?? '')?.[1] ?? null;
+}
+
 export function headsetTargets(loc: LocationLike): HeadsetTarget[] {
   const targets: HeadsetTarget[] = [];
   const port = loc.port ?? '';

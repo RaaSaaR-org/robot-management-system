@@ -68,6 +68,12 @@ agent:
     DOTENV_CONFIG_PATH: .env.g1-edu
     ROBOT_TYPE: g1_edu
 
+# The Meta Quest on this PC's USB (TASK-412: GET /quest, Connect, Open on
+# headset). Optional: without quest.adb the supervisor uses the first of
+# ~/platform-tools/adb, ~/.local/opt/platform-tools/adb and adb on PATH.
+# quest:
+#   adb: ${HOME}/platform-tools/adb
+
 timeouts:
   bridgeS: 15
   sidecarS: 45

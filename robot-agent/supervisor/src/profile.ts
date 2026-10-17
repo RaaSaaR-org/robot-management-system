@@ -56,6 +56,8 @@ export interface Profile {
     env: Record<string, string>;
   };
   sim: { script: string; cwd: string; args: string[]; env: Record<string, string> } | null;
+  /** The Meta Quest on this PC's USB (TASK-412): which adb to use; null = search. */
+  quest: { adb: string | null };
   timeouts: Timeouts;
 }
 
@@ -369,6 +371,14 @@ export function validateProfile(doc: unknown, opts: LoadOptions): Profile {
     }
   }
 
+  // ---- quest (optional)
+  let questAdb: string | null = null;
+  if (doc.quest !== undefined && doc.quest !== null) {
+    if (!isRecord(doc.quest)) throw new ProfileError('profile.quest must be a map');
+    const adb = optStr(doc.quest, 'adb', 'profile.quest');
+    questAdb = adb ? absPath(expandVars(adb, opts, 'profile.quest.adb'), opts.repoRoot) : null;
+  }
+
   const hostIp = optStr(doc, 'hostIp', where);
   if (hostIp && !/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(hostIp)) {
     throw new ProfileError(`profile.hostIp must be an IPv4 address (optionally /prefix), got ${hostIp}`);
@@ -393,6 +403,7 @@ export function validateProfile(doc: unknown, opts: LoadOptions): Profile {
     sidecar: { script: sidecarScript, env: sidecarEnv, modes: { read_only: roEnv, arm_sdk: armEnv } },
     agent: { cwd: agentCwd, command: agentCommand, path: agentPath, env: agentEnv },
     sim,
+    quest: { adb: questAdb },
     timeouts,
   };
 }

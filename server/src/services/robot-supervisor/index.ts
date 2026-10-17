@@ -15,7 +15,13 @@ import { teleoperationService } from '../TeleoperationService.js';
 import { runAsPlatform, tenantStore } from '../../middleware/tenantContext.js';
 import { MULTI_TENANCY_ENABLED } from '../../config/features.js';
 import type { TeleoperationEvent } from '../../types/teleoperation.types.js';
-import { supervisorsFromEnv, SupervisorUnreachableError, type SupervisorClient } from './SupervisorClient.js';
+import {
+  isQuestStatus,
+  supervisorsFromEnv,
+  SupervisorUnreachableError,
+  type QuestStatus,
+  type SupervisorClient,
+} from './SupervisorClient.js';
 import { RobotReadinessService, type AgentRead, type AgentReadiness, type SupervisorRead } from './RobotReadinessService.js';
 
 export * from './SupervisorClient.js';
@@ -59,6 +65,17 @@ export async function readSupervisorStatus(client: SupervisorClient | undefined)
   }
 }
 
+/** The supervisor's Quest report, or null when it did not answer with one. */
+export async function readQuestStatus(client: SupervisorClient | undefined): Promise<QuestStatus | null> {
+  if (!client) return null;
+  try {
+    const answer = await client.quest();
+    return answer.status === 200 && isQuestStatus(answer.body) ? answer.body : null;
+  } catch {
+    return null;
+  }
+}
+
 let supervisors: Map<string, SupervisorClient> | undefined;
 
 /** The configured supervisors, read from env once. */
@@ -98,6 +115,7 @@ export function createDefaultReadinessService(): RobotReadinessService {
     },
     supervisorAgentUrl: (robotId, status) => getSupervisors().get(robotId)?.agentUrlFor(status) ?? null,
     readAgent: readAgentReadiness,
+    readQuest: (robotId) => readQuestStatus(getSupervisors().get(robotId)),
     register: async (agentUrl, tenantId) => {
       const run = () => robotManager.registerRobot(agentUrl);
       if (MULTI_TENANCY_ENABLED && tenantId) await tenantStore.run({ tenantId }, run);

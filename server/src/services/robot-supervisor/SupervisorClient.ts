@@ -3,7 +3,8 @@
  * @description Typed client for the robot supervisor's HTTP API (TASK-403):
  *              status, start/stop of the robot side, the sidecar write mode,
  *              adopt/leave of a foreign process, bringing the robot LAN up and
- *              the per-process logs (tail + SSE stream). Bearer
+ *              the per-process logs (tail + SSE stream), and the Meta
+ *              Quest on the robot PC's USB (TASK-412). Bearer
  *              `ROBOT_SUPERVISOR_TOKEN`, 2 s timeout per call.
  *
  *              Which supervisor serves which robot comes from the server's own
@@ -56,6 +57,40 @@ export interface SupervisorStatus {
   at: string;
 }
 
+/** The Quest on the robot PC's USB — mirrors `robot-agent/supervisor/src/quest.ts`. */
+export type QuestDeviceState = 'device' | 'unauthorized' | 'offline';
+
+export interface QuestDevice {
+  serial: string;
+  state: QuestDeviceState;
+  model: string | null;
+}
+
+export interface QuestReverse {
+  remote: string;
+  local: string;
+}
+
+/** `GET /quest` of the supervisor. */
+export interface QuestStatus {
+  adb: string | null;
+  devices: QuestDevice[];
+  reversed: QuestReverse[];
+  hint: string | null;
+}
+
+/** Shape check of a `/quest` body; anything else is not a Quest report. */
+export function isQuestStatus(v: unknown): v is QuestStatus {
+  if (typeof v !== 'object' || v === null) return false;
+  const q = v as Record<string, unknown>;
+  return (
+    (q.adb === null || typeof q.adb === 'string') &&
+    Array.isArray(q.devices) &&
+    Array.isArray(q.reversed) &&
+    (q.hint === null || typeof q.hint === 'string')
+  );
+}
+
 /** Any HTTP answer the supervisor gave, 4xx/5xx included. */
 export interface SupervisorAnswer<T = Record<string, unknown>> {
   status: number;
@@ -73,6 +108,9 @@ export class SupervisorUnreachableError extends Error {
 export const SUPERVISOR_TIMEOUT_MS = 2_000;
 /** `nmcli con up` on the supervisor may take up to 30 s. */
 const LAN_UP_TIMEOUT_MS = 35_000;
+/** A Quest action runs up to five adb calls of at most 5 s each; a status two. */
+const QUEST_ACTION_TIMEOUT_MS = 20_000;
+const QUEST_STATUS_TIMEOUT_MS = 5_000;
 
 export interface SupervisorClientOptions {
   timeoutMs?: number;
@@ -119,6 +157,20 @@ export class SupervisorClient {
 
   lanUp(): Promise<SupervisorAnswer> {
     return this.call('POST', '/lan/up', {}, LAN_UP_TIMEOUT_MS);
+  }
+
+  quest(): Promise<SupervisorAnswer> {
+    return this.call('GET', '/quest', undefined, Math.max(this.timeoutMs, QUEST_STATUS_TIMEOUT_MS));
+  }
+
+  /** `adb reverse tcp:<port> tcp:<port>` on the robot PC. */
+  questConnect(port?: number): Promise<SupervisorAnswer> {
+    return this.call('POST', '/quest/connect', port === undefined ? {} : { port }, QUEST_ACTION_TIMEOUT_MS);
+  }
+
+  /** Open an allowlisted path in the Quest browser; the supervisor checks the path again. */
+  questOpen(path: string, port?: number): Promise<SupervisorAnswer> {
+    return this.call('POST', '/quest/open', port === undefined ? { path } : { path, port }, QUEST_ACTION_TIMEOUT_MS);
   }
 
   logs(proc: SupervisorProc, tail: number): Promise<SupervisorAnswer> {

@@ -26,3 +26,4 @@ npm test            # needs a python with pyzmq for the stub children (SUPERVISO
 | `src/sidecarClient.ts` | `/health`, `/disarm`, `/estop` — nothing else (statically tested) |
 | `src/logs.ts` | per-process log files followed into a 2000-line ring |
 | `src/api.ts` | the HTTP API on 127.0.0.1 (bearer token) |
+| `src/quest.ts` | the Meta Quest on this PC's USB: `GET /quest`, `POST /quest/connect {port?}` (`adb reverse`), `POST /quest/open {path}` (Quest browser, allowlisted paths only) — TASK-412 |

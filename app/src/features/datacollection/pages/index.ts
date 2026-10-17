@@ -7,3 +7,4 @@
 export { DataCollectionPage } from './DataCollectionPage';
 export { NewSessionPage } from './NewSessionPage';
 export { SessionDetailPage } from './SessionDetailPage';
+export { LiveSessionRedirect } from './LiveSessionRedirect';
