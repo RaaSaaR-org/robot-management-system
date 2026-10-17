@@ -845,7 +845,15 @@ def _arm_requires_fsm(env=None) -> bool:
     if (env.get("G1_ARM_ALLOW_UNKNOWN_FSM") or "").strip() == "1":
         return False
     gate, _ = g1_loco_mode.parse_gate(env)
-    return _dds_domain_env(env) == "0" or gate not in (None, g1_loco_mode.GATE_OFF)
+    if gate not in (None, g1_loco_mode.GATE_OFF):
+        return True
+    # Compare the domain as the DDS factory reads it (int, unset = 0), so "00"
+    # or "+0" is the real robot too; anything unreadable is treated as it.
+    raw = _dds_domain_env(env)
+    try:
+        return int(raw or "0") == 0
+    except ValueError:
+        return True
 
 
 def _fsm_reading():
@@ -891,8 +899,14 @@ _base_estop_latched = False
 _estop_lock = threading.Lock()
 
 
-def estop() -> "tuple[int, dict]":
+def estop(damp: bool = True) -> "tuple[int, dict]":
     """POST /estop: latch, disarm, THEN damp (TASK-398).
+
+    `{"damp": false}` in the body (and only an explicit false) skips step 2:
+    the agent's PROTECTIVE stop (server link lost, tilt warning, geofence) is a
+    pause that must not drop a balancing robot into the gantry. The sidecar
+    decides that here, from the request, so an agent with a stale idea of this
+    sidecar's G1_LOCO_ENABLED cannot damp the robot by accident.
 
     1. Both latches, and the arm controller's disarm ramp starts — synchronous,
        no RPC. We wait for at most two publish ticks (<= 0.1 s) so the first
@@ -914,7 +928,10 @@ def estop() -> "tuple[int, dict]":
             # Two ticks: the runner writes frame N before it calls tick N+1,
             # so the second tick proves the first falling frame left us.
             _arm_controller.wait_frames(2, timeout_s=0.1)
-    if _mode_ctl is None:
+    if not damp:
+        damp = {"damped": False, "damp_confirmed": False, "damp_requested": False,
+                "damp_error": "not requested (protective stop)"}
+    elif _mode_ctl is None:
         damp = {"damped": False, "damp_confirmed": False,
                 "damp_error": "mode control disabled (G1_LOCO_ENABLED)"}
     else:
@@ -3075,7 +3092,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/disarm":
             self._send(*disarm())
         elif self.path == "/estop":
-            self._send(*estop())
+            # Only an explicit false skips the damp; anything else damps.
+            self._send(*estop(damp=not (isinstance(body, dict) and body.get("damp") is False)))
         elif self.path == "/estop/reset":
             self._send(*estop_reset())
         elif self.path == "/pointcloud/lidar/switch":

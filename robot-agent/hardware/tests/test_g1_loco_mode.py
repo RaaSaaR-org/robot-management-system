@@ -288,6 +288,11 @@ def test_fsm_id_defaults_and_classification():
 def test_arm_requires_fsm_on_the_robot_or_with_the_gate():
     assert g1_sidecar._arm_requires_fsm({"G1_DDS_DOMAIN": "0"}) is True
     assert g1_sidecar._arm_requires_fsm({"G1_DDS_DOMAIN": "41"}) is False
+    # The factory parses the domain as an int: these all land on the robot.
+    for raw in ("00", "+0", " 0 ", "0x0"):
+        assert g1_sidecar._arm_requires_fsm({"G1_DDS_DOMAIN": raw}) is True, raw
+    assert g1_sidecar._arm_requires_fsm({}) is True                 # unset = domain 0
+    assert g1_sidecar._arm_requires_fsm({"G1_LIDAR_DDS_DOMAIN": "00"}) is True
     assert g1_sidecar._arm_requires_fsm({"G1_DDS_DOMAIN": "41", "G1_LOCO_ENABLED": "fsm"}) is True
     assert g1_sidecar._arm_requires_fsm({"G1_DDS_DOMAIN": "0",
                                          "G1_ARM_ALLOW_UNKNOWN_FSM": "1"}) is False
@@ -520,6 +525,23 @@ def test_estop_disarms_before_it_damps(make_rig):
     assert body["estop_latched"] is True
 
 
+def test_estop_with_damp_false_latches_and_disarms_but_never_damps(make_rig):
+    rig = make_rig(with_arms=True)
+    stand_then_balance(rig)
+    assert call(rig.base, "POST", "/arm", {})[0] == 200
+    before = list(rig.loco.sets())
+    status, body = call(rig.base, "POST", "/estop", {"damp": False})
+    assert status == 200
+    assert rig.loco.sets() == before             # no SetFsmId(1)
+    assert body["damped"] is False and body["damp_requested"] is False
+    assert body["latched"] is True and body["disarmed"] is True and body["was_armed"] is True
+    assert rig.ctrl.snapshot()["armed"] is False
+    # Anything but an explicit false still damps.
+    status, body = call(rig.base, "POST", "/estop", {"damp": "no"})
+    assert status == 200 and body["damped"] is True
+    assert rig.loco.sets()[-1] == 1
+
+
 def test_read_only_with_the_gate_damps_on_estop(make_rig):
     rig = make_rig(fsm=500)
     status, body = call(rig.base, "POST", "/estop", {})
@@ -606,3 +628,100 @@ def test_settle_restarts_when_the_stand_reading_is_interrupted(make_rig):
     rig.poll()
     status, body = rig.post_mode("balance")
     assert status == 409 and body["code"] == "not_settled"
+
+
+# ------------------------------------------------- stand/balance vs. a damp
+#
+# A stand/balance request that has passed its checks but is still waiting for
+# the RPC lock (held by the 2 Hz monitor, or by a slow sport service) must not
+# send its SetFsmId after an E-stop or a Limp has damped the robot.
+
+
+class _GatedLock(object):
+    """The RPC lock, except that the thread named `loser` cannot take it until
+    `release_loser` is set — it loses the race to whoever comes next."""
+
+    def __init__(self, loser):
+        self._real = threading.Lock()
+        self.loser = loser
+        self.release_loser = threading.Event()
+        self.loser_waiting = threading.Event()
+
+    def acquire(self, blocking=True, timeout=-1):
+        if threading.current_thread().name == self.loser and not self.release_loser.is_set():
+            self.loser_waiting.set()
+            self.release_loser.wait(5)
+        return self._real.acquire(blocking, timeout)
+
+    def release(self):
+        self._real.release()
+
+
+def _balance_ready_controller(lock, latched):
+    loco = FakeLoco(fsm=4)
+    clock = FakeClock()
+    ids = lm.FsmIds()
+    mon = lm.FsmMonitor(lambda: (loco, None), lock, ids, clock=clock)
+    mon.record(4)
+    clock.advance(3.0)
+    mon.record(4)
+    ctl = lm.ModeController(lambda: (loco, None), lock, mon, ids,
+                            estop_latched_fn=lambda: latched[0], confirm_s=1.0,
+                            confirm_poll_s=0.01, log=lambda m: None)
+    return loco, ctl
+
+
+@pytest.mark.parametrize("mode", ["balance", "stand"])
+def test_estop_that_wins_the_rpc_lock_is_not_undone(mode):
+    lock = _GatedLock("change")
+    latched = [False]
+    loco, ctl = _balance_ready_controller(lock, latched)
+    if mode == "stand":
+        loco.fsm = 1
+        ctl.monitor.record(1)
+    res = {}
+    t = threading.Thread(target=lambda: res.setdefault("change", ctl.request(mode)),
+                         name="change")
+    t.start()
+    assert lock.loser_waiting.wait(2)
+    latched[0] = True
+    estop = ctl.damp_for_estop()
+    lock.release_loser.set()
+    t.join(5)
+    assert estop == {"damped": True, "damp_confirmed": True, "damp_error": None}
+    assert loco.sets() == [1]               # the change never went out
+    assert loco.fsm == 1
+    status, body = res["change"]
+    assert status == 409 and body["code"] in ("preempted", "estop_latched")
+    assert body["sent"] is False
+
+
+def test_limp_that_wins_the_rpc_lock_is_not_undone():
+    lock = _GatedLock("change")
+    loco, ctl = _balance_ready_controller(lock, [False])
+    res = {}
+    t = threading.Thread(target=lambda: res.setdefault("change", ctl.request("balance")),
+                         name="change")
+    t.start()
+    assert lock.loser_waiting.wait(2)
+    assert ctl.limp("request")[0] == 200
+    lock.release_loser.set()
+    t.join(5)
+    assert loco.sets() == [1]
+    status, body = res["change"]
+    assert status == 409 and body["code"] == "preempted" and body["sent"] is False
+
+
+def test_change_requested_while_a_limp_runs_is_refused():
+    lock = threading.Lock()
+    loco, ctl = _balance_ready_controller(lock, [False])
+    loco.stuck = True                       # the limp waits in its confirm loop
+    t = threading.Thread(target=ctl.limp, args=("request",))
+    t.start()
+    deadline = time.time() + 2
+    while not ctl.limp_in_progress and time.time() < deadline:
+        time.sleep(0.005)
+    status, body = ctl.request("balance")
+    t.join(5)
+    assert status == 409 and body["code"] == "preempted"
+    assert loco.sets() == [1]

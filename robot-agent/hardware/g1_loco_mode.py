@@ -448,6 +448,17 @@ class ModeController(object):
             self._log("MODE %s: refused mode_change_in_flight (%s)" % (mode, body["in_flight"]))
             return status, body
         try:
+            # The Limp generation is read BEFORE the checks, and a Limp already
+            # running refuses outright: a change that started during a Limp must
+            # never take that Limp's generation and slip past its preemption.
+            with self._state_lock:
+                gen = self._limp_gen
+                limp_running = self._limp_active > 0
+            if limp_running:
+                status, body = _refuse(409, "preempted",
+                                       "a Limp is in progress — %s is refused" % mode)
+                self._log("MODE %s: refused preempted (limp in progress)" % mode)
+                return status, body
             status, body = self._check(mode)
             if status != 200:
                 self._log("MODE %s: refused %s — %s" % (mode, body["code"], body["error"]))
@@ -455,7 +466,6 @@ class ModeController(object):
             from_mode, from_id = body["from"], body["from_fsm_id"]
             with self._state_lock:
                 self._in_flight = mode
-                gen = self._limp_gen
             target = self.ids.stand if mode == "stand" else self.ids.balance
             accept = (self.ids.stand,) if mode == "stand" else self.ids.balance_reported
             status, body = self._set_and_confirm(target, accept, self.confirm_s, gen)
@@ -547,6 +557,21 @@ class ModeController(object):
             return _refuse(503, "rpc_failed", "the sport RPC stayed busy for %.1fs"
                            % (self.rpc_timeout_s + 0.5))
         try:
+            # Stand/balance (gen is not None): re-check under the RPC lock, just
+            # before the command goes out. A Limp or an E-stop that won the lock
+            # while this request waited has already damped the robot; sending
+            # SetFsmId(stand/balance) now would undo it behind the E-stop's back.
+            if gen is not None:
+                with self._state_lock:
+                    preempted = self._limp_gen != gen or self._limp_active > 0
+                if preempted:
+                    return _refuse(409, "preempted",
+                                   "a Limp request preempted this change before it was sent",
+                                   sent=False)
+                if self._estop_latched_fn():
+                    return _refuse(409, "estop_latched",
+                                   "the E-stop latched before this change was sent",
+                                   sent=False)
             try:
                 code = client.SetFsmId(int(target))
             except Exception as e:  # noqa: BLE001
