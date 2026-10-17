@@ -96,9 +96,21 @@ const { mockAgentRecording, mockProvenance } = vi.hoisted(() => ({
     resume: vi.fn().mockResolvedValue(true),
     stop: vi.fn().mockResolvedValue(null),
     status: vi.fn().mockResolvedValue(null),
+    beginEpisode: vi.fn().mockResolvedValue(null),
+    endEpisode: vi.fn().mockResolvedValue(null),
+    thumbnail: vi.fn().mockResolvedValue(null),
   },
   mockProvenance: { recordProvenance: vi.fn().mockResolvedValue({ id: 'prov-1' }) },
 }));
+
+const { mockCompliance } = vi.hoisted(() => ({
+  mockCompliance: {
+    getOrCreateSession: vi.fn(() => ({ sessionId: 'compliance-1' })),
+    logAccess: vi.fn().mockResolvedValue({ id: 'log-1' }),
+  },
+}));
+
+vi.mock('../ComplianceLogService.js', () => ({ complianceLogService: mockCompliance }));
 
 vi.mock('../AgentRecordingService.js', async (importOriginal) => {
   // The real AgentRecordingRefused is kept: startSession branches on
@@ -124,7 +136,8 @@ vi.mock('../DataQualityService.js', () => ({
   },
 }));
 
-import { TeleoperationService } from '../TeleoperationService.js';
+import { TeleoperationService, EpisodeActionError } from '../TeleoperationService.js';
+import type { EpisodeActionContext, TeleoperationEvent } from '../../types/teleoperation.types.js';
 import { AgentRecordingRefused } from '../AgentRecordingService.js';
 
 // ============================================================================
@@ -370,7 +383,11 @@ describe('TeleoperationService', () => {
         where: { id: 'session-1' },
         data: { frameCount: 30 },
       });
-      expect(result).toEqual({ episodeIndex: 0, deletedFrames: 20, frameCount: 30 });
+      expect(result).toMatchObject({ episodeIndex: 0, deletedFrames: 20, frameCount: 30 });
+      // D4 (TASK-408): the take's row is kept and flagged, never deleted.
+      expect(mockPrisma.teleoperationEpisode.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ update: { discarded: true } }),
+      );
     });
 
     it('discardEpisode rejects after the session is completed', async () => {
@@ -796,6 +813,8 @@ describe('TeleoperationService', () => {
         fps: 30,
         task: 'Pick up the cube',
         inputMode: 'vr_quest',
+        // D3 (TASK-408): the session opens between takes.
+        startBetweenTakes: true,
       });
       // The sim recorder seeds itself from persisted frames; it must not have run.
       expect(mockPrisma.teleoperationFrame.aggregate).not.toHaveBeenCalled();
@@ -834,8 +853,9 @@ describe('TeleoperationService', () => {
         status: 'recording',
         recorderKind: 'agent',
       });
+      mockAgentRecording.status.mockResolvedValue({ ...AGENT_STATUS, phase: 'between', episodeIndex: 3 });
       mockAgentRecording.nextEpisode.mockResolvedValue(4);
-      expect(await service.nextEpisode('session-1')).toEqual({ episodeIndex: 4 });
+      expect(await service.nextEpisode('session-1')).toMatchObject({ episodeIndex: 4 });
       expect(mockAgentRecording.nextEpisode).toHaveBeenCalledWith('robot-1');
       // No local index was invented alongside it.
       expect(mockPrisma.teleoperationFrame.aggregate).not.toHaveBeenCalled();
@@ -847,6 +867,7 @@ describe('TeleoperationService', () => {
         status: 'recording',
         recorderKind: 'agent',
       });
+      mockAgentRecording.status.mockResolvedValue({ ...AGENT_STATUS, phase: 'between' });
       mockAgentRecording.nextEpisode.mockResolvedValue(null);
       await expect(service.nextEpisode('session-1')).rejects.toThrow(
         /did not accept the episode boundary/,
@@ -1148,6 +1169,590 @@ describe('TeleoperationService', () => {
           fpsActual: 29.3,
         },
       ]);
+    });
+  });
+});
+
+// ============================================================================
+// EPISODE CONTROL (TASK-408)
+// ============================================================================
+
+describe('TeleoperationService — episode control (TASK-408)', () => {
+  let service: TeleoperationService;
+  let events: TeleoperationEvent[];
+  const listener = (e: TeleoperationEvent) => events.push(e);
+
+  const SESSION = {
+    ...COMPLETED_SESSION,
+    status: 'recording',
+    recorderKind: 'agent',
+    sidecarDatasetPath: null,
+    type: 'vr_quest',
+    episodeTimeS: null,
+  };
+
+  const CTX: EpisodeActionContext = {
+    source: 'vr',
+    clientId: 'quest-1',
+    user: { userId: 'user-7', displayName: 'Ana' },
+  };
+
+  type Ep = {
+    episodeIndex: number;
+    frames: number;
+    dropped: number;
+    durationS: number;
+    fpsActual: number;
+    discarded: boolean;
+    jointsMoved: { name: string; rangeRad: number }[];
+    groupsMoved: string[];
+    warnings: string[];
+    thumbnail: { camera: string; frame: number } | null;
+  };
+
+  /**
+   * A robot recorder with the TASK-402 semantics, in memory. `delayMs` makes
+   * its next-episode slow, so two presses really overlap.
+   */
+  function fakeAgent(opts: { delayMs?: number } = {}) {
+    const st = {
+      phase: 'between' as 'between' | 'capturing',
+      open: null as Ep | null,
+      episodes: [] as Ep[],
+      nextTake: 0,
+      lastStop: null as null | { episodeIndex: number; reason: string; atMs: number },
+      clock: 1000,
+    };
+    const newEp = (i: number): Ep => ({
+      episodeIndex: i,
+      frames: 0,
+      dropped: 0,
+      durationS: 0,
+      fpsActual: 0,
+      discarded: false,
+      jointsMoved: [],
+      groupsMoved: [],
+      warnings: [],
+      thumbnail: null,
+    });
+    const begin = () => {
+      if (st.open) return { ok: false as const, code: 'already_capturing' as const };
+      st.open = newEp(st.nextTake++);
+      st.phase = 'capturing';
+      return { ok: true as const, episodeIndex: st.open.episodeIndex, startedAtMs: st.clock };
+    };
+    const end = (reason: string) => {
+      if (!st.open) return { ok: false as const, code: 'not_capturing' as const };
+      const ep = st.open;
+      ep.frames = 90;
+      ep.durationS = 3;
+      ep.fpsActual = 30;
+      ep.jointsMoved = [{ name: 'left_elbow_joint', rangeRad: 0.6 }];
+      ep.groupsMoved = ['left_arm'];
+      ep.thumbnail = { camera: 'cam_right_high', frame: 45 };
+      st.episodes.push(ep);
+      st.open = null;
+      st.phase = 'between';
+      st.clock += 10;
+      st.lastStop = { episodeIndex: ep.episodeIndex, reason, atMs: st.clock };
+      return { ok: true as const, episodeIndex: ep.episodeIndex, report: { ...ep } };
+    };
+    mockAgentRecording.status.mockImplementation(async () => {
+      const all = st.open ? [...st.episodes, st.open] : st.episodes;
+      return {
+        ok: true,
+        recording: true,
+        sessionId: 'session-1',
+        episodeIndex: st.open?.episodeIndex ?? st.episodes[st.episodes.length - 1]?.episodeIndex ?? 0,
+        frames: st.open ? 12 : 0,
+        totalFrames: st.episodes.reduce((n, e) => n + e.frames, 0) + (st.open ? 12 : 0),
+        dropped: 0,
+        totalDropped: 0,
+        fpsTarget: 30,
+        fpsActual: 29.8,
+        degraded: false,
+        lastDropReason: null,
+        cameras: [],
+        scene: null,
+        behindS: null,
+        episodes: all.map((e) => ({ ...e })),
+        phase: st.phase,
+        episodeStartedAtMs: st.open ? st.clock : null,
+        episodeElapsedS: st.open ? 0.4 : null,
+        elapsedS: 10,
+        autoStopS: null,
+        lastStop: st.lastStop,
+      };
+    });
+    mockAgentRecording.beginEpisode.mockImplementation(async () => begin());
+    mockAgentRecording.endEpisode.mockImplementation(async (_r: string, reason = 'operator') => end(reason));
+    mockAgentRecording.nextEpisode.mockImplementation(async () => {
+      if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
+      if (st.open) end('next');
+      const b = begin();
+      return b.ok ? b.episodeIndex : null;
+    });
+    mockAgentRecording.discardEpisode.mockImplementation(async (_r: string, i: number) => {
+      const ep = st.episodes.find((e) => e.episodeIndex === i);
+      if (!ep) return false;
+      ep.discarded = true;
+      ep.frames = 0;
+      ep.thumbnail = null;
+      return true;
+    });
+    return { st, end };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    events = [];
+    service = TeleoperationService.getInstance();
+    service.on('teleoperation:event', listener);
+    mockPrisma.teleoperationSession.findUnique.mockResolvedValue(SESSION);
+    mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([]);
+    mockPrisma.teleoperationEpisode.upsert.mockResolvedValue({});
+    mockCompliance.getOrCreateSession.mockReturnValue({ sessionId: 'compliance-1' });
+    mockCompliance.logAccess.mockResolvedValue({ id: 'log-1' });
+  });
+
+  afterEach(() => {
+    service.off('teleoperation:event', listener);
+  });
+
+  const ofType = (t: string) => events.filter((e) => e.type === t);
+
+  it('start → episode:started and session:live capturing, attributed, persisted and audited', async () => {
+    fakeAgent();
+    const { live, take } = await service.startEpisode('session-1', { ...CTX, expectedTake: null });
+    expect(take).toBe(0);
+    expect(live.phase).toBe('capturing');
+    expect(live.take).toBe(0);
+    // D5: the server's own clock, not the robot's.
+    expect(Math.abs(Date.parse(live.takeStartedAt!) - Date.now())).toBeLessThan(2000);
+
+    const started = ofType('episode:started');
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({
+      take: 0,
+      by: { userId: 'user-7', displayName: 'Ana', source: 'vr', clientId: 'quest-1' },
+    });
+    expect(started[0]!.startedAt).toBe(live.takeStartedAt);
+    expect(ofType('session:live').at(-1)!.live).toMatchObject({ phase: 'capturing', take: 0 });
+
+    const row = mockPrisma.teleoperationEpisode.upsert.mock.calls[0]![0];
+    expect(row.create).toMatchObject({ episodeIndex: 0 });
+    expect(JSON.parse(row.create.startedBy)).toMatchObject({ userId: 'user-7', source: 'vr' });
+
+    expect(mockCompliance.logAccess).toHaveBeenCalledTimes(1);
+    expect(mockCompliance.logAccess.mock.calls[0]![0]).toMatchObject({
+      robotId: 'robot-1',
+      operatorId: 'user-7',
+      payload: { action: 'episode.start', metadata: { source: 'vr', take: 0, displayName: 'Ana' } },
+    });
+  });
+
+  it('stop → episode:stopped with the quick check, between takes, row written at stop', async () => {
+    fakeAgent();
+    await service.startEpisode('session-1', CTX);
+    events = [];
+    mockPrisma.teleoperationEpisode.upsert.mockClear();
+    mockCompliance.logAccess.mockClear();
+
+    const { live, quickCheck } = await service.stopEpisode('session-1', { ...CTX, source: 'desktop', expectedTake: 0 });
+    expect(live.phase).toBe('between');
+    expect(quickCheck).toMatchObject({
+      take: 0,
+      frames: 90,
+      durationS: 3,
+      jointsMoved: [{ name: 'left_elbow_joint', rangeRad: 0.6 }],
+      thumbnailUrl: '/api/teleoperation/sessions/session-1/episodes/0/thumbnail',
+      stopReason: 'operator',
+    });
+    const stopped = ofType('episode:stopped');
+    expect(stopped).toHaveLength(1);
+    expect(stopped[0]).toMatchObject({ take: 0, reason: 'operator', by: { source: 'desktop' } });
+    expect(stopped[0]!.quickCheck).toEqual(quickCheck);
+    expect(ofType('session:live').at(-1)!.live!.phase).toBe('between');
+
+    const row = mockPrisma.teleoperationEpisode.upsert.mock.calls[0]![0];
+    expect(row.update).toMatchObject({ frameCount: 90, durationS: 3, stopReason: 'operator' });
+    expect(JSON.parse(row.update.quickCheck)).toEqual({
+      jointsMoved: [{ name: 'left_elbow_joint', rangeRad: 0.6 }],
+      groupsMoved: ['left_arm'],
+      warnings: [],
+    });
+    expect(mockCompliance.logAccess).toHaveBeenCalledTimes(1);
+    expect(mockCompliance.logAccess.mock.calls[0]![0].payload.action).toBe('episode.stop');
+  });
+
+  it('refuses start while capturing and stop between takes, with the live state', async () => {
+    fakeAgent();
+    await expect(service.stopEpisode('session-1', CTX)).rejects.toMatchObject({
+      code: 'not_capturing',
+      status: 409,
+      live: { phase: 'between' },
+    });
+    await service.startEpisode('session-1', CTX);
+    const err = await service.startEpisode('session-1', CTX).catch((e) => e);
+    expect(err).toBeInstanceOf(EpisodeActionError);
+    expect(err.code).toBe('already_capturing');
+    expect(err.live.take).toBe(0);
+  });
+
+  it('two concurrent nexts with the same expectedTake make exactly one new take', async () => {
+    const { st } = fakeAgent({ delayMs: 30 });
+    await service.startEpisode('session-1', CTX); // take 0 capturing
+    const results = await Promise.allSettled([
+      service.nextEpisode('session-1', { ...CTX, expectedTake: 0 }),
+      service.nextEpisode('session-1', { ...CTX, source: 'desktop', clientId: 'desk-1', expectedTake: 0 }),
+    ]);
+    const ok = results.filter((r) => r.status === 'fulfilled');
+    const refused = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+    expect(ok).toHaveLength(1);
+    expect((ok[0] as PromiseFulfilledResult<{ episodeIndex: number }>).value.episodeIndex).toBe(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.reason).toBeInstanceOf(EpisodeActionError);
+    expect(refused[0]!.reason.code).toBe('episode_conflict');
+    expect(refused[0]!.reason.live).toMatchObject({ take: 1, phase: 'capturing' });
+    expect(mockAgentRecording.nextEpisode).toHaveBeenCalledTimes(1);
+    expect(st.nextTake).toBe(2);
+  });
+
+  it('a next emits complete progress — no counter is wiped for the other client', async () => {
+    fakeAgent();
+    await service.startEpisode('session-1', CTX);
+    events = [];
+    await service.nextEpisode('session-1', CTX);
+    const progress = ofType('session:progress');
+    expect(progress.length).toBeGreaterThan(0);
+    for (const p of progress) {
+      for (const key of ['frameCount', 'currentEpisode', 'fpsActual', 'running', 'degraded'] as const) {
+        expect(p.recordingProgress?.[key], key).not.toBeUndefined();
+      }
+    }
+    expect(progress.at(-1)!.recordingProgress).toMatchObject({ currentEpisode: 1, frameCount: 102, running: true });
+    // next = the stop of take 0 and the start of take 1, both told.
+    expect(ofType('episode:stopped')[0]).toMatchObject({ take: 0, reason: 'next' });
+    expect(ofType('episode:started')[0]).toMatchObject({ take: 1 });
+  });
+
+  it('discard-last ends the open take, discards it, keeps its row flagged, and says so', async () => {
+    fakeAgent();
+    await service.startEpisode('session-1', CTX);
+    events = [];
+    mockCompliance.logAccess.mockClear();
+    const { live, take } = await service.discardLast('session-1', { ...CTX, expectedTake: 0 });
+    expect(take).toBe(0);
+    expect(live).toMatchObject({ phase: 'between', discarded: 1, kept: 0 });
+    expect(ofType('episode:discarded')).toEqual([expect.objectContaining({ take: 0, by: expect.objectContaining({ source: 'vr' }) })]);
+    expect(mockPrisma.teleoperationEpisode.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ update: { discarded: true } }),
+    );
+    expect(mockPrisma.teleoperationEpisode.deleteMany).not.toHaveBeenCalled();
+    expect(mockCompliance.logAccess).toHaveBeenCalledTimes(1);
+    // A second press does not walk back into an earlier take.
+    await expect(service.discardLast('session-1', { ...CTX, expectedTake: 0 })).rejects.toMatchObject({
+      code: 'already_discarded',
+    });
+  });
+
+  it('DELETE of a take emits episode:discarded and keeps the row', async () => {
+    fakeAgent();
+    await service.startEpisode('session-1', CTX);
+    await service.stopEpisode('session-1', CTX);
+    events = [];
+    mockPrisma.teleoperationFrame.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.teleoperationFrame.count.mockResolvedValue(0);
+    mockPrisma.teleoperationSession.update.mockResolvedValue({});
+    await service.discardEpisode('session-1', 0, CTX);
+    expect(ofType('episode:discarded')).toHaveLength(1);
+    expect(mockAgentRecording.discardEpisode).toHaveBeenCalledWith('robot-1', 0);
+    expect(mockPrisma.teleoperationEpisode.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ update: { discarded: true } }),
+    );
+  });
+
+  it('DELETE of the take being recorded restarts it — no flag, no episode:discarded', async () => {
+    const { st } = fakeAgent();
+    // The agent's semantics (TASK-402 D2): the live take is restarted, not retired.
+    mockAgentRecording.discardEpisode.mockImplementation(async (_r: string, i: number) => {
+      if (st.open?.episodeIndex === i) return true;
+      const ep = st.episodes.find((e) => e.episodeIndex === i);
+      if (!ep) return false;
+      ep.discarded = true;
+      return true;
+    });
+    await service.startEpisode('session-1', CTX);
+    events = [];
+    mockPrisma.teleoperationEpisode.upsert.mockClear();
+    mockCompliance.logAccess.mockClear();
+    mockPrisma.teleoperationFrame.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.teleoperationFrame.count.mockResolvedValue(0);
+    mockPrisma.teleoperationSession.update.mockResolvedValue({});
+
+    const result = await service.discardEpisode('session-1', 0, CTX);
+    expect(result).toMatchObject({ episodeIndex: 0, restarted: true, live: { phase: 'capturing', take: 0, discarded: 0 } });
+    expect(ofType('episode:discarded')).toHaveLength(0);
+    expect(mockPrisma.teleoperationEpisode.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ update: { discarded: true } }),
+    );
+    // A fresh start stamp, attributed to whoever restarted it.
+    const restart = mockPrisma.teleoperationEpisode.upsert.mock.calls.at(-1)![0];
+    expect(restart.update).toMatchObject({ startedAt: expect.any(Date) });
+    expect(mockCompliance.logAccess.mock.calls[0]![0].payload.action).toBe('episode.restart');
+    expect(ofType('session:live').at(-1)!.live).toMatchObject({ phase: 'capturing', take: 0 });
+  });
+
+  it('DELETE of a take the session never had answers 404 unknown_take and writes nothing', async () => {
+    fakeAgent();
+    await service.startEpisode('session-1', CTX);
+    await service.stopEpisode('session-1', CTX);
+    events = [];
+    mockPrisma.teleoperationEpisode.upsert.mockClear();
+    mockCompliance.logAccess.mockClear();
+    mockPrisma.teleoperationFrame.count.mockResolvedValue(0);
+
+    await expect(service.discardEpisode('session-1', 999, CTX)).rejects.toMatchObject({
+      code: 'unknown_take',
+      status: 404,
+      live: { take: 0 },
+    });
+    expect(mockAgentRecording.discardEpisode).not.toHaveBeenCalled();
+    expect(mockPrisma.teleoperationEpisode.upsert).not.toHaveBeenCalled();
+    expect(ofType('episode:discarded')).toHaveLength(0);
+    expect(mockCompliance.logAccess).not.toHaveBeenCalled();
+  });
+
+  it('DELETE that the robot does not carry out answers 502 and flags nothing', async () => {
+    fakeAgent();
+    await service.startEpisode('session-1', CTX);
+    await service.stopEpisode('session-1', CTX);
+    mockAgentRecording.discardEpisode.mockResolvedValueOnce(false);
+    mockPrisma.teleoperationEpisode.upsert.mockClear();
+    events = [];
+    await expect(service.discardEpisode('session-1', 0, CTX)).rejects.toMatchObject({
+      code: 'recorder_unavailable',
+      status: 502,
+    });
+    expect(mockPrisma.teleoperationEpisode.upsert).not.toHaveBeenCalled();
+    expect(ofType('episode:discarded')).toHaveLength(0);
+  });
+
+  it('the list hides discarded takes unless asked', async () => {
+    mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...SESSION, status: 'completed' });
+    mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([
+      { episodeIndex: 0, frameCount: 90, droppedFrames: 0, durationS: 3, fpsActual: 30, retargetModes: null, discarded: false, datasetEpisodeIndex: 0, stopReason: 'operator', startedBy: '{"userId":"user-7","displayName":"Ana","source":"vr","clientId":null}' },
+      { episodeIndex: 1, frameCount: 0, droppedFrames: 0, durationS: 0, fpsActual: 0, retargetModes: null, discarded: true, datasetEpisodeIndex: null },
+    ]);
+    const shown = await service.listEpisodes('session-1');
+    expect(shown.map((e) => e.episodeIndex)).toEqual([0]);
+    expect(shown[0]).toMatchObject({ datasetEpisodeIndex: 0, stopReason: 'operator', startedBy: { displayName: 'Ana' } });
+    const all = await service.listEpisodes('session-1', { includeDiscarded: true });
+    expect(all.map((e) => [e.episodeIndex, e.discarded === true])).toEqual([
+      [0, false],
+      [1, true],
+    ]);
+  });
+
+  it('an SO-101 sidecar session answers unsupported_recorder', async () => {
+    mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+      ...SESSION,
+      recorderKind: 'sidecar',
+      sidecarDatasetPath: '/data/lerobot/pick',
+    });
+    await expect(service.startEpisode('session-1', CTX)).rejects.toMatchObject({ code: 'unsupported_recorder', status: 409 });
+    await expect(service.stopEpisode('session-1', CTX)).rejects.toMatchObject({ code: 'unsupported_recorder' });
+  });
+
+  it('a session that is not recording answers not_recording', async () => {
+    fakeAgent();
+    mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...SESSION, status: 'paused' });
+    await expect(service.startEpisode('session-1', CTX)).rejects.toMatchObject({ code: 'not_recording' });
+  });
+
+  it('the poller reports a stop it did not make — the robot’s time limit — as by auto', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { st, end } = fakeAgent();
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...SESSION, status: 'created', recorderKind: null, startedAt: null });
+      mockPrisma.teleoperationSession.update.mockImplementation(async (a: { data: Record<string, unknown> }) => ({ ...SESSION, ...a.data }));
+      mockPrisma.robot.findUnique.mockResolvedValue({ id: 'robot-1', model: 'G1 EDU', a2aAgentUrl: null });
+      mockAgentRecording.start.mockImplementation(async () => mockAgentRecording.status());
+      await service.startSession('session-1');
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue(SESSION);
+      await service.startEpisode('session-1', CTX);
+      events = [];
+
+      // The robot's own auto-stop.
+      end('time_limit');
+      await vi.advanceTimersByTimeAsync(1000);
+      const stopped = ofType('episode:stopped');
+      expect(stopped).toHaveLength(1);
+      expect(stopped[0]).toMatchObject({ take: 0, reason: 'time_limit', by: { source: 'auto' } });
+      expect(stopped[0]!.quickCheck).toMatchObject({ frames: 90, stopReason: 'time_limit' });
+      expect(ofType('session:live').at(-1)!.live!.phase).toBe('between');
+
+      // Reported once, not on every tick.
+      events = [];
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(ofType('episode:stopped')).toHaveLength(0);
+      expect(ofType('session:live')).toHaveLength(1);
+
+      // A stop this server made is not reported again as auto.
+      await service.startEpisode('session-1', CTX);
+      await service.stopEpisode('session-1', CTX);
+      events = [];
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(ofType('episode:stopped')).toHaveLength(0);
+      expect(st.lastStop?.reason).toBe('operator');
+    } finally {
+      (service as unknown as { stopAgentProgressPoller(id: string): void }).stopAgentProgressPoller('session-1');
+      vi.useRealTimers();
+    }
+  });
+
+  it('an auto-stop an action reads before the poller does is still reported, once, as by auto', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { end } = fakeAgent();
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...SESSION, status: 'created', recorderKind: null, startedAt: null });
+      mockPrisma.teleoperationSession.update.mockImplementation(async (a: { data: Record<string, unknown> }) => ({ ...SESSION, ...a.data }));
+      mockPrisma.robot.findUnique.mockResolvedValue({ id: 'robot-1', model: 'G1 EDU', a2aAgentUrl: null });
+      mockAgentRecording.start.mockImplementation(async () => mockAgentRecording.status());
+      await service.startSession('session-1');
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...SESSION, episodeTimeS: 3 });
+      await service.startEpisode('session-1', CTX);
+      events = [];
+      mockPrisma.teleoperationEpisode.upsert.mockClear();
+
+      // The robot auto-stops take 0, and the operator presses Start before the next poll.
+      end('time_limit');
+      const { take } = await service.startEpisode('session-1', CTX);
+      expect(take).toBe(1);
+      const stopped = ofType('episode:stopped');
+      expect(stopped).toHaveLength(1);
+      expect(stopped[0]).toMatchObject({ take: 0, reason: 'time_limit', by: { source: 'auto' } });
+      // The take's row got the quick check and who stopped it.
+      const row = mockPrisma.teleoperationEpisode.upsert.mock.calls
+        .map((c) => c[0])
+        .find((a) => a.where.sessionId_episodeIndex.episodeIndex === 0);
+      expect(row.update).toMatchObject({ frameCount: 90, stopReason: 'time_limit' });
+      expect(JSON.parse(row.update.stoppedBy)).toMatchObject({ source: 'auto' });
+      // The stop comes before the start, and the poller does not repeat it.
+      expect(events.findIndex((e) => e.type === 'episode:stopped')).toBeLessThan(
+        events.findIndex((e) => e.type === 'episode:started'),
+      );
+      events = [];
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(ofType('episode:stopped')).toHaveLength(0);
+    } finally {
+      (service as unknown as { stopAgentProgressPoller(id: string): void }).stopAgentProgressPoller('session-1');
+      vi.useRealTimers();
+    }
+  });
+
+  describe('endSession — index map and provenance', () => {
+    const tmpRoots: string[] = [];
+
+    async function datasetDir(info: Record<string, unknown>): Promise<string> {
+      const { mkdtemp, mkdir, writeFile } = await import('fs/promises');
+      const { join } = await import('path');
+      const { tmpdir } = await import('os');
+      const root = await mkdtemp(join(tmpdir(), 'task408-'));
+      tmpRoots.push(root);
+      await mkdir(join(root, 'meta'));
+      await writeFile(join(root, 'meta', 'info.json'), JSON.stringify(info));
+      return root;
+    }
+
+    afterEach(async () => {
+      const { rm } = await import('fs/promises');
+      for (const r of tmpRoots.splice(0)) await rm(r, { recursive: true, force: true });
+    });
+
+    function result(over: Record<string, unknown>) {
+      return {
+        ok: true,
+        datasetPath: '/robot/data/datasets/session-1',
+        robotType: 'Unitree_G1_Dex3',
+        totalEpisodes: 2,
+        totalFrames: 180,
+        totalDropped: 0,
+        fpsActual: 29.87,
+        // Numbered like the DATASET: kept takes only, densely.
+        episodes: [
+          { episodeIndex: 0, frames: 90, dropped: 0, durationS: 3, fpsActual: 30 },
+          { episodeIndex: 1, frames: 90, dropped: 0, durationS: 3, fpsActual: 30 },
+        ],
+        videoFeatures: ['observation.images.cam_right_high'],
+        scene: 'g1_dex3_house_scene.xml',
+        bootId: 'boot-1',
+        indexMap: [
+          { take: 0, datasetEpisode: 0 },
+          { take: 1, datasetEpisode: null },
+          { take: 2, datasetEpisode: 1 },
+        ],
+        ...over,
+      };
+    }
+
+    beforeEach(() => {
+      const { st } = fakeAgent();
+      st.episodes = [
+        { episodeIndex: 0, frames: 90, dropped: 0, durationS: 3, fpsActual: 30, discarded: false, jointsMoved: [], groupsMoved: [], warnings: [], thumbnail: null },
+        { episodeIndex: 1, frames: 0, dropped: 0, durationS: 0, fpsActual: 0, discarded: true, jointsMoved: [], groupsMoved: [], warnings: [], thumbnail: null },
+      ];
+      st.open = { episodeIndex: 2, frames: 12, dropped: 0, durationS: 0.4, fpsActual: 30, discarded: false, jointsMoved: [], groupsMoved: [], warnings: [], thumbnail: null };
+      st.phase = 'capturing';
+      mockPrisma.teleoperationSession.update.mockImplementation(async (a: { data: Record<string, unknown> }) => ({ ...SESSION, ...a.data }));
+      mockPrisma.robot.findUnique.mockResolvedValue({ id: 'robot-1', name: 'g1-edu-4', model: 'G1 EDU', a2aAgentUrl: null });
+      mockDatasetRepository.create.mockResolvedValue({ id: 'ds-1' });
+      mockRobotTypeRepository.findAll.mockResolvedValue([]);
+      mockRobotTypeRepository.create.mockResolvedValue({ id: 'rt-1' });
+      mockProvenance.recordProvenance.mockResolvedValue({ id: 'prov-1' });
+      mockPrisma.teleoperationFrame.count.mockResolvedValue(0);
+    });
+
+    it('rows learn their dataset episode from indexMap; the discarded take is flagged; the open take ended with the session', async () => {
+      mockAgentRecording.stop.mockResolvedValue(result({ simulated: true }));
+      await service.endSession('session-1');
+      const byTake = new Map<number, Record<string, unknown>>(
+        mockPrisma.teleoperationEpisode.upsert.mock.calls.map((c) => [
+          c[0].where.sessionId_episodeIndex.episodeIndex as number,
+          c[0].update as Record<string, unknown>,
+        ]),
+      );
+      expect(byTake.get(0)).toMatchObject({ datasetEpisodeIndex: 0, frameCount: 90 });
+      expect(byTake.get(2)).toMatchObject({ datasetEpisodeIndex: 1, stopReason: 'session_end' });
+      expect(byTake.get(1)).toMatchObject({ datasetEpisodeIndex: null, discarded: true });
+    });
+
+    it('a real-robot result is not labelled as simulation, and says persons may be in view', async () => {
+      const dir = await datasetDir({ fps: 29.87, features: {} });
+      mockAgentRecording.stop.mockResolvedValue(result({ simulated: false, datasetPath: dir }));
+      await service.endSession('session-1');
+      const created = mockDatasetRepository.create.mock.calls[0]![0];
+      expect(created.description).toMatch(/^Teleoperation on g1-edu-4/);
+      expect(created.description).not.toMatch(/simulat/i);
+      // An older agent's float fps becomes the integer target.
+      expect(created.infoJson.fps).toBe(30);
+      expect(created.fps).toBe(30);
+      const prov = mockProvenance.recordProvenance.mock.calls[0]![1];
+      expect(prov.sourceName).toBe('Unitree_G1_Dex3 robot robot-1');
+      expect(prov.sourceName).not.toMatch(/sim/i);
+      expect(prov.copyrightCompliance).toMatch(/recorded persons/);
+      expect(prov.copyrightCompliance).not.toMatch(/no recorded persons/);
+      expect(prov.collectionMethod).not.toMatch(/simulation boot/);
+    });
+
+    it('a sim result keeps the simulation provenance', async () => {
+      mockAgentRecording.stop.mockResolvedValue(result({ simulated: true }));
+      await service.endSession('session-1');
+      const created = mockDatasetRepository.create.mock.calls[0]![0];
+      expect(created.description).toMatch(/^Teleoperation in simulation/);
+      const prov = mockProvenance.recordProvenance.mock.calls[0]![1];
+      expect(prov.sourceName).toMatch(/^MuJoCo sim/);
+      expect(prov.copyrightCompliance).toMatch(/no recorded persons/);
     });
   });
 });

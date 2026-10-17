@@ -270,3 +270,97 @@ describe('status', () => {
     expect(await service.status('robot-1')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK-408: explicit takes and the thumbnail proxy
+// ---------------------------------------------------------------------------
+
+describe('beginEpisode / endEpisode', () => {
+  it('opens a take and hands back its number and start', async () => {
+    const post = vi.fn(async () => ({ ok: true, episodeIndex: 2, phase: 'capturing', startedAtMs: 1234 }));
+    const { service } = build({ post });
+    expect(await service.beginEpisode('robot-1')).toEqual({ ok: true, episodeIndex: 2, startedAtMs: 1234 });
+    expect(post).toHaveBeenCalledWith('/api/v1/robots/robot-1/recording/episodes/begin');
+  });
+
+  it('turns the robot’s 409 into an answer with its code, not a thrown refusal', async () => {
+    const post = vi.fn(async () => {
+      throw refusal(409, 'already_capturing', '');
+    });
+    const { service } = build({ post });
+    expect(await service.beginEpisode('robot-1')).toEqual({ ok: false, code: 'already_capturing' });
+  });
+
+  it('answers null for an agent that predates the route', async () => {
+    const post = vi.fn(async () => {
+      throw refusal(404, 'NOT_FOUND', 'no route');
+    });
+    const { service } = build({ post });
+    expect(await service.beginEpisode('robot-1')).toBeNull();
+  });
+
+  it('ends a take with a reason and returns its report', async () => {
+    const report = { episodeIndex: 1, frames: 90, dropped: 0, durationS: 3, fpsActual: 30 };
+    const post = vi.fn(async () => ({ ok: true, episodeIndex: 1, phase: 'between', report }));
+    const { service } = build({ post });
+    expect(await service.endEpisode('robot-1')).toEqual({ ok: true, episodeIndex: 1, report });
+    expect(post).toHaveBeenCalledWith('/api/v1/robots/robot-1/recording/episodes/end', { reason: 'operator' });
+  });
+
+  it('says not_capturing when there is no open take', async () => {
+    const post = vi.fn(async () => {
+      throw refusal(409, 'not_capturing', '');
+    });
+    const { service } = build({ post });
+    expect(await service.endEpisode('robot-1')).toEqual({ ok: false, code: 'not_capturing' });
+  });
+
+  it('still throws a 409 it does not recognise', async () => {
+    const post = vi.fn(async () => {
+      throw refusal(409, 'RECORDING_REFUSED', 'busy');
+    });
+    const { service } = build({ post });
+    await expect(service.endEpisode('robot-1')).rejects.toBeInstanceOf(AgentRecordingRefused);
+  });
+});
+
+describe('thumbnail', () => {
+  function withFetch(response: Response | Error) {
+    const fetchImpl = vi.fn(async () => {
+      if (response instanceof Error) throw response;
+      return response;
+    });
+    const service = new AgentRecordingService({
+      robots: { getRegisteredRobot: async () => ({ baseUrl: 'http://robot:41246/' }) },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    return { service, fetchImpl };
+  }
+
+  it('fetches the take’s JPEG from the robot', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const { service, fetchImpl } = withFetch(
+      new Response(jpeg, { status: 200, headers: { 'content-type': 'image/jpeg' } }),
+    );
+    const got = await service.thumbnail('robot-1', 3);
+    expect(got?.equals(jpeg)).toBe(true);
+    expect((fetchImpl.mock.calls[0] as unknown[])[0]).toBe(
+      'http://robot:41246/api/v1/robots/robot-1/recording/episodes/3/thumbnail',
+    );
+  });
+
+  it('answers null for a take without one', async () => {
+    const { service } = withFetch(new Response('{"code":"no_thumbnail"}', { status: 404 }));
+    expect(await service.thumbnail('robot-1', 3)).toBeNull();
+  });
+
+  it('answers null when the robot does not answer', async () => {
+    const { service } = withFetch(new Error('ECONNREFUSED'));
+    expect(await service.thumbnail('robot-1', 3)).toBeNull();
+  });
+
+  it('answers null for a reply that is not a JPEG', async () => {
+    const { service } = withFetch(new Response('<html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+    expect(await service.thumbnail('robot-1', 3)).toBeNull();
+  });
+});

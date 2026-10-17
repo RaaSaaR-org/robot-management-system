@@ -23,6 +23,12 @@ import type {
   QualityThresholds,
   ExportResultResponse,
   TeleoperationEvent,
+  EpisodeActionContext,
+  EpisodeActor,
+  EpisodeConflictCode,
+  EpisodeStopReason,
+  LiveState,
+  QuickCheck,
 } from '../types/teleoperation.types.js';
 import { DEFAULT_QUALITY_THRESHOLDS } from '../types/teleoperation.types.js';
 import { dataQualityService } from './DataQualityService.js';
@@ -35,7 +41,20 @@ import {
   agentRecordingService,
   AgentRecordingRefused,
   type AgentEpisodeReport,
+  type AgentRecordingStatus,
 } from './AgentRecordingService.js';
+import {
+  guardEpisodeAction,
+  idleLive,
+  liveFromAgent,
+  liveFromLedger,
+  progressFromLive,
+  quickCheckFromReport,
+  quickCheckFromTake,
+  type EpisodeOp,
+  type LiveBase,
+} from './teleoperation/liveState.js';
+import { TakeLedger } from './teleoperation/takeLedger.js';
 import {
   SimFrameRecorder,
   type RecordedFrame,
@@ -97,6 +116,121 @@ function joinModes(modes: readonly string[] | undefined): string | null {
 function splitModes(stored: string | null | undefined): string[] | undefined {
   if (stored === null || stored === undefined) return undefined;
   return stored === '' ? [] : stored.split('+');
+}
+
+/**
+ * An episode action the session's state does not allow, or a client whose view
+ * of the session is stale. `live` is the state to re-sync from.
+ */
+export class EpisodeActionError extends Error {
+  readonly status: number;
+  constructor(
+    readonly code: EpisodeConflictCode | 'recorder_unavailable',
+    readonly live: LiveState | undefined,
+    message: string
+  ) {
+    super(message);
+    this.name = 'EpisodeActionError';
+    this.status = code === 'recorder_unavailable' ? 502 : code === 'unknown_take' ? 404 : 409;
+  }
+}
+
+function conflictMessage(code: EpisodeConflictCode): string {
+  switch (code) {
+    case 'episode_conflict':
+      return 'Another client changed the take first — re-sync from the live state';
+    case 'already_capturing':
+      return 'A take is already being recorded';
+    case 'not_capturing':
+      return 'No take is being recorded';
+    case 'not_recording':
+      return 'The session is not recording';
+    case 'unsupported_recorder':
+      return 'Episodes are managed by the hardware sidecar for this session';
+    case 'no_take':
+      return 'There is no take to discard';
+    case 'already_discarded':
+      return 'The last take is already discarded';
+    case 'unknown_take':
+      return 'This session has no take with that number';
+  }
+}
+
+/** Callers that predate TASK-408 (no user, no client) act as the desktop. */
+const SYSTEM_CONTEXT: EpisodeActionContext = {
+  source: 'desktop',
+  user: { userId: null, displayName: null },
+};
+
+const AUTO_ACTOR: EpisodeActor = { userId: null, displayName: null, source: 'auto', clientId: null };
+
+function actorOf(ctx: EpisodeActionContext): EpisodeActor {
+  return {
+    userId: ctx.user.userId,
+    displayName: ctx.user.displayName,
+    source: ctx.source,
+    clientId: ctx.clientId ?? null,
+  };
+}
+
+/** One recorder's take operations behind one shape (agent, SimFrameRecorder, client ledger). */
+interface TakeBackend {
+  begin(): Promise<{ ok: true; take: number } | { ok: false; code: EpisodeConflictCode }>;
+  end(
+    reason: EpisodeStopReason
+  ): Promise<{ ok: true; quickCheck: QuickCheck; retargetModes?: string[] } | { ok: false; code: EpisodeConflictCode }>;
+  next(before: LiveState): Promise<{ take: number; stopped: { quickCheck: QuickCheck; retargetModes?: string[] } | null }>;
+  discard(take: number): Promise<boolean>;
+}
+
+function parseJson<T>(raw: string | null | undefined): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** A persisted take as the episode list shows it. Fields the row lacks stay absent. */
+function summaryFromRow(e: {
+  episodeIndex: number;
+  frameCount: number;
+  droppedFrames: number;
+  durationS: number;
+  fpsActual: number;
+  retargetModes?: string | null;
+  discarded?: boolean | null;
+  datasetEpisodeIndex?: number | null;
+  startedAt?: Date | null;
+  stopReason?: string | null;
+  quickCheck?: string | null;
+  startedBy?: string | null;
+  stoppedBy?: string | null;
+}): EpisodeSummary {
+  const summary: EpisodeSummary = {
+    episodeIndex: e.episodeIndex,
+    frameCount: e.frameCount,
+    startTime: 0,
+    endTime: 0,
+    durationS: e.durationS,
+    droppedFrames: e.droppedFrames,
+    fpsActual: e.fpsActual,
+    retargetModes: splitModes(e.retargetModes),
+  };
+  if (e.discarded === true) summary.discarded = true;
+  if (e.datasetEpisodeIndex !== undefined && e.datasetEpisodeIndex !== null) {
+    summary.datasetEpisodeIndex = e.datasetEpisodeIndex;
+  }
+  if (e.stopReason) summary.stopReason = e.stopReason as EpisodeStopReason;
+  if (e.startedAt) summary.takeStartedAt = e.startedAt.toISOString();
+  const startedBy = parseJson<EpisodeActor>(e.startedBy);
+  if (startedBy) summary.startedBy = startedBy;
+  const stoppedBy = parseJson<EpisodeActor>(e.stoppedBy);
+  if (stoppedBy) summary.stoppedBy = stoppedBy;
+  const qc = parseJson<NonNullable<EpisodeSummary['quickCheck']>>(e.quickCheck);
+  if (qc) summary.quickCheck = qc;
+  return summary;
 }
 
 export class TeleoperationService extends EventEmitter {
@@ -286,6 +420,9 @@ export class TeleoperationService extends EventEmitter {
       this.lastQualityFeedback.delete(sessionId);
       this.clientEpisodeIndex.delete(sessionId);
       this.progressTicks.delete(sessionId);
+      this.clientLedgers.delete(sessionId);
+      this.takeStamps.delete(sessionId);
+      this.seenStops.delete(sessionId);
 
       await this.prisma.teleoperationSession.delete({
         where: { id: sessionId },
@@ -385,6 +522,10 @@ export class TeleoperationService extends EventEmitter {
           // Optional per-take auto-stop (TASK-406); an agent before TASK-402
           // ignores the field. Omitted when unset, i.e. the operator stops takes.
           ...(session.episodeTimeS != null ? { episodeTimeS: session.episodeTimeS } : {}),
+          // D3 (TASK-408): the session opens BETWEEN takes and the first take
+          // begins on purpose. Auto-opening take 0 lost a whole session on
+          // 2026-10-16.
+          startBetweenTakes: true,
         });
       } catch (err) {
         // The robot understood and said no. That is a state on the robot the
@@ -405,7 +546,10 @@ export class TeleoperationService extends EventEmitter {
           `[TeleoperationService] agent-side recording started on ${session.robotId}: ` +
             `${agentStatus.cameras.map((c) => c.key).join(', ') || 'no cameras'} @ ${agentStatus.fpsTarget} fps`
         );
-        this.startAgentProgressPoller(sessionId, session.robotId);
+        // Whatever the robot stopped before this session is not news.
+        this.seenStops.set(sessionId, agentStatus.lastStop?.atMs ?? 0);
+        this.takeStamps.delete(sessionId);
+        this.startAgentProgressPoller(session as TeleoperationSession);
       } else {
         recorderKind = 'sim';
         console.log(
@@ -432,6 +576,12 @@ export class TeleoperationService extends EventEmitter {
       session: this.toSessionResponse(updated as TeleoperationSession),
       timestamp: new Date(),
     });
+    // Every client learns the session is open and between takes (D3).
+    try {
+      this.emitLive((await this.readLive(updated as TeleoperationSession)).live);
+    } catch (err) {
+      console.warn(`[TeleoperationService] could not publish the live state of ${sessionId}:`, err);
+    }
 
     return this.toSessionResponse(updated as TeleoperationSession);
   }
@@ -509,7 +659,7 @@ export class TeleoperationService extends EventEmitter {
       // joints-only recorder alongside it, writing TeleoperationFrame rows that
       // then look like a frame-based session to `endSession`.
       await agentRecordingService.resume(session.robotId);
-      this.startAgentProgressPoller(sessionId, session.robotId);
+      this.startAgentProgressPoller(session as TeleoperationSession);
     } else {
       const existingRecorder = this.simRecorders.get(sessionId);
       if (existingRecorder) {
@@ -540,6 +690,12 @@ export class TeleoperationService extends EventEmitter {
    * via `POST /record/stop`.
    */
   async endSession(sessionId: string): Promise<SessionResponse> {
+    // In line with the episode actions: a take begun while the session is
+    // being ended must not slip in between the stop and the bookkeeping.
+    return this.serializeEpisodes(sessionId, () => this.endSessionNow(sessionId));
+  }
+
+  private async endSessionNow(sessionId: string): Promise<SessionResponse> {
     const session = await this.prisma.teleoperationSession.findUnique({
       where: { id: sessionId },
     });
@@ -558,18 +714,39 @@ export class TeleoperationService extends EventEmitter {
     this.stopSidecarProgressPoller(sessionId);
     this.stopAgentProgressPoller(sessionId);
 
-    // Stop the sim frame recorder (if any) and flush remaining frames
+    // Stop the sim frame recorder (if any) and flush remaining frames. A take
+    // still open is closed first, and its row says the session ended it.
     const recorder = this.simRecorders.get(sessionId);
+    const ledger = recorder?.ledger ?? this.clientLedgers.get(sessionId);
+    if (ledger?.current()) {
+      const ended = ledger.end('session_end');
+      if (ended.ok) {
+        if (!recorder) {
+          ended.record.frames = await this.prisma.teleoperationFrame
+            .count({ where: { sessionId, episodeIndex: ended.record.take } })
+            .catch(() => ended.record.frames);
+        }
+        await this.persistTakeStop(sessionId, quickCheckFromTake(ended.record), AUTO_ACTOR);
+      }
+    }
     if (recorder) {
       await recorder.stop();
       this.simRecorders.delete(sessionId);
     }
+    this.clientLedgers.delete(sessionId);
 
     // Stop the agent-side recorder. This is where the encode happens, so it can
     // take a while; the result carries the dataset it wrote or the reason there
     // is none.
     let agentResult: Awaited<ReturnType<typeof agentRecordingService.stop>> = null;
     if (session.recorderKind === 'agent') {
+      // What was open and what was discarded, read before the stop — the stop
+      // result numbers only the kept takes and forgets the rest.
+      const before = await agentRecordingService.status(session.robotId).catch(() => null);
+      const openTake = before?.phase === 'capturing' ? before.episodeIndex : null;
+      const discardedTakes = new Set(
+        (before?.episodes ?? []).filter((e) => e.discarded === true).map((e) => e.episodeIndex)
+      );
       agentResult = await agentRecordingService.stop(session.robotId);
       if (agentResult?.ok) {
         console.log(
@@ -582,8 +759,13 @@ export class TeleoperationService extends EventEmitter {
             `${agentResult?.error ?? 'the robot did not answer'}`
         );
       }
-      await this.persistEpisodeSummaries(sessionId, agentResult?.episodes ?? []);
+      await this.persistEpisodeSummaries(sessionId, agentResult?.episodes ?? [], agentResult?.indexMap, {
+        openTake,
+        discardedTakes,
+      });
     }
+    this.takeStamps.delete(sessionId);
+    this.seenStops.delete(sessionId);
     this.lastQualityFeedback.delete(sessionId);
     this.clientEpisodeIndex.delete(sessionId);
     this.progressTicks.delete(sessionId);
@@ -779,144 +961,357 @@ export class TeleoperationService extends EventEmitter {
       session: this.toSessionResponse(updated as TeleoperationSession),
       timestamp: new Date(),
     });
+    try {
+      this.emitLive((await this.readLive(updated as TeleoperationSession)).live);
+    } catch {
+      /* the live state is a courtesy once the session is over */
+    }
 
     return this.toSessionResponse(updated as TeleoperationSession);
   }
 
   // ============================================================================
-  // EPISODES WITHIN A SESSION
+  // EPISODES WITHIN A SESSION (TASK-408: explicit, guarded, attributed, shared)
   // ============================================================================
 
   /**
-   * Advance the session's recording to the next episode.
-   * Only valid while the session is recording.
+   * The session's live state, as every client should render it.
    */
-  async nextEpisode(sessionId: string): Promise<{ episodeIndex: number }> {
-    const session = await this.prisma.teleoperationSession.findUnique({
-      where: { id: sessionId },
-    });
-
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-    if (session.status !== 'recording') {
-      throw new Error(
-        `Cannot advance episode: session status is ${session.status}, expected 'recording'`
-      );
-    }
-    if (session.sidecarDatasetPath) {
-      throw new Error('Episodes are managed by the hardware sidecar for this session');
-    }
-
-    // Agent-recorded sessions: the episode boundary lives in the recorder that
-    // holds the frames, so it has to be drawn there. Doing it here as well
-    // would put the boundary in the database and nowhere in the dataset.
-    if (session.recorderKind === 'agent') {
-      const agentIndex = await agentRecordingService.nextEpisode(session.robotId);
-      if (agentIndex === null) {
-        throw new Error(
-          'The robot is recording this session but did not accept the episode boundary'
-        );
-      }
-      this.emitEvent({
-        type: 'session:progress',
-        sessionId,
-        recordingProgress: { currentEpisode: agentIndex, running: true },
-        timestamp: new Date(),
-      });
-      return { episodeIndex: agentIndex };
-    }
-
-    const recorder = this.simRecorders.get(sessionId);
-    let episodeIndex: number;
-    if (recorder) {
-      episodeIndex = recorder.nextEpisode();
-    } else {
-      // No live recorder (e.g. client-posted frames): derive from stored frames
-      const agg = await this.prisma.teleoperationFrame.aggregate({
-        where: { sessionId },
-        _max: { episodeIndex: true },
-      });
-      episodeIndex = (agg._max.episodeIndex ?? 0) + 1;
-      this.clientEpisodeIndex.set(sessionId, episodeIndex);
-    }
-
-    this.emitEvent({
-      type: 'session:progress',
-      sessionId,
-      recordingProgress: { currentEpisode: episodeIndex, running: true },
-      timestamp: new Date(),
-    });
-
-    return { episodeIndex };
+  async getLiveState(sessionId: string): Promise<LiveState> {
+    const session = await this.prisma.teleoperationSession.findUnique({ where: { id: sessionId } });
+    if (!session) throw new Error(`Session ${sessionId} not found`);
+    return (await this.readLive(session as TeleoperationSession)).live;
   }
 
   /**
-   * Summarize the session's episodes from its persisted frames.
+   * Begin a take. Any session member may (D1); nothing on the robot moves.
    */
-  async listEpisodes(sessionId: string): Promise<EpisodeSummary[]> {
+  async startEpisode(sessionId: string, ctx: EpisodeActionContext): Promise<{ live: LiveState; take: number }> {
+    return this.serializeEpisodes(sessionId, async () => {
+      const { session } = await this.episodePrelude(sessionId, 'start', ctx);
+      const by = actorOf(ctx);
+      const begun = await this.takeBackend(session).begin();
+      if (!begun.ok) {
+        const { live } = await this.readLive(session);
+        throw new EpisodeActionError(begun.code, live, conflictMessage(begun.code));
+      }
+      // D5: the server stamps the start, on its own clock.
+      const startedAtMs = Date.now();
+      this.takeStamps.set(sessionId, { take: begun.take, atMs: startedAtMs });
+      await this.persistTakeStart(sessionId, begun.take, startedAtMs, by);
+      const { live } = await this.readLive(session);
+      this.emitEpisode('episode:started', sessionId, live, {
+        take: begun.take,
+        startedAt: new Date(startedAtMs).toISOString(),
+        by,
+      });
+      await this.auditEpisode(session, 'episode.start', begun.take, ctx);
+      this.emitLive(live);
+      return { live, take: begun.take };
+    });
+  }
+
+  /**
+   * End the open take. Its row is written now — not when the session ends —
+   * with the robot's quick check, so a crash later loses nothing about it.
+   */
+  async stopEpisode(
+    sessionId: string,
+    ctx: EpisodeActionContext
+  ): Promise<{ live: LiveState; quickCheck: QuickCheck | null }> {
+    return this.serializeEpisodes(sessionId, async () => {
+      const { session } = await this.episodePrelude(sessionId, 'stop', ctx);
+      const by = actorOf(ctx);
+      const ended = await this.takeBackend(session).end('operator');
+      if (!ended.ok) {
+        const { live } = await this.readLive(session);
+        throw new EpisodeActionError(ended.code, live, conflictMessage(ended.code));
+      }
+      await this.persistTakeStop(sessionId, ended.quickCheck, by, ended.retargetModes);
+      this.takeStamps.delete(sessionId);
+      const { live } = await this.readLive(session, ended.quickCheck.take);
+      this.emitEpisode('episode:stopped', sessionId, live, {
+        take: ended.quickCheck.take,
+        quickCheck: ended.quickCheck,
+        reason: 'operator',
+        by,
+      });
+      await this.auditEpisode(session, 'episode.stop', ended.quickCheck.take, ctx);
+      this.emitLive(live);
+      return { live, quickCheck: ended.quickCheck };
+    });
+  }
+
+  /**
+   * End the open take (reason `next`) and begin the next one; between takes,
+   * just begin one. Guarded like the others: two "next" presses that both saw
+   * take 3 produce take 4 once, and the second answers 409 with the live state.
+   */
+  async nextEpisode(
+    sessionId: string,
+    ctx: EpisodeActionContext = SYSTEM_CONTEXT
+  ): Promise<{ episodeIndex: number; live: LiveState }> {
+    return this.serializeEpisodes(sessionId, async () => {
+      const { session, before } = await this.episodePrelude(sessionId, 'next', ctx);
+      const by = actorOf(ctx);
+      const result = await this.takeBackend(session).next(before);
+      if (result.stopped) {
+        await this.persistTakeStop(sessionId, result.stopped.quickCheck, by, result.stopped.retargetModes);
+      }
+      const startedAtMs = Date.now();
+      this.takeStamps.set(sessionId, { take: result.take, atMs: startedAtMs });
+      await this.persistTakeStart(sessionId, result.take, startedAtMs, by);
+      const { live } = await this.readLive(session, result.stopped?.quickCheck.take ?? null);
+      if (result.stopped) {
+        this.emitEpisode('episode:stopped', sessionId, live, {
+          take: result.stopped.quickCheck.take,
+          quickCheck: result.stopped.quickCheck,
+          reason: 'next',
+          by,
+        });
+      }
+      this.emitEpisode('episode:started', sessionId, live, {
+        take: result.take,
+        startedAt: new Date(startedAtMs).toISOString(),
+        by,
+      });
+      await this.auditEpisode(session, 'episode.next', result.take, ctx);
+      this.emitLive(live);
+      return { episodeIndex: result.take, live };
+    });
+  }
+
+  /**
+   * Discard the LAST take — the open one (it is ended first, then discarded),
+   * else the one that finished last. Never an earlier one: a second press on a
+   * take already discarded answers 409 `already_discarded` instead of walking
+   * back into the take before it.
+   */
+  async discardLast(sessionId: string, ctx: EpisodeActionContext): Promise<{ live: LiveState; take: number }> {
+    return this.serializeEpisodes(sessionId, async () => {
+      const { session, before } = await this.episodePrelude(sessionId, 'discard-last', ctx);
+      const by = actorOf(ctx);
+      const take = before.take as number; // the guard refused a null take
+      const backend = this.takeBackend(session);
+      let stoppedTake: number | null = null;
+      if (before.phase === 'capturing') {
+        const ended = await backend.end('operator');
+        if (ended.ok) {
+          await this.persistTakeStop(sessionId, ended.quickCheck, by, ended.retargetModes);
+          this.takeStamps.delete(sessionId);
+          stoppedTake = ended.quickCheck.take;
+        }
+      }
+      await backend.discard(take);
+      await this.markTakeDiscarded(sessionId, take);
+      const { live } = await this.readLive(session, stoppedTake);
+      this.emitEpisode('episode:discarded', sessionId, live, { take, by });
+      await this.auditEpisode(session, 'episode.discard', take, ctx);
+      this.emitLive(live);
+      return { live, take };
+    });
+  }
+
+  /**
+   * Discard one take by number. Only valid before the session is completed.
+   *
+   * A FINISHED take is discarded: its row is kept, flagged (D4), and the frames
+   * the server holds are deleted. The OPEN take is restarted instead — every
+   * recorder (the agent's, the SimFrameRecorder's ledger, a client ledger)
+   * treats "discard the live take" as "record this take again" (TASK-402 D2),
+   * so it goes on recording under the same number and may well be kept. Its
+   * row is therefore not flagged and no `episode:discarded` is sent; it gets a
+   * fresh start stamp and every client a new live state. Which of the two
+   * happened is read back from the recorder, not assumed from the state before
+   * — a take the robot auto-stopped in between is a finished one.
+   *
+   * A take number the session never had answers 404 `unknown_take`; a robot
+   * that does not discard a take it has answers 502 `recorder_unavailable`.
+   */
+  async discardEpisode(
+    sessionId: string,
+    episodeIndex: number,
+    ctx: EpisodeActionContext = SYSTEM_CONTEXT
+  ): Promise<{ episodeIndex: number; deletedFrames: number; frameCount: number; restarted: boolean; live: LiveState }> {
+    return this.serializeEpisodes(sessionId, async () => {
+      const found = await this.prisma.teleoperationSession.findUnique({
+        where: { id: sessionId },
+      });
+
+      if (!found) {
+        throw new Error(`Session ${sessionId} not found`);
+      }
+      const session = found as TeleoperationSession;
+      if (!['created', 'recording', 'paused'].includes(session.status)) {
+        throw new Error(
+          `Cannot discard episode: session status is ${session.status}. Episodes can only be discarded before the session is completed.`
+        );
+      }
+      const by = actorOf(ctx);
+
+      const { live: before, agent } = await this.readLive(session);
+      if (agent) await this.reportUnseenStop(sessionId, before, agent);
+      if (!(await this.takeExists(sessionId, episodeIndex, before))) {
+        throw new EpisodeActionError('unknown_take', before, conflictMessage('unknown_take'));
+      }
+
+      // Drop any not-yet-persisted frames of this episode from the live recorder
+      // and wait for an in-flight persist batch, so no frame of this episode can
+      // land in the DB after the delete below.
+      const liveRecorder = this.simRecorders.get(sessionId);
+      if (liveRecorder) {
+        await liveRecorder.discardEpisode(episodeIndex);
+      }
+      if (session.recorderKind === 'agent') {
+        // The frames are on the robot, not in this database, so the delete has to
+        // happen there. The deleteMany below is still correct and still runs — it
+        // is a no-op for an agent-recorded session, and it is what cleans up a
+        // session that fell back to the sim recorder partway through.
+        const done = await agentRecordingService.discardEpisode(session.robotId, episodeIndex);
+        if (!done) {
+          const { live } = await this.readLive(session);
+          throw new EpisodeActionError(
+            'recorder_unavailable',
+            live,
+            `The robot did not discard take ${episodeIndex} — check that its agent is running`
+          );
+        }
+      } else if (!liveRecorder) {
+        this.clientLedgers.get(sessionId)?.discard(episodeIndex);
+      }
+
+      const deleted = await this.prisma.teleoperationFrame.deleteMany({
+        where: { sessionId, episodeIndex },
+      });
+
+      const frameCount = await this.prisma.teleoperationFrame.count({ where: { sessionId } });
+      await this.prisma.teleoperationSession.update({
+        where: { id: sessionId },
+        data: { frameCount },
+      });
+
+      let { live } = await this.readLive(session);
+      const restarted = live.phase === 'capturing' && live.take === episodeIndex;
+      if (restarted) {
+        // D5: the re-recorded take's clock starts now, on this server.
+        const startedAtMs = Date.now();
+        this.takeStamps.set(sessionId, { take: episodeIndex, atMs: startedAtMs });
+        await this.persistTakeStart(sessionId, episodeIndex, startedAtMs, by);
+        ({ live } = await this.readLive(session));
+        await this.auditEpisode(session, 'episode.restart', episodeIndex, ctx);
+      } else {
+        await this.markTakeDiscarded(sessionId, episodeIndex);
+        this.emitEpisode('episode:discarded', sessionId, live, { take: episodeIndex, by });
+        await this.auditEpisode(session, 'episode.discard', episodeIndex, ctx);
+      }
+      this.emitLive(live);
+
+      return { episodeIndex, deletedFrames: deleted.count, frameCount, restarted, live };
+    });
+  }
+
+  /**
+   * Whether this session ever had take `take`: a number the recorder has
+   * handed out (takes are numbered upward from 0, so any up to the live one),
+   * or one a row or a stored frame names — the takes a client ledger rebuilt
+   * after a restart does not list.
+   */
+  private async takeExists(sessionId: string, take: number, live: LiveState): Promise<boolean> {
+    if (take < 0) return false;
+    if (live.take !== null && take <= live.take) return true;
+    const [rows, frames] = await Promise.all([
+      this.prisma.teleoperationEpisode
+        .findMany({ where: { sessionId, episodeIndex: take }, select: { episodeIndex: true } })
+        .catch(() => []),
+      this.prisma.teleoperationFrame.count({ where: { sessionId, episodeIndex: take } }).catch(() => 0),
+    ]);
+    return (Array.isArray(rows) && rows.length > 0) || (typeof frames === 'number' && frames > 0);
+  }
+
+  /**
+   * The JPEG of a take's middle frame, proxied from the robot; null when there
+   * is none (not an agent session, a take without a camera, or a session the
+   * robot has already finished).
+   */
+  async episodeThumbnail(sessionId: string, take: number): Promise<Buffer | null> {
+    const session = await this.prisma.teleoperationSession.findUnique({ where: { id: sessionId } });
+    if (!session) throw new Error(`Session ${sessionId} not found`);
+    if (session.recorderKind !== 'agent') return null;
+    return agentRecordingService.thumbnail(session.robotId, take);
+  }
+
+  /**
+   * Summarize the session's episodes. Discarded takes are hidden unless asked for.
+   */
+  async listEpisodes(
+    sessionId: string,
+    options: { includeDiscarded?: boolean } = {}
+  ): Promise<EpisodeSummary[]> {
     const session = await this.prisma.teleoperationSession.findUnique({
       where: { id: sessionId },
     });
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
+    const keep = (e: EpisodeSummary): boolean => options.includeDiscarded === true || e.discarded !== true;
 
-    // Persisted summaries win when they exist. They carry two numbers that
-    // cannot be derived from frames at all: the ticks the recorder LOST (a
-    // missing frame leaves no row to count) and the rate it really achieved.
+    // Persisted rows carry what cannot be derived from frames at all: the ticks
+    // the recorder LOST (a missing frame leaves no row to count), the rate it
+    // really achieved, who began and ended the take, and whether it was
+    // discarded. Since TASK-408 a take's row is written when it stops, so a
+    // LIVE session also has rows — for the takes that finished.
     const persisted = await this.prisma.teleoperationEpisode.findMany({
       where: { sessionId },
       orderBy: { episodeIndex: 'asc' },
     });
-    if (persisted.length > 0) {
-      // `startTime` is where the episode begins in the SESSION's timeline, and
-      // for an agent-recorded session that is the sum of what came before it —
-      // the recorder reports each episode's own duration, not an offset. Every
-      // row read 0.0s before this, which the review table renders as a column
-      // of zeroes that looks like a bug in the recorder rather than in the sum.
-      let cursor = 0;
-      return persisted.map((e) => {
-        const startTime = Math.round(cursor * 100) / 100;
-        cursor += e.durationS;
-        return {
-          episodeIndex: e.episodeIndex,
-          frameCount: e.frameCount,
-          startTime,
-          endTime: Math.round(cursor * 100) / 100,
-          durationS: Math.round(e.durationS * 100) / 100,
-          droppedFrames: e.droppedFrames,
-          fpsActual: Math.round(e.fpsActual * 100) / 100,
-          retargetModes: splitModes(e.retargetModes),
-        };
-      });
-    }
+    const rows = new Map<number, EpisodeSummary>();
+    for (const e of persisted) rows.set(e.episodeIndex, summaryFromRow(e));
 
-    // A live agent-recorded session has no rows yet — they are written when it
-    // stops — so ask the robot what it has so far.
-    //
-    // NOT gated on `status === 'recording'`: a PAUSED session still has
-    // episodes, and gating on the status made the panel go empty the moment an
-    // operator paused, which reads as "your takes are gone".
-    if (session.recorderKind === 'agent') {
+    // A live agent-recorded session: the robot has the freshest numbers, the
+    // open take included. NOT gated on `status === 'recording'`: a PAUSED
+    // session still has episodes, and gating on the status made the panel go
+    // empty the moment an operator paused, which reads as "your takes are gone".
+    if (session.recorderKind === 'agent' && (session.status === 'recording' || session.status === 'paused')) {
       const live = await agentRecordingService.status(session.robotId);
       if (live) {
-        let cursor = 0;
-        return live.episodes.map((e) => {
-          const startTime = Math.round(cursor * 100) / 100;
-          cursor += e.durationS;
-          return {
+        for (const e of live.episodes) {
+          const row = rows.get(e.episodeIndex);
+          const discarded = e.discarded === true || row?.discarded === true;
+          rows.set(e.episodeIndex, {
+            ...(row ?? {}),
             episodeIndex: e.episodeIndex,
             frameCount: e.frames,
-            startTime,
-            endTime: Math.round(cursor * 100) / 100,
+            startTime: 0,
+            endTime: 0,
             durationS: e.durationS,
             droppedFrames: e.dropped,
             fpsActual: e.fpsActual,
             retargetModes: e.retargetModes,
+            ...(discarded ? { discarded: true } : {}),
+          });
+        }
+      }
+    }
+
+    if (rows.size > 0) {
+      // `startTime` is where the episode begins in the SESSION's timeline, and
+      // for a recorder that reports each episode's own duration that is the sum
+      // of what came before it — every row read 0.0s before this.
+      let cursor = 0;
+      return [...rows.values()]
+        .sort((a, b) => a.episodeIndex - b.episodeIndex)
+        .filter(keep)
+        .map((e) => {
+          const startTime = Math.round(cursor * 100) / 100;
+          cursor += e.durationS;
+          return {
+            ...e,
+            startTime,
+            endTime: Math.round(cursor * 100) / 100,
+            durationS: Math.round(e.durationS * 100) / 100,
+            ...(e.fpsActual !== undefined ? { fpsActual: Math.round(e.fpsActual * 100) / 100 } : {}),
           };
         });
-      }
     }
 
     const groups = await this.prisma.teleoperationFrame.groupBy({
@@ -941,56 +1336,417 @@ export class TeleoperationService extends EventEmitter {
     });
   }
 
-  /**
-   * Discard an episode: delete its frames and update the session frame count.
-   * Only valid before export (created/recording/paused).
-   */
-  async discardEpisode(
-    sessionId: string,
-    episodeIndex: number
-  ): Promise<{ episodeIndex: number; deletedFrames: number; frameCount: number }> {
-    const session = await this.prisma.teleoperationSession.findUnique({
-      where: { id: sessionId },
-    });
+  // --------------------------------------------------------------------------
+  // Episode control internals
+  // --------------------------------------------------------------------------
 
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-    if (!['created', 'recording', 'paused'].includes(session.status)) {
-      throw new Error(
-        `Cannot discard episode: session status is ${session.status}. Episodes can only be discarded before the session is completed.`
+  /**
+   * Run episode actions of one session one at a time. Two presses that arrive
+   * together are not both checked against the same state: the second one runs
+   * after the first has finished and sees the take the first one made.
+   */
+  private serializeEpisodes<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.episodeChains.get(sessionId) ?? Promise.resolve();
+    const run = prev.then(async () => {
+      this.mutating.add(sessionId);
+      try {
+        return await fn();
+      } finally {
+        this.mutating.delete(sessionId);
+      }
+    });
+    const tail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.episodeChains.set(sessionId, tail);
+    void tail.then(() => {
+      if (this.episodeChains.get(sessionId) === tail) this.episodeChains.delete(sessionId);
+    });
+    return run;
+  }
+
+  /** Load, check the session can take this action, and check the client's view of it. */
+  private async episodePrelude(
+    sessionId: string,
+    op: EpisodeOp,
+    ctx: EpisodeActionContext
+  ): Promise<{ session: TeleoperationSession; before: LiveState }> {
+    const found = await this.prisma.teleoperationSession.findUnique({ where: { id: sessionId } });
+    if (!found) throw new Error(`Session ${sessionId} not found`);
+    const session = found as TeleoperationSession;
+    if (session.sidecarDatasetPath || session.recorderKind === 'sidecar') {
+      // SO-101 sessions keep lerobot-record's own fixed episode flow.
+      const { live } = await this.readLive(session);
+      throw new EpisodeActionError(
+        'unsupported_recorder',
+        live,
+        'Episodes are managed by the hardware sidecar for this session'
       );
     }
-
-    // Drop any not-yet-persisted frames of this episode from the live recorder
-    // and wait for an in-flight persist batch, so no frame of this episode can
-    // land in the DB after the delete below.
-    const liveRecorder = this.simRecorders.get(sessionId);
-    if (liveRecorder) {
-      await liveRecorder.discardEpisode(episodeIndex);
+    const { live: before, agent } = await this.readLive(session);
+    // A stop the robot made on its own since the last poll is reported now,
+    // before this action draws a boundary of its own — else the action's
+    // readLive would be the first to see it and the poller never would.
+    if (agent) await this.reportUnseenStop(sessionId, before, agent);
+    if (session.status !== 'recording') {
+      throw new EpisodeActionError(
+        'not_recording',
+        before,
+        `Cannot ${op === 'next' ? 'advance episode' : `${op} a take`}: session status is ${session.status}, expected 'recording'`
+      );
     }
-    if (session.recorderKind === 'agent') {
-      // The frames are on the robot, not in this database, so the delete has to
-      // happen there. The deleteMany below is still correct and still runs — it
-      // is a no-op for an agent-recorded session, and it is what cleans up a
-      // session that fell back to the sim recorder partway through.
-      await agentRecordingService.discardEpisode(session.robotId, episodeIndex);
-      await this.prisma.teleoperationEpisode.deleteMany({
-        where: { sessionId, episodeIndex },
+    if (session.recorderKind === 'agent' && before.phase === null) {
+      throw new EpisodeActionError(
+        'recorder_unavailable',
+        before,
+        'The robot did not report its recorder — check that its agent is running'
+      );
+    }
+    const refused = guardEpisodeAction(op, before, ctx.expectedTake);
+    if (refused) throw new EpisodeActionError(refused, before, conflictMessage(refused));
+    return { session, before };
+  }
+
+  /**
+   * The live state, and the agent status it was built from when there is one.
+   * `stoppedTake` is the take the calling action itself just stopped: the
+   * agent's last stop is recorded as seen only when it is THAT take's, so the
+   * poller does not report this server's own stop as one it did not make —
+   * and still reports a stop it did not make (the robot's `time_limit`) that
+   * an action happened to read first.
+   */
+  private async readLive(
+    session: TeleoperationSession,
+    stoppedTake: number | null = null
+  ): Promise<{ live: LiveState; agent: AgentRecordingStatus | null }> {
+    const nowMs = Date.now();
+    const base: LiveBase = {
+      sessionId: session.id,
+      status: session.status,
+      fpsTarget: session.fps,
+      autoStopS: session.episodeTimeS ?? null,
+      nowMs,
+    };
+    const active = session.status === 'recording' || session.status === 'paused';
+
+    if (active && session.recorderKind === 'agent') {
+      const agent = await agentRecordingService.status(session.robotId).catch(() => null);
+      if (agent && (agent.sessionId === null || agent.sessionId === session.id)) {
+        if (stoppedTake !== null) this.noteStopSeen(session.id, agent, stoppedTake);
+        const stamp = this.takeStamps.get(session.id);
+        const live = liveFromAgent(
+          base,
+          agent,
+          stamp && agent.phase === 'capturing' && stamp.take === agent.episodeIndex ? stamp.atMs : null
+        );
+        return { live, agent };
+      }
+      return { live: idleLive(base, await this.rowCounts(session.id)), agent: null };
+    }
+
+    const recorder = this.simRecorders.get(session.id);
+    if (active && recorder) {
+      const progress = recorder.getProgress();
+      const live = liveFromLedger(base, {
+        phase: recorder.phase,
+        takes: recorder.takes(),
+        totalFrames: progress.frameCount,
+        fpsActual: progress.fpsActual,
+        degraded: progress.degraded,
+        elapsedS: progress.elapsedS,
       });
+      return { live, agent: null };
     }
 
-    const deleted = await this.prisma.teleoperationFrame.deleteMany({
-      where: { sessionId, episodeIndex },
-    });
+    if (active && !session.sidecarDatasetPath && session.recorderKind !== 'sidecar') {
+      const ledger = await this.clientLedger(session.id);
+      const live = liveFromLedger(base, {
+        phase: ledger.phase,
+        takes: ledger.all(),
+        totalFrames: session.frameCount,
+        fpsActual: null,
+        degraded: false,
+        elapsedS: session.startedAt ? Math.round((nowMs - session.startedAt.getTime()) / 10) / 100 : null,
+      });
+      return { live, agent: null };
+    }
 
-    const frameCount = await this.prisma.teleoperationFrame.count({ where: { sessionId } });
-    await this.prisma.teleoperationSession.update({
-      where: { id: sessionId },
-      data: { frameCount },
-    });
+    return { live: idleLive(base, await this.rowCounts(session.id)), agent: null };
+  }
 
-    return { episodeIndex, deletedFrames: deleted.count, frameCount };
+  /** Kept / discarded counts and the last take, from the rows (a session with no live recorder). */
+  private async rowCounts(sessionId: string): Promise<{ kept: number; discarded: number; take: number | null }> {
+    const rows = await this.prisma.teleoperationEpisode
+      .findMany({ where: { sessionId }, select: { episodeIndex: true, discarded: true, frameCount: true } })
+      .catch(() => [] as { episodeIndex: number; discarded: boolean; frameCount: number }[]);
+    const list = Array.isArray(rows) ? rows : [];
+    return {
+      kept: list.filter((r) => r.discarded !== true && r.frameCount > 0).length,
+      discarded: list.filter((r) => r.discarded === true).length,
+      take: list.length > 0 ? Math.max(...list.map((r) => r.episodeIndex)) : null,
+    };
+  }
+
+  /**
+   * The take ledger of a session whose frames a client posts. Its first take
+   * number follows the frames already stored, so a server restart mid-session
+   * never hands out a number twice.
+   */
+  private async clientLedger(sessionId: string): Promise<TakeLedger> {
+    const existing = this.clientLedgers.get(sessionId);
+    if (existing) return existing;
+    const agg = await this.prisma.teleoperationFrame.aggregate({
+      where: { sessionId },
+      _max: { episodeIndex: true },
+    });
+    const max = agg?._max?.episodeIndex ?? null;
+    const known = this.clientEpisodeIndex.get(sessionId);
+    const ledger = new TakeLedger({
+      nextTake: Math.max(max === null ? 0 : max + 1, known === undefined ? 0 : known + 1),
+    });
+    // A concurrent caller may have built one meanwhile; keep the first.
+    const raced = this.clientLedgers.get(sessionId);
+    if (raced) return raced;
+    this.clientLedgers.set(sessionId, ledger);
+    return ledger;
+  }
+
+  /** The recorder that holds this session's takes, behind one shape. */
+  private takeBackend(session: TeleoperationSession): TakeBackend {
+    const sessionId = session.id;
+    if (session.recorderKind === 'agent') {
+      const robotId = session.robotId;
+      return {
+        begin: async () => {
+          const r = await agentRecordingService.beginEpisode(robotId);
+          if (!r) throw new EpisodeActionError('recorder_unavailable', undefined, 'The robot did not accept the take');
+          return r.ok ? { ok: true, take: r.episodeIndex } : { ok: false, code: r.code === 'not_recording' ? 'not_recording' : 'already_capturing' };
+        },
+        end: async (reason) => {
+          const r = await agentRecordingService.endEpisode(robotId, reason === 'time_limit' ? 'time_limit' : 'operator');
+          if (!r) throw new EpisodeActionError('recorder_unavailable', undefined, 'The robot did not end the take');
+          if (!r.ok) return { ok: false, code: r.code === 'not_recording' ? 'not_recording' : 'not_capturing' };
+          const report = r.report ?? { episodeIndex: r.episodeIndex, frames: 0, dropped: 0, durationS: 0, fpsActual: 0 };
+          return {
+            ok: true,
+            quickCheck: quickCheckFromReport(sessionId, report, reason),
+            retargetModes: report.retargetModes,
+          };
+        },
+        next: async (before) => {
+          const take = await agentRecordingService.nextEpisode(robotId);
+          if (take === null) {
+            throw new EpisodeActionError(
+              'recorder_unavailable',
+              undefined,
+              'The robot is recording this session but did not accept the episode boundary'
+            );
+          }
+          if (before.phase !== 'capturing' || before.take === null) return { take, stopped: null };
+          // The finished take's report is in the robot's status, under its own number.
+          const status = await agentRecordingService.status(robotId).catch(() => null);
+          const report = status?.episodes.find((e) => e.episodeIndex === before.take) ?? {
+            episodeIndex: before.take,
+            frames: before.takeFrames,
+            dropped: 0,
+            durationS: before.takeElapsedS ?? 0,
+            fpsActual: 0,
+          };
+          return {
+            take,
+            stopped: { quickCheck: quickCheckFromReport(sessionId, report, 'next'), retargetModes: report.retargetModes },
+          };
+        },
+        discard: async (take) => agentRecordingService.discardEpisode(robotId, take),
+      };
+    }
+
+    const recorder = this.simRecorders.get(sessionId);
+    const ledgerOf = async (): Promise<TakeLedger> => recorder?.ledger ?? this.clientLedger(sessionId);
+    const countFrames = async (take: number, fallback: number): Promise<number> =>
+      recorder
+        ? fallback
+        : this.prisma.teleoperationFrame.count({ where: { sessionId, episodeIndex: take } }).catch(() => fallback);
+    return {
+      begin: async () => {
+        const ledger = await ledgerOf();
+        const r = ledger.begin();
+        if (r.ok && !recorder) this.clientEpisodeIndex.set(sessionId, r.take);
+        return r.ok ? { ok: true, take: r.take } : { ok: false, code: r.code };
+      },
+      end: async (reason) => {
+        const ledger = await ledgerOf();
+        const r = ledger.end(reason);
+        if (!r.ok) return { ok: false, code: r.code };
+        r.record.frames = await countFrames(r.record.take, r.record.frames);
+        return { ok: true, quickCheck: quickCheckFromTake(r.record) };
+      },
+      next: async () => {
+        const ledger = await ledgerOf();
+        const open = ledger.current();
+        const take = ledger.next();
+        if (!recorder) this.clientEpisodeIndex.set(sessionId, take);
+        if (!open) return { take, stopped: null };
+        open.frames = await countFrames(open.take, open.frames);
+        return { take, stopped: { quickCheck: quickCheckFromTake(open) } };
+      },
+      discard: async (take) => {
+        if (recorder) {
+          await recorder.discardEpisode(take);
+        } else {
+          (await ledgerOf()).discard(take);
+        }
+        await this.prisma.teleoperationFrame.deleteMany({ where: { sessionId, episodeIndex: take } });
+        const frameCount = await this.prisma.teleoperationFrame.count({ where: { sessionId } });
+        await this.prisma.teleoperationSession.update({ where: { id: sessionId }, data: { frameCount } });
+        return true;
+      },
+    };
+  }
+
+  /** Remember the robot's last stop as one this server made — only if it is the take it stopped. */
+  private noteStopSeen(sessionId: string, agent: AgentRecordingStatus, stoppedTake: number): void {
+    const stop = agent.lastStop;
+    if (!stop || stop.episodeIndex !== stoppedTake) return;
+    if (stop.atMs > (this.seenStops.get(sessionId) ?? 0)) this.seenStops.set(sessionId, stop.atMs);
+  }
+
+  /**
+   * Report a stop the robot made that this server has not reported yet — its
+   * own `time_limit` auto-stop, most often: write the take's row with the
+   * quick check and say so as `episode:stopped` by `auto`. Called by the
+   * poller and by an action's prelude; the seen-mark is set before the first
+   * await, so only one of them ever reports a given stop.
+   */
+  private async reportUnseenStop(sessionId: string, live: LiveState, agent: AgentRecordingStatus): Promise<void> {
+    const stop = agent.lastStop ?? null;
+    if (!stop || stop.atMs <= (this.seenStops.get(sessionId) ?? 0)) return;
+    this.seenStops.set(sessionId, stop.atMs);
+    if (this.takeStamps.get(sessionId)?.take === stop.episodeIndex) this.takeStamps.delete(sessionId);
+    const report = agent.episodes.find((e) => e.episodeIndex === stop.episodeIndex);
+    const quickCheck = report ? quickCheckFromReport(sessionId, report, stop.reason) : null;
+    if (quickCheck) await this.persistTakeStop(sessionId, quickCheck, AUTO_ACTOR, report?.retargetModes);
+    this.emitEpisode('episode:stopped', sessionId, live, {
+      take: stop.episodeIndex,
+      quickCheck,
+      reason: stop.reason,
+      by: AUTO_ACTOR,
+    });
+  }
+
+  private async persistTakeStart(sessionId: string, take: number, startedAtMs: number, by: EpisodeActor): Promise<void> {
+    const data = { startedAt: new Date(startedAtMs), startedBy: JSON.stringify(by) };
+    try {
+      await this.prisma.teleoperationEpisode.upsert({
+        where: { sessionId_episodeIndex: { sessionId, episodeIndex: take } },
+        create: { sessionId, episodeIndex: take, ...data },
+        update: data,
+      });
+    } catch (err) {
+      console.error(`[TeleoperationService] could not persist the start of take ${take} of ${sessionId}:`, err);
+    }
+  }
+
+  /** Write a take's row the moment it stops, with the robot's quick check. */
+  private async persistTakeStop(
+    sessionId: string,
+    qc: QuickCheck,
+    by: EpisodeActor,
+    retargetModes?: string[]
+  ): Promise<void> {
+    const data = {
+      frameCount: qc.frames,
+      droppedFrames: qc.droppedFrames,
+      durationS: qc.durationS,
+      fpsActual: qc.fpsActual,
+      stopReason: qc.stopReason,
+      quickCheck: JSON.stringify({ jointsMoved: qc.jointsMoved, groupsMoved: qc.groupsMoved, warnings: qc.warnings }),
+      stoppedBy: JSON.stringify(by),
+      ...(retargetModes !== undefined ? { retargetModes: joinModes(retargetModes) } : {}),
+    };
+    try {
+      await this.prisma.teleoperationEpisode.upsert({
+        where: { sessionId_episodeIndex: { sessionId, episodeIndex: qc.take } },
+        create: { sessionId, episodeIndex: qc.take, ...data },
+        update: data,
+      });
+    } catch (err) {
+      console.error(`[TeleoperationService] could not persist take ${qc.take} of ${sessionId}:`, err);
+    }
+  }
+
+  /** D4: a discarded take keeps its row, flagged. */
+  private async markTakeDiscarded(sessionId: string, take: number): Promise<void> {
+    try {
+      await this.prisma.teleoperationEpisode.upsert({
+        where: { sessionId_episodeIndex: { sessionId, episodeIndex: take } },
+        create: { sessionId, episodeIndex: take, discarded: true },
+        update: { discarded: true },
+      });
+    } catch (err) {
+      console.error(`[TeleoperationService] could not mark take ${take} of ${sessionId} discarded:`, err);
+    }
+  }
+
+  /**
+   * One compliance entry per episode action: who, from where, which take.
+   * Never throws — an audit log that is down must not undo a take.
+   */
+  private async auditEpisode(
+    session: TeleoperationSession,
+    action: string,
+    take: number,
+    ctx: EpisodeActionContext
+  ): Promise<void> {
+    try {
+      const { complianceLogService } = await import('./ComplianceLogService.js');
+      const { sessionId: logSession } = complianceLogService.getOrCreateSession(session.robotId);
+      await complianceLogService.logAccess({
+        sessionId: logSession,
+        robotId: session.robotId,
+        ...(ctx.user.userId ? { operatorId: ctx.user.userId } : {}),
+        payload: {
+          description: `Teleoperation ${action} (take ${take}) by ${ctx.user.displayName ?? ctx.user.userId ?? 'unknown'} via ${ctx.source}`,
+          resourceType: 'teleoperation_episode',
+          resourceId: `${session.id}:${take}`,
+          action,
+          result: 'allowed',
+          metadata: {
+            teleoperationSessionId: session.id,
+            take,
+            source: ctx.source,
+            clientId: ctx.clientId ?? null,
+            userId: ctx.user.userId,
+            displayName: ctx.user.displayName,
+          },
+        },
+      });
+    } catch (err) {
+      console.error(`[TeleoperationService] audit of ${action} on ${session.id} failed:`, err);
+    }
+  }
+
+  private emitEpisode(
+    type: 'episode:started' | 'episode:stopped' | 'episode:discarded',
+    sessionId: string,
+    live: LiveState,
+    fields: Pick<TeleoperationEvent, 'take' | 'startedAt' | 'quickCheck' | 'reason' | 'by'>
+  ): void {
+    this.emitEvent({ type, sessionId, live, ...fields, timestamp: new Date() });
+  }
+
+  /** `session:live`, and the old `session:progress` built from it — complete, never partial. */
+  private emitLive(live: LiveState, qualityFeedback?: QualityFeedback): void {
+    const timestamp = new Date();
+    this.emitEvent({ type: 'session:live', sessionId: live.sessionId, live, timestamp });
+    this.emitEvent({
+      type: 'session:progress',
+      sessionId: live.sessionId,
+      recordingProgress: progressFromLive(live),
+      ...(qualityFeedback ? { qualityFeedback } : {}),
+      timestamp,
+    });
   }
 
   // ============================================================================
@@ -1482,6 +2238,21 @@ export class TeleoperationService extends EventEmitter {
   /** Progress ticks per session (quality is recomputed every few ticks). */
   private progressTicks = new Map<string, number>();
 
+  /** TASK-408: per-session promise chain that runs episode actions one at a time. */
+  private episodeChains = new Map<string, Promise<unknown>>();
+
+  /** TASK-408: sessions with an episode action in flight (the poller holds its auto-stop check). */
+  private mutating = new Set<string>();
+
+  /** TASK-408 D5: the server's own stamp of when the live take began. */
+  private takeStamps = new Map<string, { take: number; atMs: number }>();
+
+  /** TASK-408: the agent's last stop (its clock, ms) this server has already reported. */
+  private seenStops = new Map<string, number>();
+
+  /** TASK-408: take ledgers of sessions whose frames a client posts (no live recorder). */
+  private clientLedgers = new Map<string, TakeLedger>();
+
   // ============================================================================
   // SIM FRAME RECORDER (frame-based sessions — sim robots without a sidecar)
   // ============================================================================
@@ -1559,25 +2330,44 @@ export class TeleoperationService extends EventEmitter {
       _max: { frameIndex: true, episodeIndex: true },
     });
     const initialFrameIndex = agg._max.frameIndex !== null ? agg._max.frameIndex + 1 : 0;
-    const initialEpisodeIndex = agg._max.episodeIndex ?? 0;
+    // D3 (TASK-408): the recorder opens between takes, and the first take it
+    // opens gets the next unused number — a restarted recorder never writes
+    // into a take that already ended.
+    const initialEpisodeIndex = agg._max.episodeIndex !== null ? agg._max.episodeIndex + 1 : 0;
 
     const recorder = new SimFrameRecorder({
       sessionId,
       fps: session.fps,
       initialFrameIndex,
       initialEpisodeIndex,
+      startBetweenTakes: true,
       fetchTelemetry,
       persistFrames,
       onProgress: (progress: RecorderProgress) => {
         const ticks = (this.progressTicks.get(sessionId) ?? 0) + 1;
         this.progressTicks.set(sessionId, ticks);
-        this.emitEvent({
-          type: 'session:progress',
-          sessionId,
-          recordingProgress: { ...progress },
-          qualityFeedback: this.lastQualityFeedback.get(sessionId),
-          timestamp: new Date(),
-        });
+        const recorder = this.simRecorders.get(sessionId);
+        if (recorder) {
+          // The same live state the agent path publishes, from this recorder's ledger.
+          const live = liveFromLedger(
+            {
+              sessionId,
+              status: progress.running ? 'recording' : 'paused',
+              fpsTarget: session.fps,
+              autoStopS: session.episodeTimeS ?? null,
+              nowMs: Date.now(),
+            },
+            {
+              phase: recorder.phase,
+              takes: recorder.takes(),
+              totalFrames: progress.frameCount,
+              fpsActual: progress.fpsActual,
+              degraded: progress.degraded,
+              elapsedS: progress.elapsedS,
+            }
+          );
+          this.emitLive(live, this.lastQualityFeedback.get(sessionId));
+        }
         // Recompute quality feedback every ~3s (best-effort, async)
         if (ticks % 3 === 0 && progress.running) {
           void this.refreshQualityFeedback(sessionId);
@@ -1712,37 +2502,43 @@ export class TeleoperationService extends EventEmitter {
    * and it is the only place `behind_s` is refreshed — the tick must not spend
    * its budget asking the sim how it is feeling.
    */
-  private startAgentProgressPoller(sessionId: string, robotId: string): void {
+  private startAgentProgressPoller(session: TeleoperationSession): void {
+    const sessionId = session.id;
     this.stopAgentProgressPoller(sessionId);
+    // The poller runs only while the session records; pause and end stop it.
+    const polled: TeleoperationSession = { ...session, status: 'recording', recorderKind: 'agent' };
     const timer = setInterval(() => {
-      void (async () => {
-        const status = await agentRecordingService.status(robotId).catch(() => null);
-        if (!status) return;
-        this.emitEvent({
-          type: 'session:progress',
-          sessionId,
-          recordingProgress: {
-            frameCount: status.totalFrames,
-            currentEpisode: status.episodeIndex,
-            episodesDone: Math.max(0, status.episodes.length - 1),
-            fpsActual: status.fpsActual,
-            running: status.recording,
-            degraded: status.degraded,
-          },
-          timestamp: new Date(),
-        });
-        if (status.degraded && status.lastDropReason) {
-          this.emitEvent({
-            type: 'quality:warning',
-            sessionId,
-            message: `Recording is dropping frames: ${status.lastDropReason}`,
-            timestamp: new Date(),
-          });
-        }
-      })();
+      void this.pollAgentOnce(polled).catch((err) => {
+        console.warn(`[TeleoperationService] live poll of ${sessionId} failed:`, err);
+      });
     }, AGENT_PROGRESS_POLL_MS);
     timer.unref?.();
     this.agentPollers.set(sessionId, timer);
+  }
+
+  /**
+   * One tick of the agent poller: publish the live state (1 Hz) and notice a
+   * take boundary this server did not draw — the robot's own `time_limit`
+   * auto-stop, most often — and say so as `episode:stopped` by `auto`.
+   */
+  private async pollAgentOnce(session: TeleoperationSession): Promise<void> {
+    const sessionId = session.id;
+    const { live, agent } = await this.readLive(session);
+    if (!agent) return;
+    if (!this.agentPollers.has(sessionId)) return; // stopped while asking
+
+    // An action in flight reports (or claims) the stop itself.
+    if (!this.mutating.has(sessionId)) await this.reportUnseenStop(sessionId, live, agent);
+
+    this.emitLive(live);
+    if (agent.degraded && agent.lastDropReason) {
+      this.emitEvent({
+        type: 'quality:warning',
+        sessionId,
+        message: `Recording is dropping frames: ${agent.lastDropReason}`,
+        timestamp: new Date(),
+      });
+    }
   }
 
   private stopAgentProgressPoller(sessionId: string): void {
@@ -1754,7 +2550,12 @@ export class TeleoperationService extends EventEmitter {
   }
 
   /**
-   * Write what the recorder reported about each episode.
+   * Write what the recorder reported about each episode when the session ends.
+   *
+   * The stop result numbers its episodes the way the DATASET does — densely,
+   * kept takes only. `indexMap` (TASK-402) maps each take to that number, so a
+   * report lands on its take's row and the row learns its `datasetEpisodeIndex`.
+   * An agent without `indexMap` numbered takes and episodes the same way.
    *
    * Upserted rather than created: a session that is ended twice, or one whose
    * summaries were already written by a previous stop attempt, must not blow up
@@ -1762,34 +2563,65 @@ export class TeleoperationService extends EventEmitter {
    */
   private async persistEpisodeSummaries(
     sessionId: string,
-    episodes: AgentEpisodeReport[]
+    episodes: AgentEpisodeReport[],
+    indexMap?: { take: number; datasetEpisode: number | null }[],
+    end?: { openTake: number | null; discardedTakes: Set<number> }
   ): Promise<void> {
+    const takeOf = (datasetEpisode: number): number =>
+      indexMap?.find((m) => m.datasetEpisode === datasetEpisode)?.take ?? datasetEpisode;
+    const written = new Set<number>();
     for (const ep of episodes) {
+      const take = takeOf(ep.episodeIndex);
+      written.add(take);
+      const data = {
+        frameCount: ep.frames,
+        droppedFrames: ep.dropped,
+        durationS: ep.durationS,
+        fpsActual: ep.fpsActual,
+        retargetModes: joinModes(ep.retargetModes),
+        ...(indexMap ? { datasetEpisodeIndex: ep.episodeIndex } : {}),
+        ...(ep.jointsMoved
+          ? {
+              quickCheck: JSON.stringify({
+                jointsMoved: ep.jointsMoved,
+                groupsMoved: ep.groupsMoved ?? [],
+                warnings: ep.warnings ?? [],
+              }),
+            }
+          : {}),
+        ...(end?.openTake === take ? { stopReason: 'session_end', stoppedBy: JSON.stringify(AUTO_ACTOR) } : {}),
+      };
       try {
         await this.prisma.teleoperationEpisode.upsert({
-          where: { sessionId_episodeIndex: { sessionId, episodeIndex: ep.episodeIndex } },
-          create: {
-            sessionId,
-            episodeIndex: ep.episodeIndex,
-            frameCount: ep.frames,
-            droppedFrames: ep.dropped,
-            durationS: ep.durationS,
-            fpsActual: ep.fpsActual,
-            retargetModes: joinModes(ep.retargetModes),
-          },
-          update: {
-            frameCount: ep.frames,
-            droppedFrames: ep.dropped,
-            durationS: ep.durationS,
-            fpsActual: ep.fpsActual,
-            retargetModes: joinModes(ep.retargetModes),
-          },
+          where: { sessionId_episodeIndex: { sessionId, episodeIndex: take } },
+          create: { sessionId, episodeIndex: take, ...data },
+          update: data,
         });
       } catch (err) {
         console.error(
-          `[TeleoperationService] could not persist episode ${ep.episodeIndex} of ${sessionId}:`,
+          `[TeleoperationService] could not persist episode ${take} of ${sessionId}:`,
           err
         );
+      }
+    }
+    // Takes that did not become an episode: discarded ones are flagged (D4),
+    // empty ones only learn that they have no dataset episode.
+    for (const m of indexMap ?? []) {
+      if (written.has(m.take) || m.datasetEpisode !== null) continue;
+      const discarded = end?.discardedTakes.has(m.take) === true;
+      const data = {
+        datasetEpisodeIndex: null,
+        ...(discarded ? { discarded: true } : {}),
+        ...(end?.openTake === m.take ? { stopReason: 'session_end', stoppedBy: JSON.stringify(AUTO_ACTOR) } : {}),
+      };
+      try {
+        await this.prisma.teleoperationEpisode.upsert({
+          where: { sessionId_episodeIndex: { sessionId, episodeIndex: m.take } },
+          create: { sessionId, episodeIndex: m.take, ...data },
+          update: data,
+        });
+      } catch (err) {
+        console.error(`[TeleoperationService] could not persist take ${m.take} of ${sessionId}:`, err);
       }
     }
   }
@@ -1828,20 +2660,39 @@ export class TeleoperationService extends EventEmitter {
       );
     }
 
+    // An agent before TASK-402 wrote the MEASURED rate (29.87) as the dataset
+    // fps. LeRobot reads it as the rate the frames were sampled at, so the
+    // registered copy carries the integer target the session asked for.
+    if (typeof infoJson.fps === 'number' && !Number.isInteger(infoJson.fps)) {
+      infoJson = { ...infoJson, fps: Math.round(session.fps) || Math.round(infoJson.fps) };
+    }
+
     const name =
       session.datasetRepoId ??
       session.languageInstr?.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 50) ??
       `teleop-${session.id.slice(0, 8)}`;
 
+    // Provenance follows what the robot SAYS it recorded (TASK-402 `simulated`).
+    // An agent too old to say is the simulation it always was.
+    const simulated = result.simulated !== false;
+    const robot = simulated
+      ? null
+      : await this.prisma.robot.findUnique({ where: { id: session.robotId } }).catch(() => null);
+    const robotName = robot?.name ?? session.robotId;
+
     const dataset = await datasetRepository.create({
       name,
-      description:
-        `Teleoperation in simulation: ${session.languageInstr ?? session.id}` +
-        (result.scene ? ` (${result.scene})` : ''),
+      description: simulated
+        ? `Teleoperation in simulation: ${session.languageInstr ?? session.id}` +
+          (result.scene ? ` (${result.scene})` : '')
+        : `Teleoperation on ${robotName}: ${session.languageInstr ?? session.id}`,
       robotTypeId,
       storagePath: result.datasetPath,
       lerobotVersion: 'v3.0',
-      fps: Math.round(result.fpsActual) || session.fps,
+      // The rate the frames are stamped at — info.json's, which is the integer
+      // target — not the rate the recorder happened to achieve. Registering the
+      // measured 15 next to an info.json that says 30 left two answers.
+      fps: typeof infoJson.fps === 'number' ? infoJson.fps : session.fps,
       totalFrames: result.totalFrames,
       totalDuration: durationS,
       demonstrationCount: result.totalEpisodes,
@@ -1860,7 +2711,11 @@ export class TeleoperationService extends EventEmitter {
         dataset.id,
         {
           sourceType: 'collected',
-          sourceName: result.scene ? `MuJoCo sim — ${result.scene}` : 'MuJoCo sim',
+          sourceName: simulated
+            ? result.scene
+              ? `MuJoCo sim — ${result.scene}`
+              : 'MuJoCo sim'
+            : `${result.robotType} robot ${session.robotId}`,
           collectionMethod:
             `Teleoperation (${session.type}) recorded on the robot agent at ` +
             `${result.fpsActual} fps, ${result.totalDropped} dropped frames, ` +
@@ -1870,7 +2725,7 @@ export class TeleoperationService extends EventEmitter {
             // report renders under a heading about rights clearance — a
             // reviewer reading "Simulation boot 585f1c…" there learns nothing
             // and mistrusts the field.
-            (result.bootId ? `, simulation boot ${result.bootId}` : ''),
+            (simulated && result.bootId ? `, simulation boot ${result.bootId}` : ''),
           collectionPeriod: {
             start: (session.startedAt ?? new Date()).toISOString(),
             end: new Date().toISOString(),
@@ -1883,8 +2738,11 @@ export class TeleoperationService extends EventEmitter {
             'Frames the recorder could not complete were dropped, not interpolated',
             'Episodes discarded by the operator were removed before the dataset was written',
           ],
-          copyrightCompliance:
-            'Simulation-derived: no third-party material, no recorded persons.',
+          copyrightCompliance: simulated
+            ? 'Simulation-derived: no third-party material, no recorded persons.'
+            : 'Recorded on a physical robot: the camera streams may show recorded persons ' +
+              '(the operator is in camera view). Consent of everyone in view is required ' +
+              'before the dataset is shared or used for training.',
         },
         session.operatorId
       );
@@ -1913,11 +2771,16 @@ export class TeleoperationService extends EventEmitter {
           type: 'session:progress',
           sessionId,
           timestamp: new Date(),
+          // Complete, like every progress event (TASK-408): a field left out
+          // is a counter a client wipes.
           recordingProgress: {
+            frameCount: 0,
             episodesDone: status.episodes_done ?? 0,
             currentEpisode: status.current_episode ?? 0,
             elapsedS: status.elapsed_s ?? 0,
+            fpsActual: 0,
             running: status.running ?? false,
+            degraded: false,
           },
         });
 
