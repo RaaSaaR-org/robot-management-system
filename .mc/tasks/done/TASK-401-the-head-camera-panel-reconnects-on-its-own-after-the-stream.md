@@ -3,7 +3,7 @@ id: "TASK-401"
 aliases: []
 title: "The head camera panel reconnects on its own after the stream drops"
 slug: "the-head-camera-panel-reconnects-on-its-own-after-the-stream"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
