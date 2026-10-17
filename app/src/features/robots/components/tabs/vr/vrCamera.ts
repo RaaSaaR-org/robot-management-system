@@ -170,3 +170,128 @@ export function pollLiveness(
 export function isRealLoadFailure(src: string | null): boolean {
   return Boolean(src);
 }
+
+/**
+ * The reconnect schedule, in seconds: 1, 2, 4, 8, then 15 for as long as it
+ * takes (TASK-401, D1).
+ *
+ * NO ATTEMPT LIMIT, on purpose. A teleop session lasts hours, and the camera
+ * service on the G1's PC2 drops every client whenever its USB camera
+ * re-enumerates. A panel that gave up after N tries would recreate exactly the
+ * latch this replaced: one bad minute, and CAMERA OFFLINE until the operator
+ * takes the headset off. The cap is what keeps a camera that is genuinely gone
+ * from becoming a reconnect storm against the robot.
+ *
+ * @param attempt Retries already made since the last good frame, from 0.
+ */
+export const RETRY_SCHEDULE_S = [1, 2, 4, 8] as const;
+export const RETRY_CAP_S = 15;
+
+export function nextRetryDelayS(attempt: number): number {
+  if (!Number.isFinite(attempt) || attempt < 0) return RETRY_SCHEDULE_S[0];
+  const i = Math.floor(attempt);
+  return i < RETRY_SCHEDULE_S.length ? RETRY_SCHEDULE_S[i] : RETRY_CAP_S;
+}
+
+/**
+ * How long an armed stream may go without its first decoded frame before it is
+ * treated as failed and re-armed, in ms.
+ *
+ * An MJPEG `<img>` whose upstream accepts the connection and then never sends a
+ * part fires neither `load` nor `error` — it just sits there empty. Without
+ * this the panel waited on it forever.
+ */
+export const FIRST_FRAME_TIMEOUT_MS = 4000;
+
+/** The plate text for a robot that answers `/cameras` with an empty list. */
+export const NO_CAMERA_DETAIL = 'no camera on this robot';
+
+export type CameraPanelState = 'live' | 'stale' | 'offline' | 'connecting';
+
+/**
+ * Where the stream stands as far as connecting to it goes. `offline`: the last
+ * attempt failed and a retry is scheduled. `connecting`: armed (or arming) and no
+ * frame yet. `up`: a frame has arrived — whether it is still MOVING is the
+ * panel's liveness check.
+ */
+export type ReconnectPhase = 'connecting' | 'offline' | 'up';
+
+/**
+ * The one state the panel publishes (`vrCameraStatus`). Connection trouble
+ * outranks staleness: a picture that is not there cannot be stale.
+ */
+export function cameraPanelState(phase: ReconnectPhase, stale: boolean): CameraPanelState {
+  if (phase !== 'up') return phase;
+  return stale ? 'stale' : 'live';
+}
+
+export interface OfflinePlateInput {
+  state: CameraPanelState;
+  /** Why it is offline, in the agent's words, or null when nobody said. */
+  detail: string | null;
+  /** Whole seconds to the next retry, or null when none is scheduled. */
+  retryInS: number | null;
+  /** Retries already made since the last good frame. */
+  attempt: number;
+}
+
+export type PlateTone = 'bad' | 'dim' | 'text';
+
+export interface PlateLine {
+  id: string;
+  text: string;
+  tone: PlateTone;
+}
+
+/** Longest line the 1024 px plate holds at its glyph size, in characters. */
+const PLATE_LINE_CHARS = 36;
+
+/** Break a reason into at most two plate lines, on a space where it can. */
+function wrapDetail(text: string): string[] {
+  const clean = text.trim().replace(/\s+/g, ' ');
+  if (clean.length <= PLATE_LINE_CHARS) return [clean];
+  let cut = clean.lastIndexOf(' ', PLATE_LINE_CHARS);
+  if (cut <= 0) cut = PLATE_LINE_CHARS;
+  const first = clean.slice(0, cut).trim();
+  let rest = clean.slice(cut).trim();
+  if (rest.length > PLATE_LINE_CHARS) rest = `${rest.slice(0, PLATE_LINE_CHARS - 1).trimEnd()}…`;
+  return [first, rest];
+}
+
+/**
+ * What the head-camera panel's plate says, when it shows one.
+ *
+ * Three things an operator with a headset on needs and could not get before:
+ * THAT the camera is offline, WHY (the agent's own `detail`, e.g. "cannot reach
+ * the hardware sidecar"), and that it is not giving up — a counting-down retry
+ * and the attempt number, so a stuck plate and a recovering one look different.
+ *
+ * Returns no lines for `live` and `stale`: those show the picture itself (stale
+ * has its own badge). `connecting` with no retry yet behind it is the ordinary
+ * start of a session and shows no plate either.
+ */
+export function offlinePlateLines(input: OfflinePlateInput): PlateLine[] {
+  const nextAttempt = Math.max(0, Math.floor(input.attempt)) + 1;
+  const detailLines = (text: string): PlateLine[] =>
+    wrapDetail(text).map((t, i) => ({ id: `detail${i}`, text: t, tone: 'dim' as const }));
+
+  if (input.state === 'offline') {
+    const retry =
+      input.retryInS === null
+        ? `retrying now · attempt ${nextAttempt}`
+        : `retrying in ${Math.max(0, Math.ceil(input.retryInS))}s · attempt ${nextAttempt}`;
+    return [
+      { id: 'title', text: 'CAMERA OFFLINE', tone: 'bad' },
+      ...detailLines(input.detail ?? 'stream failed'),
+      { id: 'retry', text: retry, tone: 'text' },
+    ];
+  }
+  if (input.state === 'connecting' && input.attempt > 0) {
+    return [
+      { id: 'title', text: 'RECONNECTING…', tone: 'text' },
+      ...(input.detail ? detailLines(input.detail) : []),
+      { id: 'retry', text: `attempt ${input.attempt}`, tone: 'dim' },
+    ];
+  }
+  return [];
+}
