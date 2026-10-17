@@ -157,3 +157,17 @@ Paths are relative to `app/src/features/robots/components/tabs/vr/`.
 - Never run `xr_teleoperate` and the arm_sdk sidecar together.
 - The E-stop stays reachable: B/Y and the two-hand pinch in VR, and a visible E-STOP on the desktop session page.
 - Development and tests use the sim stack only: the sim agent :41246 and sim sidecar :8777, or branch builds on free ports. Never the real g1-edu-4 (:41245/:8767). Do not stop or restart the running dev stack.
+
+## Implementation notes (2026-10-17)
+
+Decisions taken while implementing, beyond D1–D5:
+
+- **I1 An `arming` rule in the why line.** Between dead-man and controller-untracked, severity warn, text `Arming… 40 %` — TASK-405's rule 12. The spec's list had no rule for a real robot's arms ramping in.
+- **I2 The E-stop text depends on mode control.** Where NeoDEM controls the mode it is TASK-405's `E-stop is latched. Reset it, then switch to Balance.`; on the sim (no mode control) `E-stop is latched. Reset it.`
+- **I3 The wrist HUD uses a short form.** `whyNotFollowingVr` returns `text` (≤ 72 chars, the panel) and `short` (≤ 26 chars, e.g. `HELD R: lease`), because a 72-character line does not fit the 12 cm wrist plate.
+- **I4 The desktop STOP no longer ends the session either.** One stop path for B/Y, the pinch and the desktop button; the lease motion gate still ends the session as before.
+- **I5 Trigger routing is its own pure module** (`vrInput.ts` `routeControllerInput`), used by both retargetings and the ray, so the reducer test covers every consumer.
+- **I6 Held answers are coalesced, not dropped.** A refusal inside the 50 ms slot waits and goes out on the next agent tick (33 ms); a real `state` answer supersedes it. Held answers also close the RTT probe.
+- **I7 One dev emulator store per page.** StrictMode ran `createXRStore({emulate})` twice, installing two IWER devices; the session sometimes belonged to the one the modal did not keep, so emulated buttons never arrived. Found by the live spec; DEV-only path.
+- **I8 DEV debug snapshot** `window.__neodemVrUi` (clicks, ray state, button centres, panel lines), read by `app/e2e/live/vr-robot-panel.spec.ts`. The IWER DevUI overwrites controller rotations from its transform handles every frame, so the spec aims through `window.transformHandles`.
+- **Headless WebGL renders** under Playwright's headless Chromium (SwiftShader); no headed run was needed.
