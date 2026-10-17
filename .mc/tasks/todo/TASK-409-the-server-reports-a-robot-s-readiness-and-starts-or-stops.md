@@ -135,3 +135,18 @@ RobotReadiness = {
 - Never run `xr_teleoperate` and the arm_sdk sidecar together.
 - The E-stop stays reachable: B/Y and the two-hand pinch in VR, and a visible E-STOP on the desktop session page.
 - Development and tests use the sim stack only: the sim agent :41246 and sim sidecar :8777, or branch builds on free ports. Never the real g1-edu-4 (:41245/:8767). Do not stop or restart the running dev stack.
+
+## Implementation notes (2026-10-17)
+
+Deviations from the spec, following the code that landed with TASK-403/405:
+
+- **Roles.** The repo has no `operator`/`admin` roles; "operator or admin" is `memberOrAbove` (`super-admin`, `owner`, `member`), viewer reads are `viewerOrAbove`.
+- **Lease check.** The base-mode POST only forwards `leaseId`/`generation` to the agent. The bringup start may run while the agent is down, so the server checks the lease itself: the `RobotControlLease` row must be `held`, unexpired, of the caller, with this generation and `sha256(leaseId)`. The client sends `{leaseId, generation}` with `mode:'arm_sdk'`.
+- **Registration URL.** The supervisor status had no agent URL, so `Status.agentPort` was added to `robot-agent/supervisor/src/steps.ts` (one field); the server registers `http://<supervisor host>:<agentPort>`. Registration happens in the 1 Hz poll after a server-side Start (Start answers 202 before the agent step finishes), in the caller's tenant, once.
+- **Extra reasons.** Besides the four in the spec: `bringup_busy` (start/stop running — otherwise the HUD says "agent not answering" during every start), `supervisor_unreachable` (only when the agent is also down) and `agent_no_readiness` (agent answers but has no readiness route). The snapshot carries `supervisor: {reachable, error} | null` next to `bringup`. Reason text is clipped to 72 chars like the agent's.
+- **Watch set.** "Has a supervisor" alone does not keep a robot polled (that would contradict D2 and the 30 s AC): watched = readiness request or bringup write in the last 30 s, or an open (`recording`/`paused`) teleop session.
+- **Timeouts.** Supervisor 2 s, except `lan-up` (35 s, `nmcli` may take 30 s). Agent `/readiness` 4 s — the agent's own route can spend 0.8 s on `/health` plus 2.5 s on the camera list.
+- **Emission.** Deep-equal ignores every `at` key; age fields (`lowstateAgeS`, `ageS`) still change while the sidecar runs, so a live robot emits at ~1 Hz (within D5's budget).
+- **Stop's `baseMode`.** `{mode, fsmId, source:'agent'|'supervisor'}` from the cached agent readiness, else the supervisor's `lastBase`.
+- **Viewer 403s are audited** by `bringupDenialAudit()` mounted ahead of the first `/api/robots` `...protect` (same pattern as the control-lease denial audit).
+- `write-route-authorization.test.ts`: `EXPECTED_WRITE_ROUTES` 374 → 380.
