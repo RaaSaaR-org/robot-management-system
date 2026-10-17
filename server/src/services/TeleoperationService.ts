@@ -418,6 +418,9 @@ export class TeleoperationService extends EventEmitter {
       this.lastQualityFeedback.delete(sessionId);
       this.clientEpisodeIndex.delete(sessionId);
       this.progressTicks.delete(sessionId);
+      this.clientLedgers.delete(sessionId);
+      this.takeStamps.delete(sessionId);
+      this.seenStops.delete(sessionId);
 
       await this.prisma.teleoperationSession.delete({
         where: { id: sessionId },
@@ -2610,7 +2613,10 @@ export class TeleoperationService extends EventEmitter {
       robotTypeId,
       storagePath: result.datasetPath,
       lerobotVersion: 'v3.0',
-      fps: Math.round(result.fpsActual) || session.fps,
+      // The rate the frames are stamped at — info.json's, which is the integer
+      // target — not the rate the recorder happened to achieve. Registering the
+      // measured 15 next to an info.json that says 30 left two answers.
+      fps: typeof infoJson.fps === 'number' ? infoJson.fps : session.fps,
       totalFrames: result.totalFrames,
       totalDuration: durationS,
       demonstrationCount: result.totalEpisodes,

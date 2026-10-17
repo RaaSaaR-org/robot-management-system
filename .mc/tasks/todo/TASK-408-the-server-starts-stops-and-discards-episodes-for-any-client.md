@@ -187,3 +187,35 @@ The envelope `data` gains `live`, `take`, `quickCheck`, `by` and `reason`, with 
   3. persist at stop and the migration
 
   Provenance (`registerAgentDataset`) and the thumbnail proxy can then move to a child task without blocking TASK-410. TASK-410 shows "no thumbnail" when `thumbnailUrl` is null.
+
+## Implementation notes (2026-10-17)
+
+Decisions made while implementing, and where the code differs from the spec above:
+
+- **discard-last** discards the LAST take only. While capturing it ends the open take, then discards it, so the session goes between takes. A second press on a take that is already discarded answers `409 already_discarded`. It never walks back into the take before. With no take at all it answers `409 no_take`.
+- **More refusal codes** than the spec lists: `not_recording` (409, the session is not `recording`) and `recorder_unavailable` (502, the agent did not answer or did not take the action). Every refusal body is `{code, error, live}`. When the refusal has no live state, the route reads one.
+- **`takeStartedAt`** is the server's own stamp, taken when the begin returns (D5). It is not the agent's `episodeStartedAtMs`, which runs on the robot's clock. When there is no stamp (server restarted mid-take), it is derived from the agent's `episodeElapsedS` on the server clock.
+- **`QuickCheck` gains `discarded`.** Every `episode:*` event also carries the full `live`, and `episode:started` carries `startedAt`. The WS envelope `data` therefore also gains `startedAt`.
+- **New files beyond the list:**
+  - `server/src/websocket/teleopEnvelope.ts` holds the typeMap and envelope, extracted from `websocket/index.ts` so they can be tested.
+  - `server/src/services/teleoperation/takeLedger.ts` is the take bookkeeping shared by `SimFrameRecorder` and client-posted-frame sessions.
+- **Rows are written at take start** (`startedAt`, `startedBy`) and completed at stop (quick check, `stopReason`, `stoppedBy`).
+- **Persisting at end.** The agent's stop result numbers its `episodes` densely in dataset order. They are now mapped back to their take through `indexMap`. Before this, rows were written under the dataset index.
+- **D3 also covers the SimFrameRecorder fallback.** It opens between takes, and its first take gets the next unused number.
+- **Dataset `fps`** is the integer fps from `info.json` (else the session's fps), not the rounded measured rate. In the live check the measured rate was 15 while `info.json` said 30.
+- **SO-101 sidecar sessions:** `episodes/next` now answers `409 unsupported_recorder` (it was a 400), with the same message.
+- **Auto stops** (`time_limit`) are persisted with `stoppedBy {source:'auto'}` and broadcast. Only client mutations write a compliance entry.
+- **Sidecar progress** events now carry defaults for `frameCount`, `fpsActual` and `degraded`, so every progress event is complete.
+- **`thumbnailUrl`** is the server path `/api/teleoperation/sessions/:id/episodes/:take/thumbnail`, behind `protect`. A plain `<img>` only works with `AUTH_DISABLED`. TASK-410 has to fetch it with the bearer token (blob URL) when auth is on.
+- **Behaviour until TASK-410:** a session starts between takes, so the existing "Next episode" button (or `episodes/start`) begins take 0.
+- The write-route inventory (`src/__tests__/write-route-authorization.test.ts`) goes from 374 to 377: start, stop and discard-last, all on the guarded mount.
+
+Live check (branch server :3108 with a DB copy, branch agent :41308, branch sim :8808 on DDS domain 58/lo). Every robot URL in the copy was repointed to a dead port first.
+- A double start answers 409 `already_capturing`.
+- Two concurrent `next` with `expectedTake:0` give one take 1 and one 409 `episode_conflict`.
+- Stop returns a quick check with 62 frames, `jointsMoved` and a `thumbnailUrl`. The thumbnail is a 640x480 JPEG with `Cache-Control: private, max-age=3600`, and take 0 answers 404.
+- discard-last, then discard-last again, gives 409 `already_discarded`. DELETE emits `teleop:episode:discarded`.
+- End writes `datasetEpisodeIndex` 1→0, 4→1, 5→2. Discarded takes 2 and 3 are flagged, and the open take ends with `session_end`.
+- A session with `episodeTimeS:2` emits `teleop:episode:stopped {reason:'time_limit', by:{source:'auto'}}`.
+- 97 progress events were captured and all were complete. 12 compliance entries were written, one per mutation.
+- Real-robot provenance is covered by unit tests only, since the real robot is off-limits.

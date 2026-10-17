@@ -1630,6 +1630,7 @@ describe('TeleoperationService — episode control (TASK-408)', () => {
       expect(created.description).not.toMatch(/simulat/i);
       // An older agent's float fps becomes the integer target.
       expect(created.infoJson.fps).toBe(30);
+      expect(created.fps).toBe(30);
       const prov = mockProvenance.recordProvenance.mock.calls[0]![1];
       expect(prov.sourceName).toBe('Unitree_G1_Dex3 robot robot-1');
       expect(prov.sourceName).not.toMatch(/sim/i);
