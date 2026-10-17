@@ -18,6 +18,7 @@
 import { useEffect, useRef } from 'react';
 import type { Robot } from '../../robots/types/robots.types';
 import { useInputLeaseGate, type InputLease } from './inputLease';
+import { openTeleopSocket } from '../../robots/components/tabs/vr/vrUrls';
 
 interface UseGamepadJointsArgs {
   robot: Robot | null;
@@ -92,12 +93,6 @@ function readGamepad(gp: Gamepad): JointDirections {
   };
 }
 
-/** The robot agent's own WebSocket base — where the control lease is enforced. */
-function getAgentWsBaseUrl(robot: Robot): string {
-  const agent = robot.a2aAgentUrl?.replace(/\/$/, '') ?? 'http://localhost:41243';
-  return agent.replace(/^http/, 'ws');
-}
-
 function getWsBaseUrl(robot: Robot): string {
   // 41243 is the robot agent's default port; this fallback read 41245, a port
   // nothing listens on.
@@ -129,8 +124,8 @@ export function useGamepadJoints({ robot, enabled, lease }: UseGamepadJointsArgs
     let stopped = false;
     // The SO-101 sidecar's socket knows nothing of leases; under one, drive
     // through the agent, which enforces it.
-    const base = leaseEnabled ? getAgentWsBaseUrl(robot) : getWsBaseUrl(robot);
-    const ws = new WebSocket(`${base}/ws/keyboard-teleop`);
+    // The agent path goes through the server's same-origin proxy (TASK-393).
+    const ws = leaseEnabled ? openTeleopSocket(robot) : new WebSocket(`${getWsBaseUrl(robot)}/ws/keyboard-teleop`);
     wsRef.current = ws;
     lastRef.current = ZERO;
 

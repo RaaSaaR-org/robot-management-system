@@ -30,6 +30,7 @@ import type { JointConfig } from './types.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor, agentModeLocomotion } from './CommandExecutor.js';
 import { hardwareClient, HardwareActionError, type CachedBasePose } from '../hardware/HardwareClient.js';
+import { forwardableTeleopPose, isG1Family } from '../teleop/forward-joints.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import {
   PlaceTracker,
@@ -1699,6 +1700,8 @@ export class RobotStateManager {
    */
   enableTeleop(): Record<string, number> {
     if (!this.teleopJoints) {
+      this.teleopTouched.clear();
+      this.lastForwarded = null;
       const live = new Map(hardwareClient.getJointStates().map((j) => [j.name, j.position]));
       this.teleopJoints = new Map();
       for (const joint of this.getActiveJointConfig()) {
@@ -1718,6 +1721,8 @@ export class RobotStateManager {
   /** Leave teleop mode; the simulation resumes its idle/walk animation. */
   disableTeleop(): void {
     this.teleopJoints = null;
+    this.teleopTouched.clear();
+    this.lastForwarded = null;
     this.stopTeleopForwarding();
     this.notifyListeners();
   }
@@ -1746,6 +1751,20 @@ export class RobotStateManager {
   /** Logged once per teleop session, not once per failed frame. */
   private teleopForwardWarned = false;
   private teleopErrorListeners = new Set<TeleopErrorListener>();
+  /**
+   * Joints this teleop session has commanded (TASK-393). On a G1 only these
+   * are forwarded — see `teleop/forward-joints.ts` for why an untouched joint
+   * is left to the sidecar's own measured seed.
+   */
+  private teleopTouched = new Set<string>();
+  /**
+   * The last pose the sidecar ACCEPTED, and when. What the recorder stores as
+   * `action` on a real robot: the target that actually reached the write path,
+   * not the operator's intent sitting in `teleopJoints`.
+   */
+  private lastForwarded: { pose: Record<string, number>; atMs: number } | null = null;
+  /** How old a forwarded pose may be and still count as "what the robot is being told". */
+  private static readonly FORWARDED_FRESH_MS = 250;
 
   /**
    * Subscribe to teleop-forwarding failures (see {@link TeleopErrorListener}).
@@ -1799,10 +1818,30 @@ export class RobotStateManager {
     // otherwise queue a request per tick, and each would carry a target that was
     // already stale when it was sent.
     if (this.teleopForwardInFlight) return;
+    // TASK-393: an arm-only sidecar takes `/action` only while ARMED. Arming is
+    // the teleop socket's decision (lease + heartbeat, `teleop/arm-registry.ts`);
+    // until it has happened there is nothing to send, and sending anyway would
+    // only collect a 409 per tick.
+    if (!hardwareClient.mayStreamAction()) {
+      this.lastForwarded = null;
+      return;
+    }
+    const pose = isG1Family(this.state.robotType)
+      ? forwardableTeleopPose(
+        this.state.robotType,
+        this.getTeleopPositions(),
+        this.teleopTouched,
+        hardwareClient.getArmStatus().hands,
+      )
+      : this.getTeleopPositions();
+    // Nothing commanded yet: the sidecar holds the measured pose on its own.
+    if (Object.keys(pose).length === 0) return;
     this.teleopForwardInFlight = true;
     try {
-      await hardwareClient.sendAction(this.getTeleopPositions());
+      await hardwareClient.sendAction(pose);
+      this.lastForwarded = { pose, atMs: Date.now() };
     } catch (err) {
+      this.lastForwarded = null;
       // A refusal the sidecar ANSWERED (403 read-only, 400 unknown joint) is a
       // different problem from a sidecar that is not there, and an operator can
       // only act on the first — so they are not flattened into one code.
@@ -1825,6 +1864,7 @@ export class RobotStateManager {
     if (!this.teleopJoints) this.enableTeleop();
     for (const joint of this.getActiveJointConfig()) {
       this.teleopJoints!.set(joint.name, joint.defaultPosition);
+      this.teleopTouched.add(joint.name);
     }
     return this.getTeleopPositions();
   }
@@ -1843,6 +1883,7 @@ export class RobotStateManager {
     const current = this.teleopJoints!.get(jointName) ?? joint.defaultPosition;
     const next = Math.max(joint.limitLower, Math.min(joint.limitUpper, current + deltaRad));
     this.teleopJoints!.set(jointName, next);
+    this.teleopTouched.add(jointName);
     return next;
   }
 
@@ -1860,6 +1901,7 @@ export class RobotStateManager {
     if (!joint) return null;
     const next = Math.max(joint.limitLower, Math.min(joint.limitUpper, positionRad));
     this.teleopJoints!.set(jointName, next);
+    this.teleopTouched.add(jointName);
     return next;
   }
 
@@ -1870,6 +1912,25 @@ export class RobotStateManager {
       for (const [name, pos] of this.teleopJoints) out[name] = pos;
     }
     return out;
+  }
+
+  /**
+   * The commanded pose a recording should store as `action` (TASK-393).
+   *
+   * With a sidecar attached that is what the sidecar last ACCEPTED, laid over
+   * the teleop map for the joints the forwarder does not send (legs and waist
+   * on a G1, which nobody teleoperates). When nothing has been accepted within
+   * the last 250 ms — not armed yet, refused, or the stream stopped — this
+   * answers `{}`, and the recorder drops the frame instead of storing an intent
+   * the robot never received. Without a sidecar (pure in-process sim) the
+   * teleop map is the command.
+   */
+  getRecordedCommand(): Record<string, number> {
+    if (!this.teleopJoints) return {};
+    if (!hardwareClient.isConnected()) return this.getTeleopPositions();
+    const sent = this.lastForwarded;
+    if (!sent || Date.now() - sent.atMs > RobotStateManager.FORWARDED_FRESH_MS) return {};
+    return { ...this.getTeleopPositions(), ...sent.pose };
   }
 
   getCommandHistory(): RobotCommand[] {
@@ -2082,6 +2143,14 @@ export class RobotStateManager {
             void hardwareClient.sendEstop();
           }
         } else {
+          // The stop has cleared — by an operator reset, or a protective stop
+          // that recovered on its own (server comm restored). The arm-only
+          // sidecar latches the `/estop` above until told otherwise (TASK-393),
+          // so without this edge a recovered protective stop left the real
+          // arms un-armable with nothing in the UI that could clear it.
+          // Clearing the sidecar's latch moves nothing: arming still needs a
+          // bound lease, a live heartbeat and a fresh motion frame.
+          if (this.estopPropagated) this.clearSidecarEstop();
           this.estopPropagated = false;
         }
       }, HUMANOID_SAFETY_POLL_MS);
@@ -2168,8 +2237,28 @@ export class RobotStateManager {
     // back un-latched at the next boot.
     if (cleared) {
       this.setAgentSafetyState({ estopLatched: false, estopReason: null, estopAt: null });
+      // TASK-393: the arm-only sidecar latches its own `/estop` until told
+      // otherwise, so the robot's arms stay un-armable after an agent reset
+      // unless the reset reaches the sidecar too.
+      this.clearSidecarEstop();
     }
     return cleared;
+  }
+
+  /**
+   * Clear the sidecar's own E-stop latch (TASK-393). Best effort and never
+   * awaited: a sidecar without the route (the sim, an older sidecar) has no
+   * latch to clear, and a sidecar that is down will be latched-or-not when it
+   * comes back on its own terms.
+   */
+  private clearSidecarEstop(): void {
+    try {
+      void hardwareClient.resetEstop().then((res) => {
+        if (!res.ok) console.warn(`[RobotStateManager] sidecar E-stop reset failed: ${res.error ?? 'unknown'}`);
+      }).catch(() => { /* sidecar unreachable */ });
+    } catch {
+      /* a hardware client without an arm path */
+    }
   }
 
   /**

@@ -97,7 +97,7 @@ const robot: Robot = {
 
 /** The teleop socket — the observer socket on /api/a2a/ws is a separate instance. */
 const teleopSocket = (): FakeSocket =>
-  FakeSocket.instances.find((s) => s.url.endsWith('/ws/keyboard-teleop'))!;
+  FakeSocket.instances.find((s) => /\/teleop\/ws$|\/ws\/keyboard-teleop$/.test(s.url))!;
 
 async function renderAndOpen(enabled: boolean): Promise<FakeSocket> {
   api.getControlLease.mockResolvedValue({

@@ -27,12 +27,15 @@ import {
   type LinkState,
   type LinkStatus,
   type TeleopLink,
+  type TeleopSocketLike,
 } from './vrSession';
 import { useControlLease } from '../../../hooks/useControlLease';
 import { ControlLeaseBar } from '../ControlLeaseBar';
 import { createLoopHealth, isPoseFrame, onPositionsSent, onStateReceived, type LoopHealth } from './vrHud';
 import { EMULATOR_ACTIVE, XR_EMULATOR } from './vrConstants';
-import { getWsBaseUrl } from './vrUrls';
+import { getTeleopSocketUrl, teleopSocketProtocols } from './vrUrls';
+import { ensureFreshAccessToken, tokenStorage } from '@/api/client';
+import { hudHandWarning, hudNeedsRelease, type HudEngage } from './vrHud';
 import { VrScene } from './VrScene';
 import { createRigTelemetry } from './VrTeleopRig';
 
@@ -55,6 +58,64 @@ interface AgentError {
   code: string;
   message: string;
   at: string;
+}
+
+/**
+ * `{type:'arm'}` — the real robot's arm write path (TASK-393). `writeMode` is
+ * null on the sim and older sidecars, which need no arming.
+ */
+export interface ArmFrame {
+  writeMode: 'arm_sdk' | 'read_only' | null;
+  armed: boolean;
+  arming: boolean;
+  armWeight: number;
+  estopLatched: boolean;
+  hands: { left: boolean; right: boolean } | null;
+  teleopMode: 'arms+hands' | 'arms+left_hand' | 'arms+right_hand' | 'arms_only' | null;
+  claims: number;
+  lastError: string | null;
+  /** This console holds one of the claims. */
+  mine: boolean;
+  /**
+   * The agent's re-engage latch for this console (TASK-393): after any disarm
+   * the operator did not cause, the arms wait for the grip to be let go and
+   * squeezed again. Null from an older agent.
+   */
+  engage: HudEngage | null;
+  /** This console's clutch as the agent last heard it; null when never reported. */
+  clutch: { left: boolean; right: boolean } | null;
+}
+
+const ENGAGE_STATES: readonly HudEngage[] = ['need_release', 'need_press', 'ready', 'holding'];
+
+/** Parse an `{type:'arm'}` frame defensively; null when it is not one. */
+export function parseArmFrame(frame: Record<string, unknown>): ArmFrame | null {
+  if (frame.type !== 'arm') return null;
+  const hands = frame.hands as { left?: unknown; right?: unknown } | null | undefined;
+  const clutch = frame.clutch as { left?: unknown; right?: unknown } | null | undefined;
+  const mode = frame.teleopMode;
+  return {
+    writeMode: frame.writeMode === 'arm_sdk' || frame.writeMode === 'read_only' ? frame.writeMode : null,
+    armed: frame.armed === true,
+    arming: frame.arming === true,
+    armWeight: typeof frame.armWeight === 'number' && Number.isFinite(frame.armWeight)
+      ? Math.max(0, Math.min(1, frame.armWeight))
+      : 0,
+    estopLatched: frame.estopLatched === true,
+    hands: hands && typeof hands.left === 'boolean' && typeof hands.right === 'boolean'
+      ? { left: hands.left, right: hands.right }
+      : null,
+    teleopMode: mode === 'arms+hands' || mode === 'arms+left_hand' || mode === 'arms+right_hand' || mode === 'arms_only'
+      ? mode
+      : null,
+    claims: typeof frame.claims === 'number' ? frame.claims : 0,
+    lastError: typeof frame.lastError === 'string' ? frame.lastError : null,
+    mine: frame.mine === true,
+    engage: ENGAGE_STATES.includes(frame.engage as HudEngage) ? (frame.engage as HudEngage) : null,
+    clutch: clutch && typeof clutch.left === 'boolean' && typeof clutch.right === 'boolean'
+      ? { left: clutch.left, right: clutch.right }
+      : null,
+  };
 }
 
 /** `{type:'control'}` — who owns the robot, and who was pushed off it. */
@@ -255,6 +316,7 @@ export function VRTeleopModalBody({
   const [standNote, setStandNote] = useState<string | null>(null);
   const [agentErrors, setAgentErrors] = useState<AgentError[]>([]);
   const [control, setControl] = useState<ControlFrame | null>(null);
+  const [arm, setArm] = useState<ArmFrame | null>(null);
   const [meters, setMeters] = useState<{ link: LinkState; msSinceState: number | null; rttMs: number | null }>({
     link: 'lost',
     msSinceState: null,
@@ -349,6 +411,10 @@ export function VRTeleopModalBody({
   const send = useCallback((payload: unknown): boolean => {
     const ok = linkRef.current?.send(payload) ?? false;
     if (!ok) return false;
+    // A heartbeat is not a request: the agent answers it with nothing, so
+    // counting it as a send would make every idle second in VR read as a
+    // link that stopped answering (see `meterLink`).
+    if (typeof payload === 'object' && payload !== null && 'hb' in payload) return true;
     const now = Date.now();
     lastSendAtRef.current = now;
     // Only a pose frame is a round-trip probe: the agent answers those with a
@@ -375,6 +441,32 @@ export function VRTeleopModalBody({
         if (frame.positions) setPositions(frame.positions as Record<string, number>);
         lastStateAtRef.current = at;
         healthRef.current = onStateReceived(healthRef.current, at);
+        break;
+      case 'arm': {
+        const next = parseArmFrame(frame);
+        if (!next) break;
+        setArm(next);
+        // Refusals about arming are past facts once the arms are actually up.
+        if (next.armed) {
+          setAgentErrors((prev) => prev.filter((e) => !e.code.startsWith('arm_') && e.code !== 'heartbeat_lost'));
+        }
+        telemetryRef.current.arm = next.writeMode === 'arm_sdk'
+          ? {
+            armed: next.armed,
+            arming: next.arming,
+            armWeight: next.armWeight,
+            teleopMode: next.teleopMode,
+            engage: next.engage,
+          }
+          : null;
+        break;
+      }
+      case 'heartbeat':
+        // The agent's dead-man edges. A `lost` already arrived as an
+        // `{type:'error', code:'heartbeat_lost'}`; `live` takes it back out.
+        if (frame.state === 'live') {
+          setAgentErrors((prev) => prev.filter((e) => e.code !== 'heartbeat_lost'));
+        }
         break;
       case 'control':
         setControl({
@@ -485,7 +577,9 @@ export function VRTeleopModalBody({
    * battery does.
    */
   const socketUrl = useMemo(
-    () => `${getWsBaseUrl(robot)}/ws/keyboard-teleop`,
+    // Same-origin through the server by default (TASK-393): the headset then
+    // needs only the page's own origin — see `getTeleopSocketUrl`.
+    () => getTeleopSocketUrl(robot),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see above: the
     // identity of `robot` changes constantly, its address does not.
     [robot.id, robot.a2aAgentUrl],
@@ -496,7 +590,16 @@ export function VRTeleopModalBody({
     const link = createTeleopLink({
       url: socketUrl,
       onMessage: handleMessage,
-      onStatus: setStatus,
+      onStatus: (next) => {
+        // A refused upgrade (an expired token) surfaces as an error: refresh
+        // the token so the link's own retry presents a valid one.
+        if (next === 'error') void ensureFreshAccessToken().catch(() => { /* signed out */ });
+        setStatus(next);
+      },
+      // The token is read at EVERY connect, not captured once: the link
+      // reconnects on its own and a token from minutes ago may have expired.
+      socketFactory: (url) =>
+        new WebSocket(url, teleopSocketProtocols(tokenStorage.getAccessToken())) as unknown as TeleopSocketLike,
     });
     linkRef.current = link;
     link.connect();
@@ -772,7 +875,7 @@ export function VRTeleopModalBody({
           )}
           <span className="text-xs text-ink-secondary">
             {status === 'open'
-              ? `${(robotType || 'g1').toUpperCase()} · ${joints.length} DOF · ${inVr ? 'in VR' : 'simulation'}`
+              ? `${(robotType || 'g1').toUpperCase()} · ${joints.length} DOF · ${inVr ? 'in VR' : 'preview'}`
               : 'Reconnecting…'}
           </span>
           <span className="text-xs tabular-nums text-ink-tertiary" data-testid="vr-rtt">
@@ -787,6 +890,7 @@ export function VRTeleopModalBody({
                   ? 'Stream held (no control)'
                   : 'Stream idle'}
           </span>
+          {arm?.writeMode === 'arm_sdk' && <ArmStatusTag arm={arm} />}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -935,6 +1039,14 @@ export function VRTeleopModalBody({
         </ul>
       )}
 
+      <ArmNotices
+        arm={arm}
+        robotLatched={estopLatched}
+        handTracking={handTracking}
+        resetting={resetting}
+        onReset={() => void resetEstop()}
+      />
+
       {control?.preempted && (
         <p className="text-xs text-ink-tertiary">
           Teleop took control from <span className="font-medium text-ink-secondary">{control.preempted}</span>.
@@ -948,6 +1060,7 @@ export function VRTeleopModalBody({
         copied={copied}
         onCopy={copy}
       />
+
 
       {/* 3D preview */}
       <div className="h-[55vh] min-h-80 w-full overflow-hidden rounded-control border border-line">
@@ -1080,6 +1193,11 @@ function XrAvailabilityBlock({
               </Button>
             </div>
           )}
+          {target.fallbackCommand && (
+            <p className="text-[11px] text-ink-tertiary">
+              Without the repository checked out: <code className="font-mono">{target.fallbackCommand}</code>
+            </p>
+          )}
           <div className="flex items-center gap-2">
             <code className="min-w-0 flex-1 truncate rounded-tag bg-panel px-2 py-1 font-mono text-xs text-ink-secondary">
               {target.url}
@@ -1092,5 +1210,132 @@ function XrAvailabilityBlock({
         </div>
       ))}
     </Panel>
+  );
+}
+
+/**
+ * The real robot's arms, as one tag (TASK-393): off, ramping in, or under this
+ * console's control. Only rendered on a sidecar that needs arming.
+ */
+export function ArmStatusTag({ arm }: { arm: ArmFrame }) {
+  const pct = Math.round(arm.armWeight * 100);
+  if (arm.armed && pct >= 99) {
+    return <StatusTag tone="live" dot data-testid="vr-arm-status">Arms armed</StatusTag>;
+  }
+  if (arm.armed || arm.arming) {
+    return <StatusTag tone="gated" dot pulse data-testid="vr-arm-status">{`Arming ${pct}%`}</StatusTag>;
+  }
+  if (hudNeedsRelease(arm, arm.clutch !== null && (arm.clutch.left || arm.clutch.right))) {
+    return (
+      <StatusTag
+        tone="gated"
+        dot
+        data-testid="vr-arm-status"
+        title="The arms were handed back without the grip being let go (E-stop, link loss, lease change or the sidecar's own dead-man). They arm again only on a fresh squeeze."
+      >
+        Release grip to re-arm
+      </StatusTag>
+    );
+  }
+  return (
+    <StatusTag
+      tone="neutral"
+      dot
+      data-testid="vr-arm-status"
+      title="The arms are under the robot's own controller. Take control and grip to hand them to this console."
+    >
+      Arms off
+    </StatusTag>
+  );
+}
+
+/**
+ * Warnings about the real robot's arm path — NOT blockers (TASK-393).
+ *
+ * A missing Dex3 hand is how the 2026-10-16 session failed: `xr_teleoperate`
+ * waited for the right hand's state and hung until somebody switched it to
+ * arms-only. Here the session goes on with what is there and says so, and the
+ * recorder leaves the missing hand out of the dataset rather than storing zeros.
+ */
+export function ArmNotices({
+  arm,
+  robotLatched = false,
+  handTracking = false,
+  resetting = false,
+  onReset,
+}: {
+  arm: ArmFrame | null;
+  /** The agent's own latch — its banner already offers the reset. */
+  robotLatched?: boolean;
+  /** The Hands toggle is on: a tracked hand never drives the real arms. */
+  handTracking?: boolean;
+  resetting?: boolean;
+  onReset?: () => void;
+}) {
+  if (!arm) return null;
+  const notes: { id: string; title: string; body: string; reset?: boolean }[] = [];
+  // The sidecar keeps its own latch. When the agent's has cleared but the
+  // sidecar's has not (a stop from before an agent restart), nothing else on
+  // this page would say why the arms refuse to arm.
+  if (arm.writeMode === 'arm_sdk' && arm.estopLatched && !robotLatched) {
+    notes.push({
+      id: 'sidecar-estop',
+      title: 'The robot\'s sidecar is still E-stopped',
+      body: 'Its own latch survived the stop that set it, so the arms will not arm. Reset it once the robot is safe.',
+      reset: true,
+    });
+  }
+  if (arm.writeMode === 'read_only') {
+    notes.push({
+      id: 'read-only',
+      title: 'The robot will not move',
+      body: 'Its sidecar runs read-only: telemetry and the camera work, commands are refused. '
+        + 'Restart g1_sidecar.py with G1_WRITE_MODE=arm_sdk to teleoperate the arms.',
+    });
+  }
+  const hand = hudHandWarning(arm.teleopMode);
+  if (arm.writeMode === 'arm_sdk' && hand && arm.teleopMode) {
+    const which = arm.teleopMode === 'arms_only'
+      ? 'Neither Dex3 hand reports state'
+      : arm.teleopMode === 'arms+left_hand'
+        ? 'The right Dex3 hand reports no state'
+        : 'The left Dex3 hand reports no state';
+    notes.push({
+      id: 'hands',
+      title: arm.teleopMode === 'arms_only' ? 'Arms only' : 'One hand only',
+      body: `${which}. This session drives the arms${arm.teleopMode === 'arms_only' ? '' : ' and the other hand'}; `
+        + 'a recording leaves the missing hand out of the dataset and says so in its metadata.',
+    });
+  }
+  if (arm.writeMode === 'arm_sdk' && handTracking) {
+    notes.push({
+      id: 'hand-tracking',
+      title: 'Use controllers to drive the real robot',
+      body: 'A tracked hand has no grip clutch, and the real arms arm only on a grip that is let go and squeezed. '
+        + 'With hand tracking on, a side without a controller is not driven.',
+    });
+  }
+  if (arm.writeMode === 'arm_sdk' && arm.lastError && !arm.armed) {
+    notes.push({ id: 'arm-error', title: 'The sidecar refused to arm', body: arm.lastError });
+  }
+  if (notes.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2" data-testid="vr-arm-notices">
+      {notes.map((n) => (
+        <Panel key={n.id} variant="inset" padding="sm" className="border-signal-unknown/50" role="status">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-signal-unknown">{n.title}</p>
+              <p className="mt-0.5 text-xs text-ink-secondary">{n.body}</p>
+            </div>
+            {n.reset && onReset && (
+              <Button variant="secondary" size="sm" disabled={resetting} onClick={onReset}>
+                {resetting ? 'Resetting…' : 'Reset E-stop'}
+              </Button>
+            )}
+          </div>
+        </Panel>
+      ))}
+    </div>
   );
 }

@@ -63,6 +63,7 @@ import type { EpisodeRecorder, RecorderHooks, StopRecordingResult } from '../Epi
 
 interface FakeManager {
   getTeleopPositions: ReturnType<typeof vi.fn>;
+  getRecordedCommand: ReturnType<typeof vi.fn>;
   isTeleopActive: ReturnType<typeof vi.fn>;
   isEStopTriggered: ReturnType<typeof vi.fn>;
   /** Present so the test can prove the recorder does NOT read the 2 s cache. */
@@ -72,6 +73,7 @@ interface FakeManager {
 function fakeManager(tag: string): FakeManager {
   return {
     getTeleopPositions: vi.fn(() => ({ [`${tag}_joint`]: 1 })),
+    getRecordedCommand: vi.fn(() => ({ [`${tag}_joint`]: 1 })),
     isTeleopActive: vi.fn(() => true),
     isEStopTriggered: vi.fn(() => false),
     getJointStates: vi.fn(() => []),
@@ -160,8 +162,9 @@ describe('RecordingController', () => {
     // against another robot's measured one.
     const hooks = hooksOf(lastOpts());
     expect(hooks.getCommanded()).toEqual({ two_joint: 1 });
-    expect(second.getTeleopPositions).toHaveBeenCalledTimes(1);
-    expect(first.getTeleopPositions).not.toHaveBeenCalled();
+    // TASK-393: the command the sidecar accepted, not the teleop map.
+    expect(second.getRecordedCommand).toHaveBeenCalledTimes(1);
+    expect(first.getRecordedCommand).not.toHaveBeenCalled();
 
     hooks.isTeleopActive();
     hooks.isEStopTriggered();

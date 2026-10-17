@@ -20,6 +20,7 @@ import type { TeleopTabProps } from '../types';
 import { EMULATOR_ACTIVE } from './vrConstants';
 import { resolveXrAvailability, type XrAvailability } from './vrAvailability';
 import { VRTeleopModalBody } from './VRTeleopModal';
+import { QuestConnectHelp } from './QuestConnectHelp';
 
 // ============================================================================
 // LAUNCHER — compact card shown in the Teleop tab
@@ -117,6 +118,13 @@ export function VRTeleopSection({ robot, onNextEpisode, recording }: VRTeleopSec
             </StatusTag>
             <p className="text-[13px] text-ink-secondary">{hint}</p>
           </div>
+          {/* TASK-393: how to get a Quest onto this page — collapsed once the
+              page can already do WebXR, open when it cannot. */}
+          {!EMULATOR_ACTIVE && (
+            <div className="mt-3">
+              <QuestConnectHelp location={window.location} />
+            </div>
+          )}
         </Panel.Body>
       </Panel>
 

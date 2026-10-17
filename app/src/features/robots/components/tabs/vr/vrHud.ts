@@ -106,6 +106,93 @@ export interface HudState {
    * behind it, does not have to invent a value.
    */
   recording?: { episode: number; frames: number } | null;
+  /**
+   * The real robot's arm write path (TASK-393), from the agent's
+   * `{type:'arm'}` frame. Absent / null on the sim and on older sidecars,
+   * which need no arming — the HUD then looks exactly as it did.
+   */
+  arm?: HudArm | null;
+  /**
+   * Any controller grip past the clutch threshold right now (TASK-393). Read
+   * only on a real robot, to tell "release the grip" from "squeeze it".
+   */
+  clutchHeld?: boolean;
+  /**
+   * A side is driven by a tracked hand (TASK-393). On a real robot a hand never
+   * arms the arms — it has no clutch — so the plate says to use the controllers.
+   */
+  handTracked?: boolean;
+}
+
+/** Each controller grip past the clutch threshold, as the rig reports it to the agent. */
+export interface RigClutch {
+  left: boolean;
+  right: boolean;
+}
+
+/** Whether two clutch reports agree. `null` (never sent) agrees with nothing. */
+export function sameClutch(a: RigClutch, b: RigClutch | null): boolean {
+  return b !== null && a.left === b.left && a.right === b.right;
+}
+
+/**
+ * The agent's re-engage latch for this console (`robot-agent/src/teleop/reengage.ts`):
+ * `need_release` after any disarm the operator did not cause (and at the start
+ * of a session), `need_press` once the grip was seen let go, `ready` once it was
+ * squeezed again, `holding` while this console has the arms.
+ */
+export type HudEngage = 'need_release' | 'need_press' | 'ready' | 'holding';
+
+/** What the HUD needs of the agent's `{type:'arm'}` frame. */
+export interface HudArm {
+  armed: boolean;
+  arming: boolean;
+  /** 0..1 */
+  armWeight: number;
+  /** `arms+hands` | `arms+left_hand` | `arms+right_hand` | `arms_only`, or null when unknown. */
+  teleopMode: string | null;
+  /** The agent's re-engage latch for this console; null from an older agent. */
+  engage?: HudEngage | null;
+}
+
+/** The two-line plate a real robot shows while a tracked hand is in use. */
+export const HUD_USE_CONTROLLERS = ['Use controllers to drive', 'the real robot'] as const;
+/** What the MODE line says while the arms wait for the grip to be let go. */
+export const HUD_RELEASE_GRIP = 'Release grip to re-arm';
+
+/**
+ * Whether the arms are waiting for the operator to let go before they may arm
+ * again: the agent's latch says so, the grip is still held, and nothing is
+ * arming. Without the grip held the agent moves on to `need_press` within one
+ * beat, and the MODE line's own `ARMS OFF` is then the honest readout.
+ */
+export function hudNeedsRelease(arm: HudArm, clutchHeld: boolean): boolean {
+  return arm.engage === 'need_release' && clutchHeld && !arm.armed && !arm.arming;
+}
+
+/**
+ * The arm state as a MODE-line suffix. Folded into MODE rather than given a
+ * line: the plate is full (see `composeHud`), and "which arm am I holding" and
+ * "is that arm actually under my control" are one question to the wearer.
+ */
+export function hudArmSuffix(arm: HudArm): string {
+  if (arm.armed && arm.armWeight >= 0.99) return 'ARMED';
+  if (arm.armed || arm.arming) return `ARMING ${Math.round(Math.max(0, Math.min(1, arm.armWeight)) * 100)}%`;
+  return 'ARMS OFF';
+}
+
+/** The missing-hand warning, or null when both hands are there (or unknown). */
+export function hudHandWarning(teleopMode: string | null | undefined): string | null {
+  switch (teleopMode) {
+    case 'arms+left_hand':
+      return 'NO RIGHT HAND — arms + left';
+    case 'arms+right_hand':
+      return 'NO LEFT HAND — arms + right';
+    case 'arms_only':
+      return 'NO HANDS — arms only';
+    default:
+      return null;
+  }
 }
 
 export function hudMode(state: Pick<HudState, 'armLeft' | 'armRight' | 'driving'>): HudMode {
@@ -154,6 +241,29 @@ function count(v: number): string {
  * anything appended at the bottom is the first thing off the plate if the budget
  * ever moves.
  */
+/** MODE, with the arm state folded in on a robot that needs arming. */
+function modeLine(state: HudState): HudLine {
+  const mode = hudMode(state);
+  if (!state.arm) {
+    return { id: 'mode', text: `MODE ${mode}`, color: mode === 'IDLE' ? HUD_COLORS.dim : HUD_COLORS.text };
+  }
+  // Takes the MODE line rather than adding one: which arm is held does not
+  // matter while neither is under control, and what to do next does.
+  if (hudNeedsRelease(state.arm, state.clutchHeld === true)) {
+    return { id: 'mode', text: HUD_RELEASE_GRIP, color: HUD_COLORS.warn };
+  }
+  const suffix = hudArmSuffix(state.arm);
+  // Amber while an arm is held but not yet (or no longer) under control: the
+  // wearer is moving a hand the robot is not following.
+  const engaged = mode === 'ARM-L' || mode === 'ARM-R' || mode === 'ARM-LR';
+  const color = suffix === 'ARMED'
+    ? HUD_COLORS.ok
+    : engaged
+      ? HUD_COLORS.warn
+      : HUD_COLORS.dim;
+  return { id: 'mode', text: `MODE ${mode} ${suffix}`, color };
+}
+
 export function composeHud(state: HudState): HudLine[] {
   if (state.estopLatched) {
     return [
@@ -168,31 +278,36 @@ export function composeHud(state: HudState): HudLine[] {
       : `${Math.max(0, Math.round(state.msSinceState))}ms`;
 
   const rec = state.recording;
+  const hand = state.arm ? hudHandWarning(state.arm.teleopMode) : null;
+  const recLine: HudLine[] = rec
+    ? [{ id: 'rec', text: `REC ● ep ${count(rec.episode)} · ${count(rec.frames)} fr`, color: HUD_COLORS.bad }]
+    : [];
+  const linkLine: HudLine = {
+    id: 'link',
+    text: `LINK ${state.link.toUpperCase()} ${age}`,
+    color: LINK_COLOR[state.link] ?? HUD_COLORS.dim,
+  };
+
+  // A tracked hand on a real robot (TASK-393): the agent drives no side whose
+  // grip is not held, and a hand has no grip. The base readouts give way — a
+  // hands-only operator has no stick to drive the base with either.
+  if (state.arm && state.handTracked) {
+    return [
+      ...recLine,
+      linkLine,
+      { id: 'mode', text: HUD_USE_CONTROLLERS[0], color: HUD_COLORS.warn },
+      { id: 'hand-hint', text: HUD_USE_CONTROLLERS[1], color: HUD_COLORS.warn },
+    ];
+  }
 
   return [
     // Red, not green: every camera ever built lights red for "armed and
     // capturing", and the operator does not have to be taught it. It is also the
     // only red line that can appear while the robot is running, so it cannot be
     // confused with the E-Stop banner, which replaces the plate entirely.
-    ...(rec
-      ? [
-          {
-            id: 'rec',
-            text: `REC ● ep ${count(rec.episode)} · ${count(rec.frames)} fr`,
-            color: HUD_COLORS.bad,
-          },
-        ]
-      : []),
-    {
-      id: 'link',
-      text: `LINK ${state.link.toUpperCase()} ${age}`,
-      color: LINK_COLOR[state.link] ?? HUD_COLORS.dim,
-    },
-    {
-      id: 'mode',
-      text: `MODE ${hudMode(state)}`,
-      color: hudMode(state) === 'IDLE' ? HUD_COLORS.dim : HUD_COLORS.text,
-    },
+    ...recLine,
+    linkLine,
+    modeLine(state),
     // Two lines, because the base has two independent things to report and one
     // of them used to be invisible. The old single line printed `vx` and
     // `omega`; `vy` was computed, rotated into the robot frame, sent to the
@@ -215,15 +330,20 @@ export function composeHud(state: HudState): HudLine[] {
             color: HUD_COLORS.text,
           },
           // Dropped while recording — see the docstring. `rec` buys this slot.
+          // On a real robot with a Dex3 hand missing the warning takes it
+          // instead (TASK-393): the yaw has a second source, the missing hand
+          // has none inside the headset.
           ...(rec
             ? []
-            : [
-                {
-                  id: 'turn',
-                  text: `TURN ${fixed(state.omega, 2)} rad/s`,
-                  color: HUD_COLORS.text,
-                },
-              ]),
+            : hand
+              ? [{ id: 'hands', text: hand, color: HUD_COLORS.warn }]
+              : [
+                  {
+                    id: 'turn',
+                    text: `TURN ${fixed(state.omega, 2)} rad/s`,
+                    color: HUD_COLORS.text,
+                  },
+                ]),
         ]),
   ];
 }
