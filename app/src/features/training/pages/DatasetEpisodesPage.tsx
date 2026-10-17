@@ -26,7 +26,7 @@ import { trainingApi } from '../api/trainingApi';
 import { datasetViewsApi } from '../api/datasetViewsApi';
 import { CreateViewModal } from '../components/CreateViewModal';
 import { DatasetViewsSection } from '../components/DatasetViewsSection';
-import { HFPushModal } from '../components/HFPushModal';
+import { PublishDatasetDialog } from '../components/PublishDatasetDialog';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
 import { ViewBanner } from '../components/datasets/ViewBanner';
 import { DatasetExpectationsPanel } from '../components/datasets/DatasetExpectationsPanel';
@@ -503,7 +503,7 @@ export function DatasetEpisodesPage() {
               <RowActions
                 label="More actions"
                 items={[
-                  { label: 'Push to Hugging Face', icon: <CloudUpload />, disabled: !ready, onSelect: () => setIsPushOpen(true) },
+                  { label: 'Publish to Hugging Face', icon: <CloudUpload />, disabled: !ready, onSelect: () => setIsPushOpen(true) },
                 ]}
               />
             </>
@@ -676,7 +676,7 @@ export function DatasetEpisodesPage() {
         />
       )}
       {dataset && isPushOpen && (
-        <HFPushModal isOpen onClose={() => setIsPushOpen(false)} datasetId={dataset.id} datasetName={dataset.name} />
+        <PublishDatasetDialog isOpen onClose={() => setIsPushOpen(false)} datasetId={dataset.id} datasetName={dataset.name} />
       )}
       {dataset && (
         <TrainingJobWizard

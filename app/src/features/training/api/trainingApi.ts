@@ -35,6 +35,10 @@ import type {
   ImportLogResponse,
   CompatibilityReport,
   TrainingRunManifest,
+  DatasetPublishJob,
+  DatasetPublishState,
+  HubPublishStatus,
+  PublishDatasetInput,
 } from '../types';
 
 const ENDPOINTS = {
@@ -76,8 +80,8 @@ const ENDPOINTS = {
   datasetImportRetry: (id: string) => `/datasets/${id}/import/retry`,
   datasetImportLog: (id: string) => `/datasets/${id}/import/log`,
   datasetImportCancel: (id: string) => `/datasets/${id}/import/cancel`,
-  datasetPushToHub: (id: string) => `/datasets/${id}/push-to-hub`,
-  datasetPushStatus: (id: string) => `/datasets/${id}/push-status`,
+  datasetPublish: (id: string) => `/datasets/${id}/publish`,
+  datasetPublishStatus: '/datasets/publish/status',
 
   // Mixtures (TASK-220)
   datasetCompatibility: '/datasets/compatibility',
@@ -541,23 +545,23 @@ export const trainingApi = {
   },
 
   /**
-   * Push a dataset to HuggingFace Hub
+   * Publish a dataset to the Hugging Face Hub with the server's own token (TASK-394).
+   * Answers with the job as soon as the upload has started.
    */
-  async pushToHub(datasetId: string, config: { token: string; repoId: string; private?: boolean }): Promise<{ jobId: string }> {
-    const response = await apiClient.post<{ jobId: string }>(
-      ENDPOINTS.datasetPushToHub(datasetId),
-      config
-    );
+  async publishDataset(datasetId: string, input: PublishDatasetInput): Promise<DatasetPublishJob> {
+    const response = await apiClient.post<DatasetPublishJob>(ENDPOINTS.datasetPublish(datasetId), input);
     return response.data;
   },
 
-  /**
-   * Get push-to-hub job status
-   */
-  async getPushStatus(datasetId: string): Promise<{ status: string; progress?: string; url?: string; error?: string }> {
-    const response = await apiClient.get<{ status: string; progress?: string; url?: string; error?: string }>(
-      ENDPOINTS.datasetPushStatus(datasetId)
-    );
+  /** The running or last publish of a dataset. */
+  async getDatasetPublish(datasetId: string): Promise<DatasetPublishState> {
+    const response = await apiClient.get<DatasetPublishState>(ENDPOINTS.datasetPublish(datasetId));
+    return response.data;
+  },
+
+  /** Whether the server has a Hub token, and whose. */
+  async getHubPublishStatus(): Promise<HubPublishStatus> {
+    const response = await apiClient.get<HubPublishStatus>(ENDPOINTS.datasetPublishStatus);
     return response.data;
   },
 

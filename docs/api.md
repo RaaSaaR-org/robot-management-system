@@ -259,6 +259,9 @@ logout.
 | GET | `/:id/quality` | Quality report |
 | POST | `/:id/validate` | Start structural validation → `202 {state}` |
 | POST | `/:id/validate-advanced` | Trigger advanced validation |
+| GET | `/publish/status` | Whether the server has a Hugging Face token, and whose |
+| POST | `/:id/publish` | Publish to a Hugging Face dataset repo → `202 {job}` |
+| GET | `/:id/publish` | The running or last publish (phase, files, bytes, link) |
 
 `POST /:id/validate` does not wait for the verdict. It answers `202` with
 `{datasetId, accepted, state, progressUrl}` — `state: "queued"` when NATS is
@@ -272,6 +275,10 @@ While a validation for that dataset is running the endpoint answers `409
 VALIDATION_IN_FLIGHT` rather than starting a second pass; when neither backing
 store can be reached it answers `503 STORE_UNAVAILABLE` and leaves the row
 untouched.
+
+Publishing reads the dataset's directory on this server's disk and uses the
+server's own Hub token; refusals (`DATASET_DEGRADED`, `HF_TOKEN_MISSING`,
+`NAMESPACE_FORBIDDEN`, …) are listed in `docs/huggingface-publish.md`.
 
 ### Deployments (`/api/deployments`)
 
