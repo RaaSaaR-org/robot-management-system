@@ -137,17 +137,32 @@ export class ArmRegistry {
         message: 'the sidecar\'s E-stop is latched — reset the E-stop before driving the arms',
       };
     }
-    this.claims.set(id, generation);
-    this.schedulePoll(0);
-    if (this.armedLocally()) return { state: 'armed' };
-    if (this.armInFlight) return { state: 'arming' };
+    if (this.armedLocally() || this.armInFlight) {
+      this.claims.set(id, generation);
+      this.schedulePoll(0);
+      return this.armInFlight ? { state: 'arming' } : { state: 'armed' };
+    }
     if (this.now() < this.retryAfter) {
+      // Not recorded: a refused claim is not a claim, and one left on the books
+      // would keep the sidecar armed after the console that did arm it left.
+      if (this.claims.delete(id)) this.emit();
       return {
         state: 'refused',
         code: 'arm_failed',
         message: `the sidecar refused to arm: ${this.lastError ?? 'unknown error'}`,
       };
     }
+    // A FRESH ARM. Whatever claims are still on the books belong to an arm that
+    // is gone — the sidecar disarmed itself, a 409, a refused `/arm` — and their
+    // sockets have not yet noticed (they look once per tick). They are dropped
+    // here, not carried into this arm: a socket counts the arms as its own only
+    // while its claim is live, and a claim that survived a disarm would make
+    // somebody else's fresh squeeze re-arm a console whose grip never let go.
+    const stale = [...this.claims.keys()].filter((other) => other !== id);
+    for (const other of stale) this.claims.delete(other);
+    if (stale.length > 0) console.warn(`[ArmRegistry] dropped ${stale.length} claim(s) left from a lost arm`);
+    this.claims.set(id, generation);
+    this.schedulePoll(0);
     this.startArm(generation);
     return { state: 'arming' };
   }

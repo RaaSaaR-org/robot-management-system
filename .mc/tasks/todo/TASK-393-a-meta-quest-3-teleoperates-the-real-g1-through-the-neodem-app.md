@@ -227,6 +227,14 @@ TASK-391, built in parallel against the shared contract below.
     armed in 3 s, `arm_side_unclutched`.
 - Not verified here: anything on the real robot (needs TASK-391's `G1_WRITE_MODE=arm_sdk`),
   a real Quest browser, auth-enabled mode end to end (unit-tested only).
+- 2026-10-17 adversarial review of the re-arm fix: two holes in `teleop/arm-registry.ts`, both
+  fixed with tests. (1) A claim outlived the arm it was made for until its socket's next
+  33 ms tick, so another console's fresh squeeze arming the sidecar in that window made the
+  first console's stale claim live again — it drove without a fresh edge. A fresh `/arm` now
+  drops every other claim left on the books. (2) A claim refused during the `/arm` cooldown
+  was recorded anyway and never released, so a later console's arm stayed up after that
+  console left. A refused claim is no longer recorded. `arm-registry.test.ts` +2,
+  `keyboard-teleop-arming.test.ts` +2; all four fail without the fix.
 
 - Needs TASK-391's sidecar `arm_sdk` mode to move the real robot; until then an
   `arm_sdk`-less sidecar behaves exactly as before (no arming, legacy release).

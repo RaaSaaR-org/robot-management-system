@@ -611,4 +611,62 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
     await flush();
     expect(sidecar.armCalls).toEqual([1]);
   });
+
+  it('another console re-arming before this socket\'s tick does not revive its stale claim', async () => {
+    // Two consoles under one lease, each its own server so their poses can be
+    // told apart. A drives; B has squeezed but sent nothing yet.
+    const one = makeServer();
+    const two = makeServer();
+    const a = one.connect();
+    const b = two.connect();
+    await bindAndBeat(a);
+    send(a, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
+    await bindAndBeat(b);
+
+    // The sidecar disarms itself (dead-man, 409) and, before A's next tick can
+    // notice, B's first frame arms it afresh.
+    sidecar.armedLocal = false;
+    sidecar.status = { ...sidecar.status, armed: false, armWeight: 0 };
+    send(b, POSE);
+    expect(sidecar.armCalls).toEqual([1, 1]);
+    one.state.setTeleopJoint.mockClear();
+    send(a, POSE);
+    await flush();
+
+    // A's grip never let go: B's new arm is not A's.
+    expect(one.state.setTeleopJoint).not.toHaveBeenCalled();
+    expect(a.errors('arm_reengage_required').length).toBeGreaterThan(0);
+    expect(a.ofType('arm').at(-1)).toMatchObject({ engage: 'need_release', mine: false });
+    expect(two.state.setTeleopJoint).toHaveBeenCalledWith('left_shoulder_pitch_joint', 0.3);
+  });
+
+  it('a claim refused during the /arm cooldown is not left behind to keep the arms up', async () => {
+    sidecar.armResult = { ok: false, error: 'not yet' };
+    const one = makeServer();
+    const two = makeServer();
+    const a = one.connect();
+    await bindAndBeat(a);
+    send(a, POSE);
+    await flush();
+    await beatFor(a, 100, GRIP_NONE);
+    // A fresh squeeze inside the cooldown is refused...
+    squeeze(a);
+    send(a, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
+    expect(arms.view().claims).toBe(0);
+
+    // ...and leaves nothing that would outlive the console that does arm.
+    sidecar.armResult = { ok: true };
+    await beatFor(a, 1100, GRIP_NONE);
+    const b = two.connect();
+    await bindAndBeat(b);
+    send(b, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1, 1]);
+    close(b);
+    expect(sidecar.disarmCalls).toBe(1);
+  });
 });

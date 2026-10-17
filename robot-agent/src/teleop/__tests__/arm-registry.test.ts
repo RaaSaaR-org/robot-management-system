@@ -97,6 +97,35 @@ describe('ArmRegistry', () => {
     expect(client.arm).toHaveBeenCalledTimes(2);
   });
 
+  it('a claim refused in the cooldown is not kept', async () => {
+    const client = fakeClient();
+    client.armResult = { ok: false, error: 'nope' };
+    const reg = new ArmRegistry(client as ArmClient, { retryCooldownMs: 1000 });
+    reg.claim('a', 1);
+    await vi.advanceTimersByTimeAsync(0);
+    reg.release('a', 'refused');
+    expect(reg.claim('b', 1)).toMatchObject({ state: 'refused' });
+    expect(reg.has('b')).toBe(false);
+    expect(reg.view().claims).toBe(0);
+  });
+
+  it('a fresh arm drops the claims left from an arm that was lost', async () => {
+    const client = fakeClient();
+    const reg = new ArmRegistry(client as ArmClient);
+    reg.claim('a', 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reg.isLive()).toBe(true);
+    // The sidecar disarmed itself; 'a' has not noticed yet.
+    await client.disarm();
+    expect(reg.isLive()).toBe(false);
+    expect(reg.claim('b', 1)).toEqual({ state: 'arming' });
+    expect(reg.has('a')).toBe(false);
+    expect(reg.has('b')).toBe(true);
+    // Joining an arm that is up (or on its way) drops nobody.
+    expect(reg.claim('c', 1)).toEqual({ state: 'arming' });
+    expect(reg.has('b')).toBe(true);
+  });
+
   it('releaseAll disarms whatever was held', async () => {
     const client = fakeClient();
     const reg = new ArmRegistry(client as ArmClient);

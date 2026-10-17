@@ -208,7 +208,10 @@ both while nothing blocks arming (an edge made during the E-stop latch does not
 count). The HUD's MODE line reads *Release grip to re-arm* while the grip is still
 held; the desktop tag says the same. This is enforced in the agent
 (`robot-agent/src/teleop/reengage.ts`), so a stale or hostile client cannot skip
-it, and a client that reports no clutch at all cannot arm the real arms. Before
+it, and a client that reports no clutch at all cannot arm the real arms. The latch is per
+console: another console's fresh squeeze that arms the sidecar does not hand the
+arms back to a console whose grip never let go — a fresh `/arm` drops every claim
+left from the arm that was lost (`robot-agent/src/teleop/arm-registry.ts`). Before
 TASK-393's review the arms re-armed on the very next streamed frame, within 0.5 s
 of a reset, and a held grip slewed them straight to the controller's pose.
 
