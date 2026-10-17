@@ -21,6 +21,7 @@ import { scanSessionService } from '../services/ScanSessionService.js';
 import { digitalTwinService } from '../services/DigitalTwinService.js';
 import { twinZoneService } from '../services/TwinZoneService.js';
 import { agentModeService } from '../services/AgentModeService.js';
+import { getRobotReadinessService, type RobotReadiness } from '../services/robot-supervisor/index.js';
 import { authService } from '../services/AuthService.js';
 import { MULTI_TENANCY_ENABLED } from '../config/features.js';
 import { deliverEvent, deliverEventPerSocket, TenantResolver, UNRESOLVED_ROBOT_TENANT } from './eventFanout.js';
@@ -452,6 +453,15 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
     const message = teleopEnvelope(event);
     if (!message) return; // created / frame-level events are not broadcast
     deliverFor(message, eventTenantKey.teleop(event));
+  });
+
+  // Robot readiness (TASK-409): the merged supervisor + agent snapshot of a
+  // watched robot, on change and at least every 5 s, to the robot's tenant.
+  // Every identified socket of the tenant gets it; there are no per-topic
+  // subscriptions (D5).
+  getRobotReadinessService().onReadiness((snapshot: RobotReadiness) => {
+    const message = JSON.stringify({ type: 'robot:readiness', data: snapshot, timestamp: Date.now() });
+    deliverFor(message, robotKey(snapshot.robotId));
   });
 
   // Subscribe to Agent Mode events (TASK-194) and fan them out (eventFanout.ts).

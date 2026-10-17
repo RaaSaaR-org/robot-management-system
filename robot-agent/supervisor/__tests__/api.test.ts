@@ -69,6 +69,7 @@ describe('supervisor API', () => {
     const base = await boot();
     const st = await getStatus(base);
     expect(st).toMatchObject({ robotId: 'stub-g1', robot: 'sim', sidecarMode: null, overall: 'stopped', lastBase: null });
+    expect(typeof st.agentPort).toBe('number');
     expect(st.steps.map((s) => s.id)).toEqual(['preflight', 'link', 'camera', 'bridge', 'sidecar', 'agent']);
     for (const s of st.steps) {
       expect(Object.keys(s)).toEqual(expect.arrayContaining(['id', 'state', 'owned', 'pid', 'startedAt', 'detail', 'checks']));

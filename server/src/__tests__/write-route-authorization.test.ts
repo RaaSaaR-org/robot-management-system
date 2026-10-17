@@ -62,7 +62,9 @@ const app = createApp();
 // (writeRoleGuard + memberOrAbove).
 // TASK-408 adds three on the guarded /api/teleoperation mount: POST
 // /sessions/:id/episodes/start, /stop and /discard-last.
-const EXPECTED_WRITE_ROUTES = 377;
+// TASK-409 adds six on the guarded /api/robots mount: POST /:id/bringup/start,
+// /stop, /sidecar-mode, /lan-up and /steps/:step/adopt|leave (memberOrAbove).
+const EXPECTED_WRITE_ROUTES = 383;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;

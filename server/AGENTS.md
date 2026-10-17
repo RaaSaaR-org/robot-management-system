@@ -351,7 +351,7 @@ Photos: `PatrolPhotoStore` — S3 bucket `patrol-photos` when RustFS is configur
 
 - `ws://localhost:3001/api/a2a/ws` - Real-time event streaming
 
-**Outbound events**: `robot_registered`, `robot_unregistered`, `robot_status_changed`, `robot_telemetry`, `robot_health_check`, `alert_created`, `alert_acknowledged`, `alert_deleted`, `task_event`, `process:*`, `task:*`, `robot:work_assigned`, `agent:*` (incl. `agent:patrol:started|leg|finished` carrying `patrol`, `agent:finding:detected|confirmed` carrying `finding` + `patrol`)
+**Outbound events**: `robot_registered`, `robot_unregistered`, `robot_status_changed`, `robot_telemetry`, `robot_health_check`, `alert_created`, `alert_acknowledged`, `alert_deleted`, `task_event`, `process:*`, `task:*`, `robot:work_assigned`, `agent:*` (incl. `agent:patrol:started|leg|finished` carrying `patrol`, `agent:finding:detected|confirmed` carrying `finding` + `patrol`), `robot:readiness` (TASK-409: `{data: RobotReadiness}` for a watched robot, on change and at least every 5 s)
 
 **Inbound messages**: `ping` (returns pong), `subscribe` (subscribes to all events)
 
