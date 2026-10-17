@@ -16,6 +16,7 @@ import { demoQuest, READINESS_FIXTURES, readinessFor, type ReadinessFixtureName 
 import { useReadinessStore } from '../../../store/readinessStore';
 import { RobotReadinessPanel } from '../RobotReadinessPanel';
 import { BringupLogsDrawer } from '../BringupLogsDrawer';
+import { QuestControls } from '../QuestControls';
 import { questPagePort, type RobotReadiness } from '../../../api/readinessApi';
 
 const ROBOT = 'r1';
@@ -415,5 +416,47 @@ describe('RobotReadinessPanel — the Quest row (TASK-412)', () => {
     render(<RobotReadinessPanel robotId={ROBOT} lease={BOUND} />);
     await screen.findByTestId('readiness-row-arms');
     expect(screen.queryByTestId('readiness-row-quest')).toBeNull();
+  });
+
+  it('says it has no report, without guessing why, when the supervisor sent none', async () => {
+    serve({ ...readinessFor(ROBOT, 'not_engaged'), quest: null });
+    render(<RobotReadinessPanel robotId={ROBOT} lease={BOUND} />);
+    const row = await screen.findByTestId('readiness-row-quest');
+    await waitFor(() => expect(row).toHaveTextContent('no report from the supervisor'));
+    expect(row).toHaveAttribute('data-status', 'unknown');
+  });
+});
+
+describe('QuestControls — Copy viewer link (TASK-412)', () => {
+  const SESSION = '00000000-0000-4000-8000-000000000412';
+  const ORIGIN = 'http://192.168.1.20:1420';
+
+  it('shows the link when the page has no clipboard (plain-http LAN origin)', () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    try {
+      render(<QuestControls robotId={ROBOT} quest={demoQuest(true)} sessionId={SESSION} origin={ORIGIN} />);
+      fireEvent.click(screen.getByTestId('quest-copy-viewer-link'));
+      expect(screen.getByTestId('quest-message')).toHaveTextContent(`${ORIGIN}/data-collection/${SESSION}`);
+    } finally {
+      if (original) Object.defineProperty(navigator, 'clipboard', original);
+      else delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+
+  it('copies the link when the clipboard is there', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    try {
+      render(<QuestControls robotId={ROBOT} quest={demoQuest(true)} sessionId={SESSION} origin={ORIGIN} />);
+      fireEvent.click(screen.getByTestId('quest-copy-viewer-link'));
+      expect(writeText).toHaveBeenCalledWith(`${ORIGIN}/data-collection/${SESSION}`);
+      await waitFor(() => expect(screen.getByTestId('quest-copy-viewer-link')).toHaveTextContent('Copied'));
+      expect(screen.queryByTestId('quest-message')).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(navigator, 'clipboard', original);
+      else delete (navigator as { clipboard?: unknown }).clipboard;
+    }
   });
 });

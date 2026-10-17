@@ -309,6 +309,49 @@ describe('emission cadence', () => {
     expect(questReads).toBe(before);
   });
 
+  it('does not hold the poll back on a slow Quest read; the next poll carries it', async () => {
+    let answer: ((q: QuestStatus | null) => void) | undefined;
+    let questReads = 0;
+    const { service } = rig({
+      readQuest: () => {
+        questReads++;
+        return new Promise<QuestStatus | null>((resolve) => (answer = resolve));
+      },
+    });
+    let first: RobotReadiness | undefined;
+    void service.getReadiness(ROBOT).then((s) => (first = s));
+    // Only the short grace, not the read's 5 s timeout.
+    await vi.advanceTimersByTimeAsync(250);
+    expect(first?.quest).toBeNull();
+    expect(first?.reason.code).toBe('following');
+
+    // Still running over the next ticks: no second read is started meanwhile.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(questReads).toBe(1);
+
+    answer?.(questStatus(true));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(service.cached(ROBOT)?.quest?.reversed).toEqual([{ remote: 'tcp:1420', local: 'tcp:1420' }]);
+    service.stop();
+  });
+
+  it('drops a Quest read that started before Connect / Open', async () => {
+    const answers: Array<(q: QuestStatus | null) => void> = [];
+    const { service } = rig({
+      readQuest: () => new Promise<QuestStatus | null>((resolve) => answers.push(resolve)),
+    });
+    void service.getReadiness(ROBOT);
+    await vi.advanceTimersByTimeAsync(250);
+    service.invalidateQuest(ROBOT);
+    await vi.advanceTimersByTimeAsync(1_000); // the next poll starts a fresh read
+    expect(answers).toHaveLength(2);
+    answers[1](questStatus(true));
+    answers[0](questStatus(false)); // the old read answers last
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(service.cached(ROBOT)?.quest?.reversed).toEqual([{ remote: 'tcp:1420', local: 'tcp:1420' }]);
+    service.stop();
+  });
+
   it('keeps the heartbeat within 5 s when an emission falls off the tick phase', async () => {
     const { service, events } = rig();
     service.touch(ROBOT); // the 1 Hz tick starts here, at t = 0

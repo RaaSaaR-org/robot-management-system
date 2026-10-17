@@ -445,9 +445,15 @@ const QUEST_ROW_STATUS: Record<QuestPhase, RowStatus> = {
 function questRow(r: RobotReadiness, port: number): ReadinessRowModel | null {
   const q = r.quest;
   if (!q) {
-    // A supervisor that answered but sent no Quest report is older than TASK-412.
+    // A supervisor that answered but sent no Quest report: either it predates
+    // TASK-412, or its last `/quest` read failed or timed out (adb hiccup). The
+    // two look the same from here, so the row claims neither.
     if (!r.bringup) return null;
-    return { id: 'quest', label: 'Quest', status: 'unknown', value: 'not reported by the supervisor', detail: null, bringup: true, step: null };
+    return {
+      id: 'quest', label: 'Quest', status: 'unknown', value: 'no report from the supervisor',
+      detail: 'Its last Quest read failed or timed out, or this supervisor has no Quest support.',
+      bringup: true, step: null,
+    };
   }
   const s = questSummary(q, port);
   return {

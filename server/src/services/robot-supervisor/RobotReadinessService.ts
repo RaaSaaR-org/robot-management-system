@@ -95,6 +95,13 @@ export interface RobotReadinessDeps {
   readQuest?: (robotId: string) => Promise<QuestStatus | null>;
   /** How often the Quest is read while watched (default 2 s). */
   questPollMs?: number;
+  /**
+   * How long a poll waits for a Quest read it started before it goes on with
+   * the last report (default 250 ms). The read itself may take up to 5 s
+   * (adb on a cold daemon); it finishes in the background and the next poll
+   * carries it, so a slow headset never holds back the readiness line.
+   */
+  questWaitMs?: number;
   /** Register a robot from its agent URL, in the tenant of whoever asked. */
   register: (agentUrl: string, tenantId: string | null) => Promise<void>;
   now?: () => number;
@@ -108,6 +115,8 @@ export const READINESS_WATCH_MS = 30_000;
 export const READINESS_HEARTBEAT_MS = 5_000;
 /** The Quest is read every 2 s while a robot is watched (TASK-412). */
 export const READINESS_QUEST_POLL_MS = 2_000;
+/** A poll waits this long for a Quest read before it uses the last report. */
+export const READINESS_QUEST_WAIT_MS = 250;
 /** A cached agent reading older than this is not passed on (base-mode `sidecarReachable`). */
 export const READINESS_CACHE_FRESH_MS = 10_000;
 /** One VR HUD line, as the agent's own reasons (REASON_MAX_CHARS). */
@@ -237,9 +246,11 @@ interface Watch {
   heartbeatDue: boolean;
   /** A start asked for the robot to be registered once its agent is up. */
   register: { tenantId: string | null; lastTry: number } | null;
-  /** The last Quest report and when it was read (0 = never). */
+  /** The last Quest report and when its read started (0 = never). */
   quest: QuestStatus | null;
   questAt: number;
+  /** The Quest read still running; its answer is dropped once this is replaced. */
+  questRead: Promise<void> | null;
 }
 
 export class RobotReadinessService {
@@ -253,6 +264,7 @@ export class RobotReadinessService {
   private readonly watchMs: number;
   private readonly heartbeatMs: number;
   private readonly questPollMs: number;
+  private readonly questWaitMs: number;
 
   constructor(private readonly deps: RobotReadinessDeps) {
     this.now = deps.now ?? Date.now;
@@ -260,6 +272,7 @@ export class RobotReadinessService {
     this.watchMs = deps.watchMs ?? READINESS_WATCH_MS;
     this.heartbeatMs = deps.heartbeatMs ?? READINESS_HEARTBEAT_MS;
     this.questPollMs = deps.questPollMs ?? READINESS_QUEST_POLL_MS;
+    this.questWaitMs = deps.questWaitMs ?? READINESS_QUEST_WAIT_MS;
     this.emitter.setMaxListeners(50);
   }
 
@@ -347,7 +360,7 @@ export class RobotReadinessService {
   private watch(robotId: string): Watch {
     let w = this.watches.get(robotId);
     if (!w) {
-      w = { until: 0, sessions: new Set(), inFlight: null, last: null, lastEmitted: null, lastEmitAt: 0, heartbeatDue: false, register: null, quest: null, questAt: 0 };
+      w = { until: 0, sessions: new Set(), inFlight: null, last: null, lastEmitted: null, lastEmitAt: 0, heartbeatDue: false, register: null, quest: null, questAt: 0, questRead: null };
       this.watches.set(robotId, w);
     }
     return w;
@@ -428,24 +441,47 @@ export class RobotReadinessService {
   /**
    * The Quest report, read at most every `questPollMs` (the poll itself runs at
    * 1 Hz). Only asked of a supervisor that just answered; a failed read is null.
+   * Off the critical path: the poll waits at most `questWaitMs` for a read it
+   * started and otherwise goes on with the last report, while the read lands
+   * in `w.quest` for the next poll.
    */
   private async readQuest(robotId: string, w: Watch, supervisorUp: boolean): Promise<QuestStatus | null> {
-    if (!this.deps.readQuest || !supervisorUp) {
+    const readQuest = this.deps.readQuest;
+    if (!readQuest || !supervisorUp) {
       w.quest = null;
       w.questAt = 0;
+      w.questRead = null;
       return null;
     }
     const now = this.now();
-    if (w.questAt > 0 && now - w.questAt < this.questPollMs) return w.quest;
-    w.questAt = now;
-    w.quest = await this.deps.readQuest(robotId).catch(() => null);
+    if (!w.questRead && (w.questAt === 0 || now - w.questAt >= this.questPollMs)) {
+      w.questAt = now;
+      const read: Promise<void> = readQuest(robotId)
+        .catch(() => null)
+        .then((quest) => {
+          // A read replaced meanwhile (supervisor down, Connect / Open) is stale.
+          if (w.questRead !== read) return;
+          w.quest = quest;
+          w.questRead = null;
+        });
+      w.questRead = read;
+    }
+    const pending = w.questRead;
+    if (pending) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([pending, new Promise<void>((resolve) => (timer = setTimeout(resolve, this.questWaitMs)))]);
+      clearTimeout(timer);
+    }
     return w.quest;
   }
 
   /** Forget the cached Quest report so the next poll reads it again (after Connect / Open). */
   invalidateQuest(robotId: string): void {
     const w = this.watches.get(robotId);
-    if (w) w.questAt = 0;
+    if (!w) return;
+    w.questAt = 0;
+    // A read that started before the Connect / Open would bring back the old state.
+    w.questRead = null;
   }
 
   private maybeEmit(w: Watch, snapshot: RobotReadiness): void {

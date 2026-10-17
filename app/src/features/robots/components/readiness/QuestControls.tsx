@@ -117,8 +117,14 @@ export function QuestControls({
   const onCopy = () => {
     if (!sessionId) return;
     const link = viewerLink(origin ?? window.location.origin, sessionId);
+    // No clipboard on a plain-http LAN origin (not a secure context): show the
+    // link to copy by hand rather than doing nothing.
+    if (!navigator.clipboard?.writeText) {
+      setMessage({ tone: 'error', text: `Copy is not available on this page — the link is ${link}` });
+      return;
+    }
     navigator.clipboard
-      ?.writeText(link)
+      .writeText(link)
       .then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -168,7 +174,7 @@ export function QuestControls({
       </div>
       {message && (
         <p
-          className={cn('text-[12px]', message.tone === 'error' ? 'text-signal-stopped' : 'text-ink-secondary')}
+          className={cn('select-text break-all text-[12px]', message.tone === 'error' ? 'text-signal-stopped' : 'text-ink-secondary')}
           role={message.tone === 'error' ? 'alert' : 'status'}
           data-testid="quest-message"
         >
