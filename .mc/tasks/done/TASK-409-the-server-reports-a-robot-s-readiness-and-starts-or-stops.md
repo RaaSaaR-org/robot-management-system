@@ -3,7 +3,7 @@ id: "TASK-409"
 aliases: []
 title: "The server reports a robot's readiness and starts or stops its robot side through the supervisor"
 slug: "the-server-reports-a-robot-s-readiness-and-starts-or-stops"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
