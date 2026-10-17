@@ -58,11 +58,13 @@ let service: RobotReadinessService;
 interface Rig {
   supervised?: boolean;
   visibility?: RobotVisibility;
+  /** The server's supervisor token (default: the one the fake accepts). */
+  token?: string;
 }
 
 function buildApp(rig: Rig = {}) {
   const supervised = rig.supervised ?? true;
-  const client = new SupervisorClient(sup.url, TOKEN);
+  const client = new SupervisorClient(sup.url, rig.token ?? TOKEN);
   service = new RobotReadinessService({
     supervisedRobots: () => (supervised ? [ROBOT] : []),
     readSupervisor: () => readSupervisorStatus(client),
@@ -168,6 +170,12 @@ describe('GET /:id/bringup', () => {
     expect(res.body.code).toBe('no_supervisor');
   });
 
+  it('502 supervisor_auth_failed when the supervisor refuses the server token', async () => {
+    const res = await request(buildApp({ token: 'wrong-token' })).get(`${base}/bringup`).set('x-test-user', 'vera');
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('supervisor_auth_failed');
+  });
+
   it('503 when the supervisor does not answer', async () => {
     const app = buildApp();
     await sup.close();
@@ -251,6 +259,17 @@ describe('POST /:id/bringup/start', () => {
     expect(res.body.code).toBe('busy');
     await settle();
     expect(audits).toEqual([expect.objectContaining({ result: 'denied', code: 'busy', status: 409 })]);
+  });
+
+  it('maps a refused server token to 502, never a 401 the app would retry', async () => {
+    const res = await request(buildApp({ token: 'wrong-token' }))
+      .post(`${base}/bringup/start`)
+      .set('x-test-user', 'alice')
+      .send({ mode: 'read_only' });
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('supervisor_auth_failed');
+    await settle();
+    expect(audits).toEqual([expect.objectContaining({ action: 'bringup_start', code: 'supervisor_auth_failed', status: 502 })]);
   });
 
   it('registers a missing robot once the agent step is ok', async () => {

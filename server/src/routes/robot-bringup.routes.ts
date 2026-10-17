@@ -287,10 +287,12 @@ export function createRobotBringupRoutes(options: RobotBringupRoutesOptions = {}
       try {
         const sup = await requireSupervisor(robotId);
         const { answer, reply } = await run(req, sup);
-        const code = typeof answer.body.code === 'string' ? answer.body.code : null;
-        record(answer.status, code);
+        const out = relay(answer.status, reply ?? answer.body);
+        const outBody = out.body as Record<string, unknown> | null;
+        const code = outBody && typeof outBody.code === 'string' ? outBody.code : null;
+        record(out.status, code);
         service().touch(robotId);
-        res.status(answer.status).json(reply ?? answer.body);
+        res.status(out.status).json(out.body);
       } catch (error) {
         if (error instanceof Refusal) {
           record(error.status, error.code);
@@ -329,7 +331,7 @@ export function createRobotBringupRoutes(options: RobotBringupRoutesOptions = {}
     try {
       const sup = await requireSupervisor(req.params.id);
       const answer = await sup.status();
-      res.status(answer.status).json(answer.body);
+      sendRelayed(res, answer.status, answer.body);
     } catch (error) {
       sendReadError(res, error);
     }
@@ -341,7 +343,7 @@ export function createRobotBringupRoutes(options: RobotBringupRoutesOptions = {}
       const proc = procOf(req.params.proc);
       const tail = Math.min(2000, Math.max(1, Number(req.query.tail ?? 200) || 200));
       const answer = await sup.logs(proc, tail);
-      res.status(answer.status).json(answer.body);
+      sendRelayed(res, answer.status, answer.body);
     } catch (error) {
       sendReadError(res, error);
     }
@@ -362,7 +364,7 @@ export function createRobotBringupRoutes(options: RobotBringupRoutesOptions = {}
         } catch {
           body = { code: 'supervisor_error' };
         }
-        res.status(upstream.status).json(body);
+        sendRelayed(res, upstream.status, body);
         return;
       }
       res.writeHead(200, {
@@ -463,6 +465,29 @@ export function createRobotBringupRoutes(options: RobotBringupRoutesOptions = {}
 function procOf(raw: string): SupervisorProc {
   if (!(SUPERVISOR_PROCS as readonly string[]).includes(raw)) throw new Refusal(404, 'no_proc', `no process ${raw}`);
   return raw as SupervisorProc;
+}
+
+/**
+ * A supervisor answer as the browser should see it. The supervisor's 401
+ * means the server's ROBOT_SUPERVISOR_TOKEN is wrong — a server
+ * misconfiguration, not the caller's session — and a 401 passed through would
+ * make the app refresh its token and resend the request (a second start, a
+ * second compliance entry). It goes out as 502 supervisor_auth_failed.
+ */
+function relay(status: number, body: unknown): { status: number; body: unknown } {
+  if (status !== 401) return { status, body };
+  return {
+    status: 502,
+    body: {
+      code: 'supervisor_auth_failed',
+      error: 'the robot supervisor refused the server\'s token — check ROBOT_SUPERVISOR_TOKEN in the server configuration',
+    },
+  };
+}
+
+function sendRelayed(res: Response, status: number, body: unknown): void {
+  const out = relay(status, body);
+  res.status(out.status).json(out.body);
 }
 
 function sendReadError(res: Response, error: unknown): void {

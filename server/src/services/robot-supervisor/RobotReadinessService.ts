@@ -214,6 +214,13 @@ interface Watch {
   last: RobotReadiness | null;
   lastEmitted: RobotReadiness | null;
   lastEmitAt: number;
+  /**
+   * The tick found the heartbeat due: the poll it starts emits even when
+   * nothing changed. Decided on the tick's own clock, so an emission made off
+   * the tick's phase (a GET-driven poll) cannot push the next heartbeat a
+   * whole extra tick out.
+   */
+  heartbeatDue: boolean;
   /** A start asked for the robot to be registered once its agent is up. */
   register: { tenantId: string | null; lastTry: number } | null;
 }
@@ -321,7 +328,7 @@ export class RobotReadinessService {
   private watch(robotId: string): Watch {
     let w = this.watches.get(robotId);
     if (!w) {
-      w = { until: 0, sessions: new Set(), inFlight: null, last: null, lastEmitted: null, lastEmitAt: 0, register: null };
+      w = { until: 0, sessions: new Set(), inFlight: null, last: null, lastEmitted: null, lastEmitAt: 0, heartbeatDue: false, register: null };
       this.watches.set(robotId, w);
     }
     return w;
@@ -340,6 +347,10 @@ export class RobotReadinessService {
         this.watches.delete(robotId);
         continue;
       }
+      // Due when waiting for the next tick would overshoot the heartbeat:
+      // polls only run on this tick, so the last emission (whenever it
+      // happened) must be at most one heartbeat behind the tick that follows.
+      if (w.lastEmitted && now - w.lastEmitAt > this.heartbeatMs - this.pollMs) w.heartbeatDue = true;
       void this.poll(robotId).catch((error: unknown) => {
         console.error(`[robot-readiness] poll of ${robotId} failed:`, error instanceof Error ? error.message : error);
       });
@@ -395,9 +406,10 @@ export class RobotReadinessService {
   private maybeEmit(w: Watch, snapshot: RobotReadiness): void {
     const now = this.now();
     const changed = !w.lastEmitted || !sameIgnoringAt(w.lastEmitted, snapshot);
-    if (!changed && now - w.lastEmitAt < this.heartbeatMs) return;
+    if (!changed && !w.heartbeatDue && now - w.lastEmitAt < this.heartbeatMs) return;
     w.lastEmitted = snapshot;
     w.lastEmitAt = now;
+    w.heartbeatDue = false;
     this.emitter.emit('robot:readiness', snapshot);
   }
 

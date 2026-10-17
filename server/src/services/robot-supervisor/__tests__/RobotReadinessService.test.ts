@@ -245,6 +245,24 @@ describe('emission cadence', () => {
     service.stop();
   });
 
+  it('keeps the heartbeat within 5 s when an emission falls off the tick phase', async () => {
+    const { service, events } = rig();
+    service.touch(ROBOT); // the 1 Hz tick starts here, at t = 0
+    await vi.advanceTimersByTimeAsync(500);
+    expect(events).toHaveLength(0);
+    // A GET half-way between ticks polls and emits off-phase (t = 0.5 s).
+    await service.getReadiness(ROBOT);
+    expect(events).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    const times = events.map((e) => Date.parse(e.at));
+    expect(times.length).toBeGreaterThanOrEqual(5);
+    for (let i = 1; i < times.length; i++) {
+      expect(times[i] - times[i - 1]).toBeLessThanOrEqual(5_000);
+    }
+    service.stop();
+  });
+
   it('stops 30 s after the last request when no session is open', async () => {
     const { service, events } = rig();
     await service.getReadiness(ROBOT);
