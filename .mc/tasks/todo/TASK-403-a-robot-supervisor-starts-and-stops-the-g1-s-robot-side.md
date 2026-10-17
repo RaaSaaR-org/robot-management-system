@@ -3,7 +3,7 @@ id: "TASK-403"
 aliases: []
 title: "A robot supervisor starts and stops the G1's robot-side processes without a terminal"
 slug: "a-robot-supervisor-starts-and-stops-the-g1-s-robot-side"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
