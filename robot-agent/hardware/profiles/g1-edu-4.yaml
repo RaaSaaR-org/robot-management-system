@@ -1,0 +1,74 @@
+# g1-edu-4 — the real Unitree G1 EDU (Dex3-1 hands) on the robot LAN.
+#
+# Read by the robot supervisor (robot-agent/supervisor, TASK-403), which starts
+# bridge -> sidecar -> agent from it in that order, each behind a readiness gate.
+# Checked in, so: NO secrets. The supervisor's token lives in its own environment
+# (~/.config/neodem/supervisor-g1-edu-4.env), the agent's keys in
+# robot-agent/.env.g1-edu.
+#
+# What the supervisor composes itself, so it cannot disagree with this file:
+#   bridge  --iface <iface> --domain <ddsDomain> --port <ports.bridge>
+#           (+ --bind 127.0.0.1 once the bridge supports it, detected via --help)
+#   sidecar G1_SIDECAR_PORT, G1_LOWSTATE_ENDPOINT, G1_DDS_DOMAIN, G1_DDS_IFACE,
+#           G1_NET_INTERFACE, G1_ROBOT_ID, G1_ROBOT_IP, G1_PC2_CAMERA_HOST/PORT
+#   agent   PORT, HARDWARE_SIDECAR_URL, ROBOT_ID
+#
+# Refused by the loader: G1_READ_ONLY and G1_ARM_ALLOW_UNKNOWN_FSM anywhere,
+# G1_LOCO_ENABLED=1 (walking) in a real profile, and `tsx watch` for the agent.
+# ${HOME} and ${REPO} (the repository root) expand; nothing else does.
+
+robotId: g1-edu-4
+robot: real
+
+# Robot LAN. `POST /lan/up` runs `nmcli con up <nmProfile>` — only when called.
+iface: enp131s0
+nmProfile: g1-robot-lan
+robotIp: 192.168.123.164          # PC2: answers ping, serves the head camera
+hostIp: 192.168.123.222/24        # this workstation on the robot LAN
+pc2Camera: 192.168.123.164:5600   # g1-head-cam.service on PC2 (a warning if absent)
+ddsDomain: 0                      # 0 = THE REAL ROBOT — allowed only with robot: real
+
+python: ${HOME}/anaconda3/envs/unitree_sim_env6/bin/python
+cycloneddsHome: ${HOME}/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/cyclonedds/install
+
+ports:
+  bridge: 6001    # ZMQ PUB of g1_state_bridge_readonly.py
+  sidecar: 8767
+  agent: 41245    # .env.g1-edu says the same
+
+bridge:
+  script: ${REPO}/robot-agent/hardware/g1_state_bridge_readonly.py
+  args: []
+
+sidecar:
+  script: ${REPO}/robot-agent/hardware/g1_sidecar.py
+  env:
+    G1_CAMERA_SOURCE: pc2cam
+    G1_ALLOW_LIDAR_SWITCH: "0"
+  modes:
+    # The default. Telemetry only: no joint-command publisher in the process.
+    read_only:
+      G1_LOCO_ENABLED: "0"
+    # Only through the confirmed switch (POST /sidecar/mode), never xr_teleoperate
+    # at the same time. Arms via rt/arm_sdk; legs stay Unitree's. /arm refuses
+    # unless FSM 500 (balance) is measured; mode changes go through the agent's
+    # lease-checked base-mode route, never through the supervisor.
+    arm_sdk:
+      G1_WRITE_MODE: arm_sdk
+      G1_LOCO_ENABLED: fsm
+      G1_ARM_SDK_MAX_JOINT_VEL: "1.0"   # deliberately slow; the sidecar default is 3.0
+      G1_DDS_DOMAIN: "0"
+
+agent:
+  cwd: ${REPO}/robot-agent
+  # Not `tsx watch`: a reload drops the agent's /action stream mid-teleop.
+  command: [node_modules/.bin/tsx, src/index.ts]
+  path: ["${HOME}/.nvm/versions/node/v22.23.2/bin"]
+  env:
+    DOTENV_CONFIG_PATH: .env.g1-edu
+    ROBOT_TYPE: g1_edu
+
+timeouts:
+  bridgeS: 15
+  sidecarS: 45
+  agentS: 20

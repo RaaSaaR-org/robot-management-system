@@ -102,7 +102,7 @@ describe('buildInfo', () => {
   const base = {
     robotType: 'Unitree_G1_Dex3',
     jointNames: JOINTS,
-    fps: 19.7,
+    fps: 20,
     totalEpisodes: 2,
     totalFrames: 30,
   };
@@ -119,9 +119,12 @@ describe('buildInfo', () => {
     );
   });
 
-  it('writes the MEASURED fps, decimals and all', () => {
+  it('declares the integer fps it was given', () => {
+    // TASK-402 D3: the declared rate is the integer target. The measured one is
+    // provenance under `_neodem`, never `info.fps`.
     const info = buildInfo({ ...base, cameras: [] });
-    expect(info.fps).toBe(19.7);
+    expect(info.fps).toBe(20);
+    expect(Number.isInteger(info.fps)).toBe(true);
   });
 
   it('marks a camera with dtype video — the v3 spelling, not video:true', () => {
@@ -135,7 +138,7 @@ describe('buildInfo', () => {
     expect(feature.dtype).toBe('video');
     expect(feature.shape).toEqual([480, 640, 3]);
     expect(feature.names).toEqual(['height', 'width', 'channel']);
-    expect((feature.info as Record<string, unknown>)['video.fps']).toBe(19.7);
+    expect((feature.info as Record<string, unknown>)['video.fps']).toBe(20);
   });
 
   it('gives state and action the joint names and the same width', () => {
@@ -207,6 +210,22 @@ describe('writeLeRobotV3 refuses what cannot be a dataset', () => {
         cameras: [],
       }),
     ).rejects.toThrow(/fps must be positive/);
+  });
+
+  it('refuses a fractional fps — the declared rate is an integer (TASK-402)', async () => {
+    // A measured 30.21 in info.json, video.fps and `i/fps` is what LeRobot
+    // loaders tripped over. The measured rate belongs in `_neodem`.
+    await expect(
+      writeLeRobotV3({
+        root: join(tmpdir(), 'never-created-4'),
+        robotType: 'x',
+        jointNames: JOINTS,
+        fps: 30.21,
+        episodes: [episode(0, 2)],
+        cameras: [],
+      }),
+    ).rejects.toThrow(/fps must be an integer/);
+    expect(existsSync(join(tmpdir(), 'never-created-4'))).toBe(false);
   });
 });
 

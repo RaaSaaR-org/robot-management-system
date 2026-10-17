@@ -109,6 +109,10 @@ describe('HardwareClient — cached base pose', () => {
     expect(client.getCachedPose()).not.toBeNull();
 
     stubSidecar({ stateFails: true, locoOdom: { ok: true, x: 3, y: 0, yaw: 0, source: 'sim' } });
+    // TASK-405: one failed poll is a slow sidecar, not a lost one — the pose
+    // survives it. The second consecutive miss drops it.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(client.getCachedPose()).not.toBeNull();
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(client.getCachedPose()).toBeNull();

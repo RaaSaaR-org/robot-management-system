@@ -14,6 +14,9 @@ import { config } from '../config/config.js';
 import {
   EpisodeRecorder,
   RecordingError,
+  type BeginEpisodeResult,
+  type EndEpisodeResult,
+  type EpisodeEndReason,
   type RecordingStatus,
   type StartRecordingRequest,
   type StopRecordingResult,
@@ -99,6 +102,18 @@ export class RecordingController {
 
   async nextEpisode(): Promise<number> {
     return this.ensure().nextEpisode();
+  }
+
+  async beginEpisode(): Promise<BeginEpisodeResult> {
+    return this.ensure().beginEpisode();
+  }
+
+  endEpisode(reason: EpisodeEndReason): EndEpisodeResult {
+    return this.ensure().endEpisode(reason);
+  }
+
+  async episodeThumbnail(index: number): Promise<Buffer | null> {
+    return this.ensure().episodeThumbnail(index);
   }
 
   pause(): void {

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # test-all.sh — Run all project tests: typecheck + unit tests + playwright UI.
+# (Includes the robot supervisor's own typecheck + vitest, robot-agent/supervisor.)
 #
 # Usage:
 #   ./scripts/test-all.sh            # run everything
@@ -98,6 +99,33 @@ fi
 
 step "Robot agent unit tests"
 (cd "$REPO_ROOT/robot-agent" && npm test) || { echo "  robot-agent vitest FAILED"; FAILURES=$((FAILURES + 1)); }
+
+# ------------------------------------------------ 2c. Robot supervisor (TASK-403)
+# robot-agent/supervisor is its own package (no install: it resolves from
+# robot-agent/node_modules). Its tests start real stub children and run the real
+# bridge_probe.py, so they need a python with pyzmq: SUPERVISOR_TEST_PYTHON, else
+# the first of python3 / HARDWARE_PYTHON / the curation and sim venvs that has it.
+# None at all is a skip, like the python stages below — never a pass.
+SUP_PY="${SUPERVISOR_TEST_PYTHON:-}"
+if [ -z "$SUP_PY" ]; then
+  for cand in python3 "${HARDWARE_PYTHON:-}" "${CURATION_PYTHON:-}" \
+              "$REPO_ROOT/server/curation/.venv/bin/python" "${SIM_PYTHON:-}" \
+              "$REPO_ROOT/robot-agent/hardware/sim_g1_dds/.venv/bin/python"; do
+    if [ -n "$cand" ] && command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import zmq' >/dev/null 2>&1; then
+      SUP_PY="$cand"; break
+    fi
+  done
+fi
+step "Robot supervisor typecheck"
+(cd "$REPO_ROOT/robot-agent/supervisor" && npm run typecheck) || { echo "  supervisor typecheck FAILED"; FAILURES=$((FAILURES + 1)); }
+if [ -n "$SUP_PY" ]; then
+  step "Robot supervisor unit tests"
+  echo "  stub interpreter: $SUP_PY"
+  (cd "$REPO_ROOT/robot-agent/supervisor" && SUPERVISOR_TEST_PYTHON="$SUP_PY" npm test) \
+    || { echo "  supervisor vitest FAILED"; FAILURES=$((FAILURES + 1)); }
+else
+  python_unavailable "Robot supervisor unit tests — set SUPERVISOR_TEST_PYTHON to a python with pyzmq"
+fi
 fi  # PYTHON_ONLY
 
 # ------------------------------------------------------- 3. Python sim state machine

@@ -23,6 +23,14 @@
  *              imu/touch/battery/odometry field groups (getImu/getTouch/
  *              getBattery/getOdometry/getMotorTemperatures). The default
  *              sidecar URL is embodiment-aware (G1 → :8767, else :8765).
+ *
+ *              TASK-405 separates "the sidecar answers HTTP" (reachable) from
+ *              "its lowstate is fresh" (connected): one failed poll is
+ *              confirmed with a quick `/health` probe before anything is torn
+ *              down, a lost sidecar is noticed within about a second of the
+ *              poll that missed it, reconnects back off 1 → 2 → 4 → 5 s, and
+ *              the last sensor values are kept flagged stale instead of being
+ *              cleared silently. `lastHealth()` exposes the parsed `/health`.
  * @feature hardware
  * @status live
  */
@@ -474,7 +482,55 @@ export function scanSessionHeaderValue(sessionId: string | undefined): string | 
 
 // Poll every 2s — avoids monopolizing /dev/ttyACM0 so other tools can use the arm.
 // Idle watchdog in the sidecar disconnects after 5s without requests, releasing the port.
-const POLL_INTERVAL_MS = 2000;
+export const POLL_INTERVAL_MS = 2000;
+
+/**
+ * TASK-405: after ONE failed `/state` poll, a quick `/health` probe this soon
+ * decides whether the sidecar is really gone (the second consecutive failure)
+ * or that poll was just slow. Keeps the 2 s poll for the SO-101's serial port
+ * while still noticing a dead sidecar within about a second of the miss.
+ */
+export const CONFIRM_PROBE_DELAY_MS = 250;
+const CONFIRM_PROBE_TIMEOUT_MS = 500;
+
+/** Reconnect backoff after the sidecar was lost: 1 → 2 → 4 s, then every 5 s. */
+export const RECONNECT_BACKOFF_MS: readonly number[] = [1000, 2000, 4000];
+export const RECONNECT_MAX_MS = 5000;
+
+export function reconnectDelayMs(attempt: number): number {
+  return attempt < RECONNECT_BACKOFF_MS.length ? RECONNECT_BACKOFF_MS[attempt] : RECONNECT_MAX_MS;
+}
+
+/** What the sidecar's last `/health` said, parsed (TASK-405). */
+export interface SidecarHealth {
+  /** `status === 'ok'`. */
+  ok: boolean;
+  /** The sidecar's lowstate (or arm) is fresh. */
+  connected: boolean;
+  bootId: string | null;
+  sim: boolean;
+  scene: string | null;
+  /** `lowstate_age_s` (TASK-404); null = not reported. */
+  lowstateAgeS: number | null;
+  arm: SidecarArmStatus;
+  loco: LocoCapability;
+}
+
+/**
+ * The last values the poll delivered, kept after the sidecar is lost (TASK-405)
+ * and flagged `stale` — so a readiness view can say "last seen 12 s ago"
+ * instead of nothing. The live getters (`getImu`, `getBattery`, …) still answer
+ * `null` while stale: stale data must never drive telemetry or safety.
+ */
+export interface LastKnownSensors {
+  stale: boolean;
+  /** `Date.now()` of the last successful `/state` poll; null = never. */
+  atMs: number | null;
+  imu: ImuTelemetry | null;
+  battery: BatteryState | null;
+  odometry: HardwareOdometry | null;
+  base: BaseModeReading | null;
+}
 
 /**
  * The arm fields an `/arm` answer carried, and only those — an answer that says
@@ -492,8 +548,27 @@ function parseArmStatusPatch(body: Record<string, unknown>): Partial<SidecarArmS
 }
 
 export class HardwareClient {
+  /** The sidecar's robot link is up (its lowstate is fresh) — `/health.connected`. */
   private connected = false;
-  private sidecarAvailable = false;
+  /** The sidecar answers HTTP at all (TASK-405: separate from {@link connected}). */
+  private sidecarReachable = false;
+  /** Consecutive failed reads of a sidecar that was reachable; 2 = lost. */
+  private consecutiveFailures = 0;
+  /**
+   * Consecutive failed `/state` polls, whatever the `/health` probe said. A
+   * sidecar that answers `/health` but never `/state` is reachable and still
+   * delivers nothing: at 2 its values go stale and the pose goes to UNKNOWN.
+   */
+  private stateFailures = 0;
+  /** Reconnect attempts since the sidecar was lost — indexes the backoff. */
+  private reconnectAttempt = 0;
+  private retryTimer: NodeJS.Timeout | null = null;
+  private confirmTimer: NodeJS.Timeout | null = null;
+  /** The cached sensor groups are from a sidecar that has since gone away. */
+  private sensorsStale = false;
+  private lastStateAtMs: number | null = null;
+  private health: SidecarHealth | null = null;
+  private healthAtMs: number | null = null;
   private jointStates: JointState[] = [];
   private pollTimer: NodeJS.Timeout | null = null;
   /** Fired on every real-robot attach/detach transition (agent-card/identity re-report). */
@@ -676,6 +751,7 @@ export class HardwareClient {
       const status = parseArmStatus(body);
       this.applyPolledArmStatus(status, seq);
       this.applyLocoHealth(body);
+      this.recordHealth(body, status);
       return status;
     } catch {
       return null;
@@ -760,11 +836,59 @@ export class HardwareClient {
   async init(): Promise<boolean> {
     const ok = await this._tryConnect();
     if (!ok) {
-      // Sidecar not up yet — retry every 10s in background
-      console.log('[Hardware] Sidecar not available — will retry every 10s');
+      // Sidecar not up yet — retry in the background with backoff (1 → 2 → 4 → 5 s).
+      console.log('[Hardware] Sidecar not available — retrying with backoff (1 s … 5 s)');
       this._scheduleRetry();
     }
     return ok;
+  }
+
+  /** Remember a parsed `/health` body for {@link lastHealth}. */
+  private recordHealth(body: unknown, arm: SidecarArmStatus): void {
+    const data = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
+    this.health = {
+      ok: data.status === 'ok',
+      connected: data.connected === true,
+      bootId: typeof data.boot_id === 'string' && data.boot_id ? data.boot_id : null,
+      sim: data.sim === true,
+      scene: typeof data.scene === 'string' && data.scene ? data.scene : null,
+      lowstateAgeS: typeof data.lowstate_age_s === 'number' && Number.isFinite(data.lowstate_age_s)
+        ? data.lowstate_age_s
+        : null,
+      arm,
+      loco: parseLocoCapability(data),
+    };
+    this.healthAtMs = Date.now();
+  }
+
+  /** The sidecar's last `/health`, parsed; null until one was read. */
+  lastHealth(): SidecarHealth | null {
+    return this.health;
+  }
+
+  /** `Date.now()` when {@link lastHealth} was read; null = never. */
+  get lastHealthAt(): number | null {
+    return this.healthAtMs;
+  }
+
+  /** The sidecar answers HTTP (TASK-405). Its robot link may still be down — see {@link isConnected}. */
+  isSidecarReachable(): boolean {
+    return this.sidecarReachable;
+  }
+
+  /** The last polled sensor values, kept and flagged `stale` once the sidecar is lost. */
+  getLastKnownSensors(nowMs: number = Date.now()): LastKnownSensors {
+    const base = this.baseState;
+    return {
+      stale: this.sensorsStale,
+      atMs: this.lastStateAtMs,
+      imu: this.imu,
+      battery: this.battery,
+      odometry: this.odometry,
+      base: base
+        ? { fsmId: base.fsmId, mode: base.mode, ageS: baseStateAgeS(base, nowMs), error: base.error }
+        : null,
+    };
   }
 
   private async _tryConnect(): Promise<boolean> {
@@ -779,30 +903,106 @@ export class HardwareClient {
         scene?: unknown;
         odom_frame?: unknown;
       };
-      this.sidecarAvailable = data.status === 'ok';
-      this.setConnected(data.connected);
+      this.sidecarReachable = data.status === 'ok';
+      this.setConnected(data.connected === true);
       this.sidecarBootId = typeof data.boot_id === 'string' && data.boot_id ? data.boot_id : null;
       this.sidecarIsSim = data.sim === true;
       this.sidecarOdomFromBoot = data.odom_frame === 'boot';
       this.sidecarScene = typeof data.scene === 'string' && data.scene ? data.scene : null;
-      this.applyPolledArmStatus(parseArmStatus(data), seq);
+      const arm = parseArmStatus(data);
+      this.applyPolledArmStatus(arm, seq);
       this.applyLocoHealth(data);
-      if (this.sidecarAvailable) {
+      this.recordHealth(data, arm);
+      if (this.sidecarReachable) {
         console.log(`[Hardware] Sidecar reachable — arm connected: ${this.connected}`);
+        this.consecutiveFailures = 0;
+        this.reconnectAttempt = 0;
         if (!this.pollTimer) this.startPolling();
       }
     } catch {
-      this.sidecarAvailable = false;
+      this.sidecarReachable = false;
       this.setConnected(false);
     }
-    return this.sidecarAvailable;
+    return this.sidecarReachable;
   }
 
   private _scheduleRetry(): void {
-    setTimeout(async () => {
+    if (this.retryTimer) return; // one retry chain, ever
+    const delay = reconnectDelayMs(this.reconnectAttempt);
+    this.reconnectAttempt += 1;
+    this.retryTimer = setTimeout(async () => {
+      this.retryTimer = null;
       const ok = await this._tryConnect();
       if (!ok) this._scheduleRetry(); // keep retrying until sidecar is up
-    }, 10_000);
+    }, delay);
+    this.retryTimer.unref?.();
+  }
+
+  /**
+   * A read of a reachable sidecar failed. The first miss only schedules a
+   * quick `/health` probe — one slow `/state` answer is not a lost sidecar and
+   * must not wipe IMU, battery and pose. The second consecutive miss is.
+   */
+  private notePollFailure(): void {
+    if (!this.sidecarReachable) return;
+    this.consecutiveFailures += 1;
+    if (this.consecutiveFailures >= 2) {
+      this.markSidecarLost();
+      return;
+    }
+    if (this.confirmTimer) return;
+    this.confirmTimer = setTimeout(() => {
+      this.confirmTimer = null;
+      void this.confirmProbe();
+    }, CONFIRM_PROBE_DELAY_MS);
+    this.confirmTimer.unref?.();
+  }
+
+  private async confirmProbe(): Promise<void> {
+    if (!this.sidecarReachable) return;
+    try {
+      const res = await fetch(`${getSidecarUrl()}/health`, { signal: AbortSignal.timeout(CONFIRM_PROBE_TIMEOUT_MS) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await res.json();
+      // It answered: the poll was just slow. The next poll proceeds as normal.
+      this.consecutiveFailures = 0;
+    } catch {
+      this.notePollFailure();
+    }
+  }
+
+  /** `/state` keeps failing while `/health` answers: nothing fresh is arriving. */
+  private markStateStale(): void {
+    if (this.sensorsStale) return;
+    this.sensorsStale = true;
+    this.setConnected(false);
+    this.setBasePose(null);
+  }
+
+  /** Two misses in a row: the sidecar is gone. Keep the values, flag them stale. */
+  private markSidecarLost(): void {
+    if (this.confirmTimer) {
+      clearTimeout(this.confirmTimer);
+      this.confirmTimer = null;
+    }
+    this.sidecarReachable = false;
+    this.consecutiveFailures = 0;
+    this.stateFailures = 0;
+    this.setConnected(false);
+    this.stopPolling();
+    // NOTE: jointStates kept intact so the 3D viewer shows last known pose
+    //       instead of jumping to simulated defaults during brief reconnects.
+    //       The sensor groups are KEPT but flagged stale (TASK-405): the live
+    //       getters answer null while stale — stale IMU/battery/touch data
+    //       must never keep driving telemetry or safety decisions — and
+    //       `getLastKnownSensors()` still shows what was last seen.
+    this.sensorsStale = true;
+    // A pose from before the sidecar vanished is not a pose. Publishing the
+    // null is the point: place awareness must go to UNKNOWN, not coast.
+    this.setBasePose(null);
+    this.reconnectAttempt = 0;
+    console.log(`[Hardware] Lost connection to sidecar — reconnecting in ${reconnectDelayMs(0) / 1000} s (backoff to ${RECONNECT_MAX_MS / 1000} s)`);
+    this._scheduleRetry();
   }
 
   private startPolling() {
@@ -811,6 +1011,11 @@ export class HardwareClient {
       try {
         const res = await fetch(`${getSidecarUrl()}/state`, { signal: AbortSignal.timeout(500) });
         const data = (await res.json()) as Record<string, unknown>;
+        if (!this.pollTimer) return; // the sidecar was declared lost while this was out
+        this.consecutiveFailures = 0;
+        this.stateFailures = 0;
+        this.sensorsStale = false;
+        this.lastStateAtMs = Date.now();
         // Contract §2 carries an explicit `connected`; older sidecars only send
         // `simulated` — accept either, defensively.
         this.setConnected(
@@ -852,24 +1057,10 @@ export class HardwareClient {
         // fallback leg can take up to 2 s and the poll must not slip behind it.
         void this.refreshBasePose();
       } catch {
-        // sidecar went away — stop polling and schedule reconnect
-        this.sidecarAvailable = false;
-        this.setConnected(false);
-        this.stopPolling();
-        console.log('[Hardware] Lost connection to sidecar — retrying in 10s');
-        this._scheduleRetry();
-        // NOTE: jointStates kept intact so the 3D viewer shows last known pose
-        //       instead of jumping to simulated defaults during brief reconnects.
-        //       The sensor groups are DROPPED instead — stale IMU/battery/touch
-        //       data must never keep driving telemetry or safety decisions.
-        this.imu = null;
-        this.touch = null;
-        this.battery = null;
-        this.odometry = null;
-        this.baseState = null;
-        // A pose from before the sidecar vanished is not a pose. Publishing the
-        // null is the point: place awareness must go to UNKNOWN, not coast.
-        this.setBasePose(null);
+        // One miss is confirmed by a quick probe; two in a row lose the sidecar.
+        this.stateFailures += 1;
+        if (this.stateFailures >= 2) this.markStateStale();
+        this.notePollFailure();
       }
     }, POLL_INTERVAL_MS);
   }
@@ -964,7 +1155,7 @@ export class HardwareClient {
    * under `PLACE_FAULT_NULL_POSE`.
    */
   async samplePoseNow(): Promise<CachedBasePose | null> {
-    if (!this.sidecarAvailable) return null;
+    if (!this.sidecarReachable) return null;
     const fromState = this.odometry;
     // `/state.odometry` refreshes on the poll; only trust it as "now" when the
     // poll itself is fresh — otherwise ask `/loco/odom`, which the sim answers.
@@ -1002,7 +1193,7 @@ export class HardwareClient {
    * about its start-up pose, like a real robot's, and not the MJCF world.
    */
   getOdometryFrame(): OdometryFrame | null {
-    if (!this.sidecarAvailable) return null;
+    if (!this.sidecarReachable) return null;
     if (this.sidecarIsSim && !this.sidecarOdomFromBoot) return { kind: 'sim', id: this.sidecarScene ?? 'sim' };
     if (!this.sidecarBootId) return null;
     return { kind: 'odom', id: this.sidecarBootId };
@@ -1015,8 +1206,9 @@ export class HardwareClient {
     }
   }
 
+  /** Alias of {@link isSidecarReachable}, kept for existing callers. */
   isAvailable(): boolean {
-    return this.sidecarAvailable;
+    return this.sidecarReachable;
   }
 
   isConnected(): boolean {
@@ -1036,17 +1228,17 @@ export class HardwareClient {
 
   /** Latest base IMU sample from the poll, or null when the group is stale. */
   getImu(): ImuTelemetry | null {
-    return this.imu;
+    return this.sensorsStale ? null : this.imu;
   }
 
   /** Latest Dex3 touch-pad readings, or null (e.g. no hands / stale). */
   getTouch(): HandTouch | null {
-    return this.touch;
+    return this.sensorsStale ? null : this.touch;
   }
 
   /** Latest battery/BMS state, or null when the BMS topic is absent/stale. */
   getBattery(): BatteryState | null {
-    return this.battery;
+    return this.sensorsStale ? null : this.battery;
   }
 
   /**
@@ -1056,7 +1248,7 @@ export class HardwareClient {
    * and `yawSpeed` are the velocity WE commanded, not the one the base reached.
    */
   getOdometry(): HardwareOdometry | null {
-    return this.odometry;
+    return this.sensorsStale ? null : this.odometry;
   }
 
   /**
@@ -1090,7 +1282,7 @@ export class HardwareClient {
    *         status alone would let one of the two shapes through.
    */
   async sendAction(joints: Record<string, number>): Promise<Record<string, unknown> | null> {
-    if (!this.sidecarAvailable) return null;
+    if (!this.sidecarReachable) return null;
     const res = await fetch(`${getSidecarUrl()}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1144,7 +1336,7 @@ export class HardwareClient {
    * bearing for the latching case.
    */
   async releaseAction(): Promise<void> {
-    if (!this.sidecarAvailable) return;
+    if (!this.sidecarReachable) return;
     // On an arm-only sidecar `/estop` LATCHES (it needs `/estop/reset`), so
     // ending a teleop session there is a disarm, never a stop.
     if (this.requiresArming()) {
@@ -1604,7 +1796,7 @@ export class HardwareClient {
    * continue un-recorded rather than fail the rollout.
    */
   async startRecording(opts: RecordingStartOptions): Promise<RecordingStartResult> {
-    if (!this.sidecarAvailable) {
+    if (!this.sidecarReachable) {
       return { ok: false, error: 'hardware sidecar unavailable' };
     }
     try {
@@ -1749,13 +1941,15 @@ export class HardwareClient {
 
   /** The last measured mode with its total age, or null when there is none. */
   getBaseState(nowMs: number = Date.now()): BaseModeReading | null {
-    const state = this.baseState;
+    // A lost sidecar's last mode is history, not a reading (see getLastKnownSensors).
+    const state = this.sensorsStale ? null : this.baseState;
     if (!state) return null;
     return { fsmId: state.fsmId, mode: state.mode, ageS: baseStateAgeS(state, nowMs), error: state.error };
   }
 
   /** The measured FSM id when the reading is fresh enough to act on, else null. */
   getMeasuredFsmId(nowMs: number = Date.now()): number | null {
+    if (this.sensorsStale) return null;
     return isFreshBaseState(this.baseState, nowMs) ? this.baseState.fsmId : null;
   }
 

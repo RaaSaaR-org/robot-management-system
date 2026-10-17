@@ -4,23 +4,28 @@
  *              scene: an MJPEG stream uploaded to a texture at a bounded rate and
  *              only when the picture has actually changed, plus the two failure
  *              states the panel used to hide — a stream that never loaded, and a
- *              stream that stopped moving without ever saying so.
+ *              stream that stopped moving without ever saying so — and, since
+ *              TASK-401, a way back from every failure rather than only one.
  * @feature robots
  */
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState } from '@react-three/xr';
 import * as THREE from 'three';
 import { readCssColor } from '../../common/readCssColor';
-import { cameraStreamUrl, fetchCameraTicket } from '../../../api/cameraApi';
+import { cameraStreamUrl, fetchCameraTicket, fetchRobotCameras } from '../../../api/cameraApi';
 import {
+  cameraPanelState,
   initialLiveness,
-  isRealLoadFailure,
+  offlinePlateLines,
   pollLiveness,
   type FrameSampler,
   type LivenessState,
+  type PlateTone,
 } from './vrCamera';
+import { useCameraReconnect } from './useCameraReconnect';
+import { useVrCameraStatus } from './vrCameraStatus';
 import { HAPTICS, pulsePreset, type HapticSource } from './vrHaptics';
 import { HUD_COLORS } from './vrHud';
 import { useTextPlate } from './VrTextPlate';
@@ -97,7 +102,7 @@ const PANEL_TALL_M = PANEL_WIDTH_M * PANEL_ASPECT;
  *          "superseded", which needs no surfacing — whatever superseded it will
  *          report for itself.
  */
-async function armStream(
+export async function armStream(
   image: HTMLImageElement,
   robotId: string,
   isCurrent: () => boolean,
@@ -118,6 +123,21 @@ const BADGE_WIDTH_M = 0.3;
 const BADGE_HEIGHT_M = 0.075;
 const BADGE_PX_WIDTH = 256;
 const BADGE_PX_HEIGHT = 64;
+
+/**
+ * Offline plate texture. 1024 wide so the agent's own reason ("cannot reach the
+ * hardware sidecar") fits on a line at a size readable in a headset;
+ * `offlinePlateLines` wraps anything longer onto a second one.
+ */
+const PLATE_PX_WIDTH = 1024;
+const PLATE_PX_HEIGHT = 768;
+const PLATE_LINE_PX = 72;
+
+const TONE_COLOR: Record<PlateTone, string> = {
+  bad: HUD_COLORS.bad,
+  dim: HUD_COLORS.dim,
+  text: HUD_COLORS.text,
+};
 
 /**
  * FNV-1a over the downscaled frame. Chosen because it is eight lines, has no
@@ -157,7 +177,6 @@ function fnv1a(bytes: Uint8ClampedArray): number {
  *    file supplies the sample and shows the result.
  */
 export function HeadCameraPanel({ robotId }: { robotId: string }) {
-  const [failed, setFailed] = useState(false);
   const lastUpload = useRef(0);
   /** Fingerprint of the frame currently on the GPU — see the upload gate. */
   const lastUploaded = useRef<number | undefined>(undefined);
@@ -172,7 +191,12 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
   const left = useXRInputSourceState('controller', 'left');
   const right = useXRInputSourceState('controller', 'right');
 
-  const offlinePlate = useTextPlate({ pxWidth: 512, pxHeight: 384, linePx: 56, align: 'center' });
+  const offlinePlate = useTextPlate({
+    pxWidth: PLATE_PX_WIDTH,
+    pxHeight: PLATE_PX_HEIGHT,
+    linePx: PLATE_LINE_PX,
+    align: 'center',
+  });
   const badgePlate = useTextPlate({
     pxWidth: BADGE_PX_WIDTH,
     pxHeight: BADGE_PX_HEIGHT,
@@ -215,61 +239,52 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
    */
   useEffect(() => () => texture.dispose(), [texture]);
 
-  /** R3F clock time of the last reconnect attempt, for the re-arm below. */
+  /** R3F clock time of the last stale re-arm, for its rate limit below. */
   const lastRearm = useRef(0);
-  /** A ticket fetch is in flight; a second re-arm must not race it. */
-  const arming = useRef(false);
-  /**
-   * Bumped whenever the in-flight arming attempt stops being the current one —
-   * a robot change, an unmount, or a later re-arm. `arming` only stops two
-   * fetches overlapping; this is what stops a slow one landing after it lost.
-   */
-  const armEpoch = useRef(0);
+  /** Distinct frames uploaded since `fpsWindowStart`, for the published fps. */
+  const fpsFrames = useRef(0);
+  const fpsWindowStart = useRef(0);
+  /** Whether the last liveness poll called the picture stale. */
+  const staleNow = useRef(false);
+
+  // Arming, the failure latches that used to be permanent, and the backoff that
+  // replaces them — all in `useCameraReconnect`, so they are testable without
+  // a WebGL context. This component keeps the liveness side: it is the only
+  // one that can see whether a decoding picture is still moving.
+  const reconnect = useCameraReconnect({
+    robotId,
+    image,
+    arm: armStream,
+    listCameras: fetchRobotCameras,
+  });
+  const showPlate = reconnect.phase === 'offline' || (reconnect.phase === 'connecting' && reconnect.attempt > 0);
 
   useEffect(() => {
-    // Also reset per-robot, and this is why: `failed` is what swaps in the
-    // CAMERA OFFLINE plate, and leaving it set meant one robot's missing camera
-    // stuck the panel on that plate for every robot selected afterwards.
-    setFailed(false);
     // A new stream is a new picture: neither the upload gate's fingerprint nor
     // the stale clock may carry the previous robot's frame across.
     lastUploaded.current = undefined;
     liveness.current = null;
     lastRearm.current = 0;
-    // Guarded on `src`, because clearing it is how this component drops a
-    // connection — and an empty `src` is specified to fire `error`. That was
-    // harmless while arming was synchronous (`src = ''` then `src = url` in one
-    // task suppresses it); now that a ticket round trip sits between them, an
-    // unguarded handler latches CAMERA OFFLINE on the very re-arm that is busy
-    // fixing the stream, and `failed` gates the re-arm itself. Only a real load
-    // failure — one with a `src` to fail at — is an offline camera.
-    image.onerror = () => {
-      if (isRealLoadFailure(image.getAttribute('src'))) setFailed(true);
-    };
-    // Arming is a round trip now (fetch a ticket, then assign `src`), so the
-    // effect can outlive its own robot. `cancelled` is what keeps a slow ticket
-    // for robot A from pointing the panel at A's camera after the operator
-    // switched to B.
-    let cancelled = false;
-    armEpoch.current += 1;
-    const epoch = armEpoch.current;
-    void armStream(image, robotId, () => armEpoch.current === epoch).then((armed) => {
-      if (cancelled) return;
-      // No ticket, no `src`, and an unassigned `<img>` fires no `onerror` — the
-      // panel would sit blank and claim nothing. Say it is offline instead.
-      if (!armed) setFailed(true);
+    staleNow.current = false;
+    fpsFrames.current = 0;
+    fpsWindowStart.current = 0;
+  }, [robotId]);
+
+  const publish = useVrCameraStatus((s) => s.publish);
+  const resetStatus = useVrCameraStatus((s) => s.reset);
+  useEffect(() => () => resetStatus(), [resetStatus]);
+
+  // Everything but `stale` and `fps` changes as React state; those two are
+  // render-loop facts and are published from `useFrame` below.
+  useEffect(() => {
+    publish({
+      robotId,
+      state: cameraPanelState(reconnect.phase, staleNow.current),
+      detail: reconnect.phase === 'up' ? null : reconnect.detail,
+      retryInS: reconnect.retryInS,
+      ...(reconnect.phase === 'up' ? {} : { fps: null }),
     });
-    return () => {
-      cancelled = true;
-      // Retire the in-flight attempt too, or its `src` assignment lands after
-      // the line below and reopens the connection this is closing.
-      armEpoch.current += 1;
-      // Drop the MJPEG connection. Leave it open and the sim keeps rendering
-      // frames for a panel nobody is looking at — and every one of those frames
-      // is a render on its physics thread.
-      image.src = '';
-    };
-  }, [image, robotId]);
+  }, [publish, robotId, reconnect.phase, reconnect.detail, reconnect.retryInS]);
 
   useFrame((state) => {
     const now = state.clock.elapsedTime;
@@ -281,18 +296,40 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     // fingerprint that already answers "did this picture change" for the
     // staleness check answers it here too, for one 64-pixel read per upload
     // slot — four orders of magnitude under the upload it can now skip.
-    if (!failed && image.naturalWidth > 0 && now - lastUpload.current >= 1 / PANEL_TEXTURE_HZ) {
+    const offline = reconnect.phase === 'offline';
+    // A decoded frame ends `connecting` even where the browser fires no `load`
+    // for a multipart part. Idempotent, so calling it per frame costs a compare.
+    if (!offline && reconnect.phase === 'connecting' && image.naturalWidth > 0) reconnect.markFrame();
+
+    if (!offline && image.naturalWidth > 0 && now - lastUpload.current >= 1 / PANEL_TEXTURE_HZ) {
       lastUpload.current = now;
       const fingerprint = sampler();
       if (fingerprint !== undefined && fingerprint !== lastUploaded.current) {
         lastUploaded.current = fingerprint;
         texture.needsUpdate = true;
+        fpsFrames.current += 1;
       }
     }
 
     // Nothing has ever arrived is not the same failure as something stopped
-    // arriving, and only the second one is what this classifies.
-    if (failed || image.naturalWidth === 0) return;
+    // arriving, and only the second one is what this classifies. The first is
+    // `useCameraReconnect`'s first-frame watchdog.
+    if (reconnect.phase !== 'up' || image.naturalWidth === 0) {
+      // The stale badge and red surround describe a picture; with no picture
+      // (the plate, or a blank re-arm) they would be talking about nothing.
+      if (badgeRef.current) badgeRef.current.visible = false;
+      return;
+    }
+
+    // Once a second: distinct frames seen, i.e. what the operator is actually
+    // getting (capped by the upload rate), not what the stream claims.
+    if (now - fpsWindowStart.current >= 1) {
+      const elapsed = now - fpsWindowStart.current;
+      if (fpsWindowStart.current > 0) publish({ fps: Math.round(fpsFrames.current / elapsed) });
+      fpsFrames.current = 0;
+      fpsWindowStart.current = now;
+    }
+
     if (now - lastPoll.current < 1 / LIVENESS_HZ) return;
     lastPoll.current = now;
     // `pollLiveness` works in milliseconds; the R3F clock is in seconds.
@@ -302,6 +339,10 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     const next = pollLiveness(prev, sampler, nowMs);
     liveness.current = next;
     const isStale = next.state === 'stale';
+    if (isStale !== staleNow.current) {
+      staleNow.current = isStale;
+      publish({ state: cameraPanelState('up', isStale) });
+    }
 
     if (isStale && was !== 'stale') {
       // `linkLost` rather than a preset of its own: this IS a link loss from the
@@ -330,29 +371,20 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     // Reassigning `src` drops the old connection and opens a new one. Rate
     // limited, because a camera that is genuinely gone must not become a
     // reconnect storm, and only while stale — a live stream is never touched.
-    if (isStale && now - lastRearm.current >= REARM_INTERVAL_S && !arming.current) {
-      // Stamped BEFORE the await, not after. `useFrame` is synchronous and runs
+    if (isStale && now - lastRearm.current >= REARM_INTERVAL_S) {
+      // Stamped BEFORE the arm, not after. `useFrame` is synchronous and runs
       // at display rate, so a rate limit that only advanced on success would let
-      // a slow or failing ticket endpoint turn this into a ~72 Hz POST storm —
-      // the reconnect storm this limit exists to prevent, moved one hop
-      // upstream. `arming` covers the same window from the other side, so two
-      // fetches can never both be assigning `src`.
+      // a slow or failing ticket endpoint turn this into a ~72 Hz POST storm.
+      // `rearm` itself refuses while another arm is in flight.
       lastRearm.current = now;
-      arming.current = true;
       lastUploaded.current = undefined;
       liveness.current = null;
+      staleNow.current = false;
       // NOT `image.src = ''` here. `armStream` clears and reassigns in one task,
-      // which is what keeps the empty-`src` `error` event from firing; clearing
-      // it here instead leaves the `<img>` empty across the whole ticket round
-      // trip, which fires `error` (latching CAMERA OFFLINE) and drives
-      // `naturalWidth` to 0 (which the guard above turns into "never re-arm
-      // again"). Both latches are permanent — this is the panel's only way back
-      // from a sim restart.
-      armEpoch.current += 1;
-      const rearmEpoch = armEpoch.current;
-      void armStream(image, robotId, () => armEpoch.current === rearmEpoch).finally(() => {
-        arming.current = false;
-      });
+      // which is what keeps the empty-`src` `error` event from firing. Once it
+      // is armed the picture is gone until the first new frame, and a stream
+      // that never sends one is the reconnect hook's first-frame watchdog.
+      reconnect.rearm();
     }
     if (isStale) {
       badgePlate.draw([
@@ -366,13 +398,21 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
   // In an effect, not in the render body: `draw` mutates a canvas and a GPU
   // texture, which is not something a render pass is allowed to do twice under
   // StrictMode and get away with.
+  // Redrawn whenever the countdown ticks (1 Hz) — `draw` is a no-op when the
+  // text is unchanged, so the other re-renders cost one string compare.
   useEffect(() => {
-    if (!failed) return;
+    if (!showPlate) return;
+    const lines = offlinePlateLines({
+      state: reconnect.phase === 'offline' ? 'offline' : 'connecting',
+      detail: reconnect.detail,
+      retryInS: reconnect.retryInS,
+      attempt: reconnect.attempt,
+    });
     offlinePlate.draw([
-      { id: 'title', text: 'CAMERA OFFLINE', color: HUD_COLORS.bad },
-      { id: 'hint', text: PANEL_CAMERA, color: HUD_COLORS.dim },
+      ...lines.map((line) => ({ id: line.id, text: line.text, color: TONE_COLOR[line.tone] })),
+      { id: 'camera', text: PANEL_CAMERA, color: HUD_COLORS.dim },
     ]);
-  }, [failed, offlinePlate]);
+  }, [showPlate, reconnect.phase, reconnect.detail, reconnect.retryInS, reconnect.attempt, offlinePlate]);
 
   return (
     <group position={[PANEL_DISTANCE_M, PANEL_HEIGHT_M, 0]} rotation={[0, -Math.PI / 2, 0]}>
@@ -383,7 +423,7 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
             offline plate takes the SAME geometry in the SAME place, so a stream
             that dies mid-session leaves the screen where the operator last saw
             it instead of leaving a hole in the scene. */}
-        <meshBasicMaterial map={failed ? offlinePlate.texture : texture} toneMapped={false} />
+        <meshBasicMaterial map={showPlate ? offlinePlate.texture : texture} toneMapped={false} />
       </mesh>
       {/* A thin surround, so the panel reads as a screen and not a hole. Turns
           red while the picture is frozen — the one state that otherwise looks
