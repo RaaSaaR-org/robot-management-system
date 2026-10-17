@@ -298,7 +298,9 @@ export function composeHud(state: HudState): HudLine[] {
   if (state.estopLatched) {
     return [
       { id: 'estop', text: 'E-STOP LATCHED', color: HUD_COLORS.bad },
-      { id: 'estop-hint', text: 'Robot stopped — clear from the fleet console', color: HUD_COLORS.bad },
+      // TASK-407: the stop no longer ends the session, and the reset is in
+      // reach — on the robot panel, behind a one-second hold.
+      { id: 'estop-hint', text: 'Hold Reset on the robot panel', color: HUD_COLORS.bad },
     ];
   }
 

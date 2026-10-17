@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { createXRStore } from '@react-three/xr';
+import { createXRStore, type XRStore } from '@react-three/xr';
 import * as THREE from 'three';
 import { Badge, Button, Panel, StatusTag, errorMessage } from '@/shared/components/ui';
 import { safetyApi } from '@/features/safety/api/safetyApi';
@@ -39,6 +39,7 @@ import { hudHandWarning, hudNeedsRelease, type HudBaseMode, type HudEngage } fro
 import { RobotModeControl } from '../../RobotModeControl';
 import { VrScene } from './VrScene';
 import { createRigTelemetry } from './VrTeleopRig';
+import { ARM_HELD_REASONS, isArmRefusalCode, type ArmHeldReason, type VrArmInfo, type VrHandHealth } from './vrWhy';
 
 /** How often the status row re-reads the link meters, in ms. */
 const METER_INTERVAL_MS = 250;
@@ -85,6 +86,42 @@ export interface ArmFrame {
   engage: HudEngage | null;
   /** This console's clutch as the agent last heard it; null when never reported. */
   clutch: { left: boolean; right: boolean } | null;
+  /** TASK-405 fields, spread from the agent's arm view; null when absent. */
+  deadman: 'ok' | 'hold' | null;
+  lastDisarmReason: string | null;
+  handHealth: { left: VrHandHealth; right: VrHandHealth } | null;
+}
+
+function num(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** One hand's `handHealth`, defensively; null when it is not one. */
+export function parseHandHealth(raw: unknown): VrHandHealth | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const h = raw as Record<string, unknown>;
+  const err = Array.isArray(h.error) && h.error.length === 2 && h.error.every((e) => typeof e === 'number')
+    ? [h.error[0] as number, h.error[1] as number] as [number, number]
+    : null;
+  const faults = Array.isArray(h.motorFaults)
+    ? (h.motorFaults as unknown[]).flatMap((f) => {
+      if (typeof f !== 'object' || f === null) return [];
+      const m = f as Record<string, unknown>;
+      return [{
+        motor: num(m.motor) ?? -1,
+        joint: typeof m.joint === 'string' ? m.joint : '?',
+        code: typeof m.code === 'string' ? m.code : '?',
+        bits: Array.isArray(m.bits) ? m.bits.filter((b): b is string => typeof b === 'string') : [],
+      }];
+    })
+    : [];
+  return {
+    present: typeof h.present === 'boolean' ? h.present : null,
+    ageS: num(h.ageS),
+    error: err,
+    motorFaults: faults,
+    powerV: num(h.powerV),
+  };
 }
 
 const ENGAGE_STATES: readonly HudEngage[] = ['need_release', 'need_press', 'ready', 'holding'];
@@ -139,7 +176,40 @@ export function parseArmFrame(frame: Record<string, unknown>): ArmFrame | null {
     clutch: clutch && typeof clutch.left === 'boolean' && typeof clutch.right === 'boolean'
       ? { left: clutch.left, right: clutch.right }
       : null,
+    deadman: frame.deadman === 'ok' || frame.deadman === 'hold' ? frame.deadman : null,
+    lastDisarmReason: typeof frame.lastDisarmReason === 'string' ? frame.lastDisarmReason : null,
+    handHealth: (() => {
+      const hh = frame.handHealth as { left?: unknown; right?: unknown } | null | undefined;
+      const left = parseHandHealth(hh?.left);
+      const right = parseHandHealth(hh?.right);
+      return left && right ? { left, right } : null;
+    })(),
   };
+}
+
+/** What the robot panel reads off an arm frame. */
+export function armInfoOf(arm: ArmFrame): VrArmInfo {
+  return {
+    writeMode: arm.writeMode,
+    armed: arm.armed,
+    arming: arm.arming,
+    armWeight: arm.armWeight,
+    hands: arm.hands,
+    teleopMode: arm.teleopMode,
+    deadman: arm.deadman,
+    lastDisarmReason: arm.lastDisarmReason,
+    handHealth: arm.handHealth,
+  };
+}
+
+/** `{type:'state', held:true, ...}` — the agent refused the arm (TASK-407). */
+export function parseHeldFrame(frame: Record<string, unknown>): { side: 'left' | 'right' | 'both'; reason: ArmHeldReason } | null {
+  if (frame.type !== 'state' || frame.held !== true) return null;
+  const side = frame.side === 'left' || frame.side === 'right' ? frame.side : 'both';
+  const reason = ARM_HELD_REASONS.includes(frame.reason as ArmHeldReason)
+    ? (frame.reason as ArmHeldReason)
+    : 'arm_gate';
+  return { side, reason };
 }
 
 /** `{type:'control'}` — who owns the robot, and who was pushed off it. */
@@ -149,24 +219,33 @@ interface ControlFrame {
 }
 
 /**
- * What the LINK readout should say.
+ * What the LINK readout should say: TRANSPORT health, and nothing else.
  *
- * `linkState` measures the age of the agent's last `{type:'state'}` echo, and the
- * agent only produces one in answer to a frame we sent. With no arm engaged the
- * rig streams nothing, so a perfectly healthy idle link ages out and would be
- * reported as LOST — the module's own docstring warns about exactly this. While
- * idle the socket being open is the only evidence there is, and it is the right
- * evidence: nothing is being commanded, so there is no control loop to be behind.
+ * The socket must be open, and while pose frames are going out the agent must
+ * be answering — measured by the age of ANY frame it sent (`state`, the
+ * `held` answer, `heartbeat`, `arm`, `base`, …), not only `{type:'state'}`.
+ *
+ * TASK-407: it used to be the age of the last `{type:'state'}`, and the agent
+ * sent one only for a pose frame that moved an arm. Every refusal — a grip the
+ * real robot had not armed on, a closed arm gate, an IK solve that held — went
+ * unanswered, so a refused arm read as LINK stale, then LINK lost, and fired the
+ * link-lost buzz, while the network was fine. The agent now answers every pose
+ * frame (`held` when it refused), and a refusal is shown as what it is, on the
+ * robot panel's why line.
+ *
+ * With no pose frame recently sent the rig expects no answer, so the open socket
+ * is the only evidence there is — and the right evidence: nothing is being
+ * commanded, so there is no control loop to be behind.
  */
-function meterLink(
+export function meterLink(
   status: LinkStatus,
   now: number,
-  lastStateAt: number | null,
+  lastFrameAt: number | null,
   lastSendAt: number | null,
 ): LinkState {
   if (status !== 'open') return 'lost';
   if (lastSendAt === null || now - lastSendAt > LINK_STALE_AFTER_MS) return 'live';
-  return linkState(now, lastStateAt);
+  return linkState(now, lastFrameAt);
 }
 
 
@@ -277,6 +356,13 @@ function controlGroups(
           }]
           : []),
         { id: 'recenter', keys: 'A / X', label: 'Recenter the view inside the robot’s head' },
+        // TASK-407: the trigger with the grip FREE is the in-VR click. With the
+        // grip held it stays the grasp — the two never overlap.
+        {
+          id: 'ui-click',
+          keys: 'Trigger',
+          label: 'Grip free: point at the robot panel and pull to press a button (Reset E-stop: hold 1 s)',
+        },
         // Listed ONLY when the host actually wired one up. This modal is opened
         // from the robot detail page too, where there is no session and no
         // episode to advance, and a mapping card that names a control the
@@ -312,6 +398,38 @@ export interface VRTeleopModalProps {
    * (or absent) when nothing is recording.
    */
   recording?: { episode: number; frames: number } | null;
+}
+
+function makeXrStore(): XRStore {
+  return createXRStore({
+    offerSession: false,
+    emulate: XR_EMULATOR,
+    controller: { model: false, rayPointer: false, grabPointer: false, teleportPointer: false },
+    hand: { model: false, rayPointer: false, grabPointer: false, touchPointer: false, teleportPointer: false },
+    // The library registers a controller only once its input profile has
+    // loaded, from jsdelivr by default. A headset on a network without
+    // internet then never reports a grip, so the arms never arm: serve the
+    // profiles from the app itself (`public/xr-profiles/`).
+    baseAssetPath: XR_PROFILES_BASE,
+  });
+}
+
+let devEmulatorStore: XRStore | null = null;
+
+/**
+ * The store when the dev WebXR emulator is on: created ONCE per page.
+ *
+ * Each `createXRStore({emulate})` installs its own IWER device as
+ * `navigator.xr`, and StrictMode runs the `useMemo` factory twice — so a dev
+ * page had two emulated headsets, and whichever installed LAST owned the
+ * session. Half the time that was not the one in the store this modal kept:
+ * buttons pressed on `store.getState().emulator` never reached the session
+ * (found by the TASK-407 Playwright spec, which drives that emulator).
+ * Dev-only — a real headset never takes this path.
+ */
+function emulatorXrStore(): XRStore {
+  devEmulatorStore ??= makeXrStore();
+  return devEmulatorStore;
 }
 
 /**
@@ -376,6 +494,8 @@ export function VRTeleopModalBody({
   const linkRef = useRef<TeleopLink | null>(null);
   const healthRef = useRef<LoopHealth>(createLoopHealth());
   const lastStateAtRef = useRef<number | null>(null);
+  /** When ANY agent frame last arrived — what LINK measures (TASK-407). */
+  const lastFrameAtRef = useRef<number | null>(null);
   const lastSendAtRef = useRef<number | null>(null);
   /** Read by the rig every frame; see `shouldStream`. */
   const canStreamRef = useRef(false);
@@ -389,20 +509,21 @@ export function VRTeleopModalBody({
   // teleop reads controller input directly, so the rays/gizmos only add clutter to
   // the headset view. Input tracking is unaffected.
   const xrStore = useMemo(
-    () =>
-      createXRStore({
-        offerSession: false,
-        emulate: XR_EMULATOR,
-        controller: { model: false, rayPointer: false, grabPointer: false, teleportPointer: false },
-        hand: { model: false, rayPointer: false, grabPointer: false, touchPointer: false, teleportPointer: false },
-        // The library registers a controller only once its input profile has
-        // loaded, from jsdelivr by default. A headset on a network without
-        // internet then never reports a grip, so the arms never arm: serve the
-        // profiles from the app itself (`public/xr-profiles/`).
-        baseAssetPath: XR_PROFILES_BASE,
-      }),
+    // With the dev emulator on, ONE store per page (see `emulatorXrStore`).
+    () => (XR_EMULATOR !== false ? emulatorXrStore() : makeXrStore()),
     [],
   );
+  // DEV only (TASK-407): the Playwright live spec drives the IWER emulator
+  // through the store — `__neodemXr.getState().emulator.controllers.right` —
+  // and enters VR with `__neodemXr.enterVR()`. Never in a production build.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    const w = window as unknown as { __neodemXr?: unknown };
+    w.__neodemXr = xrStore;
+    return () => {
+      if (w.__neodemXr === xrStore) delete w.__neodemXr;
+    };
+  }, [xrStore]);
   /**
    * Control lease (TASK-319). Inert when the server does not advertise leases.
    * A gate (loss or release) stops the stream at once and ends the session:
@@ -466,6 +587,8 @@ export function VRTeleopModalBody({
   // identity here would tear the socket down and reconnect it.
   const handleMessage = useCallback((msg: unknown, at: number) => {
     if (typeof msg !== 'object' || msg === null) return;
+    // Any frame at all is proof the transport works — LINK measures this.
+    lastFrameAtRef.current = at;
     // Lease frames belong to the lease hook (read through a ref, so this stays stable).
     if (leaseRef.current.handleSocketMessage(msg)) return;
     const frame = msg as Record<string, unknown>;
@@ -475,15 +598,29 @@ export function VRTeleopModalBody({
         setJoints(Array.isArray(frame.joints) ? (frame.joints as VrJoint[]) : []);
         setPositions((frame.positions as Record<string, number>) ?? {});
         break;
-      case 'state':
-        if (frame.positions) setPositions(frame.positions as Record<string, number>);
+      case 'state': {
+        // Held or not, it is the agent ANSWERING the pose frame — a real round
+        // trip for the RTT, and fresh evidence for LINK.
         lastStateAtRef.current = at;
         healthRef.current = onStateReceived(healthRef.current, at);
+        const held = parseHeldFrame(frame);
+        if (held) {
+          // The arm was refused (TASK-407). Not a link problem: the panel's
+          // why line says it instead.
+          telemetryRef.current.armHeld = { ...held, at };
+          break;
+        }
+        if (frame.positions) setPositions(frame.positions as Record<string, number>);
+        // An arm moved: whatever was refusing it no longer is.
+        telemetryRef.current.armHeld = null;
+        telemetryRef.current.armRefusal = null;
         break;
+      }
       case 'arm': {
         const next = parseArmFrame(frame);
         if (!next) break;
         setArm(next);
+        telemetryRef.current.armInfo = armInfoOf(next);
         // Refusals about arming are past facts once the arms are actually up.
         if (next.armed) {
           setAgentErrors((prev) => prev.filter((e) => !e.code.startsWith('arm_') && e.code !== 'heartbeat_lost'));
@@ -554,6 +691,7 @@ export function VRTeleopModalBody({
         telemetryRef.current.moveEnabled = info.moveEnabled;
         telemetryRef.current.baseMode = info.mode;
         telemetryRef.current.modeControl = info.modeControl;
+        telemetryRef.current.baseMeasured = info.measured;
         break;
       }
       case 'error': {
@@ -582,6 +720,10 @@ export function VRTeleopModalBody({
         }
         // Walking is off on this robot (an older agent says so only this way).
         if (code === 'loco_disabled') telemetryRef.current.moveEnabled = false;
+        // An arm refusal, for the robot panel's why line (TASK-407).
+        if (isArmRefusalCode(code) || code === 'lease_required' || code === 'heartbeat_lost') {
+          telemetryRef.current.armRefusal = { code, message: entry.message, at };
+        }
         // An error is the agent saying it will not answer that frame — it sends
         // no `{type:'state'}` for one it refused. `onPositionsSent` keeps the
         // OLDEST outstanding send on purpose, so leaving the probe pending here
@@ -664,7 +806,7 @@ export function VRTeleopModalBody({
       const now = Date.now();
       const last = lastStateAtRef.current;
       setMeters({
-        link: meterLink(status, now, last, lastSendAtRef.current),
+        link: meterLink(status, now, lastFrameAtRef.current, lastSendAtRef.current),
         msSinceState: last === null ? null : now - last,
         rttMs: healthRef.current.rttMs,
       });
@@ -707,6 +849,18 @@ export function VRTeleopModalBody({
   useEffect(() => {
     robotPositionsRef.current = positions;
   }, [positions]);
+  // The robot panel's lease and socket facts (TASK-407).
+  const leaseLabel = !lease.enabled
+    ? 'off'
+    : lease.state === 'bound'
+      ? 'you'
+      : lease.holder?.displayName ?? 'none';
+  useEffect(() => {
+    const t = telemetryRef.current;
+    t.socketOpen = status === 'open';
+    t.leaseHeld = leaseAllows;
+    t.leaseLabel = leaseLabel;
+  }, [status, leaseAllows, leaseLabel]);
   useEffect(() => {
     const t = telemetryRef.current;
     t.estopLatched = estopLatched;
@@ -746,26 +900,21 @@ export function VRTeleopModalBody({
   }, [robot.id, send]);
 
   /**
-   * STOP also ENDS THE SESSION.
+   * STOP — from the desktop button, B/Y in the headset, or the two-hand pinch.
    *
-   * A wearer whose robot has just stopped and whose scene keeps rendering
-   * normally has no way to find out why: the desktop banner explaining it is on a
-   * screen they cannot see. Taking the headset off is the only way to read it, so
-   * the stop does that for them.
+   * It no longer ENDS THE XR SESSION (TASK-407, D3). It used to, because the
+   * explanation and the reset lived only in the desktop banner, on a screen the
+   * wearer cannot see — so the stop took the headset off them. Both are in the
+   * headset now: the robot panel turns red, says why, and offers Reset E-stop
+   * behind a one-second hold. Throwing the wearer out hid exactly that from the
+   * person who pressed the stop.
    *
-   * BOTH ENTRY POINTS COME HERE — the desktop STOP button and B/Y in the
-   * headset. B/Y used to call `raiseEstop` directly, skipping the session end,
-   * which is the half that exists FOR the wearer: it left them inside a live
-   * session while the wrist HUD told them to clear the stop from the fleet
-   * console — an instruction they cannot follow, because `resetEstop` has no
-   * controller binding, the Reset button lives only in the DOM banner, and the
-   * agent's latch is one-way over the socket. The only way out was to take the
-   * headset off, which is exactly the state this function was written to avoid.
+   * Safety is unchanged: the latch, disarm and damp path is `raiseEstop`, as
+   * before, and `shouldStream({estopLatched})` gates the stream at once.
    */
   const onStopButton = useCallback(() => {
     void raiseEstop();
-    void xrStore.getState().session?.end().catch(() => { /* already ending */ });
-  }, [raiseEstop, xrStore]);
+  }, [raiseEstop]);
 
   /**
    * Clear the latch.
@@ -1146,6 +1295,7 @@ export function VRTeleopModalBody({
           handTracking={handTracking}
           onRecenter={recenter}
           onEstop={onStopButton}
+          onResetEstop={resetEstop}
           onNextEpisode={onNextEpisode}
         />
       </div>

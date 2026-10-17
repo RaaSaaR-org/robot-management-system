@@ -226,6 +226,31 @@ the sidecar's latch too; if the sidecar is still latched for any other reason
 (e.g. from before an agent restart) the VR panel says *"The robot's sidecar is
 still E-stopped"* with its own reset button.
 
+### The robot panel inside the headset (TASK-407)
+
+A panel hangs about 0.9 m out and 30° to the right of the robot's forward,
+beside the head-camera screen, and turns with it on a recenter. It reads MODE,
+ARMS (with the sidecar's dead-man), GRIP per hand and any `HELD` refusal, HANDS,
+LEASE and LINK, and one bold line saying **why the arms are not following**
+(E-stop, no link, no control, mode not Balance, the agent refused the arm,
+dead-man, controller not tracked, no grip squeezed — first match wins). A
+blocking reason also takes line 1 of the wrist HUD.
+
+- **Pressing a button:** with the grip **free**, point the controller at the
+  panel — a thin ray and a dot appear on a button — and pull the trigger. With
+  the grip held the trigger is the grasp, there is no ray and nothing can be
+  pressed, so a click can never close the robot's hand.
+- **Buttons:** Recenter (same as A/X), Next take (data-collection sessions only),
+  and **Reset E-stop**, shown only while latched: hold the trigger for one
+  second (the bar fills). While latched it is the only live button.
+- **B/Y and the pinch stop no longer end the XR session.** They latch, disarm and
+  damp exactly as before and the stream stops at once; the panel turns red and
+  the wearer can read why and reset from inside the headset.
+- **LINK is transport only.** The agent now answers every pose frame — with
+  `{type:'state'}` when an arm moved, or `{type:'state', held:true, side, reason}`
+  when it refused (≤ 20 Hz) — so a refused arm shows as `HELD R: arm_gate` and a
+  why line, never as *Link lost*.
+
 ### A Dex3 hand that sends nothing
 
 On 2026-10-16 the right hand published no state and `xr_teleoperate` hung until

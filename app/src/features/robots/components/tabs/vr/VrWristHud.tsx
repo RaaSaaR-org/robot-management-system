@@ -11,7 +11,8 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState, XRSpace } from '@react-three/xr';
 import * as THREE from 'three';
-import { composeHud, markerAppearance, HUD_COLORS, type HudLine } from './vrHud';
+import { composeHud, markerAppearance, HUD_COLORS, HUD_MAX_LINES, type HudLine } from './vrHud';
+import { whyFromTelemetry } from './vrWhy';
 import { useTextPlate } from './VrTextPlate';
 import { GRIP_THRESHOLD } from './vrConstants';
 import type { VrRigTelemetry } from './VrTeleopRig';
@@ -187,6 +188,14 @@ export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTel
         text: `RTT ${rtt}ms`,
         color: rtt < RTT_OK_MS ? HUD_COLORS.ok : rtt < RTT_WARN_MS ? HUD_COLORS.warn : HUD_COLORS.bad,
       });
+    }
+    // TASK-407: a BLOCKING reason takes line 1 — the short form, which fits the
+    // plate. The latched E-stop is excluded because its banner already says it.
+    // The plate's budget holds: the RTT readout, appended last, gives way.
+    const why = whyFromTelemetry(t, Date.now());
+    if (!t.estopLatched && why.severity === 'block') {
+      lines.unshift({ id: 'why', text: why.short, color: HUD_COLORS.bad });
+      lines.length = Math.min(lines.length, HUD_MAX_LINES);
     }
     plate.draw(lines);
   });

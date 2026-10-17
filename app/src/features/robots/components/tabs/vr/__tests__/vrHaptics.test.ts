@@ -135,7 +135,18 @@ describe('HAPTICS presets', () => {
       'estop',
       'linkLost',
       'saturation',
+      'uiClick',
+      'uiHover',
     ]);
+  });
+
+  it('keeps the in-VR UI ticks below anything that means an arm (TASK-407)', () => {
+    // A hover fires on every button the ray crosses; a click must never feel
+    // like taking an arm, which is what the clutch engage means.
+    expect(HAPTICS.uiHover.intensity).toBeLessThan(HAPTICS.uiClick.intensity);
+    expect(HAPTICS.uiHover.ms).toBeLessThan(HAPTICS.uiClick.ms);
+    expect(HAPTICS.uiClick.intensity).toBeLessThan(HAPTICS.clutchEngage.intensity);
+    expect(HAPTICS.uiClick.ms).toBeLessThan(HAPTICS.clutchEngage.ms);
   });
 
   it('are all valid pulses', () => {

@@ -374,6 +374,77 @@ function isStopFrame(msg: object): boolean {
   return zero(m.move.vx) && zero(m.move.vy) && zero(m.move.omega);
 }
 
+/**
+ * Why a pose frame moved nothing (TASK-407). Every `{wrists}` / `{positions}`
+ * frame is answered — with `{type:'state', positions}` when an arm followed, or
+ * with `{type:'state', held:true, side, reason}` when none did.
+ *
+ * WHY EVERY FRAME. The client measures its LINK from the answers, and every
+ * refusal path used to return in silence: an unclutched side, a closed arm gate,
+ * a side the re-engage latch had not released, an IK solve that held. A refused
+ * arm therefore read as a dead network in the headset — LINK stale, LINK lost,
+ * the link-lost buzz — for as long as the operator held a grip the robot was
+ * refusing. A refusal is an answer, so it is sent as one.
+ *
+ * - `unclutched` — the pose named only sides whose clutch is open (real robot).
+ * - `arm_gate` — the arm gate is closed: no heartbeat, the clutch never
+ *   reported, or the sidecar refused the claim.
+ * - `not_armed` — the gate is open but this console has not made the clutch
+ *   rising edge the re-engage latch needs.
+ * - `side_refused` — the offered side may not drive (its clutch is not engaged).
+ * - `ik_held` — the solver held the previous pose (unusable or unseeded target),
+ *   or this robot has no arm chain to solve.
+ * - `estop` — an E-stop is latched.
+ * - `lease` — this socket is not bound to the control lease.
+ */
+export type TeleopHeldReason =
+  | 'unclutched'
+  | 'arm_gate'
+  | 'not_armed'
+  | 'side_refused'
+  | 'ik_held'
+  | 'estop'
+  | 'lease';
+
+export type TeleopHeldSide = 'left' | 'right' | 'both';
+
+/** `{type:'state', held:true, ...}` — the answer to a pose frame that moved nothing. */
+export interface TeleopHeldFrame {
+  type: 'state';
+  held: true;
+  side: TeleopHeldSide;
+  reason: TeleopHeldReason;
+}
+
+/**
+ * The fastest the held answers go out, per socket, in ms (20 Hz).
+ *
+ * The rig streams at 20 Hz, so this is one answer per pose frame in steady
+ * state. A burst faster than that (two pose frames in one tick) is coalesced:
+ * the newest refusal waits for the slot and goes out on the next tick, so no
+ * frame is left without an answer for longer than one tick.
+ */
+export const HELD_ANSWER_MIN_INTERVAL_MS = 50;
+
+/** Which sides a pose frame offered: the non-null keys, or `both`. */
+export function offeredSide(sides: Record<string, unknown> | null | undefined): TeleopHeldSide {
+  const left = sides?.left != null;
+  const right = sides?.right != null;
+  if (left && !right) return 'left';
+  if (right && !left) return 'right';
+  return 'both';
+}
+
+/** Which sides a `{positions}` frame touches, from its joint names. */
+export function positionsSide(positions: Record<string, unknown>): TeleopHeldSide {
+  const names = Object.keys(positions);
+  const left = names.some((n) => n.startsWith('left_'));
+  const right = names.some((n) => n.startsWith('right_'));
+  if (left && !right) return 'left';
+  if (right && !left) return 'right';
+  return 'both';
+}
+
 /** The `{type:'base'}` frame (TASK-398 adds the measured mode and the gate). */
 export interface BaseFrame {
   type: 'base';
@@ -668,9 +739,16 @@ export function createKeyboardTeleopWebSocket(
      * that drifted away while nothing could move the robot would be the first
      * thing the robot was sent once something could.
      */
+    /**
+     * Why `armGate` last returned false — what the held answer to that frame
+     * says (TASK-407). Only read right after a false return.
+     */
+    let gateRefusal: TeleopHeldReason = 'arm_gate';
     const armGate = (): boolean => {
+      gateRefusal = 'arm_gate';
       if (!arms.requiresArming()) return true;
       if (boundGeneration === null) {
+        gateRefusal = 'lease';
         sendError(
           'arm_requires_lease',
           'this robot\'s arms only take commands from the console that holds its control lease — take control first',
@@ -686,6 +764,7 @@ export function createKeyboardTeleopWebSocket(
       }
       // Said as itself rather than as "release the grip": no grip fixes a latch.
       if (arms.view().estopLatched) {
+        gateRefusal = 'estop';
         sendError(
           'arm_estop_latched',
           'the sidecar\'s E-stop is latched — reset the E-stop before driving the arms',
@@ -711,6 +790,7 @@ export function createKeyboardTeleopWebSocket(
         return false;
       }
       if (!reengage.mayArm()) {
+        gateRefusal = 'not_armed';
         sendError(
           'arm_reengage_required',
           reengage.state === 'need_release'
@@ -1167,14 +1247,47 @@ export function createKeyboardTeleopWebSocket(
       return true;
     };
 
+    // ---- held answers (TASK-407) -------------------------------------------
+    /** When the last held answer went out, as `Date.now()`. */
+    let lastHeldAt = -Infinity;
+    /** A refusal waiting for the 20 Hz slot; flushed by the tick. */
+    let pendingHeld: TeleopHeldFrame | null = null;
+
     const sendState = () => {
+      // A real answer supersedes a refusal still waiting for its slot.
+      pendingHeld = null;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'state', positions: robotStateManager.getTeleopPositions() }));
       }
     };
 
+    const flushHeld = (frame: TeleopHeldFrame): void => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      lastHeldAt = Date.now();
+      ws.send(JSON.stringify(frame));
+    };
+    /**
+     * Answer a pose frame that moved nothing. See `TeleopHeldReason`: without
+     * this the client cannot tell a refused arm from a dead link.
+     */
+    const answerHeld = (side: TeleopHeldSide, reason: TeleopHeldReason): void => {
+      const frame: TeleopHeldFrame = { type: 'state', held: true, side, reason };
+      if (Date.now() - lastHeldAt >= HELD_ANSWER_MIN_INTERVAL_MS) {
+        pendingHeld = null;
+        flushHeld(frame);
+        return;
+      }
+      pendingHeld = frame;
+    };
+
     // Integrate held-key motion, and advance the base ramp, at a fixed tick.
     const timer = setInterval(() => {
+      // A coalesced held answer goes out as soon as its slot opens (TASK-407).
+      if (pendingHeld && Date.now() - lastHeldAt >= HELD_ANSWER_MIN_INTERVAL_MS) {
+        const frame = pendingHeld;
+        pendingHeld = null;
+        flushHeld(frame);
+      }
       // The arm dead-man runs before everything else in the tick, latch or not.
       if (lastHeartbeatAt !== null && !heartbeatLost && Date.now() - lastHeartbeatAt > heartbeatTimeoutMs) {
         heartbeatLost = true;
@@ -1363,14 +1476,23 @@ export function createKeyboardTeleopWebSocket(
       // Admission (TASK-315): every motion frame is checked HERE, when it is
       // processed — never against a binding cached at some earlier point.
       const isMotion = MOTION_KEYS.some((k) => k in msg);
+      // The side a pose frame offered, for its held answer (TASK-407).
+      const poseSide: TeleopHeldSide | null =
+        'wrists' in msg && msg.wrists && typeof msg.wrists === 'object'
+          ? offeredSide(msg.wrists as Record<string, unknown>)
+          : 'positions' in msg && msg.positions && typeof msg.positions === 'object'
+            ? positionsSide(msg.positions as Record<string, unknown>)
+            : null;
       if (leaseGated() && isMotion && !mayDrive()) {
         sendError('lease_required', 'this socket is not bound to the robot\'s control lease — acquire one and send {bind}');
+        if (poseSide) answerHeld(poseSide, 'lease');
         return;
       }
       // A heartbeating client that went quiet does not get to drive on the
       // frames that still trickle in (TASK-393). A `move` zero is a stop and is
       // let through below like it always was.
       if (isMotion && heartbeatLost && !isStopFrame(msg)) {
+        if (poseSide) answerHeld(poseSide, 'arm_gate');
         return;
       }
 
@@ -1472,17 +1594,30 @@ export function createKeyboardTeleopWebSocket(
 
       // ---- wrist poses: solve arm IK here (TASK-216) ----------------------
       if ('wrists' in msg && msg.wrists && typeof msg.wrists === 'object') {
-        if (refusedByEStop()) return;
-        if (!clutchedSideOffered(msg.wrists as Record<string, unknown>)) return;
-        if (!armGate()) return;
+        const offered = poseSide ?? 'both';
+        if (refusedByEStop()) {
+          answerHeld(offered, 'estop');
+          return;
+        }
+        if (!clutchedSideOffered(msg.wrists as Record<string, unknown>)) {
+          answerHeld(offered, 'unclutched');
+          return;
+        }
+        if (!armGate()) {
+          answerHeld(offered, gateRefusal);
+          return;
+        }
         if (!canSolveArms()) {
           sendError(
             'ik_unsupported',
             'this robot has no G1 arm chain — stream {positions} instead of {wrists}',
           );
+          answerHeld(offered, 'ik_held');
           return;
         }
         let solved = false;
+        /** Sides that moved nothing, and why — for the held answer. */
+        const refusedSides: Array<{ side: 'left' | 'right'; reason: TeleopHeldReason }> = [];
         for (const side of ['left', 'right'] as const) {
           const target = parseWristPose(msg.wrists[side]);
           // A missing side is a hand that is not driving, and an UNUSABLE side
@@ -1493,9 +1628,13 @@ export function createKeyboardTeleopWebSocket(
           // in the middle of a recorded demonstration.
           if (!target) continue;
           // A real robot's arm follows only a clutched side (TASK-393).
-          if (!sideMayDrive(side)) continue;
+          if (!sideMayDrive(side)) {
+            refusedSides.push({ side, reason: 'side_refused' });
+            continue;
+          }
           const report = wristTeleop.solve(side, target);
           if (!report.held) solved = true;
+          else refusedSides.push({ side, reason: 'ik_held' });
 
           // The trigger, as one grasp axis. Only when finger tracking is not
           // driving this hand — otherwise the two would fight over the same
@@ -1512,6 +1651,13 @@ export function createKeyboardTeleopWebSocket(
         if (solved) {
           markTeleopMode('ik');
           sendState();
+        } else {
+          // Nothing moved: say why rather than going silent (TASK-407).
+          const side: TeleopHeldSide = refusedSides.length === 1 ? refusedSides[0]!.side : offered;
+          const reason: TeleopHeldReason = refusedSides.some((r) => r.reason === 'side_refused')
+            ? 'side_refused'
+            : 'ik_held';
+          answerHeld(side, reason);
         }
         return;
       }
@@ -1557,8 +1703,15 @@ export function createKeyboardTeleopWebSocket(
       }
 
       if ('positions' in msg && msg.positions && typeof msg.positions === 'object') {
-        if (refusedByEStop()) return;
-        if (!armGate()) return;
+        const offered = poseSide ?? 'both';
+        if (refusedByEStop()) {
+          answerHeld(offered, 'estop');
+          return;
+        }
+        if (!armGate()) {
+          answerHeld(offered, gateRefusal);
+          return;
+        }
         // Pose stream (e.g. WebXR / Meta Quest): absolute targets for many joints.
         const unknown: string[] = [];
         for (const [joint, position] of Object.entries(msg.positions)) {
