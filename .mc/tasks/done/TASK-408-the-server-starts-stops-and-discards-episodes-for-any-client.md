@@ -3,7 +3,7 @@ id: "TASK-408"
 aliases: []
 title: "The server starts, stops and discards episodes for any client and shares one live session state"
 slug: "the-server-starts-stops-and-discards-episodes-for-any-client"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
