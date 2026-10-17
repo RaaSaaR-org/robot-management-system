@@ -22,6 +22,7 @@ import { createDemoAgentState, createDemoScene } from './agentModeDemoData';
 import { socialDemoHandlers } from './socialDemoHandlers';
 import { experimentsDemoHandlers } from './experimentsDemoHandlers';
 import { readinessDemoHandlers } from './readinessDemoHandlers';
+import { teleopTakesDemoHandlers } from './teleopTakesDemoHandlers';
 import type { AgentModeState } from '@/features/agentmode/types/agentmode.types';
 import type { FleetSafetyStatus, RobotSafetyStatus } from '@/features/safety/types/safety.types';
 import type { UserSettings } from '@/features/settings/types/settings.types';
@@ -41,6 +42,8 @@ export const handlers = [
   // The experiment loop (TASK-242)
   ...experimentsDemoHandlers,
   ...readinessDemoHandlers,
+  // Explicit takes on one demo recording session (TASK-410)
+  ...teleopTakesDemoHandlers,
 
   // ========================================================================
   // Health

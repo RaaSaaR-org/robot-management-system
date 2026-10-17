@@ -14,6 +14,7 @@ import {
 import { UI_DATE_LOCALE, formatDateTime } from '@/shared/utils/format';
 import type { EpisodeSummary, TeleoperationSession } from '../../types/datacollection.types';
 import { formatDuration, formatEpisodeStat, formatRetargetModes } from '../../types/datacollection.types';
+import { takeLabel } from '../../utils/takeFormat';
 
 export interface SessionCompletedProps {
   session: TeleoperationSession;
@@ -24,7 +25,8 @@ export interface SessionCompletedProps {
 }
 
 const COLUMNS: DataTableColumn<EpisodeSummary>[] = [
-  { key: 'episodeIndex', header: 'Episode', sortable: true, cell: (e) => <span className="font-medium text-ink-primary">Episode {e.episodeIndex}</span> },
+  // "Take N", 1-based, the same number the session page showed while recording (TASK-410 D2).
+  { key: 'episodeIndex', header: 'Take', sortable: true, cell: (e) => <span className="font-medium text-ink-primary">{takeLabel(e.episodeIndex)}</span> },
   { key: 'frameCount', header: 'Frames', align: 'right', sortable: true, cell: (e) => e.frameCount.toLocaleString(UI_DATE_LOCALE) },
   {
     key: 'droppedFrames', header: 'Dropped', align: 'right', hideBelow: 'sm',
@@ -77,7 +79,7 @@ export function SessionCompleted({ session, robotName, episodes, onEditTask, onC
                 { label: 'Robot', value: robotName },
                 { label: 'Duration', value: formatDuration(session.duration) },
                 { label: 'Frames', value: session.frameCount.toLocaleString(UI_DATE_LOCALE) },
-                { label: 'Episodes', value: episodes.length },
+                { label: 'Takes kept', value: episodes.filter((e) => !e.discarded).length },
                 { label: 'Frame rate', value: `${session.fps} fps` },
                 { label: 'Quality', value: session.qualityScore ? `${session.qualityScore}%` : 'Not computed' },
                 { label: 'Started', value: session.startedAt ? formatDateTime(session.startedAt) : '—' },
@@ -132,11 +134,11 @@ export function SessionCompleted({ session, robotName, episodes, onEditTask, onC
 
       {episodes.length > 0 && (
         <Panel padding="none" data-testid="review-episodes">
-          <Panel.Header title="Episodes" description="Per-take frame counts, drops and how each take was driven." />
+          <Panel.Header title="Takes" description="Per-take frame counts, drops and how each take was driven." />
           <DataTable
-            caption="Recorded episodes"
+            caption="Recorded takes"
             columns={COLUMNS}
-            rows={episodes}
+            rows={episodes.filter((e) => !e.discarded)}
             getRowId={(e) => String(e.episodeIndex)}
             defaultSort={{ key: 'episodeIndex', direction: 'asc' }}
             dense

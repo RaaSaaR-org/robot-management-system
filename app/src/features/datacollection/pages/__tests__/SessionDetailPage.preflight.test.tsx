@@ -1,7 +1,7 @@
 /**
  * @file SessionDetailPage.preflight.test.tsx
  * @description A created session shows the pre-flight checklist (TASK-392);
- *              an offline robot disables Start recording and its Space hotkey,
+ *              an offline robot disables Start session and its Space hotkey,
  *              a warning does not.
  * @feature datacollection
  */
@@ -76,12 +76,12 @@ const render = () => renderWithProviders(
 );
 
 describe('SessionDetailPage pre-flight', () => {
-  it('blocks Start recording and the Space hotkey while the robot is offline', async () => {
+  it('blocks Start session and the Space hotkey while the robot is offline', async () => {
     setRobot('offline');
     render();
     expect(await screen.findByTestId('preflight')).toBeInTheDocument();
     expect(screen.getByTestId('preflight-robot')).toHaveAttribute('data-level', 'blocking');
-    expect(screen.getByRole('button', { name: 'Start recording' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeDisabled();
     fireEvent.keyDown(window, { code: 'Space' });
     expect(confirmMock).not.toHaveBeenCalled();
   });
@@ -92,7 +92,7 @@ describe('SessionDetailPage pre-flight', () => {
     render();
     expect(await screen.findByTestId('preflight-recorder')).toHaveAttribute('data-level', 'warning');
     expect(screen.getByTestId('preflight-camera')).toHaveTextContent('head_camera (pc2cam)');
-    expect(screen.getByRole('button', { name: 'Start recording' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled();
     fireEvent.keyDown(window, { code: 'Space' });
     expect(confirmMock).toHaveBeenCalledTimes(1);
   });

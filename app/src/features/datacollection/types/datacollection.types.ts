@@ -97,7 +97,114 @@ export interface EpisodeSummary {
    * Absent — NOT empty — for an episode recorded before the agent could tell.
    */
   retargetModes?: string[];
+  /** TASK-408: the take was discarded. Only present in `?includeDiscarded=1` lists. */
+  discarded?: boolean;
+  /** TASK-408: the episode this take became in the written dataset, once the session ended. */
+  datasetEpisodeIndex?: number | null;
+  /** TASK-408: why the take ended. */
+  stopReason?: EpisodeStopReason | null;
+  /** TASK-408: ISO server time the take began. */
+  takeStartedAt?: string | null;
+  /** TASK-408: who began and who ended the take. */
+  startedBy?: EpisodeActor | null;
+  stoppedBy?: EpisodeActor | null;
+  /** TASK-408: the robot's quick check of the take. */
+  quickCheck?: { jointsMoved: JointMoved[]; groupsMoved: string[]; warnings: string[] } | null;
 }
+
+// ============================================================================
+// EPISODE CONTROL + LIVE STATE (TASK-408 server, TASK-410 browser)
+// ============================================================================
+
+/** Where an episode action came from. */
+export type EpisodeSource = 'vr' | 'desktop' | 'hotkey';
+
+/** Why a take ended. `time_limit` is the robot's own auto-stop. */
+export type EpisodeStopReason = 'operator' | 'time_limit' | 'next' | 'session_end';
+
+/** Who caused an episode event. `source: 'auto'` is the recorder itself. */
+export interface EpisodeActor {
+  userId: string | null;
+  displayName: string | null;
+  source: EpisodeSource | 'auto';
+  clientId: string | null;
+}
+
+export interface JointMoved {
+  name: string;
+  rangeRad: number;
+}
+
+/** The robot's verdict on one finished take. `take` is 0-based on the wire. */
+export interface QuickCheck {
+  take: number;
+  frames: number;
+  durationS: number;
+  droppedFrames: number;
+  fpsActual: number;
+  jointsMoved: JointMoved[];
+  groupsMoved: string[];
+  /** `short`, `no_motion`, `dropped_frames` */
+  warnings: string[];
+  /** Server path of the take's middle frame, or null when there is none. */
+  thumbnailUrl: string | null;
+  stopReason: EpisodeStopReason | null;
+  discarded: boolean;
+}
+
+/** One live state per session, shared by every client (TASK-408). */
+export interface LiveState {
+  sessionId: string;
+  status: TeleoperationStatus;
+  phase: 'between' | 'capturing' | null;
+  /** The take while capturing, else the last take; null before the first. 0-based. */
+  take: number | null;
+  /** ISO server time the live take began; null between takes. */
+  takeStartedAt: string | null;
+  takeElapsedS: number | null;
+  takeFrames: number;
+  totalFrames: number;
+  kept: number;
+  discarded: number;
+  fpsTarget: number;
+  fpsActual: number | null;
+  degraded: boolean;
+  lastDropReason: string | null;
+  /** Seconds since the session's recorder started. */
+  elapsedS: number | null;
+  /** Per-take auto-stop, or null. */
+  autoStopS: number | null;
+  lastTake: QuickCheck | null;
+  /** Server time this state was built — the client derives its clock offset from it. */
+  at: string;
+}
+
+/** Codes a refused episode action answers with (409, or 404/502 for a few). */
+export type EpisodeConflictCode =
+  | 'episode_conflict'
+  | 'already_capturing'
+  | 'not_capturing'
+  | 'not_recording'
+  | 'unsupported_recorder'
+  | 'no_take'
+  | 'already_discarded'
+  | 'unknown_take'
+  | 'recorder_unavailable';
+
+/** What every episode action sends. `expectedTake: null` means "no take yet". */
+export interface EpisodeActionBody {
+  expectedTake?: number | null;
+  clientId?: string;
+  source?: EpisodeSource;
+}
+
+/** An episode action either went through, or was refused with the live state to re-sync from. */
+export type EpisodeActionResult =
+  | { ok: true; live: LiveState; quickCheck?: QuickCheck | null; take?: number; restarted?: boolean }
+  | { ok: false; code: EpisodeConflictCode | string; error: string; live: LiveState | null };
+
+/** The take actions the store offers; `discard` is "discard the last take". */
+export type TakeAction = 'start' | 'stop' | 'next' | 'discard';
 
 /**
  * One of the optional per-episode statistics, or an em-dash.
@@ -131,6 +238,10 @@ export interface TeleopRecordingProgress {
  */
 export interface TeleopWsEvent {
   type:
+    | 'teleop:session:live'
+    | 'teleop:episode:started'
+    | 'teleop:episode:stopped'
+    | 'teleop:episode:discarded'
     | 'teleop:session:progress'
     | 'teleop:quality'
     | 'teleop:session:completed'
@@ -145,6 +256,14 @@ export interface TeleopWsEvent {
     recordingProgress?: TeleopRecordingProgress;
     qualityFeedback?: QualityFeedback;
     error?: string;
+    /** TASK-408: the full live state (`session:live`, and every episode event). */
+    live?: LiveState;
+    /** TASK-408: the take an `episode:*` event is about (0-based). */
+    take?: number;
+    startedAt?: string;
+    quickCheck?: QuickCheck | null;
+    reason?: EpisodeStopReason;
+    by?: EpisodeActor;
   };
   timestamp: number;
 }
@@ -450,6 +569,14 @@ export interface DataCollectionState {
   qualityFeedback: QualityFeedback | null;
   episodes: EpisodeSummary[];
   recordingProgress: TeleopRecordingProgress | null;
+  /** TASK-410: the session's one live state, as the server last sent it. */
+  live: LiveState | null;
+  /** Server clock minus this tab's clock, from `live.at` (ms). */
+  liveClockOffsetMs: number;
+  /** The quick check of the take that stopped last, until dismissed. */
+  lastQuickCheck: QuickCheck | null;
+  /** The take action this tab has in flight, if any. */
+  takePending: TakeAction | null;
   sessionFilters: SessionFilters;
   sessionPagination: SessionPagination;
   // Active Learning
@@ -482,6 +609,15 @@ export interface DataCollectionActions {
   fetchEpisodes: (id: string) => Promise<void>;
   nextEpisode: (id: string) => Promise<number>;
   discardEpisode: (id: string, episodeIndex: number) => Promise<void>;
+  // Takes (TASK-410): guarded by the take this tab believes is live
+  fetchLive: (id: string) => Promise<void>;
+  startTake: (id: string, source?: EpisodeSource) => Promise<boolean>;
+  stopTake: (id: string, source?: EpisodeSource) => Promise<boolean>;
+  nextTake: (id: string, source?: EpisodeSource) => Promise<boolean>;
+  /** Discard the last take; `expectedTake` pins the take seen when the discard was asked for. */
+  discardLastTake: (id: string, source?: EpisodeSource, expectedTake?: number | null) => Promise<boolean>;
+  discardTake: (id: string, take: number, source?: EpisodeSource) => Promise<boolean>;
+  dismissQuickCheck: () => void;
   // WebSocket-driven updates
   handleTeleopEvent: (event: TeleopWsEvent) => void;
   // Filters

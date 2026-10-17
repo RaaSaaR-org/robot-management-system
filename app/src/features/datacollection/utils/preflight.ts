@@ -160,6 +160,6 @@ export function summarizePreflight(items: PreflightItem[]): PreflightSummary {
     warnings: warnings.length,
     next: blocker?.action
       ?? firstWarning?.action
-      ?? 'Ready. Press Start recording (Space).',
+      ?? 'Ready. Press Start session (Space).',
   };
 }
