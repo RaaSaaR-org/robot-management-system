@@ -1269,6 +1269,17 @@ describe('takes between an explicit begin and end (TASK-402)', () => {
     expect(rec.status().frames).toBe(5);
   });
 
+  it('keeps ticking when the wall clock steps backwards', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [] });
+    await run(h, rec, 100);
+    // An NTP correction: without re-anchoring, the next deadline would be an
+    // hour away and the recorder would sit silent for that hour.
+    h.clock.ms -= 3_600_000;
+    await run(h, rec, 200);
+    expect(rec.status().frames).toBeGreaterThanOrEqual(5);
+    expect(rec.status().dropped).toBe(0);
+  });
+
   it('does not count missed ticks between takes as drops', async () => {
     await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
     await advance(h, rec, 500);

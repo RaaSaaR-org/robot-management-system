@@ -924,8 +924,16 @@ export class EpisodeRecorder {
    */
   private scheduleTick(): void {
     if (!this.running) return;
-    const due = this.clockT0Ms + ((this.tickNo + 1) * 1000) / this.fpsTarget;
-    const delay = Math.max(0, Math.ceil(due - this.now()));
+    const period = 1000 / this.fpsTarget;
+    const now = this.now();
+    // The wall clock stepped BACKWARDS (an NTP correction): the next deadline
+    // is further away than one period, and waiting for it would stall the
+    // recorder for however far the clock jumped. Re-anchor the grid instead.
+    if (this.clockT0Ms + (this.tickNo + 1) * period - now > period) {
+      this.clockT0Ms = now - this.tickNo * period;
+    }
+    const due = this.clockT0Ms + (this.tickNo + 1) * period;
+    const delay = Math.max(0, Math.ceil(due - now));
     this.timer = setTimeout(() => this.onTimer(), delay);
     this.timer.unref?.();
   }

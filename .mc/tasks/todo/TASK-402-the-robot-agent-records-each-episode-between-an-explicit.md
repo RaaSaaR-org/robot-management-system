@@ -150,3 +150,20 @@ The computation is a pure function, `summarizeEpisode(frames, jointNames, groups
 - Never run `xr_teleoperate` and the arm_sdk sidecar together.
 - The E-stop stays reachable: B/Y and the two-hand pinch in VR, and a visible E-STOP on the desktop session page.
 - Development and tests use the sim stack only: the sim agent :41246 and sim sidecar :8777, or branch builds on free ports. Never the real g1-edu-4 (:41245/:8767). Do not stop or restart the running dev stack.
+
+## Implementation notes (2026-10-17)
+- **Two existing recorder assertions changed.** `reports the fps it achieved` and `repeats a slower camera's last picture` asserted `info.fps === result.fpsActual`, which is the measured-fps behaviour D3 rejects. They now assert `info.fps` is the integer target and `_neodem.fpsActual` equals the measured rate. Every other existing recorder test passes unmodified. The writer's `buildInfo` fixture moved from 19.7 to 20 for the same reason.
+- **The writer refuses a non-integer fps** (`fps must be an integer`), so the invariant is structural rather than a convention of one caller.
+- **Discarding the open take restarts it** (as the live-row discard always did), and it stays `discarded:false`. Any other discarded take stays listed with `discarded:true` and keeps its number.
+- **The auto-stop limit excludes paused time**, so pausing mid-take does not end it.
+- **The deadline scheduler re-anchors its grid when the wall clock steps backwards**, so an NTP correction cannot stall the recorder. A forward step is counted as missed ticks.
+- `stop()` with nothing kept answers `{ok:false, code:'no_episodes'}` in legacy sessions too. The `error` text is unchanged there. A failed write carries `code:'write_failed'`.
+- `recording-controller.ts` and `robot-agent/AGENTS.md` were touched as well, for the pass-throughs and to replace the doc paragraph that said `info.json.fps` is measured.
+- **Live check** (branch agent :41302, own sim :8802 on DDS domain 52/lo, joints only):
+  - Between takes for 3 s gave 0 frames and 0 drops.
+  - Begin and end worked, and the second begin or an end between takes answered 409.
+  - Auto-stop at 2 s set `time_limit`.
+  - Discarding take 1 gave the `indexMap` 0→0, 1→null, 2→1.
+  - `info.json.fps` was 30 (an integer), timestamps were `i/30`, and `simulated` was true.
+  - Cameras could not be checked live: MuJoCo EGL rendering crashes in a session without a seat.
+  - Node `fetch` to the sim's `/state/fast` takes about 43 ms (curl takes 0.5 ms), so the live sim run reached about 15 fps with "behind" drops. That latency is in the sidecar, not in this change.
