@@ -89,6 +89,8 @@ export interface Status {
   overall: Overall;
   steps: StepStatus[];
   lastBase: { mode: string | null; fsmId: number | null } | null;
+  /** The port the profile's robot agent listens on — the server registers it from here (TASK-409). */
+  agentPort: number;
   at: string;
 }
 
@@ -323,6 +325,7 @@ export class Supervisor {
       overall: this.overall(),
       steps,
       lastBase: this.lastBase,
+      agentPort: this.profile.ports.agent,
       at: new Date().toISOString(),
     };
   }

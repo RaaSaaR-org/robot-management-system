@@ -60,7 +60,9 @@ const app = createApp();
 // TASK-371 adds one on the guarded /api/datasets mount: POST /:id/import/cancel.
 // TASK-398 adds one on the guarded /api/robots mount: POST /:id/base-mode
 // (writeRoleGuard + memberOrAbove).
-const EXPECTED_WRITE_ROUTES = 374;
+// TASK-409 adds six on the guarded /api/robots mount: POST /:id/bringup/start,
+// /stop, /sidecar-mode, /lan-up and /steps/:step/adopt|leave (memberOrAbove).
+const EXPECTED_WRITE_ROUTES = 380;
 
 /** Writes on `UNGUARDED_WRITE_MOUNTS`: 13 on /api/auth, 12 on the two worker mounts. */
 const EXPECTED_UNGUARDED_WRITES = 25;

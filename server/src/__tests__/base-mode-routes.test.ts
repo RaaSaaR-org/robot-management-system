@@ -33,6 +33,8 @@ let postAnswer: AgentAnswer | Error = { status: 200, body: { ok: true } };
 let getAnswer: AgentAnswer | Error = { status: 200, body: {} };
 let posted: Array<{ baseUrl: string; robotId: string; body: Record<string, unknown> }> = [];
 
+let sidecarReachable: boolean | null = null;
+
 function buildApp() {
   const app = express();
   app.use(express.json());
@@ -56,6 +58,7 @@ function buildApp() {
       audit: (e) => {
         audits.push(e);
       },
+      sidecarReachable: () => sidecarReachable,
     }),
   );
   return app;
@@ -84,6 +87,16 @@ describe('GET /:id/base-mode', () => {
     const res = await request(buildApp()).get(URL).set('x-test-user', 'vera');
     expect(res.status).toBe(200);
     expect(res.body.base).toEqual({ mode: 'limp', fsmId: 1 });
+  });
+
+  it('adds sidecarReachable from the cached readiness (TASK-409), null when none', async () => {
+    let res = await request(buildApp()).get(URL).set('x-test-user', 'vera');
+    expect(res.body.sidecarReachable).toBeNull();
+    sidecarReachable = false;
+    res = await request(buildApp()).get(URL).set('x-test-user', 'vera');
+    expect(res.body.sidecarReachable).toBe(false);
+    expect(res.body.capability).toEqual({ gate: 'fsm' });
+    sidecarReachable = null;
   });
 
   it('answers 503 agent_unreachable when the agent does not answer', async () => {

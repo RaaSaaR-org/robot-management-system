@@ -343,8 +343,40 @@ A role-guarded, audited proxy to the agent's `/api/v1/robots/:id/base/mode`. The
 
 | Method | Path | Guard | Description |
 |--------|------|-------|-------------|
-| GET | `/` | viewer | The agent's GET; `503 {code:'agent_unreachable'}` when it does not answer; `404` for a robot outside the caller's tenant |
+| GET | `/` | viewer | The agent's GET plus `sidecarReachable: boolean\|null` (TASK-409: from a readiness snapshot of the last 10 s, `null` when none is cached); `503 {code:'agent_unreachable'}` when it does not answer; `404` for a robot outside the caller's tenant |
 | POST | `/` | member | `{mode:'limp'\|'stand'\|'balance', leaseId, generation}` (all required — `400 invalid_mode` / `400 lease_required`) → the agent's answer; `503 agent_unreachable`. One compliance entry per attempt (`access_audit`, action `base_mode`, metadata `{result:'ok'\|'denied'\|'failed', mode, fromMode, fsmId, code}` — never the lease id) |
+
+### Robot readiness and robot side (`/api/robots/:id/readiness`, `/api/robots/:id/bringup`, TASK-409)
+
+One readiness snapshot per robot, merged from the robot supervisor (`robot-agent/supervisor`, TASK-403: processes) and the agent's `GET /api/v1/robots/:id/readiness` (TASK-405: sidecar, mode, arms, hands, lease, camera, "why not following"), and Start/Stop of the robot side proxied to the supervisor. Which supervisor serves which robot comes from the server env, never from the agent: `ROBOT_SUPERVISORS=<robotId>=<url>[,…]` and `ROBOT_SUPERVISOR_TOKEN` (bearer). Unset → `bringup: null` in every snapshot and `404 {code:'no_supervisor'}` from every `/bringup` route. A supervised robot with no record yet is visible to every tenant's caller until Start registers it.
+
+```
+RobotReadiness = {
+  robotId, at,
+  agent: { reachable, error, readiness: AgentReadiness | null },   // the agent's own snapshot, verbatim
+  bringup: SupervisorStatus | null,                                // the supervisor's GET /status, verbatim
+  supervisor: { reachable, error } | null,                         // null = no supervisor configured
+  reason: { code, severity: 'block'|'warn'|'ok', text, source: 'server'|'agent' }
+}
+```
+
+`reason` is the server's own line when one applies, in this order — `bringup_stopped` ("Robot side is stopped. Press Start."), `bringup_failed:<step>` (that step's `detail`), `bringup_foreign:<step>` ("An old <bridge> process is running (pid N). Adopt or leave it."), `bringup_busy` (a start/stop is running), `supervisor_unreachable` (neither supervisor nor agent answers), `agent_unreachable` ("Robot agent is not answering."), `agent_no_readiness` (the agent answered, but not with a readiness report) — else the agent's own `reason` with `source:'agent'`. `text` is at most 72 characters (one VR HUD line).
+
+Polling: only watched robots — one with a readiness request or a bringup write in the last 30 s, or an open (`recording`/`paused`) teleop session — at 1 Hz: supervisor `/status` (2 s timeout) and agent `/readiness` (4 s). `robot:readiness` goes out on `/api/a2a/ws` as `{type:'robot:readiness', data: RobotReadiness, timestamp}` whenever the snapshot changes (deep-equal ignoring every `at`) and at least every 5 s while watched, to every identified socket of the robot's tenant (no per-topic subscription).
+
+| Method | Path | Guard | Description |
+|--------|------|-------|-------------|
+| GET | `/:id/readiness` | viewer | `RobotReadiness`; opens or extends the 30 s watch window. `404 robot_not_found` outside the caller's tenant |
+| GET | `/:id/bringup` | viewer | The supervisor's `SupervisorStatus`; `404 no_supervisor`; `503 supervisor_unreachable` |
+| POST | `/:id/bringup/start` | member | `{mode:'read_only'\|'arm_sdk', confirm?, leaseId?, generation?}`. `arm_sdk` needs `confirm:true` (`400 confirm_required`) **and** the caller's live control lease (`409 lease_required`); `400 invalid_mode`. → the supervisor's `202` + status. Once the supervisor reports the agent step `ok`, a robot without a record is registered from `http://<supervisor host>:<status.agentPort>` (the `POST /api/robots/register` logic, in the caller's tenant) |
+| POST | `/:id/bringup/stop` | member | → `{status: SupervisorStatus, baseMode: {mode, fsmId, source:'agent'\|'supervisor'} \| null}`. Never changes the FSM; the UI offers "Limp first?" through `POST /api/robots/:id/base-mode` |
+| POST | `/:id/bringup/sidecar-mode` | member | `{mode, confirm:true}` (`400 confirm_required`), plus the caller's lease for `arm_sdk` (`409 lease_required`) |
+| POST | `/:id/bringup/steps/:step/adopt` · `…/leave` | member | Adopt or leave a foreign process holding a step's port; `404 no_step` |
+| POST | `/:id/bringup/lan-up` | member | `nmcli con up` of the profile's robot LAN (real profiles only) |
+| GET | `/:id/bringup/logs/:proc?tail=200` | member | `{proc, lines}` for `sim`\|`bridge`\|`sidecar`\|`agent` (tail 1–2000); `404 no_proc` |
+| GET | `/:id/bringup/logs/:proc/stream` | member | SSE passthrough of the supervisor's log stream |
+
+Every POST — a viewer's `403` included — writes one compliance entry (`access_audit`, resourceType `robot_bringup`, action `bringup_start|stop|sidecar_mode|adopt|leave|lan_up`, metadata `{result:'ok'|'denied'|'failed', mode, step, code, status}`; never the lease id). A supervisor refusal (`409 busy`, `409 armed`, …) is passed through with its status and body; no answer at all is `503 supervisor_unreachable`.
 
 ### Tour / host mode (`/api/tour`, TASK-213)
 
