@@ -3,7 +3,7 @@ id: "TASK-407"
 aliases: []
 title: "The Quest operator reads the robot's state and presses buttons inside VR"
 slug: "the-quest-operator-reads-the-robot-s-state-and-presses"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
