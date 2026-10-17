@@ -54,6 +54,7 @@ from loco_state import (  # noqa: E402
     FSM_ZERO_TORQUE, MAX_OMEGA, MAX_VX, MAX_VY, STAND_HEIGHT_DEFAULT,
     STAND_HEIGHT_HIGH, STAND_HEIGHT_LOW, SHAKE_DURATION_S, UINT32_MAX,
     WAVE_DURATION_S, LocoState, pose_relative_to, wrap_angle,
+    BALANCE_FSM, FSM_LOCK_STAND, NON_LOCOMOTING_FSM,
 )
 from joints import (  # noqa: E402
     ARM_REST, R_ELBOW, R_SHOULDER_PITCH, R_SHOULDER_ROLL, R_SHOULDER_YAW, R_WRIST_ROLL,
@@ -576,3 +577,75 @@ def test_pose_relative_to_wraps_yaw():
 def test_pose_relative_to_the_world_origin_is_the_identity():
     pose = (1.5, -2.25, 0.7)
     assert pose_relative_to((0.0, 0.0, 0.0), pose) == pytest.approx(pose)
+
+
+# --------------------------------------------------------------------------
+# TASK-398: lock stand, balance, and arm_sdk only in balance
+# --------------------------------------------------------------------------
+
+
+def test_lock_stand_is_accepted_and_does_not_walk():
+    st = LocoState()
+    st.set_fsm_id(FSM_LOCK_STAND)
+    assert st.fsm_id == 4
+    assert FSM_LOCK_STAND in NON_LOCOMOTING_FSM
+    st.set_velocity(0.5, 0.0, 0.0, 2.0, now=0.0)
+    assert st.commanded_velocity(0.5) == (0.0, 0.0, 0.0)
+
+
+def test_only_500_counts_as_balance():
+    assert BALANCE_FSM == frozenset({FSM_START})
+    assert FSM_DAMP not in BALANCE_FSM and FSM_LOCK_STAND not in BALANCE_FSM
+
+
+def test_set_fsm_id_invents_no_transition_rules():
+    """The sim takes any id in any order; the sidecar enforces its own."""
+    st = LocoState()
+    for fsm_id in (FSM_DAMP, FSM_START, FSM_LOCK_STAND, 801, FSM_ZERO_TORQUE, FSM_START):
+        st.set_fsm_id(fsm_id)
+        assert st.fsm_id == fsm_id
+
+
+class _Cmd:
+    def __init__(self, q):
+        self.q = q
+
+
+class _LowCmd:
+    def __init__(self, weight, q=0.3):
+        self.motor_cmd = [_Cmd(q) for _ in range(29)] + [_Cmd(weight)] + [_Cmd(0.0)] * 5
+
+
+class _Node:
+    def __init__(self, fsm_id):
+        import threading
+        self.lock = threading.Lock()
+        self.loco = LocoState()
+        self.loco.set_fsm_id(fsm_id)
+        self.weight = 0.0
+        self.tgt = {"body": None}
+        self.arm_cmd_count = 0
+        self.arm_sdk_ignored_frames = 0
+
+
+@pytest.mark.parametrize("fsm_id,honoured", [(FSM_START, True), (FSM_DAMP, False),
+                                              (FSM_LOCK_STAND, False), (801, False)])
+def test_sim_node_drops_arm_sdk_outside_balance(fsm_id, honoured):
+    sim_node = pytest.importorskip("sim_node")  # needs mujoco + unitree_sdk2py
+    node = _Node(fsm_id)
+    node.weight = 0.7  # a blend left over from before the mode changed
+    sim_node.SimNode._on_arm_sdk(node, _LowCmd(1.0))
+    assert sim_node.arm_sdk_honoured(fsm_id) is honoured
+    if honoured:
+        assert node.weight == 1.0 and node.arm_cmd_count == 1
+        assert node.arm_sdk_ignored_frames == 0
+    else:
+        assert node.weight == 0.0 and node.arm_cmd_count == 0
+        assert node.arm_sdk_ignored_frames == 1
+
+
+def test_initial_fsm_flag_defaults_to_balance():
+    sim_node = pytest.importorskip("sim_node")
+    ap = sim_node.make_arg_parser()
+    assert ap.parse_args([]).initial_fsm == 500   # existing sims are unchanged
+    assert ap.parse_args(["--initial-fsm", "1"]).initial_fsm == 1

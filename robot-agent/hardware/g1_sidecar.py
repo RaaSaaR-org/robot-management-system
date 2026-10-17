@@ -43,8 +43,9 @@ on every interface in read_only mode and on 127.0.0.1 only in arm_sdk mode
                         {"error":"not_armed"} otherwise, 403 in read_only);
                         CLAMPED + SLEW-LIMITED; leg/waist keys ignored + counted.
                         Dead-man: no /action 0.5 s → hold, 1.0 s → disarm
-  POST /estop         → disarm ramp now + LATCHED until POST /estop/reset
-  POST /estop/reset   → clears the latch (does not re-arm)
+  POST /estop         → disarm ramp now + LATCHED until POST /estop/reset;
+                        with G1_LOCO_ENABLED=fsm|1 it then damps (TASK-398)
+  POST /estop/reset   → clears the latch (does not re-arm, does not stand up)
   GET  /cameras       → {"cameras": [...],
                          "source": "lerobot"|"teleimager"|"pc2cam"|"realsense"|null}
                         The names the ACTIVE source can serve, not a fixed list:
@@ -66,6 +67,24 @@ on every interface in read_only mode and on 127.0.0.1 only in arm_sdk mode
                         Real-robot recording runs in the robot-agent.
   POST /record/stop   → SIGINT the recording subprocess
   GET  /record/status → recording progress / dataset path
+
+  --- Robot mode without the remote (TASK-398), behind G1_LOCO_ENABLED=fsm|1 ---
+  GET  /loco/mode     → {"ok", "fsm_id", "mode", "age_s", "fsm_mode", "odom_mode",
+                         "source", "error", "loco": {...}, "in_flight",
+                         "estop_latched"} — the MEASURED mode (FSM monitor, 2 Hz)
+  POST /loco/mode     → {"mode": "limp"|"stand"|"balance"} → SetFsmId(1 | 4 | 500),
+                        confirmed by GetFsmId. Stand only from measured limp,
+                        balance only from stand held >= 2 s, neither while the
+                        arms are engaged or the E-stop is latched; limp always
+                        (it disarms first). Refusals carry a machine "code".
+                        See g1_loco_mode.py for the whole table.
+  POST /estop         → (with the gate on) latch, disarm ramp, THEN damp:
+                        {"latched", "was_armed", "disarmed", "damped",
+                         "damp_confirmed", "damp_error"}
+  G1_LOCO_ENABLED: 0/unset = off, fsm = mode changes only (the real robot: the
+  only RPCs that can leave this process are SetFsmId(limp|stand|balance),
+  GetFsmId and GetFsmMode), 1 = full locomotion (the sim). Anything else
+  refuses to start, and so does fsm/1 without an explicit G1_DDS_DOMAIN.
 
   --- Agent Mode locomotion (TASK-194), behind G1_LOCO_ENABLED=1 (default OFF) ---
   POST /loco/move     → {"vx","vy","omega","duration_s"} → LocoClient.SetVelocity
@@ -101,6 +120,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import g1_loco_mode
 from recorder import recorder
 from pointcloud_replay import load_frame, resolve_replay_path
 
@@ -177,7 +197,35 @@ def _bind_host(env=None) -> str:
     if explicit:
         return explicit
     mode = (env.get("G1_WRITE_MODE") or "").strip().lower()
-    return "127.0.0.1" if mode == "arm_sdk" else "0.0.0.0"
+    # TASK-398: /loco/mode stands the robot up and /estop damps it — with the
+    # mode gate on, read-only mode listens on loopback too.
+    gate, _ = g1_loco_mode.parse_gate(env)
+    if mode == "arm_sdk" or gate not in (None, g1_loco_mode.GATE_OFF):
+        return "127.0.0.1"
+    return "0.0.0.0"
+
+
+def _loco_config_error(env=None) -> "str | None":
+    """Why the mode/locomotion gate configuration must not start, or None.
+    Checked by main() next to _write_mode_error (TASK-398)."""
+    env = os.environ if env is None else env
+    gate, err = g1_loco_mode.parse_gate(env)
+    if err:
+        return err
+    if gate == g1_loco_mode.GATE_OFF:
+        return None
+    domain = _dds_domain_env(env)
+    if domain is None:
+        return ("G1_LOCO_ENABLED=%s needs an explicit DDS domain: set G1_DDS_DOMAIN "
+                "(0 = the real robot, 1 = the MuJoCo sim). There is no default on "
+                "purpose: a mode change aimed at the sim must not land on the robot"
+                % ("fsm" if gate == g1_loco_mode.GATE_FSM else "1"))
+    try:
+        int(domain)
+    except ValueError:
+        return f"G1_DDS_DOMAIN={domain!r} is not an integer"
+    _, err = g1_loco_mode.fsm_config(env)
+    return err
 
 
 def _write_mode_error(env=None) -> "str | None":
@@ -234,7 +282,16 @@ def _write_mode_error(env=None) -> "str | None":
 # silently imply the other. Telemetry-only + locomotion-enabled (READ_ONLY=1,
 # LOCO_ENABLED=1) is a legitimate, intended configuration: it is exactly what
 # Agent Mode uses against the simulated loco service in sim_g1_dds/.
-LOCO_ENABLED = os.environ.get("G1_LOCO_ENABLED", "0").strip() == "1"
+#
+# TASK-398 adds a third value: G1_LOCO_ENABLED=fsm — robot MODE changes only
+# (limp / stand / balance through POST /loco/mode, and the E-stop's damp). Under
+# fsm, /loco/move, /loco/action (stop included), /loco/stand-height and the raw
+# /loco/fsm answer 403 before any client is looked up: walking and turning stay
+# impossible on the real robot. "1" keeps its full meaning (the sim). An invalid
+# value refuses to start (_loco_config_error).
+LOCO_GATE = g1_loco_mode.parse_gate(os.environ)[0] or g1_loco_mode.GATE_OFF
+LOCO_ENABLED = LOCO_GATE == g1_loco_mode.GATE_FULL
+FSM_IDS = g1_loco_mode.fsm_config(os.environ)[0] or g1_loco_mode.FsmIds()
 
 # TASK-184: extra READ-ONLY telemetry topics forwarded by the bridge over the
 # same ZMQ PUB socket. Names must match the bridge's DDS topic strings.
@@ -748,7 +805,7 @@ def write_status() -> dict:
         "write_mode": WRITE_MODE,
         "armed": False,
         "arm_weight": 0.0,
-        "estop_latched": False,
+        "estop_latched": _base_estop_latched,
         "hands": hands,
         "teleop_mode": teleop_mode(hands["left"], hands["right"]),
     }
@@ -773,14 +830,48 @@ def start_arm_sdk() -> None:
         max_arm_vel=ARM_SDK_MAX_JOINT_VEL,
         max_hand_vel=ARM_SDK_MAX_HAND_VEL,
         limit_margin=ARM_SDK_LIMIT_MARGIN,
+        **_arm_fsm_kwargs(),
     )
     _arm_runner = g1_arm_sdk.ArmSdkRunner(_arm_controller, wire, hz=CONTROL_HZ)
     _arm_runner.start()
 
 
+def _arm_requires_fsm(env=None) -> bool:
+    """Whether /arm must see a MEASURED balance mode (TASK-398): on the real
+    robot (domain 0) or whenever this process measures the mode at all.
+    G1_ARM_ALLOW_UNKNOWN_FSM=1 is the escape hatch for a session in which a
+    person with the remote has put the robot in balance — loud at startup."""
+    env = os.environ if env is None else env
+    if (env.get("G1_ARM_ALLOW_UNKNOWN_FSM") or "").strip() == "1":
+        return False
+    gate, _ = g1_loco_mode.parse_gate(env)
+    return _dds_domain_env(env) == "0" or gate not in (None, g1_loco_mode.GATE_OFF)
+
+
+def _fsm_reading():
+    """(fsm_id, age_s) for the arm controller's mode guard."""
+    if _fsm_monitor is None:
+        return None, None
+    return _fsm_monitor.reading()
+
+
+def _arm_fsm_kwargs() -> dict:
+    """The arm controller's TASK-398 guards, from env."""
+    return {
+        "fsm_source": _fsm_reading if LOCO_GATE != g1_loco_mode.GATE_OFF else None,
+        "require_fsm": _arm_requires_fsm(),
+        "balance_ids": FSM_IDS.balance_reported,
+        "track_err_rad": _pos_float("G1_ARM_TRACK_ERR_RAD", 0.35),
+        "track_err_hold_s": _pos_float("G1_ARM_TRACK_ERR_HOLD_S", 0.3),
+    }
+
+
 def arm(body: dict) -> "tuple[int, dict]":
     if _arm_controller is None:
         return 403, {"ok": False, "error": "read_only", "detail": _READ_ONLY_WRITE_ERROR}
+    if _mode_ctl is not None and _mode_ctl.limp_in_progress:
+        return 409, {"ok": False, "error": "mode_change_in_flight",
+                     "detail": "the robot is being put into Limp — not arming", **write_status()}
     lease = body.get("lease_generation") if isinstance(body, dict) else None
     if lease is not None and (isinstance(lease, bool) or not isinstance(lease, int)):
         return 400, {"ok": False, "error": '"lease_generation" must be an integer or null'}
@@ -793,18 +884,65 @@ def disarm() -> "tuple[int, dict]":
     return _arm_controller.disarm("request")
 
 
+# The sidecar's own E-stop latch (TASK-398), in every write mode. Separate from
+# the arm controller's latch, but /estop sets both and /estop/reset clears both.
+# While it is set, Stand and Balance are refused; Limp is not.
+_base_estop_latched = False
+_estop_lock = threading.Lock()
+
+
 def estop() -> "tuple[int, dict]":
-    """POST /estop. In read_only mode there is nothing of ours to stop."""
-    if _arm_controller is None:
-        return 200, {"ok": True, "was_armed": False, **write_status(),
-                     "message": "read_only: no command path to stop"}
-    return _arm_controller.estop()
+    """POST /estop: latch, disarm, THEN damp (TASK-398).
+
+    1. Both latches, and the arm controller's disarm ramp starts — synchronous,
+       no RPC. We wait for at most two publish ticks (<= 0.1 s) so the first
+       falling-weight frame is on the wire before the damp (it does NOT wait out the 1 s ramp:
+       in damp the robot ignores arm_sdk, and waiting would keep the arms under
+       balance for a second longer during an emergency).
+    2. With the mode gate on: SetFsmId(1), confirmed by GetFsmId for up to 2 s.
+       The robot sags into the gantry, like the remote's damping.
+    Read-only mode damps too when the gate is on; with the gate off there is
+    no damp path and the reply says so.
+    """
+    global _base_estop_latched
+    with _estop_lock:
+        _base_estop_latched = True
+        was_armed = False
+        if _arm_controller is not None:
+            _, reply = _arm_controller.estop()
+            was_armed = bool(reply.get("was_armed"))
+            # Two ticks: the runner writes frame N before it calls tick N+1,
+            # so the second tick proves the first falling frame left us.
+            _arm_controller.wait_frames(2, timeout_s=0.1)
+    if _mode_ctl is None:
+        damp = {"damped": False, "damp_confirmed": False,
+                "damp_error": "mode control disabled (G1_LOCO_ENABLED)"}
+    else:
+        damp = _mode_ctl.damp_for_estop()
+    print(f"[G1 Sidecar] ESTOP: latched, was_armed={was_armed}, damped={damp['damped']}, "
+          f"confirmed={damp['damp_confirmed']}"
+          + (f" — {damp['damp_error']}" if damp["damp_error"] else ""), flush=True)
+    body = {"ok": True, **write_status(), "latched": True, "was_armed": was_armed,
+            "disarmed": True, **damp}
+    if _arm_controller is None and _mode_ctl is None:
+        body["message"] = "read_only: no command path to stop"
+    return 200, body
 
 
 def estop_reset() -> "tuple[int, dict]":
-    if _arm_controller is None:
-        return 200, {"ok": True, "was_latched": False, **write_status()}
-    return _arm_controller.estop_reset()
+    """POST /estop/reset: clears both latches. Never re-arms, never stands up —
+    the robot stays in whatever mode it is in (limp after an E-stop)."""
+    global _base_estop_latched
+    with _estop_lock:
+        was = _base_estop_latched
+        _base_estop_latched = False
+        if _arm_controller is None:
+            if was:
+                print("[G1 Sidecar] E-stop latch cleared (robot mode unchanged)", flush=True)
+            return 200, {"ok": True, "was_latched": was, **write_status()}
+        status, body = _arm_controller.estop_reset()
+        body["was_latched"] = bool(body.get("was_latched")) or was
+        return status, body
 
 
 def send_action(action: dict) -> "tuple[int, dict]":
@@ -2188,13 +2326,21 @@ _RPC_CODE_NAMES = {
 }
 
 _loco_client = None
+_loco_client_error = None           # why there is no client (str), or None
 _loco_lock = threading.Lock()       # guards construction of the singleton
 _loco_rpc_lock = threading.Lock()   # serialises RPC calls (ThreadingHTTPServer)
+_fsm_monitor = None                 # g1_loco_mode.FsmMonitor, gate != off
+_mode_ctl = None                    # g1_loco_mode.ModeController, gate != off
+
+LOCO_CONFIRM_S = _pos_float("G1_LOCO_CONFIRM_S", g1_loco_mode.CONFIRM_S_DEFAULT)
+LOCO_STAND_SETTLE_S = _pos_float("G1_LOCO_STAND_SETTLE_S", g1_loco_mode.STAND_SETTLE_S_DEFAULT)
+FSM_POLL_HZ = _pos_float("G1_FSM_POLL_HZ", g1_loco_mode.POLL_HZ_DEFAULT)
 
 
 def _loco_gate_error() -> dict:
     return {
         "ok": False,
+        "code": "loco_disabled",
         "error": (
             "G1_LOCO_ENABLED != 1 — /loco/* disabled on this sidecar "
             "(telemetry-only process). Set G1_LOCO_ENABLED=1 to allow locomotion."
@@ -2202,52 +2348,173 @@ def _loco_gate_error() -> dict:
     }
 
 
-def _get_loco_client():
-    """(client, None) on success, (None, error_dict) on failure. Never raises.
+def _loco_move_refusal(path: str) -> "tuple[int, dict] | None":
+    """(403, body) when `path` may not move the base under the current gate,
+    else None. Under G1_LOCO_ENABLED=fsm nothing that walks, turns, stops,
+    gestures or picks a raw FSM id leaves this process (TASK-398)."""
+    if LOCO_GATE == g1_loco_mode.GATE_FULL:
+        return None
+    if LOCO_GATE == g1_loco_mode.GATE_OFF:
+        return 403, _loco_gate_error()
+    if path == "/loco/fsm":
+        return 403, {"ok": False, "code": "use_loco_mode",
+                     "error": "raw FSM ids are disabled under G1_LOCO_ENABLED=fsm — "
+                              "POST /loco/mode {\"mode\": \"limp\"|\"stand\"|\"balance\"}"}
+    return 403, {"ok": False, "code": "loco_move_disabled",
+                 "error": f"{path} is disabled under G1_LOCO_ENABLED=fsm: this sidecar "
+                          "changes the robot mode only, it never walks, turns or moves the base"}
 
-    ONE LocoClient per process, built lazily and cached: its RPC stub owns DDS
-    readers/writers, so re-creating it per request would re-run discovery every
-    time. Failures are deliberately NOT cached — "SDK missing" is permanent but
-    "DDS peer not up yet" is not, and the honest thing is to retry and report
-    the current reason rather than remember a stale one.
-    """
-    global _loco_client
+
+def _new_loco_client():
+    """A fresh, initialised LocoClient. Raises on failure. Separate so tests
+    can see WHO builds the client (the startup path, never a request)."""
+    from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient  # type: ignore
+
+    client = LocoClient()
+    set_timeout = getattr(client, "SetTimeout", None)
+    if callable(set_timeout):
+        set_timeout(LOCO_RPC_TIMEOUT_S)
+    client.Init()
+    return client
+
+
+def _build_loco_client() -> bool:
+    """Build the process's one LocoClient. Called from main() on the MAIN
+    thread at startup (cyclonedds type registration is not thread-safe — see
+    start_arm_sdk), and retried every 2 s by the FSM monitor while it failed.
+    Never raises; the reason is kept for the next request to report."""
+    global _loco_client, _loco_client_error
+    with _loco_lock:
+        if _loco_client is not None:
+            return True
+        domain = _dds_domain_env()
+        iface = _dds_iface_env()
+        if domain is None:
+            _loco_client_error = ("no DDS domain configured — set G1_DDS_DOMAIN "
+                                  "(there is no default for the loco client)")
+            return False
+        try:
+            _ensure_dds_factory()
+            client = _new_loco_client()
+        except ImportError as e:
+            _loco_client_error = f"unitree_sdk2py not installed — LocoClient unavailable ({e})"
+            return False
+        except Exception as e:  # noqa: BLE001
+            _loco_client_error = (f"LocoClient init failed (domain {domain}, "
+                                  f"iface '{iface or 'default'}'): {e}")
+            return False
+        _loco_client = client
+        _loco_client_error = None
+    print(
+        f"[G1 Sidecar] ✅ LocoClient ready (sport service, domain {domain}, "
+        f"iface '{iface or 'default'}', timeout {LOCO_RPC_TIMEOUT_S}s)",
+        flush=True,
+    )
+    return True
+
+
+def _get_loco_client():
+    """(client, None) when the startup-built client exists, (None, error_dict)
+    otherwise. Never builds one: that happens on the main thread at startup
+    (and on the FSM monitor's retry), never on a request thread."""
     with _loco_lock:
         if _loco_client is not None:
             return _loco_client, None
+        return None, {"ok": False, "code": "rpc_failed",
+                      "error": _loco_client_error or "LocoClient not built (sidecar startup)"}
+
+
+def _loco_client_for_monitor():
+    client, err = _get_loco_client()
+    return client, (err or {}).get("error")
+
+
+def _odom_mode():
+    """rt/odommodestate.mode from whatever odometry feed exists — diagnostic
+    only (TASK-398 records it so its mapping to the FSM can be learned)."""
+    data = _state_latest(TOPIC_ODOM)
+    if isinstance(data, dict) and data.get("mode") is not None:
         try:
-            from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient  # type: ignore
-        except ImportError as e:  # noqa: BLE001
-            return None, {
-                "ok": False,
-                "error": f"unitree_sdk2py not installed — LocoClient unavailable ({e})",
-            }
-        domain = _dds_domain_env() or "0"
-        iface = _dds_iface_env()
-        try:
-            _ensure_dds_factory()
-        except Exception as e:  # noqa: BLE001
-            return None, {
-                "ok": False,
-                "error": (
-                    f"DDS init failed (domain {domain}, iface '{iface or 'default'}'): {e}"
-                ),
-            }
-        try:
-            client = LocoClient()
-            set_timeout = getattr(client, "SetTimeout", None)
-            if callable(set_timeout):
-                set_timeout(LOCO_RPC_TIMEOUT_S)
-            client.Init()
-        except Exception as e:  # noqa: BLE001
-            return None, {"ok": False, "error": f"LocoClient init failed: {e}"}
-        _loco_client = client
-        print(
-            f"[G1 Sidecar] ✅ LocoClient ready (sport service, domain {domain}, "
-            f"iface '{iface or 'default'}', timeout {LOCO_RPC_TIMEOUT_S}s)",
-            flush=True,
-        )
-        return client, None
+            return int(data["mode"])
+        except (TypeError, ValueError):
+            return None
+    if _dds_odom_source is not None:
+        msg = _dds_odom_source.latest(ODOM_MAX_AGE_S)
+        mode = getattr(msg, "mode", None) if msg is not None else None
+        if mode is not None:
+            return int(mode)
+    return None
+
+
+def _arm_snapshot():
+    return None if _arm_controller is None else _arm_controller.snapshot()
+
+
+def _arm_disarm(reason: str) -> None:
+    if _arm_controller is not None:
+        _arm_controller.disarm(reason)
+
+
+def start_loco(clock=time.monotonic, start_thread: bool = True, **ctl_overrides) -> None:
+    """Gate on: build the LocoClient (main thread), the FSM monitor and the
+    mode controller. Gate off: nothing — no client, no thread, no RPC.
+    `clock`, `start_thread` and `ctl_overrides` exist for the tests."""
+    global _fsm_monitor, _mode_ctl
+    if LOCO_GATE == g1_loco_mode.GATE_OFF:
+        return
+    _build_loco_client()
+    _fsm_monitor = g1_loco_mode.FsmMonitor(
+        _loco_client_for_monitor, _loco_rpc_lock, FSM_IDS, clock=clock, poll_hz=FSM_POLL_HZ,
+        odom_mode_fn=_odom_mode, retry_fn=_build_loco_client)
+    kwargs = dict(arm_snapshot_fn=_arm_snapshot, arm_disarm_fn=_arm_disarm,
+                  estop_latched_fn=lambda: _base_estop_latched,
+                  settle_s=LOCO_STAND_SETTLE_S, confirm_s=LOCO_CONFIRM_S,
+                  rpc_timeout_s=LOCO_RPC_TIMEOUT_S)
+    kwargs.update(ctl_overrides)
+    _mode_ctl = g1_loco_mode.ModeController(
+        _loco_client_for_monitor, _loco_rpc_lock, _fsm_monitor, FSM_IDS, **kwargs)
+    if start_thread:
+        _fsm_monitor.start()
+
+
+def loco_capability() -> dict:
+    """The `loco` block of /health and /loco/mode."""
+    on = LOCO_GATE != g1_loco_mode.GATE_OFF
+    return {
+        "gate": LOCO_GATE,
+        "modes": list(g1_loco_mode.MODES) if on else [],
+        "ids": FSM_IDS.as_dict(),
+        "ids_verified": g1_loco_mode.FSM_STAND_VERIFIED,
+        "move_enabled": LOCO_GATE == g1_loco_mode.GATE_FULL,
+    }
+
+
+def fsm_state() -> dict:
+    """The `base` block: the MEASURED mode, or "unknown" with the reason."""
+    if _fsm_monitor is None:
+        return {"fsm_id": None, "mode": "unknown", "age_s": None, "fsm_mode": None,
+                "odom_mode": None, "source": "rpc",
+                "error": "mode control disabled (G1_LOCO_ENABLED)"
+                if LOCO_GATE == g1_loco_mode.GATE_OFF else "FSM monitor not running"}
+    return _fsm_monitor.state()
+
+
+def loco_mode_get() -> "tuple[int, dict]":
+    return 200, {"ok": True, **fsm_state(), "loco": loco_capability(),
+                 "in_flight": None if _mode_ctl is None else _mode_ctl.in_flight,
+                 "estop_latched": _base_estop_latched}
+
+
+def loco_mode_post(body: dict) -> "tuple[int, dict]":
+    """POST /loco/mode — see g1_loco_mode.ModeController for the table."""
+    if LOCO_GATE == g1_loco_mode.GATE_OFF or _mode_ctl is None:
+        return 403, {"ok": False, "code": "mode_control_disabled",
+                     "error": "mode control is off on this sidecar — restart it with "
+                              "G1_LOCO_ENABLED=fsm (docs/g1-edu-lab-bringup.md)"}
+    mode = body.get("mode") if isinstance(body, dict) else None
+    status, reply = _mode_ctl.request(mode)
+    reply.setdefault("base", fsm_state())
+    return status, reply
 
 
 def _rpc_failed(what: str, code: int) -> dict:
@@ -2281,8 +2548,9 @@ def loco_move(body: dict) -> tuple[int, dict]:
     silently defaulted duration would mean a silently different distance
     travelled.
     """
-    if not LOCO_ENABLED:
-        return 403, _loco_gate_error()
+    refusal = _loco_move_refusal("/loco/move")
+    if refusal is not None:
+        return refusal
 
     values = {}
     for key in ("vx", "vy", "omega", "duration_s"):
@@ -2349,8 +2617,9 @@ def loco_action(body: dict) -> tuple[int, dict]:
     args: wave → {"turn": bool} (turn the torso toward the greeted person),
     shake → {"stage": -1 toggle | 0 reach | 1 return}, stop → none.
     """
-    if not LOCO_ENABLED:
-        return 403, _loco_gate_error()
+    refusal = _loco_move_refusal("/loco/action")
+    if refusal is not None:
+        return refusal
 
     name = body.get("name")
     if not isinstance(name, str) or not name.strip():
@@ -2399,8 +2668,9 @@ def loco_fsm(body: dict) -> tuple[int, dict]:
     make the sidecar the bottleneck on a firmware update. The id is echoed back
     with its name (or null) so the caller sees what it actually sent.
     """
-    if not LOCO_ENABLED:
-        return 403, _loco_gate_error()
+    refusal = _loco_move_refusal("/loco/fsm")
+    if refusal is not None:
+        return refusal
 
     fsm_id = body.get("id")
     if isinstance(fsm_id, bool) or not isinstance(fsm_id, int):
@@ -2432,8 +2702,9 @@ def loco_stand_height(body: dict) -> tuple[int, dict]:
     and 0 as sentinels. Agent Mode's `posture: high|low` blocks route here;
     without this endpoint they had no way to work at all.
     """
-    if not LOCO_ENABLED:
-        return 403, _loco_gate_error()
+    refusal = _loco_move_refusal("/loco/stand-height")
+    if refusal is not None:
+        return refusal
 
     preset = body.get("preset")
     metres = body.get("metres")
@@ -2647,6 +2918,15 @@ def loco_odom() -> tuple[int, dict]:
     }
 
 
+def _with_base(state: dict) -> dict:
+    """/state carries the `base` group whenever the mode gate is on — with
+    fsm_id null when stale. A deliberate exception to "omit stale groups":
+    "unknown" is the answer the operator must see (TASK-398)."""
+    if LOCO_GATE != g1_loco_mode.GATE_OFF:
+        state["base"] = fsm_state()
+    return state
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, payload: dict) -> None:
         data = json.dumps(payload).encode()
@@ -2744,11 +3024,16 @@ class Handler(BaseHTTPRequestHandler):
             body = {"status": "ok", "connected": live or replay, "read_only": READ_ONLY,
                     "boot_id": BOOT_ID}
             body.update(write_status())
+            # TASK-398: what this sidecar may do to the base, and the measured mode.
+            body["loco"] = loco_capability()
+            body["base"] = fsm_state()
             self._send(200, body)
         elif self.path == "/state":
-            self._send(200, get_state())
+            self._send(200, _with_base(get_state()))
         elif self.path == "/state/fast":
-            self._send(200, get_state(keep_alive=True))
+            self._send(200, _with_base(get_state(keep_alive=True)))
+        elif self.path == "/loco/mode":
+            self._send(*loco_mode_get())
         elif self.path == "/cameras":
             # What the ACTIVE SOURCE can serve, not a fixed list (TASK-233):
             # with a lone D435 attached that is one name, and the two wrist
@@ -2824,6 +3109,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(*loco_fsm(body))
         elif self.path == "/loco/stand-height":
             self._send(*loco_stand_height(body))
+        elif self.path == "/loco/mode":
+            self._send(*loco_mode_post(body))
         else:
             self._send(404, {"error": "not found"})
 
@@ -2861,7 +3148,7 @@ def main() -> None:
     import signal
     import sys
 
-    problem = _write_mode_error()
+    problem = _write_mode_error() or _loco_config_error()
     if problem:
         print(f"[G1 Sidecar] REFUSING TO START: {problem}", flush=True)
         sys.exit(2)
@@ -2884,16 +3171,41 @@ def main() -> None:
             f"{ARM_SDK_MAX_HAND_VEL} rad/s, {CONTROL_HZ:.0f} Hz. Legs are never commanded.",
             flush=True,
         )
+        if _arm_requires_fsm():
+            print("[G1 Sidecar] /arm needs a MEASURED balance mode (FSM %s, fresh <= %.1fs)"
+                  % (list(FSM_IDS.balance_reported), g1_loco_mode.FSM_FRESH_S), flush=True)
+        elif (os.environ.get("G1_ARM_ALLOW_UNKNOWN_FSM") or "").strip() == "1":
+            print("[G1 Sidecar] ⚠️⚠️  G1_ARM_ALLOW_UNKNOWN_FSM=1 — /arm does NOT check the "
+                  "robot mode. Only for a session where a person with the Unitree remote has "
+                  "put the robot in balance (R1+X). In damp the robot ignores arm_sdk and the "
+                  "arm JUMPS when balance engages.", flush=True)
         try:
             start_arm_sdk()
         except Exception as e:  # noqa: BLE001
             print(f"[G1 Sidecar] REFUSING TO START: arm_sdk DDS setup failed ({e!r})", flush=True)
             sys.exit(3)
-    if LOCO_ENABLED:
+    # TASK-398: after start_arm_sdk (same DDS factory), on the main thread.
+    start_loco()
+    if LOCO_GATE == g1_loco_mode.GATE_FSM:
+        ids = FSM_IDS
+        print(
+            f"[G1 Sidecar] ⚠️  MODE CONTROL (G1_LOCO_ENABLED=fsm) on DDS domain "
+            f"{_dds_domain_env()} (0 = REAL ROBOT), iface '{_dds_iface_env() or 'default'}'. "
+            f"POST /loco/mode limp={ids.limp} stand={ids.stand}"
+            f"{'' if g1_loco_mode.FSM_STAND_VERIFIED else ' (UNVERIFIED on this G1)'} "
+            f"balance={ids.balance} (counts as balance: {list(ids.balance_reported)}). "
+            "Walking/turning (/loco/move, /loco/action, /loco/stand-height, /loco/fsm) "
+            "answer 403. /estop damps.",
+            flush=True,
+        )
+        if _loco_client is None:
+            print(f"[G1 Sidecar] LocoClient not ready yet ({_loco_client_error}) — "
+                  "retrying every 2 s; the mode reads 'unknown' until then", flush=True)
+    elif LOCO_ENABLED:
         print(
             "[G1 Sidecar] ⚠️  LOCOMOTION ENABLED (G1_LOCO_ENABLED=1) — /loco/* will move "
             f"the robot via the sport service on DDS domain "
-            f"{_dds_domain_env() or '0'} (0 = real robot, 1 = sim). "
+            f"{_dds_domain_env()} (0 = real robot, 1 = sim). "
             "Agent Mode has manual E-Stop only: no arming gate, no watchdog, no speed cap.",
             flush=True,
         )
@@ -2903,7 +3215,8 @@ def main() -> None:
             flush=True,
         )
     host = _bind_host()
-    if not READ_ONLY and host not in ("127.0.0.1", "localhost", "::1"):
+    if (not READ_ONLY or LOCO_GATE != g1_loco_mode.GATE_OFF) \
+            and host not in ("127.0.0.1", "localhost", "::1"):
         print(f"[G1 Sidecar] ⚠️  arm_sdk routes listen on {host} (G1_SIDECAR_HOST) — "
               "/arm and /action are unauthenticated and reachable from that network", flush=True)
     server = ThreadingHTTPServer((host, PORT), Handler)

@@ -83,6 +83,21 @@ BODY_STALE_S = 0.5        # rt/lowstate older than this while armed -> disarm
 ZERO_WEIGHT_FRAMES = 5    # explicit weight-0 frames before going quiet
 MAX_TICK_DT_S = 0.1       # a stalled loop must not turn into one big jump
 
+# Mode guard (TASK-398). arm_sdk is only honoured while Unitree's balance
+# controller runs ("regular" mode, FSM 500 — the remote's R1+X). In damp the
+# robot IGNORES rt/arm_sdk, so a command streamed there drifts away from the
+# measured pose (0.7 rad, observed 2026-10-17) and lands as a jump the moment
+# the robot enters balance. So: arm only in measured balance, and let go the
+# moment the robot leaves it or the reading goes stale.
+FSM_FRESH_S = 1.5         # an FSM reading older than this is "unknown"
+FSM_STALE_DISARM_S = 2.0  # while armed, a reading this old disarms
+BALANCE_IDS = (500,)
+# Drift guard: at full weight the measured arm must follow the command. A
+# sustained gap means the robot is not executing arm_sdk (wrong mode, a joint
+# blocked, a fault) and the command must not keep running away from the pose.
+TRACK_ERR_RAD = 0.35
+TRACK_ERR_HOLD_S = 0.3
+
 TELEOP_MODES = ("arms+hands", "arms+left_hand", "arms+right_hand", "arms_only")
 
 
@@ -167,7 +182,14 @@ class ArmSdkController:
                  max_arm_vel=3.0, max_hand_vel=6.0, limit_margin=0.05,
                  arm_ramp_s=ARM_RAMP_S, disarm_ramp_s=DISARM_RAMP_S,
                  deadman_hold_s=DEADMAN_HOLD_S, deadman_disarm_s=DEADMAN_DISARM_S,
-                 hand_fresh_s=HAND_FRESH_S, body_stale_s=BODY_STALE_S, log=None):
+                 hand_fresh_s=HAND_FRESH_S, body_stale_s=BODY_STALE_S, log=None,
+                 fsm_source=None, require_fsm=False, balance_ids=BALANCE_IDS,
+                 fsm_fresh_s=FSM_FRESH_S, fsm_stale_disarm_s=FSM_STALE_DISARM_S,
+                 track_err_rad=TRACK_ERR_RAD, track_err_hold_s=TRACK_ERR_HOLD_S):
+        """`fsm_source()` returns (fsm_id | None, age_s | None) — the MEASURED
+        locomotion FSM (TASK-398). None = no measurement in this process: then
+        /arm is refused when `require_fsm` is set (the real robot), and allowed
+        as before otherwise (the sim checks)."""
         if len(body_joints) != NUM_BODY:
             raise ValueError("body_joints must list the 29 G1 body joints in DDS order")
         self._state = state
@@ -181,6 +203,13 @@ class ArmSdkController:
         self.deadman_disarm_s = float(deadman_disarm_s)
         self.hand_fresh_s = float(hand_fresh_s)
         self.body_stale_s = float(body_stale_s)
+        self._fsm_source = fsm_source
+        self.require_fsm = bool(require_fsm)
+        self.balance_ids = tuple(int(i) for i in balance_ids)
+        self.fsm_fresh_s = float(fsm_fresh_s)
+        self.fsm_stale_disarm_s = float(fsm_stale_disarm_s)
+        self.track_err_rad = float(track_err_rad)
+        self.track_err_hold_s = float(track_err_hold_s)
 
         # name -> ("arm", body idx) | ("hand", side, wire idx) | ("body_locked", idx)
         self._slot = {}
@@ -218,8 +247,46 @@ class ArmSdkController:
         self._zero_frames_left = 0
         self._ever_published = False
         self._ignored = {"legs_waist": 0, "inactive_hand": 0, "unknown": 0}
+        self._track_err = None          # max |cmd - measured| over the arms, rad
+        self._track_err_joint = None    # the joint that holds it
+        self._track_err_since = None    # when it first exceeded the limit
+        self._frames = 0                # frames tick() has returned
+        self._frame_cv = threading.Condition(self._lock)
 
     # ------------------------------------------------------------- commands
+
+    def _fsm_reading(self):
+        """(fsm_id, age_s) from the source, or (None, None). Never raises."""
+        if self._fsm_source is None:
+            return None, None
+        try:
+            fsm_id, age = self._fsm_source()
+        except Exception:  # noqa: BLE001 — an unreadable mode is an unknown one
+            return None, None
+        return fsm_id, age
+
+    def _fsm_refusal_locked(self):
+        """None when the measured mode allows arming, else (status, body)."""
+        if self._fsm_source is None:
+            if not self.require_fsm:
+                return None
+            return 409, self._reply(
+                False, error="fsm_unknown",
+                detail="this sidecar does not measure the robot mode: set "
+                       "G1_LOCO_ENABLED=fsm, or G1_ARM_ALLOW_UNKNOWN_FSM=1 if a person "
+                       "with the remote has put the robot in balance")
+        fsm_id, age = self._fsm_reading()
+        if fsm_id is None or age is None or age > self.fsm_fresh_s:
+            return 409, self._reply(
+                False, error="fsm_unknown",
+                detail="no fresh FSM reading (age %s s) — the robot mode is unknown"
+                       % (None if age is None else round(age, 2)))
+        if fsm_id not in self.balance_ids:
+            return 409, self._reply(
+                False, error="not_in_balance", fsm_id=fsm_id,
+                detail="the robot is in FSM %d, not balance %s — arm_sdk is ignored "
+                       "there; switch to Balance first" % (fsm_id, list(self.balance_ids)))
+        return None
 
     def arm(self, lease_generation=None):
         """POST /arm. Returns (http_status, body)."""
@@ -227,6 +294,9 @@ class ArmSdkController:
             if self._estop_latched:
                 return 409, self._reply(False, error="estop_latched",
                                         detail="e-stop is latched — POST /estop/reset first")
+            refusal = self._fsm_refusal_locked()
+            if refusal is not None:
+                return refusal
             if self._engaged:
                 if lease_generation != self._lease_generation:
                     self._log("re-arm under lease generation %r (was %r)"
@@ -266,6 +336,7 @@ class ArmSdkController:
             self._last_action_at = self._clock()
             self._lease_generation = lease_generation
             self._last_disarm_reason = None
+            self._track_err_since = None
             mode = teleop_mode(self._hands_active["left"], self._hands_active["right"])
             missing = [s for s in ("left", "right") if not self._hands_active[s]]
             note = ""
@@ -387,9 +458,20 @@ class ArmSdkController:
                     self._holding = True
                     self._freeze_locked()
                     self._log("dead-man: no /action for %.2fs — holding" % idle)
-            if self._engaged and _finite_list(self._state.body_q(self.body_stale_s),
-                                              NUM_BODY) is None:
+            measured = _finite_list(self._state.body_q(self.body_stale_s), NUM_BODY) \
+                if self._engaged else None
+            if self._engaged and measured is None:
                 self._begin_disarm_locked("stale_state")
+            if self._engaged and self._fsm_source is not None:
+                fsm_id, age = self._fsm_reading()
+                if age is None or age > self.fsm_stale_disarm_s:
+                    self._log("FSM reading stale (%s s) while armed" %
+                              (None if age is None else round(age, 2)))
+                    self._begin_disarm_locked("fsm_stale")
+                elif age <= self.fsm_fresh_s and fsm_id not in self.balance_ids:
+                    self._log("robot left balance (FSM %s) while armed" % fsm_id)
+                    self._begin_disarm_locked("left_balance")
+            self._track_locked(now, measured)
             for side in ("left", "right"):
                 if self._hands_active[side] and _finite_list(
                         self._state.hand_q(side, self.hand_fresh_s), NUM_HAND) is None:
@@ -431,7 +513,23 @@ class ArmSdkController:
                     self._hand_req = {}
                     self._log("disarmed (%s): weight 0, publisher quiet — the robot is "
                               "under Unitree's control" % self._last_disarm_reason)
+            self._frames += 1
+            self._frame_cv.notify_all()
             return ArmFrame(list(self._cmd), self._weight, self._mode_machine, hands)
+
+    def wait_frames(self, n=1, timeout_s=0.1):
+        """Block until tick() has returned `n` more frames, or `timeout_s`.
+        Returns at once when nothing is being published. Used by the E-stop to
+        let the first falling-weight frame out before it damps (TASK-398)."""
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        with self._lock:
+            target = self._frames + int(n)
+            while self._publishing and self._frames < target:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return False
+                self._frame_cv.wait(left)
+            return True
 
     def force_off(self, reason):
         """The publish path failed: drop to weight 0 at once and go quiet.
@@ -519,7 +617,15 @@ class ArmSdkController:
             "deadman": deadman,
             "last_disarm_reason": self._last_disarm_reason,
             "ignored_joints": dict(self._ignored),
+            "track_err_rad": None if self._track_err is None else round(self._track_err, 3),
+            "track_err_joint": (None if self._track_err_joint is None
+                                else self._body_names[self._track_err_joint]),
+            "fsm": self._fsm_snapshot(),
         }
+
+    def _fsm_snapshot(self):
+        fsm_id, age = self._fsm_reading()
+        return {"id": fsm_id, "age_s": None if age is None else round(age, 3)}
 
     def _reply(self, ok, **extra):
         # Safe under our lock: the state source has its own and never takes ours.
@@ -527,6 +633,33 @@ class ArmSdkController:
         out.update(self._snapshot_locked(self.hands_present()))
         out.update(extra)
         return out
+
+    def _track_locked(self, now, measured):
+        """Drift guard: at full weight, |command - measured| over the arms must
+        not stay above `track_err_rad` for `track_err_hold_s`."""
+        if not self._engaged or measured is None or self._weight < 0.999:
+            self._track_err = None
+            self._track_err_joint = None
+            self._track_err_since = None
+            return
+        err, joint = 0.0, None
+        for i in ARM_IDX:
+            e = abs(self._cmd[i] - measured[i])
+            if e > err:
+                err, joint = e, i
+        self._track_err = err
+        self._track_err_joint = joint
+        if err <= self.track_err_rad:
+            self._track_err_since = None
+            return
+        if self._track_err_since is None:
+            self._track_err_since = now
+            return
+        if now - self._track_err_since >= self.track_err_hold_s:
+            self._log("tracking error %.3f rad on %s (motor %d) for >= %.2fs"
+                      % (err, self._body_names[joint], joint, self.track_err_hold_s))
+            self._begin_disarm_locked("tracking_error")
+            self._track_err_since = None
 
     def _freeze_locked(self):
         """Stop chasing old targets: hold whatever is commanded right now."""

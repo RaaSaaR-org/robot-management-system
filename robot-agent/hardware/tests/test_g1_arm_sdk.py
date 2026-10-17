@@ -485,3 +485,166 @@ def test_frame_layout_constants_match_the_sidecar_and_bridge():
                for n in (g1_sidecar.BODY_JOINTS[i] for i in arm_sdk.LEG_IDX))
     assert arm_sdk.WEIGHT_IDX == 29
     assert all(math.isfinite(k) for k in arm_sdk.FRAME_KP)
+
+
+# ------------------------------------------------------- TASK-398: mode guards
+
+class FsmSource:
+    """The sidecar's FSM monitor as the controller sees it: (id, age_s)."""
+
+    def __init__(self, clock, fsm_id=500):
+        self.clock = clock
+        self.fsm_id = fsm_id
+        self.at = clock()
+
+    def set(self, fsm_id):
+        self.fsm_id = fsm_id
+        self.at = self.clock()
+
+    def __call__(self):
+        if self.at is None:
+            return None, None
+        return self.fsm_id, self.clock() - self.at
+
+
+def make_guarded(fsm_id=500, **kw):
+    clock = FakeClock()
+    src = FsmSource(clock, fsm_id)
+    ctrl, clock, state, logs = make(clock=clock, fsm_source=src, require_fsm=True, **kw)
+    return ctrl, clock, state, logs, src
+
+
+def run_fresh(ctrl, clock, src, seconds, action=None):
+    """run(), with the FSM monitor refreshing its reading every 0.5 s."""
+    frames = []
+    steps = int(round(seconds / DT))
+    for k in range(steps):
+        if k % 25 == 0:
+            src.set(src.fsm_id)
+        frames += run(ctrl, clock, DT, action)
+    return frames
+
+
+def test_arm_needs_measured_balance():
+    ctrl, _, _, _, src = make_guarded(fsm_id=1)
+    status, body = ctrl.arm()
+    assert status == 409 and body["error"] == "not_in_balance" and body["fsm_id"] == 1
+    src.set(4)
+    assert ctrl.arm()[1]["error"] == "not_in_balance"
+    src.set(500)
+    assert ctrl.arm()[0] == 200
+
+
+def test_arm_refuses_a_stale_fsm_reading():
+    ctrl, clock, _, _, src = make_guarded()
+    clock.advance(1.6)
+    status, body = ctrl.arm()
+    assert status == 409 and body["error"] == "fsm_unknown"
+    src.at = None
+    assert ctrl.arm()[1]["error"] == "fsm_unknown"
+
+
+def test_arm_without_a_source_but_required_is_fsm_unknown():
+    ctrl, _, _, _ = make(require_fsm=True)
+    status, body = ctrl.arm()
+    assert status == 409 and body["error"] == "fsm_unknown"
+    assert "G1_LOCO_ENABLED=fsm" in body["detail"] and "G1_ARM_ALLOW_UNKNOWN_FSM" in body["detail"]
+
+
+def test_arm_without_a_source_and_not_required_arms_as_before():
+    ctrl, _, _, _ = make()
+    assert ctrl.arm()[0] == 200
+    assert ctrl.snapshot()["fsm"] == {"id": None, "age_s": None}
+
+
+def test_801_counts_as_balance_only_when_configured():
+    ctrl, _, _, _, _ = make_guarded(fsm_id=801)
+    assert ctrl.arm()[1]["error"] == "not_in_balance"
+    ctrl, _, _, _, _ = make_guarded(fsm_id=801, balance_ids=(500, 801))
+    assert ctrl.arm()[0] == 200
+
+
+def test_leaving_balance_disarms():
+    ctrl, clock, _, logs, src = make_guarded()
+    hold = {LEFT_ELBOW: FakeState().body[LEFT_ELBOW_IDX]}
+    assert ctrl.arm()[0] == 200
+    run_fresh(ctrl, clock, src, 2.0, hold)
+    assert ctrl.snapshot()["armed"] is True
+    src.set(1)                       # someone damped the robot
+    run(ctrl, clock, DT, hold)
+    snap = ctrl.snapshot()
+    assert snap["armed"] is False and snap["last_disarm_reason"] == "left_balance"
+    # ...and /arm stays refused while it is out of balance: no re-arm loop.
+    assert ctrl.arm()[1]["error"] == "not_in_balance"
+
+
+def test_a_stale_fsm_reading_disarms_after_two_seconds():
+    ctrl, clock, _, _, src = make_guarded()
+    hold = {LEFT_ELBOW: FakeState().body[LEFT_ELBOW_IDX]}
+    assert ctrl.arm()[0] == 200
+    run(ctrl, clock, 1.9, hold)
+    assert ctrl.snapshot()["armed"] is True     # 1.9 s old: not yet
+    run(ctrl, clock, 0.2, hold)
+    snap = ctrl.snapshot()
+    assert snap["armed"] is False and snap["last_disarm_reason"] == "fsm_stale"
+
+
+def test_tracking_error_fires_only_after_the_hold_time():
+    ctrl, clock, state, logs, src = make_guarded()
+    hold = {LEFT_ELBOW: state.body[LEFT_ELBOW_IDX]}
+    assert ctrl.arm()[0] == 200
+    run_fresh(ctrl, clock, src, 1.7, hold)      # through the 1.5 s ramp
+    assert ctrl.snapshot()["arm_state"] == "armed"
+    state.body[LEFT_ELBOW_IDX] += 0.5           # the arm is not where we command it
+    run_fresh(ctrl, clock, src, 0.2, hold)
+    snap = ctrl.snapshot()
+    assert snap["armed"] is True
+    assert snap["track_err_rad"] == pytest.approx(0.5, abs=1e-3)
+    assert snap["track_err_joint"] == LEFT_ELBOW
+    run_fresh(ctrl, clock, src, 0.2, hold)
+    snap = ctrl.snapshot()
+    assert snap["armed"] is False and snap["last_disarm_reason"] == "tracking_error"
+    assert any("tracking error" in m and LEFT_ELBOW in m for m in logs)
+
+
+def test_tracking_error_resets_when_the_gap_closes():
+    ctrl, clock, state, _, src = make_guarded()
+    hold = {LEFT_ELBOW: state.body[LEFT_ELBOW_IDX]}
+    assert ctrl.arm()[0] == 200
+    run_fresh(ctrl, clock, src, 1.7, hold)
+    for _ in range(3):
+        state.body[LEFT_ELBOW_IDX] += 0.5
+        run_fresh(ctrl, clock, src, 0.2, hold)
+        state.body[LEFT_ELBOW_IDX] -= 0.5
+        run_fresh(ctrl, clock, src, 0.1, hold)
+    snap = ctrl.snapshot()
+    assert snap["armed"] is True and snap["track_err_rad"] < 0.01
+
+
+def test_tracking_error_is_ignored_during_the_arm_ramp():
+    ctrl, clock, state, _, src = make_guarded()
+    hold = {LEFT_ELBOW: state.body[LEFT_ELBOW_IDX]}
+    assert ctrl.arm()[0] == 200
+    state.body[LEFT_ELBOW_IDX] += 0.8           # e.g. the weight is still blending
+    run_fresh(ctrl, clock, src, 1.0, hold)
+    snap = ctrl.snapshot()
+    assert snap["armed"] is True and snap["track_err_rad"] is None
+
+
+def test_snapshot_carries_the_task_398_fields():
+    ctrl, clock, _, _, src = make_guarded()
+    clock.advance(0.25)
+    snap = ctrl.snapshot()
+    assert snap["fsm"] == {"id": 500, "age_s": 0.25}
+    assert snap["track_err_rad"] is None and snap["track_err_joint"] is None
+
+
+def test_wait_frames_returns_after_the_next_tick():
+    ctrl, clock, _, _ = make()
+    assert ctrl.wait_frames(1, timeout_s=0.01) is True    # nothing publishing
+    assert ctrl.arm()[0] == 200
+    assert ctrl.wait_frames(1, timeout_s=0.02) is False   # no publish thread
+    t = threading.Thread(target=lambda: (time.sleep(0.02), ctrl.tick()))
+    t.start()
+    assert ctrl.wait_frames(1, timeout_s=1.0) is True
+    t.join()
