@@ -94,6 +94,14 @@ describe('RobotReadinessPanel — one reason, the row that explains it', () => {
     expect(screen.queryByTestId('readiness-stop')).toBeNull();
   });
 
+  it('the compact variant offers Start while the robot side is stopped, and nothing else', async () => {
+    serve(readinessFor(ROBOT, 'bringup_stopped'));
+    render(<RobotReadinessPanel robotId={ROBOT} variant="compact" />);
+    expect(await screen.findByTestId('readiness-start')).toBeEnabled();
+    expect(screen.queryByTestId('readiness-logs')).toBeNull();
+    expect(screen.queryByTestId('readiness-arm-control')).toBeNull();
+  });
+
   it('the line variant is the reason only', async () => {
     serve(readinessFor(ROBOT, 'mode_not_balance'));
     render(<RobotReadinessPanel robotId={ROBOT} variant="line" />);

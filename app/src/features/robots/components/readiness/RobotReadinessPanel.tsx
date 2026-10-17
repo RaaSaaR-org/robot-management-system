@@ -53,6 +53,11 @@ function upright(mode: string | null | undefined): boolean {
   return mode === 'stand' || mode === 'balance';
 }
 
+/** The supervisor reports its profile as a path; the file's name is the profile. */
+export function profileName(profile: string): string {
+  return (profile.split('/').pop() ?? profile).replace(/\.ya?ml$/, '');
+}
+
 export function measuredMode(r: RobotReadiness | null): string | null {
   return r?.agent.readiness?.base?.mode ?? r?.bringup?.lastBase?.mode ?? null;
 }
@@ -167,7 +172,7 @@ function ReadinessBody({
   const offerLimp = upright(mode);
   const linkStep = bringup?.steps.find((s) => s.id === 'link') ?? null;
   const lanDown = linkStep?.state === 'failed' && linkStep.code === 'no_host_ip';
-  const procs: BringupProc[] = bringup?.robot === 'sim' ? ['sim', 'sidecar', 'agent'] : ['bridge', 'sidecar', 'agent'];
+  const procs: BringupProc[] = bringup?.robot === 'sim' ? ['sim', 'bridge', 'sidecar', 'agent'] : ['bridge', 'sidecar', 'agent'];
 
   const doStop = async () => {
     setConfirm(null);
@@ -207,7 +212,8 @@ function ReadinessBody({
 
   const errorLine = limpError ?? (lastError ? `${lastError.error}${lastError.code ? ` (${lastError.code})` : ''}` : null);
 
-  const buttons = bringup && (
+  // The compact variant offers Start only; an empty row would leave a gap.
+  const buttons = bringup && (!compact || canStart) && (
     <div className="flex flex-wrap items-center gap-2">
       {canStart && (
         <Button
@@ -337,7 +343,7 @@ function ReadinessBody({
             title="Robot readiness"
             description={
               bringup
-                ? `Robot side: ${bringup.overall}${bringup.sidecarMode ? ` · sidecar ${bringup.sidecarMode.replace('_', '-')}` : ''} · ${bringup.profile}`
+                ? `Robot side: ${bringup.overall}${bringup.sidecarMode ? ` · sidecar ${bringup.sidecarMode.replace('_', '-')}` : ''} · ${profileName(bringup.profile)}`
                 : 'Why the arms are or are not following.'
             }
           />

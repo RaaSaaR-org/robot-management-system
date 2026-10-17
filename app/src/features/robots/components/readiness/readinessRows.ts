@@ -339,7 +339,7 @@ function handRow(a: AgentReadiness | null, side: 'left' | 'right'): ReadinessRow
   return {
     id, label,
     status: hand.present ? 'ok' : 'unknown',
-    value: `${hand.present ? 'present' : 'unknown'} · ${seconds(hand.ageS)}${hand.powerV !== null ? ` · ${hand.powerV.toFixed(1)} V` : ''}`,
+    value: `${hand.present ? 'present' : 'unknown'} · ${seconds(hand.ageS)}${hand.powerV !== null && hand.powerV > 0 ? ` · ${hand.powerV.toFixed(1)} V` : ''}`,
     detail: null, bringup: false, step: null,
   };
 }

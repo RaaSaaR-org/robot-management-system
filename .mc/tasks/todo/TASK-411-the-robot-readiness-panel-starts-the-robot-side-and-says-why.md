@@ -129,3 +129,21 @@ Data and actions come from TASK-409. The VR panels show the same reason (TASK-41
 - Never run `xr_teleoperate` and the arm_sdk sidecar together.
 - The E-stop stays reachable: B/Y and the two-hand pinch in VR, and a visible E-STOP on the desktop session page.
 - Development and tests use the sim stack only: the sim agent :41246 and sim sidecar :8777, or branch builds on free ports. Never the real g1-edu-4 (:41245/:8767). Do not stop or restart the running dev stack.
+
+## Implementation notes (2026-10-17)
+
+Decisions made while building, and where the merged code differed from this spec:
+
+- **I1 The lease comes from the keyboard section.** On the Teleop tab the control lease lives in `KeyboardTeleopSection`; it now hands `{enabled, state, grant()}` up through `onLeaseChange`, and the panel reads `grant()` at click time only. The server (TASK-409) refuses `arm_sdk` without `leaseId` + `generation`, so the sidecar-mode POST carries them. With leases off on the server the button says so ("Arm control needs a control lease, and control leases are off on this server") instead of "Take control first".
+- **I2 The compact variant also offers Start** while the robot side is stopped (read-only, no confirm). Its other buttons — arm control, Stop, logs — stay on the full panel.
+- **I3 A "Back to read-only" button** (confirmed, no lease) appears while the sidecar runs `arm_sdk`; the route accepts it and without it the only way back is Stop.
+- **I4 Reason → row.** `bringup_stopped` highlights the LAN/simulator row (the first step), `bringup_busy` the running step, `agent_*` / `supervisor_unreachable` the agent row, `hand_*` the hand with the fault (right first), the agent's codes their row; `following` highlights none. A preflight row appears only when preflight is not ok/idle.
+- **I5 "Limp first" waits for `base.mode === 'limp'`** on `GET /base-mode` (500 ms poll, 15 s budget); on timeout it says so and does not stop. Its dialog is the stop dialog, so nothing limps without a second explicit click.
+- **I6 Logs** read `GET …/logs/:proc?tail=200`, then follow `…/stream` with `fetch` (the route needs the bearer token, which `EventSource` cannot send). The supervisor's stream replays its last 50 lines first; lines already in the tail are skipped. A sim profile adds a `simulator` tab.
+- **I7 Socket.** `robot:readiness` arrives as `{type, data: RobotReadiness}` (field `data`, per TASK-409) and lands in `store/readinessStore.ts`; the same store records whether the robot socket is open, which switches the hook between the 2 s fallback poll and the 20 s watch refresh.
+- **Deviation: the RobotReadiness shape** has a `supervisor: {reachable, error} | null` field the spec did not list; the agent readiness has `sidecar.readOnly`, `arms.arming`, `arms.claims`, `lease.holder: {userId, displayName}`. Types in `api/readinessApi.ts` follow the merged code.
+- **Deviation: the stop answer** is `{status, baseMode}`; the panel decides "Limp first" from the measured mode in the readiness snapshot (agent `base.mode`, else the supervisor's `lastBase`), not from the stop answer, because the offer has to be made before stopping.
+
+### Live check (sim only)
+
+Branch server :3111 on a copy of the dev DB (every robot URL repointed to `127.0.0.1:1`, a fresh `sim-g1-edu-dev` row on :41311), branch supervisor :8911 on a copy of `sim-g1-edu-dev.yaml` (DDS domain 61 / `lo`, sidecar :8811, agent :41311), branch app :1441. Start walked preflight → simulator → bridge → sidecar → agent to ok in about 7 s and the line became "The sidecar is read-only. Switch the robot side to arm control."; Stop returned every row to stopped and the line to "Robot side is stopped. Press Start." No page errors.
