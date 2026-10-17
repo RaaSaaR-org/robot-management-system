@@ -18,6 +18,9 @@
  * | `POST /:id/bringup/lan-up`                    | memberOrAbove                  |
  * | `GET  /:id/bringup/logs/:proc?tail=`          | memberOrAbove                  |
  * | `GET  /:id/bringup/logs/:proc/stream`         | memberOrAbove (SSE passthrough)|
+ * | `GET  /:id/quest`                             | memberOrAbove (TASK-412)       |
+ * | `POST /:id/quest/connect {port?}`             | memberOrAbove                  |
+ * | `POST /:id/quest/open {path, port?}`          | memberOrAbove (allowlisted path)|
  *
  * Nothing here moves the robot. `read_only` cannot command a joint; `arm_sdk`
  * is the motion path, so it needs `confirm: true` AND a control lease the
@@ -59,7 +62,9 @@ export type BringupAction =
   | 'bringup_sidecar_mode'
   | 'bringup_adopt'
   | 'bringup_leave'
-  | 'bringup_lan_up';
+  | 'bringup_lan_up'
+  | 'quest_connect'
+  | 'quest_open';
 
 /** One compliance entry per POST. Never carries the lease id. */
 export interface BringupAuditEntry {
@@ -141,13 +146,21 @@ export async function defaultHoldsLease(
 
 /** The write paths, relative to the `/api/robots` mount. */
 const BRINGUP_WRITE_PATH =
-  /^\/([^/]+)\/bringup\/(start|stop|sidecar-mode|lan-up|steps\/([^/]+)\/(adopt|leave))\/?$/;
+  /^\/([^/]+)\/(?:bringup\/(start|stop|sidecar-mode|lan-up|steps\/([^/]+)\/(adopt|leave))|quest\/(connect|open))\/?$/;
 
-function actionOf(sub: string, stepAction: string | undefined): BringupAction {
+/**
+ * The only paths a headset may be sent to (D4) — the same allowlist the
+ * supervisor applies again before anything reaches `adb shell`.
+ */
+export const QUEST_OPEN_PATH = /^\/data-collection\/(live\?robot=[A-Za-z0-9_-]+|[0-9a-f-]{36})$/;
+
+function actionOf(sub: string | undefined, stepAction: string | undefined, quest?: string): BringupAction {
+  if (quest === 'connect') return 'quest_connect';
+  if (quest === 'open') return 'quest_open';
   if (stepAction === 'adopt') return 'bringup_adopt';
   if (stepAction === 'leave') return 'bringup_leave';
   return ({ start: 'bringup_start', stop: 'bringup_stop', 'sidecar-mode': 'bringup_sidecar_mode', 'lan-up': 'bringup_lan_up' } as const)[
-    sub as 'start' | 'stop' | 'sidecar-mode' | 'lan-up'
+    (sub ?? 'start') as 'start' | 'stop' | 'sidecar-mode' | 'lan-up'
   ];
 }
 
@@ -176,7 +189,7 @@ export function bringupDenialAudit(
           robotId: decodeURIComponent(match[1]),
           userId: user?.id ?? 'unknown',
           tenantId: user?.tenantId ?? null,
-          action: actionOf(match[2].split('/')[0], match[4]),
+          action: actionOf(match[2]?.split('/')[0], match[4], match[5]),
           mode: typeof body.mode === 'string' ? body.mode.slice(0, 32) : null,
           step: match[3] ?? null,
           result: 'denied',
@@ -459,7 +472,54 @@ export function createRobotBringupRoutes(options: RobotBringupRoutesOptions = {}
     write('bringup_lan_up', async (_req, sup) => ({ answer: await sup.lanUp() })),
   );
 
+  // -------------------------------------------------------------- the Quest (TASK-412)
+
+  router.get('/:id/quest', memberOrAbove, async (req: Request, res: Response) => {
+    try {
+      const sup = await requireSupervisor(req.params.id);
+      const answer = await sup.quest();
+      sendRelayed(res, answer.status, answer.body);
+    } catch (error) {
+      sendReadError(res, error);
+    }
+  });
+
+  router.post(
+    '/:id/quest/connect',
+    memberOrAbove,
+    write('quest_connect', async (req, sup) => {
+      const port = questPort((req.body ?? {}) as Record<string, unknown>);
+      const answer = await sup.questConnect(port);
+      service().invalidateQuest(req.params.id);
+      return { answer };
+    }),
+  );
+
+  router.post(
+    '/:id/quest/open',
+    memberOrAbove,
+    write('quest_open', async (req, sup) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof body.path !== 'string' || !QUEST_OPEN_PATH.test(body.path)) {
+        throw new Refusal(400, 'bad_path', 'path must be /data-collection/live?robot=<id> or /data-collection/<session uuid>');
+      }
+      const answer = await sup.questOpen(body.path, questPort(body));
+      service().invalidateQuest(req.params.id);
+      return { answer };
+    }),
+  );
+
   return router;
+}
+
+/** The page port the headset reaches through `adb reverse`; absent = the supervisor's 1420. */
+function questPort(body: Record<string, unknown>): number | undefined {
+  if (body.port === undefined || body.port === null) return undefined;
+  const p = body.port;
+  if (typeof p !== 'number' || !Number.isInteger(p) || p < 1024 || p > 65535) {
+    throw new Refusal(400, 'bad_port', 'port must be an integer 1024-65535');
+  }
+  return p;
 }
 
 function procOf(raw: string): SupervisorProc {

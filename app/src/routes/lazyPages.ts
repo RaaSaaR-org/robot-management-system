@@ -171,6 +171,13 @@ export const LazySessionDetailPage = lazy(() =>
 );
 
 /**
+ * Live session redirect - the headset's stable entry, /data-collection/live?robot=<id> (TASK-412)
+ */
+export const LazyLiveSessionRedirect = lazy(() =>
+  import('@/features/datacollection').then((m) => ({ default: m.LiveSessionRedirect }))
+);
+
+/**
  * Datasets page - VLA training dataset management
  */
 export const LazyDatasetsPage = lazy(() =>

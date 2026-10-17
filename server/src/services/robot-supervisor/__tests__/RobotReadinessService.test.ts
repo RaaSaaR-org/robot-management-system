@@ -20,7 +20,9 @@ import {
 } from '../RobotReadinessService.js';
 import { readAgentReadiness, readSupervisorStatus } from '../index.js';
 import { SupervisorClient } from '../SupervisorClient.js';
-import { agentReadiness, deadPort, fakeAgent, fakeSupervisor, step, supStatus, TOKEN, type FakeHttp } from './fakes.js';
+import { agentReadiness, deadPort, fakeAgent, fakeSupervisor, questStatus, step, supStatus, TOKEN, type FakeHttp } from './fakes.js';
+import { readQuestStatus } from '../index.js';
+import type { QuestStatus } from '../SupervisorClient.js';
 
 const ROBOT = 'sim-g1';
 const FOLLOWING = { code: 'following', severity: 'ok' as const, text: 'Following.' };
@@ -129,6 +131,40 @@ describe('readiness merge (fake supervisor + fake agent over HTTP)', () => {
     expect(snap.supervisor?.reachable).toBe(false);
     expect(snap.reason.code).toBe('supervisor_unreachable');
     service.stop();
+  });
+});
+
+describe('the Quest in the snapshot (TASK-412)', () => {
+  it('carries the supervisor\'s /quest and never changes the reason', async () => {
+    const supState = { status: supStatus('ready', 'ok'), quest: questStatus(false) };
+    const sup = await fakeSupervisor(supState);
+    const agent = await fakeAgent({ readiness: agentReadiness(ROBOT, FOLLOWING) });
+    servers.push(sup, agent);
+    const client = new SupervisorClient(sup.url, TOKEN);
+    const service = new RobotReadinessService({
+      supervisedRobots: () => [ROBOT],
+      readSupervisor: () => readSupervisorStatus(client),
+      registeredAgentUrl: async () => agent.url,
+      supervisorAgentUrl: () => null,
+      readAgent: readAgentReadiness,
+      readQuest: () => readQuestStatus(client),
+      register: async () => undefined,
+    });
+    const snap = await service.poll(ROBOT);
+    expect(snap.quest).toEqual(questStatus(false));
+    expect(snap.reason).toEqual({ ...FOLLOWING, source: 'agent' });
+    service.stop();
+  });
+
+  it('is null without a supervisor, with a supervisor that is down, or one without /quest', async () => {
+    const none = await httpRig({ status: supStatus('ready', 'ok'), agent: 'up', supervisor: 'none' });
+    expect((await none.service.poll(ROBOT)).quest).toBeNull();
+    none.service.stop();
+    const sup = await fakeSupervisor({ status: supStatus('ready', 'ok') });
+    servers.push(sup);
+    expect(await readQuestStatus(new SupervisorClient(sup.url, TOKEN))).toBeNull();
+    expect(await readQuestStatus(new SupervisorClient(`http://127.0.0.1:${await deadPort()}`, TOKEN))).toBeNull();
+    expect(await readQuestStatus(undefined)).toBeNull();
   });
 });
 
@@ -243,6 +279,34 @@ describe('emission cadence', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(events).toHaveLength(4);
     service.stop();
+  });
+
+  it('reads the Quest every 2 s while watched, not on every 1 Hz poll, and emits its change', async () => {
+    let quest: QuestStatus = questStatus(false);
+    let questReads = 0;
+    const { service, events } = rig({
+      readQuest: async () => {
+        questReads++;
+        return quest;
+      },
+    });
+    await service.getReadiness(ROBOT);
+    expect(questReads).toBe(1);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(reads).toBe(5);
+    expect(questReads).toBe(3); // t = 0, 2, 4
+    expect(events).toHaveLength(1);
+
+    quest = questStatus(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(events.at(-1)?.quest?.reversed).toEqual([{ remote: 'tcp:1420', local: 'tcp:1420' }]);
+    expect(events.at(-1)?.reason.code).toBe('following');
+
+    // Not watched any more: no reads at all.
+    service.stop();
+    const before = questReads;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(questReads).toBe(before);
   });
 
   it('keeps the heartbeat within 5 s when an emission falls off the tick phase', async () => {

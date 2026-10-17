@@ -12,11 +12,14 @@
  *              D2: only watched robots are polled (a readiness request or a
  *              bringup action in the last 30 s, or an active teleop session),
  *              at 1 Hz, with an emission on change and at least every 5 s.
+ *              The Quest on the robot PC's USB (TASK-412) rides along as
+ *              `quest`, read every 2 s while watched; it is display-only and
+ *              never changes `reason`.
  * @feature robots
  */
 
 import { EventEmitter } from 'node:events';
-import type { SupervisorStatus, SupervisorStepStatus } from './SupervisorClient.js';
+import type { QuestStatus, SupervisorStatus, SupervisorStepStatus } from './SupervisorClient.js';
 
 // ============================================================================
 // TYPES
@@ -60,6 +63,11 @@ export interface RobotReadiness {
   bringup: SupervisorStatus | null;
   /** Null when the robot has no supervisor configured. */
   supervisor: { reachable: boolean; error: string | null } | null;
+  /**
+   * The Meta Quest on the robot PC's USB, from the supervisor's `GET /quest`;
+   * null without a supervisor or when it did not answer. Display-only.
+   */
+  quest: QuestStatus | null;
   reason: RobotReadinessReason;
 }
 
@@ -83,6 +91,10 @@ export interface RobotReadinessDeps {
   /** The agent URL the supervisor's profile names, from its last status. */
   supervisorAgentUrl: (robotId: string, status: SupervisorStatus | null) => string | null;
   readAgent: (baseUrl: string, robotId: string) => Promise<AgentRead>;
+  /** The supervisor's `GET /quest`; null when it did not answer. Absent: no Quest reports. */
+  readQuest?: (robotId: string) => Promise<QuestStatus | null>;
+  /** How often the Quest is read while watched (default 2 s). */
+  questPollMs?: number;
   /** Register a robot from its agent URL, in the tenant of whoever asked. */
   register: (agentUrl: string, tenantId: string | null) => Promise<void>;
   now?: () => number;
@@ -94,6 +106,8 @@ export interface RobotReadinessDeps {
 export const READINESS_POLL_MS = 1_000;
 export const READINESS_WATCH_MS = 30_000;
 export const READINESS_HEARTBEAT_MS = 5_000;
+/** The Quest is read every 2 s while a robot is watched (TASK-412). */
+export const READINESS_QUEST_POLL_MS = 2_000;
 /** A cached agent reading older than this is not passed on (base-mode `sidecarReachable`). */
 export const READINESS_CACHE_FRESH_MS = 10_000;
 /** One VR HUD line, as the agent's own reasons (REASON_MAX_CHARS). */
@@ -223,6 +237,9 @@ interface Watch {
   heartbeatDue: boolean;
   /** A start asked for the robot to be registered once its agent is up. */
   register: { tenantId: string | null; lastTry: number } | null;
+  /** The last Quest report and when it was read (0 = never). */
+  quest: QuestStatus | null;
+  questAt: number;
 }
 
 export class RobotReadinessService {
@@ -235,12 +252,14 @@ export class RobotReadinessService {
   private readonly pollMs: number;
   private readonly watchMs: number;
   private readonly heartbeatMs: number;
+  private readonly questPollMs: number;
 
   constructor(private readonly deps: RobotReadinessDeps) {
     this.now = deps.now ?? Date.now;
     this.pollMs = deps.pollMs ?? READINESS_POLL_MS;
     this.watchMs = deps.watchMs ?? READINESS_WATCH_MS;
     this.heartbeatMs = deps.heartbeatMs ?? READINESS_HEARTBEAT_MS;
+    this.questPollMs = deps.questPollMs ?? READINESS_QUEST_POLL_MS;
     this.emitter.setMaxListeners(50);
   }
 
@@ -328,7 +347,7 @@ export class RobotReadinessService {
   private watch(robotId: string): Watch {
     let w = this.watches.get(robotId);
     if (!w) {
-      w = { until: 0, sessions: new Set(), inFlight: null, last: null, lastEmitted: null, lastEmitAt: 0, heartbeatDue: false, register: null };
+      w = { until: 0, sessions: new Set(), inFlight: null, last: null, lastEmitted: null, lastEmitAt: 0, heartbeatDue: false, register: null, quest: null, questAt: 0 };
       this.watches.set(robotId, w);
     }
     return w;
@@ -388,12 +407,15 @@ export class RobotReadinessService {
             : { reachable: false, error: read.error, readiness: null };
     }
 
+    const quest = await this.readQuest(robotId, w, supRead?.kind === 'ok');
+
     const snapshot: RobotReadiness = {
       robotId,
       at: new Date(this.now()).toISOString(),
       agent,
       bringup,
       supervisor,
+      quest,
       reason: mergeReason(bringup, supervisor, agent),
     };
     w.last = snapshot;
@@ -401,6 +423,29 @@ export class RobotReadinessService {
     this.maybeEmit(w, snapshot);
     await this.maybeRegister(robotId, w, bringup, registered !== null);
     return snapshot;
+  }
+
+  /**
+   * The Quest report, read at most every `questPollMs` (the poll itself runs at
+   * 1 Hz). Only asked of a supervisor that just answered; a failed read is null.
+   */
+  private async readQuest(robotId: string, w: Watch, supervisorUp: boolean): Promise<QuestStatus | null> {
+    if (!this.deps.readQuest || !supervisorUp) {
+      w.quest = null;
+      w.questAt = 0;
+      return null;
+    }
+    const now = this.now();
+    if (w.questAt > 0 && now - w.questAt < this.questPollMs) return w.quest;
+    w.questAt = now;
+    w.quest = await this.deps.readQuest(robotId).catch(() => null);
+    return w.quest;
+  }
+
+  /** Forget the cached Quest report so the next poll reads it again (after Connect / Open). */
+  invalidateQuest(robotId: string): void {
+    const w = this.watches.get(robotId);
+    if (w) w.questAt = 0;
   }
 
   private maybeEmit(w: Watch, snapshot: RobotReadiness): void {

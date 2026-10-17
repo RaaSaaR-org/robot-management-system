@@ -356,13 +356,15 @@ RobotReadiness = {
   agent: { reachable, error, readiness: AgentReadiness | null },   // the agent's own snapshot, verbatim
   bringup: SupervisorStatus | null,                                // the supervisor's GET /status, verbatim
   supervisor: { reachable, error } | null,                         // null = no supervisor configured
+  quest: { adb, devices: [{serial, state:'device'|'unauthorized'|'offline', model}], reversed: [{remote, local}], hint } | null,
+                                                                   // the supervisor's GET /quest (TASK-412); display-only
   reason: { code, severity: 'block'|'warn'|'ok', text, source: 'server'|'agent' }
 }
 ```
 
 `reason` is the server's own line when one applies, in this order — `bringup_stopped` ("Robot side is stopped. Press Start."), `bringup_failed:<step>` (that step's `detail`), `bringup_foreign:<step>` ("An old <bridge> process is running (pid N). Adopt or leave it."), `bringup_busy` (a start/stop is running), `supervisor_unreachable` (neither supervisor nor agent answers), `agent_unreachable` ("Robot agent is not answering."), `agent_no_readiness` (the agent answered, but not with a readiness report) — else the agent's own `reason` with `source:'agent'`. `text` is at most 72 characters (one VR HUD line).
 
-Polling: only watched robots — one with a readiness request or a bringup write in the last 30 s, or an open (`recording`/`paused`) teleop session — at 1 Hz: supervisor `/status` (2 s timeout) and agent `/readiness` (4 s). `robot:readiness` goes out on `/api/a2a/ws` as `{type:'robot:readiness', data: RobotReadiness, timestamp}` whenever the snapshot changes (deep-equal ignoring every `at`) and at least every 5 s while watched (the heartbeat is decided on the 1 Hz tick, so an emission between ticks — a `GET /readiness` poll — does not stretch the gap past 5 s), to every identified socket of the robot's tenant (no per-topic subscription).
+Polling: only watched robots — one with a readiness request or a bringup write in the last 30 s, or an open (`recording`/`paused`) teleop session — at 1 Hz: supervisor `/status` (2 s timeout) and agent `/readiness` (4 s); the supervisor's `/quest` every 2 s. `quest` never changes `reason`. `robot:readiness` goes out on `/api/a2a/ws` as `{type:'robot:readiness', data: RobotReadiness, timestamp}` whenever the snapshot changes (deep-equal ignoring every `at`) and at least every 5 s while watched (the heartbeat is decided on the 1 Hz tick, so an emission between ticks — a `GET /readiness` poll — does not stretch the gap past 5 s), to every identified socket of the robot's tenant (no per-topic subscription).
 
 | Method | Path | Guard | Description |
 |--------|------|-------|-------------|
@@ -375,8 +377,11 @@ Polling: only watched robots — one with a readiness request or a bringup write
 | POST | `/:id/bringup/lan-up` | member | `nmcli con up` of the profile's robot LAN (real profiles only) |
 | GET | `/:id/bringup/logs/:proc?tail=200` | member | `{proc, lines}` for `sim`\|`bridge`\|`sidecar`\|`agent` (tail 1–2000); `404 no_proc` |
 | GET | `/:id/bringup/logs/:proc/stream` | member | SSE passthrough of the supervisor's log stream |
+| GET | `/:id/quest` | member | The supervisor's `GET /quest`: the Meta Quest(s) adb sees on the robot PC's USB, the reverse rules and a `hint` (TASK-412) |
+| POST | `/:id/quest/connect` | member | `{port?}` (1024–65535, default 1420) → `adb -s <serial> reverse tcp:<port> tcp:<port>` on the robot PC; `409 no_device`/`no_adb` with the hint; `400 bad_port` |
+| POST | `/:id/quest/open` | member | `{path, port?}` → the Quest browser opens `http://localhost:<port><path>`. `path` must be `/data-collection/live?robot=<id>` or `/data-collection/<session uuid>` (`400 bad_path`, checked here and again on the supervisor) |
 
-Every POST — a viewer's `403` included — writes one compliance entry (`access_audit`, resourceType `robot_bringup`, action `bringup_start|stop|sidecar_mode|adopt|leave|lan_up`, metadata `{result:'ok'|'denied'|'failed', mode, step, code, status}`; never the lease id). A supervisor refusal (`409 busy`, `409 armed`, …) is passed through with its status and body; no answer at all is `503 supervisor_unreachable`. The one exception, on every bringup route: a supervisor `401` (the server's `ROBOT_SUPERVISOR_TOKEN` is wrong) goes out as `502 supervisor_auth_failed` — a server misconfiguration, which as a `401` the app would take for an expired session and resend.
+Every POST — a viewer's `403` included — writes one compliance entry (`access_audit`, resourceType `robot_bringup`, action `bringup_start|stop|sidecar_mode|adopt|leave|lan_up` or `quest_connect|quest_open`, metadata `{result:'ok'|'denied'|'failed', mode, step, code, status}`; never the lease id). A supervisor refusal (`409 busy`, `409 armed`, …) is passed through with its status and body; no answer at all is `503 supervisor_unreachable`. The one exception, on every bringup route: a supervisor `401` (the server's `ROBOT_SUPERVISOR_TOKEN` is wrong) goes out as `502 supervisor_auth_failed` — a server misconfiguration, which as a `401` the app would take for an expired session and resend.
 
 ### Tour / host mode (`/api/tour`, TASK-213)
 

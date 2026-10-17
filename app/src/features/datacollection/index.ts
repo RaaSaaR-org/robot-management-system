@@ -79,4 +79,5 @@ export {
   DataCollectionPage,
   NewSessionPage,
   SessionDetailPage,
+  LiveSessionRedirect,
 } from './pages';

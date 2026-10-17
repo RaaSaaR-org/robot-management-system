@@ -88,6 +88,16 @@ describe('profile loader', () => {
     }
   });
 
+  it('reads the optional quest.adb (TASK-412) and expands ${HOME}', () => {
+    expect(validateProfile(realDoc(), opts).quest).toEqual({ adb: null });
+    const d = realDoc();
+    d.quest = { adb: '${HOME}/platform-tools/adb' };
+    expect(validateProfile(d, opts).quest).toEqual({ adb: '/home/op/platform-tools/adb' });
+    const bad = realDoc();
+    bad.quest = 'adb';
+    expectRefused(bad, /profile.quest must be a map/);
+  });
+
   it('rejects DDS domain 0 in a sim profile', () => {
     const d = simDoc();
     d.ddsDomain = 0;

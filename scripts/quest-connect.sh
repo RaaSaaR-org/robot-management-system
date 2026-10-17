@@ -2,7 +2,7 @@
 # quest-connect.sh — put a Meta Quest on the NeoDEM dev server over USB (TASK-393).
 #
 # What it does, in order:
-#   1. finds adb ($ADB, PATH, ~/.local/opt/platform-tools, the Android SDK, Homebrew);
+#   1. finds adb ($ADB, PATH, ~/platform-tools, ~/.local/opt/platform-tools, SDK, Homebrew);
 #   2. checks a headset is attached AND has accepted USB debugging — an
 #      "unauthorized" headset is the silent failure a bare `adb reverse` gives you;
 #   3. `adb reverse tcp:PORT tcp:PORT`, so http://localhost:PORT inside the headset
@@ -69,6 +69,7 @@ find_adb() {
   if [ -n "${ADB:-}" ] && [ -x "${ADB}" ]; then printf '%s' "$ADB"; return 0; fi
   if command -v adb >/dev/null 2>&1; then command -v adb; return 0; fi
   for candidate in \
+    "$HOME/platform-tools/adb" \
     "$HOME/.local/opt/platform-tools/adb" \
     "$HOME/Android/Sdk/platform-tools/adb" \
     "$HOME/Library/Android/sdk/platform-tools/adb" \
@@ -83,7 +84,7 @@ say "Meta Quest → NeoDEM (port $PORT)"
 if ! ADB_BIN="$(find_adb)"; then
   fail "adb not found."
   say "    Install Android platform-tools and put adb on PATH, or set ADB=/path/to/adb."
-  say "    Linux without sudo: unzip platform-tools into ~/.local/opt/ (this script looks there)."
+  say "    Linux without sudo: unzip platform-tools into ~ or ~/.local/opt/ (this script looks in both)."
   say "    macOS: brew install --cask android-platform-tools"
   exit 2
 fi

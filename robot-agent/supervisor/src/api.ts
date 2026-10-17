@@ -3,6 +3,9 @@
  * @description The supervisor's HTTP API (JSON, loopback only). Every route but
  * GET /healthz needs `Authorization: Bearer <ROBOT_SUPERVISOR_TOKEN>`. POST /estop
  * is answered even while a start or stop is running: it is the last resort.
+ *
+ * The Meta Quest on this PC's USB (TASK-412): GET /quest, POST /quest/connect
+ * {port?} and POST /quest/open {path, port?}. None of them touches the robot.
  * @feature supervisor
  */
 
@@ -12,6 +15,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { PROC_NAMES, STEP_IDS, SupervisorError } from './steps.js';
 import type { StepId, Supervisor } from './steps.js';
 import type { ProcName, SidecarMode } from './profile.js';
+import { QuestControl, QuestError, validPort } from './quest.js';
 
 const MAX_BODY = 64 * 1024;
 
@@ -61,25 +65,30 @@ export function tokenMatches(header: string | undefined, token: string): boolean
 
 export interface ApiOptions {
   token: string;
+  /** The Quest on this PC's USB; default: adb from the profile's `quest.adb`, else searched. */
+  quest?: QuestControl;
 }
 
 export function createApi(sup: Supervisor, opts: ApiOptions): Server {
   if (!opts.token || opts.token.length < 16) {
     throw new Error('ROBOT_SUPERVISOR_TOKEN must be set (at least 16 characters)');
   }
+  const quest = opts.quest ?? new QuestControl({ adb: sup.profile.quest?.adb ?? null });
   return createServer((req, res) => {
-    void handle(sup, opts, req, res).catch((e: unknown) => {
+    void handle(sup, { ...opts, quest }, req, res).catch((e: unknown) => {
       if (res.headersSent) {
         res.end();
         return;
       }
-      if (e instanceof SupervisorError) send(res, e.httpStatus, { ok: false, code: e.code, error: e.message });
+      if (e instanceof SupervisorError || e instanceof QuestError) {
+        send(res, e.httpStatus, { ok: false, code: e.code, error: e.message });
+      }
       else send(res, 500, { ok: false, code: 'internal', error: (e as Error).message });
     });
   });
 }
 
-async function handle(sup: Supervisor, opts: ApiOptions, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handle(sup: Supervisor, opts: ApiOptions & { quest: QuestControl }, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   const path = url.pathname.replace(/\/+$/, '') || '/';
   const method = req.method ?? 'GET';
@@ -93,6 +102,17 @@ async function handle(sup: Supervisor, opts: ApiOptions, req: IncomingMessage, r
     return;
   }
 
+  if (method === 'GET' && path === '/quest') {
+    const port = url.searchParams.has('port') ? validPort(Number(url.searchParams.get('port'))) : undefined;
+    send(res, 200, await opts.quest.status(port));
+    return;
+  }
+  if (method === 'POST' && (path === '/quest/connect' || path === '/quest/open')) {
+    const body = await readBody(req);
+    const r = path === '/quest/connect' ? await opts.quest.connect(body.port) : await opts.quest.open(body.path, body.port);
+    send(res, r.status, r);
+    return;
+  }
   if (method === 'GET' && path === '/status') {
     send(res, 200, sup.status());
     return;

@@ -133,7 +133,7 @@ export function VRTeleopSection({ robot, onNextEpisode, recording, launchDisable
               page can already do WebXR, open when it cannot. */}
           {!EMULATOR_ACTIVE && (
             <div className="mt-3">
-              <QuestConnectHelp location={window.location} />
+              <QuestConnectHelp location={window.location} robotId={robot.id} />
             </div>
           )}
         </Panel.Body>

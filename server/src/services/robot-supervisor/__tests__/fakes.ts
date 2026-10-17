@@ -7,7 +7,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { SupervisorStatus, SupervisorStepStatus } from '../SupervisorClient.js';
+import type { QuestStatus, SupervisorStatus, SupervisorStepStatus } from '../SupervisorClient.js';
 import type { AgentReadiness } from '../RobotReadinessService.js';
 
 export const TOKEN = 'test-supervisor-token-0123456789';
@@ -94,8 +94,25 @@ export function agentReadiness(robotId: string, reason: AgentReadiness['reason']
   };
 }
 
-/** A fake supervisor whose `/status` answers whatever `state.status` holds. */
-export async function fakeSupervisor(state: { status: SupervisorStatus; answer?: { status: number; body: unknown } }): Promise<FakeHttp> {
+/** A Quest report: one Quest 3, reversed or not. */
+export function questStatus(reversed = false): QuestStatus {
+  return {
+    adb: '/home/op/platform-tools/adb',
+    devices: [{ serial: '2G0YC5ZG8X0123', state: 'device', model: 'Quest 3' }],
+    reversed: reversed ? [{ remote: 'tcp:1420', local: 'tcp:1420' }] : [],
+    hint: reversed ? null : 'Headset connected. Press Connect to forward port 1420.',
+  };
+}
+
+/**
+ * A fake supervisor whose `/status` answers whatever `state.status` holds, and
+ * `/quest` whatever `state.quest` holds (404 when unset, like an older one).
+ */
+export async function fakeSupervisor(state: {
+  status: SupervisorStatus;
+  answer?: { status: number; body: unknown };
+  quest?: QuestStatus;
+}): Promise<FakeHttp> {
   return fakeHttp((req, res) => {
     if (req.headers.authorization !== `Bearer ${TOKEN}`) {
       json(res, 401, { ok: false, code: 'unauthorized' });
@@ -104,6 +121,19 @@ export async function fakeSupervisor(state: { status: SupervisorStatus; answer?:
     const path = (req.url ?? '/').split('?')[0];
     if (req.method === 'GET' && path === '/status') {
       json(res, 200, state.status);
+      return;
+    }
+    if (path === '/quest' || path.startsWith('/quest/')) {
+      if (!state.quest) {
+        json(res, 404, { ok: false, code: 'not_found' });
+        return;
+      }
+      if (req.method === 'GET' && path === '/quest') {
+        json(res, 200, state.quest);
+        return;
+      }
+      if (req.method === 'POST' && path === '/quest/connect') state.quest = { ...state.quest, reversed: [{ remote: 'tcp:1420', local: 'tcp:1420' }], hint: null };
+      json(res, 200, { ok: true, status: 200, code: null, error: null, serial: state.quest.devices[0]?.serial ?? null, quest: state.quest });
       return;
     }
     if (req.method === 'GET' && /^\/logs\/[a-z]+\/stream$/.test(path)) {

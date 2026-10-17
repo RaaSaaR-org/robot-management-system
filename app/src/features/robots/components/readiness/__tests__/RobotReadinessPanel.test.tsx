@@ -12,11 +12,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/mocks/server';
-import { READINESS_FIXTURES, readinessFor, type ReadinessFixtureName } from '@/mocks/readinessDemoHandlers';
+import { demoQuest, READINESS_FIXTURES, readinessFor, type ReadinessFixtureName } from '@/mocks/readinessDemoHandlers';
 import { useReadinessStore } from '../../../store/readinessStore';
 import { RobotReadinessPanel } from '../RobotReadinessPanel';
 import { BringupLogsDrawer } from '../BringupLogsDrawer';
-import type { RobotReadiness } from '../../../api/readinessApi';
+import { questPagePort, type RobotReadiness } from '../../../api/readinessApi';
 
 const ROBOT = 'r1';
 const BOUND = { enabled: true, state: 'bound', grant: () => ({ leaseId: 'lease-secret', generation: 7 }) };
@@ -368,4 +368,52 @@ it('every fixture is a complete snapshot', () => {
   for (const f of Object.values(READINESS_FIXTURES)) {
     expect(f.reason.text.length).toBeGreaterThan(0);
   }
+});
+
+describe('RobotReadinessPanel — the Quest row (TASK-412)', () => {
+  it('shows the headset and whether the port is forwarded; Connect reverses it through the server', async () => {
+    const bodies: unknown[] = [];
+    let forwarded = false;
+    // The page port (jsdom serves on its own port): what Connect forwards.
+    const PORT = questPagePort();
+    const quest = () => demoQuest(forwarded, PORT);
+    server.use(
+      http.get(`/api/robots/${ROBOT}/readiness`, () => HttpResponse.json({ ...readinessFor(ROBOT, 'not_engaged'), quest: quest() })),
+      http.post(`/api/robots/${ROBOT}/quest/connect`, async ({ request }) => {
+        bodies.push(await request.json());
+        forwarded = true;
+        return HttpResponse.json({ ok: true, status: 200, quest: quest() });
+      }),
+    );
+    render(<RobotReadinessPanel robotId={ROBOT} lease={BOUND} />);
+    const row = await screen.findByTestId('readiness-row-quest');
+    await waitFor(() => expect(row).toHaveTextContent(`Quest 3 (serial 2G0Y…0123) connected · port ${PORT} not forwarded`));
+    expect(row).toHaveAttribute('data-status', 'idle');
+    // Display-only: the reason is still the agent's.
+    expect(screen.getByTestId('readiness-reason')).toHaveAttribute('data-code', 'not_engaged');
+
+    fireEvent.click(within(row).getByTestId('quest-connect'));
+    await waitFor(() => expect(row).toHaveAttribute('data-status', 'ok'));
+    expect(row).toHaveTextContent(`port ${PORT} forwarded`);
+    expect(bodies).toEqual([{ port: PORT }]);
+    expect(within(row).getByTestId('quest-open')).toBeEnabled();
+  });
+
+  it('asks for USB debugging on an unauthorized headset, and has no row without a supervisor', async () => {
+    serve({
+      ...readinessFor(ROBOT, 'not_engaged'),
+      quest: { ...demoQuest(false), devices: [{ serial: 'X1', state: 'unauthorized', model: null }], hint: 'Put on the headset and allow USB debugging.' },
+    });
+    const { unmount } = render(<RobotReadinessPanel robotId={ROBOT} lease={BOUND} />);
+    const row = await screen.findByTestId('readiness-row-quest');
+    await waitFor(() => expect(row).toHaveTextContent('Put on the headset and allow USB debugging'));
+    expect(row).toHaveAttribute('data-status', 'warn');
+    expect(within(row).getByTestId('quest-connect')).toBeDisabled();
+    unmount();
+    useReadinessStore.getState().reset();
+    serve({ ...readinessFor(ROBOT, 'not_engaged'), bringup: null, supervisor: null, quest: null });
+    render(<RobotReadinessPanel robotId={ROBOT} lease={BOUND} />);
+    await screen.findByTestId('readiness-row-arms');
+    expect(screen.queryByTestId('readiness-row-quest')).toBeNull();
+  });
 });

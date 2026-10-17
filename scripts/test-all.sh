@@ -128,6 +128,11 @@ else
 fi
 fi  # PYTHON_ONLY
 
+# ------------------------------------------------ 2d. quest-connect.sh (TASK-412)
+# Bash only (fake HOME + stub adb), so it also runs in CI's --python-only job.
+step "quest-connect.sh adb search"
+"$REPO_ROOT/scripts/test-quest-connect.sh" || { echo "  quest-connect.sh test FAILED"; FAILURES=$((FAILURES + 1)); }
+
 # ------------------------------------------------------- 3. Python sim state machine
 # sim_g1_dds is what makes Agent Mode testable without a G1, so its state machine is
 # part of the regression suite — but only when the venv is actually there. A missing

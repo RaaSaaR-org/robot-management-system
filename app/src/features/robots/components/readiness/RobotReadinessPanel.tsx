@@ -3,7 +3,8 @@
  * @description Robot readiness (TASK-411): ONE bold line on top that says why
  *              the arms are not following (D1), the checklist that explains it
  *              (link, bridge, sidecar, agent, robot mode, arms, each hand,
- *              camera, control, Quest), and the robot-side buttons — Start
+ *              camera, control, Quest — with Connect / Open on headset in the
+ *              full variant, TASK-412), and the robot-side buttons — Start
  *              (always read-only, D2), a separate confirmed and lease-gated
  *              "Switch to arm control", Stop (which offers Limp first but never
  *              limps on its own, D3), Adopt / Leave for a foreign process (D4),
@@ -27,7 +28,8 @@ import { toneTag, type BaseTone } from '@/shared/components/ui/styles';
 import { useRobotReadiness, type UseRobotReadinessReturn } from '../../hooks/useRobotReadiness';
 import { useRobotBaseMode } from '../../hooks/useRobotBaseMode';
 import { baseModeApi as defaultBaseModeApi, type BaseModeApi } from '../../api/baseModeApi';
-import type { BringupProc, ReadinessApi, ReadinessSeverity, RobotReadiness } from '../../api/readinessApi';
+import { questPagePort, type BringupProc, type ReadinessApi, type ReadinessSeverity, type RobotReadiness } from '../../api/readinessApi';
+import { QuestControls, type QuestControlsApi } from './QuestControls';
 import { ReadinessRow } from './ReadinessRow';
 import { BringupLogsDrawer } from './BringupLogsDrawer';
 import { isFailing, readinessRows, reasonRow } from './readinessRows';
@@ -114,6 +116,8 @@ export interface RobotReadinessPanelProps {
   baseModeApi?: BaseModeApi;
   logsApi?: Pick<ReadinessApi, 'getBringupLogs' | 'streamBringupLogs'>;
   limpWaitMs?: number;
+  /** The Quest buttons' calls (tests). */
+  questApi?: QuestControlsApi;
   className?: string;
 }
 
@@ -134,6 +138,7 @@ function ReadinessBody({
   baseModeApi = defaultBaseModeApi,
   logsApi,
   limpWaitMs = LIMP_WAIT_MS,
+  questApi,
   className,
 }: RobotReadinessPanelProps & { ready: UseRobotReadinessReturn }) {
   const { readiness, stale, readError, actions, pending, lastError } = ready;
@@ -143,7 +148,8 @@ function ReadinessBody({
   const [limpError, setLimpError] = useState<string | null>(null);
   const [logsOpen, setLogsOpen] = useState(false);
 
-  const rows = useMemo(() => (readiness ? readinessRows(readiness) : []), [readiness]);
+  const questPort = questPagePort();
+  const rows = useMemo(() => (readiness ? readinessRows(readiness, questPort) : []), [readiness, questPort]);
   const highlight = readiness ? reasonRow(readiness) : null;
   const bringup = readiness?.bringup ?? null;
   const compact = variant === 'compact';
@@ -306,7 +312,9 @@ function ReadinessBody({
               onLeave={(step) => void actions.leave(step)}
               busy={busy}
               action={
-                row.id === 'link' && lanDown ? (
+                row.id === 'quest' && !compact && readiness?.quest ? (
+                  <QuestControls robotId={robotId} quest={readiness.quest} port={questPort} api={questApi} />
+                ) : row.id === 'link' && lanDown ? (
                   <Button
                     size="sm"
                     variant="secondary"

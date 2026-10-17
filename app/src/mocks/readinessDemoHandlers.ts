@@ -5,7 +5,8 @@
  *              component tests, and a small stateful robot side for the demo
  *              build — Start walks the steps through `starting` to `ready`,
  *              Stop returns them to `stopped`. Registered by a one-line spread
- *              in `handlers.ts`.
+ *              in `handlers.ts`. TASK-412: a Quest 3 on the robot PC's USB —
+ *              Connect forwards the port, Open on headset records the path.
  * @feature mocks
  */
 
@@ -16,6 +17,7 @@ import type {
   BringupStep,
   BringupStepId,
   HandHealth,
+  QuestReport,
   RobotReadiness,
 } from '@/features/robots/api/readinessApi';
 
@@ -91,6 +93,16 @@ function agentReadiness(overrides: Partial<AgentReadiness> = {}): AgentReadiness
   };
 }
 
+/** A Quest 3 on the robot PC's USB, its port forwarded or not (TASK-412). */
+export function demoQuest(forwarded: boolean, port = 1420): QuestReport {
+  return {
+    adb: '/home/operator/platform-tools/adb',
+    devices: [{ serial: '2G0YC5ZG8X0123', state: 'device', model: 'Quest 3' }],
+    reversed: forwarded ? [{ remote: `tcp:${port}`, local: `tcp:${port}` }] : [],
+    hint: forwarded ? null : `Headset connected. Press Connect to forward port ${port}.`,
+  };
+}
+
 function snapshot(parts: Partial<RobotReadiness> & { agentReadiness?: AgentReadiness | null } = {}): RobotReadiness {
   const { agentReadiness: ar, ...rest } = parts;
   const readiness = ar === undefined ? agentReadiness() : ar;
@@ -100,6 +112,7 @@ function snapshot(parts: Partial<RobotReadiness> & { agentReadiness?: AgentReadi
     agent: { reachable: readiness !== null, error: readiness ? null : 'connect ECONNREFUSED 127.0.0.1:41245', readiness },
     bringup: bringup(),
     supervisor: { reachable: true, error: null },
+    quest: demoQuest(false),
     reason: readiness
       ? { ...readiness.reason, source: 'agent' }
       : { code: 'agent_unreachable', severity: 'block', text: 'Robot agent is not answering.', source: 'server' },
@@ -235,6 +248,18 @@ interface DemoSide {
 }
 
 const sides = new Map<string, DemoSide>();
+/** The demo headset per robot: forwarded port (null = not yet) and the last opened path. */
+const quests = new Map<string, { port: number | null; opened: string | null }>();
+const OPEN_PATH = /^\/data-collection\/(live\?robot=[A-Za-z0-9_-]+|[0-9a-f-]{36})$/;
+
+function demoQuestFor(robotId: string): QuestReport {
+  const q = quests.get(robotId);
+  return q?.port ? demoQuest(true, q.port) : demoQuest(false);
+}
+
+function withQuest(robotId: string, snap: RobotReadiness): RobotReadiness {
+  return { ...snap, quest: demoQuestFor(robotId) };
+}
 /** How long the demo's Start takes per step. */
 const DEMO_STEP_MS = 700;
 
@@ -262,7 +287,25 @@ function demoSnapshot(robotId: string): RobotReadiness {
 }
 
 export const readinessDemoHandlers = [
-  http.get('/api/robots/:id/readiness', ({ params }) => HttpResponse.json(demoSnapshot(String(params.id)))),
+  http.get('/api/robots/:id/readiness', ({ params }) =>
+    HttpResponse.json(withQuest(String(params.id), demoSnapshot(String(params.id)))),
+  ),
+  http.get('/api/robots/:id/quest', ({ params }) => HttpResponse.json(demoQuestFor(String(params.id)))),
+  http.post('/api/robots/:id/quest/connect', async ({ params, request }) => {
+    const body = (await request.json().catch(() => ({}))) as { port?: number };
+    const id = String(params.id);
+    quests.set(id, { port: typeof body.port === 'number' ? body.port : 1420, opened: quests.get(id)?.opened ?? null });
+    return HttpResponse.json({ ok: true, status: 200, code: null, error: null, serial: '2G0YC5ZG8X0123', quest: demoQuestFor(id) });
+  }),
+  http.post('/api/robots/:id/quest/open', async ({ params, request }) => {
+    const body = (await request.json().catch(() => ({}))) as { path?: unknown };
+    if (typeof body.path !== 'string' || !OPEN_PATH.test(body.path)) {
+      return HttpResponse.json({ code: 'bad_path', error: 'path is not allowlisted' }, { status: 400 });
+    }
+    const id = String(params.id);
+    quests.set(id, { port: quests.get(id)?.port ?? null, opened: body.path });
+    return HttpResponse.json({ ok: true, status: 200, code: null, error: null, serial: '2G0YC5ZG8X0123', quest: demoQuestFor(id) });
+  }),
   http.get('/api/robots/:id/bringup', ({ params }) => HttpResponse.json(demoSnapshot(String(params.id)).bringup)),
   http.post('/api/robots/:id/bringup/start', async ({ params, request }) => {
     const body = (await request.json().catch(() => ({}))) as { mode?: string };
