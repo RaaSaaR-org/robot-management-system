@@ -168,6 +168,8 @@ export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTel
       baseDamped: t.baseDamped,
       recording: t.recording,
       arm: t.arm,
+      clutchHeld: t.clutch.left || t.clutch.right,
+      handTracked: t.left.tracked === 'hand' || t.right.tracked === 'hand',
     });
     // Appended, never inserted, and never while latched: `composeHud` guarantees
     // a latched E-Stop returns exactly its two red lines and nothing competing

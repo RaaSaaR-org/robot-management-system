@@ -52,7 +52,7 @@ vi.mock('@/features/safety/api/safetyApi', () => ({
   },
 }));
 
-import { VRTeleopModalBody } from '../VRTeleopModal';
+import { ArmNotices, VRTeleopModalBody, parseArmFrame } from '../VRTeleopModal';
 
 /**
  * A WebSocket stand-in. `createTeleopLink` refuses to send unless
@@ -544,5 +544,45 @@ describe('VRTeleopModalBody — the real G1 arm path', () => {
     expect(notices).toHaveTextContent('still E-stopped');
     await act(async () => { fireEvent.click(within(notices).getByRole('button', { name: 'Reset E-stop' })); });
     expect(resetRobotEStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('says to release the grip while the agent waits for a fresh squeeze', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => socket.deliver({
+      type: 'arm', writeMode: 'arm_sdk', armed: false, arming: false, armWeight: 0,
+      engage: 'need_release', clutch: { left: true, right: false },
+    }));
+    expect(screen.getByTestId('vr-arm-status')).toHaveTextContent('Release grip to re-arm');
+    act(() => socket.deliver({
+      type: 'arm', writeMode: 'arm_sdk', armed: false, arming: false, armWeight: 0,
+      engage: 'need_press', clutch: { left: false, right: false },
+    }));
+    expect(screen.getByTestId('vr-arm-status')).toHaveTextContent('Arms off');
+  });
+});
+
+describe('parseArmFrame — the re-engage latch', () => {
+  it('reads engage and clutch, and drops what it does not know', () => {
+    const base = { type: 'arm', writeMode: 'arm_sdk' };
+    expect(parseArmFrame({ ...base, engage: 'ready', clutch: { left: true, right: true } }))
+      .toMatchObject({ engage: 'ready', clutch: { left: true, right: true } });
+    expect(parseArmFrame({ ...base, engage: 'armed!', clutch: { left: 1 } }))
+      .toMatchObject({ engage: null, clutch: null });
+  });
+});
+
+describe('ArmNotices — hand tracking on the real robot', () => {
+  const ARM = parseArmFrame({ type: 'arm', writeMode: 'arm_sdk', armed: false, arming: false, armWeight: 0 })!;
+
+  it('tells the operator to use the controllers', () => {
+    render(<ArmNotices arm={ARM} handTracking />);
+    expect(screen.getByTestId('vr-arm-notices')).toHaveTextContent('Use controllers to drive the real robot');
+  });
+
+  it('says nothing about it on the sim', () => {
+    const sim = parseArmFrame({ type: 'arm', writeMode: null })!;
+    render(<ArmNotices arm={sim} handTracking />);
+    expect(screen.queryByTestId('vr-arm-notices')).toBeNull();
   });
 });

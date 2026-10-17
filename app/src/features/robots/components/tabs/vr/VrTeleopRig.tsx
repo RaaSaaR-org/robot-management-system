@@ -10,12 +10,12 @@
  * @feature robots
  */
 
-import { useRef, useMemo, useEffect } from 'react';
+import { useRef, useMemo, useEffect, useCallback } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState } from '@react-three/xr';
 import * as THREE from 'three';
 import { retargetArm, type RetargetResult, type VrJointMap } from './vrRetarget';
-import type { HudArm } from './vrHud';
+import { sameClutch, type HudArm, type RigClutch } from './vrHud';
 import {
   handKeypointsToRobotFrame,
   isStopPinch,
@@ -128,6 +128,12 @@ export interface VrRigTelemetry {
    * (TASK-393). Null on the sim / an older sidecar, which need no arming.
    */
   arm: HudArm | null;
+  /**
+   * Each controller grip past the clutch threshold, as the agent is told it
+   * (TASK-393). A side driven by a tracked hand is never clutched: a hand has
+   * no button, and a real robot's arms arm only on a clutch rising edge.
+   */
+  clutch: RigClutch;
 }
 
 /**
@@ -164,6 +170,7 @@ export function createRigTelemetry(): VrRigTelemetry {
     rttMs: null,
     recording: null,
     arm: null,
+    clutch: { left: false, right: false },
   };
 }
 
@@ -285,17 +292,26 @@ export function VrTeleopRig({
   /** When the last `{hb}` went out (performance.now), and its sequence number. */
   const lastBeatAt = useRef(-Infinity);
   const beatSeq = useRef(0);
+  /** The clutch the agent was last told, or null before the first beat. */
+  const sentClutch = useRef<RigClutch | null>(null);
+  /** One `{hb}` carrying the clutch as it is now. */
+  const beat = useCallback(() => {
+    lastBeatAt.current = performance.now();
+    beatSeq.current += 1;
+    const clutch = { ...telemetryRef.current.clutch };
+    sentClutch.current = clutch;
+    send({ hb: beatSeq.current, clutch });
+  }, [send, telemetryRef]);
 
   // The arm dead-man's other half (TASK-393): beat while this rig may stream.
   // A gated stream (E-stop, no lease, link down) sends nothing — the agent has
-  // nothing to keep alive then, and must not be told otherwise.
+  // nothing to keep alive then, and must not be told otherwise. Each beat
+  // carries the grips: the agent arms a real robot only on a clutch rising
+  // edge, so it has to see the grip let go as well as squeezed.
   useFrame(() => {
     if (!canStreamRef.current) return;
-    const now = performance.now();
-    if (now - lastBeatAt.current < HEARTBEAT_INTERVAL_MS) return;
-    lastBeatAt.current = now;
-    beatSeq.current += 1;
-    send({ hb: beatSeq.current });
+    if (performance.now() - lastBeatAt.current < HEARTBEAT_INTERVAL_MS) return;
+    beat();
   });
   /**
    * When both hands started making the stop gesture, or null.
@@ -371,6 +387,7 @@ export function VrTeleopRig({
     robotHeadingRef.current = Number.NaN;
     wasDriving.current = false;
     gripHeld.current = { left: false, right: false };
+    sentClutch.current = null;
     recenterHeld.current = false;
     estopHeld.current = false;
     nextEpisodeHeld.current = false;
@@ -768,6 +785,20 @@ export function VrTeleopRig({
     };
     telemetry.armLeft = record(left, leftSource, 'left', leftResult, wristLeft !== null);
     telemetry.armRight = record(right, rightSource, 'right', rightResult, wristRight !== null);
+
+    // ---- the clutch the agent arms on (TASK-393) --------------------------
+    // A controller grip past the threshold — the same bite point both
+    // retargetings clutch on. A tracked hand's side is never clutched.
+    const gripOf = (ctrl: ControllerState): boolean =>
+      (ctrl?.gamepad['xr-standard-squeeze']?.button ?? 0) >= GRIP_THRESHOLD;
+    telemetry.clutch = {
+      left: trackedLeft === null && gripOf(left),
+      right: trackedRight === null && gripOf(right),
+    };
+    // A change goes out AT ONCE and before this frame's pose: the agent must
+    // see the squeeze before the frame it arms on, and a release-and-squeeze
+    // shorter than a beat must not be lost between two beats.
+    if (streaming && !sameClutch(telemetry.clutch, sentClutch.current)) beat();
     telemetry.driving = stickDriving;
     telemetry.vx = vx;
     telemetry.vy = vy;

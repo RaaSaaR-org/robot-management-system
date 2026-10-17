@@ -173,10 +173,14 @@ Still one port: the API and both sockets ride the page's origin.
    not `CONTROL_LEASE_REQUIRED` is set — before TASK-393 it ignored `{bind}` and
    "Take control" timed out.
 3. In the headset: **Enter VR**. The rig sends a heartbeat at 10 Hz from its
-   render loop. Grip a controller: the first joint frame from a console that
-   holds the lease *and* is heartbeating arms the sidecar — weight ramps 0→1
-   over ~1.5 s from the **measured** arm pose. The wrist HUD's MODE line reads
-   `ARMING 40%`, then `ARMED`; the desktop shows *Arming …* / *Arms armed*.
+   render loop, and every beat carries the grips (`{hb, clutch:{left,right}}`,
+   sent at once on a change). Grip a controller: the first joint frame from a
+   console that holds the lease, is heartbeating *and* has made a **clutch
+   rising edge** — grip seen released, then squeezed — arms the sidecar; weight
+   ramps 0→1 over ~1.5 s from the **measured** arm pose. The wrist HUD's MODE
+   line reads `ARMING 40%`, then `ARMED`; the desktop shows *Arming …* /
+   *Arms armed*. A grip already held when the console connects does not count:
+   let go once, then squeeze.
 4. Record as usual (L-stick click = next episode). `action` is what the sidecar
    **accepted**, not what the operator wanted — frames before the arms are armed
    are dropped and counted ("no command reached the robot").
@@ -191,6 +195,27 @@ Still one port: the API and both sockets ride the page's origin.
 | Agent stops sending `/action` | sidecar dead-man: hold at 0.5 s, disarm at 1.0 s | 1.0 s |
 | Teleop socket closes (last engaged console) | agent | immediate |
 | Lease expires / taken over by someone else | agent lease fence | immediate |
+
+Letting go of the grip is **not** a disarm: the arms hold their last pose under
+the agent until one of the events above.
+
+**Re-arming needs a fresh squeeze.** After every disarm the operator did not
+cause by ending the session — an E-stop and its reset, a heartbeat that stalled
+and came back, a lease taken over, the sidecar's own dead-man or a 409, a refused
+`/arm` — the agent latches *re-engage required* and will not call the sidecar's
+`/arm` until it has seen this console's grip **released and then squeezed again**,
+both while nothing blocks arming (an edge made during the E-stop latch does not
+count). The HUD's MODE line reads *Release grip to re-arm* while the grip is still
+held; the desktop tag says the same. This is enforced in the agent
+(`robot-agent/src/teleop/reengage.ts`), so a stale or hostile client cannot skip
+it, and a client that reports no clutch at all cannot arm the real arms. Before
+TASK-393's review the arms re-armed on the very next streamed frame, within 0.5 s
+of a reset, and a held grip slewed them straight to the controller's pose.
+
+**Hand tracking does not drive the real robot.** A tracked hand has no grip, so
+it never reports a clutch: the agent drives no side whose grip is open on an
+`arm_sdk` sidecar (`arm_side_unclutched`), and the HUD reads *Use controllers to
+drive the real robot*. Hand tracking still drives the sim as before.
 
 After an E-stop, **Reset E-stop** clears the agent's latch and the sidecar's.
 A protective stop that clears on its own (server connection restored) now clears
@@ -216,7 +241,10 @@ A missing **arm** joint, or a hand with only some joints, still refuses.
 |---------|-------------|
 | `arm_requires_lease` | this console does not hold the lease — **Take control** |
 | `arm_requires_heartbeat` | a console that sends no heartbeat (an old cached app: reload) — keyboard and VR send one; *Simulate VR input* deliberately does not, so it can never drive real arms |
-| `heartbeat_lost` | the render loop stalled for 1 s; move again once the link is back |
+| `heartbeat_lost` | the render loop stalled for 1 s; once the link is back, release the grip and squeeze again |
+| `arm_reengage_required` / *Release grip to re-arm* | the arms were handed back without the grip being let go (E-stop, link loss, lease change, sidecar dead-man); release, then squeeze |
+| `arm_requires_clutch` | the console reports no grip clutch (an old cached app: reload) |
+| `arm_side_unclutched` / *Use controllers to drive the real robot* | a tracked hand (no grip) tried to drive the real arms; use the controllers |
 | `home_unavailable` | **Home** is refused on the real arms (all-zeros swings them forward); end teleop to hand the arms back to the robot's controller |
 | `arm_failed` / `arm_estop_latched` | the sidecar refused `/arm`; the message is its own words |
 | *The robot will not move* | sidecar is read-only — restart it with `G1_WRITE_MODE=arm_sdk` |

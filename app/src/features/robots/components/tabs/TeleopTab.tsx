@@ -71,6 +71,13 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
   const [activeDir, setActiveDir] = useState(0);
 
   const wsRef = useRef<WebSocket | null>(null);
+  /**
+   * This console's clutch, as the agent is told it on every `{hb}`: a move key
+   * held (TASK-393). A real robot's arms arm only on a rising edge of it, so a
+   * key already held through an E-stop reset or a link drop does not re-arm.
+   */
+  const clutchRef = useRef(false);
+  const beatRef = useRef(0);
 
   // Control lease (TASK-319). With the capability off this is inert and the
   // section drives exactly as before; with it on, motion needs `bound`.
@@ -96,7 +103,6 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
   const connect = useCallback(() => {
     let opened = false;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
-    let beat = 0;
     setConnecting(true);
     // Through the server's same-origin proxy (TASK-393), like the VR console.
     const ws = openTeleopSocket(robot);
@@ -104,8 +110,11 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
 
     ws.onopen = () => {
       opened = true;
+      clutchRef.current = false;
       heartbeat = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ hb: ++beat }));
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ hb: ++beatRef.current, clutch: clutchRef.current }));
+        }
       }, HEARTBEAT_MS);
       const socket: LeaseSocket = {
         send: (payload) => {
@@ -182,14 +191,25 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
       });
     };
 
+    const setClutch = (clutch: boolean) => {
+      clutchRef.current = clutch;
+      send({ hb: ++beatRef.current, clutch });
+    };
+
     const driveSelected = (direction: 1 | -1 | 0) => {
       // Without the lease a press is ignored; a release (0) always goes out.
       if (direction !== 0 && !canDriveRef.current) return;
       const joint = jointsRef.current[selectedRef.current];
       if (!joint) return;
       setActiveDir(direction);
+      // The clutch edge goes out at once and around the motion: closed BEFORE
+      // the frame that arms, opened AFTER the frame that stops.
+      const clutch = direction !== 0;
+      if (clutch && !clutchRef.current) setClutch(true);
       send({ joint: joint.name, direction });
+      if (!clutch && clutchRef.current) setClutch(false);
     };
+
 
     const isMoveKey = (k: string) =>
       k === 'ArrowRight' || k === 'ArrowLeft' || k === '+' || k === '=' || k === '-' || k === '_';
@@ -205,7 +225,13 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
         e.preventDefault();
         return;
       }
-      if (k === ' ') { send({ preset: 'stop' }); setActiveDir(0); e.preventDefault(); return; }
+      if (k === ' ') {
+        send({ preset: 'stop' });
+        setActiveDir(0);
+        if (clutchRef.current) setClutch(false);
+        e.preventDefault();
+        return;
+      }
 
       if (e.repeat) return; // begin motion once per physical key press
       if (k === 'ArrowRight' || k === '+' || k === '=') { driveSelected(1); e.preventDefault(); return; }

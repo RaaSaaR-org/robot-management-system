@@ -149,6 +149,15 @@ TASK-391, built in parallel against the shared contract below.
       loss and heartbeat loss POST `/disarm`; E-stop reset POSTs `/estop/reset`; no
       `/action` is sent while disarmed.
 - [x] Without a bound lease an `arm_sdk` sidecar is never armed (`arm_requires_lease`).
+- [x] On an `arm_sdk` sidecar the agent calls `/arm` only after it has seen the console's
+      clutch (`{hb, clutch}`) released and then squeezed again since the socket opened and
+      since the last disarm the operator did not cause (E-stop + reset, heartbeat loss,
+      lease loss/takeover, sidecar dead-man / 409, refused `/arm`); an edge made while
+      arming is blocked does not count; a console that reports no clutch cannot arm. The
+      HUD and the desktop tag say *Release grip to re-arm* while the grip is still held.
+- [x] On an `arm_sdk` sidecar a side whose clutch is open is never driven, so tracked hands
+      (no clutch) never arm or drive the real arms (`arm_side_unclutched`); the HUD and the
+      VR panel say *Use controllers to drive the real robot*. The sim is unchanged.
 - [x] The VR panel and HUD show armed / arm weight and warn (not block) on
       `arms_only` / one-hand `teleop_mode`.
 - [x] The VR panel has a "Connect Meta Quest" helper; `scripts/quest-connect.sh` sets up
@@ -192,6 +201,30 @@ TASK-391, built in parallel against the shared contract below.
   - The A2A socket through the Vite proxy answered `connected` from the running dev server.
   - Found by the e2e run and fixed: a protective stop that clears on its own left the sidecar's
     `/estop` latch set, so the arms could never be armed again; the clear edge now resets it.
+- 2026-10-17 safety fix (after the robot-day integration run showed the sidecar going from
+  latched to `arming` within 0.5 s of an E-stop reset with no fresh grip): new
+  `robot-agent/src/teleop/reengage.ts` latch per teleop socket, enforced in
+  `keyboard-teleop.ts` (agent side of the socket); the VR rig and the keyboard tab report
+  their clutch on every heartbeat and at once on a change; HUD / desktop tag / VR panel
+  show *Release grip to re-arm* and *Use controllers to drive the real robot*. TASK-391's
+  sidecar contract is unchanged.
+  - Vitest: `reengage.test.ts` (11), `keyboard-teleop-arming.test.ts` (23, 9 new — first
+    arm needs a release, E-stop reset with grip held incl. an edge made during the latch,
+    own E-stop, heartbeat loss, lease takeover, sidecar dead-man, refused `/arm`, tracked
+    hands, mixed controller + hand, no-clutch client), app `vrHud`, `VRTeleopModal`,
+    `KeyboardTeleopLease` (clutch frames around the key press). Disabling the edge check
+    fails 7 of the agent tests.
+  - End to end, own processes only, MuJoCo DDS sim + TASK-391 sidecar (`arm_sdk`) + this
+    branch's agent on DDS domain 42 / `lo` (:8782 / :8792 / :41252), a Node client that
+    mimics the rig (`{hb, clutch}` 10 Hz, poses 20 Hz only while gripped), 17/17:
+    grip held from connect → stays disarmed 2 s; release → squeeze arms (1.6 s to weight 1);
+    platform E-stop → reset with the grip held, after a release+squeeze made DURING the
+    latch → sidecar stays `disarmed`/0 for 3 s of poses; release → squeeze re-arms;
+    heartbeat stall → disarmed in ~2.0 s, link back with grip held → stays disarmed 3 s,
+    release → squeeze re-arms; agent SIGSTOP → sidecar dead-man (`last_disarm_reason
+    deadman`), SIGCONT with grip held → stays disarmed 3 s, release → squeeze re-arms;
+    letting go while armed keeps the arms armed; tracked hands only (clutch open) → never
+    armed in 3 s, `arm_side_unclutched`.
 - Not verified here: anything on the real robot (needs TASK-391's `G1_WRITE_MODE=arm_sdk`),
   a real Quest browser, auth-enabled mode end to end (unit-tested only).
 

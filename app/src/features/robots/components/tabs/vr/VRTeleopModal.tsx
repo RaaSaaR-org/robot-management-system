@@ -35,7 +35,7 @@ import { createLoopHealth, isPoseFrame, onPositionsSent, onStateReceived, type L
 import { EMULATOR_ACTIVE, XR_EMULATOR } from './vrConstants';
 import { getTeleopSocketUrl, teleopSocketProtocols } from './vrUrls';
 import { ensureFreshAccessToken, tokenStorage } from '@/api/client';
-import { hudHandWarning } from './vrHud';
+import { hudHandWarning, hudNeedsRelease, type HudEngage } from './vrHud';
 import { VrScene } from './VrScene';
 import { createRigTelemetry } from './VrTeleopRig';
 
@@ -76,12 +76,23 @@ export interface ArmFrame {
   lastError: string | null;
   /** This console holds one of the claims. */
   mine: boolean;
+  /**
+   * The agent's re-engage latch for this console (TASK-393): after any disarm
+   * the operator did not cause, the arms wait for the grip to be let go and
+   * squeezed again. Null from an older agent.
+   */
+  engage: HudEngage | null;
+  /** This console's clutch as the agent last heard it; null when never reported. */
+  clutch: { left: boolean; right: boolean } | null;
 }
+
+const ENGAGE_STATES: readonly HudEngage[] = ['need_release', 'need_press', 'ready', 'holding'];
 
 /** Parse an `{type:'arm'}` frame defensively; null when it is not one. */
 export function parseArmFrame(frame: Record<string, unknown>): ArmFrame | null {
   if (frame.type !== 'arm') return null;
   const hands = frame.hands as { left?: unknown; right?: unknown } | null | undefined;
+  const clutch = frame.clutch as { left?: unknown; right?: unknown } | null | undefined;
   const mode = frame.teleopMode;
   return {
     writeMode: frame.writeMode === 'arm_sdk' || frame.writeMode === 'read_only' ? frame.writeMode : null,
@@ -100,6 +111,10 @@ export function parseArmFrame(frame: Record<string, unknown>): ArmFrame | null {
     claims: typeof frame.claims === 'number' ? frame.claims : 0,
     lastError: typeof frame.lastError === 'string' ? frame.lastError : null,
     mine: frame.mine === true,
+    engage: ENGAGE_STATES.includes(frame.engage as HudEngage) ? (frame.engage as HudEngage) : null,
+    clutch: clutch && typeof clutch.left === 'boolean' && typeof clutch.right === 'boolean'
+      ? { left: clutch.left, right: clutch.right }
+      : null,
   };
 }
 
@@ -436,7 +451,13 @@ export function VRTeleopModalBody({
           setAgentErrors((prev) => prev.filter((e) => !e.code.startsWith('arm_') && e.code !== 'heartbeat_lost'));
         }
         telemetryRef.current.arm = next.writeMode === 'arm_sdk'
-          ? { armed: next.armed, arming: next.arming, armWeight: next.armWeight, teleopMode: next.teleopMode }
+          ? {
+            armed: next.armed,
+            arming: next.arming,
+            armWeight: next.armWeight,
+            teleopMode: next.teleopMode,
+            engage: next.engage,
+          }
           : null;
         break;
       }
@@ -1021,6 +1042,7 @@ export function VRTeleopModalBody({
       <ArmNotices
         arm={arm}
         robotLatched={estopLatched}
+        handTracking={handTracking}
         resetting={resetting}
         onReset={() => void resetEstop()}
       />
@@ -1203,6 +1225,18 @@ export function ArmStatusTag({ arm }: { arm: ArmFrame }) {
   if (arm.armed || arm.arming) {
     return <StatusTag tone="gated" dot pulse data-testid="vr-arm-status">{`Arming ${pct}%`}</StatusTag>;
   }
+  if (hudNeedsRelease(arm, arm.clutch !== null && (arm.clutch.left || arm.clutch.right))) {
+    return (
+      <StatusTag
+        tone="gated"
+        dot
+        data-testid="vr-arm-status"
+        title="The arms were handed back without the grip being let go (E-stop, link loss, lease change or the sidecar's own dead-man). They arm again only on a fresh squeeze."
+      >
+        Release grip to re-arm
+      </StatusTag>
+    );
+  }
   return (
     <StatusTag
       tone="neutral"
@@ -1226,12 +1260,15 @@ export function ArmStatusTag({ arm }: { arm: ArmFrame }) {
 export function ArmNotices({
   arm,
   robotLatched = false,
+  handTracking = false,
   resetting = false,
   onReset,
 }: {
   arm: ArmFrame | null;
   /** The agent's own latch — its banner already offers the reset. */
   robotLatched?: boolean;
+  /** The Hands toggle is on: a tracked hand never drives the real arms. */
+  handTracking?: boolean;
   resetting?: boolean;
   onReset?: () => void;
 }) {
@@ -1268,6 +1305,14 @@ export function ArmNotices({
       title: arm.teleopMode === 'arms_only' ? 'Arms only' : 'One hand only',
       body: `${which}. This session drives the arms${arm.teleopMode === 'arms_only' ? '' : ' and the other hand'}; `
         + 'a recording leaves the missing hand out of the dataset and says so in its metadata.',
+    });
+  }
+  if (arm.writeMode === 'arm_sdk' && handTracking) {
+    notes.push({
+      id: 'hand-tracking',
+      title: 'Use controllers to drive the real robot',
+      body: 'A tracked hand has no grip clutch, and the real arms arm only on a grip that is let go and squeezed. '
+        + 'With hand tracking on, a side without a controller is not driven.',
     });
   }
   if (arm.writeMode === 'arm_sdk' && arm.lastError && !arm.armed) {

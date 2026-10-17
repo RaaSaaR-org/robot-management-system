@@ -3,8 +3,11 @@
  * @description TASK-393: a real G1's arms through `/ws/keyboard-teleop`. On an
  *              arm-only sidecar (`write_mode: arm_sdk`) a joint frame arms the
  *              sidecar only for a socket that holds the control lease and is
- *              heartbeating; heartbeat silence, lease loss, an E-stop and the
- *              socket closing all give the arms back. Same fake-ws harness as
+ *              heartbeating and has made a clutch rising edge since the last
+ *              disarm it did not cause; heartbeat silence, lease loss, an
+ *              E-stop and the socket closing all give the arms back, and none
+ *              of them is undone by a grip that was already held. Same fake-ws
+ *              harness as
  *              keyboard-teleop-lease.test.ts, with a real ArmRegistry over a
  *              fake sidecar.
  * @feature teleop
@@ -153,11 +156,43 @@ function install(generation: number) {
   });
 }
 
+let beat = 0;
+/** One heartbeat carrying the clutch as the VR rig reports it. */
+function hb(ws: FakeWs, clutch: unknown = { left: false, right: false }) {
+  send(ws, { hb: ++beat, clutch });
+}
+const GRIP_BOTH = { left: true, right: true };
+const GRIP_NONE = { left: false, right: false };
+
+/** The operator lets go, then squeezes: the rising edge arming needs. */
+function squeeze(ws: FakeWs, clutch: unknown = GRIP_BOTH) {
+  hb(ws, GRIP_NONE);
+  hb(ws, clutch);
+}
+
+/** Bind, beat with the grip open, then squeeze — ready to arm on the next frame. */
 async function bindAndBeat(ws: FakeWs, generation = 1) {
   send(ws, { bind: { leaseId: SECRET, generation } });
   await flush();
-  send(ws, { hb: 1 });
+  squeeze(ws);
 }
+
+/** Bind and beat with the grip ALREADY held: no edge has been seen. */
+async function bindHolding(ws: FakeWs, generation = 1) {
+  send(ws, { bind: { leaseId: SECRET, generation } });
+  await flush();
+  hb(ws, GRIP_BOTH);
+}
+
+/** Keep the heartbeat alive across `ms` of fake time, clutch unchanged. */
+async function beatFor(ws: FakeWs, ms: number, clutch: unknown = GRIP_BOTH) {
+  for (let t = 0; t < ms; t += 100) {
+    await vi.advanceTimersByTimeAsync(100);
+    hb(ws, clutch);
+  }
+}
+
+const WRIST = { p: [0.3, 0.2, -0.3], q: [0, 0, 0, 1] };
 
 const POSE = { positions: { left_shoulder_pitch_joint: 0.3 } };
 
@@ -238,7 +273,7 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
     expect(ws.ofType('arm').at(-1)).toMatchObject({ armed: true, writeMode: 'arm_sdk', mine: true });
   });
 
-  it('heartbeat silence halts the socket, disarms and says so; a new heartbeat re-engages', async () => {
+  it('heartbeat silence halts the socket, disarms and says so; re-arming takes release then squeeze', async () => {
     const { state, connect } = makeServer();
     const ws = connect();
     await bindAndBeat(ws);
@@ -257,8 +292,16 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
     await flush();
     expect(state.setTeleopJoint).not.toHaveBeenCalled();
 
-    send(ws, { hb: 2 });
+    // The link comes back with the grip still held: nothing re-arms.
+    hb(ws, GRIP_BOTH);
     expect(ws.ofType('heartbeat').at(-1)).toEqual({ type: 'heartbeat', state: 'live' });
+    send(ws, POSE);
+    await flush();
+    expect(state.setTeleopJoint).not.toHaveBeenCalled();
+    expect(sidecar.armCalls).toEqual([1]);
+    expect(ws.errors('arm_reengage_required')).toHaveLength(1);
+
+    squeeze(ws);
     send(ws, POSE);
     await flush();
     expect(state.setTeleopJoint).toHaveBeenCalled();
@@ -270,10 +313,8 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
     const ws = connect();
     await bindAndBeat(ws);
     send(ws, POSE);
-    for (let i = 0; i < 10; i++) {
-      await vi.advanceTimersByTimeAsync(100);
-      send(ws, { hb: i });
-    }
+    // …and with the grip let go: releasing the clutch is not a disarm.
+    await beatFor(ws, 1000, GRIP_NONE);
     expect(sidecar.disarmCalls).toBe(0);
     expect(ws.errors('heartbeat_lost')).toHaveLength(0);
   });
@@ -337,9 +378,18 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
     await bindAndBeat(ws);
     send(ws, POSE);
     await flush();
-    send(ws, { hb: 2 });
-    send(ws, POSE);
+    await beatFor(ws, 100);
     expect(ws.errors('arm_failed')[0]?.message).toContain('estop latched on the sidecar');
+    // A refusal is a disarm the operator did not cause: a held grip does not
+    // retry it every second, a fresh squeeze does.
+    await beatFor(ws, 1500);
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
+    squeeze(ws);
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1, 1]);
   });
 
   it('a held key stops integrating once the sidecar disarmed itself', async () => {
@@ -353,10 +403,10 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
 
     // The sidecar's own dead-man fired (a 409 not_armed cleared the flag).
     sidecar.armedLocal = false;
-    send(ws, { hb: 2 });
+    hb(ws, GRIP_BOTH);
     await vi.advanceTimersByTimeAsync(40);
     state.applyTeleopDelta.mockClear();
-    send(ws, { hb: 3 });
+    hb(ws, GRIP_BOTH);
     await vi.advanceTimersByTimeAsync(100);
     expect(state.applyTeleopDelta).not.toHaveBeenCalled();
     // Nothing re-armed on its own: re-arming takes a new frame from the operator.
@@ -384,5 +434,181 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
     await flush();
     expect(sidecar.armCalls).toHaveLength(0);
     expect(ws.errors('arm_estop_latched')).toHaveLength(1);
+  });
+
+  // ---- the re-engage latch (TASK-393 review) ---------------------------------
+
+  it('the first arm of a session needs the grip seen released before a squeeze counts', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindHolding(ws);
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toHaveLength(0);
+    expect(state.setTeleopJoint).not.toHaveBeenCalled();
+    expect(ws.errors('arm_reengage_required')[0]?.message).toMatch(/release the grip/);
+    expect(ws.ofType('arm').at(-1)).toMatchObject({ engage: 'need_release', clutch: GRIP_BOTH });
+
+    hb(ws, GRIP_NONE);
+    expect(ws.ofType('arm').at(-1)).toMatchObject({ engage: 'need_press' });
+    hb(ws, GRIP_BOTH);
+    expect(ws.ofType('arm').at(-1)).toMatchObject({ engage: 'ready' });
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
+    expect(ws.ofType('arm').at(-1)).toMatchObject({ engage: 'holding', armed: true });
+  });
+
+  it('a heartbeating client that never reports a clutch cannot arm the real arms', async () => {
+    const { connect } = makeServer();
+    const ws = connect();
+    send(ws, { bind: { leaseId: SECRET, generation: 1 } });
+    await flush();
+    send(ws, { hb: 1 });
+    send(ws, POSE);
+    send(ws, { hb: 2 });
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toHaveLength(0);
+    expect(ws.errors('arm_requires_clutch')).toHaveLength(1);
+  });
+
+  it('after an E-stop reset a grip still held does not re-arm — release then squeeze does', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws);
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
+
+    state.isEStopTriggered.mockReturnValue(true);
+    await beatFor(ws, 200);
+    expect(sidecar.disarmCalls).toBe(1);
+    // The operator lets go and squeezes again DURING the latch: that edge does
+    // not count, because nothing could arm while it was made.
+    squeeze(ws);
+    await beatFor(ws, 100);
+
+    state.isEStopTriggered.mockReturnValue(false);
+    await beatFor(ws, 500);
+    state.setTeleopJoint.mockClear();
+    for (let i = 0; i < 10; i++) {
+      send(ws, POSE);
+      await vi.advanceTimersByTimeAsync(50);
+      hb(ws, GRIP_BOTH);
+    }
+    expect(sidecar.armCalls).toEqual([1]);
+    expect(state.setTeleopJoint).not.toHaveBeenCalled();
+    expect(ws.ofType('arm').at(-1)).toMatchObject({ engage: 'need_release', armed: false });
+
+    squeeze(ws);
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1, 1]);
+    expect(state.setTeleopJoint).toHaveBeenCalled();
+  });
+
+  it('the socket\'s own E-stop, once reset, needs a fresh squeeze too', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws);
+    send(ws, POSE);
+    await flush();
+    state.isEStopTriggered.mockReturnValue(true);
+    send(ws, { estop: { reason: 'test' } });
+    await beatFor(ws, 200);
+    state.isEStopTriggered.mockReturnValue(false);
+    await beatFor(ws, 200);
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
+  });
+
+  it('a lease taken over and bound again needs a fresh squeeze', async () => {
+    const { connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws);
+    send(ws, POSE);
+    await flush();
+    install(2);
+    await flush();
+    expect(sidecar.disarmCalls).toBe(1);
+    send(ws, { bind: { leaseId: SECRET, generation: 2 } });
+    await flush();
+    hb(ws, GRIP_BOTH);
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
+    squeeze(ws);
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1, 2]);
+  });
+
+  it('the sidecar disarming itself (dead-man, 409) is not undone by a held grip', async () => {
+    const { connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws);
+    send(ws, POSE);
+    await flush();
+    sidecar.armedLocal = false;
+    sidecar.status = { ...sidecar.status, armed: false, armWeight: 0 };
+    await beatFor(ws, 100);
+    expect(ws.ofType('arm').at(-1)).toMatchObject({ engage: 'need_release', mine: false });
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
+    squeeze(ws);
+    send(ws, POSE);
+    await flush();
+    expect(sidecar.armCalls).toEqual([1, 1]);
+  });
+
+  it('a tracked hand (no clutch) never arms the real arms', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindHolding(ws);
+    // A hands-only operator: the rig reports both clutches open, always.
+    hb(ws, GRIP_NONE);
+    for (let i = 0; i < 5; i++) {
+      send(ws, { wrists: { left: WRIST, right: WRIST } });
+      send(ws, { hands: { left: { wrist: [0, 0, 0], thumb: [0.05, 0, 0], index: [0.1, 0, 0], middle: [0.1, 0, 0.01] }, right: null } });
+      hb(ws, GRIP_NONE);
+    }
+    await flush();
+    expect(sidecar.armCalls).toHaveLength(0);
+    expect(state.setTeleopJoint).not.toHaveBeenCalled();
+    expect(ws.errors('arm_side_unclutched')).toHaveLength(1);
+  });
+
+  it('on the real arms only the clutched side of a wrist frame is offered for arming', async () => {
+    const { connect } = makeServer();
+    const ws = connect();
+    send(ws, { bind: { leaseId: SECRET, generation: 1 } });
+    await flush();
+    // Left on a controller, right a tracked hand.
+    squeeze(ws, { left: true, right: false });
+    send(ws, { wrists: { left: null, right: WRIST } });
+    await flush();
+    expect(sidecar.armCalls).toHaveLength(0);
+    expect(ws.errors('arm_side_unclutched')).toHaveLength(1);
+    send(ws, { wrists: { left: WRIST, right: WRIST } });
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
+  });
+
+  it('a released key is a stop and needs no arm', async () => {
+    const { connect } = makeServer();
+    const ws = connect();
+    await bindHolding(ws);
+    send(ws, { joint: 'left_elbow_joint', direction: 0 });
+    await flush();
+    expect(ws.errors('arm_reengage_required')).toHaveLength(0);
+    // The keyboard reports one clutch, as a boolean.
+    hb(ws, false);
+    hb(ws, true);
+    send(ws, { joint: 'left_elbow_joint', direction: 1 });
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
   });
 });
