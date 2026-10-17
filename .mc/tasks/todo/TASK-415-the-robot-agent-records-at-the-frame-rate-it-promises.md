@@ -1,7 +1,7 @@
 ---
 id: TASK-415
 title: The robot agent records at the frame rate it promises
-status: in-progress
+status: review
 priority: 2
 owner: huhn511
 created: 2026-10-18
