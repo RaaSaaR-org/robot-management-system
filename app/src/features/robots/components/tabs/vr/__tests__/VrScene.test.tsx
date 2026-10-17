@@ -57,6 +57,8 @@ vi.mock('../VrWristHud', () => ({ VrWristHud: () => <div /> }));
 vi.mock('../VrOrigin', () => ({
   VrOrigin: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
+vi.mock('../VrRobotPanel', () => ({ VrRobotPanel: () => <div data-testid="robot-panel" /> }));
+vi.mock('../VrUiRig', () => ({ VrUiRig: () => <div data-testid="ui-rig" /> }));
 vi.mock('../VrTeleopRig', () => ({
   VrTeleopRig: () => <div data-testid="rig" />,
   createRigTelemetry: () => ({}),

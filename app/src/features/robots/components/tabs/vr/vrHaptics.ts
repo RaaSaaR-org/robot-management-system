@@ -66,6 +66,12 @@ export interface HapticPreset {
  *    much softer than `estop`, because nothing is wrong. The operator gets no
  *    other feedback that the boundary was taken: the desktop episode list is
  *    behind the headset, and the HUD's frame counter only restarts a beat later.
+ *  - `uiHover` (TASK-407) — the faintest, shortest tick here: the ray just
+ *    landed on a button. It fires on every button the ray crosses, so anything
+ *    stronger would turn sweeping across the panel into a buzz.
+ *  - `uiClick` — a button press registered. Firmer than a hover, shorter and
+ *    weaker than a clutch engage, so a UI press is never mistaken for taking
+ *    an arm.
  */
 export const HAPTICS = {
   clutchEngage: { intensity: 0.6, ms: 40 },
@@ -74,6 +80,8 @@ export const HAPTICS = {
   estop: { intensity: 1, ms: 300 },
   linkLost: { intensity: 0.7, ms: 250 },
   episodeMark: { intensity: 0.5, ms: 150 },
+  uiHover: { intensity: 0.12, ms: 12 },
+  uiClick: { intensity: 0.45, ms: 30 },
 } as const satisfies Record<string, HapticPreset>;
 
 /**

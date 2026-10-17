@@ -20,6 +20,8 @@ import { HeadCameraPanel } from './HeadCameraPanel';
 import { VrWristHud } from './VrWristHud';
 import { VrOrigin } from './VrOrigin';
 import { VrTeleopRig, type VrRigTelemetry } from './VrTeleopRig';
+import { VrRobotPanel } from './VrRobotPanel';
+import { VrUiRig } from './VrUiRig';
 
 export interface VrSceneProps {
   store: XRStore;
@@ -49,6 +51,11 @@ export interface VrSceneProps {
   send: (payload: unknown) => void;
   onRecenter: () => void;
   onEstop: () => void;
+  /**
+   * Clear the E-stop latch — the robot panel's hold-to-confirm Reset
+   * (TASK-407). The modal's `resetEstop`, the same path as the desktop banner.
+   */
+  onResetEstop?: () => void | Promise<void>;
   /**
    * End the current episode and start the next — bound to the LEFT stick click.
    * Absent on the robot detail page, which has no session behind it, and the rig
@@ -89,6 +96,7 @@ export function VrScene({
   send,
   onRecenter,
   onEstop,
+  onResetEstop,
   onNextEpisode,
 }: VrSceneProps) {
   const cameraPos: [number, number, number] = modelType === 'so101' ? [0.5, 0.4, 0.5] : [1.5, 1.0, 1.5];
@@ -123,6 +131,15 @@ export function VrScene({
               resolve to a permanent CAMERA OFFLINE billboard rather than a
               picture. */}
           {modelType !== 'so101' && <HeadCameraPanel robotId={robotId} />}
+          {/* TASK-407: the robot panel and its buttons. In the yaw group, like
+              the camera screen, so a recenter brings it round with the robot;
+              outside `modelRef` for the same reason the screen is. */}
+          <VrRobotPanel
+            telemetryRef={telemetryRef}
+            onRecenter={onRecenter}
+            onNextEpisode={onNextEpisode}
+            onResetEstop={onResetEstop}
+          />
         </group>
 
         {/* Puts the headset in the robot's head. Inert outside a session.
@@ -138,6 +155,9 @@ export function VrScene({
           recenterKey={recenterKey}
         >
           <VrWristHud telemetryRef={telemetryRef} />
+          {/* The controller ray. Inside the origin for the HUD's reason: the
+              poses it reads are relative to the reference space. */}
+          <VrUiRig telemetryRef={telemetryRef} />
         </VrOrigin>
 
         <Grid

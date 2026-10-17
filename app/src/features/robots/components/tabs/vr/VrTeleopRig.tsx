@@ -38,6 +38,8 @@ import {
 import { advanceTargets, type JointTargets } from './vrSmoothing';
 import { HAPTICS, pulsePreset, type HapticPreset, type HapticSource } from './vrHaptics';
 import type { LinkState } from './vrSession';
+import { routeControllerInput } from './vrInput';
+import type { ArmHeld, ArmRefusal, VrArmInfo } from './vrWhy';
 import {
   DRIVE_MAX_MPS,
   DRIVE_SEND_INTERVAL_S,
@@ -99,6 +101,12 @@ export interface VrRigTelemetry {
   omega: number;
   left: VrHandTelemetry;
   right: VrHandTelemetry;
+  /**
+   * Each controller is present AND its pose resolves this frame (TASK-407).
+   * The why line's "controller not tracked" — a controller asleep, out of the
+   * cameras' view or out of battery reads exactly like a grip let go otherwise.
+   */
+  controllers: { left: boolean; right: boolean };
   // ---- written by the modal ------------------------------------------------
   estopLatched: boolean;
   /**
@@ -121,8 +129,26 @@ export interface VrRigTelemetry {
   baseMode: HudBaseMode;
   modeControl: 'off' | 'fsm' | 'full';
   link: LinkState;
-  /** Age of the last `{type:'state'}` frame, ms. */
+  /** Age of the last `{type:'state'}` frame (held answers included), ms. */
   msSinceState: number | null;
+  /** The teleop socket is open (TASK-407). */
+  socketOpen: boolean;
+  /** This console may drive: it holds the control lease, or leases are off. */
+  leaseHeld: boolean;
+  /** For the robot panel: `you`, `none`, `off`, or who holds the robot. */
+  leaseLabel: string;
+  /**
+   * The agent's last `{type:'state', held:true}` answer (TASK-407): the arm was
+   * refused, and why. A refusal is NOT a link problem — the agent answered.
+   * Cleared by the next answer that moved an arm.
+   */
+  armHeld: ArmHeld | null;
+  /** The last arm refusal sent as `{type:'error'}`; cleared like `armHeld`. */
+  armRefusal: ArmRefusal | null;
+  /** The whole `{type:'arm'}` frame the robot panel reads, sim included. */
+  armInfo: VrArmInfo | null;
+  /** The base mode was MEASURED rather than commanded. */
+  baseMeasured: boolean;
   /** Smoothed control-loop round trip, ms. */
   rttMs: number | null;
   /**
@@ -168,6 +194,7 @@ export function createRigTelemetry(): VrRigTelemetry {
     omega: 0,
     left: { squeeze: 0, saturated: false, tracked: null },
     right: { squeeze: 0, saturated: false, tracked: null },
+    controllers: { left: false, right: false },
     estopLatched: false,
     // False until the agent says otherwise. The opposite default would put
     // "BASE DAMPED" on the plate of every robot for the first tick of every
@@ -182,6 +209,13 @@ export function createRigTelemetry(): VrRigTelemetry {
     // a control link, and the same rule `linkState()` applies.
     link: 'lost',
     msSinceState: null,
+    socketOpen: false,
+    leaseHeld: true,
+    leaseLabel: 'off',
+    armHeld: null,
+    armRefusal: null,
+    armInfo: null,
+    baseMeasured: false,
     rttMs: null,
     recording: null,
     arm: null,
@@ -529,7 +563,22 @@ export function VrTeleopRig({
     }
     prevLink.current = telemetry.link;
 
-    if (!frame) return;
+    if (!frame) {
+      telemetry.controllers.left = false;
+      telemetry.controllers.right = false;
+      return;
+    }
+
+    // ---- controller tracking (TASK-407) -----------------------------------
+    // Present AND posed: a controller the runtime still lists but cannot place
+    // (asleep, out of view) is as useless to the arm as a missing one.
+    const posed = (ctrl: ControllerState): boolean => {
+      const space = ctrl?.inputSource?.targetRaySpace;
+      if (!space || !referenceSpace) return false;
+      return frame.getPose(space, referenceSpace) != null;
+    };
+    telemetry.controllers.left = posed(left);
+    telemetry.controllers.right = posed(right);
 
     // ---- heading ---------------------------------------------------------
     // Turning is PHYSICAL, never a stick. Smooth stick yaw is the single most
@@ -646,7 +695,14 @@ export function VrTeleopRig({
     const compute = (ctrl: ControllerState, side: 'left' | 'right'): RetargetResult | null => {
       if (!ctrl) return null;
       const squeeze = ctrl.gamepad['xr-standard-squeeze'];
-      if (!squeeze || (squeeze.button ?? 0) < GRIP_THRESHOLD) return null; // clutch
+      if (!squeeze) return null;
+      // The trigger belongs to the hand only while the grip is held; with the
+      // grip free it is the in-VR UI's click (TASK-407) and must not reach here.
+      const input = routeControllerInput({
+        squeeze: squeeze.button ?? 0,
+        trigger: ctrl.gamepad['xr-standard-trigger']?.button ?? 0,
+      });
+      if (!input.clutched || input.grasp === null) return null; // clutch
 
       const gripSpace = ctrl.inputSource?.gripSpace;
       if (!referenceSpace || !gripSpace) return null;
@@ -656,7 +712,7 @@ export function VrTeleopRig({
       const o = pose.transform.orientation;
       ctrlQuat.set(o.x, o.y, o.z, o.w);
       euler.setFromQuaternion(ctrlQuat, 'YXZ');
-      const trigger = ctrl.gamepad['xr-standard-trigger']?.button ?? 0;
+      const trigger = input.grasp;
       const axes = ctrl.gamepad['xr-standard-thumbstick'];
 
       return retargetArm(
@@ -721,7 +777,15 @@ export function VrTeleopRig({
     const readController = (ctrl: ControllerState, side: 'left' | 'right'): RobotWristPose | null => {
       if (!ctrl || !referenceSpace || !headTransform) return null;
       const squeeze = ctrl.gamepad['xr-standard-squeeze'];
-      if (!squeeze || (squeeze.button ?? 0) < GRIP_THRESHOLD) return null; // clutch
+      if (!squeeze) return null;
+      // One routing for the trigger: grasp while clutched, UI click otherwise.
+      // A trigger pulled with the grip free is a button press in the robot
+      // panel and must never close the robot's hand (TASK-407).
+      const input = routeControllerInput({
+        squeeze: squeeze.button ?? 0,
+        trigger: ctrl.gamepad['xr-standard-trigger']?.button ?? 0,
+      });
+      if (!input.clutched || input.grasp === null) return null; // clutch
       const gripSpace = ctrl.inputSource?.gripSpace;
       if (!gripSpace) return null;
       const pose = frame.getPose(gripSpace, referenceSpace);
@@ -735,7 +799,7 @@ export function VrTeleopRig({
       telemetry[side].tracked = 'controller';
       // The trigger stays the one-axis grasp it has always been — TASK-216
       // keeps it as the fallback for an operator without hand tracking.
-      wrist.grip = ctrl.gamepad['xr-standard-trigger']?.button ?? 0;
+      wrist.grip = input.grasp;
       return wrist;
     };
 
