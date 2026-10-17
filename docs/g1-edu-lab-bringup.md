@@ -301,7 +301,11 @@ offers Limp. Refusals carry a `code` (`bad_transition`, `not_settled`,
 for 2 s). It does not wait out the 1 s arm ramp: in damp the robot ignores
 arm_sdk. `POST /estop/reset` clears the latch and **does not stand the robot
 up**. SIGTERM of the sidecar does **not** damp (it disarms and leaves zero
-frames), so a restart never drops the robot.
+frames), so a restart never drops the robot. `POST /estop {"damp": false}`
+latches and disarms without damping: the agent sends it for a protective stop
+(server link lost, tilt warning, geofence), which must not drop a balancing
+robot into the gantry. A Stand up or Balance that was still waiting for the
+sport RPC when an E-stop or Limp went out is dropped unsent (409, `sent:false`).
 
 `/arm` now needs a fresh measured balance (FSM in `G1_FSM_BALANCE_REPORTED`,
 default `500`). While armed, the arms disarm by themselves when the robot leaves
@@ -314,7 +318,9 @@ sidecar warns loudly at start.
 In NeoDEM: the **VR window header** (desktop view) and the **VR data-collection
 session page** show `Mode: Limp | Stand (locked) | Balance | Unknown`, and the
 buttons **Stand up**, **Balance** and **Limp**, each behind a confirmation and
-each saying why it is disabled. They need the control lease. The headset shows
+each saying why it is disabled. They need the control lease (with control
+leases off on the server they stay disabled and say so). Limp stays clickable
+while a Stand up or Balance waits for its confirmation — it interrupts it. The headset shows
 the mode only (`ROBOT LIMP — use the desktop window`, `MODE UNKNOWN`) — never a
 button. Head turns and thumbsticks send nothing to a robot that does not walk.
 
