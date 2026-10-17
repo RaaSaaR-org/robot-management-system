@@ -145,6 +145,20 @@ describe('HardwareClient against a mode-control sidecar (G1_LOCO_ENABLED=fsm)', 
     });
   });
 
+  it('asks the sidecar not to damp when told so (a protective stop)', async () => {
+    const { c, calls } = await client(FSM_HEALTH, {
+      '/estop': () => ({ status: 200, body: {
+        ok: true, latched: true, was_armed: false, disarmed: true, damped: false,
+        damp_confirmed: false, damp_requested: false, damp_error: 'not requested (protective stop)',
+      } }),
+    });
+    const r = await c.sendEstop({ damp: false });
+    expect(calls.at(-1)).toEqual({ path: '/estop', method: 'POST', body: { damp: false } });
+    expect(r.damped).toBe(false);
+    await c.sendEstop();
+    expect(calls.at(-1)).toEqual({ path: '/estop', method: 'POST', body: {} });
+  });
+
   it('reports an unreachable sidecar as not damped, without throwing', async () => {
     const { c } = await client(FSM_HEALTH);
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED'); }));

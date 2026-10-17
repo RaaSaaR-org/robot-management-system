@@ -1964,7 +1964,7 @@ export class HardwareClient {
    * damp by GetFsmId for up to 2 s. A sidecar without mode control answers at
    * once with `damped: false`.
    */
-  async sendEstop(): Promise<SidecarEstopResult> {
+  async sendEstop(opts: { damp?: boolean } = {}): Promise<SidecarEstopResult> {
     // The forwarder stops now, whether or not the request gets through.
     this.armedLocal = false;
     this.armOpSeq += 1;
@@ -1972,7 +1972,9 @@ export class HardwareClient {
       const res = await fetch(`${getSidecarUrl()}/estop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+        // `{"damp": false}`: latch and disarm, never damp (a protective stop).
+        // The sidecar decides from this, not from what we think its gate is.
+        body: opts.damp === false ? '{"damp":false}' : '{}',
         signal: AbortSignal.timeout(7000),
       });
       const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;

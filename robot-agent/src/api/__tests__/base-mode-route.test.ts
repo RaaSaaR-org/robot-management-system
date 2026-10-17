@@ -20,13 +20,15 @@ import type { AddressInfo } from 'net';
 const agent = vi.hoisted(() => ({
   running: false,
   order: [] as string[],
+  estopOpts: undefined as { hardwareStop?: unknown } | undefined,
 }));
 
 vi.mock('../../agent-mode/agent-mode-controller.js', () => ({
   agentModeController: {
     isRunning: () => agent.running,
-    estop: async () => {
+    estop: async (_reason: string, opts?: { hardwareStop?: unknown }) => {
       agent.order.push('agentMode.estop');
+      agent.estopOpts = opts;
       return { ok: true, stopped: false, delivered: true };
     },
     resetEstop: () => ({ estopActive: false }),
@@ -200,5 +202,7 @@ describe('robot mode route (TASK-398)', () => {
     expect(res.status).toBe(200);
     expect(agent.order).toEqual(['trigger:start', 'trigger:done', 'agentMode.estop']);
     expect(((await res.json()) as { hardwareStop: unknown }).hardwareStop).toMatchObject({ damped: true });
+    // Agent Mode gets the result instead of sending a second sidecar /estop.
+    expect(agent.estopOpts?.hardwareStop).toMatchObject({ damped: true });
   });
 });

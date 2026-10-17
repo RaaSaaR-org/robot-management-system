@@ -367,6 +367,23 @@ describe('AgentModeController — E-Stop', () => {
       expect(result.delivered).toBe(true);
     });
 
+    it('does not trigger the safety path again when the caller already ran it', async () => {
+      const h = makeController([], { baseMode: FSM_GATE });
+      const result = await h.controller.estop('x', { hardwareStop: DAMPED });
+      expect(h.order).toEqual([]);           // no second sidecar /estop
+      expect(h.estopCalls).toEqual([]);
+      expect(result.delivered).toBe(true);
+      expect(h.controller.isDamped()).toBe(true);
+      expect(h.controller.getState().estopActive).toBe(true);
+    });
+
+    it('a handed-in null result is reported as not delivered, without a retrigger', async () => {
+      const h = makeController([], { baseMode: FSM_GATE });
+      const result = await h.controller.estop('x', { hardwareStop: null });
+      expect(h.estopCalls).toEqual([]);
+      expect(result.delivered).toBe(false);
+    });
+
     it('reads damp from the MEASURED mode when there is one', () => {
       let measured: number | null = 1;
       const h = makeController([], {
@@ -375,6 +392,10 @@ describe('AgentModeController — E-Stop', () => {
       expect(h.controller.isDamped()).toBe(true);
       measured = 500;
       expect(h.controller.isDamped()).toBe(false);
+      // Lock stand (FSM 4, "Stand up") holds the legs but does not walk: the
+      // sim's NON_LOCOMOTING_FSM says so too, and a walk block must not run.
+      measured = 4;
+      expect(h.controller.isDamped()).toBe(true);
     });
 
     it('refuses the 1 -> 500 stand-up jump under the fsm gate', async () => {

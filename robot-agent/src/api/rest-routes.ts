@@ -904,7 +904,11 @@ export function createRestRoutes(
     let agentModeStopped = false;
     let agentModeError: string | undefined;
     try {
-      const result = await agentModeController.estop(`Platform E-Stop: ${stopReason}`);
+      // The hardware half has run above: hand its result over so Agent Mode
+      // does not send the sidecar a second `/estop` (and wait on it again).
+      const result = await agentModeController.estop(`Platform E-Stop: ${stopReason}`, {
+        hardwareStop,
+      });
       agentModeStopped = result.stopped;
       // The stop latched but StopMove/Damp never reached the robot — that is a
       // delivery failure, and hiding it renders an un-damped robot as stopped.

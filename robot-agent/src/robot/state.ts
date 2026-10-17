@@ -2214,6 +2214,12 @@ export class RobotStateManager {
    * must NOT damp a robot standing in balance, so it does not post `/estop`
    * there. A sidecar without mode control gets `/estop` as before (it latches
    * the arm path and never damps).
+   *
+   * The cached gate only picks the route; it never decides whether the robot
+   * damps. It is refreshed on connect, not on every poll, so a sidecar that was
+   * restarted from `off` to `fsm` between two polls still reads `off` here.
+   * That `/estop` therefore says `{"damp": false}`, and the sidecar — which
+   * knows its own gate — honours it.
    */
   private propagateStopToSidecar(category: number): void {
     if (category === 0) return;
@@ -2224,7 +2230,7 @@ export class RobotStateManager {
       }
       return;
     }
-    void hardwareClient.sendEstop();
+    void hardwareClient.sendEstop({ damp: false });
   }
 
   /**

@@ -69,7 +69,7 @@ const hw = {
   sendAction: vi.fn(async (_joints: Record<string, number>): Promise<void> => {}),
   releaseAction: vi.fn(async (): Promise<void> => {}),
   locoStop: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
-  sendEstop: vi.fn(async () => ({
+  sendEstop: vi.fn(async (_opts?: { damp?: boolean }) => ({
     reached: true, disarmed: true, damped: false, dampConfirmed: false, dampError: null as string | null,
   })),
   disarm: vi.fn(async () => ({ ok: true })),
@@ -90,7 +90,7 @@ vi.mock('../../hardware/HardwareClient.js', () => ({
     getImuNow: async () => null,
     releaseAction: () => hw.releaseAction(),
     locoStop: () => hw.locoStop(),
-    sendEstop: () => hw.sendEstop(),
+    sendEstop: (opts?: { damp?: boolean }) => hw.sendEstop(opts),
     mayMoveBase: () => hw.gate === 'unknown' || hw.gate === 'full',
     getLocoCapability: () => ({
       gate: hw.gate,
@@ -303,6 +303,35 @@ describe('RobotStateManager — teleop reaches the robot', () => {
       mgr.triggerProtectiveStop('someone walked into the cell');
       await tick(1);
       expect(hw.sendEstop).not.toHaveBeenCalled();
+    });
+
+    // The humanoid safety loop's push of a stop (it only runs for a humanoid
+    // with a sidecar, so it is driven directly here).
+    const propagate = (category: number): void =>
+      (mgr as unknown as { propagateStopToSidecar(c: number): void }).propagateStopToSidecar(category);
+
+    it('the safety loop pushes a protective stop to a mode-control sidecar as a disarm only', () => {
+      hw.gate = 'fsm';
+      hw.requiresArming = true;
+      propagate(2);
+      expect(hw.disarm).toHaveBeenCalledTimes(1);
+      expect(hw.sendEstop).not.toHaveBeenCalled();
+    });
+
+    it('a protective stop on a sidecar read as gate-off posts /estop with damp:false', () => {
+      // The cached gate can be stale (the sidecar was restarted with fsm
+      // between two polls): the request itself must forbid the damp.
+      hw.gate = 'off';
+      propagate(2);
+      expect(hw.sendEstop).toHaveBeenCalledTimes(1);
+      expect(hw.sendEstop).toHaveBeenCalledWith({ damp: false });
+    });
+
+    it('an emergency stop posts /estop without damp:false', async () => {
+      hw.gate = 'off';
+      await mgr.triggerEmergencyStop('remote', 'stop');
+      expect(hw.sendEstop).toHaveBeenCalledTimes(1);
+      expect(hw.sendEstop.mock.calls[0][0]).toBeUndefined();
     });
 
     it('says in the safety status whether the robot went limp', async () => {

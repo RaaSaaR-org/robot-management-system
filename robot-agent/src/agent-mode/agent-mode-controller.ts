@@ -12,7 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config/config.js';
 import type { EmbodimentConfig } from '../embodiment/types.js';
 import { hardwareClient, type CachedBasePose, type LocoResult } from '../hardware/HardwareClient.js';
-import type { LocoCapability } from '../hardware/base-mode.js';
+import type { LocoCapability, SidecarEstopResult } from '../hardware/base-mode.js';
 import type { RobotStateManager } from '../robot/state.js';
 import type { PersistedAgentState } from '../robot/StatePersistence.js';
 import {
@@ -285,6 +285,15 @@ export interface AgentEstopResult {
   delivered: boolean;
   /** Which hardware call failed, when `delivered` is false. */
   deliveryError?: string;
+}
+
+export interface AgentEstopOptions {
+  /**
+   * The safety path's `/estop` result, when the caller has already triggered
+   * and awaited it (TASK-398). Agent Mode then does not trigger it again.
+   * `null` = triggered, but the sidecar reported nothing.
+   */
+  hardwareStop?: SidecarEstopResult | null;
 }
 
 export interface AgentModeControllerDeps {
@@ -1574,7 +1583,7 @@ export class AgentModeController {
   }
 
   /**
-   * True while the base sits in a non-locomoting FSM (damp/sit/zero-torque) —
+   * True while the base sits in a non-locomoting FSM (damp/sit/zero-torque/lock stand) —
    * after an E-Stop, until a `posture` block with pose "stand" re-arms it.
    * Locomotion commands are still ACKed in this state and do nothing, so this
    * flag is what stops the UI and the planner from being lied to. Clearing the
@@ -2070,7 +2079,7 @@ export class AgentModeController {
    * base, and delegates to the existing SafetyMonitor path so the rest of the
    * system sees a normal emergency stop.
    */
-  async estop(reason: string): Promise<AgentEstopResult> {
+  async estop(reason: string, opts: AgentEstopOptions = {}): Promise<AgentEstopResult> {
     const wasRunning = this.isRunning();
     this.estopActive = true;
     this.abortRequested = true;
@@ -2121,11 +2130,19 @@ export class AgentModeController {
     // one process that holds both arm_sdk and the LocoClient. It used to run
     // last, after a StopMove and a Damp of our own: damp-before-disarm.
     // Optional result: test doubles are partial.
+    //
+    // A caller that has ALREADY triggered and awaited that path (the platform
+    // `POST /safety/estop`) hands its result in instead: triggering it a second
+    // time would send a second `/estop`, and on a slow sport service two
+    // back-to-back damps outlast the server's E-stop timeout — the operator was
+    // told the stop failed while the robot was latched and disarmed.
     const rsm = this.robotStateManager;
-    const hardware = rsm
-      ? await Promise.resolve(rsm.triggerEmergencyStop('local', `Agent Mode E-Stop: ${reason}`))
-        .then((r) => (r && typeof r === 'object' ? r : null), () => null)
-      : null;
+    const hardware = opts.hardwareStop !== undefined
+      ? opts.hardwareStop
+      : rsm
+        ? await Promise.resolve(rsm.triggerEmergencyStop('local', `Agent Mode E-Stop: ${reason}`))
+          .then((r) => (r && typeof r === 'object' ? r : null), () => null)
+        : null;
     if (hardware?.damped) this.noteBaseDamped();
 
     // The legacy StopMove + Damp, only where the sidecar walks (the sim, gate
