@@ -1,0 +1,77 @@
+# sim-g1-edu-dev — the same robot side as g1-edu-4.yaml, against the MuJoCo DDS
+# sim instead of the robot. For live checks of the supervisor that leave the
+# running dev stack alone: DDS domain 42 on loopback, and ports nobody else uses
+# (the dev sim sidecar is :8777 and the dev sim agent :41246; this uses 18777 and
+# 41299). The "link" step starts the simulator instead of checking a cable.
+#
+#   ROBOT_SUPERVISOR_TOKEN=$(openssl rand -hex 24) ROBOT_SUPERVISOR_PORT=18766 \
+#     node --import tsx src/index.ts ../hardware/profiles/sim-g1-edu-dev.yaml
+#
+# The agent gets SERVER_URL pointed at a port nothing listens on, so it does not
+# register with or log into the dev server; registration is the server's job
+# (TASK-409). Point it at a branch server to see the robot in the app.
+
+robotId: sim-g1-edu-dev
+robot: sim
+
+iface: lo            # a sim profile must stay on loopback
+ddsDomain: 42        # never 0 (the robot) and not 1 (the dev sim)
+
+python: ${HOME}/anaconda3/envs/unitree_sim_env6/bin/python
+cycloneddsHome: ${HOME}/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/cyclonedds/install
+
+ports:
+  simHttp: 18782     # the simulator's own sidecar-compatible facade (/health)
+  bridge: 16001
+  sidecar: 18777
+  agent: 41299
+
+sim:
+  script: ${REPO}/robot-agent/hardware/sim_g1_dds/sim_node.py
+  args:
+    - --scene
+    - ${REPO}/robot-agent/hardware/sim_evaluator/mjcf/g1_dex3_pickplace_scene.xml
+    - --initial-fsm
+    - "1"            # starts in damp, like a real G1 after power-on
+    - --quiet
+  env:
+    MUJOCO_GL: egl
+
+bridge:
+  script: ${REPO}/robot-agent/hardware/g1_state_bridge_readonly.py
+  args: []
+
+sidecar:
+  script: ${REPO}/robot-agent/hardware/g1_sidecar.py
+  env:
+    G1_SIDECAR_HOST: 127.0.0.1
+    G1_ALLOW_LIDAR_SWITCH: "0"
+  modes:
+    read_only:
+      G1_LOCO_ENABLED: "0"
+    arm_sdk:
+      G1_WRITE_MODE: arm_sdk
+      G1_LOCO_ENABLED: fsm
+      G1_ARM_SDK_MAX_JOINT_VEL: "1.0"
+      G1_DDS_DOMAIN: "42"
+
+agent:
+  cwd: ${REPO}/robot-agent
+  command: [node_modules/.bin/tsx, src/index.ts]
+  path: ["${HOME}/.nvm/versions/node/v22.23.2/bin"]
+  env:
+    DOTENV_CONFIG_PATH: .env.g1-edu-sim
+    ROBOT_TYPE: g1_edu
+    ROBOT_NAME: G1-EDU (supervisor sim)
+    SERVER_URL: http://127.0.0.1:18700
+    PUBLIC_URL: http://127.0.0.1:41299
+    AGENT_MODE_ENABLED: "false"
+    AGENT_HEARTBEAT_ENABLED: "false"
+    VLA_ENABLED: "false"
+    LLM_PROVIDER: ollama
+
+timeouts:
+  simS: 90
+  bridgeS: 30
+  sidecarS: 60
+  agentS: 45

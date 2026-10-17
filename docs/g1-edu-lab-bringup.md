@@ -10,11 +10,127 @@
 
 ---
 
+## Start the robot side from NeoDEM (TASK-403)
+
+*Added 2026-10-17. The terminal commands further down still work and stay the
+fallback; this section replaces copying them by hand.*
+
+The **robot supervisor** (`robot-agent/supervisor/`) is a small standalone
+process on the robot PC. It starts, stops and reports the three robot-side
+processes in a fixed order, each behind a readiness gate:
+
+| Step | What it checks or starts | Ready when |
+| --- | --- | --- |
+| `preflight` | Parses the profile; checks ports 6001 / 8767 / 41245; in arm_sdk mode refuses while `xr_teleoperate` or `teleop_hand_and_arm` runs | ports free or held by its own children |
+| `link` | `enp131s0` carrier + operstate up, `192.168.123.222` present, one ping to the robot | "robot cable unplugged or robot off" otherwise |
+| `camera` | TCP connect to the PC2 head camera `192.168.123.164:5600` | a **warning** only, never a stop |
+| `bridge` | `g1_state_bridge_readonly.py --iface enp131s0 --domain 0` | `bridge_probe.py` sees `rt/lowstate` on :6001 |
+| `sidecar` | `g1_sidecar.py`, **read_only by default** | `/health`: `connected`, the expected `write_mode` and `loco.gate`, `dds_domain` (when reported), fresh `base.age_s` under fsm |
+| `agent` | `tsx src/index.ts` with `.env.g1-edu` on **:41245** (not `tsx watch`) | `/api/v1/health` says `healthy` |
+
+After every step it reads the sidecar's `/health` and aborts if `armed` is true,
+`arm_weight` is not 0, or the robot's mode changed during the step. A failure
+stops the sequence with a plain sentence in the step's `detail`; earlier steps
+keep running. Registering the agent with the server is the server's job
+(TASK-409) — the supervisor knows no server.
+
+**What it never does:** kill a process it did not start (a stray bridge or agent
+on a port shows as `foreign` with its pid and command line — *adopt* it to use it
+as is, or *leave* it and stop it yourself); SIGKILL a sidecar (SIGTERM ramps the
+arms down; a sidecar still alive after 15 s is reported as `sidecar_hung` with
+the runbook); set `G1_READ_ONLY` or `G1_ARM_ALLOW_UNKNOWN_FSM` (the profile
+loader refuses both); restart a sidecar by itself; command motion or change the
+robot's mode. Stop leaves the FSM alone — use the agent's Limp first if the
+robot should go limp.
+
+### Install (once, no sudo)
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.config/neodem
+ln -sf ~/develop/robot-management-system/robot-agent/supervisor/systemd/neodem-robot-supervisor@.service \
+       ~/.config/systemd/user/
+printf 'ROBOT_SUPERVISOR_TOKEN=%s\n' "$(openssl rand -hex 24)" > ~/.config/neodem/supervisor-g1-edu-4.env
+chmod 600 ~/.config/neodem/supervisor-g1-edu-4.env
+systemctl --user daemon-reload
+systemctl --user start neodem-robot-supervisor@g1-edu-4
+```
+
+- **Profile:** `robot-agent/hardware/profiles/g1-edu-4.yaml` (checked in, no
+  secrets). The unit takes `%i` as the robot id and reads `profiles/%i.yaml`.
+- **Token:** every route except `GET /healthz` needs
+  `Authorization: Bearer $ROBOT_SUPERVISOR_TOKEN`. The server proxy (TASK-409)
+  gets the same token.
+- **Port:** 127.0.0.1:8766, one supervisor per robot (lock file
+  `~/.local/state/neodem/g1-edu-4/supervisor.lock`).
+- **State:** PID files in `~/.local/state/neodem/g1-edu-4/`, logs in
+  `~/.local/state/neodem/logs/g1-edu-4-<proc>.log`.
+- The unit uses `KillMode=process`: `systemctl --user restart` restarts only the
+  supervisor; the children keep running and are re-adopted from their PID
+  files. **Stopping the robot side is `POST /stop`, not `systemctl stop`.**
+- The agent runs from `robot-agent/` and needs `npm ci` there (the supervisor
+  has no `node_modules` of its own; it resolves from `robot-agent/node_modules`).
+
+### Use it
+
+```bash
+. ~/.config/neodem/supervisor-g1-edu-4.env
+S=http://127.0.0.1:8766; A="Authorization: Bearer $ROBOT_SUPERVISOR_TOKEN"
+curl -s -XPOST -H "$A" $S/start                 # read_only; 202, then poll:
+curl -s -H "$A" $S/status | jq '.overall, (.steps[] | {id, state, detail})'
+curl -s -XPOST -H "$A" $S/lan/up                # nmcli con up g1-robot-lan — only when you call it
+curl -s -H "$A" "$S/logs/sidecar?tail=50"       # also /logs/<proc>/stream (SSE)
+curl -s -XPOST -H "$A" $S/stop                  # disarm -> agent -> sidecar -> bridge
+curl -s -XPOST -H "$A" $S/estop                 # last resort: forwards to the sidecar's /estop
+```
+
+`overall` is `stopped`, `starting`, `ready`, `degraded` (a child died after it was
+ready), `stopping` or `error` (a step failed, or `sidecar_hung`). The bridge may
+restart up to 3 times with backoff and the agent once; a sidecar never restarts
+by itself.
+
+**arm_sdk** is a separate, confirmed switch — never part of a start:
+
+```bash
+curl -s -XPOST -H "$A" $S/sidecar/mode -d '{"mode":"arm_sdk","confirm":true}'
+```
+
+It refuses while the arms are armed or `xr_teleoperate` runs, SIGTERMs the
+read-only sidecar (up to 15 s), and starts the arm_sdk block of the profile
+(`G1_WRITE_MODE=arm_sdk`, `G1_LOCO_ENABLED=fsm`, `G1_ARM_SDK_MAX_JOINT_VEL=1.0`,
+`G1_DDS_DOMAIN=0`), which must come up with `armed:false, arm_weight:0`. The
+control-lease check is the server's (TASK-409). Everything in "Arm teleop
+through arm_sdk" and "Mode changes without the remote" below still applies.
+
+**A stale process on a port** (e.g. a bridge started by hand days ago on an
+interface with no carrier): `/status` shows the step as `foreign` with
+`foreign.pid`, `foreign.cmdline` and `foreign.since`. `POST /steps/bridge/adopt`
+uses it as is (and never signals it); `POST /steps/bridge/leave` keeps it
+untouched and the start stays blocked until you stop it yourself.
+
+### Rehearsal against the MuJoCo DDS sim
+
+`robot-agent/hardware/profiles/sim-g1-edu-dev.yaml` runs the same chain against
+`sim_g1_dds` on DDS domain 42 / `lo`, on its own ports (sim 18782, bridge 16001,
+sidecar 18777, agent 41299), so it leaves the dev stack on :8777/:41246 alone:
+
+```bash
+cd robot-agent/supervisor
+ROBOT_SUPERVISOR_TOKEN=$(openssl rand -hex 24) ROBOT_SUPERVISOR_PORT=18766 \
+  node --import tsx src/index.ts ../hardware/profiles/sim-g1-edu-dev.yaml
+```
+
+Here the `link` step starts the simulator instead of checking a cable. Verified
+2026-10-17 on a copy of this profile (domain 53): start → `ready`,
+read_only → arm_sdk switch (`armed:false`, sim stays limp), supervisor restart
+re-adopts all four children, stop leaves nothing running.
+
+---
+
 ## Was heute erreicht wurde
 
 **End-to-end verifiziert: Der reale G1 EDU 4 liefert Live-Telemetrie bis in den 3D-Viewer der App — komplett read-only, mit null Software-Footprint auf dem Roboter.**
 
-Kette: `Roboter (DDS rt/lowstate, Domain 0)` → `g1_state_bridge_readonly.py` (Workstation, ~50 Hz) → `ZMQ :6001` → `g1_sidecar.py :8767 (G1_READ_ONLY)` → `robot-agent g1-edu-4 :41244` → `Server :3001` → `App :1420 (3D-Viewer)`
+Kette: `Roboter (DDS rt/lowstate, Domain 0)` → `g1_state_bridge_readonly.py` (Workstation, ~50 Hz) → `ZMQ :6001` → `g1_sidecar.py :8767 (G1_READ_ONLY)` → `robot-agent g1-edu-4 :41245` → `Server :3001` → `App :1420 (3D-Viewer)`
 
 ### 1. RMS auf nativem Windows lauffähig gemacht
 
@@ -29,7 +145,7 @@ Die lerobot-Bridge (`run_g1_server.py`) loopt beim Start `MotionSwitcherClient.R
 
 - **`robot-agent/hardware/g1_state_bridge_readonly.py`** (neu): Subscribed nur `rt/lowstate`, republished als ZMQ PUB :6001 im run_g1_server-Wire-Format. Kein MotionSwitcher, kein Publisher, kein Kommando-Socket — dieser Prozess *kann* konstruktiv keinen einzigen DDS-Befehl senden.
 - **`g1_sidecar.py`**: `G1_READ_ONLY`-Modus (**Default AN**) — `POST /action` und `POST /record/start` → HTTP 403 (verifiziert), der lerobot-Treiber wird nie geladen, State kommt per ZMQ-SUB.
-- **`robot-agent/.env.g1-edu`** (neu): Agent-Profil `g1-edu-4` (ROBOT_TYPE=g1_edu, Port 41244).
+- **`robot-agent/.env.g1-edu`** (neu): Agent-Profil `g1-edu-4` (ROBOT_TYPE=g1_edu, Port 41245).
 
 ### 4. Architektur-Pivot: DDS direkt von der Workstation (statt Bridge auf PC2)
 
@@ -65,11 +181,13 @@ Der `RobotType`-Union der App fehlte `g1_edu` → Viewer fiel auf eine generisch
 
 ## Aktueller Zustand
 
-- **Alle Dev-Prozesse gestoppt** (Roboter-Akku leer): Bridge, Sidecar, Server, SimBot-Agent, G1-Agent, App. Alle Ports (3001, 41243, 41244, 1420, 8767, 6001) frei.
+- **Alle Dev-Prozesse gestoppt** (Roboter-Akku leer): Bridge, Sidecar, Server, SimBot-Agent, G1-Agent, App. Alle Ports (3001, 41243, 41245, 1420, 8767, 6001) frei.
 - **TASK-169:** Stage 0 ✓ (bis auf lerobot/SDK2-Install — erst ab Stage 2 nötig). Stage 1: alle Software-Gates ✓; **einziges offenes Gate: physischer E-Stop-Test**. Stages 2–4 nicht begonnen.
 - **Uncommitted** (bewusst, Owner-Entscheid ausstehend): fileURLToPath-Fixes (3 Dateien), Sidecar-Read-only-Umbau + neue Bridge, App-Viewer-Fix (5 Dateien), TASK-169-Updates, `package-lock.json`. Vorschlag: 2–3 Commits (`fix(robot-agent): windows-safe paths`, `feat(robot-agent): read-only G1 telemetry path`, `fix(app): map g1_edu to g1 model in 3D viewer`).
 
 ## Neustart-Anleitung (nächste Session, Reihenfolge)
+
+*Fallback by hand — the supervisor above does this for you ("Start the robot side from NeoDEM").*
 
 ```powershell
 # 1. DDS→ZMQ-Bridge (read-only), im Repo-Root robot-management-system:
@@ -85,7 +203,7 @@ $env:G1_LOWSTATE_ENDPOINT="tcp://127.0.0.1:6001"; $env:PYTHONIOENCODING="utf-8"
 #    cd robot-agent && DOTENV_CONFIG_PATH=.env.g1-edu npx tsx watch src/index.ts
 # 5. App:               cd app && npm run dev
 # 6. Agent registrieren (falls nicht mehr in DB):
-#    POST http://localhost:3001/api/robots/register {"robotUrl":"http://localhost:41244"}
+#    POST http://localhost:3001/api/robots/register {"robotUrl":"http://localhost:41245"}
 ```
 
 SSH PC2: `unitree@192.168.123.164` (Passwort beim Owner). Windows-Falle: Prozess-Stop killt u. U. nur den npm-Wrapper — verwaiste node-PIDs via `Get-NetTCPConnection -LocalPort <port>` finden und `taskkill /PID <pid> /F`.
