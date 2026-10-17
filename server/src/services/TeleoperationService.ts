@@ -48,6 +48,11 @@ import {
 // ============================================================================
 
 const DEFAULT_FPS = 30;
+/**
+ * `--dataset.num_episodes` for an SO-101 session without a count (TASK-406).
+ * Sessions are open-ended; End stops lerobot-record long before this.
+ */
+export const SIDECAR_EPISODE_CAP = 1000;
 
 /**
  * How often the session page is told what the robot's recorder is doing.
@@ -322,8 +327,10 @@ export class TeleoperationService extends EventEmitter {
 
     if (sidecarUrl) {
       const repoId = session.datasetRepoId ?? `robot0/session-${sessionId.slice(0, 8)}`;
-      const numEpisodes = session.numEpisodes ?? 1;
-      const episodeTimeS = session.episodeTimeS ?? 60;
+      // Sessions are open-ended (TASK-406): lerobot-record needs a number, so
+      // a session without one gets a cap nobody reaches. End stops the recorder
+      // with SIGINT, which finalizes the current episode cleanly.
+      const numEpisodes = session.numEpisodes ?? SIDECAR_EPISODE_CAP;
 
       try {
         const resp = await fetch(`${sidecarUrl}/record/start`, {
@@ -333,7 +340,8 @@ export class TeleoperationService extends EventEmitter {
             repo_id: repoId,
             task: session.languageInstr ?? 'manipulate object',
             num_episodes: numEpisodes,
-            episode_time_s: episodeTimeS,
+            // No per-take auto-stop set → the sidecar's own default.
+            ...(session.episodeTimeS != null ? { episode_time_s: session.episodeTimeS } : {}),
             fps: session.fps,
           }),
         });
@@ -374,6 +382,9 @@ export class TeleoperationService extends EventEmitter {
           fps: session.fps,
           ...(session.languageInstr ? { task: session.languageInstr } : {}),
           inputMode: session.type,
+          // Optional per-take auto-stop (TASK-406); an agent before TASK-402
+          // ignores the field. Omitted when unset, i.e. the operator stops takes.
+          ...(session.episodeTimeS != null ? { episodeTimeS: session.episodeTimeS } : {}),
         });
       } catch (err) {
         // The robot understood and said no. That is a state on the robot the
@@ -679,7 +690,8 @@ export class TeleoperationService extends EventEmitter {
           fps: session.fps,
           totalFrames,
           totalDuration: duration,
-          demonstrationCount: totalEpisodes || session.numEpisodes || 1,
+          // Counted takes, never the session's old up-front episode count (TASK-406).
+          demonstrationCount: totalEpisodes || (await this.countRecordedEpisodes(sessionId)),
           status: 'ready',
           infoJson: infoJsonObj as import('../types/vla.types.js').LeRobotInfo,
         });
@@ -1316,6 +1328,9 @@ export class TeleoperationService extends EventEmitter {
     // ---------------------------------------------------------------
     if (session.sidecarDatasetPath) {
       const datasetName = dto.datasetName ?? session.datasetRepoId ?? `teleop_${sessionId.slice(0, 8)}`;
+      // Counted takes (episode rows, else what the recorder reported when the
+      // session ended) — never the session's up-front episode count (TASK-406).
+      const recordedEpisodes = await this.countRecordedEpisodes(sessionId, session.exportedDatasetId);
       const robotTypeId = await this.resolveRobotTypeIdFromSession(session.robotId);
       const datasetInput: CreateDatasetInput = {
         name: datasetName,
@@ -1326,7 +1341,7 @@ export class TeleoperationService extends EventEmitter {
         fps: session.fps,
         totalFrames: session.frameCount || 150, // fallback estimate
         totalDuration: session.duration ?? 0,
-        demonstrationCount: session.numEpisodes ?? 1,
+        demonstrationCount: recordedEpisodes,
         status: 'ready',
       };
       const dataset = await datasetRepository.create(datasetInput);
@@ -1339,7 +1354,7 @@ export class TeleoperationService extends EventEmitter {
         sessionId,
         datasetId: dataset.id,
         datasetName,
-        trajectoryCount: session.numEpisodes ?? 1,
+        trajectoryCount: recordedEpisodes,
         totalFrames: session.frameCount || 150,
         storagePath: session.sidecarDatasetPath,
       };
@@ -1621,6 +1636,24 @@ export class TeleoperationService extends EventEmitter {
     } catch {
       /* quality feedback is best-effort */
     }
+  }
+
+  /**
+   * How many takes a session actually kept (TASK-406): its episode rows, else
+   * the count the recorder reported into the dataset created when the session
+   * ended, else 1. Never the session's up-front `numEpisodes`.
+   */
+  private async countRecordedEpisodes(sessionId: string, datasetId?: string | null): Promise<number> {
+    const rows = await this.prisma.teleoperationEpisode.findMany({
+      where: { sessionId },
+      select: { episodeIndex: true },
+    });
+    if (rows.length > 0) return rows.length;
+    if (datasetId) {
+      const dataset = await datasetRepository.findById(datasetId).catch(() => null);
+      if (dataset && dataset.demonstrationCount > 0) return dataset.demonstrationCount;
+    }
+    return 1;
   }
 
   /**

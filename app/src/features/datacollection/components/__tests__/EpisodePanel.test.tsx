@@ -23,13 +23,12 @@ function episode(over: Partial<EpisodeSummary> = {}): EpisodeSummary {
   };
 }
 
-function renderPanel(episodes: EpisodeSummary[]) {
+function renderPanel(episodes: EpisodeSummary[], { isRecording = true, currentEpisode = 0 } = {}) {
   return render(
     <EpisodePanel
       episodes={episodes}
-      currentEpisode={0}
-      numEpisodes={null}
-      isRecording
+      currentEpisode={currentEpisode}
+      isRecording={isRecording}
       canDiscard
       onNextEpisode={vi.fn()}
       onDiscardEpisode={vi.fn()}
@@ -68,5 +67,21 @@ describe('EpisodePanel dropped frames', () => {
     expect(screen.queryByTestId('episode-dropped-0')).toBeNull();
     expect(screen.getByTestId('episode-dropped-1')).toHaveTextContent('7 dropped');
     expect(screen.queryByTestId('episode-dropped-2')).toBeNull();
+  });
+});
+
+describe('EpisodePanel progress line (TASK-406)', () => {
+  it('names the take and the kept count while recording, with no target', () => {
+    renderPanel([episode({ episodeIndex: 0 }), episode({ episodeIndex: 1 })], { currentEpisode: 1 });
+    const line = screen.getByTestId('episode-progress');
+    expect(line).toHaveTextContent('Recording take 2 · kept 2');
+    expect(line).not.toHaveTextContent(/\bof \d/);
+  });
+
+  it('counts the kept takes when idle, with no target', () => {
+    renderPanel([episode()], { isRecording: false });
+    const line = screen.getByTestId('episode-progress');
+    expect(line).toHaveTextContent('Kept 1 take');
+    expect(line).not.toHaveTextContent(/target/i);
   });
 });

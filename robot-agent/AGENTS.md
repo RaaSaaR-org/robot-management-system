@@ -672,8 +672,11 @@ is).
 
 | Method | Path | Answer |
 |--------|------|--------|
-| POST | `/api/v1/robots/:id/recording/start` | body `{sessionId, fps?, cameras?, task?, shadows?, inputMode?}` → `{ok:true, …RecordingStatus}` |
-| POST | `…/recording/next-episode` | close this take, open the next → `{ok:true, episodeIndex}` |
+| POST | `/api/v1/robots/:id/recording/start` | body `{sessionId, fps?, cameras?, task?, shadows?, inputMode?, startBetweenTakes?, episodeTimeS?}` → `{ok:true, …RecordingStatus}` |
+| POST | `…/recording/episodes/begin` | open a take → `{ok, episodeIndex, phase:'capturing', startedAtMs}` · 409 `{ok:false, code:'already_capturing'}` |
+| POST | `…/recording/episodes/end` | body `{reason?: 'operator'\|'time_limit'}`; close the take → `{ok, episodeIndex, phase:'between', report}` · 409 `{ok:false, code:'not_capturing'}` |
+| GET | `…/recording/episodes/:index/thumbnail` | the middle JPEG of that take's first camera, from scratch while the session lives · 404 `{code:'no_thumbnail'}` |
+| POST | `…/recording/next-episode` | close this take, open the next (between takes: just open one) → `{ok:true, episodeIndex}` |
 | POST | `…/recording/episodes/:index/discard` | throw a take away → `{ok:true, episodeIndex}` |
 | POST | `…/recording/pause` · `…/recording/resume` | park capture without ending the session; parked ticks are not counted as drops |
 | POST | `…/recording/stop` | encode and write → `StopRecordingResult` |
@@ -717,11 +720,27 @@ teleop disengaged, a joint missing on either side. `RecordingStatus.dropped` and
 JPEGs are written only once every part of the frame is in hand, so the image
 sequences stay contiguous and each video has exactly one frame per row.
 
-**The `fps` in `meta/info.json` is the MEASURED rate**, not the requested one:
-accepted frames over the span they actually covered. The `timestamp` column is
-generated from it, so declaring 30 for a run that achieved 21 would put every
-timestamp in the dataset wrong. `fpsTarget` is reported alongside it, and shadows
-are off by default because the sim's shadow pass is what costs the tick its budget
+**Takes, and the time between them (TASK-402).** Started with
+`startBetweenTakes: true` the recorder's clock runs with no episode open
+(`phase:'between'`); those ticks are neither frames nor drops, so putting the
+headset on is not episode 0. `episodes/begin` and `episodes/end` bracket each
+take; `episodeTimeS` ends a take by itself (`lastStop.reason:'time_limit'`) and
+never begins the next. Take numbers are never reused in a session — a discarded
+take stays listed with `discarded:true` — and `stop()` returns `indexMap`
+(`{take, datasetEpisode|null}`) for the dense dataset numbering. Without the flag
+episode 0 opens at once, as it always did. Each `EpisodeReport` carries a quick
+check from `episode-quick-check.ts`: `jointsMoved` (measured range > 0.05 rad,
+top 12), `groupsMoved`, `thumbnail` and `warnings` (`short`, `no_motion`,
+`dropped_frames`).
+
+**The `fps` in `meta/info.json` is the integer TARGET** (`Math.round(fps)`), and
+it alone sets every `video.fps`, ffmpeg's `-framerate` and `timestamp = i/fps` —
+LeRobot expects a whole number there, and a measured 30.21 broke loaders. The
+tick is a deadline scheduler (`setTimeout` to `t0 + n·1000/fps`), so the achieved
+rate sits at the target; a tick the event loop could not serve on time is a
+counted drop, never a catch-up burst. The measured rate is kept as
+`_neodem.fpsActual` and in the stop result. Shadows are off by default because
+the sim's shadow pass is what costs the tick its budget
 (`?shadows=0&reflection=0&format=raw`, see `hardware/sim_g1_dds/README.md`).
 
 ## Key Dependencies

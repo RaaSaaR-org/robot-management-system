@@ -47,7 +47,12 @@ Run on PC2 (alternative — NOT factory-ready: this PC2 image ships without
 unitree_sdk2py/pyzmq and has no internet; offline install is nontrivial since
 cyclonedds 0.10.2 publishes no aarch64 wheels):
   scp g1_state_bridge_readonly.py unitree@192.168.123.164:~/
-  ssh unitree@192.168.123.164 'python3 g1_state_bridge_readonly.py --iface eth0'
+  ssh unitree@192.168.123.164 'python3 g1_state_bridge_readonly.py --iface eth0 --bind 192.168.123.164'
+
+The PUB socket binds 127.0.0.1 by default (TASK-404): on the workstation the
+sidecar reads it as G1_LOWSTATE_ENDPOINT=tcp://127.0.0.1:6001 and nothing else
+on the campus LAN can. On PC2 the reader is another host, so name the robot-LAN
+address with --bind; --bind 0.0.0.0 is the old behaviour (every interface).
 
 @status lowstate path verified read-only against real hardware (2026-07-03,
         ~50 Hz); dex3/BMS/odom paths loopback-verified against the mock
@@ -120,6 +125,29 @@ def _flist(obj: Any, name: str) -> Optional[list]:
         return None
 
 
+def _u32(obj: Any, name: str) -> Optional[int]:
+    """getattr → int masked to uint32 (an error/status word), or None when the
+    field is missing / non-numeric (TASK-404: older IDLs lack it)."""
+    v = getattr(obj, name, None)
+    if v is None:
+        return None
+    try:
+        return int(v) & 0xFFFFFFFF
+    except (TypeError, ValueError):
+        return None
+
+
+def _u32list(obj: Any, name: str) -> Optional[list]:
+    """getattr → list[uint32], or None when missing / not a sequence of ints."""
+    v = getattr(obj, name, None)
+    if v is None:
+        return None
+    try:
+        return [int(x) & 0xFFFFFFFF for x in v]
+    except (TypeError, ValueError):
+        return None
+
+
 def _favg(v: Any) -> Optional[float]:
     """Scalar-or-array temperature → single float (hg MotorState_ carries
     temperature as int16[2]); None when absent/empty."""
@@ -141,19 +169,23 @@ def _favg(v: Any) -> Optional[float]:
 
 
 def lowstate_to_dict(msg: hg_LowState) -> dict:
-    """Identical wire format to lerobot run_g1_server.py::lowstate_to_dict."""
+    """Wire format of lerobot run_g1_server.py::lowstate_to_dict, plus the
+    per-motor `motorstate` status word (TASK-404, additive: readers that do not
+    know the key ignore it; omitted when the IDL lacks it)."""
     motor_states = []
     for i in range(min(NUM_MOTORS, len(msg.motor_state))):
         temp = msg.motor_state[i].temperature
         avg_temp = float(sum(temp) / len(temp)) if isinstance(temp, list) else float(temp)
-        motor_states.append(
-            {
-                "q": float(msg.motor_state[i].q),
-                "dq": float(msg.motor_state[i].dq),
-                "tau_est": float(msg.motor_state[i].tau_est),
-                "temperature": avg_temp,
-            }
-        )
+        entry = {
+            "q": float(msg.motor_state[i].q),
+            "dq": float(msg.motor_state[i].dq),
+            "tau_est": float(msg.motor_state[i].tau_est),
+            "temperature": avg_temp,
+        }
+        word = _u32(msg.motor_state[i], "motorstate")
+        if word is not None:
+            entry["motorstate"] = word
+        motor_states.append(entry)
 
     return {
         "motor_state": motor_states,
@@ -187,8 +219,18 @@ def handstate_to_dict(msg: Any) -> dict:
             temp = _favg(getattr(m, "temperature", None))
             if temp is not None:
                 entry["temperature"] = temp
+            # TASK-404: the per-motor status word — a latched Dex3 fault
+            # (0x200, 2026-10-16) is visible here and nowhere else.
+            word = _u32(m, "motorstate")
+            if word is not None:
+                entry["motorstate"] = word
             motors.append(entry)
         out["motor_state"] = motors
+
+    # TASK-404: HandState_.error[2], the hand's own error words.
+    error = _u32list(msg, "error")
+    if error is not None and len(error) >= 2:
+        out["error"] = error[:2]
 
     imu = getattr(msg, "imu_state", None)
     if imu is not None:
@@ -345,7 +387,10 @@ def _pump(
         last_sent = now
 
 
-def main() -> None:
+DEFAULT_BIND = "127.0.0.1"
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="READ-ONLY DDS→ZMQ state bridge for Unitree G1")
     parser.add_argument(
         "--iface",
@@ -364,6 +409,21 @@ def main() -> None:
                         help=f"BMS DDS topic (default: {DEFAULT_BMS_TOPIC})")
     parser.add_argument("--odom-topic", default=DEFAULT_ODOM_TOPIC,
                         help=f"odometry DDS topic (default: {DEFAULT_ODOM_TOPIC})")
+    # TASK-404: loopback by default. The sidecar and the supervisor run on the
+    # same box; 0.0.0.0 put the robot's whole state on the campus LAN.
+    parser.add_argument("--bind", default=DEFAULT_BIND,
+                        help=f"address the ZMQ PUB socket binds (default: {DEFAULT_BIND}; "
+                             "0.0.0.0 exposes the robot state on every interface)")
+    return parser
+
+
+def pub_endpoint(args: argparse.Namespace) -> str:
+    """The ZMQ PUB bind endpoint for parsed `args`."""
+    return f"tcp://{args.bind}:{args.port}"
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.domain == 1:
@@ -378,7 +438,7 @@ def main() -> None:
 
     ctx = zmq.Context.instance()
     pub_sock = ctx.socket(zmq.PUB)
-    pub_sock.bind(f"tcp://0.0.0.0:{args.port}")
+    pub_sock.bind(pub_endpoint(args))
     sender = _LockedSender(pub_sock)
 
     # cyclonedds populates an IDL type's machinery lazily, on first Topic
@@ -451,7 +511,7 @@ def main() -> None:
 
     iface_label = args.iface or "<default>"
     print(
-        f"[ReadOnlyBridge] rt/lowstate -> zmq PUB :{args.port} @ <={args.rate} Hz "
+        f"[ReadOnlyBridge] rt/lowstate -> zmq PUB {args.bind}:{args.port} @ <={args.rate} Hz "
         f"(domain {args.domain}, iface {iface_label}) — NO command path exists in this process",
         flush=True,
     )

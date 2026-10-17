@@ -471,8 +471,8 @@ else:
     check("contentType.startsWith('image/')" in src,
           "…and accepts the raw reply only when the content type is an image")
     check("data.cameras ?? []" in src, "getCameras() still reads {cameras: [...]}")
-    check("this.sidecarAvailable = data.status === 'ok'" in src,
-          "/health.status still gates sidecarAvailable — which is why standalone mode "
+    check("this.sidecarReachable = data.status === 'ok'" in src,
+          "/health.status still gates sidecarReachable — which is why standalone mode "
           "reports 'starting' rather than 'ok' before the first frame")
     check("`${getSidecarUrl()}/health`" in src and "`${getSidecarUrl()}/state`" in src,
           "…and /state is on the SAME base URL, i.e. --sidecar-url proxying is required "
