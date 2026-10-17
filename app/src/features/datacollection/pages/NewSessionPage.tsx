@@ -329,7 +329,7 @@ export function NewSessionPage() {
             <FormField
               label="Frame rate"
               error={errors.fps}
-              aside={<InfoIcon content="Frames per second. Higher captures smoother motion but makes larger datasets. 10 fps suits most tasks." />}
+              aside={<InfoIcon content="Frames per second. 30 matches LeRobot's G1 datasets. Higher captures smoother motion but makes larger datasets; a camera slower than this repeats its last picture." />}
               hint={`fps, default ${NEW_SESSION_DEFAULTS.fps}`}
             >
               <Input

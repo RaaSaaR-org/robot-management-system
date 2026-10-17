@@ -701,6 +701,69 @@ describe.skipIf(!HAVE_FFMPEG)('EpisodeRecorder with cameras', () => {
     expect(info.features['observation.images.cam_right_high'].shape).toEqual([48, 64, 3]);
   }, 60_000);
 
+  it('repeats a slower camera\'s last picture at 30 fps instead of dropping rows', async () => {
+    // The real head camera (pc2cam) delivers ~15 fps and the New session form
+    // records at 30. The sidecar answers every snapshot with its newest JPEG and
+    // never waits for a fresh one, so half the ticks see the picture the tick
+    // before saw. That has to be a frame, not a drop: dropping it would halve
+    // the rate the dataset declares, and a "stale image" check here would turn
+    // a slow camera into a recorder that records nothing.
+    const h = harness();
+    const red = spawnSync(
+      'ffmpeg',
+      ['-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=red:size=64x48:rate=1',
+       '-frames:v', '1', '-f', 'image2', '-c:v', 'mjpeg', 'pipe:1'],
+      { maxBuffer: 8 * 1024 * 1024 },
+    ).stdout;
+    const t0 = h.clock.ms;
+    const cameraFrame = (): Buffer =>
+      Math.floor(((h.clock.ms - t0) * 15) / 1000) % 2 === 0 ? JPEG : red;
+    const served: Buffer[] = [];
+    h.hooks.snapshot = async () => {
+      const jpeg = cameraFrame();
+      served.push(jpeg);
+      return jpeg;
+    };
+    const rec = new EpisodeRecorder({
+      hooks: h.hooks,
+      robotType: 'g1_edu',
+      scratchRoot: join(dir, 'scratch'),
+      datasetRoot: join(dir, 'datasets'),
+    });
+    await rec.start({ sessionId: 's1', fps: 30, cameras: ['head_camera'] });
+    await runUntilFrames(h, rec, 12);
+    rec.pause();
+    vi.useRealTimers();
+
+    const status = rec.status();
+    expect(status.dropped).toBe(0);
+    // Every row has the picture its tick was served, repeats included.
+    const camDir = join(dir, 'scratch', 's1', 'ep_000', 'cam_right_high');
+    const files = (await readdir(camDir)).sort();
+    expect(files.length).toBe(status.frames);
+    const onDisk = await Promise.all(files.map((f) => readFile(join(camDir, f))));
+    onDisk.forEach((buf, i) => expect(buf.equals(served[i]!), `frame ${i}`).toBe(true));
+    const repeats = onDisk.filter((buf, i) => i > 0 && buf.equals(onDisk[i - 1]!)).length;
+    expect(repeats).toBeGreaterThan(0);
+    expect(repeats).toBeLessThan(onDisk.length - 1); // and the picture does move
+
+    const result = await rec.stop();
+    expect(result.ok).toBe(true);
+    // The rate is the recorder's, not the camera's.
+    expect(result.fpsActual).toBeGreaterThan(25);
+    expect(result.fpsActual).toBeLessThan(35);
+    const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
+    expect(info.fps).toBe(result.fpsActual);
+    const mp4 = join(result.datasetPath!, 'videos', 'observation.images.cam_right_high', 'chunk-000', 'file-000.mp4');
+    const probe = spawnSync('ffprobe', [
+      '-v', 'error', '-count_frames', '-select_streams', 'v:0',
+      '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', mp4,
+    ]);
+    if (probe.status === 0) {
+      expect(parseInt(probe.stdout.toString().trim(), 10)).toBe(result.totalFrames);
+    }
+  }, 60_000);
+
   it('leaves per-episode image directories while recording', async () => {
     const h = harness();
     const rec = new EpisodeRecorder({

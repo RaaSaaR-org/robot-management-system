@@ -10,12 +10,20 @@
 
 import type { TeleoperationType } from '../types/datacollection.types';
 
-/** The values a fresh form starts from — and what the advanced summary compares against. */
+/**
+ * The values a fresh form starts from — and what the advanced summary compares against.
+ *
+ * 30 fps is the rate LeRobot's Unitree G1 datasets are recorded at, and the
+ * rate the server and the robot agent's recorder already default to when a
+ * request names none. The head camera (pc2cam) delivers about 15 fps; the
+ * recorder samples the sidecar's newest frame on every tick, so a slower camera
+ * repeats its last picture rather than dropping rows.
+ */
 export const NEW_SESSION_DEFAULTS = {
   type: 'vr_quest' as TeleoperationType,
   numEpisodes: 10,
   episodeTimeS: 30,
-  fps: 10,
+  fps: 30,
 } as const;
 
 /** The three devices the default view offers; the rest live under Advanced options. */
@@ -34,7 +42,9 @@ export interface NewSessionPrefs {
   recentTasks?: string[];
 }
 
-const KEY_PREFIX = 'neodem.datacollection.newSession.v1';
+// v2: v1 stored every value, defaults included, so a browser that used the
+// form while the default was 10 fps kept recording at 10 after it became 30.
+const KEY_PREFIX = 'neodem.datacollection.newSession.v2';
 const ALL_TYPES: TeleoperationType[] = [...PRIMARY_INPUT_TYPES, ...ADVANCED_INPUT_TYPES];
 
 export function prefsKey(userId: string | null | undefined): string {
@@ -73,10 +83,24 @@ export function loadNewSessionPrefs(userId: string | null | undefined): NewSessi
   }
 }
 
-/** Remember the values; a full or blocked store is silently ignored. */
+/**
+ * Remember the values; a full or blocked store is silently ignored.
+ *
+ * The recording numbers are kept only where they differ from the default: a
+ * value the operator never changed is not a choice, and storing it would pin
+ * them to today's default after the default moves.
+ */
 export function saveNewSessionPrefs(userId: string | null | undefined, prefs: NewSessionPrefs): void {
+  const choice = (key: 'numEpisodes' | 'episodeTimeS' | 'fps') =>
+    prefs[key] === NEW_SESSION_DEFAULTS[key] ? undefined : prefs[key];
+  const stored: NewSessionPrefs = {
+    ...prefs,
+    numEpisodes: choice('numEpisodes'),
+    episodeTimeS: choice('episodeTimeS'),
+    fps: choice('fps'),
+  };
   try {
-    window.localStorage.setItem(prefsKey(userId), JSON.stringify(prefs));
+    window.localStorage.setItem(prefsKey(userId), JSON.stringify(stored));
   } catch {
     /* private window or blocked storage: the page works without it */
   }

@@ -110,14 +110,14 @@ describe('NewSessionPage default view', () => {
     const { unmount } = render();
     await user.click(screen.getByRole('button', { name: /Advanced options/ }));
     await user.clear(screen.getByLabelText('Frame rate'));
-    await user.type(screen.getByLabelText('Frame rate'), '30');
+    await user.type(screen.getByLabelText('Frame rate'), '15');
     await user.clear(screen.getByLabelText('Episode length'));
     await user.type(screen.getByLabelText('Episode length'), '60');
     await user.type(screen.getByLabelText(/Dataset name/), 'neodem/g1-pick');
     await user.click(screen.getByRole('radio', { name: /Vision Pro/ }));
     await user.click(screen.getByRole('button', { name: /Advanced options/ }));
     expect(screen.getByTestId('advanced-options')).toHaveTextContent(
-      'Input Vision Pro · Episode length 60 s · Frame rate 30 fps · Dataset neodem/g1-pick',
+      'Input Vision Pro · Episode length 60 s · Frame rate 15 fps · Dataset neodem/g1-pick',
     );
     expect(screen.getByTestId('advanced-input-note')).toHaveTextContent('Using Vision Pro');
 
@@ -129,7 +129,7 @@ describe('NewSessionPage default view', () => {
       operatorId: 'user-7',
       robotId: 'g1-edu-4',
       type: 'vr_vision_pro',
-      fps: 30,
+      fps: 15,
       languageInstr: 'Pick up the apple',
       numEpisodes: 10,
       episodeTimeS: 60,
@@ -140,12 +140,28 @@ describe('NewSessionPage default view', () => {
 
     // A new visit starts from the remembered values, collapsed, without the dataset name.
     render();
-    expect(screen.getByTestId('advanced-options')).toHaveTextContent('Input Vision Pro · Episode length 60 s · Frame rate 30 fps');
+    expect(screen.getByTestId('advanced-options')).toHaveTextContent('Input Vision Pro · Episode length 60 s · Frame rate 15 fps');
     expect(screen.getByTestId('advanced-options')).not.toHaveTextContent('Dataset');
     expect(screen.getByRole('button', { name: /Advanced options/ })).toHaveAttribute('aria-expanded', 'false');
     // The last task comes back as a chip that fills the field.
     await user.click(within(screen.getByTestId('recent-tasks')).getByRole('button', { name: 'Pick up the apple' }));
     expect(screen.getByPlaceholderText(/Pick up the red block/)).toHaveValue('Pick up the apple');
+  });
+
+  it('records at 30 fps by default and does not pin the default', async () => {
+    const user = userEvent.setup();
+    render();
+    await user.click(screen.getByRole('button', { name: /Advanced options/ }));
+    expect(screen.getByLabelText('Frame rate')).toHaveValue(30);
+    expect(screen.getByText('fps, default 30')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Advanced options/ }));
+    expect(screen.getByTestId('advanced-options')).not.toHaveTextContent('Frame rate');
+    await user.type(screen.getByPlaceholderText(/Pick up the red block/), 'Wave');
+    await user.click(screen.getByRole('button', { name: 'Start session' }));
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ fps: 30, episodeTimeS: 30, numEpisodes: 10 }));
+    // An untouched value is not a choice: a later default change must reach this operator.
+    expect(JSON.parse(window.localStorage.getItem(prefsKey('user-7')) ?? '{}')).not.toHaveProperty('fps');
   });
 
   it('keeps preferences per user', async () => {

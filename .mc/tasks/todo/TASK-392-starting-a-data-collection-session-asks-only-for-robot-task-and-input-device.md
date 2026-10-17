@@ -121,8 +121,19 @@ Out of scope: `SessionCompleted.tsx` (TASK-394), `VRSessionPanel.tsx` and
 - 2026-10-17: built for the 2026-10-18 real-robot collection run (G1 EDU + Meta Quest 3); TASK-391/393/394 run in parallel.
 - 2026-10-17: implemented on the branch. Gates: app `tsc` clean, app vitest 214 files / 2868+ tests green (incl. design-drift),
   Playwright `app-routes`, `demo-api-contract`, `demo-smoke` green (153). `e2e/live/datacollection-vr.spec.ts` updated but not run
-  (needs a live stack; the running one is in use). The default episode count is now 10 (was 3); frame rate stays 10 fps.
+  (needs a live stack; the running one is in use). The default episode count is now 10 (was 3); frame rate stayed 10 fps (changed to 30 below).
 - The robot is not preselected when more than one robot is online (real and sim side by side) — choosing between them stays explicit.
 - 2026-10-17: reviewed (range `origin/main...HEAD`). One fix: the Recorder row no longer claims "it records every frame" when all it knows is
   that the agent's live stream is connected. "Recorder ready" is a proxy until the real recorder's state (TASK-391 sidecar health) reaches the app.
   Open for a human: frame rate default stays 10 fps (LeRobot G1 datasets usually use 30); `e2e/live/datacollection-vr.spec.ts` not run.
+- 2026-10-17: owner decided the frame rate default is 30 fps ("30 is perfect"), the rate LeRobot G1 datasets use. Only the app
+  had 10: the server (`TeleoperationService` `DEFAULT_FPS`), the Prisma column default and the agent's `EpisodeRecorder` were
+  already 30. `NEW_SESSION_DEFAULTS.fps` is now 30 and the help text says so. Remembered values are now stored only where they
+  differ from the default, and the storage key moved to `v2`, so a browser that used the form at 10 fps does not keep 10.
+  Checked that 30 fps works with the inputs: the recorder samples the commanded pose (forwarded at 50 Hz) and the sidecar's
+  newest camera JPEG on each tick, and the pc2cam reader answers at once with its held frame, so a ~15 fps head camera repeats
+  its last picture rather than dropping rows; timestamps are `index / measured fps`. Pinned with an `EpisodeRecorder` test (15 fps
+  camera at 30 fps: no drops, each row has the picture its tick was served, video frames = rows, fps ~30) and a sidecar test
+  (30 Hz reads of a 15 fps publisher never block and repeat the held frame). Gates: app `tsc` clean, app vitest 214/2871 green
+  (one unhandled undici WebSocket error from `DashboardPage.requests.test.tsx`, pre-existing on main); robot-agent typecheck
+  clean, vitest 156/2566 green; `robot-agent/hardware/tests` 216 passed, 18 skipped.

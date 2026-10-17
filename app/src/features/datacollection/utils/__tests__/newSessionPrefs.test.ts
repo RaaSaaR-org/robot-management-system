@@ -7,16 +7,27 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  DATASET_REPO_ID, loadNewSessionPrefs, mergeRecentTasks, prefsKey, saveNewSessionPrefs, withRecentTask,
+  DATASET_REPO_ID, NEW_SESSION_DEFAULTS, loadNewSessionPrefs, mergeRecentTasks, prefsKey, saveNewSessionPrefs, withRecentTask,
 } from '../newSessionPrefs';
 
 beforeEach(() => window.localStorage.clear());
 
 describe('newSessionPrefs', () => {
   it('round-trips per user', () => {
-    saveNewSessionPrefs('u1', { fps: 30, type: 'gamepad', recentTasks: ['a'] });
-    expect(loadNewSessionPrefs('u1')).toMatchObject({ fps: 30, type: 'gamepad', recentTasks: ['a'] });
+    saveNewSessionPrefs('u1', { fps: 15, type: 'gamepad', recentTasks: ['a'] });
+    expect(loadNewSessionPrefs('u1')).toMatchObject({ fps: 15, type: 'gamepad', recentTasks: ['a'] });
     expect(loadNewSessionPrefs('u2')).toEqual({});
+  });
+
+  it('stores the recording numbers only where they differ from the default', () => {
+    saveNewSessionPrefs('u1', { fps: NEW_SESSION_DEFAULTS.fps, episodeTimeS: 60, numEpisodes: NEW_SESSION_DEFAULTS.numEpisodes });
+    expect(JSON.parse(window.localStorage.getItem(prefsKey('u1'))!)).toEqual({ episodeTimeS: 60 });
+  });
+
+  it('ignores what the v1 form stored, defaults included', () => {
+    // v1 kept the old 10 fps default as if it had been chosen.
+    window.localStorage.setItem('neodem.datacollection.newSession.v1:u1', JSON.stringify({ fps: 10 }));
+    expect(loadNewSessionPrefs('u1')).toEqual({});
   });
 
   it('drops malformed values', () => {
