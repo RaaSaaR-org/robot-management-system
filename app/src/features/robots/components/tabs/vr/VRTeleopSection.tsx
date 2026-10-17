@@ -48,9 +48,14 @@ export interface VRTeleopSectionProps {
   onNextEpisode?: () => boolean | Promise<boolean>;
   /** The episode being captured, for the wrist HUD's REC line. */
   recording?: { episode: number; frames: number } | null;
+  /**
+   * Set while another input drives the robot (the session page's simulated VR,
+   * TASK-396): "Launch VR" is disabled and this line replaces the hint.
+   */
+  launchDisabledReason?: string;
 }
 
-export function VRTeleopSection({ robot, onNextEpisode, recording }: VRTeleopSectionProps) {
+export function VRTeleopSection({ robot, onNextEpisode, recording, launchDisabledReason }: VRTeleopSectionProps) {
   const [open, setOpen] = useState(false);
   const [sessionSupported, setSessionSupported] = useState<boolean | null>(null);
 
@@ -102,6 +107,8 @@ export function VRTeleopSection({ robot, onNextEpisode, recording }: VRTeleopSec
               size="sm"
               leftIcon={<Glasses className="h-4 w-4" strokeWidth={1.75} />}
               onClick={() => setOpen(true)}
+              disabled={!!launchDisabledReason}
+              data-testid="vr-launch"
             >
               Launch VR
             </Button>
@@ -116,7 +123,7 @@ export function VRTeleopSection({ robot, onNextEpisode, recording }: VRTeleopSec
                   ? 'Headset ready'
                   : 'No headset'}
             </StatusTag>
-            <p className="text-[13px] text-ink-secondary">{hint}</p>
+            <p className="text-[13px] text-ink-secondary" data-testid="vr-launch-hint">{launchDisabledReason ?? hint}</p>
           </div>
           {/* TASK-393: how to get a Quest onto this page — collapsed once the
               page can already do WebXR, open when it cannot. */}
