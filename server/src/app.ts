@@ -34,6 +34,7 @@ import { robotRoutes } from './routes/robot.routes.js';
 import { voiceRoutes } from './routes/voice.routes.js';
 import { agentModeRoutes } from './routes/agent-mode.routes.js';
 import { controlLeaseDenialAudit, controlLeaseRoutes } from './routes/control-lease.routes.js';
+import { baseModeRoutes } from './routes/base-mode.routes.js';
 import { patrolRoutes, patrolRobotRoutes } from './routes/patrol.routes.js';
 import { tourRoutes } from './routes/tour.routes.js';
 import { wellKnownRoutes } from './routes/wellknown.routes.js';
@@ -294,6 +295,10 @@ export function createApp(): Express {
   // lease. Behind CONTROL_LEASES_ENABLED (default on). Its role-denial audit
   // is mounted above, ahead of the robotRoutes guard.
   app.use('/api/robots', ...protect, controlLeaseRoutes);
+
+  // Robot mode without the Unitree remote (TASK-398): limp / stand / balance,
+  // proxied to the agent with the lease, audited once per attempt.
+  app.use('/api/robots', ...protect, baseModeRoutes);
 
   // Patrol (TASK-212): routes/runs/findings at /api/patrol, the robot's photo
   // upload + the spec-named /agent-mode/patrol aliases at /api/robots.

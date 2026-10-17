@@ -214,7 +214,12 @@ class SafetyService {
     // always attempted against the robot's baseUrl, and only a request that
     // fails says the robot is unreachable.
     try {
-      const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.SHORT);
+      // MEDIUM, not SHORT (TASK-398): the agent answers only after the
+      // sidecar's `/estop` — latch, disarm, then damp and confirm — and on a
+      // slow sport service that alone can take up to the agent's own 7 s
+      // sidecar timeout. A 5 s cut-off reported "Failed to trigger E-stop"
+      // about a robot that was latched, disarmed and damped.
+      const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.MEDIUM);
       const response = await httpClient.post<RobotEStopStatus>(
         `/api/v1/robots/${robotId}/safety/estop`,
         { reason, triggeredBy }

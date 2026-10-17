@@ -30,6 +30,7 @@ import type { JointConfig } from './types.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor, agentModeLocomotion } from './CommandExecutor.js';
 import { hardwareClient, HardwareActionError, type CachedBasePose } from '../hardware/HardwareClient.js';
+import type { SidecarEstopResult } from '../hardware/base-mode.js';
 import { forwardableTeleopPose, isG1Family } from '../teleop/forward-joints.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import {
@@ -374,6 +375,14 @@ export class RobotStateManager {
   private imuPollInFlight = false;
   /** Latch so a protective stop propagates to the motion path once, not every tick. */
   private estopPropagated = false;
+  /**
+   * The actuation of the most recent stop (TASK-398), so a caller can AWAIT
+   * the hardware half of an E-stop instead of racing it: `triggerEmergencyStop`
+   * returns it. Null until the first stop.
+   */
+  private lastStopActuation: Promise<SidecarEstopResult | null> | null = null;
+  /** What the sidecar's `/estop` reported for the last emergency stop. */
+  private lastHardwareStop: (SidecarEstopResult & { at: string }) | null = null;
 
   constructor(config: RobotConfig) {
     // Initialize state
@@ -2140,7 +2149,7 @@ export class RobotStateManager {
                 `[Safety] Protective stop — aborted ${aborted} active skill executor(s)`,
               );
             }
-            void hardwareClient.sendEstop();
+            this.propagateStopToSidecar(this.safetyMonitor.getEStopState().stopCategory);
           }
         } else {
           // The stop has cleared — by an operator reset, or a protective stop
@@ -2172,7 +2181,56 @@ export class RobotStateManager {
    * Get current safety status
    */
   getSafetyStatus(): SafetyStatus {
-    return this.safetyMonitor.getStatus();
+    const status = this.safetyMonitor.getStatus();
+    const stop = this.lastHardwareStop;
+    if (!stop) return status;
+    const out: SafetyStatus = { ...status, hardwareStop: { ...stop } };
+    // Only a sidecar with mode control can damp; on every other robot "not
+    // damped" is the normal answer and would be noise.
+    const gate = hardwareClient.getLocoCapability().gate;
+    if (status.estop.status === 'triggered' && (gate === 'fsm' || gate === 'full')) {
+      out.warnings = [
+        ...status.warnings,
+        stop.damped
+          ? `Robot limp (E-stop)${stop.dampConfirmed ? '' : ' — damp not confirmed by GetFsmId'}`
+          : `E-stop: arms disarmed, robot NOT damped — ${stop.dampError ?? 'unknown reason'}`,
+      ];
+    }
+    return out;
+  }
+
+  /** What the sidecar reported for the last emergency stop, or null. */
+  getLastHardwareStop(): (SidecarEstopResult & { at: string }) | null {
+    return this.lastHardwareStop;
+  }
+
+  /**
+   * The humanoid safety loop's push of a stop to the sidecar (TASK-393/398).
+   *
+   * Category 0 (an emergency stop) is already on its way: `actuateSafetyStop`
+   * sends `/estop` — latch, disarm, damp — before anything else. A protective
+   * stop (category 2: server link lost, a tilt warning, a geofence) is a pause,
+   * not an emergency: on a sidecar with mode control it disarms the arms but
+   * must NOT damp a robot standing in balance, so it does not post `/estop`
+   * there. A sidecar without mode control gets `/estop` as before (it latches
+   * the arm path and never damps).
+   *
+   * The cached gate only picks the route; it never decides whether the robot
+   * damps. It is refreshed on connect, not on every poll, so a sidecar that was
+   * restarted from `off` to `fsm` between two polls still reads `off` here.
+   * That `/estop` therefore says `{"damp": false}`, and the sidecar — which
+   * knows its own gate — honours it.
+   */
+  private propagateStopToSidecar(category: number): void {
+    if (category === 0) return;
+    const gate = hardwareClient.getLocoCapability().gate;
+    if (gate === 'fsm' || gate === 'full') {
+      if (hardwareClient.requiresArming()) {
+        void hardwareClient.disarm().catch(() => { /* sidecar unreachable */ });
+      }
+      return;
+    }
+    void hardwareClient.sendEstop({ damp: false });
   }
 
   /**
@@ -2195,7 +2253,13 @@ export class RobotStateManager {
   triggerEmergencyStop(
     triggeredBy: 'local' | 'remote' | 'server' | 'zone' | 'system',
     reason: string
-  ): void {
+  ): Promise<SidecarEstopResult | null> {
+    this.lastStopActuation = null;
+    // Latches synchronously and invokes the actuator, which starts the
+    // sidecar's `/estop` (latch, disarm, damp) before anything else — see
+    // actuateSafetyStop. The returned promise is that actuation, so a caller
+    // that must not run ahead of the damp (Agent Mode's legacy fallback, the
+    // REST route) can await it. Callers that do not care may ignore it.
     this.safetyMonitor.triggerEmergencyStop(triggeredBy, reason);
     // AND DROP THE TELEOP TARGET. Only the teleop socket's own `{estop}` used to
     // do this, so every OTHER stop path — the fleet console, `POST
@@ -2218,6 +2282,7 @@ export class RobotStateManager {
       estopReason: reason,
       estopAt: new Date().toISOString(),
     });
+    return this.lastStopActuation ?? Promise.resolve(null);
   }
 
   /**
@@ -2316,33 +2381,67 @@ export class RobotStateManager {
   }
 
   /**
-   * What a safety stop DOES, as opposed to what it records.
+   * Make a stop ACTUATE (TASK-200), in this order and for this reason
+   * (TASK-398 reordered it — "disarm, then damp" is the user's E-stop):
    *
-   * Two halves, in this order and for this reason:
+   *  1. **The sidecar's `/estop`, for an emergency stop (category 0) only.**
+   *     It latches, starts the arm disarm ramp and THEN damps the robot (with
+   *     the sidecar's mode gate on), as one sequence inside the one process
+   *     that holds both arm_sdk and the LocoClient — not a race between HTTP
+   *     calls. Awaited, and its answer kept for the safety status.
+   *  2. **Tell the drivers.** A plan that keeps generating stages will keep
+   *     issuing `/loco/move` after any single stop command we send.
+   *  3. **Command the base — only where the sidecar moves it.** `StopMove`
+   *     zeroes a commanded velocity that may still be running for seconds. A
+   *     sidecar that cannot walk (`G1_LOCO_ENABLED=fsm` or off) gets no call;
+   *     one that does not report a gate (the MuJoCo sim) gets it as before.
+   *  4. **Drop the action ramp, category 0 only.** Redundant after `/estop` on
+   *     an arm-only sidecar, harmless, and still what releases the sim's ramp.
    *
-   *  1. **Tell the drivers.** A plan that keeps generating stages will keep
-   *     issuing `/loco/move` after any single stop command we send, so stopping
-   *     the source has to come first.
-   *  2. **Command the base.** `StopMove` zeroes the commanded velocity — the
-   *     robot may be several seconds into a multi-second move that no plan abort
-   *     can recall, because the duration lives on the robot.
-   *  3. **Drop the action ramp, for a category-0 stop only.** `StopMove` says
-   *     nothing about the ARMS: the sidecar keeps ramping toward the last
-   *     `/action` target it was given, so an E-Stop taken mid-teleop left the
-   *     robot completing the operator's reach with its base stopped. Releasing
-   *     the hold hands the joints back to the robot's own controller.
-   *
-   * What this deliberately does NOT do is damp. `/action` release + `StopMove`
-   * is the right severity for a G1 that is STANDING; commanding damping from a
-   * safety stop collapses it, which turns a stop into a fall.
+   * A protective stop (category 2) skips step 1: it is a pause that keeps the
+   * controllers powered and the pose held, and damping there would turn every
+   * recoverable stop into a robot sagging into the gantry.
    *
    * Best-effort by construction: nothing here may throw back into the monitor,
-   * and a sidecar that is not there is reported, not hidden. `locoStop()` is
-   * sent unconditionally rather than gated on `hardwareClient.isConnected()` —
-   * that flag tracks the telemetry poll, and "we lost telemetry" is the worst
-   * possible moment to decide not to tell the base to stop.
+   * and a sidecar that is not there is reported, not hidden.
    */
-  private async actuateSafetyStop(stop: StopActuation): Promise<void> {
+  private actuateSafetyStop(stop: StopActuation): Promise<void> {
+    const run = this.runSafetyStop(stop);
+    this.lastStopActuation = run;
+    return run.then(() => undefined);
+  }
+
+  private async runSafetyStop(stop: StopActuation): Promise<SidecarEstopResult | null> {
+    let hardware: SidecarEstopResult | null = null;
+    if (stop.category === 0) {
+      try {
+        hardware = (await hardwareClient.sendEstop()) ?? {
+          reached: false,
+          disarmed: false,
+          damped: false,
+          dampConfirmed: false,
+          dampError: 'the hardware client reported nothing',
+        };
+      } catch (err) {
+        hardware = {
+          reached: false,
+          disarmed: false,
+          damped: false,
+          dampConfirmed: false,
+          dampError: err instanceof Error ? err.message : String(err),
+        };
+      }
+      this.lastHardwareStop = { ...hardware, at: new Date().toISOString() };
+      const gate = hardwareClient.getLocoCapability().gate;
+      if ((gate === 'fsm' || gate === 'full') && !hardware.damped) {
+        console.error(
+          `[RobotStateManager] E-stop: arms disarmed, robot NOT damped — ${hardware.dampError ?? 'unknown reason'}`,
+        );
+      } else if (hardware.damped) {
+        console.warn(`[RobotStateManager] E-stop: robot limp${hardware.dampConfirmed ? '' : ' (damp not confirmed)'}`);
+      }
+    }
+
     for (const listener of this.safetyStopListeners) {
       try {
         listener(stop);
@@ -2351,12 +2450,14 @@ export class RobotStateManager {
       }
     }
 
-    const result = await hardwareClient.locoStop();
-    if (!result.ok) {
-      console.warn(
-        `[RobotStateManager] ${stop.type} stop: base StopMove NOT delivered (${result.error ?? 'unknown error'}) — ` +
-          'the robot may still be executing commanded velocity',
-      );
+    if (hardwareClient.mayMoveBase()) {
+      const result = await hardwareClient.locoStop();
+      if (!result.ok) {
+        console.warn(
+          `[RobotStateManager] ${stop.type} stop: base StopMove NOT delivered (${result.error ?? 'unknown error'}) — ` +
+            'the robot may still be executing commanded velocity',
+        );
+      }
     }
 
     // Category 0 only: a protective stop (category 2) is a pause that keeps the
@@ -2370,6 +2471,7 @@ export class RobotStateManager {
         );
       });
     }
+    return hardware;
   }
 
   /**

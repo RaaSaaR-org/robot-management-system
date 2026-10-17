@@ -85,12 +85,16 @@ class LocoSimService(ServerBase):
         lock: threading.Lock,
         clock: Callable[[], float],
         verbose: bool = True,
+        on_fsm_set: Callable[[int], None] | None = None,
     ) -> None:
         super().__init__(LOCO_SERVICE_NAME)
         self._state = state
         self._lock = lock
         self._clock = clock
         self._verbose = verbose
+        # Told about every SetFsmId applied (TASK-398: the sim's /health keeps
+        # a timestamped history so a check can order a damp against arm_sdk).
+        self._on_fsm_set = on_fsm_set
         self.call_count = 0
         self._SetServerRequestHandler(self._handle)
         self._Start()
@@ -141,6 +145,9 @@ class LocoSimService(ServerBase):
         if api_id == API_SET_FSM_ID:
             with self._lock:
                 st.set_fsm_id(int(params.get("data", 0)))
+                fsm_id = st.fsm_id
+            if self._on_fsm_set is not None:
+                self._on_fsm_set(fsm_id)
             return RPC_OK, ""
 
         if api_id == API_SET_ARM_TASK:

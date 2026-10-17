@@ -51,6 +51,22 @@ export const HUD_COLORS = {
  */
 export const HUD_MAX_LINES = 5;
 
+/** The measured locomotion mode, as the agent names it (TASK-398). */
+export type HudBaseMode = 'limp' | 'stand' | 'balance' | 'zero_torque' | 'other' | 'unknown';
+
+/** The base line when NeoDEM controls the mode; null = the older readouts. */
+export function hudBaseLine(state: Pick<HudState, 'modeControl' | 'baseMode' | 'baseDamped' | 'moveEnabled'>):
+  { id: string; text: string } | null {
+  const controlled = state.modeControl === 'fsm' || state.modeControl === 'full';
+  if (controlled && (state.baseMode ?? 'unknown') === 'unknown') return { id: 'mode-unknown', text: 'MODE UNKNOWN' };
+  if (controlled && (state.baseDamped || state.baseMode === 'limp' || state.baseMode === 'zero_torque')) {
+    return { id: 'damped', text: 'ROBOT LIMP — use the desktop window' };
+  }
+  if (state.baseDamped) return { id: 'damped', text: 'BASE DAMPED — press Stand' };
+  if (state.moveEnabled === false) return { id: 'walk-off', text: 'Base walking disabled' };
+  return null;
+}
+
 /** What the operator's hands are currently doing. */
 export type HudMode = 'ARM-L' | 'ARM-R' | 'ARM-LR' | 'DRIVE' | 'IDLE';
 
@@ -92,6 +108,20 @@ export interface HudState {
    * manipulation. Blanking the HUD would overstate it.
    */
   baseDamped?: boolean;
+  /**
+   * TASK-398. False while the base will not walk at all (a sidecar that only
+   * changes modes): SPEED and TURN would be numbers nobody sends, so they give
+   * way to one line saying so. Absent = walking as before.
+   */
+  moveEnabled?: boolean;
+  /** The MEASURED mode, when the robot's mode can be changed from NeoDEM. */
+  baseMode?: HudBaseMode;
+  /**
+   * Whether NeoDEM can change the robot mode (`fsm`/`full`). Only then does the
+   * plate name the mode — and it never offers a button: mode changes happen in
+   * the desktop window, behind a confirmation (TASK-398, D8).
+   */
+  modeControl?: 'off' | 'fsm' | 'full';
   /**
    * The episode being captured right now, or null/absent when nothing is being
    * recorded.
@@ -300,6 +330,7 @@ export function composeHud(state: HudState): HudLine[] {
     ];
   }
 
+  const baseLine = hudBaseLine(state);
   return [
     // Red, not green: every camera ever built lights red for "armed and
     // capturing", and the operator does not have to be taught it. It is also the
@@ -315,13 +346,16 @@ export function composeHud(state: HudState): HudLine[] {
     // m/s`. Both linear axes are labelled rather than packed onto one number:
     // a magnitude would hide which way the robot is going, and 512 px of plate
     // at a 37 px glyph will not carry a third figure on the SPEED line.
-    ...(state.baseDamped
+    ...(baseLine
       ? [
           {
-            id: 'damped',
-            text: 'BASE DAMPED — press Stand',
-            color: HUD_COLORS.warn,
+            id: baseLine.id,
+            text: baseLine.text,
+            color: baseLine.id === 'walk-off' ? HUD_COLORS.text : HUD_COLORS.warn,
           },
+          // The missing-hand warning keeps its slot: with the base readouts
+          // gone there is room, and in the headset it has no other source.
+          ...(!rec && hand ? [{ id: 'hands', text: hand, color: HUD_COLORS.warn }] : []),
         ]
       : [
           {

@@ -420,8 +420,9 @@ export class CommandExecutor {
    * server's fleet commands, the Genkit `emergencyStop` tool). Clearing the
    * simulated target and speed does NOT stop an Agent Mode plan — that drives
    * the robot through its own LocoClient loop — so the stop is forwarded to the
-   * Agent Mode controller, which aborts the plan, damps the base and latches the
-   * SafetyMonitor's E-stop.
+   * Agent Mode controller, which aborts the plan and FIRST triggers the
+   * SafetyMonitor's E-stop (TASK-398): its actuation sends the sidecar's
+   * `/estop` — latch, disarm the arms, then damp — before anything else.
    *
    * HONESTY (TASK-194): the returned message says what was *commanded*. This
    * executor has no feedback channel that could confirm the physical robot

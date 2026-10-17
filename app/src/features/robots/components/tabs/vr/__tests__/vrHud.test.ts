@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   composeHud,
+  hudBaseLine,
   hudArmSuffix,
   hudHandWarning,
   hudNeedsRelease,
@@ -435,5 +436,42 @@ describe('the re-engage latch on the HUD', () => {
     expect(sameClutch({ left: true, right: false }, { left: true, right: false })).toBe(true);
     expect(sameClutch({ left: true, right: false }, { left: false, right: false })).toBe(false);
     expect(sameClutch({ left: false, right: false }, null)).toBe(false);
+  });
+});
+
+describe('composeHud — robot mode without the remote (TASK-398)', () => {
+  const FSM = { ...BASE, modeControl: 'fsm' as const, moveEnabled: false };
+
+  it('says the robot is limp and points at the desktop — never offers a button', () => {
+    const lines = composeHud({ ...FSM, baseMode: 'limp', baseDamped: true });
+    const line = lines.find((l) => l.id === 'damped');
+    expect(line?.text).toBe('ROBOT LIMP — use the desktop window');
+    expect(lines.some((l) => /press/i.test(l.text))).toBe(false);
+  });
+
+  it('says MODE UNKNOWN when there is no fresh measurement', () => {
+    const lines = composeHud({ ...FSM, baseMode: 'unknown' });
+    expect(lines.map((l) => l.text)).toContain('MODE UNKNOWN');
+    expect(lines.some((l) => l.id === 'speed')).toBe(false);
+  });
+
+  it('replaces SPEED and TURN with one line when the base does not walk', () => {
+    const lines = composeHud({ ...FSM, baseMode: 'balance', vx: 0.3, omega: 0.4 });
+    expect(lines.map((l) => l.id)).toEqual(['link', 'mode', 'walk-off']);
+    expect(lines[2].text).toBe('Base walking disabled');
+  });
+
+  it('keeps the missing-hand warning next to it', () => {
+    const lines = composeHud({
+      ...FSM, baseMode: 'balance',
+      arm: { armed: true, arming: false, armWeight: 1, teleopMode: 'arms+left_hand' } as never,
+    });
+    expect(lines.some((l) => l.id === 'hands')).toBe(true);
+  });
+
+  it('leaves a robot without mode control exactly as it was', () => {
+    expect(hudBaseLine({ baseDamped: true })).toEqual({ id: 'damped', text: 'BASE DAMPED — press Stand' });
+    expect(hudBaseLine({})).toBeNull();
+    expect(composeHud({ ...BASE, vx: 0.4 }).some((l) => l.id === 'speed')).toBe(true);
   });
 });

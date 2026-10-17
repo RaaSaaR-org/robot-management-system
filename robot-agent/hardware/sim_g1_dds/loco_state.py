@@ -72,10 +72,20 @@ FSM_SIT = 3
 FSM_START = 500
 FSM_LIE_TO_STAND = 702
 FSM_SQUAT_STAND = 706
+# The G1's C++ LocoClient: StandUp() == SetFsmId(4) — the lock stand the remote's
+# L2+Up gives (TASK-398). Not yet verified on our robot; see g1_loco_mode.py.
+FSM_LOCK_STAND = 4
 
 # States in which the robot must not translate. Matches the real FSM: damped,
-# de-energised or seated robots do not walk.
-NON_LOCOMOTING_FSM = frozenset({FSM_ZERO_TORQUE, FSM_DAMP, FSM_SIT})
+# de-energised, seated or lock-standing robots do not walk.
+NON_LOCOMOTING_FSM = frozenset({FSM_ZERO_TORQUE, FSM_DAMP, FSM_SIT, FSM_LOCK_STAND})
+
+# The FSM ids in which the robot honours rt/arm_sdk (TASK-398). On 2026-10-17 a
+# real G1 in damp ignored every arm_sdk frame; xr_teleoperate supports arm_sdk
+# only in "regular" mode (R1+X == 500). sim_node.py drops arm_sdk frames
+# outside this set. The sim invents no firmware TRANSITION rules — set_fsm_id
+# still accepts any id; the sidecar enforces its own.
+BALANCE_FSM = frozenset({FSM_START})
 
 # Arm task ids from SetTaskId (7106).
 ARM_TASK_RELEASE = 99

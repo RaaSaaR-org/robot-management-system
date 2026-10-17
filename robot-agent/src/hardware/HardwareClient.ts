@@ -44,6 +44,19 @@ import {
   UNKNOWN_ARM_STATUS,
   type SidecarArmStatus,
 } from './arm-status.js';
+import {
+  isFreshBaseState,
+  parseBaseState,
+  parseEstopReply,
+  parseLocoCapability,
+  baseStateAgeS,
+  UNKNOWN_LOCO_CAPABILITY,
+  type BaseModeCommand,
+  type BaseModeName,
+  type BaseState,
+  type LocoCapability,
+  type SidecarEstopResult,
+} from './base-mode.js';
 import { config } from '../config/config.js';
 // The ONE radians→degrees constant in this repo. Imported rather than
 // re-declared: `LocoOdometry.yaw` is radians (DDS convention) and everything
@@ -259,7 +272,11 @@ export interface RecordingStopResult {
 export interface LocoResult {
   ok: boolean;
   error?: string;
-  /** True only for HTTP 403 — locomotion is switched off on this sidecar. */
+  /**
+   * True for HTTP 403 — locomotion is switched off on this sidecar — and for a
+   * call short-circuited here because the sidecar's capability says it would
+   * refuse (TASK-398: `G1_LOCO_ENABLED=fsm` or off). No HTTP was made then.
+   */
   locoDisabled?: boolean;
   /** Unitree RPC status code echoed by the sidecar on success. */
   rpcCode?: number;
@@ -323,6 +340,25 @@ export interface HardwareOdometry extends OdometryState {
   provenance: LocoOdometryProvenance;
   /** Raw `SportModeState_.error_code`, or null when the frame carried none. */
   errorCode: number | null;
+}
+
+/** The measured base mode as the agent reports it (TASK-398). */
+export interface BaseModeReading {
+  fsmId: number | null;
+  mode: BaseModeName;
+  /** Total age: the sidecar's reading age plus transport, seconds. */
+  ageS: number | null;
+  error: string | null;
+}
+
+/** Answer of `POST /loco/mode`, passed through by the agent's route. */
+export interface LocoModeResult {
+  ok: boolean;
+  /** HTTP status the sidecar answered; 0 when it did not answer. */
+  status: number;
+  /** The sidecar's machine code on a refusal (`bad_transition`, …). */
+  code?: string;
+  body: Record<string, unknown>;
 }
 
 /** Planar base pose from `GET /loco/odom` (`rt/odommodestate`). */
@@ -523,6 +559,10 @@ export class HardwareClient {
    * had just been armed.
    */
   private armOpSeq = 0;
+  /** The sidecar's `loco` capability block (TASK-398), from `/health`. */
+  private locoCapability: LocoCapability = { ...UNKNOWN_LOCO_CAPABILITY };
+  /** The last measured `base` block, from `/state`, `/health` or `/loco/mode`. */
+  private baseState: BaseState | null = null;
 
   /**
    * Ordered list of joint names for the active embodiment (ROBOT_TYPE),
@@ -632,8 +672,10 @@ export class HardwareClient {
     try {
       const res = await fetch(`${getSidecarUrl()}/health`, { signal: AbortSignal.timeout(timeoutMs) });
       if (!res.ok) return null;
-      const status = parseArmStatus(await res.json());
+      const body = (await res.json()) as unknown;
+      const status = parseArmStatus(body);
       this.applyPolledArmStatus(status, seq);
+      this.applyLocoHealth(body);
       return status;
     } catch {
       return null;
@@ -744,6 +786,7 @@ export class HardwareClient {
       this.sidecarOdomFromBoot = data.odom_frame === 'boot';
       this.sidecarScene = typeof data.scene === 'string' && data.scene ? data.scene : null;
       this.applyPolledArmStatus(parseArmStatus(data), seq);
+      this.applyLocoHealth(data);
       if (this.sidecarAvailable) {
         console.log(`[Hardware] Sidecar reachable — arm connected: ${this.connected}`);
         if (!this.pollTimer) this.startPolling();
@@ -796,6 +839,9 @@ export class HardwareClient {
         this.touch = _parseTouch(data.touch);
         this.battery = _parseBattery(data.battery);
         this.odometry = _parseOdometry(data.odometry);
+        // TASK-398: the measured mode rides the poll whenever the sidecar's
+        // mode gate is on; a `/state` without it says nothing about the base.
+        if (data.base !== undefined) this.baseState = parseBaseState(data.base);
         // TASK-393: the arm fields ride the same poll when the sidecar sends
         // them. A `/state` WITHOUT them (the sim, an older sidecar) leaves the
         // status from `/health` alone rather than resetting it to "unknown".
@@ -820,6 +866,7 @@ export class HardwareClient {
         this.touch = null;
         this.battery = null;
         this.odometry = null;
+        this.baseState = null;
         // A pose from before the sidecar vanished is not a pose. Publishing the
         // null is the point: place awareness must go to UNKNOWN, not coast.
         this.setBasePose(null);
@@ -1673,12 +1720,118 @@ export class HardwareClient {
   // methods throw — the caller turns `ok:false` into a failed block.
   // ────────────────────────────────────────────────────────────────
 
+  // ────────────────────────────────────────────────────────────────
+  // TASK-398: the robot MODE (limp / stand / balance), measured by the sidecar.
+  // ────────────────────────────────────────────────────────────────
+
+  /** Read the `loco` + `base` blocks out of a `/health` body. */
+  private applyLocoHealth(body: unknown): void {
+    const record = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
+    this.locoCapability = parseLocoCapability(record);
+    if (record.base !== undefined && this.locoCapability.gate !== 'off') {
+      this.baseState = parseBaseState(record.base);
+    }
+  }
+
+  /** What the sidecar's gate allows; `unknown` until its `/health` was read. */
+  getLocoCapability(): LocoCapability {
+    return this.locoCapability;
+  }
+
+  /**
+   * Whether a base velocity / gesture / raw FSM call may go to the sidecar.
+   * False only when the sidecar SAID it would refuse — an unknown sidecar (the
+   * MuJoCo sim, an older one) is driven exactly as before.
+   */
+  mayMoveBase(): boolean {
+    return this.locoCapability.moveEnabled !== false;
+  }
+
+  /** The last measured mode with its total age, or null when there is none. */
+  getBaseState(nowMs: number = Date.now()): BaseModeReading | null {
+    const state = this.baseState;
+    if (!state) return null;
+    return { fsmId: state.fsmId, mode: state.mode, ageS: baseStateAgeS(state, nowMs), error: state.error };
+  }
+
+  /** The measured FSM id when the reading is fresh enough to act on, else null. */
+  getMeasuredFsmId(nowMs: number = Date.now()): number | null {
+    return isFreshBaseState(this.baseState, nowMs) ? this.baseState.fsmId : null;
+  }
+
+  /**
+   * `GET /loco/mode` — a fresh reading, for the 1 Hz app poll (the `/state`
+   * poll is only every 2 s). Updates the cache. Null when the sidecar did not
+   * answer or has no such route.
+   */
+  async fetchLocoMode(timeoutMs = 1500): Promise<{ inFlight: string | null; estopLatched: boolean } | null> {
+    try {
+      const res = await fetch(`${getSidecarUrl()}/loco/mode`, { signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) return null;
+      const body = (await res.json()) as Record<string, unknown>;
+      this.locoCapability = parseLocoCapability(body);
+      if (this.locoCapability.gate !== 'off') this.baseState = parseBaseState(body);
+      return {
+        inFlight: typeof body.in_flight === 'string' ? body.in_flight : null,
+        estopLatched: body.estop_latched === true,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * `POST /loco/mode {mode}` — limp / stand / balance. The sidecar runs the
+   * transition table and confirms by GetFsmId, so this waits up to 12 s (RPC
+   * plus confirmation). Never throws; the sidecar's status and body come back
+   * verbatim for the route to pass through.
+   */
+  async locoMode(mode: BaseModeCommand): Promise<LocoModeResult> {
+    try {
+      const res = await fetch(`${getSidecarUrl()}/loco/mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+        signal: AbortSignal.timeout(12_000),
+      });
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      const measured = body.base ?? body.measured;
+      if (measured !== undefined) this.baseState = parseBaseState(measured);
+      return {
+        ok: res.ok && body.ok !== false,
+        status: res.status,
+        ...(typeof body.code === 'string' ? { code: body.code } : {}),
+        body,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        status: 0,
+        code: 'sidecar_unreachable',
+        body: { ok: false, error: `sidecar /loco/mode unreachable: ${err instanceof Error ? err.message : String(err)}` },
+      };
+    }
+  }
+
+  /** The no-HTTP answer for a base command the sidecar said it refuses. */
+  private locoRefusedLocally(path: string): LocoResult {
+    return {
+      ok: false,
+      locoDisabled: true,
+      error:
+        this.locoCapability.gate === 'fsm'
+          ? `base motion is disabled on this robot (G1_LOCO_ENABLED=fsm: mode changes only) — ${path} not sent`
+          : `locomotion is not enabled on this robot (G1_LOCO_ENABLED is off on the sidecar) — ${path} not sent`,
+    };
+  }
+
   /** Shared POST helper for the `/loco/*` endpoints. Never throws. */
   private async _loco(
     path: string,
     body: Record<string, unknown>,
     timeoutMs: number
   ): Promise<LocoResult> {
+    if (!this.mayMoveBase()) return this.locoRefusedLocally(path);
     try {
       const res = await fetch(`${getSidecarUrl()}${path}`, {
         method: 'POST',
@@ -1801,25 +1954,39 @@ export class HardwareClient {
   }
 
   /**
-   * Best-effort soft E-stop: POST the sidecar's `/estop`, which clears the action
-   * ramp so a later command re-seeds the ramp from the true pose. The safety loop
-   * calls this to propagate a protective stop to the hardware command path. Never
-   * throws — if the sidecar is unreachable there is nothing more to do here.
+   * The sidecar's `/estop`: latch, start the arm disarm ramp, THEN damp the
+   * robot (TASK-398, when the sidecar's mode gate is on — the robot sags into
+   * the gantry, like the remote's damping). Every E-stop path in this agent
+   * calls this FIRST. Never throws; the answer says what actually happened, so
+   * a UI can tell "robot limp" from "arms disarmed, robot NOT damped".
    *
-   * ⚠️ SOFT stop (ramp reset), NOT a physical motor cut. Real-hardware bring-up
-   * still needs Unitree's damping/E-stop mode + a safety gantry.
+   * 7 s timeout: the sidecar may wait for its RPC lock and then confirms the
+   * damp by GetFsmId for up to 2 s. A sidecar without mode control answers at
+   * once with `damped: false`.
    */
-  async sendEstop(): Promise<void> {
+  async sendEstop(opts: { damp?: boolean } = {}): Promise<SidecarEstopResult> {
     // The forwarder stops now, whether or not the request gets through.
     this.armedLocal = false;
     this.armOpSeq += 1;
     try {
-      await fetch(`${getSidecarUrl()}/estop`, {
+      const res = await fetch(`${getSidecarUrl()}/estop`, {
         method: 'POST',
-        signal: AbortSignal.timeout(1500),
+        headers: { 'Content-Type': 'application/json' },
+        // `{"damp": false}`: latch and disarm, never damp (a protective stop).
+        // The sidecar decides from this, not from what we think its gate is.
+        body: opts.damp === false ? '{"damp":false}' : '{}',
+        signal: AbortSignal.timeout(7000),
       });
-    } catch {
-      // Sidecar unreachable / timeout — best-effort only.
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      return parseEstopReply(body, res.ok);
+    } catch (err) {
+      return {
+        reached: false,
+        disarmed: false,
+        damped: false,
+        dampConfirmed: false,
+        dampError: `sidecar /estop unreachable: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
   }
 }

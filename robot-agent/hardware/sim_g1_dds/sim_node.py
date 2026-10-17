@@ -37,6 +37,7 @@ DDS domains: 0 = real robot, 1 = sim, 9 = mock/tests.
 """
 from __future__ import annotations
 
+import collections
 import argparse
 import base64
 import io
@@ -74,13 +75,15 @@ try:
     from .cine_recorder import RecorderConfig, RecorderSlot, parse_size
     from .joints import ARM_REST, BASE_JOINTS, BODY, LHAND, N_BODY, N_HAND, RHAND, WEIGHT_IDX
     from .loco_service import LocoSimService
-    from .loco_state import UINT32_MAX, LocoState, pose_relative_to, wrap_angle
+    from .loco_state import BALANCE_FSM, UINT32_MAX, LocoState, pose_relative_to, wrap_angle
 except ImportError:  # plain-script invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from cine_recorder import RecorderConfig, RecorderSlot, parse_size  # type: ignore[no-redef]
     from joints import ARM_REST, BASE_JOINTS, BODY, LHAND, N_BODY, N_HAND, RHAND, WEIGHT_IDX
     from loco_service import LocoSimService
-    from loco_state import UINT32_MAX, LocoState, pose_relative_to, wrap_angle
+    from loco_state import (  # type: ignore[no-redef]
+        BALANCE_FSM, UINT32_MAX, LocoState, pose_relative_to, wrap_angle,
+    )
 
 DEFAULT_SCENE = (
     Path(__file__).resolve().parents[1]
@@ -514,6 +517,22 @@ def _cast_ray_fan(model, data, origin_world, base_x: float, base_y: float,
     }
 
 
+def _loco_health(node) -> dict:
+    """The TASK-398 /health fields. getattr: test doubles carry a subset."""
+    loco = getattr(node, "loco", None)
+    return {
+        "loco_fsm_id": None if loco is None else loco.fsm_id,
+        "fsm_history": list(getattr(node, "fsm_history", ())),
+        "arm_sdk_frames": getattr(node, "arm_cmd_count", 0),
+        "arm_sdk_ignored_frames": getattr(node, "arm_sdk_ignored_frames", 0),
+    }
+
+
+def arm_sdk_honoured(fsm_id: int) -> bool:
+    """Whether an rt/arm_sdk frame takes effect in loco FSM `fsm_id` (TASK-398)."""
+    return int(fsm_id) in BALANCE_FSM
+
+
 class SimNode:
     def __init__(self, scene: Path, domain: int, verbose: bool = True) -> None:
         self.model = mujoco.MjModel.from_xml_path(str(scene))
@@ -524,6 +543,9 @@ class SimNode:
 
         self.lock = threading.Lock()
         self.loco = LocoState()
+        # (wall time, fsm id) per SetFsmId the sport service applied, newest
+        # last -- lets a check order a damp against the arm_sdk frames it saw.
+        self.fsm_history: "collections.deque[tuple[float, int]]" = collections.deque(maxlen=32)
         self._render_queue: list[RenderRequest] = []
         self._reset_queue: list[PoseResetRequest] = []
         self._range_queue: list[RangeRequest] = []
@@ -555,7 +577,8 @@ class SimNode:
         # The loco service shares our lock and reads simulation time, so RPC
         # handlers and the physics loop can never interleave mid-update.
         self.loco_service = LocoSimService(
-            self.loco, self.lock, lambda: self.data.time, verbose=verbose
+            self.loco, self.lock, lambda: self.data.time, verbose=verbose,
+            on_fsm_set=lambda fsm_id: self.fsm_history.append((time.time(), fsm_id)),
         )
         print(f"[SimNode] scene {scene.name}, DDS domain {domain}")
         print(f"[SimNode]   sub  {TOPIC_ARM_SDK}, rt/dex3/{{left,right}}/cmd")
@@ -645,6 +668,7 @@ class SimNode:
         self.tgt = {"body": np.zeros(N_BODY), "lh": np.zeros(N_HAND), "rh": np.zeros(N_HAND)}
         self.weight = 0.0
         self.arm_cmd_count = 0
+        self.arm_sdk_ignored_frames = 0
         # Latched fall-back pose for the (1 - weight) share of the arm_sdk blend,
         # plus the weight it was latched at. See _hold_pose.
         self._hold: dict[str, np.ndarray] | None = None
@@ -709,6 +733,14 @@ class SimNode:
 
     def _on_arm_sdk(self, msg: LowCmd_) -> None:
         with self.lock:
+            # TASK-398: a real G1 honours arm_sdk only in balance ("regular"
+            # mode). Elsewhere -- damp, lock stand -- the frame is dropped and
+            # the upper body is the robot's own, exactly what was measured on
+            # the gantry on 2026-10-17.
+            if not arm_sdk_honoured(self.loco.fsm_id):
+                self.weight = 0.0
+                self.arm_sdk_ignored_frames += 1
+                return
             self.weight = float(msg.motor_cmd[WEIGHT_IDX].q)
             self.tgt["body"] = np.array([msg.motor_cmd[i].q for i in range(N_BODY)])
             self.arm_cmd_count += 1
@@ -1662,7 +1694,11 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                                  # agent then treats it as real odometry.
                                  "odom_frame": "world" if node.odom_origin is None else "boot",
                                  "behind_s": round(node.behind_s, 3),
-                                 "boot_id": BOOT_ID})
+                                 "boot_id": BOOT_ID,
+                                 # TASK-398: the loco FSM, every SetFsmId the
+                                 # sport service took (wall clock), and the
+                                 # arm_sdk frames dropped outside balance.
+                                 **_loco_health(node)})
             elif path == "/cameras":
                 self._send(200, {"cameras": node.camera_names()})
             elif path == "/record":
@@ -2000,7 +2036,8 @@ def parse_spawn(text: str) -> tuple[float, float, float]:
     return (x, y, math.radians(yaw_deg))
 
 
-def main(argv: list[str] | None = None) -> int:
+def make_arg_parser() -> argparse.ArgumentParser:
+    """The command line, separate from main() so tests can parse it."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--scene", type=Path, default=DEFAULT_SCENE)
     ap.add_argument("--domain", type=int,
@@ -2025,6 +2062,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="world: odometry IS the MJCF world (default). boot: odometry "
                          "starts at the pose the base has at start-up, like a real "
                          "robot's -- /health reports odom_frame=boot")
+    ap.add_argument("--initial-fsm", type=int, default=500,
+                    help="loco FSM id at start-up (default 500 = balance, as before). "
+                         "1 starts in damp like a real G1 after power-on (TASK-398)")
     ap.add_argument("--spawn", metavar="X,Y,YAWDEG", type=parse_spawn,
                     help="start the base at this world pose (metres, degrees)")
     ap.add_argument("--record", metavar="OUT.mp4",
@@ -2034,7 +2074,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--record-fps", type=int, default=30)
     ap.add_argument("--record-size", default="1080x1920",
                     help="WxH; default is vertical 1080x1920 for Reels/Shorts")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = make_arg_parser().parse_args(argv)
 
     if not args.scene.exists():
         print(f"[SimNode] scene not found: {args.scene}", file=sys.stderr)
@@ -2046,6 +2090,10 @@ def main(argv: list[str] | None = None) -> int:
         ChannelFactoryInitialize(args.domain)
 
     node = SimNode(args.scene, args.domain, verbose=not args.quiet)
+    if args.initial_fsm != node.loco.fsm_id:
+        node.loco.set_fsm_id(args.initial_fsm)
+        print(f"[SimNode]   initial loco FSM {args.initial_fsm} "
+              f"(arm_sdk {'honoured' if arm_sdk_honoured(args.initial_fsm) else 'IGNORED'})")
     if args.spawn is not None:
         if not node.has_base:
             print(f"[SimNode] --spawn ignored: scene {args.scene.name} has no planar base",

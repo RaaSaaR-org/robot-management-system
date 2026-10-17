@@ -119,4 +119,33 @@ describe('ReengageLatch', () => {
     expect(latch.report(OPEN)).toBe(false);
     expect(latch.report({ left: true, right: false })).toBe(true);
   });
+
+  it('a sidecar disarm on leaving balance (TASK-398) needs a release before the next arm — no loop', () => {
+    const HELD = { left: true, right: false };
+    const latch = new ReengageLatch();
+    latch.report(OPEN);
+    latch.update(false, false);
+    latch.report(HELD);
+    latch.update(false, false);
+    expect(latch.mayArm()).toBe(true);
+    latch.held();
+
+    // The robot left balance under a holding socket: the sidecar disarmed
+    // itself with reason `left_balance`. The operator is still squeezing.
+    expect(latch.update(false, false)).toBe('holding');
+    // Every later tick, and every `/arm` the sidecar refuses with
+    // `not_in_balance` (a refused arm latches), keeps it out of `ready`.
+    for (let i = 0; i < 50; i++) {
+      latch.report(HELD);
+      latch.update(false, false);
+      if (i % 10 === 0) latch.latch();
+      expect(latch.mayArm()).toBe(false);
+    }
+    // Only a deliberate release and a new squeeze arm again.
+    latch.report(OPEN);
+    latch.update(false, false);
+    latch.report(HELD);
+    latch.update(false, false);
+    expect(latch.mayArm()).toBe(true);
+  });
 });

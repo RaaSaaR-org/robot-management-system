@@ -74,11 +74,13 @@ export const G1_FSM_DAMP = 1;
 /**
  * FSM ids in which the base ACCEPTS a velocity command and does nothing with
  * it. Mirrors `NON_LOCOMOTING_FSM` in `hardware/sim_g1_dds/loco_state.py`
- * (zero-torque 0, damp 1, sit 3); the real G1's onboard FSM behaves the same.
+ * (zero-torque 0, damp 1, sit 3, lock stand 4 — TASK-398's "Stand up", which
+ * holds the legs stiff and does not walk until Balance); the real G1's onboard
+ * FSM behaves the same.
  * `SetVelocity` still answers RPC_OK in these states, which is why a block must
  * verify motion by odometry instead of trusting the return code.
  */
-export const G1_NON_LOCOMOTING_FSM_IDS: ReadonlySet<number> = new Set([0, G1_FSM_DAMP, 3]);
+export const G1_NON_LOCOMOTING_FSM_IDS: ReadonlySet<number> = new Set([0, G1_FSM_DAMP, 3, 4]);
 
 /** Velocity components (robot frame) for each walking direction. */
 const WALK_AXES: Record<WalkDirection, { fx: number; fy: number }> = {

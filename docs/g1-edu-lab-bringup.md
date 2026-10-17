@@ -159,7 +159,14 @@ succeeds and reports `teleop_mode: "arms+left_hand"` instead of blocking.
   blends into the balance controller, so that controller must be running.
   xr_teleoperate leaves the robot in debug mode on exit — switch back with the
   remote or reboot.
-- Gantry attached for the first session. One person on the hardware e-stop.
+- **The robot must be in balance** (FSM 500, the remote's R1+X) before `/arm`
+  — since TASK-398 the sidecar refuses `/arm` otherwise (`not_in_balance`,
+  `fsm_unknown`). With no remote on site, NeoDEM puts it there: see
+  ["Mode changes without the remote"](#mode-changes-without-the-remote-task-398)
+  below, which replaces the remote steps (L2+Up, R1+X) of this list.
+- Gantry attached for the first session. One person at the robot (gantry hoist
+  and battery button); the NeoDEM E-stop (app STOP, VR B/Y, or
+  `curl -XPOST localhost:8767/estop`) disarms the arms and damps the robot.
 - The read-only bridge keeps running (`g1_state_bridge_readonly.py --iface
   enp131s0 --domain 0`, ZMQ :6001): `/state` reads BMS and odometry from it.
 - Stop the read-only sidecar on :8767 first — the arm_sdk sidecar takes the
@@ -223,6 +230,16 @@ sidecar whose `/health` reports another domain.
 
 ### Not yet verified on the robot
 
+- FSM id 4 as the G1's lock stand (L2+Up). Unitree's C++ `g1_loco_client.hpp`
+  maps `StandUp()` to `SetFsmId(4)`; `/health.loco.ids_verified` stays `false`
+  until runbook step 4 below has been run and recorded in TASK-398.
+- That 500 (`Start()`) is the remote's R1+X "regular" mode, the one in which
+  arm_sdk is honoured.
+- What `GetFsmMode` (`base.fsm_mode`) and `rt/odommodestate.mode`
+  (`base.odom_mode`) report in each mode — both are logged, nothing gates on
+  them yet.
+- The drift guard default `G1_ARM_TRACK_ERR_RAD=0.35` (0.3 s): read
+  `track_err_rad` from `/health` during the first session and tune it.
 - That the robot's arm_sdk blender ignores the leg slots (Unitree's examples
   and xr_teleoperate's motion mode say so; the sim blends all 29).
 - The waist hold at kp 300 / kd 3 while the balance controller is running.
@@ -236,3 +253,157 @@ sidecar whose `/health` reports another domain.
   stop the sidecar with SIGTERM or Ctrl-C, never `kill -9`.
 - Dex3 commands have no blend weight: after a disarm each hand keeps its last
   commanded position at kp 1.5 until something else commands it.
+
+---
+
+## Mode changes without the remote (TASK-398)
+
+*Written 2026-10-17. Run against the MuJoCo DDS sim
+(`sim_g1_dds/loco_mode_sim_check.py`, domain 42), not yet against the robot.
+It amends "Before you start" above, which assumed the Unitree remote.*
+
+There is no remote on site. The sidecar changes the robot's mode instead —
+**mode changes only**: walking, turning, gestures and raw FSM ids stay
+impossible.
+
+### What the sidecar does
+
+`G1_LOCO_ENABLED` takes three values:
+
+| Value | Meaning |
+| --- | --- |
+| `0` / unset | No mode control, no locomotion. `/loco/*` → 403. |
+| `fsm` | **The real robot.** `POST /loco/mode` (limp / stand / balance) and the E-stop's damp. The only RPCs that can leave the process are `SetFsmId(1 \| 4 \| 500)`, `GetFsmId` and `GetFsmMode`. `/loco/move`, `/loco/action` (incl. stop), `/loco/stand-height` and `/loco/fsm` → 403. |
+| `1` | Full locomotion (the sim / Agent Mode). |
+
+Anything else refuses to start, and so does `fsm`/`1` without an explicit
+`G1_DDS_DOMAIN`. With the gate on the HTTP API listens on 127.0.0.1 even in
+read-only mode.
+
+An FSM monitor polls `GetFsmId` at 2 Hz; `/health` and `/state` carry the
+**measured** mode as `base: {fsm_id, mode, age_s, fsm_mode, odom_mode, error}`
+(`mode` is `unknown` when the reading is older than 1.5 s), and `/health.loco`
+says what the gate allows.
+
+| Request | Allowed from (measured) | Also needs |
+| --- | --- | --- |
+| `limp` (`SetFsmId(1)`) | anything, incl. unknown | nothing — disarms the arms first, never blocked |
+| `stand` (`SetFsmId(4)`) | limp | arms disengaged, E-stop not latched |
+| `balance` (`SetFsmId(500)`) | stand, held ≥ 2 s | arms disengaged, E-stop not latched |
+
+Each change is confirmed by `GetFsmId` within 5 s or answers **504
+`unconfirmed`** — with no automatic recovery: the UI shows the measured mode and
+offers Limp. Refusals carry a `code` (`bad_transition`, `not_settled`,
+`arms_engaged`, `estop_latched`, `fsm_unknown`, `mode_change_in_flight`,
+`rpc_failed`).
+
+`POST /estop` = latch → disarm ramp starts → **damp** (`SetFsmId(1)`, confirmed
+for 2 s). It does not wait out the 1 s arm ramp: in damp the robot ignores
+arm_sdk. `POST /estop/reset` clears the latch and **does not stand the robot
+up**. SIGTERM of the sidecar does **not** damp (it disarms and leaves zero
+frames), so a restart never drops the robot. `POST /estop {"damp": false}`
+latches and disarms without damping: the agent sends it for a protective stop
+(server link lost, tilt warning, geofence), which must not drop a balancing
+robot into the gantry. A Stand up or Balance that was still waiting for the
+sport RPC when an E-stop or Limp went out is dropped unsent (409, `sent:false`).
+
+`/arm` now needs a fresh measured balance (FSM in `G1_FSM_BALANCE_REPORTED`,
+default `500`). While armed, the arms disarm by themselves when the robot leaves
+balance (`left_balance`), when the reading is older than 2 s (`fsm_stale`), and
+when the measured arm stays more than 0.35 rad from the command for 0.3 s
+(`tracking_error`). `G1_ARM_ALLOW_UNKNOWN_FSM=1` disables the mode check for a
+session in which a person with the remote has put the robot in balance — the
+sidecar warns loudly at start.
+
+In NeoDEM: the **VR window header** (desktop view) and the **VR data-collection
+session page** show `Mode: Limp | Stand (locked) | Balance | Unknown`, and the
+buttons **Stand up**, **Balance** and **Limp**, each behind a confirmation and
+each saying why it is disabled. They need the control lease (with control
+leases off on the server they stay disabled and say so). Limp stays clickable
+while a Stand up or Balance waits for its confirmation — it interrupts it. The headset shows
+the mode only (`ROBOT LIMP — use the desktop window`, `MODE UNKNOWN`) — never a
+button. Head turns and thumbsticks send nothing to a robot that does not walk.
+
+### People
+
+- One person at the robot, with the gantry hoist and the battery power button.
+- One person at the desktop VR window.
+- One operator in the headset.
+
+**Robot state:** normal mode, not debug mode. After power-on it is in damp.
+
+### Sequence
+
+1. **Start the sidecar** with the arm_sdk line above, `G1_LOCO_ENABLED=0`
+   replaced by **`G1_LOCO_ENABLED=fsm`**. The start banner names the gate, the
+   domain, the interface and the FSM ids, and marks stand id 4 as unverified.
+2. **Check `/health`:**
+   - `curl -s localhost:8767/health` must show `loco.gate "fsm"`,
+     `loco.move_enabled false`, `base.mode "limp"`, `base.fsm_id 1` and
+     `base.age_s < 1.5`.
+   - If `base.mode` is `"unknown"`, the sport service is not answering (the
+     `error` says so) — the robot is probably in debug mode. **Stop here.**
+     Power-cycle the robot.
+   - `curl -s -XPOST localhost:8767/loco/move -d '{}'` must answer 403.
+3. **Feet on the floor.** Lower the gantry until both feet are flat on the
+   floor. Leave a hand's width of slack, so a sag is caught within about 10 cm.
+4. **Stand up** (VR window header or session page) and confirm.
+   - Expect the legs to stiffen within about 1–3 s and the readout to show
+     `Stand (locked) · FSM 4`.
+   - **This step is the on-robot check of FSM id 4.** Record the reported id
+     and what the robot did in the TASK-398 task file.
+   - If the readout says unconfirmed, the robot moves unexpectedly, or the id
+     reads anything else: **Limp** (or E-stop), hoist the gantry, and stop. Do
+     not try 706 (`G1_FSM_ID_STAND=706`, squat-to-stand) without the user
+     agreeing at the robot.
+5. **Wait at least 2 s** with the robot steady. Then **Balance** and confirm.
+   - The readout should show `Balance · FSM 500`. The robot may shift its
+     weight slightly.
+   - If the robot reports a different id (such as 801), the confirmation times
+     out — fail-closed: Limp, and record it. Only after seeing it on the robot
+     may `G1_FSM_BALANCE_REPORTED=500,801` be set.
+6. **Take control** in the VR window. The operator puts on the headset,
+   **releases, then squeezes** the grip. The arms ramp in over 1.5 s from the
+   measured pose.
+7. **Record episodes.** Arms plus the left hand only while the right Dex3
+   publishes nothing (`teleop_mode=arms+left_hand`).
+8. **Finish:**
+   - Release the grip; the arms disarm.
+   - Hoist the gantry until it carries the robot.
+   - **Limp** and confirm.
+
+### If something goes wrong (no remote on site)
+
+| Situation | Action |
+| --- | --- |
+| The arm misbehaves | Release the grip (disarm over 1 s), or press B/Y or the app STOP button (disarm, then limp, latched). |
+| The robot is unstable in balance | E-stop from the app or B/Y. It goes limp into the gantry. |
+| The app, server or agent is down but the sidecar is up | On the box: `curl -s -XPOST localhost:8767/estop`. Expect `damped:true`. |
+| The mode reads Unknown while the robot is standing | Do not arm (the sidecar refuses anyway). Try `curl -XPOST localhost:8767/estop`. If `damped` is not true: hoist the gantry until it carries the robot, then power off at the battery. |
+| The sidecar is dead or hung | The arms return to Unitree after the zero frames (SIGTERM path; **never kill -9**). **The robot stays in balance.** Restart the sidecar with `fsm` and `curl -XPOST localhost:8767/loco/mode -d '{"mode":"limp"}'`, or use the power button with the gantry carrying the robot. **Rule:** whenever the robot is not limp, the gantry stays attached and able to take its weight. |
+| After an E-stop reset | The robot stays limp. Go through Stand up, then Balance again. |
+
+### Rehearsal against the MuJoCo DDS sim
+
+Domain 42 on loopback; the sim starts in damp like a real G1 after power-on.
+
+```bash
+cd robot-agent/hardware/sim_g1_dds
+export CYCLONEDDS_HOME=/home/humanoid/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/cyclonedds/install
+MUJOCO_GL=egl ~/anaconda3/envs/unitree_sim_env6/bin/python sim_node.py \
+  --scene ../sim_evaluator/mjcf/g1_dex3_pickplace_scene.xml \
+  --domain 42 --iface lo --http-port 8782 --initial-fsm 1 --quiet &
+(cd .. && G1_WRITE_MODE=arm_sdk G1_LOCO_ENABLED=fsm G1_DDS_DOMAIN=42 G1_DDS_IFACE=lo \
+  G1_SIDECAR_PORT=8792 G1_LOWSTATE_ENDPOINT=tcp://127.0.0.1:6999 \
+  ~/anaconda3/envs/unitree_sim_env6/bin/python -u g1_sidecar.py &)
+~/anaconda3/envs/unitree_sim_env6/bin/python loco_mode_sim_check.py --domain 42 --iface lo \
+  --sim http://127.0.0.1:8782 --sidecar http://127.0.0.1:8792
+```
+
+`loco_mode_sim_check.py` walks limp → stand → balance, arms, damps the sim
+behind the sidecar's back (it must disarm with `left_balance`), and checks that
+an E-stop's falling arm_sdk weight reaches the wire before the sim applies
+`SetFsmId(1)`. It refuses domain 0, any non-loopback interface, and a sidecar
+that reports another domain or gate. The sim drops arm_sdk frames outside
+balance (`arm_sdk_ignored_frames` on its `/health`), as the robot did on
+2026-10-17; it does not model the sag in damp or the lock-stand physics.
