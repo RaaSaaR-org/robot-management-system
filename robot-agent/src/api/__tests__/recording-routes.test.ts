@@ -25,6 +25,9 @@ import type { Router } from 'express';
 const controller = vi.hoisted(() => ({
   start: vi.fn(),
   nextEpisode: vi.fn(),
+  beginEpisode: vi.fn(),
+  endEpisode: vi.fn(),
+  episodeThumbnail: vi.fn(),
   discardEpisode: vi.fn(),
   stop: vi.fn(),
   status: vi.fn(),
@@ -394,6 +397,113 @@ describe('episode recording routes', () => {
   // the name
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // begin / end / thumbnail (TASK-402)
+  // -------------------------------------------------------------------------
+
+  it('forwards startBetweenTakes and episodeTimeS to the recorder', async () => {
+    const res = await post('/robots/robot-1/recording/start', {
+      sessionId: 'session-1',
+      startBetweenTakes: true,
+      episodeTimeS: 20,
+    });
+    expect(res.status).toBe(200);
+    expect(controller.start.mock.calls[0]![0]).toEqual({
+      sessionId: 'session-1',
+      startBetweenTakes: true,
+      episodeTimeS: 20,
+    });
+  });
+
+  it('accepts episodeTimeS null as "no limit" and refuses a wrong-typed one', async () => {
+    expect((await post('/robots/robot-1/recording/start', { sessionId: 's', episodeTimeS: null })).status).toBe(200);
+    expect(controller.start.mock.calls[0]![0]).toEqual({ sessionId: 's', episodeTimeS: null });
+    for (const bad of ['20', -1, true]) {
+      const res = await post('/robots/robot-1/recording/start', { sessionId: 's', episodeTimeS: bad });
+      expect(res.status, String(bad)).toBe(400);
+    }
+    const res = await post('/robots/robot-1/recording/start', { sessionId: 's', startBetweenTakes: 'yes' });
+    expect(res.status).toBe(400);
+    expect(controller.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers begin with the take it opened, and 409 when one is already open', async () => {
+    controller.beginEpisode.mockResolvedValueOnce({
+      ok: true,
+      episodeIndex: 3,
+      phase: 'capturing',
+      startedAtMs: 1234,
+    });
+    let res = await post('/robots/robot-1/recording/episodes/begin');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, episodeIndex: 3, phase: 'capturing', startedAtMs: 1234 });
+
+    controller.beginEpisode.mockResolvedValueOnce({ ok: false, code: 'already_capturing' });
+    res = await post('/robots/robot-1/recording/episodes/begin');
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ ok: false, code: 'already_capturing' });
+  });
+
+  it('answers end with the report, 409 between takes, and passes the reason', async () => {
+    const report = { episodeIndex: 3, frames: 60, warnings: [] };
+    controller.endEpisode.mockReturnValueOnce({ ok: true, episodeIndex: 3, phase: 'between', report });
+    let res = await post('/robots/robot-1/recording/episodes/end', { reason: 'time_limit' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, episodeIndex: 3, phase: 'between', report });
+    expect(controller.endEpisode).toHaveBeenCalledWith('time_limit');
+
+    controller.endEpisode.mockReturnValueOnce({ ok: false, code: 'not_capturing' });
+    res = await post('/robots/robot-1/recording/episodes/end');
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ ok: false, code: 'not_capturing' });
+    expect(controller.endEpisode).toHaveBeenLastCalledWith('operator');
+
+    // `next` and `session_end` are the recorder's own reasons, not a client's.
+    res = await post('/robots/robot-1/recording/episodes/end', { reason: 'session_end' });
+    expect(res.status).toBe(400);
+    expect(controller.endEpisode).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves a take\'s thumbnail as a JPEG', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    controller.episodeThumbnail.mockResolvedValueOnce(jpeg);
+    const res = await get('/robots/robot-1/recording/episodes/2/thumbnail');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/^image\/jpeg/);
+    expect(Buffer.from(await res.arrayBuffer()).equals(jpeg)).toBe(true);
+    expect(controller.episodeThumbnail).toHaveBeenCalledWith(2);
+  });
+
+  it('answers 404 no_thumbnail for a take without one', async () => {
+    controller.episodeThumbnail.mockResolvedValueOnce(null);
+    const res = await get('/robots/robot-1/recording/episodes/9/thumbnail');
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: 'no_thumbnail' });
+  });
+
+  it('refuses a thumbnail index that is a path or not an integer', async () => {
+    for (const raw of ['..%2F..%2Fetc%2Fpasswd', '%2E%2E', '1.5', '-1', '1e3', '2abc']) {
+      const res = await get(`/robots/robot-1/recording/episodes/${raw}/thumbnail`);
+      // 400 from the route, or 404 from no route at all when the URL parser
+      // has already collapsed a `%2E%2E` segment — never a thumbnail lookup.
+      expect([400, 404], raw).toContain(res.status);
+      expect(await res.text(), raw).not.toMatch(/no_thumbnail/);
+    }
+    expect(controller.episodeThumbnail).not.toHaveBeenCalled();
+  });
+
+  it('refuses begin, end and thumbnail for a robot this agent does not serve', async () => {
+    const answers = await Promise.all([
+      post('/robots/other/recording/episodes/begin'),
+      post('/robots/other/recording/episodes/end'),
+      get('/robots/other/recording/episodes/0/thumbnail'),
+    ]);
+    for (const res of answers) expect(res.status).toBe(404);
+    expect(controller.beginEpisode).not.toHaveBeenCalled();
+    expect(controller.endEpisode).not.toHaveBeenCalled();
+    expect(controller.episodeThumbnail).not.toHaveBeenCalled();
+  });
+
   it('never serves /record/* — that verb belongs to the sim cine recorder', async () => {
     const paths = (router.stack as { route?: { path: string } }[])
       .map((layer) => layer.route?.path)
@@ -403,6 +513,9 @@ describe('episode recording routes', () => {
     expect(paths.filter((p) => p.includes('/record/'))).toEqual([]);
     expect(paths.filter((p) => p.includes('/recording/')).sort()).toEqual([
       '/robots/:id/recording/episodes/:index/discard',
+      '/robots/:id/recording/episodes/:index/thumbnail',
+      '/robots/:id/recording/episodes/begin',
+      '/robots/:id/recording/episodes/end',
       '/robots/:id/recording/next-episode',
       '/robots/:id/recording/pause',
       '/robots/:id/recording/resume',
