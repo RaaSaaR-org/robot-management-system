@@ -3,7 +3,7 @@ id: "TASK-411"
 aliases: []
 title: "The robot readiness panel starts the robot side and says why the arms are not following"
 slug: "the-robot-readiness-panel-starts-the-robot-side-and-says-why"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 5
 effort: "medium"
 due_date: ""
 created: "2026-10-17"
-updated: "2026-10-17"
+updated: "2026-10-18"
 ---
 
 # The robot readiness panel starts the robot side and says why the arms are not following
