@@ -331,4 +331,59 @@ describe('SimFrameRecorder', () => {
 
     await recorder.stop();
   });
+
+  // --------------------------------------------------------------------------
+  // BETWEEN TAKES (TASK-408)
+  // --------------------------------------------------------------------------
+
+  describe('explicit takes (TASK-408)', () => {
+    it('samples nothing between takes', async () => {
+      const { recorder, fetchTelemetry } = makeRecorder({ startBetweenTakes: true });
+      recorder.start();
+      await advance(1000);
+      expect(fetchTelemetry).not.toHaveBeenCalled();
+      expect(recorder.phase).toBe('between');
+      expect(recorder.getProgress()).toMatchObject({ phase: 'between', takeFrames: 0, takeStartedAtMs: null });
+      await recorder.stop();
+    });
+
+    it('records frames into the take that is open, and stops at its end', async () => {
+      const { recorder, persisted } = makeRecorder({ startBetweenTakes: true, initialEpisodeIndex: 3 });
+      recorder.start();
+      expect(recorder.begin()).toMatchObject({ ok: true, take: 3 });
+      expect(recorder.begin()).toEqual({ ok: false, code: 'already_capturing' });
+      await advance(500);
+      const ended = recorder.end('operator');
+      expect(ended.ok).toBe(true);
+      const framesInTake = ended.ok ? ended.record.frames : 0;
+      expect(framesInTake).toBeGreaterThan(0);
+      await advance(500);
+      await recorder.stop();
+      expect(persisted.length).toBe(framesInTake);
+      expect(new Set(persisted.map((f) => f.episodeIndex))).toEqual(new Set([3]));
+      expect(recorder.end()).toEqual({ ok: false, code: 'not_capturing' });
+    });
+
+    it('next from between opens a take; next while capturing ends it as `next`', async () => {
+      const { recorder } = makeRecorder({ startBetweenTakes: true });
+      recorder.start();
+      expect(recorder.nextEpisode()).toBe(0);
+      expect(recorder.nextEpisode()).toBe(1);
+      expect(recorder.takes().map((t) => [t.take, t.stopReason])).toEqual([
+        [0, 'next'],
+        [1, null],
+      ]);
+      await recorder.stop();
+    });
+
+    it('a discarded finished take stays listed, flagged', async () => {
+      const { recorder } = makeRecorder({ startBetweenTakes: true });
+      recorder.start();
+      recorder.begin();
+      recorder.end();
+      await recorder.discardEpisode(0);
+      expect(recorder.takes()[0]).toMatchObject({ take: 0, discarded: true });
+      await recorder.stop();
+    });
+  });
 });

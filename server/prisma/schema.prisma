@@ -1841,6 +1841,22 @@ model TeleoperationEpisode {
   /// an operator who switches mode mid-session gets both on the take that used
   /// both. Null for every episode recorded before TASK-216.
   retargetModes String?
+  /// TASK-408: a discarded take keeps its row, for the audit trail; lists hide it
+  /// unless asked. Its number is never reused.
+  discarded           Boolean   @default(false)
+  /// TASK-408: the episode this take became in the written dataset (the agent's
+  /// `indexMap`), null for a take that was not kept or before the session ended.
+  datasetEpisodeIndex Int?
+  /// TASK-408: server time the take was begun.
+  startedAt           DateTime?
+  /// TASK-408: 'operator' | 'time_limit' | 'next' | 'session_end'.
+  stopReason          String?
+  /// TASK-408: JSON {jointsMoved, groupsMoved, warnings} — the agent's quick check.
+  quickCheck          String?
+  /// TASK-408: JSON {userId, displayName, source, clientId} of who began the take.
+  startedBy           String?
+  /// TASK-408: JSON {userId, displayName, source, clientId} of who ended it.
+  stoppedBy           String?
   createdAt     DateTime @default(now())
 
   session TeleoperationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)

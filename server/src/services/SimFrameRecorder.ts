@@ -9,6 +9,9 @@
  * @feature datacollection
  */
 
+import { TakeLedger, type LedgerBegin, type LedgerEnd, type TakeRecord } from './teleoperation/takeLedger.js';
+import type { EpisodeStopReason } from '../types/teleoperation.types.js';
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -37,6 +40,12 @@ export interface RecorderProgress {
   fpsActual: number;
   running: boolean;
   degraded: boolean;
+  /** TASK-408: between takes the recorder samples nothing. */
+  phase: 'between' | 'capturing';
+  /** Frames in the open take (0 between takes). */
+  takeFrames: number;
+  /** When the open take began (ms epoch), or null between takes. */
+  takeStartedAtMs: number | null;
 }
 
 export interface SimFrameRecorderOptions {
@@ -45,8 +54,16 @@ export interface SimFrameRecorderOptions {
   fps: number;
   /** Frame index to start from (session.frameCount when resuming) */
   initialFrameIndex?: number;
-  /** Episode index to start recording into */
+  /**
+   * Episode index to start recording into — or, with `startBetweenTakes`, the
+   * number the first take gets.
+   */
   initialEpisodeIndex?: number;
+  /**
+   * TASK-408 D3: open between takes; nothing is sampled until `begin()`.
+   * Without it the first take opens on `start()`, as it always has.
+   */
+  startBetweenTakes?: boolean;
   /** Fetch the robot's current telemetry (joint states) */
   fetchTelemetry: () => Promise<RecorderTelemetry>;
   /** Persist a batch of frames (called ~1x/second) */
@@ -89,7 +106,8 @@ export class SimFrameRecorder {
   private fetchInFlight = false;
 
   private frameIndex: number;
-  private episodeIndex: number;
+  /** Which take is open, which finished, and why (TASK-408). */
+  readonly ledger: TakeLedger;
   private paused = false;
   private stopped = false;
 
@@ -108,7 +126,8 @@ export class SimFrameRecorder {
   constructor(options: SimFrameRecorderOptions) {
     this.options = options;
     this.frameIndex = options.initialFrameIndex ?? 0;
-    this.episodeIndex = options.initialEpisodeIndex ?? 0;
+    this.ledger = new TakeLedger({ nextTake: options.initialEpisodeIndex ?? 0 });
+    if (!options.startBetweenTakes) this.ledger.begin();
   }
 
   // --------------------------------------------------------------------------
@@ -179,13 +198,31 @@ export class SimFrameRecorder {
 
   /** Advance to the next episode. Returns the new episode index. */
   nextEpisode(): number {
-    this.episodeIndex += 1;
-    return this.episodeIndex;
+    return this.ledger.next();
   }
 
-  /** Current episode index frames are being recorded into. */
+  /** Open a take (TASK-408). Refused while one is open. */
+  begin(): LedgerBegin {
+    return this.ledger.begin();
+  }
+
+  /** Close the open take (TASK-408). Refused between takes. */
+  end(reason: EpisodeStopReason = 'operator'): LedgerEnd {
+    return this.ledger.end(reason);
+  }
+
+  get phase(): 'between' | 'capturing' {
+    return this.ledger.phase;
+  }
+
+  /** Every take so far (TASK-408). */
+  takes(): TakeRecord[] {
+    return this.ledger.all();
+  }
+
+  /** Current episode index frames are being recorded into (the last one between takes). */
   getCurrentEpisode(): number {
-    return this.episodeIndex;
+    return this.ledger.latest()?.take ?? 0;
   }
 
   /**
@@ -203,6 +240,7 @@ export class SimFrameRecorder {
    * (A failed flush re-buffers its batch, hence the second filter.)
    */
   async discardEpisode(episodeIndex: number): Promise<void> {
+    this.ledger.discard(episodeIndex);
     this.discardBufferedEpisode(episodeIndex);
     if (this.flushPromise) {
       await this.flushPromise.catch(() => {});
@@ -231,11 +269,14 @@ export class SimFrameRecorder {
   getProgress(): RecorderProgress {
     return {
       frameCount: this.frameIndex,
-      currentEpisode: this.episodeIndex,
+      currentEpisode: this.getCurrentEpisode(),
       elapsedS: this.getElapsedS(),
       fpsActual: this.computeFpsActual(),
       running: !this.stopped && !this.paused,
       degraded: this.degraded,
+      phase: this.ledger.phase,
+      takeFrames: this.ledger.current()?.frames ?? 0,
+      takeStartedAtMs: this.ledger.current()?.startedAtMs ?? null,
     };
   }
 
@@ -268,14 +309,16 @@ export class SimFrameRecorder {
 
   /** One sampling tick: fetch telemetry, buffer a frame. Never throws. */
   private async sample(): Promise<void> {
-    if (this.paused || this.stopped || this.fetchInFlight) return;
+    // Between takes nothing is a frame (TASK-408 D3).
+    if (this.paused || this.stopped || this.fetchInFlight || !this.ledger.current()) return;
     this.fetchInFlight = true;
     try {
       const telemetry = await this.options.fetchTelemetry();
       // The recorder may have been stopped/paused while the fetch was in
       // flight — do not buffer a frame that would never be flushed (stop's
       // final flush has already run by now).
-      if (this.paused || this.stopped) return;
+      const take = this.ledger.current();
+      if (this.paused || this.stopped || !take) return;
       const joints = telemetry.jointStates ?? [];
       if (joints.length === 0) {
         this.registerFailure('Robot agent returned no joint states');
@@ -288,7 +331,7 @@ export class SimFrameRecorder {
 
       this.buffer.push({
         frameIndex: this.frameIndex,
-        episodeIndex: this.episodeIndex,
+        episodeIndex: take.take,
         timestamp: this.getElapsedS(),
         jointPositions,
         jointVelocities,
@@ -297,6 +340,7 @@ export class SimFrameRecorder {
         isIntervention: false,
       });
       this.frameIndex += 1;
+      this.ledger.countFrame();
       this.framesSinceProgress += 1;
 
       // Recovered from a degraded stretch

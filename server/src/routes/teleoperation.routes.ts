@@ -5,8 +5,11 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { teleoperationService } from '../services/TeleoperationService.js';
+import { teleoperationService, EpisodeActionError } from '../services/TeleoperationService.js';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import type {
+  EpisodeActionContext,
+  EpisodeSource,
   CreateSessionDto,
   RecordFrameDto,
   BatchRecordFramesDto,
@@ -21,6 +24,72 @@ import { sendFailure } from '../utils/routeErrors.js';
 import { parseIntegerParam } from '../utils/pagination.js';
 
 export const teleoperationRoutes = Router();
+
+// ============================================================================
+// EPISODE CONTROL HELPERS (TASK-408)
+// ============================================================================
+
+const EPISODE_SOURCES: readonly EpisodeSource[] = ['vr', 'desktop', 'hotkey'];
+
+/**
+ * The body every episode action takes — `{expectedTake?, clientId?, source?}` —
+ * plus who is asking. A wrong-typed field is a 400, never silently dropped: a
+ * client that sends `expectedTake: "3"` would otherwise lose its guard without
+ * being told.
+ */
+function episodeContext(
+  req: Request
+): { ok: true; ctx: EpisodeActionContext } | { ok: false; error: string } {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, error: 'body must be an object' };
+  }
+  const { expectedTake, clientId, source } = body;
+  if (
+    expectedTake !== undefined &&
+    expectedTake !== null &&
+    !(typeof expectedTake === 'number' && Number.isInteger(expectedTake) && expectedTake >= 0)
+  ) {
+    return { ok: false, error: 'expectedTake must be a non-negative integer or null' };
+  }
+  if (clientId !== undefined && !(typeof clientId === 'string' && clientId.length > 0 && clientId.length <= 128)) {
+    return { ok: false, error: 'clientId must be a string of 1-128 characters' };
+  }
+  if (source !== undefined && !(typeof source === 'string' && (EPISODE_SOURCES as readonly string[]).includes(source))) {
+    return { ok: false, error: `source must be one of: ${EPISODE_SOURCES.join(', ')}` };
+  }
+  const user = (req as AuthenticatedRequest).user;
+  return {
+    ok: true,
+    ctx: {
+      ...(expectedTake !== undefined ? { expectedTake: expectedTake as number | null } : {}),
+      ...(typeof clientId === 'string' ? { clientId } : {}),
+      source: (source as EpisodeSource | undefined) ?? 'desktop',
+      user: { userId: user?.id ?? null, displayName: user?.name || user?.email || null },
+    },
+  };
+}
+
+/** A refused episode action answers with its code and the live state to re-sync from. */
+async function sendEpisodeFailure(
+  res: Response,
+  sessionId: string,
+  error: unknown,
+  fallback: string
+): Promise<void> {
+  if (error instanceof EpisodeActionError) {
+    const live = error.live ?? (await teleoperationService.getLiveState(sessionId).catch(() => null));
+    res.status(error.status).json({ code: error.code, error: error.message, live });
+    return;
+  }
+  // "not found" is this repo's own sentence, so that one is echoed;
+  // every other failure answers with the fallback, unread.
+  if (error instanceof Error && error.message.includes('not found')) {
+    res.status(404).json({ error: error.message });
+    return;
+  }
+  sendFailure(res, error, fallback, 400);
+}
 
 // ============================================================================
 // POST /api/teleoperation/sessions - Create new session
@@ -343,27 +412,98 @@ teleoperationRoutes.get('/sessions/:id/frames', async (req: Request, res: Respon
 });
 
 // ============================================================================
-// POST /api/teleoperation/sessions/:id/episodes/next - Advance to next episode
+// GET /api/teleoperation/sessions/:id/live - The session's one live state (TASK-408)
 // ============================================================================
 
-teleoperationRoutes.post('/sessions/:id/episodes/next', async (req: Request, res: Response) => {
+teleoperationRoutes.get('/sessions/:id/live', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    res.json(await teleoperationService.getLiveState(req.params.id));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
+    }
+    sendFailure(res, error, 'Failed to read the live state');
+  }
+});
 
-    const result = await teleoperationService.nextEpisode(id);
+// ============================================================================
+// POST /api/teleoperation/sessions/:id/episodes/start | stop | next | discard-last
+//   body {expectedTake?: number|null, clientId?, source?: 'vr'|'desktop'|'hotkey'}
+//   409 {code, error, live} when the session's state or the client's view refuses it
+// ============================================================================
 
+teleoperationRoutes.post('/sessions/:id/episodes/start', async (req: Request, res: Response) => {
+  const parsed = episodeContext(req);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+  try {
+    const { live } = await teleoperationService.startEpisode(req.params.id, parsed.ctx);
+    res.json({ live });
+  } catch (error) {
+    console.error('[TeleoperationRoutes] Error starting take:', error);
+    await sendEpisodeFailure(res, req.params.id, error, 'Failed to start the take');
+  }
+});
+
+teleoperationRoutes.post('/sessions/:id/episodes/stop', async (req: Request, res: Response) => {
+  const parsed = episodeContext(req);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+  try {
+    const { live, quickCheck } = await teleoperationService.stopEpisode(req.params.id, parsed.ctx);
+    res.json({ live, quickCheck });
+  } catch (error) {
+    console.error('[TeleoperationRoutes] Error stopping take:', error);
+    await sendEpisodeFailure(res, req.params.id, error, 'Failed to stop the take');
+  }
+});
+
+teleoperationRoutes.post('/sessions/:id/episodes/next', async (req: Request, res: Response) => {
+  const parsed = episodeContext(req);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+  try {
+    const result = await teleoperationService.nextEpisode(req.params.id, parsed.ctx);
     res.json({
       ...result,
       message: `Recording episode ${result.episodeIndex}`,
     });
   } catch (error) {
     console.error('[TeleoperationRoutes] Error advancing episode:', error);
-    // "not found" is this repo's own sentence, so that one is echoed;
-    // every other failure answers with the fallback, unread.
+    await sendEpisodeFailure(res, req.params.id, error, 'Failed to advance episode');
+  }
+});
+
+teleoperationRoutes.post('/sessions/:id/episodes/discard-last', async (req: Request, res: Response) => {
+  const parsed = episodeContext(req);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+  try {
+    const { live, take } = await teleoperationService.discardLast(req.params.id, parsed.ctx);
+    res.json({ live, take });
+  } catch (error) {
+    console.error('[TeleoperationRoutes] Error discarding the last take:', error);
+    await sendEpisodeFailure(res, req.params.id, error, 'Failed to discard the last take');
+  }
+});
+
+// ============================================================================
+// GET /api/teleoperation/sessions/:id/episodes/:take/thumbnail - image/jpeg (TASK-408)
+// ============================================================================
+
+teleoperationRoutes.get('/sessions/:id/episodes/:take/thumbnail', async (req: Request, res: Response) => {
+  const raw = req.params.take ?? '';
+  if (!/^\d+$/.test(raw)) {
+    return res.status(400).json({ error: 'take must be a non-negative integer' });
+  }
+  try {
+    const jpeg = await teleoperationService.episodeThumbnail(req.params.id, Number.parseInt(raw, 10));
+    if (!jpeg) {
+      return res.status(404).json({ code: 'no_thumbnail', error: `take ${raw} has no thumbnail` });
+    }
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.type('image/jpeg').send(jpeg);
+  } catch (error) {
     if (error instanceof Error && error.message.includes('not found')) {
       return res.status(404).json({ error: error.message });
     }
-    sendFailure(res, error, 'Failed to advance episode', 400);
+    sendFailure(res, error, 'Failed to read the thumbnail');
   }
 });
 
@@ -375,7 +515,10 @@ teleoperationRoutes.get('/sessions/:id/episodes', async (req: Request, res: Resp
   try {
     const { id } = req.params;
 
-    const episodes = await teleoperationService.listEpisodes(id);
+    const flag = String(req.query.includeDiscarded ?? '');
+    const episodes = await teleoperationService.listEpisodes(id, {
+      includeDiscarded: flag === '1' || flag === 'true',
+    });
 
     res.json({ sessionId: id, episodes });
   } catch (error) {
@@ -398,13 +541,16 @@ teleoperationRoutes.delete(
   async (req: Request, res: Response) => {
     try {
       const { id, episodeIndex } = req.params;
-      const parsedIndex = parseInt(episodeIndex, 10);
+      // Strict: parseInt reads "2.7" as 2 and would discard a DIFFERENT take.
+      const parsedIndex = /^\d+$/.test(episodeIndex ?? '') ? Number.parseInt(episodeIndex, 10) : Number.NaN;
 
       if (Number.isNaN(parsedIndex) || parsedIndex < 0) {
         return res.status(400).json({ error: 'Invalid episode index' });
       }
 
-      const result = await teleoperationService.discardEpisode(id, parsedIndex);
+      const parsed = episodeContext(req);
+      if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+      const result = await teleoperationService.discardEpisode(id, parsedIndex, parsed.ctx);
 
       res.json({
         ...result,

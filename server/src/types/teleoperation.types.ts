@@ -62,6 +62,8 @@ export interface TeleoperationSession {
   recorderKind?: 'agent' | 'sim' | 'sidecar' | null;
   /** Path ON THE ROBOT where the agent's recorder wrote the dataset. */
   agentDatasetPath?: string | null;
+  /** Per-take auto-stop in seconds (TASK-406); null = the operator ends each take. */
+  episodeTimeS?: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -110,6 +112,19 @@ export interface EpisodeSummary {
    * Absent — NOT empty — for an episode recorded before the agent could tell.
    */
   retargetModes?: string[];
+  /** TASK-408: the take was discarded. Only present in `?includeDiscarded=1` lists. */
+  discarded?: boolean;
+  /** TASK-408: the episode this take became in the written dataset, once the session ended. */
+  datasetEpisodeIndex?: number | null;
+  /** TASK-408: why the take ended. */
+  stopReason?: EpisodeStopReason | null;
+  /** TASK-408: ISO server time the take began. */
+  takeStartedAt?: string | null;
+  /** TASK-408: who began and who ended the take. */
+  startedBy?: EpisodeActor | null;
+  stoppedBy?: EpisodeActor | null;
+  /** TASK-408: the robot's quick check of the take. */
+  quickCheck?: { jointsMoved: JointMoved[]; groupsMoved: string[]; warnings: string[] } | null;
 }
 
 // ============================================================================
@@ -411,7 +426,12 @@ export type TeleoperationEventType =
   | 'session:exported'
   | 'session:progress'
   | 'frame:recorded'
-  | 'quality:warning';
+  | 'quality:warning'
+  // TASK-408: explicit episode control, shared by every client of a session.
+  | 'episode:started'
+  | 'episode:stopped'
+  | 'episode:discarded'
+  | 'session:live';
 
 /**
  * Live recording progress payload (sim frame recorder + sidecar poller)
@@ -446,5 +466,106 @@ export interface TeleoperationEvent {
   error?: string;
   /** Human-readable detail for `quality:warning` — what is going wrong, in words. */
   message?: string;
+  /** TASK-408: the full live state (`session:live`, and every episode event). */
+  live?: LiveState;
+  /** TASK-408: the take an `episode:*` event is about. */
+  take?: number;
+  /** TASK-408: `episode:started` — ISO server time the take began. */
+  startedAt?: string;
+  /** TASK-408: `episode:stopped` — the take's quick check. */
+  quickCheck?: QuickCheck | null;
+  /** TASK-408: `episode:stopped` — why it stopped. */
+  reason?: EpisodeStopReason;
+  /** TASK-408: who caused an `episode:*` event. */
+  by?: EpisodeActor;
   timestamp: Date;
+}
+
+// ============================================================================
+// EPISODE CONTROL + LIVE STATE (TASK-408)
+// ============================================================================
+
+/** Where an episode action came from. */
+export type EpisodeSource = 'vr' | 'desktop' | 'hotkey';
+
+/** Why a take ended. `time_limit` is the agent's own auto-stop. */
+export type EpisodeStopReason = 'operator' | 'time_limit' | 'next' | 'session_end';
+
+/** Who caused an episode event. `source: 'auto'` is the recorder itself. */
+export interface EpisodeActor {
+  userId: string | null;
+  displayName: string | null;
+  source: EpisodeSource | 'auto';
+  clientId: string | null;
+}
+
+/** What a client sends with start / stop / next / discard. */
+export interface EpisodeActionContext {
+  /**
+   * The take the client believes is live (or last). Given and different from
+   * the server's → 409 `episode_conflict`. `null` means "no take yet";
+   * absent means "do not check".
+   */
+  expectedTake?: number | null;
+  clientId?: string;
+  source: EpisodeSource;
+  user: { userId: string | null; displayName: string | null };
+}
+
+export type EpisodeConflictCode =
+  | 'episode_conflict'
+  | 'already_capturing'
+  | 'not_capturing'
+  | 'not_recording'
+  | 'unsupported_recorder'
+  | 'no_take'
+  | 'already_discarded';
+
+export interface JointMoved {
+  name: string;
+  rangeRad: number;
+}
+
+/** The robot's verdict on one finished take. */
+export interface QuickCheck {
+  take: number;
+  frames: number;
+  durationS: number;
+  droppedFrames: number;
+  fpsActual: number;
+  jointsMoved: JointMoved[];
+  groupsMoved: string[];
+  warnings: string[];
+  /** Server path of the take's middle frame, or null when there is none. */
+  thumbnailUrl: string | null;
+  stopReason: EpisodeStopReason | null;
+  /** The take was discarded after it stopped. */
+  discarded: boolean;
+}
+
+/** One live state per session, shared by every client (TASK-408). */
+export interface LiveState {
+  sessionId: string;
+  status: TeleoperationStatus;
+  phase: 'between' | 'capturing' | null;
+  /** The take while capturing, else the last take; null before the first. 0-based. */
+  take: number | null;
+  /** ISO server time the live take began; null between takes. */
+  takeStartedAt: string | null;
+  takeElapsedS: number | null;
+  takeFrames: number;
+  totalFrames: number;
+  kept: number;
+  discarded: number;
+  fpsTarget: number;
+  fpsActual: number | null;
+  degraded: boolean;
+  lastDropReason: string | null;
+  /** Seconds since the session's recorder started. */
+  elapsedS: number | null;
+  /** Per-take auto-stop, or null. */
+  autoStopS: number | null;
+  lastTake: QuickCheck | null;
+  /** Server time this state was built — clients derive their clock offset from it. */
+  at: string;
 }

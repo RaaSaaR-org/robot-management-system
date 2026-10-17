@@ -46,6 +46,7 @@ import type { TaskEvent } from '../types/robotTask.types.js';
 import type { TrainingJobEvent } from '../types/training.types.js';
 import type { DatasetEvent } from '../types/dataset.types.js';
 import type { TeleoperationEvent } from '../types/teleoperation.types.js';
+import { teleopEnvelope } from './teleopEnvelope.js';
 
 /** The A2A event socket's path. */
 const A2A_WS_PATH = '/api/a2a/ws';
@@ -448,30 +449,8 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
   // tenant. Event types are namespaced 'teleop:*' so feature clients can
   // filter with a simple prefix check (mirrors 'training:job:*').
   teleoperationService.on('teleoperation:event', (event: TeleoperationEvent) => {
-    const typeMap: Record<string, string> = {
-      'session:progress': 'teleop:session:progress',
-      'quality:warning': 'teleop:quality',
-      'session:completed': 'teleop:session:completed',
-      'session:exported': 'teleop:session:exported',
-      'session:started': 'teleop:session:started',
-      'session:paused': 'teleop:session:paused',
-      'session:resumed': 'teleop:session:resumed',
-      'session:failed': 'teleop:session:failed',
-    };
-    const mappedType = typeMap[event.type];
-    if (!mappedType) return; // created / frame-level events are not broadcast
-
-    const message = JSON.stringify({
-      type: mappedType,
-      data: {
-        sessionId: event.sessionId,
-        session: event.session,
-        recordingProgress: event.recordingProgress,
-        qualityFeedback: event.qualityFeedback,
-        error: event.error,
-      },
-      timestamp: Date.now(),
-    });
+    const message = teleopEnvelope(event);
+    if (!message) return; // created / frame-level events are not broadcast
     deliverFor(message, eventTenantKey.teleop(event));
   });
 
