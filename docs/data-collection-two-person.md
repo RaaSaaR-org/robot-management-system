@@ -92,7 +92,7 @@ Operator card switches to `In VR`.
 | Pinch (thumb to little finger), both hands, hold | E-STOP when you hold no controller |
 | Grip | Hold to take that arm. Release it and the arm holds its pose |
 | Trigger (grip held) | Close the hand |
-| Trigger (grip free) | Point at a panel and pull to press a button. Hold **Reset E-stop** for 1 s |
+| Trigger (grip free) | Point at a panel and pull to press a button. Hold **Hold 1 s to reset** for 1 s after an E-stop, or **Hold to allow …** when the desktop asks for a mode |
 | A / X | Recenter the view inside the robot's head |
 | L-Stick click | Start a take. Click again to stop it |
 | R-Stick click | End this take and start the next one |
@@ -111,6 +111,35 @@ Operator card switches to `In VR`.
 
 When the session ends, a toast sums it up: takes kept, total minutes, and the
 best streak.
+
+## After an E-stop
+
+An E-stop damps the base, and the arms stay refused until the robot is back in
+Balance. The operator stays in VR the whole time: the assistant, who can see
+the robot, asks for each mode from the desktop, and the operator allows it in
+the headset. The change is sent from the headset, under the operator's own
+control lease, through the same confirmed route as the desktop buttons.
+
+| Step | Who | Where | Presses |
+| --- | --- | --- | --- |
+| 1 | Operator | headset, robot panel | **Hold 1 s to reset** (trigger, 1 s). The panel turns from red to dark |
+| 2 | Assistant | session page, **Robot mode** card | **Ask the headset: Stand up**, then confirms. The card shows "Waiting for the operator… (10 s)" |
+| 3 | Operator | headset, robot panel | **Hold to allow Stand up** (trigger, 1 s), under "DESKTOP ASKS: Stand up" |
+| 4 | Assistant | session page | **Ask the headset: Balance** once the robot has stood for 2 s, then confirms |
+| 5 | Operator | headset | **Hold to allow Balance**, then release and squeeze the grip to take the arm again |
+
+Rules the relay keeps:
+
+- Only **Stand up** and **Balance** are ever asked for. **Limp** stays a direct
+  desktop button and needs the lease. Walking is never offered.
+- No prompt appears in the headset while the E-stop is latched, while the
+  headset does not hold control, or for a mode that is not next (Stand up only
+  from limp, Balance only from stand). The desktop then hears "declined" at once.
+- A request the operator does not allow within 10 s expires, and the desktop
+  card says so. One request per session every 2 s.
+- The server only carries the question and the answer. It never calls the
+  robot or the mode route itself.
+- **B / Y** and the desktop **E-STOP** work at every step.
 
 ## What the warnings mean
 

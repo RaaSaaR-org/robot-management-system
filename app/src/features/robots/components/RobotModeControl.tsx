@@ -6,6 +6,12 @@
  *              a tooltip — why a button is disabled. Desktop only: there are no
  *              mode buttons inside the headset (a confirmation needs a mouse
  *              and a second person watching the robot).
+ *
+ *              TASK-417: while the operator in the headset holds the lease, the
+ *              desktop ASKS for Stand up or Balance (`requestFromHolder`) behind
+ *              the same confirmation, and the operator allows it with a hold in
+ *              the headset, whose page sends it under its own lease. Limp is
+ *              never asked for: it stays a direct, lease-gated action here.
  * @feature robots
  */
 
@@ -119,6 +125,40 @@ export function modeDisabledReason(mode: BaseModeCommand, ctx: ModeReasonContext
   return null;
 }
 
+/** What became of a request to the lease holder (TASK-417). */
+export interface HolderRequestResult {
+  outcome: 'allowed' | 'declined' | 'expired' | 'failed' | 'rejected' | 'unsent';
+  error?: string;
+}
+
+/** How long the headset shows a request, s — the card counts it down. */
+export const HOLDER_REQUEST_TTL_S = 10;
+
+/** The modes that may be asked of the lease holder (D2): never Limp. */
+export type HolderMode = Exclude<BaseModeCommand, 'limp'>;
+
+/** The card's line for an answered request. */
+export function holderOutcomeText(label: string, result: HolderRequestResult): string {
+  switch (result.outcome) {
+    case 'allowed':
+      return `The operator allowed ${label}.`;
+    case 'declined':
+      return `The headset did not show ${label}${result.error ? `: ${result.error}` : '.'}`;
+    case 'expired':
+      return `The operator did not answer within ${HOLDER_REQUEST_TTL_S} s.`;
+    case 'failed':
+      return `The operator allowed ${label}, but the robot refused${result.error ? `: ${result.error}` : '.'}`;
+    case 'rejected':
+      return result.error === 'no_operator'
+        ? 'Nobody is in the headset.'
+        : result.error === 'rate_limited'
+          ? 'Wait 2 s between requests.'
+          : `The server did not pass the request on (${result.error ?? 'refused'}).`;
+    default:
+      return `Not sent: ${result.error ?? 'no connection'}`;
+  }
+}
+
 export interface RobotModeControlProps {
   robotId: string;
   /** The page's control lease. `grant()` is read at click time only. */
@@ -131,13 +171,25 @@ export interface RobotModeControlProps {
   armsEngaged?: boolean;
   /** Inject a hook result (tests); otherwise polls at 1 Hz. */
   baseMode?: UseRobotBaseModeReturn;
+  /**
+   * TASK-417: ask the lease holder in the headset for Stand up or Balance.
+   * Pass it only while the session's operator is present and in VR; it is used
+   * only while this console does not hold the lease itself.
+   */
+  requestFromHolder?: (mode: HolderMode) => Promise<HolderRequestResult>;
   className?: string;
 }
 
-export function RobotModeControl({ robotId, lease, armsEngaged = false, baseMode, className }: RobotModeControlProps) {
+export function RobotModeControl({
+  robotId, lease, armsEngaged = false, baseMode, requestFromHolder, className,
+}: RobotModeControlProps) {
   const own = useRobotBaseMode(robotId, { enabled: baseMode === undefined });
   const bm = baseMode ?? own;
   const [confirming, setConfirming] = useState<BaseModeCommand | null>(null);
+  const [asking, setAsking] = useState<{ mode: HolderMode; since: number } | null>(null);
+  const [answered, setAnswered] = useState<{ mode: HolderMode; result: HolderRequestResult } | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
   const [now, setNow] = useState(() => Date.now());
   const limpRef = useRef<HTMLButtonElement>(null);
 
@@ -176,8 +228,39 @@ export function RobotModeControl({ robotId, lease, armsEngaged = false, baseMode
         : 'text-ink-primary';
   const pendingButton = BUTTONS.find((b) => b.mode === confirming) ?? null;
 
+  // TASK-417: someone else (the headset) holds the lease and may be asked.
+  const askMode = requestFromHolder !== undefined && lease.enabled && lease.state !== 'bound';
+  const askable = (mode: BaseModeCommand): boolean =>
+    askMode && mode !== 'limp' && asking === null
+    && modeDisabledReason(mode, { ...ctx, needsControl: false }) === null;
+  const reasonFor = (mode: BaseModeCommand): string | null => {
+    if (askable(mode)) return null;
+    if (askMode && mode !== 'limp') {
+      return asking ? 'Waiting for the operator.' : modeDisabledReason(mode, { ...ctx, needsControl: false });
+    }
+    return modeDisabledReason(mode, ctx);
+  };
+  const askingLeftS = asking ? Math.max(0, HOLDER_REQUEST_TTL_S - Math.floor((now - asking.since) / 1000)) : 0;
+  const confirmAsks = pendingButton !== null && askable(pendingButton.mode);
+
+  const ask = async (mode: HolderMode): Promise<void> => {
+    if (!requestFromHolder) return;
+    setAnswered(null);
+    setAsking({ mode, since: Date.now() });
+    let result: HolderRequestResult;
+    try {
+      result = await requestFromHolder(mode);
+    } catch (err) {
+      result = { outcome: 'unsent', error: err instanceof Error ? err.message : String(err) };
+    }
+    if (!mounted.current) return;
+    setAsking(null);
+    setAnswered({ mode, result });
+    if (result.outcome === 'allowed') void bm.refresh();
+  };
+
   const reasons = BUTTONS
-    .map((b) => ({ b, reason: modeDisabledReason(b.mode, ctx) }))
+    .map((b) => ({ b, reason: reasonFor(b.mode) }))
     .filter((r): r is { b: (typeof BUTTONS)[number]; reason: string } => r.reason !== null);
 
   return (
@@ -202,11 +285,15 @@ export function RobotModeControl({ robotId, lease, armsEngaged = false, baseMode
               ref={b.mode === 'limp' ? limpRef : undefined}
               size="sm"
               variant={b.mode === 'limp' ? 'secondary' : 'outline'}
-              disabled={modeDisabledReason(b.mode, ctx) !== null}
+              disabled={reasonFor(b.mode) !== null}
               data-testid={`robot-mode-${b.mode}`}
               onClick={() => setConfirming(b.mode)}
             >
-              {bm.pending === b.mode ? `${b.label}…` : b.label}
+              {bm.pending === b.mode
+                ? `${b.label}…`
+                : askMode && b.mode !== 'limp' && (askable(b.mode) || asking?.mode === b.mode)
+                  ? `Ask the headset: ${b.label}`
+                  : b.label}
             </Button>
           ))}
         </div>
@@ -230,6 +317,21 @@ export function RobotModeControl({ robotId, lease, armsEngaged = false, baseMode
           ))}
         </ul>
       )}
+      {asking && (
+        <p className="text-xs font-medium text-signal-unknown" role="status" data-testid="robot-mode-asking">
+          Waiting for the operator… ({askingLeftS} s)
+        </p>
+      )}
+      {!asking && answered && (
+        <p
+          role="status"
+          data-testid="robot-mode-answer"
+          data-outcome={answered.result.outcome}
+          className={cn('text-xs', answered.result.outcome === 'allowed' ? 'text-signal-measured' : 'text-signal-unknown')}
+        >
+          {holderOutcomeText(BUTTONS.find((b) => b.mode === answered.mode)?.label ?? answered.mode, answered.result)}
+        </p>
+      )}
       {result && !result.ok && (
         <p
           role="alert"
@@ -247,12 +349,17 @@ export function RobotModeControl({ robotId, lease, armsEngaged = false, baseMode
         onClose={() => setConfirming(null)}
         onConfirm={async () => {
           const target = pendingButton;
+          const viaHeadset = confirmAsks;
           setConfirming(null);
-          if (target) await bm.request(target.mode, lease.grant());
+          if (!target) return;
+          if (viaHeadset && target.mode !== 'limp') await ask(target.mode);
+          else await bm.request(target.mode, lease.grant());
         }}
         title={pendingButton?.title ?? ''}
-        description={pendingButton?.text}
-        confirmLabel={pendingButton?.label}
+        description={confirmAsks && pendingButton
+          ? `${pendingButton.text} The operator confirms in the headset.`
+          : pendingButton?.text}
+        confirmLabel={confirmAsks && pendingButton ? `Ask the headset: ${pendingButton.label}` : pendingButton?.label}
         tone={pendingButton?.mode === 'limp' ? 'danger' : 'default'}
         testId="robot-mode-confirm"
       />

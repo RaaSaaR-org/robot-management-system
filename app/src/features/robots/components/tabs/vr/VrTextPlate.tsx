@@ -26,6 +26,11 @@ export interface TextPlateLine {
    * two). The last kept row ends in an ellipsis when text was cut.
    */
   maxRows?: number;
+  /**
+   * Glyph and row height relative to the plate's `linePx` (TASK-417: the
+   * robot panel's why line is 1.5x). Default 1.
+   */
+  scale?: number;
 }
 
 /** Per-draw extras (TASK-407): the button states and the latched panel. */
@@ -103,7 +108,7 @@ export function useTextPlate(options: TextPlateOptions): TextPlate {
     if (!texture || !ctx) return;
     const fill = options?.fill;
     const signature = lines
-      .map((l) => `${l.id}\u0000${l.text}\u0000${l.color}\u0000${l.bold ? 1 : 0}${l.wrap ? 1 : 0}${l.maxRows ?? ''}`)
+      .map((l) => `${l.id}\u0000${l.text}\u0000${l.color}\u0000${l.bold ? 1 : 0}${l.wrap ? 1 : 0}${l.maxRows ?? ''}\u0000${l.scale ?? 1}`)
       .join('\u0001')
       + `\u0002${options?.background ?? ''}\u0002${options?.highlight ?? ''}`
       + `\u0002${fill ? `${fill.fraction.toFixed(3)} ${fill.color}` : ''}`;
@@ -136,9 +141,12 @@ export function useTextPlate(options: TextPlateOptions): TextPlate {
     const maxWidth = pxWidth - 2 * margin;
 
     // Lay the lines out as ROWS first: a wrapped line can take several.
-    const rows: Array<{ text: string; color: string; font: string }> = [];
+    const rows: Array<{ text: string; color: string; font: string; height: number }> = [];
     for (const line of lines) {
-      const font = fontFor(line.bold === true, glyph);
+      const scale = line.scale !== undefined && Number.isFinite(line.scale) && line.scale > 0 ? line.scale : 1;
+      const lineGlyph = Math.round(glyph * scale);
+      const height = Math.round(linePx * scale);
+      const font = fontFor(line.bold === true, lineGlyph);
       ctx.font = font;
       if (line.wrap && ctx.measureText(line.text).width > maxWidth) {
         const wrapped: string[] = [];
@@ -160,25 +168,27 @@ export function useTextPlate(options: TextPlateOptions): TextPlate {
           while (last.length > 1 && ctx.measureText(last).width > maxWidth) last = `${last.slice(0, -2)}…`;
           wrapped[limit - 1] = last;
         }
-        for (const text of wrapped) rows.push({ text, color: line.color, font });
+        for (const text of wrapped) rows.push({ text, color: line.color, font, height });
         continue;
       }
       // Too wide and not wrapped: shrink it rather than cut it off.
       const width = ctx.measureText(line.text).width;
       const px = width > maxWidth
-        ? Math.max(Math.round(glyph * 0.6), Math.floor(glyph * (maxWidth / width)))
-        : glyph;
-      rows.push({ text: line.text, color: line.color, font: fontFor(line.bold === true, px) });
+        ? Math.max(Math.round(lineGlyph * 0.6), Math.floor(lineGlyph * (maxWidth / width)))
+        : lineGlyph;
+      rows.push({ text: line.text, color: line.color, font: fontFor(line.bold === true, px), height });
     }
 
     // Vertically centre the block, so a two-line E-Stop banner does not sit in
     // the top half of the plate with nothing under it.
-    const top = (pxHeight - rows.length * linePx) / 2 + linePx / 2;
-    rows.forEach((row, i) => {
+    const total = rows.reduce((sum, row) => sum + row.height, 0);
+    let y = (pxHeight - total) / 2;
+    for (const row of rows) {
       ctx.font = row.font;
       ctx.fillStyle = row.color;
-      ctx.fillText(row.text, x, top + i * linePx);
-    });
+      ctx.fillText(row.text, x, y + row.height / 2);
+      y += row.height;
+    }
     texture.needsUpdate = true;
   }, [plate, pxWidth, pxHeight, linePx, background, align]);
 

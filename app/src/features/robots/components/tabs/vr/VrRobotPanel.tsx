@@ -7,6 +7,9 @@
  *              Reset E-stop. World-locked beside the head-camera screen, inside
  *              the yaw group, so it follows a recenter. TASK-414: the title
  *              names who watches from a desktop ("WATCHING Ben (desktop)").
+ *              TASK-417: the why line leads, 1.5x, with one row of chips for
+ *              what is not fine; a desktop request for Stand up or Balance
+ *              shows as "DESKTOP ASKS: Balance" with one hold-to-allow button.
  * @feature robots
  */
 
@@ -24,6 +27,7 @@ import {
   type ServerWhy,
 } from './vrWhy';
 import { useVrCameraStatus } from './vrCameraStatus';
+import { vrModeAllowLabel, vrModePromptLine, type VrModePrompt } from './vrModeRequest';
 import { useReadinessStore } from '../../../store/readinessStore';
 import { READINESS_STALE_MS } from '../../../hooks/useRobotReadiness';
 import type { VrRigTelemetry } from './VrTeleopRig';
@@ -84,6 +88,13 @@ export interface VrRobotPanelProps {
   onResetEstop?: () => void | Promise<void>;
   /** Who else watches the session (TASK-414), read at the panel's rate; absent without a session. */
   watching?: () => string | null;
+  /**
+   * TASK-417: the desktop's request on show, or null. Changes only when a
+   * request arrives or ends, so it may be a prop; the countdown is read per draw.
+   */
+  modeRequest?: VrModePrompt | null;
+  /** TASK-417: the operator held "allow" — the modal sends the change under its lease. */
+  onAllowModeRequest?: () => void;
 }
 
 /** The panel title: `ROBOT`, or `ROBOT · WATCHING Ben (desktop)` while someone watches. */
@@ -106,8 +117,12 @@ export function serverWhyOf(robotId: string, now: number): ServerWhy | null {
   return reason ? { code: reason.code, severity: reason.severity, text: reason.text, source: reason.source } : null;
 }
 
-export function VrRobotPanel({ robotId, telemetryRef, onRecenter, onResetEstop, watching }: VrRobotPanelProps) {
+export function VrRobotPanel({
+  robotId, telemetryRef, onRecenter, onResetEstop, watching, modeRequest = null, onAllowModeRequest,
+}: VrRobotPanelProps) {
   const placement = useMemo(robotPanelPlacement, []);
+  const modeRequestRef = useRef<VrModePrompt | null>(modeRequest);
+  modeRequestRef.current = modeRequest;
 
   // TASK-413: the server's reason, read once a second into a ref — never a
   // subscription, which would re-render inside the canvas.
@@ -125,11 +140,13 @@ export function VrRobotPanel({ robotId, telemetryRef, onRecenter, onResetEstop, 
     const local = whyFromTelemetry(t, now);
     const picked = pickWhyLine(local, serverWhy.current);
     const lines = composeRobotPanel(panelFactsFromTelemetry(t), local, now);
-    // The why line is last; the camera line goes just above it.
-    const whyLine = lines.pop()!;
+    // TASK-417 (D3): the why line is FIRST; a desktop request goes right under
+    // it, then the chips; the camera only when it is not live.
+    lines[0] = { ...lines[0], text: picked.text, color: SEVERITY_COLOR[picked.severity] };
+    const prompt = modeRequestRef.current;
+    if (prompt && !t.estopLatched) lines.splice(1, 0, vrModePromptLine(prompt, now));
     const camera = cameraPanelLine(useVrCameraStatus.getState(), robotId);
-    if (camera) lines.push(camera);
-    lines.push({ ...whyLine, text: picked.text, color: SEVERITY_COLOR[picked.severity] });
+    if (camera && !camera.text.startsWith('CAMERA live')) lines.push(camera);
     const title = t.estopLatched ? 'ROBOT — E-STOP LATCHED' : robotPanelTitle(watching?.());
     if (import.meta.env.DEV) {
       vrUiDebug.panel = lines.map((l) => l.text);
@@ -144,6 +161,12 @@ export function VrRobotPanel({ robotId, telemetryRef, onRecenter, onResetEstop, 
     if (onResetEstop) void Promise.resolve(onResetEstop()).catch(() => { /* the banner says why */ });
   }, [onResetEstop]);
   const latched = useCallback(() => telemetryRef.current.estopLatched, [telemetryRef]);
+  // Never while latched: the prompt is withdrawn then, and Reset owns the slot.
+  const asking = useCallback(
+    () => modeRequestRef.current !== null && !telemetryRef.current.estopLatched,
+    [telemetryRef],
+  );
+  const allow = useCallback(() => onAllowModeRequest?.(), [onAllowModeRequest]);
 
   const buttonY = -ROBOT_PANEL_HEIGHT_M / 2 + VR_BUTTON_HEIGHT_M / 2 + 0.005;
   const textY = ROBOT_PANEL_HEIGHT_M / 2 - TEXT_HEIGHT_M / 2;
@@ -164,7 +187,7 @@ export function VrRobotPanel({ robotId, telemetryRef, onRecenter, onResetEstop, 
       <VrButton id="recenter" label="Recenter" position={[-0.16, buttonY, 0.001]} onClick={onRecenter} />
       <VrButton
         id="reset-estop"
-        label="Reset E-stop"
+        label="Hold 1 s to reset"
         holdLabel="Hold…"
         position={[0.16, buttonY, 0.001]}
         holdMs={1000}
@@ -173,6 +196,18 @@ export function VrRobotPanel({ robotId, telemetryRef, onRecenter, onResetEstop, 
         disabled={!onResetEstop}
         isVisible={latched}
         onClick={reset}
+      />
+      {/* TASK-417: the desktop asked; a one-second hold allows it. Shares the
+          Reset slot, which is empty whenever a request may show. */}
+      <VrButton
+        id="allow-mode"
+        label={modeRequest ? vrModeAllowLabel(modeRequest.mode) : 'Hold to allow'}
+        holdLabel="Hold…"
+        position={[0.16, buttonY, 0.001]}
+        holdMs={1000}
+        disabled={!onAllowModeRequest || !modeRequest}
+        isVisible={asking}
+        onClick={allow}
       />
     </group>
   );
