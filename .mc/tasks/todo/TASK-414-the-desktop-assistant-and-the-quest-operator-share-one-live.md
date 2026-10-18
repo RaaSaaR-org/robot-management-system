@@ -3,7 +3,7 @@ id: "TASK-414"
 aliases: []
 title: "The desktop assistant and the Quest operator share one live data-collection session"
 slug: "the-desktop-assistant-and-the-quest-operator-share-one-live"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
