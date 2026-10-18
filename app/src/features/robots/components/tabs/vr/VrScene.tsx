@@ -140,6 +140,7 @@ export function VrScene({
             telemetryRef={telemetryRef}
             onRecenter={onRecenter}
             onResetEstop={onResetEstop}
+            watching={session?.watching}
           />
           {/* TASK-413: the session board, mirrored on the robot's left (D3).
               Only with a session — the robot detail page has none. */}

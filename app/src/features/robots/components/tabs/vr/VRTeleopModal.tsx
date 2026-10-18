@@ -41,6 +41,8 @@ import { RobotReadinessPanel } from '../../readiness/RobotReadinessPanel';
 import { VrScene } from './VrScene';
 import type { VrSessionBridge } from './vrSessionBridge';
 import { createRigTelemetry } from './VrTeleopRig';
+import { useOperatorPublisher } from './useOperatorPublisher';
+import { useAuthStore } from '@/features/auth/store/authStore';
 import { ARM_HELD_REASONS, isArmRefusalCode, type ArmHeldReason, type VrArmInfo, type VrHandHealth } from './vrWhy';
 
 /** How often the status row re-reads the link meters, in ms. */
@@ -499,6 +501,16 @@ export function VRTeleopModalBody({
   const canStreamRef = useRef(false);
   const telemetryRef = useRef(createRigTelemetry());
   const robotPositionsRef = useRef<Readonly<Record<string, number>>>({});
+  // TASK-414: while in VR with a session attached, the desktop assistant sees
+  // what this operator sees — relayed at 5 Hz from the telemetry ref.
+  const operatorName = useAuthStore((s) => s.user?.name ?? s.user?.email ?? undefined);
+  useOperatorPublisher({
+    sessionId: vrSession?.sessionId,
+    robotId: robot.id,
+    inVr,
+    telemetryRef,
+    displayName: operatorName,
+  });
 
   // offerSession:false — we drive entry from our own "Enter VR" button instead of
   // the library's auto-injected DOM overlay button. emulate is off by default so a

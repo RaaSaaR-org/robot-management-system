@@ -13,7 +13,7 @@
  * @feature robots
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Glasses } from 'lucide-react';
 import { Button, Modal, Panel, StatusTag } from '@/shared/components/ui';
 import type { TeleopTabProps } from '../types';
@@ -49,10 +49,29 @@ export interface VRTeleopSectionProps {
    * TASK-396): "Launch VR" is disabled and this line replaces the hint.
    */
   launchDisabledReason?: string;
+  /**
+   * The full-screen VR modal opened or closed (TASK-414): the session page
+   * then unmounts its own 3D viewer and camera tiles behind it, and stops
+   * declaring itself the desktop assistant.
+   */
+  onOpenChange?: (open: boolean) => void;
+  /**
+   * Show the compact readiness panel in the card (default). Off where the page
+   * shows it elsewhere (the session page's side column, TASK-414) — that one
+   * keeps the readiness store fresh for the headset's robot panel instead.
+   */
+  showReadiness?: boolean;
 }
 
-export function VRTeleopSection({ robot, vrSession, launchDisabledReason }: VRTeleopSectionProps) {
+export function VRTeleopSection({ robot, vrSession, launchDisabledReason, onOpenChange, showReadiness = true }: VRTeleopSectionProps) {
   const [open, setOpen] = useState(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  useEffect(() => {
+    onOpenChangeRef.current?.(open);
+  }, [open]);
+  // Closing on unmount: the page must not keep its viewer hidden for a modal that is gone.
+  useEffect(() => () => onOpenChangeRef.current?.(false), []);
   const [sessionSupported, setSessionSupported] = useState<boolean | null>(null);
 
   /**
@@ -113,7 +132,7 @@ export function VRTeleopSection({ robot, vrSession, launchDisabledReason }: VRTe
         <Panel.Body>
           {/* TASK-411: why the arms would not follow, before anyone puts the
               headset on — the session page gets it through this section (D5). */}
-          <RobotReadinessPanel robotId={robot.id} variant="compact" className="mb-3" />
+          {showReadiness && <RobotReadinessPanel robotId={robot.id} variant="compact" className="mb-3" />}
           <div className="flex flex-wrap items-center gap-3">
             <StatusTag tone={EMULATOR_ACTIVE || (availability === 'ready' && sessionSupported) ? 'live' : 'neutral'} dot>
               {EMULATOR_ACTIVE

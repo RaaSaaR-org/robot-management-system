@@ -65,7 +65,14 @@ export interface VrSessionView {
  * so the canvas never re-renders because a frame counter moved.
  */
 export interface VrSessionBridge {
+  /** The session this bridge drives (TASK-414: the operator publisher watches it). */
+  sessionId?: string;
   getState(): VrSessionView;
+  /**
+   * Who else watches the session, for the robot panel's title (TASK-414):
+   * "Ben (desktop)", or null when nobody does. Read from the frame loop.
+   */
+  watching?(): string | null;
   actions: {
     start(): Promise<VrTakeOutcome>;
     stop(): Promise<VrTakeOutcome>;
@@ -92,7 +99,9 @@ export function withTakeHaptics(bridge: VrSessionBridge): VrSessionBridge {
     return outcome;
   };
   return {
+    sessionId: bridge.sessionId,
     getState: () => bridge.getState(),
+    watching: bridge.watching ? () => bridge.watching!() : undefined,
     actions: {
       start: felt(() => bridge.actions.start()),
       stop: felt(() => bridge.actions.stop()),

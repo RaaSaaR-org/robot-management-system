@@ -25,6 +25,7 @@ import type { Robot } from '../../robots/types/robots.types';
 import type { InputLease } from '../hooks/inputLease';
 import { useDataCollectionStore, selectKept } from '../store/datacollectionStore';
 import { groupLabel, warningLabel } from '../utils/takeFormat';
+import { watchingLabel } from '../utils/presenceFormat';
 import {
   buildVrSessionView,
   type VrSessionBridge,
@@ -38,6 +39,10 @@ export interface VRSessionPanelProps {
   /** "Simulate VR input" switch, when the page owns it; local state otherwise. */
   simulate?: boolean;
   onSimulateChange?: (on: boolean) => void;
+  /** The VR modal opened or closed (TASK-414). */
+  onVrOpenChange?: (open: boolean) => void;
+  /** Show the readiness panel in the VR card (default); the session page shows it in its side column. */
+  showReadiness?: boolean;
 }
 
 const STATUS: Record<SimInputStatus | 'off', { label: string; tone: StatusTagTone }> = {
@@ -49,7 +54,7 @@ const STATUS: Record<SimInputStatus | 'off', { label: string; tone: StatusTagTon
 };
 
 export function VRSessionPanel({
-  robot, lease, simulate: simulateProp, onSimulateChange,
+  robot, lease, simulate: simulateProp, onSimulateChange, onVrOpenChange, showReadiness = true,
 }: VRSessionPanelProps) {
   const sessionId = useDataCollectionStore((s) => s.selectedSession?.id ?? null);
   // TASK-413 (D2): one object for the headset, read through a getter from the
@@ -82,6 +87,8 @@ export function VRSessionPanel({
       <VRTeleopSection
         robot={robot}
         vrSession={vrSession}
+        onOpenChange={onVrOpenChange}
+        showReadiness={showReadiness}
         launchDisabledReason={simulate ? 'Simulated VR input is driving the robot. Switch it off to use a headset.' : undefined}
       />
 
@@ -152,6 +159,12 @@ export function createVrSessionBridge(sessionId: string): VrSessionBridge {
     }
   };
   return {
+    sessionId,
+    // TASK-414: who watches from a desktop, for the robot panel's title.
+    watching: () => {
+      const presence = store.getState().presence;
+      return presence?.sessionId === sessionId ? watchingLabel(presence.viewers) : null;
+    },
     getState: () => {
       const state = store.getState();
       const live = state.live?.sessionId === sessionId ? state.live : null;

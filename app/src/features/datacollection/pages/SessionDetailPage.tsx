@@ -12,6 +12,13 @@
  *              gamepad and simulated-VR inputs join (TASK-320). A created
  *              session shows a pre-flight checklist; a blocking item (robot
  *              offline) disables Start session and its hotkey (TASK-392).
+ *              TASK-414: the desktop is the assistant's view of a two-person
+ *              session — the twin at the fast-channel rate with the operator's
+ *              ghost hands, the head camera, the HUD, an Operator card and the
+ *              takes; presence and the read-only lease holder in the header.
+ *              While this page's own VR modal is open (the Quest) the viewer
+ *              and camera tiles unmount and the page stops declaring itself
+ *              the assistant.
  * @feature datacollection
  */
 
@@ -33,11 +40,21 @@ import { SessionHud, type HudPhase } from '../components/session/SessionHud';
 import { SessionCompleted } from '../components/session/SessionCompleted';
 import { QuickCheckCard } from '../components/session/QuickCheckCard';
 import { SessionEStopButton } from '../components/session/SessionEStopButton';
+import { OperatorCard } from '../components/OperatorCard';
+import { OperatorOverlay, OVERLAY_LINK } from '../components/OperatorOverlay';
+import { PresenceBar } from '../components/PresenceBar';
+import { RobotReadinessPanel } from '../../robots/components/readiness/RobotReadinessPanel';
+import { useSessionPresence } from '../hooks/useSessionPresence';
+import { useFreshOperator } from '../hooks/useFreshOperator';
+import { useOperatorCues } from '../hooks/useOperatorCues';
+import { sessionSummary } from '../utils/takeStreak';
 import { isDialogOpen, isTypingTarget } from '../utils/hotkeys';
 import { isCueMuted, scheduleAutoStopWarning, setCueMuted, subscribeCueMuted } from '@/shared/utils/sessionCues';
 import { useSessionDetail } from '../hooks/datacollection';
 import { useTeleopEvents } from '../hooks/useTeleopEvents';
-import { useDataCollectionStore, selectKept, selectTakeElapsedS } from '../store/datacollectionStore';
+import {
+  useDataCollectionStore, selectKept, selectTakeElapsedS, selectOperatorFor, selectStreakFor, selectViewersFor,
+} from '../store/datacollectionStore';
 import { useRobotsStore } from '../../robots/store/robotsStore';
 import { useTelemetryStream } from '../../robots/hooks/useTelemetryStream';
 import { JointStateGrid } from '../../robots/components/visualization';
@@ -97,6 +114,12 @@ export function SessionDetailPage() {
   const storeDiscardTake = useDataCollectionStore((s) => s.discardTake);
   const dismissQuickCheck = useDataCollectionStore((s) => s.dismissQuickCheck);
   const muted = useSyncExternalStore(subscribeCueMuted, isCueMuted, isCueMuted);
+  // TASK-414: who watches, the operator's relayed state, and the take streak.
+  const viewers = useDataCollectionStore(useMemo(() => selectViewersFor(id), [id]));
+  const streak = useDataCollectionStore(useMemo(() => selectStreakFor(id), [id]));
+  const operator = useFreshOperator(id);
+  /** The page's own VR modal is open — on the Quest, the wearer's page. */
+  const [vrModalOpen, setVrModalOpen] = useState(false);
 
   // Live progress via the app WebSocket; REST polling backs it up while it is down.
   const { isConnected: isWsConnected } = useTeleopEvents();
@@ -229,10 +252,12 @@ export function SessionDetailPage() {
 
   const robotName = robot?.name ?? session?.robotId ?? 'the robot';
 
-  const run = async (kind: 'start' | 'pause' | 'end', act: () => Promise<unknown>, ok: string, fail: string) => {
+  const run = async (kind: 'start' | 'pause' | 'end', act: () => Promise<unknown>, ok: string, fail: string, okDescription?: () => string) => {
     setPending(kind);
-    try { await act(); toast.success(ok); } catch (err) { toast.error(fail, { description: errorMessage(err) }); } finally { setPending(null); }
+    try { await act(); toast.success(ok, okDescription ? { description: okDescription() } : undefined); } catch (err) { toast.error(fail, { description: errorMessage(err) }); } finally { setPending(null); }
   };
+  /** What the End toast sums up (TASK-414), as of the last render. */
+  const summaryRef = useRef({ kept: 0, elapsedS: 0, best: 0 });
 
   const handleStart = async () => {
     if (!session) return;
@@ -257,7 +282,10 @@ export function SessionDetailPage() {
       confirmLabel: 'End session',
       tone: 'danger',
     });
-    if (ok) await run('end', () => storeEnd(session.id), 'Session ended', "Couldn't end session");
+    if (ok) {
+      const { kept: keptNow, elapsedS, best } = summaryRef.current;
+      await run('end', () => storeEnd(session.id), 'Session ended', "Couldn't end session", () => sessionSummary(keptNow, elapsedS, best));
+    }
   };
 
   // Session shortcuts: Space starts a created session (or resumes a paused
@@ -318,6 +346,19 @@ export function SessionDetailPage() {
     enabled: !!session && sessionIsVr && sessionIsLive && robotOnline,
   });
   const modeControlOn = baseMode.status?.capability.gate === 'fsm' || baseMode.status?.capability.gate === 'full';
+
+  // TASK-414: this page watches the session as the desktop assistant — except
+  // while its own VR modal is open, when the headset's publisher is the operator.
+  useSessionPresence(sessionIsLive ? session?.id : null, vrModalOpen ? null : 'assistant');
+  useOperatorCues(id, capturing, sessionIsLive && sessionIsVr && !vrModalOpen);
+  const getOperatorState = useCallback(
+    () => selectOperatorFor(id)(useDataCollectionStore.getState())?.state ?? null,
+    [id],
+  );
+  const twinOverlay = useMemo(
+    () => (sessionIsVr ? { link: OVERLAY_LINK, node: <OperatorOverlay getState={getOperatorState} /> } : undefined),
+    [sessionIsVr, getOperatorState],
+  );
 
   // TASK-392: what the page can check before recording, and the cameras the
   // robot really serves (a G1 has a head camera, not top/wrist).
@@ -394,6 +435,27 @@ export function SessionDetailPage() {
   const degraded = !!(live?.degraded || recordingProgress?.degraded);
   const robotType = (telemetry?.robotType as RobotType) ?? ((robot?.metadata as Record<string, unknown>)?.robotType as RobotType) ?? 'generic';
   const openExport = () => { setModalError(undefined); setExportOpen(true); };
+  summaryRef.current = { kept, elapsedS: sessionElapsedS, best: streak.best };
+  // The head camera leads the side column; any other camera goes under the twin.
+  const cameraNames = cameras.cameras.length > 0 ? cameras.cameras.slice(0, 4) : ['top', 'wrist'];
+  const headIndex = Math.max(0, cameraNames.findIndex((n) => /head/i.test(n)));
+  const leadCamera = cameraNames[headIndex];
+  const otherCameras = cameraNames.filter((_, i) => i !== headIndex);
+  const operatorViewer = viewers.find((v) => v.role === 'operator') ?? null;
+  // TASK-414: who holds the robot, for everyone, whenever leases are on. The
+  // interactive bar below covers the page's own inputs.
+  const showLeaseHolder = isLive && lease.enabled && !leaseInputs;
+  const cameraTile = (name: string, className: string) => (
+    <CameraStreamView
+      key={name}
+      robotId={session.robotId}
+      cameraName={name}
+      label={cameraLabel(name)}
+      className={className}
+      isRecording={isRecording}
+      offline={!robotOnline}
+    />
+  );
 
   const actions = (() => {
     if (session.status === 'created') {
@@ -441,32 +503,18 @@ export function SessionDetailPage() {
           <SessionStatusBadge status={session.status} showPulse={isRecording} />
           {isSim && <StatusTag tone="sim">Sim</StatusTag>}
           {isTelemetryConnected && <StatusTag tone="live" dot pulse>Live</StatusTag>}
+          {isLive && <PresenceBar viewers={viewers} />}
         </>}
         actions={<>
+          {showLeaseHolder && robot && (
+            <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={false} readOnly />
+          )}
           <SessionEStopButton robotId={session.robotId} robotName={robotName} />
           {actions}
         </>}
       >
         <SessionStepIndicator session={session} />
       </PageHeader>
-
-      {isLive && (
-        <SessionHud
-          phase={hudPhase}
-          take={live ? live.take : isRecording ? currentEpisode : null}
-          takeElapsedS={takeMode ? takeElapsedS : isRecording ? sessionElapsedS : null}
-          duration={isRecording ? formatElapsed(Math.floor(sessionElapsedS)) : formatDuration(session.duration)}
-          frames={liveFrameCount}
-          fps={session.fps}
-          fpsActual={isRecording ? live?.fpsActual ?? recordingProgress?.fpsActual : undefined}
-          kept={kept}
-          degraded={isRecording && degraded}
-          autoStopInS={autoStopInS}
-          muted={muted}
-          onToggleMute={() => setCueMuted(!muted)}
-          tone={isRecording ? 'live' : undefined}
-        />
-      )}
 
       {isLive && lastQuickCheck && (
         <QuickCheckCard
@@ -508,50 +556,86 @@ export function SessionDetailPage() {
       )}
 
       {isLive && (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="flex flex-col gap-6 xl:col-span-2">
-            <Panel padding="none">
-              <Panel.Header title="Robot" description={robotOnline ? robotType.toUpperCase() : undefined} />
-              {robotOnline ? (
-                <div className="h-64 sm:h-80">
-                  <Suspense fallback={<Skeleton className="h-full w-full" />}>
-                    <Robot3DViewer robotType={robotType} jointStates={telemetry?.jointStates} isAnimating={isTelemetryConnected} />
-                  </Suspense>
-                </div>
-              ) : (
-                <EmptyState size="sm" title="Robot offline" description="Start the robot agent to see the live model." />
-              )}
-            </Panel>
-            <Panel>
-              <Panel.Header title="Cameras" />
-              <Panel.Body className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        // TASK-414: the assistant layout. Left: the twin, large. Right: the
+        // head camera, the HUD, the operator, the takes and the readiness.
+        // Below lg it stacks with the side column first, so the controls never
+        // sit under the 3D view on a tablet.
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12" data-testid="session-assistant-layout">
+          <div className="flex flex-col gap-6 lg:col-span-7 xl:col-span-8">
+            {/* D5: on the Quest the VR modal covers this page — no second scene behind it. */}
+            {!vrModalOpen && (
+              <Panel padding="none" data-testid="session-twin">
+                <Panel.Header
+                  title="Robot"
+                  description={robotOnline ? `${robotType.toUpperCase()}${isVrSession ? ' · ghost hands show where the operator wants them' : ''}` : undefined}
+                />
+                {robotOnline ? (
+                  <div className="h-72 sm:h-96 lg:h-[34rem]">
+                    <Suspense fallback={<Skeleton className="h-full w-full" />}>
+                      <Robot3DViewer
+                        robotType={robotType}
+                        robotId={session.robotId}
+                        jointStates={telemetry?.jointStates}
+                        isAnimating={isTelemetryConnected}
+                        linkOverlay={twinOverlay}
+                      />
+                    </Suspense>
+                  </div>
+                ) : (
+                  <EmptyState size="sm" title="Robot offline" description="Start the robot agent to see the live model." />
+                )}
+              </Panel>
+            )}
+            {!vrModalOpen && otherCameras.length > 0 && !(robotOnline && cameras.loading) && !(robotOnline && cameras.cameras.length === 0) && (
+              <Panel>
+                <Panel.Header title="More cameras" />
+                <Panel.Body className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {otherCameras.map((name) => cameraTile(name, 'h-44'))}
+                </Panel.Body>
+              </Panel>
+            )}
+          </div>
+          <div className="order-first flex flex-col gap-6 lg:order-none lg:col-span-5 xl:col-span-4">
+            {!vrModalOpen && (
+              <div data-testid="session-lead-camera">
                 {robotOnline && cameras.loading ? (
-                  <Skeleton className="h-44 w-full sm:col-span-2" />
+                  <Skeleton className="h-56 w-full" />
                 ) : robotOnline && cameras.cameras.length === 0 ? (
                   <EmptyState
                     size="sm"
-                    className="sm:col-span-2"
                     title="No camera"
                     description={cameras.detail ? `The robot serves no camera: ${cameras.detail}` : 'The robot serves no camera. Episodes record without video.'}
                   />
                 ) : (
-                  (cameras.cameras.length > 0 ? cameras.cameras.slice(0, 4) : ['top', 'wrist']).map((name) => (
-                    <CameraStreamView
-                      key={name}
-                      robotId={session.robotId}
-                      cameraName={name}
-                      label={cameraLabel(name)}
-                      className="h-44"
-                      isRecording={isRecording}
-                      offline={!robotOnline}
-                    />
-                  ))
+                  cameraTile(leadCamera, 'h-56')
                 )}
-              </Panel.Body>
-            </Panel>
-          </div>
-          {/* Takes first below xl: on a tablet the controls must not sit under the 3D view. */}
-          <div className="order-first flex flex-col gap-6 xl:order-none">
+              </div>
+            )}
+            <SessionHud
+              phase={hudPhase}
+              take={live ? live.take : isRecording ? currentEpisode : null}
+              takeElapsedS={takeMode ? takeElapsedS : isRecording ? sessionElapsedS : null}
+              duration={isRecording ? formatElapsed(Math.floor(sessionElapsedS)) : formatDuration(session.duration)}
+              frames={liveFrameCount}
+              fps={session.fps}
+              fpsActual={isRecording ? live?.fpsActual ?? recordingProgress?.fpsActual : undefined}
+              kept={kept}
+              degraded={isRecording && degraded}
+              autoStopInS={autoStopInS}
+              muted={muted}
+              onToggleMute={() => setCueMuted(!muted)}
+              tone={isRecording ? 'live' : undefined}
+              streak={streak.current}
+              compact
+            />
+            {isVrSession && (
+              <OperatorCard
+                robotId={session.robotId}
+                sessionId={session.id}
+                operator={operator?.state ?? null}
+                operatorViewer={operatorViewer}
+              />
+            )}
             <EpisodePanel
               sessionId={session.id}
               episodes={episodes}
@@ -566,6 +650,14 @@ export function SessionDetailPage() {
               onDiscardTake={(take) => (takeMode ? handleDiscardTake(take) : handleDiscardEpisode(take))}
               onNextEpisode={handleNextEpisode}
             />
+            {isVrSession && robot && (
+              <Panel data-testid="session-readiness">
+                <Panel.Header title="Robot side" description="Why the arms would not follow, before anyone puts the headset on." />
+                <Panel.Body>
+                  <RobotReadinessPanel robotId={robot.id} variant="compact" />
+                </Panel.Body>
+              </Panel>
+            )}
             <Panel>
               <Panel.Header title="Quality" />
               <Panel.Body><QualityIndicator feedback={isRecording || isPaused ? qualityFeedback : null} /></Panel.Body>
@@ -580,6 +672,8 @@ export function SessionDetailPage() {
           lease={lease}
           simulate={simulateVr}
           onSimulateChange={setSimulateVr}
+          onVrOpenChange={setVrModalOpen}
+          showReadiness={false}
         />
       )}
 

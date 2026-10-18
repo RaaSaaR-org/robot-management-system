@@ -6,11 +6,13 @@
  *              a discard buzzes low, the auto-stop warns with a tick 3 s
  *              before it fires, and a link or robot problem sounds a double
  *              low tone. Muting is per viewer, remembered in localStorage.
+ *              TASK-414: a soft chime when the operator enters VR, and a
+ *              falling low tone when the headset's link is lost.
  * @feature datacollection
  */
 
 /** The cues a session plays. */
-export type SessionCue = 'started' | 'stopped' | 'discarded' | 'tick' | 'problem';
+export type SessionCue = 'started' | 'stopped' | 'discarded' | 'tick' | 'problem' | 'joined' | 'linkLost';
 
 /** One tone of a cue, relative to the moment the cue is played. */
 export interface CueTone {
@@ -45,6 +47,17 @@ export const CUE_TONES: Readonly<Record<SessionCue, readonly CueTone[]>> = {
   problem: [
     { freq: 220, at: 0, dur: 0.14, type: 'triangle', gain: 0.2 },
     { freq: 220, at: 0.22, dur: 0.14, type: 'triangle', gain: 0.2 },
+  ],
+  // Soft three-note chime: the operator put the headset on (TASK-414).
+  joined: [
+    { freq: 784, at: 0, dur: 0.18, type: 'sine', gain: 0.1 },
+    { freq: 988, at: 0.12, dur: 0.18, type: 'sine', gain: 0.1 },
+    { freq: 1319, at: 0.24, dur: 0.3, type: 'sine', gain: 0.08 },
+  ],
+  // One long falling low tone: the headset lost its link to the robot (TASK-414).
+  linkLost: [
+    { freq: 330, at: 0, dur: 0.12, type: 'triangle', gain: 0.18 },
+    { freq: 196, at: 0.14, dur: 0.3, type: 'triangle', gain: 0.18 },
   ],
 };
 

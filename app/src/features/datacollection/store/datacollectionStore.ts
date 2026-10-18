@@ -14,6 +14,7 @@ import { datacollectionApi } from '../api/datacollectionApi';
 import { DEFAULT_SESSION_PAGINATION } from '../types/datacollection.types';
 import { describeConflict, describeRemoteAction, takeLabel } from '../utils/takeFormat';
 import { forgetThumbnail } from '../utils/takeThumbnailCache';
+import { streakFromLive, type TakeStreak } from '../utils/takeStreak';
 import type {
   DataCollectionStore,
   TeleoperationSession,
@@ -41,6 +42,8 @@ import type {
   LiveState,
   QuickCheck,
   TakeAction,
+  OperatorSnapshot,
+  PresenceViewer,
 } from '../types/datacollection.types';
 
 // ============================================================================
@@ -69,6 +72,9 @@ const initialState = {
   liveClockOffsetMs: 0,
   lastQuickCheck: null as QuickCheck | null,
   takePending: null as TakeAction | null,
+  presence: null as { sessionId: string; viewers: PresenceViewer[] } | null,
+  operator: null as OperatorSnapshot | null,
+  streak: null as TakeStreak | null,
   clientId: CLIENT_ID,
   sessionFilters: {} as SessionFilters,
   sessionPagination: { ...DEFAULT_SESSION_PAGINATION } as SessionPagination,
@@ -113,6 +119,10 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
       set((state) => {
         state.live = live;
         if (Number.isFinite(at)) state.liveClockOffsetMs = at - Date.now();
+        // TASK-414: the take streak follows the server's counts, so a take the
+        // recorder did not keep (no frames) never extends it, and the same
+        // state adopted twice (REST answer + WebSocket echo) counts once.
+        state.streak = streakFromLive(state.streak, live);
       });
       // The link to the robot just went bad: one double-low cue on the edge.
       if (live.degraded && before?.sessionId === live.sessionId && !before.degraded) playCue('problem');
@@ -630,6 +640,26 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
       const { sessionId, session, recordingProgress, qualityFeedback } = event.data;
 
       switch (event.type) {
+        // TASK-414: who watches, and the operator's relayed state — the session on screen only.
+        case 'teleop:session:presence':
+          if (get().selectedSession?.id !== sessionId || !Array.isArray(event.data.viewers)) break;
+          set((state) => {
+            state.presence = { sessionId, viewers: event.data.viewers! };
+          });
+          break;
+
+        case 'teleop:operator':
+          if (get().selectedSession?.id !== sessionId || !event.data.state) break;
+          set((state) => {
+            state.operator = {
+              sessionId,
+              robotId: event.data.robotId ?? null,
+              state: event.data.state!,
+              receivedAt: Date.now(),
+            };
+          });
+          break;
+
         case 'teleop:session:live':
           if (event.data.live) adoptLive(event.data.live);
           break;
@@ -839,6 +869,7 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
 // HELPER FUNCTIONS
 // ============================================================================
 
+
 type EpisodeEventKind = 'started' | 'stopped' | 'discarded';
 
 const TAKE_VERB: Record<TakeAction, string> = {
@@ -968,6 +999,35 @@ export const selectTakeElapsedS = (nowServerMs: number) => (state: Pick<DataColl
 /** Takes kept so far: the server's count, else the listed episodes that are not discarded. */
 export const selectKept = (state: DataCollectionStore): number =>
   state.live?.kept ?? state.episodes.filter((e) => !e.discarded).length;
+
+// ----------------------------------------------------------------------------
+// Two-person session (TASK-414)
+// ----------------------------------------------------------------------------
+
+/** An operator state older than this is not shown as live. */
+export const OPERATOR_STALE_MS = 2_000;
+
+/** The operator of `sessionId` while fresh at `nowMs` (this tab's clock), else null. */
+export const selectOperatorFor = (sessionId: string | undefined, nowMs: number = Date.now()) =>
+  (state: Pick<DataCollectionStore, 'operator'>): OperatorSnapshot | null => {
+    const op = state.operator;
+    if (!op || !sessionId || op.sessionId !== sessionId) return null;
+    return nowMs - op.receivedAt <= OPERATOR_STALE_MS ? op : null;
+  };
+
+/** Who watches `sessionId`; empty when nobody (or another session). */
+export const selectViewersFor = (sessionId: string | undefined) =>
+  (state: Pick<DataCollectionStore, 'presence'>): PresenceViewer[] =>
+    state.presence && sessionId && state.presence.sessionId === sessionId ? state.presence.viewers : EMPTY_VIEWERS;
+
+const EMPTY_VIEWERS: PresenceViewer[] = [];
+
+/** The take streak of `sessionId` (current and best), zero when none. */
+export const selectStreakFor = (sessionId: string | undefined) =>
+  (state: Pick<DataCollectionStore, 'streak'>): { current: number; best: number } =>
+    state.streak && sessionId && state.streak.sessionId === sessionId ? state.streak : NO_STREAK;
+
+const NO_STREAK = { current: 0, best: 0 } as const;
 
 export const sessionStateSelectors = {
   selectLive,

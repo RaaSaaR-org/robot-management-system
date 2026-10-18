@@ -5,7 +5,8 @@
  *              line saying why the arms are not following — the server's
  *              reason when it blocks (D4) — plus Recenter and a hold-to-confirm
  *              Reset E-stop. World-locked beside the head-camera screen, inside
- *              the yaw group, so it follows a recenter.
+ *              the yaw group, so it follows a recenter. TASK-414: the title
+ *              names who watches from a desktop ("WATCHING Ben (desktop)").
  * @feature robots
  */
 
@@ -76,6 +77,13 @@ export interface VrRobotPanelProps {
   onRecenter: () => void;
   /** The modal's `resetEstop` — the same path as the desktop banner's button. */
   onResetEstop?: () => void | Promise<void>;
+  /** Who else watches the session (TASK-414), read at the panel's rate; absent without a session. */
+  watching?: () => string | null;
+}
+
+/** The panel title: `ROBOT`, or `ROBOT · WATCHING Ben (desktop)` while someone watches. */
+export function robotPanelTitle(watching: string | null | undefined): string {
+  return watching ? `ROBOT · WATCHING ${watching}` : 'ROBOT';
 }
 
 /** How often the server's readiness reason is read into the panel. */
@@ -86,14 +94,14 @@ const READINESS_READ_MS = 1_000;
  * stale. Read from the readiness store, which the launcher card's readiness
  * panel (`VRTeleopSection`) keeps fresh for as long as this modal is open.
  */
-function serverWhyOf(robotId: string, now: number): ServerWhy | null {
+export function serverWhyOf(robotId: string, now: number): ServerWhy | null {
   const entry = useReadinessStore.getState().byRobot[robotId];
   if (!entry || now - entry.receivedAt > READINESS_STALE_MS) return null;
   const reason = entry.readiness.reason;
   return reason ? { code: reason.code, severity: reason.severity, text: reason.text, source: reason.source } : null;
 }
 
-export function VrRobotPanel({ robotId, telemetryRef, onRecenter, onResetEstop }: VrRobotPanelProps) {
+export function VrRobotPanel({ robotId, telemetryRef, onRecenter, onResetEstop, watching }: VrRobotPanelProps) {
   const placement = useMemo(robotPanelPlacement, []);
 
   // TASK-413: the server's reason, read once a second into a ref — never a
@@ -117,11 +125,15 @@ export function VrRobotPanel({ robotId, telemetryRef, onRecenter, onResetEstop }
     const camera = cameraPanelLine(useVrCameraStatus.getState(), robotId);
     if (camera) lines.push(camera);
     lines.push({ ...whyLine, text: picked.text, color: SEVERITY_COLOR[picked.severity] });
-    if (import.meta.env.DEV) vrUiDebug.panel = lines.map((l) => l.text);
+    const title = t.estopLatched ? 'ROBOT — E-STOP LATCHED' : robotPanelTitle(watching?.());
+    if (import.meta.env.DEV) {
+      vrUiDebug.panel = lines.map((l) => l.text);
+      vrUiDebug.panelTitle = title;
+    }
     return t.estopLatched
-      ? { title: 'ROBOT — E-STOP LATCHED', titleColor: 'white', lines, background: BG_LATCHED, highlight: 'salmon' }
-      : { title: 'ROBOT', lines, background: BG };
-  }, [telemetryRef, robotId]);
+      ? { title, titleColor: 'white', lines, background: BG_LATCHED, highlight: 'salmon' }
+      : { title, lines, background: BG };
+  }, [telemetryRef, robotId, watching]);
 
   const reset = useCallback(() => {
     if (onResetEstop) void Promise.resolve(onResetEstop()).catch(() => { /* the banner says why */ });

@@ -6,7 +6,9 @@
  *              of session totals (time, frames, frame rate, kept). The take
  *              timer is computed by the caller from the server's stamp, so
  *              every client shows the same time. Open-ended (TASK-406): no
- *              "of N". Keeps the hud-* test ids.
+ *              "of N". Keeps the hud-* test ids. TASK-414: the take streak
+ *              ("5 kept in a row") under Kept, and a compact two-column form
+ *              for the assistant layout's side column.
  * @feature datacollection
  */
 
@@ -15,6 +17,7 @@ import { Button, StatRow, StatTile, type Tone } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { takeNumber } from '../../utils/takeFormat';
+import { streakLabel } from '../../utils/takeStreak';
 
 /** `capturing` records a take; `between` is ready for the next one. */
 export type HudPhase = 'capturing' | 'between' | 'paused' | 'idle';
@@ -37,6 +40,10 @@ export interface SessionHudProps {
   muted?: boolean;
   onToggleMute?: () => void;
   tone?: Tone;
+  /** Takes kept in a row (TASK-414); shown from two. */
+  streak?: number;
+  /** Two stat columns instead of four — for a side column. */
+  compact?: boolean;
 }
 
 /** 83.4 → "01:23". */
@@ -61,7 +68,9 @@ const PHASE_STYLE: Record<HudPhase, string> = {
 
 export function SessionHud({
   phase, take, takeElapsedS, duration, frames, fps, fpsActual, kept, degraded, autoStopInS, muted, onToggleMute, tone,
+  streak = 0, compact = false,
 }: SessionHudProps) {
+  const streakText = streakLabel(streak);
   // Between takes the number shown is the NEXT take: that is what Start records.
   const shownTake = take === null ? 0 : phase === 'capturing' ? take : take + 1;
   return (
@@ -119,7 +128,7 @@ export function SessionHud({
           </Button>
         )}
       </div>
-      <StatRow columns={4}>
+      <StatRow columns={compact ? 2 : 4}>
         <StatTile label="Session time" value={<span data-testid="hud-duration">{duration}</span>} tone={tone} />
         <StatTile label="Frames" value={<span data-testid="hud-frames">{frames.toLocaleString(UI_DATE_LOCALE)}</span>} tone={tone} />
         <StatTile
@@ -132,7 +141,7 @@ export function SessionHud({
           label="Kept"
           value={<span data-testid="hud-kept">{kept}</span>}
           unit={kept === 1 ? 'take' : 'takes'}
-          hint="Space starts and stops a take"
+          hint={streakText ? <span data-testid="hud-streak">{streakText}</span> : 'Space starts and stops a take'}
         />
       </StatRow>
     </div>

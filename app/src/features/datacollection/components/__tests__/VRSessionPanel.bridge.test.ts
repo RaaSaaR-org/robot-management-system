@@ -124,4 +124,21 @@ describe('createVrSessionBridge', () => {
     expect(await bridge.actions.stop()).toBe('refused');
     expect(api.startEpisode).not.toHaveBeenCalled();
   });
+
+  it('names who watches from a desktop, for the robot panel title (TASK-414)', () => {
+    useDataCollectionStore.setState({ selectedSession: SESSION, presence: null });
+    const bridge = createVrSessionBridge('s1');
+    expect(bridge.sessionId).toBe('s1');
+    expect(bridge.watching?.()).toBeNull();
+    useDataCollectionStore.setState({
+      presence: {
+        sessionId: 's1',
+        viewers: [
+          { userId: 'u1', displayName: 'Anna', role: 'operator', since: '' },
+          { userId: 'u2', displayName: 'Ben', role: 'assistant', since: '' },
+        ],
+      },
+    });
+    expect(bridge.watching?.()).toBe('Ben (desktop)');
+  });
 });
