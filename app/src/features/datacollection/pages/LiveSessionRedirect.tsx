@@ -17,7 +17,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Glasses } from 'lucide-react';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import { datacollectionApi } from '../api/datacollectionApi';
-import { formatRelative, sessionName } from '../utils/sessionFormat';
+import { formatDateTime } from '@/shared/utils/format';
+import { sessionName } from '../utils/sessionFormat';
 import type { TeleoperationSession, TeleoperationStatus } from '../types/datacollection.types';
 
 export const LIVE_SESSION_POLL_MS = 2_000;
@@ -56,9 +57,21 @@ export function liveCandidates(sessions: TeleoperationSession[], robotId: string
   return { candidates, ignored };
 }
 
-/** "created 12m ago" with the word the operator reads on the desktop. */
-function createdAgo(s: TeleoperationSession): string {
-  return `created ${formatRelative(s.createdAt)}`;
+/**
+ * "created 12 min ago" / "created 2 days ago", spelled out: this page is read
+ * in the headset, where "2d" is one more thing to decode. A week or more is a date.
+ */
+export function createdAgo(s: TeleoperationSession, nowMs: number = Date.now()): string {
+  const ms = Date.parse(s.createdAt);
+  if (!Number.isFinite(ms)) return 'created at an unknown time';
+  const min = Math.floor(Math.max(0, nowMs - ms) / 60_000);
+  if (min < 1) return 'created just now';
+  if (min < 60) return `created ${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `created ${hr} hour${hr === 1 ? '' : 's'} ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `created ${day} day${day === 1 ? '' : 's'} ago`;
+  return `created ${formatDateTime(s.createdAt, { year: 'numeric', month: 'short', day: 'numeric' })}`;
 }
 
 const STATUS_WORD: Partial<Record<TeleoperationStatus, string>> = {

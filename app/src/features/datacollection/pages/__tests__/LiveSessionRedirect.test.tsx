@@ -16,7 +16,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/mocks/server';
 import { resetLiveSessionDemo } from '@/mocks/liveSessionDemoHandlers';
-import { LIVE_CREATED_MAX_AGE_MS, LiveSessionRedirect, liveCandidates } from '../LiveSessionRedirect';
+import { LIVE_CREATED_MAX_AGE_MS, LiveSessionRedirect, createdAgo, liveCandidates } from '../LiveSessionRedirect';
 import type { TeleoperationSession } from '../../types/datacollection.types';
 
 const ROBOT = 'g1-edu-4';
@@ -100,6 +100,21 @@ describe('liveCandidates', () => {
   });
 });
 
+describe('createdAgo', () => {
+  it('spells the age out the way the headset reads it', () => {
+    const at = (ms: number) => createdAgo(session('x', ROBOT, 'created', ago(ms)), NOW);
+    expect(at(20_000)).toBe('created just now');
+    expect(at(12 * MIN)).toBe('created 12 min ago');
+    expect(at(60 * MIN)).toBe('created 1 hour ago');
+    expect(at(5 * 60 * MIN)).toBe('created 5 hours ago');
+    expect(at(DAY)).toBe('created 1 day ago');
+    expect(at(2 * DAY)).toBe('created 2 days ago');
+    expect(at(9 * DAY)).toMatch(/^created \S/);
+    expect(at(9 * DAY)).not.toContain('ago');
+    expect(createdAgo(session('x', ROBOT, 'created', 'not a date'), NOW)).toBe('created at an unknown time');
+  });
+});
+
 describe('LiveSessionRedirect', () => {
   it('replaces itself with the single live session and asks only for live statuses', async () => {
     const asked: URLSearchParams[] = [];
@@ -160,7 +175,7 @@ describe('LiveSessionRedirect', () => {
     const choices = screen.getAllByTestId('live-session-choice');
     expect(choices.map((c) => c.getAttribute('data-session-id'))).toEqual(['s-b', 's-a']);
     expect(choices[0]).toHaveTextContent('Stack cups');
-    expect(choices[0]).toHaveTextContent('created 12m ago');
+    expect(choices[0]).toHaveTextContent('created 12 min ago');
     // It keeps polling while the list is up, and never jumps on its own.
     await act(async () => {
       await new Promise((r) => setTimeout(r, 150));
@@ -184,7 +199,7 @@ describe('LiveSessionRedirect', () => {
     renderAt(`/data-collection/live?robot=${ROBOT}`);
     await waitFor(() =>
       expect(screen.getByTestId('live-session-ignored')).toHaveTextContent(
-        "Ignoring ‘Appely’ (created 2d ago, never started). End it on the desktop if it is not needed.",
+        "Ignoring ‘Appely’ (created 2 days ago, never started). End it on the desktop if it is not needed.",
       ),
     );
     expect(screen.queryByTestId('where')).toBeNull();

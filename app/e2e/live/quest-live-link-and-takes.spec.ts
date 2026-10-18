@@ -10,7 +10,7 @@
  *        take N is still discarded on the server, the desktop and the board,
  *        and is absent from the written dataset.
  *     3. A presses B (E-stop, SIM agent only) mid-take → board and desktop
- *        leave REC within about a second, the take reads "stopped by the
+ *        leave REC within 1 s, the take reads "stopped by the
  *        E-stop — discarded", it is not in the dataset, and the next take
  *        after the reset records normally.
  *
@@ -25,6 +25,16 @@ import { test, expect, type Page, type APIRequestContext } from '@playwright/tes
 
 const ROBOT_ID = process.env.VR_ROBOT_ID ?? 'sim-robot-g1-edu';
 const SCREENS = process.env.VR_SCREENSHOT_DIR;
+
+/**
+ * The emulated headset renders on the GPU. Headless Chromium defaults to the
+ * SwiftShader software rasterizer, and with the desktop page rendering beside
+ * it the headset page drops to ~2.5 frames a second — every button press then
+ * waits a frame (~400 ms) to be seen and the board another to be redrawn, which
+ * measures the rasterizer, not the product (a Quest renders at 72 Hz).
+ * VR_SOFTWARE_GL=1 keeps the default.
+ */
+if (!process.env.VR_SOFTWARE_GL) test.use({ launchOptions: { args: ['--enable-gpu', '--use-angle=gl-egl'] } });
 
 type Vec3 = [number, number, number];
 type Side = 'left' | 'right';
@@ -193,6 +203,37 @@ async function releaseControl(page: Page): Promise<void> {
   }
 }
 
+/**
+ * The E-stop damps the base and its reset clears only the latch; the arms follow
+ * only in Balance. Switch back the way an operator does on the VR modal's
+ * desktop panel: Stand up, then Balance, each confirmed. The sidecar refuses a
+ * mode change while the E-stop's arm disarm ramp still runs, so a refused
+ * request is asked again. A sidecar without mode control has no panel, and one
+ * that does not damp on an E-stop leaves Balance alone: nothing to do then.
+ */
+async function backToBalance(page: Page): Promise<void> {
+  const modal = page.getByRole('dialog', { name: /VR teleop/i });
+  const panel = modal.getByTestId('robot-mode-control');
+  if ((await panel.count()) === 0) return;
+  const readout = panel.getByTestId('robot-mode-readout');
+  // The panel reads the mode once a second: wait for it to show the damp.
+  await expect(readout).not.toHaveText(/^Balance/, { timeout: 5_000 }).catch(() => {});
+  if (/^Balance/.test(await readout.innerText())) return;
+  for (const [mode, shown] of [['stand', /^Stand/], ['balance', /^Balance/]] as const) {
+    if (mode === 'stand' && /^Stand/.test(await readout.innerText())) continue;
+    const button = panel.getByTestId(`robot-mode-${mode}`);
+    await expect(async () => {
+      await expect(button).toBeEnabled({ timeout: 5_000 });
+      // The emulator's canvas lies over the desktop panel: click by event, not by pointer.
+      await button.dispatchEvent('click');
+      await page.getByTestId('robot-mode-confirm-confirm').dispatchEvent('click');
+      await expect(readout).toHaveText(shown, { timeout: 4_000 });
+    }).toPass({ timeout: 30_000, intervals: [1_000] }).catch(async (err: unknown) => {
+      throw new Error(`${mode} did not take — the panel says: ${await panel.innerText().catch(() => '?')}\n${String(err)}`);
+    });
+  }
+}
+
 async function createSession(request: APIRequestContext, base: string, task: string): Promise<string> {
   const created = await request.post(`${base}/api/teleoperation/sessions`, {
     data: { operatorId: 'live-check', robotId: ROBOT_ID, type: 'vr_quest', fps: 30, languageInstr: task },
@@ -217,7 +258,12 @@ test('the Quest link waits past a stale READY session and never guesses between 
 
     await page.goto(`/data-collection/live?robot=${ROBOT_ID}`);
     await expect(page.getByTestId('live-session-status')).toHaveText(`No live session for ${ROBOT_ID}. Waiting…`, { timeout: 10_000 });
-    if (stale.length > 0) await expect(page.getByTestId('live-session-ignored')).toContainText(/^Ignoring ‘.+’ \(created \S+ ago, never started\)/);
+    if (stale.length > 0) {
+      const ignored = page.getByTestId('live-session-ignored');
+      await expect(ignored).toContainText(/^Ignoring ‘.+’ \(created [^)]+, never started\)/);
+      // Spelled out ("2 days ago"), never the table's "2d ago".
+      await expect(ignored).not.toContainText(/\d[smhd] ago/);
+    }
     await shot(page, 'live-link-waiting-stale');
 
     // The desktop creates a session: the headset page opens it within 2.5 s.
@@ -316,6 +362,9 @@ test('a discard survives the headset starting the next take, and an E-stop abort
     await drive(quest, 1_500);
     await setButton(quest, 'right', 'b-button', 1);
     const estopAt = Date.now();
+    // Held for a few frames, as a thumb does: a press and release inside one
+    // frame is never seen by the headset.
+    await quest.waitForTimeout(80);
     await setButton(quest, 'right', 'b-button', 0);
     // Three views, watched at once: the server's live state, the desktop HUD, the headset board.
     const since = async (until: Promise<unknown>) => { await until; return Date.now() - estopAt; };
@@ -326,6 +375,10 @@ test('a discard survives the headset starting the next take, and an E-stop abort
     ]);
     test.info().annotations.push({ type: 'left REC after the E-stop (server / desktop / board)', description: `${serverMs} / ${deskMs} / ${boardMs} ms` });
     console.log(`[TASK-416] left REC after the E-stop: server ${serverMs} ms, desktop ${deskMs} ms, board ${boardMs} ms`);
+    // The acceptance criterion: board and desktop leave REC within 1 s of B.
+    expect(deskMs, 'the desktop left REC within 1 s of the E-stop').toBeLessThan(1_000);
+    // On the software rasterizer the headset's own frames (~400 ms each) are the bound, not the product.
+    if (!process.env.VR_SOFTWARE_GL) expect(boardMs, 'the headset board left REC within 1 s of the E-stop').toBeLessThan(1_000);
     await expect(desk.getByText('Take 3 stopped by the E-stop — discarded').first()).toBeVisible({ timeout: 3_000 });
     await expect.poll(() => boardText(quest), { timeout: 3_000 }).toContain('Take 3 stopped by the E-stop — discarded');
     await expect(desk.getByTestId('quick-check-verdict')).toHaveText('Take 3 stopped by the E-stop — discarded');
@@ -337,6 +390,7 @@ test('a discard survives the headset starting the next take, and an E-stop abort
 
     // ---- Reset; take 4 records normally --------------------------------------
     expect((await deskCtx.request.post(`${base}/api/safety/robots/${ROBOT_ID}/estop/reset`)).ok()).toBeTruthy();
+    await backToBalance(quest);
     await quest.waitForFunction(
       () => (window as DebugWindow).__neodemVrUi!.targets().find((t) => t.id === 'session-start')?.live === true,
       null,
