@@ -3,7 +3,7 @@ id: "TASK-418"
 aliases: []
 title: "The operator sees the task, the take state and the take result where they are looking"
 slug: "the-operator-sees-the-task-the-take-state-and-the-take"
-status: review
+status: done
 priority: 2
 owner: "huhn511"
 projects: []
