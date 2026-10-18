@@ -152,3 +152,11 @@ Make the panel complete the bringup by itself, make stale code visible and refus
 - The supervisor never signals a process it did not start, and never sends SIGKILL to a sidecar.
 - Never set `G1_READ_ONLY=0`, never use `G1_ARM_ALLOW_UNKNOWN_FSM=1`, no DDS publishing on domain 0 in development or tests.
 - Development and tests use the sim stack only. Never start, stop, adopt or POST to the real g1-edu-4 robot side (:41245/:8767/:6001/:8766). Do not stop or restart the running dev stack, and do not edit `server/.env` or `~/.config` on this box. The install itself is an operator step.
+
+## Implementation notes (2026-10-18)
+
+- **Code age** also counts the code files' modification times (a pull or checkout rewrites them), not only `git log %ct`; a literal "dirty tree = now" would make every dev process stale 30 s after it started. A process whose cwd is in another git checkout is compared by that checkout's commit time.
+- **Foreign fields**: the start time stays in the existing `foreign.since` (no duplicate `startedAt`); added `cwd`, `robotId`, `staleCode`.
+- **Reason order**: `agent_outdated` from a supervisor `staleCode` goes ahead of `bringup_stopped`/`bringup_failed`, so a refused preflight reads as outdated code. `clip()` keeps the first sentence when it fits, else cuts at a word.
+- **Take control** opens the arm-control confirmation after it binds (still confirmed); in the Stop dialog it only enables Limp first, never limps on its own. The session page's compact panel gets its lease but shows neither switch nor Stop, so no `take` there.
+- **Live check** (branch supervisor :8963, server :3163, app :1463, agent :41363, sidecar :8863, sim DDS domain 79 on lo; bridge needed one more port, 6079): `app/e2e/live/readiness-bringup.spec.ts`, all four scenarios passed. The docs' install steps ran with a scratch HOME except the `systemctl --user` lines, which would have reached the real user manager.
