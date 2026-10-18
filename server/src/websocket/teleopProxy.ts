@@ -68,6 +68,22 @@ export interface TeleopProxyDeps {
   agentHeaders(): Record<string, string>;
   /** Opens the agent socket; injectable for tests. */
   connectUpstream?(url: string, headers: Record<string, string>): WebSocket;
+  /**
+   * TASK-416: the browser just sent an E-stop for `robotId` (the headset's B/Y).
+   * Told after the frame is forwarded, never instead of it.
+   */
+  onEStop?(robotId: string): void;
+}
+
+/** `"estop"` as a JSON key — `{ "estop": { "reason": … } }` is the client's E-stop frame. */
+const ESTOP_KEY = Buffer.from('"estop"');
+
+/** Whether a text frame from the browser carries an E-stop. Cheap: no parse. */
+export function isEStopFrame(data: RawData, isBinary: boolean): boolean {
+  if (isBinary) return false;
+  if (Buffer.isBuffer(data)) return data.includes(ESTOP_KEY);
+  if (Array.isArray(data)) return data.some((b) => b.includes(ESTOP_KEY));
+  return Buffer.from(data).includes(ESTOP_KEY);
 }
 
 const DEV_IDENTITY: SocketIdentity = { userId: 'dev-user-id', role: 'super-admin', tenantId: DEFAULT_TENANT_ID };
@@ -120,7 +136,7 @@ function sendableCloseCode(code: number): number {
  * down together. Text stays text: the agent speaks JSON frames and the
  * browser's `onmessage` must keep getting strings.
  */
-export function bridgeSockets(client: WebSocket, upstream: WebSocket): void {
+export function bridgeSockets(client: WebSocket, upstream: WebSocket, onEStop?: () => void): void {
   const pending: Array<{ data: RawData; isBinary: boolean }> = [];
   let closed = false;
 
@@ -144,6 +160,13 @@ export function bridgeSockets(client: WebSocket, upstream: WebSocket): void {
         return;
       }
       pending.push({ data, isBinary });
+    }
+    if (onEStop && isEStopFrame(data, isBinary)) {
+      try {
+        onEStop();
+      } catch (err) {
+        console.warn(`[TeleopProxy] E-stop listener failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   });
   upstream.on('open', () => {
@@ -216,7 +239,7 @@ export function createTeleopProxy(deps: TeleopProxyDeps): UpgradeRoute {
               return;
             }
             console.log(`[TeleopProxy] ${identity.userId} → robot ${robotId} (${url})`);
-            bridgeSockets(client, upstream);
+            bridgeSockets(client, upstream, deps.onEStop ? () => deps.onEStop!(robotId) : undefined);
           });
         },
         (err: unknown) => {

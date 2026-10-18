@@ -182,6 +182,24 @@ describe('profile loader', () => {
     expect(agentSpec(p, parent).env).toMatchObject({ PORT: '41245', HARDWARE_SIDECAR_URL: 'http://127.0.0.1:8767', ROBOT_ID: 'g1-test' });
   });
 
+  it('a sim profile\'s sidecar says it fronts the sim and probes no camera; a real one never does (TASK-416)', () => {
+    const sim = validateProfile(simDoc(), opts);
+    for (const mode of ['read_only', 'arm_sdk'] as const) {
+      expect(sidecarSpec(sim, mode, {}).env.G1_SIM_BACKEND).toBe('1');
+    }
+    // simDoc inherits realDoc's explicit pc2cam source: an explicit choice is kept.
+    expect(sidecarSpec(sim, 'read_only', {}).env.G1_CAMERA_SOURCE).toBe('pc2cam');
+    const noCam = simDoc();
+    (noCam.sidecar as { env: Record<string, unknown> }).env = {};
+    expect(sidecarSpec(validateProfile(noCam, opts), 'read_only', {}).env.G1_CAMERA_SOURCE).toBe('none');
+
+    const realWithFlag = realDoc();
+    (realWithFlag.sidecar as { env: Record<string, unknown> }).env = { G1_CAMERA_SOURCE: 'pc2cam', G1_SIM_BACKEND: '1' };
+    const real = validateProfile(realWithFlag, opts);
+    expect(sidecarSpec(real, 'read_only', {}).env).not.toHaveProperty('G1_SIM_BACKEND');
+    expect(sidecarSpec(real, 'arm_sdk', {}).env).not.toHaveProperty('G1_SIM_BACKEND');
+  });
+
   it('the simulator gets the profile domain and loopback', () => {
     const p = validateProfile(simDoc(), opts);
     expect(simSpec(p, {}).args).toEqual(expect.arrayContaining(['--domain', '42', '--iface', 'lo']));
@@ -207,5 +225,12 @@ describe('checked-in profiles', () => {
     expect(p.ddsDomain).toBe(42);
     const ports = [p.ports.bridge, p.ports.sidecar, p.ports.agent, p.ports.simHttp];
     for (const devPort of [6001, 8767, 8777, 41245, 41246, 3001]) expect(ports).not.toContain(devPort);
+    // TASK-416: labelled sim, no robot-LAN camera probe, facade on loopback only.
+    const sidecar = sidecarSpec(p, 'arm_sdk', {}).env;
+    expect(sidecar.G1_SIM_BACKEND).toBe('1');
+    expect(sidecar.G1_CAMERA_SOURCE).toBe('none');
+    expect(sidecar.G1_ROBOT_IP).toBe('127.0.0.1');
+    const simArgs = simSpec(p, {}).args;
+    expect(simArgs[simArgs.indexOf('--host') + 1]).toBe('127.0.0.1');
   });
 });

@@ -42,7 +42,8 @@ export interface AgentEpisodeReport {
   thumbnail?: { camera: string; frame: number } | null;
 }
 
-export type AgentEpisodeEndReason = 'operator' | 'time_limit' | 'next' | 'session_end';
+/** `estop`: the agent ended and discarded the take itself when an E-stop latched (TASK-416). */
+export type AgentEpisodeEndReason = 'operator' | 'time_limit' | 'next' | 'session_end' | 'estop';
 
 /** The agent's last take boundary (TASK-402). */
 export interface AgentLastStop {

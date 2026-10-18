@@ -129,8 +129,11 @@ export interface StartRecordingRequest {
   episodeTimeS?: number | null;
 }
 
-/** Why a take ended. */
-export type EpisodeEndReason = 'operator' | 'time_limit' | 'next' | 'session_end';
+/**
+ * Why a take ended. `estop` is the recorder's own abort when an emergency stop
+ * latches mid-take (TASK-416 D4): that take is discarded as it ends.
+ */
+export type EpisodeEndReason = 'operator' | 'time_limit' | 'next' | 'session_end' | 'estop';
 
 export type RecorderPhase = 'between' | 'capturing';
 
@@ -1018,6 +1021,17 @@ export class EpisodeRecorder {
         return;
       }
     }
+    // E-stop (TASK-416 D4): every frame after the latch would be dropped, so
+    // the take is truncated by definition. The first tick that sees the latch
+    // ends the take (`estop`, the same path as `time_limit`) and discards it —
+    // a silently kept aborted attempt is worse than one re-recorded take. It
+    // never begins a new take, and it does nothing to the robot: what the
+    // E-stop does to the motors is not the recorder's business.
+    if (this.hooks.isEStopTriggered()) {
+      const ended = this.endEpisode('estop');
+      if (ended.ok) await this.discardEpisode(ended.episodeIndex);
+      return;
+    }
     // Before the pause and drop checks: the marks describe what has ALREADY
     // driven the robot, and they belong to the episode that was open when it
     // happened whether or not this particular tick produces a frame.
@@ -1028,10 +1042,6 @@ export class EpisodeRecorder {
       // queueing would build a backlog that never drains and would stretch the
       // clock the dataset claims.
       this.drop('behind: the previous frame had not finished');
-      return;
-    }
-    if (this.hooks.isEStopTriggered()) {
-      this.drop('an emergency stop is latched');
       return;
     }
     if (!this.hooks.isTeleopActive()) {

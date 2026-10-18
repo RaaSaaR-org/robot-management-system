@@ -178,6 +178,24 @@ def _dds_domain_env(env=None) -> "str | None":
     return None
 
 
+def _sim_backend(env=None) -> bool:
+    """Whether this sidecar fronts the MuJoCo DDS sim, not a robot (TASK-416).
+
+    The sidecar cannot tell `sim_node.py` from a G1 over DDS, so the supervisor
+    says so: a `robot: sim` profile sets G1_SIM_BACKEND=1. Reported on /health
+    as `sim`, the field the recorder reads to label a dataset sim or real.
+    Never on DDS domain 0 (the robot's): a stray flag there must not make real
+    demonstrations read as simulated ones."""
+    env = os.environ if env is None else env
+    if (env.get("G1_SIM_BACKEND") or "").strip() != "1":
+        return False
+    raw = _dds_domain_env(env)
+    try:
+        return int(raw or "0") != 0
+    except ValueError:
+        return False
+
+
 def _dds_iface_env(env=None) -> str:
     env = os.environ if env is None else env
     for key in ("G1_DDS_IFACE", "G1_LIDAR_DDS_IFACE", "G1_NET_INTERFACE"):
@@ -1616,6 +1634,9 @@ def _no_camera_source_detail() -> str:
     `_PORT` are overridable, and a message that names a machine nobody is
     running sends the operator to the wrong box.
     """
+    if _camera_disabled():
+        return ("no camera: G1_CAMERA_SOURCE is off for this sidecar (a sim profile "
+                "has no head camera), so nothing on the robot's network is probed.")
     pc2_host, pc2_port = _pc2cam_endpoint()
     img_host, img_port = _teleimager_host_port()
     return (
@@ -1627,11 +1648,22 @@ def _no_camera_source_detail() -> str:
     )
 
 
+#: G1_CAMERA_SOURCE values that turn every camera source off (TASK-416). The
+#: `auto` order probes the robot's LAN (teleimager, then PC2) — wrong for a sim
+#: rehearsal, which has no head camera and must not reach 192.168.123.0/24.
+_CAMERA_OFF_VALUES = ("none", "off")
+
+
+def _camera_disabled(env=None) -> bool:
+    env = os.environ if env is None else env
+    return (env.get("G1_CAMERA_SOURCE") or "").strip().lower() in _CAMERA_OFF_VALUES
+
+
 def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
     """(active frame source, camera names it can serve).
 
     Source comes from G1_CAMERA_SOURCE ∈
-    {auto|lerobot|teleimager|pc2cam|realsense}, the same knob
+    {auto|lerobot|teleimager|pc2cam|realsense|none}, the same knob
     /cameras/<n>/snapshot has always used. The `auto` order is lerobot (richest,
     but never loaded in read-only mode), then the two ways to reach the ROBOT's
     own head camera — the vendor's teleimager image server, then this lab's
@@ -1639,6 +1671,8 @@ def _camera_source_and_names() -> "tuple[str | None, tuple[str, ...]]":
     That last place is deliberate: the first three are what the robot sees,
     while a D435 plugged into the workstation sees whatever the desk faces.
     """
+    if _camera_disabled():
+        return None, ()  # `none`/`off`: probe nothing (TASK-416)
     cam_source = os.environ.get("G1_CAMERA_SOURCE", "auto").lower()
     if cam_source in ("auto", "lerobot"):
         names = _lerobot_camera_names()
@@ -2988,6 +3022,21 @@ def _with_base(state: dict) -> dict:
     return state
 
 
+def health_body() -> dict:
+    """GET /health. Point-cloud replay mode reports "connected" so the Node
+    hardware seam pulls real recorded clouds without a physical robot attached.
+    `sim` (TASK-416) is true only behind a sim profile, see `_sim_backend`."""
+    replay = bool(os.environ.get("G1_POINTCLOUD_REPLAY", "").strip())
+    live = _state_latest(TOPIC_LOWSTATE) is not None
+    body = {"status": "ok", "connected": live or replay, "read_only": READ_ONLY,
+            "boot_id": BOOT_ID, "sim": _sim_backend()}
+    body.update(write_status())
+    # TASK-398: what this sidecar may do to the base, and the measured mode.
+    body["loco"] = loco_capability()
+    body["base"] = fsm_state()
+    return body
+
+
 class Handler(BaseHTTPRequestHandler):
     # TCP_NODELAY on every accepted socket (TASK-415). `_send` writes the
     # headers and the body as two segments; with Nagle on, the body waits for
@@ -3090,17 +3139,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            # Point-cloud replay mode reports "connected" so the Node hardware
-            # seam pulls real recorded clouds without a physical robot attached.
-            replay = bool(os.environ.get("G1_POINTCLOUD_REPLAY", "").strip())
-            live = _state_latest(TOPIC_LOWSTATE) is not None
-            body = {"status": "ok", "connected": live or replay, "read_only": READ_ONLY,
-                    "boot_id": BOOT_ID}
-            body.update(write_status())
-            # TASK-398: what this sidecar may do to the base, and the measured mode.
-            body["loco"] = loco_capability()
-            body["base"] = fsm_state()
-            self._send(200, body)
+            self._send(200, health_body())
         elif self.path == "/state":
             self._send(200, _with_base(get_state()))
         elif self.path == "/state/fast":

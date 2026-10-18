@@ -50,6 +50,11 @@ export function actorTag(by: EpisodeActor | null | undefined): string | null {
 
 type EpisodeEventKind = 'started' | 'stopped' | 'discarded';
 
+/** "Take 11 stopped by the E-stop — discarded" (TASK-416 D4): one line on every view. */
+export function describeEStopTake(take: number): string {
+  return `${takeLabel(take)} stopped by the E-stop — discarded`;
+}
+
 /**
  * The toast for an action someone else took: "Take 5 started from the
  * headset", "Anna discarded take 4", "Take 6 stopped automatically".
@@ -103,4 +108,48 @@ export function describeConflict(
     default:
       return 'The session changed elsewhere — showing the current state';
   }
+}
+
+/** Why a discard was refused, in words, for the "was NOT discarded" toast. */
+function discardRefusalReason(
+  code: EpisodeConflictCode | string,
+  take: number,
+  live: LiveState | null,
+  by?: EpisodeActor | null,
+): string {
+  const now = live?.take;
+  switch (code) {
+    case 'episode_conflict':
+      return typeof now === 'number' && now !== take
+        ? `${takeLabel(now)} was started elsewhere${actorPhrase(by)}`
+        : `the take changed elsewhere${actorPhrase(by)}`;
+    case 'unknown_take':
+      return 'the server does not know that take';
+    case 'recorder_unavailable':
+      return 'the robot did not answer';
+    case 'not_recording':
+      return 'the session is not recording';
+    case 'no_take':
+      return 'there is no take yet';
+    case 'unsupported_recorder':
+      return "this robot's recorder runs its own episodes";
+    default:
+      return typeof code === 'string' && code ? code.replace(/_/g, ' ') : 'the server refused';
+  }
+}
+
+/**
+ * The toast when a discard did not happen (TASK-416): it always names the
+ * take that SURVIVED, so nobody walks away thinking it is gone.
+ * "Take 9 was NOT discarded — Take 10 was started elsewhere from the headset.
+ * Discard it from the take list."
+ */
+export function describeDiscardRefusal(
+  code: EpisodeConflictCode | string,
+  take: number,
+  live: LiveState | null,
+  by?: EpisodeActor | null,
+): string {
+  if (code === 'already_discarded') return `${takeLabel(take)} was already discarded${actorPhrase(by)}`;
+  return `${takeLabel(take)} was NOT discarded — ${discardRefusalReason(code, take, live, by)}. Discard it from the take list.`;
 }

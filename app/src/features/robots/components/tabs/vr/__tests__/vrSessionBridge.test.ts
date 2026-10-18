@@ -176,6 +176,22 @@ describe('composeSessionBoard', () => {
     expect(composeSessionBoard(view({ lastQuickCheck: qc }), 30_000).some((l) => l.id === 'qc')).toBe(false);
   });
 
+  it('says a take the E-stop aborted was discarded, until the next Start (TASK-416)', () => {
+    const aborted = { take: 10, frames: 0, durationS: 4.2, groupsMoved: [], warnings: ['short'], discarded: true, stopReason: 'estop' };
+    const v = view({ live: live({ phase: 'between' }), lastQuickCheck: aborted });
+    expect(v.lastQuickCheck).toMatchObject({ takeNumber: 11, estopDiscarded: true });
+    for (const now of [0, 30_000]) {
+      const lines = composeSessionBoard(v, now);
+      expect(lines[0].text).toBe('READY  Take 8 next');
+      expect(lines[2]).toMatchObject({ id: 'qc-verdict', text: 'Take 11 stopped by the E-stop — discarded', color: BOARD_COLORS.warn });
+      expect(lines).toHaveLength(3);
+    }
+    // The next Start hides it, like any quick check.
+    expect(composeSessionBoard(view({ lastQuickCheck: aborted }), 0).some((l) => l.id === 'qc-verdict')).toBe(false);
+    // Any other discarded take still leaves the board.
+    expect(view({ lastQuickCheck: { ...aborted, stopReason: 'operator' } }).lastQuickCheck).toBeNull();
+  });
+
   it('puts the warnings in place of "looks good"', () => {
     const warned = { take: 2, frames: 30, durationS: 1, groupsMoved: [], warnings: ['short', 'no_motion'], discarded: false };
     const lines = composeSessionBoard(view({ live: live({ phase: 'between' }), lastQuickCheck: warned }), 0);
@@ -254,6 +270,19 @@ describe('the camera strip (TASK-418)', () => {
     m = stepCameraStrip(m, next, T0 + 200);
     expect(m.verdict).toBeNull();
     expect(composeCameraStrip(next, false, m, T0 + 200)?.tone).toBe('rec');
+  });
+
+  it('says a take the E-stop aborted was discarded, in the board\'s words (TASK-416)', () => {
+    let m = stepCameraStrip(initialCameraStrip(capturing()), capturing(), T0);
+    const aborted = between({ discarded: 2 }, {
+      lastQuickCheck: { take: 2, frames: 0, durationS: 3, groupsMoved: [], warnings: ['short'], discarded: true, stopReason: 'estop' },
+    });
+    m = stepCameraStrip(m, aborted, T0 + 100);
+    expect(composeCameraStrip(aborted, false, m, T0 + 100)).toEqual({
+      text: 'Take 3 stopped by the E-stop — discarded', tone: 'warn', redFrame: false,
+    });
+    // While the rig itself is latched, the E-stop line still wins.
+    expect(composeCameraStrip(aborted, true, m, T0 + 100)?.tone).toBe('estop');
   });
 });
 

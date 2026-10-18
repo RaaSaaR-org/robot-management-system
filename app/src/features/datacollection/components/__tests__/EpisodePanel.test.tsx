@@ -182,16 +182,40 @@ describe('EpisodePanel hotkeys', () => {
     expect(props.onStartTake).not.toHaveBeenCalled();
   });
 
-  it('Backspace discards the last take after 5 s, sending the take it was asked for', () => {
+  it('Backspace discards the last finished take after 5 s, by its number', () => {
     vi.useFakeTimers();
     const { props } = renderPanel({ episodes: [episode()], live: live({ take: 0, kept: 1 }) });
     fireEvent.keyDown(window, { key: 'Backspace' });
     expect(getToasts()[0]?.title).toBe('Discarding take 1…');
     expect(getToasts()[0]?.action?.label).toBe('Undo');
     act(() => { vi.advanceTimersByTime(DISCARD_UNDO_MS - 1); });
-    expect(props.onDiscardLast).not.toHaveBeenCalled();
+    expect(props.onDiscardTake).not.toHaveBeenCalled();
     act(() => { vi.advanceTimersByTime(1); });
-    expect(props.onDiscardLast).toHaveBeenCalledWith(0);
+    expect(props.onDiscardTake).toHaveBeenCalledWith(0);
+    expect(props.onDiscardLast).not.toHaveBeenCalled();
+  });
+
+  it('still discards the named take by index when the headset starts the next one inside the Undo window (TASK-416)', () => {
+    vi.useFakeTimers();
+    const { props, rerender } = renderPanel({ episodes: [episode({ episodeIndex: 8 })], live: live({ take: 8, kept: 9 }) });
+    fireEvent.keyDown(window, { key: 'Backspace' });
+    expect(getToasts()[0]?.title).toBe('Discarding take 9…');
+    act(() => { vi.advanceTimersByTime(1500); });
+    // Take 10 starts from the headset.
+    rerender(<EpisodePanel {...props} live={live({ phase: 'capturing', take: 9, kept: 9 })} />);
+    act(() => { vi.advanceTimersByTime(DISCARD_UNDO_MS); });
+    expect(props.onDiscardTake).toHaveBeenCalledTimes(1);
+    expect(props.onDiscardTake).toHaveBeenCalledWith(8);
+    expect(props.onDiscardLast).not.toHaveBeenCalled();
+  });
+
+  it('ends and discards the named take when it is still recording when the window closes', () => {
+    vi.useFakeTimers();
+    const { props } = renderPanel({ live: live({ phase: 'capturing', take: 2, kept: 2 }) });
+    fireEvent.keyDown(window, { key: 'Backspace' });
+    act(() => { vi.advanceTimersByTime(DISCARD_UNDO_MS); });
+    expect(props.onDiscardLast).toHaveBeenCalledWith(2);
+    expect(props.onDiscardTake).not.toHaveBeenCalled();
   });
 
   it('Undo within 5 s cancels the discard before anything is sent', () => {
@@ -202,6 +226,7 @@ describe('EpisodePanel hotkeys', () => {
     act(() => { getToasts()[0]!.action!.onClick(); });
     act(() => { vi.advanceTimersByTime(DISCARD_UNDO_MS * 2); });
     expect(props.onDiscardLast).not.toHaveBeenCalled();
+    expect(props.onDiscardTake).not.toHaveBeenCalled();
     expect(getToasts()).toHaveLength(0);
   });
 });

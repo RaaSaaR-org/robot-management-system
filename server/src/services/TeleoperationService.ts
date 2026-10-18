@@ -79,6 +79,15 @@ export const SIDECAR_EPISODE_CAP = 1000;
  * make the number flicker.
  */
 const AGENT_PROGRESS_POLL_MS = 1000;
+/**
+ * TASK-416: after an E-stop the live state is read every
+ * `ESTOP_WATCH_INTERVAL_MS` until the robot's recorder has ended the open take
+ * (it does so on its first tick after the latch, then writes and discards it),
+ * for at most `ESTOP_WATCH_WINDOW_MS`. Two fixed reads missed a take that ended
+ * between them often enough that the board left REC only at the next 1 Hz poll.
+ */
+const ESTOP_WATCH_INTERVAL_MS = 100;
+const ESTOP_WATCH_WINDOW_MS = 3000;
 const MAX_BATCH_SIZE = 100;
 
 // ============================================================================
@@ -1618,6 +1627,11 @@ export class TeleoperationService extends EventEmitter {
    * quick check and say so as `episode:stopped` by `auto`. Called by the
    * poller and by an action's prelude; the seen-mark is set before the first
    * await, so only one of them ever reports a given stop.
+   *
+   * An `estop` stop (TASK-416 D4) is the agent aborting the take because an
+   * emergency stop latched; it discarded the take as it ended it. The row is
+   * flagged discarded too and `episode:discarded` (by `auto`, reason `estop`)
+   * follows the stop, so every view shows the take stopped AND discarded.
    */
   private async reportUnseenStop(sessionId: string, live: LiveState, agent: AgentRecordingStatus): Promise<void> {
     const stop = agent.lastStop ?? null;
@@ -1633,6 +1647,14 @@ export class TeleoperationService extends EventEmitter {
       reason: stop.reason,
       by: AUTO_ACTOR,
     });
+    if (stop.reason === 'estop') {
+      await this.markTakeDiscarded(sessionId, stop.episodeIndex);
+      this.emitEpisode('episode:discarded', sessionId, live, {
+        take: stop.episodeIndex,
+        reason: 'estop',
+        by: AUTO_ACTOR,
+      });
+    }
   }
 
   private async persistTakeStart(sessionId: string, take: number, startedAtMs: number, by: EpisodeActor): Promise<void> {
@@ -2228,6 +2250,10 @@ export class TeleoperationService extends EventEmitter {
 
   /** Progress pollers for agent-side recordings, one per live session. */
   private agentPollers = new Map<string, ReturnType<typeof setInterval>>();
+  /** The session each agent poller reads, by session id (TASK-416: E-stop nudge). */
+  private polledSessions = new Map<string, TeleoperationSession>();
+  /** Sessions with an E-stop watch running (TASK-416): one per session at a time. */
+  private estopWatches = new Set<string>();
 
   /** Latest computed quality feedback per session (attached to progress events). */
   private lastQualityFeedback = new Map<string, QualityFeedback>();
@@ -2514,18 +2540,63 @@ export class TeleoperationService extends EventEmitter {
     }, AGENT_PROGRESS_POLL_MS);
     timer.unref?.();
     this.agentPollers.set(sessionId, timer);
+    this.polledSessions.set(sessionId, polled);
+  }
+
+  /**
+   * An E-stop just went to `robotId` (TASK-416). Its recorder ends and
+   * discards an open take on the next tick; watch the live state of the
+   * robot's recording sessions until that take has ended, instead of waiting
+   * for the next 1 Hz poll, so the board and the desktop leave REC within a
+   * beat. Never throws.
+   */
+  nudgeLiveAfterEStop(robotId: string): void {
+    for (const [sessionId, polled] of this.polledSessions) {
+      if (polled.robotId !== robotId || this.estopWatches.has(sessionId)) continue;
+      this.estopWatches.add(sessionId);
+      void this.watchTakeEndAfterEStop(polled).finally(() => this.estopWatches.delete(sessionId));
+    }
+  }
+
+  /**
+   * Read the live state every `ESTOP_WATCH_INTERVAL_MS` until it says no take
+   * is capturing — the read that sees the end publishes it, like any poll — or
+   * the window closes, or the session stops being polled. A failed read is
+   * retried at the next interval.
+   */
+  private async watchTakeEndAfterEStop(session: TeleoperationSession): Promise<void> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < ESTOP_WATCH_WINDOW_MS) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, ESTOP_WATCH_INTERVAL_MS);
+        timer.unref?.();
+      });
+      if (!this.agentPollers.has(session.id)) return;
+      try {
+        const phase = await this.pollAgentOnce(session);
+        if (phase !== undefined && phase !== 'capturing') {
+          console.log(
+            `[TeleoperationService] E-stop on ${session.robotId}: session ${session.id} out of REC ${Date.now() - startedAt} ms after the latch`
+          );
+          return;
+        }
+      } catch (err) {
+        console.warn(`[TeleoperationService] E-stop live read of ${session.id} failed:`, err);
+      }
+    }
   }
 
   /**
    * One tick of the agent poller: publish the live state (1 Hz) and notice a
    * take boundary this server did not draw — the robot's own `time_limit`
    * auto-stop, most often — and say so as `episode:stopped` by `auto`.
+   * Returns the phase it published, or undefined when it published nothing.
    */
-  private async pollAgentOnce(session: TeleoperationSession): Promise<void> {
+  private async pollAgentOnce(session: TeleoperationSession): Promise<LiveState['phase'] | undefined> {
     const sessionId = session.id;
     const { live, agent } = await this.readLive(session);
-    if (!agent) return;
-    if (!this.agentPollers.has(sessionId)) return; // stopped while asking
+    if (!agent) return undefined;
+    if (!this.agentPollers.has(sessionId)) return undefined; // stopped while asking
 
     // An action in flight reports (or claims) the stop itself.
     if (!this.mutating.has(sessionId)) await this.reportUnseenStop(sessionId, live, agent);
@@ -2539,6 +2610,7 @@ export class TeleoperationService extends EventEmitter {
         timestamp: new Date(),
       });
     }
+    return live.phase;
   }
 
   private stopAgentProgressPoller(sessionId: string): void {
@@ -2547,6 +2619,7 @@ export class TeleoperationService extends EventEmitter {
       clearInterval(timer);
       this.agentPollers.delete(sessionId);
     }
+    this.polledSessions.delete(sessionId);
   }
 
   /**

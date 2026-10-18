@@ -12,7 +12,7 @@ import { errorMessage } from '@/shared/components/ui/errorMessage';
 import { playCue } from '@/shared/utils/sessionCues';
 import { datacollectionApi } from '../api/datacollectionApi';
 import { DEFAULT_SESSION_PAGINATION } from '../types/datacollection.types';
-import { describeConflict, describeRemoteAction, takeLabel } from '../utils/takeFormat';
+import { describeConflict, describeDiscardRefusal, describeEStopTake, describeRemoteAction, takeLabel } from '../utils/takeFormat';
 import { forgetThumbnail } from '../utils/takeThumbnailCache';
 import { streakFromLive, type TakeStreak } from '../utils/takeStreak';
 import type {
@@ -177,7 +177,12 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
       if (kind === 'discarded') {
         set((state) => {
           state.episodes = state.episodes.filter((e) => e.episodeIndex !== take);
-          if (state.lastQuickCheck?.take === take) state.lastQuickCheck = null;
+          if (state.lastQuickCheck?.take === take) {
+            // An E-stop abort stays on the quick check, marked discarded, so
+            // it can say what happened (TASK-416); any other discard clears it.
+            if (state.lastQuickCheck.stopReason === 'estop') state.lastQuickCheck.discarded = true;
+            else state.lastQuickCheck = null;
+          }
         });
       }
       if (announced.has(key)) return;
@@ -187,6 +192,18 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
       // Once per event, so a late WebSocket echo cannot drop a frame loaded since.
       if (kind === 'started' || kind === 'discarded') forgetThumbnail(sessionId, take);
 
+      // TASK-416: the robot's E-stop abort is one message on every client —
+      // the stop says it all, and the discard that follows adds nothing.
+      if (extra.reason === 'estop') {
+        if (kind === 'stopped') {
+          playCue('problem');
+          toast.info(describeEStopTake(take), {
+            description: 'Frames after the E-stop were never recorded. Reset the E-stop and record it again.',
+            id: `take-${sessionId}-estop-${take}`,
+          });
+        }
+        return;
+      }
       playCue(kind);
       const own = !by || by.clientId === CLIENT_ID;
       if (own) {
@@ -223,7 +240,11 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
           const take = result.live?.take;
           const kind: EpisodeEventKind = result.code === 'not_capturing' ? 'stopped' : result.code === 'already_discarded' ? 'discarded' : 'started';
           const by = typeof take === 'number' ? actors.get(`${id}:${kind}:${take}`) : undefined;
-          toast.info(describeConflict(result.code, result.live, by), { id: `take-conflict-${id}` });
+          // A refused discard names the take that SURVIVED (TASK-416).
+          const text = action === 'discard' && typeof expectedTake === 'number'
+            ? describeDiscardRefusal(result.code, expectedTake, result.live, by)
+            : describeConflict(result.code, result.live, by);
+          toast.info(text, { id: `take-conflict-${id}` });
           return false;
         }
         const live = result.live;
@@ -617,7 +638,7 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
         const result = await datacollectionApi.discardTake(id, take, { clientId: CLIENT_ID, source });
         if (!result.ok) {
           if (result.live) adoptLive(result.live);
-          toast.info(describeConflict(result.code, result.live), { id: `take-conflict-${id}` });
+          toast.info(describeDiscardRefusal(result.code, take, result.live), { id: `take-conflict-${id}` });
           return false;
         }
         adoptLive(result.live);
@@ -629,7 +650,7 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
         void get().fetchEpisodes(id);
         return true;
       } catch (error) {
-        toast.error(`Couldn't discard ${takeLabel(take).toLowerCase()}`, { description: errorMessage(error) });
+        toast.error(`${takeLabel(take)} was NOT discarded`, { description: `${errorMessage(error)}. Discard it from the take list.` });
         return false;
       }
     },

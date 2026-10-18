@@ -478,6 +478,20 @@ export function sidecarEnvFor(profile: Profile, mode: SidecarMode, parent: NodeJ
     if (!('G1_PC2_CAMERA_HOST' in env)) env.G1_PC2_CAMERA_HOST = profile.pc2Camera.host;
     if (!('G1_PC2_CAMERA_PORT' in env)) env.G1_PC2_CAMERA_PORT = String(profile.pc2Camera.port);
   }
+  // TASK-416 D5: the sidecar cannot tell MuJoCo from a G1 over DDS; the profile
+  // can. A sim profile's sidecar reports `sim: true`, so its datasets are
+  // labelled sim. A real profile's never does, whatever its env block says.
+  if (profile.robot === 'sim') {
+    env.G1_SIM_BACKEND = '1';
+    // No robot LAN behind a sim: the `auto` camera order would probe it
+    // (teleimager, then PC2 on 192.168.123.x). Off unless the profile names a source.
+    if (!('G1_CAMERA_SOURCE' in env)) env.G1_CAMERA_SOURCE = 'none';
+    // And the sidecar's default robot address (192.168.123.164) is never its
+    // fallback for anything: a sim's robot is this machine.
+    if (!('G1_ROBOT_IP' in env)) env.G1_ROBOT_IP = '127.0.0.1';
+  } else {
+    delete env.G1_SIM_BACKEND;
+  }
   return env;
 }
 

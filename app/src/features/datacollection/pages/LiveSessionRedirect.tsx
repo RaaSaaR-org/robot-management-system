@@ -1,11 +1,14 @@
 /**
  * @file LiveSessionRedirect.tsx
- * @description `/data-collection/live?robot=<id>` (TASK-412): the stable URL
- *              the Quest browser opens. It lands on the robot's newest live
- *              session (status `created`, `recording` or `paused`) and replaces
- *              itself in history; with none it says so and looks again every
- *              2 s, so the headset can be opened before the desktop creates
- *              the session (D2).
+ * @description `/data-collection/live?robot=<id>` (TASK-412, TASK-416): the
+ *              stable URL the Quest browser opens. A session is a candidate
+ *              when it is `recording` or `paused` (any age), or `created` less
+ *              than `LIVE_CREATED_MAX_AGE_MS` ago. Exactly one candidate → the
+ *              page replaces itself with it. More than one → it lists them and
+ *              lets the operator pick, never guessing (D1). None → it waits,
+ *              looks again every 2 s and names any stale READY session it is
+ *              ignoring, so the headset can be opened before the desktop
+ *              creates the session.
  * @feature datacollection
  */
 
@@ -14,34 +17,90 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Glasses } from 'lucide-react';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import { datacollectionApi } from '../api/datacollectionApi';
+import { formatDateTime } from '@/shared/utils/format';
+import { sessionName } from '../utils/sessionFormat';
 import type { TeleoperationSession, TeleoperationStatus } from '../types/datacollection.types';
 
 export const LIVE_SESSION_POLL_MS = 2_000;
-/** A session in one of these is the one the headset belongs on. */
+/** Statuses the page asks the server for; `created` is then age-filtered. */
 export const LIVE_SESSION_STATUSES: TeleoperationStatus[] = ['created', 'recording', 'paused'];
+/** A READY session nobody started for this long is not the one the desktop means (D2). */
+export const LIVE_CREATED_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 
-/** The newest live session, or null. Pure. */
-export function newestLiveSession(sessions: TeleoperationSession[], robotId: string): TeleoperationSession | null {
-  let best: TeleoperationSession | null = null;
-  for (const s of sessions) {
-    if (s.robotId !== robotId || !LIVE_SESSION_STATUSES.includes(s.status)) continue;
-    if (!best || Date.parse(s.createdAt) > Date.parse(best.createdAt)) best = s;
-  }
-  return best;
+export interface LiveCandidates {
+  /** Sessions the headset may belong on, newest first. */
+  candidates: TeleoperationSession[];
+  /** `created` sessions of this robot too old to count, newest first. */
+  ignored: TeleoperationSession[];
 }
+
+function createdMs(s: TeleoperationSession): number {
+  const t = Date.parse(s.createdAt);
+  return Number.isFinite(t) ? t : 0;
+}
+
+/** Split a robot's sessions into live candidates and stale READY ones. Pure. */
+export function liveCandidates(sessions: TeleoperationSession[], robotId: string, nowMs: number): LiveCandidates {
+  const candidates: TeleoperationSession[] = [];
+  const ignored: TeleoperationSession[] = [];
+  for (const s of sessions) {
+    if (s.robotId !== robotId) continue;
+    if (s.status === 'recording' || s.status === 'paused') candidates.push(s);
+    else if (s.status === 'created') {
+      if (nowMs - createdMs(s) < LIVE_CREATED_MAX_AGE_MS) candidates.push(s);
+      else ignored.push(s);
+    }
+  }
+  const newestFirst = (a: TeleoperationSession, b: TeleoperationSession) => createdMs(b) - createdMs(a);
+  candidates.sort(newestFirst);
+  ignored.sort(newestFirst);
+  return { candidates, ignored };
+}
+
+/**
+ * "created 12 min ago" / "created 2 days ago", spelled out: this page is read
+ * in the headset, where "2d" is one more thing to decode. A week or more is a date.
+ */
+export function createdAgo(s: TeleoperationSession, nowMs: number = Date.now()): string {
+  const ms = Date.parse(s.createdAt);
+  if (!Number.isFinite(ms)) return 'created at an unknown time';
+  const min = Math.floor(Math.max(0, nowMs - ms) / 60_000);
+  if (min < 1) return 'created just now';
+  if (min < 60) return `created ${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `created ${hr} hour${hr === 1 ? '' : 's'} ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `created ${day} day${day === 1 ? '' : 's'} ago`;
+  return `created ${formatDateTime(s.createdAt, { year: 'numeric', month: 'short', day: 'numeric' })}`;
+}
+
+const STATUS_WORD: Partial<Record<TeleoperationStatus, string>> = {
+  created: 'Ready',
+  recording: 'Recording',
+  paused: 'Paused',
+};
 
 export interface LiveSessionRedirectProps {
   pollMs?: number;
   api?: Pick<typeof datacollectionApi, 'listSessions'>;
+  /** Clock for the `created` age filter; tests pin it. */
+  now?: () => number;
 }
 
-export function LiveSessionRedirect({ pollMs = LIVE_SESSION_POLL_MS, api = datacollectionApi }: LiveSessionRedirectProps) {
+export function LiveSessionRedirect({
+  pollMs = LIVE_SESSION_POLL_MS,
+  api = datacollectionApi,
+  now = Date.now,
+}: LiveSessionRedirectProps) {
   const [params] = useSearchParams();
   const robotId = (params.get('robot') ?? '').trim();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [checks, setChecks] = useState(0);
+  const [found, setFound] = useState<LiveCandidates>({ candidates: [], ignored: [] });
   const done = useRef(false);
+  const nowRef = useRef(now);
+  nowRef.current = now;
 
   useEffect(() => {
     if (!robotId) return undefined;
@@ -54,12 +113,13 @@ export function LiveSessionRedirect({ pollMs = LIVE_SESSION_POLL_MS, api = datac
         const res = await api.listSessions({ robotId, status: LIVE_SESSION_STATUSES, limit: 20 });
         if (cancelled) return;
         setError(null);
-        const live = newestLiveSession(res.sessions ?? [], robotId);
-        if (live) {
+        const next = liveCandidates(res.sessions ?? [], robotId, nowRef.current());
+        if (next.candidates.length === 1) {
           done.current = true;
-          navigate(`/data-collection/${live.id}`, { replace: true });
+          navigate(`/data-collection/${next.candidates[0].id}`, { replace: true });
           return;
         }
+        setFound(next);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : String(err));
@@ -74,14 +134,48 @@ export function LiveSessionRedirect({ pollMs = LIVE_SESSION_POLL_MS, api = datac
     };
   }, [api, navigate, pollMs, robotId]);
 
+  const choosing = found.candidates.length > 1;
+  const stale = found.ignored[0];
+
   return (
     <div className="flex min-h-[60vh] items-center justify-center p-6" data-testid="live-session-redirect">
-      <div className="flex max-w-md flex-col items-center gap-3 text-center">
+      <div className="flex w-full max-w-md flex-col items-center gap-3 text-center">
         <Glasses className="h-8 w-8 text-ink-tertiary" strokeWidth={1.5} />
         {!robotId ? (
           <p className="text-[15px] text-ink-primary" data-testid="live-session-status" data-state="no-robot">
             No robot named. Open this page as /data-collection/live?robot=&lt;robot id&gt;.
           </p>
+        ) : choosing ? (
+          <>
+            <p className="text-[15px] font-medium text-ink-primary" data-testid="live-session-status" data-state="choose">
+              {found.candidates.length} live sessions for {robotId}. Which one is yours?
+            </p>
+            <p className="text-[13px] text-ink-secondary">
+              Pick the session the desktop has open. This list keeps updating.
+            </p>
+            <ul className="flex w-full flex-col gap-2" data-testid="live-session-choices">
+              {found.candidates.map((s) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      done.current = true;
+                      navigate(`/data-collection/${s.id}`, { replace: true });
+                    }}
+                    className="flex w-full min-h-[48px] items-center justify-between gap-3 rounded-control border border-line bg-panel px-4 py-3 text-left hover:border-line-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    data-testid="live-session-choice"
+                    data-session-id={s.id}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-[14px] font-medium text-ink-primary">{sessionName(s)}</span>
+                      <span className="block text-[12px] text-ink-secondary">{createdAgo(s)}</span>
+                    </span>
+                    <span className="shrink-0 text-[12px] font-medium text-ink-secondary">{STATUS_WORD[s.status] ?? s.status}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
         ) : (
           <>
             <p className="text-[15px] font-medium text-ink-primary" data-testid="live-session-status" data-state="waiting">
@@ -90,13 +184,20 @@ export function LiveSessionRedirect({ pollMs = LIVE_SESSION_POLL_MS, api = datac
             <p className="text-[13px] text-ink-secondary">
               Create or start a data-collection session for this robot on the desktop; this page opens it on its own.
             </p>
-            <Spinner size="sm" label="Waiting for a live session" />
-            {error && (
-              <p className="text-[12px] text-signal-stopped" role="alert" data-testid="live-session-error">
-                Could not read the sessions: {error}. Trying again…
+            {stale && (
+              <p className="text-[13px] text-ink-secondary" data-testid="live-session-ignored">
+                Ignoring &lsquo;{sessionName(stale)}&rsquo; ({createdAgo(stale)}, never started).
+                {found.ignored.length > 1 ? ` ${found.ignored.length - 1} older one${found.ignored.length > 2 ? 's' : ''} too.` : ''}{' '}
+                End it on the desktop if it is not needed.
               </p>
             )}
+            <Spinner size="sm" label="Waiting for a live session" />
           </>
+        )}
+        {robotId && error && (
+          <p className="text-[12px] text-signal-stopped" role="alert" data-testid="live-session-error">
+            Could not read the sessions: {error}. Trying again…
+          </p>
         )}
       </div>
     </div>

@@ -41,8 +41,16 @@ export interface EpisodePanelProps {
   onStartTake: () => unknown | Promise<unknown>;
   onStopTake: () => unknown | Promise<unknown>;
   onNextTake: () => unknown | Promise<unknown>;
-  /** Called after the Undo window, with the take that was last when the discard was asked for */
+  /**
+   * Called after the Undo window when the take named in the toast is STILL the
+   * one being recorded: it is ended and discarded, guarded by that take.
+   */
   onDiscardLast: (expectedTake: number) => unknown | Promise<unknown>;
+  /**
+   * Discard one finished take by its number. The Undo window ends here when
+   * the named take is no longer recording (TASK-416 D3): a take started
+   * elsewhere in the meantime cannot cancel the discard.
+   */
   onDiscardTake: (take: number) => unknown | Promise<unknown>;
   /** Recorders without explicit takes (SO-101 sidecar): the old boundary */
   onNextEpisode?: () => unknown | Promise<unknown>;
@@ -65,6 +73,9 @@ export function EpisodePanel({
   const lastTake = live?.take ?? null;
   const canTake = isRecording && takeMode && !pending;
   const canDiscardLast = isRecording && takeMode && lastTake !== null && !(live!.lastTake?.discarded && !capturing && live!.lastTake.take === lastTake);
+  /** The freshest live state, read when the Undo window closes. */
+  const liveRef = useRef(live);
+  liveRef.current = live;
 
   const cancelUndo = useCallback(() => {
     const pendingDiscard = undoRef.current;
@@ -75,7 +86,12 @@ export function EpisodePanel({
     setUndoTake(null);
   }, []);
 
-  /** Discard the last take after a 5 s Undo window; nothing is sent until it closes. */
+  /**
+   * Discard the last take after a 5 s Undo window; nothing is sent until it
+   * closes. Then exactly the take named in the toast goes: still recording →
+   * end-and-discard guarded by it; finished (even if the headset has started
+   * the next one since) → discarded by its number.
+   */
   const requestDiscardLast = useCallback(() => {
     if (lastTake === null || undoRef.current) return;
     const take = lastTake;
@@ -87,11 +103,13 @@ export function EpisodePanel({
     const timer = setTimeout(() => {
       undoRef.current = null;
       setUndoTake(null);
-      void onDiscardLast(take);
+      const now = liveRef.current;
+      if (now?.phase === 'capturing' && now.take === take) void onDiscardLast(take);
+      else void onDiscardTake(take);
     }, DISCARD_UNDO_MS);
     undoRef.current = { timer, toastId, take };
     setUndoTake(take);
-  }, [lastTake, onDiscardLast, cancelUndo]);
+  }, [lastTake, onDiscardLast, onDiscardTake, cancelUndo]);
 
   // Leaving the page cancels a discard that was not sent yet.
   useEffect(() => () => {

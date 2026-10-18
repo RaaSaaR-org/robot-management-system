@@ -37,6 +37,8 @@ export interface VrQuickCheckView {
   groups: string[];
   /** "Short", "No motion" … — empty when the take looks good. */
   warnings: string[];
+  /** TASK-416: the robot ended this take on an E-stop and discarded it. */
+  estopDiscarded?: boolean;
 }
 
 /** The session, read by the board, the wrist HUD and the stick shortcuts. */
@@ -153,6 +155,8 @@ export interface VrQuickCheckInput {
   groupsMoved: string[];
   warnings: string[];
   discarded: boolean;
+  /** Why the take ended; `estop` keeps a discarded take on the board (TASK-416). */
+  stopReason?: string | null;
 }
 
 export interface VrSessionInput {
@@ -226,13 +230,14 @@ export function buildVrSessionView(
     fpsActual: finiteOr(live?.fpsActual, null),
     degraded: live?.degraded === true,
     autoStopInS: capturing && autoStopS && takeElapsedS !== null ? Math.max(0, autoStopS - takeElapsedS) : null,
-    lastQuickCheck: qc && !qc.discarded
+    lastQuickCheck: qc && (!qc.discarded || qc.stopReason === 'estop')
       ? {
         takeNumber: qc.take + 1,
         durationS: qc.durationS,
         frames: qc.frames,
         groups: qc.groupsMoved.map(labelers.group),
         warnings: qc.warnings.map(labelers.warning),
+        ...(qc.discarded ? { estopDiscarded: true } : {}),
       }
       : null,
     pending: input.pending,
@@ -324,6 +329,8 @@ export const INSTRUCTION_MAX_ROWS = 2;
  *      between takes it was noise (`1523 fr total · 0 fps · OK`)
  *   5–6. the last take's quick check, kept until the next Start or the end of
  *      the session (D3) — the desktop shows the same card for the same time.
+ *      A take the E-stop aborted (TASK-416) shows one line instead: it was
+ *      discarded — its numbers describe frames that were thrown away.
  */
 export function composeSessionBoard(view: VrSessionView, nowMs: number): BoardLine[] {
   const capturing = view.phase === 'capturing';
@@ -344,7 +351,14 @@ export function composeSessionBoard(view: VrSessionView, nowMs: number): BoardLi
     lines.push({ id: 'stats', text: stats.join(' · '), color: view.degraded ? BOARD_COLORS.warn : BOARD_COLORS.text });
   }
   const qc = view.lastQuickCheck;
-  if (qc && !capturing && !ended) {
+  if (qc?.estopDiscarded && !capturing && !ended) {
+    lines.push({
+      id: 'qc-verdict',
+      text: `Take ${qc.takeNumber} stopped by the E-stop — discarded`,
+      color: BOARD_COLORS.warn,
+      bold: true,
+    });
+  } else if (qc && !capturing && !ended) {
     const groups = qc.groups.length > 0 ? qc.groups.join(' + ') : 'nothing moved';
     lines.push({
       id: 'qc',
@@ -469,7 +483,8 @@ export interface CameraStrip {
  * The strip along the top of the camera screen, where the operator looks
  * during a take. Priority: the latched E-stop over everything (it is the one
  * state that must never be missed), then the session's end, then REC, then
- * for `STRIP_VERDICT_MS` the verdict on the take that just stopped. Null:
+ * for `STRIP_VERDICT_MS` the verdict on the take that just stopped (an
+ * E-stop abort says so, TASK-416). Null:
  * no strip, normal frame.
  */
 export function composeCameraStrip(
@@ -490,10 +505,15 @@ export function composeCameraStrip(
   }
   const verdict = memory?.verdict;
   if (!verdict || nowMs - verdict.atMs >= STRIP_VERDICT_MS) return null;
+  const qc = view.lastQuickCheck?.takeNumber === verdict.takeNumber ? view.lastQuickCheck : null;
+  // TASK-416: the robot ended this take on an E-stop and threw it away — the
+  // same words as the board and the desktop, whichever way the strip saw it end.
+  if (qc?.estopDiscarded) {
+    return { text: `Take ${verdict.takeNumber} stopped by the E-stop — discarded`, tone: 'warn', redFrame: false };
+  }
   if (verdict.kind === 'discarded') {
     return { text: `Take ${verdict.takeNumber} discarded`, tone: 'dim', redFrame: false };
   }
-  const qc = view.lastQuickCheck?.takeNumber === verdict.takeNumber ? view.lastQuickCheck : null;
   if (qc && qc.warnings.length > 0) {
     return { text: `⚠ ${qc.warnings[0]} — Discard on the board`, tone: 'warn', redFrame: false };
   }
