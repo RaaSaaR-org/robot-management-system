@@ -8,11 +8,23 @@
  *              from the rig's telemetry ref on a timer, never through React
  *              state, so the canvas does not re-render for it. Display only:
  *              the server fans it out and forwards nothing to the robot.
+ *
+ *              TASK-417: the same operator socket receives the assistant's
+ *              mode requests (`onModeRequest`) and sends the headset's answer
+ *              (`answerModeRequest`). The change itself goes through the
+ *              base-mode route under this headset's lease — never this socket.
  * @feature robots
  */
 
-import { useEffect, useRef } from 'react';
-import { openSessionWatch, type OperatorPose, type OperatorState, type SessionWatch } from '@/shared/utils/sessionWatch';
+import { useCallback, useEffect, useRef } from 'react';
+import {
+  openSessionWatch,
+  type ModeRequestIn,
+  type ModeRequestOutcome,
+  type OperatorPose,
+  type OperatorState,
+  type SessionWatch,
+} from '@/shared/utils/sessionWatch';
 import type { VrRigTelemetry } from './VrTeleopRig';
 import type { RobotWristPose } from './vrWrist';
 import { ARM_REFUSAL_FRESH_MS, pickWhyLine, whyFromTelemetry, type ServerWhy } from './vrWhy';
@@ -76,6 +88,13 @@ export interface OperatorPublisherOptions {
   inVr: boolean;
   telemetryRef: { current: VrRigTelemetry };
   displayName?: string;
+  /** TASK-417: the desktop assistant asks for Stand up or Balance. */
+  onModeRequest?: (request: ModeRequestIn) => void;
+}
+
+export interface OperatorPublisherReturn {
+  /** TASK-417: answer a mode request on the operator socket; false when there is none. */
+  answerModeRequest(requestId: string, outcome: ModeRequestOutcome, error?: string): boolean;
 }
 
 /**
@@ -84,10 +103,14 @@ export interface OperatorPublisherOptions {
  * role follows `inVr`, so entering VR shows on the desktop without waiting
  * for a connect.
  */
-export function useOperatorPublisher({ sessionId, robotId, inVr, telemetryRef, displayName }: OperatorPublisherOptions): void {
+export function useOperatorPublisher({
+  sessionId, robotId, inVr, telemetryRef, displayName, onModeRequest,
+}: OperatorPublisherOptions): OperatorPublisherReturn {
   const watchRef = useRef<SessionWatch | null>(null);
   const inVrRef = useRef(inVr);
   inVrRef.current = inVr;
+  const onModeRequestRef = useRef(onModeRequest);
+  onModeRequestRef.current = onModeRequest;
 
   useEffect(() => {
     if (!sessionId || import.meta.env.VITE_DEMO_MODE === 'true') return undefined;
@@ -102,6 +125,7 @@ export function useOperatorPublisher({ sessionId, robotId, inVr, telemetryRef, d
       displayName,
       // The first state goes out with the acknowledgement, not a tick later.
       onWatched: publish,
+      onModeRequest: (request) => onModeRequestRef.current?.(request),
     });
     watchRef.current = watch;
     const timer = setInterval(publish, OPERATOR_PUBLISH_MS);
@@ -115,4 +139,11 @@ export function useOperatorPublisher({ sessionId, robotId, inVr, telemetryRef, d
   useEffect(() => {
     watchRef.current?.setRole(inVr ? 'operator' : null);
   }, [inVr]);
+
+  const answerModeRequest = useCallback(
+    (requestId: string, outcome: ModeRequestOutcome, error?: string): boolean =>
+      watchRef.current?.answerModeRequest(requestId, outcome, error) ?? false,
+    [],
+  );
+  return { answerModeRequest };
 }

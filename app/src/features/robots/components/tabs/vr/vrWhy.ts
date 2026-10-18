@@ -7,6 +7,10 @@
  *              (TASK-405), so the desktop and the headset say the same thing;
  *              the two rules only the headset can know (controller tracking,
  *              grip) live only here.
+ *
+ *              TASK-417: every sentence names a button that exists in the
+ *              headset (Reset, the grip) or the person who acts (the desktop);
+ *              the panel leads with the why line and shows only what is not fine.
  * @feature robots
  */
 
@@ -125,8 +129,23 @@ const HELD_TEXT: Record<ArmHeldReason, string> = {
   not_armed: 'Arms dropped. Release the grip, then squeeze it again.',
   side_refused: 'Arm refused on that side. Release its grip and squeeze again.',
   ik_held: 'Arm held: the hand pose is out of the arm\'s reach.',
-  estop: 'E-stop is latched. Reset it.',
-  lease: 'Nobody has taken control. Press Take control.',
+  estop: 'E-stop latched — hold Reset for 1 s.',
+  // TASK-417: there is no Take control button inside the headset.
+  lease: 'You lost control — exit VR and press Take control.',
+};
+
+/**
+ * A held reason in a few words, for the robot panel's chip row (TASK-417): the
+ * same meaning as `HELD_TEXT`, never the agent's code.
+ */
+const HELD_WORDS: Record<ArmHeldReason, string> = {
+  unclutched: 'grip not held',
+  arm_gate: 'arm gate',
+  not_armed: 'arms dropped',
+  side_refused: 'side refused',
+  ik_held: 'out of reach',
+  estop: 'E-stop',
+  lease: 'no control',
 };
 
 /** Texts for an `{type:'error'}` refusal, by code. Unknown codes get the code. */
@@ -135,7 +154,7 @@ const REFUSAL_TEXT: Record<string, string> = {
   arm_requires_lease: HELD_TEXT.lease,
   arm_requires_heartbeat: 'No heartbeat from this console. Check the link.',
   heartbeat_lost: 'No heartbeat from this console. Check the link.',
-  arm_estop_latched: 'The sidecar\'s E-stop is latched. Reset it.',
+  arm_estop_latched: 'The sidecar\'s E-stop is latched — hold Reset for 1 s.',
   arm_requires_clutch: 'This console reports no grip. Reload the app.',
   arm_reengage_required: HELD_TEXT.not_armed,
   arm_side_unclutched: HELD_TEXT.unclutched,
@@ -178,7 +197,10 @@ export function whyNotFollowingVr(input: VrWhyInput): WhyNotFollowing {
     return {
       code: 'estop_latched',
       severity: 'block',
-      text: controlled ? 'E-stop is latched. Reset it, then switch to Balance.' : 'E-stop is latched. Reset it.',
+      // TASK-417: name the buttons the operator has, and who acts next.
+      text: controlled
+        ? 'E-stop latched — hold Reset for 1 s. Then the desktop asks for Balance.'
+        : 'E-stop latched — hold Reset for 1 s.',
       short: 'E-STOP — hold Reset',
     };
   }
@@ -191,18 +213,28 @@ export function whyNotFollowingVr(input: VrWhyInput): WhyNotFollowing {
     };
   }
   if (!input.leaseHeld) {
-    return { code: 'lease_none', severity: 'block', text: HELD_TEXT.lease, short: 'NO CONTROL — take it' };
+    return { code: 'lease_none', severity: 'block', text: HELD_TEXT.lease, short: 'NO CONTROL — exit VR' };
   }
   if (controlled && input.baseMode === 'unknown') {
     return { code: 'mode_unknown', severity: 'block', text: 'The robot mode is unknown.', short: 'MODE UNKNOWN' };
   }
   if (controlled && input.baseMode !== 'balance') {
-    const mode = input.baseMode === 'zero_torque' ? 'limp' : input.baseMode;
+    // TASK-417: the desktop asks, the headset allows — no mode button in VR.
+    const limp = input.baseMode === 'limp' || input.baseMode === 'zero_torque';
+    if (limp) {
+      return {
+        code: 'mode_not_balance',
+        severity: 'block',
+        text: 'Robot limp — the desktop asks for Stand up, then Balance.',
+        short: 'LIMP — desktop asks',
+      };
+    }
+    const mode = input.baseMode === 'stand' ? 'standing' : `in ${input.baseMode}`;
     return {
       code: 'mode_not_balance',
       severity: 'block',
-      text: `The robot is ${mode}. Switch to Balance.`,
-      short: clip(`ROBOT ${mode.toUpperCase()} — Balance`, 26),
+      text: `Robot ${mode} — the desktop asks for Balance.`,
+      short: clip(`${input.baseMode.toUpperCase()} — desktop asks`, 26),
     };
   }
   if (input.armHeld && fresh(input.armHeld.at, input.now)) {
@@ -211,7 +243,7 @@ export function whyNotFollowingVr(input: VrWhyInput): WhyNotFollowing {
       code: 'arm_refused',
       severity: 'block',
       text: HELD_TEXT[reason],
-      short: clip(`HELD ${SIDE_TAG[side]}: ${reason}`, 26),
+      short: clip(`HELD ${SIDE_TAG[side]}: ${HELD_WORDS[reason]}`, 26),
     };
   }
   if (input.armRefusal && fresh(input.armRefusal.at, input.now)) {
@@ -281,6 +313,10 @@ export interface PanelLine {
   bold?: boolean;
   /** Wrap onto a second row rather than shrink. */
   wrap?: boolean;
+  /** With `wrap`: at most this many rows. */
+  maxRows?: number;
+  /** Glyph and row height relative to the panel's line (TASK-417: the why line is 1.5). */
+  scale?: number;
 }
 
 /** What the robot panel reads off the rig telemetry. */
@@ -318,84 +354,82 @@ function handHealthTag(h: VrHandHealth): string {
   return 'ok';
 }
 
-function armsLine(arm: VrArmInfo | null): PanelLine {
-  if (!arm || arm.writeMode !== 'arm_sdk') {
-    return {
-      id: 'arms',
-      text: arm?.writeMode === 'read_only' ? 'ARMS read-only sidecar' : 'ARMS no arming needed',
-      color: arm?.writeMode === 'read_only' ? PANEL_COLORS.warn : PANEL_COLORS.dim,
-    };
-  }
+/** The ARMS chip, or null when the arms need no attention (or no arming at all). */
+function armsChip(arm: VrArmInfo | null): { text: string; bad: boolean } | null {
+  if (!arm) return null;
+  if (arm.writeMode === 'read_only') return { text: 'ARMS read-only sidecar', bad: false };
+  if (arm.writeMode !== 'arm_sdk') return null;
+  if (arm.deadman === 'hold') return { text: 'DEAD-MAN hold', bad: false };
   const pct = Math.round(arm.armWeight * 100);
-  const state = arm.armed && pct >= 99
-    ? `armed ${pct} %`
-    : arm.armed || arm.arming
-      ? `arming ${pct} %`
-      : `disarmed: ${arm.lastDisarmReason ?? '—'}`;
-  const deadman = arm.deadman === null ? '—' : arm.deadman.toUpperCase();
-  const color = arm.armed && pct >= 99
-    ? PANEL_COLORS.ok
-    : arm.armed || arm.arming
-      ? PANEL_COLORS.warn
-      : PANEL_COLORS.dim;
-  return { id: 'arms', text: `ARMS ${state} · dead-man ${deadman}`, color: arm.deadman === 'hold' ? PANEL_COLORS.warn : color };
+  if (arm.armed && pct >= 99) return null;
+  if (arm.armed || arm.arming) return { text: `ARMS arming ${pct} %`, bad: false };
+  return { text: arm.lastDisarmReason ? `ARMS off: ${arm.lastDisarmReason}` : 'ARMS off', bad: false };
 }
 
-function handsLine(arm: VrArmInfo | null): PanelLine {
-  let text: string;
-  let warn = false;
+/** The HANDS chip, or null while both hands are fine (or not reported). */
+function handsChip(arm: VrArmInfo | null): string | null {
   if (arm?.handHealth) {
     const l = handHealthTag(arm.handHealth.left);
     const r = handHealthTag(arm.handHealth.right);
-    warn = l !== 'ok' || r !== 'ok';
-    text = `HANDS L ${l} · R ${r}`;
-  } else if (arm?.hands) {
-    const l = arm.hands.left ? 'ok' : 'none';
-    const r = arm.hands.right ? 'ok' : 'none';
-    warn = !arm.hands.left || !arm.hands.right;
-    text = `HANDS L ${l} · R ${r}`;
-  } else {
-    text = 'HANDS —';
+    if ((l === 'ok' || l === '—') && (r === 'ok' || r === '—')) return null;
+    return `HANDS L ${l} · R ${r}`;
   }
-  if (arm?.teleopMode) text += ` · ${arm.teleopMode}`;
-  return { id: 'hands', text, color: warn ? PANEL_COLORS.warn : PANEL_COLORS.text };
+  if (arm?.hands && (!arm.hands.left || !arm.hands.right)) {
+    return `HANDS L ${arm.hands.left ? 'ok' : 'none'} · R ${arm.hands.right ? 'ok' : 'none'}`;
+  }
+  return null;
 }
 
 /**
- * The robot panel, top to bottom: MODE, ARMS, GRIP, HANDS, LEASE·LINK, and the
- * why line last — bold, wrapped, coloured by severity.
+ * The robot panel, top to bottom (TASK-417, D3): the why line FIRST — bold,
+ * 1.5x, at most two rows, coloured by severity — then ONE row of chips naming
+ * only what is not fine: MODE (not balance, where NeoDEM controls it), ARMS,
+ * HELD (in words, never the agent's code), HANDS, LINK (not live), LEASE (not
+ * you). A glance finds why the arms stopped; nothing that is fine competes
+ * with it, and no number that freezes while idle (the old RTT) is shown.
  */
 export function composeRobotPanel(facts: RobotPanelFacts, why: WhyNotFollowing, now: number): PanelLine[] {
   const controlled = facts.modeControl === 'fsm' || facts.modeControl === 'full';
-  const modeText = `MODE ${facts.baseMode === 'zero_torque' ? 'limp' : facts.baseMode}`
-    + `${facts.baseMeasured ? ' (measured)' : ''}${facts.baseDamped ? ' · damped' : ''}`;
-  const modeColor = facts.baseMode === 'balance'
-    ? PANEL_COLORS.ok
-    : controlled || facts.baseDamped
-      ? PANEL_COLORS.warn
-      : PANEL_COLORS.text;
+  const chips: string[] = [];
+  let bad = false;
 
-  const dot = (on: boolean): string => (on ? '●' : '○');
+  if (controlled && facts.baseMode !== 'balance') {
+    const mode = facts.baseMode === 'zero_torque' ? 'limp' : facts.baseMode;
+    chips.push(`MODE ${mode}${facts.baseDamped && mode !== 'limp' ? ' · damped' : ''}`);
+  } else if (!controlled && facts.baseDamped) {
+    chips.push('BASE damped');
+  }
+  const arms = armsChip(facts.armInfo);
+  if (arms) chips.push(arms.text);
   const heldFresh = facts.armHeld && fresh(facts.armHeld.at, now) ? facts.armHeld : null;
-  const grip = `GRIP L ${dot(facts.clutch.left)}  R ${dot(facts.clutch.right)}`
-    + (heldFresh ? ` · HELD ${SIDE_TAG[heldFresh.side]}: ${heldFresh.reason}` : '');
+  if (heldFresh) {
+    chips.push(`HELD ${SIDE_TAG[heldFresh.side]}: ${HELD_WORDS[heldFresh.reason]}`);
+    bad = true;
+  }
+  const hands = handsChip(facts.armInfo);
+  if (hands) chips.push(hands);
+  if (facts.link !== 'live') {
+    chips.push(`LINK ${facts.link}`);
+    if (facts.link === 'lost') bad = true;
+  }
+  if (facts.leaseLabel !== 'you' && facts.leaseLabel !== 'off') {
+    chips.push(`LEASE ${facts.leaseLabel}`);
+    bad = true;
+  }
 
-  const rtt = facts.rttMs === null || !Number.isFinite(facts.rttMs) ? '' : ` ${Math.round(facts.rttMs)} ms`;
-  const linkColor = facts.link === 'live' ? PANEL_COLORS.ok : facts.link === 'stale' ? PANEL_COLORS.warn : PANEL_COLORS.bad;
-  const leaseOk = facts.leaseLabel === 'you' || facts.leaseLabel === 'off';
-
-  return [
-    { id: 'mode', text: modeText, color: modeColor },
-    armsLine(facts.armInfo),
-    { id: 'grip', text: grip, color: heldFresh ? PANEL_COLORS.bad : PANEL_COLORS.text },
-    handsLine(facts.armInfo),
-    {
-      id: 'lease-link',
-      text: `LEASE ${facts.leaseLabel} · LINK ${facts.link}${rtt}`,
-      color: !leaseOk ? PANEL_COLORS.warn : linkColor,
-    },
-    { id: 'why', text: why.text, color: SEVERITY_COLOR[why.severity], bold: true, wrap: true },
+  const lines: PanelLine[] = [
+    { id: 'why', text: why.text, color: SEVERITY_COLOR[why.severity], bold: true, wrap: true, maxRows: 2, scale: 1.5 },
   ];
+  if (chips.length > 0) {
+    lines.push({
+      id: 'chips',
+      text: chips.join('  ·  '),
+      color: bad ? PANEL_COLORS.bad : PANEL_COLORS.warn,
+      wrap: true,
+      maxRows: 2,
+    });
+  }
+  return lines;
 }
 
 /** The rig telemetry fields the why line and the panel read (`VrRigTelemetry` satisfies it). */
@@ -508,5 +542,23 @@ export function pickWhyLine(local: WhyNotFollowing, server: ServerWhy | null): {
   if (!server || local.code === 'estop_latched') return localLine;
   const serverWins = server.severity === 'block'
     || (server.source === 'server' && server.severity !== 'ok' && SEVERITY_RANK[server.severity] >= SEVERITY_RANK[local.severity]);
-  return serverWins ? { text: server.text, severity: server.severity, from: 'server' } : localLine;
+  return serverWins ? { text: vrServerText(server, local), severity: server.severity, from: 'server' } : localLine;
+}
+
+/**
+ * The server's reasons are worded for the desktop ("Press Take control",
+ * "Switch to Balance"), and the headset has neither button (TASK-417). Those
+ * codes take the headset's own wording: the local sentence when it agrees on
+ * the code, else this table.
+ */
+const VR_SERVER_TEXT: Record<string, string> = {
+  estop_latched: HELD_TEXT.estop,
+  lease_none: HELD_TEXT.lease,
+  mode_not_balance: 'Robot not balancing — the desktop asks for Balance.',
+};
+
+function vrServerText(server: ServerWhy, local: WhyNotFollowing): string {
+  const reworded = VR_SERVER_TEXT[server.code];
+  if (reworded === undefined) return server.text;
+  return local.code === server.code ? local.text : reworded;
 }

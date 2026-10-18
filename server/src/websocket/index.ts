@@ -50,14 +50,31 @@ import type { DatasetEvent } from '../types/dataset.types.js';
 import type { TeleoperationEvent } from '../types/teleoperation.types.js';
 import { teleopEnvelope } from './teleopEnvelope.js';
 import {
+  MODE_REQUEST_TTL_MS,
+  ModeRequestLedger,
   OperatorRelay,
   PRESENCE_SWEEP_MS,
   SessionPresence,
   cleanDisplayName,
   isPresenceRole,
+  modeAnswerSchema,
+  modeRequestSchema,
+  parseModeMessage,
   parseOperatorState,
+  type ModeRequestRejection,
   type OperatorState,
 } from './sessionPresence.js';
+
+/** A client message without its `type`, for the relay's schemas (TASK-417). */
+function stripType(msg: Record<string, unknown>): Record<string, unknown> {
+  const { type: _type, ...rest } = msg;
+  return rest;
+}
+
+/** A request id worth echoing in a rejection, or null. */
+function safeRequestId(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : null;
+}
 
 /** The A2A event socket's path. */
 const A2A_WS_PATH = '/api/a2a/ws';
@@ -211,7 +228,13 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
       broadcastPresence(sessionId);
     }
   };
-  const presenceSweep = setInterval(() => presenceChanged(presence.sweep(Date.now())), PRESENCE_SWEEP_MS);
+  // TASK-417: the assistant's mode questions and the headset's answers.
+  const modeRequests = new ModeRequestLedger<WebSocket>();
+  const presenceSweep = setInterval(() => {
+    const now = Date.now();
+    modeRequests.sweep(now);
+    presenceChanged(presence.sweep(now));
+  }, PRESENCE_SWEEP_MS);
   presenceSweep.unref?.();
 
   const reply = (ws: WebSocket, body: Record<string, unknown>): void => {
@@ -263,6 +286,49 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
         if (changed) presenceChanged([sessionId]);
         else if (wasOperator && role !== 'operator' && !presence.hasOperator(sessionId)) relay.forget(sessionId);
       })().catch(() => reply(ws, { type: 'teleop:watch:rejected', sessionId, error: 'lookup_failed' }));
+      return;
+    }
+    // TASK-417: the assistant asks the headset for Stand up or Balance. The
+    // relay carries the question to the session's operator socket and the
+    // answer back to the asker — it never calls the robot or the base-mode
+    // route. The headset sends the change itself, under its own lease.
+    if (msg.type === 'teleop:mode-request') {
+      const request = parseModeMessage(modeRequestSchema, stripType(msg));
+      if (!request) {
+        reply(ws, { type: 'teleop:mode-request:rejected', sessionId, requestId: safeRequestId(msg.requestId), error: 'invalid' });
+        return;
+      }
+      const rejected = (error: ModeRequestRejection) =>
+        reply(ws, { type: 'teleop:mode-request:rejected', sessionId: request.sessionId, requestId: request.requestId, error });
+      if (!presence.isAssistant(ws, request.sessionId)) return rejected('not_assistant');
+      const operators = presence.operatorSockets(request.sessionId).filter((s) => clients.has(s));
+      if (operators.length === 0) return rejected('no_operator');
+      const opened = modeRequests.open(request.sessionId, request.requestId, ws, operators, Date.now());
+      if (!opened.ok) return rejected(opened.error);
+      const body = {
+        type: 'teleop:mode-request',
+        sessionId: request.sessionId,
+        requestId: request.requestId,
+        mode: request.mode,
+        from: clientIdentity.get(ws)?.userId ?? null,
+        ttlMs: MODE_REQUEST_TTL_MS,
+      };
+      for (const operator of operators) reply(operator, body);
+      reply(ws, { type: 'teleop:mode-request:sent', sessionId: request.sessionId, requestId: request.requestId });
+      return;
+    }
+    if (msg.type === 'teleop:mode-request:answer') {
+      const answer = parseModeMessage(modeAnswerSchema, stripType(msg));
+      if (!answer || !presence.isOperator(ws, answer.sessionId)) return;
+      const asker = modeRequests.answer(answer.sessionId, answer.requestId, ws);
+      if (!asker || !clients.has(asker)) return;
+      reply(asker, {
+        type: 'teleop:mode-request:answer',
+        sessionId: answer.sessionId,
+        requestId: answer.requestId,
+        outcome: answer.outcome,
+        ...(answer.error !== undefined ? { error: answer.error } : {}),
+      });
       return;
     }
     // teleop:operator — only from the socket that declared itself the operator.
@@ -357,6 +423,7 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
       console.log(`[WebSocket] Client disconnected (total: ${clients.size - 1})`);
       clients.delete(ws);
       // A closed watcher leaves its sessions at once (TASK-414).
+      modeRequests.dropSocket(ws);
       presenceChanged(presence.dropSocket(ws));
     });
 
@@ -364,6 +431,7 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
     ws.on('error', (error) => {
       console.error('[WebSocket] Client error:', error);
       clients.delete(ws);
+      modeRequests.dropSocket(ws);
       presenceChanged(presence.dropSocket(ws));
     });
   });
@@ -693,7 +761,10 @@ function handleClientMessage(
     case 'teleop:watch':
     case 'teleop:unwatch':
     case 'teleop:operator':
+    case 'teleop:mode-request':
+    case 'teleop:mode-request:answer':
       // Session presence and the operator relay (TASK-414): display only.
+      // TASK-417: a mode question and its answer, relayed between two people.
       onTeleop(ws, msg);
       break;
 

@@ -103,15 +103,18 @@ describe('whyNotFollowingVr — the rules, in order', () => {
     }
   });
 
-  it('uses the agent table wording for the latched E-stop where NeoDEM controls the mode', () => {
+  it('names the hold on Reset, and who asks for Balance next, for a latched E-stop (TASK-417)', () => {
     expect(whyNotFollowingVr(following({ estopLatched: true })).text)
-      .toBe('E-stop is latched. Reset it, then switch to Balance.');
+      .toBe('E-stop latched — hold Reset for 1 s. Then the desktop asks for Balance.');
     expect(whyNotFollowingVr(following({ estopLatched: true, modeControl: 'off' })).text)
-      .toBe('E-stop is latched. Reset it.');
+      .toBe('E-stop latched — hold Reset for 1 s.');
   });
 
-  it('names the mode, and asks only where NeoDEM controls it (the sim does not)', () => {
-    expect(whyNotFollowingVr(following({ baseMode: 'stand' })).text).toBe('The robot is stand. Switch to Balance.');
+  it('names the mode and who acts, only where NeoDEM controls it (the sim does not)', () => {
+    expect(whyNotFollowingVr(following({ baseMode: 'stand' })).text).toBe('Robot standing — the desktop asks for Balance.');
+    expect(whyNotFollowingVr(following({ baseMode: 'limp' })).text)
+      .toBe('Robot limp — the desktop asks for Stand up, then Balance.');
+    expect(whyNotFollowingVr(following({ baseMode: 'zero_torque' })).short).toBe('LIMP — desktop asks');
     expect(whyNotFollowingVr(following({ baseMode: 'unknown' })).code).toBe('mode_unknown');
     expect(whyNotFollowingVr(following({ baseMode: 'unknown', modeControl: 'off' })).code).toBe('following');
   });
@@ -121,7 +124,7 @@ describe('whyNotFollowingVr — the rules, in order', () => {
     expect(whyNotFollowingVr(following({
       armHeld: { side: 'left', reason: 'not_armed', at: NOW },
       armRefusal: { code: 'arm_requires_heartbeat', message: '', at: NOW },
-    }))).toMatchObject({ code: 'arm_refused', short: 'HELD L: not_armed' });
+    }))).toMatchObject({ code: 'arm_refused', short: 'HELD L: arms dropped' });
     expect(whyNotFollowingVr(following({
       armRefusal: { code: 'arm_requires_heartbeat', message: '', at: NOW },
     })).text).toBe('No heartbeat from this console. Check the link.');
@@ -160,29 +163,31 @@ describe('composeRobotPanel', () => {
   });
   const why = whyNotFollowingVr(following());
 
-  it('prints the six lines, the why line last, bold and wrapped', () => {
+  it('leads with the why line — bold, 1.5x, two rows at most — and shows nothing that is fine (TASK-417)', () => {
     const lines = composeRobotPanel(facts(), why, NOW);
-    expect(lines.map((l) => l.text)).toEqual([
-      'MODE balance (measured)',
-      'ARMS armed 100 % · dead-man OK',
-      'GRIP L ●  R ○',
-      'HANDS L ok · R ok · arms+hands',
-      'LEASE you · LINK live 42 ms',
-      'Following.',
+    expect(lines).toEqual([
+      { id: 'why', text: 'Following.', color: PANEL_COLORS.ok, bold: true, wrap: true, maxRows: 2, scale: 1.5 },
     ]);
-    expect(lines[lines.length - 1]).toMatchObject({ id: 'why', bold: true, wrap: true });
   });
 
-  it('shows the held side and reason, the disarm reason, and — for an absent dead-man', () => {
+  it('puts the non-ok facts on one chip row, held reasons in words, never the agent code', () => {
     const lines = composeRobotPanel(facts({
       armInfo: { ...ARM, armed: false, armWeight: 0, deadman: null, lastDisarmReason: 'left_balance' },
-      armHeld: { side: 'right', reason: 'arm_gate', at: NOW },
+      armHeld: { side: 'right', reason: 'ik_held', at: NOW },
+      baseMode: 'stand',
+      link: 'stale',
+      leaseLabel: 'Ben',
     }), why, NOW);
-    expect(lines[1].text).toBe('ARMS disarmed: left_balance · dead-man —');
-    expect(lines[2].text).toBe('GRIP L ●  R ○ · HELD R: arm_gate');
+    expect(lines[0].id).toBe('why');
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toMatchObject({ id: 'chips', color: PANEL_COLORS.bad, wrap: true });
+    expect(lines[1].text).toBe(
+      'MODE stand  ·  ARMS off: left_balance  ·  HELD R: out of reach  ·  LINK stale  ·  LEASE Ben',
+    );
+    expect(lines[1].text).not.toMatch(/ik_held/);
   });
 
-  it('decodes hand health: a motor fault by joint and code, a missing hand', () => {
+  it('decodes hand health only when a hand is not fine', () => {
     const health = (present: boolean | null, joint?: string) => ({
       present,
       ageS: 0.1,
@@ -190,21 +195,25 @@ describe('composeRobotPanel', () => {
       motorFaults: joint ? [{ motor: 1, joint, code: '0x200', bits: ['overcurrent'] }] : [],
       powerV: 24,
     });
-    const lines = composeRobotPanel(facts({
+    const fault = composeRobotPanel(facts({
       armInfo: { ...ARM, handHealth: { left: health(true), right: health(true, 'right_hand_thumb_1_joint') } },
     }), why, NOW);
-    expect(lines[3].text).toBe('HANDS L ok · R THUMB_1 0x200 · arms+hands');
+    expect(fault[1].text).toBe('HANDS L ok · R THUMB_1 0x200');
     const missing = composeRobotPanel(facts({
       armInfo: { ...ARM, handHealth: { left: health(false), right: health(true) } },
     }), why, NOW);
-    expect(missing[3].text).toContain('L missing');
+    expect(missing[1].text).toContain('L missing');
+    const fine = composeRobotPanel(facts({
+      armInfo: { ...ARM, handHealth: { left: health(true), right: health(true) } },
+    }), why, NOW);
+    expect(fine).toHaveLength(1);
   });
 
-  it('says plainly when the sidecar needs no arming (the sim)', () => {
-    const lines = composeRobotPanel(facts({ armInfo: null, modeControl: 'off', baseMode: 'unknown', baseMeasured: false }), why, NOW);
-    expect(lines[0].text).toBe('MODE unknown');
-    expect(lines[1].text).toBe('ARMS no arming needed');
-    expect(lines[3].text).toBe('HANDS —');
+  it('drops "MODE unknown", "no arming needed" and the idle RTT on the sim', () => {
+    const lines = composeRobotPanel(facts({ armInfo: null, modeControl: 'off', baseMode: 'unknown', baseMeasured: false, rttMs: 4497 }), why, NOW);
+    expect(lines.map((l) => l.id)).toEqual(['why']);
+    const all = lines.map((l) => l.text).join(' ');
+    expect(all).not.toMatch(/MODE unknown|no arming needed|ms\b/);
   });
 
   it('shortens joint names', () => {

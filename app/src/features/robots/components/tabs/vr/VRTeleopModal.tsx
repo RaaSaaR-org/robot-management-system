@@ -42,6 +42,16 @@ import { VrScene } from './VrScene';
 import type { VrSessionBridge } from './vrSessionBridge';
 import { createRigTelemetry } from './VrTeleopRig';
 import { useOperatorPublisher } from './useOperatorPublisher';
+import { useRobotBaseMode } from '../../../hooks/useRobotBaseMode';
+import {
+  vrModeAllow,
+  vrModeArrive,
+  vrModeTick,
+  type VrModePrompt,
+  type VrModePromptFacts,
+  type VrModeStep,
+} from './vrModeRequest';
+import type { ModeRequestIn } from '@/shared/utils/sessionWatch';
 import { useAuthStore } from '@/features/auth/store/authStore';
 import { ARM_HELD_REASONS, isArmRefusalCode, type ArmHeldReason, type VrArmInfo, type VrHandHealth } from './vrWhy';
 
@@ -465,10 +475,13 @@ export function VRTeleopModalBody({
   const [agentErrors, setAgentErrors] = useState<AgentError[]>([]);
   const [control, setControl] = useState<ControlFrame | null>(null);
   const [arm, setArm] = useState<ArmFrame | null>(null);
-  const [meters, setMeters] = useState<{ link: LinkState; msSinceState: number | null; rttMs: number | null }>({
+  const [meters, setMeters] = useState<{
+    link: LinkState; msSinceState: number | null; rttMs: number | null; posesOutstanding: boolean;
+  }>({
     link: 'lost',
     msSinceState: null,
     rttMs: null,
+    posesOutstanding: false,
   });
   const [copied, setCopied] = useState<string | null>(null);
   /** Bumped to put the viewpoint back in the robot's head. */
@@ -504,12 +517,17 @@ export function VRTeleopModalBody({
   // TASK-414: while in VR with a session attached, the desktop assistant sees
   // what this operator sees — relayed at 5 Hz from the telemetry ref.
   const operatorName = useAuthStore((s) => s.user?.name ?? s.user?.email ?? undefined);
-  useOperatorPublisher({
+  // TASK-417: the desktop's mode requests arrive on the operator socket; the
+  // handler is set below, once the lease exists.
+  const modeRequestHandlerRef = useRef<(request: ModeRequestIn) => void>(() => {});
+  const onModeRequest = useCallback((request: ModeRequestIn) => modeRequestHandlerRef.current(request), []);
+  const { answerModeRequest } = useOperatorPublisher({
     sessionId: vrSession?.sessionId,
     robotId: robot.id,
     inVr,
     telemetryRef,
     displayName: operatorName,
+    onModeRequest,
   });
 
   // offerSession:false — we drive entry from our own "Enter VR" button instead of
@@ -548,6 +566,49 @@ export function VRTeleopModalBody({
   const leaseRef = useRef(lease);
   leaseRef.current = lease;
   const leaseAllows = !lease.enabled || lease.state === 'bound';
+
+  // ---- TASK-417: the desktop asks, the headset allows (D1) ----------------
+  // The request is only a question: allowing it sends the change through the
+  // same lease-checked base-mode route the desktop uses, with THIS headset's
+  // grant. No polling — the measured mode comes from the agent's base frames.
+  const modeChange = useRobotBaseMode(robot.id, { enabled: false });
+  const [modePrompt, setModePrompt] = useState<VrModePrompt | null>(null);
+  const modePromptRef = useRef<VrModePrompt | null>(null);
+  const modePromptFacts = useCallback((): VrModePromptFacts => {
+    const t = telemetryRef.current;
+    const l = leaseRef.current;
+    return {
+      estopLatched: t.estopLatched,
+      leaseHeld: l.enabled && l.state === 'bound',
+      modeControl: t.modeControl,
+      baseMode: t.baseMode,
+      baseDamped: t.baseDamped,
+    };
+  }, []);
+  const applyModeStep = useCallback((step: Pick<VrModeStep, 'answers'> & { prompt: VrModePrompt | null }) => {
+    if (modePromptRef.current !== step.prompt) {
+      modePromptRef.current = step.prompt;
+      setModePrompt(step.prompt);
+    }
+    for (const a of step.answers) answerModeRequest(a.requestId, a.outcome, a.error);
+  }, [answerModeRequest]);
+  modeRequestHandlerRef.current = (request) =>
+    applyModeStep(vrModeArrive(modePromptRef.current, request, Date.now(), modePromptFacts()));
+  // Expire the prompt, and withdraw it the moment an E-stop latches or the lease goes.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (modePromptRef.current) applyModeStep(vrModeTick(modePromptRef.current, Date.now(), modePromptFacts()));
+    }, 250);
+    return () => clearInterval(timer);
+  }, [applyModeStep, modePromptFacts]);
+  const allowModeRequest = useCallback(async () => {
+    const step = vrModeAllow(modePromptRef.current, Date.now(), modePromptFacts());
+    applyModeStep(step);
+    if (!step.send) return;
+    const { requestId, mode } = step.send;
+    const result = await modeChange.request(mode, leaseRef.current.grant());
+    answerModeRequest(requestId, result.ok ? 'allowed' : 'failed', result.ok ? undefined : `${result.code}: ${result.error}`);
+  }, [applyModeStep, modePromptFacts, modeChange, answerModeRequest]);
   const jointMap = useMemo<VrJointMap>(() => buildJointMap(joints), [joints]);
   /** Ask the left arm, then the right: a one-armed robot names its gripper on one side only. */
   const trigger = useMemo<EndEffectorMode>(() => {
@@ -819,6 +880,9 @@ export function VRTeleopModalBody({
         link: meterLink(status, now, lastFrameAtRef.current, lastSendAtRef.current),
         msSinceState: last === null ? null : now - last,
         rttMs: healthRef.current.rttMs,
+        // TASK-417: the same rule as `meterLink` — a pose sent within the
+        // stale window expects an answer; otherwise the rig is idle.
+        posesOutstanding: lastSendAtRef.current !== null && now - lastSendAtRef.current <= LINK_STALE_AFTER_MS,
       });
     }, METER_INTERVAL_MS);
     return () => clearInterval(id);
@@ -877,6 +941,7 @@ export function VRTeleopModalBody({
     t.link = meters.link;
     t.msSinceState = meters.msSinceState;
     t.rttMs = meters.rttMs;
+    t.posesOutstanding = meters.posesOutstanding;
   }, [estopLatched, meters]);
 
   /**
@@ -1194,7 +1259,11 @@ export function VRTeleopModalBody({
           Limp / Stand up / Balance buttons, each behind a confirmation. Only
           here on the desktop — the headset shows the mode, never buttons. */}
       {/* TASK-411: the one line that says why the arms are not following. */}
-      <RobotReadinessPanel robotId={robot.id} variant="line" />
+      <RobotReadinessPanel
+        robotId={robot.id}
+        variant="line"
+        pendingStep={lease.enabled && lease.state !== 'bound' ? 'Take control, then Enter VR.' : null}
+      />
 
       {modeControl !== 'off' && (
         <Panel variant="inset" padding="sm" data-testid="vr-robot-mode">
@@ -1307,6 +1376,8 @@ export function VRTeleopModalBody({
           onEstop={onStopButton}
           onResetEstop={resetEstop}
           vrSession={vrSession}
+          modeRequest={modePrompt}
+          onAllowModeRequest={allowModeRequest}
         />
       </div>
 

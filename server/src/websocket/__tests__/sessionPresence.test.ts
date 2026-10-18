@@ -1,14 +1,22 @@
 /**
  * @file sessionPresence.test.ts
  * @description Unit tests for session presence (join, leave, timeout), the
- *   operator state's validation and the relay's 5 Hz trailing throttle (TASK-414).
+ *   operator state's validation and the relay's 5 Hz trailing throttle (TASK-414),
+ *   and the mode-request ledger (TASK-417).
  * @feature datacollection
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  MODE_REQUEST_GRACE_MS,
+  MODE_REQUEST_INTERVAL_MS,
+  MODE_REQUEST_TTL_MS,
+  ModeRequestLedger,
   OperatorRelay,
   PRESENCE_TTL_MS,
+  modeAnswerSchema,
+  modeRequestSchema,
+  parseModeMessage,
   SessionPresence,
   cleanDisplayName,
   parseOperatorState,
@@ -137,5 +145,51 @@ describe('OperatorRelay', () => {
     relay.forget('s1');
     vi.advanceTimersByTime(300);
     expect(sent).toEqual(['s1:a', 's2:b']);
+  });
+});
+
+describe('ModeRequestLedger (TASK-417)', () => {
+  it('rate-limits per session, not across sessions', () => {
+    const ledger = new ModeRequestLedger<string>();
+    expect(ledger.open('s1', 'a', 'desk', ['quest'], 0)).toEqual({ ok: true });
+    expect(ledger.open('s1', 'b', 'desk', ['quest'], 1_999)).toEqual({ ok: false, error: 'rate_limited' });
+    expect(ledger.open('s2', 'c', 'desk', ['quest'], 1_999)).toEqual({ ok: true });
+    expect(ledger.open('s1', 'd', 'desk', ['quest'], MODE_REQUEST_INTERVAL_MS)).toEqual({ ok: true });
+  });
+
+  it('refuses a request id that is still open', () => {
+    const ledger = new ModeRequestLedger<string>();
+    ledger.open('s1', 'a', 'desk', ['quest'], 0);
+    expect(ledger.open('s1', 'a', 'desk', ['quest'], 5_000)).toEqual({ ok: false, error: 'invalid' });
+  });
+
+  it('hands the answer to the asker once, and only from a socket it went to', () => {
+    const ledger = new ModeRequestLedger<string>();
+    ledger.open('s1', 'a', 'desk', ['quest'], 0);
+    expect(ledger.answer('s1', 'a', 'other')).toBeNull();
+    expect(ledger.answer('s2', 'a', 'quest')).toBeNull();
+    expect(ledger.answer('s1', 'a', 'quest')).toBe('desk');
+    expect(ledger.answer('s1', 'a', 'quest')).toBeNull();
+  });
+
+  it('forgets requests after their TTL and grace, and those of a closed socket', () => {
+    const ledger = new ModeRequestLedger<string>();
+    ledger.open('s1', 'a', 'desk', ['quest'], 0);
+    ledger.sweep(MODE_REQUEST_TTL_MS + MODE_REQUEST_GRACE_MS - 1);
+    expect(ledger.size()).toBe(1);
+    ledger.sweep(MODE_REQUEST_TTL_MS + MODE_REQUEST_GRACE_MS);
+    expect(ledger.size()).toBe(0);
+    ledger.open('s1', 'b', 'desk', ['quest'], 100_000);
+    ledger.dropSocket('quest');
+    expect(ledger.size()).toBe(0);
+  });
+
+  it('accepts only Stand up and Balance, bounded in size', () => {
+    expect(parseModeMessage(modeRequestSchema, { sessionId: 's1', mode: 'balance', requestId: 'r-1' })).toEqual({
+      sessionId: 's1', mode: 'balance', requestId: 'r-1',
+    });
+    expect(parseModeMessage(modeRequestSchema, { sessionId: 's1', mode: 'limp', requestId: 'r-1' })).toBeNull();
+    expect(parseModeMessage(modeAnswerSchema, { sessionId: 's1', requestId: 'r', outcome: 'allowed', error: 'x'.repeat(161) })).toBeNull();
+    expect(parseModeMessage(modeAnswerSchema, { sessionId: 's1', requestId: 'r', outcome: 'allowed', x: 'y'.repeat(600) })).toBeNull();
   });
 });

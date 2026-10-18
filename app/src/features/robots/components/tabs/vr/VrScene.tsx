@@ -22,6 +22,7 @@ import { VrWristHud } from './VrWristHud';
 import { VrOrigin } from './VrOrigin';
 import { VrTeleopRig, type VrRigTelemetry } from './VrTeleopRig';
 import { VrRobotPanel } from './VrRobotPanel';
+import type { VrModePrompt } from './vrModeRequest';
 import { VrUiRig } from './VrUiRig';
 import { VrSessionBoard } from './VrSessionBoard';
 import { withTakeHaptics, type VrSessionBridge } from './vrSessionBridge';
@@ -59,6 +60,9 @@ export interface VrSceneProps {
    * (TASK-407). The modal's `resetEstop`, the same path as the desktop banner.
    */
   onResetEstop?: () => void | Promise<void>;
+  /** TASK-417: the desktop's mode request on show, and the hold that allows it. */
+  modeRequest?: VrModePrompt | null;
+  onAllowModeRequest?: () => void;
   /**
    * The recording session (TASK-413), or absent on the robot detail page. When
    * present: the session board left of the robot, the stick shortcuts and the
@@ -96,6 +100,8 @@ export function VrScene({
   onRecenter,
   onEstop,
   onResetEstop,
+  modeRequest,
+  onAllowModeRequest,
   vrSession,
 }: VrSceneProps) {
   // Every take action is felt: `episodeMark` when it lands, two taps when refused.
@@ -143,6 +149,8 @@ export function VrScene({
             onRecenter={onRecenter}
             onResetEstop={onResetEstop}
             watching={session?.watching}
+            modeRequest={modeRequest}
+            onAllowModeRequest={onAllowModeRequest}
           />
           {/* TASK-413: the session board, mirrored on the robot's left (D3).
               Only with a session — the robot detail page has none. */}

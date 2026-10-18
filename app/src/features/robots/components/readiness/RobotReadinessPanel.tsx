@@ -81,10 +81,19 @@ export interface ReadinessReasonLineProps {
   stale?: boolean;
   readError?: string | null;
   size?: 'lg' | 'sm';
+  /**
+   * TASK-417: what this page still has to do while the robot side is ready —
+   * the VR window before control is taken says "Take control, then Enter VR"
+   * rather than a green "Ready" next to a greyed Enter VR. Shown amber, and
+   * only when the reason is `ok`; a blocking reason always wins.
+   */
+  pendingStep?: string | null;
   className?: string;
 }
 
-export function ReadinessReasonLine({ readiness, stale = false, readError = null, size = 'lg', className }: ReadinessReasonLineProps) {
+export function ReadinessReasonLine({
+  readiness, stale = false, readError = null, size = 'lg', pendingStep = null, className,
+}: ReadinessReasonLineProps) {
   if (!readiness) {
     return (
       <p className={cn('text-[13px] text-ink-secondary', className)} data-testid="readiness-reason" data-severity="unknown">
@@ -93,15 +102,20 @@ export function ReadinessReasonLine({ readiness, stale = false, readError = null
     );
   }
   const { reason } = readiness;
+  const step = reason.severity === 'ok' && pendingStep ? pendingStep : null;
   return (
     <div
-      className={cn('flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-control border px-3 py-2', toneTag[SEVERITY_TONE[reason.severity]], className)}
+      className={cn(
+        'flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-control border px-3 py-2',
+        toneTag[step ? 'warning' : SEVERITY_TONE[reason.severity]],
+        className,
+      )}
       data-testid="readiness-reason"
-      data-severity={reason.severity}
-      data-code={reason.code}
+      data-severity={step ? 'warn' : reason.severity}
+      data-code={step ? 'page_step' : reason.code}
       role="status"
     >
-      <span className={cn('font-semibold', size === 'lg' ? 'text-[17px] leading-snug' : 'text-[13px]')}>{reason.text}</span>
+      <span className={cn('font-semibold', size === 'lg' ? 'text-[17px] leading-snug' : 'text-[13px]')}>{step ?? reason.text}</span>
       <span className="text-[11px] uppercase tracking-wide opacity-75">
         {reason.source === 'server' ? 'robot side' : 'robot agent'}
         {stale ? ' · stale' : ''}
@@ -126,6 +140,8 @@ export interface RobotReadinessPanelProps {
   limpWaitMs?: number;
   /** The Quest buttons' calls (tests). */
   questApi?: QuestControlsApi;
+  /** `line` only (TASK-417): the page's own next step while the robot side is ready. */
+  pendingStep?: string | null;
   className?: string;
 }
 
@@ -133,7 +149,16 @@ export function RobotReadinessPanel(props: RobotReadinessPanelProps) {
   const own = useRobotReadiness(props.robotId, { enabled: props.readiness === undefined });
   const ready = props.readiness ?? own;
   if (props.variant === 'line') {
-    return <ReadinessReasonLine readiness={ready.readiness} stale={ready.stale} readError={ready.readError} size="sm" className={props.className} />;
+    return (
+      <ReadinessReasonLine
+        readiness={ready.readiness}
+        stale={ready.stale}
+        readError={ready.readError}
+        size="sm"
+        pendingStep={props.pendingStep}
+        className={props.className}
+      />
+    );
   }
   return <ReadinessBody {...props} ready={ready} />;
 }

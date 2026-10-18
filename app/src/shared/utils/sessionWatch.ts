@@ -7,6 +7,12 @@
  *              `teleop:operator`. Display only: the server fans these out and
  *              forwards nothing to a robot.
  *
+ *              TASK-417: the same socket carries a mode question from the
+ *              assistant (`teleop:mode-request`, Stand up or Balance only) and
+ *              the headset's answer (`teleop:mode-request:answer`). The relay
+ *              forwards neither to a robot: the headset sends the change itself,
+ *              under its own lease, through the base-mode route.
+ *
  *              Shared by the session page's presence (datacollection) and the
  *              headset's operator publisher (robots/vr), which is why it lives
  *              here rather than in either feature.
@@ -47,6 +53,34 @@ export interface OperatorState {
   targets: { left: OperatorPose | null; right: OperatorPose | null };
 }
 
+/** The modes the desktop may ask the headset for (TASK-417, D2): never Limp, never walking. */
+export type RelayedMode = 'stand' | 'balance';
+/** How the headset answered a mode request. */
+export type ModeRequestOutcome = 'allowed' | 'declined' | 'expired' | 'failed';
+/** Why the server would not relay a request. */
+export type ModeRequestRejection = 'no_operator' | 'not_assistant' | 'invalid' | 'rate_limited';
+/** How long the headset shows a request before it answers `expired`. Mirrors the server. */
+export const MODE_REQUEST_TTL_MS = 10_000;
+
+/** A request as the headset receives it. */
+export interface ModeRequestIn {
+  requestId: string;
+  mode: RelayedMode;
+  /** How long the prompt may stay up, ms. */
+  ttlMs: number;
+}
+
+/** What the asker hears back: the headset's answer, or the server's refusal. */
+export type ModeRequestReply =
+  | { kind: 'answer'; requestId: string; outcome: ModeRequestOutcome; error?: string }
+  | { kind: 'rejected'; requestId: string | null; error: ModeRequestRejection | string };
+
+/** A fresh request id: short, URL-safe, unique enough for one session. */
+export function newModeRequestId(): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `mr-${Date.now().toString(36)}-${rand}`;
+}
+
 export interface SessionWatchOptions {
   sessionId: string;
   /** The role to declare; null opens the socket without watching yet (see `setRole`). */
@@ -56,11 +90,19 @@ export interface SessionWatchOptions {
   onWatched?: () => void;
   /** The server refused it: `unauthenticated`, `session_not_found`, `forbidden`… */
   onRejected?: (error: string) => void;
+  /** TASK-417, headset: the assistant asks for a mode. */
+  onModeRequest?: (request: ModeRequestIn) => void;
+  /** TASK-417, desktop: the answer to (or refusal of) a request this socket sent. */
+  onModeReply?: (reply: ModeRequestReply) => void;
 }
 
 export interface SessionWatch {
   /** Relay one operator state; false when the socket is not (yet) the accepted operator. */
   sendOperator(state: OperatorState): boolean;
+  /** TASK-417, desktop: ask the operator for a mode; false when the socket is not an accepted watcher. */
+  sendModeRequest(mode: RelayedMode, requestId: string): boolean;
+  /** TASK-417, headset: answer a request this socket received. */
+  answerModeRequest(requestId: string, outcome: ModeRequestOutcome, error?: string): boolean;
   /** The server has acknowledged this socket's watch. */
   isWatched(): boolean;
   /**
@@ -128,8 +170,12 @@ export function openSessionWatch(options: SessionWatchOptions, deps?: Partial<Se
     socket.addEventListener('message', (event: MessageEvent) => {
       if (typeof event.data !== 'string') return;
       // Cheap pre-filter: this socket also receives every event of the tenant.
-      if (!event.data.includes('"teleop:watch') && !event.data.includes('"auth"')) return;
-      let msg: { type?: unknown; sessionId?: unknown; authenticated?: unknown; error?: unknown };
+      if (!event.data.includes('"teleop:watch') && !event.data.includes('"auth"')
+        && !event.data.includes('"teleop:mode-request')) return;
+      let msg: {
+        type?: unknown; sessionId?: unknown; authenticated?: unknown; error?: unknown;
+        requestId?: unknown; mode?: unknown; ttlMs?: unknown; outcome?: unknown;
+      };
       try {
         msg = JSON.parse(event.data);
       } catch {
@@ -145,6 +191,30 @@ export function openSessionWatch(options: SessionWatchOptions, deps?: Partial<Se
       } else if (msg.type === 'teleop:watch:rejected' && msg.sessionId === options.sessionId) {
         watched = false;
         options.onRejected?.(typeof msg.error === 'string' ? msg.error : 'rejected');
+      } else if (msg.sessionId !== options.sessionId) {
+        // Another session's mode traffic is not ours.
+      } else if (msg.type === 'teleop:mode-request') {
+        if (typeof msg.requestId !== 'string' || (msg.mode !== 'stand' && msg.mode !== 'balance')) return;
+        const ttl = typeof msg.ttlMs === 'number' && Number.isFinite(msg.ttlMs)
+          ? Math.min(MODE_REQUEST_TTL_MS, Math.max(1_000, msg.ttlMs))
+          : MODE_REQUEST_TTL_MS;
+        options.onModeRequest?.({ requestId: msg.requestId, mode: msg.mode, ttlMs: ttl });
+      } else if (msg.type === 'teleop:mode-request:answer') {
+        const outcome = msg.outcome;
+        if (typeof msg.requestId !== 'string'
+          || (outcome !== 'allowed' && outcome !== 'declined' && outcome !== 'expired' && outcome !== 'failed')) return;
+        options.onModeReply?.({
+          kind: 'answer',
+          requestId: msg.requestId,
+          outcome,
+          ...(typeof msg.error === 'string' ? { error: msg.error } : {}),
+        });
+      } else if (msg.type === 'teleop:mode-request:rejected') {
+        options.onModeReply?.({
+          kind: 'rejected',
+          requestId: typeof msg.requestId === 'string' ? msg.requestId : null,
+          error: typeof msg.error === 'string' ? msg.error : 'invalid',
+        });
       }
     });
     socket.addEventListener('close', () => {
@@ -165,6 +235,18 @@ export function openSessionWatch(options: SessionWatchOptions, deps?: Partial<Se
       if (ws.bufferedAmount > MAX_BUFFERED_BYTES) return false;
       return send({ type: 'teleop:operator', sessionId: options.sessionId, state });
     },
+    sendModeRequest: (mode, requestId) => {
+      if (!watched) return false;
+      return send({ type: 'teleop:mode-request', sessionId: options.sessionId, mode, requestId });
+    },
+    answerModeRequest: (requestId, outcome, error) =>
+      send({
+        type: 'teleop:mode-request:answer',
+        sessionId: options.sessionId,
+        requestId,
+        outcome,
+        ...(error ? { error: error.slice(0, 160) } : {}),
+      }),
     isWatched: () => watched,
     setRole: (next) => {
       if (closed || next === role) return;

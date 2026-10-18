@@ -61,9 +61,10 @@ export function hudBaseLine(state: Pick<HudState, 'modeControl' | 'baseMode' | '
   const controlled = state.modeControl === 'fsm' || state.modeControl === 'full';
   if (controlled && (state.baseMode ?? 'unknown') === 'unknown') return { id: 'mode-unknown', text: 'MODE UNKNOWN' };
   if (controlled && (state.baseDamped || state.baseMode === 'limp' || state.baseMode === 'zero_torque')) {
-    return { id: 'damped', text: 'ROBOT LIMP — use the desktop window' };
+    // TASK-417: no mode button in the headset — the desktop asks, the headset allows.
+    return { id: 'damped', text: 'ROBOT LIMP — desktop asks for Balance' };
   }
-  if (state.baseDamped) return { id: 'damped', text: 'BASE DAMPED — press Stand' };
+  if (state.baseDamped) return { id: 'damped', text: 'BASE DAMPED — desktop asks for Stand' };
   if (state.moveEnabled === false) return { id: 'walk-off', text: 'Base walking disabled' };
   return null;
 }
@@ -77,6 +78,13 @@ export interface HudState {
   link: LinkState;
   /** Age of the last `{type:'state'}` message, ms. Null when none has arrived. */
   msSinceState: number | null;
+  /**
+   * TASK-417: pose frames went out recently, so an answer is expected (the
+   * same rule as `meterLink`). Only then does LINK carry an age; idle, it
+   * reads `LINK OK` — an age that counts up while nothing is commanded says
+   * nothing about the link. Absent = treated as idle.
+   */
+  posesOutstanding?: boolean;
   armLeft: boolean;
   armRight: boolean;
   /**
@@ -319,7 +327,11 @@ export function composeHud(state: HudState): HudLine[] {
   const recLine: HudLine[] = rec ? [hudTakeLine(rec)] : [];
   const linkLine: HudLine = {
     id: 'link',
-    text: `LINK ${state.link.toUpperCase()} ${age}`,
+    text: state.posesOutstanding === true
+      ? `LINK ${state.link.toUpperCase()} ${age}`
+      : state.link === 'live'
+        ? 'LINK OK'
+        : `LINK ${state.link.toUpperCase()}`,
     color: LINK_COLOR[state.link] ?? HUD_COLORS.dim,
   };
 
@@ -385,6 +397,29 @@ export function composeHud(state: HudState): HudLine[] {
                 ]),
         ]),
   ];
+}
+
+/** TASK-417: the permanent reminder of where the E-stop is — the B and Y buttons. */
+export const HUD_STOP_TAG: HudLine = { id: 'stop-tag', text: 'B/Y = STOP', color: HUD_COLORS.bad };
+
+/**
+ * The wrist plate as drawn (TASK-417): `composeHud`'s lines with a blocking
+ * reason's short form first (never under a latched E-stop, whose banner says
+ * it), the RTT readout while poses are outstanding, cut to the plate's budget
+ * with one row kept for the `B/Y = STOP` tag, which is always the LAST row.
+ * The RTT readout is the first to give way, then the lines composed last.
+ */
+export function finishWristHud(
+  lines: readonly HudLine[],
+  extras: { estopLatched: boolean; whyBlock: string | null; rttLine: HudLine | null },
+): HudLine[] {
+  const out: HudLine[] = [];
+  if (!extras.estopLatched && extras.whyBlock) out.push({ id: 'why', text: extras.whyBlock, color: HUD_COLORS.bad });
+  out.push(...lines);
+  if (!extras.estopLatched && extras.rttLine) out.push(extras.rttLine);
+  out.length = Math.min(out.length, HUD_MAX_LINES - 1);
+  out.push(HUD_STOP_TAG);
+  return out;
 }
 
 export interface MarkerInput {

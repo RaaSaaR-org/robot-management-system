@@ -1173,6 +1173,122 @@ describe('setupWebSocket', () => {
       expect((relayed.at(-1)!.data!.state as { rttMs: number }).rttMs).toBe(19);
     });
 
+    // ---- TASK-417: the assistant asks the headset for Stand up / Balance ----
+    describe('mode requests (TASK-417)', () => {
+      const ask = (requestId: string, mode = 'stand', sessionId = 's1') =>
+        ({ type: 'teleop:mode-request', sessionId, mode, requestId });
+      const twoPeople = async () => {
+        const wss = setup();
+        const quest = connect(wss, makeClient());
+        const desk = connect(wss, makeClient());
+        const bystander = connect(wss, makeClient());
+        say(quest, { type: 'teleop:watch', sessionId: 's1', role: 'operator' });
+        say(desk, { type: 'teleop:watch', sessionId: 's1', role: 'assistant' });
+        say(bystander, { type: 'teleop:watch', sessionId: 's1', role: 'assistant' });
+        await flush();
+        quest.reset();
+        desk.reset();
+        bystander.reset();
+        return { wss, quest, desk, bystander };
+      };
+
+      it('relays a request to the declared operator socket only', async () => {
+        const { quest, desk, bystander } = await twoPeople();
+        say(desk, ask('r1', 'balance'));
+        const [req] = ofType(quest, 'teleop:mode-request') as Array<Record<string, unknown>>;
+        expect(req).toMatchObject({ sessionId: 's1', requestId: 'r1', mode: 'balance', ttlMs: 10_000 });
+        expect(ofType(desk, 'teleop:mode-request:sent')).toHaveLength(1);
+        expect(ofType(desk, 'teleop:mode-request')).toEqual([]);
+        expect(ofType(bystander, 'teleop:mode-request')).toEqual([]);
+      });
+
+      it('rejects a request from a socket that is not an assistant of the session', async () => {
+        const { wss, quest } = await twoPeople();
+        const stranger = connect(wss, makeClient());
+        stranger.reset();
+        say(stranger, ask('r1'));
+        expect(ofType(stranger, 'teleop:mode-request:rejected')[0]?.error).toBe('not_assistant');
+        // The operator itself may not ask either.
+        say(quest, ask('r2'));
+        expect(ofType(quest, 'teleop:mode-request:rejected')[0]?.error).toBe('not_assistant');
+        expect(ofType(quest, 'teleop:mode-request')).toEqual([]);
+      });
+
+      it('answers no_operator when nobody is in the headset', async () => {
+        const wss = setup();
+        const desk = connect(wss, makeClient());
+        say(desk, { type: 'teleop:watch', sessionId: 's1', role: 'assistant' });
+        await flush();
+        desk.reset();
+        say(desk, ask('r1'));
+        expect(ofType(desk, 'teleop:mode-request:rejected')[0]?.error).toBe('no_operator');
+      });
+
+      it('rejects a malformed request, and never relays Limp or walking', async () => {
+        const { quest, desk } = await twoPeople();
+        for (const mode of ['limp', 'zero_torque', 'walk', 'damp']) say(desk, ask('r1', mode));
+        say(desk, { ...ask('r2'), requestId: 'has space' });
+        say(desk, { ...ask('r3'), padding: 'x'.repeat(600) });
+        const rejected = ofType(desk, 'teleop:mode-request:rejected');
+        expect(rejected).toHaveLength(6);
+        expect(rejected.every((m) => m.error === 'invalid')).toBe(true);
+        expect(ofType(quest, 'teleop:mode-request')).toEqual([]);
+      });
+
+      it('holds one request per 2 s per session', async () => {
+        const { quest, desk, bystander } = await twoPeople();
+        say(desk, ask('r1'));
+        say(bystander, ask('r2'));
+        expect(ofType(bystander, 'teleop:mode-request:rejected')[0]?.error).toBe('rate_limited');
+        await vi.advanceTimersByTimeAsync(1_900);
+        say(desk, ask('r3'));
+        expect(ofType(desk, 'teleop:mode-request:rejected')[0]?.error).toBe('rate_limited');
+        await vi.advanceTimersByTimeAsync(200);
+        say(desk, ask('r4', 'balance'));
+        expect(ofType(quest, 'teleop:mode-request').map((m) => (m as Record<string, unknown>).requestId)).toEqual(['r1', 'r4']);
+      });
+
+      it('relays the answer to the asker only, once, and only from the operator it went to', async () => {
+        const { wss, quest, desk, bystander } = await twoPeople();
+        say(desk, ask('r1'));
+        // Another socket cannot answer for the operator.
+        const stranger = connect(wss, makeClient());
+        say(stranger, { type: 'teleop:mode-request:answer', sessionId: 's1', requestId: 'r1', outcome: 'allowed' });
+        say(bystander, { type: 'teleop:mode-request:answer', sessionId: 's1', requestId: 'r1', outcome: 'allowed' });
+        expect(ofType(desk, 'teleop:mode-request:answer')).toEqual([]);
+        say(quest, { type: 'teleop:mode-request:answer', sessionId: 's1', requestId: 'r1', outcome: 'failed', error: 'not_settled' });
+        say(quest, { type: 'teleop:mode-request:answer', sessionId: 's1', requestId: 'r1', outcome: 'allowed' });
+        const answers = ofType(desk, 'teleop:mode-request:answer') as Array<Record<string, unknown>>;
+        expect(answers).toEqual([
+          { type: 'teleop:mode-request:answer', sessionId: 's1', requestId: 'r1', outcome: 'failed', error: 'not_settled' },
+        ]);
+        expect(ofType(bystander, 'teleop:mode-request:answer')).toEqual([]);
+        expect(ofType(quest, 'teleop:mode-request:answer')).toEqual([]);
+      });
+
+      it('forgets a request whose asker left', async () => {
+        const { quest, desk } = await twoPeople();
+        say(desk, ask('r1'));
+        desk.emit('close');
+        desk.reset();
+        say(quest, { type: 'teleop:mode-request:answer', sessionId: 's1', requestId: 'r1', outcome: 'allowed' });
+        expect(desk.sent).toEqual([]);
+      });
+
+      it('never calls the robot or the base-mode route', async () => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+        const { quest, desk } = await twoPeople();
+        say(desk, ask('r1', 'balance'));
+        say(quest, { type: 'teleop:mode-request:answer', sessionId: 's1', requestId: 'r1', outcome: 'allowed' });
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(fetchSpy).not.toHaveBeenCalled();
+        // And the module has no way to: it imports neither the route nor an HTTP client.
+        const { readFileSync } = await import('node:fs');
+        const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+        expect(source).not.toMatch(/from '\.\.\/routes\/base-mode|HttpClient|axios|robotManager\.(?!onRobotEvent)/);
+      });
+    });
+
     it('stops relaying once the operator left', async () => {
       const wss = setup();
       const quest = connect(wss, makeClient());

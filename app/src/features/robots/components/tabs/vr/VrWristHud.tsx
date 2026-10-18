@@ -11,7 +11,7 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState, XRSpace } from '@react-three/xr';
 import * as THREE from 'three';
-import { composeHud, markerAppearance, HUD_COLORS, HUD_MAX_LINES, type HudLine } from './vrHud';
+import { composeHud, finishWristHud, markerAppearance, HUD_COLORS, type HudLine } from './vrHud';
 import { whyFromTelemetry } from './vrWhy';
 import { useTextPlate } from './VrTextPlate';
 import { VR_UI_MATERIAL, VR_UI_RENDER_ORDER } from './VrPanel';
@@ -177,6 +177,7 @@ export function VrWristHud({
       estopLatched: t.estopLatched,
       link: t.link,
       msSinceState: t.msSinceState,
+      posesOutstanding: t.posesOutstanding,
       armLeft: t.armLeft,
       armRight: t.armRight,
       driving: t.driving,
@@ -192,29 +193,24 @@ export function VrWristHud({
       clutchHeld: t.clutch.left || t.clutch.right,
       handTracked: t.left.tracked === 'hand' || t.right.tracked === 'hand',
     });
-    // Appended, never inserted, and never while latched: `composeHud` guarantees
-    // a latched E-Stop returns exactly its two red lines and nothing competing
-    // with them, and an extra readout under that banner is exactly the
-    // competition it exists to avoid.
-    // The plate holds `HUD_MAX_LINES`; `composeHud` returns at most four and
-    // gives up its TURN line while recording precisely so this one still fits.
-    if (!t.estopLatched && t.rttMs !== null) {
-      const rtt = Math.round(t.rttMs);
-      lines.push({
-        id: 'rtt',
-        text: `RTT ${rtt}ms`,
-        color: rtt < RTT_OK_MS ? HUD_COLORS.ok : rtt < RTT_WARN_MS ? HUD_COLORS.warn : HUD_COLORS.bad,
-      });
-    }
-    // TASK-407: a BLOCKING reason takes line 1 — the short form, which fits the
-    // plate. The latched E-stop is excluded because its banner already says it.
-    // The plate's budget holds: the RTT readout, appended last, gives way.
+    // TASK-417: RTT only while poses are outstanding — an idle RTT is a
+    // number frozen at the last pose. `finishWristHud` puts a blocking reason
+    // first (never under a latched E-stop, whose banner already says it), keeps
+    // the plate's budget, and always ends on the `B/Y = STOP` tag.
+    const rtt = t.posesOutstanding && t.rttMs !== null ? Math.round(t.rttMs) : null;
     const why = whyFromTelemetry(t, Date.now());
-    if (!t.estopLatched && why.severity === 'block') {
-      lines.unshift({ id: 'why', text: why.short, color: HUD_COLORS.bad });
-      lines.length = Math.min(lines.length, HUD_MAX_LINES);
-    }
-    plate.draw(lines);
+    const drawn = finishWristHud(lines, {
+      estopLatched: t.estopLatched,
+      whyBlock: why.severity === 'block' ? why.short : null,
+      rttLine: rtt === null
+        ? null
+        : {
+            id: 'rtt',
+            text: `RTT ${rtt}ms`,
+            color: rtt < RTT_OK_MS ? HUD_COLORS.ok : rtt < RTT_WARN_MS ? HUD_COLORS.warn : HUD_COLORS.bad,
+          },
+    });
+    plate.draw(drawn);
   });
 
   return (

@@ -146,6 +146,8 @@ export interface VrRigTelemetry {
   link: LinkState;
   /** Age of the last `{type:'state'}` frame (held answers included), ms. */
   msSinceState: number | null;
+  /** TASK-417: pose frames went out recently, so LINK and RTT carry numbers (see `meterLink`). */
+  posesOutstanding: boolean;
   /** The teleop socket is open (TASK-407). */
   socketOpen: boolean;
   /** This console may drive: it holds the control lease, or leases are off. */
@@ -227,6 +229,7 @@ export function createRigTelemetry(): VrRigTelemetry {
     // a control link, and the same rule `linkState()` applies.
     link: 'lost',
     msSinceState: null,
+    posesOutstanding: false,
     socketOpen: false,
     leaseHeld: true,
     leaseLabel: 'off',

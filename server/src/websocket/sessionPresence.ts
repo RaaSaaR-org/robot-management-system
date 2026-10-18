@@ -12,7 +12,13 @@
  * headset additionally relays a small `OperatorState` (grip, link, why line,
  * targets) that the server only validates, throttles and fans out (D1).
  *
- * Neither message changes robot state: nothing here is forwarded to an agent.
+ * TASK-417 adds a question and its answer: the assistant asks the headset for
+ * Stand up or Balance (`teleop:mode-request`), the operator allows it inside the
+ * headset and its own page sends the mode change under its own lease. The relay
+ * carries the question to the operator socket and the answer back to the asker,
+ * and nothing else.
+ *
+ * None of these messages changes robot state: nothing here is forwarded to an agent.
  */
 
 import { z } from 'zod';
@@ -127,6 +133,18 @@ export class SessionPresence<S extends object> {
   /** Whether `socket` declared itself the operator of `sessionId`. */
   isOperator(socket: S, sessionId: string): boolean {
     return this.sessions.get(sessionId)?.get(socket)?.role === 'operator';
+  }
+
+  /** Whether `socket` declared itself an assistant of `sessionId` (TASK-417). */
+  isAssistant(socket: S, sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.get(socket)?.role === 'assistant';
+  }
+
+  /** The sockets that declared themselves the session's operator (normally one). */
+  operatorSockets(sessionId: string): S[] {
+    const viewers = this.sessions.get(sessionId);
+    if (!viewers) return [];
+    return [...viewers].filter(([, entry]) => entry.role === 'operator').map(([socket]) => socket);
   }
 
   /** Whether any socket is the session's declared operator. */
@@ -254,5 +272,123 @@ export class OperatorRelay<T> {
     for (const { timer } of this.pending.values()) clearTimeout(timer);
     this.pending.clear();
     this.lastSent.clear();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode requests (TASK-417)
+// ---------------------------------------------------------------------------
+
+/** At most one mode request per session in this window. */
+export const MODE_REQUEST_INTERVAL_MS = 2_000;
+/** How long the headset shows a request before it answers `expired`. */
+export const MODE_REQUEST_TTL_MS = 10_000;
+/** A request the operator never answered is forgotten this long after its TTL. */
+export const MODE_REQUEST_GRACE_MS = 5_000;
+/** The largest request or answer the relay accepts, serialized, in bytes. */
+export const MODE_REQUEST_MAX_BYTES = 512;
+
+/**
+ * Only Stand up and Balance are ever relayed (D2): Limp stays a direct,
+ * lease-gated desktop action, and walking or zero torque are never offered.
+ */
+export const RELAYED_MODES = ['stand', 'balance'] as const;
+export type RelayedMode = (typeof RELAYED_MODES)[number];
+export type ModeRequestOutcome = 'allowed' | 'declined' | 'expired' | 'failed';
+export type ModeRequestRejection = 'no_operator' | 'not_assistant' | 'invalid' | 'rate_limited';
+
+const requestId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+
+export const modeRequestSchema = z.object({
+  sessionId: z.string().min(1).max(128),
+  mode: z.enum(RELAYED_MODES),
+  requestId,
+});
+
+export const modeAnswerSchema = z.object({
+  sessionId: z.string().min(1).max(128),
+  requestId,
+  outcome: z.enum(['allowed', 'declined', 'expired', 'failed']),
+  error: z.string().max(160).optional(),
+});
+
+export type ModeRequest = z.infer<typeof modeRequestSchema>;
+export type ModeAnswer = z.infer<typeof modeAnswerSchema>;
+
+/** Validate a relayed message: at most 512 bytes serialized, then the schema. Null when invalid. */
+export function parseModeMessage<T>(schema: z.ZodType<T>, raw: unknown): T | null {
+  let size: number;
+  try {
+    size = Buffer.byteLength(JSON.stringify(raw) ?? '', 'utf8');
+  } catch {
+    return null;
+  }
+  if (size > MODE_REQUEST_MAX_BYTES) return null;
+  const parsed = schema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
+interface PendingModeRequest<S> {
+  sessionId: string;
+  from: S;
+  to: Set<S>;
+  forgetAt: number;
+}
+
+/**
+ * Which assistant asked which operator sockets, so an answer goes back to the
+ * asker and nobody else; and the per-session rate limit. Pure: the caller owns
+ * the sockets and the clock.
+ */
+export class ModeRequestLedger<S> {
+  private readonly lastAt = new Map<string, number>();
+  private readonly pending = new Map<string, PendingModeRequest<S>>();
+
+  constructor(
+    private readonly intervalMs: number = MODE_REQUEST_INTERVAL_MS,
+    private readonly keepMs: number = MODE_REQUEST_TTL_MS + MODE_REQUEST_GRACE_MS
+  ) {}
+
+  /**
+   * Record a request about to be relayed to `to`. Refused when the session sent
+   * one less than `intervalMs` ago, or when the id is already pending.
+   */
+  open(sessionId: string, id: string, from: S, to: readonly S[], now: number): { ok: true } | { ok: false; error: 'rate_limited' | 'invalid' } {
+    const last = this.lastAt.get(sessionId);
+    if (last !== undefined && now - last < this.intervalMs) return { ok: false, error: 'rate_limited' };
+    if (this.pending.has(id)) return { ok: false, error: 'invalid' };
+    this.lastAt.set(sessionId, now);
+    this.pending.set(id, { sessionId, from, to: new Set(to), forgetAt: now + this.keepMs });
+    return { ok: true };
+  }
+
+  /**
+   * The asker of request `id`, when `from` is one of the sockets it went to and
+   * the session matches; the request is then closed. Null otherwise.
+   */
+  answer(sessionId: string, id: string, from: S): S | null {
+    const entry = this.pending.get(id);
+    if (!entry || entry.sessionId !== sessionId || !entry.to.has(from)) return null;
+    this.pending.delete(id);
+    return entry.from;
+  }
+
+  /** A closed socket: its own requests go, and it no longer answers any. */
+  dropSocket(socket: S): void {
+    for (const [id, entry] of [...this.pending]) {
+      entry.to.delete(socket);
+      if (entry.from === socket || entry.to.size === 0) this.pending.delete(id);
+    }
+  }
+
+  /** Forget requests nobody answered in time, and rate-limit marks long past. */
+  sweep(now: number): void {
+    for (const [id, entry] of [...this.pending]) if (now >= entry.forgetAt) this.pending.delete(id);
+    for (const [sessionId, at] of [...this.lastAt]) if (now - at >= this.intervalMs) this.lastAt.delete(sessionId);
+  }
+
+  /** Open requests (tests, diagnostics). */
+  size(): number {
+    return this.pending.size;
   }
 }

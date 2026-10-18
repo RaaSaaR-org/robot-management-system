@@ -40,7 +40,7 @@ describe('buildOperatorState', () => {
     const s = buildOperatorState(t, 5_000, null, true);
     expect(s.held).toBeNull();
     expect(s.why.severity).toBe('block');
-    expect(s.why.text).toMatch(/^E-stop is latched/);
+    expect(s.why.text).toMatch(/^E-stop latched — hold Reset/);
   });
 
   it('takes the server reason when it blocks, with its code', () => {

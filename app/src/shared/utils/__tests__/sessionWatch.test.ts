@@ -115,4 +115,48 @@ describe('openSessionWatch', () => {
     // No second unwatch for a role already given up.
     expect(s.sent.filter((m) => m.type === 'teleop:unwatch')).toHaveLength(1);
   });
+
+  describe('mode requests (TASK-417)', () => {
+    it('asks only once watched, and hears the answer to its own session only', () => {
+      const replies: unknown[] = [];
+      const w = openSessionWatch(
+        { sessionId: 's1', role: 'assistant', onModeReply: (r) => replies.push(r) },
+        { open, url: 'ws://x' },
+      );
+      const s = sockets[0];
+      s.open();
+      expect(w.sendModeRequest('stand', 'r1')).toBe(false);
+      s.receive({ type: 'teleop:watched', sessionId: 's1', role: 'assistant' });
+      expect(w.sendModeRequest('balance', 'r1')).toBe(true);
+      expect(s.sent[s.sent.length - 1]).toEqual({ type: 'teleop:mode-request', sessionId: 's1', mode: 'balance', requestId: 'r1' });
+      s.receive({ type: 'teleop:mode-request:answer', sessionId: 's2', requestId: 'r1', outcome: 'allowed' });
+      s.receive({ type: 'teleop:mode-request:answer', sessionId: 's1', requestId: 'r1', outcome: 'expired' });
+      s.receive({ type: 'teleop:mode-request:rejected', sessionId: 's1', requestId: 'r2', error: 'no_operator' });
+      expect(replies).toEqual([
+        { kind: 'answer', requestId: 'r1', outcome: 'expired' },
+        { kind: 'rejected', requestId: 'r2', error: 'no_operator' },
+      ]);
+    });
+
+    it('hands the headset a request (Stand up or Balance only) and sends its answer', () => {
+      const requests: unknown[] = [];
+      const w = openSessionWatch(
+        { sessionId: 's1', role: 'operator', onModeRequest: (r) => requests.push(r) },
+        { open, url: 'ws://x' },
+      );
+      const s = sockets[0];
+      s.open();
+      s.receive({ type: 'teleop:mode-request', sessionId: 's1', requestId: 'r1', mode: 'stand', ttlMs: 10_000 });
+      s.receive({ type: 'teleop:mode-request', sessionId: 's1', requestId: 'r2', mode: 'limp', ttlMs: 10_000 });
+      s.receive({ type: 'teleop:mode-request', sessionId: 's1', requestId: 'r3', mode: 'balance', ttlMs: 999_999 });
+      expect(requests).toEqual([
+        { requestId: 'r1', mode: 'stand', ttlMs: 10_000 },
+        { requestId: 'r3', mode: 'balance', ttlMs: 10_000 },
+      ]);
+      expect(w.answerModeRequest('r1', 'failed', 'not_settled')).toBe(true);
+      expect(s.sent[s.sent.length - 1]).toEqual({
+        type: 'teleop:mode-request:answer', sessionId: 's1', requestId: 'r1', outcome: 'failed', error: 'not_settled',
+      });
+    });
+  });
 });

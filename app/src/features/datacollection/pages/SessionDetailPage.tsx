@@ -386,7 +386,9 @@ export function SessionDetailPage() {
 
   // TASK-414: this page watches the session as the desktop assistant — except
   // while its own VR modal is open, when the headset's publisher is the operator.
-  useSessionPresence(sessionIsLive ? session?.id : null, vrModalOpen ? null : 'assistant');
+  const { requestMode } = useSessionPresence(sessionIsLive ? session?.id : null, vrModalOpen ? null : 'assistant');
+  // TASK-417: the Robot mode card may ask the headset only while its operator is in VR.
+  const operatorInVr = useDataCollectionStore((s) => selectOperatorFor(id)(s)?.state.inVr === true);
   useOperatorCues(id, capturing, sessionIsLive && sessionIsVr && !vrModalOpen);
   const getOperatorState = useCallback(
     () => selectOperatorFor(id)(useDataCollectionStore.getState())?.state ?? null,
@@ -584,10 +586,15 @@ export function SessionDetailPage() {
         <Panel data-testid="session-robot-mode">
           <Panel.Header
             title="Robot mode"
-            description="Limp, Stand up and Balance without the remote. The changes need control — take it in the VR window (or here, for simulated input)."
+            description="Limp, Stand up and Balance without the remote. The changes need control — take it in the VR window (or here, for simulated input). While the operator is in the headset, ask for Stand up or Balance here; they allow it in the headset."
           />
           <Panel.Body>
-            <RobotModeControl robotId={robot.id} lease={lease} baseMode={baseMode} />
+            <RobotModeControl
+              robotId={robot.id}
+              lease={lease}
+              baseMode={baseMode}
+              requestFromHolder={operatorViewer && operatorInVr && !vrModalOpen ? requestMode : undefined}
+            />
           </Panel.Body>
         </Panel>
       )}

@@ -222,3 +222,76 @@ describe('RobotModeControl', () => {
     expect(screen.getByTestId('robot-mode-error')).toHaveTextContent('bad_transition: balance is only allowed from stand');
   });
 });
+
+describe('RobotModeControl — asking the headset (TASK-417)', () => {
+  const HELD_ELSEWHERE = { enabled: true, state: 'observing', grant: () => null };
+
+  it('offers Stand up as "Ask the headset" while the headset holds the lease; Limp stays lease-gated', () => {
+    const ask = vi.fn();
+    render(<RobotModeControl robotId="r1" lease={HELD_ELSEWHERE} baseMode={fakeHook()} requestFromHolder={ask} />);
+    expect(screen.getByTestId('robot-mode-stand')).toBeEnabled();
+    expect(screen.getByTestId('robot-mode-stand')).toHaveTextContent('Ask the headset: Stand up');
+    // Balance needs Stand first — its real reason, not "Take control first".
+    expect(screen.getByTestId('robot-mode-balance')).toBeDisabled();
+    expect(screen.getByTestId('robot-mode-balance')).toHaveTextContent(/^Balance$/);
+    expect(screen.getByTestId('robot-mode-reasons')).toHaveTextContent('Balance: Balance needs Stand.');
+    expect(screen.getByTestId('robot-mode-limp')).toBeDisabled();
+    expect(screen.getByTestId('robot-mode-reasons')).toHaveTextContent('Limp: Take control first.');
+  });
+
+  it('without a headset to ask, nothing changes: "Take control first"', () => {
+    render(<RobotModeControl robotId="r1" lease={HELD_ELSEWHERE} baseMode={fakeHook()} />);
+    expect(screen.getByTestId('robot-mode-stand')).toBeDisabled();
+    expect(screen.getByTestId('robot-mode-stand')).toHaveTextContent(/^Stand up$/);
+  });
+
+  it('holding the lease itself, the console posts directly and never asks', () => {
+    const ask = vi.fn();
+    render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={fakeHook()} requestFromHolder={ask} />);
+    expect(screen.getByTestId('robot-mode-stand')).toHaveTextContent(/^Stand up$/);
+  });
+
+  it('never offers the ask during a latched E-stop', () => {
+    const ask = vi.fn();
+    render(
+      <RobotModeControl robotId="r1" lease={HELD_ELSEWHERE} baseMode={fakeHook({ status: status({ estopLatched: true }) })} requestFromHolder={ask} />,
+    );
+    expect(screen.getByTestId('robot-mode-stand')).toBeDisabled();
+    expect(screen.getByTestId('robot-mode-reasons')).toHaveTextContent('Stand up: Reset the E-stop first.');
+  });
+
+  it('confirms first, says the operator confirms in the headset, waits with a countdown, then shows the outcome', async () => {
+    let answer!: (r: { outcome: 'allowed' }) => void;
+    const ask = vi.fn(() => new Promise<{ outcome: 'allowed' }>((resolve) => { answer = resolve; }));
+    const hook = fakeHook({ status: status({}, { mode: 'stand', fsmId: 4 }), standSince: Date.now() - 5_000 });
+    render(<RobotModeControl robotId="r1" lease={HELD_ELSEWHERE} baseMode={hook} requestFromHolder={ask} />);
+
+    fireEvent.click(screen.getByTestId('robot-mode-balance'));
+    expect(ask).not.toHaveBeenCalled();
+    expect(screen.getByText(/The operator confirms in the headset\./)).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('robot-mode-confirm-confirm'));
+    });
+    expect(ask).toHaveBeenCalledWith('balance');
+    expect(hook.request).not.toHaveBeenCalled();
+    expect(screen.getByTestId('robot-mode-asking')).toHaveTextContent(/Waiting for the operator… \(\d+ s\)/);
+    expect(screen.getByTestId('robot-mode-balance')).toBeDisabled();
+
+    await act(async () => { answer({ outcome: 'allowed' }); });
+    expect(screen.queryByTestId('robot-mode-asking')).toBeNull();
+    expect(screen.getByTestId('robot-mode-answer')).toHaveTextContent('The operator allowed Balance.');
+    expect(hook.refresh).toHaveBeenCalled();
+  });
+
+  it('says so when the operator lets the request expire', async () => {
+    const ask = vi.fn(async () => ({ outcome: 'expired' as const }));
+    render(<RobotModeControl robotId="r1" lease={HELD_ELSEWHERE} baseMode={fakeHook()} requestFromHolder={ask} />);
+    fireEvent.click(screen.getByTestId('robot-mode-stand'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('robot-mode-confirm-confirm'));
+    });
+    const line = screen.getByTestId('robot-mode-answer');
+    expect(line).toHaveAttribute('data-outcome', 'expired');
+    expect(line).toHaveTextContent('The operator did not answer within 10 s.');
+  });
+});

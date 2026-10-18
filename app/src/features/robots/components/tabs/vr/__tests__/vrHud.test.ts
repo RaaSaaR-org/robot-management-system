@@ -23,7 +23,9 @@ import {
   onStateReceived,
   HUD_COLORS,
   HUD_MAX_LINES,
+  HUD_STOP_TAG,
   RTT_EMA_ALPHA,
+  finishWristHud,
   type HudState,
 } from '../vrHud';
 
@@ -31,6 +33,8 @@ const BASE: HudState = {
   estopLatched: false,
   link: 'live',
   msSinceState: 42,
+  // Poses going out: LINK carries its age (TASK-417 — idle reads LINK OK).
+  posesOutstanding: true,
   armLeft: false,
   armRight: false,
   driving: false,
@@ -457,7 +461,7 @@ describe('composeHud — robot mode without the remote (TASK-398)', () => {
   it('says the robot is limp and points at the desktop — never offers a button', () => {
     const lines = composeHud({ ...FSM, baseMode: 'limp', baseDamped: true });
     const line = lines.find((l) => l.id === 'damped');
-    expect(line?.text).toBe('ROBOT LIMP — use the desktop window');
+    expect(line?.text).toBe('ROBOT LIMP — desktop asks for Balance');
     expect(lines.some((l) => /press/i.test(l.text))).toBe(false);
   });
 
@@ -482,8 +486,51 @@ describe('composeHud — robot mode without the remote (TASK-398)', () => {
   });
 
   it('leaves a robot without mode control exactly as it was', () => {
-    expect(hudBaseLine({ baseDamped: true })).toEqual({ id: 'damped', text: 'BASE DAMPED — press Stand' });
+    expect(hudBaseLine({ baseDamped: true })).toEqual({ id: 'damped', text: 'BASE DAMPED — desktop asks for Stand' });
     expect(hudBaseLine({})).toBeNull();
     expect(composeHud({ ...BASE, vx: 0.4 }).some((l) => l.id === 'speed')).toBe(true);
+  });
+});
+
+describe('the wrist plate (TASK-417)', () => {
+  it('reads LINK OK without a number while no pose is outstanding, the age only while one is', () => {
+    const idle = composeHud({ ...BASE, posesOutstanding: false, msSinceState: 4497 });
+    expect(idle[0]).toEqual({ id: 'link', text: 'LINK OK', color: HUD_COLORS.ok });
+    expect(composeHud({ ...BASE, posesOutstanding: undefined, msSinceState: 4497 })[0].text).toBe('LINK OK');
+    expect(composeHud({ ...BASE, posesOutstanding: true, msSinceState: 38 })[0].text).toBe('LINK LIVE 38ms');
+    // A closed socket is lost whatever the rig is doing, and has no age to give.
+    expect(composeHud({ ...BASE, posesOutstanding: false, link: 'lost' })[0].text).toBe('LINK LOST');
+  });
+
+  it('always ends on B/Y = STOP — idle, busy, blocked and latched', () => {
+    const rtt = { id: 'rtt', text: 'RTT 40ms', color: HUD_COLORS.ok };
+    const cases = [
+      finishWristHud(composeHud({ ...BASE, posesOutstanding: false }), { estopLatched: false, whyBlock: null, rttLine: null }),
+      finishWristHud(composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 3, elapsedS: 9 } }),
+        { estopLatched: false, whyBlock: 'LIMP — desktop asks', rttLine: rtt }),
+      finishWristHud(composeHud({ ...BASE, estopLatched: true }), { estopLatched: true, whyBlock: 'E-STOP', rttLine: rtt }),
+    ];
+    for (const lines of cases) {
+      expect(lines[lines.length - 1]).toEqual(HUD_STOP_TAG);
+      expect(lines.length).toBeLessThanOrEqual(HUD_MAX_LINES);
+    }
+    expect(HUD_STOP_TAG.text).toBe('B/Y = STOP');
+  });
+
+  it('puts a blocking reason first, and lets the RTT give way when the plate is full', () => {
+    const lines = finishWristHud(
+      composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 3, elapsedS: 9 } }),
+      { estopLatched: false, whyBlock: 'LIMP — desktop asks', rttLine: { id: 'rtt', text: 'RTT 40ms', color: HUD_COLORS.ok } },
+    );
+    expect(lines.map((l) => l.id)).toEqual(['why', 'rec', 'link', 'mode', 'stop-tag']);
+    const roomy = finishWristHud(composeHud({ ...BASE, recording: { phase: 'capturing', takeNumber: 3, elapsedS: 9 } }),
+      { estopLatched: false, whyBlock: null, rttLine: { id: 'rtt', text: 'RTT 40ms', color: HUD_COLORS.ok } });
+    expect(roomy.map((l) => l.id)).toEqual(['rec', 'link', 'mode', 'speed', 'stop-tag']);
+  });
+
+  it('keeps the latched banner alone with the tag: no reason, no RTT', () => {
+    const lines = finishWristHud(composeHud({ ...BASE, estopLatched: true }),
+      { estopLatched: true, whyBlock: 'E-STOP', rttLine: { id: 'rtt', text: 'RTT 40ms', color: HUD_COLORS.ok } });
+    expect(lines.map((l) => l.id)).toEqual(['estop', 'estop-hint', 'stop-tag']);
   });
 });
