@@ -177,6 +177,17 @@ export interface VrRigTelemetry {
    * no button, and a real robot's arms arm only on a clutch rising edge.
    */
   clutch: RigClutch;
+  /**
+   * The head's orientation in the robot's frame (TASK-414), for the desktop
+   * assistant's frustum; p is the eye point itself, so always ~0. Null before
+   * the first viewer pose.
+   */
+  head: RobotWristPose | null;
+  /**
+   * The wrist targets this frame commands (IK mode), robot frame — what the
+   * desktop draws as ghost hands. A side that is not driving is null.
+   */
+  targets: { left: RobotWristPose | null; right: RobotWristPose | null };
 }
 
 /**
@@ -226,6 +237,8 @@ export function createRigTelemetry(): VrRigTelemetry {
     rttMs: null,
     arm: null,
     clutch: { left: false, right: false },
+    head: null,
+    targets: { left: null, right: null },
   };
 }
 
@@ -825,6 +838,11 @@ export function VrTeleopRig({
     const ikOn = retargetMode === 'ik';
     const wristLeft = ikOn ? (trackedLeft?.wrist ?? readController(left, 'left')) : null;
     const wristRight = ikOn ? (trackedRight?.wrist ?? readController(right, 'right')) : null;
+    // TASK-414: what the desktop assistant draws — the head's frustum and the
+    // commanded wrists. Written in place: the publisher samples it at 5 Hz.
+    telemetry.head = headTransform ? wristToRobotFrame(headTransform, headTransform, robotHeadingRef.current) : null;
+    telemetry.targets.left = wristLeft;
+    telemetry.targets.right = wristRight;
 
     const leftResult = ikOn ? null : compute(left, 'left');
     const rightResult = ikOn ? null : compute(right, 'right');

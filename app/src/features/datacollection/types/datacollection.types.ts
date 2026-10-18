@@ -2,8 +2,10 @@
  * @file datacollection.types.ts
  * @description Type definitions for data collection feature (teleoperation & active learning)
  * @feature datacollection
- * @dependencies None
+ * @dependencies @/shared/utils/sessionWatch (the operator state's wire type, TASK-414)
  */
+
+import type { OperatorState } from '@/shared/utils/sessionWatch';
 
 // ============================================================================
 // TELEOPERATION TYPES
@@ -249,9 +251,19 @@ export interface TeleopWsEvent {
     | 'teleop:session:started'
     | 'teleop:session:paused'
     | 'teleop:session:resumed'
-    | 'teleop:session:failed';
+    | 'teleop:session:failed'
+    | 'teleop:session:presence'
+    | 'teleop:operator';
   data: {
     sessionId: string;
+    /** TASK-414: the session's robot (`presence`, `operator`). */
+    robotId?: string | null;
+    /** TASK-414: who watches the session (`teleop:session:presence`). */
+    viewers?: PresenceViewer[];
+    /** TASK-414: the operator's relayed state (`teleop:operator`). */
+    state?: OperatorState;
+    /** TASK-414: server time the relay sent `state`. */
+    at?: string;
     session?: TeleoperationSession;
     recordingProgress?: TeleopRecordingProgress;
     qualityFeedback?: QualityFeedback;
@@ -266,6 +278,31 @@ export interface TeleopWsEvent {
     by?: EpisodeActor;
   };
   timestamp: number;
+}
+
+// ============================================================================
+// TWO-PERSON SESSION (TASK-414)
+// ============================================================================
+
+/** One watcher of a session, as the server broadcasts it. */
+export interface PresenceViewer {
+  userId: string;
+  displayName: string;
+  /** The headset (`operator`) or a desktop page (`assistant`). */
+  role: 'operator' | 'assistant';
+  /** ISO time this watcher joined. */
+  since: string;
+}
+
+/** The operator's relayed state and its pose type live with the socket that sends them. */
+export type { OperatorPose, OperatorState } from '@/shared/utils/sessionWatch';
+
+/** The operator's latest state on this page, and when it arrived (this tab's clock). */
+export interface OperatorSnapshot {
+  sessionId: string;
+  robotId: string | null;
+  state: OperatorState;
+  receivedAt: number;
 }
 
 // ============================================================================
@@ -577,6 +614,12 @@ export interface DataCollectionState {
   lastQuickCheck: QuickCheck | null;
   /** The take action this tab has in flight, if any. */
   takePending: TakeAction | null;
+  /** TASK-414: who watches the session on screen. */
+  presence: { sessionId: string; viewers: PresenceViewer[] } | null;
+  /** TASK-414: the operator's latest relayed state; stale after `OPERATOR_STALE_MS`. */
+  operator: OperatorSnapshot | null;
+  /** TASK-414: takes kept in a row, and the session's best run. */
+  streak: { sessionId: string; current: number; previousBest: number; best: number; kept: number; discarded: number } | null;
   /** This tab's id, sent with every take action so it can tell its own events apart. Fixed per tab. */
   clientId: string;
   sessionFilters: SessionFilters;

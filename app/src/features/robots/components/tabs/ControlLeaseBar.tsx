@@ -22,6 +22,11 @@ export interface ControlLeaseBarProps {
   connected: boolean;
   /** Render the per-robot E-stop here; off for a view that has its own always-on stop. */
   showEstop?: boolean;
+  /**
+   * Only say who holds the robot (TASK-414): no Take / Release, no E-stop, no
+   * notices — for a page that does not drive, beside its own E-STOP.
+   */
+  readOnly?: boolean;
 }
 
 /** Seconds until `expiresAt`, re-read every second; null without a deadline. */
@@ -43,9 +48,27 @@ export function holderLabel(holder: ControlLeaseHolder, secondsLeft: number | nu
   return secondsLeft === null ? base : `${base} · expires in ${secondsLeft} s`;
 }
 
-export function ControlLeaseBar({ lease, robotId, robotName, connected, showEstop = true }: ControlLeaseBarProps) {
+export function ControlLeaseBar({ lease, robotId, robotName, connected, showEstop = true, readOnly = false }: ControlLeaseBarProps) {
   const { state, holder, notice } = lease;
   const secondsLeft = useSecondsLeft(holder?.expiresAt);
+
+  if (readOnly) {
+    return (
+      <div className="flex items-center" data-testid="control-lease-readonly">
+        {/* No countdown here: renewals are not broadcast, so an observer's
+            deadline is the acquire's and would read "expires in 0 s" while held. */}
+        {holder ? (
+          <StatusTag tone="warning" dot data-testid="control-lease-holder">
+            {holderLabel(holder, null)}
+          </StatusTag>
+        ) : (
+          <StatusTag tone="neutral" dot>
+            Nobody has control
+          </StatusTag>
+        )}
+      </div>
+    );
+  }
 
   const takeControl = async (): Promise<void> => {
     const ok = await confirm({

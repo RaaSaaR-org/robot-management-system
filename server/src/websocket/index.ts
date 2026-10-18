@@ -26,13 +26,14 @@ import { authService } from '../services/AuthService.js';
 import { MULTI_TENANCY_ENABLED } from '../config/features.js';
 import { deliverEvent, deliverEventPerSocket, TenantResolver, UNRESOLVED_ROBOT_TENANT } from './eventFanout.js';
 import { eStopEventFor, eventTenantKey, tenantKey, type TenantKey } from './eventTenancy.js';
-import { lookupTenant } from './tenantLookups.js';
+import { lookupTeleopSessionRobot, lookupTenant } from './tenantLookups.js';
 import { attachUpgradeRoutes, type UpgradeRoute } from './teleopProxy.js';
 import { onControlLeaseTransition } from '../services/controlLeaseEvents.js';
 import {
   deliverControlLeaseTransition,
   identityFromToken,
   identityFromUpgrade,
+  mayObserveTenant,
   type AccessTokenVerifier,
   type SocketIdentity,
 } from './socketIdentity.js';
@@ -48,6 +49,15 @@ import type { TrainingJobEvent } from '../types/training.types.js';
 import type { DatasetEvent } from '../types/dataset.types.js';
 import type { TeleoperationEvent } from '../types/teleoperation.types.js';
 import { teleopEnvelope } from './teleopEnvelope.js';
+import {
+  OperatorRelay,
+  PRESENCE_SWEEP_MS,
+  SessionPresence,
+  cleanDisplayName,
+  isPresenceRole,
+  parseOperatorState,
+  type OperatorState,
+} from './sessionPresence.js';
 
 /** The A2A event socket's path. */
 const A2A_WS_PATH = '/api/a2a/ws';
@@ -57,6 +67,8 @@ const MAX_CLIENTS = 1000;
 const MAX_BUFFERED_AMOUNT = 65536; // 64KB backpressure threshold
 const HEARTBEAT_INTERVAL_MS = 30000; // 30 seconds
 const PONG_TIMEOUT_MS = 10000; // 10 seconds to respond to ping
+/** Session → robot answers kept for presence routing (TASK-414). */
+const MAX_SESSION_ROBOTS = 1000;
 
 /**
  * Safely send a message to a WebSocket client with error handling and backpressure check
@@ -144,6 +156,129 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
   const robotKey = (robotId: string | null | undefined): TenantKey | null =>
     robotId ? tenantKey('robot', robotId) : null;
 
+  // ---- Session presence and the operator relay (TASK-414) -----------------
+  // Display only: who watches a data-collection session, and the operator's
+  // state as the headset reports it. Nothing here reaches a robot agent.
+  const presence = new SessionPresence<WebSocket>();
+  const sessionRobots = new Map<string, string>();
+  /** Per socket and session, a counter that orders a watch's async check against a later (un)watch. */
+  const watchSeq = new WeakMap<WebSocket, Map<string, number>>();
+  const bumpWatch = (ws: WebSocket, sessionId: string): number => {
+    let seqs = watchSeq.get(ws);
+    if (!seqs) {
+      seqs = new Map();
+      watchSeq.set(ws, seqs);
+    }
+    const next = (seqs.get(sessionId) ?? 0) + 1;
+    seqs.set(sessionId, next);
+    return next;
+  };
+  const currentWatch = (ws: WebSocket, sessionId: string): number => watchSeq.get(ws)?.get(sessionId) ?? 0;
+  const resolveSessionRobot = async (sessionId: string): Promise<string | null> => {
+    const known = sessionRobots.get(sessionId);
+    if (known) return known;
+    const robotId = await lookupTeleopSessionRobot(sessionId);
+    if (robotId) {
+      sessionRobots.set(sessionId, robotId);
+      if (sessionRobots.size > MAX_SESSION_ROBOTS) {
+        const oldest = sessionRobots.keys().next().value;
+        if (oldest !== undefined) sessionRobots.delete(oldest);
+      }
+    }
+    return robotId;
+  };
+  const broadcastPresence = (sessionId: string): void => {
+    const robotId = sessionRobots.get(sessionId) ?? null;
+    const message = JSON.stringify({
+      type: 'teleop:session:presence',
+      data: { sessionId, robotId, viewers: presence.viewers(sessionId) },
+      timestamp: Date.now(),
+    });
+    deliverFor(message, robotId ? robotKey(robotId) : tenantKey('teleopSession', sessionId));
+  };
+  const relay = new OperatorRelay<{ robotId: string; state: OperatorState }>((sessionId, { robotId, state }) => {
+    const message = JSON.stringify({
+      type: 'teleop:operator',
+      data: { sessionId, robotId, state, at: new Date().toISOString() },
+      timestamp: Date.now(),
+    });
+    deliverFor(message, robotKey(robotId));
+  });
+  /** After watchers left: broadcast, and drop a relayed state nobody may send any more. */
+  const presenceChanged = (sessionIds: Iterable<string>): void => {
+    for (const sessionId of sessionIds) {
+      if (!presence.hasOperator(sessionId)) relay.forget(sessionId);
+      broadcastPresence(sessionId);
+    }
+  };
+  const presenceSweep = setInterval(() => presenceChanged(presence.sweep(Date.now())), PRESENCE_SWEEP_MS);
+  presenceSweep.unref?.();
+
+  const reply = (ws: WebSocket, body: Record<string, unknown>): void => {
+    safeSend(ws, JSON.stringify(body), clients);
+  };
+
+  /** `teleop:watch` / `teleop:unwatch` / `teleop:operator` from a client (TASK-414). */
+  const handleTeleopMessage = (ws: WebSocket, msg: Record<string, unknown>): void => {
+    const sessionId = typeof msg.sessionId === 'string' && msg.sessionId.length > 0 && msg.sessionId.length <= 128
+      ? msg.sessionId
+      : null;
+    if (msg.type === 'teleop:unwatch') {
+      if (!sessionId) return;
+      bumpWatch(ws, sessionId);
+      if (presence.unwatch(ws, sessionId)) presenceChanged([sessionId]);
+      return;
+    }
+    if (msg.type === 'teleop:watch') {
+      const identity = clientIdentity.get(ws);
+      if (!sessionId || !isPresenceRole(msg.role)) {
+        reply(ws, { type: 'teleop:watch:rejected', sessionId, error: 'invalid' });
+        return;
+      }
+      if (!identity) {
+        reply(ws, { type: 'teleop:watch:rejected', sessionId, error: 'unauthenticated' });
+        return;
+      }
+      const role = msg.role;
+      const displayName = cleanDisplayName(msg.displayName, identity.userId);
+      const seq = bumpWatch(ws, sessionId);
+      void (async () => {
+        const robotId = await resolveSessionRobot(sessionId);
+        if (!robotId) {
+          reply(ws, { type: 'teleop:watch:rejected', sessionId, error: 'session_not_found' });
+          return;
+        }
+        if (MULTI_TENANCY_ENABLED) {
+          const tenantId = await tenants.resolve(tenantKey('robot', robotId));
+          if (!mayObserveTenant(identity, tenantId)) {
+            reply(ws, { type: 'teleop:watch:rejected', sessionId, error: 'forbidden' });
+            return;
+          }
+        }
+        // A later unwatch (or watch), or the socket closing, wins over this one.
+        if (currentWatch(ws, sessionId) !== seq || !clients.has(ws)) return;
+        const wasOperator = presence.isOperator(ws, sessionId);
+        const changed = presence.watch(ws, sessionId, { userId: identity.userId, displayName, role }, Date.now());
+        reply(ws, { type: 'teleop:watched', sessionId, role });
+        if (changed) presenceChanged([sessionId]);
+        else if (wasOperator && role !== 'operator' && !presence.hasOperator(sessionId)) relay.forget(sessionId);
+      })().catch(() => reply(ws, { type: 'teleop:watch:rejected', sessionId, error: 'lookup_failed' }));
+      return;
+    }
+    // teleop:operator — only from the socket that declared itself the operator.
+    if (!sessionId || !presence.isOperator(ws, sessionId)) {
+      reply(ws, { type: 'teleop:operator:rejected', sessionId, error: 'not_operator' });
+      return;
+    }
+    const robotId = sessionRobots.get(sessionId);
+    const check = parseOperatorState(msg.state);
+    if (!check.ok || !robotId) {
+      reply(ws, { type: 'teleop:operator:rejected', sessionId, error: check.ok ? 'session_not_found' : check.error });
+      return;
+    }
+    relay.offer(sessionId, { robotId, state: check.state });
+  };
+
   // Heartbeat interval to detect dead connections
   const heartbeatInterval = setInterval(() => {
     clients.forEach((ws) => {
@@ -172,6 +307,8 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
 
   wss.on('close', () => {
     clearInterval(heartbeatInterval);
+    clearInterval(presenceSweep);
+    relay.dispose();
     stopLeaseEvents();
   });
 
@@ -205,7 +342,7 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
     ws.on('message', (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
-        handleClientMessage(ws, message, clientIdentity);
+        handleClientMessage(ws, message, clientIdentity, handleTeleopMessage);
       } catch (error) {
         console.error('Invalid WebSocket message:', error);
         ws.send(JSON.stringify({
@@ -219,12 +356,15 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
     ws.on('close', () => {
       console.log(`[WebSocket] Client disconnected (total: ${clients.size - 1})`);
       clients.delete(ws);
+      // A closed watcher leaves its sessions at once (TASK-414).
+      presenceChanged(presence.dropSocket(ws));
     });
 
     // Handle errors
     ws.on('error', (error) => {
       console.error('[WebSocket] Client error:', error);
       clients.delete(ws);
+      presenceChanged(presence.dropSocket(ws));
     });
   });
 
@@ -520,7 +660,8 @@ export function setupWebSocket(server: Server, extraRoutes: readonly UpgradeRout
 function handleClientMessage(
   ws: WebSocket,
   message: unknown,
-  identities: WeakMap<WebSocket, SocketIdentity>
+  identities: WeakMap<WebSocket, SocketIdentity>,
+  onTeleop: (ws: WebSocket, msg: Record<string, unknown>) => void
 ): void {
   if (!message || typeof message !== 'object') {
     return;
@@ -548,6 +689,13 @@ function handleClientMessage(
       }
       break;
     }
+
+    case 'teleop:watch':
+    case 'teleop:unwatch':
+    case 'teleop:operator':
+      // Session presence and the operator relay (TASK-414): display only.
+      onTeleop(ws, msg);
+      break;
 
     case 'subscribe':
       // Client wants to subscribe to specific events

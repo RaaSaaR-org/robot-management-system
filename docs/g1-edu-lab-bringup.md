@@ -10,6 +10,10 @@
 
 ---
 
+> **Recording with two people** (one in the Quest, one at a desktop): see
+> [Two-person data collection](data-collection-two-person.md) for the roles,
+> the setup order, who presses what, and what each warning means.
+
 ## Start the robot side from NeoDEM (TASK-403)
 
 *Added 2026-10-17. The terminal commands further down still work and stay the

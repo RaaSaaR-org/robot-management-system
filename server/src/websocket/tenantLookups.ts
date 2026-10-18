@@ -52,3 +52,14 @@ export async function lookupTenant(key: TenantKey): Promise<string | null> {
   // A robot not (or no longer) in the database keeps TASK-366's rule: no tenant.
   return entity === 'robot' ? null : UNRESOLVED_ROBOT_TENANT;
 }
+
+/**
+ * The robot a teleoperation session records (TASK-414): presence and the
+ * operator relay are routed by it. Null when the session does not exist.
+ */
+export async function lookupTeleopSessionRobot(sessionId: string): Promise<string | null> {
+  const session = await runAsPlatform(() =>
+    prisma.teleoperationSession.findUnique({ where: { id: sessionId }, select: { robotId: true } })
+  );
+  return session?.robotId ?? null;
+}

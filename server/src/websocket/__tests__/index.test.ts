@@ -153,6 +153,8 @@ vi.mock('../tenantLookups.js', () => ({
   lookupTenant: vi.fn(async (key: string) =>
     tenancy.tenants.has(key) ? tenancy.tenants.get(key) ?? null : '\u0000unresolved'
   ),
+  // TASK-414: session → robot for presence; `missing` names no session.
+  lookupTeleopSessionRobot: vi.fn(async (sessionId: string) => (sessionId === 'missing' ? null : `robot-of-${sessionId}`)),
 }));
 
 import { setupWebSocket } from '../index.js';
@@ -1005,6 +1007,184 @@ describe('setupWebSocket', () => {
       expect(robots(a)).toEqual(['ra']);
       expect(robots(b)).toEqual(['rb']);
       expect(robots(admin)).toEqual(['ra', 'rb']);
+    });
+  });
+  // -------------------------------------------------------------------------
+  // Session presence and the operator relay (TASK-414)
+  // -------------------------------------------------------------------------
+  describe('session presence and the operator relay (TASK-414)', () => {
+    const flush = async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    };
+    const say = (client: ReturnType<typeof makeClient>, body: unknown) =>
+      client.emit('message', Buffer.from(JSON.stringify(body)));
+    const messages = (client: ReturnType<typeof makeClient>) =>
+      client.sent.map((m) => JSON.parse(m) as { type: string; data?: Record<string, unknown>; error?: string });
+    const ofType = (client: ReturnType<typeof makeClient>, type: string) => messages(client).filter((m) => m.type === type);
+    const state = {
+      inVr: true, link: 'live', rttMs: 38,
+      clutch: { left: false, right: true }, grip: { left: 0, right: 0.9 },
+      held: null, why: { code: 'following', severity: 'ok', text: 'Following.' },
+      head: { p: [0, 0, 0], q: [0, 0, 0, 1] },
+      targets: { left: null, right: { p: [0.3, -0.2, -0.3], q: [0, 0, 0, 1] } },
+    };
+
+    it('announces a watcher to the tenant with its role and acknowledges the watch', async () => {
+      const wss = setup();
+      const desk = connect(wss, makeClient());
+      desk.reset();
+      say(desk, { type: 'teleop:watch', sessionId: 's1', role: 'assistant', displayName: 'Ben' });
+      await flush();
+      expect(ofType(desk, 'teleop:watched')).toHaveLength(1);
+      const [presenceMsg] = ofType(desk, 'teleop:session:presence');
+      expect(presenceMsg.data).toMatchObject({ sessionId: 's1', robotId: 'robot-of-s1' });
+      expect(presenceMsg.data!.viewers).toEqual([
+        expect.objectContaining({ displayName: 'Ben', role: 'assistant' }),
+      ]);
+    });
+
+    it('rejects a watch for a session that does not exist', async () => {
+      const wss = setup();
+      const desk = connect(wss, makeClient());
+      desk.reset();
+      say(desk, { type: 'teleop:watch', sessionId: 'missing', role: 'assistant' });
+      await flush();
+      expect(ofType(desk, 'teleop:watch:rejected')[0]?.error).toBe('session_not_found');
+      expect(ofType(desk, 'teleop:session:presence')).toEqual([]);
+    });
+
+    it('a repeated heartbeat with nothing changed broadcasts nothing', async () => {
+      const wss = setup();
+      const desk = connect(wss, makeClient());
+      say(desk, { type: 'teleop:watch', sessionId: 's1', role: 'assistant', displayName: 'Ben' });
+      await flush();
+      desk.reset();
+      say(desk, { type: 'teleop:watch', sessionId: 's1', role: 'assistant', displayName: 'Ben' });
+      await flush();
+      expect(ofType(desk, 'teleop:session:presence')).toEqual([]);
+    });
+
+    it('drops a closed socket at once and tells the others', async () => {
+      const wss = setup();
+      const quest = connect(wss, makeClient());
+      const desk = connect(wss, makeClient());
+      say(quest, { type: 'teleop:watch', sessionId: 's1', role: 'operator', displayName: 'Anna' });
+      say(desk, { type: 'teleop:watch', sessionId: 's1', role: 'assistant', displayName: 'Ben' });
+      await flush();
+      desk.reset();
+      quest.emit('close');
+      const [msg] = ofType(desk, 'teleop:session:presence');
+      expect(msg.data!.viewers).toEqual([expect.objectContaining({ displayName: 'Ben' })]);
+    });
+
+    it('drops a silent watcher within 25 s, and keeps one that beats every 10 s', async () => {
+      const wss = setup();
+      const silent = connect(wss, makeClient());
+      const beating = connect(wss, makeClient());
+      say(silent, { type: 'teleop:watch', sessionId: 's1', role: 'operator', displayName: 'Anna' });
+      say(beating, { type: 'teleop:watch', sessionId: 's1', role: 'assistant', displayName: 'Ben' });
+      await flush();
+      beating.reset();
+      for (let t = 0; t < 2; t++) {
+        await vi.advanceTimersByTimeAsync(10_000);
+        say(beating, { type: 'teleop:watch', sessionId: 's1', role: 'assistant', displayName: 'Ben' });
+        await flush();
+      }
+      // 20 s: both still there.
+      expect(ofType(beating, 'teleop:session:presence')).toEqual([]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const [msg] = ofType(beating, 'teleop:session:presence');
+      expect(msg?.data!.viewers).toEqual([expect.objectContaining({ displayName: 'Ben', role: 'assistant' })]);
+    });
+
+    it('unwatch removes the watcher', async () => {
+      const wss = setup();
+      const desk = connect(wss, makeClient());
+      say(desk, { type: 'teleop:watch', sessionId: 's1', role: 'assistant' });
+      await flush();
+      desk.reset();
+      say(desk, { type: 'teleop:unwatch', sessionId: 's1' });
+      expect(ofType(desk, 'teleop:session:presence')[0]?.data!.viewers).toEqual([]);
+    });
+
+    it('relays the operator state to the tenant, without unknown keys', async () => {
+      const wss = setup();
+      const quest = connect(wss, makeClient());
+      const desk = connect(wss, makeClient());
+      say(quest, { type: 'teleop:watch', sessionId: 's1', role: 'operator' });
+      await flush();
+      desk.reset();
+      say(quest, { type: 'teleop:operator', sessionId: 's1', state: { ...state, secret: 'x' } });
+      const [msg] = ofType(desk, 'teleop:operator');
+      expect(msg.data).toMatchObject({ sessionId: 's1', robotId: 'robot-of-s1' });
+      expect(msg.data!.state).toEqual(state);
+      expect(typeof msg.data!.at).toBe('string');
+    });
+
+    it('rejects the operator state from a socket that is not the declared operator', async () => {
+      const wss = setup();
+      const quest = connect(wss, makeClient());
+      const desk = connect(wss, makeClient());
+      say(quest, { type: 'teleop:watch', sessionId: 's1', role: 'operator' });
+      say(desk, { type: 'teleop:watch', sessionId: 's1', role: 'assistant' });
+      await flush();
+      desk.reset();
+      quest.reset();
+      say(desk, { type: 'teleop:operator', sessionId: 's1', state });
+      expect(ofType(desk, 'teleop:operator:rejected')[0]?.error).toBe('not_operator');
+      expect(ofType(quest, 'teleop:operator')).toEqual([]);
+      // A socket that never watched at all is refused the same way.
+      const stranger = connect(wss, makeClient());
+      stranger.reset();
+      say(stranger, { type: 'teleop:operator', sessionId: 's1', state });
+      expect(ofType(stranger, 'teleop:operator:rejected')[0]?.error).toBe('not_operator');
+    });
+
+    it('rejects an operator state over 2 KB, and a malformed one', async () => {
+      const wss = setup();
+      const quest = connect(wss, makeClient());
+      say(quest, { type: 'teleop:watch', sessionId: 's1', role: 'operator' });
+      await flush();
+      quest.reset();
+      say(quest, { type: 'teleop:operator', sessionId: 's1', state: { ...state, why: { ...state.why, padding: 'x'.repeat(2100) } } });
+      expect(ofType(quest, 'teleop:operator:rejected')[0]?.error).toBe('too_large');
+      quest.reset();
+      say(quest, { type: 'teleop:operator', sessionId: 's1', state: { ...state, link: 'great' } });
+      expect(ofType(quest, 'teleop:operator:rejected')[0]?.error).toBe('invalid');
+      expect(ofType(quest, 'teleop:operator')).toEqual([]);
+    });
+
+    it('throttles the relay to 5 Hz per session and ends on the latest state', async () => {
+      const wss = setup();
+      const quest = connect(wss, makeClient());
+      const desk = connect(wss, makeClient());
+      say(quest, { type: 'teleop:watch', sessionId: 's1', role: 'operator' });
+      await flush();
+      desk.reset();
+      // 20 states in one second (20 Hz) → at most 5 (+1 trailing) go out.
+      for (let i = 0; i < 20; i++) {
+        say(quest, { type: 'teleop:operator', sessionId: 's1', state: { ...state, rttMs: i } });
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      await vi.advanceTimersByTimeAsync(250);
+      const relayed = ofType(desk, 'teleop:operator');
+      expect(relayed.length).toBeGreaterThanOrEqual(5);
+      expect(relayed.length).toBeLessThanOrEqual(6);
+      expect((relayed.at(-1)!.data!.state as { rttMs: number }).rttMs).toBe(19);
+    });
+
+    it('stops relaying once the operator left', async () => {
+      const wss = setup();
+      const quest = connect(wss, makeClient());
+      const desk = connect(wss, makeClient());
+      say(quest, { type: 'teleop:watch', sessionId: 's1', role: 'operator' });
+      await flush();
+      say(quest, { type: 'teleop:operator', sessionId: 's1', state });
+      say(quest, { type: 'teleop:operator', sessionId: 's1', state: { ...state, rttMs: 99 } }); // queued
+      say(quest, { type: 'teleop:unwatch', sessionId: 's1' });
+      desk.reset();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(ofType(desk, 'teleop:operator')).toEqual([]);
     });
   });
 });

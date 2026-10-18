@@ -72,6 +72,7 @@ const CATEGORY_MAP: Record<string, string> = {
   'g1-edu-lab-bringup': 'Robot Integration',
   'real-g1-apple-runbook': 'Robot Integration',
   'vr-teleop-data-collection': 'Robot Integration',
+  'data-collection-two-person': 'Robot Integration',
   'training-pipeline-testing': 'Training',
   'training-run-export': 'Training',
   'research-publications': 'Research',
