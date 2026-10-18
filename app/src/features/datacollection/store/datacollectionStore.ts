@@ -167,6 +167,13 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
           state.lastQuickCheck = quickCheck;
         });
       }
+      // TASK-418 (D3): the quick check stays until the next Start — on the
+      // desktop card and the headset board alike.
+      if (kind === 'started' && get().lastQuickCheck) {
+        set((state) => {
+          state.lastQuickCheck = null;
+        });
+      }
       if (kind === 'discarded') {
         set((state) => {
           state.episodes = state.episodes.filter((e) => e.episodeIndex !== take);

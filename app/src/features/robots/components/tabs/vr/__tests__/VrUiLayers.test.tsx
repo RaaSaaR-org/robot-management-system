@@ -47,7 +47,10 @@ describe('VR UI layers (TASK-418, D1)', () => {
   it('orders the UI above the robot (0) and a button above its plate', () => {
     expect(VR_UI_RENDER_ORDER.panel).toBeGreaterThan(0);
     expect(VR_UI_RENDER_ORDER.button).toBeGreaterThan(VR_UI_RENDER_ORDER.panel);
-    expect(VR_UI_RENDER_ORDER.ray).toBeGreaterThan(VR_UI_RENDER_ORDER.hud);
+    // The wrist HUD over the robot but under the panels: a raised wrist never hides a button.
+    expect(VR_UI_RENDER_ORDER.hud).toBeGreaterThan(0);
+    expect(VR_UI_RENDER_ORDER.hud).toBeLessThan(VR_UI_RENDER_ORDER.panel);
+    expect(VR_UI_RENDER_ORDER.ray).toBeGreaterThan(VR_UI_RENDER_ORDER.strip);
     expect(VR_UI_MATERIAL).toMatchObject({ depthTest: false, depthWrite: false, transparent: true });
   });
 

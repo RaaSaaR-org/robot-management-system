@@ -134,3 +134,17 @@ Overlap with parallel tasks:
 - The E-stop stays reachable and visible: B/Y and the two-hand pinch in VR, and the Reset hold on the robot panel. Rendering on top must never hide the E-stop state.
 - Never set `G1_READ_ONLY=0`, never use `G1_ARM_ALLOW_UNKNOWN_FSM=1`, never `kill -9` a sidecar, no DDS on domain 0.
 - Development and tests use the sim stack only (branch builds on free ports). Never the real g1-edu-4 (:41245/:8767). Do not stop or restart the running dev stack.
+
+## Implementation notes (2026-10-18)
+
+Decisions taken while building, and where the code differs from the spec:
+
+- **Side panels:** bearing widened to ±40° (`SIDE_PANEL_BEARING_RAD` in `VrRobotPanel.tsx`, mirrored by the board); `CENTRE_Y_M` unchanged. In a 2064x2208 IWER render looking forward, no side-panel pixel touches the camera screen.
+- **Render order (D1):** `VR_UI_MATERIAL` (`depthTest:false`, `depthWrite:false`) and `VR_UI_RENDER_ORDER` in `VrPanel.tsx`. The wrist HUD draws over the robot but **under** the panels (18 < 20), so a raised wrist can never hide a board button; buttons over plates, the camera strip over the screen, the ray and its hit marker (`VrUiRig.tsx`) over everything.
+- **Wrist HUD:** 17 cm off the back of the hand, 5 cm toward the wrist (grip space), billboarded to the eyes. Measured in the IWER neutral pose it sits above the board's top edge and left of the camera screen. The tracked-hand offset is unchanged (9 cm).
+- **Camera strip:** sits just above the screen's top edge, outside the picture (the stale badge keeps the inside). Priority is E-stop > session ended > REC > the 3 s verdict; "ended" was added for D4.
+- **Quick check (D3):** the board shows it until the next Start. The desktop `QuickCheckCard` used to dismiss the shared quick check after 8 s, which cleared the headset's copy too. The card now stays until Keep, a discard or the next Start (the auto-hide is opt-in through `visibleMs`). The store clears `lastQuickCheck` on `episode:started`.
+- **ENDED by:** the end event names no actor, so the bridge remembers the first desktop assistant in presence. The wearer has no End in VR, so an end they did not cause came from a desktop.
+- **Goodbye (D4):** the decision is made during render in `SessionDetailPage` (`endsUnderVr`), not in an effect. An effect runs after the commit that already unmounted the VR panel, and the immersive session ends with it. A page test checks for exactly that (no remount).
+- **FRAMES 0, root cause:** the server emits one last live state *after* `session:completed`. An ended session's live state counts 0 frames, and the store's `session:progress` handler copied that 0 over the final `frameCount`. The handler now only copies while the session records or is paused. As a fallback, `SessionCompleted` refetches while the count reads 0 but kept takes hold frames, and shows "…" meanwhile.
+- **Files outside the spec's list:** `VrUiRig.tsx` (ray render order), `vrUiRegistry.ts` (`strip` debug field), `VrScene.tsx` (wiring), `VRSessionPanel.tsx` (bridge fields), `QuickCheckCard.tsx` (D3).

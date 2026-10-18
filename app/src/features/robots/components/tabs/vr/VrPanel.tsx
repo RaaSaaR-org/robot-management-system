@@ -50,14 +50,15 @@ const DEFAULT_TITLE_COLOR = 'darkgray';
  * Draw order of the VR UI (TASK-418, D1). The robot model renders at the default
  * 0 with a depth test; every UI layer renders after it with NO depth test, so
  * an arm raised in front of a panel never hides it. Within the UI the order is
- * fixed: a button over its plate, the camera strip and the wrist HUD over the
- * panels, the ray and its hit marker over everything they point at.
+ * fixed: the wrist HUD lowest (a raised wrist never covers a button), a button
+ * over its plate, the camera strip over the screen, the ray and its hit marker
+ * over everything they point at.
  */
 export const VR_UI_RENDER_ORDER = {
+  hud: 18,
   panel: 20,
   button: 21,
   strip: 22,
-  hud: 25,
   ray: 30,
 } as const;
 

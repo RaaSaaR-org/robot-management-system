@@ -46,13 +46,15 @@ const HUD_PX_HEIGHT = 256;
  * re-checking on a real Quest before anyone treats the numbers as tuned.
  */
 /**
- * TASK-418: ON the wrist, not in front of it. Parked 5 cm out and 7 cm back the
- * plate floated into the forward view whenever the left hand was raised, right
- * over the session board. 3 cm off the back of the hand and 13 cm back along the
- * forearm it stays on the arm, and it is turned to face the eyes every frame
- * (the hand's billboard, below) rather than relying on a fixed pitch.
+ * TASK-418: ABOVE the wrist, like a watch face lifted toward the eyes, not in
+ * front of it. Parked 5 cm out and 7 cm back the plate floated in front of the
+ * session board whenever the left hand was held forward — in a 2064x2208 render
+ * of the neutral pose it covered the board's Start button. 10 cm off the back of
+ * the hand it sits above the board's top edge (≈ -12° below the eyes) and left of
+ * the camera screen, and it turns to face the eyes every frame (the billboard,
+ * below) rather than relying on a fixed pitch.
  */
-export const HUD_POSITION: [number, number, number] = [0, 0.03, 0.13];
+export const HUD_POSITION: [number, number, number] = [0, 0.17, 0.05];
 
 /**
  * And where it sits on a tracked HAND's wrist joint.
@@ -63,7 +65,7 @@ export const HUD_POSITION: [number, number, number] = [0, 0.03, 0.13];
  * here can check in a headset is how a panel ends up edge-on to the wearer.
  * A distance is a distance in any frame; a billboard needs no frame at all.
  */
-export const HUD_POSITION_HAND: [number, number, number] = [0, 0.05, 0];
+export const HUD_POSITION_HAND: [number, number, number] = [0, 0.09, 0];
 
 /** Scratch for the billboard, so the frame loop allocates nothing. */
 const FACING = new THREE.Vector3();
@@ -230,7 +232,8 @@ export function VrWristHud({
               // Drawn last and without a depth test: a status panel that
               // disappears when the operator's wrist passes behind the robot's
               // torso is a status panel that is missing at the moment they are
-              // reaching into something. Over the panels too (TASK-418).
+              // reaching into something. TASK-418: over the robot but UNDER the
+              // panels, so a raised wrist can never hide a board button.
               renderOrder={VR_UI_RENDER_ORDER.hud}
             >
               <planeGeometry args={[HUD_WIDTH_M, HUD_HEIGHT_M]} />

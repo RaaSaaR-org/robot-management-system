@@ -89,6 +89,13 @@ const BACK = { to: '/data-collection', label: 'Data collection' };
 /** TASK-418 (D4): how long the headset stays in VR after the session ended — enough to read "ended". */
 export const VR_GOODBYE_MS = 5_000;
 
+/** TASK-418 (D4): the session went from live to ended while this page's VR modal was open. */
+export function endsUnderVr(prevStatus: string | undefined, status: string | undefined, vrModalOpen: boolean): boolean {
+  const wasLive = prevStatus === 'created' || prevStatus === 'recording' || prevStatus === 'paused';
+  const ended = status === 'completed' || status === 'failed';
+  return vrModalOpen && wasLive && ended;
+}
+
 export function SessionDetailPage() {
   const { sessionId: id } = useParams<{ sessionId: string }>();
   const { session, isLoading, error, annotateSession, exportSession, fetchSession } = useSessionDetail(id!);
@@ -128,8 +135,6 @@ export function SessionDetailPage() {
    * ENDED and the camera strip "take the headset off" — then VR closes as before.
    */
   const [vrGoodbye, setVrGoodbye] = useState(false);
-  const vrModalOpenRef = useRef(false);
-  vrModalOpenRef.current = vrModalOpen;
 
   // Live progress via the app WebSocket; REST polling backs it up while it is down.
   const { isConnected: isWsConnected } = useTeleopEvents();
@@ -189,19 +194,20 @@ export function SessionDetailPage() {
   useEffect(() => { dismissQuickCheck(); }, [id, dismissQuickCheck]);
 
   // TASK-418: the session just ended under an open VR modal — the goodbye.
-  const wasLiveRef = useRef<{ id: string | undefined; live: boolean }>({ id: undefined, live: false });
+  // Decided DURING render (React's "adjust state on a prop change" pattern),
+  // not in an effect: an effect runs after the commit that already unmounted
+  // the VR panel, and the immersive session dies with it.
+  const [seenStatus, setSeenStatus] = useState<{ id: string | undefined; status: string | undefined }>({ id, status: sessionStatus });
+  if (seenStatus.id !== id || seenStatus.status !== sessionStatus) {
+    setSeenStatus({ id, status: sessionStatus });
+    if (seenStatus.id !== id) setVrGoodbye(false);
+    else if (endsUnderVr(seenStatus.status, sessionStatus, vrModalOpen)) setVrGoodbye(true);
+  }
   useEffect(() => {
-    const live = sessionStatus === 'created' || sessionStatus === 'recording' || sessionStatus === 'paused';
-    const ended = sessionStatus === 'completed' || sessionStatus === 'failed';
-    const was = wasLiveRef.current;
-    wasLiveRef.current = { id, live };
-    // Only a transition on the SAME session: opening an ended session is no goodbye.
-    if (was.id !== id) { setVrGoodbye(false); return; }
-    if (!was.live || !ended || !vrModalOpenRef.current) return;
-    setVrGoodbye(true);
+    if (!vrGoodbye) return;
     const timer = setTimeout(() => setVrGoodbye(false), VR_GOODBYE_MS);
     return () => clearTimeout(timer);
-  }, [id, sessionStatus]);
+  }, [vrGoodbye]);
 
   // Fallback polling while the WebSocket is down.
   useEffect(() => {

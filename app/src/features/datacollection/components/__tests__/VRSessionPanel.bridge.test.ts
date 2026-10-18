@@ -179,4 +179,17 @@ describe('createVrSessionBridge', () => {
     } as Parameters<ReturnType<typeof store>['handleTeleopEvent']>[0]);
     expect(store().selectedSession?.frameCount).toBe(42);
   });
+
+  it('keeps the quick check until the next Start, then drops it on both views (TASK-418 D3)', () => {
+    const qc = quickCheck({ take: 0 });
+    useDataCollectionStore.setState({ live: live({ take: 0, kept: 1, lastTake: qc }), lastQuickCheck: qc });
+    const bridge = createVrSessionBridge('s1');
+    expect(bridge.getState().lastQuickCheck?.takeNumber).toBe(1);
+    store().handleTeleopEvent({
+      type: 'teleop:episode:started',
+      data: { sessionId: 's1', take: 1, live: live({ phase: 'capturing', take: 1, kept: 1 }) },
+    } as Parameters<ReturnType<typeof store>['handleTeleopEvent']>[0]);
+    expect(store().lastQuickCheck).toBeNull();
+    expect(bridge.getState().lastQuickCheck).toBeNull();
+  });
 });
