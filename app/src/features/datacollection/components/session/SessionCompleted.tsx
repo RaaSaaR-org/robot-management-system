@@ -4,9 +4,13 @@
  *              packed into (or the way to create one), and the episode review
  *              table. Keeps the dataset-card / open-dataset / review-episodes /
  *              episode-input-N / session-warning test ids.
+ *              TASK-418: never FRAMES 0 for a session whose takes hold
+ *              frames — it refetches the session until the count is final and
+ *              shows "…" meanwhile.
  * @feature datacollection
  */
 
+import { useEffect, useState } from 'react';
 import { AlertTriangle, ArrowRight, Pencil } from 'lucide-react';
 import {
   Button, DataTable, KeyValueList, LinkButton, Panel, StatusTag, type DataTableColumn,
@@ -22,6 +26,45 @@ export interface SessionCompletedProps {
   episodes: EpisodeSummary[];
   onEditTask: () => void;
   onCreateDataset: () => void;
+  /**
+   * Refetch the session (TASK-418). Called while the session reads 0 frames but
+   * its kept takes hold some — the count is not final yet.
+   */
+  onRefetch?: () => Promise<unknown> | void;
+}
+
+/** How often, and how many times, an unfinished frame count is refetched. */
+export const FRAME_REFETCH_MS = 1_500;
+export const FRAME_REFETCH_TRIES = 8;
+
+/** Frames in the kept takes: what the session's own count must at least not deny. */
+export function keptEpisodeFrames(episodes: readonly EpisodeSummary[]): number {
+  return episodes.reduce((n, e) => (e.discarded ? n : n + (e.frameCount || 0)), 0);
+}
+
+/**
+ * Whether the session's frame count is still settling: it reads 0 while its
+ * kept takes hold frames. Refetched until it is not, at most `FRAME_REFETCH_TRIES`
+ * times — after that the server's 0 is the answer and is shown as such.
+ */
+export function useSettlingFrameCount(
+  session: Pick<TeleoperationSession, 'id' | 'frameCount'>,
+  episodes: readonly EpisodeSummary[],
+  onRefetch?: () => Promise<unknown> | void,
+): boolean {
+  const [tries, setTries] = useState(0);
+  const unsettled = session.frameCount === 0 && keptEpisodeFrames(episodes) > 0;
+  const settling = unsettled && !!onRefetch && tries < FRAME_REFETCH_TRIES;
+  useEffect(() => {
+    if (!settling) return;
+    const timer = setTimeout(() => {
+      setTries((n) => n + 1);
+      void Promise.resolve(onRefetch?.()).catch(() => { /* the next try, or the page's error state */ });
+    }, tries === 0 ? 0 : FRAME_REFETCH_MS);
+    return () => clearTimeout(timer);
+  }, [settling, tries, onRefetch]);
+  useEffect(() => setTries(0), [session.id]);
+  return settling;
 }
 
 const COLUMNS: DataTableColumn<EpisodeSummary>[] = [
@@ -49,7 +92,8 @@ const COLUMNS: DataTableColumn<EpisodeSummary>[] = [
   },
 ];
 
-export function SessionCompleted({ session, robotName, episodes, onEditTask, onCreateDataset }: SessionCompletedProps) {
+export function SessionCompleted({ session, robotName, episodes, onEditTask, onCreateDataset, onRefetch }: SessionCompletedProps) {
+  const framesSettling = useSettlingFrameCount(session, episodes, onRefetch);
   const sidecarPath = (session as unknown as Record<string, unknown>).sidecarDatasetPath;
   const datasetId = session.exportedDatasetId;
 
@@ -78,7 +122,12 @@ export function SessionCompleted({ session, robotName, episodes, onEditTask, onC
                 { label: 'Task', value: session.languageInstr || 'No description' },
                 { label: 'Robot', value: robotName },
                 { label: 'Duration', value: formatDuration(session.duration) },
-                { label: 'Frames', value: session.frameCount.toLocaleString(UI_DATE_LOCALE) },
+                {
+                  label: 'Frames',
+                  value: framesSettling
+                    ? <span data-testid="session-frames" title="Counting the frames the robot packed">…</span>
+                    : <span data-testid="session-frames">{session.frameCount.toLocaleString(UI_DATE_LOCALE)}</span>,
+                },
                 { label: 'Takes kept', value: episodes.filter((e) => !e.discarded).length },
                 { label: 'Frame rate', value: `${session.fps} fps` },
                 { label: 'Quality', value: session.qualityScore ? `${session.qualityScore}%` : 'Not computed' },
@@ -111,7 +160,7 @@ export function SessionCompleted({ session, robotName, episodes, onEditTask, onC
                   Open dataset
                 </LinkButton>
               </>
-            ) : session.frameCount === 0 ? (
+            ) : session.frameCount === 0 && !framesSettling ? (
               <>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium text-ink-primary">Nothing to package</span>

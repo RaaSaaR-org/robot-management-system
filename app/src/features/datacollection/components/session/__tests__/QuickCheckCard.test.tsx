@@ -78,7 +78,7 @@ describe('QuickCheckCard', () => {
     vi.useFakeTimers();
     const onDiscard = vi.fn();
     const onKeep = vi.fn();
-    render(<QuickCheckCard sessionId="s1" quickCheck={qc({ warnings: [warning] })} onKeep={onKeep} onDiscard={onDiscard} />);
+    render(<QuickCheckCard sessionId="s1" quickCheck={qc({ warnings: [warning] })} onKeep={onKeep} onDiscard={onDiscard} visibleMs={QUICK_CHECK_VISIBLE_MS} />);
     expect(screen.getByTestId('quick-check-discard')).toHaveFocus();
     expect(screen.getByTestId(`quick-check-warning-${warning}`)).toBeInTheDocument();
     act(() => { vi.advanceTimersByTime(QUICK_CHECK_VISIBLE_MS); });
@@ -86,10 +86,19 @@ describe('QuickCheckCard', () => {
     expect(onKeep).toHaveBeenCalledTimes(1);
   });
 
-  it('hides itself after 8 s, unless the pointer is on it', () => {
+  it('stays by default until Keep or the next Start, like the headset board (TASK-418 D3)', () => {
     vi.useFakeTimers();
     const onKeep = vi.fn();
     render(<QuickCheckCard sessionId="s1" quickCheck={qc()} onKeep={onKeep} onDiscard={vi.fn()} />);
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(onKeep).not.toHaveBeenCalled();
+    expect(screen.getByTestId('quick-check')).toBeInTheDocument();
+  });
+
+  it('with an opt-in auto-hide, hides itself after it, unless the pointer is on it', () => {
+    vi.useFakeTimers();
+    const onKeep = vi.fn();
+    render(<QuickCheckCard sessionId="s1" quickCheck={qc()} onKeep={onKeep} onDiscard={vi.fn()} visibleMs={QUICK_CHECK_VISIBLE_MS} />);
     fireEvent.mouseEnter(screen.getByTestId('quick-check'));
     act(() => { vi.advanceTimersByTime(QUICK_CHECK_VISIBLE_MS * 2); });
     expect(onKeep).not.toHaveBeenCalled();

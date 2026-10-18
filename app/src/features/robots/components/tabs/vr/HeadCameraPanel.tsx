@@ -6,6 +6,9 @@
  *              states the panel used to hide — a stream that never loaded, and a
  *              stream that stopped moving without ever saying so — and, since
  *              TASK-401, a way back from every failure rather than only one.
+ *              TASK-418: a strip along its top edge carries the take state —
+ *              REC, the latched E-stop, the verdict after a stop, the session's
+ *              end — and the frame turns red while recording or latched.
  * @feature robots
  */
 
@@ -29,6 +32,18 @@ import { useVrCameraStatus } from './vrCameraStatus';
 import { HAPTICS, pulsePreset, type HapticSource } from './vrHaptics';
 import { HUD_COLORS } from './vrHud';
 import { useTextPlate } from './VrTextPlate';
+import { VR_UI_MATERIAL, VR_UI_RENDER_ORDER } from './VrPanel';
+import { vrUiDebug } from './vrUiRegistry';
+import type { VrRigTelemetry } from './VrTeleopRig';
+import {
+  composeCameraStrip,
+  initialCameraStrip,
+  stepCameraStrip,
+  type CameraStrip,
+  type CameraStripMemory,
+  type CameraStripTone,
+  type VrSessionBridge,
+} from './vrSessionBridge';
 import {
   PANEL_ASPECT,
   PANEL_CAMERA,
@@ -133,6 +148,23 @@ const PLATE_PX_WIDTH = 1024;
 const PLATE_PX_HEIGHT = 768;
 const PLATE_LINE_PX = 72;
 
+/**
+ * The take strip (TASK-418): just above the screen's top edge, outside the
+ * picture, the screen's full width. Recomposed a few times a second.
+ */
+const STRIP_HEIGHT_M = 0.075;
+const STRIP_PX_WIDTH = 1024;
+const STRIP_PX_HEIGHT = 96;
+const STRIP_HZ = 8;
+const STRIP_LOOK: Record<CameraStripTone, { bg: string; text: string }> = {
+  rec: { bg: 'rgba(150,20,20,0.94)', text: 'white' },
+  estop: { bg: 'rgba(150,20,20,0.96)', text: 'white' },
+  ok: { bg: 'rgba(9,11,17,0.9)', text: 'palegreen' },
+  warn: { bg: 'rgba(9,11,17,0.9)', text: 'khaki' },
+  dim: { bg: 'rgba(9,11,17,0.9)', text: 'gainsboro' },
+  ended: { bg: 'rgba(9,11,17,0.94)', text: 'khaki' },
+};
+
 const TONE_COLOR: Record<PlateTone, string> = {
   bad: HUD_COLORS.bad,
   dim: HUD_COLORS.dim,
@@ -176,7 +208,19 @@ function fnv1a(bytes: Uint8ClampedArray): number {
  *    live picture of a stationary scene. `vrCamera.ts` classifies that; this
  *    file supplies the sample and shows the result.
  */
-export function HeadCameraPanel({ robotId }: { robotId: string }) {
+export interface HeadCameraPanelProps {
+  robotId: string;
+  /**
+   * The recording session (TASK-418), read from the frame loop like the board
+   * does — no subscription of its own. Absent on the robot page: the strip then
+   * shows only the latched E-stop.
+   */
+  vrSession?: VrSessionBridge;
+  /** The rig's telemetry, for the latched E-stop. */
+  telemetryRef?: { current: VrRigTelemetry };
+}
+
+export function HeadCameraPanel({ robotId, vrSession, telemetryRef }: HeadCameraPanelProps) {
   const lastUpload = useRef(0);
   /** Fingerprint of the frame currently on the GPU — see the upload gate. */
   const lastUploaded = useRef<number | undefined>(undefined);
@@ -187,6 +231,11 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
   // both controllers — on every single session start.
   const liveness = useRef<LivenessState | null>(null);
   const surroundRef = useRef<THREE.Mesh>(null);
+  const stripRef = useRef<THREE.Mesh>(null);
+  /** The strip's memory of the session, and what it last showed (TASK-418). */
+  const stripMemory = useRef<CameraStripMemory | null>(null);
+  const stripNow = useRef<CameraStrip | null>(null);
+  const lastStrip = useRef(-Infinity);
   const badgeRef = useRef<THREE.Mesh>(null);
   const left = useXRInputSourceState('controller', 'left');
   const right = useXRInputSourceState('controller', 'right');
@@ -195,6 +244,12 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     pxWidth: PLATE_PX_WIDTH,
     pxHeight: PLATE_PX_HEIGHT,
     linePx: PLATE_LINE_PX,
+    align: 'center',
+  });
+  const stripPlate = useTextPlate({
+    pxWidth: STRIP_PX_WIDTH,
+    pxHeight: STRIP_PX_HEIGHT,
+    linePx: 80,
     align: 'center',
   });
   const badgePlate = useTextPlate({
@@ -289,6 +344,33 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
   useFrame((state) => {
     const now = state.clock.elapsedTime;
 
+    // TASK-418: the take strip, before any early return below — it must speak
+    // even while the picture is offline or connecting.
+    if (now - lastStrip.current >= 1 / STRIP_HZ) {
+      lastStrip.current = now;
+      const view = vrSession?.getState() ?? null;
+      const nowMs = Date.now();
+      if (view) {
+        stripMemory.current = stripMemory.current
+          ? stepCameraStrip(stripMemory.current, view, nowMs)
+          : initialCameraStrip(view);
+      }
+      const strip = composeCameraStrip(view, telemetryRef?.current.estopLatched === true, stripMemory.current, nowMs);
+      stripNow.current = strip;
+      if (import.meta.env.DEV) vrUiDebug.strip = strip?.text ?? '';
+      if (stripRef.current) stripRef.current.visible = strip !== null;
+      if (strip) {
+        const look = STRIP_LOOK[strip.tone];
+        stripPlate.draw([{ id: 'strip', text: strip.text, color: look.text, bold: true }], { background: look.bg });
+      }
+      const surround = surroundRef.current;
+      if (surround) {
+        (surround.material as THREE.MeshBasicMaterial).color.set(
+          strip?.redFrame || staleNow.current ? HUD_COLORS.bad : readCssColor('--color-primary', 'white'),
+        );
+      }
+    }
+
     // Rate-limited AND change-gated. The rate limit alone was the behaviour
     // `vrCamera.ts` names as the reason it exists: 20 uploads a second of a
     // ~14 fps stream re-pushed the same 1.2 MB of RGBA about six times a second
@@ -355,7 +437,7 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     const surround = surroundRef.current;
     if (surround) {
       (surround.material as THREE.MeshBasicMaterial).color.set(
-        isStale ? HUD_COLORS.bad : readCssColor('--color-primary', 'white'),
+        isStale || stripNow.current?.redFrame ? HUD_COLORS.bad : readCssColor('--color-primary', 'white'),
       );
     }
     const badge = badgeRef.current;
@@ -432,6 +514,18 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
         <planeGeometry args={[PANEL_WIDTH_M + 0.03, PANEL_TALL_M + 0.03]} />
         <meshBasicMaterial color={readCssColor('--color-primary', 'white')} />
       </mesh>
+      {stripPlate.texture && (
+        <mesh
+          ref={stripRef}
+          visible={false}
+          position={[0, PANEL_TALL_M / 2 + 0.015 + STRIP_HEIGHT_M / 2 + 0.006, 0.002]}
+          renderOrder={VR_UI_RENDER_ORDER.strip}
+          name="vr-camera-strip"
+        >
+          <planeGeometry args={[PANEL_WIDTH_M + 0.03, STRIP_HEIGHT_M]} />
+          <meshBasicMaterial map={stripPlate.texture} {...VR_UI_MATERIAL} />
+        </mesh>
+      )}
       {badgePlate.texture && (
         <mesh
           ref={badgeRef}

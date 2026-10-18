@@ -33,9 +33,14 @@ import { vrUiDebug } from './vrUiRegistry';
 export const ROBOT_PANEL_WIDTH_M = 0.5;
 export const ROBOT_PANEL_HEIGHT_M = 0.32;
 const TEXT_HEIGHT_M = 0.244;
-/** Distance from the head, and bearing right of the robot's forward. */
+/**
+ * Distance from the head, and bearing right of the robot's forward. TASK-418:
+ * 40°, not 30° — at 30° the panels' top inner corners covered the camera
+ * screen's bottom corners, which is exactly where the grippers appear.
+ */
 const DISTANCE_M = 0.9;
-const BEARING_RAD = (30 * Math.PI) / 180;
+export const SIDE_PANEL_BEARING_RAD = (40 * Math.PI) / 180;
+const BEARING_RAD = SIDE_PANEL_BEARING_RAD;
 /**
  * Height of the panel's centre in the robot's (centred) model frame. The G1's
  * eyes sit at about +0.43 (`EYE_BELOW_CROWN_M`) and the head-camera screen spans
@@ -62,7 +67,7 @@ export function sidePanelPlacement(bearingRad: number): { position: [number, num
   return { position: [x, CENTRE_Y_M, z], rotation: new THREE.Euler(pitch, yaw, 0, 'YXZ') };
 }
 
-/** The robot panel: 30° to the right. The session board mirrors it on the left (TASK-413, D3). */
+/** The robot panel: 40° to the right. The session board mirrors it on the left (TASK-413, D3). */
 export function robotPanelPlacement(): { position: [number, number, number]; rotation: THREE.Euler } {
   return sidePanelPlacement(BEARING_RAD);
 }
