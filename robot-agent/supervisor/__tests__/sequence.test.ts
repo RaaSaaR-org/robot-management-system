@@ -197,7 +197,7 @@ describe('start sequence', () => {
     expect(step(left, 'agent').detail).toContain('left alone');
 
     // adopt: the sequence uses it as the agent, still never signals it
-    h.sup.adopt('agent');
+    await h.sup.adopt('agent');
     const adopted = await startAndWait(h);
     expect(adopted.overall).toBe('ready');
     expect(step(adopted, 'agent')).toMatchObject({ state: 'ok', owned: false, pid });
@@ -274,7 +274,7 @@ describe('start sequence', () => {
     write();
     let st = await startAndWait(h);
     expect(step(st, 'link')).toMatchObject({ state: 'failed', code: 'no_carrier' });
-    expect(step(st, 'link').detail).toContain('robot cable unplugged or robot off');
+    expect(step(st, 'link').detail).toMatch(/^Robot cable unplugged or robot off \(enp9s9 no carrier\)\./);
     expect(step(st, 'bridge').pid).toBeNull();
     expect(pings).toEqual([]);
     expect(nmcli).toEqual([]); // never brought up automatically

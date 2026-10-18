@@ -9,12 +9,12 @@
  */
 
 import { useState, type ReactNode } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, Circle, HelpCircle, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Circle, Copy, HelpCircle, XCircle } from 'lucide-react';
 import { Button } from '@/shared/components/ui/Button';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import { cn } from '@/shared/utils/cn';
-import type { BringupStepId } from '../../api/readinessApi';
-import type { ReadinessRowModel, RowStatus } from './readinessRows';
+import { staleCodeOf, type BringupStepId } from '../../api/readinessApi';
+import { shortDateTime, type ReadinessRowModel, type RowStatus } from './readinessRows';
 
 const ICON: Record<Exclude<RowStatus, 'pending'>, { icon: typeof Circle; className: string; label: string }> = {
   ok: { icon: CheckCircle2, className: 'text-signal-measured', label: 'ok' },
@@ -33,6 +33,18 @@ export function ageText(iso: string | null | undefined, now: number = Date.now()
   if (s < 90) return `${s} s`;
   if (s < 90 * 60) return `${Math.round(s / 60)} min`;
   return `${Math.round(s / 3600)} h`;
+}
+
+/** The last two segments of a working directory, e.g. `robot-management-system/robot-agent/`. */
+export function shortCwd(cwd: string | null | undefined): string | null {
+  if (!cwd) return null;
+  const parts = cwd.split('/').filter(Boolean);
+  return parts.length ? `${parts.slice(-2).join('/')}/` : '/';
+}
+
+/** The one terminal step left (TASK-419): stop a process NeoDEM did not start. SIGTERM, never -9. */
+export function stopCommand(pid: number | null | undefined): string | null {
+  return pid && pid > 0 ? `kill -TERM ${pid}` : null;
 }
 
 export interface ReadinessRowProps {
@@ -55,7 +67,13 @@ export function ReadinessRow({ row, highlighted = false, onAdopt, onLeave, busy 
   const icon = row.status === 'pending' ? null : ICON[row.status];
   const Icon = icon?.icon;
   const detail = row.detail;
-  const actions = foreign ? foreign.actions ?? ['adopt', 'leave'] : [];
+  const stale = foreign ? staleCodeOf(foreign) : null;
+  // A process that runs older code is never adopted, whatever the supervisor offers.
+  const actions = (foreign ? foreign.actions ?? ['adopt', 'leave'] : []).filter((a) => !(stale && a === 'adopt'));
+  const startedAt = foreign ? foreign.foreign?.since ?? foreign.startedAt : null;
+  const cwd = foreign ? shortCwd(foreign.foreign?.cwd) : null;
+  const stop = foreign && stale ? stopCommand(foreign.foreign?.pid ?? foreign.pid) : null;
+  const [copied, setCopied] = useState(false);
 
   return (
     <li
@@ -103,11 +121,44 @@ export function ReadinessRow({ row, highlighted = false, onAdopt, onLeave, busy 
                 <span className="break-all font-mono">{foreign.foreign.cmdline.join(' ')}</span>
               </>
             )}
-            {' · running '}
-            {ageText(foreign.foreign?.since ?? foreign.startedAt)}
+            {' · started '}
+            <span data-testid={`readiness-foreign-started-${foreign.id}`}>{shortDateTime(startedAt)}</span>
+            {` (${ageText(startedAt)} ago)`}
+            {cwd && (
+              <>
+                {' · '}
+                <span className="font-mono" title={foreign.foreign?.cwd ?? undefined}>
+                  {cwd}
+                </span>
+              </>
+            )}
+            {foreign.foreign?.robotId ? ` · robot ${foreign.foreign.robotId}` : ''}
           </p>
+          {stale && (
+            <div className="flex w-full flex-wrap items-center gap-2" data-testid={`readiness-stale-${foreign.id}`}>
+              <p className="text-[12px] font-medium text-signal-stopped">
+                Runs code from before {shortDateTime(stale.codeAt)}. Stop it, then press Start.
+              </p>
+              {stop && (
+                <span className="flex items-center gap-1">
+                  <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-[12px] text-ink-primary">{stop}</code>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    leftIcon={<Copy className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(stop).then(() => setCopied(true), () => setCopied(false));
+                    }}
+                    data-testid={`readiness-stale-copy-${foreign.id}`}
+                  >
+                    {copied ? 'Copied' : 'Copy'}
+                  </Button>
+                </span>
+              )}
+            </div>
+          )}
           {actions.includes('adopt') && onAdopt && (
-            <Button size="sm" variant="secondary" disabled={busy} onClick={() => onAdopt(foreign.id)}>
+            <Button size="sm" variant="secondary" disabled={busy} onClick={() => onAdopt(foreign.id)} data-testid={`readiness-adopt-${foreign.id}`}>
               Adopt
             </Button>
           )}

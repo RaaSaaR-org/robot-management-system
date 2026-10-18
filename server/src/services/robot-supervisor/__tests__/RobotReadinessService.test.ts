@@ -207,8 +207,89 @@ describe('mergeReason order', () => {
     expect(mergeReason(s, supOk, agentDown).text.length).toBeLessThanOrEqual(72);
   });
 
-  it('an agent without a readiness route → agent_no_readiness', () => {
-    expect(mergeReason(null, null, { reachable: true, error: 'HTTP 404', readiness: null }).code).toBe('agent_no_readiness');
+  it('an agent that sent no usable readiness report → agent_no_readiness', () => {
+    expect(mergeReason(null, null, { reachable: true, error: 'HTTP 500', readiness: null }).code).toBe('agent_no_readiness');
+  });
+
+  it('an outdated agent (health ok, no readiness route) → agent_outdated, block', () => {
+    expect(mergeReason(supStatus('ready', 'ok'), supOk, { reachable: true, error: 'HTTP 404', readiness: null, outdated: true })).toEqual({
+      code: 'agent_outdated',
+      severity: 'block',
+      text: 'The robot agent runs older code than NeoDEM. Restart the robot side.',
+      source: 'server',
+    });
+  });
+
+  it('the supervisor\'s staleCode on an owned step → agent_outdated, ahead of the agent line', () => {
+    const stale = { startedAt: '2026-10-17T15:21:00.000Z', codeAt: '2026-10-18T09:00:00.000Z' };
+    const s = supStatus('ready', 'ok', { agent: step('agent', 'warn', { code: 'stale_code', checks: { staleCode: stale } }) });
+    expect(mergeReason(s, supOk, agentUp)).toMatchObject({
+      code: 'agent_outdated',
+      severity: 'block',
+      text: 'The robot agent runs older code than NeoDEM. Restart the robot side.',
+    });
+  });
+
+  it('a stale foreign agent → agent_outdated naming its pid, ahead of the failed preflight', () => {
+    const stale = { startedAt: '2026-10-17T15:21:00.000Z', codeAt: '2026-10-18T09:00:00.000Z' };
+    const s = supStatus('error', 'idle', {
+      preflight: step('preflight', 'failed', { code: 'foreign_process', detail: 'Old processes hold :41299 agent — see the rows. More.' }),
+      agent: step('agent', 'foreign', {
+        code: 'stale_code',
+        foreign: { pid: 4242, cmdline: null, since: stale.startedAt, port: 41299, cwd: '/old/robot-agent', robotId: null, staleCode: stale },
+        actions: ['leave'],
+      }),
+    });
+    const r = mergeReason(s, supOk, agentDown);
+    expect(r).toMatchObject({ code: 'agent_outdated', severity: 'block' });
+    expect(r.text).toBe('An old robot agent (pid 4242) runs older code. Stop it, then Start.');
+    expect(r.text.length).toBeLessThanOrEqual(72);
+  });
+
+  it('the cable and foreign texts keep their meaning at 72 characters, never cut mid-word', () => {
+    const cable = supStatus('error', 'idle', {
+      link: step('link', 'failed', { detail: 'Robot cable unplugged or robot off (enp131s0 no carrier). Interface operstate: down.' }),
+    });
+    expect(mergeReason(cable, supOk, agentDown).text).toBe('Robot cable unplugged or robot off (enp131s0 no carrier).');
+    const foreign = supStatus('error', 'idle', {
+      preflight: step('preflight', 'failed', {
+        detail: 'Old processes hold :6001 bridge, :41245 agent — see the rows. The supervisor did not start them and never kills them: adopt one (use it as is) or leave it and stop it by hand, then start again.',
+      }),
+    });
+    expect(mergeReason(foreign, supOk, agentDown).text).toBe('Old processes hold :6001 bridge, :41245 agent — see the rows.');
+  });
+
+  it('clips a long sentence at a word boundary', () => {
+    const s = supStatus('error', 'idle', { link: step('link', 'failed', { detail: 'word '.repeat(40) }) });
+    const text = mergeReason(s, supOk, agentDown).text;
+    expect(text.length).toBeLessThanOrEqual(72);
+    expect(text).toMatch(/ word…$/);
+  });
+});
+
+describe('outdated agent over HTTP (TASK-419)', () => {
+  it('health ok + readiness 404 → agent_outdated', async () => {
+    const agent = await fakeAgent({ readiness: null, outdated: true });
+    servers.push(agent);
+    expect(await readAgentReadiness(agent.url, ROBOT)).toEqual({ kind: 'outdated' });
+    const service = new RobotReadinessService({
+      supervisedRobots: () => [],
+      readSupervisor: async () => ({ kind: 'error', error: 'none' }),
+      registeredAgentUrl: async () => agent.url,
+      supervisorAgentUrl: () => null,
+      readAgent: readAgentReadiness,
+      register: async () => undefined,
+    });
+    const snap = await service.poll(ROBOT);
+    expect(snap.reason).toMatchObject({ code: 'agent_outdated', severity: 'block', source: 'server' });
+    expect(snap.agent).toMatchObject({ reachable: true, readiness: null, outdated: true });
+    service.stop();
+  });
+
+  it('a current agent that does not serve this robot (404 ROBOT_NOT_FOUND) is not outdated', async () => {
+    const agent = await fakeAgent({ readiness: null, fail: 404 });
+    servers.push(agent);
+    expect(await readAgentReadiness(agent.url, ROBOT)).toEqual({ kind: 'bad_status', status: 404 });
   });
 });
 

@@ -32,10 +32,41 @@ export interface BringupStep {
   pid: number | null;
   startedAt: string | null;
   detail: string | null;
-  checks: Record<string, boolean | number | string | null>;
+  checks: Record<string, boolean | number | string | null | StaleCode>;
   code?: string | null;
-  foreign?: { pid: number | null; cmdline: string[] | null; since: string | null; port: number } | null;
+  foreign?: {
+    pid: number | null;
+    cmdline: string[] | null;
+    since: string | null;
+    port: number;
+    /** TASK-419: its working directory and the robot id it names, when readable. */
+    cwd?: string | null;
+    robotId?: string | null;
+    /** TASK-419: it started before the code it runs; it cannot be adopted. */
+    staleCode?: StaleCode | null;
+  } | null;
   actions?: Array<'adopt' | 'leave'>;
+}
+
+/** A robot-side process that started before the code it should run (TASK-419). */
+export interface StaleCode {
+  startedAt: string;
+  codeAt: string;
+}
+
+export function isStaleCode(v: unknown): v is StaleCode {
+  return typeof v === 'object' && v !== null
+    && typeof (v as StaleCode).startedAt === 'string'
+    && typeof (v as StaleCode).codeAt === 'string';
+}
+
+/** The stale-code verdict of a step, owned (`checks`) or foreign. */
+export function staleCodeOf(step: BringupStep | null | undefined): StaleCode | null {
+  if (!step) return null;
+  const foreign = step.foreign?.staleCode;
+  if (isStaleCode(foreign)) return foreign;
+  const owned = step.checks?.staleCode;
+  return isStaleCode(owned) ? owned : null;
 }
 
 export interface BringupStatus {
@@ -146,7 +177,8 @@ export interface ReadinessReason {
 export interface RobotReadiness {
   robotId: string;
   at: string;
-  agent: { reachable: boolean; error: string | null; readiness: AgentReadiness | null };
+  /** `outdated`: it answers /health but has no readiness route — older code (TASK-419). */
+  agent: { reachable: boolean; error: string | null; readiness: AgentReadiness | null; outdated?: boolean };
   /** Null when the robot has no supervisor, or it did not answer. */
   bringup: BringupStatus | null;
   /** Null when the robot has no supervisor configured. */

@@ -18,6 +18,7 @@ import type {
   QuestReport,
   RobotReadiness,
 } from '../../api/readinessApi';
+import { staleCodeOf } from '../../api/readinessApi';
 
 export type RowId =
   | 'preflight'
@@ -91,6 +92,32 @@ function stepFallbackDetail(step: BringupStep): string | null {
     return `pid ${step.foreign.pid ?? '?'} holds port ${step.foreign.port}`;
   }
   return step.detail;
+}
+
+/** "2026-10-17 17:21" in local time. */
+export function shortDateTime(iso: string | null | undefined): string {
+  if (!iso) return 'an unknown time';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * A process that runs older code than this checkout (TASK-419) fails its row,
+ * whatever else it reports: the day must not run on yesterday's code.
+ */
+function markStale(row: ReadinessRowModel): ReadinessRowModel {
+  const stale = staleCodeOf(row.step);
+  if (!stale) return row;
+  return {
+    ...row,
+    status: 'fail',
+    value: `runs code from before ${shortDateTime(stale.codeAt)}`,
+    detail: row.step?.state === 'foreign'
+      ? `Started ${shortDateTime(stale.startedAt)}, before the code it should run changed. Stop it, then press Start.`
+      : `Started ${shortDateTime(stale.startedAt)}, before the code it runs changed. Stop and Start the robot side.`,
+  };
 }
 
 function linkRow(r: RobotReadiness): ReadinessRowModel | null {
@@ -205,7 +232,9 @@ function sidecarRow(r: RobotReadiness, a: AgentReadiness | null): ReadinessRowMo
 
 function agentRow(r: RobotReadiness, a: AgentReadiness | null): ReadinessRowModel {
   const step = stepOf(r, 'agent');
-  if (step && (step.state === 'running' || step.state === 'failed' || step.state === 'foreign' || step.state === 'idle') && !r.agent.reachable) {
+  // A foreign agent may well answer (an old one does): its row is the process.
+  const foreign = step?.state === 'foreign';
+  if (step && (foreign || ((step.state === 'running' || step.state === 'failed' || step.state === 'idle') && !r.agent.reachable))) {
     return {
       id: 'agent',
       label: 'Agent',
@@ -219,6 +248,17 @@ function agentRow(r: RobotReadiness, a: AgentReadiness | null): ReadinessRowMode
   if (!r.agent.reachable) {
     return {
       id: 'agent', label: 'Agent', status: 'fail', value: 'not answering', detail: r.agent.error, bringup: false, step,
+    };
+  }
+  if (!a && r.agent.outdated) {
+    return {
+      id: 'agent',
+      label: 'Agent',
+      status: 'fail',
+      value: 'older code than NeoDEM',
+      detail: 'The agent answers, but has no readiness route: it runs code from before this NeoDEM. Stop and Start the robot side.',
+      bringup: false,
+      step,
     };
   }
   if (!a) {
@@ -473,9 +513,7 @@ export function readinessRows(r: RobotReadiness, questPort = 1420): ReadinessRow
   const rows: Array<ReadinessRowModel | null> = [
     preflightRow(r),
     linkRow(r),
-    bridgeRow(r),
-    sidecarRow(r, a),
-    agentRow(r, a),
+    ...[bridgeRow(r), sidecarRow(r, a), agentRow(r, a)].map((row) => (row ? markStale(row) : null)),
     modeRow(a),
     armsRow(a),
     handRow(a, 'left'),
@@ -522,6 +560,10 @@ export function reasonRow(r: RobotReadiness): RowId | null {
   if (code === 'bringup_busy') {
     const running = r.bringup?.steps.find((s) => s.state === 'running');
     return running ? STEP_ROW[running.id] : null;
+  }
+  if (code === 'agent_outdated') {
+    const stale = r.bringup?.steps.find((s) => staleCodeOf(s) !== null);
+    return stale ? STEP_ROW[stale.id] : 'agent';
   }
   if (code === 'supervisor_unreachable' || code === 'agent_unreachable' || code === 'agent_no_readiness') return 'agent';
   if (code === 'hand_missing' || code === 'hand_fault') {
