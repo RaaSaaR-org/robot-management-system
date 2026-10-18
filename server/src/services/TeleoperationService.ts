@@ -1618,6 +1618,11 @@ export class TeleoperationService extends EventEmitter {
    * quick check and say so as `episode:stopped` by `auto`. Called by the
    * poller and by an action's prelude; the seen-mark is set before the first
    * await, so only one of them ever reports a given stop.
+   *
+   * An `estop` stop (TASK-416 D4) is the agent aborting the take because an
+   * emergency stop latched; it discarded the take as it ended it. The row is
+   * flagged discarded too and `episode:discarded` (by `auto`, reason `estop`)
+   * follows the stop, so every view shows the take stopped AND discarded.
    */
   private async reportUnseenStop(sessionId: string, live: LiveState, agent: AgentRecordingStatus): Promise<void> {
     const stop = agent.lastStop ?? null;
@@ -1633,6 +1638,14 @@ export class TeleoperationService extends EventEmitter {
       reason: stop.reason,
       by: AUTO_ACTOR,
     });
+    if (stop.reason === 'estop') {
+      await this.markTakeDiscarded(sessionId, stop.episodeIndex);
+      this.emitEpisode('episode:discarded', sessionId, live, {
+        take: stop.episodeIndex,
+        reason: 'estop',
+        by: AUTO_ACTOR,
+      });
+    }
   }
 
   private async persistTakeStart(sessionId: string, take: number, startedAtMs: number, by: EpisodeActor): Promise<void> {

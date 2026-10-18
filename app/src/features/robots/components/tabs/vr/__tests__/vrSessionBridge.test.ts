@@ -141,6 +141,18 @@ describe('composeSessionBoard', () => {
     expect(composeSessionBoard(v, 10_000, null)).toHaveLength(3);
   });
 
+  it('says a take the E-stop aborted was discarded (TASK-416)', () => {
+    const qc = { take: 10, frames: 0, durationS: 4.2, groupsMoved: [], warnings: ['short'], discarded: true, stopReason: 'estop' };
+    const v = view({ live: live({ phase: 'between' }), lastQuickCheck: qc });
+    expect(v.lastQuickCheck).toMatchObject({ takeNumber: 11, estopDiscarded: true });
+    const lines = composeSessionBoard(v, 10_000, 9_000);
+    expect(lines[0].text).toBe('READY  Take 8 next');
+    expect(lines[3]).toMatchObject({ text: 'Take 11 stopped by the E-stop — discarded', color: BOARD_COLORS.warn });
+    expect(lines).toHaveLength(4);
+    // Any other discarded take still leaves the board.
+    expect(view({ lastQuickCheck: { ...qc, stopReason: 'operator' } }).lastQuickCheck).toBeNull();
+  });
+
   it('puts the warnings on line 5 in place of "looks good"', () => {
     const qc = { take: 2, frames: 30, durationS: 1, groupsMoved: [], warnings: ['short', 'no_motion'], discarded: false };
     const lines = composeSessionBoard(view({ lastQuickCheck: qc }), 0, 0);

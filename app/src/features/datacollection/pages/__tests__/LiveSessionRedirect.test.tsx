@@ -1,7 +1,9 @@
 /**
  * @file LiveSessionRedirect.test.tsx
- * @description `/data-collection/live?robot=<id>` (TASK-412) against MSW: it
- *              replaces itself with the robot's newest live session, waits
+ * @description `/data-collection/live?robot=<id>` (TASK-412, TASK-416) against
+ *              MSW: `liveCandidates` drops READY sessions older than 4 h; the
+ *              page replaces itself with the single candidate, lists several
+ *              instead of guessing, names a stale one it ignores, waits
  *              ("No live session for <robot>. Waiting…") and follows a session
  *              created after it opened, ignores other robots' and finished
  *              sessions, and keeps trying after a failed read.
@@ -14,7 +16,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/mocks/server';
 import { resetLiveSessionDemo } from '@/mocks/liveSessionDemoHandlers';
-import { LiveSessionRedirect, newestLiveSession } from '../LiveSessionRedirect';
+import { LIVE_CREATED_MAX_AGE_MS, LiveSessionRedirect, liveCandidates } from '../LiveSessionRedirect';
 import type { TeleoperationSession } from '../../types/datacollection.types';
 
 const ROBOT = 'g1-edu-4';
@@ -48,29 +50,66 @@ beforeEach(() => {
   resetLiveSessionDemo();
 });
 
-describe('newestLiveSession', () => {
-  it('takes the newest created/recording/paused session of that robot only', () => {
-    const list = [
-      session('old', ROBOT, 'recording', '2026-10-18T08:00:00Z'),
-      session('done', ROBOT, 'completed', '2026-10-18T11:00:00Z'),
-      session('other', 'sim-1', 'created', '2026-10-18T12:00:00Z'),
-      session('new', ROBOT, 'created', '2026-10-18T10:00:00Z'),
-    ];
-    expect(newestLiveSession(list, ROBOT)?.id).toBe('new');
-    expect(newestLiveSession(list.slice(1, 3), ROBOT)).toBeNull();
+const NOW = Date.parse('2026-10-18T12:00:00Z');
+const ago = (ms: number) => new Date(NOW - ms).toISOString();
+const MIN = 60_000;
+const DAY = 24 * 60 * MIN;
+
+describe('liveCandidates', () => {
+  it('ignores a 2-day-old created session', () => {
+    const r = liveCandidates([session('appely', ROBOT, 'created', ago(2 * DAY))], ROBOT, NOW);
+    expect(r.candidates).toEqual([]);
+    expect(r.ignored.map((s) => s.id)).toEqual(['appely']);
+  });
+
+  it('keeps a 2-day-old recording (and paused) session', () => {
+    const r = liveCandidates(
+      [session('rec', ROBOT, 'recording', ago(2 * DAY)), session('pau', 'sim-1', 'paused', ago(2 * DAY))],
+      ROBOT,
+      NOW,
+    );
+    expect(r.candidates.map((s) => s.id)).toEqual(['rec']);
+    expect(r.ignored).toEqual([]);
+  });
+
+  it('returns two fresh candidates newest first, so the page lists them', () => {
+    const r = liveCandidates(
+      [
+        session('older', ROBOT, 'paused', ago(30 * MIN)),
+        session('newer', ROBOT, 'created', ago(5 * MIN)),
+        session('stale', ROBOT, 'created', ago(LIVE_CREATED_MAX_AGE_MS + MIN)),
+      ],
+      ROBOT,
+      NOW,
+    );
+    expect(r.candidates.map((s) => s.id)).toEqual(['newer', 'older']);
+    expect(r.ignored.map((s) => s.id)).toEqual(['stale']);
+  });
+
+  it('returns exactly one candidate when only one counts, so the page redirects', () => {
+    const r = liveCandidates(
+      [
+        session('one', ROBOT, 'created', ago(LIVE_CREATED_MAX_AGE_MS - MIN)),
+        session('done', ROBOT, 'completed', ago(MIN)),
+        session('other', 'sim-1', 'created', ago(MIN)),
+      ],
+      ROBOT,
+      NOW,
+    );
+    expect(r.candidates.map((s) => s.id)).toEqual(['one']);
   });
 });
 
 describe('LiveSessionRedirect', () => {
-  it('replaces itself with the newest live session and asks only for live statuses', async () => {
+  it('replaces itself with the single live session and asks only for live statuses', async () => {
     const asked: URLSearchParams[] = [];
     server.use(
       http.get('/api/teleoperation/sessions', ({ request }) => {
         asked.push(new URL(request.url).searchParams);
         return HttpResponse.json({
           sessions: [
-            session('s-old', ROBOT, 'recording', '2026-10-18T08:00:00Z'),
-            session('s-new', ROBOT, 'created', '2026-10-18T09:00:00Z'),
+            session('s-stale', ROBOT, 'created', new Date(Date.now() - 2 * DAY).toISOString()),
+            session('s-new', ROBOT, 'created', new Date(Date.now() - 2 * MIN).toISOString()),
           ],
           pagination: { page: 1, limit: 20, total: 2, totalPages: 1 },
         });
@@ -102,6 +141,53 @@ describe('LiveSessionRedirect', () => {
       made = ((await res.json()) as { session: TeleoperationSession }).session;
     });
     await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent(`/data-collection/${made.id}`));
+  });
+
+  it('lists several live sessions instead of guessing, and opens the one tapped', async () => {
+    server.use(
+      http.get('/api/teleoperation/sessions', () =>
+        HttpResponse.json({
+          sessions: [
+            { ...session('s-a', ROBOT, 'recording', new Date(Date.now() - 40 * MIN).toISOString()), languageInstr: 'pick the apple' },
+            { ...session('s-b', ROBOT, 'created', new Date(Date.now() - 12 * MIN).toISOString()), languageInstr: 'stack cups' },
+          ],
+          pagination: {},
+        }),
+      ),
+    );
+    renderAt(`/data-collection/live?robot=${ROBOT}`);
+    await waitFor(() => expect(screen.getByTestId('live-session-status')).toHaveAttribute('data-state', 'choose'));
+    const choices = screen.getAllByTestId('live-session-choice');
+    expect(choices.map((c) => c.getAttribute('data-session-id'))).toEqual(['s-b', 's-a']);
+    expect(choices[0]).toHaveTextContent('Stack cups');
+    expect(choices[0]).toHaveTextContent('created 12m ago');
+    // It keeps polling while the list is up, and never jumps on its own.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 150));
+    });
+    expect(screen.queryByTestId('where')).toBeNull();
+    await act(async () => {
+      choices[1].click();
+    });
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/data-collection/s-a'));
+  });
+
+  it('waits past a stale READY session and names it', async () => {
+    server.use(
+      http.get('/api/teleoperation/sessions', () =>
+        HttpResponse.json({
+          sessions: [{ ...session('appely', ROBOT, 'created', new Date(Date.now() - 2 * DAY).toISOString()), languageInstr: 'Appely' }],
+          pagination: {},
+        }),
+      ),
+    );
+    renderAt(`/data-collection/live?robot=${ROBOT}`);
+    await waitFor(() =>
+      expect(screen.getByTestId('live-session-ignored')).toHaveTextContent(
+        "Ignoring ‘Appely’ (created 2d ago, never started). End it on the desktop if it is not needed.",
+      ),
+    );
+    expect(screen.queryByTestId('where')).toBeNull();
   });
 
   it('keeps trying after a failed read', async () => {

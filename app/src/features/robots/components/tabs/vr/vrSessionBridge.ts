@@ -34,6 +34,8 @@ export interface VrQuickCheckView {
   groups: string[];
   /** "Short", "No motion" … — empty when the take looks good. */
   warnings: string[];
+  /** TASK-416: the robot ended this take on an E-stop and discarded it. */
+  estopDiscarded?: boolean;
 }
 
 /** The session, read by the board, the wrist HUD and the stick shortcuts. */
@@ -139,6 +141,8 @@ export interface VrQuickCheckInput {
   groupsMoved: string[];
   warnings: string[];
   discarded: boolean;
+  /** Why the take ended; `estop` keeps a discarded take on the board (TASK-416). */
+  stopReason?: string | null;
 }
 
 export interface VrSessionInput {
@@ -204,13 +208,14 @@ export function buildVrSessionView(
     fpsActual: finiteOr(live?.fpsActual, null),
     degraded: live?.degraded === true,
     autoStopInS: capturing && autoStopS && takeElapsedS !== null ? Math.max(0, autoStopS - takeElapsedS) : null,
-    lastQuickCheck: qc && !qc.discarded
+    lastQuickCheck: qc && (!qc.discarded || qc.stopReason === 'estop')
       ? {
         takeNumber: qc.take + 1,
         durationS: qc.durationS,
         frames: qc.frames,
         groups: qc.groupsMoved.map(labelers.group),
         warnings: qc.warnings.map(labelers.warning),
+        ...(qc.discarded ? { estopDiscarded: true } : {}),
       }
       : null,
     pending: input.pending,
@@ -281,7 +286,8 @@ function statusLine(view: VrSessionView, nowMs: number): BoardLine {
  *   1. `● REC  Take 7   00:42` / `READY  Take 8 next` / `PAUSED` / `ENDED`
  *   2. `707 fr · 30 fps · OK · auto-stop 12 s`
  *   3. `kept 6 · discarded 1`
- *   4–5. for `QUICK_CHECK_SHOW_MS` after a stop: the take and its warnings.
+ *   4–5. for `QUICK_CHECK_SHOW_MS` after a stop: the take and its warnings —
+ *        or, for a take the E-stop aborted, one line saying it was discarded.
  *
  * `quickCheckSinceMs` is when this quick check first reached the board (the
  * board remembers it) — null hides lines 4–5.
@@ -297,7 +303,14 @@ export function composeSessionBoard(view: VrSessionView, nowMs: number, quickChe
     { id: 'counts', text: `kept ${view.kept} · discarded ${view.discarded}`, color: BOARD_COLORS.text },
   ];
   const qc = view.lastQuickCheck;
-  if (qc && quickCheckSinceMs !== null && nowMs - quickCheckSinceMs < QUICK_CHECK_SHOW_MS) {
+  if (qc?.estopDiscarded && quickCheckSinceMs !== null && nowMs - quickCheckSinceMs < QUICK_CHECK_SHOW_MS) {
+    lines.push({
+      id: 'qc-verdict',
+      text: `Take ${qc.takeNumber} stopped by the E-stop — discarded`,
+      color: BOARD_COLORS.warn,
+      bold: true,
+    });
+  } else if (qc && quickCheckSinceMs !== null && nowMs - quickCheckSinceMs < QUICK_CHECK_SHOW_MS) {
     const groups = qc.groups.length > 0 ? qc.groups.join(' + ') : 'nothing moved';
     lines.push({
       id: 'qc',

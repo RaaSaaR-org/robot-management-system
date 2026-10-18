@@ -6,7 +6,9 @@
  *              the default and only dismisses (D3); Discard throws the take
  *              away. A take that is short or did not move pre-focuses Discard
  *              — it never discards on its own. Hides after 8 s unless the
- *              pointer or focus is on it.
+ *              pointer or focus is on it. A take the robot aborted on an
+ *              E-stop is already discarded (TASK-416): the card says so and
+ *              offers only Dismiss.
  * @feature datacollection
  */
 
@@ -15,7 +17,7 @@ import { Check, Trash2 } from 'lucide-react';
 import { Button, Panel } from '@/shared/components/ui';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import type { QuickCheck } from '../../types/datacollection.types';
-import { DISCARD_SUGGESTING_WARNINGS, groupLabel, takeLabel, warningLabel } from '../../utils/takeFormat';
+import { DISCARD_SUGGESTING_WARNINGS, describeEStopTake, groupLabel, takeLabel, warningLabel } from '../../utils/takeFormat';
 import { TakeThumbnail } from './TakeThumbnail';
 
 /** How long the card stays without being touched. */
@@ -37,7 +39,8 @@ export function QuickCheckCard({ sessionId, quickCheck, onKeep, onDiscard, visib
   const [busy, setBusy] = useState(false);
   const [held, setHeld] = useState(false);
   const discardRef = useRef<HTMLButtonElement>(null);
-  const suggestDiscard = quickCheck.warnings.some((w) => DISCARD_SUGGESTING_WARNINGS.includes(w));
+  const alreadyDiscarded = quickCheck.discarded === true;
+  const suggestDiscard = !alreadyDiscarded && quickCheck.warnings.some((w) => DISCARD_SUGGESTING_WARNINGS.includes(w));
 
   // Pre-focus Discard on a take that is probably not worth keeping.
   useEffect(() => {
@@ -87,6 +90,12 @@ export function QuickCheckCard({ sessionId, quickCheck, onKeep, onDiscard, visib
             </span>
           </div>
 
+          {alreadyDiscarded && (
+            <p className="text-[13px] font-medium text-signal-stopped" role="status" data-testid="quick-check-verdict">
+              {quickCheck.stopReason === 'estop' ? describeEStopTake(quickCheck.take) : `${takeLabel(quickCheck.take)} was discarded`}
+            </p>
+          )}
+
           <div className="flex flex-wrap items-center gap-1.5" data-testid="quick-check-groups">
             {quickCheck.groupsMoved.length > 0 ? (
               quickCheck.groupsMoved.map((g) => (
@@ -126,17 +135,19 @@ export function QuickCheckCard({ sessionId, quickCheck, onKeep, onDiscard, visib
           )}
 
           <div className="flex flex-wrap justify-end gap-2">
-            <Button
-              ref={discardRef}
-              variant={suggestDiscard ? 'danger' : 'secondary'}
-              size="sm"
-              isLoading={busy}
-              onClick={() => void discard()}
-              data-testid="quick-check-discard"
-              leftIcon={<Trash2 className="h-4 w-4" strokeWidth={1.75} />}
-            >
-              Discard
-            </Button>
+            {!alreadyDiscarded && (
+              <Button
+                ref={discardRef}
+                variant={suggestDiscard ? 'danger' : 'secondary'}
+                size="sm"
+                isLoading={busy}
+                onClick={() => void discard()}
+                data-testid="quick-check-discard"
+                leftIcon={<Trash2 className="h-4 w-4" strokeWidth={1.75} />}
+              >
+                Discard
+              </Button>
+            )}
             <Button
               size="sm"
               variant={suggestDiscard ? 'secondary' : 'primary'}
@@ -144,7 +155,7 @@ export function QuickCheckCard({ sessionId, quickCheck, onKeep, onDiscard, visib
               data-testid="quick-check-keep"
               leftIcon={<Check className="h-4 w-4" strokeWidth={1.75} />}
             >
-              Keep
+              {alreadyDiscarded ? 'Dismiss' : 'Keep'}
             </Button>
           </div>
         </div>

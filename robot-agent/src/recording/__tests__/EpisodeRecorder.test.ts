@@ -205,6 +205,20 @@ async function run(h: Harness, rec: EpisodeRecorder, ms: number, step = 10): Pro
 }
 
 /**
+ * Advance `ms` of fake clock without waiting for ticks to settle into a frame
+ * or a drop. An E-stop tick is neither: it ends and discards the take, and the
+ * discard takes its frames back out of `totalFrames`, so `run()`'s settle
+ * count would wait forever.
+ */
+async function runLatched(h: Harness, ms: number, step = 10): Promise<void> {
+  for (let t = 0; t < ms; t += step) {
+    h.clock.ms += step;
+    await vi.advanceTimersByTimeAsync(step);
+  }
+  for (let i = 0; i < 50; i++) await vi.advanceTimersByTimeAsync(0);
+}
+
+/**
  * Advance until the open episode holds `frames` frames, and fail saying why if
  * it never gets there.
  *
@@ -431,14 +445,18 @@ describe('EpisodeRecorder', () => {
     }
   });
 
-  it('drops a tick while an emergency stop is latched, and says so', async () => {
+  it('ends and discards the open take when an emergency stop latches (TASK-416 D4)', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
-    h.flags.estop = true;
     await run(h, rec, 200);
+    expect(rec.status().frames).toBeGreaterThan(0);
+    h.flags.estop = true;
+    await runLatched(h, 200);
     const status = rec.status();
-    expect(status.frames).toBe(0);
-    expect(status.dropped).toBeGreaterThan(0);
-    expect(status.lastDropReason).toMatch(/emergency stop/);
+    expect(status.phase).toBe('between');
+    expect(status.lastStop).toMatchObject({ episodeIndex: 0, reason: 'estop' });
+    expect(status.episodes).toHaveLength(1);
+    expect(status.episodes[0]).toMatchObject({ episodeIndex: 0, discarded: true, frames: 0 });
+    expect(status.totalFrames).toBe(0);
   });
 
   it('drops a tick while teleop is disengaged rather than recording a stale pose', async () => {
@@ -473,7 +491,8 @@ describe('EpisodeRecorder', () => {
 
   it('reports itself degraded after a run of drops', async () => {
     await rec.start({ sessionId: 's1', fps: 50, cameras: [] });
-    h.flags.estop = true;
+    // Teleop disengaged mid-take drops every tick (an E-stop would end the take instead).
+    h.flags.teleop = false;
     await run(h, rec, 1000);
     expect(rec.status().degraded).toBe(true);
   });
@@ -1096,6 +1115,43 @@ describe('takes between an explicit begin and end (TASK-402)', () => {
     expect(status.episodes).toHaveLength(1);
   });
 
+  it('an E-stop mid-take ends it with `estop`, discards it, never begins another, and the next take after the reset records', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
+    await take(200); // take 0, kept
+    await rec.beginEpisode(); // take 1
+    await run(h, rec, 300);
+    expect(rec.status().frames).toBeGreaterThan(0);
+    h.flags.estop = true;
+    await runLatched(h, 100);
+    let status = rec.status();
+    expect(status.phase).toBe('between');
+    expect(status.lastStop).toMatchObject({ episodeIndex: 1, reason: 'estop' });
+    expect(status.episodes.map((e) => [e.episodeIndex, e.discarded])).toEqual([[0, false], [1, true]]);
+    // Still latched: nothing begins, nothing is counted as a drop between takes.
+    const droppedBefore = status.totalDropped;
+    await runLatched(h, 500);
+    status = rec.status();
+    expect(status.phase).toBe('between');
+    expect(status.episodes).toHaveLength(2);
+    expect(status.totalDropped).toBe(droppedBefore);
+
+    // Reset, next take records normally under a fresh number.
+    h.flags.estop = false;
+    expect(await rec.beginEpisode()).toMatchObject({ ok: true, episodeIndex: 2 });
+    await run(h, rec, 300);
+    status = rec.status();
+    expect(status.phase).toBe('capturing');
+    expect(status.frames).toBeGreaterThan(0);
+
+    vi.useRealTimers();
+    const result = await rec.stop();
+    expect(result.indexMap).toEqual([
+      { take: 0, datasetEpisode: 0 },
+      { take: 1, datasetEpisode: null },
+      { take: 2, datasetEpisode: 1 },
+    ]);
+  });
+
   it('does not count a pause against the time limit', async () => {
     await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true, episodeTimeS: 2 });
     await rec.beginEpisode();
@@ -1215,7 +1271,7 @@ describe('takes between an explicit begin and end (TASK-402)', () => {
     await rec.start({ sessionId: 's', fps: 20, cameras: [], startBetweenTakes: true });
     await rec.beginEpisode();
     await run(h, rec, 2500); // frames span 2.45 s: not short
-    h.flags.estop = true;
+    h.flags.teleop = false;
     await run(h, rec, 1500); // 30 of 80 ticks dropped
     const ended = rec.endEpisode('operator');
     if (!ended.ok) throw new Error('end refused');

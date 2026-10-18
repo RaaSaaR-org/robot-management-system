@@ -488,8 +488,12 @@ export interface TeleoperationEvent {
 /** Where an episode action came from. */
 export type EpisodeSource = 'vr' | 'desktop' | 'hotkey';
 
-/** Why a take ended. `time_limit` is the agent's own auto-stop. */
-export type EpisodeStopReason = 'operator' | 'time_limit' | 'next' | 'session_end';
+/**
+ * Why a take ended. `time_limit` is the agent's own auto-stop; `estop` is the
+ * agent ending (and discarding) the take because an emergency stop latched
+ * mid-take (TASK-416 D4).
+ */
+export type EpisodeStopReason = 'operator' | 'time_limit' | 'next' | 'session_end' | 'estop';
 
 /** Who caused an episode event. `source: 'auto'` is the recorder itself. */
 export interface EpisodeActor {

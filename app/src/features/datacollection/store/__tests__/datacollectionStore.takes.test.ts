@@ -147,6 +147,21 @@ describe('teleop:episode:* from another client', () => {
     expect(t?.description).toBe('The auto-stop time was reached.');
   });
 
+  it('an E-stop abort: stopped then discarded is ONE toast, and the quick check stays, marked discarded (TASK-416)', () => {
+    const AUTO: EpisodeActor = { userId: null, displayName: null, source: 'auto', clientId: null };
+    const qc = quickCheck({ take: 10, frames: 0, stopReason: 'estop', discarded: true });
+    store().handleTeleopEvent(event('teleop:episode:stopped', {
+      take: 10, reason: 'estop', quickCheck: qc, by: AUTO, live: live({ take: 10, discarded: 1, lastTake: qc }),
+    }));
+    store().handleTeleopEvent(event('teleop:episode:discarded', {
+      take: 10, reason: 'estop', by: AUTO, live: live({ take: 10, discarded: 1, lastTake: qc }),
+    }));
+    expect(getToasts().map((t) => t.title)).toEqual(['Take 11 stopped by the E-stop — discarded']);
+    expect(cue).toHaveBeenCalledWith('problem');
+    expect(cue).not.toHaveBeenCalledWith('discarded');
+    expect(store().lastQuickCheck).toMatchObject({ take: 10, stopReason: 'estop', discarded: true });
+  });
+
   it('discarded: removes the row and names who discarded it', () => {
     useDataCollectionStore.setState({
       episodes: [
@@ -270,6 +285,29 @@ describe('take actions', () => {
     await store().discardTake('s1', 2);
     expect(cue).not.toHaveBeenCalledWith('discarded');
     expect(getToasts()[0]?.title).toBe('Take 3 restarted');
+  });
+
+  it('a refused discard by number names the take that was NOT discarded (TASK-416)', async () => {
+    api.discardTake.mockResolvedValue({ ok: false, code: 'episode_conflict', error: 'conflict', live: live({ phase: 'capturing', take: 9 }) });
+    await expect(store().discardTake('s1', 8)).resolves.toBe(false);
+    expect(getToasts()[0]?.title).toBe(
+      'Take 9 was NOT discarded — Take 10 was started elsewhere. Discard it from the take list.',
+    );
+  });
+
+  it('a refused discard-last names the take it was asked for, never just "showing it now"', async () => {
+    store().handleTeleopEvent(event('teleop:session:live', { live: live({ take: 8, kept: 9 }) }));
+    api.discardLast.mockResolvedValue({ ok: false, code: 'episode_conflict', error: 'conflict', live: live({ phase: 'capturing', take: 9 }) });
+    await store().discardLastTake('s1', 'desktop', 8);
+    const title = getToasts()[0]?.title ?? '';
+    expect(title).toMatch(/^Take 9 was NOT discarded — Take 10 was started elsewhere/);
+    expect(title).not.toMatch(/showing it now/);
+  });
+
+  it('a discard the server could not be reached for still names the surviving take', async () => {
+    api.discardTake.mockRejectedValue(new Error('Unable to connect to the server'));
+    await expect(store().discardTake('s1', 4)).resolves.toBe(false);
+    expect(getToasts()[0]).toMatchObject({ tone: 'error', title: 'Take 5 was NOT discarded' });
   });
 
   it('a failed request is an error toast, not a thrown error', async () => {

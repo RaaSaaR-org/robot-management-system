@@ -2085,6 +2085,11 @@ def make_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--iface", default=os.environ.get("G1_SIM_DDS_IFACE", "lo0"))
     ap.add_argument("--http-port", type=int, default=0,
                     help="serve the sidecar-compatible facade on this port (0 = off)")
+    # TASK-416: the supervisor's sim profile passes 127.0.0.1 so a rehearsal's
+    # facade is not reachable from the LAN. The default keeps today's
+    # behaviour for the dev stack and the Mac sim.
+    ap.add_argument("--host", default="0.0.0.0",
+                    help="address the HTTP facade binds (default 0.0.0.0)")
     ap.add_argument("--viewer", action="store_true",
                     help="open a live MuJoCo window (needs mjpython on macOS)")
     ap.add_argument("--quiet", action="store_true")
@@ -2161,7 +2166,7 @@ def main(argv: list[str] | None = None) -> int:
     httpd = None
     if args.http_port:
         bridge = _LocoBridge()
-        httpd = ThreadingHTTPServer(("0.0.0.0", args.http_port),
+        httpd = ThreadingHTTPServer((args.host, args.http_port),
                                     make_handler(node, bridge))
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
@@ -2178,7 +2183,7 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:  # noqa: BLE001
                 print(f"[SimNode]   loco bridge not warm yet: {exc}")
         threading.Thread(target=_warm, daemon=True).start()
-        print(f"[SimNode]   http :{args.http_port} "
+        print(f"[SimNode]   http {args.host}:{args.http_port} "
               f"(/health /cameras /cameras/<n>/{{snapshot,stream}} /state "
               f"/action /estop /loco/* /pointcloud/*) "
               f"-- point HARDWARE_SIDECAR_URL here")

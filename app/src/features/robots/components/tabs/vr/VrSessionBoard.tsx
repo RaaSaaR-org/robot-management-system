@@ -41,7 +41,8 @@ export interface VrSessionBoardProps {
 }
 
 const sameQuickCheck = (a: VrQuickCheckView | null, b: VrQuickCheckView | null): boolean =>
-  a === b || (!!a && !!b && a.takeNumber === b.takeNumber && a.frames === b.frames && a.durationS === b.durationS);
+  a === b || (!!a && !!b && a.takeNumber === b.takeNumber && a.frames === b.frames && a.durationS === b.durationS
+    && !!a.estopDiscarded === !!b.estopDiscarded);
 
 export function VrSessionBoard({ vrSession, telemetryRef }: VrSessionBoardProps) {
   const placement = useMemo(() => sidePanelPlacement(BEARING_RAD), []);
