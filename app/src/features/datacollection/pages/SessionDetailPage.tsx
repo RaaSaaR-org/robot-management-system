@@ -86,6 +86,8 @@ const cameraLabel = (name: string) => {
 
 const formatElapsed = (secs: number) => `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
 const BACK = { to: '/data-collection', label: 'Data collection' };
+/** TASK-418 (D4): how long the headset stays in VR after the session ended — enough to read "ended". */
+export const VR_GOODBYE_MS = 5_000;
 
 export function SessionDetailPage() {
   const { sessionId: id } = useParams<{ sessionId: string }>();
@@ -120,6 +122,14 @@ export function SessionDetailPage() {
   const operator = useFreshOperator(id);
   /** The page's own VR modal is open — on the Quest, the wearer's page. */
   const [vrModalOpen, setVrModalOpen] = useState(false);
+  /**
+   * TASK-418 (D4): the session ended while the VR modal was open. The modal
+   * and the immersive session stay up for `VR_GOODBYE_MS` so the board can say
+   * ENDED and the camera strip "take the headset off" — then VR closes as before.
+   */
+  const [vrGoodbye, setVrGoodbye] = useState(false);
+  const vrModalOpenRef = useRef(false);
+  vrModalOpenRef.current = vrModalOpen;
 
   // Live progress via the app WebSocket; REST polling backs it up while it is down.
   const { isConnected: isWsConnected } = useTeleopEvents();
@@ -177,6 +187,21 @@ export function SessionDetailPage() {
 
   // A quick check belongs to the session it was taken in.
   useEffect(() => { dismissQuickCheck(); }, [id, dismissQuickCheck]);
+
+  // TASK-418: the session just ended under an open VR modal — the goodbye.
+  const wasLiveRef = useRef<{ id: string | undefined; live: boolean }>({ id: undefined, live: false });
+  useEffect(() => {
+    const live = sessionStatus === 'created' || sessionStatus === 'recording' || sessionStatus === 'paused';
+    const ended = sessionStatus === 'completed' || sessionStatus === 'failed';
+    const was = wasLiveRef.current;
+    wasLiveRef.current = { id, live };
+    // Only a transition on the SAME session: opening an ended session is no goodbye.
+    if (was.id !== id) { setVrGoodbye(false); return; }
+    if (!was.live || !ended || !vrModalOpenRef.current) return;
+    setVrGoodbye(true);
+    const timer = setTimeout(() => setVrGoodbye(false), VR_GOODBYE_MS);
+    return () => clearTimeout(timer);
+  }, [id, sessionStatus]);
 
   // Fallback polling while the WebSocket is down.
   useEffect(() => {
@@ -251,6 +276,12 @@ export function SessionDetailPage() {
   }, [session, storeDiscardEpisode, fetchSession]);
 
   const robotName = robot?.name ?? session?.robotId ?? 'the robot';
+
+  /** TASK-418: the completed view's refetch while the frame count settles. */
+  const refetchCompleted = useCallback(async () => {
+    if (!id) return;
+    await Promise.all([fetchSession(), storeFetchEpisodes(id)]);
+  }, [id, fetchSession, storeFetchEpisodes]);
 
   const run = async (kind: 'start' | 'pause' | 'end', act: () => Promise<unknown>, ok: string, fail: string, okDescription?: () => string) => {
     setPending(kind);
@@ -666,7 +697,7 @@ export function SessionDetailPage() {
         </div>
       )}
 
-      {isLive && isVrSession && (
+      {(isLive || vrGoodbye) && isVrSession && (
         <VRSessionPanel
           robot={robot}
           lease={lease}
@@ -704,6 +735,7 @@ export function SessionDetailPage() {
           episodes={episodes}
           onEditTask={() => { setAnnotationText(session.languageInstr || ''); setModalError(undefined); setAnnotateOpen(true); }}
           onCreateDataset={openExport}
+          onRefetch={refetchCompleted}
         />
       )}
 

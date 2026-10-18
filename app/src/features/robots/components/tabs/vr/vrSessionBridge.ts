@@ -5,7 +5,10 @@
  *              (`VrSessionBridge`), the pure view builder over the session's
  *              live state, the session board's lines, the wrist HUD's take line,
  *              and the stick-shortcut reducer (left click Start/Stop, right
- *              click Next, right hold Discard last). No React, no three.js, no
+ *              click Next, right hold Discard last). TASK-418: the task line,
+ *              the quick check kept until the next Start, the ENDED line, and
+ *              the head-camera screen's strip (REC / E-STOP / the verdict /
+ *              session ended). No React, no three.js, no
  *              WebXR — all of it testable in vitest with fake gamepad frames.
  *              The one side effect, `withTakeHaptics`, only queues pulses.
  *
@@ -57,6 +60,17 @@ export interface VrSessionView {
   lastQuickCheck: VrQuickCheckView | null;
   /** A take action is in flight (the store answers one at a time). */
   pending: boolean;
+  /** What to demonstrate — the session's language instruction (TASK-418); null when it has none. */
+  instruction: string | null;
+  /** Who ended the session, as presence named them (TASK-418); null when unknown or not ended. */
+  endedBy: string | null;
+  /** The session's own frame count — the final one once it has ended. */
+  sessionFrames: number;
+}
+
+/** The session is over: completed, cancelled or failed. */
+export function sessionEnded(view: Pick<VrSessionView, 'status'>): boolean {
+  return view.status === 'completed' || view.status === 'cancelled' || view.status === 'failed';
 }
 
 /**
@@ -149,6 +163,12 @@ export interface VrSessionInput {
   /** Episodes listed and not discarded — the kept count before the first live state. */
   keptFallback: number;
   pending: boolean;
+  /** The session's `languageInstr` (TASK-418). */
+  instruction?: string | null;
+  /** Who ended it, when known (TASK-418). */
+  endedBy?: string | null;
+  /** The session's `frameCount` (TASK-418): the ENDED line's frame total. */
+  sessionFrames?: number;
 }
 
 export interface VrLabelers {
@@ -193,8 +213,10 @@ export function buildVrSessionView(
   }
   const autoStopS = live?.autoStopS ?? null;
   const qc = input.lastQuickCheck;
+  const status = live?.status ?? input.sessionStatus;
+  const instruction = input.instruction?.trim() ? input.instruction.trim() : null;
   return {
-    status: live?.status ?? input.sessionStatus,
+    status,
     phase: live?.phase ?? null,
     take: live?.take ?? null,
     takeElapsedS,
@@ -214,6 +236,9 @@ export function buildVrSessionView(
       }
       : null,
     pending: input.pending,
+    instruction,
+    endedBy: sessionEnded({ status }) ? input.endedBy ?? null : null,
+    sessionFrames: finiteOr(input.sessionFrames, 0),
   };
 }
 
@@ -221,8 +246,8 @@ export function buildVrSessionView(
 // THE SESSION BOARD'S LINES
 // ============================================================================
 
-/** How long the quick check stays on the board after a stop. */
-export const QUICK_CHECK_SHOW_MS = 6_000;
+/** How long the camera strip shows a take's verdict after it stopped (TASK-418). */
+export const STRIP_VERDICT_MS = 3_000;
 
 export const BOARD_COLORS = {
   rec: 'salmon',
@@ -237,6 +262,9 @@ export interface BoardLine {
   text: string;
   color: string;
   bold?: boolean;
+  /** Wrap at word boundaries (the task line), at most `maxRows` rows. */
+  wrap?: boolean;
+  maxRows?: number;
 }
 
 /** `42.4` → `00:42`; `3725` → `62:05`. */
@@ -253,8 +281,16 @@ export function shownTakeNumber(view: Pick<VrSessionView, 'phase' | 'take'>): nu
 
 function statusLine(view: VrSessionView, nowMs: number): BoardLine {
   if (view.status === 'paused') return { id: 'status', text: 'PAUSED', color: BOARD_COLORS.warn, bold: true };
-  if (view.status === 'completed' || view.status === 'cancelled' || view.status === 'failed') {
-    return { id: 'status', text: 'ENDED', color: BOARD_COLORS.dim, bold: true };
+  if (sessionEnded(view)) {
+    // TASK-418: who ended it and what the session holds, so the wearer is not
+    // thrown out of VR without a word.
+    const by = view.endedBy ? ` by ${view.endedBy}` : '';
+    return {
+      id: 'status',
+      text: `ENDED${by} · ${view.kept} kept · ${view.sessionFrames} fr`,
+      color: BOARD_COLORS.warn,
+      bold: true,
+    };
   }
   if (view.status !== 'recording') {
     return { id: 'status', text: 'NOT STARTED  start the session on the desktop', color: BOARD_COLORS.dim, bold: true };
@@ -276,28 +312,39 @@ function statusLine(view: VrSessionView, nowMs: number): BoardLine {
   return { id: 'status', text: `● REC  Take ${shownTakeNumber(view)}`, color: BOARD_COLORS.rec, bold: true };
 }
 
+/** The board's task line wraps onto at most this many rows (TASK-418). */
+export const INSTRUCTION_MAX_ROWS = 2;
+
 /**
- * The board, top to bottom (D3):
- *   1. `● REC  Take 7   00:42` / `READY  Take 8 next` / `PAUSED` / `ENDED`
- *   2. `707 fr · 30 fps · OK · auto-stop 12 s`
+ * The board, top to bottom (TASK-418):
+ *   1. the task to demonstrate (wrapped, two rows at most), when the session has one
+ *   2. `● REC  Take 7   00:42` / `READY  Take 8 next` / `PAUSED` / `ENDED by Ben · 9 kept · 1523 fr`
  *   3. `kept 6 · discarded 1`
- *   4–5. for `QUICK_CHECK_SHOW_MS` after a stop: the take and its warnings.
- *
- * `quickCheckSinceMs` is when this quick check first reached the board (the
- * board remembers it) — null hides lines 4–5.
+ *   4. `707 fr · 30 fps · OK · auto-stop 12 s` — only while capturing or degraded;
+ *      between takes it was noise (`1523 fr total · 0 fps · OK`)
+ *   5–6. the last take's quick check, kept until the next Start or the end of
+ *      the session (D3) — the desktop shows the same card for the same time.
  */
-export function composeSessionBoard(view: VrSessionView, nowMs: number, quickCheckSinceMs: number | null): BoardLine[] {
-  const fps = view.fpsActual === null ? '— fps' : `${Math.round(view.fpsActual)} fps`;
-  const frames = view.phase === 'capturing' ? `${view.frames} fr` : `${view.frames} fr total`;
-  const stats = [frames, fps, view.degraded ? 'DEGRADED' : 'OK'];
-  if (view.autoStopInS !== null) stats.push(`auto-stop ${Math.ceil(view.autoStopInS)} s`);
-  const lines: BoardLine[] = [
-    statusLine(view, nowMs),
-    { id: 'stats', text: stats.join(' · '), color: view.degraded ? BOARD_COLORS.warn : BOARD_COLORS.text },
-    { id: 'counts', text: `kept ${view.kept} · discarded ${view.discarded}`, color: BOARD_COLORS.text },
-  ];
+export function composeSessionBoard(view: VrSessionView, nowMs: number): BoardLine[] {
+  const capturing = view.phase === 'capturing';
+  const ended = sessionEnded(view);
+  const lines: BoardLine[] = [];
+  if (view.instruction) {
+    lines.push({ id: 'task', text: view.instruction, color: BOARD_COLORS.text, wrap: true, maxRows: INSTRUCTION_MAX_ROWS });
+  }
+  lines.push(statusLine(view, nowMs));
+  if (!ended) {
+    lines.push({ id: 'counts', text: `kept ${view.kept} · discarded ${view.discarded}`, color: BOARD_COLORS.text });
+  }
+  if (!ended && (capturing || view.degraded)) {
+    const fps = view.fpsActual === null ? '— fps' : `${Math.round(view.fpsActual)} fps`;
+    const frames = capturing ? `${view.frames} fr` : `${view.frames} fr total`;
+    const stats = [frames, fps, view.degraded ? 'DEGRADED' : 'OK'];
+    if (view.autoStopInS !== null) stats.push(`auto-stop ${Math.ceil(view.autoStopInS)} s`);
+    lines.push({ id: 'stats', text: stats.join(' · '), color: view.degraded ? BOARD_COLORS.warn : BOARD_COLORS.text });
+  }
   const qc = view.lastQuickCheck;
-  if (qc && quickCheckSinceMs !== null && nowMs - quickCheckSinceMs < QUICK_CHECK_SHOW_MS) {
+  if (qc && !capturing && !ended) {
     const groups = qc.groups.length > 0 ? qc.groups.join(' + ') : 'nothing moved';
     lines.push({
       id: 'qc',
@@ -354,6 +401,105 @@ export function hudTakeOf(view: VrSessionView | null | undefined): HudTake | nul
     takeNumber: shownTakeNumber(view),
     elapsedS: view.phase === 'capturing' ? view.takeElapsedS : null,
   };
+}
+
+// ============================================================================
+// THE HEAD-CAMERA SCREEN'S STRIP (TASK-418, D2)
+// ============================================================================
+
+/**
+ * What the strip remembers between frames: the phase and take it last saw, the
+ * discard count, the live take's last clock reading, and the verdict on the
+ * take that just ended. Pure data, stepped by `stepCameraStrip`.
+ */
+export interface CameraStripMemory {
+  phase: VrSessionView['phase'];
+  take: number | null;
+  discarded: number;
+  /** The live take's clock as last read, for a kept take whose quick check has not arrived. */
+  lastElapsedS: number | null;
+  verdict: {
+    kind: 'stopped' | 'discarded';
+    /** 1-based. */
+    takeNumber: number;
+    durationS: number | null;
+    atMs: number;
+  } | null;
+}
+
+/** The memory before the strip has seen the session: nothing to report yet. */
+export function initialCameraStrip(view: VrSessionView): CameraStripMemory {
+  return { phase: view.phase, take: view.take, discarded: view.discarded, lastElapsedS: null, verdict: null };
+}
+
+/**
+ * One read of the session. A take that went from capturing to between is
+ * `stopped`; a discard count that went up is `discarded` (the take last seen —
+ * the live one for a hold-discard while capturing). The next Start clears it.
+ */
+export function stepCameraStrip(prev: CameraStripMemory, view: VrSessionView, nowMs: number): CameraStripMemory {
+  let verdict = prev.verdict;
+  const capturing = view.phase === 'capturing';
+  if (view.discarded > prev.discarded && prev.take !== null) {
+    verdict = { kind: 'discarded', takeNumber: prev.take + 1, durationS: null, atMs: nowMs };
+  } else if (prev.phase === 'capturing' && !capturing && prev.take !== null) {
+    verdict = { kind: 'stopped', takeNumber: prev.take + 1, durationS: prev.lastElapsedS, atMs: nowMs };
+  } else if (capturing && (prev.phase !== 'capturing' || view.take !== prev.take)) {
+    verdict = null;
+  }
+  return {
+    phase: view.phase,
+    take: view.take,
+    discarded: view.discarded,
+    lastElapsedS: capturing ? view.takeElapsedS : null,
+    verdict,
+  };
+}
+
+export type CameraStripTone = 'rec' | 'estop' | 'ok' | 'warn' | 'dim' | 'ended';
+
+export interface CameraStrip {
+  text: string;
+  tone: CameraStripTone;
+  /** The screen's frame turns red (REC and the latched E-stop). */
+  redFrame: boolean;
+}
+
+/**
+ * The strip along the top of the camera screen, where the operator looks
+ * during a take. Priority: the latched E-stop over everything (it is the one
+ * state that must never be missed), then the session's end, then REC, then
+ * for `STRIP_VERDICT_MS` the verdict on the take that just stopped. Null:
+ * no strip, normal frame.
+ */
+export function composeCameraStrip(
+  view: VrSessionView | null,
+  estopLatched: boolean,
+  memory: CameraStripMemory | null,
+  nowMs: number,
+): CameraStrip | null {
+  if (estopLatched) return { text: 'E-STOP — hold Reset (right panel)', tone: 'estop', redFrame: true };
+  if (!view) return null;
+  if (sessionEnded(view)) return { text: 'Session ended — take the headset off', tone: 'ended', redFrame: false };
+  if (view.status === 'recording' && view.phase === 'capturing') {
+    return {
+      text: `● REC  Take ${shownTakeNumber(view)}  ${formatTakeClock(view.takeElapsedS)}`,
+      tone: 'rec',
+      redFrame: true,
+    };
+  }
+  const verdict = memory?.verdict;
+  if (!verdict || nowMs - verdict.atMs >= STRIP_VERDICT_MS) return null;
+  if (verdict.kind === 'discarded') {
+    return { text: `Take ${verdict.takeNumber} discarded`, tone: 'dim', redFrame: false };
+  }
+  const qc = view.lastQuickCheck?.takeNumber === verdict.takeNumber ? view.lastQuickCheck : null;
+  if (qc && qc.warnings.length > 0) {
+    return { text: `⚠ ${qc.warnings[0]} — Discard on the board`, tone: 'warn', redFrame: false };
+  }
+  const durationS = qc ? qc.durationS : verdict.durationS;
+  const duration = durationS !== null && Number.isFinite(durationS) ? ` · ${durationS.toFixed(1)} s` : '';
+  return { text: `✓ Take ${verdict.takeNumber} kept${duration}`, tone: 'ok', redFrame: false };
 }
 
 // ============================================================================

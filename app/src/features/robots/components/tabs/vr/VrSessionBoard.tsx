@@ -3,8 +3,10 @@
  * @description The session board in the headset (TASK-413): the take, its
  *              timer and frame rate, kept / discarded, and the quick check
  *              after each stop — plus Start / Stop (one slot), Next and a
- *              hold-to-confirm Discard last. World-locked 30° LEFT of the
- *              robot's forward, mirroring the robot panel on the right (D3),
+ *              hold-to-confirm Discard last. TASK-418: the task line on top,
+ *              the quick check kept until the next Start, and the ENDED line.
+ *              World-locked LEFT of the robot's forward, mirroring the robot
+ *              panel on the right (D3), clear of the camera screen,
  *              inside the yaw group so it follows a recenter. Reads the session
  *              through `VrSessionBridge.getState()` from its frame loop, never
  *              through props (D2).
@@ -14,13 +16,12 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { VrPanel, type VrPanelContent } from './VrPanel';
 import { VrButton, VR_BUTTON_HEIGHT_M } from './VrButton';
-import { sidePanelPlacement } from './VrRobotPanel';
+import { SIDE_PANEL_BEARING_RAD, sidePanelPlacement } from './VrRobotPanel';
 import { vrUiDebug } from './vrUiRegistry';
 import type { VrRigTelemetry } from './VrTeleopRig';
 import {
   boardButtons,
   composeSessionBoard,
-  type VrQuickCheckView,
   type VrSessionBridge,
   type VrSessionView,
 } from './vrSessionBridge';
@@ -29,8 +30,8 @@ import {
 export const SESSION_BOARD_WIDTH_M = 0.5;
 export const SESSION_BOARD_HEIGHT_M = 0.34;
 const TEXT_HEIGHT_M = 0.264;
-/** 30° LEFT of the robot's forward: the robot panel's bearing, mirrored. */
-const BEARING_RAD = (-30 * Math.PI) / 180;
+/** LEFT of the robot's forward: the robot panel's bearing, mirrored (TASK-418: 40°, clear of the camera screen). */
+const BEARING_RAD = -SIDE_PANEL_BEARING_RAD;
 
 const BG = 'rgba(9,11,17,0.86)';
 const BG_LATCHED = 'rgba(60,20,20,0.9)';
@@ -40,21 +41,10 @@ export interface VrSessionBoardProps {
   telemetryRef: { current: VrRigTelemetry };
 }
 
-const sameQuickCheck = (a: VrQuickCheckView | null, b: VrQuickCheckView | null): boolean =>
-  a === b || (!!a && !!b && a.takeNumber === b.takeNumber && a.frames === b.frames && a.durationS === b.durationS);
-
 export function VrSessionBoard({ vrSession, telemetryRef }: VrSessionBoardProps) {
   const placement = useMemo(() => sidePanelPlacement(BEARING_RAD), []);
   /** The view as last read — every button reads it rather than calling the getter again. */
   const viewRef = useRef<VrSessionView>(vrSession.getState());
-  /**
-   * The quick check on the board, and when it first arrived (it shows for 6 s).
-   * One already there when the board mounts is old news: `since` null, never shown.
-   */
-  const quickCheck = useRef<{ check: VrQuickCheckView | null; since: number | null }>({
-    check: viewRef.current.lastQuickCheck,
-    since: null,
-  });
 
   const read = useCallback((): VrSessionView => {
     const view = vrSession.getState();
@@ -64,12 +54,7 @@ export function VrSessionBoard({ vrSession, telemetryRef }: VrSessionBoardProps)
 
   const compose = useCallback((): VrPanelContent => {
     const view = read();
-    const now = Date.now();
-    const qc = quickCheck.current;
-    if (!sameQuickCheck(qc.check, view.lastQuickCheck)) {
-      quickCheck.current = { check: view.lastQuickCheck, since: view.lastQuickCheck ? now : null };
-    }
-    const lines = composeSessionBoard(view, now, quickCheck.current.since);
+    const lines = composeSessionBoard(view, Date.now());
     if (import.meta.env.DEV) vrUiDebug.board = lines.map((l) => l.text);
     const latched = telemetryRef.current.estopLatched;
     return latched

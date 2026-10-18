@@ -13,6 +13,8 @@
  *              TASK-413: the headset reads the session's shared live state and
  *              starts, stops, advances and discards takes through one
  *              `VrSessionBridge` built here from the data-collection store.
+ *              TASK-418: the bridge also carries the task instruction, the
+ *              session's frame count, and who ended it (from presence).
  * @feature datacollection
  */
 
@@ -158,6 +160,22 @@ export function createVrSessionBridge(sessionId: string): VrSessionBridge {
       return 'refused';
     }
   };
+  /**
+   * TASK-418: the desktop that was watching, remembered — presence empties as
+   * the session ends, and that is exactly when the headset says who ended it.
+   * The wearer has no End in VR, so an end they did not cause came from a
+   * desktop; with several, the first one presence lists.
+   */
+  let lastDesk: string | null = null;
+  let endedBy: string | null | undefined;
+  const deskName = (): string | null => {
+    const presence = store.getState().presence;
+    if (presence?.sessionId === sessionId) {
+      const desk = presence.viewers.find((v) => v.role === 'assistant');
+      if (desk) lastDesk = desk.displayName;
+    }
+    return lastDesk;
+  };
   return {
     sessionId,
     // TASK-414: who watches from a desktop, for the robot panel's title.
@@ -168,9 +186,18 @@ export function createVrSessionBridge(sessionId: string): VrSessionBridge {
     getState: () => {
       const state = store.getState();
       const live = state.live?.sessionId === sessionId ? state.live : null;
+      const session = state.selectedSession?.id === sessionId ? state.selectedSession : null;
+      const status = live?.status ?? session?.status ?? 'unknown';
+      const desk = deskName();
+      const ended = status === 'completed' || status === 'failed';
+      if (ended && endedBy === undefined) endedBy = desk;
+      if (!ended) endedBy = undefined;
       return buildVrSessionView(
         {
-          sessionStatus: state.selectedSession?.id === sessionId ? state.selectedSession.status : 'unknown',
+          sessionStatus: session?.status ?? 'unknown',
+          instruction: session?.languageInstr ?? null,
+          sessionFrames: session?.frameCount ?? 0,
+          endedBy: endedBy ?? null,
           live,
           lastQuickCheck: live ? state.lastQuickCheck : null,
           keptFallback: selectKept(state),

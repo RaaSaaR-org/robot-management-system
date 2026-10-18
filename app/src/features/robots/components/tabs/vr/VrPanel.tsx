@@ -4,6 +4,9 @@
  *              textured by `useTextPlate`, recomposed a few times a second from
  *              a callback. Lines carry their own colour; the panel takes an
  *              optional title and background. No font fetch — see `VrTextPlate`.
+ *              TASK-418: every piece of VR UI draws OVER the robot model
+ *              (`VR_UI_MATERIAL`, `VR_UI_RENDER_ORDER`) — the raised arms used to
+ *              hide the REC line and the Stop button.
  * @feature robots
  */
 
@@ -43,6 +46,28 @@ export interface VrPanelProps {
 
 const DEFAULT_TITLE_COLOR = 'darkgray';
 
+/**
+ * Draw order of the VR UI (TASK-418, D1). The robot model renders at the default
+ * 0 with a depth test; every UI layer renders after it with NO depth test, so
+ * an arm raised in front of a panel never hides it. Within the UI the order is
+ * fixed: a button over its plate, the camera strip and the wrist HUD over the
+ * panels, the ray and its hit marker over everything they point at.
+ */
+export const VR_UI_RENDER_ORDER = {
+  panel: 20,
+  button: 21,
+  strip: 22,
+  hud: 25,
+  ray: 30,
+} as const;
+
+/**
+ * Material flags every VR UI surface takes (D1): no depth test, so geometry in
+ * front (the robot's arms) never occludes it, and no depth write, so it never
+ * punches a hole in what draws after it.
+ */
+export const VR_UI_MATERIAL = { depthTest: false, depthWrite: false, transparent: true, toneMapped: false } as const;
+
 export function VrPanel({
   width,
   height,
@@ -73,9 +98,9 @@ export function VrPanel({
 
   if (!plate.texture) return null;
   return (
-    <mesh position={position}>
+    <mesh position={position} renderOrder={VR_UI_RENDER_ORDER.panel}>
       <planeGeometry args={[width, height]} />
-      <meshBasicMaterial map={plate.texture} transparent toneMapped={false} />
+      <meshBasicMaterial map={plate.texture} {...VR_UI_MATERIAL} />
     </mesh>
   );
 }

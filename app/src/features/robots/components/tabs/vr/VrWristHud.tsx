@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { composeHud, markerAppearance, HUD_COLORS, HUD_MAX_LINES, type HudLine } from './vrHud';
 import { whyFromTelemetry } from './vrWhy';
 import { useTextPlate } from './VrTextPlate';
+import { VR_UI_MATERIAL, VR_UI_RENDER_ORDER } from './VrPanel';
 import { GRIP_THRESHOLD } from './vrConstants';
 import type { VrRigTelemetry } from './VrTeleopRig';
 import { hudTakeOf, type VrSessionBridge } from './vrSessionBridge';
@@ -44,8 +45,14 @@ const HUD_PX_HEIGHT = 256;
  * naturally. This is geometry from that convention, not a measurement — worth
  * re-checking on a real Quest before anyone treats the numbers as tuned.
  */
-const HUD_POSITION: [number, number, number] = [0, 0.05, 0.07];
-const HUD_ROTATION: [number, number, number] = [-Math.PI / 3, 0, 0];
+/**
+ * TASK-418: ON the wrist, not in front of it. Parked 5 cm out and 7 cm back the
+ * plate floated into the forward view whenever the left hand was raised, right
+ * over the session board. 3 cm off the back of the hand and 13 cm back along the
+ * forearm it stays on the arm, and it is turned to face the eyes every frame
+ * (the hand's billboard, below) rather than relying on a fixed pitch.
+ */
+export const HUD_POSITION: [number, number, number] = [0, 0.03, 0.13];
 
 /**
  * And where it sits on a tracked HAND's wrist joint.
@@ -56,7 +63,7 @@ const HUD_ROTATION: [number, number, number] = [-Math.PI / 3, 0, 0];
  * here can check in a headset is how a panel ends up edge-on to the wearer.
  * A distance is a distance in any frame; a billboard needs no frame at all.
  */
-const HUD_POSITION_HAND: [number, number, number] = [0, 0.09, 0];
+export const HUD_POSITION_HAND: [number, number, number] = [0, 0.05, 0];
 
 /** Scratch for the billboard, so the frame loop allocates nothing. */
 const FACING = new THREE.Vector3();
@@ -152,11 +159,11 @@ export function VrWristHud({
     applyMarker(rightMarker.current,
       t.right.tracked === 'hand' ? 1 : t.right.squeeze, t.right.saturated);
 
-    // Billboard the plate when it is on a hand. The controller offsets below
-    // are geometry from WebXR's GRIP space convention; a hand's `wrist` joint
-    // is a different frame and its numbers would be a guess. Facing the head
-    // needs no convention at all — only the joint's position.
-    if (plateMesh.current && anchors.left.onHand) {
+    // Billboard the plate. A hand's `wrist` joint does not share the grip
+    // space's convention, so a fixed rotation there would be a guess; facing
+    // the head needs no convention at all — only the anchor's position.
+    // TASK-418: the controller plate too, from its place on the forearm.
+    if (plateMesh.current) {
       plateMesh.current.lookAt(state.camera.getWorldPosition(FACING));
     }
 
@@ -220,15 +227,14 @@ export function VrWristHud({
             <mesh
               ref={plateMesh}
               position={anchors.left.onHand ? HUD_POSITION_HAND : HUD_POSITION}
-              rotation={anchors.left.onHand ? [0, 0, 0] : HUD_ROTATION}
               // Drawn last and without a depth test: a status panel that
               // disappears when the operator's wrist passes behind the robot's
               // torso is a status panel that is missing at the moment they are
-              // reaching into something.
-              renderOrder={10}
+              // reaching into something. Over the panels too (TASK-418).
+              renderOrder={VR_UI_RENDER_ORDER.hud}
             >
               <planeGeometry args={[HUD_WIDTH_M, HUD_HEIGHT_M]} />
-              <meshBasicMaterial map={plate.texture} transparent toneMapped={false} depthTest={false} />
+              <meshBasicMaterial map={plate.texture} {...VR_UI_MATERIAL} />
             </mesh>
           )}
         </XRSpace>

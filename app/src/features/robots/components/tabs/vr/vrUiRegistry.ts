@@ -61,6 +61,7 @@ export function resetVrUiRegistry(): void {
   vrUiDebug.panel = [];
   vrUiDebug.panelTitle = '';
   vrUiDebug.board = [];
+  vrUiDebug.strip = '';
   vrUiDebug.rays.left = { ...EMPTY_RAY };
   vrUiDebug.rays.right = { ...EMPTY_RAY };
 }
@@ -275,6 +276,8 @@ export const vrUiDebug: {
   panelTitle: string;
   /** The session board's lines as last drawn (TASK-413); empty without a session. */
   board: string[];
+  /** The camera screen's strip as last drawn (TASK-418); '' when it shows none. */
+  strip: string;
 } = {
   clicks: [],
   rays: { left: { ...EMPTY_RAY }, right: { ...EMPTY_RAY } },
@@ -282,4 +285,5 @@ export const vrUiDebug: {
   panel: [],
   panelTitle: '',
   board: [],
+  strip: '',
 };

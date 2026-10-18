@@ -29,6 +29,7 @@ import {
 } from './vrUiRegistry';
 import { HAPTICS, pulsePreset, type HapticSource } from './vrHaptics';
 import type { VrRigTelemetry } from './VrTeleopRig';
+import { VR_UI_MATERIAL, VR_UI_RENDER_ORDER } from './VrPanel';
 
 type Side = 'left' | 'right';
 const SIDES: readonly Side[] = ['left', 'right'];
@@ -58,14 +59,17 @@ export function VrUiRig({ telemetryRef }: { telemetryRef: { current: VrRigTeleme
       const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -1)]);
       const line = new THREE.Line(
         geometry,
-        new THREE.LineBasicMaterial({ color: 'lightskyblue', transparent: true, opacity: 0.8, toneMapped: false }),
+        new THREE.LineBasicMaterial({ color: 'lightskyblue', opacity: 0.8, ...VR_UI_MATERIAL }),
       );
+      // TASK-418: the ray and its hit marker draw over the robot and the panels.
+      line.renderOrder = VR_UI_RENDER_ORDER.ray;
       line.visible = false;
       line.frustumCulled = false;
       const cursor = new THREE.Mesh(
         new THREE.SphereGeometry(CURSOR_RADIUS_M, 12, 8),
-        new THREE.MeshBasicMaterial({ color: 'white', toneMapped: false }),
+        new THREE.MeshBasicMaterial({ color: 'white', ...VR_UI_MATERIAL }),
       );
+      cursor.renderOrder = VR_UI_RENDER_ORDER.ray;
       cursor.visible = false;
       return { line, cursor };
     };

@@ -141,4 +141,42 @@ describe('createVrSessionBridge', () => {
     });
     expect(bridge.watching?.()).toBe('Ben (desktop)');
   });
+
+  it('carries the task, and names the desktop that ended it after presence empties (TASK-418)', () => {
+    useDataCollectionStore.setState({
+      selectedSession: { ...SESSION, languageInstr: 'pick up the red cube' },
+      presence: {
+        sessionId: 's1',
+        viewers: [
+          { userId: 'a', displayName: 'Anna', role: 'operator', since: 'x' },
+          { userId: 'b', displayName: 'Ben', role: 'assistant', since: 'x' },
+        ],
+      },
+    });
+    const bridge = createVrSessionBridge('s1');
+    expect(bridge.getState()).toMatchObject({ instruction: 'pick up the red cube', endedBy: null });
+    // The end: presence leaves with the session, the count is final.
+    useDataCollectionStore.setState({
+      selectedSession: { ...SESSION, status: 'completed', frameCount: 1523, languageInstr: 'pick up the red cube' },
+      live: live({ status: 'completed', phase: null, kept: 9 }),
+      presence: { sessionId: 's1', viewers: [] },
+    });
+    const ended = bridge.getState();
+    expect(ended).toMatchObject({ status: 'completed', endedBy: 'Ben', sessionFrames: 1523, kept: 9 });
+  });
+
+  it('keeps the final frame count when the last live state after the end reads 0 (TASK-418)', () => {
+    useDataCollectionStore.setState({ selectedSession: { ...SESSION, status: 'completed', frameCount: 1523 } });
+    store().handleTeleopEvent({
+      type: 'teleop:session:progress',
+      data: { sessionId: 's1', recordingProgress: { frameCount: 0 } },
+    } as Parameters<ReturnType<typeof store>['handleTeleopEvent']>[0]);
+    expect(store().selectedSession?.frameCount).toBe(1523);
+    useDataCollectionStore.setState({ selectedSession: { ...SESSION, status: 'recording', frameCount: 10 } });
+    store().handleTeleopEvent({
+      type: 'teleop:session:progress',
+      data: { sessionId: 's1', recordingProgress: { frameCount: 42 } },
+    } as Parameters<ReturnType<typeof store>['handleTeleopEvent']>[0]);
+    expect(store().selectedSession?.frameCount).toBe(42);
+  });
 });
