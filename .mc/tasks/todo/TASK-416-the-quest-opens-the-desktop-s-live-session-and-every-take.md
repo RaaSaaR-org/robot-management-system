@@ -3,7 +3,7 @@ id: "TASK-416"
 aliases: []
 title: "The Quest opens the desktop's live session, and every take lands in the dataset as it was meant"
 slug: "the-quest-opens-the-desktop-s-live-session-and-every-take"
-status: in-progress
+status: review
 priority: 1
 owner: "huhn511"
 projects: []
@@ -150,6 +150,6 @@ Decisions and deviations from the spec, against the code that merged before this
 - **Discard by index** uses the existing `DELETE /api/teleoperation/sessions/:id/episodes/:index` (the spec named a `POST …/:index/discard` route, which does not exist) through the store's existing `discardTake`. When the Undo window closes and the named take is *still recording*, the panel sends `discard-last` guarded by that take instead — the by-index route restarts a live take rather than discarding it.
 - **E-stop actor**: the server emits `episode:stopped` and `episode:discarded` with `by: {source: 'auto'}` (the existing `AUTO_ACTOR`) and `reason: 'estop'`; there is no robot actor shape.
 - **Leaving REC within a second** needed one addition outside the file list: the teleop proxy notices an `{"estop": …}` frame from the browser (and `POST /api/safety/robots/:id/estop` does the same) and asks `TeleoperationService.nudgeLiveAfterEStop(robotId)` to read the live state 150 ms and 450 ms later, instead of waiting for the 1 Hz poll.
-- **Views**: the quick-check card and the VR session board (`vrSessionBridge.ts`, `VrSessionBoard.tsx`) show "Take N stopped by the E-stop — discarded"; the card hides the take's numbers then, because the agent drops the frames as it discards and the report reads 0 frames. The store keeps that quick check (marked discarded) instead of clearing it, and every refused discard names the surviving take — slightly more store change than "stop-reason text only".
+- **Views**: the quick-check card and the VR session board and, after the merge with TASK-418, its camera strip (`vrSessionBridge.ts`) show "Take N stopped by the E-stop — discarded"; the card hides the take's numbers then, because the agent drops the frames as it discards and the report reads 0 frames. The store keeps that quick check (marked discarded) instead of clearing it, and every refused discard names the surviving take — slightly more store change than "stop-reason text only".
 - **Sim labelling**: `/health` reports a top-level `sim` (the field the agent's `parseArmStatus` reads into `arm.sim`). The sidecar ignores `G1_SIM_BACKEND` on DDS domain 0. The supervisor strips it from real profiles, and for `robot: sim` also defaults `G1_CAMERA_SOURCE=none` (a new off value in `g1_sidecar.py`) and `G1_ROBOT_IP=127.0.0.1` unless the profile sets them. Side effect: on the sim profile the agent now treats odometry as the sim world frame (`kind: 'sim'`) rather than `odom` keyed by boot id.
 - **Live check**: the take flows ran against the MuJoCo facade (`sim_node.py --host 127.0.0.1`) on the reserved ports. Provenance was checked with sim + `g1_sidecar.py` started from `simSpec`/`sidecarSpec` on a port-adjusted copy of `sim-g1-edu-dev.yaml` (no bridge, `--initial-fsm 500`), not by the supervisor process itself. The reserved port set has no room for its bridge.
