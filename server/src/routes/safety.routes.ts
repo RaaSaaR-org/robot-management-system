@@ -6,6 +6,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { safetyService } from '../services/SafetyService.js';
+import { teleoperationService } from '../services/TeleoperationService.js';
 import { parseIntegerParam } from '../utils/pagination.js';
 import { sendFailure } from '../utils/routeErrors.js';
 
@@ -55,6 +56,9 @@ safetyRoutes.post('/robots/:id/estop', async (req: Request, res: Response) => {
       reason,
       triggeredBy || 'server'
     );
+    // TASK-416: the robot aborts and discards an open take on the latch; read
+    // its live state now so every client leaves REC within a beat.
+    teleoperationService.nudgeLiveAfterEStop(id);
 
     res.json({
       message: 'Emergency stop triggered',

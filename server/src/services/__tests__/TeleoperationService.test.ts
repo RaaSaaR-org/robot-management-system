@@ -1666,6 +1666,39 @@ describe('TeleoperationService — episode control (TASK-408)', () => {
     }
   });
 
+  it('an E-stop nudges a live read, so the aborted take is reported well before the next 1 Hz poll (TASK-416)', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    try {
+      const { st, end } = fakeAgent();
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...SESSION, status: 'created', recorderKind: null, startedAt: null });
+      mockPrisma.teleoperationSession.update.mockImplementation(async (a: { data: Record<string, unknown> }) => ({ ...SESSION, ...a.data }));
+      mockPrisma.robot.findUnique.mockResolvedValue({ id: 'robot-1', model: 'G1 EDU', a2aAgentUrl: null });
+      mockAgentRecording.start.mockImplementation(async () => mockAgentRecording.status());
+      await service.startSession('session-1');
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue(SESSION);
+      await service.startEpisode('session-1', CTX);
+      await vi.advanceTimersByTimeAsync(1000); // one regular poll, then the E-stop lands mid-interval
+      events = [];
+
+      end('estop');
+      st.episodes[0]!.discarded = true;
+      service.nudgeLiveAfterEStop('other-robot');
+      service.nudgeLiveAfterEStop('robot-1');
+      await vi.advanceTimersByTimeAsync(200);
+      expect(ofType('episode:stopped')).toEqual([expect.objectContaining({ take: 0, reason: 'estop' })]);
+      expect(ofType('episode:discarded')).toHaveLength(1);
+      expect(ofType('session:live').at(-1)!.live!.phase).toBe('between');
+
+      // The second nudge and the next poll do not report it again.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(ofType('episode:stopped')).toHaveLength(1);
+      expect(ofType('episode:discarded')).toHaveLength(1);
+    } finally {
+      (service as unknown as { stopAgentProgressPoller(id: string): void }).stopAgentProgressPoller('session-1');
+      vi.useRealTimers();
+    }
+  });
+
   it('an auto-stop an action reads before the poller does is still reported, once, as by auto', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     try {

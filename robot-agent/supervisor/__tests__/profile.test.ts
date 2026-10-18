@@ -229,7 +229,7 @@ describe('checked-in profiles', () => {
     const sidecar = sidecarSpec(p, 'arm_sdk', {}).env;
     expect(sidecar.G1_SIM_BACKEND).toBe('1');
     expect(sidecar.G1_CAMERA_SOURCE).toBe('none');
-    expect(sidecar).not.toHaveProperty('G1_ROBOT_IP');
+    expect(sidecar.G1_ROBOT_IP).toBe('127.0.0.1');
     const simArgs = simSpec(p, {}).args;
     expect(simArgs[simArgs.indexOf('--host') + 1]).toBe('127.0.0.1');
   });

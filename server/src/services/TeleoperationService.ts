@@ -79,6 +79,12 @@ export const SIDECAR_EPISODE_CAP = 1000;
  * make the number flicker.
  */
 const AGENT_PROGRESS_POLL_MS = 1000;
+/**
+ * TASK-416: reads of the live state after an E-stop. The recorder ends (and
+ * discards) the open take on its next tick, one frame after the latch; the
+ * second read covers a tick that was slow.
+ */
+const ESTOP_NUDGE_DELAYS_MS = [150, 450] as const;
 const MAX_BATCH_SIZE = 100;
 
 // ============================================================================
@@ -2241,6 +2247,8 @@ export class TeleoperationService extends EventEmitter {
 
   /** Progress pollers for agent-side recordings, one per live session. */
   private agentPollers = new Map<string, ReturnType<typeof setInterval>>();
+  /** The session each agent poller reads, by session id (TASK-416: E-stop nudge). */
+  private polledSessions = new Map<string, TeleoperationSession>();
 
   /** Latest computed quality feedback per session (attached to progress events). */
   private lastQualityFeedback = new Map<string, QualityFeedback>();
@@ -2527,6 +2535,28 @@ export class TeleoperationService extends EventEmitter {
     }, AGENT_PROGRESS_POLL_MS);
     timer.unref?.();
     this.agentPollers.set(sessionId, timer);
+    this.polledSessions.set(sessionId, polled);
+  }
+
+  /**
+   * An E-stop just went to `robotId` (TASK-416). Its recorder ends and
+   * discards an open take on the next tick; read the live state of the
+   * robot's recording sessions now instead of at the next 1 Hz poll, so the
+   * board and the desktop leave REC within a beat. Never throws.
+   */
+  nudgeLiveAfterEStop(robotId: string): void {
+    for (const [sessionId, polled] of this.polledSessions) {
+      if (polled.robotId !== robotId) continue;
+      for (const delay of ESTOP_NUDGE_DELAYS_MS) {
+        const timer = setTimeout(() => {
+          if (!this.agentPollers.has(sessionId)) return;
+          void this.pollAgentOnce(polled).catch((err) => {
+            console.warn(`[TeleoperationService] E-stop live read of ${sessionId} failed:`, err);
+          });
+        }, delay);
+        timer.unref?.();
+      }
+    }
   }
 
   /**
@@ -2560,6 +2590,7 @@ export class TeleoperationService extends EventEmitter {
       clearInterval(timer);
       this.agentPollers.delete(sessionId);
     }
+    this.polledSessions.delete(sessionId);
   }
 
   /**

@@ -18,6 +18,7 @@ import {
   attachUpgradeRoutes,
   agentTeleopUrl,
   createTeleopProxy,
+  isEStopFrame,
   tokenFromProtocols,
   TELEOP_SUBPROTOCOL,
   type TeleopProxyDeps,
@@ -71,7 +72,11 @@ const TOKENS: Record<string, { userId: string; role: string; tenantId: string | 
   'other-tenant': { userId: 'u3', role: 'owner', tenantId: 't2' },
 };
 
+/** Robots the proxy reported an E-stop for (TASK-416). */
+let estops: string[] = [];
+
 beforeEach(async () => {
+  estops = [];
   agent = await startAgent();
   authDisabled = true;
   robots = new Map([['r1', { baseUrl: agent.url, tenantId: 't1' }]]);
@@ -80,6 +85,7 @@ beforeEach(async () => {
     verifyAccessToken: (t) => TOKENS[t] ?? null,
     authDisabled: () => authDisabled,
     agentHeaders: () => ({ Authorization: 'Bearer agent-secret' }),
+    onEStop: (id) => estops.push(id),
   };
   server = http.createServer((_req, res) => res.end('ok'));
   attachUpgradeRoutes(server, [createTeleopProxy(deps)]);
@@ -131,6 +137,12 @@ describe('helpers', () => {
     expect(tokenFromProtocols(['bearer.'])).toBeNull();
   });
 
+  it('spots an E-stop frame without parsing, and only in text', () => {
+    expect(isEStopFrame(Buffer.from('{"estop":{"reason":"x"}}'), false)).toBe(true);
+    expect(isEStopFrame(Buffer.from('{"hb":1,"pose":{}}'), false)).toBe(false);
+    expect(isEStopFrame(Buffer.from('{"estop":{}}'), true)).toBe(false);
+  });
+
   it('builds the agent socket URL from its base URL', () => {
     expect(agentTeleopUrl('http://10.0.0.2:41243/')).toBe('ws://10.0.0.2:41243/ws/keyboard-teleop');
     expect(agentTeleopUrl('https://robot.example')).toBe('wss://robot.example/ws/keyboard-teleop');
@@ -148,6 +160,19 @@ describe('the teleop proxy', () => {
     ws.send(JSON.stringify({ hb: 1 }));
     expect((await reply).echo).toEqual({ hb: 1 });
     expect(agent.headers[0].authorization).toBe('Bearer agent-secret');
+  });
+
+  it('forwards an E-stop frame first, then tells the server which robot got it (TASK-416)', async () => {
+    const ws = open('/api/robots/r1/teleop/ws');
+    await upgradeStatus(ws);
+    await nextMessage(ws, 'config');
+    ws.send(JSON.stringify({ hb: 1 }));
+    const reply = nextMessage(ws, 'state');
+    ws.send(JSON.stringify({ estop: { reason: 'VR B button' } }));
+    expect((await reply).echo).toEqual({ hb: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(agent.received.map((t) => JSON.parse(t))).toContainEqual({ estop: { reason: 'VR B button' } });
+    expect(estops).toEqual(['r1']);
   });
 
   it('delivers frames sent before the agent socket finished opening, in order', async () => {

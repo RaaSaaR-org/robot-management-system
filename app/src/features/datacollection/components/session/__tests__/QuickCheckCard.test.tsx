@@ -103,6 +103,9 @@ describe('QuickCheckCard', () => {
     render(<QuickCheckCard sessionId="s1" quickCheck={qc({ take: 10, frames: 0, stopReason: 'estop', discarded: true, warnings: ['short'] })} onKeep={onKeep} onDiscard={vi.fn()} />);
     expect(screen.getByTestId('quick-check-verdict')).toHaveTextContent('Take 11 stopped by the E-stop — discarded');
     expect(screen.queryByTestId('quick-check-discard')).toBeNull();
+    // The thrown-away frames' numbers and warnings are not shown.
+    expect(screen.queryByTestId('quick-check-stats')).toBeNull();
+    expect(screen.queryByTestId('quick-check-warning-short')).toBeNull();
     fireEvent.click(screen.getByTestId('quick-check-keep'));
     expect(screen.getByTestId('quick-check-keep')).toHaveTextContent('Dismiss');
     expect(onKeep).toHaveBeenCalledTimes(1);

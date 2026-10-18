@@ -486,6 +486,9 @@ export function sidecarEnvFor(profile: Profile, mode: SidecarMode, parent: NodeJ
     // No robot LAN behind a sim: the `auto` camera order would probe it
     // (teleimager, then PC2 on 192.168.123.x). Off unless the profile names a source.
     if (!('G1_CAMERA_SOURCE' in env)) env.G1_CAMERA_SOURCE = 'none';
+    // And the sidecar's default robot address (192.168.123.164) is never its
+    // fallback for anything: a sim's robot is this machine.
+    if (!('G1_ROBOT_IP' in env)) env.G1_ROBOT_IP = '127.0.0.1';
   } else {
     delete env.G1_SIM_BACKEND;
   }
