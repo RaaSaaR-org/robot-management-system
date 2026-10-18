@@ -31,6 +31,18 @@ export const SUPERVISOR_STEP_IDS: readonly SupervisorStepId[] = [
 export const SUPERVISOR_PROCS: readonly SupervisorProc[] = ['sim', 'bridge', 'sidecar', 'agent'];
 export const SIDECAR_MODES: readonly SupervisorSidecarMode[] = ['read_only', 'arm_sdk'];
 
+/** A process that started before the code it runs (TASK-419): `checks.staleCode` / `foreign.staleCode`. */
+export interface SupervisorStaleCode {
+  startedAt: string;
+  codeAt: string;
+}
+
+export function isStaleCode(v: unknown): v is SupervisorStaleCode {
+  return typeof v === 'object' && v !== null
+    && typeof (v as SupervisorStaleCode).startedAt === 'string'
+    && typeof (v as SupervisorStaleCode).codeAt === 'string';
+}
+
 export interface SupervisorStepStatus {
   id: SupervisorStepId;
   state: SupervisorStepState;
@@ -38,9 +50,19 @@ export interface SupervisorStepStatus {
   pid: number | null;
   startedAt: string | null;
   detail: string | null;
-  checks: Record<string, boolean | number | string | null>;
+  checks: Record<string, boolean | number | string | null | SupervisorStaleCode>;
   code?: string | null;
-  foreign?: { pid: number | null; cmdline: string[] | null; since: string | null; port: number } | null;
+  foreign?: {
+    pid: number | null;
+    cmdline: string[] | null;
+    since: string | null;
+    port: number;
+    /** TASK-419: the process's working directory and the robot id it names, when readable. */
+    cwd?: string | null;
+    robotId?: string | null;
+    /** TASK-419: it started before the code it should run; it cannot be adopted. */
+    staleCode?: SupervisorStaleCode | null;
+  } | null;
   actions?: Array<'adopt' | 'leave'>;
 }
 

@@ -19,6 +19,8 @@ import { readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { connect } from 'node:net';
 import { join } from 'node:path';
+import { CodeAge, processCwd, processRobotId, shortDate } from './codeAge.js';
+import type { StaleCode } from './codeAge.js';
 import { LogTailer } from './logs.js';
 import {
   belongsTo,
@@ -53,7 +55,8 @@ import type { SidecarHealth } from './sidecarClient.js';
 export type StepId = 'preflight' | 'link' | 'camera' | 'bridge' | 'sidecar' | 'agent';
 export type StepState = 'idle' | 'running' | 'ok' | 'warn' | 'failed' | 'foreign';
 export type Overall = 'stopped' | 'starting' | 'ready' | 'degraded' | 'stopping' | 'error';
-export type CheckValue = boolean | number | string | null;
+export type CheckValue = boolean | number | string | null | StaleCode;
+export type { StaleCode } from './codeAge.js';
 
 export const STEP_IDS: StepId[] = ['preflight', 'link', 'camera', 'bridge', 'sidecar', 'agent'];
 export const PROC_NAMES: ProcName[] = ['sim', 'bridge', 'sidecar', 'agent'];
@@ -63,6 +66,12 @@ export interface ForeignProcess {
   cmdline: string[] | null;
   since: string | null;
   port: number;
+  /** Its working directory (/proc/<pid>/cwd), when readable. */
+  cwd?: string | null;
+  /** The robot id its environment or command line names, when it names one. */
+  robotId?: string | null;
+  /** Set when it started before the code it should run (TASK-419): it cannot be adopted. */
+  staleCode?: StaleCode | null;
 }
 
 export interface StepStatus {
@@ -159,6 +168,8 @@ export interface SupervisorDeps {
   log?: (msg: string) => void;
   /** Poll interval of the background liveness monitor (ms). */
   monitorMs?: number;
+  /** Runs `git` for the code-age check (TASK-419). Default: `run`. */
+  git?: RunFn;
 }
 
 export interface SupervisorOptions {
@@ -219,6 +230,9 @@ export class Supervisor {
   private readonly conflicts: string[];
   private readonly parentEnv: NodeJS.ProcessEnv;
   private readonly log: (msg: string) => void;
+  private readonly codeAge: CodeAge;
+  /** What an owned step said before it was marked stale, to put back when it is current again. */
+  private readonly staleRestore: Partial<Record<StepId, Pick<StepStatus, 'state' | 'code' | 'detail'>>> = {};
 
   private readonly recs: Partial<Record<ProcName, ChildRecord>> = {};
   private readonly steps: Record<StepId, StepStatus>;
@@ -261,6 +275,7 @@ export class Supervisor {
     this.parentEnv = d.parentEnv ?? process.env;
     this.log = d.log ?? ((m) => console.log(`[supervisor] ${m}`));
     this.monitorMs = d.monitorMs ?? 1000;
+    this.codeAge = new CodeAge({ repoRoot: this.repoRoot, run: d.git ?? this.run, now: () => this.clock.now(), procRoot: this.procRoot });
     this.profile = loadProfile(this.profilePath, { repoRoot: this.repoRoot, home: this.home });
     this.steps = Object.fromEntries(STEP_IDS.map((id) => [id, emptyStep(id)])) as Record<StepId, StepStatus>;
   }
@@ -283,7 +298,7 @@ export class Supervisor {
     await this.verifyAdopted();
     this.monitor = setInterval(() => {
       if (this.liveness) return;
-      this.liveness = this.checkLiveness().finally(() => {
+      this.liveness = this.checkLiveness().then(() => this.refreshCodeAge()).finally(() => {
         this.liveness = null;
       });
     }, this.monitorMs);
@@ -450,7 +465,7 @@ export class Supervisor {
     });
   }
 
-  adopt(id: StepId): StepStatus {
+  async adopt(id: StepId): Promise<StepStatus> {
     const step = this.steps[id];
     const proc = this.procOf(id);
     if (!proc || step.state !== 'foreign' || !step.foreign) {
@@ -459,6 +474,17 @@ export class Supervisor {
     const pid = step.foreign.pid;
     if (pid === null || pid <= 0) {
       throw new SupervisorError(409, 'unknown_pid', `the process holding :${step.foreign.port} cannot be identified (another user's?) — it cannot be adopted`);
+    }
+    // Adopting a process that runs older code would run the day on it (TASK-419).
+    await this.checkForeignCode(id);
+    const stale = step.foreign?.staleCode;
+    if (stale) {
+      throw new SupervisorError(409, 'stale_code',
+        `pid ${pid} runs code from before ${shortDate(stale.codeAt)} (started ${shortDate(stale.startedAt)}) — ` +
+        'it cannot be adopted. Stop it by hand, then press Start.');
+    }
+    if (this.steps[id].state !== 'foreign' || this.steps[id].foreign?.pid !== pid) {
+      throw new SupervisorError(409, 'gone', `pid ${pid} no longer holds the port — start again`);
     }
     const st = readStat(pid, this.procRoot);
     const cmdline = readCmdline(pid, this.procRoot);
@@ -542,6 +568,8 @@ export class Supervisor {
       const unsafe = await this.assertSafe(before, id === 'sidecar');
       if (unsafe) return this.safetyAbort(id, unsafe);
     }
+    // An adopted process may be older than its code: say so right away.
+    await this.refreshCodeAge();
   }
 
   private fail(id: StepId, detail?: string): void {
@@ -588,7 +616,7 @@ export class Supervisor {
     for (const [id, proc, port] of this.portList()) {
       const verdict = this.portVerdict(id, proc, port);
       s.checks[`port_${port}`] = verdict;
-      if (verdict === 'foreign') foreign.push(`:${port} (${id})`);
+      if (verdict === 'foreign') foreign.push(`:${port} ${id}`);
     }
     if (mode === 'arm_sdk') {
       const c = this.conflictDetail();
@@ -597,9 +625,16 @@ export class Supervisor {
     }
     if (foreign.length) {
       foreign = [...new Set(foreign)];
+      for (const [id] of this.portList()) {
+        if (this.steps[id].state === 'foreign') await this.checkForeignCode(id);
+      }
+      const stale = this.portList().some(([id]) => this.steps[id].foreign?.staleCode);
+      // The first sentence is the reason line (72 characters); the rest is detail.
       return this.failStep(s, 'foreign_process',
-        `a process the supervisor did not start holds ${foreign.join(', ')}. It is never killed: adopt it ` +
-        '(use it as is) or leave it and stop it by hand, then start again.');
+        `Old processes hold ${foreign.join(', ')} — see the rows. ` +
+        'The supervisor did not start them and never kills them: adopt one (use it as is) or leave it and ' +
+        'stop it by hand, then start again.' +
+        (stale ? ' A process that runs older code than this checkout cannot be adopted.' : ''));
     }
     s.state = 'ok';
     s.detail = `profile ${this.profile.robotId} (${this.profile.robot}), ports free or ours, mode ${mode}`;
@@ -629,6 +664,7 @@ export class Supervisor {
     }
     const pid = holders.find((h) => h > 0) ?? null;
     const left = this.leaveDecisions.has(id);
+    const prev = step.state === 'foreign' && step.foreign?.pid === pid ? step.foreign : null;
     Object.assign(step, {
       state: 'foreign',
       owned: false,
@@ -640,8 +676,11 @@ export class Supervisor {
         cmdline: pid ? readCmdline(pid, this.procRoot) : null,
         since: pid ? processSince(pid, this.procRoot) : null,
         port,
+        cwd: prev?.cwd ?? (pid ? processCwd(pid, this.procRoot) : null),
+        robotId: prev?.robotId ?? null,
+        staleCode: prev?.staleCode ?? null,
       },
-      actions: left ? [] : ['adopt', 'leave'],
+      actions: left ? [] : prev?.staleCode ? ['leave'] : ['adopt', 'leave'],
       detail: left
         ? `left alone at your request: pid ${pid ?? '?'} keeps :${port}; this step cannot run until it is gone`
         : `pid ${pid ?? '?'} holds :${port} and was not started by the supervisor — adopt it or leave it (it is never killed)`,
@@ -685,7 +724,8 @@ export class Supervisor {
     s.checks.carrier = carrier;
     s.checks.operstate = operstate;
     if (!carrier || operstate !== 'up') {
-      return this.failStep(s, 'no_carrier', `robot cable unplugged or robot off (${iface}: no carrier, operstate ${operstate})`);
+      return this.failStep(s, 'no_carrier',
+        `Robot cable unplugged or robot off (${iface} no carrier). Interface operstate: ${operstate}.`);
     }
     const want = (this.profile.hostIp ?? '').split('/')[0];
     const hasIp = this.netAddrs(iface).includes(want);
@@ -1204,6 +1244,69 @@ export class Supervisor {
     if (sim) Object.assign(this.steps.link, { state: 'ok', detail: `simulator pid ${sim.pid} (re-adopted)` });
     const any = PROC_NAMES.some((p) => this.recs[p]);
     if (any) Object.assign(this.steps.preflight, { state: 'ok', detail: 're-adopted after a supervisor restart' });
+    // A child re-adopted from its PID file may predate the code now checked out.
+    await this.refreshCodeAge();
+  }
+
+  // ------------------------------------------------------------- code age
+
+  /** The code a process runs (TASK-419 D1): the agent's sources + lockfile, a script file otherwise. */
+  private codePaths(proc: ProcName): string[] {
+    if (proc === 'agent') return [join(this.profile.agent.cwd, 'src'), join(this.profile.agent.cwd, 'package-lock.json')];
+    if (proc === 'bridge') return [this.profile.bridge.script];
+    if (proc === 'sidecar') return [this.profile.sidecar.script];
+    return [];
+  }
+
+  /** Fill a foreign step's cwd, robot id and stale-code verdict. Never signals anything. */
+  private async checkForeignCode(id: StepId): Promise<void> {
+    const step = this.steps[id];
+    const proc = this.procOf(id);
+    const f = step.foreign;
+    if (!proc || step.state !== 'foreign' || !f || f.pid === null || f.pid <= 0) return;
+    const pid = f.pid;
+    const stale = await this.codeAge.check(pid, this.codePaths(proc)).catch(() => null);
+    // The step may have changed while git ran.
+    if (this.steps[id].foreign !== f) return;
+    f.cwd = processCwd(pid, this.procRoot);
+    f.robotId = processRobotId(pid, f.cmdline, this.procRoot);
+    f.staleCode = stale;
+    if (stale) {
+      step.code = 'stale_code';
+      if (step.actions.length) step.actions = ['leave'];
+      step.detail = `pid ${pid} runs code from before ${shortDate(stale.codeAt)} (started ${shortDate(stale.startedAt)}) ` +
+        `and holds :${f.port}. It was not started by the supervisor and is never killed: stop it by hand, then press Start.`;
+    }
+  }
+
+  /**
+   * Mark every running owned or adopted bridge, sidecar and agent that started
+   * before its code (`checks.staleCode`, warn), and clear the mark once it is
+   * current again. Runs with the liveness monitor; git answers are cached 30 s.
+   */
+  async refreshCodeAge(): Promise<void> {
+    for (const proc of ['bridge', 'sidecar', 'agent'] as ProcName[]) {
+      const id = this.stepOf(proc);
+      const rec = this.recs[proc];
+      const step = this.steps[id];
+      if (!rec || !recAlive(rec, this.procRoot)) continue;
+      if (step.state !== 'ok' && step.state !== 'warn') continue;
+      const stale = await this.codeAge.check(rec.pid, this.codePaths(proc)).catch(() => null);
+      if (this.recs[proc] !== rec || (step.state !== 'ok' && step.state !== 'warn')) continue;
+      if (stale) {
+        if (step.code !== 'stale_code') this.staleRestore[id] = { state: step.state, code: step.code, detail: step.detail };
+        step.checks.staleCode = stale;
+        Object.assign(step, {
+          state: 'warn',
+          code: 'stale_code',
+          detail: `runs code from before ${shortDate(stale.codeAt)} — restart the robot side (started ${shortDate(stale.startedAt)})`,
+        });
+      } else if (step.code === 'stale_code') {
+        delete step.checks.staleCode;
+        Object.assign(step, this.staleRestore[id] ?? { state: 'ok', code: null, detail: null });
+        delete this.staleRestore[id];
+      }
+    }
   }
 
   // ---------------------------------------------------------------- helpers

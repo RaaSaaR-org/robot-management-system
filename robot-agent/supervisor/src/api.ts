@@ -139,7 +139,7 @@ async function handle(sup: Supervisor, opts: ApiOptions & { quest: QuestControl 
   if (method === 'POST' && step) {
     const id = step[1] as StepId;
     if (!STEP_IDS.includes(id)) throw new SupervisorError(404, 'no_step', `no step ${id}`);
-    const result = step[2] === 'adopt' ? sup.adopt(id) : sup.leave(id);
+    const result = step[2] === 'adopt' ? await sup.adopt(id) : sup.leave(id);
     send(res, 200, { ok: true, step: result, status: sup.status() });
     return;
   }

@@ -4,6 +4,8 @@
  *              the session board's lines and buttons, the wrist HUD's take,
  *              the answer haptics, and the stick shortcuts driven by fake
  *              gamepad frames through the same `isStickClick` the rig uses.
+ *              TASK-418: the task line, the persistent quick check, the ENDED
+ *              line and the camera strip's priority (E-stop > REC > verdict).
  * @feature robots
  */
 
@@ -12,10 +14,13 @@ import {
   BOARD_COLORS,
   DISCARD_HOLD_MS,
   IDLE_SESSION_KEYS,
-  QUICK_CHECK_SHOW_MS,
+  STRIP_VERDICT_MS,
   boardButtons,
   buildVrSessionView,
+  composeCameraStrip,
   composeSessionBoard,
+  initialCameraStrip,
+  stepCameraStrip,
   formatTakeClock,
   hudTakeOf,
   stepSessionKeys,
@@ -99,65 +104,185 @@ describe('buildVrSessionView', () => {
 });
 
 describe('composeSessionBoard', () => {
-  it('reads ● REC, the 1-based take and the timer while capturing', () => {
-    const lines = composeSessionBoard(view(), 0, null);
+  const qc = { take: 5, frames: 707, durationS: 23.44, groupsMoved: ['left_arm', 'right_hand'], warnings: [], discarded: false };
+
+  it('reads ● REC, the 1-based take and the timer while capturing, with the stats', () => {
+    const lines = composeSessionBoard(view(), 0);
     expect(lines[0]).toMatchObject({ text: '● REC  Take 7   00:42', color: BOARD_COLORS.rec });
-    expect(lines[1].text).toBe('707 fr · 30 fps · OK');
-    expect(lines[2].text).toBe('kept 6 · discarded 1');
+    expect(lines[1].text).toBe('kept 6 · discarded 1');
+    expect(lines[2].text).toBe('707 fr · 30 fps · OK');
     expect(lines).toHaveLength(3);
   });
 
+  it('puts the task instruction first, wrapped to two rows at most', () => {
+    const lines = composeSessionBoard(view({ instruction: '  pick up the red cube and place it in the bin ' }), 0);
+    expect(lines[0]).toMatchObject({ id: 'task', text: 'pick up the red cube and place it in the bin', wrap: true, maxRows: 2 });
+    expect(lines[1].text).toMatch(/^● REC/);
+    expect(composeSessionBoard(view({ instruction: '   ' }), 0)[0].id).toBe('status');
+  });
+
   it('blinks the dot without moving the text', () => {
-    const on = composeSessionBoard(view(), 0, null)[0].text;
-    const off = composeSessionBoard(view(), 500, null)[0].text;
+    const on = composeSessionBoard(view(), 0)[0].text;
+    const off = composeSessionBoard(view(), 500)[0].text;
     expect(on).toContain('●');
     expect(off).not.toContain('●');
     expect(off.trim()).toBe(on.replace('●', '').trim());
   });
 
-  it('says READY and the next take between takes', () => {
-    const lines = composeSessionBoard(view({ live: live({ phase: 'between' }) }), 0, null);
-    expect(lines[0].text).toBe('READY  Take 8 next');
-    expect(lines[1].text).toBe('5230 fr total · 30 fps · OK');
+  it('says READY between takes and drops the frame/fps noise', () => {
+    const lines = composeSessionBoard(view({ live: live({ phase: 'between' }) }), 0);
+    expect(lines.map((l) => l.text)).toEqual(['READY  Take 8 next', 'kept 6 · discarded 1']);
   });
 
-  it('says PAUSED and ENDED for those sessions', () => {
-    expect(composeSessionBoard(view({ live: live({ status: 'paused' }) }), 0, null)[0].text).toBe('PAUSED');
-    expect(composeSessionBoard(view({ live: live({ status: 'completed' }) }), 0, null)[0].text).toBe('ENDED');
+  it('keeps the stats between takes while degraded', () => {
+    const lines = composeSessionBoard(view({ live: live({ phase: 'between', degraded: true }) }), 0);
+    expect(lines[2]).toMatchObject({ text: '5230 fr total · 30 fps · DEGRADED', color: BOARD_COLORS.warn });
+  });
+
+  it('says PAUSED for a paused session', () => {
+    expect(composeSessionBoard(view({ live: live({ status: 'paused' }) }), 0)[0].text).toBe('PAUSED');
+  });
+
+  it('says who ENDED the session, the kept takes and the final frames', () => {
+    const ended = view({
+      live: live({ status: 'completed', phase: null, totalFrames: 0, kept: 9 }),
+      sessionFrames: 1523,
+      endedBy: 'Ben',
+      lastQuickCheck: qc,
+    });
+    const lines = composeSessionBoard(ended, 0);
+    expect(lines.map((l) => l.text)).toEqual(['ENDED by Ben · 9 kept · 1523 fr']);
+    const anonymous = view({ live: live({ status: 'completed', phase: null, kept: 2 }), sessionFrames: 40 });
+    expect(composeSessionBoard(anonymous, 0)[0].text).toBe('ENDED · 2 kept · 40 fr');
+  });
+
+  it('does not name an ender while the session runs', () => {
+    expect(view({ endedBy: 'Ben' }).endedBy).toBeNull();
   });
 
   it('flags a degraded link and the auto-stop', () => {
-    const lines = composeSessionBoard(view({ live: live({ degraded: true, autoStopS: 55 }) }), 0, null);
-    expect(lines[1]).toMatchObject({ text: '707 fr · 30 fps · DEGRADED · auto-stop 13 s', color: BOARD_COLORS.warn });
+    const lines = composeSessionBoard(view({ live: live({ degraded: true, autoStopS: 55 }) }), 0);
+    expect(lines[2]).toMatchObject({ text: '707 fr · 30 fps · DEGRADED · auto-stop 13 s', color: BOARD_COLORS.warn });
   });
 
-  it('shows the quick check for 6 s after a stop, then drops it', () => {
-    const qc = { take: 5, frames: 707, durationS: 23.44, groupsMoved: ['left_arm', 'right_hand'], warnings: [], discarded: false };
-    const v = view({ live: live({ phase: 'between' }), lastQuickCheck: qc });
-    const shown = composeSessionBoard(v, 10_000, 9_000);
-    expect(shown[3].text).toBe('Take 6 · 23.4 s · 707 fr · L arm + R hand');
-    expect(shown[4]).toMatchObject({ text: '✓ looks good', color: BOARD_COLORS.ok });
-    expect(composeSessionBoard(v, 9_000 + QUICK_CHECK_SHOW_MS, 9_000)).toHaveLength(3);
-    expect(composeSessionBoard(v, 10_000, null)).toHaveLength(3);
+  it('keeps the quick check until the next Start (D3), never on a timer', () => {
+    const between = view({ live: live({ phase: 'between' }), lastQuickCheck: qc });
+    for (const now of [0, 6_000, 30_000, 600_000]) {
+      const lines = composeSessionBoard(between, now);
+      expect(lines[2].text).toBe('Take 6 · 23.4 s · 707 fr · L arm + R hand');
+      expect(lines[3]).toMatchObject({ text: '✓ looks good', color: BOARD_COLORS.ok });
+    }
+    // The next Start: capturing hides it.
+    expect(composeSessionBoard(view({ lastQuickCheck: qc }), 30_000).some((l) => l.id === 'qc')).toBe(false);
   });
 
-  it('says a take the E-stop aborted was discarded (TASK-416)', () => {
-    const qc = { take: 10, frames: 0, durationS: 4.2, groupsMoved: [], warnings: ['short'], discarded: true, stopReason: 'estop' };
-    const v = view({ live: live({ phase: 'between' }), lastQuickCheck: qc });
+  it('says a take the E-stop aborted was discarded, until the next Start (TASK-416)', () => {
+    const aborted = { take: 10, frames: 0, durationS: 4.2, groupsMoved: [], warnings: ['short'], discarded: true, stopReason: 'estop' };
+    const v = view({ live: live({ phase: 'between' }), lastQuickCheck: aborted });
     expect(v.lastQuickCheck).toMatchObject({ takeNumber: 11, estopDiscarded: true });
-    const lines = composeSessionBoard(v, 10_000, 9_000);
-    expect(lines[0].text).toBe('READY  Take 8 next');
-    expect(lines[3]).toMatchObject({ text: 'Take 11 stopped by the E-stop — discarded', color: BOARD_COLORS.warn });
-    expect(lines).toHaveLength(4);
+    for (const now of [0, 30_000]) {
+      const lines = composeSessionBoard(v, now);
+      expect(lines[0].text).toBe('READY  Take 8 next');
+      expect(lines[2]).toMatchObject({ id: 'qc-verdict', text: 'Take 11 stopped by the E-stop — discarded', color: BOARD_COLORS.warn });
+      expect(lines).toHaveLength(3);
+    }
+    // The next Start hides it, like any quick check.
+    expect(composeSessionBoard(view({ lastQuickCheck: aborted }), 0).some((l) => l.id === 'qc-verdict')).toBe(false);
     // Any other discarded take still leaves the board.
-    expect(view({ lastQuickCheck: { ...qc, stopReason: 'operator' } }).lastQuickCheck).toBeNull();
+    expect(view({ lastQuickCheck: { ...aborted, stopReason: 'operator' } }).lastQuickCheck).toBeNull();
   });
 
-  it('puts the warnings on line 5 in place of "looks good"', () => {
-    const qc = { take: 2, frames: 30, durationS: 1, groupsMoved: [], warnings: ['short', 'no_motion'], discarded: false };
-    const lines = composeSessionBoard(view({ lastQuickCheck: qc }), 0, 0);
-    expect(lines[3].text).toBe('Take 3 · 1.0 s · 30 fr · nothing moved');
-    expect(lines[4]).toMatchObject({ text: '⚠ Short · No motion', color: BOARD_COLORS.warn });
+  it('puts the warnings in place of "looks good"', () => {
+    const warned = { take: 2, frames: 30, durationS: 1, groupsMoved: [], warnings: ['short', 'no_motion'], discarded: false };
+    const lines = composeSessionBoard(view({ live: live({ phase: 'between' }), lastQuickCheck: warned }), 0);
+    expect(lines[2].text).toBe('Take 3 · 1.0 s · 30 fr · nothing moved');
+    expect(lines[3]).toMatchObject({ text: '⚠ Short · No motion', color: BOARD_COLORS.warn });
+  });
+});
+
+describe('the camera strip (TASK-418)', () => {
+  const capturing = (o: Partial<VrLiveInput> = {}) => view({ live: live({ take: 2, takeStartedAt: new Date(T0 - 12_300).toISOString(), ...o }) });
+  const between = (o: Partial<VrLiveInput> = {}, extra: Partial<VrSessionInput> = {}) =>
+    view({ live: live({ take: 2, phase: 'between', takeStartedAt: null, ...o }), ...extra });
+
+  it('shows REC with the take and its clock while capturing, on a red frame', () => {
+    const v = capturing();
+    expect(composeCameraStrip(v, false, initialCameraStrip(v), T0)).toEqual({ text: '● REC  Take 3  00:12', tone: 'rec', redFrame: true });
+  });
+
+  it('puts the latched E-stop over everything, REC and the end included', () => {
+    const v = capturing();
+    const estop = { text: 'E-STOP — hold Reset (right panel)', tone: 'estop', redFrame: true };
+    expect(composeCameraStrip(v, true, initialCameraStrip(v), T0)).toEqual(estop);
+    expect(composeCameraStrip(null, true, null, T0)).toEqual(estop);
+    const ended = view({ live: live({ status: 'completed', phase: null }) });
+    expect(composeCameraStrip(ended, true, null, T0)).toEqual(estop);
+  });
+
+  it('says the session ended, until VR closes', () => {
+    const ended = view({ live: live({ status: 'completed', phase: null }) });
+    expect(composeCameraStrip(ended, false, null, T0)).toEqual({
+      text: 'Session ended — take the headset off', tone: 'ended', redFrame: false,
+    });
+  });
+
+  it('shows nothing between takes with no fresh verdict, and nothing without a session', () => {
+    const v = between();
+    expect(composeCameraStrip(v, false, initialCameraStrip(v), T0)).toBeNull();
+    expect(composeCameraStrip(null, false, null, T0)).toBeNull();
+  });
+
+  it('reports a kept take for 3 s after its stop, with the quick check duration', () => {
+    let m = initialCameraStrip(capturing());
+    m = stepCameraStrip(m, capturing(), T0);
+    const stopped = between({}, { lastQuickCheck: { take: 2, frames: 400, durationS: 13.46, groupsMoved: ['left_arm'], warnings: [], discarded: false } });
+    m = stepCameraStrip(m, stopped, T0 + 100);
+    expect(composeCameraStrip(stopped, false, m, T0 + 100)).toEqual({ text: '✓ Take 3 kept · 13.5 s', tone: 'ok', redFrame: false });
+    expect(composeCameraStrip(stopped, false, m, T0 + 100 + STRIP_VERDICT_MS - 1)).not.toBeNull();
+    expect(composeCameraStrip(stopped, false, m, T0 + 100 + STRIP_VERDICT_MS)).toBeNull();
+  });
+
+  it('falls back to the clock it last read when the quick check has not arrived', () => {
+    let m = initialCameraStrip(capturing());
+    m = stepCameraStrip(m, capturing(), T0);
+    m = stepCameraStrip(m, between(), T0 + 100);
+    expect(composeCameraStrip(between(), false, m, T0 + 100)?.text).toBe('✓ Take 3 kept · 12.3 s');
+  });
+
+  it('names the first quick-check warning instead', () => {
+    let m = stepCameraStrip(initialCameraStrip(capturing()), capturing(), T0);
+    const stopped = between({}, { lastQuickCheck: { take: 2, frames: 30, durationS: 1, groupsMoved: [], warnings: ['no_motion', 'short'], discarded: false } });
+    m = stepCameraStrip(m, stopped, T0 + 100);
+    expect(composeCameraStrip(stopped, false, m, T0 + 100)).toEqual({ text: '⚠ No motion — Discard on the board', tone: 'warn', redFrame: false });
+  });
+
+  it('says a discarded take was discarded', () => {
+    let m = stepCameraStrip(initialCameraStrip(capturing()), capturing(), T0);
+    const discarded = between({ discarded: 2 });
+    m = stepCameraStrip(m, discarded, T0 + 100);
+    expect(composeCameraStrip(discarded, false, m, T0 + 100)?.text).toBe('Take 3 discarded');
+  });
+
+  it('drops the verdict on the next Start', () => {
+    let m = stepCameraStrip(initialCameraStrip(capturing()), capturing(), T0);
+    m = stepCameraStrip(m, between(), T0 + 100);
+    const next = capturing({ take: 3 });
+    m = stepCameraStrip(m, next, T0 + 200);
+    expect(m.verdict).toBeNull();
+    expect(composeCameraStrip(next, false, m, T0 + 200)?.tone).toBe('rec');
+  });
+
+  it('says a take the E-stop aborted was discarded, in the board\'s words (TASK-416)', () => {
+    let m = stepCameraStrip(initialCameraStrip(capturing()), capturing(), T0);
+    const aborted = between({ discarded: 2 }, {
+      lastQuickCheck: { take: 2, frames: 0, durationS: 3, groupsMoved: [], warnings: ['short'], discarded: true, stopReason: 'estop' },
+    });
+    m = stepCameraStrip(m, aborted, T0 + 100);
+    expect(composeCameraStrip(aborted, false, m, T0 + 100)).toEqual({
+      text: 'Take 3 stopped by the E-stop — discarded', tone: 'warn', redFrame: false,
+    });
+    // While the rig itself is latched, the E-stop line still wins.
+    expect(composeCameraStrip(aborted, true, m, T0 + 100)?.tone).toBe('estop');
   });
 });
 

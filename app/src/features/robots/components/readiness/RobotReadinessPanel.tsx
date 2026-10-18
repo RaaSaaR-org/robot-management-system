@@ -8,7 +8,9 @@
  *              (always read-only, D2), a separate confirmed and lease-gated
  *              "Switch to arm control", Stop (which offers Limp first but never
  *              limps on its own, D3), Adopt / Leave for a foreign process (D4),
- *              and the logs. Nothing here moves the robot; the only motion-
+ *              and the logs. Where arm control or Limp first is blocked only by
+ *              the missing lease, it offers "Take control" when the page can
+ *              take it (TASK-419 D3). Nothing here moves the robot; the only motion-
  *              adjacent step is Limp, through the existing confirmed base-mode
  *              route.
  *
@@ -48,6 +50,12 @@ export interface ReadinessLease {
   enabled: boolean;
   state: string;
   grant(): { leaseId: string; generation: number } | null;
+  /**
+   * Take control from the panel (TASK-419 D3): connect what the lease needs and
+   * take it; resolves true once bound. Without it the panel can only say
+   * "Take control first."
+   */
+  take?: () => Promise<boolean>;
 }
 
 /** The modes a stop dialog offers Limp first for: the robot is holding itself up. */
@@ -147,6 +155,8 @@ function ReadinessBody({
   const [limping, setLimping] = useState(false);
   const [limpError, setLimpError] = useState<string | null>(null);
   const [logsOpen, setLogsOpen] = useState(false);
+  const [taking, setTaking] = useState(false);
+  const [takeError, setTakeError] = useState<string | null>(null);
 
   const questPort = questPagePort();
   const rows = useMemo(() => (readiness ? readinessRows(readiness, questPort) : []), [readiness, questPort]);
@@ -174,6 +184,23 @@ function ReadinessBody({
     : lease && !lease.enabled
       ? 'Limp needs a control lease, and control leases are off on this server.'
       : 'Take control first.';
+  // A blocked button that names a missing action offers it (TASK-419 D3).
+  const take = !leaseBound && lease?.enabled && lease.take ? lease.take : null;
+  const takeControl = async (then?: () => void) => {
+    if (!take) return;
+    setTaking(true);
+    setTakeError(null);
+    try {
+      const ok = await take().catch(() => false);
+      if (!ok) {
+        setTakeError('Could not take control. See the control bar above for why.');
+        return;
+      }
+      then?.();
+    } finally {
+      setTaking(false);
+    }
+  };
   const mode = measuredMode(readiness);
   const offerLimp = upright(mode);
   const linkStep = bringup?.steps.find((s) => s.id === 'link') ?? null;
@@ -216,7 +243,7 @@ function ReadinessBody({
     }
   };
 
-  const errorLine = limpError ?? (lastError ? `${lastError.error}${lastError.code ? ` (${lastError.code})` : ''}` : null);
+  const errorLine = limpError ?? takeError ?? (lastError ? `${lastError.error}${lastError.code ? ` (${lastError.code})` : ''}` : null);
 
   // The compact variant offers Start only; an empty row would leave a gap.
   const buttons = bringup && (!compact || canStart) && (
@@ -248,7 +275,20 @@ function ReadinessBody({
           >
             Switch to arm control
           </Button>
-          {armBlockedReason && (
+          {armBlockedReason && take && (
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => void takeControl(() => setConfirm('arm'))}
+              disabled={busy || taking}
+              isLoading={taking}
+              loadingText="Taking control…"
+              data-testid="readiness-take-control"
+            >
+              Take control
+            </Button>
+          )}
+          {armBlockedReason && !take && (
             <span className="text-[12px] text-ink-secondary" data-testid="readiness-arm-blocked">
               {armBlockedReason}
             </span>
@@ -267,6 +307,7 @@ function ReadinessBody({
           leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />}
           onClick={() => {
             setLimpError(null);
+            setTakeError(null);
             setConfirm('stop');
           }}
           disabled={busy && pending?.action !== 'start'}
@@ -420,11 +461,24 @@ function ReadinessBody({
               >
                 Limp first, then stop
               </Button>
-              {limpBlockedReason && <span className="text-[12px] text-ink-secondary">{limpBlockedReason}</span>}
+              {limpBlockedReason && take && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => void takeControl()}
+                  disabled={limping || taking}
+                  isLoading={taking}
+                  loadingText="Taking control…"
+                  data-testid="readiness-limp-take-control"
+                >
+                  Take control
+                </Button>
+              )}
+              {limpBlockedReason && !take && <span className="text-[12px] text-ink-secondary">{limpBlockedReason}</span>}
             </div>
-            {limpError && (
+            {(limpError ?? takeError) && (
               <p className="mt-2 text-[12px] text-signal-stopped" role="alert">
-                {limpError}
+                {limpError ?? takeError}
               </p>
             )}
           </div>

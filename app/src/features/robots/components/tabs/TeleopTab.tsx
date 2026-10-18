@@ -62,6 +62,10 @@ function Kbd({ children }: { children: string }) {
 // KEYBOARD TELEOP SECTION
 // ============================================================================
 
+/** How long the panel's Take control waits for the agent socket, then for the robot's `bound`. */
+const TAKE_CONNECT_MS = 8_000;
+const TAKE_BIND_MS = 8_000;
+
 export function KeyboardTeleopSection({
   robot,
   onLeaseChange,
@@ -99,11 +103,6 @@ export function KeyboardTeleopSection({
   const leaseRef = useRef(lease);
   leaseRef.current = lease;
   const canDrive = !lease.enabled || lease.state === 'bound';
-  // The readiness panel sits outside this section; it reads the grant at
-  // click time through the ref, never a stale copy.
-  useEffect(() => {
-    onLeaseChange?.({ enabled: lease.enabled, state: lease.state, grant: () => leaseRef.current.grant() });
-  }, [lease.enabled, lease.state, onLeaseChange]);
   const canDriveRef = useRef(canDrive);
   canDriveRef.current = canDrive;
 
@@ -176,6 +175,47 @@ export function KeyboardTeleopSection({
       } catch { /* ignore parse errors */ }
     };
   }, [robot]);
+
+  /**
+   * Take control for the readiness panel (TASK-419 D3): connect this section's
+   * agent socket when it is not open yet, then take the lease and wait until
+   * the robot confirms it. Resolves true once bound. Opening the socket moves
+   * nothing — the clutch stays open and no key is held.
+   */
+  const take = useCallback(async (): Promise<boolean> => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const until = (ok: () => boolean, ms: number) =>
+      new Promise<boolean>((resolve) => {
+        const deadline = Date.now() + ms;
+        const tick = () => {
+          if (ok()) return resolve(true);
+          if (Date.now() >= deadline) return resolve(false);
+          setTimeout(tick, 100);
+        };
+        tick();
+      });
+    if (leaseRef.current.state === 'bound') return true;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      if (!wsRef.current) connect();
+      const ws = wsRef.current as WebSocket | null;
+      if (!(await until(() => ws !== null && ws.readyState === WebSocket.OPEN && wsRef.current === ws, TAKE_CONNECT_MS))) return false;
+      // The lease hook learns of the socket on open; give it one render to see it.
+      await sleep(50);
+    }
+    await leaseRef.current.acquire();
+    // Let the hook's own state (acquiring, or a refusal's notice) render first.
+    await sleep(50);
+    return until(
+      () => leaseRef.current.state === 'bound' || (leaseRef.current.state === 'observing' && leaseRef.current.notice !== null),
+      TAKE_BIND_MS,
+    ).then(() => leaseRef.current.state === 'bound');
+  }, [connect]);
+
+  // The readiness panel sits outside this section; it reads the grant at
+  // click time through the ref, never a stale copy.
+  useEffect(() => {
+    onLeaseChange?.({ enabled: lease.enabled, state: lease.state, grant: () => leaseRef.current.grant(), take });
+  }, [lease.enabled, lease.state, onLeaseChange, take]);
 
   const disconnect = useCallback(() => {
     // Hand control back on purpose first, so the operator sees no "lost" banner.

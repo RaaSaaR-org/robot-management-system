@@ -5,10 +5,11 @@
  *              moved most with their range, and the robot's warnings. Keep is
  *              the default and only dismisses (D3); Discard throws the take
  *              away. A take that is short or did not move pre-focuses Discard
- *              — it never discards on its own. Hides after 8 s unless the
- *              pointer or focus is on it. A take the robot aborted on an
- *              E-stop is already discarded (TASK-416): the card says only
- *              that, and offers only Dismiss.
+ *              — it never discards on its own. TASK-418 (D3): it stays until
+ *              Keep, a discard or the next Start — the headset board shows the
+ *              same quick check for the same time, so the two views agree.
+ *              A take the robot aborted on an E-stop is already discarded
+ *              (TASK-416): the card says only that, and offers only Dismiss.
  * @feature datacollection
  */
 
@@ -20,7 +21,10 @@ import type { QuickCheck } from '../../types/datacollection.types';
 import { DISCARD_SUGGESTING_WARNINGS, describeEStopTake, groupLabel, takeLabel, warningLabel } from '../../utils/takeFormat';
 import { TakeThumbnail } from './TakeThumbnail';
 
-/** How long the card stays without being touched. */
+/**
+ * The old auto-hide (TASK-410), now opt-in through `visibleMs`. TASK-418 (D3):
+ * by default the card stays until the next Start, like the headset's board.
+ */
 export const QUICK_CHECK_VISIBLE_MS = 8000;
 
 export interface QuickCheckCardProps {
@@ -28,14 +32,14 @@ export interface QuickCheckCardProps {
   quickCheck: QuickCheck;
   onKeep: () => void;
   onDiscard: (take: number) => void | Promise<unknown>;
-  /** Override for tests */
+  /** Hide after this many ms untouched; absent (the default) keeps the card until the next Start. */
   visibleMs?: number;
 }
 
 /** The range bar's full width: a joint that swept half a turn fills it. */
 const FULL_RANGE_RAD = Math.PI;
 
-export function QuickCheckCard({ sessionId, quickCheck, onKeep, onDiscard, visibleMs = QUICK_CHECK_VISIBLE_MS }: QuickCheckCardProps) {
+export function QuickCheckCard({ sessionId, quickCheck, onKeep, onDiscard, visibleMs }: QuickCheckCardProps) {
   const [busy, setBusy] = useState(false);
   const [held, setHeld] = useState(false);
   const discardRef = useRef<HTMLButtonElement>(null);
@@ -47,9 +51,9 @@ export function QuickCheckCard({ sessionId, quickCheck, onKeep, onDiscard, visib
     if (suggestDiscard) discardRef.current?.focus();
   }, [suggestDiscard, quickCheck.take]);
 
-  // Gone after 8 s, unless someone is reading or pointing at it.
+  // Opt-in auto-hide, unless someone is reading or pointing at it.
   useEffect(() => {
-    if (held) return;
+    if (held || visibleMs === undefined) return;
     const timer = setTimeout(onKeep, visibleMs);
     return () => clearTimeout(timer);
   }, [held, onKeep, visibleMs, quickCheck.take]);

@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useTextPlate, type TextPlateDrawOptions } from './VrTextPlate';
+import { VR_UI_MATERIAL, VR_UI_RENDER_ORDER } from './VrPanel';
 import { registerVrUiTarget, vrUiGate, type VrUiTarget } from './vrUiRegistry';
 
 export const VR_BUTTON_WIDTH_M = 0.12;
@@ -123,9 +124,10 @@ export function VrButton({
   return (
     <group ref={groupRef} position={position}>
       {plate.texture && (
-        <mesh ref={meshRef} name={`vr-button-${id}`}>
+        // Over the robot and over its own plate (TASK-418, D1).
+        <mesh ref={meshRef} name={`vr-button-${id}`} renderOrder={VR_UI_RENDER_ORDER.button}>
           <planeGeometry args={[VR_BUTTON_WIDTH_M, VR_BUTTON_HEIGHT_M]} />
-          <meshBasicMaterial map={plate.texture} transparent toneMapped={false} />
+          <meshBasicMaterial map={plate.texture} {...VR_UI_MATERIAL} />
         </mesh>
       )}
     </group>

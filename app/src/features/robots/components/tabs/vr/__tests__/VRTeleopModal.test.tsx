@@ -164,6 +164,7 @@ const FAKE_SESSION: VrSessionBridge = {
   getState: () => ({
     status: 'recording', phase: 'between', take: null, takeElapsedS: null, kept: 0, discarded: 0,
     frames: 0, fpsActual: null, degraded: false, autoStopInS: null, lastQuickCheck: null, pending: false,
+    instruction: null, endedBy: null, sessionFrames: 0,
   }),
   actions: {
     start: () => Promise.resolve('ok'),

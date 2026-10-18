@@ -167,6 +167,13 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
           state.lastQuickCheck = quickCheck;
         });
       }
+      // TASK-418 (D3): the quick check stays until the next Start — on the
+      // desktop card and the headset board alike.
+      if (kind === 'started' && get().lastQuickCheck) {
+        set((state) => {
+          state.lastQuickCheck = null;
+        });
+      }
       if (kind === 'discarded') {
         set((state) => {
           state.episodes = state.episodes.filter((e) => e.episodeIndex !== take);
@@ -711,9 +718,14 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
               // counters must not wipe the others (the "next" wipe, TASK-408).
               state.recordingProgress = mergeProgress(state.recordingProgress, recordingProgress);
               if (qualityFeedback) state.qualityFeedback = normalizeQualityFeedback(qualityFeedback);
-              // Keep the visible frame count in sync with the live recorder
+              // Keep the visible frame count in sync with the live recorder —
+              // while it records. TASK-418: the server emits one last live
+              // state AFTER `session:completed`, and an ended session's live
+              // state counts 0 frames; copying that over the final count is
+              // what made the completed summary read FRAMES 0 until a reload.
               if (
                 state.selectedSession?.id === sessionId &&
+                (state.selectedSession.status === 'recording' || state.selectedSession.status === 'paused') &&
                 typeof recordingProgress?.frameCount === 'number'
               ) {
                 state.selectedSession.frameCount = recordingProgress.frameCount;

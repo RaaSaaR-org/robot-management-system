@@ -10,6 +10,9 @@
  *              options" disclosure that summarises what differs from the
  *              defaults. Robot, device and the advanced values are remembered
  *              per user; recent task instructions come back as chips.
+ *              An offline robot with a robot supervisor gets the compact
+ *              readiness panel under the robot field, with Start robot side,
+ *              so the robot side comes up without leaving the page (TASK-419).
  * @feature datacollection
  */
 
@@ -23,6 +26,8 @@ import {
 import { SessionTypeSelector } from '../components/SessionTypeSelector';
 import { useDataCollectionStore } from '../store/datacollectionStore';
 import { useRobotsStore } from '../../robots/store/robotsStore';
+import { useRobotReadiness } from '../../robots/hooks/useRobotReadiness';
+import { RobotReadinessPanel } from '../../robots/components/readiness/RobotReadinessPanel';
 import { useAuthStore } from '@/features/auth/store/authStore';
 import { TELEOPERATION_TYPE_LABELS } from '../types/datacollection.types';
 import type { TeleoperationType, CreateSessionRequest } from '../types/datacollection.types';
@@ -38,6 +43,9 @@ interface Errors {
   fps?: string;
   datasetRepoId?: string;
 }
+
+/** How often the robot list is re-read while a just-started robot comes online. */
+const ROBOT_REFRESH_MS = 3_000;
 
 const ADVANCED_FIELDS: (keyof Errors)[] = ['episodeTimeS', 'fps', 'datasetRepoId'];
 
@@ -96,6 +104,20 @@ export function NewSessionPage() {
     label: `${r.name} (${r.model}) · ${humanizeStatus(r.status)}`,
   }));
   const selectedRobot = robots.find((r) => r.id === robotId);
+
+  // An offline robot that a supervisor covers can be started from here (TASK-419).
+  const offlineId = selectedRobot && !isOnline(selectedRobot.status) ? selectedRobot.id : '';
+  const offlineReadiness = useRobotReadiness(offlineId, { enabled: offlineId !== '' });
+  const offlineSnapshot = offlineId ? offlineReadiness.readiness : null;
+  const supervised = offlineSnapshot?.robotId === offlineId && offlineSnapshot.bringup != null;
+  // Once its agent answers, re-read the robot list until the robot shows online.
+  const agentUp = supervised && offlineSnapshot?.agent.reachable === true;
+  useEffect(() => {
+    if (!agentUp) return undefined;
+    void fetchRobots();
+    const timer = setInterval(() => void fetchRobots(), ROBOT_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [agentUp, fetchRobots]);
 
   // Preselect once the list arrives: the remembered robot if it is online,
   // else the only online robot. Never overrides a choice the user made.
@@ -199,7 +221,9 @@ export function NewSessionPage() {
               error={errors.robotId}
               hint={
                 selectedRobot && !isOnline(selectedRobot.status)
-                  ? 'This robot is offline. Start its robot agent before you record.'
+                  ? supervised
+                    ? 'This robot is offline. Start the robot side below.'
+                    : 'This robot is offline. Start its robot agent before you record.'
                   : robots.length > 0 && onlineRobots.length === 0
                     ? 'No robot is online right now.'
                     : 'Online robots are listed first.'
@@ -251,6 +275,15 @@ export function NewSessionPage() {
               )}
             </div>
           </div>
+
+          {supervised && (
+            <RobotReadinessPanel
+              robotId={offlineId}
+              variant="compact"
+              readiness={offlineReadiness}
+              className="rounded-control border border-line-subtle p-3"
+            />
+          )}
 
           <div className="flex flex-col gap-1.5">
             <span className="text-[13px] font-medium text-ink-secondary">Input device</span>

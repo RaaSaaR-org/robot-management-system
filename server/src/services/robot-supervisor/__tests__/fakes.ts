@@ -152,9 +152,18 @@ export async function fakeSupervisor(state: {
 }
 
 /** A fake agent whose readiness route answers `state.readiness` (or `state.fail`). */
-export async function fakeAgent(state: { readiness: AgentReadiness | null; fail?: number }): Promise<FakeHttp> {
+export async function fakeAgent(state: { readiness: AgentReadiness | null; fail?: number; outdated?: boolean }): Promise<FakeHttp> {
   return fakeHttp((req, res) => {
     const path = (req.url ?? '/').split('?')[0];
+    if (req.method === 'GET' && path === '/api/v1/health') {
+      json(res, 200, { status: 'healthy' });
+      return;
+    }
+    // An agent from before TASK-405: healthy, but no readiness route at all.
+    if (state.outdated) {
+      json(res, 404, { error: 'Not found' });
+      return;
+    }
     const m = /^\/api\/v1\/robots\/([^/]+)\/readiness$/.exec(path);
     if (req.method === 'GET' && m) {
       if (state.fail) {

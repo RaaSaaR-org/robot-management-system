@@ -131,7 +131,9 @@ export function VrScene({
               serves `head_camera`, so that oversized screen was guaranteed to
               resolve to a permanent CAMERA OFFLINE billboard rather than a
               picture. */}
-          {modelType !== 'so101' && <HeadCameraPanel robotId={robotId} />}
+          {modelType !== 'so101' && (
+            <HeadCameraPanel robotId={robotId} vrSession={session} telemetryRef={telemetryRef} />
+          )}
           {/* TASK-407: the robot panel and its buttons. In the yaw group, like
               the camera screen, so a recenter brings it round with the robot;
               outside `modelRef` for the same reason the screen is. */}

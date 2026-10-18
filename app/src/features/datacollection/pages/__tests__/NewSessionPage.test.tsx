@@ -18,6 +18,10 @@ import { useRobotsStore } from '@/features/robots/store/robotsStore';
 import { useDataCollectionStore } from '../../store/datacollectionStore';
 import { NewSessionPage } from '../NewSessionPage';
 import { prefsKey } from '../../utils/newSessionPrefs';
+import { http, HttpResponse } from 'msw';
+import { server } from '@/mocks/server';
+import { readinessFor } from '@/mocks/readinessDemoHandlers';
+import { useReadinessStore } from '@/features/robots/store/readinessStore';
 
 const navigateSpy = vi.hoisted(() => vi.fn());
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -226,5 +230,55 @@ describe('NewSessionPage default view', () => {
     await user.click(screen.getByRole('button', { name: 'Start session' }));
     expect(await screen.findByText(/Use a name or owner\/name/)).toBeInTheDocument();
     expect(createSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('NewSessionPage — an offline robot (TASK-419)', () => {
+  beforeEach(() => {
+    useReadinessStore.getState().reset();
+  });
+
+  it('with a supervisor: the compact readiness panel with Start robot side, and the hint points at it', async () => {
+    const posted: unknown[] = [];
+    server.use(
+      http.get('/api/robots/sim-1/readiness', () => HttpResponse.json(readinessFor('sim-1', 'bringup_stopped'))),
+      http.post('/api/robots/sim-1/bringup/start', async ({ request }) => {
+        posted.push(await request.json());
+        return HttpResponse.json({ ok: true }, { status: 202 });
+      }),
+    );
+    const user = userEvent.setup();
+    render();
+    await user.selectOptions(screen.getAllByRole('combobox')[0], 'sim-1');
+    const panel = await screen.findByTestId('robot-readiness-compact');
+    expect(screen.getByText('This robot is offline. Start the robot side below.')).toBeInTheDocument();
+    await user.click(within(panel).getByTestId('readiness-start'));
+    await waitFor(() => expect(posted).toEqual([{ mode: 'read_only' }]));
+  });
+
+  it('re-reads the robot list once the started agent answers, so the robot comes online on this page', async () => {
+    const fetchRobots = vi.fn().mockResolvedValue(undefined);
+    useRobotsStore.setState({ fetchRobots: fetchRobots as never });
+    server.use(http.get('/api/robots/sim-1/readiness', () => HttpResponse.json(readinessFor('sim-1', 'read_only_ready'))));
+    const user = userEvent.setup();
+    render();
+    const before = fetchRobots.mock.calls.length;
+    await user.selectOptions(screen.getAllByRole('combobox')[0], 'sim-1');
+    await waitFor(() => expect(fetchRobots.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it('without a supervisor: no panel, and the old hint', async () => {
+    server.use(
+      http.get('/api/robots/sim-1/readiness', () =>
+        HttpResponse.json({ ...readinessFor('sim-1', 'agent_unreachable'), bringup: null, supervisor: null }),
+      ),
+    );
+    const user = userEvent.setup();
+    render();
+    await user.selectOptions(screen.getAllByRole('combobox')[0], 'sim-1');
+    expect(await screen.findByText('This robot is offline. Start its robot agent before you record.')).toBeInTheDocument();
+    // give the readiness read time to land
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.queryByTestId('robot-readiness-compact')).toBeNull();
   });
 });

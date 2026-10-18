@@ -43,9 +43,24 @@ export async function readAgentReadiness(baseUrl: string, robotId: string): Prom
     return { kind: 'ok', readiness: body };
   } catch (error) {
     if (error instanceof HttpClientError && error.statusCode !== undefined) {
+      // No readiness route but a healthy agent: it runs code from before the
+      // route existed (TASK-419). Any other 404 (unknown robot id) stays bad_status.
+      const code = (error.responseBody as { code?: unknown } | undefined)?.code;
+      if (error.statusCode === 404 && code !== 'ROBOT_NOT_FOUND' && (await agentAnswersHealth(client))) {
+        return { kind: 'outdated' };
+      }
       return { kind: 'bad_status', status: error.statusCode };
     }
     return { kind: 'unreachable', error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function agentAnswersHealth(client: HttpClient): Promise<boolean> {
+  try {
+    await client.get<unknown>('/api/v1/health');
+    return true;
+  } catch {
+    return false;
   }
 }
 
