@@ -3,7 +3,7 @@ id: "TASK-416"
 aliases: []
 title: "The Quest opens the desktop's live session, and every take lands in the dataset as it was meant"
 slug: "the-quest-opens-the-desktop-s-live-session-and-every-take"
-status: review
+status: done
 priority: 1
 owner: "huhn511"
 projects: []
