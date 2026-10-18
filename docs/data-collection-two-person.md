@@ -47,19 +47,37 @@ title, so the operator knows someone is watching.
 
 ## Setup
 
-1. **Start the robot side.** On the robot's page, or in the session's
-   readiness panel, press **Start robot side**. See
+1. **Start the robot side.** On the robot's **Teleop** tab, in the session's
+   readiness panel, or under the robot field of **New session** when the robot
+   is offline, press **Start robot side**. It always starts read-only. See
    [Start the robot side from NeoDEM](g1-edu-lab-bringup.md#start-the-robot-side-from-neodem-task-403).
-2. **Connect the Quest.** Plug the Quest into the robot PC over USB and press
+2. **Switch to arm control.** On the robot's **Teleop** tab, in the readiness
+   panel, press **Take control** (it connects the page to the robot agent and
+   takes the control lease), then **Switch to arm control** and confirm. The
+   sidecar restarts in `arm_sdk`; nothing moves yet.
+3. **Stand the robot up.** In the session's **Robot mode** panel (or the VR window on the robot's
+   Teleop tab), press **Stand up** and confirm, wait until the robot measures
+   Stand, then **Balance** and confirm. The robot must hang in the gantry while
+   it stands up. Stand up uses FSM id 4, which is not yet verified on the robot:
+   watch the robot, and keep the remote's L1+A / the E-STOP within reach.
+4. **Connect the Quest.** Plug the Quest into the robot PC over USB and press
    **Connect** (this runs `adb reverse` for the page port).
-3. **Open the session on the headset.** Press **Open on headset**. The Quest
+5. **Open the session on the headset.** Press **Open on headset**. The Quest
    browser opens `/data-collection/live?robot=<id>`, which always lands on the
    robot's live session. Put on the headset, press **Launch VR**, then
    **Enter VR**. The Enter VR press has to happen inside the headset, because
-   WebXR only starts after a user gesture.
-4. **The assistant opens the session.** Press **Copy viewer link** and open
+   WebXR only starts after a user gesture. The headset takes the robot's control
+   lease when it enters VR, so the desktop's control ends there.
+6. **The assistant opens the session.** Press **Copy viewer link** and open
    the copied link on the desktop. While no headset is in VR, the Operator card
    reads "Waiting for the headset" and shows the same buttons.
+
+**Stopping for the day.** On the robot's Teleop tab press **Stop robot side**.
+While the robot stands or balances, the dialog offers **Limp first, then stop**
+(when it is disabled, press **Take control** next to it first): it switches the
+robot to Limp, waits until the robot measures Limp, and only then stops the robot
+side.
+Have the gantry carry the robot before you press it.
 
 When the operator enters VR, the assistant hears a soft chime, and the
 Operator card switches to `In VR`.
@@ -103,7 +121,7 @@ best streak.
 | Double low tone during a take | The operator's arms have been blocked for more than 1 s while a take is recording. The take is still recording | Stop the take and discard it if the motion is spoiled |
 | Falling low tone, the card shows `link lost` | The headset lost its link to the robot agent. The arms hold and the dead-man hands them back | Wait for the link to come back, or end the take |
 | `link stale` (amber) | The link is slow; frames are late | Move closer to the Wi-Fi access point, or use USB |
-| Operator card: "Waiting for the headset" | No headset is in VR on this session | Open the live link on the Quest (Setup, step 3) |
+| Operator card: "Waiting for the headset" | No headset is in VR on this session | Open the live link on the Quest (Setup, step 5) |
 | HUD `Degraded` | The robot agent is unreachable; frames are being missed | Check the agent in the readiness panel |
 
 All of the operator information is display only. The server passes the

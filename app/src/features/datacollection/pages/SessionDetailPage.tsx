@@ -654,7 +654,7 @@ export function SessionDetailPage() {
               <Panel data-testid="session-readiness">
                 <Panel.Header title="Robot side" description="Why the arms would not follow, before anyone puts the headset on." />
                 <Panel.Body>
-                  <RobotReadinessPanel robotId={robot.id} variant="compact" />
+                  <RobotReadinessPanel robotId={robot.id} variant="compact" lease={{ enabled: lease.enabled, state: lease.state, grant: lease.grant }} />
                 </Panel.Body>
               </Panel>
             )}

@@ -26,7 +26,7 @@ processes in a fixed order, each behind a readiness gate:
 | Step | What it checks or starts | Ready when |
 | --- | --- | --- |
 | `preflight` | Parses the profile; checks ports 6001 / 8767 / 41245; in arm_sdk mode refuses while `xr_teleoperate` or `teleop_hand_and_arm` runs | ports free or held by its own children |
-| `link` | `enp131s0` carrier + operstate up, `192.168.123.222` present, one ping to the robot | "robot cable unplugged or robot off" otherwise |
+| `link` | `enp131s0` carrier + operstate up, `192.168.123.222` present, one ping to the robot | "Robot cable unplugged or robot off" otherwise |
 | `camera` | TCP connect to the PC2 head camera `192.168.123.164:5600` | a **warning** only, never a stop |
 | `bridge` | `g1_state_bridge_readonly.py --iface enp131s0 --domain 0` | `bridge_probe.py` sees `rt/lowstate` on :6001 |
 | `sidecar` | `g1_sidecar.py`, **read_only by default** | `/health`: `connected`, the expected `write_mode` and `loco.gate`, `dds_domain` (when reported), fresh `base.age_s` under fsm |
@@ -39,8 +39,10 @@ keep running. Registering the agent with the server is the server's job
 (TASK-409) — the supervisor knows no server.
 
 **What it never does:** kill a process it did not start (a stray bridge or agent
-on a port shows as `foreign` with its pid and command line — *adopt* it to use it
-as is, or *leave* it and stop it yourself); SIGKILL a sidecar (SIGTERM ramps the
+on a port shows as `foreign` with its pid, command line, start time and working
+directory — *adopt* it to use it as is, or *leave* it and stop it yourself; one
+that runs older code than this checkout cannot be adopted, see *Old robot code*
+below); SIGKILL a sidecar (SIGTERM ramps the
 arms down; a sidecar still alive after 15 s is reported as `sidecar_hung` with
 the runbook); set `G1_READ_ONLY` or `G1_ARM_ALLOW_UNKNOWN_FSM` (the profile
 loader refuses both); restart a sidecar by itself; command motion or change the
@@ -49,6 +51,12 @@ robot should go limp.
 
 ### Install (once, no sudo)
 
+The install has two halves: the supervisor on the robot PC, and the lab's NeoDEM
+server pointed at it. Without the second half the readiness panel has no Start
+button.
+
+**1. The supervisor** (a user unit, enabled so it comes back after a reboot):
+
 ```bash
 mkdir -p ~/.config/systemd/user ~/.config/neodem
 ln -sf ~/develop/robot-management-system/robot-agent/supervisor/systemd/neodem-robot-supervisor@.service \
@@ -56,14 +64,38 @@ ln -sf ~/develop/robot-management-system/robot-agent/supervisor/systemd/neodem-r
 printf 'ROBOT_SUPERVISOR_TOKEN=%s\n' "$(openssl rand -hex 24)" > ~/.config/neodem/supervisor-g1-edu-4.env
 chmod 600 ~/.config/neodem/supervisor-g1-edu-4.env
 systemctl --user daemon-reload
-systemctl --user start neodem-robot-supervisor@g1-edu-4
+systemctl --user enable --now neodem-robot-supervisor@g1-edu-4
+curl -s 127.0.0.1:8766/healthz                 # the check: {"ok":true,...}
 ```
+
+**2. The server half.** Append the supervisor and the same token to the lab
+server's `server/.env`, then restart the server — editing `.env` does not
+restart `tsx watch`:
+
+```bash
+cd ~/develop/robot-management-system
+. ~/.config/neodem/supervisor-g1-edu-4.env
+printf '\nROBOT_SUPERVISORS=g1-edu-4=http://127.0.0.1:8766\nROBOT_SUPERVISOR_TOKEN=%s\n' \
+  "$ROBOT_SUPERVISOR_TOKEN" >> server/.env
+# then stop the server (Ctrl-C in its terminal) and run `npm run dev` in server/ again
+```
+
+Open the robot's **Teleop** tab: the readiness panel now reads "Robot side is
+stopped. Press Start." with a **Start robot side** button. Only the lab's NeoDEM
+server points at the real robot's supervisor; branch servers and test stacks
+never do.
+
+**After a code update** (a pull, a merge, a branch switch): press **Stop robot
+side**, then **Start robot side**. The supervisor compares each process's start
+time with the code it runs; one started before its code shows as *runs code from
+before …* and the panel reads "The robot agent runs older code than NeoDEM.
+Restart the robot side." until you do.
 
 - **Profile:** `robot-agent/hardware/profiles/g1-edu-4.yaml` (checked in, no
   secrets). The unit takes `%i` as the robot id and reads `profiles/%i.yaml`.
 - **Token:** every route except `GET /healthz` needs
   `Authorization: Bearer $ROBOT_SUPERVISOR_TOKEN`. The server proxy (TASK-409)
-  gets the same token.
+  gets the same token (`ROBOT_SUPERVISOR_TOKEN` in `server/.env`, step 2 above).
 - **Port:** 127.0.0.1:8766, one supervisor per robot (lock file
   `~/.local/state/neodem/g1-edu-4/supervisor.lock`).
 - **State:** PID files in `~/.local/state/neodem/g1-edu-4/`, logs in
@@ -73,6 +105,29 @@ systemctl --user start neodem-robot-supervisor@g1-edu-4
   files. **Stopping the robot side is `POST /stop`, not `systemctl stop`.**
 - The agent runs from `robot-agent/` and needs `npm ci` there (the supervisor
   has no `node_modules` of its own; it resolves from `robot-agent/node_modules`).
+
+### Old robot code (TASK-419)
+
+For every running bridge, sidecar and agent the supervisor compares the process's
+start time (`/proc/<pid>/stat`) with the newest change of the code it runs —
+`robot-agent/src` + `robot-agent/package-lock.json` for the agent, the script
+file for the bridge and the sidecar: the last commit touching them
+(`git log -1 --format=%ct`) and the files' modification times (a pull, a checkout
+or an edit rewrites them). Git answers are cached for 30 s.
+
+- **A process the supervisor started** that is older than its code gets
+  `checks.staleCode = {startedAt, codeAt}` and a warning: "runs code from before
+  <date> — restart the robot side". Stop and Start in the panel fixes it.
+- **A foreign process** carries the same verdict in `foreign.staleCode`, plus its
+  `cwd` and the robot id its environment names. A process that runs from another
+  checkout (an old worktree) is compared by that checkout's own commit time. A
+  stale foreign process **cannot be adopted** (409 `stale_code`); the panel shows
+  "Runs code from before <date>. Stop it, then press Start." with a copyable
+  `kill -TERM <pid>`. The supervisor still never signals it — that one command is
+  the only terminal step left.
+- The server turns either verdict into the reason `agent_outdated`. An agent that
+  answers `/api/v1/health` but has no readiness route (code from before TASK-405)
+  reads the same way.
 
 ### Use it
 

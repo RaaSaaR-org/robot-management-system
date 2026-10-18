@@ -19,7 +19,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import type { QuestStatus, SupervisorStatus, SupervisorStepStatus } from './SupervisorClient.js';
+import { isStaleCode, type QuestStatus, type SupervisorStatus, type SupervisorStepStatus } from './SupervisorClient.js';
 
 // ============================================================================
 // TYPES
@@ -58,7 +58,11 @@ export interface RobotReadinessReason {
 export interface RobotReadiness {
   robotId: string;
   at: string;
-  agent: { reachable: boolean; error: string | null; readiness: AgentReadiness | null };
+  /**
+   * `outdated`: the agent answers `/api/v1/health` but has no readiness route —
+   * it runs code from before TASK-405 (TASK-419).
+   */
+  agent: { reachable: boolean; error: string | null; readiness: AgentReadiness | null; outdated?: boolean };
   /** The supervisor's status; null when the robot has none or it did not answer. */
   bringup: SupervisorStatus | null;
   /** Null when the robot has no supervisor configured. */
@@ -80,6 +84,8 @@ export type SupervisorRead =
 export type AgentRead =
   | { kind: 'ok'; readiness: AgentReadiness }
   | { kind: 'bad_status'; status: number }
+  /** The readiness route 404s while `/api/v1/health` answers: older agent code (TASK-419). */
+  | { kind: 'outdated' }
   | { kind: 'unreachable'; error: string };
 
 export interface RobotReadinessDeps {
@@ -128,9 +134,24 @@ const REGISTER_RETRY_MS = 5_000;
 // THE MERGE
 // ============================================================================
 
-function clip(text: string): string {
+/**
+ * One HUD line: the text itself when it fits, else its first sentence when that
+ * fits, else cut at the last word boundary with an ellipsis — never mid-word.
+ */
+export function clip(text: string): string {
   const one = text.replace(/\s+/g, ' ').trim();
-  return one.length <= REASON_MAX_CHARS ? one : `${one.slice(0, REASON_MAX_CHARS - 1)}…`;
+  if (one.length <= REASON_MAX_CHARS) return one;
+  const sentence = /^(.+?[.!?])(\s|$)/.exec(one)?.[1];
+  if (sentence && sentence.length <= REASON_MAX_CHARS) return sentence;
+  const room = one.slice(0, REASON_MAX_CHARS - 1);
+  const space = room.lastIndexOf(' ');
+  const cut = (space > REASON_MAX_CHARS / 2 ? room.slice(0, space) : room).replace(/[\s,;:—–-]+$/, '');
+  return `${cut}…`;
+}
+
+/** The first bringup step whose process runs older code than this checkout (TASK-419). */
+export function staleStep(status: SupervisorStatus): SupervisorStepStatus | null {
+  return status.steps.find((s) => isStaleCode(s.checks?.staleCode) || isStaleCode(s.foreign?.staleCode)) ?? null;
 }
 
 function firstStep(status: SupervisorStatus, state: SupervisorStepStatus['state']): SupervisorStepStatus | null {
@@ -154,7 +175,12 @@ const STEP_PROCESS: Record<string, string> = {
  * 4. `bringup_busy` — a start, stop or mode switch is still running.
  * 5. `supervisor_unreachable` — neither the supervisor nor the agent answers.
  * 6. `agent_unreachable` — the agent does not answer.
- * 7. `agent_no_readiness` — the agent answers, but not with a readiness report.
+ * 7. `agent_outdated` — the agent answers `/health` but has no readiness route.
+ * 8. `agent_no_readiness` — the agent answers, but not with a readiness report.
+ *
+ * Ahead of all of them: `agent_outdated` when the supervisor reports a robot-side
+ * process that started before its code (`staleCode`, TASK-419) — the day would
+ * otherwise run on yesterday's code, whatever else the steps say.
  */
 export function mergeReason(
   bringup: SupervisorStatus | null,
@@ -168,6 +194,15 @@ export function mergeReason(
     source: 'server',
   });
   if (bringup) {
+    const stale = staleStep(bringup);
+    if (stale) {
+      const proc = stale.id === 'agent' ? 'robot agent' : STEP_PROCESS[stale.id] ?? stale.id;
+      if (stale.state === 'foreign') {
+        const pid = stale.foreign?.pid ?? stale.pid;
+        return server('agent_outdated', 'block', `An old ${proc} (pid ${pid ?? '?'}) runs older code. Stop it, then Start.`);
+      }
+      return server('agent_outdated', 'block', `The ${proc} runs older code than NeoDEM. Restart the robot side.`);
+    }
     if (bringup.overall === 'stopped') {
       return server('bringup_stopped', 'block', 'Robot side is stopped. Press Start.');
     }
@@ -200,6 +235,9 @@ export function mergeReason(
       return server('supervisor_unreachable', 'block', 'Robot supervisor and agent are not answering.');
     }
     return server('agent_unreachable', 'block', 'Robot agent is not answering.');
+  }
+  if (!agent.readiness && agent.outdated) {
+    return server('agent_outdated', 'block', 'The robot agent runs older code than NeoDEM. Restart the robot side.');
   }
   if (!agent.readiness) {
     return server('agent_no_readiness', 'warn', `Robot agent sent no readiness report (${agent.error ?? 'no body'}).`);
@@ -415,9 +453,11 @@ export class RobotReadinessService {
       agent =
         read.kind === 'ok'
           ? { reachable: true, error: null, readiness: read.readiness }
-          : read.kind === 'bad_status'
-            ? { reachable: true, error: `HTTP ${read.status}`, readiness: null }
-            : { reachable: false, error: read.error, readiness: null };
+          : read.kind === 'outdated'
+            ? { reachable: true, error: 'HTTP 404 (no readiness route)', readiness: null, outdated: true }
+            : read.kind === 'bad_status'
+              ? { reachable: true, error: `HTTP ${read.status}`, readiness: null }
+              : { reachable: false, error: read.error, readiness: null };
     }
 
     const quest = await this.readQuest(robotId, w, supRead?.kind === 'ok');
