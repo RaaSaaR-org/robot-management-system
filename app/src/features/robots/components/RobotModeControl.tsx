@@ -189,7 +189,11 @@ export function RobotModeControl({
   const [asking, setAsking] = useState<{ mode: HolderMode; since: number } | null>(null);
   const [answered, setAnswered] = useState<{ mode: HolderMode; result: HolderRequestResult } | null>(null);
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  // Set on every mount: StrictMode mounts, unmounts and mounts again in dev.
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [now, setNow] = useState(() => Date.now());
   const limpRef = useRef<HTMLButtonElement>(null);
 
@@ -236,7 +240,8 @@ export function RobotModeControl({
   const reasonFor = (mode: BaseModeCommand): string | null => {
     if (askable(mode)) return null;
     if (askMode && mode !== 'limp') {
-      return asking ? 'Waiting for the operator.' : modeDisabledReason(mode, { ...ctx, needsControl: false });
+      const own = modeDisabledReason(mode, { ...ctx, needsControl: false });
+      return own ?? (asking ? 'Waiting for the operator.' : null);
     }
     return modeDisabledReason(mode, ctx);
   };

@@ -156,3 +156,20 @@ Overlap with parallel tasks:
 - The E-stop stays reachable: B/Y and the two-hand pinch in VR, and the visible E-STOP on the desktop session page. Nothing in this task may delay or gate it.
 - Never set `G1_READ_ONLY=0`, never use `G1_ARM_ALLOW_UNKNOWN_FSM=1`, never `kill -9` a sidecar, no DDS on domain 0.
 - Development and tests use the sim stack only (branch builds on free ports). Never the real g1-edu-4 (:41245/:8767). Do not stop or restart the running dev stack.
+
+## Implementation notes (2026-10-18)
+
+Decisions made while building, and where the code differs from the spec above:
+
+- **Relay rejections** carry a fourth code, `rate_limited`, besides `no_operator` | `not_assistant` | `invalid`. A duplicate request id answers `invalid`. The server acknowledges a relayed request with `teleop:mode-request:sent`. Requests and answers are capped at 512 bytes. The ledger forgets an unanswered request 15 s after it opened (the 10 s TTL plus 5 s grace), and forgets it straight away when its asker disconnects.
+- **The desktop gives up 13 s after asking** (10 s TTL plus 3 s grace) and reports `expired`, even if the headset never answers (for example, when its socket drops).
+- **The headset declines at once** a request it may not show (E-stop latched, no lease, mode not next, mode control off). It answers `declined` with the reason, and the desktop card shows it. A newer request replaces an older one, which is answered `declined`.
+- **The headset's base-mode call** uses `useRobotBaseMode(robotId, {enabled:false})`: no 1 Hz poll in the modal, the same lease-checked POST, and the headset's own `lease.grant()`.
+- **"Stand up only from limp/damped"** accepts measured `limp`, `zero_torque` or a damped base. **"Balance only from stand"** needs measured `stand` and no damping. The sidecar's 2 s settle still applies; the desktop's button stays disabled until then.
+- **Held reasons on the panel's chip row** use short words with the same meaning as `HELD_TEXT` (`out of reach`, `arms dropped`, …). The full sentences are too long for a chip. The wrist HUD's short form uses the same words instead of the agent code.
+- **Server reasons worded for the desktop** (`lease_none`, `mode_not_balance`, `estop_latched` from the agent's `why-not-following.ts`) are re-worded in VR by `pickWhyLine`, so the headset never says "Press Take control" or "Switch to Balance". The agent's own table is unchanged, because the desktop has those buttons.
+- **The camera line** shows on the panel only when the camera is not live (D3).
+- **Wrist HUD:** the `B/Y = STOP` tag always takes the last row, latched included. RTT shows only while poses are outstanding, and it is the first line to give way when the plate is full (`finishWristHud` in `vrHud.ts`).
+- **The "Take control, then Enter VR." readiness line** is a new `pendingStep` prop on `RobotReadinessPanel` (line variant). It is shown amber, only while the robot side reports `ok`; a blocking reason still wins.
+- **Edits outside the key-file list:** `VrScene.tsx` passes the two new panel props through; `VrTextPlate.tsx` gets per-line `scale` (`VrPanel` passes lines through unchanged); `VrTeleopRig.tsx` adds `posesOutstanding` to the telemetry; `useSessionPresence.ts` returns `requestMode`; and `SessionDetailPage.tsx` gets one line at the `useSessionPresence` call (plus the `operatorInVr` selector) besides the Robot mode card block.
+- **Live check:** `app/e2e/live/vr-estop-recovery.spec.ts`. IWER's DevUI resets a head pose set from the test, so the panel screenshots use a wide viewport (`VR_QUEST_VIEWPORT=2064x1500`) plus a crop, not a turned head at 2064x2208.

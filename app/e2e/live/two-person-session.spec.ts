@@ -11,7 +11,7 @@
  *       headset"; B presses Stop → A's board shows the quick check.
  *     - B presses Discard last → A's `kept` follows within 1.5 s of the server.
  *     - A presses B (E-stop, SIM agent only) → B's operator card shows the
- *       block why line "E-stop is latched" and A's session buttons are dead;
+ *       block why line "E-stop latched" and A's session buttons are dead;
  *       B resets the E-stop through the existing safety reset.
  *
  *   Needs a LIVE dev stack against a SIM robot (server + robot-agent + sim
@@ -283,7 +283,7 @@ test('the desktop assistant and the Quest operator share one live session (TASK-
     await expect(quest.getByRole('dialog', { name: /VR teleop/i }).getByText('E-stop latched')).toBeVisible({ timeout: 10_000 });
     await setButton(quest, 'right', 'b-button', 0);
     const why = desk.getByTestId('operator-why');
-    await expect(why).toContainText('E-stop is latched', { timeout: 5_000 });
+    await expect(why).toContainText('E-stop latched', { timeout: 5_000 });
     await expect(why).toHaveAttribute('data-severity', 'block');
     await quest.waitForFunction(
       () => (window as DebugWindow).__neodemVrUi!.targets().find((t) => t.id === 'reset-estop')?.live === true,
@@ -297,7 +297,7 @@ test('the desktop assistant and the Quest operator share one live session (TASK-
     // B resets it through the existing safety reset; both sides recover.
     const reset = await deskCtx.request.post(`${base}/api/safety/robots/${ROBOT_ID}/estop/reset`);
     expect(reset.ok()).toBeTruthy();
-    await expect(why).not.toContainText('E-stop is latched', { timeout: 10_000 });
+    await expect(why).not.toContainText('E-stop latched', { timeout: 10_000 });
     await quest.waitForFunction(
       () => (window as DebugWindow).__neodemVrUi!.targets().find((t) => t.id === 'session-start')?.live === true,
       null,
