@@ -49,7 +49,8 @@ export interface OperatorState {
 
 export interface SessionWatchOptions {
   sessionId: string;
-  role: WatchRole;
+  /** The role to declare; null opens the socket without watching yet (see `setRole`). */
+  role: WatchRole | null;
   displayName?: string;
   /** The server accepted the watch (again). */
   onWatched?: () => void;
@@ -62,6 +63,12 @@ export interface SessionWatch {
   sendOperator(state: OperatorState): boolean;
   /** The server has acknowledged this socket's watch. */
   isWatched(): boolean;
+  /**
+   * Declare another role at once, or stop watching (null) without closing the
+   * socket — the headset keeps its socket open while the modal is, so entering
+   * VR costs one message rather than a connect.
+   */
+  setRole(role: WatchRole | null): void;
   /** Unwatch and close for good. */
   close(): void;
 }
@@ -84,6 +91,7 @@ export function openSessionWatch(options: SessionWatchOptions, deps?: Partial<Se
   const url = deps?.url ?? getWebSocketUrl('/api/a2a/ws');
   let ws: WebSocket | null = null;
   let watched = false;
+  let role: WatchRole | null = options.role;
   let closed = false;
   let beat: ReturnType<typeof setInterval> | null = null;
   let reconnect: ReturnType<typeof setTimeout> | null = null;
@@ -98,7 +106,8 @@ export function openSessionWatch(options: SessionWatchOptions, deps?: Partial<Se
     }
   };
   const watch = (): void => {
-    send({ type: 'teleop:watch', sessionId: options.sessionId, role: options.role, displayName: options.displayName });
+    if (!role) return;
+    send({ type: 'teleop:watch', sessionId: options.sessionId, role, displayName: options.displayName });
   };
 
   const connect = (): void => {
@@ -129,6 +138,8 @@ export function openSessionWatch(options: SessionWatchOptions, deps?: Partial<Se
       if (msg.type === 'auth' && msg.authenticated === true) {
         watch();
       } else if (msg.type === 'teleop:watched' && msg.sessionId === options.sessionId) {
+        // An acknowledgement of a role this socket has since given up is not a watch.
+        if (!role || (msg as { role?: unknown }).role !== role) return;
         watched = true;
         options.onWatched?.();
       } else if (msg.type === 'teleop:watch:rejected' && msg.sessionId === options.sessionId) {
@@ -155,12 +166,20 @@ export function openSessionWatch(options: SessionWatchOptions, deps?: Partial<Se
       return send({ type: 'teleop:operator', sessionId: options.sessionId, state });
     },
     isWatched: () => watched,
+    setRole: (next) => {
+      if (closed || next === role) return;
+      const previous = role;
+      role = next;
+      watched = false;
+      if (next) watch();
+      else if (previous) send({ type: 'teleop:unwatch', sessionId: options.sessionId });
+    },
     close: () => {
       if (closed) return;
       closed = true;
       if (beat) clearInterval(beat);
       if (reconnect) clearTimeout(reconnect);
-      send({ type: 'teleop:unwatch', sessionId: options.sessionId });
+      if (role) send({ type: 'teleop:unwatch', sessionId: options.sessionId });
       const socket = ws;
       ws = null;
       watched = false;

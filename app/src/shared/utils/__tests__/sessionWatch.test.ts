@@ -93,4 +93,26 @@ describe('openSessionWatch', () => {
     expect(sockets[1].types()).toEqual(['teleop:watch']);
     w.close();
   });
+
+  it('opens without a role and declares one on demand, then gives it up without closing', () => {
+    const w = openSessionWatch({ sessionId: 's1', role: null }, { open, url: 'ws://x' });
+    const s = sockets[0];
+    s.open();
+    vi.advanceTimersByTime(WATCH_INTERVAL_MS);
+    expect(s.sent).toEqual([]);
+    w.setRole('operator');
+    expect(s.sent[0]).toMatchObject({ type: 'teleop:watch', role: 'operator' });
+    // An acknowledgement for another role is not this watch.
+    s.receive({ type: 'teleop:watched', sessionId: 's1', role: 'assistant' });
+    expect(w.isWatched()).toBe(false);
+    s.receive({ type: 'teleop:watched', sessionId: 's1', role: 'operator' });
+    expect(w.isWatched()).toBe(true);
+    w.setRole(null);
+    expect(s.sent[s.sent.length - 1]).toEqual({ type: 'teleop:unwatch', sessionId: 's1' });
+    expect(w.sendOperator(STATE)).toBe(false);
+    expect(s.close).not.toHaveBeenCalled();
+    w.close();
+    // No second unwatch for a role already given up.
+    expect(s.sent.filter((m) => m.type === 'teleop:unwatch')).toHaveLength(1);
+  });
 });

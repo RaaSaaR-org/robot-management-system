@@ -190,14 +190,16 @@ test('the desktop assistant and the Quest operator share one live session (TASK-
   const deskCtx = await browser.newContext({ baseURL: base, viewport: { width: 1440, height: 900 } });
   const quest = await questCtx.newPage();
   const desk = await deskCtx.newPage();
-  // The desktop's app socket: count the fast-channel frames it receives.
-  let fastFrames = 0;
+  // The desktop's app sockets: count the fast-channel frames each receives
+  // (the page holds several — events, presence, lease observer — and every one
+  // gets the tenant's telemetry, so the rate is the busiest socket's).
+  const fastBySocket = new Map<object, number>();
   let lastOperator: unknown = null;
   desk.on('websocket', (ws) => {
     if (!ws.url().includes('/api/a2a/ws')) return;
     ws.on('framereceived', (f) => {
       if (typeof f.payload !== 'string') return;
-      if (f.payload.includes('"robot_telemetry_fast"') && f.payload.includes(ROBOT_ID)) fastFrames++;
+      if (f.payload.includes('"robot_telemetry_fast"') && f.payload.includes(ROBOT_ID)) fastBySocket.set(ws, (fastBySocket.get(ws) ?? 0) + 1);
       if (f.payload.startsWith('{"type":"teleop:operator"')) lastOperator = JSON.parse(f.payload);
     });
   });
@@ -212,9 +214,9 @@ test('the desktop assistant and the Quest operator share one live session (TASK-
     const twin = desk.getByTestId('robot-3d-viewer');
     await expect(twin).toHaveAttribute('data-robot-id', ROBOT_ID, { timeout: 20_000 });
     await expect(twin).toHaveAttribute('data-fast-channel', 'on');
-    const fastBefore = fastFrames;
+    const fastBefore = new Map(fastBySocket);
     await desk.waitForTimeout(3_000);
-    const fastHz = (fastFrames - fastBefore) / 3;
+    const fastHz = Math.max(0, ...[...fastBySocket].map(([ws, n]) => n - (fastBefore.get(ws) ?? 0))) / 3;
     test.info().annotations.push({ type: 'fast channel on the desktop', description: `${fastHz.toFixed(1)} Hz` });
     expect(fastHz).toBeGreaterThan(5);
     await shot(desk, 'desktop-waiting');

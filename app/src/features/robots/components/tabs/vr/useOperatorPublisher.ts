@@ -11,8 +11,8 @@
  * @feature robots
  */
 
-import { useEffect } from 'react';
-import { openSessionWatch, type OperatorPose, type OperatorState } from '@/shared/utils/sessionWatch';
+import { useEffect, useRef } from 'react';
+import { openSessionWatch, type OperatorPose, type OperatorState, type SessionWatch } from '@/shared/utils/sessionWatch';
 import type { VrRigTelemetry } from './VrTeleopRig';
 import type { RobotWristPose } from './vrWrist';
 import { ARM_REFUSAL_FRESH_MS, pickWhyLine, whyFromTelemetry, type ServerWhy } from './vrWhy';
@@ -78,18 +78,41 @@ export interface OperatorPublisherOptions {
   displayName?: string;
 }
 
-/** Watch the session as its operator while in VR, and relay the operator's state at 5 Hz. */
+/**
+ * Watch the session as its operator while in VR, and relay the operator's
+ * state at 5 Hz. The socket opens with the session (the modal) and only the
+ * role follows `inVr`, so entering VR shows on the desktop without waiting
+ * for a connect.
+ */
 export function useOperatorPublisher({ sessionId, robotId, inVr, telemetryRef, displayName }: OperatorPublisherOptions): void {
+  const watchRef = useRef<SessionWatch | null>(null);
+  const inVrRef = useRef(inVr);
+  inVrRef.current = inVr;
+
   useEffect(() => {
-    if (!sessionId || !inVr || import.meta.env.VITE_DEMO_MODE === 'true') return undefined;
-    const watch = openSessionWatch({ sessionId, role: 'operator', displayName });
-    const timer = setInterval(() => {
+    if (!sessionId || import.meta.env.VITE_DEMO_MODE === 'true') return undefined;
+    const publish = () => {
+      if (!inVrRef.current) return;
       const now = Date.now();
       watch.sendOperator(buildOperatorState(telemetryRef.current, now, serverWhyOf(robotId, now), true));
-    }, OPERATOR_PUBLISH_MS);
+    };
+    const watch = openSessionWatch({
+      sessionId,
+      role: inVrRef.current ? 'operator' : null,
+      displayName,
+      // The first state goes out with the acknowledgement, not a tick later.
+      onWatched: publish,
+    });
+    watchRef.current = watch;
+    const timer = setInterval(publish, OPERATOR_PUBLISH_MS);
     return () => {
       clearInterval(timer);
       watch.close();
+      if (watchRef.current === watch) watchRef.current = null;
     };
-  }, [sessionId, robotId, inVr, telemetryRef, displayName]);
+  }, [sessionId, robotId, telemetryRef, displayName]);
+
+  useEffect(() => {
+    watchRef.current?.setRole(inVr ? 'operator' : null);
+  }, [inVr]);
 }
