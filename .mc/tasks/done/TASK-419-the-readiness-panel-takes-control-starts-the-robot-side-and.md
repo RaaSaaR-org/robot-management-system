@@ -3,7 +3,7 @@ id: "TASK-419"
 aliases: []
 title: "The readiness panel takes control, starts the robot side and spots stale robot code without a terminal"
 slug: "the-readiness-panel-takes-control-starts-the-robot-side-and"
-status: review
+status: done
 priority: 1
 owner: "huhn511"
 projects: []
