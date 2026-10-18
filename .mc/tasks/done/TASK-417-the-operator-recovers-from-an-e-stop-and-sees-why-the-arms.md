@@ -3,7 +3,7 @@ id: "TASK-417"
 aliases: []
 title: "The operator recovers from an E-stop and sees why the arms stopped without taking the headset off"
 slug: "the-operator-recovers-from-an-e-stop-and-sees-why-the-arms"
-status: review
+status: done
 priority: 1
 owner: "huhn511"
 projects: []
