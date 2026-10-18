@@ -3,15 +3,18 @@
  * @description Completed-session view: recording summary, the dataset it was
  *              packed into (or the way to create one), and the episode review
  *              table. Keeps the dataset-card / open-dataset / review-episodes /
- *              episode-input-N / session-warning test ids.
+ *              episode-input-N / session-warning test ids; publish-dataset opens
+ *              the Hugging Face publish dialog (TASK-394).
  * @feature datacollection
  */
 
-import { AlertTriangle, ArrowRight, Pencil } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, ArrowRight, CloudUpload, Pencil } from 'lucide-react';
 import {
   Button, DataTable, KeyValueList, LinkButton, Panel, StatusTag, type DataTableColumn,
 } from '@/shared/components/ui';
 import { UI_DATE_LOCALE, formatDateTime } from '@/shared/utils/format';
+import { PublishDatasetDialog } from '@/features/training/components/PublishDatasetDialog';
 import type { EpisodeSummary, TeleoperationSession } from '../../types/datacollection.types';
 import { formatDuration, formatEpisodeStat, formatRetargetModes } from '../../types/datacollection.types';
 import { takeLabel } from '../../utils/takeFormat';
@@ -52,6 +55,7 @@ const COLUMNS: DataTableColumn<EpisodeSummary>[] = [
 export function SessionCompleted({ session, robotName, episodes, onEditTask, onCreateDataset }: SessionCompletedProps) {
   const sidecarPath = (session as unknown as Record<string, unknown>).sidecarDatasetPath;
   const datasetId = session.exportedDatasetId;
+  const [isPublishOpen, setIsPublishOpen] = useState(false);
 
   return (
     <div className="flex flex-col gap-6">
@@ -110,6 +114,14 @@ export function SessionCompleted({ session, robotName, episodes, onEditTask, onC
                 >
                   Open dataset
                 </LinkButton>
+                <Button
+                  variant="secondary"
+                  data-testid="publish-dataset"
+                  leftIcon={<CloudUpload className="h-4 w-4" strokeWidth={1.75} />}
+                  onClick={() => setIsPublishOpen(true)}
+                >
+                  Publish to Hugging Face
+                </Button>
               </>
             ) : session.frameCount === 0 ? (
               <>
@@ -144,6 +156,14 @@ export function SessionCompleted({ session, robotName, episodes, onEditTask, onC
             dense
           />
         </Panel>
+      )}
+
+      {datasetId && isPublishOpen && (
+        <PublishDatasetDialog
+          isOpen
+          onClose={() => setIsPublishOpen(false)}
+          datasetId={datasetId}
+        />
       )}
     </div>
   );

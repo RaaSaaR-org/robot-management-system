@@ -474,6 +474,9 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `RUSTFS_MULTIPART_MAX_AGE_HOURS` | No | `24` | Age after which the server aborts an incomplete multipart upload (parts an interrupted upload left in a bucket). Keep it above the longest single-file upload |
 | `RUSTFS_MULTIPART_SWEEP_INTERVAL_HOURS` | No | `6` | How often that sweep runs; it also runs whenever RustFS becomes ready |
 | `HF_IMPORT_CONCURRENCY` | No | `5` | Concurrent HuggingFace file transfers, capped at 5; use `1` when storage has limited room for temporary multipart uploads |
+| `HF_TOKEN` | No | — | Hub token the server publishes datasets with; else `HF_TOKEN_PATH`, `$HF_HOME/token`, `~/.cache/huggingface/token` (see `docs/huggingface-publish.md`) |
+| `HF_PUBLISH_NAMESPACE` | No | the token's user | Namespace the publish dialog prefills, e.g. an organisation |
+| `HF_ENDPOINT` | No | `https://huggingface.co` | Hub mirror for publishing |
 | `COMPLIANCE_LOG_ENCRYPTION_KEY` | Prod | — | 64-char hex key for compliance logs |
 | `OPENROUTER_API_KEY` | No | — | OpenRouter key for orchestrator LLM |
 | `ORCHESTRATOR_MODEL` | No | `stepfun/step-3.5-flash:free` | LLM model for agent routing |

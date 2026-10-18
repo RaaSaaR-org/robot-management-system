@@ -1,6 +1,6 @@
 /**
  * @file DatasetsPage.tsx
- * @description Dataset hub: list, filter, import, generate, push and delete LeRobot datasets
+ * @description Dataset hub: list, filter, import, generate, publish and delete LeRobot datasets
  * @feature training
  */
 
@@ -37,7 +37,7 @@ import { getErrorMessage } from '@/shared/utils';
 import { DatasetList } from '../components/DatasetList';
 import { DatasetUploadModal } from '../components/DatasetUploadModal';
 import { HFDatasetBrowserModal } from '../components/HFDatasetBrowserModal';
-import { HFPushModal } from '../components/HFPushModal';
+import { PublishDatasetDialog } from '../components/PublishDatasetDialog';
 import { GenerateSyntheticModal } from '../components/GenerateSyntheticModal';
 import { CreateViewModal } from '../components/CreateViewModal';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
@@ -178,7 +178,7 @@ function DatasetsHub() {
         frozen
           ? { label: 'Duplicate view', icon: <Copy />, onSelect: () => duplicate(d) }
           : { label: 'Create view', icon: <GitFork />, onSelect: () => navigate(`/datasets/${d.id}/episodes`) },
-        { label: 'Push to Hugging Face', icon: <CloudUpload />, onSelect: () => setPushDataset(d) },
+        { label: 'Publish to Hugging Face', icon: <CloudUpload />, onSelect: () => setPushDataset(d) },
       );
     }
     if (d.status === 'failed' && d.huggingFaceRepoId) {
@@ -303,10 +303,10 @@ function DatasetsHub() {
         onContinue={(ids) => { setModal(null); setWizardMixture(ids); }}
       />
       {pushDataset && (
-        <HFPushModal
+        <PublishDatasetDialog
           isOpen
           onClose={() => setPushDataset(null)}
-          onSuccess={refresh}
+          onPublished={() => refresh()}
           datasetId={pushDataset.id}
           datasetName={pushDataset.name}
         />

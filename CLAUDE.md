@@ -437,6 +437,7 @@ Guidelines:
 | `docs/multi-tenancy.md`          | Row-level multi-tenancy — flag, Prisma `$extends` isolation, `runAsPlatform`, Organizations UI (TASK-155) |
 | `docs/vla-integration-guide.md`  | VLA integration (SmolVLA, pi0.5, GR00T) |
 | `docs/training-run-export.md`    | Exporting a run to a cluster this server cannot reach |
+| `docs/huggingface-publish.md`    | Publishing a recorded dataset to the Hugging Face Hub |
 | `docs/regulatory-compliance.md`  | EU AI Act, GDPR compliance        |
 
 ## Current Limitations
