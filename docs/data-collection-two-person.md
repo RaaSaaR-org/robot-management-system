@@ -1,11 +1,23 @@
 # Two-person data collection
 
-*Added 2026-10-18 (TASK-414).*
+*Added 2026-10-18 (TASK-414). Updated 2026-10-19 (TASK-420): the whole session
+in order, takes and the quick check, and remote testing over Tailscale.*
 
 Recording demonstrations on the G1 is a two-person job. One person wears the
 Meta Quest 3 and drives the arms; the other sits at a desktop browser in
 NeoDEM, watches the robot and runs the session. Both people see the same
 session on their screen, and either of them can start, stop or discard a take.
+
+A session is open-ended: you do not choose a number of episodes up front. You
+record takes until you press **End session**. Each take runs from **Start take**
+to **Stop take**, or until the optional auto-stop ends it.
+
+**Once per machine, before the first session:** the robot supervisor runs as a
+systemd user unit on the robot PC, and the lab's `server/.env` points at it. See
+[Install (once, no sudo)](g1-edu-lab-bringup.md#install-once-no-sudo). To
+rehearse without the robot, use the sim robot `sim-g1-edu-dev`
+([Rehearsal against the MuJoCo DDS sim](g1-edu-lab-bringup.md#rehearsal-against-the-mujoco-dds-sim)).
+The steps below are the same for both robots.
 
 ## Roles
 
@@ -47,6 +59,11 @@ title, so the operator knows someone is watching.
 
 ## Setup
 
+0. **Create the session** (assistant). Data collection → **New session**: pick
+   the robot, the task and the input device. There is no episode count. Under
+   the advanced options, **Stop each take automatically after (s)** sets the
+   optional auto-stop (5–600 s); leave it empty and the operator ends each take.
+   The session page then shows the robot-side readiness panel used in steps 1–2.
 1. **Start the robot side.** On the robot's **Teleop** tab, in the session's
    readiness panel, or under the robot field of **New session** when the robot
    is offline, press **Start robot side**. It always starts read-only. See
@@ -61,16 +78,61 @@ title, so the operator knows someone is watching.
    it stands up. Stand up uses FSM id 4, which is not yet verified on the robot:
    watch the robot, and keep the remote's L1+A / the E-STOP within reach.
 4. **Connect the Quest.** Plug the Quest into the robot PC over USB and press
-   **Connect** (this runs `adb reverse` for the page port).
+   **Connect** (this runs `adb reverse` for the page port). **Connect** and
+   **Open on headset** run `adb` on the robot PC, so they only work for a Quest plugged into that PC. For a Quest on another computer
+   see [Remote testing over Tailscale](#remote-testing-over-tailscale).
 5. **Open the session on the headset.** Press **Open on headset**. The Quest
-   browser opens `/data-collection/live?robot=<id>`, which always lands on the
-   robot's live session. Put on the headset, press **Launch VR**, then
-   **Enter VR**. The Enter VR press has to happen inside the headset, because
-   WebXR only starts after a user gesture. The headset takes the robot's control
-   lease when it enters VR, so the desktop's control ends there.
-6. **The assistant opens the session.** Press **Copy viewer link** and open
+   browser opens `/data-collection/live?robot=<id>`, which lands on the robot's
+   live session: a session that is recording or paused, or a READY one created
+   in the last 4 hours. With exactly one such session it opens it; with more it
+   lists them and the operator picks one; with none it waits, looks again every
+   2 s, and names any older READY session it is ignoring. So the headset can be
+   opened before the session exists.
+6. **Enter VR** (operator, inside the headset). Press **Launch VR**, then
+   **Take control**, then **Enter VR**. Enter VR stays disabled until this
+   headset holds the control lease, and taking it ends the desktop's control.
+   The Enter VR press has to happen inside the headset, because WebXR only
+   starts after a user gesture.
+7. **The assistant opens the session.** Press **Copy viewer link** and open
    the copied link on the desktop. While no headset is in VR, the Operator card
-   reads "Waiting for the headset" and shows the same buttons.
+   reads "Waiting for the headset — open `/data-collection/live?robot=<id>` on
+   the Quest" and shows the same buttons.
+8. **Start session** (assistant, or Space on the desktop). Starting records
+   nothing yet: it opens the session for takes.
+
+When the operator enters VR, the assistant hears a soft chime, and the
+Operator card switches to `In VR`.
+
+## Recording takes
+
+Either person starts, stops and discards takes: the assistant with the take
+buttons or the keys below, the operator with the sticks or the session board
+left of the robot. Both views show the same take within about a second, and a
+toast says who did what ("Take 5 started from the headset", "Anna discarded
+take 4").
+
+- **Start take** → the HUD shows `● REC`, the take number and the take timer.
+  With an auto-stop set, the HUD also counts down `auto-stop in Ns`.
+- **Stop take** → the quick check appears (below).
+- **Next take** ends the take that is recording and starts the next one.
+- **Discard last** throws away the last take. On the desktop you can undo it
+  for 5 s; the discard is only sent when that window closes. In the headset it
+  is a hold (R-stick 1.5 s, or the board button 1 s), never a click.
+- **End session** (desktop only, asks first) ends the session; a toast sums up the takes kept,
+  the total minutes and the best streak.
+
+**The quick check after every take.** When a take stops, the desktop shows a
+card and the headset's session board shows the same check: a thumbnail, the
+length, frames and frame rate, which body parts moved (arms, hands), the five
+joints that moved most, and the robot's warnings (**Short**, **No motion**,
+**Dropped frames**). **Keep** is the default and only dismisses the card;
+**Discard** throws the take away. A take that is short or did not move turns
+the card red and puts the focus on Discard, but nothing is ever discarded
+automatically. The check stays until Keep, a discard, or the next Start.
+
+**An E-stop during a take** stops and discards that take at once. Every view
+says "Take N stopped by the E-stop — discarded", and the take is not in the
+exported dataset. The next take after the reset records normally.
 
 **Stopping for the day.** On the robot's Teleop tab press **Stop robot side**.
 While the robot stands or balances, the dialog offers **Limp first, then stop**
@@ -78,9 +140,6 @@ While the robot stands or balances, the dialog offers **Limp first, then stop**
 robot to Limp, waits until the robot measures Limp, and only then stops the robot
 side.
 Have the gantry carry the robot before you press it.
-
-When the operator enters VR, the assistant hears a soft chime, and the
-Operator card switches to `In VR`.
 
 ## Who presses what
 
@@ -145,7 +204,7 @@ Rules the relay keeps:
 
 | You see | Means | Do |
 | --- | --- | --- |
-| Operator card, red: "E-stop is latched. Reset it." | Someone pressed B / Y or the E-STOP. Every take button is disabled | Check that everyone is clear, then reset the E-stop from the desktop banner or with **Reset E-stop** (hold 1 s) in the headset |
+| Operator card, red: "E-stop latched — hold Reset for 1 s." | Someone pressed B / Y or the E-STOP. Every take button is disabled, and a take that was recording is discarded | Check that everyone is clear. Then the operator holds **Hold 1 s to reset** on the headset's robot panel, or the desktop presses **Reset E-stop** in the VR window's "E-stop latched" banner. After that, see [After an E-stop](#after-an-e-stop) |
 | Operator card, red: "Arm refused …" and `held: arm_gate` | The robot refused an arm, for example because it is not in Balance | Read the line. Most often: switch the robot to Balance, then release and squeeze the grip again |
 | Double low tone during a take | The operator's arms have been blocked for more than 1 s while a take is recording. The take is still recording | Stop the take and discard it if the motion is spoiled |
 | Falling low tone, the card shows `link lost` | The headset lost its link to the robot agent. The arms hold and the dead-man hands them back | Wait for the link to come back, or end the take |
@@ -156,6 +215,51 @@ Rules the relay keeps:
 All of the operator information is display only. The server passes the
 operator's state on to the other browsers, and it never sends any of it to
 the robot.
+
+## Remote testing over Tailscale
+
+To try the flow from a laptop that is not in the lab, reach the lab PC (the one
+running `npm run dev` in `app/` and `server/`) over Tailscale. Use the sim robot
+`sim-g1-edu-dev` for this, never the real one, unless people are at the robot.
+
+**Only port 1420 is needed.** The Vite dev server proxies `/api`, including the
+event socket and the teleop socket, to the server on :3001
+(`app/vite.config.ts`), and the app builds every API and WebSocket URL from the
+page's own origin. The head camera and the take thumbnails also come through
+`/api`. Forward :3001 as well only if the app was started with
+`VITE_API_BASE_URL` or `VITE_WS_URL` pointing at it (the default leaves both
+unset).
+
+- **Desktop only (no VR):** `http://<tailscale-ip>:1420` works as is, because
+  the dev server listens on every interface. WebXR is not available there: the
+  page is not a secure origin, so there is no Enter VR and no `?xremu`.
+- **With VR, through an SSH tunnel** (on the laptop):
+
+  ```bash
+  ssh -N -L 1420:localhost:1420 <user>@<tailscale-ip>
+  ```
+
+  Then open `http://localhost:1420`. `localhost` is a secure origin, so WebXR
+  works.
+- **Emulated Quest (no headset):** in a second browser window, open the session
+  page itself with `?xremu`, e.g.
+  `http://localhost:1420/data-collection/<session id>?xremu`. The WebXR emulator
+  then simulates a Meta Quest 3 in that tab, and **Enter VR** works without a
+  headset. It only runs in the dev build and only on `localhost` /
+  `127.0.0.1`. Open the session URL directly: the live link redirects without
+  the query. The first window is the assistant's desktop view.
+- **A real Quest plugged into the laptop:** keep the tunnel open, then forward
+  the headset's port 1420 to the laptop over USB — `adb reverse tcp:1420
+  tcp:1420`, or `./scripts/quest-connect.sh` from a checkout on the laptop. In
+  the Quest browser, open `http://localhost:1420/data-collection/live?robot=<id>`.
+  The chain is Quest → laptop :1420 → SSH tunnel → lab PC :1420. The
+  readiness panel's **Connect** and **Open on headset** do not apply here: they
+  run `adb` on the robot PC and only see a Quest on its USB.
+- **Fallback without a tunnel:** in desktop Chrome, enable
+  `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, add
+  `http://<tailscale-ip>:1420`, and relaunch. The page then counts as secure
+  and WebXR is offered. `?xremu` still stays off, because the host is not
+  `localhost`.
 
 Related: [VR teleoperation data collection](vr-teleop-data-collection.md) (the
 single-operator runbook and the real-robot path) ·

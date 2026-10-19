@@ -183,6 +183,51 @@ Here the `link` step starts the simulator instead of checking a cable. Verified
 read_only → arm_sdk switch (`armed:false`, sim stays limp), supervisor restart
 re-adopts all four children, stop leaves nothing running.
 
+**The sim robot in the app (TASK-420).** To rehearse a whole data-collection
+session from the readiness panel, run the sim profile as a second instance of
+the same user unit. Its robot id is `sim-g1-edu-dev`, it listens on
+127.0.0.1:**18766**, and like the real robot it starts read_only, with the sim
+in damp (`--initial-fsm 1`). The server holds **one** `ROBOT_SUPERVISOR_TOKEN`
+for every supervisor, so the sim's env file reuses the token from step 1 of the
+install above:
+
+```bash
+E=~/.config/neodem/supervisor-sim-g1-edu-dev.env
+{ grep '^ROBOT_SUPERVISOR_TOKEN=' ~/.config/neodem/supervisor-g1-edu-4.env
+  echo 'ROBOT_SUPERVISOR_PORT=18766'; } > "$E"
+chmod 600 "$E"
+systemctl --user daemon-reload
+systemctl --user enable --now neodem-robot-supervisor@sim-g1-edu-dev
+curl -s 127.0.0.1:18766/healthz                # {"ok":true,...}
+```
+
+On a machine without the real robot's supervisor, write a new token instead
+(`printf 'ROBOT_SUPERVISOR_TOKEN=%s\n' "$(openssl rand -hex 24)"`), and put that
+same token in `server/.env`. Then list both supervisors in the server's
+`server/.env` and restart the server:
+
+```bash
+ROBOT_SUPERVISORS=g1-edu-4=http://127.0.0.1:8766,sim-g1-edu-dev=http://127.0.0.1:18766
+ROBOT_SUPERVISOR_TOKEN=<the same token as in the env files>
+```
+
+Never print the token or commit it. The profile's agent reads
+`robot-agent/.env.g1-edu-sim` (copy it from `.env.g1-edu-sim.example` once);
+the profile itself sets its port, robot id and sidecar URL. The agent does not
+register itself (its `SERVER_URL` points at a dead port): the server registers
+it once a Start through the server reaches the agent step. If the robot does not
+appear in the app yet, start it once through the API, then use the panel:
+
+```bash
+curl -s -XPOST -H 'Content-Type: application/json' \
+  localhost:3001/api/robots/sim-g1-edu-dev/bringup/start -d '{"mode":"read_only"}'
+```
+
+(This works as is with `AUTH_DISABLED=true`; with auth on, add a member's bearer
+token.) From then on the session runbook,
+[Two-person data collection](data-collection-two-person.md), works the same
+for `sim-g1-edu-dev` as for `g1-edu-4`.
+
 ---
 
 ## Was heute erreicht wurde
