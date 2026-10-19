@@ -437,6 +437,9 @@ Guidelines:
 | `docs/multi-tenancy.md`          | Row-level multi-tenancy — flag, Prisma `$extends` isolation, `runAsPlatform`, Organizations UI (TASK-155) |
 | `docs/vla-integration-guide.md`  | VLA integration (SmolVLA, pi0.5, GR00T) |
 | `docs/training-run-export.md`    | Exporting a run to a cluster this server cannot reach |
+| `docs/data-collection-two-person.md` | The data-collection session runbook — readiness panel to last take, Quest operator + desktop assistant, E-stop recovery, remote testing over Tailscale |
+| `docs/g1-edu-lab-bringup.md`     | G1 EDU lab bringup — robot supervisor install (real robot and the `sim-g1-edu-dev` rehearsal robot), arm_sdk, mode changes without the remote |
+| `docs/vr-teleop-data-collection.md` | Quest 3 teleop on the G1 through NeoDEM, single operator; Unitree `xr_teleoperate` path and LeRobot import |
 | `docs/regulatory-compliance.md`  | EU AI Act, GDPR compliance        |
 
 ## Current Limitations

@@ -47,7 +47,7 @@ from.
 
 | Path | Maturity | Produces | Notes |
 | ---- | -------- | -------- | ----- |
-| Teleoperation and VR | `Sim` | G1 EDU + Dex3-1, 43 joints | Drive the robot by hand and the session records itself into a training-ready dataset — no export, no conversion script. Proven in simulation; the path to real hardware is still gated. |
+| Teleoperation and VR | `Sim` | G1 EDU + Dex3-1, 43 joints | Drive the robot by hand and the session records itself into a training-ready dataset — no export, no conversion script. Proven in simulation. On the real G1 the arms-only path is built and has moved the real arms, behind a supervisor-run robot side, a control lease and an E-stop reachable from inside the headset; no dataset recorded on the real robot backs this verdict yet. |
 | LiDAR room scan | `Live` | A digital twin, simulator-ready | Walk a scanner around the space and it comes back as a twin you can navigate and simulate in. Proven on a real 240,000-point capture of our lab. The rooms and zones you draw on the twin become the places a robot is sent to by name. |
 | World-model synthesis | `Live` | Generated episodes, tagged synthetic | When the robots cannot make enough episodes, a world action model generates them — and every one is labelled synthetic, so nothing on the record passes a generated episode off as a recording. |
 | Video to motion | `Sim` | Human footage retargeted to G1 motion | Ordinary video of a person working, turned into motion the G1 can perform and played back on the live 3D robot. |

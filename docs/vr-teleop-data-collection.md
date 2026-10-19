@@ -58,7 +58,7 @@ converter): `$UNITREE_ROOT/_data/vr_teleop_pipeline_test/bin/ffmpeg.exe` → PAT
 ## Testing without headset or robot (proven 2026-07-12)
 
 1. **In NeoDEM:** create a Teleoperation Session of a VR type on a simulated
-   robot and use **"Simulate VR input (no headset)"** in the session detail
+   robot and use the **Simulate VR input** switch in the session detail
    page — synthetic joint targets stream through the same WebSocket path the
    real WebXR rig uses; frames are recorded server-side and exported to a
    LeRobot dataset when the session ends.
@@ -243,9 +243,12 @@ blocking reason also takes line 1 of the wrist HUD.
   panel — a thin ray and a dot appear on a button — and pull the trigger. With
   the grip held the trigger is the grasp, there is no ray and nothing can be
   pressed, so a click can never close the robot's hand.
-- **Buttons:** Recenter (same as A/X), Next take (data-collection sessions only),
-  and **Reset E-stop**, shown only while latched: hold the trigger for one
-  second (the bar fills). While latched it is the only live button.
+- **Buttons:** Recenter (same as A/X); **Hold 1 s to reset**, shown only while
+  the E-stop is latched: hold the trigger for one second (the bar fills). While
+  latched it is the only live button. **Hold to allow Stand up / Balance**
+  appears when the desktop asks for a mode (TASK-417, see
+  [After an E-stop](data-collection-two-person.md#after-an-e-stop)). Next take
+  moved to the session board left of the robot (TASK-413).
 - **B/Y and the pinch stop no longer end the XR session.** They latch, disarm and
   damp exactly as before and the stream stops at once; the panel turns red and
   the wearer can read why and reset from inside the headset.
