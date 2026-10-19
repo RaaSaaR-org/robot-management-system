@@ -3,7 +3,7 @@ id: "TASK-420"
 aliases: []
 title: "The docs describe the data-collection flow as it now works, including remote testing"
 slug: "the-docs-describe-the-data-collection-flow-as-it-now-works"
-status: review
+status: done
 priority: 2
 owner: "huhn511"
 projects: []
