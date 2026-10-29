@@ -51,13 +51,18 @@ sidecar:
       G1_LOCO_ENABLED: "0"
     # Only through the confirmed switch (POST /sidecar/mode), never xr_teleoperate
     # at the same time. Arms via rt/arm_sdk; legs stay Unitree's. /arm refuses
-    # unless FSM 500 (balance) is measured; mode changes go through the agent's
+    # unless FSM 501 (balance) is measured; mode changes go through the agent's
     # lease-checked base-mode route, never through the supervisor.
     arm_sdk:
       G1_WRITE_MODE: arm_sdk
       G1_LOCO_ENABLED: fsm
       G1_ARM_SDK_MAX_JOINT_VEL: "1.0"   # deliberately slow; the sidecar default is 3.0
       G1_DDS_DOMAIN: "0"
+      # This G1 has the 3-DoF waist: Regular Mode (R1+X) is FSM 501. It accepts
+      # SetFsmId(500) and ignores it — stays in 4 (lab test, 2026-10-29). Read
+      # only at the supervisor's preflight: restart (/start) after changing it.
+      G1_FSM_ID_BALANCE: "501"
+      G1_FSM_BALANCE_REPORTED: "501"
 
 agent:
   cwd: ${REPO}/robot-agent

@@ -215,6 +215,8 @@ describe('checked-in profiles', () => {
     expect(p.ports).toMatchObject({ bridge: 6001, sidecar: 8767, agent: 41245 });
     expect(p.sidecar.modes.read_only.G1_LOCO_ENABLED).toBe('0');
     expect(p.sidecar.modes.arm_sdk).toMatchObject({ G1_WRITE_MODE: 'arm_sdk', G1_LOCO_ENABLED: 'fsm' });
+    // TASK-422: the 3-DoF-waist G1 balances in Regular Mode 501; it ignores 500.
+    expect(sidecarSpec(p, 'arm_sdk', {}).env).toMatchObject({ G1_FSM_ID_BALANCE: '501', G1_FSM_BALANCE_REPORTED: '501' });
     expect(p.agent.command).not.toContain('watch');
   });
 

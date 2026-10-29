@@ -44,6 +44,9 @@ Sources, checked 2026-10-17:
       Sit() = SetFsmId(3), StandUp() = SetFsmId(4), ZeroTorque() = SetFsmId(0).
     So the G1's own C++ client maps "stand up" to FSM 4 — the Python client
     (unitree_sdk2py/g1/loco/g1_loco_client.py) simply has no StandUp().
+    Start()'s 500 is Regular Mode on the 1-DoF-waist G1. The 3-DoF-waist G1
+    (29 DoF, e.g. g1-edu-4) balances in 501 and ignores SetFsmId(500) — it
+    stays in 4 (lab test, 2026-10-29). Its profile sets G1_FSM_ID_BALANCE=501.
   * unitree_sdk2py h2_loco_client.py:125-126 — StandUp() = SetFsmId(4) on H2.
   * The vendor's G1 Python example stands up with Damp(); sleep; Squat2StandUp()
     (706). 706 is allowed here only as an explicit operator fallback (env), and
@@ -73,15 +76,23 @@ GATE_FULL = "full"
 
 MODES = ("limp", "stand", "balance")
 
-# FSM ids. LIMP and BALANCE are fixed; STAND and the set of ids that COUNT as
-# balance are configurable inside a fixed allowlist.
+# FSM ids. LIMP is fixed; STAND, BALANCE and the set of ids that COUNT as
+# balance are configurable inside fixed allowlists.
 FSM_ZERO_TORQUE = 0
 FSM_ID_LIMP = 1
 FSM_ID_BALANCE = 500
 FSM_STAND_DEFAULT = 4
 FSM_STAND_ALLOWED = (4, 706)
-FSM_BALANCE_REPORTED_DEFAULT = (500,)
-FSM_BALANCE_REPORTED_ALLOWED = (500, 801)
+# Balance is Regular Mode (the remote's R1+X), and its id depends on the waist:
+# 500 on the 1-DoF-waist G1, 501 on the 3-DoF-waist G1 (29 DoF, e.g. g1-edu-4).
+# On g1-edu-4 (motion switcher "ai") SetFsmId(500) is accepted but ignored — the
+# robot stays in 4 — while 501 confirms in 0.2 s (lab test, 2026-10-29).
+FSM_BALANCE_ALLOWED = (500, 501)
+FSM_BALANCE_REPORTED_ALLOWED = (500, 501, 801)
+# What the robot reports in balance when G1_FSM_BALANCE_REPORTED is unset: the
+# commanded id itself.
+FSM_BALANCE_REPORTED_DEFAULT = (FSM_ID_BALANCE,)
+FSM_BALANCE_3DOF_WAIST = 501
 # Flip to True in a later commit, after the on-robot check (runbook step 4)
 # confirmed that FSM 4 is the lock stand on this G1.
 FSM_STAND_VERIFIED = False
@@ -172,9 +183,9 @@ def fsm_config(env):
     balance, err = _int_env(env, "G1_FSM_ID_BALANCE", FSM_ID_BALANCE)
     if err:
         return None, err
-    if balance != FSM_ID_BALANCE:
-        return None, ("G1_FSM_ID_BALANCE=%d — balance is only ever commanded as %d "
-                      "(Start(), the remote's R1+X)" % (balance, FSM_ID_BALANCE))
+    if balance not in FSM_BALANCE_ALLOWED:
+        return None, ("G1_FSM_ID_BALANCE=%d — balance is only ever commanded as one of %s "
+                      "(Regular Mode, the remote's R1+X)" % (balance, list(FSM_BALANCE_ALLOWED)))
     stand, err = _int_env(env, "G1_FSM_ID_STAND", FSM_STAND_DEFAULT)
     if err:
         return None, err
@@ -182,7 +193,7 @@ def fsm_config(env):
         return None, ("G1_FSM_ID_STAND=%d is not allowed — use one of %s"
                       % (stand, list(FSM_STAND_ALLOWED)))
     raw = (env.get("G1_FSM_BALANCE_REPORTED") or "").strip()
-    reported = FSM_BALANCE_REPORTED_DEFAULT
+    reported = (balance,)
     if raw:
         try:
             reported = tuple(sorted(set(int(p) for p in raw.split(",") if p.strip())))
@@ -191,7 +202,24 @@ def fsm_config(env):
         if not reported or any(r not in FSM_BALANCE_REPORTED_ALLOWED for r in reported):
             return None, ("G1_FSM_BALANCE_REPORTED=%r must be a non-empty subset of %s"
                           % (raw, list(FSM_BALANCE_REPORTED_ALLOWED)))
-    return FsmIds(FSM_ID_LIMP, stand, FSM_ID_BALANCE, reported), None
+        if balance not in reported:
+            # Balance would be commanded but could never be confirmed.
+            return None, ("G1_FSM_BALANCE_REPORTED=%r must include the commanded balance id "
+                          "G1_FSM_ID_BALANCE=%d" % (raw, balance))
+    return FsmIds(FSM_ID_LIMP, stand, balance, reported), None
+
+
+def _add_balance_hint(body, target, stand_id):
+    """An unconfirmed balance that left the robot in stand is, on a 3-DoF-waist
+    G1, almost always the wrong Regular Mode id: SetFsmId(500) is accepted there
+    and ignored. Say so in the error the operator reads (2026-10-29, g1-edu-4)."""
+    measured = (body.get("measured") or {}).get("fsm_id")
+    if target == FSM_ID_BALANCE and measured == stand_id:
+        hint = ("the robot still reports FSM %d — a G1 with the 3-DoF waist balances in "
+                "FSM %d, not %d: set G1_FSM_ID_BALANCE=%d in its profile"
+                % (stand_id, FSM_BALANCE_3DOF_WAIST, FSM_ID_BALANCE, FSM_BALANCE_3DOF_WAIST))
+        body["hint"] = hint
+        body["error"] = "%s; %s" % (body.get("error"), hint)
 
 
 def rpc_error_text(code):
@@ -469,6 +497,8 @@ class ModeController(object):
             target = self.ids.stand if mode == "stand" else self.ids.balance
             accept = (self.ids.stand,) if mode == "stand" else self.ids.balance_reported
             status, body = self._set_and_confirm(target, accept, self.confirm_s, gen)
+            if mode == "balance" and status == 504:
+                _add_balance_hint(body, target, self.ids.stand)
             body.setdefault("mode", mode)
             body["from"] = from_mode
             self._log_result(mode, from_mode, from_id, target, status, body)
