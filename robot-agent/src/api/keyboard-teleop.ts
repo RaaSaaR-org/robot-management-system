@@ -1578,6 +1578,10 @@ export function createKeyboardTeleopWebSocket(
         }
         const clutch = parseClutch((msg as HeartbeatMessage).clutch);
         if (clutch !== null && (clutch.left || clutch.right)) lastClutchClosedAt = Date.now();
+        // A clutch reported open lets go of every held joint (TASK-421 review):
+        // a key-up that named the wrong joint, or never arrived, must not leave
+        // a velocity behind for the next press to set moving again.
+        if (clutch !== null && !clutch.left && !clutch.right) velocity.clear();
         const clutchChanged = clutch !== null && reengage.report(clutch);
         if (clutch !== null) errorsSent.delete('arm_requires_clutch');
         // A beat that recovers a lost link is not an edge: `syncEngage` saw the
@@ -1866,7 +1870,17 @@ export function createKeyboardTeleopWebSocket(
         if (msg.direction !== 0 && !armGate()) return;
         // Held-key motion: set (or clear) the joint's velocity.
         markTeleopMode('manual');
-        velocity.set(msg.joint, msg.direction * SLEW_RATE_RAD_PER_S);
+        if (msg.direction === 0) {
+          velocity.delete(msg.joint);
+        } else {
+          // A clutch-reporting console (the keyboard) holds one key on one
+          // joint (TASK-421 review): a press drops whatever an earlier press
+          // left moving, whose key-up may have named another joint after the
+          // selection moved mid-hold. A console without a clutch (the gamepad)
+          // drives several joints at once and keeps them.
+          if (reengage.clutch !== null) velocity.clear();
+          velocity.set(msg.joint, msg.direction * SLEW_RATE_RAD_PER_S);
+        }
         return;
       }
 

@@ -112,6 +112,13 @@ export function KeyboardTeleopSection({
    * key already held through an E-stop reset or a link drop does not re-arm.
    */
   const clutchRef = useRef(false);
+  /**
+   * The joint the held move key is driving, named at key-down (TASK-421
+   * review). The selection can move while the key is held (↑/↓, a `drivable`
+   * update), and a key-up that stops the joint selected THEN left the one
+   * actually moving with its velocity on the agent.
+   */
+  const heldJointRef = useRef<string | null>(null);
   const beatRef = useRef(0);
   /** When each agent error code was last toasted (TASK-421). */
   const errorToastAtRef = useRef(new Map<string, number>());
@@ -148,6 +155,7 @@ export function KeyboardTeleopSection({
     ws.onopen = () => {
       opened = true;
       clutchRef.current = false;
+      heldJointRef.current = null;
       heartbeat = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ hb: ++beatRef.current, clutch: clutchRef.current }));
@@ -302,14 +310,20 @@ export function KeyboardTeleopSection({
     const driveSelected = (direction: 1 | -1 | 0) => {
       // Without the lease a press is ignored; a release (0) always goes out.
       if (direction !== 0 && !canDriveRef.current) return;
-      const joint = jointsRef.current[selectedRef.current];
-      if (!joint) return;
+      const held = heldJointRef.current;
+      // A release stops the joint the press started, wherever the selection is now.
+      const selectedName = jointsRef.current[selectedRef.current]?.name;
+      const name = direction === 0 ? held ?? selectedName : selectedName;
+      if (!name) return;
       setActiveDir(direction);
       // The clutch edge goes out at once and around the motion: closed BEFORE
       // the frame that arms, opened AFTER the frame that stops.
       const clutch = direction !== 0;
       if (clutch && !clutchRef.current) setClutch(true);
-      send({ joint: joint.name, direction });
+      // A second move key on another joint lets go of the first one.
+      if (clutch && held !== null && held !== name) send({ joint: held, direction: 0 });
+      send({ joint: name, direction });
+      heldJointRef.current = clutch ? name : null;
       if (!clutch && clutchRef.current) setClutch(false);
     };
 
@@ -331,6 +345,7 @@ export function KeyboardTeleopSection({
       if (k === ' ') {
         send({ preset: 'stop' });
         setActiveDir(0);
+        heldJointRef.current = null;
         if (clutchRef.current) setClutch(false);
         e.preventDefault();
         return;

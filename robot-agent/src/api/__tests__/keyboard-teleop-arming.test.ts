@@ -839,6 +839,56 @@ describe('TASK-421: keyboard teleop on the real arms', () => {
     expect(sidecar.disarmCalls).toBe(0);
   });
 
+  // Review of TASK-421 (round 2): the selection moved mid-hold (↓, or a
+  // `drivable` frame), so the key-up named the wrist while the elbow was
+  // moving. The elbow kept its velocity, and the next press moved both.
+  const jointsMoved = (state: ReturnType<typeof makeStateStub>) =>
+    new Set(state.applyTeleopDelta.mock.calls.map((c) => c[0] as string));
+
+  it('a key-up that names another joint does not leave the held one moving for the next press', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    hb(ws, false);
+    // The clutch opens with the key-up, as TeleopTab sends it — and the
+    // stale velocity does not survive the gap.
+    press(ws, 'left_elbow_joint');
+    await beatFor(ws, 200, true);
+    release(ws, 'left_wrist_roll_joint');
+    await beatFor(ws, 400, false);
+    state.applyTeleopDelta.mockClear();
+    press(ws, 'left_wrist_roll_joint');
+    await beatFor(ws, 300, true);
+    expect(jointsMoved(state)).toEqual(new Set(['left_wrist_roll_joint']));
+    expect(sidecar.armCalls).toEqual([1]);
+    expect(sidecar.disarmCalls).toBe(0);
+  });
+
+  it('a press on a new joint drops the joint an earlier press left moving, even with the clutch still closed', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    hb(ws, false);
+    press(ws, 'left_elbow_joint');
+    await beatFor(ws, 200, true);
+    // The stop names the wrong joint and the clutch-open beat is lost.
+    send(ws, { joint: 'left_wrist_roll_joint', direction: 0 });
+    state.applyTeleopDelta.mockClear();
+    send(ws, { joint: 'left_wrist_roll_joint', direction: 1 });
+    await beatFor(ws, 300, true);
+    expect(jointsMoved(state)).toEqual(new Set(['left_wrist_roll_joint']));
+  });
+
+  it('a console without a clutch (the gamepad) still drives several joints at once', async () => {
+    sidecar.setMode('read_only');
+    const { state, connect } = makeServer();
+    const ws = connect();
+    send(ws, { joint: 'left_elbow_joint', direction: 1 });
+    send(ws, { joint: 'left_wrist_roll_joint', direction: -1 });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(jointsMoved(state)).toEqual(new Set(['left_elbow_joint', 'left_wrist_roll_joint']));
+  });
+
   it('a console that goes quiet stops its joint within 300 ms and holds; the dead-man then hands the arms back', async () => {
     const { state, connect } = makeServer(false, 1_000);
     const ws = connect();
