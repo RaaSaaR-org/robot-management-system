@@ -3,7 +3,7 @@ id: "TASK-423"
 aliases: []
 title: "The G1 bring-up survives a link flap and a zero-torque start"
 slug: "the-g1-bring-up-survives-a-link-flap-and-a-zero-torque-start"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-10-29"
-updated: "2026-10-29"
+updated: "2026-10-30"
 ---
 
 # The G1 bring-up survives a link flap and a zero-torque start
@@ -43,7 +43,7 @@ Two frictions from the 2026-10-29 bring-up of `g1-edu-4`:
 - [x] A link that stays down fails `no_carrier` after `timeouts.carrierS`, with the wait in the detail
 - [x] `stand` from zero torque answers `bad_transition` with `next: "limp"` and sends no RPC
 - [x] The mode panel shows the current bring-up step and the next button; each step still needs its own confirmation
-- [ ] Checked on `g1-edu-4`: unplug the robot cable for ~5 s during `/start`, and stand up from zero torque via Limp
+- [ ] Checked on `g1-edu-4`: unplug the robot cable for ~5 s during `/start`, and stand up from zero torque via Limp — moved to [[TASK-424]] (g1-edu-4 check on 2026-10-30)
 
 ## Test Strategy
 
