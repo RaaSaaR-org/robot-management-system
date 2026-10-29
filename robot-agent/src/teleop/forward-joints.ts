@@ -34,6 +34,11 @@ export function isG1Family(robotType: RobotType | string): boolean {
   return robotType === 'g1' || robotType === 'g1_edu';
 }
 
+/** Whether `name` is one of the 14 G1 arm joints (shoulder to wrist, no fingers). */
+export function isG1ArmJoint(name: string): boolean {
+  return ARM.has(name);
+}
+
 /**
  * Whether a joint may be commanded on a G1 at all: an arm joint, or a finger of
  * a hand that is present. `hands === null` means the sidecar did not say, and
@@ -84,8 +89,16 @@ export function forwardableTeleopPose(
  * selected joint is `left_hip_pitch_joint`, a leg) armed the robot and then sent
  * NOTHING: the arms blended in for one second, the dead-man fired and they
  * blended back out, once per key press (2026-10-29, g1-edu-4). Sending the seed
- * for all 14 arm joints is a no-op for the robot (the sidecar's own targets are
- * the same values) and keeps the stream alive for as long as the agent drives.
+ * for all 14 arm joints keeps the stream alive for as long as the agent drives,
+ * and moves an arm joint only where its seed sits within the sidecar's limit
+ * margin (0.05 rad) of a stop — which a resting arm does not.
+ *
+ * THE FINGERS ARE TARGETS, NOT TRAFFIC. The caller starts the finger targets
+ * here so a finger key begins where the finger is, but must not mark them as
+ * commanded: five of a Dex3 hand's seven joints have a stop at 0.0, an open
+ * hand rests there, and the sidecar clamps every `/action` value to the stop
+ * minus 0.05 rad — streaming an untouched open hand would flex it about three
+ * degrees on every fresh arm. The arm joints alone feed the dead-man.
  *
  * `seed` is the `/arm` answer's `seed`; `measured` the agent's last joint
  * reading, used for a joint the seed does not carry (an older sidecar).

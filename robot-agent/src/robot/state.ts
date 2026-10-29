@@ -31,7 +31,7 @@ import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor, agentModeLocomotion } from './CommandExecutor.js';
 import { hardwareClient, HardwareActionError, type CachedBasePose } from '../hardware/HardwareClient.js';
 import type { SidecarEstopResult } from '../hardware/base-mode.js';
-import { armSeedTargets, forwardableTeleopPose, isG1Family } from '../teleop/forward-joints.js';
+import { armSeedTargets, forwardableTeleopPose, isG1ArmJoint, isG1Family } from '../teleop/forward-joints.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import {
   PlaceTracker,
@@ -1889,6 +1889,10 @@ export class RobotStateManager {
    *   meant an arm with nothing forwardable touched sent nothing at all — arm,
    *   dead-man, disarm, on every key press. All 14 arm joints are now touched
    *   at their seed, so the stream holds the pose until the agent stops it.
+   *   The fingers get their seed as a starting target but stay untouched until
+   *   the operator drives one: the sidecar clamps a streamed value 0.05 rad off
+   *   each stop, and an open Dex3 hand rests ON five of its stops, so sending
+   *   an untouched hand would flex it (see `armSeedTargets`).
    * - **The first target must be where the arm IS.** The teleop map was seeded
    *   once per session from the 2 s state cache, and kept integrating while the
    *   arm was not live; after every disarm the robot's own controller moves the
@@ -1907,7 +1911,7 @@ export class RobotStateManager {
       const value = targets[joint.name];
       if (value === undefined) continue;
       this.teleopJoints.set(joint.name, Math.max(joint.limitLower, Math.min(joint.limitUpper, value)));
-      this.teleopTouched.add(joint.name);
+      if (isG1ArmJoint(joint.name)) this.teleopTouched.add(joint.name);
     }
   }
 

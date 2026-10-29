@@ -197,6 +197,20 @@ export function KeyboardTeleopSection({
           // Start on a joint that moves (TASK-421): a G1 lists its legs first,
           // and a leg is never driven on the real robot.
           setSelected(Math.max(0, list.findIndex((j) => isDrivable(j))));
+        } else if (msg.type === 'drivable' && msg.joints && typeof msg.joints === 'object') {
+          // What moves changed under this socket — the readiness panel switched
+          // the sidecar to arm control after taking control (TASK-421 review).
+          const flags = msg.joints as Record<string, unknown>;
+          const list = jointsRef.current.map((j) =>
+            typeof flags[j.name] === 'boolean' ? { ...j, drivable: flags[j.name] as boolean } : j);
+          jointsRef.current = list;
+          setJoints(list);
+          // Leave the selection alone unless it now sits on a joint that never moves.
+          if (!isDrivable(list[selectedRef.current])) {
+            const first = list.findIndex((j) => isDrivable(j));
+            selectedRef.current = Math.max(0, first);
+            setSelected(selectedRef.current);
+          }
         } else if (msg.type === 'state' && msg.positions) {
           setPositions(msg.positions);
         } else if (msg.type === 'error' && typeof msg.code === 'string') {

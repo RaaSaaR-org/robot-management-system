@@ -597,8 +597,28 @@ export function createKeyboardTeleopWebSocket(
       !arms.requiresArming()
       || !isG1Family(robotStateManager.getState().robotType)
       || isG1ForwardableJoint(name, arms.view().hands);
+    /**
+     * The drivable set as last told to this client. It changes under an open
+     * socket: the readiness panel takes control (opening this socket) while the
+     * sidecar is still read-only, and only then switches it to arm control, so
+     * the `config` frame alone would advertise all 43 joints as drivable for
+     * the whole session (TASK-421 review).
+     */
+    let drivableKey = '';
+    const drivableMap = (): Record<string, boolean> =>
+      Object.fromEntries(joints.map((j) => [j.name, jointDrivable(j.name)]));
+    /** Push `{type:'drivable'}` when the set differs from what the client has. */
+    const sendDrivableIfChanged = (): void => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const map = drivableMap();
+      const key = JSON.stringify(map);
+      if (key === drivableKey) return;
+      drivableKey = key;
+      ws.send(JSON.stringify({ type: 'drivable', joints: map }));
+    };
 
     // Advertise the embodiment so the client can build controls for any robot.
+    drivableKey = JSON.stringify(drivableMap());
     ws.send(JSON.stringify({
       type: 'config',
       robotType: robotStateManager.getState().robotType,
@@ -906,6 +926,8 @@ export function createKeyboardTeleopWebSocket(
         engage: reengage.state,
         clutch: reengage.clutch,
       }));
+      // The write mode or the commanded hands may have changed what moves.
+      sendDrivableIfChanged();
     };
     const unsubscribeArm = arms.subscribe(sendArmState);
     sendArmState(arms.view());

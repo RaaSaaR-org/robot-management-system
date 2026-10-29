@@ -761,6 +761,39 @@ describe('TASK-421: keyboard teleop on the real arms', () => {
     });
   });
 
+  // Review of TASK-421: the readiness panel takes control (opening this
+  // socket) while the sidecar is still read-only, and switches it to arm
+  // control afterwards — the config frame alone said "all drivable" forever.
+  it('tells an open console when switching to arm control changes what moves', async () => {
+    sidecar.setMode('read_only');
+    const { state, connect } = makeServer();
+    state.getActiveJointConfig.mockReturnValue(
+      ['left_hip_pitch_joint', 'left_elbow_joint', 'right_hand_thumb_0_joint'].map((name) => ({
+        name, axis: 'y', limitLower: -1, limitUpper: 1, defaultPosition: 0,
+      })),
+    );
+    const ws = connect();
+    const config = ws.ofType('config')[0] as { joints: Array<{ name: string; drivable: boolean }> };
+    expect(config.joints.every((j) => j.drivable)).toBe(true);
+    expect(ws.ofType('drivable')).toHaveLength(0);
+
+    // The sidecar restarts in arm_sdk with only the left hand live.
+    sidecar.status = { ...sidecar.status, writeMode: 'arm_sdk', hands: { left: true, right: false } };
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(ws.ofType('drivable')).toEqual([{
+      type: 'drivable',
+      joints: { left_hip_pitch_joint: false, left_elbow_joint: true, right_hand_thumb_0_joint: false },
+    }]);
+
+    // Nothing changed: nothing more is sent. The right hand comes up: one frame.
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(ws.ofType('drivable')).toHaveLength(1);
+    sidecar.status = { ...sidecar.status, hands: { left: true, right: true } };
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(ws.ofType('drivable').at(-1)).toMatchObject({ joints: { right_hand_thumb_0_joint: true } });
+    expect(ws.ofType('drivable')).toHaveLength(2);
+  });
+
   it('arms once and stays armed across presses and the gaps between them', async () => {
     const { state, connect } = makeServer();
     const ws = connect();

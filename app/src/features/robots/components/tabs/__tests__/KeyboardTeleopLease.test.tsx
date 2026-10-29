@@ -187,6 +187,46 @@ describe('KeyboardTeleopSection with the control lease', () => {
     expect(screen.getAllByText(/not driven/)).toHaveLength(2);
   });
 
+  // Review of TASK-421: the readiness panel opens this socket on "Take
+  // control" while the sidecar is read-only; "Switch to arm control" comes
+  // after, so the config said every joint was drivable.
+  it('follows a drivable update that arrives after the config', async () => {
+    capability(false);
+    render(<KeyboardTeleopSection robot={robot} />);
+    await waitFor(() => expect(api.getControlLease).toHaveBeenCalledWith('g1-1'));
+    const ws = await connect([
+      joint('left_hip_pitch_joint', true),
+      joint('waist_yaw_joint', true),
+      joint('left_elbow_joint', true),
+      joint('left_wrist_roll_joint', true),
+    ]);
+    const lastJoint = () => (moves(ws)[moves(ws).length - 1] as { joint: string }).joint;
+    expect(screen.queryAllByText(/not driven/)).toHaveLength(0);
+    act(() => {
+      ws.receive({
+        type: 'drivable',
+        joints: { left_hip_pitch_joint: false, waist_yaw_joint: false, left_elbow_joint: true, left_wrist_roll_joint: true },
+      });
+    });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(lastJoint()).toBe('left_elbow_joint');
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(lastJoint()).toBe('left_elbow_joint');
+    expect(screen.getAllByText(/not driven/)).toHaveLength(2);
+    // A selection that is still drivable stays where the operator put it.
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    act(() => {
+      ws.receive({ type: 'drivable', joints: { left_hip_pitch_joint: false, waist_yaw_joint: false } });
+    });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(lastJoint()).toBe('left_wrist_roll_joint');
+    expect(moves(ws).some((m) => /hip|waist/.test((m as { joint: string }).joint))).toBe(false);
+  });
+
   it('lets go of a held key when the window loses focus (no keyup ever comes)', async () => {
     capability(false);
     render(<KeyboardTeleopSection robot={robot} />);

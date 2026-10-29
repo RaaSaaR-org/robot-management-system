@@ -696,14 +696,39 @@ describe('RobotStateManager — teleop reaches the robot', () => {
         expect(hw.sendAction.mock.calls.at(-1)![0]).toMatchObject({ left_shoulder_pitch_joint: 0.9 });
       });
 
-      it('carries the fingers the seed lists, and falls back to the measured pose without a seed', async () => {
+      it('falls back to the measured pose for an arm joint the seed does not carry', async () => {
         hw.armEpoch = 1;
-        hw.armSeed = { left_shoulder_pitch_joint: 0.3, left_hand_thumb_0_joint: 0.4 };
+        hw.armSeed = { left_shoulder_pitch_joint: 0.3 };
         hw.joints = [{ name: 'right_elbow_joint', position: -0.6 }];
         g1.enableTeleop();
         await tick(1);
         expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({
-          left_shoulder_pitch_joint: 0.3, right_elbow_joint: -0.6, left_hand_thumb_0_joint: 0.4,
+          left_shoulder_pitch_joint: 0.3, right_elbow_joint: -0.6,
+        });
+      });
+
+      // Review of TASK-421: an open Dex3 hand rests on five of its stops, and
+      // the sidecar clamps every /action value 0.05 rad off a stop — streaming
+      // the untouched seed flexed both hands on every fresh arm.
+      it('starts the fingers at the seed but sends none until the operator drives one', async () => {
+        hw.armEpoch = 1;
+        hw.armSeed = {
+          left_shoulder_pitch_joint: 0.3,
+          left_hand_index_0_joint: 0,
+          left_hand_thumb_0_joint: 0.4,
+          right_hand_index_0_joint: 0,
+        };
+        g1.enableTeleop();
+        await tick(3);
+        for (const [pose] of hw.sendAction.mock.calls) {
+          expect(Object.keys(pose as Record<string, number>).some((n) => n.includes('_hand_'))).toBe(false);
+        }
+        expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({ left_shoulder_pitch_joint: 0.3 });
+        // The seed is still where a finger key starts from.
+        g1.applyTeleopDelta('left_hand_thumb_0_joint', 0.1);
+        await tick(1);
+        expect(hw.sendAction.mock.calls.at(-1)![0]).toEqual({
+          left_shoulder_pitch_joint: 0.3, left_hand_thumb_0_joint: 0.5,
         });
       });
     });
