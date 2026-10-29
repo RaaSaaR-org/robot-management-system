@@ -3,7 +3,7 @@ id: "TASK-422"
 aliases: []
 title: "g1-edu-4 balances in Regular Mode (FSM 501)"
 slug: "g1-edu-4-balances-in-regular-mode-fsm-501"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 3
 effort: "medium"
 due_date: ""
 created: "2026-10-29"
-updated: "2026-10-29"
+updated: "2026-10-30"
 ---
 
 # g1-edu-4 balances in Regular Mode (FSM 501)
@@ -52,7 +52,7 @@ FSM ids: 0 zero torque, 1 limp (damp), 4 locked stand, 500/501 Regular Mode,
       describe the balance id per waist and the lab findings: feet flat on the
       floor with a hand's width of slack (not hanging), no stand from zero
       torque, finish = hoist the gantry, then Limp.
-- [ ] Verified on g1-edu-4 from a clean `/start` with the committed profile.
+- [ ] Verified on g1-edu-4 from a clean `/start` with the committed profile. — moved to [[TASK-424]] (g1-edu-4 check on 2026-10-30)
 
 ## Notes
 
