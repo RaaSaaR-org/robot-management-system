@@ -118,6 +118,12 @@ or an edit rewrites them). Git answers are cached for 30 s.
 - **A process the supervisor started** that is older than its code gets
   `checks.staleCode = {startedAt, codeAt}` and a warning: "runs code from before
   <date> — restart the robot side". Stop and Start in the panel fixes it.
+- **The supervisor itself is not covered.** Stop and Start restart only its
+  children, and the stale-code check looks only at them. After a change under
+  `robot-agent/supervisor/` (a pull that touches it, e.g. TASK-423's carrier
+  wait), restart the supervisor:
+  `systemctl --user restart neodem-robot-supervisor@<robot>` (e.g.
+  `@g1-edu-4`). The children keep running and are re-adopted.
 - **A foreign process** carries the same verdict in `foreign.staleCode`, plus its
   `cwd` and the robot id its environment names. A process that runs from another
   checkout (an old worktree) is compared by that checkout's own commit time. A

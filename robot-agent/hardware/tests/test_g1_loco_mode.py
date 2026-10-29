@@ -421,6 +421,18 @@ def test_balance_from_limp_names_stand_as_the_next_step(make_rig):
     assert "command stand first" in body["error"]
 
 
+def test_a_next_step_without_a_hint_still_refuses_cleanly(make_rig, monkeypatch):
+    """next_step can return "balance", which has no NEXT_STEP_HINTS entry; the
+    refusal must stay a 409 with `next` set, never a KeyError."""
+    monkeypatch.setattr(lm, "next_step", lambda measured, target: "balance")
+    rig = make_rig(fsm=0)
+    status, body = rig.post_mode("stand")
+    assert status == 409 and body["code"] == "bad_transition"
+    assert body["next"] == "balance"
+    assert body["error"].endswith("the robot is in zero_torque")
+    assert rig.loco.sets() == []
+
+
 @pytest.mark.parametrize("measured,target,want", [
     ("zero_torque", "stand", "limp"),
     ("zero_torque", "balance", "limp"),

@@ -520,7 +520,8 @@ class ModeController(object):
             # TASK-423: name the next valid step instead of only refusing. It is
             # never taken automatically — every step stays an operator action.
             nxt = next_step(st["mode"], mode)
-            hint = (" — %s" % NEXT_STEP_HINTS[nxt]) if nxt else ""
+            hint_text = NEXT_STEP_HINTS.get(nxt) if nxt else None
+            hint = (" — %s" % hint_text) if hint_text else ""
             return _refuse(409, "bad_transition", "%s is only allowed from %s, the robot is in %s%s"
                            % (mode, " or ".join(allowed_from), st["mode"], hint),
                            **{"from": st["mode"], "allowed_from": allowed_from,

@@ -45,6 +45,18 @@ Two frictions from the 2026-10-29 bring-up of `g1-edu-4`:
 - [x] The mode panel shows the current bring-up step and the next button; each step still needs its own confirmation
 - [ ] Checked on `g1-edu-4`: unplug the robot cable for ~5 s during `/start`, and stand up from zero torque via Limp
 
+## Test Strategy
+
+- **Unit:** the supervisor vitest suite (`robot-agent/supervisor`,
+  `__tests__/sequence.test.ts`: carrier flap shorter than `carrierS` passes,
+  a link that stays down fails `no_carrier` with the wait), the hardware pytest
+  suite (`robot-agent/hardware/tests/test_g1_loco_mode.py`: `next_step`, the
+  zero-torque refusal naming Limp with no RPC sent, a hint-less next step still
+  refusing cleanly) and the app vitest suite
+  (`RobotModeControl.test.tsx`: the bring-up strip and the marked next button).
+- **Live:** the `g1-edu-4` check (cable pulled ~5 s during `/start`, stand up
+  from zero torque via Limp) moved to TASK-424.
+
 ## Notes
 
 - Supervisor: `robot-agent/supervisor/src/steps.ts` (`stepLink`), `src/profile.ts` (`carrierS`).
