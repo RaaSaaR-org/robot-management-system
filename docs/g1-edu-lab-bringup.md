@@ -602,9 +602,10 @@ always Limp → Stand up → Balance.
 5. **Wait at least 2 s** with the robot steady. Then **Balance** and confirm.
    - The readout should show `Balance · FSM 501` on g1-edu-4 (`FSM 500` on a
      1-DoF-waist G1). The robot may shift its weight slightly.
-   - If it times out and the robot still reports FSM 4, the balance id is wrong
-     for this robot (the error says so): Limp, set `G1_FSM_ID_BALANCE` in the
-     profile, restart the robot side.
+   - If it times out and the robot still reports FSM 4, the balance id is
+     likely wrong for this robot — the Robot mode panel shows a hint under the
+     error: Limp, and if this G1 has the 3-DoF waist set
+     `G1_FSM_ID_BALANCE=501` in the profile, restart the robot side.
    - If the robot reports a different id (such as 801), the confirmation times
      out — fail-closed: Limp, and record it. Only after seeing it on the robot
      may `G1_FSM_BALANCE_REPORTED` list it (for example `501,801`).

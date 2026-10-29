@@ -212,11 +212,15 @@ def fsm_config(env):
 def _add_balance_hint(body, target, stand_id):
     """An unconfirmed balance that left the robot in stand is, on a 3-DoF-waist
     G1, almost always the wrong Regular Mode id: SetFsmId(500) is accepted there
-    and ignored. Say so in the error the operator reads (2026-10-29, g1-edu-4)."""
+    and ignored. Say so in the error the operator reads (2026-10-29, g1-edu-4).
+
+    The sidecar cannot tell the waist variant, so the hint is conditional: on a
+    1-DoF-waist G1 that failed for another reason, 501 is unverified and must
+    not read as the fix."""
     measured = (body.get("measured") or {}).get("fsm_id")
     if target == FSM_ID_BALANCE and measured == stand_id:
-        hint = ("the robot still reports FSM %d — a G1 with the 3-DoF waist balances in "
-                "FSM %d, not %d: set G1_FSM_ID_BALANCE=%d in its profile"
+        hint = ("the robot still reports FSM %d — if this G1 has the 3-DoF waist, it balances "
+                "in FSM %d, not %d: set G1_FSM_ID_BALANCE=%d in its profile"
                 % (stand_id, FSM_BALANCE_3DOF_WAIST, FSM_ID_BALANCE, FSM_BALANCE_3DOF_WAIST))
         body["hint"] = hint
         body["error"] = "%s; %s" % (body.get("error"), hint)

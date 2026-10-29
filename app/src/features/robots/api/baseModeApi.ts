@@ -63,6 +63,8 @@ export type BaseModeResult =
       settleRemainingS?: number;
       /** `unconfirmed` / `fsm_unknown`: what the sidecar measured. */
       measured?: BaseModeReading | null;
+      /** What the operator should check, when the sidecar has a guess (wrong balance FSM id). */
+      hint?: string;
     };
 
 /** Every status whose body carries a reason. */
@@ -111,6 +113,7 @@ export async function setBaseMode(
     error: typeof body.error === 'string' ? body.error : `the robot refused (HTTP ${response.status})`,
     ...(typeof body.settle_remaining_s === 'number' ? { settleRemainingS: body.settle_remaining_s } : {}),
     ...(body.measured !== undefined ? { measured: toReading(body.measured) } : {}),
+    ...(typeof body.hint === 'string' && body.hint.trim() ? { hint: body.hint } : {}),
   };
 }
 

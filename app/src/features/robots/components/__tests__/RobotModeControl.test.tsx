@@ -214,6 +214,31 @@ describe('RobotModeControl', () => {
     expect(document.activeElement).toBe(screen.getByTestId('robot-mode-limp'));
   });
 
+  it('shows the sidecar hint under an unconfirmed balance (TASK-422)', () => {
+    const hint = 'the robot still reports FSM 4 — if this G1 has the 3-DoF waist, it balances in FSM 501, not 500: set G1_FSM_ID_BALANCE=501 in its profile';
+    const hook = fakeHook({
+      status: status({}, { mode: 'stand', fsmId: 4 }),
+      lastResult: {
+        ok: false, status: 504, code: 'unconfirmed', error: `not reported; ${hint}`, hint,
+        measured: { fsmId: 4, mode: 'stand', ageS: 0.1, error: null },
+      },
+    });
+    render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={hook} />);
+    expect(screen.getByTestId('robot-mode-error')).toHaveTextContent('Not confirmed — the robot reports Stand (locked).');
+    expect(screen.getByTestId('robot-mode-hint')).toHaveTextContent(hint);
+  });
+
+  it('shows no hint when the result carries none', () => {
+    const hook = fakeHook({
+      lastResult: {
+        ok: false, status: 504, code: 'unconfirmed', error: 'not reported',
+        measured: { fsmId: 4, mode: 'stand', ageS: 0.1, error: null },
+      },
+    });
+    render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={hook} />);
+    expect(screen.queryByTestId('robot-mode-hint')).toBeNull();
+  });
+
   it('shows any other refusal with its code', () => {
     const hook = fakeHook({
       lastResult: { ok: false, status: 409, code: 'bad_transition', error: 'balance is only allowed from stand' },

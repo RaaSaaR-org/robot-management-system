@@ -445,6 +445,8 @@ def test_balance_500_ignored_in_stand_hints_at_501(make_rig):
     assert status == 504 and body["code"] == "unconfirmed"
     assert body["measured"]["fsm_id"] == 4
     assert "3-DoF waist" in body["hint"] and "G1_FSM_ID_BALANCE=501" in body["error"]
+    # Conditional: a 1-DoF-waist G1 can fail to balance for another reason too.
+    assert "if this G1 has the 3-DoF waist" in body["hint"]
     assert rig.loco.sets() == [4, 500]
 
 
