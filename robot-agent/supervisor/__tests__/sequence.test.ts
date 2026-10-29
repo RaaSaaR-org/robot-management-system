@@ -272,9 +272,12 @@ describe('start sequence', () => {
       writeFileSync(join(sys, 'enp9s9', 'operstate'), carrier === '1' ? 'up' : 'down');
     };
     write();
+    h.clock.virtual = true; // the carrier wait (timeouts.carrierS, default 15 s) passes in virtual time
     let st = await startAndWait(h);
-    expect(step(st, 'link')).toMatchObject({ state: 'failed', code: 'no_carrier' });
+    h.clock.virtual = false;
+    expect(step(st, 'link')).toMatchObject({ state: 'failed', code: 'no_carrier', checks: { carrierWaitS: 15 } });
     expect(step(st, 'link').detail).toMatch(/^Robot cable unplugged or robot off \(enp9s9 no carrier\)\./);
+    expect(step(st, 'link').detail).toContain('Waited 15 s for the link to come back.');
     expect(step(st, 'bridge').pid).toBeNull();
     expect(pings).toEqual([]);
     expect(nmcli).toEqual([]); // never brought up automatically
@@ -296,5 +299,88 @@ describe('start sequence', () => {
     const lan = await h.sup.lanUp();
     expect(lan.ok).toBe(true);
     expect(nmcli).toEqual([['con', 'up', 'test-lan']]);
+  });
+  it('real profile: a short carrier loss is waited out, and the step says it waited (TASK-423)', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const sys = join((await import('node:os')).tmpdir(), `neodem-sys-flap-${process.pid}-${Date.now()}`);
+    const iface = join(sys, 'enp9s9');
+    const setCarrier = (up: boolean) => {
+      writeFileSync(join(iface, 'carrier'), up ? '1' : '0');
+      writeFileSync(join(iface, 'operstate'), up ? 'up' : 'down');
+    };
+    // The link drops for 8 s; NetworkManager puts the host IP back 2 s after the carrier.
+    let sleptS = 0;
+    let ipBack = false;
+    const details: string[] = [];
+    const clock = {
+      offset: 0,
+      now() { return Date.now() + this.offset; },
+      async sleep(ms: number) {
+        await new Promise((r) => setTimeout(r, 5));
+        this.offset += ms;
+        sleptS += ms / 1000;
+        const link = h?.sup.status().steps.find((x) => x.id === 'link');
+        if (link?.detail) details.push(link.detail);
+        if (sleptS >= 8) setCarrier(true);
+        if (sleptS >= 10) ipBack = true;
+      },
+    };
+    const pings: string[][] = [];
+    h = await makeHarness({
+      bridgeEnv: { STUB_SILENT: '1' },
+      profile: (doc) => {
+        Object.assign(doc, { robot: 'real', iface: 'enp9s9', ddsDomain: 7, robotIp: '192.0.2.10', hostIp: '192.0.2.1/24' });
+        delete doc.sim;
+        delete (doc.ports as Record<string, unknown>).simHttp;
+        (doc.timeouts as Record<string, number>).bridgeS = 1;
+        ((doc.sidecar as { modes: { arm_sdk: Record<string, string> } }).modes.arm_sdk).G1_DDS_DOMAIN = '7';
+      },
+      deps: {
+        clock,
+        sysClassNet: sys,
+        netAddrs: () => (ipBack ? ['192.0.2.1'] : []),
+        tcpProbe: async () => false,
+        run: async (cmd, args) => {
+          if (cmd === 'ping') pings.push(args);
+          return { code: 0, stdout: '', stderr: '' };
+        },
+      },
+    });
+    mkdirSync(iface, { recursive: true });
+    setCarrier(false);
+    const st = await startAndWait(h);
+    const link = step(st, 'link');
+    expect(link).toMatchObject({ state: 'ok', checks: { carrier: true, hostIp: true, ping: true, carrierWaitS: 10 } });
+    expect(link.detail).toContain('the link was down at start; waited 10 s for it to come back');
+    expect(details.some((d) => d.startsWith('waiting for carrier on enp9s9 — link down'))).toBe(true);
+    expect(details.some((d) => d.startsWith('carrier on enp9s9 is back; waiting for 192.0.2.1'))).toBe(true);
+    expect(pings).toEqual([['-c1', '-W1', '192.0.2.10']]);
+    // the sequence went on past the link
+    expect(step(st, 'bridge').state).not.toBe('idle');
+  });
+
+  it('real profile: a link that stays down is never masked — no_carrier after carrierS (TASK-423)', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const sys = join((await import('node:os')).tmpdir(), `neodem-sys-down-${process.pid}-${Date.now()}`);
+    h = await makeHarness({
+      profile: (doc) => {
+        Object.assign(doc, { robot: 'real', iface: 'enp9s9', ddsDomain: 7, robotIp: '192.0.2.10', hostIp: '192.0.2.1/24' });
+        delete doc.sim;
+        delete (doc.ports as Record<string, unknown>).simHttp;
+        (doc.timeouts as Record<string, number>).carrierS = 4;
+        ((doc.sidecar as { modes: { arm_sdk: Record<string, string> } }).modes.arm_sdk).G1_DDS_DOMAIN = '7';
+      },
+      deps: { sysClassNet: sys, netAddrs: () => ['192.0.2.1'], tcpProbe: async () => false },
+    });
+    mkdirSync(join(sys, 'enp9s9'), { recursive: true });
+    writeFileSync(join(sys, 'enp9s9', 'carrier'), '0');
+    writeFileSync(join(sys, 'enp9s9', 'operstate'), 'down');
+    h.clock.virtual = true;
+    const st = await startAndWait(h);
+    expect(step(st, 'link')).toMatchObject({ state: 'failed', code: 'no_carrier', checks: { carrier: false, carrierWaitS: 4 } });
+    expect(step(st, 'link').detail).toContain('Waited 4 s for the link to come back.');
+    expect(step(st, 'bridge').pid).toBeNull();
   });
 });
