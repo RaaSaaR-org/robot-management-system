@@ -523,8 +523,8 @@ refused. With 501 it confirmed balance in 0.2 s and stood stable. Its profile
 and the sidecar refuses to start when it does not include it. Allowed: 500 and
 501. The supervisor reads the profile only at its preflight, so a changed
 profile needs a `/stop` and `/start`. A balance that stays unconfirmed while the
-robot still reports FSM 4 after `SetFsmId(500)` says so in its error: this G1
-probably needs 501.
+robot still reports FSM 4 after `SetFsmId(500)` says so in its error: if this G1
+has the 3-DoF waist, it needs 501.
 
 Other FSM ids worth knowing: 0 zero torque, 1 limp (damp), 4 locked stand,
 801 running mode.
