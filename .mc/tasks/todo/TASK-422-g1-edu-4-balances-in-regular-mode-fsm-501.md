@@ -3,7 +3,7 @@ id: "TASK-422"
 aliases: []
 title: "g1-edu-4 balances in Regular Mode (FSM 501)"
 slug: "g1-edu-4-balances-in-regular-mode-fsm-501"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
