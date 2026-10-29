@@ -3,7 +3,7 @@ id: "TASK-421"
 aliases: []
 title: "Keyboard teleop moves the real G1 arms smoothly"
 slug: "keyboard-teleop-moves-the-real-g1-arms-smoothly"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "huhn511"
 projects: []
