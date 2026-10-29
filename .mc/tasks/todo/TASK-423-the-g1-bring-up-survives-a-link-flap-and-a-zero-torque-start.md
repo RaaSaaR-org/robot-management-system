@@ -3,7 +3,7 @@ id: "TASK-423"
 aliases: []
 title: "The G1 bring-up survives a link flap and a zero-torque start"
 slug: "the-g1-bring-up-survives-a-link-flap-and-a-zero-torque-start"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
