@@ -25,7 +25,30 @@ interface TeleopJoint {
   limitLower: number;
   limitUpper: number;
   defaultPosition: number;
+  /**
+   * False for a joint the robot's write path never commands — on a real G1
+   * the legs, the waist and the fingers of a hand without live state
+   * (TASK-421). Absent from an older agent: treated as drivable.
+   */
+  drivable?: boolean;
 }
+
+/** Whether a joint takes commands (absent = an older agent = yes). */
+const isDrivable = (joint: TeleopJoint | undefined): boolean => joint !== undefined && joint.drivable !== false;
+
+/**
+ * The next drivable joint from `from` in `step` direction, or `from` when
+ * there is none. Non-drivable joints are skipped so ↑/↓ never lands on a leg.
+ */
+function nextDrivable(joints: TeleopJoint[], from: number, step: number): number {
+  for (let i = from + step; i >= 0 && i < joints.length; i += step) {
+    if (isDrivable(joints[i])) return i;
+  }
+  return from;
+}
+
+/** How long the same agent error stays quiet after its toast, in ms. */
+const ERROR_TOAST_QUIET_MS = 3_000;
 
 /** Controls legend (embodiment-agnostic). */
 const KEY_DISPLAY: Array<{ keys: string[]; label: string }> = [
@@ -90,6 +113,8 @@ export function KeyboardTeleopSection({
    */
   const clutchRef = useRef(false);
   const beatRef = useRef(0);
+  /** When each agent error code was last toasted (TASK-421). */
+  const errorToastAtRef = useRef(new Map<string, number>());
 
   // Control lease (TASK-319). With the capability off this is inert and the
   // section drives exactly as before; with it on, motion needs `bound`.
@@ -165,12 +190,23 @@ export function KeyboardTeleopSection({
         const msg = JSON.parse(event.data);
         if (leaseRef.current.handleSocketMessage(msg)) return;
         if (msg.type === 'config') {
+          const list: TeleopJoint[] = msg.joints ?? [];
           setRobotType(msg.robotType ?? '');
-          setJoints(msg.joints ?? []);
+          setJoints(list);
           setPositions(msg.positions ?? {});
-          setSelected(0);
+          // Start on a joint that moves (TASK-421): a G1 lists its legs first,
+          // and a leg is never driven on the real robot.
+          setSelected(Math.max(0, list.findIndex((j) => isDrivable(j))));
         } else if (msg.type === 'state' && msg.positions) {
           setPositions(msg.positions);
+        } else if (msg.type === 'error' && typeof msg.code === 'string') {
+          // The agent says why a key moved nothing (TASK-421); one toast per
+          // code at a time, not one per refused frame.
+          const now = Date.now();
+          if ((errorToastAtRef.current.get(msg.code) ?? -Infinity) + ERROR_TOAST_QUIET_MS <= now) {
+            errorToastAtRef.current.set(msg.code, now);
+            toast.error('Teleop command not applied', { description: String(msg.message ?? msg.code) });
+          }
         }
       } catch { /* ignore parse errors */ }
     };
@@ -238,9 +274,9 @@ export function KeyboardTeleopSection({
 
     const moveSelection = (delta: number) => {
       setSelected((prev) => {
-        const len = jointsRef.current.length;
-        if (len === 0) return prev;
-        return Math.max(0, Math.min(len - 1, prev + delta));
+        const list = jointsRef.current;
+        if (list.length === 0) return prev;
+        return nextDrivable(list, prev, delta);
       });
     };
 
@@ -296,11 +332,25 @@ export function KeyboardTeleopSection({
       if (isMoveKey(e.key)) { driveSelected(0); e.preventDefault(); }
     };
 
+    // A key held while the window loses focus never gets its keyup (TASK-421):
+    // the joint would keep moving until it hit its limit. Losing focus or
+    // hiding the tab lets go of the key.
+    const letGo = () => {
+      if (clutchRef.current) driveSelected(0);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') letGo();
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', letGo);
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', letGo);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [connected, send]);
 
@@ -383,20 +433,25 @@ export function KeyboardTeleopSection({
                 const range = joint.limitUpper - joint.limitLower;
                 const pct = range > 0 ? ((pos - joint.limitLower) / range) * 100 : 50;
                 const isSel = i === selected;
+                const drivable = isDrivable(joint);
                 return (
                   <button
                     key={joint.name}
                     type="button"
-                    onClick={() => setSelected(i)}
+                    onClick={() => drivable && setSelected(i)}
                     aria-pressed={isSel}
+                    aria-disabled={!drivable}
+                    title={drivable ? undefined : 'Not driven on this robot'}
                     className={cn(
                       'w-full rounded-control border px-3 py-2 text-left text-xs transition-colors',
                       isSel ? 'border-primary bg-primary/10' : 'border-line-subtle bg-inset hover:border-line-strong',
+                      !drivable && 'cursor-not-allowed opacity-50 hover:border-line-subtle',
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className={isSel ? 'font-medium text-ink-primary' : 'text-ink-secondary'}>
                         {prettyJoint(joint.name)}
+                        {!drivable && <span className="ml-1.5 text-ink-tertiary">· not driven</span>}
                       </span>
                       <span className="tabular-nums text-ink-primary">
                         {pos.toFixed(2)}

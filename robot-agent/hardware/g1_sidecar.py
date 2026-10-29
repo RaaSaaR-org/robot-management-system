@@ -39,8 +39,10 @@ on every interface in read_only mode and on 127.0.0.1 only in arm_sdk mode
                         error[2], motor_faults[], power_v} (dex3_faults.py)
   GET  /state/fast    → same as /state
   POST /arm           → {"lease_generation": int|null} → weight 0→1 over ~1.5 s,
-                        seeded from the MEASURED arm pose. 403 read_only,
-                        409 estop_latched, 503 no fresh rt/lowstate
+                        seeded from the MEASURED arm pose; a fresh arm's
+                        reply carries that pose as "seed" {joint: rad}
+                        (TASK-421). 403 read_only, 409 estop_latched,
+                        503 no fresh rt/lowstate
   POST /disarm        → weight 1→0 over ~1 s, then the publisher goes quiet
   POST /action        → {"<joint>": rad, ...} → only while armed (409
                         {"error":"not_armed"} otherwise, 403 in read_only);

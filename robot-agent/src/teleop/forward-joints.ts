@@ -71,3 +71,40 @@ export function forwardableTeleopPose(
   }
   return out;
 }
+
+/**
+ * The targets a fresh arm starts from on a G1 (TASK-421): every arm joint, and
+ * every finger of a hand the sidecar commands, at the pose the sidecar seeded
+ * the arm from.
+ *
+ * WHY EVERY ARM JOINT, NOT ONLY THE TOUCHED ONES. An arm-only sidecar holds the
+ * pose only while `/action` keeps arriving — 0.5 s without one is a hold, 1 s a
+ * disarm. The forwarder used to send only joints the session had touched, so a
+ * session whose operator had driven nothing forwardable (the keyboard's first
+ * selected joint is `left_hip_pitch_joint`, a leg) armed the robot and then sent
+ * NOTHING: the arms blended in for one second, the dead-man fired and they
+ * blended back out, once per key press (2026-10-29, g1-edu-4). Sending the seed
+ * for all 14 arm joints is a no-op for the robot (the sidecar's own targets are
+ * the same values) and keeps the stream alive for as long as the agent drives.
+ *
+ * `seed` is the `/arm` answer's `seed`; `measured` the agent's last joint
+ * reading, used for a joint the seed does not carry (an older sidecar).
+ */
+export function armSeedTargets(
+  seed: Readonly<Record<string, number>> | null,
+  measured: Readonly<Record<string, number>>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const name of G1_ARM_JOINTS) {
+    const value = seed?.[name] ?? measured[name];
+    if (typeof value === 'number' && Number.isFinite(value)) out[name] = value;
+  }
+  // Fingers only from the seed: it lists exactly the hands the sidecar commands.
+  if (seed) {
+    for (const name of [...G1_LEFT_HAND_JOINTS, ...G1_RIGHT_HAND_JOINTS]) {
+      const value = seed[name];
+      if (typeof value === 'number' && Number.isFinite(value)) out[name] = value;
+    }
+  }
+  return out;
+}

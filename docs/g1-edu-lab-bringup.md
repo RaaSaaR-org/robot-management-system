@@ -352,7 +352,7 @@ both modes (it spawned `lerobot-record`, i.e. the same `rt/lowcmd` driver).
 
 | Route | Behaviour |
 | --- | --- |
-| `POST /arm {"lease_generation": n}` | Seeds every target from the **measured** pose, weight 0→1 over 1.5 s. 409 `estop_latched`, 503 `no_state` (no fresh `rt/lowstate`). |
+| `POST /arm {"lease_generation": n}` | Seeds every target from the **measured** pose, weight 0→1 over 1.5 s; the reply carries that pose as `seed` (`{joint: rad}`), which the agent starts its teleop targets from. 409 `estop_latched`, 503 `no_state` (no fresh `rt/lowstate`). |
 | `POST /action {"<joint>": rad}` | Only while armed (else 409 `not_armed`). Clamped to the joint limits minus 0.05 rad, slewed at ≤ 3 rad/s (arms) / 6 rad/s (fingers). Leg and waist keys are ignored and counted. |
 | `POST /disarm` | Weight 1→0 over 1 s, five explicit weight-0 frames, then silence. |
 | `POST /estop` | The same ramp, plus a latch: `/arm` → 409 until `POST /estop/reset`. |

@@ -347,7 +347,7 @@ class ArmSdkController:
                         % "+".join(missing))
             self._log("ARM (lease %r): weight 0 -> 1 over %.1fs, teleop_mode=%s%s"
                       % (lease_generation, self.arm_ramp_s, mode, note))
-            return 200, self._reply(True)
+            return 200, self._reply(True, seed=self._seed_locked())
 
     def disarm(self, reason="request"):
         """POST /disarm (and every internal stop). Always succeeds."""
@@ -627,6 +627,20 @@ class ArmSdkController:
         if self._engaged:
             return "armed" if self._weight >= 1.0 else "arming"
         return "disarming"
+
+    def _seed_locked(self):
+        """The pose this arm was seeded from, by joint name: the 14 arm joints
+        and the fingers of each commanded hand (TASK-421).
+
+        The agent starts its teleop targets from THIS, not from its own 2 s
+        state cache: a target that starts anywhere else is a lurch toward a
+        stale pose on the first /action (the arm hangs somewhere else again
+        after every disarm), and a tracking-error disarm once it gets there."""
+        seed = {self._body_names[i]: self._cmd[i] for i in ARM_IDX}
+        for side, cmd in self._hand_cmd.items():
+            for k, name in enumerate(self._hand_names[side]):
+                seed[name] = cmd[k]
+        return seed
 
     def _teleop_mode_locked(self):
         return teleop_mode(self._hands_active["left"], self._hands_active["right"])
