@@ -12,6 +12,9 @@
  *              an outside click close it, and focus returns to the button.
  *              While open it is a dialog, so the page's single-key hotkeys
  *              (Space, E, N, Backspace) pause; Escape twice still stops.
+ *              On a phone the E-STOP is a fixed bottom dock: the popover ends
+ *              at least 17 px above it (the dock's dead band) and the dock is
+ *              stacked above it, so the popover never covers the E-STOP.
  * @feature datacollection
  */
 
@@ -20,6 +23,12 @@ import { cn } from '@/shared/utils/cn';
 
 /** Gap between the bar and the popover. */
 const OFFSET = 8;
+
+/** On a phone, the popover's bottom stays this far above the E-STOP dock (its dead band). */
+const DOCK_CLEARANCE = 17;
+
+/** Never shorter than this, even on a very short screen (the dock is stacked above it anyway). */
+const MIN_HEIGHT = 120;
 
 /**
  * Whether the popover is open. A row's in-place content (the keyboard
@@ -39,13 +48,15 @@ export interface TestingToolsProps {
   onClose: (refocus: boolean) => void;
   /** The element whose end edge the popover aligns to: the bar's toggle, or the ⋯ button on a phone. */
   anchor: HTMLElement | null;
+  /** The E-STOP zone. When it is the fixed phone dock, the popover stops above it. */
+  dock?: HTMLElement | null;
   children: ReactNode;
   className?: string;
 }
 
-export function TestingTools({ open, onClose, anchor, children, className }: TestingToolsProps) {
+export function TestingTools({ open, onClose, anchor, dock = null, children, className }: TestingToolsProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight?: number } | null>(null);
 
   // Positioned against the offset parent (the bar's sticky shim), so it moves
   // with the bar when the page scrolls.
@@ -57,8 +68,18 @@ export function TestingTools({ open, onClose, anchor, children, className }: Tes
     const a = anchor.getBoundingClientRect();
     const width = el.offsetWidth;
     const left = Math.min(Math.max(0, a.right - p.left - width), Math.max(0, p.width - width));
-    setPos({ top: a.bottom - p.top + OFFSET, left });
-  }, [anchor]);
+    // 8 px under the anchor — in a 60 px bar that is 5 px above its bottom
+    // edge, as in the mockup — and no higher in a taller (tight) bar, whose
+    // centred ⋯ sits further up.
+    const top = Math.max(a.bottom - p.top + OFFSET, parent.offsetHeight - 5);
+    let maxHeight: number | undefined;
+    if (dock && getComputedStyle(dock).position === 'fixed') {
+      maxHeight = Math.max(MIN_HEIGHT, Math.floor(dock.getBoundingClientRect().top - DOCK_CLEARANCE - (p.top + top)));
+    }
+    setPos((prev) =>
+      prev && prev.top === top && prev.left === left && prev.maxHeight === maxHeight ? prev : { top, left, maxHeight },
+    );
+  }, [anchor, dock]);
 
   useLayoutEffect(() => {
     if (open) position();
@@ -90,10 +111,13 @@ export function TestingTools({ open, onClose, anchor, children, className }: Tes
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKey);
     window.addEventListener('resize', position);
+    // Until the bar sticks, scrolling moves the popover toward (or away from) the phone dock.
+    window.addEventListener('scroll', position, { passive: true });
     return () => {
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', position);
+      window.removeEventListener('scroll', position);
     };
   }, [open, onClose, position]);
 
@@ -108,7 +132,7 @@ export function TestingTools({ open, onClose, anchor, children, className }: Tes
       // Closed, it is not a dialog: the page's hotkeys check for open dialogs.
       aria-hidden={!open || undefined}
       inert={!open}
-      style={pos ? { top: pos.top, left: pos.left } : undefined}
+      style={pos ? { top: pos.top, left: pos.left, maxHeight: pos.maxHeight } : undefined}
       className={cn(
         'absolute z-40 w-[360px] max-w-[calc(100vw-32px)] has-[[data-tools-expanded]]:w-[560px] overflow-y-auto rounded-control border border-line bg-raised p-1.5 shadow-[var(--shadow-raised)]',
         'max-h-[calc(100dvh-220px)]',

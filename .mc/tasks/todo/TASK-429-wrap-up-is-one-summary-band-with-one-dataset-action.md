@@ -69,7 +69,7 @@ width under the readouts, in the page and not in the dock.
   - the tally colours;
   - in §3, the sentence "A live console may use a console bar instead of PageHeader.";
   - the E-STOP clear-zone rule: alone at the far right, at least 64 px from any other
-    control at 1512 px, and the bar's 28 px sticky offset.
+    control at 1512 px, and the bar's 32 px sticky offset.
 - `docs/data-collection-two-person.md`:
   - rewrite "What the assistant sees" for the three phases (Set up, Record, Wrap up);
   - point Setup steps 1–8 at the "Get ready" steps (robot side, arm control, stand and

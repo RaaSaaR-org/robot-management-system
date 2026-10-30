@@ -279,12 +279,13 @@ with **Launch VR** as the primary (keeps `vr-launch`). The desktop steps sit beh
 bar, wrapped in a `bg-canvas` sticky shim so that content scrolling under it is covered.
 It is the page's `<header>` (data-testid `session-command-bar`).
 
-**Sticky offset (decided 2026-10-30).** The shim holds the bar **28 px** under the TopBar
-when it is stuck (the mockup used 12 px), so the bar's top sits at 56 + 28 = 84 px and the
-E-STOP's top at 92 px. That puts the TopBar's account avatar about 50 px from the E-STOP
-instead of 34 px. At scroll 0 the bar stays where the layout puts it (y≈144 at 1512×945);
+**Sticky offset (decided 2026-10-30, amended to 32 px in TASK-426's review).** The shim
+holds the bar **32 px** under the TopBar when it is stuck (the mockup used 12 px), so the
+bar's top sits at 56 + 32 = 88 px and the E-STOP's top at 96 px. That puts every TopBar
+control's hit box ≥ 48 px from the E-STOP (the Docs icon button 49.5 px, the account
+avatar 54.5 px) instead of 34 px; at 28 px the Docs button's box was only 45.5 px away. At scroll 0 the bar stays where the layout puts it (y≈144 at 1512×945);
 only the stuck position changes. Content scrolling under the bar stays covered by the
-`bg-canvas` shim across the whole 28 px.
+`bg-canvas` shim across the whole 32 px.
 
 **Two sides, and the E-STOP never shares one.** Every normal action sits on the left,
 packed right after the identity. The E-STOP sits alone on the far right, in its own zone,
@@ -1117,9 +1118,9 @@ Plan decisions (2026-10-30), on top of the split above:
     up, at scroll position 0. Inside the bar, the gap holds at every width from 640 px
     up.
   - The app TopBar's controls are not moved, but the bar's sticky offset keeps them clear:
-    the bar sticks 28 px under the TopBar (was 12 px; decided 2026-10-30, see "Sticky
-    offset" under the command bar), so when the page scrolls the TopBar's account menu sits
-    about 50 px above the E-STOP (34 + 16) instead of 34 px.
+    the bar sticks 32 px under the TopBar (was 12 px; decided 2026-10-30, see "Sticky
+    offset" under the command bar), so when the page scrolls every TopBar control sits
+    ≥ 48 px from the E-STOP instead of 34 px.
   - At 390×844 the bottom dock holds only the E-STOP. End session, Testing tools and the
     mute are in the bar's ⋯ menu, and the phase action is in the page.
 

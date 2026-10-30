@@ -79,10 +79,12 @@ here, read them:
 - **"Phase engine"**: the status → phase table and `useDeviceRole()`.
 
 The sticky offset decision (2026-10-30, now in the epic under "Sticky offset"):
-- The `bg-canvas` shim holds the bar **28 px** under the TopBar when it is stuck, not the
-  mockup's 12 px. The bar's stuck top is then 84 px and the E-STOP's top 92 px, which keeps
-  the TopBar's account avatar about 50 px away instead of 34 px.
-- At scroll 0 the bar stays where the layout puts it. The shim covers the full 28 px band,
+- The `bg-canvas` shim holds the bar **32 px** under the TopBar when it is stuck, not the
+  mockup's 12 px. The bar's stuck top is then 88 px and the E-STOP's top 96 px, which keeps
+  every TopBar control's hit box ≥ 48 px away (the Docs icon button, the nearest, 49.5 px;
+  the account avatar 54.5 px). Amended in review round 1 from 28 px: at 28 the 38 px Docs
+  button's box was 45.5 px from the E-STOP.
+- At scroll 0 the bar stays where the layout puts it. The shim covers the full 32 px band,
   so no content shows between the TopBar and the bar while scrolling.
 
 The phase switch:
@@ -196,8 +198,15 @@ epic's "Split"):
   - The bar's gap from the E-STOP to the nearest bar control is ≥ 65 px at every width from
     640 px up (measured at 640, 1280, 1512 and 1920), with the Testing tools popover open
     as well.
-  - On a scrolled page with the bar stuck, the bar's top is 84 px (TopBar + 28 px), and the
-    TopBar's nearest control is ≥ 48 px from the E-STOP (about 50 px by construction).
+  - On a scrolled page with the bar stuck, the bar's top is 88 px (TopBar + 32 px), and the
+    TopBar's nearest control is ≥ 48 px from the E-STOP (49.5 px by construction).
+  - From 640 to 1500 px of viewport (a tablet with the sidebar included) the E-STOP lies
+    whole inside the bar and the viewport, and nothing in the bar overlaps: when the left
+    group does not fit, it moves into the ⋯ menu (on the left, after the identity), line 2
+    keeps only the robot, and when even the h1 does not fit beside the status tag the
+    identity wraps as on a phone and the bar grows taller. The E-STOP zone never gives way.
+  - On a phone an open Testing tools popover ends ≥ 17 px above the bottom dock, and the
+    dock is stacked above it: every point of the E-STOP hits the E-STOP.
   - At 390×844 the bottom dock holds only the E-STOP, and End session, Testing tools and
     Mute sound cues are in the bar's ⋯ menu.
 - [ ] **No duplicates.**
@@ -249,8 +258,11 @@ epic's "Split"):
   - The visibility sweep: 200 px steps, at 1512 and 390, in all three phases.
   - The bar clearance at 640, 1280, 1512 and 1920, with Testing tools open too, using the
     rectangle distance from `estop-gap.mjs`.
-  - The stuck-bar check: scroll by 400 px, then the bar's top is 84 px and the TopBar's
+  - The stuck-bar check: scroll by 400 px, then the bar's top is 88 px and the TopBar's
     distance to the E-STOP is ≥ 48 px.
+  - The bar fit sweep, 640 to 1500 px in 20 px steps, in all three phases.
+  - At 390×844 and 360×640, Testing tools open (Joint states expanded), `elementFromPoint`
+    at the E-STOP's inset corners and centre hits `session-estop`.
   - The phone dock holds only the E-STOP, and the ⋯ menu holds the three actions.
   - Testing tools reachability.
   - The headset hero under a Quest user agent.
