@@ -242,7 +242,7 @@ and renders one layout per phase: Set up, Record, Wrap up.
 - **The tally.** A 2 px line on the bar's top edge (`data-tally`) tells the
   room the state from across it:
 
-  | `data-tally` | When | Colour |
+  | Tally | When | Colour |
   |---|---|---|
   | `setup` | while setup steps are open | `bg-signal-unknown` |
   | `setup` | once every step is done | `bg-signal-measured` |
