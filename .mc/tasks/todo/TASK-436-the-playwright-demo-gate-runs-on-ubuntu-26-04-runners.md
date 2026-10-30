@@ -27,7 +27,9 @@ GitHub moved the `ubuntu-latest` runner image to Ubuntu 26.04 on 2026-10-30. Sin
 CI job "Playwright (demo gate)" fails on every PR before any test runs. The repo's Playwright
 (1.58.2) has no browser build or system-dependency list for `ubuntu26.04-x64`. This task
 upgrades the app's Playwright to the smallest release that supports Ubuntu 26.04, so the demo
-gate runs again without any change to the workflow file.
+gate runs again without any change to the workflow file. It also fixes a vitest flake that
+failed the App job on this PR's first run: a fake socket in `KeyboardTeleopLease.test.tsx`
+leaked the keyboard teleop heartbeat timer.
 
 Branch: `chore/task-436-the-playwright-demo-gate-runs-on-ubuntu-26-04-runners`.
 
@@ -69,10 +71,35 @@ Branch: `chore/task-436-the-playwright-demo-gate-runs-on-ubuntu-26-04-runners`.
   therefore cannot fail a baseline. Fix a spec only for a Playwright API or behaviour change,
   and change product code only if the run shows a real bug.
 
+### App job flake (found on this PR's first CI run)
+
+- On this PR's first run, the Playwright gate passed on the 26.04 runner. The App job
+  ("App typecheck + build (dev + demo)", Node 20) failed in its Test step. All 3479 tests
+  passed, but vitest caught 2 unhandled errors:
+
+  ```
+  ReferenceError: WebSocket is not defined
+   ❯ Timeout._onTimeout src/features/robots/components/tabs/TeleopTab.tsx:160:31
+  This error originated in "src/features/robots/components/tabs/__tests__/KeyboardTeleopLease.test.tsx" test file.
+  ```
+
+- Cause: `FakeSocket.close()` in `KeyboardTeleopLease.test.tsx` set `readyState` and never
+  fired `onclose`. In `TeleopTab.tsx`, `onclose` and `onerror` are the only places that clear
+  the 100 ms heartbeat interval, so every connected test leaked one interval. When an
+  interval fired after the jsdom teardown, `WebSocket` was gone. Node 22 (the dev box) has a
+  native global `WebSocket`, so this never shows locally. Node 20 (CI) has none. Whether it
+  fires inside that window is timing, which is why #453's App job passed on the same runner.
+- The product code is right: a real socket fires `close` after `close()`. The fix is in the
+  test. The fake's `close()` now fires `onclose` once. A new test, "stops its heartbeat when
+  the section unmounts", fails without that fix and passes with it.
+- The bot's GitHub App cannot rerun a job (`POST .../actions/jobs/<id>/rerun` answers 403), so
+  this fix is also what gives the PR a new CI run.
+
 ### Key files
 
 - `app/package.json`
 - `app/package-lock.json`
+- `app/src/features/robots/components/tabs/__tests__/KeyboardTeleopLease.test.tsx`
 
 ## Acceptance Criteria
 
@@ -81,6 +108,11 @@ Branch: `chore/task-436-the-playwright-demo-gate-runs-on-ubuntu-26-04-runners`.
   installs 1.61.1.
 - [ ] No file under `.github/workflows/` changes.
 - [ ] `cd app && npx tsc --noEmit && npx vitest run` passes.
+- [ ] `KeyboardTeleopLease.test.tsx` leaks no heartbeat interval: its `FakeSocket.close()`
+  fires `onclose`, and "stops its heartbeat when the section unmounts" asserts that unmount
+  clears the 100 ms interval. The app suite also passes with
+  `NODE_OPTIONS=--no-experimental-websocket`, which removes Node 22's global `WebSocket` the
+  way Node 20 lacks one.
 - [ ] The full Playwright demo gate (`app/playwright.config.ts`: demo build, vite preview, MSW)
   passes locally on 1.61.1 with `CI=true`.
 - [ ] On this PR, the CI check "Playwright (demo gate)" gets past
@@ -93,7 +125,10 @@ Branch: `chore/task-436-the-playwright-demo-gate-runs-on-ubuntu-26-04-runners`.
 - `cd app && npx playwright install chromium`, then
   `CI=true PLAYWRIGHT_PORT=<free port> npx playwright test`. This is the whole default suite,
   the way CI runs it.
-- `cd app && npx tsc --noEmit && npx vitest run`.
+- `cd app && npx tsc --noEmit && npx vitest run`, and once more with
+  `NODE_OPTIONS=--no-experimental-websocket`.
+- Revert the `FakeSocket.close()` fix alone. "stops its heartbeat when the section unmounts"
+  must then fail.
 - Push, then read the e2e job's log on the PR. The install step must name `ubuntu26.04-x64`
   without the "does not support chromium" error, and the test step must pass.
 
