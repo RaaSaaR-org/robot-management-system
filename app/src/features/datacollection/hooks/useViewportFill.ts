@@ -4,9 +4,11 @@
  *              (TASK-428): it sets `--console-h` on the element to
  *              `innerHeight − its top in page coordinates − 24` (the shell's
  *              bottom padding), never below 520 px. It re-measures on resize
- *              and through a ResizeObserver on `document.body`, so anything
- *              that pushes the console down — the shell's E-stop alarm banner
- *              appearing — shrinks the console instead of scrolling the page.
+ *              and through a ResizeObserver on `document.body` and the
+ *              console's ancestors, so anything that pushes the console down —
+ *              the shell's E-stop alarm banner appearing — shrinks the console
+ *              instead of scrolling the page, and it grows back when the
+ *              banner goes.
  *              Below `minWidth` the console stacks and the page scrolls, so the
  *              variable is removed.
  * @feature datacollection
@@ -53,6 +55,10 @@ export function useViewportFill({ enabled = true, minWidth = 1024 }: ViewportFil
     if (typeof ResizeObserver !== 'undefined') {
       observer = new ResizeObserver(() => measure());
       observer.observe(document.body);
+      // The body alone misses a banner going away: the shell's min-h-screen
+      // keeps the body's size while the content above the console shrinks.
+      // An ancestor that wraps that content changes size either way.
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) observer.observe(p);
     }
     return () => {
       window.removeEventListener('resize', measure);

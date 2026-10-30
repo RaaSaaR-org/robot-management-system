@@ -810,6 +810,27 @@ test.describe('Record (TASK-428)', () => {
     await expect(page.getByTestId('live-view').getByTestId('live-view-expand')).toBeVisible();
   });
 
+  test('an alarm banner above shrinks the console, never the page, and it grows back when the banner goes', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await openRecordOn(page, 'vr');
+    const consoleH = () => page.evaluate(() => Math.round(document.querySelector('[data-testid="session-console"]')!.getBoundingClientRect().height));
+    const scrolls = () => page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
+    const before = await consoleH();
+    // The shell's in-flow alarm banner (78 px) above the section rail.
+    await page.evaluate(() => {
+      const rail = document.querySelector('nav[aria-label="Section"]')!;
+      const banner = document.createElement('div');
+      banner.id = 'probe-alarm';
+      banner.style.height = '78px';
+      rail.parentElement!.insertBefore(banner, rail);
+    });
+    await expect.poll(consoleH).toBeLessThan(before);
+    expect(await scrolls()).toBeLessThanOrEqual(0);
+    await page.evaluate(() => document.getElementById('probe-alarm')!.remove());
+    await expect.poll(consoleH).toBe(before);
+    expect(await scrolls()).toBeLessThanOrEqual(0);
+  });
+
   test('on a phone Record has no horizontal scroll and Stop / Start take stay in the take dock', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openRecordOn(page, 'vr');
