@@ -118,6 +118,7 @@ code never uses `dark:` variants.
 | Signal unknown / gated / warning | `--signal-unknown` | `text-signal-unknown` | `#e9c39c` | `#7a5510` |
 | Signal stopped / fault / danger | `--signal-stopped` | `text-signal-stopped` | `#ff9b9b` | `#b02020` |
 | STOP fill (E-stop buttons, alarm banners) | `--signal-stopped-fill` | `bg-stop` + `text-on-stop` | `#e5484d` / `#ffffff` | `#c9302c` / `#ffffff` |
+| Media well (video, camera frames) | `--bg-media` | `bg-media` | `#03070c` | `#03070c` |
 
 Also: `--panel-highlight-from` (`#162638` / `#eef7f3`) starts the highlight
 panel's `linear-gradient(135deg, var(--panel-highlight-from), var(--bg-secondary))`,
@@ -140,10 +141,22 @@ modals lifting off the page — a drop shadow, never a glow).
   not collide with a static utility: `--color-inset` would turn `ring-inset`
   into a ring-color setter, which is why `bg-inset` is a plain `@utility`.
 
+- `bg-media` is the one surface that does not follow the theme: video is
+  black in every theme, so the video well is `#03070c` in dark and light alike.
+  It is used only behind live video and camera frames.
+
 Radius: `rounded-panel` 14px (panels, modals), `rounded-control` 10px (buttons,
 inputs, insets, menus), `rounded-tag` 6px (tags, badges). `rounded-brand`
 (10px) is the landing page's button radius only. Motion: 150ms
 `--ease-instrument`; nothing bounces; reduced motion respected.
+
+| Motion token | Utility | What it does | Where |
+|---|---|---|---|
+| `--animate-breathe` (`@keyframes breathe`) | `animate-breathe` | opacity .45 → 1 → .45 over 2 s, ease-in-out, forever | the only motion for a lit state: the REC tally, the current setup step's ring and the live dot (`StatusTag pulse`); at most one breathes at a time, and the global `prefers-reduced-motion` block stops it |
+
+A lit state is drawn with a 1 px signal border, a 4–10 % signal tint and a
+2 px bar, and `animate-breathe` is the only motion it may add — never a glow
+shadow, a hover lift or anything faster than 1 Hz.
 
 ### White-label
 
@@ -206,6 +219,48 @@ Content      Panel(s) · DataTable · card grid
   `inset` panel, never another bordered card with its own shadow.
 - Pages use the full width of the content area (the shell pads it); long
   reading text is capped at ~70ch.
+- A live console may use a console bar instead of PageHeader.
+
+### Live console (the data-collection session page)
+
+A page the assistant works from while a robot moves (`/data-collection/:id`)
+replaces `PageHeader` with one sticky **console bar** (`SessionCommandBar`)
+and renders one layout per phase: Set up, Record, Wrap up.
+
+- **The bar.** Back, the h1 (truncates first, full text in `title`), the
+  status tag and line 2 (robot · input · fps) on the left, then every normal
+  action packed right after the identity (presence, mute, Testing tools, End
+  session). It sticks **32 px under the TopBar** (`top: 88px`), so every TopBar
+  control stays ≥ 48 px from the E-STOP while the page scrolls.
+- **The E-STOP clear zone.** The E-STOP stands alone at the far right in its
+  own zone, behind a clear gap: no other control is closer than **64 px** at
+  1512 px (48 px at 1280 px), measured page-wide, and the bar's own gap never
+  drops below 65 px — the title truncates first. One press, no confirmation,
+  never behind a disclosure. Below 640 px the same element becomes a fixed
+  bottom dock that holds the E-STOP and nothing else; the bar's normal actions
+  move into a ⋯ menu.
+- **The tally.** A 2 px line on the bar's top edge (`data-tally`) tells the
+  room the state from across it:
+
+  | `data-tally` | When | Colour |
+  |---|---|---|
+  | `setup` | while setup steps are open | `bg-signal-unknown` |
+  | `setup` | once every step is done | `bg-signal-measured` |
+  | `rec` | while a take records | `bg-signal-stopped animate-breathe` |
+  | `between` | between takes | `bg-line-strong` |
+  | `fault` | E-stop latched or a failed system | `bg-signal-stopped` |
+  | `done` | session completed | `bg-signal-measured` |
+  | `failed` | session failed | `bg-signal-stopped` |
+
+- **One lit thing.** In every phase exactly one control carries the primary
+  fill, and it is the next action; the E-STOP (`bg-stop`) is the exception.
+  Wrap up is one `Panel variant="highlight"` summary band (its only use on the
+  page): the result, one sentence, five readouts and the one dataset action in
+  its own right column, never on the band's top row under the E-STOP.
+- **Instrument details.** Readouts are hairline grids (`gap-px bg-line-subtle`
+  cells, or `border-l border-line` dividers) with Archivo tabular values and
+  sentence-case Inter labels — no eyebrows on readouts. Video sits on
+  `bg-media`.
 
 ## 4. CRUD — identical on every page
 

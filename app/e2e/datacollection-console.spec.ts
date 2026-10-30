@@ -411,3 +411,148 @@ for (const [w, h] of [[390, 844], [1280, 800]] as const) {
     await context.close();
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK-429 — Wrap up: one summary band with one dataset action. One lit
+// action, Edit task and Create dataset one click away, the page-wide E-STOP
+// clearance at 1280/1512/1920 at scroll 0, and the phone band.
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe('Wrap up (TASK-429)', () => {
+  /** End the demo takes session after `takes` kept takes (0 → nothing to package). */
+  async function wrapAfter(page: Page, takes: number): Promise<void> {
+    await openRecord(page);
+    for (let i = 0; i < takes; i++) {
+      await page.getByTestId('take-primary').click();
+      await expect(page.getByTestId('take-primary')).toHaveText(/Stop take/);
+      await page.waitForTimeout(1500);
+      await page.getByTestId('take-primary').click();
+      await page.getByTestId('quick-check-keep').click();
+    }
+    const end = page.getByTestId('session-end');
+    if (await end.isVisible()) await end.click();
+    else {
+      await page.getByTestId('session-more').click();
+      await page.getByTestId('session-more-end').click();
+    }
+    await page.getByRole('alertdialog').getByRole('button', { name: /^End session$/ }).click();
+    await expect(page.locator('[data-testid="session-command-bar"][data-phase="wrap"]')).toBeVisible();
+    await expect(page.getByTestId('session-summary')).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+  }
+
+  /** Visible, enabled kit primaries (the `bg-primary` fill), the E-STOP aside. */
+  const litActions = (page: Page) =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('button, a[href]')]
+        .filter((el) => el.getAttribute('data-testid') !== 'session-estop')
+        .filter((el) => el.classList.contains('bg-primary') && !(el as HTMLButtonElement).disabled)
+        .filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+        })
+        .map((el) => el.getAttribute('data-testid') || (el.textContent ?? '').trim()),
+    );
+
+  /**
+   * Page-wide: the nearest visible interactive element to the E-STOP, anywhere
+   * on the page. The shell's section rail (`nav[aria-label="Section"]`) is
+   * reported on its own: it is the same in every phase and not this page's to
+   * move (at 1280 its right-most tabs sit above the bar's E-STOP).
+   */
+  const pageClearance = (page: Page) =>
+    page.evaluate(() => {
+      const estop = document.querySelector('[data-testid="session-estop"]')!;
+      const rail = document.querySelector('nav[aria-label="Section"]');
+      const E = estop.getBoundingClientRect();
+      const sel = 'a[href], button, [role="switch"], [role="menuitem"], input, select, textarea';
+      const page = { d: Infinity, el: '' };
+      const shell = { d: Infinity, el: '' };
+      for (const el of document.querySelectorAll(sel)) {
+        if (el === estop || !(el as HTMLElement).getClientRects().length) continue;
+        let hidden = false;
+        for (let p: Element | null = el; p; p = p.parentElement) {
+          const s = getComputedStyle(p);
+          if (s.display === 'none' || s.visibility === 'hidden') hidden = true;
+        }
+        if (hidden) continue;
+        const r = el.getBoundingClientRect();
+        const d = Math.round(Math.hypot(Math.max(0, E.left - r.right, r.left - E.right), Math.max(0, E.top - r.bottom, r.top - E.bottom)) * 10) / 10;
+        const best = rail && rail.contains(el) ? shell : page;
+        if (d < best.d) {
+          best.d = d;
+          best.el = el.getAttribute('data-testid') || el.getAttribute('aria-label') || (el.textContent ?? '').trim().slice(0, 30);
+        }
+      }
+      return { page, rail: shell };
+    });
+
+  test('one lit action: Create dataset after a kept take', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await wrapAfter(page, 1);
+    expect(await litActions(page)).toEqual(['create-dataset']);
+    // The one dataset control in the DOM; the Details row names the state without a button.
+    await expect(page.getByRole('button', { name: /dataset/i })).toHaveCount(1);
+    await expect(page.getByTestId('open-dataset')).toHaveCount(0);
+    await expect(page.getByTestId('review-episodes')).toBeVisible();
+    await expect(page.getByTestId('review-episodes').getByTestId('take-thumbnail-0')).toBeVisible();
+    await expect(page.getByTestId('session-frames')).not.toHaveText('0');
+    await page.screenshot({ ...shot('TASK-429-wrap-1512-e2e.png') });
+  });
+
+  test('one lit action: New session when nothing was recorded', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await wrapAfter(page, 0);
+    expect(await litActions(page)).toEqual(['wrap-new-session']);
+    await expect(page.getByTestId('create-dataset')).toHaveCount(0);
+    await expect(page.getByTestId('session-summary')).toContainText('nothing to package');
+  });
+
+  test('Edit task and Create dataset are one click away', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await wrapAfter(page, 1);
+    await page.getByRole('button', { name: 'Edit task' }).click();
+    await expect(page.getByRole('dialog', { name: 'Edit task' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Edit task' })).toHaveCount(0);
+    await page.getByTestId('create-dataset').click();
+    await expect(page.getByRole('dialog', { name: 'Create dataset' })).toBeVisible();
+  });
+
+  for (const [w, h, min] of [[1280, 800, 48], [1512, 945, 64], [1920, 1080, 64]] as const) {
+    test(`the E-STOP stands alone page-wide — ${w}×${h} (≥ ${min} px)`, async ({ page }) => {
+      await page.setViewportSize({ width: w, height: h });
+      await wrapAfter(page, 1);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const near = await pageClearance(page);
+      test.info().annotations.push({
+        type: 'clearance',
+        description: `wrap@${w}: page ${near.page.d} px (${near.page.el}); section rail ${near.rail.d} px (${near.rail.el})`,
+      });
+      expect(near.page.d, `nearest: ${near.page.el}`).toBeGreaterThanOrEqual(min);
+      // The action sits in its own column, below the band's top row.
+      const band = (await page.getByTestId('session-summary').boundingBox())!;
+      const action = (await page.getByTestId('create-dataset').boundingBox())!;
+      expect(action.y).toBeGreaterThan(band.y + 40);
+      expect(action.x).toBeGreaterThan(band.x + band.width / 2);
+    });
+  }
+
+  test('on a phone: no horizontal scroll, the action spans the band in the page', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await wrapAfter(page, 1);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    const action = page.getByTestId('session-summary').getByTestId('create-dataset');
+    await expect(action).toBeVisible();
+    await expect(page.getByTestId('estop-zone').getByTestId('create-dataset')).toHaveCount(0);
+    const fill = await page.getByTestId('session-summary').evaluate((band) => {
+      const b = band.getBoundingClientRect();
+      const s = getComputedStyle(band);
+      const a = band.querySelector('[data-testid="create-dataset"]')!.getBoundingClientRect();
+      return { inner: b.width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight) - parseFloat(s.borderLeftWidth) - parseFloat(s.borderRightWidth), action: a.width };
+    });
+    expect(Math.abs(fill.inner - fill.action)).toBeLessThanOrEqual(1);
+    expect(await litActions(page)).toEqual(['create-dataset']);
+    await page.screenshot({ ...shot('TASK-429-wrap-390-e2e.png'), fullPage: true });
+  });
+});

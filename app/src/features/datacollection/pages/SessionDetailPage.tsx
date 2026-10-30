@@ -25,14 +25,16 @@
  *              renders one layout per phase (Set up, Record, Wrap up). The
  *              developer tools sit behind one Testing tools popover; on the
  *              headset the page leads with Launch VR.
+ *              TASK-429: Wrap up (completed and failed) is one summary band
+ *              with one dataset action, the takes and the details.
  * @feature datacollection
  */
 
 import { useState, Suspense, lazy, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useParams } from 'react-router-dom';
-import { Pause, Play, Plus } from 'lucide-react';
+import { Pause, Play } from 'lucide-react';
 import {
-  Button, EmptyState, ErrorState, FormField, FormModal, Input, LinkButton, Panel,
+  Button, EmptyState, ErrorState, FormField, FormModal, Input, Panel,
   Skeleton, SkeletonText, Switch, Textarea, confirm, errorMessage, toast,
 } from '@/shared/components/ui';
 import { QualityIndicator } from '../components/QualityIndicator';
@@ -470,7 +472,6 @@ export function SessionDetailPage() {
 
   const isRecording = session.status === 'recording';
   const isPaused = session.status === 'paused';
-  const isCompleted = session.status === 'completed';
   const isLive = isRecording || isPaused || session.status === 'created';
   const isVrSession = session.type === 'vr_quest' || session.type === 'vr_vision_pro';
   const isSim = !!robot && (robot.id.startsWith('sim-') || /sim/i.test(robot.model ?? ''));
@@ -778,24 +779,16 @@ export function SessionDetailPage() {
     </>
   );
 
+  // TASK-429: Wrap up is one summary band (the one dataset action), the takes and the details.
   const wrapBlocks = phase === 'wrap' && (
-    <>
-      {isCompleted && session.frameCount === 0 && !session.exportedDatasetId && (
-        <div className="flex">
-          <LinkButton to="/data-collection/new" leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}>New session</LinkButton>
-        </div>
-      )}
-      {isCompleted && (
-        <SessionCompleted
-          session={session}
-          robotName={robotName}
-          episodes={episodes}
-          onEditTask={() => { setAnnotationText(session.languageInstr || ''); setModalError(undefined); setAnnotateOpen(true); }}
-          onCreateDataset={openExport}
-          onRefetch={refetchCompleted}
-        />
-      )}
-    </>
+    <SessionCompleted
+      session={session}
+      robotName={robotName}
+      episodes={episodes}
+      onEditTask={() => { setAnnotationText(session.languageInstr || ''); setModalError(undefined); setAnnotateOpen(true); }}
+      onCreateDataset={openExport}
+      onRefetch={refetchCompleted}
+    />
   );
 
   return (

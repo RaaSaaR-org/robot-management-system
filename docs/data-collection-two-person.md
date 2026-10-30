@@ -1,7 +1,9 @@
 # Two-person data collection
 
 *Added 2026-10-18 (TASK-414). Updated 2026-10-19 (TASK-420): the whole session
-in order, takes and the quick check, and remote testing over Tailscale.*
+in order, takes and the quick check, and remote testing over Tailscale. Updated
+2026-10-30 (TASK-429): the session page as a live console in three phases (Set
+up, Record, Wrap up).*
 
 Recording demonstrations on the G1 is a two-person job. One person wears the
 Meta Quest 3 and drives the arms; the other sits at a desktop browser in
@@ -33,26 +35,75 @@ operator.
 
 ## What the assistant sees
 
-The session page on a desktop (1024 px wide or more) has three areas:
+The session page is a live console with one layout per phase of the session:
+**Set up** (the session is created, nothing records yet), **Record** (the
+session is recording or paused) and **Wrap up** (completed or failed). In every
+phase exactly one button carries the bright primary fill, and it is the next
+thing to do.
 
-- **Left:** the robot twin. It moves at the robot's fast telemetry rate
-  (about 10 Hz). While the operator is in VR, two translucent **ghost hands**
-  show where the operator wants the robot's hands to be, and a small wireframe
-  pyramid at the robot's eyes shows where the operator is looking. A ghost
-  hand that stays away from the robot's real hand means the arm is not
-  following.
-- **Right, top:** the head camera, then the session HUD with the big
-  `● REC` / `READY` state, the take timer, and the number of takes kept.
-  From two kept takes in a row, the HUD also shows the streak ("5 kept in a
-  row").
-- **Right, middle:** the **Operator** card. It shows `In VR · link live 38 ms`,
-  a grip bar for each hand (filled in the accent colour while that grip
-  clutches the arm), the headset's own why line (amber for a warning, red when
-  the arm is blocked), and `held: <reason>` when the robot refused an arm.
-- **Right, bottom:** the take controls and the list of takes, the robot-side
-  readiness panel, and the quality panel.
-- **Header:** who is in the session ("Anna · headset", "Ben · desktop"), who
-  holds the robot's control lease (read only), and the **E-STOP**.
+**The command bar, in every phase.** One bar at the top of the page stays in
+place while the page scrolls. On its left: the back arrow, the task (the
+session's name), the status tag, and the robot, input and frame rate. Right
+after them sit the normal actions: who is in the session ("Anna · headset",
+"Ben · desktop", one avatar each), the sound-cue mute (Record), **Testing
+tools** (Set up, Record) and **End session** (Record only, asks first). On the
+far right, alone in its own zone, is the **E-STOP**: one press, no
+confirmation, and no other control within 64 px of it, so it is never hit by
+accident and never missed. A 2 px line on the bar's top edge tells the room
+the state from across it: amber while getting ready (mint once every step is
+done), breathing red while a take records, quiet grey between takes, red on a
+fault, mint when the session is complete.
+
+**Testing tools** is a button on the bar that opens one popover holding the
+developer tools: Simulate VR input (a "Simulated input" tag then shows in the
+bar), the desktop VR window with **Launch VR**, the keyboard fallback and the
+joint states. None of them is needed for a normal session.
+
+**On a phone** (below 640 px) the E-STOP is a bar pinned to the bottom of the
+screen that holds nothing else; End session, Testing tools and the mute move
+into the bar's ⋯ menu, and the phase's own action stays in the page.
+
+**Set up** is a "Get ready" checklist in bring-up order, next to a preview of
+the robot twin and the head camera:
+
+1. **Start the robot side**
+2. **Switch to arm control** (Take control, then Switch to arm control)
+3. **Stand up and balance** (Limp, Stand up, Balance)
+4. **Connect the Quest** (Connect, Open on headset, Copy viewer link)
+5. **Operator enters VR**
+
+The current step is the first one not done; it is expanded and holds the
+page's one primary button. A step after a failed one reads "Waits for step N",
+and a problem is stated once, in the step it belongs to. **Start session**
+sits under the steps: secondary while steps are open, primary once all are
+done.
+
+**Record** fits one screen: the big live view (head camera, with the twin and
+the operator's ghost hands in a corner you can swap), a strip of systems below
+it (robot side, control, arm control, mode, headset, arms, hands; open a cell
+for its actions), and the take dock on the right with the `● REC` / `READY`
+state, the take number, the big take timer, **Start take** / **Stop take**,
+**Next take**, **Discard**, the readouts and, after each take, the quick check.
+The list of takes sits under the dock.
+
+**Wrap up** is one summary band: "Session complete" (or "Session failed" with
+the reason), one sentence on when it ended and what was kept, five readouts
+(takes kept, recorded time, frames, frame rate, motion) and one action in its
+own column: **Open dataset** when the session was packed into one, **New
+session** when it recorded no frames, otherwise **Create dataset**. Under the
+band: the takes table (a thumbnail, length, frames, dropped, frame rate, the
+body parts that moved, who started it and the input) and a details list (the
+task with **Edit**, robot and input, start and end, the session id, and the
+dataset).
+
+> **Still landing (2026-10-30).** The command bar, Testing tools, the phone
+> dock and the Wrap up band are built (TASK-426, TASK-429). The Set up
+> checklist (TASK-427) and the Record console (TASK-428) are specified in
+> TASK-425 and still being built: until they merge, Set up and Record show
+> the earlier panels under the command bar — the robot-side readiness panel,
+> the **Robot mode** panel, the twin and camera tiles, the session HUD, the
+> **Operator** card and the take list — with the same buttons the steps
+> below name.
 
 The headset shows `ROBOT · WATCHING Ben (desktop)` as the robot panel's
 title, so the operator knows someone is watching.
@@ -63,17 +114,18 @@ title, so the operator knows someone is watching.
    the robot, the task and the input device. There is no episode count. Under
    the advanced options, **Stop each take automatically after (s)** sets the
    optional auto-stop (5–600 s); leave it empty and the operator ends each take.
-   The session page then shows the robot-side readiness panel used in steps 1–2.
-1. **Start the robot side.** On the robot's **Teleop** tab, in the session's
-   readiness panel, or under the robot field of **New session** when the robot
+   The session page opens in **Set up**, on the "Get ready" checklist: steps
+   1–6 below are its five steps, in the same order.
+1. **Start the robot side** (Get ready step 1). In the step, on the robot's
+   **Teleop** tab, or under the robot field of **New session** when the robot
    is offline, press **Start robot side**. It always starts read-only. See
    [Start the robot side from NeoDEM](g1-edu-lab-bringup.md#start-the-robot-side-from-neodem-task-403).
-2. **Switch to arm control.** On the robot's **Teleop** tab, in the readiness
-   panel, press **Take control** (it connects the page to the robot agent and
+2. **Switch to arm control** (Get ready step 2). In the step, or on the
+   robot's **Teleop** tab, press **Take control** (it connects the page to the robot agent and
    takes the control lease), then **Switch to arm control** and confirm. The
    sidecar restarts in `arm_sdk`; nothing moves yet.
-3. **Stand the robot up.** In the session's **Robot mode** panel (or the VR window on the robot's
-   Teleop tab), press **Stand up** and confirm, wait until the robot measures
+3. **Stand the robot up** (Get ready step 3, "Stand up and balance"). In the
+   step (or the VR window on the robot's Teleop tab), press **Stand up** and confirm, wait until the robot measures
    Stand, then **Balance** and confirm. Before Stand up, lower the gantry until
    both feet are flat on the floor with a hand's width of slack — the robot must
    **not** hang in the gantry. Start from Limp: Stand up from zero torque (FSM 0)
@@ -82,28 +134,31 @@ title, so the operator knows someone is watching.
    profile; see [the balance id](g1-edu-lab-bringup.md#what-the-sidecar-does).
    Stand up uses FSM id 4, which is not yet verified on the robot: watch the
    robot, and keep the remote's L1+A / the E-STOP within reach.
-4. **Connect the Quest.** Plug the Quest into the robot PC over USB and press
+4. **Connect the Quest** (Get ready step 4). Plug the Quest into the robot PC over USB and press
    **Connect** (this runs `adb reverse` for the page port). **Connect** and
    **Open on headset** run `adb` on the robot PC, so they only work for a Quest plugged into that PC. For a Quest on another computer
    see [Remote testing over Tailscale](#remote-testing-over-tailscale).
-5. **Open the session on the headset.** Press **Open on headset**. The Quest
+5. **Open the session on the headset** (Get ready step 4). Press **Open on
+   headset**. The Quest
    browser opens `/data-collection/live?robot=<id>`, which lands on the robot's
    live session: a session that is recording or paused, or a READY one created
    in the last 4 hours. With exactly one such session it opens it; with more it
    lists them and the operator picks one; with none it waits, looks again every
    2 s, and names any older READY session it is ignoring. So the headset can be
    opened before the session exists.
-6. **Enter VR** (operator, inside the headset). Press **Launch VR**, then
+6. **Enter VR** (operator, inside the headset; Get ready step 5, "Operator
+   enters VR", turns done when the headset is in VR). Press **Launch VR**, then
    **Take control**, then **Enter VR**. Enter VR stays disabled until this
    headset holds the control lease, and taking it ends the desktop's control.
    The Enter VR press has to happen inside the headset, because WebXR only
    starts after a user gesture.
-7. **The assistant opens the session.** Press **Copy viewer link** and open
-   the copied link on the desktop. While no headset is in VR, the Operator card
-   reads "Waiting for the headset — open `/data-collection/live?robot=<id>` on
-   the Quest" and shows the same buttons.
-8. **Start session** (assistant, or Space on the desktop). Starting records
-   nothing yet: it opens the session for takes.
+7. **The assistant opens the session.** Press **Copy viewer link** (Get ready
+   step 4) and open the copied link on the desktop. While no headset is in VR,
+   step 5 reads "Waiting for the headset".
+8. **Start session** (assistant, or Space on the desktop), in the start bar
+   under the steps. You can start with steps still open; it asks first.
+   Starting records nothing yet: it opens the session for takes, and the page
+   switches to **Record**.
 
 When the operator enters VR, the assistant hears a soft chime, and the
 Operator card switches to `In VR`.
@@ -168,14 +223,16 @@ first, then Limp.
 
 | Key | Does |
 | --- | --- |
-| **Escape** twice within 1 s | **E-STOP** (the red button in the header does the same) |
+| **Escape** twice within 1 s | **E-STOP** (the red button alone at the right end of the command bar does the same; on a phone, the bar pinned to the bottom) |
 | Space | Start or stop a take (Start session before the first take) |
 | N | Next take |
 | Backspace | Discard the last take. You can undo it for 5 s |
 | E | End the session (asks first) |
 
 When the session ends, a toast sums it up: takes kept, total minutes, and the
-best streak.
+best streak, and the page switches to **Wrap up**: press the band's one action,
+**Create dataset**, to pack the kept takes into a dataset (or **Open dataset**
+once it exists).
 
 ## After an E-stop
 

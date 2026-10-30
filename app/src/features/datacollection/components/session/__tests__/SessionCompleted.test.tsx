@@ -1,17 +1,25 @@
 /**
  * @file SessionCompleted.test.tsx
- * @description The review table names takes the way the session page did
- *              while recording: "Take N", 1-based (TASK-410 D2). TASK-418:
+ * @description Wrap up (TASK-429): one summary band with exactly one dataset
+ *              action, in the epic's order — exported → Open dataset, 0 frames
+ *              → New session, otherwise Create dataset — the failed variant
+ *              with its reason, and the Details "Dataset" row without a second
+ *              button. The review table names takes the way the session page
+ *              did while recording: "Take N", 1-based (TASK-410 D2). TASK-418:
  *              a session whose takes hold frames never reads FRAMES 0 — it
  *              refetches and shows "…" until the count is final.
  * @feature datacollection
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { act, screen } from '@testing-library/react';
+import { act, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '@/test/utils';
-import { FRAME_REFETCH_MS, FRAME_REFETCH_TRIES, SessionCompleted } from '../SessionCompleted';
+import { FRAME_REFETCH_MS, FRAME_REFETCH_TRIES, SessionCompleted, wrapAction } from '../SessionCompleted';
 import type { EpisodeSummary, TeleoperationSession } from '../../../types/datacollection.types';
+
+// The thumbnails are fetched through the API client; these tests are about the band, not the frames.
+vi.mock('../../../utils/takeThumbnailCache', () => ({ loadThumbnail: vi.fn(async () => null), forgetThumbnail: vi.fn() }));
 
 const session = {
   id: 'sess-1', operatorId: 'u', robotId: 'g1', type: 'vr_quest', status: 'completed', startedAt: null, endedAt: null,
@@ -23,23 +31,102 @@ const ep = (episodeIndex: number, over: Partial<EpisodeSummary> = {}): EpisodeSu
   episodeIndex, frameCount: 300, startTime: 0, endTime: 10, durationS: 10, ...over,
 });
 
+const render = (over: Partial<TeleoperationSession> = {}, episodes: EpisodeSummary[] = [ep(0), ep(1)], handlers = {}) => {
+  const props = {
+    session: { ...session, ...over } as TeleoperationSession,
+    robotName: 'G1',
+    episodes,
+    onEditTask: vi.fn(),
+    onCreateDataset: vi.fn(),
+    ...handlers,
+  };
+  renderWithProviders(<SessionCompleted {...props} />);
+  return props;
+};
+
+/** Every control that opens, creates or starts something from a dataset point of view. */
+const datasetControls = () =>
+  screen.queryAllByRole('button', { name: /dataset/i }).length + screen.queryAllByRole('link', { name: /dataset|new session/i }).length;
+
 describe('SessionCompleted', () => {
   it('lists the kept takes as "Take N", 1-based, with no discarded take and no 0', () => {
-    renderWithProviders(
-      <SessionCompleted
-        session={session}
-        robotName="G1"
-        episodes={[ep(0), ep(1, { discarded: true }), ep(2)]}
-        onEditTask={vi.fn()}
-        onCreateDataset={vi.fn()}
-      />,
-    );
+    render({}, [ep(0), ep(1, { discarded: true }), ep(2)]);
     const table = screen.getByTestId('review-episodes');
     expect(table).toHaveTextContent('Take 1');
     expect(table).not.toHaveTextContent('Take 2');
     expect(table).toHaveTextContent('Take 3');
     expect(table).not.toHaveTextContent(/Episode \d/);
-    expect(screen.getByText('Takes kept').nextSibling ?? screen.getByText('Takes kept').parentElement).toHaveTextContent('2');
+    expect(screen.getByTestId('session-kept')).toHaveTextContent('2');
+    expect(screen.getByTestId('session-summary')).toHaveTextContent('2 takes kept, 1 discarded.');
+  });
+
+  it('shows how each take was driven (episode-input-N)', () => {
+    render({}, [ep(0, { retargetModes: ['ik'] }), ep(1)]);
+    expect(screen.getByTestId('episode-input-0')).toBeInTheDocument();
+    expect(screen.getByTestId('episode-input-1')).toBeInTheDocument();
+  });
+});
+
+describe('SessionCompleted — the one dataset action (TASK-429)', () => {
+  it('orders the action: exported → Open dataset, 0 frames → New session, else Create dataset', () => {
+    expect(wrapAction({ exportedDatasetId: 'ds-1', frameCount: 0 }, false)).toBe('open-dataset');
+    expect(wrapAction({ exportedDatasetId: null, frameCount: 0 }, false)).toBe('new-session');
+    expect(wrapAction({ exportedDatasetId: null, frameCount: 0 }, true)).toBe('create-dataset');
+    expect(wrapAction({ exportedDatasetId: null, frameCount: 12 }, false)).toBe('create-dataset');
+  });
+
+  it('an exported session opens its dataset, and the Details row names it without a button', () => {
+    render({ exportedDatasetId: 'e3553405-aaaa' });
+    const open = screen.getByTestId('open-dataset');
+    expect(open).toHaveAttribute('href', expect.stringContaining('/datasets/e3553405-aaaa/episodes'));
+    expect(within(screen.getByTestId('session-summary')).getByTestId('open-dataset')).toBe(open);
+    const row = screen.getByTestId('dataset-card');
+    expect(row).toHaveTextContent('Exported');
+    expect(row).toHaveTextContent('e3553405');
+    expect(within(row).queryByRole('button')).toBeNull();
+    expect(within(row).queryByRole('link')).toBeNull();
+    expect(datasetControls()).toBe(1);
+  });
+
+  it('a session with no frames offers New session and nothing to package', () => {
+    render({ frameCount: 0 }, [ep(0, { discarded: true })]);
+    expect(screen.getByRole('link', { name: 'New session' })).toHaveAttribute('href', expect.stringContaining('/data-collection/new'));
+    expect(screen.getByTestId('session-summary')).toHaveTextContent('nothing to package');
+    expect(screen.queryByTestId('create-dataset')).toBeNull();
+    expect(screen.queryByTestId('open-dataset')).toBeNull();
+    expect(screen.queryByTestId('dataset-card')).toBeNull();
+    expect(datasetControls()).toBe(1);
+  });
+
+  it('otherwise Create dataset opens the existing modal, and it is the only dataset button in the DOM', async () => {
+    const p = render();
+    expect(screen.getByText('Not created yet')).toBeInTheDocument();
+    expect(datasetControls()).toBe(1);
+    await userEvent.click(screen.getByRole('button', { name: 'Create dataset' }));
+    expect(p.onCreateDataset).toHaveBeenCalledTimes(1);
+  });
+
+  it('Edit task is one click from Details', async () => {
+    const p = render();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    expect(p.onEditTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('a completed session with a warning shows it once, under the sentence', () => {
+    render({ errorMessage: 'The right hand stopped answering.' });
+    expect(screen.getByTestId('session-warning')).toHaveTextContent('The right hand stopped answering.');
+    expect(screen.getAllByText(/right hand stopped answering/)).toHaveLength(1);
+    expect(screen.getByTestId('session-summary')).toHaveAttribute('data-result', 'completed');
+  });
+
+  it('a failed session says so, with its reason, once', () => {
+    render({ status: 'failed', errorMessage: 'The recorder lost the robot.' });
+    const band = screen.getByTestId('session-summary');
+    expect(band).toHaveAttribute('data-result', 'failed');
+    expect(within(band).getByRole('heading', { level: 2 })).toHaveTextContent('Session failed');
+    expect(screen.getByTestId('session-warning')).toHaveTextContent('The recorder lost the robot.');
+    expect(screen.getAllByText(/recorder lost the robot/)).toHaveLength(1);
+    expect(datasetControls()).toBe(1);
   });
 });
 
@@ -61,7 +148,7 @@ describe('SessionCompleted frame count (TASK-418)', () => {
     const p = props({ frameCount: 0 }, [ep(0), ep(1)], onRefetch);
     const { rerender } = renderWithProviders(<SessionCompleted {...p} />);
     expect(screen.getByTestId('session-frames')).toHaveTextContent('…');
-    expect(screen.queryByText('Nothing to package')).toBeNull();
+    expect(screen.queryByText(/nothing to package/)).toBeNull();
     await act(async () => { vi.advanceTimersByTime(0); });
     expect(onRefetch).toHaveBeenCalledTimes(1);
     await act(async () => { vi.advanceTimersByTime(FRAME_REFETCH_MS); });
@@ -88,7 +175,7 @@ describe('SessionCompleted frame count (TASK-418)', () => {
     const onRefetch = vi.fn();
     renderWithProviders(<SessionCompleted {...props({ frameCount: 0 }, [ep(0, { discarded: true })], onRefetch)} />);
     expect(screen.getByTestId('session-frames')).toHaveTextContent('0');
-    expect(screen.getByText('Nothing to package')).toBeInTheDocument();
+    expect(screen.getByText(/nothing to package/)).toBeInTheDocument();
     expect(onRefetch).not.toHaveBeenCalled();
   });
 });
