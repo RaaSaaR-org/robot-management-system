@@ -34,7 +34,6 @@
 
 import { useState, Suspense, lazy, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useParams } from 'react-router-dom';
-import { cn } from '@/shared/utils/cn';
 import { Glasses, Pause, Play, Plus } from 'lucide-react';
 import {
   Button, EmptyState, ErrorState, FormField, FormModal, Input, LinkButton, Panel,
@@ -56,7 +55,8 @@ import { HeadsetHero, RobotSetupDisclosure } from '../components/console/Headset
 import { SetupRail, type SetupStepContent } from '../components/console/SetupRail';
 import { LiveView } from '../components/console/LiveView';
 import { buildSetupModel, type SetupStep } from '../utils/setupSteps';
-import { useLeaseTake } from '../hooks/useLeaseTake';
+import { useLeaseHandOver, useLeaseTake } from '../hooks/useLeaseTake';
+import { PageLeaseLine } from '../components/console/PageLeaseLine';
 import { useDeviceRole, detectDeviceRole, type DeviceRole } from '../hooks/useDeviceRole';
 import { commandBarTally, sessionPhase } from '../utils/sessionPhase';
 import { EMULATOR_ACTIVE } from '../../robots/components/tabs/vr/vrConstants';
@@ -412,6 +412,24 @@ export function SessionDetailPage() {
     enabled: !!session && sessionIsVr && sessionIsLive && robotOnline,
   });
   const modeControlOn = baseMode.status?.capability.gate === 'fsm' || baseMode.status?.capability.gate === 'full';
+
+  // TASK-427: the server never preempts a lease, so the lease step 2 took is
+  // given back for the operator: once they open VR with the robot balancing
+  // (or this page's own VR window opens), and when the session starts. While
+  // the page holds it, steps 2, 3 and 5 show it with a Release button.
+  const pageHoldsLease = sessionIsVr && !leaseInputs && leaseTake.wanted && lease.state === 'bound';
+  const operatorHere = viewers.some((v) => v.role === 'operator');
+  const stanceReady = baseMode.status !== null && (!modeControlOn || baseMode.status.base?.mode === 'balance');
+  const releaseLease = leaseTake.release;
+  const handOver = useCallback(() => {
+    releaseLease();
+    toast.info('You gave control back', { description: 'The operator can take control in the headset now.' });
+  }, [releaseLease]);
+  useLeaseHandOver(sessionIsVr && !leaseInputs && (vrModalOpen || (operatorHere && stanceReady)), pageHoldsLease, handOver);
+  const releaseOnStart = sessionIsVr && !leaseInputs && leaseTake.wanted && session?.status !== 'created';
+  useEffect(() => {
+    if (releaseOnStart) releaseLease();
+  }, [releaseOnStart, releaseLease]);
 
   // TASK-414: this page watches the session as the desktop assistant — except
   // while its own VR modal is open, when the headset's publisher is the operator.
@@ -808,6 +826,9 @@ export function SessionDetailPage() {
       <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={leaseConnected} showEstop={false} />
     </div>
   ) : null;
+  const heldLine = (className?: string) => (pageHoldsLease ? (
+    <PageLeaseLine text={`You have control of ${robotName}.`} onRelease={releaseLease} className={className} />
+  ) : null);
   const detailsFor = (step: SetupStep) => (robot && step.rows.length > 0 ? (
     <RobotReadinessPanel robotId={robot.id} variant="rows" rows={step.rows} readiness={readinessState} />
   ) : undefined);
@@ -827,12 +848,12 @@ export function SessionDetailPage() {
       case 'arm_control':
         return {
           lead: 'The arms follow the headset only in arm control. Take control, then switch. Nothing moves yet.',
-          children: leaseBar,
+          children: leaseBar ?? heldLine(),
           actions: robotActions(['arm', 'read_only'], lit),
           note: (
             <>
               <Glasses className="mt-0.5 h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
-              Later the operator takes control in the headset. That ends yours, as it should.
+              When the operator opens VR with the robot balancing, this page gives your control back so they can take it in the headset.
             </>
           ),
           details: detailsFor(step),
@@ -847,9 +868,12 @@ export function SessionDetailPage() {
                 lit={lit}
                 lease={lease}
                 baseMode={baseMode}
-                takeControlHint="Take control in step 2 first."
+                // Simulated input: step 2's control bar takes it. Otherwise this step does.
+                takeControlHint={leaseInputs ? 'Take control in step 2 first.' : undefined}
+                onTakeControl={readinessLease.take}
                 requestFromHolder={operatorViewer && operatorInVr && !vrModalOpen ? requestMode : undefined}
               />
+              {heldLine('mt-3')}
             </div>
           ) : null,
           details: detailsFor(step),
@@ -871,6 +895,13 @@ export function SessionDetailPage() {
       case 'operator':
         return {
           lead: 'In the headset the operator presses Launch VR, Take control and Enter VR. You hear a chime when they are in.',
+          children: pageHoldsLease ? (
+            <PageLeaseLine
+              text={`You still have control of ${robotName}. ${operatorName ?? 'The operator'} can take it in the headset only once you release it.`}
+              onRelease={releaseLease}
+              lit={lit}
+            />
+          ) : null,
           details: detailsFor(step),
         };
       case 'input': {
@@ -935,9 +966,10 @@ export function SessionDetailPage() {
 
   return (
     // max-sm:pb-[88px]: with the shell's 24 px, nothing hides behind the phone's E-STOP dock.
-    // Set up below 1440 px: 16 px more above the bar, where the shell's section
-    // rail runs over the E-STOP's column and would sit 35 px from it (TASK-427).
-    <div className={cn('flex flex-col gap-3 max-sm:pb-[88px]', phase === 'setup' && 'sm:max-[1439px]:pt-4')} data-phase={phase} data-role={deviceRole}>
+    // Below 1440 px: 16 px more above the bar, where the shell's section rail
+    // runs over the E-STOP's column and would sit 35 px from it (TASK-427). In
+    // every phase, so the bar and the E-STOP never move when the phase changes.
+    <div className="flex flex-col gap-3 max-sm:pb-[88px] sm:max-[1439px]:pt-4" data-phase={phase} data-role={deviceRole}>
       <SessionCommandBar
         phase={phase}
         tally={tally}

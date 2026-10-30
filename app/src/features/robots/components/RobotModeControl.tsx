@@ -25,12 +25,14 @@
  *              `modeDisabledReason` order) and the unverified stand-up FSM as
  *              one amber line; the raw sidecar error stays in the step's
  *              Details. `panel` keeps its look. An unknown mode is amber in
- *              both: unknown is never a fault.
+ *              both: unknown is never a fault. Given `onTakeControl`, a step
+ *              that only lacks control offers Take control as its lit action,
+ *              in place of a reason line that names a button elsewhere.
  * @feature robots
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Lock, PersonStanding, TriangleAlert } from 'lucide-react';
+import { Hand, Lock, PersonStanding, TriangleAlert } from 'lucide-react';
 import { Button } from '@/shared/components/ui/Button';
 import { ConfirmDialog } from '@/shared/components/ui/ConfirmDialog';
 import { cn } from '@/shared/utils/cn';
@@ -234,6 +236,12 @@ export interface RobotModeControlProps {
   lit?: boolean;
   /** `step` only: says where control is taken, in place of "Take control first." */
   takeControlHint?: string;
+  /**
+   * `step` only: take the console's lease from the step itself (TASK-427);
+   * resolves true once bound. While the step lacks only control, Take control
+   * is its lit action and the mode buttons wait behind it.
+   */
+  onTakeControl?: () => Promise<boolean>;
   className?: string;
 }
 
@@ -245,13 +253,16 @@ export function modeTone(mode: BaseModeName): string {
 }
 
 export function RobotModeControl({
-  robotId, lease, armsEngaged = false, baseMode, requestFromHolder, variant = 'panel', lit = true, takeControlHint, className,
+  robotId, lease, armsEngaged = false, baseMode, requestFromHolder, variant = 'panel', lit = true, takeControlHint, onTakeControl,
+  className,
 }: RobotModeControlProps) {
   const own = useRobotBaseMode(robotId, { enabled: baseMode === undefined });
   const bm = baseMode ?? own;
   const [confirming, setConfirming] = useState<BaseModeCommand | null>(null);
   const [asking, setAsking] = useState<{ mode: HolderMode; since: number } | null>(null);
   const [answered, setAnswered] = useState<{ mode: HolderMode; result: HolderRequestResult } | null>(null);
+  const [taking, setTaking] = useState(false);
+  const [takeFailed, setTakeFailed] = useState(false);
   const mounted = useRef(true);
   // Set on every mount: StrictMode mounts, unmounts and mounts again in dev.
   useEffect(() => {
@@ -401,9 +412,22 @@ export function RobotModeControl({
     const reasonButton = (next?.mode ? BUTTONS.find((b) => b.mode === next.mode) : undefined) ?? reasons[0]?.b;
     const rawReason = reasonButton ? reasonFor(reasonButton.mode) : null;
     // The raw sidecar error belongs to the step's Details, not to this line.
-    const reasonLine = rawReason === 'Take control first.' && takeControlHint
-      ? takeControlHint
-      : rawReason?.startsWith('The robot mode is unknown') ? 'The robot mode is unknown.' : rawReason;
+    // Only control is missing and the step can take it: Take control is the action.
+    const offerTake = rawReason === 'Take control first.' && onTakeControl !== undefined && lease.enabled;
+    const reasonLine = offerTake
+      ? takeFailed ? 'Could not take control. Someone else may hold the robot.' : null
+      : rawReason === 'Take control first.' && takeControlHint
+        ? takeControlHint
+        : rawReason?.startsWith('The robot mode is unknown') ? 'The robot mode is unknown.' : rawReason;
+    const takeControl = async (): Promise<void> => {
+      if (!onTakeControl) return;
+      setTaking(true);
+      setTakeFailed(false);
+      const ok = await onTakeControl().catch(() => false);
+      if (!mounted.current) return;
+      setTaking(false);
+      setTakeFailed(!ok);
+    };
     const onTrack = BRING_UP_STEPS.some((s) => s.mode === mode);
     const currentIndex = BRING_UP_STEPS.findIndex((s) => s.mode === mode);
     const readout = (
@@ -463,13 +487,26 @@ export function RobotModeControl({
           <p className="mb-3 max-w-[62ch] text-[14px] text-ink-secondary" data-testid="robot-bringup-next">{next.text}</p>
         )}
         <div className="flex flex-wrap items-center gap-2">
+          {offerTake && (
+            <Button
+              variant={lit ? 'primary' : 'secondary'}
+              leftIcon={<Hand className="h-4 w-4" strokeWidth={1.75} />}
+              onClick={() => void takeControl()}
+              disabled={taking}
+              isLoading={taking}
+              loadingText="Taking control…"
+              data-testid="robot-mode-take-control"
+            >
+              Take control
+            </Button>
+          )}
           {BUTTONS.map((b) => {
             const isNext = next?.mode === b.mode;
             return (
               <Button
                 key={b.mode}
                 ref={b.mode === 'limp' ? limpRef : undefined}
-                variant={isNext && lit ? 'primary' : 'secondary'}
+                variant={isNext && lit && !offerTake ? 'primary' : 'secondary'}
                 disabled={reasonFor(b.mode) !== null}
                 data-testid={`robot-mode-${b.mode}`}
                 data-next={isNext ? 'true' : undefined}

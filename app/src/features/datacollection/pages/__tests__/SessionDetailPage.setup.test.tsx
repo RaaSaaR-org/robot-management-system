@@ -4,8 +4,8 @@
  *              read-only and the robot limp, so step 2 is current — open, with
  *              Take control as the page's one lit action. The read-only reason
  *              is said once, the Quest controls exist once (in step 4), step 3
- *              carries the mode buttons with one reason line, and Take control
- *              opens the page's lease only on the press.
+ *              carries the mode buttons behind its own Take control, and Take
+ *              control opens the page's lease only on the press.
  * @feature datacollection
  */
 
@@ -133,9 +133,11 @@ describe('SessionDetailPage Set up', () => {
     const stance = screen.getByTestId('setup-step-stance');
     expect(within(stance).getByTestId('robot-mode-stand')).toBeVisible();
     expect(within(stance).getByTestId('robot-mode-limp')).toBeVisible();
-    expect(within(stance).getByTestId('robot-mode-reasons')).toHaveTextContent(/^Take control in step 2 first\.$/);
-    // The step's own next button is primary but disabled: nothing is lit.
-    expect(litPrimaries()).toHaveLength(0);
+    // The step lacks only control, so it offers Take control itself as its one
+    // lit action, in place of a reason line naming a button elsewhere.
+    expect(within(stance).queryByTestId('robot-mode-reasons')).toBeNull();
+    expect(litPrimaries().map((b) => b.dataset.testid)).toEqual(['robot-mode-take-control']);
+    expect(within(stance).getByTestId('robot-mode-limp').className).not.toContain('bg-primary');
 
     fireEvent.click(screen.getByTestId('setup-step-quest-toggle'));
     const quest = screen.getByTestId('setup-step-quest');
