@@ -24,6 +24,9 @@
  *              just the ones it is about. TASK-430: "Restart robot side" for a
  *              robot side that runs stale code, behind the Stop confirm — only
  *              where a host lists it; the full panel keeps Stop and Start.
+ *              TASK-437: the arm switch goes out only with control held. A
+ *              lease that ended while its confirm was open is taken again on
+ *              the confirm; when that fails, nothing is sent.
  * @feature robots
  */
 
@@ -270,6 +273,37 @@ function useReadinessActions({
       setTaking(false);
     }
   };
+  /**
+   * Switch to arm control, with control held when the request goes out
+   * (TASK-437). The lease can end while the confirm is open: a tab that stops
+   * running for a few seconds misses its 1 s renewals, the robot expires the
+   * 5 s lease, and the server then refuses the switch (409 `lease_required`).
+   * The confirm is the explicit press taking control needs, so it takes it
+   * again first; when that fails it sends nothing and says so.
+   */
+  const switchToArmControl = async () => {
+    setConfirm(null);
+    let grant = lease?.grant() ?? null;
+    if (!grant && lease?.enabled) {
+      const retake = lease.take;
+      if (!retake) {
+        setTakeError('Control ran out before the switch, so arm control was not switched on. Take control, then switch.');
+        return;
+      }
+      setTaking(true);
+      setTakeError(null);
+      try {
+        grant = (await retake().catch(() => false)) ? lease.grant() : null;
+      } finally {
+        setTaking(false);
+      }
+      if (!grant) {
+        setTakeError('Control ran out before the switch and could not be taken again, so arm control was not switched on.');
+        return;
+      }
+    }
+    await actions.switchMode('arm_sdk', grant);
+  };
   const mode = measuredMode(readiness);
   const offerLimp = upright(mode);
   const linkStep = bringup?.steps.find((s) => s.id === 'link') ?? null;
@@ -474,10 +508,7 @@ function useReadinessActions({
       <ConfirmDialog
         isOpen={confirm === 'arm'}
         onClose={() => setConfirm(null)}
-        onConfirm={async () => {
-          setConfirm(null);
-          await actions.switchMode('arm_sdk', lease?.grant() ?? null);
-        }}
+        onConfirm={switchToArmControl}
         title="Switch the robot side to arm control?"
         confirmLabel="Switch to arm control"
         testId="readiness-arm-confirm"
