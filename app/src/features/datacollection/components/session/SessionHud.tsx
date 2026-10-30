@@ -138,7 +138,7 @@ export function HudReadouts({ duration, frames, fps, fpsActual, kept, streak = 0
   const label = motion ? motionLabel(motion.currentSmoothnessScore) : null;
   const value = live ? 'text-ink-primary' : 'text-ink-secondary';
   return (
-    <dl className="m-0 grid grid-cols-4 gap-px overflow-hidden rounded-control border border-line-subtle bg-line-subtle max-sm:grid-cols-2">
+    <dl className="m-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] gap-px overflow-hidden rounded-control border border-line-subtle bg-line-subtle max-sm:grid-cols-2">
       <div className={CELL}>
         <dt className={DT}>Session</dt>
         <dd className={cn(DD, value)} data-testid="hud-duration">{duration}</dd>

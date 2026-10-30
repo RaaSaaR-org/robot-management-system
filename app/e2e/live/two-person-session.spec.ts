@@ -10,7 +10,7 @@
  *     - A ray-clicks Start → B shows `● REC Take 1` and "started from the
  *       headset"; B presses Stop → A's board shows the quick check.
  *     - B presses Discard last → A's `kept` follows within 1.5 s of the server.
- *     - A presses B (E-stop, SIM agent only) → B's operator card shows the
+ *     - A presses B (E-stop, SIM agent only) → B's Arms cell shows the
  *       block why line "E-stop latched" and A's session buttons are dead;
  *       B resets the E-stop through the existing safety reset.
  *
@@ -207,9 +207,10 @@ test('the desktop assistant and the Quest operator share one live session (TASK-
   try {
     // ---- B: the assistant layout, waiting for the headset -------------------
     await desk.goto(`/data-collection/${sessionId}`);
-    const card = desk.getByTestId('operator-card');
-    await expect(card).toHaveAttribute('data-state', 'waiting', { timeout: 20_000 });
-    await expect(desk.getByTestId('operator-status')).toContainText(`/data-collection/live?robot=${ROBOT_ID}`);
+    // TASK-428: no headset yet — the Headset cell says so, and its popover holds the Quest controls.
+    const headsetCell = desk.getByTestId('systems-cell-headset');
+    await expect(headsetCell).toContainText('No headset', { timeout: 20_000 });
+    await expect(desk.getByTestId('operator-card')).toHaveCount(0);
     await expect(desk.locator('[data-testid="presence-viewer"][data-role="assistant"]')).toBeVisible({ timeout: 15_000 });
     const twin = desk.getByTestId('robot-3d-viewer');
     await expect(twin).toHaveAttribute('data-robot-id', ROBOT_ID, { timeout: 20_000 });
@@ -233,8 +234,9 @@ test('the desktop assistant and the Quest operator share one live session (TASK-
     await expect(desk.getByTestId('operator-status')).toContainText('In VR', { timeout: 2_000 });
     await expect(desk.locator('[data-testid="presence-viewer"][data-role="operator"]')).toBeVisible({ timeout: Math.max(100, 2_000 - (Date.now() - enteredAt)) });
     test.info().annotations.push({ type: 'In VR on the desktop after', description: `${Date.now() - enteredAt} ms` });
-    // The read-only lease holder: A took control in the VR window.
-    await expect(desk.getByTestId('control-lease-holder')).toContainText('Controlled by', { timeout: 10_000 });
+    // The read-only lease holder: A took control in the VR window (TASK-428: the Control cell names them).
+    await expect(desk.getByTestId('systems-cell-control')).toHaveAttribute('data-status', 'ok', { timeout: 10_000 });
+    await expect(desk.getByTestId('control-lease-holder')).not.toHaveText(/^(Nobody|You)$/);
     // The headset names the desktop watcher in its robot panel.
     await expect.poll(() => quest.evaluate(() => (window as DebugWindow).__neodemVrUi?.panelTitle ?? ''), { timeout: 10_000 })
       .toMatch(/WATCHING .+ \(desktop\)/);

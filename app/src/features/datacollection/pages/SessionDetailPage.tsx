@@ -38,6 +38,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams } from 'react-router-dom';
 import { Glasses, OctagonX, Plus, TriangleAlert } from 'lucide-react';
 import {
@@ -56,6 +57,7 @@ import { SystemsStrip, type StripCell } from '../components/console/SystemsStrip
 import { TakeDock } from '../components/console/TakeDock';
 import { TakesList } from '../components/console/TakesList';
 import { useTakeHotkeys } from '../hooks/useTakeHotkeys';
+import { ReparentHost, useDetachedNode } from '../components/console/Reparent';
 import { useViewportFill } from '../hooks/useViewportFill';
 import { SessionCommandBar, SessionCommandBarSkeleton, type RobotLink } from '../components/console/SessionCommandBar';
 import { TestingToolsRow } from '../components/console/TestingTools';
@@ -324,6 +326,10 @@ export function SessionDetailPage() {
   });
   // The console fills the viewport below its top: Record never scrolls from 1024 px.
   const consoleRef = useViewportFill({ enabled: recordPhase });
+  // The robot-mode controls render once and move between the dock's recovery
+  // slot and the Mode cell without a remount (an open confirm or the headset's
+  // answer survives the robot reaching Balance).
+  const modeNode = useDetachedNode();
 
   const legacyNext = async () => {
     setLegacyNextBusy(true);
@@ -877,7 +883,7 @@ export function SessionDetailPage() {
         <p className={slotLine}>The operator resets it in the headset, or reset it at the robot. Then stand the robot up again.</p>
       )}
       <p className={slotLine}>The arms will not follow until the robot balances.</p>
-      {modeControl && <div className="ml-6 mt-2.5">{modeControl}</div>}
+      {modeControl && <ReparentHost node={modeNode} className="ml-6 mt-2.5" />}
     </div>
   ) : null;
   const blocker = blockerKind === 'degraded' ? (
@@ -987,7 +993,9 @@ export function SessionDetailPage() {
             {cellReason(c)}
             {showRecovery && modeControl
               ? <p className="m-0 text-ink-secondary">Limp, Stand up and Balance are in the take dock while the robot does not balance.</p>
-              : modeControl ?? <p className="m-0 text-ink-secondary">This robot&apos;s mode cannot be changed from here.</p>}
+              : modeControl
+                ? <ReparentHost node={modeNode} />
+                : <p className="m-0 text-ink-secondary">This robot&apos;s mode cannot be changed from here.</p>}
             {rowsFor(['mode'])}
           </>
         );
@@ -1125,6 +1133,7 @@ export function SessionDetailPage() {
           onDiscardTake={(take) => (takeMode ? handleDiscardTake(take) : handleDiscardEpisode(take))}
         />
       </div>
+      {modeControl && modeNode && createPortal(modeControl, modeNode)}
     </div>
   );
 
