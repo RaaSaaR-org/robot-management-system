@@ -29,14 +29,16 @@
  *              order, the current one open with the page's one lit action, each
  *              problem stated once in the step it belongs to — next to a
  *              preview of the twin with the head camera as a picture-in-picture.
+ *              TASK-429: Wrap up (completed and failed) is one summary band
+ *              with one dataset action, the takes and the details.
  * @feature datacollection
  */
 
 import { useState, Suspense, lazy, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useParams } from 'react-router-dom';
-import { Glasses, Pause, Play, Plus } from 'lucide-react';
+import { Glasses, Pause, Play } from 'lucide-react';
 import {
-  Button, EmptyState, ErrorState, FormField, FormModal, Input, LinkButton, Panel,
+  Button, EmptyState, ErrorState, FormField, FormModal, Input, Panel,
   Skeleton, SkeletonText, Switch, Textarea, confirm, errorMessage, toast,
 } from '@/shared/components/ui';
 import { QualityIndicator } from '../components/QualityIndicator';
@@ -49,6 +51,7 @@ import { QuickCheckCard } from '../components/session/QuickCheckCard';
 import { SessionEStopButton } from '../components/session/SessionEStopButton';
 import { OperatorCard } from '../components/OperatorCard';
 import { OperatorOverlay, OVERLAY_LINK } from '../components/OperatorOverlay';
+import { cn } from '@/shared/utils/cn';
 import { SessionCommandBar, SessionCommandBarSkeleton, type RobotLink } from '../components/console/SessionCommandBar';
 import { TestingToolsRow } from '../components/console/TestingTools';
 import { HeadsetHero, RobotSetupDisclosure } from '../components/console/HeadsetHero';
@@ -108,6 +111,16 @@ const cameraLabel = (name: string) => {
 const formatElapsed = (secs: number) => `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
 /** TASK-418 (D4): how long the headset stays in VR after the session ended — enough to read "ended". */
 export const VR_GOODBYE_MS = 5_000;
+
+/**
+ * TASK-427, TASK-429: the E-STOP stands alone page-wide (>= 48 px at 1280).
+ * Below 1440 px the shell's section rail (the nav right above this page)
+ * reaches across to the bar's right end, 35 px above the E-STOP; 16 px more
+ * above the bar puts it past 48. At 1440 and up the rail ends well left of the
+ * E-STOP, so the page sits where the mockup has it. The loading skeleton takes
+ * it too, so the bar does not move when the session arrives.
+ */
+const RAIL_CLEARANCE = 'sm:max-[1439px]:pt-4';
 
 /** TASK-418 (D4): the session went from live to ended while this page's VR modal was open. */
 export function endsUnderVr(prevStatus: string | undefined, status: string | undefined, vrModalOpen: boolean): boolean {
@@ -499,7 +512,7 @@ export function SessionDetailPage() {
 
   if (!session) {
     return (
-      <div className="flex flex-col gap-3">
+      <div className={cn('flex flex-col gap-3', RAIL_CLEARANCE)}>
         <SessionCommandBarSkeleton title={error && !isLoading ? 'Session' : 'Loading…'} />
         <Panel>
           {error && !isLoading ? (
@@ -514,7 +527,6 @@ export function SessionDetailPage() {
 
   const isRecording = session.status === 'recording';
   const isPaused = session.status === 'paused';
-  const isCompleted = session.status === 'completed';
   const isLive = isRecording || isPaused || session.status === 'created';
   const isVrSession = session.type === 'vr_quest' || session.type === 'vr_vision_pro';
   const isSim = !!robot && (robot.id.startsWith('sim-') || /sim/i.test(robot.model ?? ''));
@@ -628,7 +640,7 @@ export function SessionDetailPage() {
   ) : null;
 
   // The phase actions that are not in the bar, until each phase gets its own
-  // layout (TASK-428 take dock, TASK-429 summary band).
+  // layout (TASK-428 take dock).
   const legacyActions = (legacyRecording || isPaused) && (
     <div className="flex flex-wrap items-center gap-2" data-testid="session-legacy-actions">
       {legacyRecording && (
@@ -966,32 +978,23 @@ export function SessionDetailPage() {
     </div>
   );
 
+  // TASK-429: Wrap up is one summary band (the one dataset action), the takes and the details.
   const wrapBlocks = phase === 'wrap' && (
-    <>
-      {isCompleted && session.frameCount === 0 && !session.exportedDatasetId && (
-        <div className="flex">
-          <LinkButton to="/data-collection/new" leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}>New session</LinkButton>
-        </div>
-      )}
-      {isCompleted && (
-        <SessionCompleted
-          session={session}
-          robotName={robotName}
-          episodes={episodes}
-          onEditTask={() => { setAnnotationText(session.languageInstr || ''); setModalError(undefined); setAnnotateOpen(true); }}
-          onCreateDataset={openExport}
-          onRefetch={refetchCompleted}
-        />
-      )}
-    </>
+    <SessionCompleted
+      session={session}
+      robotName={robotName}
+      episodes={episodes}
+      onEditTask={() => { setAnnotationText(session.languageInstr || ''); setModalError(undefined); setAnnotateOpen(true); }}
+      onCreateDataset={openExport}
+      onRefetch={refetchCompleted}
+    />
   );
 
   return (
     // max-sm:pb-[88px]: with the shell's 24 px, nothing hides behind the phone's E-STOP dock.
-    // Below 1440 px: 16 px more above the bar, where the shell's section rail
-    // runs over the E-STOP's column and would sit 35 px from it (TASK-427). In
-    // every phase, so the bar and the E-STOP never move when the phase changes.
-    <div className="flex flex-col gap-3 max-sm:pb-[88px] sm:max-[1439px]:pt-4" data-phase={phase} data-role={deviceRole}>
+    // RAIL_CLEARANCE: below 1440 px the section rail runs over the E-STOP's
+    // column; in every phase, so the bar and the E-STOP never move when the phase changes.
+    <div className={cn('flex flex-col gap-3 max-sm:pb-[88px]', RAIL_CLEARANCE)} data-phase={phase} data-role={deviceRole}>
       <SessionCommandBar
         phase={phase}
         tally={tally}

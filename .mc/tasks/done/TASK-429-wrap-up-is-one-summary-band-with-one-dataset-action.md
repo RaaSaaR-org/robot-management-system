@@ -3,7 +3,7 @@ id: "TASK-429"
 aliases: []
 title: "Wrap-up is one summary band with one dataset action"
 slug: "wrap-up-is-one-summary-band-with-one-dataset-action"
-status: "todo"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
