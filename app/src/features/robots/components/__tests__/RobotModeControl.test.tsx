@@ -358,3 +358,57 @@ describe('RobotModeControl — asking the headset (TASK-417)', () => {
     expect(line).toHaveTextContent('The operator did not answer within 10 s.');
   });
 });
+
+describe('RobotModeControl variant="step" (TASK-427)', () => {
+  it('draws the bring-up as a track, lights the next button, and says one reason', () => {
+    render(<RobotModeControl robotId="r1" variant="step" lease={{ ...BOUND, state: 'observing' }} baseMode={fakeHook()} takeControlHint="Take control in step 2 first." />);
+    const track = screen.getByTestId('robot-bringup');
+    expect(track.querySelector('[data-current="true"]')).toHaveTextContent('Limp');
+    expect(screen.getByTestId('robot-mode-readout')).toHaveTextContent('Limp');
+    expect(screen.getByTestId('robot-mode-stand')).toHaveAttribute('data-next', 'true');
+    expect(screen.getByTestId('robot-mode-stand').className).toContain('bg-primary');
+    expect(screen.getByTestId('robot-mode-balance').className).not.toContain('bg-primary');
+    // One line, not one per button.
+    const reasons = screen.getByTestId('robot-mode-reasons');
+    expect(reasons.tagName).toBe('P');
+    expect(reasons).toHaveTextContent(/^Take control in step 2 first\.$/);
+    expect(screen.getByTestId('robot-mode-unverified')).toHaveClass('text-signal-unknown');
+  });
+
+  it('is not lit when its step is not the open one', () => {
+    render(<RobotModeControl robotId="r1" variant="step" lit={false} lease={BOUND} baseMode={fakeHook()} />);
+    expect(screen.getByTestId('robot-mode-stand').className).not.toContain('bg-primary');
+  });
+
+  it('renders an unknown mode amber, never red — in both variants — and keeps the sidecar error out of the step', () => {
+    const unknown = fakeHook({ status: status({}, { mode: 'unknown', fsmId: null, error: 'GetFsmId timed out' }) });
+    const { unmount } = render(<RobotModeControl robotId="r1" variant="step" lease={BOUND} baseMode={unknown} />);
+    expect(screen.getByTestId('robot-mode-readout')).toHaveClass('text-signal-unknown');
+    expect(screen.getByTestId('robot-mode-readout')).not.toHaveClass('text-signal-stopped');
+    expect(screen.getByTestId('robot-mode-reasons')).toHaveTextContent(/^The robot mode is unknown\.$/);
+    expect(screen.queryByText(/GetFsmId timed out/)).toBeNull();
+    // Limp stays enabled from an unknown mode.
+    expect(screen.getByTestId('robot-mode-limp')).toBeEnabled();
+    unmount();
+    render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={unknown} />);
+    expect(screen.getByTestId('robot-mode-readout')).toHaveClass('text-signal-unknown');
+  });
+
+  it('still confirms before it posts', async () => {
+    const hook = fakeHook();
+    render(<RobotModeControl robotId="r1" variant="step" lease={BOUND} baseMode={hook} />);
+    fireEvent.click(screen.getByTestId('robot-mode-stand'));
+    expect(hook.request).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('robot-mode-confirm-confirm'));
+    });
+    expect(hook.request).toHaveBeenCalledWith('stand', { leaseId: 'secret', generation: 9 });
+  });
+
+  it('keeps Limp clickable while a Balance waits, as the panel does', () => {
+    const hook = fakeHook({ pending: 'balance', status: status({ inFlight: 'balance' }, { mode: 'stand', fsmId: 4 }) });
+    render(<RobotModeControl robotId="r1" variant="step" lease={BOUND} baseMode={hook} />);
+    expect(screen.getByTestId('robot-mode-limp')).toBeEnabled();
+    expect(screen.getByTestId('robot-mode-balance')).toBeDisabled();
+  });
+});

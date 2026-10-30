@@ -18,10 +18,19 @@
  *              button to press; a robot in zero torque says "press Limp first"
  *              instead of only disabling Stand up. Nothing is chained: every
  *              step is still its own confirmed click.
+ *
+ *              TASK-427: `variant="step"` draws it as the session page's Set up
+ *              step 3 — the bring-up as a node track, the next button as the
+ *              step's one lit action, one reason line (the first in
+ *              `modeDisabledReason` order) and the unverified stand-up FSM as
+ *              one amber line; the raw sidecar error stays in the step's
+ *              Details. `panel` keeps its look. An unknown mode is amber in
+ *              both: unknown is never a fault.
  * @feature robots
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { Lock, PersonStanding, TriangleAlert } from 'lucide-react';
 import { Button } from '@/shared/components/ui/Button';
 import { ConfirmDialog } from '@/shared/components/ui/ConfirmDialog';
 import { cn } from '@/shared/utils/cn';
@@ -216,11 +225,27 @@ export interface RobotModeControlProps {
    * only while this console does not hold the lease itself.
    */
   requestFromHolder?: (mode: HolderMode) => Promise<HolderRequestResult>;
+  /**
+   * TASK-427: `panel` (the Teleop tab, the VR modal) or `step` (the session
+   * page's Set up step 3: node track, one lit next button, one reason line).
+   */
+  variant?: 'panel' | 'step';
+  /** `step` only: the next button carries the primary fill (the step is the open one). */
+  lit?: boolean;
+  /** `step` only: says where control is taken, in place of "Take control first." */
+  takeControlHint?: string;
   className?: string;
 }
 
+/** The measured mode's colour: Balance mint, Limp and Unknown amber (never a fault). */
+export function modeTone(mode: BaseModeName): string {
+  return mode === 'balance' ? 'text-signal-measured'
+    : mode === 'unknown' || mode === 'limp' ? 'text-signal-unknown'
+      : 'text-ink-primary';
+}
+
 export function RobotModeControl({
-  robotId, lease, armsEngaged = false, baseMode, requestFromHolder, className,
+  robotId, lease, armsEngaged = false, baseMode, requestFromHolder, variant = 'panel', lit = true, takeControlHint, className,
 }: RobotModeControlProps) {
   const own = useRobotBaseMode(robotId, { enabled: baseMode === undefined });
   const bm = baseMode ?? own;
@@ -265,10 +290,7 @@ export function RobotModeControl({
     standHeldS,
   };
   const idsVerified = bm.status?.capability.idsVerified ?? false;
-  const tone = mode === 'balance' ? 'text-signal-measured'
-    : mode === 'unknown' ? 'text-signal-stopped'
-      : mode === 'limp' ? 'text-signal-unknown'
-        : 'text-ink-primary';
+  const tone = modeTone(mode);
   const pendingButton = BUTTONS.find((b) => b.mode === confirming) ?? null;
   const gateOn = bm.status?.capability.gate === 'fsm' || bm.status?.capability.gate === 'full';
   const next = gateOn && bm.status?.sidecarReachable !== false ? bringUpNext(mode) : null;
@@ -309,6 +331,174 @@ export function RobotModeControl({
     .map((b) => ({ b, reason: reasonFor(b.mode) }))
     .filter((r): r is { b: (typeof BUTTONS)[number]; reason: string } => r.reason !== null);
 
+  const buttonLabel = (b: (typeof BUTTONS)[number]): string =>
+    bm.pending === b.mode
+      ? `${b.label}…`
+      : askMode && b.mode !== 'limp' && (askable(b.mode) || asking?.mode === b.mode)
+        ? `Ask the headset: ${b.label}`
+        : b.label;
+
+  const feedback = (
+    <>
+      {asking && (
+        <p className="text-xs font-medium text-signal-unknown" role="status" data-testid="robot-mode-asking">
+          Waiting for the operator… ({askingLeftS} s)
+        </p>
+      )}
+      {!asking && answered && (
+        <p
+          role="status"
+          data-testid="robot-mode-answer"
+          data-outcome={answered.result.outcome}
+          className={cn('text-xs', answered.result.outcome === 'allowed' ? 'text-signal-measured' : 'text-signal-unknown')}
+        >
+          {holderOutcomeText(BUTTONS.find((b) => b.mode === answered.mode)?.label ?? answered.mode, answered.result)}
+        </p>
+      )}
+      {result && !result.ok && (
+        <p
+          role="alert"
+          data-testid="robot-mode-error"
+          className={cn('text-xs', unconfirmed ? 'font-semibold text-signal-stopped' : 'text-signal-unknown')}
+        >
+          {unconfirmed
+            ? `Not confirmed — the robot reports ${modeLabel(result.measured?.mode ?? 'unknown', result.measured?.fsmId ?? null)}. Use Limp if in doubt.`
+            : `${result.code}: ${result.error}`}
+        </p>
+      )}
+      {result && !result.ok && result.hint && (
+        <p className="text-xs text-ink-secondary" data-testid="robot-mode-hint">
+          {result.hint}
+        </p>
+      )}
+    </>
+  );
+
+  const confirmDialog = (
+    <ConfirmDialog
+      isOpen={pendingButton !== null}
+      onClose={() => setConfirming(null)}
+      onConfirm={async () => {
+        const target = pendingButton;
+        const viaHeadset = confirmAsks;
+        setConfirming(null);
+        if (!target) return;
+        if (viaHeadset && target.mode !== 'limp') await ask(target.mode);
+        else await bm.request(target.mode, lease.grant());
+      }}
+      title={pendingButton?.title ?? ''}
+      description={confirmAsks && pendingButton
+        ? `${pendingButton.text} The operator confirms in the headset.`
+        : pendingButton?.text}
+      confirmLabel={confirmAsks && pendingButton ? `Ask the headset: ${pendingButton.label}` : pendingButton?.label}
+      tone={pendingButton?.mode === 'limp' ? 'danger' : 'default'}
+      testId="robot-mode-confirm"
+    />
+  );
+
+  if (variant === 'step') {
+    // The one reason line: the next button's, else the first disabled button's.
+    const reasonButton = (next?.mode ? BUTTONS.find((b) => b.mode === next.mode) : undefined) ?? reasons[0]?.b;
+    const rawReason = reasonButton ? reasonFor(reasonButton.mode) : null;
+    // The raw sidecar error belongs to the step's Details, not to this line.
+    const reasonLine = rawReason === 'Take control first.' && takeControlHint
+      ? takeControlHint
+      : rawReason?.startsWith('The robot mode is unknown') ? 'The robot mode is unknown.' : rawReason;
+    const onTrack = BRING_UP_STEPS.some((s) => s.mode === mode);
+    const currentIndex = BRING_UP_STEPS.findIndex((s) => s.mode === mode);
+    const readout = (
+      <span className={cn('font-semibold', tone)} data-testid="robot-mode-readout">
+        {modeLabel(mode, base?.fsmId ?? null)}
+      </span>
+    );
+    return (
+      <div className={cn('min-w-0', className)} data-testid="robot-mode-control" data-variant="step">
+        {next && onTrack ? (
+          <div className="mb-3 flex flex-wrap items-center gap-y-2" data-testid="robot-bringup">
+            <ol className="flex flex-wrap items-center gap-y-2" aria-label="Bring-up sequence">
+              {BRING_UP_STEPS.map((s, i) => {
+                const now = s.mode === mode;
+                const past = i < currentIndex;
+                return (
+                  <li key={s.mode} className="flex items-center" data-current={now ? 'true' : undefined}>
+                    {i > 0 && (
+                      <span aria-hidden className={cn('mx-2 h-px w-7 flex-none', past || now ? 'bg-ink-tertiary' : 'bg-line-strong')} />
+                    )}
+                    <span className={cn('inline-flex items-center gap-[7px] whitespace-nowrap text-[13px]', now ? 'font-semibold text-ink-primary' : past ? 'text-ink-tertiary' : 'text-ink-muted')}>
+                      <span
+                        aria-hidden
+                        className={cn(
+                          'h-2.5 w-2.5 flex-none rounded-full border-[1.5px]',
+                          now
+                            ? mode === 'balance'
+                              ? 'border-signal-measured bg-signal-measured ring-[3px] ring-signal-measured/20'
+                              : 'border-signal-unknown bg-signal-unknown ring-[3px] ring-signal-unknown/20'
+                            : past
+                              ? 'border-ink-tertiary bg-ink-tertiary'
+                              : s.mode === 'balance'
+                                ? 'border-signal-measured'
+                                : 'border-line-strong',
+                        )}
+                      />
+                      {now ? (
+                        <span className={tone} data-testid="robot-mode-readout">{s.label}</span>
+                      ) : s.label}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+            {age !== null && (
+              <span className="ml-3.5 text-xs tabular-nums text-ink-tertiary">measured {age.toFixed(1)} s ago</span>
+            )}
+          </div>
+        ) : (
+          <p className="mb-3 text-[13px]" title={base?.fsmId !== null && base?.fsmId !== undefined ? `FSM ${base.fsmId}` : 'No FSM reading'}>
+            <span className="text-ink-secondary">Measured: </span>
+            {readout}
+            {age !== null && <span className="text-xs tabular-nums text-ink-tertiary"> · {age.toFixed(1)} s ago</span>}
+          </p>
+        )}
+        {next && (
+          <p className="mb-3 max-w-[62ch] text-[14px] text-ink-secondary" data-testid="robot-bringup-next">{next.text}</p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {BUTTONS.map((b) => {
+            const isNext = next?.mode === b.mode;
+            return (
+              <Button
+                key={b.mode}
+                ref={b.mode === 'limp' ? limpRef : undefined}
+                variant={isNext && lit ? 'primary' : 'secondary'}
+                disabled={reasonFor(b.mode) !== null}
+                data-testid={`robot-mode-${b.mode}`}
+                data-next={isNext ? 'true' : undefined}
+                leftIcon={b.mode === 'stand' ? <PersonStanding className="h-4 w-4" strokeWidth={1.75} /> : undefined}
+                onClick={() => setConfirming(b.mode)}
+              >
+                {buttonLabel(b)}
+              </Button>
+            );
+          })}
+        </div>
+        {reasonLine && (
+          <p className="mt-3 flex items-start gap-2 text-[13px] text-ink-tertiary" data-testid="robot-mode-reasons">
+            <Lock className="mt-0.5 h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
+            {reasonLine}
+          </p>
+        )}
+        {!idsVerified && bm.status?.capability.gate === 'fsm' && (
+          <p className="mt-2.5 flex items-start gap-2 text-[12.5px] text-signal-unknown" data-testid="robot-mode-unverified">
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
+            Stand-up FSM {bm.status.capability.ids?.stand ?? 4} is not verified on this robot yet. Watch the first Stand up closely.
+          </p>
+        )}
+        <div className="mt-2 space-y-1 empty:hidden">{feedback}</div>
+        {confirmDialog}
+      </div>
+    );
+  }
+
   return (
     <div className={cn('min-w-0 space-y-1.5', className)} data-testid="robot-mode-control">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -337,11 +527,7 @@ export function RobotModeControl({
               className={next?.mode === b.mode ? 'ring-1 ring-signal-measured' : undefined}
               onClick={() => setConfirming(b.mode)}
             >
-              {bm.pending === b.mode
-                ? `${b.label}…`
-                : askMode && b.mode !== 'limp' && (askable(b.mode) || asking?.mode === b.mode)
-                  ? `Ask the headset: ${b.label}`
-                  : b.label}
+              {buttonLabel(b)}
             </Button>
           ))}
         </div>
@@ -382,57 +568,8 @@ export function RobotModeControl({
           ))}
         </ul>
       )}
-      {asking && (
-        <p className="text-xs font-medium text-signal-unknown" role="status" data-testid="robot-mode-asking">
-          Waiting for the operator… ({askingLeftS} s)
-        </p>
-      )}
-      {!asking && answered && (
-        <p
-          role="status"
-          data-testid="robot-mode-answer"
-          data-outcome={answered.result.outcome}
-          className={cn('text-xs', answered.result.outcome === 'allowed' ? 'text-signal-measured' : 'text-signal-unknown')}
-        >
-          {holderOutcomeText(BUTTONS.find((b) => b.mode === answered.mode)?.label ?? answered.mode, answered.result)}
-        </p>
-      )}
-      {result && !result.ok && (
-        <p
-          role="alert"
-          data-testid="robot-mode-error"
-          className={cn('text-xs', unconfirmed ? 'font-semibold text-signal-stopped' : 'text-signal-unknown')}
-        >
-          {unconfirmed
-            ? `Not confirmed — the robot reports ${modeLabel(result.measured?.mode ?? 'unknown', result.measured?.fsmId ?? null)}. Use Limp if in doubt.`
-            : `${result.code}: ${result.error}`}
-        </p>
-      )}
-      {result && !result.ok && result.hint && (
-        <p className="text-xs text-ink-secondary" data-testid="robot-mode-hint">
-          {result.hint}
-        </p>
-      )}
-
-      <ConfirmDialog
-        isOpen={pendingButton !== null}
-        onClose={() => setConfirming(null)}
-        onConfirm={async () => {
-          const target = pendingButton;
-          const viaHeadset = confirmAsks;
-          setConfirming(null);
-          if (!target) return;
-          if (viaHeadset && target.mode !== 'limp') await ask(target.mode);
-          else await bm.request(target.mode, lease.grant());
-        }}
-        title={pendingButton?.title ?? ''}
-        description={confirmAsks && pendingButton
-          ? `${pendingButton.text} The operator confirms in the headset.`
-          : pendingButton?.text}
-        confirmLabel={confirmAsks && pendingButton ? `Ask the headset: ${pendingButton.label}` : pendingButton?.label}
-        tone={pendingButton?.mode === 'limp' ? 'danger' : 'default'}
-        testId="robot-mode-confirm"
-      />
+      {feedback}
+      {confirmDialog}
     </div>
   );
 }

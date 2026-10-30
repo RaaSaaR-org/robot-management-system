@@ -70,8 +70,11 @@ test.describe('VR data collection in simulation', () => {
     await page.getByTestId('session-tools-toggle').click();
     await expect(page.getByTestId('vr-session-panel')).toBeVisible();
     await page.keyboard.press('Escape');
-    // Pre-flight checklist: the sim robot is online, nothing blocks Start.
-    await expect(page.getByTestId('preflight-robot')).toHaveAttribute('data-level', 'ok', { timeout: 15_000 });
+    // Set up (TASK-427): the sim robot is online — step 1 is done or the current
+    // step, never offline — and nothing blocks Start.
+    await expect(page.getByTestId('setup-step-robot')).toHaveAttribute('data-state', /^(done|current)$/, { timeout: 15_000 });
+    await expect(page.getByTestId('setup-step-robot-summary')).not.toContainText('is offline', { timeout: 15_000 });
+    await expect(page.getByRole('button', { name: /^Start session$/ })).toBeEnabled();
 
     // ── 2. Start the session, then the first take (TASK-410) ──────────────
     await page.getByRole('button', { name: /^Start session$/ }).click();

@@ -1,13 +1,14 @@
 /**
  * @file SessionDetailPage.preflight.test.tsx
- * @description A created session shows the pre-flight checklist (TASK-392);
- *              an offline robot disables Start session and its Space hotkey,
- *              a warning does not.
+ * @description A created session shows the pre-flight checklist (TASK-392),
+ *              since TASK-427 as the Set up steps and the preview: an offline
+ *              robot disables Start session — with the reason as visible text —
+ *              and its Space hotkey, a warning does not.
  * @feature datacollection
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, fireEvent } from '@testing-library/react';
+import { screen, fireEvent, within } from '@testing-library/react';
 import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/utils';
 import { confirm } from '@/shared/components/ui';
@@ -79,9 +80,15 @@ describe('SessionDetailPage pre-flight', () => {
   it('blocks Start session and the Space hotkey while the robot is offline', async () => {
     setRobot('offline');
     render();
-    expect(await screen.findByTestId('preflight')).toBeInTheDocument();
-    expect(screen.getByTestId('preflight-robot')).toHaveAttribute('data-level', 'blocking');
+    const robot = await screen.findByTestId('setup-step-robot');
+    // The first step is the current one, and it says what is wrong.
+    expect(robot).toHaveAttribute('data-state', 'current');
+    expect(screen.getByTestId('setup-step-robot-summary')).toHaveTextContent('G1 EDU is offline');
     expect(screen.getByRole('button', { name: 'Start session' })).toBeDisabled();
+    // Disabled with the reason as text, not only a title.
+    expect(screen.getByTestId('setup-start-text')).toHaveTextContent('Start the robot agent and wait until the robot shows as online.');
+    // The preview shows the offline state, the action lives in step 1.
+    expect(within(screen.getByTestId('setup-preview')).getByText('Robot offline')).toBeInTheDocument();
     fireEvent.keyDown(window, { code: 'Space' });
     expect(confirmMock).not.toHaveBeenCalled();
   });
@@ -90,8 +97,10 @@ describe('SessionDetailPage pre-flight', () => {
     telemetryConnected.value = false;
     setRobot('online');
     render();
-    expect(await screen.findByTestId('preflight-recorder')).toHaveAttribute('data-level', 'warning');
-    expect(screen.getByTestId('preflight-camera')).toHaveTextContent('head_camera (pc2cam)');
+    // MSW's demo robot side starts stopped: the next thing to do, not a blocker.
+    expect(await screen.findByTestId('setup-step-robot-summary')).toHaveTextContent('Robot side stopped');
+    expect(screen.getByTestId('setup-step-robot')).toHaveAttribute('data-state', 'current');
+    expect(within(screen.getByTestId('setup-preview')).getByTestId('camera')).toHaveTextContent('Head camera');
     expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled();
     fireEvent.keyDown(window, { code: 'Space' });
     expect(confirmMock).toHaveBeenCalledTimes(1);
@@ -100,7 +109,8 @@ describe('SessionDetailPage pre-flight', () => {
   it('shows the cameras the robot serves', async () => {
     setRobot('online');
     render();
-    expect(await screen.findByText('Head camera')).toBeInTheDocument();
+    const preview = await screen.findByTestId('setup-preview');
+    expect(within(preview).getByTestId('camera')).toHaveTextContent('Head camera');
     expect(screen.queryByText('Top camera')).not.toBeInTheDocument();
   });
 });

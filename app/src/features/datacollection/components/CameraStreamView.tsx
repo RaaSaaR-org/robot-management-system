@@ -4,6 +4,9 @@
  *              the stream with a camera ticket (TASK-214), takes any camera
  *              name the robot serves (TASK-392), and reconnects on its own with
  *              backoff — including while a recording runs (TASK-401).
+ *              TASK-427: `fit` fills a live-view frame — no tile border, the
+ *              picture covering the frame, the name left to the frame's own
+ *              view switch.
  * @feature datacollection
  */
 
@@ -27,6 +30,11 @@ interface CameraStreamViewProps {
   isRecording?: boolean;
   /** The robot is offline or unknown: show the offline state without requesting the stream */
   offline?: boolean;
+  /**
+   * Fill a live-view frame (TASK-427): no border or tile ground, the picture
+   * covers the frame, and no name tag (the frame's view switch names it).
+   */
+  fit?: boolean;
 }
 
 const FRAME =
@@ -50,7 +58,7 @@ const SNAPSHOT_INTERVAL_MS = 1000;
  * A camera error never stops or pauses the recording. The recorder records
  * whatever the agent sees; this is only the operator's window onto it.
  */
-export function CameraStreamView({ robotId, cameraName, label, className, isRecording, offline }: CameraStreamViewProps) {
+export function CameraStreamView({ robotId, cameraName, label, className, isRecording, offline, fit = false }: CameraStreamViewProps) {
   /**
    * The stream URL whose `<img>` errored. Keyed on the URL rather than a flag so
    * a retry cannot remount the `<img>` on the dead URL for the one render before
@@ -138,7 +146,7 @@ export function CameraStreamView({ robotId, cameraName, label, className, isReco
   // Offline robot — a normal state, not an error, and nothing to retry against.
   if (offline) {
     return (
-      <div className={cn(FRAME, className)}>
+      <div className={cn(FRAME, fit && 'h-full w-full rounded-none border-0 bg-media', className)}>
         <VideoOff className="h-4 w-4 text-ink-tertiary" strokeWidth={1.75} />
         <span className="text-[13px] font-medium text-ink-secondary">{name} offline</span>
         <span className="text-xs text-ink-tertiary">Start the robot agent to see this stream.</span>
@@ -149,11 +157,16 @@ export function CameraStreamView({ robotId, cameraName, label, className, isReco
   const retryInS = retryAt === null ? null : Math.max(0, Math.ceil((retryAt - now) / 1000));
   const reconnectText = retryInS === null ? 'Reconnecting…' : `Reconnecting in ${retryInS}s`;
   const reconnecting = hasError || (!streamUrl && failures > 0);
-  const onPicture = hasSnapshot;
+  // On the black media well the light-on-dark texts read in either theme.
+  const onPicture = hasSnapshot || fit;
 
   return (
     <div
-      className={cn('relative overflow-hidden rounded-control border border-line-subtle bg-inset', className)}
+      className={cn(
+        'relative overflow-hidden',
+        fit ? 'h-full w-full bg-media' : 'rounded-control border border-line-subtle bg-inset',
+        className,
+      )}
       data-testid="camera-stream-view"
     >
       {/* The last good frame, under everything; visible only while the live
@@ -161,7 +174,7 @@ export function CameraStreamView({ robotId, cameraName, label, className, isReco
       <canvas
         ref={canvasRef}
         aria-hidden
-        className={cn('absolute inset-0 h-full w-full object-contain', (live || !hasSnapshot) && 'invisible')}
+        className={cn('absolute inset-0 h-full w-full', fit ? 'object-cover' : 'object-contain', (live || !hasSnapshot) && 'invisible')}
       />
       {live && (
         <>
@@ -171,11 +184,13 @@ export function CameraStreamView({ robotId, cameraName, label, className, isReco
             alt={`${name} camera`}
             onLoad={() => setFailures(0)}
             onError={() => setFailedUrl(streamUrl)}
-            className="relative h-full w-full object-contain"
+            className={cn('relative h-full w-full', fit ? 'object-cover' : 'object-contain')}
           />
-          <div className="absolute left-2 top-2">
-            <StatusTag tone="live" dot>{name}</StatusTag>
-          </div>
+          {!fit && (
+            <div className="absolute left-2 top-2">
+              <StatusTag tone="live" dot>{name}</StatusTag>
+            </div>
+          )}
         </>
       )}
       {!live && (
@@ -206,7 +221,7 @@ export function CameraStreamView({ robotId, cameraName, label, className, isReco
               <Button variant="ghost" size="sm" onClick={retry}>Retry now</Button>
             </>
           ) : (
-            <span className="text-xs text-ink-tertiary">Connecting to {name}…</span>
+            <span className={cn('text-xs', fit ? 'text-white/70' : 'text-ink-tertiary')}>Connecting to {name}…</span>
           )}
         </div>
       )}

@@ -7,10 +7,14 @@
  *              Stop returns them to `stopped`. Registered by a one-line spread
  *              in `handlers.ts`. TASK-412: a Quest 3 on the robot PC's USB —
  *              Connect forwards the port, Open on headset records the path.
+ *              TASK-427: the robot's measured base mode — limp once the demo
+ *              robot side is up, so Set up's step 3 shows the bring-up track;
+ *              the demo refuses a mode change as it refuses arm control.
  * @feature mocks
  */
 
 import { http, HttpResponse } from 'msw';
+import type { BaseModeStatus } from '@/features/robots/api/baseModeApi';
 import type {
   AgentReadiness,
   BringupStatus,
@@ -286,7 +290,27 @@ function demoSnapshot(robotId: string): RobotReadiness {
   return readinessFor(robotId, 'read_only_ready');
 }
 
+/** The demo robot's measured mode: unreachable while the robot side is stopped, then limp. */
+function demoBaseMode(robotId: string): BaseModeStatus {
+  const up = demoSnapshot(robotId).bringup?.overall === 'ready';
+  return {
+    capability: up
+      ? { gate: 'fsm', moveEnabled: false, idsVerified: false, ids: { limp: 1, stand: 4, balance: 501, balanceReported: [501] } }
+      : { gate: 'unknown', moveEnabled: null, idsVerified: false, ids: null },
+    base: up ? { fsmId: 1, mode: 'limp', ageS: 0.3, error: null } : null,
+    inFlight: null,
+    estopLatched: false,
+    sidecarEstopLatched: false,
+    armed: false,
+    sidecarReachable: up,
+  };
+}
+
 export const readinessDemoHandlers = [
+  http.get('/api/robots/:id/base-mode', ({ params }) => HttpResponse.json(demoBaseMode(String(params.id)))),
+  http.post('/api/robots/:id/base-mode', () =>
+    HttpResponse.json({ ok: false, code: 'demo', error: 'The demo has no robot to change modes on.' }, { status: 409 }),
+  ),
   http.get('/api/robots/:id/readiness', ({ params }) =>
     HttpResponse.json(withQuest(String(params.id), demoSnapshot(String(params.id)))),
   ),

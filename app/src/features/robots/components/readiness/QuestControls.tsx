@@ -10,6 +10,9 @@
  *              viewer link** copies the session page for a second person.
  *              "Enter VR" stays a press inside the headset (WebXR needs a user
  *              gesture there). Nothing here touches the robot.
+ *              TASK-427: on the session page they live in Set up step 4, where
+ *              `lit` makes the next one (Connect, then Open on headset) the
+ *              page's one primary.
  * @feature robots
  */
 
@@ -43,6 +46,12 @@ export interface QuestControlsProps {
   api?: QuestControlsApi;
   /** `window.location.origin`, injectable for tests. */
   origin?: string;
+  /**
+   * TASK-427, a Set up step: true gives the next button (Connect until the port
+   * is forwarded, then Open on headset) the primary fill; false leaves both
+   * secondary. Unset: the panel's look (Open on headset primary).
+   */
+  lit?: boolean;
   className?: string;
 }
 
@@ -69,6 +78,7 @@ export function QuestControls({
   port: portProp,
   api = DEFAULT_API,
   origin,
+  lit,
   className,
 }: QuestControlsProps) {
   const port = portProp ?? questPagePort();
@@ -78,6 +88,10 @@ export function QuestControls({
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const usable = summary.phase === 'connected' || summary.phase === 'forwarded';
+  const step = lit !== undefined;
+  const connectVariant = step && lit && !summary.forwarded ? 'primary' : 'secondary';
+  const openVariant = !step ? 'primary' : lit && summary.forwarded ? 'primary' : 'secondary';
+  const size = step ? 'md' : 'sm';
 
   const connect = useCallback(async (): Promise<boolean> => {
     const r = await api.questConnect(robotId, port);
@@ -136,8 +150,8 @@ export function QuestControls({
     <div className={cn('flex flex-col gap-1.5', className)} data-testid="quest-controls" data-phase={summary.phase}>
       <div className="flex flex-wrap items-center gap-2">
         <Button
-          size="sm"
-          variant="secondary"
+          size={size}
+          variant={connectVariant}
           leftIcon={<Cable className="h-4 w-4" strokeWidth={1.75} />}
           onClick={() => void onConnect()}
           disabled={!usable || pending !== null}
@@ -149,7 +163,8 @@ export function QuestControls({
           {summary.forwarded ? 'Reconnect' : 'Connect'}
         </Button>
         <Button
-          size="sm"
+          size={size}
+          variant={openVariant}
           leftIcon={<Glasses className="h-4 w-4" strokeWidth={1.75} />}
           onClick={() => void onOpen()}
           disabled={!usable || !livePath || pending !== null}

@@ -6,7 +6,8 @@
  *              created after it opened; the readiness panel's Quest row
  *              forwards the port with Connect; the VR launcher shows the
  *              headset's live state with Connect / Open on headset, and Copy
- *              viewer link on a session page. Set QUEST_SCREENS_DIR to keep
+ *              viewer link on a session page (in Set up step 4 since
+ *              TASK-427). Set QUEST_SCREENS_DIR to keep
  *              the screenshots.
  * @feature robots
  */
@@ -43,10 +44,11 @@ test('the headset URL waits for a live session and follows the one created after
   // The history entry was replaced: Back does not return to the waiting page.
   expect(page.url()).not.toContain('/live');
 
-  // On the session page the VR launcher offers the viewer link for the second person.
-  // TASK-426: the launcher lives in Testing tools (TASK-427 moves the card into step 4).
-  await page.getByTestId('session-tools-toggle').click();
-  const help = page.getByTestId('quest-connect-help');
+  // On the session page Set up step 4 offers the viewer link for the second person.
+  // TASK-427: the Quest controls live once, in step 4 (bodies stay mounted; open it).
+  const step = page.getByTestId('setup-step-quest');
+  if ((await step.getAttribute('data-expanded')) !== 'true') await page.getByTestId('setup-step-quest-toggle').click();
+  const help = step.getByTestId('quest-connect-help');
   await expect(help).toHaveAttribute('data-mode', 'live', { timeout: 15_000 });
   await expect(help.getByTestId('quest-copy-viewer-link')).toBeVisible();
   await help.scrollIntoViewIfNeeded();
