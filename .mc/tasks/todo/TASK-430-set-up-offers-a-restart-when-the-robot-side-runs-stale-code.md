@@ -3,7 +3,7 @@ id: "TASK-430"
 aliases: []
 title: "Set up offers a restart when the robot side runs stale code"
 slug: "set-up-offers-a-restart-when-the-robot-side-runs-stale-code"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -114,11 +114,14 @@ Branch: `fix/task-430-set-up-offers-a-restart-when-the-robot-side-runs-stale-cod
   - the demo Stop lets a pinned robot go and passes through `stopping` for about 1.4 s, as
     the supervisor does;
   - a Start while stopping is refused with 409 `busy`.
-- `CameraStreamView.tsx`: a `compact` prop for the PiP. LiveView passes it there, and in
-  `fit` the frame names the camera:
-  - the placeholder draws no camera name;
-  - compact also drops the icon and the recording lines;
-  - it starts below the PiP bar.
+- `CameraStreamView.tsx`: a `compact` prop, which LiveView passes for the PiP. The PiP's
+  bar names the camera, so the compact placeholder:
+  - draws no camera name;
+  - drops the icon and the recording lines;
+  - starts below the PiP bar.
+  The main view keeps its placeholder as it is.
+- `LiveView.tsx`, `PipBar`: the label stays on one line. In a narrow PiP (about 126 px at
+  1280) it drops its icon, and it truncates only as a last resort.
 
 ### Key files
 
@@ -148,7 +151,7 @@ Branch: `fix/task-430-set-up-offers-a-restart-when-the-robot-side-runs-stale-cod
 - [ ] Set up keeps exactly one lit action, and the E-STOP clearance checks in
   `datacollection-console.spec.ts` stay green.
 - [ ] In the PiP, the reconnecting camera's placeholder is drawn once, below the PiP bar.
-  It shows no second camera name.
+  It shows no second camera name, and the bar's label reads on one line at 1280 and 1512.
 - [ ] Vitest covers the step model (stale, stopped, running and ok, stopping, foreign) and
   its lit action, `robotSideActions`, the hook's restart sequence and its refusals, the
   step's Restart and confirm, and the compact placeholder.
