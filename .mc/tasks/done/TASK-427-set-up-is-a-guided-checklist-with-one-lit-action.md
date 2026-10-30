@@ -3,7 +3,7 @@ id: "TASK-427"
 aliases: []
 title: "Set up is a guided checklist with one lit action"
 slug: "set-up-is-a-guided-checklist-with-one-lit-action"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
