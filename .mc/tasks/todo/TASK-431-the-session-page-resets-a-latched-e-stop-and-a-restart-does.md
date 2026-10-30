@@ -3,7 +3,7 @@ id: "TASK-431"
 aliases: []
 title: "The session page resets a latched E-stop, and a restart does not invent a protective stop"
 slug: "the-session-page-resets-a-latched-e-stop-and-a-restart-does"
-status: "done"
+status: "in-progress"
 priority: 2
 owner: "huhn511"
 projects: []
