@@ -19,6 +19,10 @@
  *   TASK-427/428/429 add their phases' blocks here. TASK-430: on stale code
  *   Set up's step 1 leads with Restart robot side, behind the Stop confirm,
  *   through to a fresh robot side, with Stop under Details afterwards.
+ *   TASK-431: a latched E-stop and a protective stop with no latch, in Set up
+ *   (step 3's blocker) and in Record (the recovery slot), each with one lit
+ *   Reset E-stop that stays ≥ 64 px from the E-STOP at 1512 and ≥ 48 px at
+ *   1280, through to the robot limp with "stand it up again".
  *   Set SCREEN_DIR to also save screenshots there.
  * @feature datacollection
  */
@@ -33,8 +37,21 @@ const QUEST_UA =
 
 type Phase = 'setup' | 'record' | 'wrap';
 
-/** Set up: a created VR session on the demo G1 (MSW keeps it in this page's memory). */
-async function openSetup(page: Page): Promise<void> {
+/** Pin the demo G1 to one readiness fixture (demo-only route), or let it go with null. */
+async function pinRobot(page: Page, fixture: string | null): Promise<void> {
+  await page.evaluate(async ([robotId, f]) => {
+    await fetch(`/api/__demo/robots/${robotId}/readiness`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fixture: f }),
+    });
+  }, [ROBOT, fixture] as const);
+}
+
+/**
+ * Set up: a created VR session on the demo G1 (MSW keeps it in this page's
+ * memory). `pin` pins the robot before the session page opens, so the page
+ * reads the pinned robot's status on open (TASK-431).
+ */
+async function openSetup(page: Page, pin?: string): Promise<void> {
   await page.goto('./#/data-collection');
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   const id = await page.evaluate(async (robotId) => {
@@ -45,6 +62,7 @@ async function openSetup(page: Page): Promise<void> {
     });
     return ((await res.json()) as { session: { id: string } }).session.id;
   }, ROBOT);
+  if (pin) await pinRobot(page, pin);
   await page.evaluate((sid) => { window.location.hash = `#/data-collection/${sid}`; }, id);
   await expect(page.locator('[data-testid="session-command-bar"][data-phase="setup"]')).toBeVisible();
 }
@@ -431,6 +449,14 @@ const litPrimaries = (page: Page) =>
       .map((b) => b.dataset.testid ?? b.textContent?.trim() ?? ''),
   );
 
+/** The rectangle distance from one element to the E-STOP (TASK-431: Reset E-stop). */
+const distanceToEstop = (page: Page, testId: string) =>
+  page.evaluate((id) => {
+    const E = document.querySelector('[data-testid="session-estop"]')!.getBoundingClientRect();
+    const r = document.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect();
+    return Math.round(Math.hypot(Math.max(0, E.left - r.right, r.left - E.right), Math.max(0, E.top - r.bottom, r.top - E.bottom)) * 10) / 10;
+  }, testId);
+
 /** The page-wide nearest interactive element to the E-STOP, at the current scroll. */
 const pageClearance = (page: Page) =>
   page.evaluate(() => {
@@ -657,6 +683,104 @@ test.describe('Set up (TASK-427)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// TASK-431 — a stop: one lit Reset E-stop, out of the E-STOP's reach
+// ---------------------------------------------------------------------------
+test.describe('a stop on the session page (TASK-431)', () => {
+  const RESET_DONE = 'The E-stop is reset. Stand the robot up again: Limp, Stand up, Balance.';
+
+  /** Record on the Quest demo session, with the robot pinned before the page opens. */
+  async function openRecordPinned(page: Page, fixture: string): Promise<void> {
+    await page.goto('./#/data-collection');
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    await pinRobot(page, fixture);
+    await page.evaluate(() => { window.location.hash = '#/data-collection/demo-session-takes-vr'; });
+    await expect(page.getByTestId('hud-phase')).toHaveText('READY');
+  }
+
+  for (const [w, h, min] of [[1280, 800, 48], [1512, 945, 64]] as const) {
+    test(`Set up: a latched E-stop is step 3's blocker with one lit Reset E-stop at ${w}×${h}`, async ({ page }) => {
+      await page.setViewportSize({ width: w, height: h });
+      await openSetup(page, 'estop_latched');
+      const stance = page.getByTestId('setup-step-stance');
+      await expect(stance.getByTestId('setup-step-reason')).toHaveText('E-stop is latched.', { timeout: 15_000 });
+      await expect(stance.getByTestId('estop-recovery-reason')).toHaveText('Reason: Platform E-Stop: Emergency stop triggered for G1-EDU-4 (real).', { timeout: 10_000 });
+      await expect(stance.getByTestId('take-dock-estop-reset')).toContainText('Reset E-stop clears the latch in the robot agent and in the sidecar. It does not move the robot.');
+      await expect(page.getByText('at the robot')).toHaveCount(0);
+      for (const id of ['quest', 'operator']) await expect(page.getByTestId(`setup-step-${id}`)).toHaveAttribute('data-state', 'waits');
+      // The page's one lit action, wherever the current step is.
+      const current = page.locator('[data-testid^="setup-step-"][data-state="current"]');
+      await expect(current).toHaveAttribute('data-testid', 'setup-step-stance', { timeout: 15_000 });
+      expect(await litPrimaries(page)).toEqual(['estop-reset']);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const d = await distanceToEstop(page, 'estop-reset');
+      const c = await pageClearance(page);
+      test.info().annotations.push({ type: 'clearance', description: `setup stop@${w}: estop-reset ${d}, nearest ${c.d} (${c.el})` });
+      expect(d).toBeGreaterThanOrEqual(min);
+      expect(c.d, `nearest: ${c.el}`).toBeGreaterThanOrEqual(min);
+      await page.screenshot({ ...shot(`TASK-431-setup-latched-${w}-e2e.png`) });
+
+      await stance.getByTestId('estop-reset').click();
+      await expect(stance.getByTestId('estop-recovery')).toHaveCount(0, { timeout: 10_000 });
+      await expect(stance).toContainText(RESET_DONE);
+      await expect(stance.getByTestId('robot-mode-stand')).toBeVisible();
+      await expect(page.getByTestId('setup-step-quest')).not.toHaveAttribute('data-state', 'waits');
+      await page.screenshot({ ...shot(`TASK-431-setup-reset-${w}-e2e.png`) });
+    });
+  }
+
+  test('Set up: a protective stop with no latch says "Protective stop." and the same reset clears it', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await openSetup(page, 'protective_stop_unlatched');
+    const stance = page.getByTestId('setup-step-stance');
+    await expect(stance.getByTestId('setup-step-reason')).toHaveText('Protective stop.', { timeout: 15_000 });
+    await expect(stance.getByTestId('estop-recovery')).toHaveAttribute('data-kind', 'status');
+    await expect(stance.getByTestId('take-dock-estop-reset')).toContainText('The robot reports a protective stop, but no latch holds it.');
+    await expect(page.getByText('E-stop is latched')).toHaveCount(0);
+    await page.screenshot({ ...shot('TASK-431-setup-protective-1512-e2e.png') });
+    await stance.getByTestId('estop-reset').click();
+    await expect(stance.getByTestId('estop-recovery')).toHaveCount(0, { timeout: 10_000 });
+    await expect(stance).toContainText(RESET_DONE);
+  });
+
+  for (const [w, h, min] of [[1280, 800, 48], [1512, 945, 64]] as const) {
+    test(`Record: the recovery slot leads with one lit Reset E-stop, out of the E-STOP's reach, at ${w}×${h}`, async ({ page }) => {
+      await page.setViewportSize({ width: w, height: h });
+      await openRecordPinned(page, 'estop_latched');
+      const slot = page.getByTestId('take-dock-slot');
+      await expect(slot).toHaveAttribute('data-kind', 'recovery', { timeout: 10_000 });
+      await expect(page.getByTestId('take-dock-recovery-title')).toHaveText('E-stop is latched.');
+      await expect(slot.getByTestId('estop-recovery-reason')).toContainText('Platform E-Stop', { timeout: 10_000 });
+      await expect(slot).not.toContainText('at the robot');
+      expect(await litPrimaries(page)).toEqual(['estop-reset']);
+      await expect(page.getByTestId('take-primary')).not.toHaveClass(/bg-primary/);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const d = await distanceToEstop(page, 'estop-reset');
+      const c = await pageClearance(page);
+      test.info().annotations.push({ type: 'clearance', description: `record stop@${w}: estop-reset ${d}, nearest ${c.d} (${c.el})` });
+      expect(d).toBeGreaterThanOrEqual(min);
+      expect(c.d, `nearest: ${c.el}`).toBeGreaterThanOrEqual(min);
+      await page.screenshot({ ...shot(`TASK-431-record-latched-${w}-e2e.png`) });
+
+      await slot.getByTestId('estop-reset').click();
+      await expect(page.getByTestId('take-dock-recovery-title')).toHaveText(/The robot is limp|Limp/, { timeout: 10_000 });
+      await expect(slot.getByTestId('estop-reset-done')).toHaveText(RESET_DONE);
+      expect(await litPrimaries(page)).toEqual(['take-primary']);
+      await page.screenshot({ ...shot(`TASK-431-record-reset-${w}-e2e.png`) });
+    });
+  }
+
+  test('Record: a protective stop with no latch is "Protective stop.", not "E-stop is latched."', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await openRecordPinned(page, 'protective_stop_unlatched');
+    await expect(page.getByTestId('take-dock-recovery-title')).toHaveText('Protective stop.', { timeout: 10_000 });
+    await expect(page.getByTestId('take-dock-slot').getByTestId('estop-recovery')).toHaveAttribute('data-kind', 'status');
+    await page.screenshot({ ...shot('TASK-431-record-protective-1512-e2e.png') });
+    await page.getByTestId('estop-reset').click();
+    await expect(page.getByTestId('take-dock-recovery-title')).not.toHaveText('Protective stop.', { timeout: 10_000 });
+  });
+});
+
 test.describe('Record (TASK-428)', () => {
   const VR = './#/data-collection/demo-session-takes-vr';
   type Session = 'keyboard' | 'vr';
@@ -841,9 +965,16 @@ test.describe('Record (TASK-428)', () => {
           for (const fixture of ['mode_not_balance', 'estop_latched'] as const) {
             await pin(page, fixture);
             await expect(page.getByTestId('take-dock-slot')).toHaveAttribute('data-kind', 'recovery', { timeout: 10_000 });
-            if (fixture === 'estop_latched') await expect(page.getByTestId('take-dock-recovery-title')).toHaveText('E-stop is latched.');
+            if (fixture === 'estop_latched') {
+              await expect(page.getByTestId('take-dock-recovery-title')).toHaveText('E-stop is latched.');
+              // TASK-431: the slot's Reset E-stop, out of the E-STOP's reach.
+              await page.evaluate(() => window.scrollTo(0, 0));
+              const d = await distanceToEstop(page, 'estop-reset');
+              gaps.push(`estop-reset ${d}`);
+              expect(d, 'Reset E-stop to the E-STOP').toBeGreaterThanOrEqual(min);
+            }
             fits.push(await expectFits(page, `recovery ${fixture}`));
-            await expectSlotLeadsWith(page, `recovery ${fixture}`, fixture === 'estop_latched' ? 'take-dock-estop-reset' : 'robot-mode-stand');
+            await expectSlotLeadsWith(page, `recovery ${fixture}`, fixture === 'estop_latched' ? 'estop-reset' : 'robot-mode-stand');
             await clear(`recovery ${fixture}`);
             fits.push(await expectTakesReachable(page, `recovery ${fixture}`));
             if (w !== 1920) await page.screenshot({ ...shot(`TASK-428-record-recovery-${fixture}-${w}.png`) });

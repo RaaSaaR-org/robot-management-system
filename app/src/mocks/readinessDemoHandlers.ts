@@ -20,11 +20,19 @@
  *              robot go and passes through `stopping`, as the supervisor does,
  *              and a Start while it stops is refused with 409 `busy`, so the
  *              Set up step's Restart is Stop, wait, Start here as well.
+ *              TASK-431: the two stops the session page must tell apart — the
+ *              E-stop latched (`estop_latched`, with the agent's stop warning)
+ *              and a `protective_stop` status with no latch
+ *              (`protective_stop_unlatched`). A pinned stop also sets the
+ *              robot's status and its telemetry warning, and the demo's Reset
+ *              E-stop moves it to `estop_reset_limp`: no latch, the robot limp.
  * @feature mocks
  */
 
 import { http, HttpResponse } from 'msw';
 import type { BaseModeStatus } from '@/features/robots/api/baseModeApi';
+import type { RobotStatus } from '@/features/robots/types/robots.types';
+import { DEMO_ROBOTS } from './demoData';
 import type {
   AgentReadiness,
   BringupStatus,
@@ -217,6 +225,23 @@ export const READINESS_FIXTURES = {
       reason: { code: 'estop_latched', severity: 'block', text: 'E-stop is latched. Reset it, then switch to Balance.' },
     }),
   }),
+  // TASK-431: a protective_stop status that no latch holds (the sim restored one
+  // from its state file). Readiness reports no latch; only the robot's status says stop.
+  protective_stop_unlatched: snapshot({
+    agentReadiness: agentReadiness({
+      base: { gate: 'fsm', mode: 'limp', fsmId: 1, ageS: 0.3, error: null, stale: false },
+      arms: { ...agentReadiness().arms, armed: false, armWeight: 0, armState: 'idle' },
+      reason: { code: 'mode_not_balance', severity: 'block', text: 'The robot is limp. Switch to Balance.' },
+    }),
+  }),
+  // TASK-431: after Reset E-stop — no latch, and the robot still limp from the stop.
+  estop_reset_limp: snapshot({
+    agentReadiness: agentReadiness({
+      base: { gate: 'fsm', mode: 'limp', fsmId: 1, ageS: 0.3, error: null, stale: false },
+      arms: { ...agentReadiness().arms, armed: false, armWeight: 0, armState: 'idle' },
+      reason: { code: 'mode_not_balance', severity: 'block', text: 'The robot is limp. Switch to Balance.' },
+    }),
+  }),
   hand_fault: snapshot({
     agentReadiness: agentReadiness({
       hands: {
@@ -281,6 +306,25 @@ export const READINESS_FIXTURES = {
 } satisfies Record<string, RobotReadiness>;
 
 export type ReadinessFixtureName = keyof typeof READINESS_FIXTURES;
+
+/**
+ * TASK-431: what a pinned stop fixture's robot reports besides its readiness —
+ * the server's status for it, and the agent's warnings in its telemetry (the
+ * stop warning `SafetyMonitor` writes with a latch).
+ */
+export const FIXTURE_ROBOT: Partial<Record<ReadinessFixtureName, { status: RobotStatus; warnings: string[] }>> = {
+  estop_latched: {
+    status: 'protective_stop',
+    warnings: ['Emergency stop activated: Platform E-Stop: Emergency stop triggered for G1-EDU-4 (real)'],
+  },
+  protective_stop_unlatched: { status: 'protective_stop', warnings: [] },
+};
+
+/** Where the demo's Reset E-stop takes a pinned stop. */
+const RESETS_TO: Partial<Record<ReadinessFixtureName, ReadinessFixtureName>> = {
+  estop_latched: 'estop_reset_limp',
+  protective_stop_unlatched: 'estop_reset_limp',
+};
 
 /** A fixture for another robot id (deep enough for the panel). */
 export function readinessFor(robotId: string, name: ReadinessFixtureName): RobotReadiness {
@@ -387,7 +431,47 @@ function demoBaseMode(robotId: string): BaseModeStatus {
   };
 }
 
+/** The pinned fixture's robot facts (TASK-431), or null. */
+function pinnedRobot(robotId: string) {
+  const pinned = overrides.get(robotId);
+  return pinned ? FIXTURE_ROBOT[pinned] ?? null : null;
+}
+
 export const readinessDemoHandlers = [
+  // TASK-431: a pinned stop sets the robot's status and its telemetry warning.
+  // Without one, these fall through to the general demo handlers.
+  http.get('/api/robots/:id', ({ params }) => {
+    const id = String(params.id);
+    const extra = pinnedRobot(id);
+    const robot = DEMO_ROBOTS.find((r) => r.id === id);
+    if (!extra || !robot) return undefined;
+    return HttpResponse.json({ ...robot, status: extra.status });
+  }),
+  http.get('/api/robots/:id/telemetry', ({ params }) => {
+    const id = String(params.id);
+    const extra = pinnedRobot(id);
+    if (!extra) return undefined;
+    return HttpResponse.json({
+      robotId: id, batteryLevel: 50, cpuUsage: 30, memoryUsage: 45, temperature: 35, sensors: {},
+      warnings: extra.warnings, timestamp: new Date().toISOString(),
+    });
+  }),
+  // TASK-431: the session page's Reset E-stop. A pinned stop clears to the robot
+  // limp with no latch; the robot itself was never moved.
+  http.post('/api/safety/robots/:id/estop/reset', ({ params }) => {
+    const id = String(params.id);
+    const pinned = overrides.get(id);
+    const next = pinned ? RESETS_TO[pinned] : undefined;
+    if (next) overrides.set(id, next);
+    return HttpResponse.json({
+      message: 'E-stop reset successfully',
+      robotId: id,
+      status: 'armed',
+      stopCategory: 2,
+      requiresManualReset: true,
+      robotStatus: 'online',
+    });
+  }),
   // Demo-only (TASK-428): pin a robot to one fixture, or { fixture: null } to let it go.
   http.post('/api/__demo/robots/:id/readiness', async ({ params, request }) => {
     const body = (await request.json().catch(() => ({}))) as { fixture?: string | null };

@@ -16,7 +16,9 @@
  *              under 900 px tall the timer joins the header row while the slot
  *              shows. The hotkeys, toasts and confirms are the old take
  *              panel's, through `useTakeHotkeys`. The root keeps
- *              `session-hud`.
+ *              `session-hud`. TASK-431: while a stop holds the robot, the
+ *              slot's Reset E-stop is the lit action and the take primary is
+ *              secondary (`primaryLit`).
  * @feature datacollection
  */
 
@@ -83,6 +85,8 @@ export interface TakeDockProps {
   quickCheck?: ReactNode;
   /** The take a Start now keeps (the quick check's), for "Starting take 4 keeps take 3." */
   keepsTake?: number | null;
+  /** False while the slot holds the page's lit action (Reset E-stop): the take primary turns secondary. Default true. */
+  primaryLit?: boolean;
   /** A recorder without explicit takes (SO-101 sidecar): Pause / Resume and Next episode */
   legacy?: {
     recording: boolean;
@@ -111,8 +115,9 @@ const PRIMARY = 'h-[52px] justify-start gap-2.5 px-[18px] text-base [&>span.trun
 
 export function TakeDock({
   phase, take, takeElapsedS, autoStop = null, readouts, controls, pending = null,
-  onStartTake, onStopTake, onNextTake, recovery, blocker, slotTone, quickCheck, keepsTake = null, legacy = null, className,
+  onStartTake, onStopTake, onNextTake, recovery, blocker, slotTone, quickCheck, keepsTake = null, primaryLit = true, legacy = null, className,
 }: TakeDockProps) {
+  const primaryVariant = primaryLit ? undefined : 'secondary';
   const { takeMode, capturing, lastTake, canDiscardLast, undoTake, requestDiscardLast, cancelUndo } = controls;
   const kind = dockSlotKind({ recovery, blocker, quickCheck: phase === 'between' ? quickCheck : null });
   const takeButtons = takeMode && (phase === 'capturing' || phase === 'between');
@@ -171,6 +176,7 @@ export function TakeDock({
           {capturing ? (
             <Button
               fullWidth
+              variant={primaryVariant}
               className={PRIMARY}
               onClick={() => void onStopTake()}
               disabled={!!pending}
@@ -179,13 +185,14 @@ export function TakeDock({
               data-action="stop"
               title="Stop this take (Space)"
               leftIcon={<Square className="h-[18px] w-[18px]" strokeWidth={1.75} />}
-              rightIcon={<KeyHint k="Space" onPrimary />}
+              rightIcon={<KeyHint k="Space" onPrimary={primaryLit} />}
             >
               Stop take
             </Button>
           ) : (
             <Button
               fullWidth
+              variant={primaryVariant}
               className={PRIMARY}
               onClick={() => void onStartTake()}
               disabled={!!pending}
@@ -194,7 +201,7 @@ export function TakeDock({
               data-action="start"
               title="Start a take (Space)"
               leftIcon={<Play className="h-[18px] w-[18px]" strokeWidth={1.75} />}
-              rightIcon={<KeyHint k="Space" onPrimary />}
+              rightIcon={<KeyHint k="Space" onPrimary={primaryLit} />}
             >
               Start take
             </Button>
