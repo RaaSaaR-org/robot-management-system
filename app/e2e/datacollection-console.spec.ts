@@ -238,7 +238,12 @@ test('the stuck bar sits 32 px under the TopBar, every TopBar control ≥ 48 px 
   await openSetup(page);
   const atRest = await page.getByTestId('session-command-bar').boundingBox();
   expect(atRest!.y).toBeGreaterThan(100);
-  await page.evaluate(() => window.scrollTo(0, 400));
+  // Jump, not glide: the page scrolls smoothly, and a probe mid-glide measures a moving bar.
+  await page.evaluate(() => {
+    document.documentElement.style.scrollBehavior = 'auto';
+    window.scrollTo(0, 400);
+  });
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
   await page.waitForTimeout(100);
   const bar = await page.getByTestId('session-command-bar').boundingBox();
   expect(Math.round(bar!.y)).toBe(88);
