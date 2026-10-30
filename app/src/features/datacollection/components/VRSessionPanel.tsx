@@ -15,12 +15,17 @@
  *              `VrSessionBridge` built here from the data-collection store.
  *              TASK-418: the bridge also carries the task instruction, the
  *              session's frame count, and who ended it (from presence).
+ *              TASK-426: on the session page it is drawn as the Testing tools
+ *              rows (desktop) or as the headset hero's Launch VR (Quest); it
+ *              stays the one owner of the VR modal, the simulated input and
+ *              the goodbye in either role.
  * @feature datacollection
  */
 
 import { useMemo, useState } from 'react';
+import { Glasses } from 'lucide-react';
 import { Button, Panel, StatusTag, Switch, type StatusTagTone } from '@/shared/components/ui';
-import { VRTeleopSection } from '../../robots/components/tabs/vr/VRTeleopSection';
+import { VRTeleopSection, type VRLauncherState } from '../../robots/components/tabs/vr/VRTeleopSection';
 import { KeyboardTeleopSection } from '../../robots/components/tabs/TeleopTab';
 import { useSimulatedVrInput, type SimInputStatus } from '../hooks/useSimulatedVrInput';
 import type { Robot } from '../../robots/types/robots.types';
@@ -28,11 +33,20 @@ import type { InputLease } from '../hooks/inputLease';
 import { useDataCollectionStore, selectKept } from '../store/datacollectionStore';
 import { groupLabel, warningLabel } from '../utils/takeFormat';
 import { watchingLabel } from '../utils/presenceFormat';
+import { TestingToolsRow } from './console/TestingTools';
 import {
   buildVrSessionView,
   type VrSessionBridge,
   type VrTakeOutcome,
 } from '../../robots/components/tabs/vr/vrSessionBridge';
+
+/**
+ * Where the panel is drawn (TASK-426). `card`: the stacked cards (the default,
+ * outside the session page). `tools`: rows of the session page's Testing tools
+ * popover on a desktop. `hero`: Launch VR as the primary of the headset hero.
+ * The session page mounts exactly one, in either role.
+ */
+export type VRSessionPanelVariant = 'card' | 'tools' | 'hero';
 
 export interface VRSessionPanelProps {
   robot: Robot | null;
@@ -45,6 +59,8 @@ export interface VRSessionPanelProps {
   onVrOpenChange?: (open: boolean) => void;
   /** Show the readiness panel in the VR card (default); the session page shows it in its side column. */
   showReadiness?: boolean;
+  /** How the panel is drawn (default `card`). */
+  variant?: VRSessionPanelVariant;
 }
 
 const STATUS: Record<SimInputStatus | 'off', { label: string; tone: StatusTagTone }> = {
@@ -55,8 +71,10 @@ const STATUS: Record<SimInputStatus | 'off', { label: string; tone: StatusTagTon
   streaming: { label: 'Streaming synthetic motion', tone: 'sim' },
 };
 
+const OFFLINE = 'Robot offline. Start the robot agent to connect a headset.';
+
 export function VRSessionPanel({
-  robot, lease, simulate: simulateProp, onSimulateChange, onVrOpenChange, showReadiness = true,
+  robot, lease, simulate: simulateProp, onSimulateChange, onVrOpenChange, showReadiness = true, variant = 'card',
 }: VRSessionPanelProps) {
   const sessionId = useDataCollectionStore((s) => s.selectedSession?.id ?? null);
   // TASK-413 (D2): one object for the headset, read through a getter from the
@@ -71,13 +89,112 @@ export function VRSessionPanel({
   const [showKeyboard, setShowKeyboard] = useState(false);
   const simStatus = useSimulatedVrInput({ robot, enabled: simulate, lease });
   const status = STATUS[simulate ? simStatus : 'off'];
+  const launchDisabledReason = simulate ? 'Simulated VR input is driving the robot. Switch it off to use a headset.' : undefined;
+
+  if (variant === 'hero') {
+    return (
+      <div className="flex flex-col gap-3" data-testid="vr-session-panel">
+        {robot ? (
+          <VRTeleopSection
+            robot={robot}
+            vrSession={vrSession}
+            onOpenChange={onVrOpenChange}
+            showReadiness={false}
+            launchDisabledReason={launchDisabledReason}
+            renderLauncher={(launcher) => <HeroLauncher launcher={launcher} />}
+          />
+        ) : (
+          <p className="text-[13px] text-ink-tertiary">{OFFLINE}</p>
+        )}
+      </div>
+    );
+  }
+
+  if (variant === 'tools') {
+    return (
+      <div data-testid="vr-session-panel">
+        <TestingToolsRow
+          title="Simulate VR input"
+          help={
+            <>
+              Streams reach-and-grasp motion to the robot. Needs control.
+              <span data-testid="sim-input-status" className="mt-1 flex empty:hidden">
+                {simulate && (
+                  <StatusTag tone={status.tone} size="sm" dot pulse={simStatus !== 'disconnected'}>{status.label}</StatusTag>
+                )}
+              </span>
+            </>
+          }
+          control={
+            <Switch
+              id="simulate-vr-input"
+              data-testid="simulate-vr-toggle"
+              checked={simulate}
+              onCheckedChange={setSimulate}
+              aria-label="Simulate VR input"
+              disabled={!robot}
+            />
+          }
+        />
+        {robot ? (
+          <VRTeleopSection
+            robot={robot}
+            vrSession={vrSession}
+            onOpenChange={onVrOpenChange}
+            showReadiness={false}
+            launchDisabledReason={launchDisabledReason}
+            renderLauncher={(launcher) => (
+              <TestingToolsRow
+                title="VR window on this browser"
+                help={<span data-testid="vr-launch-hint">{launcher.hint}</span>}
+                control={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    leftIcon={<Glasses className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                    onClick={launcher.launch}
+                    disabled={launcher.disabled}
+                    data-testid="vr-launch"
+                  >
+                    Launch VR
+                  </Button>
+                }
+              >
+                {launcher.questHelp}
+              </TestingToolsRow>
+            )}
+          />
+        ) : (
+          <TestingToolsRow title="VR window on this browser" help={OFFLINE} />
+        )}
+        <TestingToolsRow
+          title="Keyboard fallback"
+          help="Drive single joints from the keyboard."
+          control={
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="keyboard-fallback-toggle"
+              aria-expanded={showKeyboard}
+              disabled={!robot}
+              onClick={() => setShowKeyboard((v) => !v)}
+            >
+              {showKeyboard ? 'Close' : 'Open'}
+            </Button>
+          }
+        >
+          {showKeyboard && robot ? <KeyboardTeleopSection robot={robot} /> : null}
+        </TestingToolsRow>
+      </div>
+    );
+  }
 
   if (!robot) {
     return (
       <Panel data-testid="vr-session-panel">
         <Panel.Header title="VR input" />
         <Panel.Body>
-          <p className="text-[13px] text-ink-tertiary">Robot offline. Start the robot agent to connect a headset.</p>
+          <p className="text-[13px] text-ink-tertiary">{OFFLINE}</p>
         </Panel.Body>
       </Panel>
     );
@@ -91,7 +208,7 @@ export function VRSessionPanel({
         vrSession={vrSession}
         onOpenChange={onVrOpenChange}
         showReadiness={showReadiness}
-        launchDisabledReason={simulate ? 'Simulated VR input is driving the robot. Switch it off to use a headset.' : undefined}
+        launchDisabledReason={launchDisabledReason}
       />
 
       <Panel>
@@ -127,6 +244,26 @@ export function VRSessionPanel({
           </Panel.Body>
         )}
       </Panel>
+    </div>
+  );
+}
+
+/** The headset hero's Launch VR: the one primary on the headset's page. */
+function HeroLauncher({ launcher }: { launcher: VRLauncherState }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <Button
+        size="lg"
+        leftIcon={<Glasses className="h-[18px] w-[18px]" strokeWidth={1.75} />}
+        onClick={launcher.launch}
+        disabled={launcher.disabled}
+        data-testid="vr-launch"
+        className="min-w-[200px]"
+      >
+        Launch VR
+      </Button>
+      <StatusTag tone={launcher.status.tone} dot>{launcher.status.label}</StatusTag>
+      <p className="basis-full text-[13px] text-ink-secondary" data-testid="vr-launch-hint">{launcher.hint}</p>
     </div>
   );
 }

@@ -62,11 +62,14 @@ test.describe('VR data collection in simulation', () => {
     await expect(page.getByRole('button', { name: /^Advanced options/ })).toHaveAttribute('aria-expanded', 'false');
     await page.getByRole('button', { name: /^Start session$/ }).click();
 
-    // Lands on the session detail page — step 1 (Connect input) is active
+    // Lands on the session detail page, its command bar on top
     await expect(page).toHaveURL(/data-collection\/[0-9a-f-]+/, { timeout: 15_000 });
     sessionId = /data-collection\/([0-9a-f-]+)/.exec(page.url())?.[1] ?? null;
-    await expect(page.getByTestId('session-steps')).toBeVisible();
+    await expect(page.getByTestId('session-command-bar')).toBeVisible();
+    // TASK-426: the VR panel lives in Testing tools on a desktop.
+    await page.getByTestId('session-tools-toggle').click();
     await expect(page.getByTestId('vr-session-panel')).toBeVisible();
+    await page.keyboard.press('Escape');
     // Pre-flight checklist: the sim robot is online, nothing blocks Start.
     await expect(page.getByTestId('preflight-robot')).toHaveAttribute('data-level', 'ok', { timeout: 15_000 });
 
@@ -83,7 +86,9 @@ test.describe('VR data collection in simulation', () => {
     // ── 3. Take control, enable "Simulate VR input" and watch frames rise ──
     // The agent records frames only while commands reach the robot, and the
     // simulated input streams only while this page holds the control lease.
+    await page.getByTestId('session-tools-toggle').click();
     await page.getByTestId('simulate-vr-toggle').click();
+    await page.keyboard.press('Escape');
     const takeControl = page.getByTestId('session-control-lease').getByRole('button', { name: /Take control/ });
     if (await takeControl.isVisible({ timeout: 10_000 }).catch(() => false)) {
       await takeControl.click();

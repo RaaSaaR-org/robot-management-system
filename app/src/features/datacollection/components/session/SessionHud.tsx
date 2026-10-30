@@ -2,18 +2,18 @@
  * @file SessionHud.tsx
  * @description Live recording HUD (TASK-410): a big phase pill (● REC /
  *              READY / PAUSED), "Take N" with its own timer, the auto-stop
- *              countdown, a DEGRADED chip and the sound-cue mute, over a row
+ *              countdown and a DEGRADED chip, over a row
  *              of session totals (time, frames, frame rate, kept). The take
  *              timer is computed by the caller from the server's stamp, so
  *              every client shows the same time. Open-ended (TASK-406): no
  *              "of N". Keeps the hud-* test ids. TASK-414: the take streak
  *              ("5 kept in a row") under Kept, and a compact two-column form
- *              for the assistant layout's side column.
+ *              for the assistant layout's side column. TASK-426: the sound-cue
+ *              mute (`hud-mute`) moved to the command bar's left group.
  * @feature datacollection
  */
 
-import { Volume2, VolumeX } from 'lucide-react';
-import { Button, StatRow, StatTile, type Tone } from '@/shared/components/ui';
+import { StatRow, StatTile, type Tone } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { takeNumber } from '../../utils/takeFormat';
@@ -37,8 +37,6 @@ export interface SessionHudProps {
   degraded?: boolean;
   /** Seconds until the robot stops the take on its own; null when there is no auto-stop */
   autoStopInS?: number | null;
-  muted?: boolean;
-  onToggleMute?: () => void;
   tone?: Tone;
   /** Takes kept in a row (TASK-414); shown from two. */
   streak?: number;
@@ -67,7 +65,7 @@ const PHASE_STYLE: Record<HudPhase, string> = {
 };
 
 export function SessionHud({
-  phase, take, takeElapsedS, duration, frames, fps, fpsActual, kept, degraded, autoStopInS, muted, onToggleMute, tone,
+  phase, take, takeElapsedS, duration, frames, fps, fpsActual, kept, degraded, autoStopInS, tone,
   streak = 0, compact = false,
 }: SessionHudProps) {
   const streakText = streakLabel(streak);
@@ -111,21 +109,6 @@ export function SessionHud({
           >
             Degraded
           </span>
-        )}
-        {onToggleMute && (
-          <Button
-            variant="ghost"
-            size="sm"
-            iconOnly
-            className="ml-auto"
-            onClick={onToggleMute}
-            data-testid="hud-mute"
-            aria-pressed={!!muted}
-            aria-label={muted ? 'Unmute sound cues' : 'Mute sound cues'}
-            title={muted ? 'Sound cues are off' : 'Sound cues are on'}
-          >
-            {muted ? <VolumeX className="h-4 w-4" strokeWidth={1.75} /> : <Volume2 className="h-4 w-4" strokeWidth={1.75} />}
-          </Button>
         )}
       </div>
       <StatRow columns={compact ? 2 : 4}>

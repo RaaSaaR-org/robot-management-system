@@ -6,6 +6,9 @@
  *              twice within a second fires it too; a single Escape keeps its
  *              usual job (closing a dialog), and Escape while typing does not
  *              count, so an operator closing a field cannot drop the robot.
+ *              TASK-426: it stands alone in the command bar's right zone, in
+ *              the display face with its Escape-twice hint; below 640 px the
+ *              zone is the bottom dock and the button grows to 52 px.
  * @feature datacollection
  * @apiCalls safetyApi.triggerRobotEStop
  */
@@ -63,16 +66,27 @@ export function SessionEStopButton({ robotId, robotName, hotkey = true, classNam
 
   return (
     <Button
+      variant="danger"
       onClick={() => void fire()}
       isLoading={firing}
       loadingText="Stopping…"
       data-testid="session-estop"
       title="Emergency stop the robot (Escape twice)"
       aria-label={`Emergency stop ${robotName}`}
-      leftIcon={<OctagonX className="h-4 w-4" strokeWidth={1.75} />}
-      className={cn('bg-stop font-semibold tracking-[0.06em] text-on-stop hover:bg-stop/90', className)}
+      leftIcon={<OctagonX className="h-[18px] w-[18px]" strokeWidth={1.75} />}
+      className={cn(
+        "h-11 gap-2.5 rounded-control bg-stop px-3.5 font-display text-[15px] font-bold tracking-[.06em] text-on-stop [font-variation-settings:'wdth'_112]",
+        // Phones: the bottom dock's one control — taller, wider, no key hint.
+        'max-sm:h-[52px] max-sm:min-w-[176px] max-sm:px-5',
+        className,
+      )}
     >
       E-STOP
+      {!firing && (
+        <kbd className="rounded-[5px] border border-on-stop/40 px-[5px] py-[3px] font-sans text-[11px] font-semibold leading-none tracking-[.02em] text-on-stop/85 max-sm:hidden">
+          Esc Esc
+        </kbd>
+      )}
     </Button>
   );
 }

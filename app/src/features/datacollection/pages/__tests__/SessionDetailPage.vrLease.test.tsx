@@ -82,11 +82,15 @@ describe('SessionDetailPage control lease in a VR session', () => {
 
   it('takes the page lease for simulated input and closes the headset path', async () => {
     render();
-    fireEvent.click(await screen.findByTestId('simulate-vr-toggle'));
+    // TASK-426: the simulated input lives in Testing tools, kept mounted while closed.
+    fireEvent.click(await screen.findByTestId('session-tools-toggle'));
+    expect(screen.getByTestId('session-tools')).toBeVisible();
+    fireEvent.click(screen.getByTestId('simulate-vr-toggle'));
     expect(await screen.findByTestId('session-control-lease')).toBeInTheDocument();
     expect(leaseCalls.active[leaseCalls.active.length - 1]).toBe(true);
     expect(screen.getByTestId('vr-launch')).toBeDisabled();
     expect(screen.getByTestId('vr-launch-hint')).toHaveTextContent(/Switch it off to use a headset/);
+    expect(screen.getByTestId('sim-input-tag')).toHaveTextContent('Simulated input');
 
     fireEvent.click(screen.getByTestId('simulate-vr-toggle'));
     expect(screen.queryByTestId('session-control-lease')).not.toBeInTheDocument();
