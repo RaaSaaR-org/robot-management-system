@@ -715,20 +715,46 @@ export class Supervisor {
         return null;
       }
     };
-    const operstate = read('operstate');
+    let operstate = read('operstate');
     if (operstate === null) {
       s.checks.iface = false;
       return this.failStep(s, 'no_iface', `network interface ${iface} does not exist on this machine`);
     }
-    const carrier = read('carrier') === '1';
-    s.checks.carrier = carrier;
-    s.checks.operstate = operstate;
-    if (!carrier || operstate !== 'up') {
-      return this.failStep(s, 'no_carrier',
-        `Robot cable unplugged or robot off (${iface} no carrier). Interface operstate: ${operstate}.`);
-    }
+    // A short carrier loss (the robot LAN flapped for ~8 s on 2026-10-29,
+    // TASK-423) is waited out for up to timeouts.carrierS, and after one the
+    // host IP gets the rest of that budget to come back. A link that stays down
+    // still fails no_carrier, saying how long it was waited for.
     const want = (this.profile.hostIp ?? '').split('/')[0];
-    const hasIp = this.netAddrs(iface).includes(want);
+    const waitS = this.profile.timeouts.carrierS;
+    const t0 = this.clock.now();
+    const waitedS = (): number => (this.clock.now() - t0) / 1000;
+    let carrier = read('carrier') === '1';
+    let hasIp = this.netAddrs(iface).includes(want);
+    let flapped = false; // the link was down at least once during this step
+    while (!(carrier && operstate === 'up') || (flapped && !hasIp)) {
+      const waited = waitedS();
+      const linkUp = carrier && operstate === 'up';
+      if (!linkUp) flapped = true;
+      Object.assign(s.checks, { carrier: linkUp, operstate, carrierWaitS: Math.round(waited) });
+      if (this.abortRequested) return this.failStep(s, 'aborted', 'aborted by stop');
+      if (waited >= waitS) {
+        if (linkUp) break; // carrier is back, the IP is not: no_host_ip below says so
+        return this.failStep(s, 'no_carrier',
+          `Robot cable unplugged or robot off (${iface} no carrier). Interface operstate: ${operstate}. ` +
+          `Waited ${waitS} s for the link to come back.`);
+      }
+      s.detail = linkUp
+        ? `carrier on ${iface} is back; waiting for ${want} (${Math.round(waited)} s of ${waitS} s)`
+        : `waiting for carrier on ${iface} — link down (${Math.round(waited)} s of ${waitS} s)`;
+      await this.clock.sleep(1000);
+      operstate = read('operstate') ?? 'missing';
+      carrier = read('carrier') === '1';
+      hasIp = this.netAddrs(iface).includes(want);
+    }
+    const flapS = Math.round(waitedS());
+    s.checks.carrier = true;
+    s.checks.operstate = operstate;
+    if (flapped) s.checks.carrierWaitS = flapS;
     s.checks.hostIp = hasIp;
     if (!hasIp) {
       return this.failStep(s, 'no_host_ip',
@@ -742,7 +768,8 @@ export class Supervisor {
       return this.failStep(s, 'no_ping', `the robot does not answer a ping at ${ip} — is it powered on?`);
     }
     s.state = 'ok';
-    s.detail = `${iface} up with ${this.profile.hostIp}; the robot answers at ${ip}`;
+    s.detail = `${iface} up with ${this.profile.hostIp}; the robot answers at ${ip}` +
+      (flapped ? ` (the link was down at start; waited ${flapS} s for it to come back)` : '');
     return true;
   }
 

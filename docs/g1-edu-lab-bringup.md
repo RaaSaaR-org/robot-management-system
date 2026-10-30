@@ -26,7 +26,7 @@ processes in a fixed order, each behind a readiness gate:
 | Step | What it checks or starts | Ready when |
 | --- | --- | --- |
 | `preflight` | Parses the profile; checks ports 6001 / 8767 / 41245; in arm_sdk mode refuses while `xr_teleoperate` or `teleop_hand_and_arm` runs | ports free or held by its own children |
-| `link` | `enp131s0` carrier + operstate up, `192.168.123.222` present, one ping to the robot | "Robot cable unplugged or robot off" otherwise |
+| `link` | `enp131s0` carrier + operstate up, `192.168.123.222` present, one ping to the robot. A carrier loss is waited out for up to `timeouts.carrierS` (15 s) and the step says how long it waited (TASK-423) | "Robot cable unplugged or robot off … Waited 15 s" when it stays down |
 | `camera` | TCP connect to the PC2 head camera `192.168.123.164:5600` | a **warning** only, never a stop |
 | `bridge` | `g1_state_bridge_readonly.py --iface enp131s0 --domain 0` | `bridge_probe.py` sees `rt/lowstate` on :6001 |
 | `sidecar` | `g1_sidecar.py`, **read_only by default** | `/health`: `connected`, the expected `write_mode` and `loco.gate`, `dds_domain` (when reported), fresh `base.age_s` under fsm |
@@ -118,6 +118,12 @@ or an edit rewrites them). Git answers are cached for 30 s.
 - **A process the supervisor started** that is older than its code gets
   `checks.staleCode = {startedAt, codeAt}` and a warning: "runs code from before
   <date> — restart the robot side". Stop and Start in the panel fixes it.
+- **The supervisor itself is not covered.** Stop and Start restart only its
+  children, and the stale-code check looks only at them. After a change under
+  `robot-agent/supervisor/` (a pull that touches it, e.g. TASK-423's carrier
+  wait), restart the supervisor:
+  `systemctl --user restart neodem-robot-supervisor@<robot>` (e.g.
+  `@g1-edu-4`). The children keep running and are re-adopted.
 - **A foreign process** carries the same verdict in `foreign.staleCode`, plus its
   `cwd` and the robot id its environment names. A process that runs from another
   checkout (an old worktree) is compared by that checkout's own commit time. A
@@ -381,7 +387,8 @@ succeeds and reports `teleop_mode: "arms+left_hand"` instead of blocking.
   blends into the balance controller, so that controller must be running.
   xr_teleoperate leaves the robot in debug mode on exit — switch back with the
   remote or reboot.
-- **The robot must be in balance** (FSM 500, the remote's R1+X) before `/arm`
+- **The robot must be in balance** (Regular Mode, the remote's R1+X: FSM 501 on
+  g1-edu-4, which has the 3-DoF waist; 500 on a 1-DoF-waist G1) before `/arm`
   — since TASK-398 the sidecar refuses `/arm` otherwise (`not_in_balance`,
   `fsm_unknown`). With no remote on site, NeoDEM puts it there: see
   ["Mode changes without the remote"](#mode-changes-without-the-remote-task-398)
@@ -455,8 +462,6 @@ sidecar whose `/health` reports another domain.
 - FSM id 4 as the G1's lock stand (L2+Up). Unitree's C++ `g1_loco_client.hpp`
   maps `StandUp()` to `SetFsmId(4)`; `/health.loco.ids_verified` stays `false`
   until runbook step 4 below has been run and recorded in TASK-398.
-- That 500 (`Start()`) is the remote's R1+X "regular" mode, the one in which
-  arm_sdk is honoured.
 - What `GetFsmMode` (`base.fsm_mode`) and `rt/odommodestate.mode`
   (`base.odom_mode`) report in each mode — both are logged, nothing gates on
   them yet.
@@ -495,7 +500,7 @@ impossible.
 | Value | Meaning |
 | --- | --- |
 | `0` / unset | No mode control, no locomotion. `/loco/*` → 403. |
-| `fsm` | **The real robot.** `POST /loco/mode` (limp / stand / balance) and the E-stop's damp. The only RPCs that can leave the process are `SetFsmId(1 \| 4 \| 500)`, `GetFsmId` and `GetFsmMode`. `/loco/move`, `/loco/action` (incl. stop), `/loco/stand-height` and `/loco/fsm` → 403. |
+| `fsm` | **The real robot.** `POST /loco/mode` (limp / stand / balance) and the E-stop's damp. The only RPCs that can leave the process are `SetFsmId(1 \| 4 \| balance id)`, `GetFsmId` and `GetFsmMode`. `/loco/move`, `/loco/action` (incl. stop), `/loco/stand-height` and `/loco/fsm` → 403. |
 | `1` | Full locomotion (the sim / Agent Mode). |
 
 Anything else refuses to start, and so does `fsm`/`1` without an explicit
@@ -511,7 +516,30 @@ says what the gate allows.
 | --- | --- | --- |
 | `limp` (`SetFsmId(1)`) | anything, incl. unknown | nothing — disarms the arms first, never blocked |
 | `stand` (`SetFsmId(4)`) | limp | arms disengaged, E-stop not latched |
-| `balance` (`SetFsmId(500)`) | stand, held ≥ 2 s | arms disengaged, E-stop not latched |
+| `balance` (`SetFsmId(500)`, or `501` with `G1_FSM_ID_BALANCE=501`) | stand, held ≥ 2 s | arms disengaged, E-stop not latched |
+
+**The balance id depends on the waist** (lab test, 2026-10-29). Balance is
+Regular Mode, the remote's R1+X: FSM **500** on a G1 with the 1-DoF waist, FSM
+**501** on one with the 3-DoF waist (29 DoF). g1-edu-4 has the 3-DoF waist (its
+motion switcher reports `{'form':'0','name':'ai'}`): it accepts `SetFsmId(500)`
+and ignores it — it stays in FSM 4, so balance never confirms and `/arm` stays
+refused. With 501 it confirmed balance in 0.2 s and stood stable. Its profile
+(`robot-agent/hardware/profiles/g1-edu-4.yaml`, arm_sdk block) therefore sets
+`G1_FSM_ID_BALANCE=501`; `G1_FSM_BALANCE_REPORTED` defaults to the commanded id,
+and the sidecar refuses to start when it does not include it. Allowed: 500 and
+501. The supervisor reads the profile only at its preflight, so a changed
+profile needs a `/stop` and `/start`. A balance that stays unconfirmed while the
+robot still reports FSM 4 after `SetFsmId(500)` says so in its error: if this G1
+has the 3-DoF waist, it needs 501.
+
+Other FSM ids worth knowing: 0 zero torque, 1 limp (damp), 4 locked stand,
+801 running mode.
+
+A robot found in **zero torque** (FSM 0) is not stood up directly: `stand` is
+refused with `bad_transition` and `next: "limp"` ("command limp first"), and the
+app's mode panel shows the bring-up strip *Zero torque → Limp → Stand → Balance*
+with the next button marked. Limp, Stand up and Balance stay three confirmed
+clicks — nothing chains them (TASK-423).
 
 Each change is confirmed by `GetFsmId` within 5 s or answers **504
 `unconfirmed`** — with no automatic recovery: the UI shows the measured mode and
@@ -530,7 +558,7 @@ robot into the gantry. A Stand up or Balance that was still waiting for the
 sport RPC when an E-stop or Limp went out is dropped unsent (409, `sent:false`).
 
 `/arm` now needs a fresh measured balance (FSM in `G1_FSM_BALANCE_REPORTED`,
-default `500`). While armed, the arms disarm by themselves when the robot leaves
+default: the commanded balance id, 501 on g1-edu-4). While armed, the arms disarm by themselves when the robot leaves
 balance (`left_balance`), when the reading is older than 2 s (`fsm_stale`), and
 when the measured arm stays more than 0.35 rad from the command for 0.3 s
 (`tracking_error`). `G1_ARM_ALLOW_UNKNOWN_FSM=1` disables the mode check for a
@@ -553,6 +581,9 @@ button. Head turns and thumbsticks send nothing to a robot that does not walk.
 - One operator in the headset.
 
 **Robot state:** normal mode, not debug mode. After power-on it is in damp.
+If it reads zero torque (FSM 0) instead, **Limp** first: Stand up from zero
+torque is refused (`bad_transition`, observed 2026-10-29). The sequence is
+always Limp → Stand up → Balance.
 
 ### Sequence
 
@@ -569,6 +600,8 @@ button. Head turns and thumbsticks send nothing to a robot that does not walk.
    - `curl -s -XPOST localhost:8767/loco/move -d '{}'` must answer 403.
 3. **Feet on the floor.** Lower the gantry until both feet are flat on the
    floor. Leave a hand's width of slack, so a sag is caught within about 10 cm.
+   **Do not stand up or balance a robot hanging in the gantry**: the balance
+   controller needs the feet on the floor (lab test, 2026-10-29).
 4. **Stand up** (VR window header or session page) and confirm.
    - Expect the legs to stiffen within about 1–3 s and the readout to show
      `Stand (locked) · FSM 4`.
@@ -579,11 +612,15 @@ button. Head turns and thumbsticks send nothing to a robot that does not walk.
      not try 706 (`G1_FSM_ID_STAND=706`, squat-to-stand) without the user
      agreeing at the robot.
 5. **Wait at least 2 s** with the robot steady. Then **Balance** and confirm.
-   - The readout should show `Balance · FSM 500`. The robot may shift its
-     weight slightly.
+   - The readout should show `Balance · FSM 501` on g1-edu-4 (`FSM 500` on a
+     1-DoF-waist G1). The robot may shift its weight slightly.
+   - If it times out and the robot still reports FSM 4, the balance id is
+     likely wrong for this robot — the Robot mode panel shows a hint under the
+     error: Limp, and if this G1 has the 3-DoF waist set
+     `G1_FSM_ID_BALANCE=501` in the profile, restart the robot side.
    - If the robot reports a different id (such as 801), the confirmation times
      out — fail-closed: Limp, and record it. Only after seeing it on the robot
-     may `G1_FSM_BALANCE_REPORTED=500,801` be set.
+     may `G1_FSM_BALANCE_REPORTED` list it (for example `501,801`).
 6. **Take control** in the VR window. The operator puts on the headset,
    **releases, then squeezes** the grip. The arms ramp in over 1.5 s from the
    measured pose.
@@ -591,7 +628,8 @@ button. Head turns and thumbsticks send nothing to a robot that does not walk.
    publishes nothing (`teleop_mode=arms+left_hand`).
 8. **Finish:**
    - Release the grip; the arms disarm.
-   - Hoist the gantry until it carries the robot.
+   - Hoist the gantry until it carries the robot — first the gantry, then Limp,
+     so the robot never drops into slack.
    - **Limp** and confirm.
 
 ### If something goes wrong (no remote on site)
