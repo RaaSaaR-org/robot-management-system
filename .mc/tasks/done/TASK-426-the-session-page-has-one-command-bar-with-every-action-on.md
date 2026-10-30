@@ -3,7 +3,7 @@ id: "TASK-426"
 aliases: []
 title: "The session page has one command bar with every action on the left and the E-STOP alone on the right"
 slug: "the-session-page-has-one-command-bar-with-every-action-on"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
