@@ -625,14 +625,18 @@ test.describe('Record (TASK-428)', () => {
         const r = el.getBoundingClientRect();
         return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
       };
+      const dock = document.querySelector('[data-testid="session-hud"]')!;
       return {
         sh: document.documentElement.scrollHeight,
         ih: window.innerHeight,
         iw: window.innerWidth,
+        // The dock's content stays inside its box: nothing spills under its border onto the takes list.
+        dockSpill: dock.scrollHeight - dock.clientHeight,
         boxes: { live: box('live-view'), systems: box('session-systems'), primary: box('take-primary'), estop: box('session-estop') },
       };
     });
     expect(m.sh, `${label}: scrollHeight ${m.sh} vs innerHeight ${m.ih}`).toBeLessThanOrEqual(m.ih);
+    expect(m.dockSpill, `${label}: the take dock's content spills ${m.dockSpill} px`).toBeLessThanOrEqual(1);
     for (const [name, b] of Object.entries(m.boxes)) {
       expect(b, `${label}: ${name}`).not.toBeNull();
       expect(b!.top, `${label}: ${name} top`).toBeGreaterThanOrEqual(0);
@@ -720,13 +724,25 @@ test.describe('Record (TASK-428)', () => {
         await clear('capturing');
         if (w === 1512) await page.screenshot({ ...shot(`TASK-428-record-${session}-1512.png`) });
 
-        // Between takes, the quick check in the hero.
+        // Between takes, the quick check in the hero (a take of 1 s or more moves joints in the demo).
+        await page.waitForTimeout(1_100);
         await page.getByTestId('take-primary').click();
         await expect(page.getByTestId('quick-check')).toBeVisible();
         await expect(page.getByTestId('session-hud').getByTestId('quick-check')).toHaveCount(1);
         fits.push(await expectFits(page, 'between'));
         await clear('between');
         if (w === 1512) await page.screenshot({ ...shot(`TASK-428-record-check-${session}-1512.png`) });
+        // Top 5 joints open: the check scrolls inside, and Keep / Discard stay in view.
+        await page.getByTestId('quick-check-joints-toggle').click();
+        await expect(page.getByTestId('quick-check-joints')).toBeVisible();
+        fits.push(await expectFits(page, 'between, joints open'));
+        for (const id of ['quick-check-keep', 'quick-check-discard']) {
+          const b = (await page.getByTestId(id).boundingBox())!;
+          const d = (await page.getByTestId('quick-check').boundingBox())!;
+          expect(b.y, `joints open: ${id} top`).toBeGreaterThanOrEqual(d.y);
+          expect(b.y + b.height, `joints open: ${id} bottom`).toBeLessThanOrEqual(d.y + d.height);
+        }
+        await page.getByTestId('quick-check-joints-toggle').click();
 
         // A blocker in the slot: missed frames (keyboard), a hand fault (VR).
         if (session === 'vr') await pin(page, 'hand_fault');

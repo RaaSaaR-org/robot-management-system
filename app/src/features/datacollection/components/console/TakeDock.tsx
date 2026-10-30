@@ -11,7 +11,8 @@
  *              (the E-stop latched, or the robot not balancing) over a blocker
  *              (missed frames, a blocking readiness reason, jerky motion) over
  *              the quick check. From lg the dock may shrink to its column,
- *              and only the slot gives way: it scrolls inside; on a screen
+ *              and only the slot or the quick check gives way: it scrolls
+ *              inside (the check keeps Keep and Discard in view); on a screen
  *              under 900 px tall the timer joins the header row while the slot
  *              shows. The hotkeys, toasts and confirms are the old take
  *              panel's, through `useTakeHotkeys`. The root keeps
@@ -100,7 +101,7 @@ const SLOT_TONE: Record<'fault' | 'warn', string> = {
   warn: 'border-signal-unknown/35 bg-signal-unknown/[0.06]',
 };
 
-/** A short screen (lg, under 900 px tall) with the slot showing: header and timer share one row. */
+/** A short screen (lg, under 900 px tall) with the slot showing: header and timer share one row; the gaps tighten for the check too. */
 const SHORT_ROW = 'lg:[@media(max-height:899px)]:flex-row lg:[@media(max-height:899px)]:items-center lg:[@media(max-height:899px)]:justify-between';
 const SHORT_TIMER = 'lg:[@media(max-height:899px)]:text-[36px]';
 const SHORT_GAP = 'lg:[@media(max-height:899px)]:gap-2';
@@ -137,7 +138,7 @@ export function TakeDock({
     <section
       // From lg the dock may shrink to its column; every part keeps its height
       // (`*:flex-none`) but the slot, which takes back flex-shrink inline.
-      className={cn('flex flex-none flex-col gap-3.5 lg:min-h-0 lg:flex-initial lg:*:flex-none rounded-panel border border-line-subtle bg-panel p-4 pb-[18px] max-[1439px]:gap-3 max-sm:p-3.5', slotShows && SHORT_GAP, className)}
+      className={cn('flex flex-none flex-col gap-3.5 lg:min-h-0 lg:flex-initial lg:*:flex-none rounded-panel border border-line-subtle bg-panel p-4 pb-[18px] max-[1439px]:gap-3 max-sm:p-3.5', (slotShows || checkShows) && SHORT_GAP, className)}
       data-testid="session-hud"
       data-slot={kind ?? undefined}
       aria-label="Take"
@@ -148,7 +149,10 @@ export function TakeDock({
       {checkShows ? (
         <>
           <HudHeader phase={phase} take={take} />
-          {quickCheck}
+          {/* The check gives way like the slot: it shrinks and scrolls inside, so it never spills onto the takes list. */}
+          <div className="flex min-h-0 flex-col" style={{ flexShrink: 1 }} data-testid="take-dock-check">
+            {quickCheck}
+          </div>
         </>
       ) : (
         <>
