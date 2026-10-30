@@ -21,12 +21,14 @@
  *              Details; `rows` narrows any variant to those row ids).
  *              `ReadinessActions` renders the robot-side buttons (and their
  *              confirmations and logs) on their own, so a Set up step can host
- *              just the ones it is about.
+ *              just the ones it is about. TASK-430: "Restart robot side" for a
+ *              robot side that runs stale code, behind the Stop confirm — only
+ *              where a host lists it; the full panel keeps Stop and Start.
  * @feature robots
  */
 
-import { useMemo, useState, type ReactNode } from 'react';
-import { Activity, Hand, Lock, Play, ScrollText, Square, Wifi } from 'lucide-react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { Activity, Hand, Lock, Play, RotateCw, ScrollText, Square, Wifi } from 'lucide-react';
 import { Button } from '@/shared/components/ui/Button';
 import { ConfirmDialog } from '@/shared/components/ui/ConfirmDialog';
 import { Panel } from '@/shared/components/ui/Panel';
@@ -39,7 +41,7 @@ import { questPagePort, type BringupProc, type ReadinessApi, type ReadinessSever
 import { QuestControls, type QuestControlsApi } from './QuestControls';
 import { ReadinessRow } from './ReadinessRow';
 import { BringupLogsDrawer } from './BringupLogsDrawer';
-import { isFailing, readinessRows, reasonRow, type RowId } from './readinessRows';
+import { isFailing, readinessRows, reasonRow, robotSideActions, type RowId } from './readinessRows';
 
 const SEVERITY_TONE: Record<ReadinessSeverity, BaseTone> = {
   block: 'danger',
@@ -62,6 +64,13 @@ export interface ReadinessLease {
    */
   take?: () => Promise<boolean>;
 }
+
+/**
+ * What a Stop does, said the same way in the Stop and the Restart confirm
+ * (TASK-430): the supervisor disarms the arms before it stops anything.
+ */
+export const STOP_SAFETY = "The arms are disarmed first, then the agent, sidecar and bridge stop. Stopping does not change the robot's mode.";
+export const RESTART_WORDS = `${STOP_SAFETY} Then they start again on the current code, read-only: switch to arm control again afterwards.`;
 
 /** The modes a stop dialog offers Limp first for: the robot is holding itself up. */
 function upright(mode: string | null | undefined): boolean {
@@ -180,8 +189,8 @@ export interface ReadinessActionsOptions {
   limpWaitMs?: number;
 }
 
-/** The robot-side buttons a host may show (TASK-427). */
-export type ReadinessActionId = 'start' | 'arm' | 'read_only' | 'stop' | 'logs';
+/** The robot-side buttons a host may show (TASK-427). `restart` shows only where `only` lists it (TASK-430). */
+export type ReadinessActionId = 'start' | 'restart' | 'arm' | 'read_only' | 'stop' | 'logs';
 
 export interface ReadinessButtonsOptions {
   compact?: boolean;
@@ -189,7 +198,7 @@ export interface ReadinessButtonsOptions {
   only?: ReadinessActionId[];
   /**
    * The host's one lit action (a Set up step that is open): the next button —
-   * Start, Take control, or Switch to arm control once control is held — gets
+   * Start, Restart, Take control, or Switch to arm control once control is held — gets
    * the primary fill and every other one is secondary. Unset: the panel's own
    * look.
    */
@@ -210,7 +219,11 @@ function useReadinessActions({
 }: ReadinessActionsOptions) {
   const { readiness, actions, pending, lastError } = ready;
   const baseMode = useRobotBaseMode(robotId, { api: baseModeApi, enabled: false });
-  const [confirm, setConfirm] = useState<'arm' | 'read_only' | 'stop' | null>(null);
+  const [confirm, setConfirm] = useState<'arm' | 'read_only' | 'stop' | 'restart' | null>(null);
+  // The stop dialog keeps its words while it closes.
+  const stopKind = useRef<'stop' | 'restart'>('stop');
+  if (confirm === 'stop' || confirm === 'restart') stopKind.current = confirm;
+  const restartDialog = stopKind.current === 'restart';
   const [limping, setLimping] = useState(false);
   const [limpError, setLimpError] = useState<string | null>(null);
   const [logsOpen, setLogsOpen] = useState(false);
@@ -220,8 +233,11 @@ function useReadinessActions({
   const bringup = readiness?.bringup ?? null;
   const overall = bringup?.overall ?? null;
   const busy = pending !== null || limping;
-  const canStart = overall === 'stopped' || overall === 'error';
-  const canStop = bringup !== null && overall !== 'stopped';
+  const side = robotSideActions(readiness);
+  const canStart = side.start;
+  const canStop = side.stop;
+  // A restart in flight keeps its button (loading) and hides Start and Stop.
+  const restarting = pending?.action === 'restart';
   const sidecarStep = bringup?.steps.find((s) => s.id === 'sidecar') ?? null;
   const sidecarUp = sidecarStep?.state === 'ok' && (overall === 'ready' || overall === 'degraded');
   const showArmSwitch = bringup?.sidecarMode === 'read_only' && sidecarUp;
@@ -264,8 +280,13 @@ function useReadinessActions({
     setConfirm(null);
     await actions.stop();
   };
+  const doRestart = async () => {
+    setConfirm(null);
+    await actions.restart();
+  };
 
   const limpThenStop = async () => {
+    const restart = confirm === 'restart';
     const grant = lease?.grant() ?? null;
     if (!grant) {
       setLimpError('Take control first.');
@@ -284,13 +305,13 @@ function useReadinessActions({
         const status = await baseModeApi.getBaseMode(robotId).catch(() => null);
         if (status?.base?.mode === 'limp') break;
         if (Date.now() >= deadline) {
-          setLimpError('The robot did not report Limp — the robot side was not stopped.');
+          setLimpError(`The robot did not report Limp — the robot side was not ${restart ? 'restarted' : 'stopped'}.`);
           return;
         }
         await new Promise((r) => setTimeout(r, LIMP_POLL_MS));
       }
       setConfirm(null);
-      await actions.stop();
+      await (restart ? actions.restart() : actions.stop());
     } finally {
       setLimping(false);
     }
@@ -299,19 +320,21 @@ function useReadinessActions({
   const errorLine = limpError ?? takeError ?? (lastError ? `${lastError.error}${lastError.code ? ` (${lastError.code})` : ''}` : null);
 
   const renderButtons = ({ compact = false, only, lit }: ReadinessButtonsOptions = {}): ReactNode => {
-    const show = (id: ReadinessActionId) => !only || only.includes(id);
+    const show = (id: ReadinessActionId) => (only ? only.includes(id) : id !== 'restart');
     const stepMode = lit !== undefined;
-    const startB = show('start') && canStart;
+    const startB = show('start') && canStart && !restarting;
+    const restartB = show('restart') && (side.restart || restarting);
     const armB = !compact && show('arm') && showArmSwitch;
     const takeB = armB && armBlockedReason !== null && take !== null;
     const readOnlyB = !compact && show('read_only') && showReadOnlySwitch;
-    const stopB = !compact && show('stop') && canStop;
+    const stopB = !compact && show('stop') && canStop && !restarting;
     const logsB = !compact && show('logs');
-    if (!bringup || !(startB || armB || readOnlyB || stopB || logsB)) return null;
-    // In a step, the next action is lit: Start, else Take control, else the switch.
+    if (!bringup || !(startB || restartB || armB || readOnlyB || stopB || logsB)) return null;
+    // In a step, the next action is lit: Start or Restart, else Take control, else the switch.
     const startVariant = stepMode && !lit ? 'secondary' : 'primary';
+    const restartVariant = stepMode && !lit ? 'secondary' : 'primary';
     const takeVariant = stepMode && !lit ? 'secondary' : 'primary';
-    const armVariant = stepMode && lit && !takeB && !startB ? 'primary' : 'secondary';
+    const armVariant = stepMode && lit && !takeB && !startB && !restartB ? 'primary' : 'secondary';
     const takeButton = takeB && (
       <Button
         size={stepMode ? 'md' : 'sm'}
@@ -365,6 +388,24 @@ function useReadinessActions({
             data-testid="readiness-start"
           >
             Start robot side
+          </Button>
+        )}
+        {restartB && (
+          <Button
+            size={stepMode ? 'md' : 'sm'}
+            variant={restartVariant}
+            leftIcon={<RotateCw className="h-4 w-4" strokeWidth={1.75} />}
+            onClick={() => {
+              setLimpError(null);
+              setTakeError(null);
+              setConfirm('restart');
+            }}
+            disabled={busy}
+            isLoading={restarting}
+            loadingText="Restarting…"
+            data-testid="readiness-restart"
+          >
+            Restart robot side
           </Button>
         )}
         {armB && (stepMode ? (
@@ -461,18 +502,19 @@ function useReadinessActions({
         testId="readiness-read-only-confirm"
       />
 
+      {/* Stop and Restart share one confirm (TASK-430): a restart is a stop first. */}
       <ConfirmDialog
-        isOpen={confirm === 'stop'}
+        isOpen={confirm === 'stop' || confirm === 'restart'}
         onClose={() => {
           if (!limping) setConfirm(null);
         }}
-        onConfirm={doStop}
-        title="Stop the robot side?"
-        description="The agent, sidecar and bridge stop. Stopping does not change the robot's mode."
-        confirmLabel="Stop robot side"
+        onConfirm={restartDialog ? doRestart : doStop}
+        title={restartDialog ? 'Restart the robot side?' : 'Stop the robot side?'}
+        description={restartDialog ? RESTART_WORDS : STOP_SAFETY}
+        confirmLabel={restartDialog ? 'Restart robot side' : 'Stop robot side'}
         tone="danger"
         isLoading={limping}
-        testId="readiness-stop-confirm"
+        testId={restartDialog ? 'readiness-restart-confirm' : 'readiness-stop-confirm'}
       >
         {offerLimp && (
           <div className="mt-3 rounded-control border border-signal-unknown/30 bg-signal-unknown/10 p-3 text-[13px]" data-testid="readiness-limp-offer">
@@ -489,7 +531,7 @@ function useReadinessActions({
                 loadingText="Waiting for Limp…"
                 data-testid="readiness-limp-first"
               >
-                Limp first, then stop
+                {restartDialog ? 'Limp first, then restart' : 'Limp first, then stop'}
               </Button>
               {limpBlockedReason && take && (
                 <Button

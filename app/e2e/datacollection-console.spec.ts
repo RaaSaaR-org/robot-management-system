@@ -16,7 +16,9 @@
  *     popover ends above the dock and never covers the E-STOP;
  *   - Testing tools reaches every developer tool in one click;
  *   - a Quest user agent leads with the headset hero and Launch VR.
- *   TASK-427/428/429 add their phases' blocks here.
+ *   TASK-427/428/429 add their phases' blocks here. TASK-430: on stale code
+ *   Set up's step 1 leads with Restart robot side, behind the Stop confirm,
+ *   through to a fresh robot side, with Stop under Details afterwards.
  *   Set SCREEN_DIR to also save screenshots there.
  * @feature datacollection
  */
@@ -572,6 +574,86 @@ test.describe('Set up (TASK-427)', () => {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ ...shot('TASK-427-setup-390.png') });
     await page.screenshot({ ...shot('TASK-427-setup-390-full.png'), fullPage: true });
+  });
+
+  // TASK-430: the robot side runs, but on code from before the last change.
+  test.describe('a robot side on stale code (TASK-430)', () => {
+    /** Pin the demo G1 to the stale-sidecar fixture (demo-only route); its Stop lets it go. */
+    const pinStale = (page: Page) =>
+      page.evaluate(async (robotId) => {
+        await fetch(`/api/__demo/robots/${robotId}/readiness`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fixture: 'sidecar_stale_code' }),
+        });
+      }, ROBOT);
+
+    async function openStale(page: Page) {
+      await openSetup(page);
+      await pinStale(page);
+      const robot = page.getByTestId('setup-step-robot');
+      await expect(robot.getByTestId('setup-step-robot-summary')).toContainText('runs code from before', { timeout: 15_000 });
+      return robot;
+    }
+
+    test('step 1 leads with Restart robot side, behind the Stop confirm, through to a fresh robot side', async ({ page }) => {
+      await page.setViewportSize({ width: 1512, height: 945 });
+      const robot = await openStale(page);
+      await expect(robot).toHaveAttribute('data-state', 'current');
+      await expect(robot).toHaveAttribute('data-expanded', 'true');
+      await expect(robot.getByTestId('setup-step-reason')).toHaveAttribute('data-code', 'agent_outdated');
+      expect(await litPrimaries(page)).toEqual(['readiness-restart']);
+      await expect(robot.getByTestId('readiness-start')).toHaveCount(0);
+      await expect(page.getByText('Teleop tab')).toHaveCount(0);
+      // A restart is the remedy: no second Stop under Details.
+      await robot.getByTestId('setup-step-robot-details-toggle').click();
+      await expect(robot.getByTestId('setup-step-robot-details').getByTestId('readiness-row-sidecar')).toHaveAttribute('data-status', 'fail');
+      await expect(robot.getByTestId('readiness-stop')).toHaveCount(0);
+
+      await robot.getByTestId('readiness-restart').click();
+      const dialog = page.getByTestId('readiness-restart-confirm');
+      await expect(dialog).toContainText('Restart the robot side?');
+      await expect(dialog).toContainText('The arms are disarmed first');
+      await page.screenshot({ ...shot('TASK-430-restart-confirm-1512.png') });
+      await page.getByTestId('readiness-restart-confirm-confirm').click();
+      // The demo stops in the background, as the supervisor does: Restarting… until it is up again.
+      await expect(robot.getByTestId('readiness-restart')).toContainText('Restarting');
+      await expect(robot.getByTestId('setup-step-robot-summary')).toContainText(/Stopping|Starting|stopped/);
+      // Fresh and read-only: the reason moves on to step 2, and nothing asks for a restart.
+      await expect(page.getByTestId('setup-step-arm_control').getByTestId('setup-step-reason')).toHaveAttribute('data-code', 'read_only', { timeout: 15_000 });
+      await expect(page.getByTestId('readiness-restart')).toHaveCount(0);
+      await expect(robot.getByTestId('setup-step-robot-summary')).not.toContainText('runs code');
+
+      // Running: Stop waits under step 1's Details, secondary, behind its confirm.
+      if ((await robot.getAttribute('data-expanded')) !== 'true') await page.getByTestId('setup-step-robot-toggle').click();
+      await expect(robot).toContainText('Stop them under Details when you finish for the day.');
+      const details = robot.getByTestId('setup-step-robot-details');
+      if (!(await details.isVisible())) await robot.getByTestId('setup-step-robot-details-toggle').click();
+      const stop = details.getByTestId('readiness-stop');
+      await expect(stop).toBeVisible();
+      await expect(stop).not.toHaveClass(/bg-primary/);
+      await page.screenshot({ ...shot('TASK-430-step1-running-details-1512.png') });
+      await stop.click();
+      await expect(page.getByTestId('readiness-stop-confirm')).toContainText('The arms are disarmed first');
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('readiness-stop-confirm')).toHaveCount(0);
+    });
+
+    for (const [w, h, min] of [[1280, 800, 48], [1512, 945, 64]] as const) {
+      test(`the E-STOP stands alone with Restart lit in step 1 at ${w}×${h}`, async ({ page }) => {
+        await page.setViewportSize({ width: w, height: h });
+        const robot = await openStale(page);
+        await expect(robot.getByTestId('readiness-restart')).toBeVisible();
+        expect(await litPrimaries(page)).toEqual(['readiness-restart']);
+        await page.evaluate(() => window.scrollTo(0, 0));
+        const c = await pageClearance(page);
+        test.info().annotations.push({ type: 'clearance', description: `stale@${w}: ${c.d} (${c.el})` });
+        expect(c.d, `nearest: ${c.el}`).toBeGreaterThanOrEqual(min);
+        // Step 1 sits in the left column, well clear of the E-STOP.
+        const restart = (await robot.getByTestId('readiness-restart').boundingBox())!;
+        const estop = (await page.getByTestId('session-estop').boundingBox())!;
+        expect(restart.x + restart.width).toBeLessThan(estop.x - 200);
+        await page.screenshot({ ...shot(`TASK-430-step1-stale-${w}-e2e.png`) });
+      });
+    }
   });
 });
 

@@ -4,7 +4,10 @@
  *              and non-VR sessions, the current step, waits behind a failed
  *              step, the one readiness reason landing in exactly one step and
  *              one systems cell, a missing hand as a warning, and the cells
- *              built from the same input.
+ *              built from the same input. TASK-430: step 1's robot-side buttons
+ *              — Start when stopped, Restart when the robot side runs stale
+ *              code, Stop under Details while it runs, none of them while it
+ *              stops.
  * @feature datacollection
  */
 
@@ -12,7 +15,8 @@ import { describe, it, expect } from 'vitest';
 import { READINESS_FIXTURES, readinessFor } from '@/mocks/readinessDemoHandlers';
 import type { RobotReadiness } from '@/features/robots/api/readinessApi';
 import { buildPreflight } from '../preflight';
-import { buildSetupModel, leaseWorkDone, reasonCell, reasonStep, stepOrder, type SetupModelInput } from '../setupSteps';
+import { buildSetupModel, leaseWorkDone, reasonCell, reasonStep, robotSideButtons, stepOrder, type SetupModelInput } from '../setupSteps';
+import type { BringupStep } from '@/features/robots/api/readinessApi';
 
 const ROBOT = 'demo-g1-001';
 
@@ -294,5 +298,86 @@ describe('the lease hand-over is due', () => {
         expect(leaseWorkDone(readiness, mode)).toBe(done('arm_control') && done('stance'));
       }
     }
+  });
+});
+
+describe('step 1\'s robot-side buttons (TASK-430)', () => {
+  const STALE = { startedAt: '2026-10-29T18:05:00.000Z', codeAt: '2026-10-30T00:44:00.000Z' };
+  const robotStep = (m: ReturnType<typeof buildSetupModel>) => m.steps.find((s) => s.id === 'robot')!;
+  /** The stale-code fixture with its sidecar step changed. */
+  const staleSidecar = (change: Partial<BringupStep>): RobotReadiness => {
+    const base = readinessFor(ROBOT, 'sidecar_stale_code');
+    return { ...base, bringup: { ...base.bringup!, steps: base.bringup!.steps.map((s) => (s.id === 'sidecar' ? { ...s, ...change } : s)) } };
+  };
+  const overall = (name: Parameters<typeof readinessFor>[1], o: NonNullable<RobotReadiness['bringup']>['overall']): RobotReadiness => {
+    const base = readinessFor(ROBOT, name);
+    return { ...base, bringup: { ...base.bringup!, overall: o } };
+  };
+
+  it('stale code: step 1 fails with the stale row, owns the reason, and leads with Restart; no Stop under Details', () => {
+    const m = buildSetupModel(input({ readiness: readinessFor(ROBOT, 'sidecar_stale_code'), operator: { present: false, name: null, inVr: false } }));
+    const robot = robotStep(m);
+    expect(m.current).toBe('robot');
+    expect(robot.state).toBe('current');
+    expect(robot.tone).toBe('fail');
+    expect(robot.summary).toMatch(/^Sidecar: runs code from before /);
+    expect(robot.reason).toMatchObject({ code: 'agent_outdated', text: 'The sidecar runs older code than NeoDEM. Restart the robot side.' });
+    expect(m.robotSide).toEqual({ lead: 'restart', stop: false });
+    // Every later VR step waits for it, and the reason is stated once.
+    expect(m.steps.filter((s) => s.id !== 'robot' && s.id !== 'stance').every((s) => s.state === 'waits' && s.waitsFor === 1)).toBe(true);
+    expect(m.steps.filter((s) => s.reason !== null)).toHaveLength(1);
+  });
+
+  it('stopped: Start is the lead and there is nothing to stop', () => {
+    expect(buildSetupModel(input({ readiness: readinessFor(ROBOT, 'bringup_stopped') })).robotSide).toEqual({ lead: 'start', stop: false });
+    // A failed robot side (error) starts again too.
+    expect(robotSideButtons(readinessFor(ROBOT, 'bringup_failed:link'))).toEqual({ lead: 'start', stop: true });
+  });
+
+  it('running ok: nothing lit in step 1, and Stop waits under Details', () => {
+    for (const name of ['following', 'read_only_ready', 'mode_not_balance'] as const) {
+      expect(robotSideButtons(readinessFor(ROBOT, name)), name).toEqual({ lead: null, stop: true });
+    }
+    expect(buildSetupModel(input()).robotSide).toEqual({ lead: null, stop: true });
+  });
+
+  it('stopping (a restart in flight): no lead, and step 1 says it is stopping', () => {
+    const m = buildSetupModel(input({ readiness: overall('bringup_stopped', 'stopping') }));
+    expect(m.robotSide.lead).toBeNull();
+    expect(robotStep(m).summary).toBe('Stopping the robot side…');
+    // Stale code while still starting: no Restart until it runs.
+    expect(robotSideButtons(overall('sidecar_stale_code', 'starting')).lead).toBeNull();
+  });
+
+  it('degraded with stale code still leads with Restart', () => {
+    expect(robotSideButtons(overall('sidecar_stale_code', 'degraded'))).toEqual({ lead: 'restart', stop: false });
+  });
+
+  it('no Restart for a process the supervisor never signals: foreign or adopted', () => {
+    const foreign = staleSidecar({
+      state: 'foreign', owned: false, checks: {},
+      foreign: { pid: 31337, cmdline: ['python3', 'g1_sidecar.py'], since: STALE.startedAt, port: 8767, staleCode: STALE },
+    });
+    expect(robotSideButtons(foreign).lead).toBeNull();
+    const adopted = staleSidecar({ owned: false });
+    expect(robotSideButtons(adopted)).toEqual({ lead: null, stop: true });
+  });
+
+  it('an owned agent without a readiness route (older code) is cured by a restart as well', () => {
+    const base = readinessFor(ROBOT, 'read_only_ready');
+    const outdated: RobotReadiness = {
+      ...base,
+      agent: { reachable: true, error: 'HTTP 404 (no readiness route)', readiness: null, outdated: true },
+      reason: { code: 'agent_outdated', severity: 'block', text: 'The robot agent runs older code than NeoDEM. Restart the robot side.', source: 'server' },
+    };
+    expect(robotSideButtons(outdated).lead).toBe('restart');
+    const m = buildSetupModel(input({ readiness: outdated }));
+    expect(robotStep(m).summary).toBe('Agent: older code than NeoDEM');
+    expect(robotStep(m).reason?.code).toBe('agent_outdated');
+  });
+
+  it('no robot side reported (no supervisor): nothing to start, restart or stop', () => {
+    expect(robotSideButtons({ ...READINESS_FIXTURES.following, bringup: null })).toEqual({ lead: null, stop: false });
+    expect(robotSideButtons(null)).toEqual({ lead: null, stop: false });
   });
 });

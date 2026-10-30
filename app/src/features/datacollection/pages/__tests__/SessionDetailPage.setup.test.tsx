@@ -5,7 +5,10 @@
  *              Take control as the page's one lit action. The read-only reason
  *              is said once, the Quest controls exist once (in step 4), step 3
  *              carries the mode buttons behind its own Take control, and Take
- *              control opens the page's lease only on the press.
+ *              control opens the page's lease only on the press. TASK-430: on
+ *              stale code step 1 leads with Restart, behind the Stop confirm,
+ *              which stops, waits for stopped and starts; while the robot side
+ *              runs, Stop waits under step 1's Details.
  * @feature datacollection
  */
 
@@ -154,5 +157,102 @@ describe('SessionDetailPage Set up', () => {
     expect(leaseCalls.active.every((a) => a === false)).toBe(true);
     fireEvent.click(screen.getByTestId('readiness-take-control'));
     await waitFor(() => expect(leaseCalls.active[leaseCalls.active.length - 1]).toBe(true));
+  });
+});
+
+describe('SessionDetailPage Set up — step 1 restarts a robot side on stale code (TASK-430)', () => {
+  /** The demo robot side in miniature: stale until stopped, stopping once, stopped, then read-only after Start. */
+  function staleRobotSide() {
+    const posts: string[] = [];
+    let phase: 'stale' | 'stopping' | 'stopped' | 'up' = 'stale';
+    server.use(
+      http.get('/api/robots/:id/readiness', () => {
+        if (phase === 'stopping') {
+          phase = 'stopped';
+          const s = readinessFor('g1', 'bringup_stopped');
+          return HttpResponse.json({ ...s, bringup: { ...s.bringup!, overall: 'stopping' } });
+        }
+        return HttpResponse.json(readinessFor('g1', phase === 'stale' ? 'sidecar_stale_code' : phase === 'stopped' ? 'bringup_stopped' : 'read_only_ready'));
+      }),
+      http.post('/api/robots/:id/bringup/stop', () => {
+        posts.push('stop');
+        phase = 'stopping';
+        return HttpResponse.json({ status: null, baseMode: null });
+      }),
+      http.post('/api/robots/:id/bringup/start', async ({ request }) => {
+        posts.push(`start:${((await request.json()) as { mode: string }).mode}`);
+        phase = 'up';
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    return posts;
+  }
+
+  it('makes Restart robot side the one lit action of a current step 1, without the Teleop tab sentence', async () => {
+    staleRobotSide();
+    render();
+    const robot = await screen.findByTestId('setup-step-robot');
+    await waitFor(() => expect(robot).toHaveAttribute('data-state', 'current'));
+    await waitFor(() => expect(litPrimaries().map((b) => b.dataset.testid)).toEqual(['readiness-restart']));
+    expect(within(robot).getByTestId('readiness-restart')).toHaveTextContent('Restart robot side');
+    expect(within(robot).queryByTestId('readiness-start')).toBeNull();
+    expect(within(robot).getByTestId('setup-step-reason')).toHaveTextContent('The sidecar runs older code than NeoDEM. Restart the robot side.');
+    expect(robot.textContent).toContain('Restart stops them and starts them again on the current code, read-only.');
+    expect(document.body.textContent).not.toContain('Teleop tab');
+    // A restart is the remedy here: Details holds the rows, not a second Stop.
+    fireEvent.click(within(robot).getByTestId('setup-step-robot-details-toggle'));
+    expect(within(robot).queryByTestId('readiness-stop')).toBeNull();
+  });
+
+  it('asks first with the Stop confirm\'s words, then stops, waits for stopped and starts read-only', async () => {
+    const posts = staleRobotSide();
+    render();
+    const restart = await screen.findByTestId('readiness-restart');
+    fireEvent.click(restart);
+    const dialog = await screen.findByTestId('readiness-restart-confirm');
+    expect(dialog).toHaveTextContent('Restart the robot side?');
+    expect(dialog).toHaveTextContent('The arms are disarmed first, then the agent, sidecar and bridge stop.');
+    expect(dialog).toHaveTextContent('read-only');
+    expect(posts).toEqual([]);
+    fireEvent.click(screen.getByTestId('readiness-restart-confirm-confirm'));
+    await waitFor(() => expect(posts).toEqual(['stop', 'start:read_only']), { timeout: 5_000 });
+    // Fresh and read-only: step 1 is done, and the read-only reason is step 2's.
+    await waitFor(() => expect(screen.getByTestId('setup-step-robot')).toHaveAttribute('data-state', 'done'), { timeout: 5_000 });
+    expect(screen.queryByTestId('readiness-restart')).toBeNull();
+    await waitFor(() => expect(litPrimaries().map((b) => b.dataset.testid)).toEqual(['readiness-take-control']));
+  });
+
+  it('Cancel restarts nothing', async () => {
+    const posts = staleRobotSide();
+    render();
+    fireEvent.click(await screen.findByTestId('readiness-restart'));
+    const dialog = await screen.findByTestId('readiness-restart-confirm');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByTestId('readiness-restart-confirm')).toBeNull());
+    expect(posts).toEqual([]);
+  });
+
+  it('while the robot side runs fine, Stop waits under step 1\'s Details, secondary and confirmed', async () => {
+    const posts: string[] = [];
+    server.use(http.post('/api/robots/:id/bringup/stop', () => {
+      posts.push('stop');
+      return HttpResponse.json({ status: null, baseMode: null });
+    }));
+    await ready();
+    const robot = screen.getByTestId('setup-step-robot');
+    fireEvent.click(within(robot).getByTestId('setup-step-robot-toggle'));
+    expect(robot.textContent).toContain('Stop them under Details when you finish for the day.');
+    expect(document.body.textContent).not.toContain('Teleop tab');
+    expect(within(robot).queryByTestId('readiness-restart')).toBeNull();
+    fireEvent.click(within(robot).getByTestId('setup-step-robot-details-toggle'));
+    const stop = within(within(robot).getByTestId('setup-step-robot-details')).getByTestId('readiness-stop');
+    expect(stop).toHaveTextContent('Stop robot side');
+    expect(stop.className).not.toContain('bg-primary');
+    fireEvent.click(stop);
+    const dialog = await screen.findByTestId('readiness-stop-confirm');
+    expect(dialog).toHaveTextContent('The arms are disarmed first, then the agent, sidecar and bridge stop.');
+    expect(posts).toEqual([]);
+    fireEvent.click(screen.getByTestId('readiness-stop-confirm-confirm'));
+    await waitFor(() => expect(posts).toEqual(['stop']));
   });
 });

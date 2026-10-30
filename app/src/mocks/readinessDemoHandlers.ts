@@ -15,6 +15,11 @@
  *              robot to one fixture — its base mode and E-stop included — so
  *              the e2e can show the Record console's Mode cell, recovery slot
  *              and blockers.
+ *              TASK-430: a `sidecar_stale_code` fixture (up, but the sidecar
+ *              started before its code changed). The demo Stop lets a pinned
+ *              robot go and passes through `stopping`, as the supervisor does,
+ *              and a Start while it stops is refused with 409 `busy`, so the
+ *              Set up step's Restart is Stop, wait, Start here as well.
  * @feature mocks
  */
 
@@ -245,6 +250,34 @@ export const READINESS_FIXTURES = {
       reason: { code: 'read_only', severity: 'block', text: 'The sidecar is read-only. Switch the robot side to arm control.' },
     }),
   }),
+  /**
+   * TASK-430: up and read-only, but the sidecar started before its code
+   * changed — the supervisor's stale-code mark on an owned step, and the
+   * server's `agent_outdated` line. A restart of the robot side cures it.
+   */
+  sidecar_stale_code: snapshot({
+    bringup: bringup({
+      sidecarMode: 'read_only',
+      steps: readySteps().map((s) => (s.id === 'sidecar'
+        ? {
+          ...s,
+          state: 'warn' as const,
+          code: 'stale_code',
+          detail: 'runs code from before 2026-10-30 01:44 — restart the robot side (started 2026-10-29 19:05)',
+          checks: {
+            connected: true, write_mode: 'read_only', armed: false,
+            staleCode: { startedAt: '2026-10-29T18:05:00.000Z', codeAt: '2026-10-30T00:44:00.000Z' },
+          },
+        }
+        : s)),
+    }),
+    agentReadiness: agentReadiness({
+      sidecar: { ...agentReadiness().sidecar, writeMode: 'read_only', readOnly: true },
+      arms: { ...agentReadiness().arms, armed: false, armWeight: 0, armState: 'idle' },
+      reason: { code: 'read_only', severity: 'block', text: 'The sidecar is read-only. Switch the robot side to arm control.' },
+    }),
+    reason: { code: 'agent_outdated', severity: 'block', text: 'The sidecar runs older code than NeoDEM. Restart the robot side.', source: 'server' },
+  }),
 } satisfies Record<string, RobotReadiness>;
 
 export type ReadinessFixtureName = keyof typeof READINESS_FIXTURES;
@@ -260,7 +293,7 @@ export function readinessFor(robotId: string, name: ReadinessFixtureName): Robot
 // ============================================================================
 
 interface DemoSide {
-  phase: 'stopped' | 'starting' | 'ready';
+  phase: 'stopped' | 'starting' | 'ready' | 'stopping';
   startedAt: number;
 }
 
@@ -281,12 +314,26 @@ function withQuest(robotId: string, snap: RobotReadiness): RobotReadiness {
 }
 /** How long the demo's Start takes per step. */
 const DEMO_STEP_MS = 700;
+/** How long the demo's Stop takes: the supervisor answers at once and stops in the background. */
+const DEMO_STOP_MS = 2 * DEMO_STEP_MS;
 
 function demoSnapshot(robotId: string): RobotReadiness {
   const pinned = overrides.get(robotId);
   if (pinned) return readinessFor(robotId, pinned);
   const side = sides.get(robotId) ?? { phase: 'stopped', startedAt: 0 };
+  if (side.phase === 'stopping' && Date.now() - side.startedAt >= DEMO_STOP_MS) side.phase = 'stopped';
   if (side.phase === 'stopped') return readinessFor(robotId, 'bringup_stopped');
+  if (side.phase === 'stopping') {
+    const base = readinessFor(robotId, 'bringup_stopped');
+    const steps = STEP_IDS.map((id) =>
+      id === 'bridge' || id === 'sidecar' || id === 'agent' ? step(id, 'running', { detail: `stopping ${id}…` }) : step(id, 'idle'),
+    );
+    return {
+      ...base,
+      bringup: { ...base.bringup!, overall: 'stopping', steps },
+      reason: { code: 'bringup_busy', severity: 'warn', text: 'Robot side is stopping…', source: 'server' },
+    };
+  }
   if (side.phase === 'starting') {
     const done = Math.floor((Date.now() - side.startedAt) / DEMO_STEP_MS);
     if (done >= STEP_IDS.length) {
@@ -378,12 +425,20 @@ export const readinessDemoHandlers = [
     if (body.mode !== 'read_only') {
       return HttpResponse.json({ code: 'demo_read_only', error: 'the demo starts read-only only' }, { status: 400 });
     }
-    sides.set(String(params.id), { phase: 'starting', startedAt: Date.now() });
+    const id = String(params.id);
+    // As the supervisor: no Start while a Stop is still running.
+    if (demoSnapshot(id).bringup?.overall === 'stopping') {
+      return HttpResponse.json({ code: 'busy', error: 'the supervisor is stopping — wait for it to finish' }, { status: 409 });
+    }
+    sides.set(id, { phase: 'starting', startedAt: Date.now() });
     return HttpResponse.json({ ok: true, accepted: true });
   }),
   http.post('/api/robots/:id/bringup/stop', ({ params }) => {
-    sides.set(String(params.id), { phase: 'stopped', startedAt: 0 });
-    return HttpResponse.json({ status: demoSnapshot(String(params.id)).bringup, baseMode: null });
+    const id = String(params.id);
+    // A Stop lets a pinned robot go (TASK-430): the demo's own robot side takes over, stopping.
+    overrides.delete(id);
+    sides.set(id, { phase: 'stopping', startedAt: Date.now() });
+    return HttpResponse.json({ status: demoSnapshot(id).bringup, baseMode: null });
   }),
   http.post('/api/robots/:id/bringup/sidecar-mode', () =>
     HttpResponse.json({ code: 'demo', error: 'The demo has no robot to switch to arm control.' }, { status: 409 }),

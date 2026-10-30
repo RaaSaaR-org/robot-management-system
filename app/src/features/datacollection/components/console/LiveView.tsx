@@ -13,6 +13,9 @@
  *              page's own VR modal is open. TASK-428: Record leads with the
  *              camera, rings the well and the reticle red while a take records,
  *              and puts the operator chip on the picture's bottom-left.
+ *              TASK-430: a camera in the PiP draws its placeholder compact,
+ *              below the PiP's bar, so its name shows once; the bar's label
+ *              stays on one line (a narrow PiP drops its icon).
  * @feature datacollection
  */
 
@@ -172,6 +175,7 @@ export function LiveView({
       isRecording={isRecording}
       offline={!online}
       fit
+      compact={role === 'pip'}
       className={role === 'pip' ? 'text-[11px]' : undefined}
     />
   );
@@ -331,11 +335,16 @@ export function LiveView({
 
 /** The PiP's own row: its name and the swap button. */
 function PipBar({ label, icon, onSwap }: { label: string; icon: ReactNode; onSwap: () => void }) {
+  // One line always (TASK-430): a narrow PiP (1280 px) drops the icon, then truncates.
   return (
-    <div className="absolute inset-x-1.5 top-1.5 z-10 flex items-center justify-between gap-1.5">
-      <span className={cn(chip, 'h-6 gap-1.5 px-2 text-[11.5px] text-ink-primary')}>
-        {icon}
-        {label}
+    <div className="@container absolute inset-x-1.5 top-1.5 z-10 flex items-center justify-between gap-1">
+      <span
+        className={cn(chip, 'h-6 min-w-0 gap-1.5 whitespace-nowrap px-1 text-[11px] text-ink-primary @min-[132px]:px-2 @min-[132px]:text-[11.5px]')}
+        title={label}
+        data-testid="live-view-pip-label"
+      >
+        <span aria-hidden className="hidden flex-none @min-[132px]:inline-flex">{icon}</span>
+        <span className="truncate">{label}</span>
       </span>
       <Button
         variant="ghost"
@@ -344,7 +353,7 @@ function PipBar({ label, icon, onSwap }: { label: string; icon: ReactNode; onSwa
         aria-label={`Swap: ${label} as the main view`}
         title="Swap views"
         onClick={onSwap}
-        className={cn(chip, 'h-6 w-6 text-ink-secondary')}
+        className={cn(chip, 'h-6 w-6 flex-none text-ink-secondary')}
         data-testid="live-view-swap"
       >
         <ArrowLeftRight className="h-3.5 w-3.5" strokeWidth={1.75} />

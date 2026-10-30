@@ -36,6 +36,8 @@
  *              check. The take hotkeys, toasts and confirms are unchanged.
  *              TASK-429: Wrap up (completed and failed) is one summary band
  *              with one dataset action, the takes and the details.
+ *              TASK-430: Set up's step 1 leads with Restart when the robot side
+ *              runs stale code, and keeps Stop under its Details.
  * @feature datacollection
  */
 
@@ -72,7 +74,7 @@ import { PageLeaseLine } from '../components/console/PageLeaseLine';
 import { useDeviceRole, detectDeviceRole, type DeviceRole } from '../hooks/useDeviceRole';
 import { commandBarTally, sessionPhase } from '../utils/sessionPhase';
 import { EMULATOR_ACTIVE } from '../../robots/components/tabs/vr/vrConstants';
-import { ReadinessActions, RobotReadinessPanel } from '../../robots/components/readiness/RobotReadinessPanel';
+import { ReadinessActions, RobotReadinessPanel, type ReadinessActionId } from '../../robots/components/readiness/RobotReadinessPanel';
 import { QuestControls } from '../../robots/components/readiness/QuestControls';
 import { QuestConnectHelp } from '../../robots/components/tabs/vr/QuestConnectHelp';
 import { useRobotReadiness } from '../../robots/hooks/useRobotReadiness';
@@ -685,19 +687,36 @@ export function SessionDetailPage() {
   const detailsFor = (step: SetupStep) => (robot && step.rows.length > 0 ? (
     <RobotReadinessPanel robotId={robot.id} variant="rows" rows={step.rows} readiness={readinessState} />
   ) : undefined);
-  const robotActions = (only: Array<'start' | 'arm' | 'read_only' | 'logs'>, lit: boolean) => (robot ? (
+  const robotActions = (only: ReadinessActionId[], lit: boolean) => (robot ? (
     <ReadinessActions robotId={robot.id} ready={readinessState} lease={readinessLease} only={only} lit={lit} />
   ) : null);
   const renderStep = (step: SetupStep, lit: boolean): SetupStepContent => {
     switch (step.id) {
-      case 'robot':
+      case 'robot': {
+        // TASK-430: Start, or Restart on stale code, is the step's one lit
+        // action; while the robot side runs, Stop waits under Details.
+        const side = setupModel?.robotSide ?? { lead: null, stop: false };
+        const restarting = readinessState.pending?.action === 'restart';
+        const rows = detailsFor(step);
         return {
           lead: readinessState.readiness?.bringup
-            ? "The bridge, the sidecar and the robot agent run on the robot PC. Stop the robot side from the robot's Teleop tab when you finish for the day."
+            ? `The bridge, the sidecar and the robot agent run on the robot PC.${
+              side.lead === 'restart' || restarting
+                ? ' Restart stops them and starts them again on the current code, read-only.'
+                : side.stop ? ' Stop them under Details when you finish for the day.' : ''
+            }`
             : preflightItems.find((i) => i.id === 'robot')?.action ?? `${robotName} is online. Its agent streams the robot state the takes record.`,
-          actions: robotActions(['start', 'logs'], lit),
-          details: detailsFor(step),
+          actions: robotActions(['start', 'restart', 'logs'], lit),
+          details: robot && side.stop && !restarting ? (
+            <>
+              {rows}
+              <div className={rows ? 'mt-3' : undefined} data-testid="setup-robot-stop">
+                <ReadinessActions robotId={robot.id} ready={readinessState} lease={readinessLease} only={['stop']} />
+              </div>
+            </>
+          ) : rows,
         };
+      }
       case 'arm_control':
         return {
           lead: 'The arms follow the headset only in arm control. Take control, then switch. Nothing moves yet.',
