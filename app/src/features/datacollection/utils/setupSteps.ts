@@ -8,6 +8,9 @@
  *              readiness snapshot, the preflight items, the measured base
  *              mode, the control lease and the operator's presence — so the
  *              steps and the cells can never disagree. No React.
+ *              TASK-430: step 1's robot-side buttons — Start, or Restart when
+ *              the robot side runs stale code, and Stop under Details while it
+ *              runs — from the same rules the buttons use.
  * @feature datacollection
  */
 
@@ -17,6 +20,7 @@ import {
   questSummary,
   readinessRows,
   reasonRow,
+  robotSideActions,
   type ReadinessRowModel,
   type RowId,
   type RowStatus,
@@ -95,6 +99,25 @@ export interface SetupModel {
   /** Every step done, as one line ("Robot ready, arm control on, balancing, Anna in VR"). */
   foldedSummary: string;
   cells: SystemsCell[];
+  /** Step 1's robot-side buttons (TASK-430). */
+  robotSide: RobotSideButtons;
+}
+
+/**
+ * Step 1's robot-side buttons (TASK-430). `lead`: the one it leads with, lit
+ * while the step is open — Start on a stopped robot side, Restart on one that
+ * runs stale code. `stop`: Details offers Stop (secondary), while the robot
+ * side can be stopped and a restart is not the remedy.
+ */
+export interface RobotSideButtons {
+  lead: 'start' | 'restart' | null;
+  stop: boolean;
+}
+
+/** Step 1's buttons from one readiness snapshot. */
+export function robotSideButtons(readiness: RobotReadiness | null): RobotSideButtons {
+  const a = robotSideActions(readiness);
+  return { lead: a.restart ? 'restart' : a.start ? 'start' : null, stop: a.stop && !a.restart };
 }
 
 const VR_TYPES: TeleoperationType[] = ['vr_quest', 'vr_vision_pro'];
@@ -321,6 +344,7 @@ export function buildSetupModel(input: SetupModelInput): SetupModel {
         if (offline) return { done, failed, summary: `${input.robotName} is offline`, tone: 'fail' };
         if (failing) return { done, failed, summary: `${failing.label}: ${failing.value}`, tone: 'fail' };
         if (bringup?.overall === 'stopped') return { done, failed, summary: 'Robot side stopped', tone: 'warn' };
+        if (bringup?.overall === 'stopping') return { done, failed, summary: 'Stopping the robot side…', tone: 'warn' };
         if (bringup?.overall === 'starting' || [link, bridge, sidecar, agent].some((r) => r?.status === 'pending')) {
           return { done, failed, summary: 'Starting the robot side…', tone: 'warn' };
         }
@@ -420,6 +444,7 @@ export function buildSetupModel(input: SetupModelInput): SetupModel {
     allDone,
     foldedSummary: foldedLine(steps, input),
     cells: buildCells(input, rows, readiness, vr, byId as Map<SetupStepId, Facts & { id: SetupStepId }>),
+    robotSide: robotSideButtons(readiness),
   };
 }
 

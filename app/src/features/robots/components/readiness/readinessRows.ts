@@ -5,7 +5,9 @@
  *              sidecar, agent, robot mode, arms, each hand, camera, control,
  *              Quest — derived from the merged `RobotReadiness`, plus which row
  *              the one reason line is about. Pure, so the panel and its tests
- *              read the same verdicts.
+ *              read the same verdicts. TASK-430: which robot-side buttons the
+ *              snapshot allows — Start, Restart (when a restart cures stale
+ *              code) and Stop.
  * @feature robots
  */
 
@@ -523,6 +525,43 @@ export function readinessRows(r: RobotReadiness, questPort = 1420): ReadinessRow
     questRow(r, questPort),
   ];
   return rows.filter((x): x is ReadinessRowModel => x !== null);
+}
+
+/** What the robot side's buttons can do right now (TASK-430). */
+export interface RobotSideActions {
+  /** Start: the supervisor reports `stopped` or `error`. */
+  start: boolean;
+  /** Restart: the robot side runs, and a restart cures what is wrong with it. */
+  restart: boolean;
+  /** Stop: there is a supervisor, and it is not stopped. */
+  stop: boolean;
+}
+
+const RESTARTED: BringupStepId[] = ['bridge', 'sidecar', 'agent'];
+
+/**
+ * A Stop and a Start cure the robot side (TASK-430): a bridge, sidecar or agent
+ * the supervisor started runs older code (TASK-419), or the agent it started
+ * has no readiness route. A foreign or adopted process is never signalled by
+ * the supervisor's Stop, so a restart would not reach it; that one is stopped
+ * by hand.
+ */
+export function restartCures(r: RobotReadiness): boolean {
+  const steps = r.bringup?.steps ?? [];
+  const ours = (s: BringupStep | undefined): boolean => !!s && s.owned && s.state !== 'foreign';
+  if (steps.some((s) => RESTARTED.includes(s.id) && ours(s) && staleCodeOf(s) !== null)) return true;
+  return !r.agent.readiness && r.agent.outdated === true && ours(steps.find((s) => s.id === 'agent'));
+}
+
+/** The robot side's buttons, from one snapshot. Pure, so the panel and the Set up model agree. */
+export function robotSideActions(r: RobotReadiness | null): RobotSideActions {
+  const overall = r?.bringup?.overall ?? null;
+  const running = overall === 'ready' || overall === 'degraded';
+  return {
+    start: overall === 'stopped' || overall === 'error',
+    restart: running && !!r && restartCures(r),
+    stop: overall !== null && overall !== 'stopped',
+  };
 }
 
 const STEP_ROW: Record<BringupStepId, RowId> = {

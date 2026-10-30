@@ -200,6 +200,16 @@ describe('Foreign and stale robot-side processes', () => {
     expect(reasonRow(r)).toBe('agent');
   });
 
+  it('the full panel (the Teleop tab) offers no Restart on stale code: Stop and its confirm, as before (TASK-430)', async () => {
+    serve(readinessFor(ROBOT, 'sidecar_stale_code'));
+    render(<RobotReadinessPanel robotId={ROBOT} lease={BOUND} />);
+    fireEvent.click(await screen.findByTestId('readiness-stop'));
+    const dialog = await screen.findByTestId('readiness-stop-confirm');
+    expect(dialog).toHaveTextContent('Stop the robot side?');
+    expect(dialog).toHaveTextContent('The arms are disarmed first, then the agent, sidecar and bridge stop.');
+    expect(screen.queryByTestId('readiness-restart')).toBeNull();
+  });
+
   it('helpers: short cwd, the SIGTERM stop command, local date-time', () => {
     expect(shortCwd('/home/op/develop/robot-management-system/robot-agent')).toBe('robot-management-system/robot-agent/');
     expect(shortCwd(null)).toBeNull();

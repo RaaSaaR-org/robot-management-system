@@ -6,7 +6,9 @@
  *              backoff — including while a recording runs (TASK-401).
  *              TASK-427: `fit` fills a live-view frame — no tile border, the
  *              picture covering the frame, the name left to the frame's own
- *              view switch.
+ *              view switch. TASK-430: `compact` for a picture-in-picture — its
+ *              bar names the camera, so the placeholder draws the reconnect
+ *              line and Retry once, below that bar.
  * @feature datacollection
  */
 
@@ -35,6 +37,12 @@ interface CameraStreamViewProps {
    * covers the frame, and no name tag (the frame's view switch names it).
    */
   fit?: boolean;
+  /**
+   * A picture-in-picture (TASK-430): the PiP's own bar, along its top edge,
+   * names the camera. The placeholder drops the name, the icon and the
+   * recording lines, and starts below the bar.
+   */
+  compact?: boolean;
 }
 
 const FRAME =
@@ -58,7 +66,9 @@ const SNAPSHOT_INTERVAL_MS = 1000;
  * A camera error never stops or pauses the recording. The recorder records
  * whatever the agent sees; this is only the operator's window onto it.
  */
-export function CameraStreamView({ robotId, cameraName, label, className, isRecording, offline, fit = false }: CameraStreamViewProps) {
+export function CameraStreamView({
+  robotId, cameraName, label, className, isRecording, offline, fit = false, compact = false,
+}: CameraStreamViewProps) {
   /**
    * The stream URL whose `<img>` errored. Keyed on the URL rather than a flag so
    * a retry cannot remount the `<img>` on the dead URL for the one render before
@@ -196,32 +206,37 @@ export function CameraStreamView({ robotId, cameraName, label, className, isReco
       {!live && (
         <div
           className={cn(
-            'absolute inset-0 flex flex-col items-center justify-center gap-1.5 p-3 text-center',
+            'absolute inset-0 flex flex-col items-center justify-center text-center',
+            // Compact: below the PiP's bar (6 px inset + 24 px), which names the camera.
+            compact ? 'gap-1 px-1.5 pb-1.5 pt-8' : 'gap-1.5 p-3',
             onPicture && 'bg-black/50',
           )}
+          data-testid="camera-placeholder"
         >
           {reconnecting ? (
             <>
-              {isRecording ? (
+              {!compact && (isRecording ? (
                 <StatusTag status="recording" dot pulse>Recording</StatusTag>
               ) : (
                 <VideoOff className={cn('h-4 w-4', onPicture ? 'text-white/80' : 'text-ink-tertiary')} strokeWidth={1.75} />
+              ))}
+              {!compact && (
+                <span className={cn('text-[13px] font-medium', onPicture ? 'text-white' : 'text-ink-secondary')}>
+                  {name}
+                </span>
               )}
-              <span className={cn('text-[13px] font-medium', onPicture ? 'text-white' : 'text-ink-secondary')}>
-                {name}
-              </span>
-              <span role="status" className={cn('text-xs', onPicture ? 'text-white/85' : 'text-ink-tertiary')}>
+              <span role="status" className={cn(compact ? 'text-[11.5px] leading-tight' : 'text-xs', onPicture ? 'text-white/85' : 'text-ink-tertiary')}>
                 {reconnectText}
               </span>
-              {isRecording && (
+              {isRecording && !compact && (
                 <span className={cn('text-xs', onPicture ? 'text-white/70' : 'text-ink-tertiary')}>
                   The recording continues.
                 </span>
               )}
-              <Button variant="ghost" size="sm" onClick={retry}>Retry now</Button>
+              <Button variant="ghost" size="sm" onClick={retry} className={compact ? 'h-7 px-2 text-[12px]' : undefined}>Retry now</Button>
             </>
           ) : (
-            <span className={cn('text-xs', fit ? 'text-white/70' : 'text-ink-tertiary')}>Connecting to {name}…</span>
+            <span className={cn('text-xs', fit ? 'text-white/70' : 'text-ink-tertiary')}>{compact ? 'Connecting…' : `Connecting to ${name}…`}</span>
           )}
         </div>
       )}

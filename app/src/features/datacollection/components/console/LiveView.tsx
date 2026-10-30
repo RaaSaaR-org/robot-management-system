@@ -13,6 +13,8 @@
  *              page's own VR modal is open. TASK-428: Record leads with the
  *              camera, rings the well and the reticle red while a take records,
  *              and puts the operator chip on the picture's bottom-left.
+ *              TASK-430: a camera in the PiP draws its placeholder compact,
+ *              below the PiP's bar, so its name shows once.
  * @feature datacollection
  */
 
@@ -172,6 +174,7 @@ export function LiveView({
       isRecording={isRecording}
       offline={!online}
       fit
+      compact={role === 'pip'}
       className={role === 'pip' ? 'text-[11px]' : undefined}
     />
   );

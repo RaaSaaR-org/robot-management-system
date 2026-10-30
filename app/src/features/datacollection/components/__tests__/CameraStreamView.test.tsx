@@ -1,7 +1,9 @@
 /**
  * @file CameraStreamView.test.tsx
  * @description The session page's camera tile reconnects on its own — also, and
- *              especially, while a recording runs (TASK-401).
+ *              especially, while a recording runs (TASK-401). TASK-430: in a
+ *              picture-in-picture (`compact`) the placeholder names nothing —
+ *              the PiP's bar does — and starts below that bar.
  * @feature datacollection
  */
 
@@ -98,6 +100,26 @@ describe('CameraStreamView reconnects', () => {
       await flush();
     }
     expect(fetchCameraTicket).toHaveBeenCalledTimes(7);
+  });
+
+  it('in a PiP (compact) draws the reconnect line and Retry once, below the bar, without the name', async () => {
+    fetchCameraTicket.mockRejectedValue(new Error('500'));
+    render(<CameraStreamView robotId="g1" cameraName="head_camera" label="Head camera" fit compact isRecording />);
+    await flush();
+    const placeholder = screen.getByTestId('camera-placeholder');
+    expect(placeholder).toHaveTextContent(/^Reconnecting in 1sRetry now$/);
+    expect(screen.queryByText('Head camera')).toBeNull();
+    expect(screen.queryByText('The recording continues.')).toBeNull();
+    // Below the PiP's 30 px bar.
+    expect(placeholder.className).toContain('pt-8');
+  });
+
+  it('a full-size frame keeps the name and the recording line', async () => {
+    fetchCameraTicket.mockRejectedValue(new Error('500'));
+    render(<CameraStreamView robotId="g1" cameraName="head_camera" label="Head camera" fit isRecording />);
+    await flush();
+    expect(screen.getByText('Head camera')).toBeInTheDocument();
+    expect(screen.getByText('The recording continues.')).toBeInTheDocument();
   });
 
   it('does not request a stream for an offline robot', async () => {
