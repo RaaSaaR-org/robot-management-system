@@ -129,13 +129,13 @@ let sidecar: FakeSidecar;
 let arms: ArmRegistry;
 const openSockets: FakeWs[] = [];
 
-function makeServer(required = false) {
+function makeServer(required = false, heartbeatTimeoutMs = HB_TIMEOUT_MS) {
   const state = makeStateStub();
   const wss = createKeyboardTeleopWebSocket(state as unknown as RobotStateManager, {
     controlLease: leases,
     leaseRequired: () => required,
     armRegistry: arms,
-    heartbeatTimeoutMs: HB_TIMEOUT_MS,
+    heartbeatTimeoutMs,
   });
   const connect = (): FakeWs => {
     const ws = new FakeWs();
@@ -680,6 +680,231 @@ describe('an arm-only sidecar (write_mode: arm_sdk)', () => {
     expect(sidecar.armCalls).toEqual([1, 1]);
     close(b);
     expect(sidecar.disarmCalls).toBe(1);
+  });
+});
+
+// TASK-421 (g1-edu-4, 2026-10-29): keyboard teleop on the real G1 armed the
+// arms on every key press and the sidecar's dead-man blended them back out a
+// second later. The keyboard selects `left_hip_pitch_joint` first, which the
+// arm-only path never commands, so nothing was ever streamed after the arm.
+describe('TASK-421: keyboard teleop on the real arms', () => {
+  beforeEach(() => {
+    sidecar.setMode('arm_sdk');
+    install(1);
+  });
+
+  /** One key press as TeleopTab sends it: clutch edge first, then the direction. */
+  const press = (ws: FakeWs, joint = 'left_elbow_joint', direction = 1) => {
+    hb(ws, true);
+    send(ws, { joint, direction });
+  };
+  /** The matching release: the stop first, then the clutch opens. */
+  const release = (ws: FakeWs, joint = 'left_elbow_joint') => {
+    send(ws, { joint, direction: 0 });
+    hb(ws, false);
+  };
+
+  it('a key on a joint the real arms never take (a leg) is refused and arms nothing', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    hb(ws, false);
+    press(ws, 'left_hip_pitch_joint');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(sidecar.armCalls).toEqual([]);
+    expect(state.applyTeleopDelta).not.toHaveBeenCalled();
+    expect(ws.errors('joint_not_drivable')).toHaveLength(1);
+    // Every refused press says so: it is a deliberate act.
+    release(ws, 'left_hip_pitch_joint');
+    press(ws, 'waist_yaw_joint');
+    await flush();
+    expect(ws.errors('joint_not_drivable')).toHaveLength(2);
+    expect(sidecar.armCalls).toEqual([]);
+  });
+
+  it('refuses a finger of a hand the sidecar does not command, and takes the other hand', async () => {
+    sidecar.status = { ...sidecar.status, hands: { left: true, right: false } };
+    const { connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    hb(ws, false);
+    press(ws, 'right_hand_thumb_0_joint');
+    await flush();
+    expect(ws.errors('joint_not_drivable')).toHaveLength(1);
+    expect(sidecar.armCalls).toEqual([]);
+    release(ws, 'right_hand_thumb_0_joint');
+    press(ws, 'left_hand_thumb_0_joint');
+    await flush();
+    expect(sidecar.armCalls).toEqual([1]);
+  });
+
+  it('a stop for an undrivable joint is still a stop', async () => {
+    const { connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    send(ws, { joint: 'left_hip_pitch_joint', direction: 0 });
+    await flush();
+    expect(ws.errors('joint_not_drivable')).toHaveLength(0);
+  });
+
+  it('the config frame marks which joints the real arms take', () => {
+    const { state, connect } = makeServer();
+    state.getActiveJointConfig.mockReturnValue(
+      ['left_hip_pitch_joint', 'waist_yaw_joint', 'left_elbow_joint', 'left_hand_thumb_0_joint'].map((name) => ({
+        name, axis: 'y', limitLower: -1, limitUpper: 1, defaultPosition: 0,
+      })),
+    );
+    const ws = connect();
+    const config = ws.ofType('config')[0] as { joints: Array<{ name: string; drivable: boolean }> };
+    expect(Object.fromEntries(config.joints.map((j) => [j.name, j.drivable]))).toEqual({
+      left_hip_pitch_joint: false, waist_yaw_joint: false, left_elbow_joint: true, left_hand_thumb_0_joint: true,
+    });
+  });
+
+  // Review of TASK-421: the readiness panel takes control (opening this
+  // socket) while the sidecar is still read-only, and switches it to arm
+  // control afterwards — the config frame alone said "all drivable" forever.
+  it('tells an open console when switching to arm control changes what moves', async () => {
+    sidecar.setMode('read_only');
+    const { state, connect } = makeServer();
+    state.getActiveJointConfig.mockReturnValue(
+      ['left_hip_pitch_joint', 'left_elbow_joint', 'right_hand_thumb_0_joint'].map((name) => ({
+        name, axis: 'y', limitLower: -1, limitUpper: 1, defaultPosition: 0,
+      })),
+    );
+    const ws = connect();
+    const config = ws.ofType('config')[0] as { joints: Array<{ name: string; drivable: boolean }> };
+    expect(config.joints.every((j) => j.drivable)).toBe(true);
+    expect(ws.ofType('drivable')).toHaveLength(0);
+
+    // The sidecar restarts in arm_sdk with only the left hand live.
+    sidecar.status = { ...sidecar.status, writeMode: 'arm_sdk', hands: { left: true, right: false } };
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(ws.ofType('drivable')).toEqual([{
+      type: 'drivable',
+      joints: { left_hip_pitch_joint: false, left_elbow_joint: true, right_hand_thumb_0_joint: false },
+    }]);
+
+    // Nothing changed: nothing more is sent. The right hand comes up: one frame.
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(ws.ofType('drivable')).toHaveLength(1);
+    sidecar.status = { ...sidecar.status, hands: { left: true, right: true } };
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(ws.ofType('drivable').at(-1)).toMatchObject({ joints: { right_hand_thumb_0_joint: true } });
+    expect(ws.ofType('drivable')).toHaveLength(2);
+  });
+
+  it('arms once and stays armed across presses and the gaps between them', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    hb(ws, false);
+    for (let i = 0; i < 4; i++) {
+      press(ws, i % 2 ? 'left_elbow_joint' : 'left_shoulder_pitch_joint');
+      await beatFor(ws, 600, true);
+      release(ws, i % 2 ? 'left_elbow_joint' : 'left_shoulder_pitch_joint');
+      await beatFor(ws, 400, false);
+    }
+    expect(sidecar.armCalls).toEqual([1]);
+    expect(sidecar.disarmCalls).toBe(0);
+    expect(state.applyTeleopDelta.mock.calls.length).toBeGreaterThan(4 * 25);
+    expect(ws.ofType('arm').at(-1)).toMatchObject({ armed: true, mine: true, engage: 'holding' });
+  });
+
+  it('a held key moves its joint at 50 Hz in steps one sidecar frame can follow', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    hb(ws, false);
+    press(ws);
+    await beatFor(ws, 1000, true);
+    const steps = state.applyTeleopDelta.mock.calls.map((c) => c[1] as number);
+    expect(steps.length).toBeGreaterThanOrEqual(48);
+    // 0.8 rad/s × 20 ms, under the sidecar's 1.0 rad/s × 20 ms slew step.
+    for (const step of steps) expect(step).toBeCloseTo(0.016, 6);
+  });
+
+  it('a clutch reported open stops the joint even when the key-up frame was lost', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    hb(ws, false);
+    press(ws);
+    await beatFor(ws, 200, true);
+    expect(state.applyTeleopDelta).toHaveBeenCalled();
+    state.applyTeleopDelta.mockClear();
+    hb(ws, false); // no {direction: 0} ever arrives
+    await beatFor(ws, 500, false);
+    expect(state.applyTeleopDelta).not.toHaveBeenCalled();
+    expect(sidecar.disarmCalls).toBe(0);
+  });
+
+  // Review of TASK-421 (round 2): the selection moved mid-hold (↓, or a
+  // `drivable` frame), so the key-up named the wrist while the elbow was
+  // moving. The elbow kept its velocity, and the next press moved both.
+  const jointsMoved = (state: ReturnType<typeof makeStateStub>) =>
+    new Set(state.applyTeleopDelta.mock.calls.map((c) => c[0] as string));
+
+  it('a key-up that names another joint does not leave the held one moving for the next press', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    hb(ws, false);
+    // The clutch opens with the key-up, as TeleopTab sends it — and the
+    // stale velocity does not survive the gap.
+    press(ws, 'left_elbow_joint');
+    await beatFor(ws, 200, true);
+    release(ws, 'left_wrist_roll_joint');
+    await beatFor(ws, 400, false);
+    state.applyTeleopDelta.mockClear();
+    press(ws, 'left_wrist_roll_joint');
+    await beatFor(ws, 300, true);
+    expect(jointsMoved(state)).toEqual(new Set(['left_wrist_roll_joint']));
+    expect(sidecar.armCalls).toEqual([1]);
+    expect(sidecar.disarmCalls).toBe(0);
+  });
+
+  it('a press on a new joint drops the joint an earlier press left moving, even with the clutch still closed', async () => {
+    const { state, connect } = makeServer();
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    hb(ws, false);
+    press(ws, 'left_elbow_joint');
+    await beatFor(ws, 200, true);
+    // The stop names the wrong joint and the clutch-open beat is lost.
+    send(ws, { joint: 'left_wrist_roll_joint', direction: 0 });
+    state.applyTeleopDelta.mockClear();
+    send(ws, { joint: 'left_wrist_roll_joint', direction: 1 });
+    await beatFor(ws, 300, true);
+    expect(jointsMoved(state)).toEqual(new Set(['left_wrist_roll_joint']));
+  });
+
+  it('a console without a clutch (the gamepad) still drives several joints at once', async () => {
+    sidecar.setMode('read_only');
+    const { state, connect } = makeServer();
+    const ws = connect();
+    send(ws, { joint: 'left_elbow_joint', direction: 1 });
+    send(ws, { joint: 'left_wrist_roll_joint', direction: -1 });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(jointsMoved(state)).toEqual(new Set(['left_elbow_joint', 'left_wrist_roll_joint']));
+  });
+
+  it('a console that goes quiet stops its joint within 300 ms and holds; the dead-man then hands the arms back', async () => {
+    const { state, connect } = makeServer(false, 1_000);
+    const ws = connect();
+    await bindAndBeat(ws, 1);
+    hb(ws, false);
+    press(ws);
+    await beatFor(ws, 200, true);
+    // The tab froze: no frames at all from here on.
+    await vi.advanceTimersByTimeAsync(400);
+    state.applyTeleopDelta.mockClear();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(state.applyTeleopDelta).not.toHaveBeenCalled();
+    expect(sidecar.disarmCalls).toBe(0);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(sidecar.disarmCalls).toBe(1);
+    expect(ws.errors('heartbeat_lost')).toHaveLength(1);
   });
 });
 
