@@ -22,11 +22,19 @@ export type { PriorityDashboardProps } from './PriorityDashboard';
 export { UncertaintyHeatmap } from './UncertaintyHeatmap';
 export type { UncertaintyHeatmapProps } from './UncertaintyHeatmap';
 
-export { SessionStepIndicator, getActiveStep } from './SessionStepIndicator';
-export type { SessionStepIndicatorProps } from './SessionStepIndicator';
 
 export { EpisodePanel } from './EpisodePanel';
 export type { EpisodePanelProps } from './EpisodePanel';
 
 export { VRSessionPanel } from './VRSessionPanel';
-export type { VRSessionPanelProps } from './VRSessionPanel';
+export type { VRSessionPanelProps, VRSessionPanelVariant } from './VRSessionPanel';
+
+export { PresenceBar, dedupeViewers } from './PresenceBar';
+export type { PresenceBarProps } from './PresenceBar';
+
+export { SessionCommandBar, SessionCommandBarSkeleton } from './console/SessionCommandBar';
+export type { SessionCommandBarProps, RobotLink } from './console/SessionCommandBar';
+export { TestingTools, TestingToolsRow } from './console/TestingTools';
+export type { TestingToolsProps, TestingToolsRowProps } from './console/TestingTools';
+export { HeadsetHero, RobotSetupDisclosure } from './console/HeadsetHero';
+export type { HeadsetHeroProps } from './console/HeadsetHero';

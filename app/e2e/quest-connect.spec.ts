@@ -44,6 +44,8 @@ test('the headset URL waits for a live session and follows the one created after
   expect(page.url()).not.toContain('/live');
 
   // On the session page the VR launcher offers the viewer link for the second person.
+  // TASK-426: the launcher lives in Testing tools (TASK-427 moves the card into step 4).
+  await page.getByTestId('session-tools-toggle').click();
   const help = page.getByTestId('quest-connect-help');
   await expect(help).toHaveAttribute('data-mode', 'live', { timeout: 15_000 });
   await expect(help.getByTestId('quest-copy-viewer-link')).toBeVisible();

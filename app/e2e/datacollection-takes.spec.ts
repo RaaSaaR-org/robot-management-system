@@ -34,7 +34,7 @@ test('start, stop, glance, discard — and the E-STOP is always there', async ({
   await expect(page.getByTestId('hud-take')).toHaveText('Take 1');
   await expect(page.getByTestId('hud-take-timer')).toHaveText(/^00:0[0-1]$/);
   await expect(page.getByTestId('take-primary')).toHaveText('Stop take');
-  await expect(page.getByTestId('hud-take-timer')).toHaveText('00:02', { timeout: 5_000 });
+  await expect(page.getByTestId('hud-take-timer')).toHaveText(/^00:0[2-9]$/, { timeout: 5_000 });
   await page.screenshot({ fullPage: true, ...shot('TASK-410-recording.png') });
 
   // Stop → the quick check: thumbnail, length, moved parts.

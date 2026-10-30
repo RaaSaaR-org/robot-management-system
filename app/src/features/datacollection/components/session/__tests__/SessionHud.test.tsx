@@ -1,13 +1,13 @@
 /**
  * @file SessionHud.test.tsx
  * @description The live HUD: the phase pill, "Take N" (1-based) with its
- *              timer, the auto-stop countdown, the DEGRADED chip and the mute
- *              toggle; never a target count (TASK-406, TASK-410).
+ *              timer, the auto-stop countdown and the DEGRADED chip; never a
+ *              target count (TASK-406, TASK-410).
  * @feature datacollection
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import { SessionHud, formatTakeTimer, type SessionHudProps } from '../SessionHud';
 
 const base: SessionHudProps = {
@@ -37,13 +37,10 @@ describe('SessionHud', () => {
     expect(screen.getByTestId('hud-take')).toHaveTextContent('Take 6');
   });
 
-  it('shows DEGRADED and the mute state', () => {
-    const onToggleMute = vi.fn();
-    render(<SessionHud {...base} degraded muted onToggleMute={onToggleMute} />);
+  it('shows DEGRADED, and no mute: that lives in the command bar (TASK-426)', () => {
+    render(<SessionHud {...base} degraded />);
     expect(screen.getByTestId('hud-degraded')).toBeInTheDocument();
-    expect(screen.getByTestId('hud-mute')).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByTestId('hud-mute'));
-    expect(onToggleMute).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('hud-mute')).toBeNull();
   });
 
   it('formats the timer as mm:ss', () => {

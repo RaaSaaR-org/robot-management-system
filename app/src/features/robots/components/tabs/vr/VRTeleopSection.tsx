@@ -10,12 +10,15 @@
  *              and streamed to the robot agent over the same `/ws/keyboard-teleop`
  *              WebSocket using the batch `{positions}` message. Hold the grip
  *              (squeeze) on a controller to move that arm; release to freeze it.
+ *              TASK-426: a caller may draw the launcher itself
+ *              (`renderLauncher`) — the session page's Testing tools row and
+ *              headset hero — while the modal stays owned here.
  * @feature robots
  */
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Glasses } from 'lucide-react';
-import { Button, Modal, Panel, StatusTag } from '@/shared/components/ui';
+import { Button, Modal, Panel, StatusTag, type StatusTagTone } from '@/shared/components/ui';
 import type { TeleopTabProps } from '../types';
 import { EMULATOR_ACTIVE } from './vrConstants';
 import { resolveXrAvailability, type XrAvailability } from './vrAvailability';
@@ -35,6 +38,24 @@ const AVAILABILITY_HINT: Record<XrAvailability, string> = {
     'This origin is not secure, so no browser exposes WebXR here — the headset included. Launch for the USB and network options.',
   unsupported: 'Open this page in a Meta Quest browser to enter VR. Launch to preview the robot.',
 };
+
+/**
+ * What a custom launcher needs (TASK-426): the session page draws Launch VR as
+ * a Testing tools row on a desktop and as the headset hero on a Quest, while
+ * this section keeps the modal, the availability and the headset detection.
+ */
+export interface VRLauncherState {
+  /** Opens the full-screen VR modal. */
+  launch: () => void;
+  /** Launch is disabled (another input drives the robot). */
+  disabled: boolean;
+  /** One line: why it is disabled, else what launching will do here. */
+  hint: string;
+  /** "Headset ready" / "Emulator" / "No headset". */
+  status: { label: string; tone: StatusTagTone };
+  /** The "Connect Meta Quest" help card, or null under the dev emulator. */
+  questHelp: ReactNode;
+}
 
 export interface VRTeleopSectionProps {
   robot: TeleopTabProps['robot'];
@@ -61,9 +82,16 @@ export interface VRTeleopSectionProps {
    * keeps the readiness store fresh for the headset's robot panel instead.
    */
   showReadiness?: boolean;
+  /**
+   * Draw the launcher yourself instead of the card (TASK-426). The modal stays
+   * here either way, so it lives exactly as long as this section is mounted.
+   */
+  renderLauncher?: (state: VRLauncherState) => ReactNode;
 }
 
-export function VRTeleopSection({ robot, vrSession, launchDisabledReason, onOpenChange, showReadiness = true }: VRTeleopSectionProps) {
+export function VRTeleopSection({
+  robot, vrSession, launchDisabledReason, onOpenChange, showReadiness = true, renderLauncher,
+}: VRTeleopSectionProps) {
   const [open, setOpen] = useState(false);
   const onOpenChangeRef = useRef(onOpenChange);
   onOpenChangeRef.current = onOpenChange;
@@ -110,6 +138,39 @@ export function VRTeleopSection({ robot, vrSession, launchDisabledReason, onOpen
       ? 'WebXR is available, but no VR device is connected. Launch to preview the robot.'
       : AVAILABILITY_HINT[availability];
 
+  const status = {
+    label: EMULATOR_ACTIVE ? 'Emulator' : availability === 'ready' && sessionSupported ? 'Headset ready' : 'No headset',
+    tone: (EMULATOR_ACTIVE || (availability === 'ready' && sessionSupported) ? 'live' : 'neutral') as StatusTagTone,
+  };
+  const questHelp = EMULATOR_ACTIVE ? null : <QuestConnectHelp location={window.location} robotId={robot.id} />;
+
+  const modal = (
+    <Modal isOpen={open} onClose={() => setOpen(false)} title="VR teleop (Meta Quest)" size="full">
+      <VRTeleopModalBody
+        robot={robot}
+        availability={availability}
+        sessionSupported={sessionSupported}
+        onClose={() => setOpen(false)}
+        vrSession={vrSession}
+      />
+    </Modal>
+  );
+
+  if (renderLauncher) {
+    return (
+      <>
+        {renderLauncher({
+          launch: () => setOpen(true),
+          disabled: !!launchDisabledReason,
+          hint: launchDisabledReason ?? hint,
+          status,
+          questHelp,
+        })}
+        {modal}
+      </>
+    );
+  }
+
   return (
     <>
       <Panel>
@@ -134,34 +195,15 @@ export function VRTeleopSection({ robot, vrSession, launchDisabledReason, onOpen
               headset on — the session page gets it through this section (D5). */}
           {showReadiness && <RobotReadinessPanel robotId={robot.id} variant="compact" className="mb-3" />}
           <div className="flex flex-wrap items-center gap-3">
-            <StatusTag tone={EMULATOR_ACTIVE || (availability === 'ready' && sessionSupported) ? 'live' : 'neutral'} dot>
-              {EMULATOR_ACTIVE
-                ? 'Emulator'
-                : availability === 'ready' && sessionSupported
-                  ? 'Headset ready'
-                  : 'No headset'}
-            </StatusTag>
+            <StatusTag tone={status.tone} dot>{status.label}</StatusTag>
             <p className="text-[13px] text-ink-secondary" data-testid="vr-launch-hint">{launchDisabledReason ?? hint}</p>
           </div>
           {/* TASK-393: how to get a Quest onto this page — collapsed once the
               page can already do WebXR, open when it cannot. */}
-          {!EMULATOR_ACTIVE && (
-            <div className="mt-3">
-              <QuestConnectHelp location={window.location} robotId={robot.id} />
-            </div>
-          )}
+          {questHelp && <div className="mt-3">{questHelp}</div>}
         </Panel.Body>
       </Panel>
-
-      <Modal isOpen={open} onClose={() => setOpen(false)} title="VR teleop (Meta Quest)" size="full">
-        <VRTeleopModalBody
-          robot={robot}
-          availability={availability}
-          sessionSupported={sessionSupported}
-          onClose={() => setOpen(false)}
-          vrSession={vrSession}
-        />
-      </Modal>
+      {modal}
     </>
   );
 }

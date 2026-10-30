@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { act, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { useEffect } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/utils';
@@ -97,6 +97,14 @@ describe('SessionDetailPage VR goodbye (TASK-418 D4)', () => {
   it('keeps the VR panel mounted for 5 s after the session ends, then unmounts it', async () => {
     render();
     expect(await screen.findByTestId('vr-session-panel')).toBeInTheDocument();
+    // TASK-426: the panel lives in Testing tools; opening and closing the
+    // popover only toggles it, never remounts it.
+    const mountedAtStart = mounts.count;
+    fireEvent.click(screen.getByTestId('session-tools-toggle'));
+    fireEvent.click(screen.getByTestId('session-tools-toggle'));
+    expect(screen.getByTestId('session-tools')).not.toBeVisible();
+    expect(screen.getByTestId('vr-session-panel')).toBeInTheDocument();
+    expect(mounts.count).toBe(mountedAtStart);
     const mountedBefore = mounts.count;
     vi.useFakeTimers();
     try {

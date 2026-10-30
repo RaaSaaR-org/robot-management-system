@@ -54,7 +54,10 @@ test('two browsers share one take, one timer and one quick check', async ({ brow
 
   // The agent records frames only while commands reach the robot: A drives the
   // SIM arms with the simulated VR input (taking control when the server leases it).
+  // TASK-426: the simulated input lives in Testing tools.
+  await a.getByTestId('session-tools-toggle').click();
   await a.getByTestId('simulate-vr-toggle').click();
+  await a.keyboard.press('Escape');
   const takeControl = a.getByTestId('session-control-lease').getByRole('button', { name: /Take control/ });
   await expect(takeControl).toBeVisible({ timeout: 10_000 });
   await takeControl.click();

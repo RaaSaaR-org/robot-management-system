@@ -19,20 +19,24 @@
  *              While this page's own VR modal is open (the Quest) the viewer
  *              and camera tiles unmount and the page stops declaring itself
  *              the assistant.
+ *              TASK-426: one sticky command bar replaces the page header —
+ *              every normal action on its left, the E-STOP alone in its own
+ *              zone on the right (a bottom dock on a phone) — and the page
+ *              renders one layout per phase (Set up, Record, Wrap up). The
+ *              developer tools sit behind one Testing tools popover; on the
+ *              headset the page leads with Launch VR.
  * @feature datacollection
  */
 
 import { useState, Suspense, lazy, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useParams } from 'react-router-dom';
-import { ArrowRight, Database, Pause, Play, Plus, Square } from 'lucide-react';
+import { Pause, Play, Plus } from 'lucide-react';
 import {
-  Button, EmptyState, ErrorState, FormField, FormModal, Input, LinkButton, PageHeader, Panel,
-  Skeleton, SkeletonText, StatusTag, Textarea, confirm, errorMessage, toast,
+  Button, EmptyState, ErrorState, FormField, FormModal, Input, LinkButton, Panel,
+  Skeleton, SkeletonText, Switch, Textarea, confirm, errorMessage, toast,
 } from '@/shared/components/ui';
-import { SessionStatusBadge } from '../components/SessionStatusBadge';
 import { QualityIndicator } from '../components/QualityIndicator';
 import { CameraStreamView } from '../components/CameraStreamView';
-import { SessionStepIndicator } from '../components/SessionStepIndicator';
 import { EpisodePanel } from '../components/EpisodePanel';
 import { PreflightChecklist } from '../components/PreflightChecklist';
 import { VRSessionPanel } from '../components/VRSessionPanel';
@@ -42,7 +46,12 @@ import { QuickCheckCard } from '../components/session/QuickCheckCard';
 import { SessionEStopButton } from '../components/session/SessionEStopButton';
 import { OperatorCard } from '../components/OperatorCard';
 import { OperatorOverlay, OVERLAY_LINK } from '../components/OperatorOverlay';
-import { PresenceBar } from '../components/PresenceBar';
+import { SessionCommandBar, SessionCommandBarSkeleton, Kbd, type RobotLink } from '../components/console/SessionCommandBar';
+import { TestingToolsRow } from '../components/console/TestingTools';
+import { HeadsetHero, RobotSetupDisclosure } from '../components/console/HeadsetHero';
+import { useDeviceRole, detectDeviceRole, type DeviceRole } from '../hooks/useDeviceRole';
+import { commandBarTally, sessionPhase } from '../utils/sessionPhase';
+import { EMULATOR_ACTIVE } from '../../robots/components/tabs/vr/vrConstants';
 import { RobotReadinessPanel } from '../../robots/components/readiness/RobotReadinessPanel';
 import { useSessionPresence } from '../hooks/useSessionPresence';
 import { useFreshOperator } from '../hooks/useFreshOperator';
@@ -85,7 +94,6 @@ const cameraLabel = (name: string) => {
 };
 
 const formatElapsed = (secs: number) => `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
-const BACK = { to: '/data-collection', label: 'Data collection' };
 /** TASK-418 (D4): how long the headset stays in VR after the session ended — enough to read "ended". */
 export const VR_GOODBYE_MS = 5_000;
 
@@ -156,7 +164,12 @@ export function SessionDetailPage() {
   const [modalError, setModalError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<'start' | 'pause' | 'end' | null>(null);
-  const [showManual, setShowManual] = useState(false);
+  const [showJoints, setShowJoints] = useState(false);
+  const [showKeyboardFallback, setShowKeyboardFallback] = useState(false);
+  // TASK-426: which side of the session this browser is; Testing tools can
+  // force the headset view on a desktop ("Show the headset view here").
+  const [roleOverride, setRoleOverride] = useState<DeviceRole | null>(null);
+  const deviceRole = useDeviceRole(roleOverride);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -442,8 +455,8 @@ export function SessionDetailPage() {
 
   if (!session) {
     return (
-      <div className="flex flex-col gap-6">
-        <PageHeader eyebrow="Build" back={BACK} title={error && !isLoading ? 'Session' : 'Loading…'} />
+      <div className="flex flex-col gap-3">
+        <SessionCommandBarSkeleton title={error && !isLoading ? 'Session' : 'Loading…'} />
         <Panel>
           {error && !isLoading ? (
             <ErrorState title="Couldn't load this session" message={error} onRetry={() => void fetchSession()} />
@@ -482,7 +495,8 @@ export function SessionDetailPage() {
   const otherCameras = cameraNames.filter((_, i) => i !== headIndex);
   const operatorViewer = viewers.find((v) => v.role === 'operator') ?? null;
   // TASK-414: who holds the robot, for everyone, whenever leases are on. The
-  // interactive bar below covers the page's own inputs.
+  // interactive bar below covers the page's own inputs. TASK-426: no
+  // ControlLeaseBar on this page draws an E-stop — the bar's is the one.
   const showLeaseHolder = isLive && lease.enabled && !leaseInputs;
   const cameraTile = (name: string, className: string) => (
     <CameraStreamView
@@ -496,66 +510,114 @@ export function SessionDetailPage() {
     />
   );
 
-  const actions = (() => {
-    if (session.status === 'created') {
-      return (
-        <Button
-          isLoading={pending === 'start'}
-          disabled={preflight.blocking}
-          title={preflight.blocking ? preflight.next : undefined}
-          leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />}
-          onClick={() => void handleStart()}
+  // TASK-426: the phase engine and the command bar.
+  const phase = sessionPhase(session.status);
+  const legacyRecording = isRecording && !takeMode;
+  const robotFault = robot?.status === 'protective_stop' || robot?.status === 'error';
+  const tally = commandBarTally({ status: session.status, capturing: capturing || legacyRecording, fault: robotFault });
+  const link: RobotLink = !robotOnline ? 'offline' : isTelemetryConnected ? 'live' : 'stale';
+  const headset = deviceRole === 'headset';
+  const detectedRole = detectDeviceRole(typeof navigator === 'undefined' ? '' : navigator.userAgent, EMULATOR_ACTIVE);
+  // The one VRSessionPanel: Testing tools rows on a desktop, the hero's Launch VR on the headset.
+  const vrPanelMounted = (isLive || vrGoodbye) && isVrSession;
+  const vrPanel = (variant: 'tools' | 'hero') => (
+    <VRSessionPanel
+      robot={robot}
+      lease={lease}
+      simulate={simulateVr}
+      onSimulateChange={setSimulateVr}
+      onVrOpenChange={setVrModalOpen}
+      showReadiness={false}
+      variant={variant}
+    />
+  );
+  const jointUnit = jointPositionUnit(telemetry?.robotType ?? (robot?.metadata as Record<string, unknown> | undefined)?.robotType);
+  // Testing tools rows. Positions are stable (nulls hold their slot), so the
+  // VRSessionPanel in slot 0 never remounts while the session ends under VR.
+  const tools = vrPanelMounted || isLive ? (
+    <>
+      {vrPanelMounted && !headset ? vrPanel('tools') : null}
+      {isLive && !isVrSession && robot && gamepadEligible ? (
+        <TestingToolsRow
+          title="Keyboard fallback"
+          help="Drive single joints from the keyboard."
+          wide={showKeyboardFallback}
+          control={
+            <Button variant="ghost" size="sm" data-testid="keyboard-fallback-toggle" aria-expanded={showKeyboardFallback} onClick={() => setShowKeyboardFallback((v) => !v)}>
+              {showKeyboardFallback ? 'Close' : 'Open'}
+            </Button>
+          }
         >
-          Start session
-        </Button>
-      );
-    }
-    const end = (variant: 'danger' | 'secondary') => (
-      <Button variant={variant} isLoading={pending === 'end'} leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handleEnd()}>End session</Button>
-    );
-    if (isRecording) {
-      // Between takes IS the pause for a recorder with explicit takes (TASK-408 D6).
-      if (takeMode) return end('secondary');
-      return <><Button variant="secondary" isLoading={pending === 'pause'} leftIcon={<Pause className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handlePause()}>Pause</Button>{end('danger')}</>;
-    }
-    if (isPaused) {
-      return <>{end('secondary')}<Button isLoading={pending === 'start'} leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handleStart()}>Resume</Button></>;
-    }
-    if (isCompleted && session.exportedDatasetId) {
-      return <LinkButton to={`/datasets/${session.exportedDatasetId}/episodes`} rightIcon={<ArrowRight className="h-4 w-4" strokeWidth={1.75} />}>Open dataset</LinkButton>;
-    }
-    if (isCompleted && session.frameCount === 0) {
-      return <LinkButton to="/data-collection/new" leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}>New session</LinkButton>;
-    }
-    if (isCompleted) return <Button leftIcon={<Database className="h-4 w-4" strokeWidth={1.75} />} onClick={openExport}>Create dataset</Button>;
-    return null;
-  })();
+          {showKeyboardFallback ? <KeyboardTeleopSection robot={robot} /> : null}
+        </TestingToolsRow>
+      ) : null}
+      {isLive ? (
+        <TestingToolsRow
+          title="Joint states"
+          help="Every joint's position, live."
+          data-testid="tools-joint-states"
+          wide={showJoints}
+          control={
+            <Button variant="ghost" size="sm" data-testid="joint-states-toggle" aria-expanded={showJoints} onClick={() => setShowJoints((v) => !v)}>
+              {showJoints ? 'Hide' : 'Show'}
+            </Button>
+          }
+        >
+          {showJoints ? <JointStateGrid jointStates={telemetry?.jointStates ?? []} columns={2} positionUnit={jointUnit} /> : null}
+        </TestingToolsRow>
+      ) : null}
+      {isLive && isVrSession && detectedRole === 'desktop' ? (
+        <TestingToolsRow
+          title="Show the headset view here"
+          help="Leads with Launch VR, as the Quest does."
+          control={
+            <Switch
+              checked={headset}
+              onCheckedChange={(on) => setRoleOverride(on ? 'headset' : null)}
+              aria-label="Show the headset view here"
+              data-testid="headset-view-toggle"
+            />
+          }
+        />
+      ) : null}
+    </>
+  ) : null;
 
-  return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        eyebrow="Build"
-        back={BACK}
-        title={sessionName(session)}
-        description={`${robotName} · ${TELEOPERATION_TYPE_LABELS[session.type]}`}
-        meta={<>
-          <SessionStatusBadge status={session.status} showPulse={isRecording} />
-          {isSim && <StatusTag tone="sim">Sim</StatusTag>}
-          {isTelemetryConnected && <StatusTag tone="live" dot pulse>Live</StatusTag>}
-          {isLive && <PresenceBar viewers={viewers} />}
-        </>}
-        actions={<>
-          {showLeaseHolder && robot && (
-            <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={false} readOnly />
-          )}
-          <SessionEStopButton robotId={session.robotId} robotName={robotName} />
-          {actions}
-        </>}
+  // The phase actions that are not in the bar, until each phase gets its own
+  // layout (TASK-427 start bar, TASK-428 take dock, TASK-429 summary band).
+  const startBar = (
+    <Panel padding="sm" className="flex flex-wrap items-center gap-x-4 gap-y-2" data-testid="setup-start">
+      <Button
+        size="lg"
+        isLoading={pending === 'start'}
+        disabled={preflight.blocking}
+        title={preflight.blocking ? preflight.next : undefined}
+        leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />}
+        onClick={() => void handleStart()}
       >
-        <SessionStepIndicator session={session} />
-      </PageHeader>
+        Start session
+        <Kbd className="border-on-primary/30 text-on-primary/70">Space</Kbd>
+      </Button>
+      <p className={preflight.blocking ? 'text-[13px] text-signal-stopped' : 'text-[13px] text-ink-secondary'}>
+        {preflight.blocking ? preflight.next : 'Nothing records until a take starts.'}
+      </p>
+    </Panel>
+  );
+  const legacyActions = (legacyRecording || isPaused) && (
+    <div className="flex flex-wrap items-center gap-2" data-testid="session-legacy-actions">
+      {legacyRecording && (
+        <Button variant="secondary" isLoading={pending === 'pause'} leftIcon={<Pause className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handlePause()}>Pause</Button>
+      )}
+      {isPaused && (
+        <Button isLoading={pending === 'start'} leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handleStart()}>Resume</Button>
+      )}
+    </div>
+  );
 
-      {isLive && lastQuickCheck && (
+  // The old blocks, by phase. TASK-427/428/429 replace them one phase at a time.
+  const liveBlocks = isLive && (
+    <>
+      {phase === 'record' && lastQuickCheck && (
         <QuickCheckCard
           key={lastQuickCheck.take}
           sessionId={session.id}
@@ -571,18 +633,25 @@ export function SessionDetailPage() {
         </Panel>
       )}
 
-      {isCreated && <PreflightChecklist items={preflightItems} summary={preflight} />}
+      {phase === 'setup' && <PreflightChecklist items={preflightItems} summary={preflight} />}
+      {phase === 'setup' && startBar}
 
-      {isLive && lease.enabled && leaseInputs && robot && (
+      {showLeaseHolder && robot && (
+        <Panel padding="sm" data-testid="session-lease-holder">
+          <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={false} readOnly showEstop={false} />
+        </Panel>
+      )}
+
+      {lease.enabled && leaseInputs && robot && (
         <Panel data-testid="session-control-lease">
           <Panel.Header title="Control" description="Gamepad and simulated VR input drive the robot only while you hold control." />
           <Panel.Body>
-            <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={leaseConnected} />
+            <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={leaseConnected} showEstop={false} />
           </Panel.Body>
         </Panel>
       )}
 
-      {isLive && isVrSession && modeControlOn && robot && (
+      {isVrSession && modeControlOn && robot && (
         <Panel data-testid="session-robot-mode">
           <Panel.Header
             title="Robot mode"
@@ -599,148 +668,123 @@ export function SessionDetailPage() {
         </Panel>
       )}
 
-      {isLive && (
-        // TASK-414: the assistant layout. Left: the twin, large. Right: the
-        // head camera, the HUD, the operator, the takes and the readiness.
-        // Below lg it stacks with the side column first, so the controls never
-        // sit under the 3D view on a tablet.
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12" data-testid="session-assistant-layout">
-          <div className="flex flex-col gap-6 lg:col-span-7 xl:col-span-8">
-            {/* D5: on the Quest the VR modal covers this page — no second scene behind it. */}
-            {!vrModalOpen && (
-              <Panel padding="none" data-testid="session-twin">
-                <Panel.Header
-                  title="Robot"
-                  description={robotOnline ? `${robotType.toUpperCase()}${isVrSession ? ' · ghost hands show where the operator wants them' : ''}` : undefined}
-                />
-                {robotOnline ? (
-                  <div className="h-72 sm:h-96 lg:h-[34rem]">
-                    <Suspense fallback={<Skeleton className="h-full w-full" />}>
-                      <Robot3DViewer
-                        robotType={robotType}
-                        robotId={session.robotId}
-                        jointStates={telemetry?.jointStates}
-                        isAnimating={isTelemetryConnected}
-                        linkOverlay={twinOverlay}
-                      />
-                    </Suspense>
-                  </div>
-                ) : (
-                  <EmptyState size="sm" title="Robot offline" description="Start the robot agent to see the live model." />
-                )}
-              </Panel>
-            )}
-            {!vrModalOpen && otherCameras.length > 0 && !(robotOnline && cameras.loading) && !(robotOnline && cameras.cameras.length === 0) && (
-              <Panel>
-                <Panel.Header title="More cameras" />
-                <Panel.Body className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {otherCameras.map((name) => cameraTile(name, 'h-44'))}
-                </Panel.Body>
-              </Panel>
-            )}
-          </div>
-          <div className="order-first flex flex-col gap-6 lg:order-none lg:col-span-5 xl:col-span-4">
-            {!vrModalOpen && (
-              <div data-testid="session-lead-camera">
-                {robotOnline && cameras.loading ? (
-                  <Skeleton className="h-56 w-full" />
-                ) : robotOnline && cameras.cameras.length === 0 ? (
-                  <EmptyState
-                    size="sm"
-                    title="No camera"
-                    description={cameras.detail ? `The robot serves no camera: ${cameras.detail}` : 'The robot serves no camera. Episodes record without video.'}
-                  />
-                ) : (
-                  cameraTile(leadCamera, 'h-56')
-                )}
-              </div>
-            )}
-            <SessionHud
-              phase={hudPhase}
-              take={live ? live.take : isRecording ? currentEpisode : null}
-              takeElapsedS={takeMode ? takeElapsedS : isRecording ? sessionElapsedS : null}
-              duration={isRecording ? formatElapsed(Math.floor(sessionElapsedS)) : formatDuration(session.duration)}
-              frames={liveFrameCount}
-              fps={session.fps}
-              fpsActual={isRecording ? live?.fpsActual ?? recordingProgress?.fpsActual : undefined}
-              kept={kept}
-              degraded={isRecording && degraded}
-              autoStopInS={autoStopInS}
-              muted={muted}
-              onToggleMute={() => setCueMuted(!muted)}
-              tone={isRecording ? 'live' : undefined}
-              streak={streak.current}
-              compact
-            />
-            {isVrSession && (
-              <OperatorCard
-                robotId={session.robotId}
-                sessionId={session.id}
-                operator={operator?.state ?? null}
-                operatorViewer={operatorViewer}
+      {/* TASK-414: the assistant layout. Left: the twin, large. Right: the
+          head camera, the HUD, the operator, the takes and the readiness.
+          Below lg it stacks with the side column first, so the controls never
+          sit under the 3D view on a tablet. */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12" data-testid="session-assistant-layout">
+        <div className="flex flex-col gap-6 lg:col-span-7 xl:col-span-8">
+          {/* D5: on the Quest the VR modal covers this page — no second scene behind it. */}
+          {!vrModalOpen && (
+            <Panel padding="none" data-testid="session-twin">
+              <Panel.Header
+                title="Robot"
+                description={robotOnline ? `${robotType.toUpperCase()}${isVrSession ? ' · ghost hands show where the operator wants them' : ''}` : undefined}
               />
-            )}
-            <EpisodePanel
-              sessionId={session.id}
-              episodes={episodes}
-              live={live}
-              isRecording={isRecording}
-              canDiscard={isLive}
-              pending={takePending}
-              onStartTake={() => handleStartTake()}
-              onStopTake={() => handleStopTake()}
-              onNextTake={() => handleNextTake()}
-              onDiscardLast={handleDiscardLast}
-              onDiscardTake={(take) => (takeMode ? handleDiscardTake(take) : handleDiscardEpisode(take))}
-              onNextEpisode={handleNextEpisode}
-            />
-            {isVrSession && robot && (
-              <Panel data-testid="session-readiness">
-                <Panel.Header title="Robot side" description="Why the arms would not follow, before anyone puts the headset on." />
-                <Panel.Body>
-                  <RobotReadinessPanel robotId={robot.id} variant="compact" lease={{ enabled: lease.enabled, state: lease.state, grant: lease.grant }} />
-                </Panel.Body>
-              </Panel>
-            )}
-            <Panel>
-              <Panel.Header title="Quality" />
-              <Panel.Body><QualityIndicator feedback={isRecording || isPaused ? qualityFeedback : null} /></Panel.Body>
+              {robotOnline ? (
+                <div className="h-72 sm:h-96 lg:h-[34rem]">
+                  <Suspense fallback={<Skeleton className="h-full w-full" />}>
+                    <Robot3DViewer
+                      robotType={robotType}
+                      robotId={session.robotId}
+                      jointStates={telemetry?.jointStates}
+                      isAnimating={isTelemetryConnected}
+                      linkOverlay={twinOverlay}
+                    />
+                  </Suspense>
+                </div>
+              ) : (
+                <EmptyState size="sm" title="Robot offline" description="Start the robot agent to see the live model." />
+              )}
             </Panel>
-          </div>
+          )}
+          {!vrModalOpen && otherCameras.length > 0 && !(robotOnline && cameras.loading) && !(robotOnline && cameras.cameras.length === 0) && (
+            <Panel>
+              <Panel.Header title="More cameras" />
+              <Panel.Body className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {otherCameras.map((name) => cameraTile(name, 'h-44'))}
+              </Panel.Body>
+            </Panel>
+          )}
+        </div>
+        <div className="order-first flex flex-col gap-6 lg:order-none lg:col-span-5 xl:col-span-4">
+          {!vrModalOpen && (
+            <div data-testid="session-lead-camera">
+              {robotOnline && cameras.loading ? (
+                <Skeleton className="h-56 w-full" />
+              ) : robotOnline && cameras.cameras.length === 0 ? (
+                <EmptyState
+                  size="sm"
+                  title="No camera"
+                  description={cameras.detail ? `The robot serves no camera: ${cameras.detail}` : 'The robot serves no camera. Episodes record without video.'}
+                />
+              ) : (
+                cameraTile(leadCamera, 'h-56')
+              )}
+            </div>
+          )}
+          {phase === 'record' && legacyActions}
+          <SessionHud
+            phase={hudPhase}
+            take={live ? live.take : isRecording ? currentEpisode : null}
+            takeElapsedS={takeMode ? takeElapsedS : isRecording ? sessionElapsedS : null}
+            duration={isRecording ? formatElapsed(Math.floor(sessionElapsedS)) : formatDuration(session.duration)}
+            frames={liveFrameCount}
+            fps={session.fps}
+            fpsActual={isRecording ? live?.fpsActual ?? recordingProgress?.fpsActual : undefined}
+            kept={kept}
+            degraded={isRecording && degraded}
+            autoStopInS={autoStopInS}
+            tone={isRecording ? 'live' : undefined}
+            streak={streak.current}
+            compact
+          />
+          {isVrSession && (
+            <OperatorCard
+              robotId={session.robotId}
+              sessionId={session.id}
+              operator={operator?.state ?? null}
+              operatorViewer={operatorViewer}
+            />
+          )}
+          <EpisodePanel
+            sessionId={session.id}
+            episodes={episodes}
+            live={live}
+            isRecording={isRecording}
+            canDiscard={isLive}
+            pending={takePending}
+            onStartTake={() => handleStartTake()}
+            onStopTake={() => handleStopTake()}
+            onNextTake={() => handleNextTake()}
+            onDiscardLast={handleDiscardLast}
+            onDiscardTake={(take) => (takeMode ? handleDiscardTake(take) : handleDiscardEpisode(take))}
+            onNextEpisode={handleNextEpisode}
+          />
+          {isVrSession && robot && (
+            <Panel data-testid="session-readiness">
+              <Panel.Header title="Robot side" description="Why the arms would not follow, before anyone puts the headset on." />
+              <Panel.Body>
+                <RobotReadinessPanel robotId={robot.id} variant="compact" lease={{ enabled: lease.enabled, state: lease.state, grant: lease.grant }} />
+              </Panel.Body>
+            </Panel>
+          )}
+          <Panel>
+            <Panel.Header title="Quality" />
+            <Panel.Body><QualityIndicator feedback={isRecording || isPaused ? qualityFeedback : null} /></Panel.Body>
+          </Panel>
+        </div>
+      </div>
+    </>
+  );
+
+  const wrapBlocks = phase === 'wrap' && (
+    <>
+      {isCompleted && session.frameCount === 0 && !session.exportedDatasetId && (
+        <div className="flex">
+          <LinkButton to="/data-collection/new" leftIcon={<Plus className="h-4 w-4" strokeWidth={1.75} />}>New session</LinkButton>
         </div>
       )}
-
-      {(isLive || vrGoodbye) && isVrSession && (
-        <VRSessionPanel
-          robot={robot}
-          lease={lease}
-          simulate={simulateVr}
-          onSimulateChange={setSimulateVr}
-          onVrOpenChange={setVrModalOpen}
-          showReadiness={false}
-        />
-      )}
-
-      {isLive && !isVrSession && (
-        <Panel>
-          <Panel.Header
-            title="Manual control"
-            description="Keyboard or gamepad fallback, and the live joint states."
-            actions={<Button variant="ghost" size="sm" onClick={() => setShowManual((v) => !v)}>{showManual ? 'Hide' : 'Show'}</Button>}
-          />
-          {showManual && (
-            <Panel.Body className="flex flex-col gap-6">
-              {robot && gamepadEligible && <KeyboardTeleopSection robot={robot} />}
-              <JointStateGrid
-                jointStates={telemetry?.jointStates ?? []}
-                columns={2}
-                positionUnit={jointPositionUnit(telemetry?.robotType ?? (robot?.metadata as Record<string, unknown> | undefined)?.robotType)}
-              />
-            </Panel.Body>
-          )}
-        </Panel>
-      )}
-
       {isCompleted && (
         <SessionCompleted
           session={session}
@@ -751,6 +795,43 @@ export function SessionDetailPage() {
           onRefetch={refetchCompleted}
         />
       )}
+    </>
+  );
+
+  return (
+    // max-sm:pb-[88px]: with the shell's 24 px, nothing hides behind the phone's E-STOP dock.
+    <div className="flex flex-col gap-3 max-sm:pb-[88px]" data-phase={phase} data-role={deviceRole}>
+      <SessionCommandBar
+        phase={phase}
+        tally={tally}
+        ready={phase === 'setup' && !preflight.blocking && preflight.warnings === 0}
+        title={sessionName(session)}
+        status={session.status}
+        robotName={robotName}
+        isSim={isSim}
+        link={link}
+        inputLabel={TELEOPERATION_TYPE_LABELS[session.type]}
+        fps={session.fps}
+        viewers={isLive ? viewers : []}
+        muted={muted}
+        onToggleMute={() => setCueMuted(!muted)}
+        simulatedInput={isVrSession && simulateVr}
+        onEnd={canEndSession(session) ? () => void handleEnd() : undefined}
+        endPending={pending === 'end'}
+        tools={tools}
+        estop={<SessionEStopButton robotId={session.robotId} robotName={robotName} />}
+      />
+
+      {/* The headset: Launch VR first, the desktop's blocks behind "Robot setup". */}
+      {headset && vrPanelMounted && (
+        <HeadsetHero
+          launcher={vrPanel('hero')}
+          onShowDesktopView={roleOverride ? () => setRoleOverride(null) : undefined}
+        />
+      )}
+
+      {headset && isLive && isVrSession ? <RobotSetupDisclosure>{liveBlocks}</RobotSetupDisclosure> : liveBlocks}
+      {wrapBlocks}
 
       <FormModal
         isOpen={annotateOpen}
