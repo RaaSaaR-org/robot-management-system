@@ -95,7 +95,11 @@ title, so the operator knows someone is watching.
    opened before the session exists.
 6. **Enter VR** (operator, inside the headset). Press **Launch VR**, then
    **Take control**, then **Enter VR**. Enter VR stays disabled until this
-   headset holds the control lease, and taking it ends the desktop's control.
+   headset holds the control lease. The robot never takes a held lease away,
+   so the desktop has to give its own back first: the session page does that
+   on its own once the operator opens VR with the robot balancing (and when
+   the session starts), and while it still holds control its Set up steps show
+   **Release control**. A Teleop tab releases when you leave it.
    The Enter VR press has to happen inside the headset, because WebXR only
    starts after a user gesture.
 7. **The assistant opens the session.** Press **Copy viewer link** and open
