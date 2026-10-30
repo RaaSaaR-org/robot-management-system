@@ -86,7 +86,8 @@ ZERO_WEIGHT_FRAMES = 5    # explicit weight-0 frames before going quiet
 MAX_TICK_DT_S = 0.1       # a stalled loop must not turn into one big jump
 
 # Mode guard (TASK-398). arm_sdk is only honoured while Unitree's balance
-# controller runs ("regular" mode, FSM 500 — the remote's R1+X). In damp the
+# controller runs ("regular" mode, FSM 500, or 501 on a 3-DoF-waist G1 — the
+# remote's R1+X; the sidecar passes the configured ids in as balance_ids). In damp the
 # robot IGNORES rt/arm_sdk, so a command streamed there drifts away from the
 # measured pose (0.7 rad, observed 2026-10-17) and lands as a jump the moment
 # the robot enters balance. So: arm only in measured balance, and let go the

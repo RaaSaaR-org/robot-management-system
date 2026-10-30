@@ -408,6 +408,11 @@ export function RobotModeControl({
             : `${result.code}: ${result.error}`}
         </p>
       )}
+      {result && !result.ok && result.hint && (
+        <p className="text-xs text-ink-secondary" data-testid="robot-mode-hint">
+          {result.hint}
+        </p>
+      )}
 
       <ConfirmDialog
         isOpen={pendingButton !== null}
