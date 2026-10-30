@@ -31,7 +31,8 @@ robot expired the lease. The confirm then sent the switch with no lease. This
 task makes the switch go out only with control held. The confirm takes control
 again, which is the explicit press that taking control needs, or sends nothing
 and says why. A VR session page now also says when its control ended on its
-own.
+own. It also stops the supervisor sim from handing the lease over to a limp
+robot the moment arm control comes on.
 
 Branch: `fix/task-437-the-arm-control-confirm-takes-control-again-when-the-lease`.
 
@@ -79,6 +80,21 @@ Branch: `fix/task-437-the-arm-control-confirm-takes-control-again-when-the-lease
   `ControlLeaseBar` renders. The lease hook's notice ("Your control lease
   expired on the robot.") showed nowhere. Step 2 just went back to "Nobody has
   control".
+- On the supervisor sim the hand-over fired early, about 1 s after the switch,
+  with the robot limp. Reproduced live on main: Stop, Start, Take control,
+  Switch, then the release and the "You gave control back" toast.
+  - In that second, the snapshot looked like this: the supervisor already
+    reports `sidecarMode: arm_sdk` (`armControlOn()` true), the restarting
+    sidecar is unreachable, the agent has no base reading, and the mode gate
+    reads off.
+  - The readiness mode row of a `sim` sidecar without a base is `idle` ("not
+    measured (sim)"). `stanceFacts()` counted that as "nothing to stand up",
+    which made `leaseWorkDone()` true.
+  - That shortcut is meant for the legacy MuJoCo facade (`sim_node.py`, no
+    write mode, no supervisor). The supervisor sim runs the real
+    `g1_sidecar.py`, which has the FSM.
+  - A real sidecar (`sim: false`) reads `unknown` there, so `g1-edu-4` never
+    took this path.
 
 ### Frontend
 
@@ -99,6 +115,9 @@ Branch: `fix/task-437-the-arm-control-confirm-takes-control-again-when-the-lease
   - Where: in step 2 while arm control is off, and in step 3 once it is on.
   - A release on purpose leaves no notice, so neither Release nor the hand-over
     shows the line.
+- `utils/setupSteps.ts` `noLocomotionFsm()`: step 3 skips "Stand up and
+  balance" only on the legacy facade (a `sim` sidecar with no write mode, and
+  no supervisor `bringup`). The `idle` mode row alone no longer counts.
 - The hand-over trigger stays as TASK-427 defined it: arm control on, and the
   robot measured in Balance (`leaseWorkDone`). On `g1-edu-4`, Balance is FSM
   501 (`G1_FSM_BALANCE_REPORTED: "501"`), so the hand-over cannot fire before
@@ -110,6 +129,8 @@ Branch: `fix/task-437-the-arm-control-confirm-takes-control-again-when-the-lease
 - `app/src/features/robots/components/readiness/RobotReadinessPanel.tsx`
 - `app/src/features/datacollection/components/console/PageLeaseLine.tsx`
 - `app/src/features/datacollection/pages/SessionDetailPage.tsx`
+- `app/src/features/datacollection/utils/setupSteps.ts`
+- `app/src/features/datacollection/utils/__tests__/setupSteps.test.ts`
 - `app/src/features/datacollection/pages/__tests__/SessionDetailPage.armSwitchLease.test.tsx` (new)
 - `app/src/features/robots/components/readiness/__tests__/TakeControlAndStaleCode.test.tsx`
 
@@ -126,6 +147,9 @@ Branch: `fix/task-437-the-arm-control-confirm-takes-control-again-when-the-lease
       on." in step 2 (step 3 once arm control is on). A deliberate release or
       the hand-over shows nothing.
 - [ ] The hand-over still fires only on arm control on and measured Balance.
+      That includes the supervisor sim while its sidecar restarts into arm
+      control, where the mode is unread. The legacy MuJoCo facade still has
+      nothing to stand up.
 - [ ] app tsc and vitest pass, and the Playwright demo gate specs
       datacollection-console, datacollection-takes, quest-connect,
       datacollection-new-session and robot-readiness pass.
@@ -145,9 +169,25 @@ Branch: `fix/task-437-the-arm-control-confirm-takes-control-again-when-the-lease
 - `TakeControlAndStaleCode.test.tsx` covers the same at the panel:
   - the panel takes control again before the switch;
   - with no take offered, the panel sends nothing.
-- Live (sim only): on the session page, Take control, open the confirm, and
-  wait more than 10 s. The server log shows a renew every second, and the
-  switch returns 202.
+- `setupSteps.test.ts`:
+  - The supervisor sim restarting into arm control (sidecar unreachable, base
+    null, gate off, supervisor `arm_sdk/starting`) is not done. This failed
+    before the change.
+  - The legacy facade is still done.
+- Live, sim only, 2026-10-30. Scripts drove headless chromium, and CDP
+  `Debugger.pause` froze the tab for 9 s while the confirm was open.
+  - On main (:1420): the lease expired during the pause, the page released it
+    on resume, and the switch got 409 `lease_required`. That is the
+    walkthrough exactly.
+  - On this branch (a dev server on :1450 against the same API): step 2 showed
+    "Your control lease expired on the robot. Take control again to go on."
+    The confirm acquired generation 32, and the switch got 202 (arm_sdk).
+  - Hand-over after a fresh read-only start, then Take control and Switch:
+    - on main, the lease was released 1.0 s after the switch, with the robot
+      limp;
+    - on this branch, it was still held 15 s later.
+  - Step 3, Stand then Balance: the hand-over toast and the release came 0.3 s
+    after Balance was measured (FSM 500 on the sim), and not at Stand.
 
 ## Notes
 
