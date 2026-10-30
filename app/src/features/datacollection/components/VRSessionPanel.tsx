@@ -170,6 +170,7 @@ export function VRSessionPanel({
         <TestingToolsRow
           title="Keyboard fallback"
           help="Drive single joints from the keyboard."
+          wide={showKeyboard && !!robot}
           control={
             <Button
               variant="ghost"

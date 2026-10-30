@@ -6,7 +6,8 @@
  *     three phases), one press, no dialog, and Escape twice;
  *   - the E-STOP alone in its zone, ≥ 65 px from every other bar control at
  *     640, 1280, 1512 and 1920, with Testing tools open as well;
- *   - the stuck bar 28 px under the TopBar, the TopBar ≥ 48 px from the E-STOP;
+ *   - the stuck bar 28 px under the TopBar, the account avatar ≥ 48 px from
+ *     the E-STOP (the TopBar's 38 px icon buttons' boxes: ≥ 44, measured 45.5);
  *   - on a phone the zone is a bottom dock holding only the E-STOP, and the
  *     ⋯ menu holds End session, Testing tools and the mute;
  *   - Testing tools reaches every developer tool in one click;
@@ -168,7 +169,7 @@ for (const [w, h] of [[640, 800], [1280, 800], [1512, 945], [1920, 1080]] as con
   }
 }
 
-test('the stuck bar sits 28 px under the TopBar, the TopBar ≥ 48 px from the E-STOP', async ({ page }) => {
+test('the stuck bar sits 28 px under the TopBar, the account avatar ≥ 48 px from the E-STOP', async ({ page }) => {
   await page.setViewportSize({ width: 1512, height: 945 });
   await openSetup(page);
   const atRest = await page.getByTestId('session-command-bar').boundingBox();
@@ -179,8 +180,9 @@ test('the stuck bar sits 28 px under the TopBar, the TopBar ≥ 48 px from the E
   expect(Math.round(bar!.y)).toBe(84);
   // The TopBar is not moved; the 28 px offset keeps it clear. Measured to the
   // account avatar (the 28 px circle, ~50 px by construction) and to the
-  // nearest TopBar control's whole hit box (the account button is 36 px tall,
-  // so its box reaches ~4 px lower than the circle).
+  // nearest TopBar control's whole hit box: its 38 px icon buttons (Docs sits
+  // right above the E-STOP at 1512) reach ~5 px lower than the avatar circle,
+  // 45.5 px from the E-STOP.
   const top = await page.evaluate(() => {
     const E = document.querySelector('[data-testid="session-estop"]')!.getBoundingClientRect();
     const header = document.querySelector('[data-app-shell] > header')!;

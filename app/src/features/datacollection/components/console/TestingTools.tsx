@@ -15,13 +15,20 @@
  * @feature datacollection
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { cn } from '@/shared/utils/cn';
 
-/** The popover's width; it shrinks to the viewport (less a 16 px gutter each side) on a phone. */
-const WIDTH = 360;
 /** Gap between the bar and the popover. */
 const OFFSET = 8;
+
+/**
+ * Whether the popover is open. A row's in-place content (the keyboard
+ * fallback with its global key listener, the joint grid, the Quest card's
+ * polling) renders only while it is: closing the tools must not leave a
+ * hidden keyboard console driving joints. The rows themselves — and the
+ * VRSessionPanel with its modal — stay mounted.
+ */
+const ToolsOpenContext = createContext(true);
 
 /** Marks the elements that toggle the popover, so a click on them is not an "outside" click. */
 export const TOOLS_ANCHOR_ATTR = 'data-tools-anchor';
@@ -48,13 +55,23 @@ export function TestingTools({ open, onClose, anchor, children, className }: Tes
     if (!el || !parent || !anchor) return;
     const p = parent.getBoundingClientRect();
     const a = anchor.getBoundingClientRect();
-    const width = Math.min(WIDTH, window.innerWidth - 32);
+    const width = el.offsetWidth;
     const left = Math.min(Math.max(0, a.right - p.left - width), Math.max(0, p.width - width));
     setPos({ top: a.bottom - p.top + OFFSET, left });
   }, [anchor]);
 
   useLayoutEffect(() => {
     if (open) position();
+  }, [open, position]);
+
+  // A row that opens in place (the keyboard fallback, the joint states) widens
+  // the popover; it stays aligned to the button's end, so it grows leftward.
+  useEffect(() => {
+    const el = ref.current;
+    if (!open || !el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => position());
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [open, position]);
 
   useEffect(() => {
@@ -93,8 +110,8 @@ export function TestingTools({ open, onClose, anchor, children, className }: Tes
       inert={!open}
       style={pos ? { top: pos.top, left: pos.left } : undefined}
       className={cn(
-        'absolute z-40 w-[360px] max-w-[calc(100vw-32px)] overflow-y-auto rounded-control border border-line bg-raised p-1.5 shadow-[var(--shadow-raised)]',
-        'max-h-[calc(100dvh-180px)]',
+        'absolute z-40 w-[360px] max-w-[calc(100vw-32px)] has-[[data-tools-expanded]]:w-[560px] overflow-y-auto rounded-control border border-line bg-raised p-1.5 shadow-[var(--shadow-raised)]',
+        'max-h-[calc(100dvh-220px)]',
         className,
       )}
     >
@@ -102,7 +119,7 @@ export function TestingTools({ open, onClose, anchor, children, className }: Tes
         Testing tools
       </h3>
       <p className="px-3 pb-2 text-[12.5px] text-ink-tertiary">For testing without a headset. A real session needs none of this.</p>
-      {children}
+      <ToolsOpenContext.Provider value={open}>{children}</ToolsOpenContext.Provider>
     </div>
   );
 }
@@ -115,11 +132,14 @@ export interface TestingToolsRowProps {
   control?: ReactNode;
   /** What the row opens in place (the keyboard fallback, the joint states). */
   children?: ReactNode;
+  /** The content needs room: the popover widens to 560 px while it shows. */
+  wide?: boolean;
   'data-testid'?: string;
 }
 
 /** One tool: a 1 px top border, a title, one line of help, and its control. */
-export function TestingToolsRow({ title, help, control, children, 'data-testid': testId }: TestingToolsRowProps) {
+export function TestingToolsRow({ title, help, control, children, wide = false, 'data-testid': testId }: TestingToolsRowProps) {
+  const open = useContext(ToolsOpenContext);
   return (
     <section className="border-t border-line" data-testid={testId}>
       <div className="flex items-center gap-3 px-3 py-2.5">
@@ -129,7 +149,11 @@ export function TestingToolsRow({ title, help, control, children, 'data-testid':
         </div>
         {control}
       </div>
-      {children && <div className="px-3 pb-3">{children}</div>}
+      {children && open && (
+        <div className="px-3 pb-3" data-tools-expanded={wide ? '' : undefined}>
+          {children}
+        </div>
+      )}
     </section>
   );
 }

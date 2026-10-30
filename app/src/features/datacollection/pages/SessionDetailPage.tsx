@@ -541,6 +541,7 @@ export function SessionDetailPage() {
         <TestingToolsRow
           title="Keyboard fallback"
           help="Drive single joints from the keyboard."
+          wide={showKeyboardFallback}
           control={
             <Button variant="ghost" size="sm" data-testid="keyboard-fallback-toggle" aria-expanded={showKeyboardFallback} onClick={() => setShowKeyboardFallback((v) => !v)}>
               {showKeyboardFallback ? 'Close' : 'Open'}
@@ -555,13 +556,14 @@ export function SessionDetailPage() {
           title="Joint states"
           help="Every joint's position, live."
           data-testid="tools-joint-states"
+          wide={showJoints}
           control={
             <Button variant="ghost" size="sm" data-testid="joint-states-toggle" aria-expanded={showJoints} onClick={() => setShowJoints((v) => !v)}>
               {showJoints ? 'Hide' : 'Show'}
             </Button>
           }
         >
-          {showJoints ? <JointStateGrid jointStates={telemetry?.jointStates ?? []} columns={1} positionUnit={jointUnit} /> : null}
+          {showJoints ? <JointStateGrid jointStates={telemetry?.jointStates ?? []} columns={2} positionUnit={jointUnit} /> : null}
         </TestingToolsRow>
       ) : null}
       {isLive && isVrSession && detectedRole === 'desktop' ? (
