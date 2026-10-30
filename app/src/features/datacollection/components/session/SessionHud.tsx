@@ -138,7 +138,7 @@ export function HudReadouts({ duration, frames, fps, fpsActual, kept, streak = 0
   const label = motion ? motionLabel(motion.currentSmoothnessScore) : null;
   const value = live ? 'text-ink-primary' : 'text-ink-secondary';
   return (
-    <dl className="m-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] gap-px overflow-hidden rounded-control border border-line-subtle bg-line-subtle max-sm:grid-cols-2">
+    <dl className="m-0 grid grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.25fr)_minmax(0,1.15fr)] gap-px overflow-hidden rounded-control border border-line-subtle bg-line-subtle max-sm:grid-cols-2">
       <div className={CELL}>
         <dt className={DT}>Session</dt>
         <dd className={cn(DD, value)} data-testid="hud-duration">{duration}</dd>
@@ -161,7 +161,8 @@ export function HudReadouts({ duration, frames, fps, fpsActual, kept, streak = 0
           <small className={SMALL}>{kept === 1 ? 'take' : 'takes'}</small>
         </dd>
         {streakText && (
-          <span className="mt-0.5 block truncate text-[11px] text-signal-measured" data-testid="hud-streak">
+          // Below 1440 px the dock is narrow and every line counts: the streak stays in the cell's title and for screen readers.
+          <span className="mt-0.5 block truncate text-[11px] text-signal-measured max-[1439px]:sr-only" data-testid="hud-streak">
             {streak} in a row
           </span>
         )}

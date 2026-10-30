@@ -11,6 +11,7 @@
  * @feature datacollection
  */
 
+import { useEffect, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { Button, confirm } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
@@ -36,6 +37,9 @@ export interface TakesListProps {
   className?: string;
 }
 
+/** Below this height the panel cannot show even its header. */
+const SQUEEZED_PX = 56;
+
 function formatSeconds(s: number): string {
   return `${s.toFixed(1)} s`;
 }
@@ -49,6 +53,18 @@ export function TakesList({ sessionId, episodes, live, isRecording, canDiscard, 
   const takeMode = !!live && live.phase !== null;
   const capturing = takeMode && live!.phase === 'capturing';
   const lastTake = live?.take ?? null;
+
+  // Squeezed below its own header (a short window with a blocker in the dock):
+  // hidden rather than drawn as a sliver.
+  const rootRef = useRef<HTMLElement>(null);
+  const [squeezed, setSqueezed] = useState(false);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setSqueezed(el.clientHeight > 0 && el.clientHeight < SQUEEZED_PX));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const askDiscard = async (take: number) => {
     const isLive = capturing && take === lastTake;
@@ -69,7 +85,9 @@ export function TakesList({ sessionId, episodes, live, isRecording, canDiscard, 
 
   return (
     <section
-      className={cn('flex min-h-0 flex-col overflow-hidden rounded-panel border border-line-subtle bg-panel', className)}
+      ref={rootRef}
+      className={cn('flex min-h-0 flex-col overflow-hidden rounded-panel border border-line-subtle bg-panel', squeezed && 'invisible', className)}
+      data-squeezed={squeezed ? 'true' : undefined}
       data-testid="episode-panel"
       aria-label="Takes"
     >
