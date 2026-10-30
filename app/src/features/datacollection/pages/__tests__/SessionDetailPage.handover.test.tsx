@@ -10,7 +10,9 @@
  *              starts. The trigger is read off the robot, never off the
  *              headset: a headset publishes the operator role only while in
  *              VR, and it enters VR only once it holds the lease, so a
- *              hand-over waiting for it could never fire.
+ *              hand-over waiting for it could never fire. TASK-428: each trigger
+ *              — the robot balancing, this page opening its own VR window — is
+ *              its own rising edge with its own message.
  * @feature datacollection
  */
 
@@ -21,6 +23,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '@/mocks/server';
 import { readinessFor } from '@/mocks/readinessDemoHandlers';
 import { renderWithProviders } from '@/test/utils';
+import { dismissToast, getToasts } from '@/shared/components/ui';
 import { useRobotsStore } from '@/features/robots/store/robotsStore';
 import { useDataCollectionStore } from '../../store/datacollectionStore';
 import { SessionDetailPage } from '../SessionDetailPage';
@@ -83,6 +86,7 @@ const session = {
 } as TeleoperationSession;
 
 beforeEach(() => {
+  dismissToast();
   h.active = [];
   h.acquire.mockClear();
   h.release.mockClear();
@@ -146,6 +150,10 @@ describe('SessionDetailPage Set up hands the lease over', () => {
     rerender();
     await waitFor(() => expect(h.release).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(h.active[h.active.length - 1]).toBe(false));
+    // Its own message: the robot's state is why.
+    expect(getToasts().map((t) => t.description)).toContain(
+      'The robot balances with arm control on. The operator can take control in the headset now.',
+    );
     expect(screen.queryByTestId('setup-lease-held')).toBeNull();
     // Step 4 is next, and no Release is left anywhere.
     expect(screen.getByTestId('setup-step-quest')).toHaveAttribute('data-state', 'current');
@@ -180,5 +188,27 @@ describe('SessionDetailPage Set up hands the lease over', () => {
     });
     await waitFor(() => expect(h.release).toHaveBeenCalled());
     await waitFor(() => expect(h.active[h.active.length - 1]).toBe(false));
+  });
+
+  it('hands over when this page opens its own VR window, though the robot balanced long before, and says so', async () => {
+    // Balancing with arm control on: the balance trigger fired (and found nothing to release) long ago.
+    h.mode = 'balance';
+    render();
+    await waitFor(() => expect(screen.getByTestId('setup-step-quest')).toHaveAttribute('data-state', 'current'));
+    // The assistant takes control again on purpose: it stays theirs.
+    fireEvent.click(screen.getByTestId('setup-step-stance-toggle'));
+    fireEvent.click(within(screen.getByTestId('setup-step-stance')).getByTestId('robot-mode-take-control'));
+    await waitFor(() => expect(h.acquire).toHaveBeenCalledTimes(1));
+    rerender();
+    expect(h.release).not.toHaveBeenCalled();
+
+    // Opening the VR window on this browser is its own rising edge.
+    fireEvent.click(screen.getByTestId('session-tools-toggle'));
+    fireEvent.click(screen.getByTestId('vr-launch'));
+    await waitFor(() => expect(h.release).toHaveBeenCalledTimes(1));
+    const said = getToasts().map((t) => t.description);
+    expect(said).toContain('The VR window on this browser takes control itself.');
+    // Not the balance message: that is not why it happened.
+    expect(said).not.toContain('The robot balances with arm control on. The operator can take control in the headset now.');
   });
 });

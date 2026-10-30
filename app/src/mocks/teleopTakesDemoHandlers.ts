@@ -7,6 +7,11 @@
  *              load; every action is guarded by `expectedTake` exactly as the
  *              server guards it, so a stale press answers 409 with `live`.
  *              Open `#/data-collection/demo-session-takes` in the demo build.
+ *              TASK-428: a VR variant, `demo-session-takes-vr` (a Quest session
+ *              on the demo G1), for the Record console's VR cells, and a
+ *              demo-only control (`POST /api/__demo/sessions/:id/live`) that
+ *              sets the recorder's `degraded` flag and the auto-stop, so the
+ *              e2e can show a blocker and the auto-stop track.
  * @feature datacollection
  */
 
@@ -20,6 +25,8 @@ import type {
 } from '@/features/datacollection/types/datacollection.types';
 
 export const DEMO_TAKES_SESSION_ID = 'demo-session-takes';
+/** The same session as a Quest one (TASK-428). */
+export const DEMO_TAKES_VR_SESSION_ID = 'demo-session-takes-vr';
 const ROBOT_ID = 'demo-g1-001';
 const FPS = 30;
 
@@ -37,25 +44,32 @@ interface DemoState {
   session: TeleoperationSession;
   sessionStartedMs: number;
   takes: DemoTake[];
+  /** Demo-only (TASK-428): the recorder misses frames. */
+  degraded: boolean;
+  /** Demo-only (TASK-428): each take stops on its own after this many seconds. */
+  autoStopS: number | null;
 }
 
-function freshState(): DemoState {
+function freshState(id: string = DEMO_TAKES_SESSION_ID): DemoState {
   const now = Date.now();
+  const vr = id === DEMO_TAKES_VR_SESSION_ID;
   return {
     sessionStartedMs: now,
     takes: [],
+    degraded: false,
+    autoStopS: null,
     session: {
-      id: DEMO_TAKES_SESSION_ID,
+      id,
       operatorId: 'demo-user',
       robotId: ROBOT_ID,
-      type: 'keyboard_mouse',
+      type: vr ? 'vr_quest' : 'keyboard_mouse',
       status: 'recording',
       startedAt: new Date(now).toISOString(),
       endedAt: null,
       frameCount: 0,
       duration: null,
       fps: FPS,
-      languageInstr: 'Pick up the red cube and place it in the bin',
+      languageInstr: vr ? 'Pick up the apple and place it on the plate' : 'Pick up the red cube and place it in the bin',
       qualityScore: null,
       exportedDatasetId: null,
       errorMessage: null,
@@ -65,10 +79,24 @@ function freshState(): DemoState {
   };
 }
 
+const states = new Map<string, DemoState>();
+/** The session a handler is answering for; set by `known()` before each one runs. */
 let state = freshState();
 
-/** Test hook: back to a fresh session between unit tests. */
+function select(id: unknown): boolean {
+  if (id !== DEMO_TAKES_SESSION_ID && id !== DEMO_TAKES_VR_SESSION_ID) return false;
+  let s = states.get(id);
+  if (!s) {
+    s = freshState(id);
+    states.set(id, s);
+  }
+  state = s;
+  return true;
+}
+
+/** Test hook: back to fresh sessions between unit tests. */
 export function resetDemoTakes(): void {
+  states.clear();
   state = freshState();
 }
 
@@ -106,7 +134,7 @@ function quickCheckOf(t: DemoTake): QuickCheck {
       : [],
     groupsMoved: moved ? ['left_arm', 'left_hand', 'waist'] : [],
     warnings: [...(durationS < 2 ? ['short'] : []), ...(moved ? [] : ['no_motion'])],
-    thumbnailUrl: `/api/teleoperation/sessions/${DEMO_TAKES_SESSION_ID}/episodes/${t.take}/thumbnail`,
+    thumbnailUrl: `/api/teleoperation/sessions/${state.session.id}/episodes/${t.take}/thumbnail`,
     stopReason: 'operator',
     discarded: t.discarded,
   };
@@ -119,7 +147,7 @@ function buildLive(): LiveState {
   const kept = state.takes.filter((t) => !t.discarded && t.stoppedAtMs !== null).length;
   const stoppedLast = [...state.takes].reverse().find((t) => t.stoppedAtMs !== null) ?? null;
   return {
-    sessionId: DEMO_TAKES_SESSION_ID,
+    sessionId: state.session.id,
     status: state.session.status,
     phase: state.session.status === 'recording' ? (live ? 'capturing' : 'between') : null,
     take: last ? last.take : null,
@@ -131,10 +159,10 @@ function buildLive(): LiveState {
     discarded: state.takes.filter((t) => t.discarded).length,
     fpsTarget: FPS,
     fpsActual: state.session.status === 'recording' ? FPS : null,
-    degraded: false,
-    lastDropReason: null,
+    degraded: state.degraded,
+    lastDropReason: state.degraded ? 'agent_unreachable' : null,
     elapsedS: (now - state.sessionStartedMs) / 1000,
-    autoStopS: null,
+    autoStopS: state.autoStopS,
     lastTake: stoppedLast?.quickCheck ?? null,
     at: new Date(now).toISOString(),
   };
@@ -206,7 +234,7 @@ function thumbnailSvg(take: number): string {
 }
 
 const S = '/api/teleoperation/sessions/:id';
-const known = (id: unknown) => id === DEMO_TAKES_SESSION_ID;
+const known = (id: unknown) => select(id);
 const notFound = () => HttpResponse.json({ error: 'Session not found' }, { status: 404 });
 
 export const teleopTakesDemoHandlers = [
@@ -218,14 +246,14 @@ export const teleopTakesDemoHandlers = [
     if (!known(params.id)) return notFound();
     const all = new URL(request.url).searchParams.get('includeDiscarded') === '1';
     return HttpResponse.json({
-      sessionId: DEMO_TAKES_SESSION_ID,
+      sessionId: state.session.id,
       episodes: state.takes.filter((t) => all || !t.discarded).map(summary),
     });
   }),
 
   http.get(`${S}/episodes/:take/thumbnail`, ({ params }) => {
-    const t = state.takes.find((x) => x.take === Number(params.take));
-    if (!known(params.id) || !t || t.stoppedAtMs === null) {
+    const t = known(params.id) ? state.takes.find((x) => x.take === Number(params.take)) : undefined;
+    if (!t || t.stoppedAtMs === null) {
       return HttpResponse.json({ code: 'no_thumbnail', error: 'No thumbnail' }, { status: 404 });
     }
     return new HttpResponse(thumbnailSvg(t.take), {
@@ -236,6 +264,7 @@ export const teleopTakesDemoHandlers = [
   http.post(`${S}/episodes/start`, async ({ params, request }) => {
     if (!known(params.id)) return notFound();
     const b = await body(request);
+    known(params.id); // another session's request may have run during the await
     const refused = guard(b);
     if (refused) return refused;
     if (capturingTake()) return conflict('already_capturing', 'A take is already recording');
@@ -246,6 +275,7 @@ export const teleopTakesDemoHandlers = [
   http.post(`${S}/episodes/stop`, async ({ params, request }) => {
     if (!known(params.id)) return notFound();
     const b = await body(request);
+    known(params.id); // another session's request may have run during the await
     const refused = guard(b);
     if (refused) return refused;
     const t = capturingTake();
@@ -257,6 +287,7 @@ export const teleopTakesDemoHandlers = [
   http.post(`${S}/episodes/next`, async ({ params, request }) => {
     if (!known(params.id)) return notFound();
     const b = await body(request);
+    known(params.id); // another session's request may have run during the await
     const refused = guard(b);
     if (refused) return refused;
     const t = capturingTake();
@@ -268,6 +299,7 @@ export const teleopTakesDemoHandlers = [
   http.post(`${S}/episodes/discard-last`, async ({ params, request }) => {
     if (!known(params.id)) return notFound();
     const b = await body(request);
+    known(params.id); // another session's request may have run during the await
     const refused = guard(b);
     if (refused) return refused;
     const t = lastTake();
@@ -307,6 +339,16 @@ export const teleopTakesDemoHandlers = [
       updatedAt: new Date(now).toISOString(),
     };
     return HttpResponse.json({ session: state.session });
+  }),
+
+  // Demo-only (TASK-428): the recorder's degraded flag and the auto-stop, for the e2e.
+  http.post('/api/__demo/sessions/:id/live', async ({ params, request }) => {
+    if (!known(params.id)) return notFound();
+    const b = await body(request);
+    known(params.id); // another session's request may have run during the await
+    if (typeof b.degraded === 'boolean') state.degraded = b.degraded;
+    if (typeof b.autoStopS === 'number' || b.autoStopS === null) state.autoStopS = b.autoStopS as number | null;
+    return HttpResponse.json(buildLive());
   }),
 
   // The session page's E-STOP. Nothing moves in the demo; the answer is the robot's safety status.

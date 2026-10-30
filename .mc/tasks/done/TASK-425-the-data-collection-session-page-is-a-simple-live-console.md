@@ -3,7 +3,7 @@ id: "TASK-425"
 aliases: []
 title: "The data-collection session page is a simple live console that shows the assistant one clear next step"
 slug: "the-data-collection-session-page-is-a-simple-live-console"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -1090,7 +1090,7 @@ Plan decisions (2026-10-30), on top of the split above:
 
 ## Acceptance Criteria
 
-- [ ] **Record fits.** At 1512×945, on `#/data-collection/demo-session-takes` (demo build,
+- [x] **Record fits.** At 1512×945, on `#/data-collection/demo-session-takes` (demo build,
   MSW), during a take, between takes with the quick check open, and with a blocker in the
   slot, all of these hold:
   - `document.documentElement.scrollHeight <= window.innerHeight`;
@@ -1099,7 +1099,7 @@ Plan decisions (2026-10-30), on top of the split above:
 
   The same holds at 1920×1080 and 1280×800. This is measured in
   `app/e2e/datacollection-console.spec.ts`.
-- [ ] **E-STOP always visible.** Exactly one `session-estop` is in the DOM. Scrolling in
+- [x] **E-STOP always visible.** Exactly one `session-estop` is in the DOM. Scrolling in
   200 px steps through the whole page, its bounding box lies inside the viewport at every
   position:
   - at 1512×945 in Set up, Record and Wrap up;
@@ -1107,7 +1107,7 @@ Plan decisions (2026-10-30), on top of the split above:
 
   It fires on one press with no dialog ("Emergency stop sent"), and Escape twice still
   works.
-- [ ] **E-STOP stands alone.** Measured in `app/e2e/datacollection-console.spec.ts` from
+- [x] **E-STOP stands alone.** Measured in `app/e2e/datacollection-console.spec.ts` from
   the bounding boxes:
   - The E-STOP is the only control in the bar's right zone (`estop-zone`). End session is
     never adjacent to it, in any phase or width.
@@ -1129,7 +1129,7 @@ Plan decisions (2026-10-30), on top of the split above:
   ≥ 84 px at 1512 in Wrap up (Create dataset), ≥ 101 px in Set up (the preview's view
   switch), and 50 px at 1280 in Set up (the view switch). Before the change, End session
   sat 25 px from the E-STOP.
-- [ ] **No duplicates.**
+- [x] **No duplicates.**
   - On a live VR session there is at most one element each with `quest-connect`,
     `quest-open` and `quest-copy-viewer-link`. The text "Open on headset" occurs once.
   - The kept count is rendered once (`hud-kept`).
@@ -1137,10 +1137,10 @@ Plan decisions (2026-10-30), on top of the split above:
   - There is one `session-estop`.
   - There is no second E-STOP inside a `ControlLeaseBar` on this page.
   - Presence shows one avatar per (user, role).
-- [ ] **One lit action.** In every phase state of the e2e (Set up, Record capturing,
+- [x] **One lit action.** In every phase state of the e2e (Set up, Record capturing,
   Record between takes, Wrap up), exactly one visible kit `primary` button is on screen,
   not counting the E-STOP. Disabled primaries count as not lit.
-- [ ] **Every function within one disclosure.** The e2e reaches each of these with at most
+- [x] **Every function within one disclosure.** The e2e reaches each of these with at most
   one click (expand a step, open a systems cell, or open Testing tools):
   - Start robot side, Take control, Switch to arm control;
   - Limp / Stand up / Balance (and Ask the headset);
@@ -1149,30 +1149,30 @@ Plan decisions (2026-10-30), on top of the split above:
   - Edit task, Create/Open dataset;
   - Simulate VR input, Launch VR, Keyboard fallback, Joint states;
   - mute, swap view, expand view, E-STOP (zero clicks).
-- [ ] **Diagnostics.**
+- [x] **Diagnostics.**
   - Single-source and plain-language: a robot with readiness reason `mode_not_balance`
     shows the reason in step 3 (Set up) or the Mode cell plus the recovery slot (Record),
     and nowhere else.
   - Steps after a failed step read "Waits for step N" without the error text.
   - The robot mode `unknown` renders amber (`text-signal-unknown`).
-- [ ] **Set up.**
+- [x] **Set up.**
   - The current step is the first open one, is expanded, and holds the page's only primary.
   - Start session is secondary while steps are open and primary when all are done.
   - It is disabled with visible reason text when the robot is offline, and Space then does
     not start it (existing vitest kept).
-- [ ] **Testing tools.**
+- [x] **Testing tools.**
   - Simulated VR input, the desktop VR window, Keyboard fallback and Joint states are only
     in Testing tools.
   - Turning simulation on shows a "Simulated input" sim tag in the bar.
   - Closing the popover does not unmount `VRSessionPanel`: the vrGoodbye and vrLease
     vitest files pass.
-- [ ] **Phone (390×844).**
+- [x] **Phone (390×844).**
   - No horizontal scroll (`scrollWidth <= clientWidth`; the existing "fits a phone" e2e
     passes).
   - The fixed bottom dock holds the E-STOP and no other control. The phase action stays
     in the page: the start bar, the take dock or the summary band.
   - The h1 wraps to at most 2 lines.
-- [ ] **Headset role.** With `?xremu`, the page leads with the "This is the headset" hero
+- [x] **Headset role.** With `?xremu`, the page leads with the "This is the headset" hero
   and Launch VR (`vr-launch`) above the fold at 390×844 and 1280×800.
 - [ ] **Brand.**
   - `app/src/__tests__/design-drift.test.ts` passes.
@@ -1262,3 +1262,36 @@ Plan decisions (2026-10-30), on top of the split above:
 - No behaviour change: stores, hooks, API calls, polling intervals, hotkeys, presence role
   and lease logic are untouched. Only the 14 items under "Explicit changes" differ, and all
   of them are presentation.
+
+## Notes
+
+Closed 2026-10-30 with its four children merged: TASK-426 (#448), TASK-427 (#450),
+TASK-429 (#449) and TASK-428 (#451). Each child's PR lists where its part of the criteria
+above is tested. The ticked criteria are measured on the demo build with MSW, mostly in
+`app/e2e/datacollection-console.spec.ts`; the full demo Playwright suite (258 tests) and the
+app's vitest (3459 tests) pass on the merged tree.
+
+Left unticked, and why:
+- **Brand.** Everything but one part holds: the tokens, `design-drift.test.ts`, the
+  reduced-motion stop and the `docs/brand.md` entries. The light theme was checked for all
+  three phases, and the ZeMA `brand/` config for the command bar, the phone dock, Record and
+  Wrap up. Set up was not re-shot under ZeMA (#450 says so); it adds no colour outside the
+  tokens.
+- **Tests and screenshots.** The four Playwright specs are green. `./scripts/test-all.sh
+  --skip-pw` is not green on this box, for reasons outside the epic's diff (no child changes
+  `server/`, `robot-agent/` or `scripts/`): `server` `ScanSessionService.test.ts` fails while
+  `RUSTFS_ENDPOINT` is set in the shell, and `robot-agent` `workspace.test.ts` fails its
+  orphan sweep, on `main` too. The before/after screenshots are described in each PR body,
+  not attached, because this repo does not keep PR images.
+
+Not verified on a real robot. All of the above is the demo build, unit tests and the
+reviewers' probes. None of the manual checks under "Test Strategy" is recorded here: not the
+rehearsal against `sim-g1-edu-dev`, and not the screen review on `g1-edu-4` with the ZeMA
+brand. That covers Set up steps 1–5 against a live robot side, the lease hand-over to the
+headset, Ask the headset from the recovery slot, recovery after a real E-stop, and a dataset
+from real takes. The user started testing on the real robot on 2026-10-30.
+
+Found while closing, not fixed here: `useSessionDetail`
+(`app/src/features/datacollection/hooks/datacollection.ts`) fetches once per mount
+(`hasFetched`), so a hash-only navigation from one session page to another stays on
+"Loading…".

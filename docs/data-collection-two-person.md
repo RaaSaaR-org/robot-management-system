@@ -2,8 +2,8 @@
 
 *Added 2026-10-18 (TASK-414). Updated 2026-10-19 (TASK-420): the whole session
 in order, takes and the quick check, and remote testing over Tailscale. Updated
-2026-10-30 (TASK-429): the session page as a live console in three phases (Set
-up, Record, Wrap up).*
+2026-10-30 (TASK-426 to TASK-429): the session page as a live console in three
+phases (Set up, Record, Wrap up).*
 
 Recording demonstrations on the G1 is a two-person job. One person wears the
 Meta Quest 3 and drives the arms; the other sits at a desktop browser in
@@ -26,7 +26,7 @@ The steps below are the same for both robots.
 | Role | Where | Does |
 | --- | --- | --- |
 | **Operator** | Quest 3, inside VR, on `/data-collection/live?robot=<id>` | drives the arms (grip clutch), starts and stops takes from the session board or the sticks, and presses **B / Y** if anything goes wrong |
-| **Assistant** | a desktop browser, on the session page `/data-collection/<session id>` | watches the twin and the camera, reads the operator card, starts, stops and discards takes, keeps notes, and presses **E-STOP** if anything goes wrong |
+| **Assistant** | a desktop browser, on the session page `/data-collection/<session id>` | watches the twin and the camera, reads the operator chip, starts, stops and discards takes, keeps notes, and presses **E-STOP** if anything goes wrong |
 
 Both people can press the take buttons and the E-STOP. Changing the robot's
 mode (Limp, Stand up, Balance) still needs the control lease, and the operator
@@ -78,13 +78,44 @@ and a problem is stated once, in the step it belongs to. **Start session**
 sits under the steps: secondary while steps are open, primary once all are
 done.
 
-**Record** fits one screen: the big live view (head camera, with the twin and
-the operator's ghost hands in a corner you can swap), a strip of systems below
-it (robot side, control, arm control, mode, headset, arms, hands; open a cell
-for its actions), and the take dock on the right with the `● REC` / `READY`
-state, the take number, the big take timer, **Start take** / **Stop take**,
-**Next take**, **Discard**, the readouts and, after each take, the quick check.
-The list of takes sits under the dock.
+**Record** is one console that fits the screen: from 1024 px wide the page does
+not scroll while you record (the console never gets shorter than 520 px, so
+only a window shorter than that scrolls), and an alarm banner above it shrinks
+the console, never the page.
+
+- **The live view** leads with the head camera. The twin, with the operator's
+  ghost hands, is the picture-in-picture in a corner; its swap button trades
+  the two. A switch on the picture picks the twin or any camera the robot
+  serves, and **Expand the view** takes it full screen. While a take records,
+  the view is ringed in red. On a VR session the operator chip sits on its
+  bottom-left: the operator's initials, the link latency (mint; amber when the
+  link is stale, `Link lost` in red) and the grip bars L and R, each filling
+  mint while that grip holds the arm.
+- **The systems strip** under the view is the Set up checklist folded into
+  cells: Robot side, Control, Arm control, Mode, Headset, Arms and Hands on a
+  VR session (Robot side, Control and Input otherwise). Each cell is a dot and
+  a short value, amber when it needs attention and red when it failed. A click
+  opens that step's controls from Set up in a popover (Start robot side, Take
+  control, Switch to arm control, Limp / Stand up / Balance, the Quest
+  buttons), so every control stays one click away. On a phone the strip is one
+  summary row ("All 7 systems ok", or the worst cell) that expands it.
+- **The take dock** on the right, under the E-STOP: the state (`● REC`,
+  `READY` or `PAUSED`) and the take number, the big take timer (with
+  "Auto-stop in N s" under it when an auto-stop is set), **Start take** /
+  **Stop take** (Space), **Next take** (N) while a take records, **Discard**
+  (⌫) for the last take, and the readouts: session time, frames, frame rate,
+  takes kept and the Motion meter.
+- **The dock's slot** shows one thing, in this order: the **recovery** when
+  the E-stop is latched or the robot is not in Balance ("E-stop is latched.",
+  or "The robot is in Stand. The arms follow only in Balance."), with Limp,
+  Stand up and Balance right there; else a **blocker**: frames being missed, a
+  readiness problem with a button that opens its cell, the headset's arms
+  blocked, or jerky motion; else, after each take, the **quick check**, in the
+  timer's place.
+- **The takes list** under the dock, newest first: a thumbnail, the length and
+  frames (or "Recording" with the timer for the live take), what moved, dropped
+  frames, who started it, and a trash button that asks first. It scrolls
+  inside its column.
 
 **Wrap up** is one summary band: "Session complete" (or "Session failed" with
 the reason), one sentence on when it ended and what was kept, five readouts
@@ -95,14 +126,6 @@ band: the takes table (a thumbnail, length, frames, dropped, frame rate, the
 body parts that moved, who started it and the input) and a details list (the
 task with **Edit**, robot and input, start and end, the session id, and the
 dataset).
-
-> **Still landing (2026-10-30).** The command bar, Testing tools, the phone
-> dock, the Set up checklist and the Wrap up band are built (TASK-426,
-> TASK-427, TASK-429). The Record console (TASK-428) is specified in TASK-425
-> and still being built: until it merges, Record shows the earlier panels
-> under the command bar — the robot-side readiness panel, the **Robot mode**
-> panel, the twin and camera tiles, the session HUD, the **Operator** card and
-> the take list — with the same buttons the steps below name.
 
 The headset shows `ROBOT · WATCHING Ben (desktop)` as the robot panel's
 title, so the operator knows someone is watching.
@@ -165,8 +188,8 @@ title, so the operator knows someone is watching.
    Starting records nothing yet: it opens the session for takes, and the page
    switches to **Record**.
 
-When the operator enters VR, the assistant hears a soft chime, and the
-Operator card switches to `In VR`.
+When the operator enters VR, the assistant hears a soft chime, Get ready step 5
+turns done ("… is in VR"), and in Record the **Headset** cell reads `In VR`.
 
 ## Recording takes
 
@@ -176,24 +199,28 @@ left of the robot. Both views show the same take within about a second, and a
 toast says who did what ("Take 5 started from the headset", "Anna discarded
 take 4").
 
-- **Start take** → the HUD shows `● REC`, the take number and the take timer.
-  With an auto-stop set, the HUD also counts down `auto-stop in Ns`.
-- **Stop take** → the quick check appears (below).
+- **Start take** → the take dock shows `● REC`, the take number and the take
+  timer. With an auto-stop set, it also counts down "Auto-stop in N s".
+- **Stop take** → the quick check appears in the take dock (below).
 - **Next take** ends the take that is recording and starts the next one.
-- **Discard last** throws away the last take. On the desktop you can undo it
-  for 5 s; the discard is only sent when that window closes. In the headset it
+- **Discard** (the take dock's, for the last take) throws it away. On the
+  desktop the button turns into **Undo discard** for 5 s; the discard is only
+  sent when that window closes. In the headset it
   is a hold (R-stick 1.5 s, or the board button 1 s), never a click.
 - **End session** (desktop only, asks first) ends the session; a toast sums up the takes kept,
   the total minutes and the best streak.
 
-**The quick check after every take.** When a take stops, the desktop shows a
-card and the headset's session board shows the same check: a thumbnail, the
-length, frames and frame rate, which body parts moved (arms, hands), the five
-joints that moved most, and the robot's warnings (**Short**, **No motion**,
-**Dropped frames**). **Keep** is the default and only dismisses the card;
+**The quick check after every take.** When a take stops, the quick check takes
+the timer's place in the take dock, and the headset's session board shows the
+same check: a thumbnail, the length, frames and frame rate, which body parts
+moved (arms, hands), the five joints that moved most (behind **Top 5 joints**
+on the desktop), and the robot's warnings (**Short**, **No motion**,
+**Dropped frames**). **Keep** is the default and only dismisses the check;
 **Discard** throws the take away. A take that is short or did not move turns
-the card red and puts the focus on Discard, but nothing is ever discarded
-automatically. The check stays until Keep, a discard, or the next Start.
+the check's border red and puts the focus on Discard, but nothing is ever
+discarded automatically. The check stays until Keep, a discard, or the next
+Start, and starting the next take keeps it: the dock says so ("Starting take 6
+keeps take 5.").
 
 **An E-stop during a take** stops and discards that take at once. Every view
 says "Take N stopped by the E-stop — discarded", and the take is not in the
@@ -250,7 +277,7 @@ control lease, through the same confirmed route as the desktop buttons.
 | Step | Who | Where | Presses |
 | --- | --- | --- | --- |
 | 1 | Operator | headset, robot panel | **Hold 1 s to reset** (trigger, 1 s). The panel turns from red to dark |
-| 2 | Assistant | session page, **Robot mode** card | **Ask the headset: Stand up**, then confirms. The card shows "Waiting for the operator… (10 s)" |
+| 2 | Assistant | session page, the take dock's recovery | **Ask the headset: Stand up**, then confirms. The dock shows "Waiting for the operator… (10 s)" |
 | 3 | Operator | headset, robot panel | **Hold to allow Stand up** (trigger, 1 s), under "DESKTOP ASKS: Stand up" |
 | 4 | Assistant | session page | **Ask the headset: Balance** once the robot has stood for 2 s, then confirms |
 | 5 | Operator | headset | **Hold to allow Balance**, then release and squeeze the grip to take the arm again |
@@ -263,7 +290,7 @@ Rules the relay keeps:
   headset does not hold control, or for a mode that is not next (Stand up only
   from limp, Balance only from stand). The desktop then hears "declined" at once.
 - A request the operator does not allow within 10 s expires, and the desktop
-  card says so. One request per session every 2 s.
+  page says so. One request per session every 2 s.
 - The server only carries the question and the answer. It never calls the
   robot or the mode route itself.
 - **B / Y** and the desktop **E-STOP** work at every step.
@@ -272,13 +299,13 @@ Rules the relay keeps:
 
 | You see | Means | Do |
 | --- | --- | --- |
-| Operator card, red: "E-stop latched — hold Reset for 1 s." | Someone pressed B / Y or the E-STOP. Every take button is disabled, and a take that was recording is discarded | Check that everyone is clear. Then the operator holds **Hold 1 s to reset** on the headset's robot panel, or the desktop presses **Reset E-stop** in the VR window's "E-stop latched" banner. After that, see [After an E-stop](#after-an-e-stop) |
-| Operator card, red: "Arm refused …" and `held: arm_gate` | The robot refused an arm, for example because it is not in Balance | Read the line. Most often: switch the robot to Balance, then release and squeeze the grip again |
+| Take dock, red: "E-stop is latched."; the **Arms** cell red | Someone pressed B / Y or the E-STOP. Every take button is disabled, and a take that was recording is discarded | Check that everyone is clear. Then the operator holds **Hold 1 s to reset** on the headset's robot panel, or the desktop presses **Reset E-stop** in the VR window's "E-stop latched" banner. After that, see [After an E-stop](#after-an-e-stop) |
+| Take dock or the **Arms** cell, red: "Arm refused …" and `held: arm_gate` | The robot refused an arm, for example because it is not in Balance | Read the line. Most often: switch the robot to Balance, then release and squeeze the grip again |
 | Double low tone during a take | The operator's arms have been blocked for more than 1 s while a take is recording. The take is still recording | Stop the take and discard it if the motion is spoiled |
-| Falling low tone, the card shows `link lost` | The headset lost its link to the robot agent. The arms hold and the dead-man hands them back | Wait for the link to come back, or end the take |
+| Falling low tone, the operator chip shows `Link lost` | The headset lost its link to the robot agent. The arms hold and the dead-man hands them back | Wait for the link to come back, or end the take |
 | `link stale` (amber) | The link is slow; frames are late | Move closer to the Wi-Fi access point, or use USB |
-| Operator card: "Waiting for the headset" | No headset is in VR on this session | Open the live link on the Quest (Setup, step 5) |
-| HUD `Degraded` | The robot agent is unreachable; frames are being missed | Check the agent in the readiness panel |
+| Get ready step 5: "Waiting for the headset" (in Record, the **Headset** cell: `No headset`) | No headset is in VR on this session | Open the live link on the Quest (Setup, step 5) |
+| Take dock: "Frames are being missed." | The robot agent is unreachable; frames are being missed | Check the agent in the **Robot side** cell |
 
 All of the operator information is display only. The server passes the
 operator's state on to the other browsers, and it never sends any of it to

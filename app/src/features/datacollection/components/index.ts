@@ -23,8 +23,14 @@ export { UncertaintyHeatmap } from './UncertaintyHeatmap';
 export type { UncertaintyHeatmapProps } from './UncertaintyHeatmap';
 
 
-export { EpisodePanel } from './EpisodePanel';
-export type { EpisodePanelProps } from './EpisodePanel';
+export { TakeDock, KeyHint, dockSlotKind } from './console/TakeDock';
+export type { TakeDockProps, DockSlotKind } from './console/TakeDock';
+export { TakesList } from './console/TakesList';
+export type { TakesListProps } from './console/TakesList';
+export { SystemsStrip, worstCell } from './console/SystemsStrip';
+export type { SystemsStripProps, StripCell } from './console/SystemsStrip';
+export { OperatorChip } from './console/OperatorChip';
+export type { OperatorChipProps } from './console/OperatorChip';
 
 export { VRSessionPanel } from './VRSessionPanel';
 export type { VRSessionPanelProps, VRSessionPanelVariant } from './VRSessionPanel';

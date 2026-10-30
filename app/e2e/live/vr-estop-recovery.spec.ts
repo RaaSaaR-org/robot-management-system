@@ -265,7 +265,9 @@ test('the operator recovers from an E-stop without leaving VR (TASK-417)', async
     await openVrModal(quest, sessionId);
     await enterVr(quest);
     await expect(desk.getByTestId('operator-status')).toContainText('In VR', { timeout: 5_000 });
-    await expect(desk.getByTestId('control-lease-holder')).toContainText('Controlled by', { timeout: 10_000 });
+    // TASK-428: the Control cell names the holder (the operator, in the VR window).
+    await expect(desk.getByTestId('systems-cell-control')).toHaveAttribute('data-status', 'ok', { timeout: 10_000 });
+    await expect(desk.getByTestId('control-lease-holder')).not.toHaveText(/^(Nobody|You)$/);
 
     // The panel leads with the why line; the sim robot is limp.
     await expect.poll(async () => (await panelOf(quest))[0] ?? '', { timeout: 10_000 })

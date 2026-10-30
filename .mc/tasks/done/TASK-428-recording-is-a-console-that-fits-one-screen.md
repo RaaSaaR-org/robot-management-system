@@ -3,7 +3,7 @@ id: "TASK-428"
 aliases: []
 title: "Recording is a console that fits one screen"
 slug: "recording-is-a-console-that-fits-one-screen"
-status: "todo"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
@@ -194,6 +194,24 @@ epic's "Split"):
   `brand/` config.
 - [ ] **Screenshots.** The PR shows before/after screenshots of Record, capturing and
   between takes, at 1512×945, 1920×1080 and 390×844.
+- [ ] **SectionRail clearance in every phase** (added 2026-10-30 by the main session). At
+  1280×800, scroll 0, the shell's SectionRail tabs (`nav[aria-label="Section"]`,
+  "Research" / "Activity") sat 35 px above the E-STOP in Record and Wrap up. TASK-427 fixed
+  it for Set up only, with 16 px extra top padding between 640 and 1439 px. The spacing
+  applies to the bar in every phase, not per phase, and the console e2e asserts the
+  page-wide distance ≥ 48 px at 1280 **including the rail**, in Set up, Record and Wrap up.
+- [ ] **Shell height** (added 2026-10-30). When a page is shorter than the viewport (Set up
+  and Wrap up now fit one screen), the Sidebar's `bg-inset` column reaches the bottom of
+  the viewport instead of stopping where the content ends:
+  `app/src/components/layout/AppLayout.tsx` gives the flex row under the TopBar
+  `min-h-[calc(100dvh-3.5rem)]` (or equivalent). Another short page (a settings page) still
+  looks right, and nothing scrolls that did not before.
+- [ ] **One rising edge per lease hand-over trigger** (added 2026-10-30, a nit from
+  TASK-427's review). In `SessionDetailPage` the hand-over's two triggers no longer share
+  one rising edge (`due = vrModalOpen || leaseDone`): `useLeaseHandOver` is called once per
+  trigger with its own message, so opening the page's own VR window is a rising edge even
+  when the robot already balances with arm control on, and the VR-window toast no longer
+  claims "The robot balances with arm control on". A vitest covers both triggers.
 - [ ] **Gates (every child).**
   - `design-drift.test.ts` passes, with no raw hex or hue utilities, no `backdrop-filter`
     and no glow shadows.

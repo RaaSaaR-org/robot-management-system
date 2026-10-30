@@ -10,7 +10,9 @@
  *              container units, so the overlays never sit on the letterbox.
  *              No camera is one amber line with a "Why"; an offline robot is a
  *              small empty state. The twin and the cameras unmount while the
- *              page's own VR modal is open.
+ *              page's own VR modal is open. TASK-428: Record leads with the
+ *              camera, rings the well and the reticle red while a take records,
+ *              and puts the operator chip on the picture's bottom-left.
  * @feature datacollection
  */
 
@@ -66,6 +68,8 @@ export interface LiveViewProps {
    * no control may come within 64 px of it.
    */
   expandAt?: 'top' | 'bottom';
+  /** Bottom-left on the picture: the operator chip in Record (TASK-428). */
+  bottomLeft?: ReactNode;
   className?: string;
   'data-testid'?: string;
 }
@@ -101,6 +105,7 @@ export function LiveView({
   isRecording = false,
   suspended = false,
   expandAt = 'top',
+  bottomLeft = null,
   className,
   'data-testid': testId = 'live-view',
 }: LiveViewProps) {
@@ -267,7 +272,7 @@ export function LiveView({
         {expandAt === 'top' && expand}
       </div>
 
-      {(noCamera || expandAt === 'bottom') && (
+      {(noCamera || expandAt === 'bottom' || bottomLeft) && (
         <div
           className={cn(
             'absolute bottom-[26px] left-[26px] z-20 flex flex-col items-start gap-1.5',
@@ -281,6 +286,7 @@ export function LiveView({
             </p>
           )}
           <div className="flex flex-wrap items-center gap-1.5">
+            {bottomLeft}
             {expandAt === 'bottom' && expand}
             {noCamera && (
               <p className={cn(chip, 'gap-2 px-2.5 py-1.5 text-[12.5px] text-signal-unknown')} data-testid="live-view-no-camera">
@@ -309,13 +315,16 @@ export function LiveView({
       className={cn(
         'relative min-h-0 overflow-hidden [container-type:size]',
         online ? 'bg-media' : 'bg-inset',
-        isRecording && 'ring-1 ring-inset ring-signal-stopped/65',
         className,
       )}
       data-testid={testId}
       data-recording={isRecording ? 'true' : undefined}
     >
       {body}
+      {/* The recording ring, drawn over the picture (an inset ring on the well itself sits under it). */}
+      {isRecording && (
+        <span aria-hidden className="pointer-events-none absolute inset-0 z-30 rounded-[inherit] ring-1 ring-inset ring-signal-stopped/65" />
+      )}
     </div>
   );
 }

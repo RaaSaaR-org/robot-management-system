@@ -29,35 +29,44 @@
  *              order, the current one open with the page's one lit action, each
  *              problem stated once in the step it belongs to — next to a
  *              preview of the twin with the head camera as a picture-in-picture.
+ *              TASK-428: Record is a console that fits one screen — the live
+ *              view (the head camera, the twin as a picture-in-picture) over the
+ *              systems strip, and the take dock over the takes list. The slot
+ *              in the dock shows one thing: recovery, a blocker, or the quick
+ *              check. The take hotkeys, toasts and confirms are unchanged.
  *              TASK-429: Wrap up (completed and failed) is one summary band
  *              with one dataset action, the takes and the details.
  * @feature datacollection
  */
 
-import { useState, Suspense, lazy, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams } from 'react-router-dom';
-import { Glasses, Pause, Play } from 'lucide-react';
+import { Glasses, OctagonX, TriangleAlert } from 'lucide-react';
 import {
-  Button, EmptyState, ErrorState, FormField, FormModal, Input, Panel,
-  Skeleton, SkeletonText, Switch, Textarea, confirm, errorMessage, toast,
+  Button, ErrorState, FormField, FormModal, Input, Panel,
+  SkeletonText, Switch, Textarea, confirm, errorMessage, toast,
 } from '@/shared/components/ui';
-import { QualityIndicator } from '../components/QualityIndicator';
-import { CameraStreamView } from '../components/CameraStreamView';
-import { EpisodePanel } from '../components/EpisodePanel';
 import { VRSessionPanel } from '../components/VRSessionPanel';
-import { SessionHud, type HudPhase } from '../components/session/SessionHud';
+import type { HudPhase } from '../components/session/SessionHud';
 import { SessionCompleted } from '../components/session/SessionCompleted';
 import { QuickCheckCard } from '../components/session/QuickCheckCard';
 import { SessionEStopButton } from '../components/session/SessionEStopButton';
-import { OperatorCard } from '../components/OperatorCard';
+import { WHY_CLASS, heldLine as heldText } from '../components/OperatorCard';
 import { OperatorOverlay, OVERLAY_LINK } from '../components/OperatorOverlay';
-import { cn } from '@/shared/utils/cn';
+import { OperatorChip } from '../components/console/OperatorChip';
+import { SystemsStrip, type StripCell } from '../components/console/SystemsStrip';
+import { TakeDock } from '../components/console/TakeDock';
+import { TakesList } from '../components/console/TakesList';
+import { useTakeHotkeys } from '../hooks/useTakeHotkeys';
+import { ReparentHost, useDetachedNode } from '../components/console/Reparent';
+import { useViewportFill } from '../hooks/useViewportFill';
 import { SessionCommandBar, SessionCommandBarSkeleton, type RobotLink } from '../components/console/SessionCommandBar';
 import { TestingToolsRow } from '../components/console/TestingTools';
 import { HeadsetHero, RobotSetupDisclosure } from '../components/console/HeadsetHero';
 import { SetupRail, type SetupStepContent } from '../components/console/SetupRail';
 import { LiveView } from '../components/console/LiveView';
-import { buildSetupModel, leaseWorkDone, type SetupStep } from '../utils/setupSteps';
+import { buildSetupModel, leaseWorkDone, modeWord, type SetupStep, type SystemsCellId, type SystemsCellStatus } from '../utils/setupSteps';
 import { useLeaseHandOver, useLeaseTake } from '../hooks/useLeaseTake';
 import { PageLeaseLine } from '../components/console/PageLeaseLine';
 import { useDeviceRole, detectDeviceRole, type DeviceRole } from '../hooks/useDeviceRole';
@@ -67,6 +76,7 @@ import { ReadinessActions, RobotReadinessPanel } from '../../robots/components/r
 import { QuestControls } from '../../robots/components/readiness/QuestControls';
 import { QuestConnectHelp } from '../../robots/components/tabs/vr/QuestConnectHelp';
 import { useRobotReadiness } from '../../robots/hooks/useRobotReadiness';
+import type { RowId } from '../../robots/components/readiness/readinessRows';
 import { questPagePort } from '../../robots/api/readinessApi';
 import { useSessionPresence } from '../hooks/useSessionPresence';
 import { useFreshOperator } from '../hooks/useFreshOperator';
@@ -95,32 +105,12 @@ import { jointPositionUnit } from '../../robots/types/robots.types';
 import type { RobotType } from '../../robots/types/robots.types';
 import { TELEOPERATION_TYPE_LABELS, formatDuration, canStartSession, canPauseSession, canEndSession } from '../types/datacollection.types';
 import { sessionName } from '../utils/sessionFormat';
-import { takeLabel } from '../utils/takeFormat';
-
-const Robot3DViewer = lazy(() =>
-  import('../../robots/components/visualization/Robot3DViewer').then((m) => ({ default: m.Robot3DViewer }))
-);
-
-/** `head_camera` → "Head camera". */
-const cameraLabel = (name: string) => {
-  const words = name.replace(/[_-]+/g, ' ').trim();
-  const text = /camera$/i.test(words) ? words : `${words} camera`;
-  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
-};
+import { actorTag, describeEStopTake, takeLabel } from '../utils/takeFormat';
+import { cn } from '@/shared/utils/cn';
 
 const formatElapsed = (secs: number) => `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
 /** TASK-418 (D4): how long the headset stays in VR after the session ended — enough to read "ended". */
 export const VR_GOODBYE_MS = 5_000;
-
-/**
- * TASK-427, TASK-429: the E-STOP stands alone page-wide (>= 48 px at 1280).
- * Below 1440 px the shell's section rail (the nav right above this page)
- * reaches across to the bar's right end, 35 px above the E-STOP; 16 px more
- * above the bar puts it past 48. At 1440 and up the rail ends well left of the
- * E-STOP, so the page sits where the mockup has it. The loading skeleton takes
- * it too, so the bar does not move when the session arrives.
- */
-const RAIL_CLEARANCE = 'sm:max-[1439px]:pt-4';
 
 /** TASK-418 (D4): the session went from live to ended while this page's VR modal was open. */
 export function endsUnderVr(prevStatus: string | undefined, status: string | undefined, vrModalOpen: boolean): boolean {
@@ -191,6 +181,9 @@ export function SessionDetailPage() {
   const [pending, setPending] = useState<'start' | 'pause' | 'end' | null>(null);
   const [showJoints, setShowJoints] = useState(false);
   const [showKeyboardFallback, setShowKeyboardFallback] = useState(false);
+  // TASK-428: the legacy Next episode in flight, and the systems cell whose popover is open.
+  const [legacyNextBusy, setLegacyNextBusy] = useState(false);
+  const [openCell, setOpenCell] = useState<SystemsCellId | null>(null);
   // TASK-426: which side of the session this browser is; Testing tools can
   // force the headset view on a desktop ("Show the headset view here").
   const [roleOverride, setRoleOverride] = useState<DeviceRole | null>(null);
@@ -318,6 +311,32 @@ export function SessionDetailPage() {
       toast.error("Couldn't discard the take", { description: errorMessage(err) });
     }
   }, [session, storeDiscardEpisode, fetchSession]);
+
+  // TASK-428: Space / N / Backspace and the Undo window, moved unchanged out of
+  // the old take panel; bound while the session records (Record).
+  const recordPhase = sessionStatus === 'recording' || sessionStatus === 'paused';
+  const takeControls = useTakeHotkeys({
+    live,
+    isRecording: sessionStatus === 'recording',
+    pending: takePending,
+    hotkeys: recordPhase,
+    onStartTake: () => handleStartTake(),
+    onStopTake: () => handleStopTake(),
+    onNextTake: () => handleNextTake(),
+    onDiscardLast: handleDiscardLast,
+    onDiscardTake: (take) => (takeMode ? handleDiscardTake(take) : handleDiscardEpisode(take)),
+  });
+  // The console fills the viewport below its top: Record never scrolls from 1024 px.
+  const consoleRef = useViewportFill({ enabled: recordPhase });
+  // The robot-mode controls render once and move between the dock's recovery
+  // slot and the Mode cell without a remount (an open confirm or the headset's
+  // answer survives the robot reaching Balance).
+  const modeNode = useDetachedNode();
+
+  const legacyNext = async () => {
+    setLegacyNextBusy(true);
+    try { await handleNextEpisode(); } finally { setLegacyNextBusy(false); }
+  };
 
   const robotName = robot?.name ?? session?.robotId ?? 'the robot';
 
@@ -456,8 +475,9 @@ export function SessionDetailPage() {
   // robot really serves (a G1 has a head camera, not top/wrist).
   const cameras = useRobotCameras(sessionIsLive && robotOnline ? session!.robotId : null, 5000);
   const isCreated = session?.status === 'created';
-  const presence = useInputPresence(isCreated && sessionIsVr, isCreated && session?.type === 'gamepad');
-  const preflightItems = useMemo(() => (session && isCreated ? buildPreflight({
+  const presence = useInputPresence(isCreated && sessionIsVr, sessionIsLive && session?.type === 'gamepad');
+  // TASK-428: Record folds the same checks into its systems cells.
+  const preflightItems = useMemo(() => (session && sessionIsLive ? buildPreflight({
     robot: robot ? { name: robot.name, online: robotOnline } : null,
     agentConnected: isTelemetryConnected,
     cameras: { loading: cameras.loading, names: cameras.cameras, source: cameras.source, detail: cameras.detail },
@@ -466,13 +486,14 @@ export function SessionDetailPage() {
     vrSupported: presence.vrSupported,
     gamepadConnected: presence.gamepadConnected,
     lease: leaseInputs ? { enabled: lease.enabled, bound: lease.state === 'bound' } : undefined,
-  }) : []), [session, isCreated, robot, robotOnline, isTelemetryConnected, cameras.loading, cameras.cameras,
+  }) : []), [session, sessionIsLive, robot, robotOnline, isTelemetryConnected, cameras.loading, cameras.cameras,
     cameras.source, cameras.detail, presence.secureContext, presence.vrSupported, presence.gamepadConnected,
     leaseInputs, lease.enabled, lease.state]);
   const preflight = summarizePreflight(preflightItems);
   // TASK-427: the Set up steps read the robot's readiness (the compact panel's
-  // own read before); Record keeps its panel until TASK-428.
-  const readinessState = useRobotReadiness(session?.robotId ?? '', { enabled: isCreated && !!robot });
+  // own read before). TASK-428: so do Record's systems cells, on a VR session
+  // (where the compact panel read it before).
+  const readinessState = useRobotReadiness(session?.robotId ?? '', { enabled: (isCreated || (sessionIsLive && sessionIsVr)) && !!robot });
   // The hand-over is due once the page's lease has done its work: arm control
   // on and the robot balancing (steps 2 and 3), or this page's own VR window
   // opening. Never on the headset's presence: it reports its operator in VR
@@ -482,11 +503,18 @@ export function SessionDetailPage() {
     { measured: baseMode.status?.base?.mode ?? null, gateOn: modeControlOn },
     questPagePort(),
   );
-  const handOver = useCallback(() => {
+  // One rising edge per trigger, each with its own message: opening the VR
+  // window here is a hand-over even when the robot balanced long before.
+  const handOverBalanced = useCallback(() => {
     releaseLease();
     toast.info('You gave control back', { description: 'The robot balances with arm control on. The operator can take control in the headset now.' });
   }, [releaseLease]);
-  useLeaseHandOver(sessionIsVr && !leaseInputs && (vrModalOpen || leaseDone), pageHoldsLease, handOver);
+  const handOverVrWindow = useCallback(() => {
+    releaseLease();
+    toast.info('You gave control back', { description: 'The VR window on this browser takes control itself.' });
+  }, [releaseLease]);
+  useLeaseHandOver(sessionIsVr && !leaseInputs && leaseDone, pageHoldsLease, handOverBalanced);
+  useLeaseHandOver(sessionIsVr && !leaseInputs && vrModalOpen, pageHoldsLease, handOverVrWindow);
   // Read by the hotkey handler, which binds once per status change.
   const startBlockedRef = useRef(false);
   startBlockedRef.current = isCreated && preflight.blocking;
@@ -512,7 +540,7 @@ export function SessionDetailPage() {
 
   if (!session) {
     return (
-      <div className={cn('flex flex-col gap-3', RAIL_CLEARANCE)}>
+      <div className="flex flex-col gap-3">
         <SessionCommandBarSkeleton title={error && !isLoading ? 'Session' : 'Loading…'} />
         <Panel>
           {error && !isLoading ? (
@@ -544,27 +572,7 @@ export function SessionDetailPage() {
   const robotType = (telemetry?.robotType as RobotType) ?? ((robot?.metadata as Record<string, unknown>)?.robotType as RobotType) ?? 'generic';
   const openExport = () => { setModalError(undefined); setExportOpen(true); };
   summaryRef.current = { kept, elapsedS: sessionElapsedS, best: streak.best };
-  // The head camera leads the side column; any other camera goes under the twin.
-  const cameraNames = cameras.cameras.length > 0 ? cameras.cameras.slice(0, 4) : ['top', 'wrist'];
-  const headIndex = Math.max(0, cameraNames.findIndex((n) => /head/i.test(n)));
-  const leadCamera = cameraNames[headIndex];
-  const otherCameras = cameraNames.filter((_, i) => i !== headIndex);
   const operatorViewer = viewers.find((v) => v.role === 'operator') ?? null;
-  // TASK-414: who holds the robot, for everyone, whenever leases are on. The
-  // interactive bar below covers the page's own inputs. TASK-426: no
-  // ControlLeaseBar on this page draws an E-stop — the bar's is the one.
-  const showLeaseHolder = isLive && lease.enabled && !leaseInputs;
-  const cameraTile = (name: string, className: string) => (
-    <CameraStreamView
-      key={name}
-      robotId={session.robotId}
-      cameraName={name}
-      label={cameraLabel(name)}
-      className={className}
-      isRecording={isRecording}
-      offline={!robotOnline}
-    />
-  );
 
   // TASK-426: the phase engine and the command bar.
   const phase = sessionPhase(session.status);
@@ -639,185 +647,11 @@ export function SessionDetailPage() {
     </>
   ) : null;
 
-  // The phase actions that are not in the bar, until each phase gets its own
-  // layout (TASK-428 take dock).
-  const legacyActions = (legacyRecording || isPaused) && (
-    <div className="flex flex-wrap items-center gap-2" data-testid="session-legacy-actions">
-      {legacyRecording && (
-        <Button variant="secondary" isLoading={pending === 'pause'} leftIcon={<Pause className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handlePause()}>Pause</Button>
-      )}
-      {isPaused && (
-        <Button isLoading={pending === 'start'} leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />} onClick={() => void handleStart()}>Resume</Button>
-      )}
-    </div>
-  );
-
-  // The old blocks, by phase. TASK-427/428/429 replace them one phase at a time.
-  const liveBlocks = isLive && (
-    <>
-      {phase === 'record' && lastQuickCheck && (
-        <QuickCheckCard
-          key={lastQuickCheck.take}
-          sessionId={session.id}
-          quickCheck={lastQuickCheck}
-          onKeep={dismissQuickCheck}
-          onDiscard={handleDiscardTake}
-        />
-      )}
-
-      {isRecording && degraded && (
-        <Panel variant="inset" padding="sm" className="text-[13px] text-ink-secondary">
-          <span className="font-medium text-signal-estimated">Frames are being missed.</span> The robot agent is unreachable; retrying automatically.
-        </Panel>
-      )}
-
-      {showLeaseHolder && robot && (
-        <Panel padding="sm" data-testid="session-lease-holder">
-          <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={false} readOnly showEstop={false} />
-        </Panel>
-      )}
-
-      {lease.enabled && leaseInputs && robot && (
-        <Panel data-testid="session-control-lease">
-          <Panel.Header title="Control" description="Gamepad and simulated VR input drive the robot only while you hold control." />
-          <Panel.Body>
-            <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={leaseConnected} showEstop={false} />
-          </Panel.Body>
-        </Panel>
-      )}
-
-      {isVrSession && modeControlOn && robot && (
-        <Panel data-testid="session-robot-mode">
-          <Panel.Header
-            title="Robot mode"
-            description="Limp, Stand up and Balance without the remote. The changes need control — take it in the VR window (or here, for simulated input). While the operator is in the headset, ask for Stand up or Balance here; they allow it in the headset."
-          />
-          <Panel.Body>
-            <RobotModeControl
-              robotId={robot.id}
-              lease={lease}
-              baseMode={baseMode}
-              requestFromHolder={operatorViewer && operatorInVr && !vrModalOpen ? requestMode : undefined}
-            />
-          </Panel.Body>
-        </Panel>
-      )}
-
-      {/* TASK-414: the assistant layout. Left: the twin, large. Right: the
-          head camera, the HUD, the operator, the takes and the readiness.
-          Below lg it stacks with the side column first, so the controls never
-          sit under the 3D view on a tablet. */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12" data-testid="session-assistant-layout">
-        <div className="flex flex-col gap-6 lg:col-span-7 xl:col-span-8">
-          {/* D5: on the Quest the VR modal covers this page — no second scene behind it. */}
-          {!vrModalOpen && (
-            <Panel padding="none" data-testid="session-twin">
-              <Panel.Header
-                title="Robot"
-                description={robotOnline ? `${robotType.toUpperCase()}${isVrSession ? ' · ghost hands show where the operator wants them' : ''}` : undefined}
-              />
-              {robotOnline ? (
-                <div className="h-72 sm:h-96 lg:h-[34rem]">
-                  <Suspense fallback={<Skeleton className="h-full w-full" />}>
-                    <Robot3DViewer
-                      robotType={robotType}
-                      robotId={session.robotId}
-                      jointStates={telemetry?.jointStates}
-                      isAnimating={isTelemetryConnected}
-                      linkOverlay={twinOverlay}
-                    />
-                  </Suspense>
-                </div>
-              ) : (
-                <EmptyState size="sm" title="Robot offline" description="Start the robot agent to see the live model." />
-              )}
-            </Panel>
-          )}
-          {!vrModalOpen && otherCameras.length > 0 && !(robotOnline && cameras.loading) && !(robotOnline && cameras.cameras.length === 0) && (
-            <Panel>
-              <Panel.Header title="More cameras" />
-              <Panel.Body className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {otherCameras.map((name) => cameraTile(name, 'h-44'))}
-              </Panel.Body>
-            </Panel>
-          )}
-        </div>
-        <div className="order-first flex flex-col gap-6 lg:order-none lg:col-span-5 xl:col-span-4">
-          {!vrModalOpen && (
-            <div data-testid="session-lead-camera">
-              {robotOnline && cameras.loading ? (
-                <Skeleton className="h-56 w-full" />
-              ) : robotOnline && cameras.cameras.length === 0 ? (
-                <EmptyState
-                  size="sm"
-                  title="No camera"
-                  description={cameras.detail ? `The robot serves no camera: ${cameras.detail}` : 'The robot serves no camera. Episodes record without video.'}
-                />
-              ) : (
-                cameraTile(leadCamera, 'h-56')
-              )}
-            </div>
-          )}
-          {phase === 'record' && legacyActions}
-          <SessionHud
-            phase={hudPhase}
-            take={live ? live.take : isRecording ? currentEpisode : null}
-            takeElapsedS={takeMode ? takeElapsedS : isRecording ? sessionElapsedS : null}
-            duration={isRecording ? formatElapsed(Math.floor(sessionElapsedS)) : formatDuration(session.duration)}
-            frames={liveFrameCount}
-            fps={session.fps}
-            fpsActual={isRecording ? live?.fpsActual ?? recordingProgress?.fpsActual : undefined}
-            kept={kept}
-            degraded={isRecording && degraded}
-            autoStopInS={autoStopInS}
-            tone={isRecording ? 'live' : undefined}
-            streak={streak.current}
-            compact
-          />
-          {isVrSession && (
-            <OperatorCard
-              robotId={session.robotId}
-              sessionId={session.id}
-              operator={operator?.state ?? null}
-              operatorViewer={operatorViewer}
-            />
-          )}
-          <EpisodePanel
-            sessionId={session.id}
-            episodes={episodes}
-            live={live}
-            isRecording={isRecording}
-            canDiscard={isLive}
-            pending={takePending}
-            onStartTake={() => handleStartTake()}
-            onStopTake={() => handleStopTake()}
-            onNextTake={() => handleNextTake()}
-            onDiscardLast={handleDiscardLast}
-            onDiscardTake={(take) => (takeMode ? handleDiscardTake(take) : handleDiscardEpisode(take))}
-            onNextEpisode={handleNextEpisode}
-          />
-          {isVrSession && robot && (
-            <Panel data-testid="session-readiness">
-              <Panel.Header title="Robot side" description="Why the arms would not follow, before anyone puts the headset on." />
-              <Panel.Body>
-                <RobotReadinessPanel robotId={robot.id} variant="compact" lease={{ enabled: lease.enabled, state: lease.state, grant: lease.grant }} />
-              </Panel.Body>
-            </Panel>
-          )}
-          <Panel>
-            <Panel.Header title="Quality" />
-            <Panel.Body><QualityIndicator feedback={isRecording || isPaused ? qualityFeedback : null} /></Panel.Body>
-          </Panel>
-        </div>
-      </div>
-    </>
-  );
-
-
   // TASK-427: Set up — the guided rail and the preview.
   const operatorName = operatorViewer ? operatorViewer.displayName.split(' ')[0] : null;
   const questPort = questPagePort();
-  const setupModel = phase === 'setup' ? buildSetupModel({
+  // TASK-428: Record's systems cells come from the same model.
+  const setupModel = phase !== 'wrap' ? buildSetupModel({
     sessionType: session.type,
     robotName,
     readiness: readinessState.readiness,
@@ -950,7 +784,7 @@ export function SessionDetailPage() {
         };
     }
   };
-  const setupBlocks = setupModel && (
+  const setupBlocks = phase === 'setup' && setupModel && (
     <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]" data-testid="session-setup">
       <SetupRail
         model={setupModel}
@@ -978,6 +812,336 @@ export function SessionDetailPage() {
     </div>
   );
 
+  // TASK-428: Record — the console. The robot-side buttons keep the old Record
+  // panel's lease (no Take control of the page's own: the lease Set up took is
+  // given back when the session starts).
+  const recordLease = { enabled: lease.enabled, state: lease.state, grant: () => lease.grant() };
+  const readiness = readinessState.readiness;
+  const arms = readiness?.agent.readiness?.arms ?? null;
+  const measuredMode = baseMode.status?.base?.mode ?? null;
+  const estopLatched = robotFault || !!baseMode.status?.estopLatched || !!baseMode.status?.sidecarEstopLatched
+    || !!arms?.estopLatched || !!arms?.sidecarEstopLatched;
+  const notBalancing = isVrSession && modeControlOn && measuredMode !== null && measuredMode !== 'balance';
+  const operatorState = operator?.state ?? null;
+  const operatorInVrNow = operatorState?.inVr === true;
+  const recordCells = phase === 'record' && setupModel ? setupModel.cells : [];
+  const reasonCellNow = recordCells.find((c) => c.reason) ?? null;
+  const reasonOwner = reasonCellNow?.id ?? null;
+  const reason = reasonCellNow?.reason ?? null;
+  const modeReason = reasonOwner === 'mode' ? reason : null;
+  const showRecovery = phase === 'record' && (estopLatched || notBalancing);
+  const abortedCheck = lastQuickCheck?.discarded && lastQuickCheck.stopReason === 'estop' ? lastQuickCheck : null;
+  const jerky = !!qualityFeedback && (isRecording || isPaused) && qualityFeedback.currentSmoothnessScore < 0.6;
+  // The slot's blocker: the first of missed frames, a blocking readiness reason, the headset's block, jerky motion.
+  const blockerKind = showRecovery ? null
+    : isRecording && degraded ? 'degraded'
+      : reason?.severity === 'block' ? 'reason'
+        : operatorInVrNow && operatorState!.why.severity === 'block' ? 'operator'
+          : jerky ? 'motion' : null;
+  /** The readiness reason sentence shows once: in the slot when it holds it, else in its cell's popover. */
+  const slotShowsReason = (showRecovery && !!modeReason) || blockerKind === 'reason';
+  const FIX: Partial<Record<SystemsCellId, string>> = {
+    robot: 'Start robot side…', arm_control: 'Switch to arm control…', control: 'Control…', mode: 'Robot mode…', headset: 'Connect the Quest…',
+  };
+  const fixButton = (cell: SystemsCellId) => (
+    <Button variant="secondary" size="sm" onClick={() => setOpenCell(cell)} data-testid="take-dock-fix">
+      {FIX[cell] ?? 'Details…'}
+    </Button>
+  );
+  const modeControl = robot && modeControlOn ? (
+    <div data-testid="session-robot-mode">
+      <RobotModeControl
+        robotId={robot.id}
+        variant="step"
+        lit={false}
+        // In the recovery slot it is the compact form, so the dock still fits one screen.
+        dense={showRecovery}
+        lease={lease}
+        baseMode={baseMode}
+        takeControlHint="Take control in the VR window, or through the Control cell."
+        requestFromHolder={operatorViewer && operatorInVr && !vrModalOpen ? requestMode : undefined}
+      />
+    </div>
+  ) : null;
+  const slotTitle = (tone: 'fault' | 'warn', text: string, testId?: string) => (
+    <p className={cn('m-0 flex items-start gap-2 font-semibold', tone === 'fault' ? 'text-signal-stopped' : 'text-signal-unknown')} data-testid={testId}>
+      {tone === 'fault'
+        ? <OctagonX className="mt-0.5 h-4 w-4 flex-none" strokeWidth={1.75} aria-hidden />
+        : <TriangleAlert className="mt-0.5 h-4 w-4 flex-none" strokeWidth={1.75} aria-hidden />}
+      <span>{text}</span>
+    </p>
+  );
+  const slotLine = 'm-0 ml-6 mt-1 leading-normal text-ink-secondary';
+  const recovery = showRecovery ? (
+    <div className="flex flex-col">
+      {estopLatched
+        ? slotTitle('fault', 'E-stop is latched.', 'take-dock-recovery-title')
+        : slotTitle('warn', modeReason?.text ?? `The robot is in ${modeWord(measuredMode)}. The arms follow only in Balance.`, 'take-dock-recovery-title')}
+      {estopLatched && abortedCheck && (
+        <p className={cn(slotLine, 'font-medium text-signal-stopped')} role="status" data-testid="quick-check-verdict">
+          {describeEStopTake(abortedCheck.take)}
+        </p>
+      )}
+      {estopLatched && (
+        <p className={slotLine} data-testid="take-dock-estop-reset">The operator resets it in the headset, or reset it at the robot. Then stand the robot up again.</p>
+      )}
+      {/* The mode buttons right under the title, so a short slot shows them before it scrolls. */}
+      {modeControl && <ReparentHost node={modeNode} className="ml-6 mt-2" />}
+      {/* The fallback title already says it; the readiness reason and the E-stop do not. */}
+      {(estopLatched || modeReason) && <p className={cn(slotLine, modeControl && 'mt-1.5')}>The arms will not follow until the robot balances.</p>}
+    </div>
+  ) : null;
+  const blocker = blockerKind === 'degraded' ? (
+    <div className="flex flex-col">
+      {slotTitle('warn', 'Frames are being missed.', 'hud-degraded')}
+      <p className={slotLine}>The robot agent is unreachable; retrying.</p>
+    </div>
+  ) : blockerKind === 'reason' && reason && reasonOwner ? (
+    <div className="flex flex-col">
+      {slotTitle('fault', reason.text, 'take-dock-reason')}
+      <div className="ml-6 mt-2 flex flex-wrap gap-2">{fixButton(reasonOwner)}</div>
+    </div>
+  ) : blockerKind === 'operator' && operatorState ? (
+    <div className="flex flex-col">
+      {slotTitle('fault', operatorState.why.text)}
+      {operatorState.held && <p className={slotLine} data-testid="operator-held">{heldText(operatorState.held)}</p>}
+      <div className="ml-6 mt-2 flex flex-wrap gap-2">{fixButton('arms')}</div>
+    </div>
+  ) : blockerKind === 'motion' && qualityFeedback ? (
+    <div className="flex flex-col">
+      {slotTitle('warn', qualityFeedback.warningMessage ?? 'Motion is jerky.')}
+      {(qualityFeedback.suggestions ?? []).slice(0, 2).map((tip) => <p key={tip} className={slotLine}>{tip}</p>)}
+    </div>
+  ) : null;
+  const slotTone: 'fault' | 'warn' = blockerKind === 'degraded' || blockerKind === 'motion' || (showRecovery && !estopLatched) ? 'warn' : 'fault';
+
+  // The cells, with what the page knows live: the lease holder's name and the headset's why line.
+  const WHY_STATUS: Record<'block' | 'warn' | 'ok', SystemsCellStatus> = { block: 'fail', warn: 'warn', ok: 'ok' };
+  const holderName = lease.holder?.displayName ?? lease.holder?.userId ?? null;
+  const stripCells: StripCell[] = recordCells.map((c) => {
+    if (c.id === 'control') {
+      const first = lease.state !== 'bound' && holderName ? holderName.split(' ')[0] : null;
+      return { ...c, value: first ?? c.value, valueTestId: 'control-lease-holder', title: holderName ? `${holderName} has control` : c.value };
+    }
+    if (c.id === 'arms' && operatorState && operatorInVrNow) {
+      const why = operatorState.why;
+      return {
+        ...c,
+        value: why.text.replace(/\.$/, ''),
+        status: WHY_STATUS[why.severity],
+        valueTestId: 'operator-why',
+        valueData: { 'data-severity': why.severity, 'data-code': why.code },
+        title: why.text,
+      };
+    }
+    return c;
+  });
+  const cellReason = (c: StripCell) => (c.reason && !slotShowsReason ? (
+    <p
+      className={cn('m-0 font-medium', c.reason.severity === 'block' ? 'text-signal-stopped' : 'text-signal-unknown')}
+      data-testid="systems-cell-reason"
+      data-code={c.reason.code}
+    >
+      {c.reason.text}
+    </p>
+  ) : null);
+  const rowsFor = (ids: RowId[]) => (robot && readiness ? (
+    <RobotReadinessPanel robotId={robot.id} variant="rows" rows={ids} readiness={readinessState} />
+  ) : null);
+  const recordActions = (only: Array<'start' | 'arm' | 'read_only' | 'logs'>) => (robot ? (
+    <div className="flex flex-wrap items-center gap-2">
+      <ReadinessActions robotId={robot.id} ready={readinessState} lease={recordLease} only={only} lit={false} />
+    </div>
+  ) : null);
+  const renderCell = (c: StripCell): ReactNode => {
+    switch (c.id) {
+      case 'robot':
+        return (
+          <>
+            {cellReason(c)}
+            <p className="m-0 text-ink-secondary">The bridge, the sidecar and the robot agent run on the robot PC.</p>
+            {recordActions(['start', 'logs'])}
+            {rowsFor(['preflight', 'link', 'bridge', 'sidecar', 'agent'])}
+          </>
+        );
+      case 'control':
+        return (
+          <>
+            {cellReason(c)}
+            {!lease.enabled ? (
+              <p className="m-0 text-ink-secondary">This robot runs without control leases: any input drives it.</p>
+            ) : leaseInputs && robot ? (
+              <div data-testid="session-control-lease">
+                <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={leaseConnected} showEstop={false} />
+              </div>
+            ) : robot ? (
+              <>
+                <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={false} readOnly showEstop={false} />
+                {pageHoldsLease && <PageLeaseLine text={`You have control of ${robotName}.`} onRelease={releaseLease} />}
+                {isVrSession && <p className="m-0 text-ink-tertiary">The operator takes control in the headset. This page never takes it from them.</p>}
+              </>
+            ) : null}
+          </>
+        );
+      case 'arm_control':
+        return (
+          <>
+            {cellReason(c)}
+            <p className="m-0 text-ink-secondary">The arms follow the headset only in arm control.</p>
+            {recordActions(['arm', 'read_only'])}
+            {rowsFor(['sidecar', 'control'])}
+          </>
+        );
+      case 'mode':
+        return (
+          <>
+            {cellReason(c)}
+            {showRecovery && modeControl
+              ? <p className="m-0 text-ink-secondary">Limp, Stand up and Balance are in the take dock while the robot does not balance.</p>
+              : modeControl
+                ? <ReparentHost node={modeNode} />
+                : <p className="m-0 text-ink-secondary">This robot&apos;s mode cannot be changed from here.</p>}
+            {rowsFor(['mode'])}
+          </>
+        );
+      case 'headset': {
+        const quest = readiness?.quest ?? null;
+        return (
+          <>
+            {cellReason(c)}
+            {operatorInVrNow ? (
+              <p className="m-0 text-ink-secondary">{operatorViewer?.displayName ?? 'The operator'} is in VR.</p>
+            ) : robot && quest ? (
+              <div data-testid="quest-connect-help" data-mode="live">
+                <QuestControls robotId={robot.id} quest={quest} sessionId={session.id} port={questPort} />
+              </div>
+            ) : (
+              <QuestConnectHelp location={window.location} robotId={robot?.id} quest={null} sessionId={session.id} />
+            )}
+            {rowsFor(['quest'])}
+          </>
+        );
+      }
+      case 'arms':
+        return (
+          <>
+            {cellReason(c)}
+            {operatorState && operatorInVrNow ? (
+              <>
+                <p className={cn('m-0 font-medium', WHY_CLASS[operatorState.why.severity])}>{operatorState.why.text}</p>
+                {operatorState.held && blockerKind !== 'operator' && <p className="m-0 text-ink-tertiary">{heldText(operatorState.held)}</p>}
+              </>
+            ) : (
+              <p className="m-0 text-ink-secondary">The arms follow the operator&apos;s hands while they hold a grip.</p>
+            )}
+            {rowsFor(['arms'])}
+          </>
+        );
+      case 'hands':
+        return (
+          <>
+            {cellReason(c)}
+            {rowsFor(['hand_left', 'hand_right'])}
+          </>
+        );
+      case 'input': {
+        const input = preflightItems.find((i) => i.id === 'input');
+        return (
+          <>
+            {cellReason(c)}
+            <p className="m-0 text-ink-secondary">{input?.action ?? input?.detail ?? 'The input is not checked.'}</p>
+          </>
+        );
+      }
+    }
+  };
+
+  const quickCheckNode = lastQuickCheck ? (
+    <QuickCheckCard
+      key={lastQuickCheck.take}
+      variant="dock"
+      sessionId={session.id}
+      quickCheck={lastQuickCheck}
+      by={actorTag(episodes.find((e) => e.episodeIndex === lastQuickCheck.take)?.startedBy)}
+      onKeep={dismissQuickCheck}
+      onDiscard={handleDiscardTake}
+    />
+  ) : null;
+
+  const recordBlocks = phase === 'record' && (
+    <div
+      ref={consoleRef}
+      className="grid grid-cols-1 gap-3 lg:h-[var(--console-h,640px)] lg:grid-cols-[minmax(0,1fr)_340px] min-[1440px]:grid-cols-[minmax(0,1fr)_380px]"
+      data-testid="session-console"
+    >
+      <section className="flex min-h-0 flex-col rounded-panel border border-line-subtle bg-panel" aria-label="Live view">
+        <LiveView
+          className="flex-1 rounded-t-[13px] max-lg:aspect-[4/3] max-lg:flex-none"
+          robotId={session.robotId}
+          robotType={robotType}
+          online={robotOnline}
+          live={isTelemetryConnected}
+          jointStates={telemetry?.jointStates}
+          twinOverlay={twinOverlay}
+          cameras={{ names: cameras.cameras, loading: robotOnline && cameras.loading, detail: cameras.detail }}
+          defaultMain="camera"
+          isRecording={capturing || legacyRecording}
+          suspended={vrModalOpen}
+          bottomLeft={isVrSession ? <OperatorChip operator={operatorState} operatorViewer={operatorViewer} /> : null}
+        />
+        <SystemsStrip cells={stripCells} renderBody={renderCell} openId={openCell} onOpenChange={setOpenCell} />
+      </section>
+      <div className="flex min-h-0 flex-col gap-3">
+        <TakeDock
+          phase={hudPhase}
+          take={live ? live.take : isRecording ? currentEpisode : null}
+          takeElapsedS={takeMode ? takeElapsedS : isRecording ? sessionElapsedS : null}
+          autoStop={autoStopInS !== null ? { inS: autoStopInS, totalS: live?.autoStopS ?? null } : null}
+          readouts={{
+            duration: isRecording ? formatElapsed(Math.floor(sessionElapsedS)) : formatDuration(session.duration),
+            frames: liveFrameCount,
+            fps: session.fps,
+            fpsActual: isRecording ? live?.fpsActual ?? recordingProgress?.fpsActual : undefined,
+            kept,
+            streak: streak.current,
+            motion: isRecording || isPaused ? qualityFeedback : null,
+            live: isRecording,
+          }}
+          controls={takeControls}
+          pending={takePending}
+          onStartTake={() => handleStartTake()}
+          onStopTake={() => handleStopTake()}
+          onNextTake={() => handleNextTake()}
+          recovery={recovery}
+          blocker={blocker}
+          slotTone={slotTone}
+          quickCheck={quickCheckNode}
+          keepsTake={lastQuickCheck && !lastQuickCheck.discarded ? lastQuickCheck.take : null}
+          legacy={!takeMode ? {
+            recording: isRecording,
+            paused: isPaused,
+            pending: pending === 'start' || pending === 'pause' ? pending : null,
+            nextPending: legacyNextBusy,
+            onPause: () => void handlePause(),
+            onResume: () => void handleStart(),
+            onNextEpisode: () => void legacyNext(),
+          } : null}
+        />
+        <TakesList
+          className="lg:flex-1"
+          sessionId={session.id}
+          episodes={episodes}
+          live={live}
+          isRecording={isRecording}
+          canDiscard={isLive}
+          takeElapsedS={takeElapsedS}
+          onDiscardTake={(take) => (takeMode ? handleDiscardTake(take) : handleDiscardEpisode(take))}
+        />
+      </div>
+      {modeControl && modeNode && createPortal(modeControl, modeNode)}
+    </div>
+  );
+
   // TASK-429: Wrap up is one summary band (the one dataset action), the takes and the details.
   const wrapBlocks = phase === 'wrap' && (
     <SessionCompleted
@@ -992,9 +1156,10 @@ export function SessionDetailPage() {
 
   return (
     // max-sm:pb-[88px]: with the shell's 24 px, nothing hides behind the phone's E-STOP dock.
-    // RAIL_CLEARANCE: below 1440 px the section rail runs over the E-STOP's
-    // column; in every phase, so the bar and the E-STOP never move when the phase changes.
-    <div className={cn('flex flex-col gap-3 max-sm:pb-[88px]', RAIL_CLEARANCE)} data-phase={phase} data-role={deviceRole}>
+    // The 16 px the section rail needs above the bar below 1440 px is the bar's
+    // own margin (SessionCommandBar's SHIM), so it holds in every phase and in
+    // the loading skeleton, and is applied nowhere else (TASK-427, TASK-429).
+    <div className="flex flex-col gap-3 max-sm:pb-[88px]" data-phase={phase} data-role={deviceRole}>
       <SessionCommandBar
         phase={phase}
         tally={tally}
@@ -1025,8 +1190,8 @@ export function SessionDetailPage() {
       )}
 
       {headset && isLive && isVrSession
-        ? <RobotSetupDisclosure>{phase === 'setup' ? setupBlocks : liveBlocks}</RobotSetupDisclosure>
-        : phase === 'setup' ? setupBlocks : liveBlocks}
+        ? <RobotSetupDisclosure>{phase === 'setup' ? setupBlocks : recordBlocks}</RobotSetupDisclosure>
+        : phase === 'setup' ? setupBlocks : recordBlocks}
       {wrapBlocks}
 
       <FormModal

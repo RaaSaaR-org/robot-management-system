@@ -120,3 +120,52 @@ describe('QuickCheckCard', () => {
     expect(onKeep).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('QuickCheckCard dock variant (TASK-428)', () => {
+  it('shows the take, when and by whom, its numbers and groups; Top 5 joints is a disclosure', async () => {
+    render(<QuickCheckCard variant="dock" sessionId="s1" quickCheck={qc()} by="by Anna" onKeep={vi.fn()} onDiscard={vi.fn()} />);
+    const card = screen.getByTestId('quick-check');
+    expect(card).toHaveAttribute('data-variant', 'dock');
+    expect(screen.getByTestId('quick-check-title')).toHaveTextContent('Take 5');
+    expect(card).toHaveTextContent('just now, by Anna');
+    expect(screen.getByTestId('quick-check-stats')).toHaveTextContent('23.4 s707 frames30 fps');
+    expect(screen.getByTestId('quick-check-groups')).toHaveTextContent('L arm');
+    expect(await screen.findByTestId('take-thumbnail-4')).toBeInTheDocument();
+    expect(screen.queryByTestId('quick-check-joints')).toBeNull();
+    fireEvent.click(screen.getByTestId('quick-check-joints-toggle'));
+    expect(screen.getByTestId('quick-check-joints').querySelectorAll('li')).toHaveLength(5);
+  });
+
+  it('Keep (ghost) dismisses; Discard (secondary) discards that take; no fill on either', () => {
+    const onKeep = vi.fn();
+    const onDiscard = vi.fn();
+    render(<QuickCheckCard variant="dock" sessionId="s1" quickCheck={qc()} onKeep={onKeep} onDiscard={onDiscard} />);
+    const keep = screen.getByTestId('quick-check-keep');
+    const discard = screen.getByTestId('quick-check-discard');
+    expect(keep.className).not.toMatch(/(^| )bg-primary( |$)/);
+    expect(discard.className).not.toMatch(/bg-stop/);
+    fireEvent.click(keep);
+    expect(onKeep).toHaveBeenCalledTimes(1);
+    fireEvent.click(discard);
+    expect(onDiscard).toHaveBeenCalledWith(4);
+  });
+
+  it('turns red and focuses Discard on a take worth discarding, without the E-STOP red fill', () => {
+    render(<QuickCheckCard variant="dock" sessionId="s1" quickCheck={qc({ warnings: ['short'] })} onKeep={vi.fn()} onDiscard={vi.fn()} />);
+    expect(screen.getByTestId('quick-check').className).toContain('border-signal-stopped/40');
+    const discard = screen.getByTestId('quick-check-discard');
+    expect(discard).toHaveFocus();
+    expect(discard.className).not.toMatch(/bg-stop/);
+  });
+
+  it('keeps the E-stop verdict and offers only Dismiss', () => {
+    const onKeep = vi.fn();
+    render(<QuickCheckCard variant="dock" sessionId="s1" quickCheck={qc({ take: 10, frames: 0, stopReason: 'estop', discarded: true })} onKeep={onKeep} onDiscard={vi.fn()} />);
+    expect(screen.getByTestId('quick-check-verdict')).toHaveTextContent('Take 11 stopped by the E-stop — discarded');
+    expect(screen.queryByTestId('quick-check-discard')).toBeNull();
+    expect(screen.queryByTestId('quick-check-stats')).toBeNull();
+    fireEvent.click(screen.getByTestId('quick-check-keep'));
+    expect(screen.getByTestId('quick-check-keep')).toHaveTextContent('Dismiss');
+    expect(onKeep).toHaveBeenCalledTimes(1);
+  });
+});
