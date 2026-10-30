@@ -26,7 +26,7 @@ processes in a fixed order, each behind a readiness gate:
 | Step | What it checks or starts | Ready when |
 | --- | --- | --- |
 | `preflight` | Parses the profile; checks ports 6001 / 8767 / 41245; in arm_sdk mode refuses while `xr_teleoperate` or `teleop_hand_and_arm` runs | ports free or held by its own children |
-| `link` | `enp131s0` carrier + operstate up, `192.168.123.222` present, one ping to the robot | "Robot cable unplugged or robot off" otherwise |
+| `link` | `enp131s0` carrier + operstate up, `192.168.123.222` present, one ping to the robot. A carrier loss is waited out for up to `timeouts.carrierS` (15 s) and the step says how long it waited (TASK-423) | "Robot cable unplugged or robot off … Waited 15 s" when it stays down |
 | `camera` | TCP connect to the PC2 head camera `192.168.123.164:5600` | a **warning** only, never a stop |
 | `bridge` | `g1_state_bridge_readonly.py --iface enp131s0 --domain 0` | `bridge_probe.py` sees `rt/lowstate` on :6001 |
 | `sidecar` | `g1_sidecar.py`, **read_only by default** | `/health`: `connected`, the expected `write_mode` and `loco.gate`, `dds_domain` (when reported), fresh `base.age_s` under fsm |
@@ -118,6 +118,12 @@ or an edit rewrites them). Git answers are cached for 30 s.
 - **A process the supervisor started** that is older than its code gets
   `checks.staleCode = {startedAt, codeAt}` and a warning: "runs code from before
   <date> — restart the robot side". Stop and Start in the panel fixes it.
+- **The supervisor itself is not covered.** Stop and Start restart only its
+  children, and the stale-code check looks only at them. After a change under
+  `robot-agent/supervisor/` (a pull that touches it, e.g. TASK-423's carrier
+  wait), restart the supervisor:
+  `systemctl --user restart neodem-robot-supervisor@<robot>` (e.g.
+  `@g1-edu-4`). The children keep running and are re-adopted.
 - **A foreign process** carries the same verdict in `foreign.staleCode`, plus its
   `cwd` and the robot id its environment names. A process that runs from another
   checkout (an old worktree) is compared by that checkout's own commit time. A
@@ -528,6 +534,12 @@ has the 3-DoF waist, it needs 501.
 
 Other FSM ids worth knowing: 0 zero torque, 1 limp (damp), 4 locked stand,
 801 running mode.
+
+A robot found in **zero torque** (FSM 0) is not stood up directly: `stand` is
+refused with `bad_transition` and `next: "limp"` ("command limp first"), and the
+app's mode panel shows the bring-up strip *Zero torque → Limp → Stand → Balance*
+with the next button marked. Limp, Stand up and Balance stay three confirmed
+clicks — nothing chains them (TASK-423).
 
 Each change is confirmed by `GetFsmId` within 5 s or answers **504
 `unconfirmed`** — with no automatic recovery: the UI shows the measured mode and

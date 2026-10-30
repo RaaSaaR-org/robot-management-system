@@ -412,6 +412,29 @@ class FsmMonitor(object):
 # ---------------------------------------------------------------------------
 
 
+# The bring-up sequence without the remote: zero torque / other -> limp ->
+# stand -> balance. `next_step` names the one step that moves the robot toward
+# `target` from the measured mode; nothing here ever sends it.
+BRING_UP_ORDER = ("limp", "stand", "balance")
+NEXT_STEP_HINTS = {
+    "limp": "command limp first (zero torque or any other mode -> limp -> stand -> balance)",
+    "stand": "command stand first (limp -> stand -> balance)",
+}
+
+
+def next_step(measured, target):
+    """The next mode to command on the way from `measured` to `target`, or
+    None when there is none (already there, or the mode is unknown)."""
+    if target not in BRING_UP_ORDER or measured == target or measured == "unknown":
+        return None
+    if measured not in BRING_UP_ORDER:
+        return "limp"
+    here, there = BRING_UP_ORDER.index(measured), BRING_UP_ORDER.index(target)
+    if there < here:
+        return "limp"  # going back down always passes through limp
+    return BRING_UP_ORDER[here + 1]
+
+
 def _refuse(status, code, error, **extra):
     body = {"ok": False, "code": code, "error": error}
     body.update(extra)
@@ -528,10 +551,15 @@ class ModeController(object):
                            measured=st)
         allowed_from = ["limp"] if mode == "stand" else ["stand"]
         if st["mode"] not in allowed_from:
-            return _refuse(409, "bad_transition", "%s is only allowed from %s, the robot is in %s"
-                           % (mode, " or ".join(allowed_from), st["mode"]),
+            # TASK-423: name the next valid step instead of only refusing. It is
+            # never taken automatically — every step stays an operator action.
+            nxt = next_step(st["mode"], mode)
+            hint_text = NEXT_STEP_HINTS.get(nxt) if nxt else None
+            hint = (" — %s" % hint_text) if hint_text else ""
+            return _refuse(409, "bad_transition", "%s is only allowed from %s, the robot is in %s%s"
+                           % (mode, " or ".join(allowed_from), st["mode"], hint),
                            **{"from": st["mode"], "allowed_from": allowed_from,
-                              "fsm_id": st["fsm_id"]})
+                              "fsm_id": st["fsm_id"], "next": nxt})
         if mode == "balance":
             held = self.monitor.stand_held_s()
             if held is None or held < self.settle_s:

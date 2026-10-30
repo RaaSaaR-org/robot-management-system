@@ -28,6 +28,11 @@ export interface Timeouts {
   agentS: number;
   /** How long the simulator may take to answer its /health (sim profiles). */
   simS: number;
+  /**
+   * How long the link step waits for a dropped carrier to come back before it
+   * fails `no_carrier` (TASK-423: the robot LAN flapped for ~8 s on 2026-10-29).
+   */
+  carrierS: number;
 }
 
 export interface Profile {
@@ -88,7 +93,7 @@ export const INHERITED_ENV_KEYS = ['HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 
 /** PATH tail every child gets after the profile's own entries. */
 export const BASE_PATH = ['/usr/local/bin', '/usr/bin', '/bin'];
 
-const DEFAULT_TIMEOUTS: Timeouts = { bridgeS: 15, sidecarS: 45, agentS: 20, simS: 60 };
+const DEFAULT_TIMEOUTS: Timeouts = { bridgeS: 15, sidecarS: 45, agentS: 20, simS: 60, carrierS: 15 };
 
 /** Bridge args the supervisor composes itself from the profile's fields. */
 const BRIDGE_OWNED_ARGS = ['--iface', '--domain', '--port', '--bind'];

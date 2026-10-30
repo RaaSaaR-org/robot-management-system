@@ -473,6 +473,59 @@ def test_stand_only_from_limp(make_rig, fsm, mode):
     assert rig.loco.sets() == []
 
 
+def test_stand_from_zero_torque_names_limp_as_the_next_step_and_sends_nothing(make_rig):
+    """TASK-423: on 2026-10-29 the G1 sat at FSM 0 and Stand was refused with
+    nothing but bad_transition. The refusal now names Limp as the next step —
+    and still sends no RPC: every step stays an operator action."""
+    rig = make_rig(fsm=0)
+    status, body = rig.post_mode("stand")
+    assert status == 409 and body["code"] == "bad_transition"
+    assert body["from"] == "zero_torque" and body["next"] == "limp"
+    assert "command limp first" in body["error"]
+    assert rig.loco.sets() == []
+    # the operator's two explicit steps then work
+    status, body = rig.post_mode("limp")
+    assert status == 200 and body["from"] == "zero_torque"
+    status, body = rig.post_mode("stand")
+    assert status == 200 and body["from"] == "limp"
+    assert rig.loco.sets() == [1, 4]
+
+
+def test_balance_from_limp_names_stand_as_the_next_step(make_rig):
+    rig = make_rig()
+    status, body = rig.post_mode("balance")
+    assert status == 409 and body["next"] == "stand"
+    assert "command stand first" in body["error"]
+
+
+def test_a_next_step_without_a_hint_still_refuses_cleanly(make_rig, monkeypatch):
+    """next_step can return "balance", which has no NEXT_STEP_HINTS entry; the
+    refusal must stay a 409 with `next` set, never a KeyError."""
+    monkeypatch.setattr(lm, "next_step", lambda measured, target: "balance")
+    rig = make_rig(fsm=0)
+    status, body = rig.post_mode("stand")
+    assert status == 409 and body["code"] == "bad_transition"
+    assert body["next"] == "balance"
+    assert body["error"].endswith("the robot is in zero_torque")
+    assert rig.loco.sets() == []
+
+
+@pytest.mark.parametrize("measured,target,want", [
+    ("zero_torque", "stand", "limp"),
+    ("zero_torque", "balance", "limp"),
+    ("other", "stand", "limp"),
+    ("limp", "stand", "stand"),
+    ("limp", "balance", "stand"),
+    ("stand", "balance", "balance"),
+    ("balance", "stand", "limp"),
+    ("balance", "balance", None),
+    ("unknown", "stand", None),
+    ("limp", "walk", None),
+])
+def test_next_step(measured, target, want):
+    assert lm.next_step(measured, target) == want
+
+
 def test_unknown_mode_is_400(make_rig):
     rig = make_rig()
     for bad in ("walk", None, 500):
