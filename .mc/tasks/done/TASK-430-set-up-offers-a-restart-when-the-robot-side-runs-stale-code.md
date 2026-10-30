@@ -3,7 +3,7 @@ id: "TASK-430"
 aliases: []
 title: "Set up offers a restart when the robot side runs stale code"
 slug: "set-up-offers-a-restart-when-the-robot-side-runs-stale-code"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
