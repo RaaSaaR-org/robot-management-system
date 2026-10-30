@@ -3,7 +3,7 @@ id: "TASK-421"
 aliases: []
 title: "Keyboard teleop moves the real G1 arms smoothly"
 slug: "keyboard-teleop-moves-the-real-g1-arms-smoothly"
-status: "review"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
@@ -16,7 +16,7 @@ spe: 4
 effort: "high"
 due_date: ""
 created: "2026-10-29"
-updated: "2026-10-29"
+updated: "2026-10-30"
 ---
 
 # Keyboard teleop moves the real G1 arms smoothly
@@ -69,8 +69,8 @@ The candidates in the brief were checked and ruled out. Browser key auto-repeat 
 - [x] Presses on arm joints and the gaps between them arm once and never disarm while the console heartbeats (vitest).
 - [x] Held-key steps are 16 mrad at 50 Hz; an open clutch or 300 ms without a clutch-closed beat stops the joint; 1 s without a heartbeat still disarms (vitest).
 - [x] The Teleop tab starts on and steps between drivable joints, shows agent errors and releases a held key on blur (vitest `KeyboardTeleopLease.test.tsx`).
-- [ ] On `g1-edu-4` in Balance: hold → on an arm joint, and the joint moves smoothly. Release, wait 2 s and press again: the sidecar log shows ONE `ARM` for the whole session, no `dead-man` lines while the tab is open, and the arm does not jump on the first press.
-- [ ] On `g1-edu-4`: close the tab while armed. `DISARM (request)` appears within about 1 s.
+- [ ] On `g1-edu-4` in Balance: hold → on an arm joint, and the joint moves smoothly. Release, wait 2 s and press again: the sidecar log shows ONE `ARM` for the whole session, no `dead-man` lines while the tab is open, and the arm does not jump on the first press. — moved to [[TASK-424]] (g1-edu-4 check on 2026-10-30)
+- [ ] On `g1-edu-4`: close the tab while armed. `DISARM (request)` appears within about 1 s. — moved to [[TASK-424]] (g1-edu-4 check on 2026-10-30)
 
 ## Notes
 
