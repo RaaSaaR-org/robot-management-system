@@ -456,8 +456,8 @@ test.describe('Wrap up (TASK-429)', () => {
   /**
    * Page-wide: the nearest visible interactive element to the E-STOP, anywhere
    * on the page. The shell's section rail (`nav[aria-label="Section"]`) is
-   * reported on its own: it is the same in every phase and not this page's to
-   * move (at 1280 its right-most tabs sit above the bar's E-STOP).
+   * reported on its own, and held to the same floor: at 1280 its right-most
+   * tabs sit above the bar's E-STOP, so the page keeps its distance from it.
    */
   const pageClearance = (page: Page) =>
     page.evaluate(() => {
@@ -529,11 +529,25 @@ test.describe('Wrap up (TASK-429)', () => {
         description: `wrap@${w}: page ${near.page.d} px (${near.page.el}); section rail ${near.rail.d} px (${near.rail.el})`,
       });
       expect(near.page.d, `nearest: ${near.page.el}`).toBeGreaterThanOrEqual(min);
+      expect(near.rail.d, `nearest rail tab: ${near.rail.el}`).toBeGreaterThanOrEqual(min);
       // The action sits in its own column, below the band's top row.
       const band = (await page.getByTestId('session-summary').boundingBox())!;
       const action = (await page.getByTestId('create-dataset').boundingBox())!;
       expect(action.y).toBeGreaterThan(band.y + 40);
       expect(action.x).toBeGreaterThan(band.x + band.width / 2);
+    });
+  }
+
+  // The rail sits above the bar in every phase, so its distance is held in all three.
+  for (const phase of ['setup', 'record', 'wrap'] as const) {
+    test(`the section rail keeps 48 px from the E-STOP — ${phase} at 1280×800`, async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      if (phase === 'wrap') await wrapAfter(page, 0);
+      else await OPEN[phase](page);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const near = await pageClearance(page);
+      expect(near.rail.el, 'the section rail is on this page').not.toBe('');
+      expect(near.rail.d, `nearest rail tab: ${near.rail.el}`).toBeGreaterThanOrEqual(48);
     });
   }
 

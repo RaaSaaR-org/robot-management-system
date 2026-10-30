@@ -75,6 +75,14 @@ describe('SessionCompleted — the one dataset action (TASK-429)', () => {
     expect(wrapAction({ exportedDatasetId: null, frameCount: 12 }, false)).toBe('create-dataset');
   });
 
+  it('a failed session with frames offers New session, never Create dataset (the server packages only completed ones)', () => {
+    expect(wrapAction({ exportedDatasetId: null, frameCount: 12, status: 'failed' }, false)).toBe('new-session');
+    render({ status: 'failed', frameCount: 12 });
+    expect(screen.queryByTestId('create-dataset')).toBeNull();
+    expect(screen.getByTestId('wrap-new-session')).toBeInTheDocument();
+    expect(screen.getByTestId('session-summary')).toHaveTextContent('A failed session cannot be packaged');
+  });
+
   it('an exported session opens its dataset, and the Details row names it without a button', () => {
     render({ exportedDatasetId: 'e3553405-aaaa' });
     const open = screen.getByTestId('open-dataset');

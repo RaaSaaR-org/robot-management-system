@@ -48,6 +48,7 @@ import { QuickCheckCard } from '../components/session/QuickCheckCard';
 import { SessionEStopButton } from '../components/session/SessionEStopButton';
 import { OperatorCard } from '../components/OperatorCard';
 import { OperatorOverlay, OVERLAY_LINK } from '../components/OperatorOverlay';
+import { cn } from '@/shared/utils/cn';
 import { SessionCommandBar, SessionCommandBarSkeleton, Kbd, type RobotLink } from '../components/console/SessionCommandBar';
 import { TestingToolsRow } from '../components/console/TestingTools';
 import { HeadsetHero, RobotSetupDisclosure } from '../components/console/HeadsetHero';
@@ -98,6 +99,15 @@ const cameraLabel = (name: string) => {
 const formatElapsed = (secs: number) => `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
 /** TASK-418 (D4): how long the headset stays in VR after the session ended — enough to read "ended". */
 export const VR_GOODBYE_MS = 5_000;
+
+/**
+ * TASK-429: the E-STOP stands alone page-wide (>= 48 px at 1280). Below 1440 px
+ * the shell's section rail (the nav right above this page) reaches across to
+ * the bar's right end, 35 px above the E-STOP; 16 px more puts it past 48.
+ * At 1440 and up the rail ends well left of the E-STOP, so the page sits where
+ * the mockup has it.
+ */
+const RAIL_CLEARANCE = 'sm:max-[1439px]:[nav+&]:mt-4';
 
 /** TASK-418 (D4): the session went from live to ended while this page's VR modal was open. */
 export function endsUnderVr(prevStatus: string | undefined, status: string | undefined, vrModalOpen: boolean): boolean {
@@ -457,7 +467,7 @@ export function SessionDetailPage() {
 
   if (!session) {
     return (
-      <div className="flex flex-col gap-3">
+      <div className={cn('flex flex-col gap-3', RAIL_CLEARANCE)}>
         <SessionCommandBarSkeleton title={error && !isLoading ? 'Session' : 'Loading…'} />
         <Panel>
           {error && !isLoading ? (
@@ -793,7 +803,8 @@ export function SessionDetailPage() {
 
   return (
     // max-sm:pb-[88px]: with the shell's 24 px, nothing hides behind the phone's E-STOP dock.
-    <div className="flex flex-col gap-3 max-sm:pb-[88px]" data-phase={phase} data-role={deviceRole}>
+    // RAIL_CLEARANCE: below 1440 px the section rail's right end sits above the E-STOP.
+    <div className={cn('flex flex-col gap-3 max-sm:pb-[88px]', RAIL_CLEARANCE)} data-phase={phase} data-role={deviceRole}>
       <SessionCommandBar
         phase={phase}
         tally={tally}

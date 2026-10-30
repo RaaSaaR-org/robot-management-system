@@ -83,10 +83,12 @@ export type WrapAction = 'open-dataset' | 'new-session' | 'create-dataset';
 
 /** Open dataset when exported → New session at 0 frames (once the count is final) → Create dataset. */
 export function wrapAction(
-  session: Pick<TeleoperationSession, 'exportedDatasetId' | 'frameCount'>,
+  session: Pick<TeleoperationSession, 'exportedDatasetId' | 'frameCount'> & Partial<Pick<TeleoperationSession, 'status'>>,
   framesSettling: boolean,
 ): WrapAction {
   if (session.exportedDatasetId) return 'open-dataset';
+  // The server packages only completed sessions (exportToLeRobot refuses the rest).
+  if (session.status === 'failed') return 'new-session';
   if (session.frameCount === 0 && !framesSettling) return 'new-session';
   return 'create-dataset';
 }
@@ -123,7 +125,7 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 
 /** The one sentence under the result: when it ended, what was kept, and the next step. */
 export function wrapSentence(
-  session: Pick<TeleoperationSession, 'endedAt'>,
+  session: Pick<TeleoperationSession, 'endedAt'> & Partial<Pick<TeleoperationSession, 'status'>>,
   kept: number,
   discarded: number,
   action: WrapAction,
@@ -133,6 +135,8 @@ export function wrapSentence(
     : '';
   const next = action === 'open-dataset'
     ? 'Open the dataset to curate and train on it.'
+    : action === 'new-session' && session.status === 'failed'
+      ? 'A failed session cannot be packaged as a dataset. Start a new session to record again.'
     : action === 'new-session'
       ? 'It recorded no frames, so there is nothing to package. Start a new session with the robot online.'
       : `Create a dataset to curate and train on ${kept === 1 ? 'it' : 'them'}.`;
