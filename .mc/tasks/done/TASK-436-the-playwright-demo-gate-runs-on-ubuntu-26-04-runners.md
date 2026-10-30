@@ -3,7 +3,7 @@ id: "TASK-436"
 aliases: []
 title: "The Playwright demo gate runs on Ubuntu 26.04 runners"
 slug: "the-playwright-demo-gate-runs-on-ubuntu-26-04-runners"
-status: "in-progress"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
@@ -76,14 +76,14 @@ Branch: `chore/task-436-the-playwright-demo-gate-runs-on-ubuntu-26-04-runners`.
 
 ## Acceptance Criteria
 
-- [ ] `app/package.json` asks for `@playwright/test` `^1.61.1`, and `app/package-lock.json`
+- [x] `app/package.json` asks for `@playwright/test` `^1.61.1`, and `app/package-lock.json`
   locks `@playwright/test`, `playwright` and `playwright-core` at 1.61.1. `npm ci` in `app/`
   installs 1.61.1.
-- [ ] No file under `.github/workflows/` changes.
-- [ ] `cd app && npx tsc --noEmit && npx vitest run` passes.
-- [ ] The full Playwright demo gate (`app/playwright.config.ts`: demo build, vite preview, MSW)
+- [x] No file under `.github/workflows/` changes.
+- [x] `cd app && npx tsc --noEmit && npx vitest run` passes.
+- [x] The full Playwright demo gate (`app/playwright.config.ts`: demo build, vite preview, MSW)
   passes locally on 1.61.1 with `CI=true`.
-- [ ] On this PR, the CI check "Playwright (demo gate)" gets past
+- [x] On this PR, the CI check "Playwright (demo gate)" gets past
   `npx playwright install --with-deps chromium` on the `ubuntu-latest` (26.04) runner and
   passes. Every other check on the PR passes too.
 
