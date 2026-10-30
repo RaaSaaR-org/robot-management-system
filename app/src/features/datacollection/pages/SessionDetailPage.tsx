@@ -54,7 +54,7 @@ import { TestingToolsRow } from '../components/console/TestingTools';
 import { HeadsetHero, RobotSetupDisclosure } from '../components/console/HeadsetHero';
 import { SetupRail, type SetupStepContent } from '../components/console/SetupRail';
 import { LiveView } from '../components/console/LiveView';
-import { buildSetupModel, type SetupStep } from '../utils/setupSteps';
+import { buildSetupModel, leaseWorkDone, type SetupStep } from '../utils/setupSteps';
 import { useLeaseHandOver, useLeaseTake } from '../hooks/useLeaseTake';
 import { PageLeaseLine } from '../components/console/PageLeaseLine';
 import { useDeviceRole, detectDeviceRole, type DeviceRole } from '../hooks/useDeviceRole';
@@ -414,18 +414,11 @@ export function SessionDetailPage() {
   const modeControlOn = baseMode.status?.capability.gate === 'fsm' || baseMode.status?.capability.gate === 'full';
 
   // TASK-427: the server never preempts a lease, so the lease step 2 took is
-  // given back for the operator: once they open VR with the robot balancing
-  // (or this page's own VR window opens), and when the session starts. While
-  // the page holds it, steps 2, 3 and 5 show it with a Release button.
+  // given back for the operator, on its own when the hand-over is due (below)
+  // and when the session starts. While the page holds it, steps 2 to 5 show it
+  // with a Release button.
   const pageHoldsLease = sessionIsVr && !leaseInputs && leaseTake.wanted && lease.state === 'bound';
-  const operatorHere = viewers.some((v) => v.role === 'operator');
-  const stanceReady = baseMode.status !== null && (!modeControlOn || baseMode.status.base?.mode === 'balance');
   const releaseLease = leaseTake.release;
-  const handOver = useCallback(() => {
-    releaseLease();
-    toast.info('You gave control back', { description: 'The operator can take control in the headset now.' });
-  }, [releaseLease]);
-  useLeaseHandOver(sessionIsVr && !leaseInputs && (vrModalOpen || (operatorHere && stanceReady)), pageHoldsLease, handOver);
   const releaseOnStart = sessionIsVr && !leaseInputs && leaseTake.wanted && session?.status !== 'created';
   useEffect(() => {
     if (releaseOnStart) releaseLease();
@@ -467,6 +460,20 @@ export function SessionDetailPage() {
   // TASK-427: the Set up steps read the robot's readiness (the compact panel's
   // own read before); Record keeps its panel until TASK-428.
   const readinessState = useRobotReadiness(session?.robotId ?? '', { enabled: isCreated && !!robot });
+  // The hand-over is due once the page's lease has done its work: arm control
+  // on and the robot balancing (steps 2 and 3), or this page's own VR window
+  // opening. Never on the headset's presence: it reports its operator in VR
+  // only after it holds the lease, which it cannot while this page keeps it.
+  const leaseDone = leaseWorkDone(
+    readinessState.readiness,
+    { measured: baseMode.status?.base?.mode ?? null, gateOn: modeControlOn },
+    questPagePort(),
+  );
+  const handOver = useCallback(() => {
+    releaseLease();
+    toast.info('You gave control back', { description: 'The robot balances with arm control on. The operator can take control in the headset now.' });
+  }, [releaseLease]);
+  useLeaseHandOver(sessionIsVr && !leaseInputs && (vrModalOpen || leaseDone), pageHoldsLease, handOver);
   // Read by the hotkey handler, which binds once per status change.
   const startBlockedRef = useRef(false);
   startBlockedRef.current = isCreated && preflight.blocking;
@@ -853,7 +860,7 @@ export function SessionDetailPage() {
           note: (
             <>
               <Glasses className="mt-0.5 h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
-              When the operator opens VR with the robot balancing, this page gives your control back so they can take it in the headset.
+              Once arm control is on and the robot balances, this page gives your control back so the operator can take it in the headset.
             </>
           ),
           details: detailsFor(step),
@@ -882,12 +889,27 @@ export function SessionDetailPage() {
         const quest = readinessState.readiness?.quest ?? null;
         return {
           lead: 'Plug the Quest into the robot PC over USB, with Developer Mode on and the headset awake. Then connect it and open this session on it.',
-          children: robot && quest ? (
-            <div data-testid="quest-connect-help" data-mode="live">
-              <QuestControls robotId={robot.id} quest={quest} sessionId={session.id} port={questPort} lit={lit} />
-            </div>
-          ) : (
-            <QuestConnectHelp location={window.location} robotId={robot?.id} quest={null} sessionId={session.id} />
+          // Still holding control here (taken again on purpose, or on a robot
+          // that needed no hand-over): Release is the lit action, since the
+          // operator cannot take control until it is pressed.
+          children: (
+            <>
+              {pageHoldsLease && (
+                <PageLeaseLine
+                  text={`You still have control of ${robotName}. Release it so ${operatorName ?? 'the operator'} can take it in the headset.`}
+                  onRelease={releaseLease}
+                  lit={lit}
+                  className="mb-3"
+                />
+              )}
+              {robot && quest ? (
+                <div data-testid="quest-connect-help" data-mode="live">
+                  <QuestControls robotId={robot.id} quest={quest} sessionId={session.id} port={questPort} lit={lit && !pageHoldsLease} />
+                </div>
+              ) : (
+                <QuestConnectHelp location={window.location} robotId={robot?.id} quest={null} sessionId={session.id} />
+              )}
+            </>
           ),
           details: detailsFor(step),
         };

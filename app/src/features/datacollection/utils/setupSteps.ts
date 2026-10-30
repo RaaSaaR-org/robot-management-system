@@ -253,6 +253,40 @@ function armControlOn(readiness: RobotReadiness | null): boolean | null {
   return null;
 }
 
+/** Step 3's facts: the measured mode, and done once it balances (or the sim has nothing to stand up). */
+function stanceFacts(
+  readiness: RobotReadiness | null,
+  rows: ReadinessRowModel[],
+  mode: SetupModelInput['mode'],
+): Facts {
+  const measured = mode.measured ?? readinessMode(readiness);
+  const modeRow = rowOf(rows, 'mode');
+  // The MuJoCo sim has no locomotion FSM: nothing to stand up.
+  if (modeRow?.status === 'idle' && !mode.gateOn) {
+    return { done: true, failed: false, summary: capital(modeRow.value), tone: 'ok' };
+  }
+  const done = measured === 'balance';
+  // An unknown mode is attention, never a fault (brand §0.5).
+  return { done, failed: false, summary: modeWord(measured), tone: done ? 'ok' : measured ? 'warn' : 'idle' };
+}
+
+/**
+ * The page's lease has done its work (TASK-427): arm control is on and the
+ * robot balances, so steps 2 and 3 are done and the operator is the only one
+ * who still needs control. This is when the page hands its lease over. It is
+ * read off the robot, never off the headset: the headset reports its operator
+ * as in VR only after it holds the lease, so a hand-over waiting for that
+ * would never come while the page keeps it.
+ */
+export function leaseWorkDone(
+  readiness: RobotReadiness | null,
+  mode: SetupModelInput['mode'],
+  questPort = 1420,
+): boolean {
+  if (!readiness || !armControlOn(readiness)) return false;
+  return stanceFacts(readiness, readinessRows(readiness, questPort), mode).done;
+}
+
 export function buildSetupModel(input: SetupModelInput): SetupModel {
   const { readiness, preflight, lease, operator } = input;
   const vr = VR_TYPES.includes(input.sessionType);
@@ -299,17 +333,7 @@ export function buildSetupModel(input: SetupModelInput): SetupModel {
         if (on) return { done: true, failed: false, summary: 'Arm control on', tone: 'ok' };
         return { done: false, failed: sidecar?.status === 'fail', summary: holderText, tone: lease.bound ? 'ok' : 'warn' };
       }
-      case 'stance': {
-        const measured = input.mode.measured ?? readinessMode(readiness);
-        const modeRow = rowOf(rows, 'mode');
-        // The MuJoCo sim has no locomotion FSM: nothing to stand up.
-        if (modeRow?.status === 'idle' && !input.mode.gateOn) {
-          return { done: true, failed: false, summary: capital(modeRow.value), tone: 'ok' };
-        }
-        const done = measured === 'balance';
-        // An unknown mode is attention, never a fault (brand §0.5).
-        return { done, failed: false, summary: modeWord(measured), tone: done ? 'ok' : measured ? 'warn' : 'idle' };
-      }
+      case 'stance': return stanceFacts(readiness, rows, input.mode);
       case 'quest': {
         const q = questWords(readiness, port);
         const done = q.forwarded || operator.present;

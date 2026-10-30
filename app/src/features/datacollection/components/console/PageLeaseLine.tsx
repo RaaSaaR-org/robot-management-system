@@ -4,7 +4,7 @@
  *              (TASK-427): one line that says so and a Release button. The
  *              server never takes a held lease away, so this is how the
  *              assistant gives it back by hand; the page also gives it back on
- *              its own when the operator opens VR with the robot balancing.
+ *              its own once arm control is on and the robot balances.
  * @feature datacollection
  */
 
@@ -16,7 +16,7 @@ export interface PageLeaseLineProps {
   /** What the line says ("You have control of G1 EDU."). */
   text: string;
   onRelease: () => void;
-  /** Release is the step's one lit action (step 5, while the operator waits for it). */
+  /** Release is the step's one lit action (steps 4 and 5, while the operator waits for it). */
   lit?: boolean;
   className?: string;
 }

@@ -12,7 +12,8 @@
  *              it back for the operator to take control in the headset:
  *              `release()` does (the step's Release button), and
  *              `useLeaseHandOver` does it on its own the moment the hand-over
- *              is due (the operator opens VR once the robot balances).
+ *              is due (arm control on and the robot balancing, so only the
+ *              operator still needs control).
  * @feature datacollection
  */
 
@@ -93,7 +94,7 @@ export function useLeaseTake(): UseLeaseTakeReturn {
  * afterwards stays theirs (the step shows it, with Release) instead of being
  * pulled from under them.
  *
- * @param due     the hand-over is due now (the operator is in VR and the robot ready)
+ * @param due     the hand-over is due now (the lease's work is done: arm control on, robot balancing)
  * @param holds   the page holds the lease it took through `useLeaseTake`
  * @param handOver releases it (and tells the user)
  */

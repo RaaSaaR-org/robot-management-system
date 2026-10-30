@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 import { READINESS_FIXTURES, readinessFor } from '@/mocks/readinessDemoHandlers';
 import type { RobotReadiness } from '@/features/robots/api/readinessApi';
 import { buildPreflight } from '../preflight';
-import { buildSetupModel, reasonCell, reasonStep, stepOrder, type SetupModelInput } from '../setupSteps';
+import { buildSetupModel, leaseWorkDone, reasonCell, reasonStep, stepOrder, type SetupModelInput } from '../setupSteps';
 
 const ROBOT = 'demo-g1-001';
 
@@ -266,5 +266,33 @@ describe('systems cells', () => {
     expect(m.steps.find((s) => s.id === 'control')).toMatchObject({ state: 'done', summary: 'You have control' });
     expect(m.cells.map((c) => c.id)).toEqual(['robot', 'control', 'input']);
     expect(m.cells.find((c) => c.id === 'control')!.value).toBe('You');
+  });
+});
+
+describe('the lease hand-over is due', () => {
+  it('once arm control is on and the robot balances, whoever is in the session', () => {
+    expect(leaseWorkDone(readinessFor(ROBOT, 'mode_not_balance'), { measured: 'balance', gateOn: true })).toBe(true);
+  });
+
+  it('not while the robot only stands or is limp, nor before a readiness snapshot', () => {
+    expect(leaseWorkDone(readinessFor(ROBOT, 'mode_not_balance'), { measured: 'stand', gateOn: true })).toBe(false);
+    expect(leaseWorkDone(readinessFor(ROBOT, 'mode_not_balance'), { measured: 'limp', gateOn: true })).toBe(false);
+    expect(leaseWorkDone(null, { measured: 'balance', gateOn: true })).toBe(false);
+  });
+
+  it('not while the sidecar is read-only, even with the robot balancing (step 2 still needs control)', () => {
+    expect(leaseWorkDone(readinessFor(ROBOT, 'read_only_ready'), { measured: 'balance', gateOn: true })).toBe(false);
+  });
+
+  it('agrees with steps 2 and 3 of the model', () => {
+    for (const name of ['following', 'mode_not_balance', 'read_only_ready'] as const) {
+      for (const measured of ['limp', 'stand', 'balance'] as const) {
+        const readiness = readinessFor(ROBOT, name);
+        const mode = { measured, gateOn: true };
+        const m = buildSetupModel(input({ readiness, mode }));
+        const done = (id: string) => m.steps.find((s) => s.id === id)!.state === 'done';
+        expect(leaseWorkDone(readiness, mode)).toBe(done('arm_control') && done('stance'));
+      }
+    }
   });
 });

@@ -5,8 +5,12 @@
  *              take control in the headset while the page kept it. With arm
  *              control already on and the robot standing, step 3 offers Take
  *              control itself; while the page holds the lease it shows it with
- *              Release; and it releases on its own once the operator opens VR
- *              with the robot balancing, and when the session starts.
+ *              Release; and it releases on its own once arm control is on and
+ *              the robot balances (steps 2 and 3 done), and when the session
+ *              starts. The trigger is read off the robot, never off the
+ *              headset: a headset publishes the operator role only while in
+ *              VR, and it enters VR only once it holds the lease, so a
+ *              hand-over waiting for it could never fire.
  * @feature datacollection
  */
 
@@ -118,11 +122,8 @@ async function takeInStep3() {
   expect(within(stance).getByTestId('robot-mode-balance')).toBeEnabled();
 }
 
-const operatorArrives = () => act(() => {
-  useDataCollectionStore.setState({
-    presence: { sessionId: 'sess-hand', viewers: [{ userId: 'op', displayName: 'Anna Op', role: 'operator', since: 'x' }] },
-  });
-});
+/** A re-render that picks up a new measured mode (the base-mode poll). */
+const rerender = () => act(() => { useDataCollectionStore.setState({ episodes: [] }); });
 
 describe('SessionDetailPage Set up hands the lease over', () => {
   it('offers Take control in step 3 when step 2 is already done, and shows the held lease with Release', async () => {
@@ -133,31 +134,42 @@ describe('SessionDetailPage Set up hands the lease over', () => {
     expect(screen.queryByTestId('setup-lease-held')).toBeNull();
   });
 
-  it('keeps the lease while the robot is not balancing, and releases it once the operator opens VR with it balancing', async () => {
+  it('keeps the lease while the robot only stands, and gives it back once it balances, with no operator in the session', async () => {
     await takeInStep3();
-    operatorArrives();
+    rerender();
     // Standing: the assistant still needs control for Balance.
     expect(h.release).not.toHaveBeenCalled();
+    // Nobody is in the session: the headset could not be "in VR" while the page holds the lease anyway.
+    expect(useDataCollectionStore.getState().presence).toBeNull();
 
     h.mode = 'balance';
-    act(() => {
-      useDataCollectionStore.setState({
-        presence: { sessionId: 'sess-hand', viewers: [{ userId: 'op', displayName: 'Anna Op', role: 'operator', since: 'y' }] },
-      });
-    });
+    rerender();
     await waitFor(() => expect(h.release).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(h.active[h.active.length - 1]).toBe(false));
     expect(screen.queryByTestId('setup-lease-held')).toBeNull();
+    // Step 4 is next, and no Release is left anywhere.
+    expect(screen.getByTestId('setup-step-quest')).toHaveAttribute('data-state', 'current');
   });
 
-  it('releases when the operator arrives after the robot already balances', async () => {
-    await takeInStep3();
+  it('does not take back a lease taken again after the robot balances, and lights Release in step 4', async () => {
     h.mode = 'balance';
-    // Any re-render picks up the measured Balance; the operator is not here yet.
-    act(() => { useDataCollectionStore.setState({ episodes: [] }); });
+    render();
+    await waitFor(() => expect(screen.getByTestId('setup-step-quest')).toHaveAttribute('data-state', 'current'));
+    fireEvent.click(screen.getByTestId('setup-step-stance-toggle'));
+    const stance = screen.getByTestId('setup-step-stance');
+    fireEvent.click(within(stance).getByTestId('robot-mode-take-control'));
+    await waitFor(() => expect(h.acquire).toHaveBeenCalledTimes(1));
+    rerender();
     expect(h.release).not.toHaveBeenCalled();
-    operatorArrives();
-    await waitFor(() => expect(h.release).toHaveBeenCalledTimes(1));
+
+    // Back on step 4, the current one: the held lease is its lit action.
+    fireEvent.click(screen.getByTestId('setup-step-quest-toggle'));
+    const quest = screen.getByTestId('setup-step-quest');
+    await waitFor(() => expect(within(quest).getByTestId('setup-lease-held')).toBeInTheDocument());
+    const release = within(quest).getByTestId('setup-lease-release');
+    expect(release.className).toMatch(/(^| )bg-primary( |$)/);
+    fireEvent.click(release);
+    expect(h.release).toHaveBeenCalledTimes(1);
   });
 
   it('releases the lease when the session starts', async () => {
