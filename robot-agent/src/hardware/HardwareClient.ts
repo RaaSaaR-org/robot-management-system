@@ -555,6 +555,20 @@ function parseArmStatusPatch(body: Record<string, unknown>): Partial<SidecarArmS
   return patch;
 }
 
+/**
+ * The `seed` of an `/arm` answer (TASK-421): the measured pose the sidecar
+ * seeded its targets from, `{joint: rad}`. Null when absent (an older sidecar,
+ * `already_armed`) or when no entry is a finite number.
+ */
+export function parseArmSeed(value: unknown): Record<string, number> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const out: Record<string, number> = {};
+  for (const [name, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === 'number' && Number.isFinite(v)) out[name] = v;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 export class HardwareClient {
   /** The sidecar's robot link is up (its lowstate is fresh) — `/health.connected`. */
   private connected = false;
@@ -642,6 +656,15 @@ export class HardwareClient {
    * had just been armed.
    */
   private armOpSeq = 0;
+  /**
+   * Counts the fresh arms THIS agent made (TASK-421). The teleop forwarder
+   * re-seeds its targets from {@link armSeed} whenever this moves, so every
+   * arm starts from the pose the sidecar measured, never from a target left
+   * over from before the last disarm.
+   */
+  private armEpoch = 0;
+  /** The `seed` of the last fresh `/arm` answer, or null (older sidecar). */
+  private armSeed: Record<string, number> | null = null;
   /** The sidecar's `loco` capability block (TASK-398), from `/health`. */
   private locoCapability: LocoCapability = { ...UNKNOWN_LOCO_CAPABILITY };
   /** The last measured `base` block, from `/state`, `/health` or `/loco/mode`. */
@@ -749,6 +772,16 @@ export class HardwareClient {
     return !this.requiresArming() || this.armedLocal;
   }
 
+  /** Bumped by every fresh arm this agent made (TASK-421). */
+  getArmEpoch(): number {
+    return this.armEpoch;
+  }
+
+  /** The measured pose the last fresh arm was seeded from, or null. */
+  getArmSeed(): Record<string, number> | null {
+    return this.armSeed;
+  }
+
   /** Re-read `/health` for the arm fields. Null when the sidecar did not answer. */
   async refreshArmStatus(timeoutMs = 1000): Promise<SidecarArmStatus | null> {
     const seq = this.armOpSeq;
@@ -786,7 +819,16 @@ export class HardwareClient {
         const error = typeof body.error === 'string' ? body.error : `sidecar /arm returned HTTP ${res.status}`;
         return { ok: false, error, status: res.status };
       }
+      // Bumped again on the answer: a status read sent WHILE `/arm` was out
+      // may have been served before the sidecar armed, and must not land
+      // after this and clear `armedLocal` under a freshly armed sidecar.
+      this.armOpSeq += 1;
       this.armedLocal = true;
+      // `already_armed` keeps the targets it has; only a fresh arm re-seeds.
+      if (body.already_armed !== true) {
+        this.armEpoch += 1;
+        this.armSeed = parseArmSeed(body.seed);
+      }
       this.setArmStatus({ ...this.armStatus, ...parseArmStatusPatch(body), armed: true });
       return { ok: true, status: res.status };
     } catch (err) {

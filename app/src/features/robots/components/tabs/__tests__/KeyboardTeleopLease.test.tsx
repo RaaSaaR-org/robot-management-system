@@ -29,6 +29,7 @@ vi.mock('../../../api/controlLeaseApi', () => ({
 }));
 
 import { controlLeaseApi } from '../../../api/controlLeaseApi';
+import { toast } from '@/shared/components/ui';
 import { KeyboardTeleopSection } from '../TeleopTab';
 import type { TeleopTabProps } from '../types';
 
@@ -80,7 +81,13 @@ function teleopSockets(): FakeSocket[] {
   return FakeSocket.instances.filter((s) => /\/teleop\/ws$|\/ws\/keyboard-teleop$/.test(s.url));
 }
 
-async function connect(): Promise<FakeSocket> {
+const joint = (name: string, drivable?: boolean) => ({
+  name, limitLower: -1, limitUpper: 1, defaultPosition: 0, ...(drivable === undefined ? {} : { drivable }),
+});
+
+async function connect(
+  joints: unknown[] = [{ name: 'left_elbow_joint', limitLower: -1, limitUpper: 1, defaultPosition: 0 }],
+): Promise<FakeSocket> {
   const before = teleopSockets().length;
   fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));
   const opened = teleopSockets();
@@ -91,7 +98,7 @@ async function connect(): Promise<FakeSocket> {
     ws.receive({
       type: 'config',
       robotType: 'g1',
-      joints: [{ name: 'left_elbow_joint', limitLower: -1, limitUpper: 1, defaultPosition: 0 }],
+      joints,
       positions: {},
     });
   });
@@ -149,6 +156,165 @@ describe('KeyboardTeleopSection with the control lease', () => {
       const f = m as { hb?: number; clutch?: boolean; direction?: number };
       return f.hb !== undefined ? `clutch:${f.clutch}` : `dir:${f.direction}`;
     })).toEqual(['clutch:true', 'dir:1', 'dir:0', 'clutch:false']);
+  });
+
+  // TASK-421: on the real G1 the first listed joint is a leg, which the arm
+  // path never commands — a key press there armed the arms with nothing to send.
+  it('starts on the first drivable joint and steps over the ones that are not driven', async () => {
+    capability(false);
+    render(<KeyboardTeleopSection robot={robot} />);
+    await waitFor(() => expect(api.getControlLease).toHaveBeenCalledWith('g1-1'));
+    const ws = await connect([
+      joint('left_hip_pitch_joint', false),
+      joint('left_elbow_joint', true),
+      joint('waist_yaw_joint', false),
+      joint('left_wrist_roll_joint', true),
+    ]);
+    const lastJoint = () => (moves(ws)[moves(ws).length - 1] as { joint: string }).joint;
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(lastJoint()).toBe('left_elbow_joint');
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(lastJoint()).toBe('left_wrist_roll_joint');
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(lastJoint()).toBe('left_elbow_joint');
+    expect(moves(ws).some((m) => /hip|waist/.test((m as { joint: string }).joint))).toBe(false);
+    expect(screen.getAllByText(/not driven/)).toHaveLength(2);
+  });
+
+  // Review of TASK-421: the readiness panel opens this socket on "Take
+  // control" while the sidecar is read-only; "Switch to arm control" comes
+  // after, so the config said every joint was drivable.
+  it('follows a drivable update that arrives after the config', async () => {
+    capability(false);
+    render(<KeyboardTeleopSection robot={robot} />);
+    await waitFor(() => expect(api.getControlLease).toHaveBeenCalledWith('g1-1'));
+    const ws = await connect([
+      joint('left_hip_pitch_joint', true),
+      joint('waist_yaw_joint', true),
+      joint('left_elbow_joint', true),
+      joint('left_wrist_roll_joint', true),
+    ]);
+    const lastJoint = () => (moves(ws)[moves(ws).length - 1] as { joint: string }).joint;
+    expect(screen.queryAllByText(/not driven/)).toHaveLength(0);
+    act(() => {
+      ws.receive({
+        type: 'drivable',
+        joints: { left_hip_pitch_joint: false, waist_yaw_joint: false, left_elbow_joint: true, left_wrist_roll_joint: true },
+      });
+    });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(lastJoint()).toBe('left_elbow_joint');
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(lastJoint()).toBe('left_elbow_joint');
+    expect(screen.getAllByText(/not driven/)).toHaveLength(2);
+    // A selection that is still drivable stays where the operator put it.
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    act(() => {
+      ws.receive({ type: 'drivable', joints: { left_hip_pitch_joint: false, waist_yaw_joint: false } });
+    });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(lastJoint()).toBe('left_wrist_roll_joint');
+    expect(moves(ws).some((m) => /hip|waist/.test((m as { joint: string }).joint))).toBe(false);
+  });
+
+  // Review of TASK-421 (round 2): the key-up stopped whatever joint was
+  // selected at key-up, so moving the selection mid-hold left the held joint
+  // moving on the agent — and the next press moved it as well.
+  it('a key-up stops the joint the press started, even after the selection moved', async () => {
+    capability(false);
+    render(<KeyboardTeleopSection robot={robot} />);
+    await waitFor(() => expect(api.getControlLease).toHaveBeenCalledWith('g1-1'));
+    const ws = await connect([joint('left_elbow_joint', true), joint('left_wrist_roll_joint', true)]);
+    const before = moves(ws).length;
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(moves(ws).slice(before)).toEqual([
+      { joint: 'left_elbow_joint', direction: 1 },
+      { joint: 'left_elbow_joint', direction: 0 },
+    ]);
+    // The next press drives the newly selected joint, and only that one.
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyUp(window, { key: 'ArrowRight' });
+    expect(moves(ws).slice(before + 2)).toEqual([
+      { joint: 'left_wrist_roll_joint', direction: 1 },
+      { joint: 'left_wrist_roll_joint', direction: 0 },
+    ]);
+  });
+
+  it('a blur after a drivable update moved the selection stops the joint that was held', async () => {
+    capability(false);
+    render(<KeyboardTeleopSection robot={robot} />);
+    await waitFor(() => expect(api.getControlLease).toHaveBeenCalledWith('g1-1'));
+    const ws = await connect([joint('left_hip_pitch_joint', true), joint('left_elbow_joint', true)]);
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    act(() => {
+      ws.receive({ type: 'drivable', joints: { left_hip_pitch_joint: false, left_elbow_joint: true } });
+    });
+    const before = ws.sent.length;
+    fireEvent.blur(window);
+    expect(ws.sent.slice(before)).toEqual([
+      { joint: 'left_hip_pitch_joint', direction: 0 },
+      expect.objectContaining({ clutch: false }),
+    ]);
+  });
+
+  it('a second move key on another joint lets go of the first', async () => {
+    capability(false);
+    render(<KeyboardTeleopSection robot={robot} />);
+    await waitFor(() => expect(api.getControlLease).toHaveBeenCalledWith('g1-1'));
+    const ws = await connect([joint('left_elbow_joint', true), joint('left_wrist_roll_joint', true)]);
+    const before = moves(ws).length;
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    fireEvent.keyDown(window, { key: '-' });
+    expect(moves(ws).slice(before)).toEqual([
+      { joint: 'left_elbow_joint', direction: 1 },
+      { joint: 'left_elbow_joint', direction: 0 },
+      { joint: 'left_wrist_roll_joint', direction: -1 },
+    ]);
+  });
+
+  it('lets go of a held key when the window loses focus (no keyup ever comes)', async () => {
+    capability(false);
+    render(<KeyboardTeleopSection robot={robot} />);
+    await waitFor(() => expect(api.getControlLease).toHaveBeenCalledWith('g1-1'));
+    const ws = await connect();
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    const before = ws.sent.length;
+    fireEvent.blur(window);
+    expect(ws.sent.slice(before)).toEqual([
+      { joint: 'left_elbow_joint', direction: 0 },
+      expect.objectContaining({ clutch: false }),
+    ]);
+    // A second blur with nothing held sends nothing.
+    const after = ws.sent.length;
+    fireEvent.blur(window);
+    expect(ws.sent.length).toBe(after);
+  });
+
+  it('says why a key moved nothing, once per reason', async () => {
+    const shown = vi.spyOn(toast, 'error');
+    capability(false);
+    render(<KeyboardTeleopSection robot={robot} />);
+    await waitFor(() => expect(api.getControlLease).toHaveBeenCalledWith('g1-1'));
+    const ws = await connect();
+    act(() => {
+      ws.receive({ type: 'error', code: 'joint_not_drivable', message: 'left_hip_pitch_joint is not driven' });
+      ws.receive({ type: 'error', code: 'joint_not_drivable', message: 'left_hip_pitch_joint is not driven' });
+    });
+    expect(shown).toHaveBeenCalledTimes(1);
+    expect(shown.mock.calls[0][1]).toMatchObject({ description: 'left_hip_pitch_joint is not driven' });
   });
 
   it('ignores motion keys until bound, then drives', async () => {

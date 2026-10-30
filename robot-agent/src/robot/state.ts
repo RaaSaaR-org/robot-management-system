@@ -31,7 +31,7 @@ import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor, agentModeLocomotion } from './CommandExecutor.js';
 import { hardwareClient, HardwareActionError, type CachedBasePose } from '../hardware/HardwareClient.js';
 import type { SidecarEstopResult } from '../hardware/base-mode.js';
-import { forwardableTeleopPose, isG1Family } from '../teleop/forward-joints.js';
+import { armSeedTargets, forwardableTeleopPose, isG1ArmJoint, isG1Family } from '../teleop/forward-joints.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import {
   PlaceTracker,
@@ -1710,6 +1710,7 @@ export class RobotStateManager {
   enableTeleop(): Record<string, number> {
     if (!this.teleopJoints) {
       this.teleopTouched.clear();
+      this.teleopSeededEpoch = null;
       this.lastForwarded = null;
       const live = new Map(hardwareClient.getJointStates().map((j) => [j.name, j.position]));
       this.teleopJoints = new Map();
@@ -1731,6 +1732,7 @@ export class RobotStateManager {
   disableTeleop(): void {
     this.teleopJoints = null;
     this.teleopTouched.clear();
+    this.teleopSeededEpoch = null;
     this.lastForwarded = null;
     this.stopTeleopForwarding();
     this.notifyListeners();
@@ -1766,6 +1768,11 @@ export class RobotStateManager {
    * is left to the sidecar's own measured seed.
    */
   private teleopTouched = new Set<string>();
+  /**
+   * The arm epoch (`hardwareClient.getArmEpoch()`) the teleop targets were last
+   * seeded for (TASK-421). `null` = not yet seeded in this teleop session.
+   */
+  private teleopSeededEpoch: number | null = null;
   /**
    * The last pose the sidecar ACCEPTED, and when. What the recorder stores as
    * `action` on a real robot: the target that actually reached the write path,
@@ -1835,6 +1842,7 @@ export class RobotStateManager {
       this.lastForwarded = null;
       return;
     }
+    if (isG1Family(this.state.robotType) && hardwareClient.requiresArming()) this.seedFromArm();
     const pose = isG1Family(this.state.robotType)
       ? forwardableTeleopPose(
         this.state.robotType,
@@ -1843,7 +1851,9 @@ export class RobotStateManager {
         hardwareClient.getArmStatus().hands,
       )
       : this.getTeleopPositions();
-    // Nothing commanded yet: the sidecar holds the measured pose on its own.
+    // Nothing commanded yet. Only reachable where nothing needs arming (the
+    // sim holds the pose on its own): an armed arm-only sidecar always has the
+    // seeded arm joints to send (see `seedFromArm`).
     if (Object.keys(pose).length === 0) return;
     this.teleopForwardInFlight = true;
     try {
@@ -1865,6 +1875,43 @@ export class RobotStateManager {
       }
     } finally {
       this.teleopForwardInFlight = false;
+    }
+  }
+
+  /**
+   * Start the teleop targets of a fresh arm from the pose the sidecar seeded
+   * it from (TASK-421), once per arm.
+   *
+   * Two failures this closes, both seen on g1-edu-4 on 2026-10-29:
+   *
+   * - **The stream must not stop while armed.** An arm-only sidecar disarms
+   *   itself one second after the last `/action`. Sending only touched joints
+   *   meant an arm with nothing forwardable touched sent nothing at all — arm,
+   *   dead-man, disarm, on every key press. All 14 arm joints are now touched
+   *   at their seed, so the stream holds the pose until the agent stops it.
+   *   The fingers get their seed as a starting target but stay untouched until
+   *   the operator drives one: the sidecar clamps a streamed value 0.05 rad off
+   *   each stop, and an open Dex3 hand rests ON five of its stops, so sending
+   *   an untouched hand would flex it (see `armSeedTargets`).
+   * - **The first target must be where the arm IS.** The teleop map was seeded
+   *   once per session from the 2 s state cache, and kept integrating while the
+   *   arm was not live; after every disarm the robot's own controller moves the
+   *   arm again. The next arm then started its targets from a pose that no
+   *   longer existed — a lurch at the slew limit, then a tracking-error disarm.
+   */
+  private seedFromArm(): void {
+    if (!this.teleopJoints) return;
+    const epoch = hardwareClient.getArmEpoch();
+    if (epoch === this.teleopSeededEpoch) return;
+    this.teleopSeededEpoch = epoch;
+    const measured: Record<string, number> = {};
+    for (const j of hardwareClient.getJointStates()) measured[j.name] = j.position;
+    const targets = armSeedTargets(hardwareClient.getArmSeed(), measured);
+    for (const joint of this.getActiveJointConfig()) {
+      const value = targets[joint.name];
+      if (value === undefined) continue;
+      this.teleopJoints.set(joint.name, Math.max(joint.limitLower, Math.min(joint.limitUpper, value)));
+      if (isG1ArmJoint(joint.name)) this.teleopTouched.add(joint.name);
     }
   }
 

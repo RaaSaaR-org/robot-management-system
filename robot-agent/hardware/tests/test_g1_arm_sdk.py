@@ -13,6 +13,7 @@ state is never commanded, and every way out ends at weight 0.
 """
 
 import math
+import json
 import os
 import sys
 import threading
@@ -253,6 +254,75 @@ def test_deadman_holds_at_half_a_second_and_disarms_at_one():
     assert snap["armed"] is False
     assert snap["arm_state"] == "disarming"
     assert snap["last_disarm_reason"] == "deadman"
+
+
+# ------------------------------------------------- TASK-421: keyboard teleop
+
+def test_an_arm_with_no_action_at_all_blends_in_and_straight_back_out():
+    """The 2026-10-29 g1-edu-4 cycle, from the sidecar's side: /arm, then no
+    /action ever (the agent had nothing forwardable to send). The weight is
+    two thirds of the way in when the dead-man disarms — the twitch."""
+    ctrl, clock, _, logs = make()
+    ctrl.arm(lease_generation=25)
+    run(ctrl, clock, 1.02)
+    snap = ctrl.snapshot()
+    assert snap["armed"] is False and snap["last_disarm_reason"] == "deadman"
+    disarm = [line for line in logs if line.startswith("DISARM (deadman)")]
+    assert len(disarm) == 1
+    weight = float(disarm[0].split("weight ")[1].split(" ")[0])
+    assert weight == pytest.approx(1.0 / 1.5, abs=0.03)
+
+
+def test_a_fresh_arm_reply_carries_the_pose_it_seeded_from():
+    ctrl, _, state, _ = make()
+    status, body = ctrl.arm(lease_generation=1)
+    assert status == 200
+    seed = body["seed"]
+    assert set(seed) == set(ARM_NAMES) | set(g1_sidecar.LEFT_HAND_WIRE) | set(g1_sidecar.RIGHT_HAND_WIRE)
+    for i, name in enumerate(g1_sidecar.BODY_JOINTS):
+        if name in ARM_NAMES:
+            assert seed[name] == pytest.approx(state.body[i])
+    for k, name in enumerate(g1_sidecar.LEFT_HAND_WIRE):
+        assert seed[name] == pytest.approx(state.hands["left"][k])
+    json.dumps(body)  # the reply must stay JSON
+
+
+def test_the_seed_lists_only_the_hands_that_are_commanded():
+    state = FakeState()
+    state.hands["right"] = None
+    ctrl, _, _, _ = make(state=state)
+    _, body = ctrl.arm()
+    assert not set(body["seed"]) & set(g1_sidecar.RIGHT_HAND_WIRE)
+    assert set(g1_sidecar.LEFT_HAND_WIRE) <= set(body["seed"])
+
+
+def test_a_rearm_reseeds_from_where_the_arm_is_now():
+    ctrl, clock, state, _ = make()
+    ctrl.arm()
+    ctrl.disarm()
+    run(ctrl, clock, 1.2)
+    state.body[LEFT_ELBOW_IDX] = 0.9  # Unitree's controller moved the arm meanwhile
+    _, body = ctrl.arm()
+    assert body["seed"][LEFT_ELBOW] == pytest.approx(0.9)
+
+
+def test_already_armed_carries_no_seed():
+    ctrl, _, _, _ = make()
+    ctrl.arm()
+    _, body = ctrl.arm()
+    assert body["already_armed"] is True and "seed" not in body
+
+
+def test_streaming_the_seed_holds_the_arm_still_and_armed():
+    """What the agent now sends between key presses: the seed, unchanged."""
+    ctrl, clock, _, _ = make()
+    _, body = ctrl.arm()
+    frames = run(ctrl, clock, 3.0, action=body["seed"])
+    snap = ctrl.snapshot()
+    assert snap["armed"] is True and snap["deadman"] == "ok" and snap["arm_weight"] == 1.0
+    first = frames[0].q
+    for f in frames:
+        assert f.q == pytest.approx(first)
 
 
 def test_an_action_during_hold_resumes():

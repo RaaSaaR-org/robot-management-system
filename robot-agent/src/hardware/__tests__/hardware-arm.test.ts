@@ -158,6 +158,54 @@ describe('HardwareClient on an arm-only sidecar', () => {
     expect(c.mayStreamAction()).toBe(false);
   });
 
+  // TASK-421: the teleop targets of a fresh arm start from the pose the
+  // sidecar seeded it from.
+  it('remembers the seed of a fresh arm and counts the arm', async () => {
+    const { c } = await client({ write_mode: 'arm_sdk' }, {
+      '/arm': () => ({ status: 200, body: { ok: true, armed: true, seed: { left_elbow_joint: 0.4, bad: 'x' } } }),
+    });
+    expect(c.getArmEpoch()).toBe(0);
+    expect(c.getArmSeed()).toBeNull();
+    await c.arm(1);
+    expect(c.getArmEpoch()).toBe(1);
+    expect(c.getArmSeed()).toEqual({ left_elbow_joint: 0.4 });
+  });
+
+  it('an already_armed answer neither re-seeds nor counts as a fresh arm', async () => {
+    let reply: Record<string, unknown> = { ok: true, armed: true, seed: { left_elbow_joint: 0.4 } };
+    const { c } = await client({ write_mode: 'arm_sdk' }, { '/arm': () => ({ status: 200, body: reply }) });
+    await c.arm(1);
+    reply = { ok: true, armed: true, already_armed: true };
+    await c.arm(1);
+    expect(c.getArmEpoch()).toBe(1);
+    expect(c.getArmSeed()).toEqual({ left_elbow_joint: 0.4 });
+  });
+
+  it('a status read sent while /arm was out, served before it, does not disarm the forwarder', async () => {
+    const { c } = await client({ write_mode: 'arm_sdk', armed: false });
+    let landArm!: (v: unknown) => void;
+    const armGate = new Promise((resolve) => { landArm = resolve; });
+    let answerHealth!: (v: unknown) => void;
+    const healthGate = new Promise((resolve) => { answerHealth = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/arm') {
+        await armGate;
+        return { ok: true, status: 200, json: async () => ({ ok: true, armed: true }) };
+      }
+      // Served before the sidecar armed, delivered after the /arm answer.
+      await healthGate;
+      return { ok: true, status: 200, json: async () => ({ status: 'ok', write_mode: 'arm_sdk', armed: false }) };
+    }));
+    const arming = c.arm(1);
+    const stale = c.refreshArmStatus(); // sent AFTER /arm went out
+    landArm(undefined);
+    await arming;
+    answerHealth(undefined);
+    await stale;
+    expect(c.mayStreamAction()).toBe(true);
+  });
+
   it('describeSidecar carries the arm status for the recorder', async () => {
     const { c } = await client({ write_mode: 'read_only', scene: null });
     const d = await c.describeSidecar();
