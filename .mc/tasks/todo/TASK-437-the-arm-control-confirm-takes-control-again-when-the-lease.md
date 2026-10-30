@@ -51,8 +51,8 @@ Branch: `fix/task-437-the-arm-control-confirm-takes-control-again-when-the-lease
     renew at all. In normal windows the page completes 17 to 19 requests per
     12 s. When it resumes, one of each poll arrives at once. That is a tab that
     did not run (a stalled main thread, with the WebGL context lost), not a
-    slow server. The GPU on this box was at 100% from other processes at the
-    time.
+    slow server. Checked minutes later, the GPU on this box was at 100% from
+    other processes.
   - The agent (`sim-g1-edu-dev-agent.log`):
     `[ControlLease] generation 28 expired` (TTL 5 s, no renewals), then
     `released generation 28`.
