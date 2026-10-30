@@ -107,8 +107,9 @@ the console, never the page.
   takes kept and the Motion meter.
 - **The dock's slot** shows one thing, in this order: the **recovery** when
   the E-stop is latched or the robot is not in Balance ("E-stop is latched.",
-  or "The robot is in Stand. The arms follow only in Balance."), with Limp,
-  Stand up and Balance right there; else a **blocker**: frames being missed, a
+  or "The robot is in Stand. The arms follow only in Balance."), with
+  **Reset E-stop** first while a stop holds, then Limp, Stand up and Balance;
+  else a **blocker**: frames being missed, a
   readiness problem with a button that opens its cell, the headset's arms
   blocked, or jerky motion; else, after each take, the **quick check**, in the
   timer's place.
@@ -146,7 +147,12 @@ title, so the operator knows someone is watching.
    robot's **Teleop** tab, press **Take control** (it connects the page to the robot agent and
    takes the control lease), then **Switch to arm control** and confirm. The
    sidecar restarts in `arm_sdk`; nothing moves yet.
-3. **Stand the robot up** (Get ready step 3, "Stand up and balance"). In the
+3. **Stand the robot up** (Get ready step 3, "Stand up and balance"). If the
+   E-stop is latched (the robot comes back latched from an E-stop before a
+   restart), step 3 says so with the reason and leads with **Reset E-stop**.
+   That clears the latch in the robot agent and the sidecar and moves nothing;
+   the robot stays damped. Check that everyone is clear before pressing it, and
+   wait until steps 4 and 5 stop reading "Waits for step 3". Then, in the
    step (or the VR window on the robot's Teleop tab), press **Stand up** and confirm, wait until the robot measures
    Stand, then **Balance** and confirm. Before Stand up, lower the gantry until
    both feet are flat on the floor with a hand's width of slack — the robot must
@@ -276,7 +282,7 @@ control lease, through the same confirmed route as the desktop buttons.
 
 | Step | Who | Where | Presses |
 | --- | --- | --- | --- |
-| 1 | Operator | headset, robot panel | **Hold 1 s to reset** (trigger, 1 s). The panel turns from red to dark |
+| 1 | Operator, or assistant | headset, robot panel; or the take dock | **Hold 1 s to reset** (trigger, 1 s). The panel turns from red to dark. On the desktop: **Reset E-stop** in the take dock |
 | 2 | Assistant | session page, the take dock's recovery | **Ask the headset: Stand up**, then confirms. The dock shows "Waiting for the operator… (10 s)" |
 | 3 | Operator | headset, robot panel | **Hold to allow Stand up** (trigger, 1 s), under "DESKTOP ASKS: Stand up" |
 | 4 | Assistant | session page | **Ask the headset: Balance** once the robot has stood for 2 s, then confirms |
@@ -299,7 +305,8 @@ Rules the relay keeps:
 
 | You see | Means | Do |
 | --- | --- | --- |
-| Take dock, red: "E-stop is latched."; the **Arms** cell red | Someone pressed B / Y or the E-STOP. Every take button is disabled, and a take that was recording is discarded | Check that everyone is clear. Then the operator holds **Hold 1 s to reset** on the headset's robot panel, or the desktop presses **Reset E-stop** in the VR window's "E-stop latched" banner. After that, see [After an E-stop](#after-an-e-stop) |
+| Take dock, red: "E-stop is latched."; the **Arms** cell red | Someone pressed B / Y or the E-STOP. Every take button is disabled, and a take that was recording is discarded | Check that everyone is clear. Then the operator holds **Hold 1 s to reset** on the headset's robot panel, or the assistant presses **Reset E-stop** in the take dock. After that, see [After an E-stop](#after-an-e-stop) |
+| Take dock, red: "Protective stop." | The robot reports a protective stop, but neither the robot agent nor the sidecar holds a latch | Press **Reset E-stop** in the take dock. It clears the stop and moves nothing |
 | Take dock or the **Arms** cell, red: "Arm refused …" and `held: arm_gate` | The robot refused an arm, for example because it is not in Balance | Read the line. Most often: switch the robot to Balance, then release and squeeze the grip again |
 | Double low tone during a take | The operator's arms have been blocked for more than 1 s while a take is recording. The take is still recording | Stop the take and discard it if the motion is spoiled |
 | Falling low tone, the operator chip shows `Link lost` | The headset lost its link to the robot agent. The arms hold and the dead-man hands them back | Wait for the link to come back, or end the take |

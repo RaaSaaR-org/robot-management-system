@@ -1274,6 +1274,13 @@ export class RobotStateManager {
    *    carried while powered off must not report where it used to stand.
    * 3. **The banner says plainly what came back.** Whoever walks up to a robot
    *    that refuses to move has to be able to read why.
+   * 4. **A stop status comes back only with its latch** (TASK-431). Only a
+   *    latch justifies `protective_stop`, and only the E-Stop latch is durable.
+   *    A snapshot that says `protective_stop` without `estopLatched` (a
+   *    comms-loss protective stop, persisted before it auto-cleared) comes
+   *    back `online`. Otherwise a restarted robot reports a stop that nothing
+   *    holds and nothing can clear, every boot. A restored latch still brings
+   *    `protective_stop` back, through `restoreLatchedEmergencyStop` below.
    */
   private restorePersistedState(): void {
     const persisted = this.persistence.load();
@@ -1283,7 +1290,9 @@ export class RobotStateManager {
     const ageMs = snapshotAgeMs(persisted.savedAt);
     const stale = ageMs === null || ageMs > PLACE_STALE_MS;
 
-    this.state.status = rs.status;
+    // Rule 4. The latch below re-applies `protective_stop` when it is restored.
+    const unlatchedStop = rs.status === 'protective_stop';
+    this.state.status = unlatchedStop ? 'online' : rs.status;
     this.state.batteryLevel = rs.batteryLevel;
     this.state.speed = rs.speed;
     this.state.errors = [...rs.errors];
@@ -1325,7 +1334,8 @@ export class RobotStateManager {
     const ageText = ageMs === null ? 'unknown age' : `${Math.round(ageMs / 1000)}s old`;
     console.log(
       `[RobotStateManager] Restored persisted state (${ageText}): ` +
-        `battery=${rs.batteryLevel.toFixed(1)}%, status=${rs.status}, ` +
+        `battery=${rs.batteryLevel.toFixed(1)}%, status=${this.state.status}` +
+        (unlatchedStop && !agent.estopLatched ? ' (saved protective_stop had no latch)' : '') + ', ' +
         `estop=${agent.estopLatched ? `LATCHED (${agent.estopReason ?? 'no reason recorded'})` : 'clear'}, ` +
         `damped=${agent.damped}, place=${agent.place ?? 'unknown'}` +
         (stale ? ' — snapshot too old: pose, place and held object dropped' : ''),

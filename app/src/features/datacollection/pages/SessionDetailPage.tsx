@@ -38,6 +38,11 @@
  *              with one dataset action, the takes and the details.
  *              TASK-430: Set up's step 1 leads with Restart when the robot side
  *              runs stale code, and keeps Stop under its Details.
+ *              TASK-431: a stop reads the agent's and the sidecar's own latch
+ *              (and only without one, a `protective_stop` status), and offers
+ *              Reset E-stop, the VR window's reset: lit in Record's recovery
+ *              slot, and in Set up as the blocker of step 3. The robot's status
+ *              is read again on open and after a reset.
  * @feature datacollection
  */
 
@@ -60,6 +65,9 @@ import { OperatorChip } from '../components/console/OperatorChip';
 import { SystemsStrip, type StripCell } from '../components/console/SystemsStrip';
 import { TakeDock } from '../components/console/TakeDock';
 import { TakesList } from '../components/console/TakesList';
+import { EstopRecovery } from '../components/console/EstopRecovery';
+import { RESET_DONE, robotStop } from '../utils/robotStop';
+import { useEstopReset } from '../hooks/useEstopReset';
 import { useTakeHotkeys } from '../hooks/useTakeHotkeys';
 import { ReparentHost, useDetachedNode } from '../components/console/Reparent';
 import { useViewportFill } from '../hooks/useViewportFill';
@@ -166,12 +174,23 @@ export function SessionDetailPage() {
 
   const robots = useRobotsStore((s) => s.robots);
   const fetchRobots = useRobotsStore((s) => s.fetchRobots);
+  const fetchRobot = useRobotsStore((s) => s.fetchRobot);
   const robot = robots.find((r) => r.id === session?.robotId) ?? null;
   useEffect(() => { if (robots.length === 0) fetchRobots(); }, [robots.length, fetchRobots]);
+  // TASK-431: the robot's status as the server has it now, not as the app first
+  // loaded it. The page decides from it whether a protective stop shows.
+  const sessionRobotId = session?.robotId;
+  useEffect(() => { if (sessionRobotId) void fetchRobot(sessionRobotId); }, [sessionRobotId, fetchRobot]);
 
   const robotOnline = !!robot && robot.status !== 'offline';
-  const { telemetry, isConnected: isTelemetryConnected } = useTelemetryStream(session?.robotId ?? '', {
-    autoConnect: !!session && robotOnline && ['recording', 'paused', 'created'].includes(session.status),
+  // TASK-431: the stream starts once the robot is known to be online, also when
+  // the robot list arrives after the session. The hook connects once per robot
+  // id, so the id is handed over only when the stream should run; before this,
+  // a robot list that came second left the polled stream (the demo, dev before
+  // the first broadcast frame) off for good, and with it the agent's warnings.
+  const telemetryOn = !!session && robotOnline && ['recording', 'paused', 'created'].includes(session.status);
+  const { telemetry, isConnected: isTelemetryConnected } = useTelemetryStream(telemetryOn ? session!.robotId : '', {
+    autoConnect: telemetryOn,
   });
 
   const [annotateOpen, setAnnotateOpen] = useState(false);
@@ -517,6 +536,32 @@ export function SessionDetailPage() {
   }, [releaseLease]);
   useLeaseHandOver(sessionIsVr && !leaseInputs && leaseDone, pageHoldsLease, handOverBalanced);
   useLeaseHandOver(sessionIsVr && !leaseInputs && vrModalOpen, pageHoldsLease, handOverVrWindow);
+  // TASK-431: what holds the robot stopped. The agent's and the sidecar's own
+  // latch decide, as readiness and the mode read report them. Only without a
+  // latch does a `protective_stop` status count, and the agent's stop warning
+  // (its telemetry) names the cause and the reason.
+  const readArms = readinessState.readiness?.agent.readiness?.arms ?? null;
+  const stop = robotStop({
+    agentLatched: !!readArms?.estopLatched || !!baseMode.status?.estopLatched,
+    sidecarLatched: !!readArms?.sidecarEstopLatched || !!baseMode.status?.sidecarEstopLatched,
+    status: robotOnline && robot ? robot.status : null,
+    warnings: telemetry?.warnings,
+  });
+  const refreshReadiness = readinessState.refresh;
+  const refreshBaseMode = baseMode.refresh;
+  const estopReset = useEstopReset(session?.robotId ?? null, () => {
+    if (session?.robotId) void fetchRobot(session.robotId);
+    void refreshReadiness();
+    void refreshBaseMode();
+  });
+  // "The E-stop is reset, stand it up again" holds until the robot balances
+  // (it shows only while no stop does).
+  const balancingNow = baseMode.status?.base?.mode === 'balance';
+  const clearReset = estopReset.clear;
+  const resetShown = estopReset.resetAt !== null;
+  useEffect(() => {
+    if (resetShown && balancingNow) clearReset();
+  }, [resetShown, balancingNow, clearReset]);
   // Read by the hotkey handler, which binds once per status change.
   const startBlockedRef = useRef(false);
   startBlockedRef.current = isCreated && preflight.blocking;
@@ -580,7 +625,7 @@ export function SessionDetailPage() {
   const phase = sessionPhase(session.status);
   const legacyRecording = isRecording && !takeMode;
   const robotFault = robot?.status === 'protective_stop' || robot?.status === 'error';
-  const tally = commandBarTally({ status: session.status, capturing: capturing || legacyRecording, fault: robotFault });
+  const tally = commandBarTally({ status: session.status, capturing: capturing || legacyRecording, fault: robotFault || stop !== null });
   const link: RobotLink = !robotOnline ? 'offline' : isTelemetryConnected ? 'live' : 'stale';
   const headset = deviceRole === 'headset';
   const detectedRole = detectDeviceRole(typeof navigator === 'undefined' ? '' : navigator.userAgent, EMULATOR_ACTIVE);
@@ -667,6 +712,7 @@ export function SessionDetailPage() {
       pageInputs: leaseInputs,
     },
     operator: { present: operatorViewer !== null, name: operatorName, inVr: operatorInVr },
+    stop,
   }) : null;
   // The page's own lease drives the robot-side buttons; Take control opens it on
   // a VR session (simulated input shows the lease bar instead).
@@ -690,7 +736,28 @@ export function SessionDetailPage() {
   const robotActions = (only: ReadinessActionId[], lit: boolean) => (robot ? (
     <ReadinessActions robotId={robot.id} ready={readinessState} lease={readinessLease} only={only} lit={lit} />
   ) : null);
+  // TASK-431: the stop and its Reset E-stop, in the step it blocks. That step's
+  // own lit action waits behind it. A waiting step does not repeat it.
+  const stopIn = (step: SetupStep) => (stop && setupModel?.stopStep === step.id && step.state !== 'waits' ? stop : null);
+  const stopBlock = (step: SetupStep, lit: boolean) => {
+    const here = stopIn(step);
+    return here ? (
+      <EstopRecovery
+        className="mb-3"
+        stop={here}
+        lit={lit}
+        pending={estopReset.pending}
+        error={estopReset.error}
+        onReset={() => void estopReset.reset()}
+        headset={isVrSession}
+        // Only a humanoid session stands up again; the step 3 track drives it.
+        standUp={isVrSession && (baseMode.status?.base?.mode ?? null) !== 'balance'}
+      />
+    ) : null;
+  };
+  const resetDone = !stop && estopReset.resetAt !== null;
   const renderStep = (step: SetupStep, lit: boolean): SetupStepContent => {
+    const stopped = stopIn(step) !== null;
     switch (step.id) {
       case 'robot': {
         // TASK-430: Start, or Restart on stale code, is the step's one lit
@@ -706,7 +773,8 @@ export function SessionDetailPage() {
                 : side.stop ? ' Stop them under Details when you finish for the day.' : ''
             }`
             : preflightItems.find((i) => i.id === 'robot')?.action ?? `${robotName} is online. Its agent streams the robot state the takes record.`,
-          actions: robotActions(['start', 'restart', 'logs'], lit),
+          children: stopBlock(step, lit),
+          actions: robotActions(['start', 'restart', 'logs'], lit && !stopped),
           details: robot && side.stop && !restarting ? (
             <>
               {rows}
@@ -732,21 +800,25 @@ export function SessionDetailPage() {
         };
       case 'stance':
         return {
+          lead: resetDone ? RESET_DONE : undefined,
           children: robot ? (
-            <div data-testid="session-robot-mode">
-              <RobotModeControl
-                robotId={robot.id}
-                variant="step"
-                lit={lit}
-                lease={lease}
-                baseMode={baseMode}
-                // Simulated input: step 2's control bar takes it. Otherwise this step does.
-                takeControlHint={leaseInputs ? 'Take control in step 2 first.' : undefined}
-                onTakeControl={readinessLease.take}
-                requestFromHolder={operatorViewer && operatorInVr && !vrModalOpen ? requestMode : undefined}
-              />
-              {heldLine('mt-3')}
-            </div>
+            <>
+              {stopBlock(step, lit)}
+              <div data-testid="session-robot-mode">
+                <RobotModeControl
+                  robotId={robot.id}
+                  variant="step"
+                  lit={lit && !stopped}
+                  lease={lease}
+                  baseMode={baseMode}
+                  // Simulated input: step 2's control bar takes it. Otherwise this step does.
+                  takeControlHint={leaseInputs ? 'Take control in step 2 first.' : undefined}
+                  onTakeControl={readinessLease.take}
+                  requestFromHolder={operatorViewer && operatorInVr && !vrModalOpen ? requestMode : undefined}
+                />
+                {heldLine('mt-3')}
+              </div>
+            </>
           ) : null,
           details: detailsFor(step),
         };
@@ -836,10 +908,7 @@ export function SessionDetailPage() {
   // given back when the session starts).
   const recordLease = { enabled: lease.enabled, state: lease.state, grant: () => lease.grant() };
   const readiness = readinessState.readiness;
-  const arms = readiness?.agent.readiness?.arms ?? null;
   const measuredMode = baseMode.status?.base?.mode ?? null;
-  const estopLatched = robotFault || !!baseMode.status?.estopLatched || !!baseMode.status?.sidecarEstopLatched
-    || !!arms?.estopLatched || !!arms?.sidecarEstopLatched;
   const notBalancing = isVrSession && modeControlOn && measuredMode !== null && measuredMode !== 'balance';
   const operatorState = operator?.state ?? null;
   const operatorInVrNow = operatorState?.inVr === true;
@@ -848,7 +917,7 @@ export function SessionDetailPage() {
   const reasonOwner = reasonCellNow?.id ?? null;
   const reason = reasonCellNow?.reason ?? null;
   const modeReason = reasonOwner === 'mode' ? reason : null;
-  const showRecovery = phase === 'record' && (estopLatched || notBalancing);
+  const showRecovery = phase === 'record' && (stop !== null || notBalancing);
   const abortedCheck = lastQuickCheck?.discarded && lastQuickCheck.stopReason === 'estop' ? lastQuickCheck : null;
   const jerky = !!qualityFeedback && (isRecording || isPaused) && qualityFeedback.currentSmoothnessScore < 0.6;
   // The slot's blocker: the first of missed frames, a blocking readiness reason, the headset's block, jerky motion.
@@ -891,23 +960,36 @@ export function SessionDetailPage() {
     </p>
   );
   const slotLine = 'm-0 ml-6 mt-1 leading-normal text-ink-secondary';
+  // TASK-431: a stop leads with its Reset E-stop, the slot's one lit action;
+  // the mode buttons wait under it, as they wait for the reset.
   const recovery = showRecovery ? (
     <div className="flex flex-col">
-      {estopLatched
-        ? slotTitle('fault', 'E-stop is latched.', 'take-dock-recovery-title')
+      {stop
+        ? slotTitle('fault', stop.title, 'take-dock-recovery-title')
         : slotTitle('warn', modeReason?.text ?? `The robot is in ${modeWord(measuredMode)}. The arms follow only in Balance.`, 'take-dock-recovery-title')}
-      {estopLatched && abortedCheck && (
+      {stop && abortedCheck && (
         <p className={cn(slotLine, 'font-medium text-signal-stopped')} role="status" data-testid="quick-check-verdict">
           {describeEStopTake(abortedCheck.take)}
         </p>
       )}
-      {estopLatched && (
-        <p className={slotLine} data-testid="take-dock-estop-reset">The operator resets it in the headset, or reset it at the robot. Then stand the robot up again.</p>
+      {stop && (
+        <EstopRecovery
+          className="ml-6 mt-2"
+          dense
+          stop={stop}
+          lit
+          pending={estopReset.pending}
+          error={estopReset.error}
+          onReset={() => void estopReset.reset()}
+          headset={isVrSession}
+          standUp={isVrSession && measuredMode !== 'balance'}
+        />
       )}
+      {!stop && resetDone && <p className={slotLine} data-testid="estop-reset-done">{RESET_DONE}</p>}
       {/* The mode buttons right under the title, so a short slot shows them before it scrolls. */}
       {modeControl && <ReparentHost node={modeNode} className="ml-6 mt-2" />}
-      {/* The fallback title already says it; the readiness reason and the E-stop do not. */}
-      {(estopLatched || modeReason) && <p className={cn(slotLine, modeControl && 'mt-1.5')}>The arms will not follow until the robot balances.</p>}
+      {/* The fallback title already says it; the readiness reason and the stop do not. */}
+      {(stop || modeReason) && <p className={cn(slotLine, modeControl && 'mt-1.5')}>The arms will not follow until the robot balances.</p>}
     </div>
   ) : null;
   const blocker = blockerKind === 'degraded' ? (
@@ -932,7 +1014,7 @@ export function SessionDetailPage() {
       {(qualityFeedback.suggestions ?? []).slice(0, 2).map((tip) => <p key={tip} className={slotLine}>{tip}</p>)}
     </div>
   ) : null;
-  const slotTone: 'fault' | 'warn' = blockerKind === 'degraded' || blockerKind === 'motion' || (showRecovery && !estopLatched) ? 'warn' : 'fault';
+  const slotTone: 'fault' | 'warn' = blockerKind === 'degraded' || blockerKind === 'motion' || (showRecovery && !stop) ? 'warn' : 'fault';
 
   // The cells, with what the page knows live: the lease holder's name and the headset's why line.
   const WHY_STATUS: Record<'block' | 'warn' | 'ok', SystemsCellStatus> = { block: 'fail', warn: 'warn', ok: 'ok' };
@@ -1136,6 +1218,7 @@ export function SessionDetailPage() {
           slotTone={slotTone}
           quickCheck={quickCheckNode}
           keepsTake={lastQuickCheck && !lastQuickCheck.discarded ? lastQuickCheck.take : null}
+          primaryLit={!(showRecovery && stop)}
           legacy={!takeMode ? {
             recording: isRecording,
             paused: isPaused,

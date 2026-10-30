@@ -7,7 +7,9 @@
  *              built from the same input. TASK-430: step 1's robot-side buttons
  *              — Start when stopped, Restart when the robot side runs stale
  *              code, Stop under Details while it runs, none of them while it
- *              stops.
+ *              stops. TASK-431: a stop is step 3's blocker (steps 4 and 5 wait
+ *              for it), or step 1's without a step 3; a read-only sidecar is
+ *              never "Arm control on", sim or not.
  * @feature datacollection
  */
 
@@ -15,7 +17,8 @@ import { describe, it, expect } from 'vitest';
 import { READINESS_FIXTURES, readinessFor } from '@/mocks/readinessDemoHandlers';
 import type { RobotReadiness } from '@/features/robots/api/readinessApi';
 import { buildPreflight } from '../preflight';
-import { buildSetupModel, leaseWorkDone, reasonCell, reasonStep, robotSideButtons, stepOrder, type SetupModelInput } from '../setupSteps';
+import { armControlOn, buildSetupModel, leaseWorkDone, reasonCell, reasonStep, robotSideButtons, stepOrder, type SetupModelInput } from '../setupSteps';
+import { robotStop } from '../robotStop';
 import type { BringupStep } from '@/features/robots/api/readinessApi';
 
 const ROBOT = 'demo-g1-001';
@@ -166,7 +169,7 @@ describe('the one readiness reason', () => {
     ['sidecar_unreachable', 'robot', 'robot'],
     ['no_lowstate', 'robot', 'robot'],
     ['read_only', 'arm_control', 'arm_control'],
-    ['estop_latched', 'operator', 'arms'],
+    ['estop_latched', 'stance', 'arms'],
     ['mode_unknown', 'stance', 'mode'],
     ['mode_not_balance', 'stance', 'mode'],
     ['lease_none', 'operator', 'control'],
@@ -379,5 +382,126 @@ describe('step 1\'s robot-side buttons (TASK-430)', () => {
   it('no robot side reported (no supervisor): nothing to start, restart or stop', () => {
     expect(robotSideButtons({ ...READINESS_FIXTURES.following, bringup: null })).toEqual({ lead: null, stop: false });
     expect(robotSideButtons(null)).toEqual({ lead: null, stop: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-431 — a stop is the blocker of the step it blocks
+// ---------------------------------------------------------------------------
+describe('a stop in Set up (TASK-431)', () => {
+  const latched = robotStop({
+    agentLatched: true, sidecarLatched: false, status: 'protective_stop',
+    warnings: ['Emergency stop activated: Platform E-Stop: Emergency stop triggered for G1-EDU-4 (real)'],
+  })!;
+  const unlatched = robotStop({ agentLatched: false, sidecarLatched: false, status: 'protective_stop', warnings: [] })!;
+  const up = (over: Partial<SetupModelInput> = {}) => input({
+    readiness: readinessFor(ROBOT, 'estop_latched'),
+    mode: { measured: 'limp', gateOn: true },
+    operator: { present: false, name: null, inVr: false },
+    ...over,
+  });
+
+  it('a latched E-stop fails step 3, which is current and owns the stop line; steps 4 and 5 wait for it', () => {
+    const m = buildSetupModel(up({ stop: latched }));
+    const s = Object.fromEntries(m.steps.map((x) => [x.id, x]));
+    expect(m.current).toBe('stance');
+    expect(m.stopStep).toBe('stance');
+    expect(s.stance).toMatchObject({ state: 'current', summary: 'E-stop latched', tone: 'fail' });
+    expect(s.stance.reason).toEqual({ code: 'estop_latched', text: 'E-stop is latched.', severity: 'block' });
+    expect(s.quest).toMatchObject({ state: 'waits', summary: 'Waits for step 3', reason: null });
+    expect(s.operator).toMatchObject({ state: 'waits', summary: 'Waits for step 3', reason: null });
+    // The readiness line "E-stop is latched. Reset it…" is not said a second time anywhere.
+    expect(m.steps.filter((x) => x.reason !== null).map((x) => x.id)).toEqual(['stance']);
+    expect(m.allDone).toBe(false);
+  });
+
+  it('with step 2 still open, step 3 is a fault that keeps its stop line, and step 2 stays current', () => {
+    const m = buildSetupModel(up({ readiness: readinessFor(ROBOT, 'read_only_ready'), stop: latched }));
+    const s = Object.fromEntries(m.steps.map((x) => [x.id, x]));
+    expect(m.current).toBe('arm_control');
+    expect(s.stance).toMatchObject({ state: 'fault', summary: 'E-stop latched' });
+    expect(s.stance.reason?.code).toBe('estop_latched');
+    expect(s.arm_control.reason?.code).toBe('read_only');
+  });
+
+  it('a protective stop with no latch blocks step 3 as well, under its own name', () => {
+    const m = buildSetupModel(up({ readiness: readinessFor(ROBOT, 'protective_stop_unlatched'), stop: unlatched }));
+    const stance = m.steps.find((x) => x.id === 'stance')!;
+    expect(stance).toMatchObject({ state: 'current', summary: 'Protective stop', tone: 'fail' });
+    expect(stance.reason).toEqual({ code: 'protective_stop', text: 'Protective stop.', severity: 'block' });
+    expect(m.stopStep).toBe('stance');
+  });
+
+  it('without a stop, step 3 is the bring-up track again', () => {
+    const m = buildSetupModel(up({ readiness: readinessFor(ROBOT, 'estop_reset_limp'), stop: null }));
+    const stance = m.steps.find((x) => x.id === 'stance')!;
+    expect(stance).toMatchObject({ state: 'current', summary: 'Limp' });
+    expect(stance.reason?.code).toBe('mode_not_balance');
+    expect(m.stopStep).toBeNull();
+    expect(m.steps.find((x) => x.id === 'quest')!.state).not.toBe('waits');
+  });
+
+  it('a non-VR session has no step 3: the stop blocks a running step 1', () => {
+    const m = buildSetupModel(up({
+      sessionType: 'gamepad',
+      preflight: preflight(true, true, 'gamepad'),
+      lease: { enabled: true, bound: false, holder: null, pageInputs: true },
+      stop: latched,
+    }));
+    expect(m.stopStep).toBe('robot');
+    expect(m.steps[0]).toMatchObject({ id: 'robot', state: 'current', summary: 'E-stop latched', tone: 'fail' });
+    expect(m.steps[0].reason?.code).toBe('estop_latched');
+  });
+
+  it('a non-VR robot side that is not up leads with its own problem, not the stop', () => {
+    const m = buildSetupModel(up({
+      sessionType: 'gamepad',
+      preflight: preflight(true, true, 'gamepad'),
+      readiness: READINESS_FIXTURES.bringup_stopped,
+      stop: unlatched,
+    }));
+    expect(m.stopStep).toBeNull();
+    expect(m.steps[0].summary).toBe('Robot side stopped');
+  });
+});
+
+describe('arm control on (TASK-431)', () => {
+  const withSidecar = (sidecar: Partial<NonNullable<RobotReadiness['agent']['readiness']>['sidecar']>): RobotReadiness => {
+    const base = READINESS_FIXTURES.following;
+    const ar = base.agent.readiness!;
+    return { ...base, agent: { ...base.agent, readiness: { ...ar, sidecar: { ...ar.sidecar, ...sidecar } } } };
+  };
+
+  it('the legacy MuJoCo sim sidecar (sim, no write mode) has no read-only gate: on', () => {
+    expect(armControlOn(withSidecar({ sim: true, writeMode: null, readOnly: false }))).toBe(true);
+  });
+
+  it('the supervisor sim (the real g1_sidecar.py, read-only) is not on, and step 2 asks for control', () => {
+    const r = withSidecar({ sim: true, writeMode: 'read_only', readOnly: true });
+    expect(armControlOn(r)).toBe(false);
+    const m = buildSetupModel(input({ readiness: r, lease: { enabled: true, bound: false, holder: null, pageInputs: false } }));
+    const arm = m.steps.find((x) => x.id === 'arm_control')!;
+    expect(arm.state).toBe('current');
+    expect(arm.summary).toBe('Nobody has control');
+    expect(m.cells.find((c) => c.id === 'arm_control')).toMatchObject({ value: 'Read-only', status: 'warn' });
+  });
+
+  it('a sim sidecar that says read_only without the readOnly flag is still not on', () => {
+    expect(armControlOn(withSidecar({ sim: true, writeMode: 'read_only', readOnly: false }))).toBe(false);
+  });
+
+  it('the supervisor sim switched to arm control is on', () => {
+    expect(armControlOn(withSidecar({ sim: true, writeMode: 'arm_sdk', readOnly: false }))).toBe(true);
+  });
+
+  it('a real sidecar: arm_sdk is on, read_only and an unknown write mode are not', () => {
+    expect(armControlOn(withSidecar({ sim: false, writeMode: 'arm_sdk', readOnly: false }))).toBe(true);
+    expect(armControlOn(withSidecar({ sim: false, writeMode: 'read_only', readOnly: true }))).toBe(false);
+    expect(armControlOn(withSidecar({ sim: false, writeMode: null, readOnly: false }))).toBe(false);
+  });
+
+  it('the hand-over is not due on the read-only supervisor sim, even balancing', () => {
+    const r = withSidecar({ sim: true, writeMode: 'read_only', readOnly: true });
+    expect(leaseWorkDone(r, { measured: 'balance', gateOn: true })).toBe(false);
   });
 });

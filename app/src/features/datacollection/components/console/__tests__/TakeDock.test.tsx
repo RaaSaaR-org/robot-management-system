@@ -7,7 +7,8 @@
  *              the quick check — with the quick check owning Discard and the
  *              "Starting take N keeps take N−1." hint; the legacy recorder's
  *              Resume / Pause / Next episode; and no control in the header row,
- *              which lies under the E-STOP.
+ *              which lies under the E-STOP. TASK-431: while the slot holds the
+ *              lit Reset E-stop, the take primary turns secondary.
  * @feature datacollection
  */
 
@@ -102,6 +103,19 @@ describe('TakeDock slot priority', () => {
     expect(screen.getByTestId('hud-take-timer')).toHaveTextContent('00:00');
     expect(screen.getByTestId('take-primary')).toBeEnabled();
     expect(screen.getByTestId('take-discard-last')).toBeInTheDocument();
+  });
+
+  it('turns the take primary secondary while the slot holds the lit Reset E-stop (TASK-431)', () => {
+    setup({
+      phase: 'between',
+      recovery: <button type="button" className="bg-primary" data-testid="estop-reset">Reset E-stop</button>,
+      primaryLit: false,
+    });
+    expect(primaries().map((b) => (b as HTMLElement).dataset.testid)).toEqual(['estop-reset']);
+    const primary = screen.getByTestId('take-primary');
+    expect(primary.className).not.toContain('bg-primary');
+    // Still a button that works: the take buttons stay usable during a stop.
+    expect(primary).toBeEnabled();
   });
 
   it('renders a blocker over the quick check, amber unless told otherwise', () => {

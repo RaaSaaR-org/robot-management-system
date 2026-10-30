@@ -8,7 +8,10 @@
  *              control opens the page's lease only on the press. TASK-430: on
  *              stale code step 1 leads with Restart, behind the Stop confirm,
  *              which stops, waits for stopped and starts; while the robot side
- *              runs, Stop waits under step 1's Details.
+ *              runs, Stop waits under step 1's Details. TASK-431: a latched
+ *              E-stop, or a protective stop no latch holds, is step 3's blocker
+ *              with Reset E-stop as the one lit action; the reset is the VR
+ *              window's call, and afterwards step 3 says to stand up again.
  * @feature datacollection
  */
 
@@ -22,6 +25,7 @@ import { renderWithProviders } from '@/test/utils';
 import { useRobotsStore } from '@/features/robots/store/robotsStore';
 import { useDataCollectionStore } from '../../store/datacollectionStore';
 import { SessionDetailPage } from '../SessionDetailPage';
+import { RESET_DONE } from '../../utils/robotStop';
 import type { TeleoperationSession } from '../../types/datacollection.types';
 
 const leaseCalls = vi.hoisted(() => ({ active: [] as boolean[], acquire: vi.fn(async () => {}) }));
@@ -256,3 +260,91 @@ describe('SessionDetailPage Set up — step 1 restarts a robot side on stale cod
     await waitFor(() => expect(posts).toEqual(['stop']));
   });
 });
+
+describe('SessionDetailPage Set up — a stop blocks step 3 (TASK-431)', () => {
+  const G1 = { id: 'g1', name: 'G1 EDU', model: 'Unitree G1', batteryLevel: 80, location: { x: 0, y: 0, zone: '' }, lastSeen: 'x', capabilities: [], createdAt: 'x', updatedAt: 'x' };
+
+  it('a latched E-stop: step 3 is current with Reset E-stop as the one lit action, the VR window\'s reset, then "stand up again"', async () => {
+    let fixture: 'estop_latched' | 'estop_reset_limp' = 'estop_latched';
+    const resets: string[] = [];
+    server.use(
+      http.get('/api/robots/:id/readiness', () => HttpResponse.json(readinessFor('g1', fixture))),
+      http.post('/api/safety/robots/:id/estop/reset', ({ params }) => {
+        resets.push(String(params.id));
+        fixture = 'estop_reset_limp';
+        return HttpResponse.json({ robotId: params.id, status: 'armed', robotStatus: 'online' });
+      }),
+    );
+    render();
+    await waitFor(() => expect(screen.getByTestId('setup-step-stance')).toHaveAttribute('data-state', 'current'));
+    const stance = screen.getByTestId('setup-step-stance');
+    expect(stance).toHaveAttribute('data-expanded', 'true');
+    expect(within(stance).getByTestId('setup-step-reason')).toHaveTextContent('E-stop is latched.');
+    expect(within(stance).getByTestId('take-dock-estop-reset')).toHaveTextContent(
+      'Reset E-stop clears the latch in the robot agent and in the sidecar. It does not move the robot. The operator can also reset it in the headset. Then stand the robot up again: Limp, Stand up, Balance.',
+    );
+    expect(litPrimaries().map((b) => b.dataset.testid)).toEqual(['estop-reset']);
+    // The readiness line does not repeat the stop, and nothing says "at the robot".
+    expect(document.body.textContent).not.toContain('E-stop is latched. Reset it');
+    expect(document.body.textContent).not.toContain('at the robot');
+    expect(screen.getByTestId('setup-step-quest')).toHaveAttribute('data-state', 'waits');
+    expect(screen.getByTestId('setup-step-operator')).toHaveAttribute('data-state', 'waits');
+
+    fireEvent.click(within(stance).getByTestId('estop-reset'));
+    await waitFor(() => expect(resets).toEqual(['g1']));
+    await waitFor(() => expect(within(stance).queryByTestId('estop-recovery')).toBeNull());
+    expect(stance).toHaveTextContent(RESET_DONE);
+    expect(screen.getByTestId('setup-step-quest')).not.toHaveAttribute('data-state', 'waits');
+  });
+
+  it('a failed reset says why and leaves the stop in place', async () => {
+    server.use(
+      http.get('/api/robots/:id/readiness', () => HttpResponse.json(readinessFor('g1', 'estop_latched'))),
+      http.post('/api/safety/robots/:id/estop/reset', () =>
+        HttpResponse.json({ error: 'Failed to reset E-stop: Cannot reset E-stop - safety conditions not met' }, { status: 400 })),
+    );
+    render();
+    const reset = await screen.findByTestId('estop-reset');
+    fireEvent.click(reset);
+    const error = await screen.findByTestId('estop-reset-error');
+    expect(error).toHaveTextContent(/^Reset failed: .*The robot is still stopped\.$/);
+    expect(screen.getByTestId('estop-recovery')).toBeInTheDocument();
+  });
+
+  it('protective_stop with no latch: "Protective stop." and the same reset, which clears the status', async () => {
+    let status: 'protective_stop' | 'online' = 'protective_stop';
+    const resets: string[] = [];
+    useRobotsStore.setState({ robots: [{ ...G1, status: 'protective_stop' } as never] });
+    server.use(
+      http.get('/api/robots/:id/readiness', () => HttpResponse.json(readinessFor('g1', 'protective_stop_unlatched'))),
+      http.get('/api/robots/:id', () => HttpResponse.json({ ...G1, status })),
+      http.post('/api/safety/robots/:id/estop/reset', ({ params }) => {
+        resets.push(String(params.id));
+        status = 'online';
+        return HttpResponse.json({ robotId: params.id, status: 'armed', robotStatus: 'online' });
+      }),
+    );
+    render();
+    await waitFor(() => expect(screen.getByTestId('setup-step-stance')).toHaveAttribute('data-state', 'current'));
+    const stance = screen.getByTestId('setup-step-stance');
+    expect(within(stance).getByTestId('setup-step-reason')).toHaveTextContent('Protective stop.');
+    expect(within(stance).getByTestId('estop-recovery')).toHaveAttribute('data-kind', 'status');
+    expect(within(stance).getByTestId('take-dock-estop-reset')).toHaveTextContent('The robot reports a protective stop, but no latch holds it.');
+    expect(litPrimaries().map((b) => b.dataset.testid)).toEqual(['estop-reset']);
+
+    fireEvent.click(within(stance).getByTestId('estop-reset'));
+    await waitFor(() => expect(resets).toEqual(['g1']));
+    // The page reads the robot's status again after the reset.
+    await waitFor(() => expect(within(stance).queryByTestId('estop-recovery')).toBeNull());
+  });
+
+  it('reads the robot\'s status on open, not the one the app loaded', async () => {
+    server.use(
+      http.get('/api/robots/:id/readiness', () => HttpResponse.json(readinessFor('g1', 'protective_stop_unlatched'))),
+      http.get('/api/robots/:id', () => HttpResponse.json({ ...G1, status: 'protective_stop' })),
+    );
+    render();
+    await waitFor(() => expect(screen.getByTestId('setup-step-stance')).toHaveTextContent('Protective stop'));
+  });
+});
+

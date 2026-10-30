@@ -11,6 +11,11 @@
  *              TASK-430: step 1's robot-side buttons — Start, or Restart when
  *              the robot side runs stale code, and Stop under Details while it
  *              runs — from the same rules the buttons use.
+ *              TASK-431: a stop (a latched E-stop, or a protective stop with no
+ *              latch) is the blocker of step 3, which it blocks: the robot is
+ *              damped and must stand up again; steps 4 and 5 wait for it. A
+ *              sidecar that reports read-only is never "Arm control on", sim
+ *              or not.
  * @feature datacollection
  */
 
@@ -27,6 +32,7 @@ import {
 } from '../../robots/components/readiness/readinessRows';
 import type { TeleoperationType } from '../types/datacollection.types';
 import type { PreflightItem } from './preflight';
+import type { RobotStop } from './robotStop';
 
 export type SetupStepId = 'robot' | 'arm_control' | 'stance' | 'quest' | 'operator' | 'input' | 'control';
 
@@ -88,6 +94,8 @@ export interface SetupModelInput {
   lease: { enabled: boolean; bound: boolean; holder: string | null; pageInputs: boolean };
   /** The session's operator in the headset, from presence and the relayed state. */
   operator: { present: boolean; name: string | null; inVr: boolean };
+  /** What holds the robot stopped (`robotStop()`), or null (TASK-431). */
+  stop?: RobotStop | null;
 }
 
 export interface SetupModel {
@@ -101,6 +109,8 @@ export interface SetupModel {
   cells: SystemsCell[];
   /** Step 1's robot-side buttons (TASK-430). */
   robotSide: RobotSideButtons;
+  /** The step that shows the stop and its Reset E-stop, or null (TASK-431). */
+  stopStep: SetupStepId | null;
 }
 
 /**
@@ -148,7 +158,8 @@ const PREREQUISITES: Record<SetupStepId, SetupStepId[]> = {
   robot: [],
   arm_control: ['robot'],
   stance: ['robot'],
-  quest: ['robot'],
+  // TASK-431: a stop fails step 3, and the Quest waits for it as well.
+  quest: ['robot', 'stance'],
   operator: ['robot', 'arm_control', 'stance', 'quest'],
   input: [],
   control: ['robot'],
@@ -185,6 +196,8 @@ export function reasonStep(
   const has = (id: SetupStepId) => steps.includes(id);
   let owner: SetupStepId | null;
   if (code === 'read_only') owner = has('arm_control') ? 'arm_control' : 'robot';
+  // TASK-431: a latch blocks standing up, not the operator's hands.
+  else if (code === 'estop_latched') owner = has('stance') ? 'stance' : 'robot';
   else if (row === 'control') owner = has('operator') ? 'operator' : has('control') ? 'control' : 'robot';
   else if (row === 'mode') owner = has('stance') ? 'stance' : 'robot';
   else if (row === 'arms') owner = has('operator') ? 'operator' : 'robot';
@@ -259,6 +272,8 @@ interface Facts {
   summary: string;
   tone: SetupTone;
   warning?: string | null;
+  /** The stop (TASK-431) is what keeps this step from done. */
+  stopped?: boolean;
 }
 
 /** The mode the agent's readiness measured, when the base-mode poll has none. */
@@ -267,10 +282,20 @@ function readinessMode(readiness: RobotReadiness | null): BaseModeName | null {
   return mode && mode in MODE_WORDS ? (mode as BaseModeName) : null;
 }
 
-/** The sidecar writes the arms: arm_sdk (or the sim, which has no read-only gate). */
-function armControlOn(readiness: RobotReadiness | null): boolean | null {
+/**
+ * The sidecar writes the arms: arm_sdk. The legacy MuJoCo sim facade (`sim`
+ * and no write mode) has no read-only gate, so it counts as on, as the agent's
+ * `explainNotFollowing` treats it. A sidecar that reports read-only never
+ * does, sim or not (TASK-431): the supervisor sim runs the real g1_sidecar.py,
+ * read-only until the robot side switches to arm control.
+ */
+export function armControlOn(readiness: RobotReadiness | null): boolean | null {
   const sc = readiness?.agent.readiness?.sidecar ?? null;
-  if (sc && sc.reachable) return sc.sim || (!sc.readOnly && sc.writeMode === 'arm_sdk');
+  if (sc && sc.reachable) {
+    if (sc.readOnly || sc.writeMode === 'read_only') return false;
+    if (sc.writeMode === 'arm_sdk') return true;
+    return sc.sim && sc.writeMode === null;
+  }
   const mode = readiness?.bringup?.sidecarMode ?? null;
   if (mode) return mode === 'arm_sdk';
   return null;
@@ -319,7 +344,9 @@ export function buildSetupModel(input: SetupModelInput): SetupModel {
   const item = (id: PreflightItem['id']) => preflight.find((p) => p.id === id) ?? null;
   const robotItem = item('robot');
   const recorderItem = item('recorder');
-  const owner = reasonStep(readiness, order);
+  const stop = input.stop ?? null;
+  // A latched readiness reason only repeats the stop, which says it with its cause.
+  const owner = stop && readiness?.reason.code === 'estop_latched' ? null : reasonStep(readiness, order);
   const bringup = readiness?.bringup ?? null;
   const holderText = lease.bound ? 'You have control' : lease.holder ? `${lease.holder} has control` : 'Nobody has control';
 
@@ -338,6 +365,10 @@ export function buildSetupModel(input: SetupModelInput): SetupModel {
         const failing = [pre, link, bridge, sidecar, agent].find((r) => r?.status === 'fail') ?? null;
         const failed = offline || failing !== null;
         const warning = handWarning(rows);
+        // Without a step 3 (a non-VR session), a stop blocks a running robot side.
+        if (done && stop && !order.includes('stance')) {
+          return { done: false, failed: true, summary: stop.short, tone: 'fail', warning, stopped: true };
+        }
         if (done) {
           return { done, failed: false, summary: warning ? `Running; ${warning}` : 'Running, robot state live', tone: warning ? 'warn' : 'ok', warning };
         }
@@ -357,7 +388,10 @@ export function buildSetupModel(input: SetupModelInput): SetupModel {
         if (on) return { done: true, failed: false, summary: 'Arm control on', tone: 'ok' };
         return { done: false, failed: sidecar?.status === 'fail', summary: holderText, tone: lease.bound ? 'ok' : 'warn' };
       }
-      case 'stance': return stanceFacts(readiness, rows, input.mode);
+      case 'stance':
+        // The robot was damped by the stop: nothing stands up until it is reset.
+        if (stop) return { done: false, failed: true, summary: stop.short, tone: 'fail', stopped: true };
+        return stanceFacts(readiness, rows, input.mode);
       case 'quest': {
         const q = questWords(readiness, port);
         const done = q.forwarded || operator.present;
@@ -390,6 +424,9 @@ export function buildSetupModel(input: SetupModelInput): SetupModel {
   const reason: SetupReason | null = readiness && owner
     ? { code: readiness.reason.code, text: readiness.reason.text, severity: readiness.reason.severity }
     : null;
+  // The stop's own line, in the step it blocks (only while it blocks one).
+  const stopStep: SetupStepId | null = raw.find((r) => r.stopped)?.id ?? null;
+  const stopReason: SetupReason | null = stop ? { code: stop.code, text: stop.title, severity: 'block' } : null;
 
   // A failed step: its own facts, or a blocking reason it owns that is not just the next thing to do.
   const failed = (id: SetupStepId): boolean => {
@@ -427,8 +464,9 @@ export function buildSetupModel(input: SetupModelInput): SetupModel {
       state,
       summary: state === 'waits' ? `Waits for step ${waitsFor}` : r.summary,
       tone: state === 'waits' ? 'idle' : r.tone,
-      // A waiting step never repeats the upstream error.
-      reason: owner === r.id && state !== 'waits' ? reason : null,
+      // A waiting step never repeats the upstream error. The stop outranks the
+      // readiness reason in the step it blocks.
+      reason: state === 'waits' ? null : stopStep === r.id ? stopReason : owner === r.id ? reason : null,
       warning: r.warning ?? null,
       rows: STEP_ROWS[r.id].filter((row) => rows.some((x) => x.id === row)),
       waitsFor,
@@ -445,6 +483,7 @@ export function buildSetupModel(input: SetupModelInput): SetupModel {
     foldedSummary: foldedLine(steps, input),
     cells: buildCells(input, rows, readiness, vr, byId as Map<SetupStepId, Facts & { id: SetupStepId }>),
     robotSide: robotSideButtons(readiness),
+    stopStep,
   };
 }
 
