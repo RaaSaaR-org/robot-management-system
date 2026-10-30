@@ -97,13 +97,12 @@ task with **Edit**, robot and input, start and end, the session id, and the
 dataset).
 
 > **Still landing (2026-10-30).** The command bar, Testing tools, the phone
-> dock and the Wrap up band are built (TASK-426, TASK-429). The Set up
-> checklist (TASK-427) and the Record console (TASK-428) are specified in
-> TASK-425 and still being built: until they merge, Set up and Record show
-> the earlier panels under the command bar — the robot-side readiness panel,
-> the **Robot mode** panel, the twin and camera tiles, the session HUD, the
-> **Operator** card and the take list — with the same buttons the steps
-> below name.
+> dock, the Set up checklist and the Wrap up band are built (TASK-426,
+> TASK-427, TASK-429). The Record console (TASK-428) is specified in TASK-425
+> and still being built: until it merges, Record shows the earlier panels
+> under the command bar — the robot-side readiness panel, the **Robot mode**
+> panel, the twin and camera tiles, the session HUD, the **Operator** card and
+> the take list — with the same buttons the steps below name.
 
 The headset shows `ROBOT · WATCHING Ben (desktop)` as the robot panel's
 title, so the operator knows someone is watching.
@@ -149,7 +148,13 @@ title, so the operator knows someone is watching.
 6. **Enter VR** (operator, inside the headset; Get ready step 5, "Operator
    enters VR", turns done when the headset is in VR). Press **Launch VR**, then
    **Take control**, then **Enter VR**. Enter VR stays disabled until this
-   headset holds the control lease, and taking it ends the desktop's control.
+   headset holds the control lease. The robot never takes a held lease away,
+   so the desktop has to give its own back first: the session page does that
+   on its own as soon as arm control is on and the robot balances (steps 2
+   and 3 done), and when the session starts. If it still holds control after
+   that (you took it again), its Set up steps show **Release control**, lit in
+   the current step; press it before the operator presses Take control. A
+   Teleop tab releases when you leave it.
    The Enter VR press has to happen inside the headset, because WebXR only
    starts after a user gesture.
 7. **The assistant opens the session.** Press **Copy viewer link** (Get ready

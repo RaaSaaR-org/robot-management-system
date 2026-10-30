@@ -25,6 +25,10 @@
  *              renders one layout per phase (Set up, Record, Wrap up). The
  *              developer tools sit behind one Testing tools popover; on the
  *              headset the page leads with Launch VR.
+ *              TASK-427: Set up is the "Get ready" rail — the steps in bring-up
+ *              order, the current one open with the page's one lit action, each
+ *              problem stated once in the step it belongs to — next to a
+ *              preview of the twin with the head camera as a picture-in-picture.
  *              TASK-429: Wrap up (completed and failed) is one summary band
  *              with one dataset action, the takes and the details.
  * @feature datacollection
@@ -32,7 +36,7 @@
 
 import { useState, Suspense, lazy, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useParams } from 'react-router-dom';
-import { Pause, Play } from 'lucide-react';
+import { Glasses, Pause, Play } from 'lucide-react';
 import {
   Button, EmptyState, ErrorState, FormField, FormModal, Input, Panel,
   Skeleton, SkeletonText, Switch, Textarea, confirm, errorMessage, toast,
@@ -40,7 +44,6 @@ import {
 import { QualityIndicator } from '../components/QualityIndicator';
 import { CameraStreamView } from '../components/CameraStreamView';
 import { EpisodePanel } from '../components/EpisodePanel';
-import { PreflightChecklist } from '../components/PreflightChecklist';
 import { VRSessionPanel } from '../components/VRSessionPanel';
 import { SessionHud, type HudPhase } from '../components/session/SessionHud';
 import { SessionCompleted } from '../components/session/SessionCompleted';
@@ -49,13 +52,22 @@ import { SessionEStopButton } from '../components/session/SessionEStopButton';
 import { OperatorCard } from '../components/OperatorCard';
 import { OperatorOverlay, OVERLAY_LINK } from '../components/OperatorOverlay';
 import { cn } from '@/shared/utils/cn';
-import { SessionCommandBar, SessionCommandBarSkeleton, Kbd, type RobotLink } from '../components/console/SessionCommandBar';
+import { SessionCommandBar, SessionCommandBarSkeleton, type RobotLink } from '../components/console/SessionCommandBar';
 import { TestingToolsRow } from '../components/console/TestingTools';
 import { HeadsetHero, RobotSetupDisclosure } from '../components/console/HeadsetHero';
+import { SetupRail, type SetupStepContent } from '../components/console/SetupRail';
+import { LiveView } from '../components/console/LiveView';
+import { buildSetupModel, leaseWorkDone, type SetupStep } from '../utils/setupSteps';
+import { useLeaseHandOver, useLeaseTake } from '../hooks/useLeaseTake';
+import { PageLeaseLine } from '../components/console/PageLeaseLine';
 import { useDeviceRole, detectDeviceRole, type DeviceRole } from '../hooks/useDeviceRole';
 import { commandBarTally, sessionPhase } from '../utils/sessionPhase';
 import { EMULATOR_ACTIVE } from '../../robots/components/tabs/vr/vrConstants';
-import { RobotReadinessPanel } from '../../robots/components/readiness/RobotReadinessPanel';
+import { ReadinessActions, RobotReadinessPanel } from '../../robots/components/readiness/RobotReadinessPanel';
+import { QuestControls } from '../../robots/components/readiness/QuestControls';
+import { QuestConnectHelp } from '../../robots/components/tabs/vr/QuestConnectHelp';
+import { useRobotReadiness } from '../../robots/hooks/useRobotReadiness';
+import { questPagePort } from '../../robots/api/readinessApi';
 import { useSessionPresence } from '../hooks/useSessionPresence';
 import { useFreshOperator } from '../hooks/useFreshOperator';
 import { useOperatorCues } from '../hooks/useOperatorCues';
@@ -101,13 +113,14 @@ const formatElapsed = (secs: number) => `${Math.floor(secs / 60)}:${(secs % 60).
 export const VR_GOODBYE_MS = 5_000;
 
 /**
- * TASK-429: the E-STOP stands alone page-wide (>= 48 px at 1280). Below 1440 px
- * the shell's section rail (the nav right above this page) reaches across to
- * the bar's right end, 35 px above the E-STOP; 16 px more puts it past 48.
- * At 1440 and up the rail ends well left of the E-STOP, so the page sits where
- * the mockup has it.
+ * TASK-427, TASK-429: the E-STOP stands alone page-wide (>= 48 px at 1280).
+ * Below 1440 px the shell's section rail (the nav right above this page)
+ * reaches across to the bar's right end, 35 px above the E-STOP; 16 px more
+ * above the bar puts it past 48. At 1440 and up the rail ends well left of the
+ * E-STOP, so the page sits where the mockup has it. The loading skeleton takes
+ * it too, so the bar does not move when the session arrives.
  */
-const RAIL_CLEARANCE = 'sm:max-[1439px]:[nav+&]:mt-4';
+const RAIL_CLEARANCE = 'sm:max-[1439px]:pt-4';
 
 /** TASK-418 (D4): the session went from live to ended while this page's VR modal was open. */
 export function endsUnderVr(prevStatus: string | undefined, status: string | undefined, vrModalOpen: boolean): boolean {
@@ -391,11 +404,15 @@ export function SessionDetailPage() {
   // robot's one lease, so a VR session joins it only for the simulated input.
   const [simulateVr, setSimulateVr] = useState(false);
   const leaseInputs = gamepadEligible || (sessionIsVr && simulateVr);
+  // TASK-427: Set up step 2's "Take control" opens the page's lease socket on
+  // the press, and only then; until it, the page holds no lease (TASK-396).
+  const leaseTake = useLeaseTake();
   const { lease, connected: leaseConnected } = useSessionControlLease(
     session?.robotId ?? '',
     robot?.a2aAgentUrl,
-    robotOnline && sessionIsLive && leaseInputs,
+    robotOnline && sessionIsLive && (leaseInputs || leaseTake.wanted),
   );
+  leaseTake.sync(lease, leaseConnected);
   useGamepadJoints({
     robot: gamepadEligible ? robot : null,
     enabled: gamepadEligible && (session?.status === 'recording' || session?.status === 'paused'),
@@ -408,6 +425,17 @@ export function SessionDetailPage() {
     enabled: !!session && sessionIsVr && sessionIsLive && robotOnline,
   });
   const modeControlOn = baseMode.status?.capability.gate === 'fsm' || baseMode.status?.capability.gate === 'full';
+
+  // TASK-427: the server never preempts a lease, so the lease step 2 took is
+  // given back for the operator, on its own when the hand-over is due (below)
+  // and when the session starts. While the page holds it, steps 2 to 5 show it
+  // with a Release button.
+  const pageHoldsLease = sessionIsVr && !leaseInputs && leaseTake.wanted && lease.state === 'bound';
+  const releaseLease = leaseTake.release;
+  const releaseOnStart = sessionIsVr && !leaseInputs && leaseTake.wanted && session?.status !== 'created';
+  useEffect(() => {
+    if (releaseOnStart) releaseLease();
+  }, [releaseOnStart, releaseLease]);
 
   // TASK-414: this page watches the session as the desktop assistant — except
   // while its own VR modal is open, when the headset's publisher is the operator.
@@ -442,6 +470,23 @@ export function SessionDetailPage() {
     cameras.source, cameras.detail, presence.secureContext, presence.vrSupported, presence.gamepadConnected,
     leaseInputs, lease.enabled, lease.state]);
   const preflight = summarizePreflight(preflightItems);
+  // TASK-427: the Set up steps read the robot's readiness (the compact panel's
+  // own read before); Record keeps its panel until TASK-428.
+  const readinessState = useRobotReadiness(session?.robotId ?? '', { enabled: isCreated && !!robot });
+  // The hand-over is due once the page's lease has done its work: arm control
+  // on and the robot balancing (steps 2 and 3), or this page's own VR window
+  // opening. Never on the headset's presence: it reports its operator in VR
+  // only after it holds the lease, which it cannot while this page keeps it.
+  const leaseDone = leaseWorkDone(
+    readinessState.readiness,
+    { measured: baseMode.status?.base?.mode ?? null, gateOn: modeControlOn },
+    questPagePort(),
+  );
+  const handOver = useCallback(() => {
+    releaseLease();
+    toast.info('You gave control back', { description: 'The robot balances with arm control on. The operator can take control in the headset now.' });
+  }, [releaseLease]);
+  useLeaseHandOver(sessionIsVr && !leaseInputs && (vrModalOpen || leaseDone), pageHoldsLease, handOver);
   // Read by the hotkey handler, which binds once per status change.
   const startBlockedRef = useRef(false);
   startBlockedRef.current = isCreated && preflight.blocking;
@@ -595,25 +640,7 @@ export function SessionDetailPage() {
   ) : null;
 
   // The phase actions that are not in the bar, until each phase gets its own
-  // layout (TASK-427 start bar, TASK-428 take dock, TASK-429 summary band).
-  const startBar = (
-    <Panel padding="sm" className="flex flex-wrap items-center gap-x-4 gap-y-2" data-testid="setup-start">
-      <Button
-        size="lg"
-        isLoading={pending === 'start'}
-        disabled={preflight.blocking}
-        title={preflight.blocking ? preflight.next : undefined}
-        leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />}
-        onClick={() => void handleStart()}
-      >
-        Start session
-        <Kbd className="border-on-primary/30 text-on-primary/70">Space</Kbd>
-      </Button>
-      <p className={preflight.blocking ? 'text-[13px] text-signal-stopped' : 'text-[13px] text-ink-secondary'}>
-        {preflight.blocking ? preflight.next : 'Nothing records until a take starts.'}
-      </p>
-    </Panel>
-  );
+  // layout (TASK-428 take dock).
   const legacyActions = (legacyRecording || isPaused) && (
     <div className="flex flex-wrap items-center gap-2" data-testid="session-legacy-actions">
       {legacyRecording && (
@@ -643,9 +670,6 @@ export function SessionDetailPage() {
           <span className="font-medium text-signal-estimated">Frames are being missed.</span> The robot agent is unreachable; retrying automatically.
         </Panel>
       )}
-
-      {phase === 'setup' && <PreflightChecklist items={preflightItems} summary={preflight} />}
-      {phase === 'setup' && startBar}
 
       {showLeaseHolder && robot && (
         <Panel padding="sm" data-testid="session-lease-holder">
@@ -789,6 +813,171 @@ export function SessionDetailPage() {
     </>
   );
 
+
+  // TASK-427: Set up — the guided rail and the preview.
+  const operatorName = operatorViewer ? operatorViewer.displayName.split(' ')[0] : null;
+  const questPort = questPagePort();
+  const setupModel = phase === 'setup' ? buildSetupModel({
+    sessionType: session.type,
+    robotName,
+    readiness: readinessState.readiness,
+    questPort,
+    preflight: preflightItems,
+    mode: { measured: baseMode.status?.base?.mode ?? null, gateOn: modeControlOn },
+    lease: {
+      enabled: lease.enabled,
+      bound: lease.state === 'bound',
+      holder: lease.holder?.displayName ?? lease.holder?.userId ?? null,
+      pageInputs: leaseInputs,
+    },
+    operator: { present: operatorViewer !== null, name: operatorName, inVr: operatorInVr },
+  }) : null;
+  // The page's own lease drives the robot-side buttons; Take control opens it on
+  // a VR session (simulated input shows the lease bar instead).
+  const readinessLease = {
+    enabled: lease.enabled,
+    state: lease.state,
+    grant: () => lease.grant(),
+    take: isVrSession && !leaseInputs ? leaseTake.take : undefined,
+  };
+  const leaseBar = lease.enabled && leaseInputs && robot ? (
+    <div className="mt-1" data-testid="session-control-lease">
+      <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robotName} connected={leaseConnected} showEstop={false} />
+    </div>
+  ) : null;
+  const heldLine = (className?: string) => (pageHoldsLease ? (
+    <PageLeaseLine text={`You have control of ${robotName}.`} onRelease={releaseLease} className={className} />
+  ) : null);
+  const detailsFor = (step: SetupStep) => (robot && step.rows.length > 0 ? (
+    <RobotReadinessPanel robotId={robot.id} variant="rows" rows={step.rows} readiness={readinessState} />
+  ) : undefined);
+  const robotActions = (only: Array<'start' | 'arm' | 'read_only' | 'logs'>, lit: boolean) => (robot ? (
+    <ReadinessActions robotId={robot.id} ready={readinessState} lease={readinessLease} only={only} lit={lit} />
+  ) : null);
+  const renderStep = (step: SetupStep, lit: boolean): SetupStepContent => {
+    switch (step.id) {
+      case 'robot':
+        return {
+          lead: readinessState.readiness?.bringup
+            ? "The bridge, the sidecar and the robot agent run on the robot PC. Stop the robot side from the robot's Teleop tab when you finish for the day."
+            : preflightItems.find((i) => i.id === 'robot')?.action ?? `${robotName} is online. Its agent streams the robot state the takes record.`,
+          actions: robotActions(['start', 'logs'], lit),
+          details: detailsFor(step),
+        };
+      case 'arm_control':
+        return {
+          lead: 'The arms follow the headset only in arm control. Take control, then switch. Nothing moves yet.',
+          children: leaseBar ?? heldLine(),
+          actions: robotActions(['arm', 'read_only'], lit),
+          note: (
+            <>
+              <Glasses className="mt-0.5 h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
+              Once arm control is on and the robot balances, this page gives your control back so the operator can take it in the headset.
+            </>
+          ),
+          details: detailsFor(step),
+        };
+      case 'stance':
+        return {
+          children: robot ? (
+            <div data-testid="session-robot-mode">
+              <RobotModeControl
+                robotId={robot.id}
+                variant="step"
+                lit={lit}
+                lease={lease}
+                baseMode={baseMode}
+                // Simulated input: step 2's control bar takes it. Otherwise this step does.
+                takeControlHint={leaseInputs ? 'Take control in step 2 first.' : undefined}
+                onTakeControl={readinessLease.take}
+                requestFromHolder={operatorViewer && operatorInVr && !vrModalOpen ? requestMode : undefined}
+              />
+              {heldLine('mt-3')}
+            </div>
+          ) : null,
+          details: detailsFor(step),
+        };
+      case 'quest': {
+        const quest = readinessState.readiness?.quest ?? null;
+        return {
+          lead: 'Plug the Quest into the robot PC over USB, with Developer Mode on and the headset awake. Then connect it and open this session on it.',
+          // Still holding control here (taken again on purpose, or on a robot
+          // that needed no hand-over): Release is the lit action, since the
+          // operator cannot take control until it is pressed.
+          children: (
+            <>
+              {pageHoldsLease && (
+                <PageLeaseLine
+                  text={`You still have control of ${robotName}. Release it so ${operatorName ?? 'the operator'} can take it in the headset.`}
+                  onRelease={releaseLease}
+                  lit={lit}
+                  className="mb-3"
+                />
+              )}
+              {robot && quest ? (
+                <div data-testid="quest-connect-help" data-mode="live">
+                  <QuestControls robotId={robot.id} quest={quest} sessionId={session.id} port={questPort} lit={lit && !pageHoldsLease} />
+                </div>
+              ) : (
+                <QuestConnectHelp location={window.location} robotId={robot?.id} quest={null} sessionId={session.id} />
+              )}
+            </>
+          ),
+          details: detailsFor(step),
+        };
+      }
+      case 'operator':
+        return {
+          lead: 'In the headset the operator presses Launch VR, Take control and Enter VR. You hear a chime when they are in.',
+          children: pageHoldsLease ? (
+            <PageLeaseLine
+              text={`You still have control of ${robotName}. ${operatorName ?? 'The operator'} can take it in the headset only once you release it.`}
+              onRelease={releaseLease}
+              lit={lit}
+            />
+          ) : null,
+          details: detailsFor(step),
+        };
+      case 'input': {
+        const input = preflightItems.find((i) => i.id === 'input');
+        return { lead: input?.action ?? input?.detail };
+      }
+      case 'control':
+        return {
+          lead: 'Your input moves the robot only while you hold control.',
+          children: leaseBar,
+          details: detailsFor(step),
+        };
+    }
+  };
+  const setupBlocks = setupModel && (
+    <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]" data-testid="session-setup">
+      <SetupRail
+        model={setupModel}
+        renderStep={renderStep}
+        onStart={() => void handleStart()}
+        starting={pending === 'start'}
+        blockedReason={preflight.blocking ? preflight.next : null}
+        autoStopS={live?.autoStopS ?? null}
+      />
+      <Panel padding="none" className="flex min-h-[320px] flex-col overflow-hidden max-lg:aspect-[4/3] max-lg:min-h-0" data-testid="setup-preview">
+        <LiveView
+          className="flex-1"
+          robotId={session.robotId}
+          robotType={robotType}
+          online={robotOnline}
+          live={isTelemetryConnected}
+          jointStates={telemetry?.jointStates}
+          twinOverlay={twinOverlay}
+          cameras={{ names: cameras.cameras, loading: robotOnline && cameras.loading, detail: cameras.detail }}
+          defaultMain="twin"
+          expandAt="bottom"
+          suspended={vrModalOpen}
+        />
+      </Panel>
+    </div>
+  );
+
   // TASK-429: Wrap up is one summary band (the one dataset action), the takes and the details.
   const wrapBlocks = phase === 'wrap' && (
     <SessionCompleted
@@ -803,12 +992,13 @@ export function SessionDetailPage() {
 
   return (
     // max-sm:pb-[88px]: with the shell's 24 px, nothing hides behind the phone's E-STOP dock.
-    // RAIL_CLEARANCE: below 1440 px the section rail's right end sits above the E-STOP.
+    // RAIL_CLEARANCE: below 1440 px the section rail runs over the E-STOP's
+    // column; in every phase, so the bar and the E-STOP never move when the phase changes.
     <div className={cn('flex flex-col gap-3 max-sm:pb-[88px]', RAIL_CLEARANCE)} data-phase={phase} data-role={deviceRole}>
       <SessionCommandBar
         phase={phase}
         tally={tally}
-        ready={phase === 'setup' && !preflight.blocking && preflight.warnings === 0}
+        ready={phase === 'setup' && !!setupModel?.allDone && !preflight.blocking}
         title={sessionName(session)}
         status={session.status}
         robotName={robotName}
@@ -834,7 +1024,9 @@ export function SessionDetailPage() {
         />
       )}
 
-      {headset && isLive && isVrSession ? <RobotSetupDisclosure>{liveBlocks}</RobotSetupDisclosure> : liveBlocks}
+      {headset && isLive && isVrSession
+        ? <RobotSetupDisclosure>{phase === 'setup' ? setupBlocks : liveBlocks}</RobotSetupDisclosure>
+        : phase === 'setup' ? setupBlocks : liveBlocks}
       {wrapBlocks}
 
       <FormModal

@@ -15,13 +15,18 @@
  *              route.
  *
  *              Variants: `full` (robot detail Teleop tab), `compact` (inside the
- *              VR launcher — the reason, the failing rows and Start, D5) and
- *              `line` (the VR window header — the reason only).
+ *              VR launcher — the reason, the failing rows and Start, D5),
+ *              `line` (the VR window header — the reason only) and `rows`
+ *              (TASK-427: the checklist rows alone, for a Set up step's
+ *              Details; `rows` narrows any variant to those row ids).
+ *              `ReadinessActions` renders the robot-side buttons (and their
+ *              confirmations and logs) on their own, so a Set up step can host
+ *              just the ones it is about.
  * @feature robots
  */
 
-import { useMemo, useState } from 'react';
-import { Activity, Play, ScrollText, Square, Wifi } from 'lucide-react';
+import { useMemo, useState, type ReactNode } from 'react';
+import { Activity, Hand, Lock, Play, ScrollText, Square, Wifi } from 'lucide-react';
 import { Button } from '@/shared/components/ui/Button';
 import { ConfirmDialog } from '@/shared/components/ui/ConfirmDialog';
 import { Panel } from '@/shared/components/ui/Panel';
@@ -34,7 +39,7 @@ import { questPagePort, type BringupProc, type ReadinessApi, type ReadinessSever
 import { QuestControls, type QuestControlsApi } from './QuestControls';
 import { ReadinessRow } from './ReadinessRow';
 import { BringupLogsDrawer } from './BringupLogsDrawer';
-import { isFailing, readinessRows, reasonRow } from './readinessRows';
+import { isFailing, readinessRows, reasonRow, type RowId } from './readinessRows';
 
 const SEVERITY_TONE: Record<ReadinessSeverity, BaseTone> = {
   block: 'danger',
@@ -130,7 +135,9 @@ export function ReadinessReasonLine({
 
 export interface RobotReadinessPanelProps {
   robotId: string;
-  variant?: 'full' | 'compact' | 'line';
+  variant?: 'full' | 'compact' | 'line' | 'rows';
+  /** Only these rows (TASK-427: a Set up step's Details). */
+  rows?: RowId[];
   /** The page's control lease; arm control and Limp first need it bound. */
   lease?: ReadinessLease | null;
   /** Inject a hook result (tests); otherwise reads live. */
@@ -163,18 +170,45 @@ export function RobotReadinessPanel(props: RobotReadinessPanelProps) {
   return <ReadinessBody {...props} ready={ready} />;
 }
 
-function ReadinessBody({
+/** What a robot-side action button set needs. */
+export interface ReadinessActionsOptions {
+  robotId: string;
+  lease?: ReadinessLease | null;
+  ready: UseRobotReadinessReturn;
+  baseModeApi?: BaseModeApi;
+  logsApi?: Pick<ReadinessApi, 'getBringupLogs' | 'streamBringupLogs'>;
+  limpWaitMs?: number;
+}
+
+/** The robot-side buttons a host may show (TASK-427). */
+export type ReadinessActionId = 'start' | 'arm' | 'read_only' | 'stop' | 'logs';
+
+export interface ReadinessButtonsOptions {
+  compact?: boolean;
+  /** Only these buttons (default: all the variant shows). */
+  only?: ReadinessActionId[];
+  /**
+   * The host's one lit action (a Set up step that is open): the next button —
+   * Start, Take control, or Switch to arm control once control is held — gets
+   * the primary fill and every other one is secondary. Unset: the panel's own
+   * look.
+   */
+  lit?: boolean;
+}
+
+/**
+ * The robot-side actions' state, handlers, confirmations and logs drawer, so
+ * the full panel and a Set up step draw the same buttons with the same rules.
+ */
+function useReadinessActions({
   robotId,
-  variant = 'full',
   lease = null,
   ready,
   baseModeApi = defaultBaseModeApi,
   logsApi,
   limpWaitMs = LIMP_WAIT_MS,
-  questApi,
-  className,
-}: RobotReadinessPanelProps & { ready: UseRobotReadinessReturn }) {
-  const { readiness, stale, readError, actions, pending, lastError } = ready;
+}: ReadinessActionsOptions) {
+  const { readiness, actions, pending, lastError } = ready;
   const baseMode = useRobotBaseMode(robotId, { api: baseModeApi, enabled: false });
   const [confirm, setConfirm] = useState<'arm' | 'read_only' | 'stop' | null>(null);
   const [limping, setLimping] = useState(false);
@@ -183,13 +217,7 @@ function ReadinessBody({
   const [taking, setTaking] = useState(false);
   const [takeError, setTakeError] = useState<string | null>(null);
 
-  const questPort = questPagePort();
-  const rows = useMemo(() => (readiness ? readinessRows(readiness, questPort) : []), [readiness, questPort]);
-  const highlight = readiness ? reasonRow(readiness) : null;
   const bringup = readiness?.bringup ?? null;
-  const compact = variant === 'compact';
-  const shown = rows.filter((r) => (bringup || !r.bringup) && (!compact || isFailing(r)));
-
   const overall = bringup?.overall ?? null;
   const busy = pending !== null || limping;
   const canStart = overall === 'stopped' || overall === 'error';
@@ -270,161 +298,138 @@ function ReadinessBody({
 
   const errorLine = limpError ?? takeError ?? (lastError ? `${lastError.error}${lastError.code ? ` (${lastError.code})` : ''}` : null);
 
-  // The compact variant offers Start only; an empty row would leave a gap.
-  const buttons = bringup && (!compact || canStart) && (
-    <div className="flex flex-wrap items-center gap-2">
-      {canStart && (
-        <Button
-          size="sm"
-          leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />}
-          onClick={() => void actions.start()}
-          disabled={busy}
-          isLoading={pending?.action === 'start'}
-          loadingText="Starting…"
-          data-testid="readiness-start"
-        >
-          Start robot side
-        </Button>
-      )}
-      {!compact && showArmSwitch && (
-        <span className="flex items-center gap-2">
+  const renderButtons = ({ compact = false, only, lit }: ReadinessButtonsOptions = {}): ReactNode => {
+    const show = (id: ReadinessActionId) => !only || only.includes(id);
+    const stepMode = lit !== undefined;
+    const startB = show('start') && canStart;
+    const armB = !compact && show('arm') && showArmSwitch;
+    const takeB = armB && armBlockedReason !== null && take !== null;
+    const readOnlyB = !compact && show('read_only') && showReadOnlySwitch;
+    const stopB = !compact && show('stop') && canStop;
+    const logsB = !compact && show('logs');
+    if (!bringup || !(startB || armB || readOnlyB || stopB || logsB)) return null;
+    // In a step, the next action is lit: Start, else Take control, else the switch.
+    const startVariant = stepMode && !lit ? 'secondary' : 'primary';
+    const takeVariant = stepMode && !lit ? 'secondary' : 'primary';
+    const armVariant = stepMode && lit && !takeB && !startB ? 'primary' : 'secondary';
+    const takeButton = takeB && (
+      <Button
+        size={stepMode ? 'md' : 'sm'}
+        variant={takeVariant}
+        leftIcon={stepMode ? <Hand className="h-4 w-4" strokeWidth={1.75} /> : undefined}
+        onClick={() => void takeControl(() => setConfirm('arm'))}
+        disabled={busy || taking}
+        isLoading={taking}
+        loadingText="Taking control…"
+        data-testid="readiness-take-control"
+      >
+        Take control
+      </Button>
+    );
+    const armButton = armB && (
+      <Button
+        size={stepMode ? 'md' : 'sm'}
+        variant={armVariant}
+        leftIcon={<Activity className="h-4 w-4" strokeWidth={1.75} />}
+        onClick={() => setConfirm('arm')}
+        disabled={busy || armBlockedReason !== null}
+        isLoading={pending?.action === 'sidecar-mode'}
+        loadingText="Switching…"
+        data-testid="readiness-arm-control"
+      >
+        Switch to arm control
+      </Button>
+    );
+    const armBlocked = armB && armBlockedReason && !take && (stepMode ? (
+      // In a step it is the step's one reason line, under the buttons.
+      <p className="order-last m-0 flex basis-full items-start gap-2 text-[13px] text-ink-tertiary" data-testid="readiness-arm-blocked">
+        <Lock className="mt-0.5 h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
+        {armBlockedReason}
+      </p>
+    ) : (
+      <span className="text-[12px] text-ink-secondary" data-testid="readiness-arm-blocked">
+        {armBlockedReason}
+      </span>
+    ));
+    return (
+      <div className={stepMode ? 'contents' : 'flex flex-wrap items-center gap-2'}>
+        {startB && (
+          <Button
+            size={stepMode ? 'md' : 'sm'}
+            variant={startVariant}
+            leftIcon={<Play className="h-4 w-4" strokeWidth={1.75} />}
+            onClick={() => void actions.start()}
+            disabled={busy}
+            isLoading={pending?.action === 'start'}
+            loadingText="Starting…"
+            data-testid="readiness-start"
+          >
+            Start robot side
+          </Button>
+        )}
+        {armB && (stepMode ? (
+          // A step reads in the order you press: take control, then switch.
+          <>
+            {takeButton}
+            {armButton}
+            {armBlocked}
+          </>
+        ) : (
+          <span className="flex items-center gap-2">
+            {armButton}
+            {takeButton}
+            {armBlocked}
+          </span>
+        ))}
+        {readOnlyB && (
+          <Button size={stepMode ? 'md' : 'sm'} variant="secondary" onClick={() => setConfirm('read_only')} disabled={busy} data-testid="readiness-read-only">
+            Back to read-only
+          </Button>
+        )}
+        {stopB && (
           <Button
             size="sm"
-            variant="secondary"
-            leftIcon={<Activity className="h-4 w-4" strokeWidth={1.75} />}
-            onClick={() => setConfirm('arm')}
-            disabled={busy || armBlockedReason !== null}
-            isLoading={pending?.action === 'sidecar-mode'}
-            loadingText="Switching…"
-            data-testid="readiness-arm-control"
+            variant="outline"
+            leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />}
+            onClick={() => {
+              setLimpError(null);
+              setTakeError(null);
+              setConfirm('stop');
+            }}
+            disabled={busy && pending?.action !== 'start'}
+            isLoading={pending?.action === 'stop'}
+            loadingText="Stopping…"
+            data-testid="readiness-stop"
           >
-            Switch to arm control
+            Stop robot side
           </Button>
-          {armBlockedReason && take && (
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => void takeControl(() => setConfirm('arm'))}
-              disabled={busy || taking}
-              isLoading={taking}
-              loadingText="Taking control…"
-              data-testid="readiness-take-control"
-            >
-              Take control
-            </Button>
-          )}
-          {armBlockedReason && !take && (
-            <span className="text-[12px] text-ink-secondary" data-testid="readiness-arm-blocked">
-              {armBlockedReason}
-            </span>
-          )}
-        </span>
-      )}
-      {!compact && showReadOnlySwitch && (
-        <Button size="sm" variant="secondary" onClick={() => setConfirm('read_only')} disabled={busy} data-testid="readiness-read-only">
-          Back to read-only
-        </Button>
-      )}
-      {!compact && canStop && (
-        <Button
-          size="sm"
-          variant="outline"
-          leftIcon={<Square className="h-4 w-4" strokeWidth={1.75} />}
-          onClick={() => {
-            setLimpError(null);
-            setTakeError(null);
-            setConfirm('stop');
-          }}
-          disabled={busy && pending?.action !== 'start'}
-          isLoading={pending?.action === 'stop'}
-          loadingText="Stopping…"
-          data-testid="readiness-stop"
-        >
-          Stop robot side
-        </Button>
-      )}
-      {!compact && (
-        <Button
-          size="sm"
-          variant="ghost"
-          leftIcon={<ScrollText className="h-4 w-4" strokeWidth={1.75} />}
-          onClick={() => setLogsOpen((v) => !v)}
-          aria-expanded={logsOpen}
-          data-testid="readiness-logs"
-        >
-          Logs
-        </Button>
-      )}
-    </div>
-  );
+        )}
+        {logsB && (
+          <Button
+            size="sm"
+            variant="ghost"
+            leftIcon={<ScrollText className="h-4 w-4" strokeWidth={1.75} />}
+            onClick={() => setLogsOpen((v) => !v)}
+            aria-expanded={logsOpen}
+            data-testid="readiness-logs"
+          >
+            Logs
+          </Button>
+        )}
+      </div>
+    );
+  };
 
-  const body = (
-    <div className="flex flex-col gap-3">
-      <ReadinessReasonLine readiness={readiness} stale={stale} readError={readError} size={compact ? 'sm' : 'lg'} />
-      {buttons}
-      {errorLine && (
-        <p className="text-[12px] text-signal-stopped" role="alert" data-testid="readiness-error">
-          {errorLine}
-        </p>
-      )}
-      {shown.length > 0 && (
-        <ul className="flex flex-col gap-1.5" aria-label="Readiness checklist">
-          {shown.map((row) => (
-            <ReadinessRow
-              key={row.id}
-              row={row}
-              highlighted={row.id === highlight}
-              onAdopt={(step) => void actions.adopt(step)}
-              onLeave={(step) => void actions.leave(step)}
-              busy={busy}
-              action={
-                row.id === 'quest' && !compact && readiness?.quest ? (
-                  <QuestControls robotId={robotId} quest={readiness.quest} port={questPort} api={questApi} />
-                ) : row.id === 'link' && lanDown ? (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    leftIcon={<Wifi className="h-4 w-4" strokeWidth={1.75} />}
-                    onClick={() => void actions.lanUp()}
-                    disabled={busy}
-                    isLoading={pending?.action === 'lan-up'}
-                    loadingText="Bringing up…"
-                    data-testid="readiness-lan-up"
-                  >
-                    Bring up LAN
-                  </Button>
-                ) : undefined
-              }
-            />
-          ))}
-        </ul>
-      )}
-      {!compact && logsOpen && bringup && (
-        <BringupLogsDrawer robotId={robotId} procs={procs} api={logsApi} onClose={() => setLogsOpen(false)} />
-      )}
-    </div>
+  const errorNode = errorLine && (
+    <p className="text-[12px] text-signal-stopped" role="alert" data-testid="readiness-error">
+      {errorLine}
+    </p>
   );
-
-  return (
+  const logsDrawer = logsOpen && bringup && (
+    <BringupLogsDrawer robotId={robotId} procs={procs} api={logsApi} onClose={() => setLogsOpen(false)} />
+  );
+  const dialogs = (
     <>
-      {compact ? (
-        <div className={className} data-testid="robot-readiness-compact">
-          {body}
-        </div>
-      ) : (
-        <Panel className={className} data-testid="robot-readiness">
-          <Panel.Header
-            title="Robot readiness"
-            description={
-              bringup
-                ? `Robot side: ${bringup.overall}${bringup.sidecarMode ? ` · sidecar ${bringup.sidecarMode.replace('_', '-')}` : ''} · ${profileName(bringup.profile)}`
-                : 'Why the arms are or are not following.'
-            }
-          />
-          <Panel.Body>{body}</Panel.Body>
-        </Panel>
-      )}
-
       <ConfirmDialog
         isOpen={confirm === 'arm'}
         onClose={() => setConfirm(null)}
@@ -509,6 +514,156 @@ function ReadinessBody({
           </div>
         )}
       </ConfirmDialog>
+    </>
+  );
+
+  return { renderButtons, errorNode, logsDrawer, dialogs, busy, lanDown, actions, pending };
+}
+
+export interface ReadinessActionsProps extends ReadinessActionsOptions, ReadinessButtonsOptions {
+  className?: string;
+}
+
+/**
+ * The robot-side buttons on their own (TASK-427): Start robot side, Take
+ * control, Switch to arm control, Back to read-only, Stop and Logs, each with
+ * its confirmation, plus the error line and the logs drawer. `lit` gives the
+ * next one the primary fill. Laid out flat (`display: contents`) inside a step,
+ * so the host's own Details button sits in the same row.
+ */
+export function ReadinessActions({ only, lit, compact, className, ...opts }: ReadinessActionsProps) {
+  const ra = useReadinessActions(opts);
+  const buttons = ra.renderButtons({ compact, only, lit });
+  return (
+    <div className={cn(lit !== undefined ? 'contents' : 'flex flex-col gap-3', className)} data-testid="readiness-actions">
+      {buttons}
+      {ra.errorNode && <div className="basis-full">{ra.errorNode}</div>}
+      {ra.logsDrawer && <div className="basis-full">{ra.logsDrawer}</div>}
+      {ra.dialogs}
+    </div>
+  );
+}
+
+function ReadinessBody({
+  robotId,
+  variant = 'full',
+  rows: only,
+  lease = null,
+  ready,
+  baseModeApi = defaultBaseModeApi,
+  logsApi,
+  limpWaitMs = LIMP_WAIT_MS,
+  questApi,
+  className,
+}: RobotReadinessPanelProps & { ready: UseRobotReadinessReturn }) {
+  const { readiness, stale, readError } = ready;
+  const ra = useReadinessActions({ robotId, lease, ready, baseModeApi, logsApi, limpWaitMs });
+  const { busy, lanDown, actions, pending } = ra;
+
+  const questPort = questPagePort();
+  const rows = useMemo(() => (readiness ? readinessRows(readiness, questPort) : []), [readiness, questPort]);
+  const highlight = readiness ? reasonRow(readiness) : null;
+  const bringup = readiness?.bringup ?? null;
+  const compact = variant === 'compact';
+  const rowsOnly = variant === 'rows';
+  const shown = rows.filter((r) => (bringup || !r.bringup) && (!compact || isFailing(r)) && (!only || only.includes(r.id)));
+  const buttons = rowsOnly ? null : ra.renderButtons({ compact });
+
+  const body = (
+    <div className="flex flex-col gap-3">
+      <ReadinessReasonLine readiness={readiness} stale={stale} readError={readError} size={compact ? 'sm' : 'lg'} />
+      {buttons}
+      {ra.errorNode}
+      {shown.length > 0 && (
+        <ul className="flex flex-col gap-1.5" aria-label="Readiness checklist">
+          {shown.map((row) => (
+            <ReadinessRow
+              key={row.id}
+              row={row}
+              highlighted={row.id === highlight}
+              onAdopt={(step) => void actions.adopt(step)}
+              onLeave={(step) => void actions.leave(step)}
+              busy={busy}
+              action={
+                row.id === 'quest' && !compact && !rowsOnly && readiness?.quest ? (
+                  <QuestControls robotId={robotId} quest={readiness.quest} port={questPort} api={questApi} />
+                ) : row.id === 'link' && lanDown ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    leftIcon={<Wifi className="h-4 w-4" strokeWidth={1.75} />}
+                    onClick={() => void actions.lanUp()}
+                    disabled={busy}
+                    isLoading={pending?.action === 'lan-up'}
+                    loadingText="Bringing up…"
+                    data-testid="readiness-lan-up"
+                  >
+                    Bring up LAN
+                  </Button>
+                ) : undefined
+              }
+            />
+          ))}
+        </ul>
+      )}
+      {!compact && ra.logsDrawer}
+    </div>
+  );
+
+  if (rowsOnly) {
+    return shown.length > 0 ? (
+      <ul className={cn('flex flex-col gap-1.5', className)} aria-label="Readiness checklist" data-testid="readiness-rows">
+        {shown.map((row) => (
+          <ReadinessRow
+            key={row.id}
+            row={row}
+            highlighted={row.id === highlight}
+            onAdopt={(step) => void actions.adopt(step)}
+            onLeave={(step) => void actions.leave(step)}
+            busy={busy}
+            action={row.id === 'link' && lanDown ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                leftIcon={<Wifi className="h-4 w-4" strokeWidth={1.75} />}
+                onClick={() => void actions.lanUp()}
+                disabled={busy}
+                isLoading={pending?.action === 'lan-up'}
+                loadingText="Bringing up…"
+                data-testid="readiness-lan-up"
+              >
+                Bring up LAN
+              </Button>
+            ) : undefined}
+          />
+        ))}
+      </ul>
+    ) : (
+      <p className={cn('text-[13px] text-ink-tertiary', className)}>Nothing reported yet.</p>
+    );
+  }
+
+  return (
+    <>
+      {compact ? (
+        <div className={className} data-testid="robot-readiness-compact">
+          {body}
+        </div>
+      ) : (
+        <Panel className={className} data-testid="robot-readiness">
+          <Panel.Header
+            title="Robot readiness"
+            description={
+              bringup
+                ? `Robot side: ${bringup.overall}${bringup.sidecarMode ? ` · sidecar ${bringup.sidecarMode.replace('_', '-')}` : ''} · ${profileName(bringup.profile)}`
+                : 'Why the arms are or are not following.'
+            }
+          />
+          <Panel.Body>{body}</Panel.Body>
+        </Panel>
+      )}
+
+      {ra.dialogs}
     </>
   );
 }

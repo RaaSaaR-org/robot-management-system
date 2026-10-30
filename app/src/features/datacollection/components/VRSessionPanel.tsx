@@ -19,6 +19,8 @@
  *              rows (desktop) or as the headset hero's Launch VR (Quest); it
  *              stays the one owner of the VR modal, the simulated input and
  *              the goodbye in either role.
+ *              TASK-427: the Quest connect card is no longer drawn here; on the
+ *              session page the Quest controls live once, in Set up step 4.
  * @feature datacollection
  */
 
@@ -159,9 +161,7 @@ export function VRSessionPanel({
                     Launch VR
                   </Button>
                 }
-              >
-                {launcher.questHelp}
-              </TestingToolsRow>
+              />
             )}
           />
         ) : (
