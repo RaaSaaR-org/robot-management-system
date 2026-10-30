@@ -50,6 +50,9 @@ export type { UseTeleopEventsReturn } from './hooks/useTeleopEvents';
 export { useSimulatedVrInput } from './hooks/useSimulatedVrInput';
 export { useDeviceRole, detectDeviceRole } from './hooks/useDeviceRole';
 export type { DeviceRole } from './hooks/useDeviceRole';
+export { useTakeHotkeys, DISCARD_UNDO_MS } from './hooks/useTakeHotkeys';
+export type { TakeControls, UseTakeHotkeysOptions } from './hooks/useTakeHotkeys';
+export { useViewportFill, consoleHeight } from './hooks/useViewportFill';
 export { sessionPhase, commandBarTally } from './utils/sessionPhase';
 export type { SessionPhase, CommandBarTally } from './utils/sessionPhase';
 export type { SimInputStatus } from './hooks/useSimulatedVrInput';
@@ -62,7 +65,10 @@ export {
   QualityIndicator,
   PriorityDashboard,
   UncertaintyHeatmap,
-  EpisodePanel,
+  TakeDock,
+  TakesList,
+  SystemsStrip,
+  OperatorChip,
   VRSessionPanel,
   SessionCommandBar,
   TestingTools,
@@ -75,7 +81,10 @@ export type {
   QualityIndicatorProps,
   PriorityDashboardProps,
   UncertaintyHeatmapProps,
-  EpisodePanelProps,
+  TakeDockProps,
+  TakesListProps,
+  SystemsStripProps,
+  OperatorChipProps,
   VRSessionPanelProps,
   SessionCommandBarProps,
   TestingToolsProps,

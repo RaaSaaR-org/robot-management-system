@@ -10,6 +10,11 @@
  *              TASK-427: the robot's measured base mode — limp once the demo
  *              robot side is up, so Set up's step 3 shows the bring-up track;
  *              the demo refuses a mode change as it refuses arm control.
+ *              TASK-428: a demo-only override (`POST /api/__demo/robots/:id/
+ *              readiness` with a fixture name, or null to clear it) pins the
+ *              robot to one fixture — its base mode and E-stop included — so
+ *              the e2e can show the Record console's Mode cell, recovery slot
+ *              and blockers.
  * @feature mocks
  */
 
@@ -252,6 +257,8 @@ interface DemoSide {
 }
 
 const sides = new Map<string, DemoSide>();
+/** Demo-only (TASK-428): a robot pinned to one fixture. */
+const overrides = new Map<string, ReadinessFixtureName>();
 /** The demo headset per robot: forwarded port (null = not yet) and the last opened path. */
 const quests = new Map<string, { port: number | null; opened: string | null }>();
 const OPEN_PATH = /^\/data-collection\/(live\?robot=[A-Za-z0-9_-]+|[0-9a-f-]{36})$/;
@@ -268,6 +275,8 @@ function withQuest(robotId: string, snap: RobotReadiness): RobotReadiness {
 const DEMO_STEP_MS = 700;
 
 function demoSnapshot(robotId: string): RobotReadiness {
+  const pinned = overrides.get(robotId);
+  if (pinned) return readinessFor(robotId, pinned);
   const side = sides.get(robotId) ?? { phase: 'stopped', startedAt: 0 };
   if (side.phase === 'stopped') return readinessFor(robotId, 'bringup_stopped');
   if (side.phase === 'starting') {
@@ -292,6 +301,23 @@ function demoSnapshot(robotId: string): RobotReadiness {
 
 /** The demo robot's measured mode: unreachable while the robot side is stopped, then limp. */
 function demoBaseMode(robotId: string): BaseModeStatus {
+  const pinned = overrides.get(robotId);
+  if (pinned) {
+    // The pinned fixture's own measured mode, and its E-stop.
+    const ar = readinessFor(robotId, pinned).agent.readiness;
+    const base = ar?.base ?? null;
+    return {
+      capability: base?.gate === 'fsm' || base?.gate === 'full'
+        ? { gate: base.gate, moveEnabled: false, idsVerified: false, ids: { limp: 1, stand: 4, balance: 501, balanceReported: [501] } }
+        : { gate: 'unknown', moveEnabled: null, idsVerified: false, ids: null },
+      base: base ? { fsmId: base.fsmId, mode: base.mode, ageS: base.ageS, error: base.error } : null,
+      inFlight: null,
+      estopLatched: ar?.arms?.estopLatched ?? false,
+      sidecarEstopLatched: ar?.arms?.sidecarEstopLatched ?? false,
+      armed: ar?.arms?.armed ?? false,
+      sidecarReachable: !!ar?.sidecar?.reachable,
+    } as BaseModeStatus;
+  }
   const up = demoSnapshot(robotId).bringup?.overall === 'ready';
   return {
     capability: up
@@ -307,6 +333,14 @@ function demoBaseMode(robotId: string): BaseModeStatus {
 }
 
 export const readinessDemoHandlers = [
+  // Demo-only (TASK-428): pin a robot to one fixture, or { fixture: null } to let it go.
+  http.post('/api/__demo/robots/:id/readiness', async ({ params, request }) => {
+    const body = (await request.json().catch(() => ({}))) as { fixture?: string | null };
+    const id = String(params.id);
+    if (body.fixture && body.fixture in READINESS_FIXTURES) overrides.set(id, body.fixture as ReadinessFixtureName);
+    else overrides.delete(id);
+    return HttpResponse.json(withQuest(id, demoSnapshot(id)));
+  }),
   http.get('/api/robots/:id/base-mode', ({ params }) => HttpResponse.json(demoBaseMode(String(params.id)))),
   http.post('/api/robots/:id/base-mode', () =>
     HttpResponse.json({ ok: false, code: 'demo', error: 'The demo has no robot to change modes on.' }, { status: 409 }),

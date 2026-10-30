@@ -421,39 +421,40 @@ for (const [w, h] of [[390, 844], [1280, 800]] as const) {
 // ---------------------------------------------------------------------------
 // TASK-427 — Set up: the guided rail with one lit action, and the preview.
 // ---------------------------------------------------------------------------
-test.describe('Set up (TASK-427)', () => {
-  /** Enabled kit primaries on screen (the E-STOP is `bg-stop`, not counted). */
-  const litPrimaries = (page: Page) =>
-    page.evaluate(() =>
-      [...document.querySelectorAll<HTMLButtonElement>('button.bg-primary')]
-        .filter((b) => !b.disabled && b.getClientRects().length > 0 && getComputedStyle(b).visibility !== 'hidden')
-        .map((b) => b.dataset.testid ?? b.textContent?.trim() ?? ''),
-    );
+/** Enabled kit primaries on screen (the E-STOP is `bg-stop`, not counted). */
+const litPrimaries = (page: Page) =>
+  page.evaluate(() =>
+    [...document.querySelectorAll<HTMLButtonElement>('button.bg-primary')]
+      .filter((b) => !b.disabled && b.getClientRects().length > 0 && getComputedStyle(b).visibility !== 'hidden')
+      .map((b) => b.dataset.testid ?? b.textContent?.trim() ?? ''),
+  );
 
-  /** The page-wide nearest interactive element to the E-STOP, at the current scroll. */
-  const pageClearance = (page: Page) =>
-    page.evaluate(() => {
-      const estop = document.querySelector('[data-testid="session-estop"]') as HTMLElement;
-      const E = estop.getBoundingClientRect();
-      const sel = 'a[href], button, [role="switch"], [role="menuitem"], input, select, textarea';
-      let best = { d: Infinity, el: '' };
-      for (const el of document.querySelectorAll(sel)) {
-        if (el === estop || !(el as HTMLElement).getClientRects().length) continue;
-        let shown = true;
-        for (let p: Element | null = el; p; p = p.parentElement) {
-          const s = getComputedStyle(p);
-          if (s.display === 'none' || s.visibility === 'hidden') { shown = false; break; }
-        }
-        if (!shown) continue;
-        const r = el.getBoundingClientRect();
-        const d = Math.hypot(Math.max(0, E.left - r.right, r.left - E.right), Math.max(0, E.top - r.bottom, r.top - E.bottom));
-        if (d < best.d) {
-          best = { d: Math.round(d * 10) / 10, el: (el.getAttribute('data-testid') || el.getAttribute('aria-label') || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40) };
-        }
+/** The page-wide nearest interactive element to the E-STOP, at the current scroll. */
+const pageClearance = (page: Page) =>
+  page.evaluate(() => {
+    const estop = document.querySelector('[data-testid="session-estop"]') as HTMLElement;
+    const E = estop.getBoundingClientRect();
+    const sel = 'a[href], button, [role="switch"], [role="menuitem"], input, select, textarea';
+    let best = { d: Infinity, el: '' };
+    for (const el of document.querySelectorAll(sel)) {
+      if (el === estop || !(el as HTMLElement).getClientRects().length) continue;
+      let shown = true;
+      for (let p: Element | null = el; p; p = p.parentElement) {
+        const s = getComputedStyle(p);
+        if (s.display === 'none' || s.visibility === 'hidden') { shown = false; break; }
       }
-      return best;
-    });
+      if (!shown) continue;
+      const r = el.getBoundingClientRect();
+      const d = Math.hypot(Math.max(0, E.left - r.right, r.left - E.right), Math.max(0, E.top - r.bottom, r.top - E.bottom));
+      if (d < best.d) {
+        best = { d: Math.round(d * 10) / 10, el: (el.getAttribute('data-testid') || el.getAttribute('aria-label') || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40) };
+      }
+    }
+    return best;
+  });
 
+
+test.describe('Set up (TASK-427)', () => {
   test('the current step is open and holds the page\'s one lit action; Start session is secondary', async ({ page }) => {
     await page.setViewportSize({ width: 1512, height: 945 });
     await openSetup(page);
@@ -572,4 +573,300 @@ test.describe('Set up (TASK-427)', () => {
     await page.screenshot({ ...shot('TASK-427-setup-390.png') });
     await page.screenshot({ ...shot('TASK-427-setup-390-full.png'), fullPage: true });
   });
+});
+
+test.describe('Record (TASK-428)', () => {
+  const VR = './#/data-collection/demo-session-takes-vr';
+  type Session = 'keyboard' | 'vr';
+
+  /** Pin the demo G1 to one readiness fixture (demo-only route), or let it go with null. */
+  const pin = (page: Page, fixture: string | null) =>
+    page.evaluate(async ([robotId, f]) => {
+      await fetch(`/api/__demo/robots/${robotId}/readiness`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fixture: f }),
+      });
+    }, [ROBOT, fixture] as const);
+
+  /** The demo recorder's degraded flag and auto-stop (demo-only route). */
+  const liveFlags = (page: Page, sid: string, flags: { degraded?: boolean; autoStopS?: number | null }) =>
+    page.evaluate(async ([id, f]) => {
+      await fetch(`/api/__demo/sessions/${id}/live`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(f) });
+    }, [sid, flags] as const);
+
+  /** Record on the keyboard demo session, or on its Quest twin with the robot following. */
+  async function openRecordOn(page: Page, session: Session, fixture: string | null = 'following'): Promise<void> {
+    await page.goto(session === 'vr' ? VR : TAKES);
+    await expect(page.getByTestId('hud-phase')).toHaveText('READY');
+    if (session === 'vr') {
+      await pin(page, fixture);
+      await expect(page.getByTestId('systems-cell-robot')).toBeAttached();
+    }
+    await expect(page.getByTestId('session-console')).toBeVisible();
+  }
+
+  const capture = async (page: Page) => {
+    await page.getByTestId('take-primary').click();
+    await expect(page.getByTestId('hud-phase')).toHaveText('● REC');
+  };
+  const takeOne = async (page: Page) => {
+    await capture(page);
+    await page.waitForTimeout(1_200);
+    await page.getByTestId('take-primary').click();
+    await expect(page.getByTestId('quick-check')).toBeVisible();
+  };
+
+  /** The fit measurement: no page scroll, and the console's key parts inside the viewport. */
+  async function expectFits(page: Page, label: string): Promise<string> {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const m = await page.evaluate(() => {
+      const box = (id: string) => {
+        const el = document.querySelector(`[data-testid="${id}"]`);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+      };
+      return {
+        sh: document.documentElement.scrollHeight,
+        ih: window.innerHeight,
+        iw: window.innerWidth,
+        boxes: { live: box('live-view'), systems: box('session-systems'), primary: box('take-primary'), estop: box('session-estop') },
+      };
+    });
+    expect(m.sh, `${label}: scrollHeight ${m.sh} vs innerHeight ${m.ih}`).toBeLessThanOrEqual(m.ih);
+    for (const [name, b] of Object.entries(m.boxes)) {
+      expect(b, `${label}: ${name}`).not.toBeNull();
+      expect(b!.top, `${label}: ${name} top`).toBeGreaterThanOrEqual(0);
+      expect(b!.bottom, `${label}: ${name} bottom`).toBeLessThanOrEqual(m.ih);
+      expect(b!.left, `${label}: ${name} left`).toBeGreaterThanOrEqual(0);
+      expect(b!.right, `${label}: ${name} right`).toBeLessThanOrEqual(m.iw);
+    }
+    return `${label} ${m.sh}/${m.ih}`;
+  }
+
+  for (const session of ['keyboard', 'vr'] as const) {
+    for (const [w, h, min] of [[1280, 800, 48], [1512, 945, 64], [1920, 1080, 64]] as const) {
+      test(`Record fits and the E-STOP stands alone at ${w}×${h} (${session}) — capturing, between takes, blocker; Testing tools open too`, async ({ page }) => {
+        await page.setViewportSize({ width: w, height: h });
+        await openRecordOn(page, session);
+        const sid = session === 'vr' ? 'demo-session-takes-vr' : 'demo-session-takes';
+        const fits: string[] = [];
+        const gaps: string[] = [];
+        const clear = async (label: string) => {
+          await page.evaluate(() => window.scrollTo(0, 0));
+          const c = await pageClearance(page);
+          gaps.push(`${label} ${c.d} (${c.el})`);
+          expect(c.d, `${label}: nearest ${c.el}`).toBeGreaterThanOrEqual(min);
+          await openTools(page);
+          const t = await pageClearance(page);
+          gaps.push(`${label}+tools ${t.d} (${t.el})`);
+          expect(t.d, `${label} with Testing tools: nearest ${t.el}`).toBeGreaterThanOrEqual(min);
+          await page.keyboard.press('Escape');
+          await expect(page.getByTestId('session-tools')).toBeHidden();
+        };
+
+        // Capturing, with the auto-stop track.
+        await liveFlags(page, sid, { autoStopS: 60 });
+        await capture(page);
+        await expect(page.getByTestId('hud-autostop')).toBeVisible();
+        fits.push(await expectFits(page, 'capturing'));
+        await clear('capturing');
+        if (w === 1512) await page.screenshot({ ...shot(`TASK-428-record-${session}-1512.png`) });
+
+        // Between takes, the quick check in the hero.
+        await page.getByTestId('take-primary').click();
+        await expect(page.getByTestId('quick-check')).toBeVisible();
+        await expect(page.getByTestId('session-hud').getByTestId('quick-check')).toHaveCount(1);
+        fits.push(await expectFits(page, 'between'));
+        await clear('between');
+        if (w === 1512) await page.screenshot({ ...shot(`TASK-428-record-check-${session}-1512.png`) });
+
+        // A blocker in the slot: missed frames (keyboard), a hand fault (VR).
+        if (session === 'vr') await pin(page, 'hand_fault');
+        else await liveFlags(page, sid, { degraded: true });
+        await capture(page);
+        await expect(page.getByTestId('take-dock-slot')).toHaveAttribute('data-kind', 'blocker', { timeout: 10_000 });
+        fits.push(await expectFits(page, 'blocker'));
+        await clear('blocker');
+        if (w === 1512) await page.screenshot({ ...shot(`TASK-428-record-fault-${session}-1512.png`) });
+        test.info().annotations.push({ type: 'fit', description: `record ${session}@${w}: ${fits.join(' · ')}` });
+        test.info().annotations.push({ type: 'clearance', description: `record ${session}@${w}: ${gaps.join(' · ')}` });
+      });
+    }
+  }
+
+  test('one lit action in Record: capturing and between takes', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await openRecordOn(page, 'vr');
+    expect(await litPrimaries(page)).toEqual(['take-primary']);
+    await capture(page);
+    expect(await litPrimaries(page)).toEqual(['take-primary']);
+    await page.getByTestId('take-primary').click();
+    await expect(page.getByTestId('quick-check')).toBeVisible();
+    expect(await litPrimaries(page)).toEqual(['take-primary']);
+  });
+
+  test('no duplicates in Record on a live VR session: the Quest controls, "Open on headset", the reason and the kept count once', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    // Up, read-only: a blocking reason the dock's blocker states.
+    await openRecordOn(page, 'vr', 'read_only_ready');
+    const reason = page.getByTestId('take-dock-reason');
+    await expect(reason).toBeVisible({ timeout: 10_000 });
+    const text = (await reason.textContent())!.trim();
+    expect(await page.evaluate((t) => document.body.innerHTML.split(t).length - 1, text), `"${text}" in the DOM`).toBe(1);
+    // The Headset cell holds the Quest controls, once.
+    await page.getByTestId('systems-cell-headset').click();
+    const popover = page.getByTestId('systems-popover-headset');
+    for (const id of ['quest-connect', 'quest-open', 'quest-copy-viewer-link']) {
+      await expect(page.getByTestId(id), id).toHaveCount(1);
+      await expect(popover.getByTestId(id), id).toBeVisible();
+    }
+    expect(await page.evaluate(() => document.body.innerText.split('Open on headset').length - 1)).toBe(1);
+    expect(await page.evaluate((t) => document.body.innerHTML.split(t).length - 1, text), `"${text}" with the popover open`).toBe(1);
+    await page.keyboard.press('Escape');
+    // The kept count once; the old blocks are gone.
+    await expect(page.getByTestId('hud-kept')).toHaveCount(1);
+    for (const id of ['episode-progress', 'session-assistant-layout', 'session-readiness', 'robot-readiness-compact', 'session-lease-holder', 'session-steps']) {
+      await expect(page.getByTestId(id), id).toHaveCount(0);
+    }
+    await expect(page.getByTestId('session-estop')).toHaveCount(1);
+  });
+
+  test('diagnostics: mode_not_balance shows in the Mode cell and the recovery slot, and nowhere else', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await openRecordOn(page, 'vr', 'mode_not_balance');
+    const mode = page.getByTestId('systems-cell-mode');
+    await expect(mode).toHaveAttribute('data-status', 'warn', { timeout: 10_000 });
+    await expect(mode).toContainText('Stand');
+    const slot = page.getByTestId('take-dock-slot');
+    await expect(slot).toHaveAttribute('data-kind', 'recovery');
+    const reason = 'The robot is standing. Switch it to Balance.';
+    await expect(slot).toContainText(reason);
+    // Limp / Stand up / Balance in the slot, with no click.
+    for (const m of ['limp', 'stand', 'balance']) await expect(slot.getByTestId(`robot-mode-${m}`)).toBeVisible();
+    expect(await page.evaluate((t) => document.body.innerHTML.split(t).length - 1, reason)).toBe(1);
+    // No other cell claims it.
+    for (const id of ['robot', 'control', 'arm_control', 'headset', 'arms', 'hands']) {
+      await expect(page.getByTestId(`systems-cell-${id}`), id).not.toHaveAttribute('data-status', 'fail');
+    }
+    // Opening the Mode cell does not repeat the controls or the sentence.
+    await mode.click();
+    await expect(page.getByTestId('systems-popover-mode')).toBeVisible();
+    await expect(page.getByTestId('robot-mode-limp')).toHaveCount(1);
+    expect(await page.evaluate((t) => document.body.innerHTML.split(t).length - 1, reason)).toBe(1);
+    await page.screenshot({ ...shot('TASK-428-record-recovery-1512.png') });
+  });
+
+  test('every Record function is one click away', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await openRecordOn(page, 'vr');
+    // Takes: Start, Next, Stop, Keep, Discard and Undo — each one press.
+    await capture(page);
+    await page.getByTestId('take-next').click();
+    await expect(page.getByTestId('hud-take')).toHaveText('Take 2');
+    await page.getByTestId('take-primary').click();
+    await expect(page.getByTestId('quick-check')).toBeVisible();
+    await page.getByTestId('quick-check-keep').click();
+    await expect(page.getByTestId('quick-check')).toHaveCount(0);
+    await page.getByTestId('take-discard-last').click();
+    await expect(page.getByText('Discarding take 2…')).toBeVisible();
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(page.getByTestId('take-discard-last')).toHaveText('Discard');
+
+    const cell = async (id: string) => {
+      await page.getByTestId(`systems-cell-${id}`).click();
+      const body = page.getByTestId(`systems-popover-${id}`);
+      await expect(body).toBeVisible();
+      return body;
+    };
+    // Robot mode, through the Mode cell (the robot balances, so the dock has no recovery).
+    const mode = await cell('mode');
+    for (const m of ['limp', 'stand', 'balance']) await expect(mode.getByTestId(`robot-mode-${m}`)).toBeVisible();
+    await page.keyboard.press('Escape');
+    // The Quest, through the Headset cell.
+    const headset = await cell('headset');
+    for (const id of ['quest-connect', 'quest-open', 'quest-copy-viewer-link']) await expect(headset.getByTestId(id)).toBeVisible();
+    await page.keyboard.press('Escape');
+    // The control holder, through the Control cell (read-only: the operator takes control in the headset).
+    await expect(page.getByTestId('control-lease-holder')).toBeVisible();
+    await cell('control');
+    await page.keyboard.press('Escape');
+
+    // The robot side, from stopped: Start robot side, then arm control and Take control.
+    await pin(page, null);
+    const robot = await cell('robot');
+    await expect(robot.getByTestId('readiness-start')).toBeVisible({ timeout: 10_000 });
+    await robot.getByTestId('readiness-start').click();
+    await expect(robot.getByTestId('readiness-logs')).toBeVisible({ timeout: 15_000 });
+    await page.keyboard.press('Escape');
+    const arm = await cell('arm_control');
+    await expect(arm.getByTestId('readiness-arm-control')).toBeVisible({ timeout: 15_000 });
+    // The demo has no control lease: the cell says so where Take control would be.
+    await expect(arm.getByTestId('readiness-take-control').or(arm.getByTestId('readiness-arm-blocked'))).toBeVisible();
+    await page.keyboard.press('Escape');
+    // Limp now stands the robot down: the demo robot side reports limp, so the dock leads with the recovery.
+    await expect(page.getByTestId('take-dock-slot')).toHaveAttribute('data-kind', 'recovery', { timeout: 10_000 });
+    await expect(page.getByTestId('take-dock-slot').getByTestId('robot-mode-stand')).toBeVisible();
+    // Swap and expand the view.
+    await expect(page.getByTestId('live-view').getByTestId('live-view-expand')).toBeVisible();
+  });
+
+  test('on a phone Record has no horizontal scroll and Stop / Start take stay in the take dock', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openRecordOn(page, 'vr');
+    await capture(page);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    await expect(page.getByTestId('session-hud').getByTestId('take-primary')).toHaveCount(1);
+    await expect(page.getByTestId('estop-zone').getByTestId('take-primary')).toHaveCount(0);
+    await expect(page.getByTestId('estop-zone').getByRole('button')).toHaveCount(1);
+    // The systems strip folds into one summary row that expands it.
+    await expect(page.getByTestId('systems-summary')).toBeVisible();
+    await expect(page.getByTestId('systems-cell-robot')).toBeHidden();
+    await page.getByTestId('systems-summary').click();
+    await expect(page.getByTestId('systems-cell-robot')).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ ...shot('TASK-428-record-390.png') });
+    await page.screenshot({ ...shot('TASK-428-record-390-full.png'), fullPage: true });
+  });
+});
+
+test.describe('the section rail and the E-STOP (TASK-428)', () => {
+  /** The rail's nearest tab to the E-STOP, at scroll 0. */
+  const railGap = (page: Page) =>
+    page.evaluate(() => {
+      const E = document.querySelector('[data-testid="session-estop"]')!.getBoundingClientRect();
+      let d = Infinity;
+      for (const el of document.querySelectorAll('nav[aria-label="Section"] a, nav[aria-label="Section"] button')) {
+        const r = el.getBoundingClientRect();
+        if (!r.width) continue;
+        d = Math.min(d, Math.hypot(Math.max(0, E.left - r.right, r.left - E.right), Math.max(0, E.top - r.bottom, r.top - E.bottom)));
+      }
+      return Math.round(d * 10) / 10;
+    });
+
+  for (const phase of ['setup', 'record', 'wrap'] as const) {
+    test(`at 1280×800 the rail and every other control stay ≥ 48 px from the E-STOP — ${phase}`, async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await OPEN[phase](page);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await expect(page.locator('nav[aria-label="Section"]')).toBeVisible();
+      const rail = await railGap(page);
+      const all = await pageClearance(page);
+      test.info().annotations.push({ type: 'rail', description: `${phase}@1280: rail ${rail} · page-wide ${all.d} (${all.el})` });
+      expect(rail, 'the section rail').toBeGreaterThanOrEqual(48);
+      expect(all.d, `page-wide: nearest ${all.el}`).toBeGreaterThanOrEqual(48);
+    });
+  }
+});
+
+test('the shell reaches the bottom of the screen on a short page', async ({ page }) => {
+  await page.setViewportSize({ width: 1512, height: 945 });
+  await openSetup(page);
+  const m = await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    const aside = document.querySelector('aside')!.getBoundingClientRect();
+    return { asideBottom: Math.round(aside.bottom), ih: window.innerHeight };
+  });
+  // The sidebar's column ends at the bottom of the screen, not where the content ends.
+  expect(m.asideBottom).toBeGreaterThanOrEqual(m.ih);
 });

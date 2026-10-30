@@ -219,9 +219,13 @@ function useStuck() {
 
 // The shim: sticky 88 px down; its canvas band (before:) covers the gap above
 // the bar — 24 px at rest (the shell's gap, empty anyway), the full 32 px up
-// to the TopBar once stuck.
+// to the TopBar once stuck. Below 1440 px it sits 16 px lower at rest: the
+// shell's section rail runs over the E-STOP's column there and would end
+// 35 px above it (TASK-427 found it in Set up, TASK-429 in Wrap up). It is the
+// bar's own margin, so it holds in every phase and in the loading skeleton,
+// and the E-STOP never moves when the phase changes (TASK-428).
 const SHIM =
-  'sticky top-[88px] z-30 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-6 before:bg-canvas data-[stuck=true]:before:h-8';
+  'sticky top-[88px] z-30 sm:max-[1439px]:mt-4 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-6 before:bg-canvas data-[stuck=true]:before:h-8';
 
 const BAR =
   'relative flex h-[60px] items-center gap-3 overflow-hidden rounded-panel border border-line-subtle bg-panel pl-2.5 ' +
