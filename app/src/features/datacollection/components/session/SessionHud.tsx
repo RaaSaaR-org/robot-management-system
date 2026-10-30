@@ -76,10 +76,10 @@ const TIMER =
   "font-display text-[64px] font-semibold leading-[.95] tabular-nums tracking-[-0.03em] [font-variation-settings:'wdth'_116] max-[1439px]:text-[56px] max-sm:text-[44px]";
 
 /** The hero timer; muted `00:00` between takes. */
-export function HudTimer({ phase, takeElapsedS }: { phase: HudPhase; takeElapsedS: number | null }) {
+export function HudTimer({ phase, takeElapsedS, className }: { phase: HudPhase; takeElapsedS: number | null; className?: string }) {
   const live = phase === 'capturing';
   return (
-    <div className={cn(TIMER, live ? 'text-ink-primary' : 'text-ink-muted')} data-testid="hud-take-timer" aria-label="Take time">
+    <div className={cn(TIMER, live ? 'text-ink-primary' : 'text-ink-muted', className)} data-testid="hud-take-timer" aria-label="Take time">
       {formatTakeTimer(live ? takeElapsedS : 0)}
     </div>
   );

@@ -242,6 +242,13 @@ export interface RobotModeControlProps {
    * is its lit action and the mode buttons wait behind it.
    */
   onTakeControl?: () => Promise<boolean>;
+  /**
+   * `step` only (TASK-428): the compact form for the Record take dock's
+   * recovery slot, a 340 px column that must not push the page past one
+   * screen. The measured mode is one line instead of the node track, the
+   * buttons are small, and the lines are tighter.
+   */
+  dense?: boolean;
   className?: string;
 }
 
@@ -254,7 +261,7 @@ export function modeTone(mode: BaseModeName): string {
 
 export function RobotModeControl({
   robotId, lease, armsEngaged = false, baseMode, requestFromHolder, variant = 'panel', lit = true, takeControlHint, onTakeControl,
-  className,
+  dense = false, className,
 }: RobotModeControlProps) {
   const own = useRobotBaseMode(robotId, { enabled: baseMode === undefined });
   const bm = baseMode ?? own;
@@ -435,102 +442,129 @@ export function RobotModeControl({
         {modeLabel(mode, base?.fsmId ?? null)}
       </span>
     );
-    return (
-      <div className={cn('min-w-0', className)} data-testid="robot-mode-control" data-variant="step">
-        {next && onTrack ? (
-          <div className="mb-3 flex flex-wrap items-center gap-y-2" data-testid="robot-bringup">
-            <ol className="flex flex-wrap items-center gap-y-2" aria-label="Bring-up sequence">
-              {BRING_UP_STEPS.map((s, i) => {
-                const now = s.mode === mode;
-                const past = i < currentIndex;
-                return (
-                  <li key={s.mode} className="flex items-center" data-current={now ? 'true' : undefined}>
-                    {i > 0 && (
-                      <span aria-hidden className={cn('mx-2 h-px w-7 flex-none', past || now ? 'bg-ink-tertiary' : 'bg-line-strong')} />
-                    )}
-                    <span className={cn('inline-flex items-center gap-[7px] whitespace-nowrap text-[13px]', now ? 'font-semibold text-ink-primary' : past ? 'text-ink-tertiary' : 'text-ink-muted')}>
-                      <span
-                        aria-hidden
-                        className={cn(
-                          'h-2.5 w-2.5 flex-none rounded-full border-[1.5px]',
-                          now
-                            ? mode === 'balance'
-                              ? 'border-signal-measured bg-signal-measured ring-[3px] ring-signal-measured/20'
-                              : 'border-signal-unknown bg-signal-unknown ring-[3px] ring-signal-unknown/20'
-                            : past
-                              ? 'border-ink-tertiary bg-ink-tertiary'
-                              : s.mode === 'balance'
-                                ? 'border-signal-measured'
-                                : 'border-line-strong',
-                        )}
-                      />
-                      {now ? (
-                        <span className={tone} data-testid="robot-mode-readout">{s.label}</span>
-                      ) : s.label}
-                    </span>
-                  </li>
-                );
-              })}
-            </ol>
-            {age !== null && (
-              <span className="ml-3.5 text-xs tabular-nums text-ink-tertiary">measured {age.toFixed(1)} s ago</span>
-            )}
-          </div>
-        ) : (
-          <p className="mb-3 text-[13px]" title={base?.fsmId !== null && base?.fsmId !== undefined ? `FSM ${base.fsmId}` : 'No FSM reading'}>
-            <span className="text-ink-secondary">Measured: </span>
-            {readout}
-            {age !== null && <span className="text-xs tabular-nums text-ink-tertiary"> · {age.toFixed(1)} s ago</span>}
-          </p>
-        )}
-        {next && (
-          <p className="mb-3 max-w-[62ch] text-[14px] text-ink-secondary" data-testid="robot-bringup-next">{next.text}</p>
-        )}
-        <div className="flex flex-wrap items-center gap-2">
-          {offerTake && (
-            <Button
-              variant={lit ? 'primary' : 'secondary'}
-              leftIcon={<Hand className="h-4 w-4" strokeWidth={1.75} />}
-              onClick={() => void takeControl()}
-              disabled={taking}
-              isLoading={taking}
-              loadingText="Taking control…"
-              data-testid="robot-mode-take-control"
-            >
-              Take control
-            </Button>
-          )}
-          {BUTTONS.map((b) => {
-            const isNext = next?.mode === b.mode;
+    const measuredPart = next && onTrack && !dense ? (
+      <div className="mb-3 flex flex-wrap items-center gap-y-2" data-testid="robot-bringup">
+        <ol className="flex flex-wrap items-center gap-y-2" aria-label="Bring-up sequence">
+          {BRING_UP_STEPS.map((s, i) => {
+            const now = s.mode === mode;
+            const past = i < currentIndex;
             return (
-              <Button
-                key={b.mode}
-                ref={b.mode === 'limp' ? limpRef : undefined}
-                variant={isNext && lit && !offerTake ? 'primary' : 'secondary'}
-                disabled={reasonFor(b.mode) !== null}
-                data-testid={`robot-mode-${b.mode}`}
-                data-next={isNext ? 'true' : undefined}
-                leftIcon={b.mode === 'stand' ? <PersonStanding className="h-4 w-4" strokeWidth={1.75} /> : undefined}
-                onClick={() => setConfirming(b.mode)}
-              >
-                {buttonLabel(b)}
-              </Button>
+              <li key={s.mode} className="flex items-center" data-current={now ? 'true' : undefined}>
+                {i > 0 && (
+                  <span aria-hidden className={cn('mx-2 h-px w-7 flex-none', past || now ? 'bg-ink-tertiary' : 'bg-line-strong')} />
+                )}
+                <span className={cn('inline-flex items-center gap-[7px] whitespace-nowrap text-[13px]', now ? 'font-semibold text-ink-primary' : past ? 'text-ink-tertiary' : 'text-ink-muted')}>
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'h-2.5 w-2.5 flex-none rounded-full border-[1.5px]',
+                      now
+                        ? mode === 'balance'
+                          ? 'border-signal-measured bg-signal-measured ring-[3px] ring-signal-measured/20'
+                          : 'border-signal-unknown bg-signal-unknown ring-[3px] ring-signal-unknown/20'
+                        : past
+                          ? 'border-ink-tertiary bg-ink-tertiary'
+                          : s.mode === 'balance'
+                            ? 'border-signal-measured'
+                            : 'border-line-strong',
+                    )}
+                  />
+                  {now ? (
+                    <span className={tone} data-testid="robot-mode-readout">{s.label}</span>
+                  ) : s.label}
+                </span>
+              </li>
             );
           })}
-        </div>
-        {reasonLine && (
-          <p className="mt-3 flex items-start gap-2 text-[13px] text-ink-tertiary" data-testid="robot-mode-reasons">
-            <Lock className="mt-0.5 h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
-            {reasonLine}
-          </p>
+        </ol>
+        {age !== null && (
+          <span className="ml-3.5 text-xs tabular-nums text-ink-tertiary">measured {age.toFixed(1)} s ago</span>
         )}
-        {!idsVerified && bm.status?.capability.gate === 'fsm' && (
-          <p className="mt-2.5 flex items-start gap-2 text-[12.5px] text-signal-unknown" data-testid="robot-mode-unverified">
-            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
-            Stand-up FSM {bm.status.capability.ids?.stand ?? 4} is not verified on this robot yet. Watch the first Stand up closely.
-          </p>
+      </div>
+    ) : (
+      <p className={cn('text-[13px]', dense ? 'mt-1.5' : 'mb-3')} title={base?.fsmId !== null && base?.fsmId !== undefined ? `FSM ${base.fsmId}` : 'No FSM reading'}>
+        <span className="text-ink-secondary">Measured: </span>
+        {readout}
+        {age !== null && <span className="text-xs tabular-nums text-ink-tertiary"> · {age.toFixed(1)} s ago</span>}
+      </p>
+    );
+    const nextPart = next && (
+      <p className={cn('max-w-[62ch] text-ink-secondary', dense ? 'mt-2 text-[13px] leading-snug' : 'mb-3 text-[14px]')} data-testid="robot-bringup-next">{next.text}</p>
+    );
+    const buttonsPart = (
+      <div className={cn('flex flex-wrap items-center', dense ? 'gap-1.5' : 'gap-2')}>
+        {offerTake && (
+          <Button
+            variant={lit ? 'primary' : 'secondary'}
+            size={dense ? 'sm' : undefined}
+            leftIcon={<Hand className="h-4 w-4" strokeWidth={1.75} />}
+            onClick={() => void takeControl()}
+            disabled={taking}
+            isLoading={taking}
+            loadingText="Taking control…"
+            data-testid="robot-mode-take-control"
+          >
+            Take control
+          </Button>
         )}
-        <div className="mt-2 space-y-1 empty:hidden">{feedback}</div>
+        {BUTTONS.map((b) => {
+          const isNext = next?.mode === b.mode;
+          return (
+            <Button
+              key={b.mode}
+              ref={b.mode === 'limp' ? limpRef : undefined}
+              variant={isNext && lit && !offerTake ? 'primary' : 'secondary'}
+              size={dense ? 'sm' : undefined}
+              disabled={reasonFor(b.mode) !== null}
+              data-testid={`robot-mode-${b.mode}`}
+              data-next={isNext ? 'true' : undefined}
+              leftIcon={b.mode === 'stand' ? <PersonStanding className="h-4 w-4" strokeWidth={1.75} /> : undefined}
+              onClick={() => setConfirming(b.mode)}
+            >
+              {buttonLabel(b)}
+            </Button>
+          );
+        })}
+      </div>
+    );
+    const reasonPart = reasonLine && (
+      <p className={cn('flex items-start gap-2 text-ink-tertiary', dense ? 'mt-1.5 text-[12.5px] leading-snug' : 'mt-3 text-[13px]')} data-testid="robot-mode-reasons">
+        <Lock className="mt-0.5 h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
+        {reasonLine}
+      </p>
+    );
+    const unverifiedPart = !idsVerified && bm.status?.capability.gate === 'fsm' && (
+      <p className={cn('flex items-start gap-2 text-[12.5px] text-signal-unknown', dense ? 'mt-1.5 leading-snug' : 'mt-2.5')} data-testid="robot-mode-unverified">
+        <TriangleAlert className="mt-0.5 h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
+        Stand-up FSM {bm.status.capability.ids?.stand ?? 4} is not verified on this robot yet. Watch the first Stand up closely.
+      </p>
+    );
+    const feedbackPart = (
+      <div className="mt-2 space-y-1 empty:hidden">{feedback}</div>
+    );
+    return (
+      <div className={cn('min-w-0', className)} data-testid="robot-mode-control" data-variant="step" data-dense={dense ? 'true' : undefined}>
+        {dense ? (
+          // The take dock's recovery slot: the buttons first, so a short slot
+          // shows them before it has to scroll; the explanation follows.
+          <>
+            {buttonsPart}
+            {feedbackPart}
+            {nextPart}
+            {measuredPart}
+            {reasonPart}
+            {unverifiedPart}
+          </>
+        ) : (
+          <>
+            {measuredPart}
+            {nextPart}
+            {buttonsPart}
+            {reasonPart}
+            {unverifiedPart}
+            {feedbackPart}
+          </>
+        )}
         {confirmDialog}
       </div>
     );

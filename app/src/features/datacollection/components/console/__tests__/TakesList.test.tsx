@@ -112,3 +112,15 @@ describe('TakesList', () => {
     expect(screen.getByTestId('episode-empty')).toHaveTextContent('No takes yet. Space starts the first one.');
   });
 });
+
+describe('TakesList stays reachable (TASK-428 review)', () => {
+  it('never hides itself: from lg it keeps its header and one row, and the rows scroll', () => {
+    setup({ episodes: [episode({ episodeIndex: 0 }), episode({ episodeIndex: 1 })], live: live({ take: 1 }) });
+    const panel = screen.getByTestId('episode-panel');
+    expect(panel.className).toContain('lg:min-h-[112px]');
+    expect(panel.className).not.toContain('invisible');
+    expect(panel).not.toHaveAttribute('data-squeezed');
+    expect(screen.getByTestId('episode-discard-1')).toBeInTheDocument();
+    expect(screen.getByTestId('episode-row-1').parentElement!.className).toContain('overflow-auto');
+  });
+});

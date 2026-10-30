@@ -7,11 +7,11 @@
  *              frames (or "Recording 00:12"), the moved groups and warnings,
  *              dropped frames, who started it, and its trash button — Discard
  *              on a finished take, "Restart take N?" on the live one, each
- *              through its confirm. Row ids are unchanged.
+ *              through its confirm. Row ids are unchanged. From lg it never
+ *              gets shorter than its header and one row.
  * @feature datacollection
  */
 
-import { useEffect, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { Button, confirm } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
@@ -37,9 +37,6 @@ export interface TakesListProps {
   className?: string;
 }
 
-/** Below this height the panel cannot show even its header. */
-const SQUEEZED_PX = 56;
-
 function formatSeconds(s: number): string {
   return `${s.toFixed(1)} s`;
 }
@@ -53,18 +50,6 @@ export function TakesList({ sessionId, episodes, live, isRecording, canDiscard, 
   const takeMode = !!live && live.phase !== null;
   const capturing = takeMode && live!.phase === 'capturing';
   const lastTake = live?.take ?? null;
-
-  // Squeezed below its own header (a short window with a blocker in the dock):
-  // hidden rather than drawn as a sliver.
-  const rootRef = useRef<HTMLElement>(null);
-  const [squeezed, setSqueezed] = useState(false);
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => setSqueezed(el.clientHeight > 0 && el.clientHeight < SQUEEZED_PX));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   const askDiscard = async (take: number) => {
     const isLive = capturing && take === lastTake;
@@ -85,9 +70,9 @@ export function TakesList({ sessionId, episodes, live, isRecording, canDiscard, 
 
   return (
     <section
-      ref={rootRef}
-      className={cn('flex min-h-0 flex-col overflow-hidden rounded-panel border border-line-subtle bg-panel', squeezed && 'invisible', className)}
-      data-squeezed={squeezed ? 'true' : undefined}
+      // From lg it keeps its header and one row: the take dock gives way first,
+      // so every row's Discard / Restart stays reachable by scrolling the list.
+      className={cn('flex flex-col overflow-hidden rounded-panel border border-line-subtle bg-panel lg:min-h-[112px]', className)}
       data-testid="episode-panel"
       aria-label="Takes"
     >

@@ -853,6 +853,8 @@ export function SessionDetailPage() {
         robotId={robot.id}
         variant="step"
         lit={false}
+        // In the recovery slot it is the compact form, so the dock still fits one screen.
+        dense={showRecovery}
         lease={lease}
         baseMode={baseMode}
         takeControlHint="Take control in the VR window, or through the Control cell."
@@ -880,10 +882,12 @@ export function SessionDetailPage() {
         </p>
       )}
       {estopLatched && (
-        <p className={slotLine}>The operator resets it in the headset, or reset it at the robot. Then stand the robot up again.</p>
+        <p className={slotLine} data-testid="take-dock-estop-reset">The operator resets it in the headset, or reset it at the robot. Then stand the robot up again.</p>
       )}
-      <p className={slotLine}>The arms will not follow until the robot balances.</p>
-      {modeControl && <ReparentHost node={modeNode} className="ml-6 mt-2.5" />}
+      {/* The mode buttons right under the title, so a short slot shows them before it scrolls. */}
+      {modeControl && <ReparentHost node={modeNode} className="ml-6 mt-2" />}
+      {/* The fallback title already says it; the readiness reason and the E-stop do not. */}
+      {(estopLatched || modeReason) && <p className={cn(slotLine, modeControl && 'mt-1.5')}>The arms will not follow until the robot balances.</p>}
     </div>
   ) : null;
   const blocker = blockerKind === 'degraded' ? (

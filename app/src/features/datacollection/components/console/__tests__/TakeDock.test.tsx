@@ -163,3 +163,31 @@ describe('TakeDock legacy recorder', () => {
     expect(primaries()).toHaveLength(1);
   });
 });
+
+describe('TakeDock fits its column (TASK-428 review)', () => {
+  it('lets only the slot give way: the slot scrolls inside, every other part keeps its height', () => {
+    setup({ phase: 'capturing', take: 0, controls: controls({ capturing: true, lastTake: 0 }), recovery: <p>The robot is standing.</p> });
+    const dock = screen.getByTestId('session-hud');
+    expect(dock.className).toContain('lg:min-h-0');
+    expect(dock.className).toContain('lg:*:flex-none');
+    const slot = screen.getByTestId('take-dock-slot');
+    expect(slot.className).toContain('overflow-y-auto');
+    expect(slot.className).toContain('min-h-0');
+    expect(slot.style.flexShrink).toBe('1');
+  });
+
+  it('on a short screen with a slot, the timer joins the header row; without one it stays the hero', () => {
+    const { props, rerender } = setup({ phase: 'capturing', take: 0, takeElapsedS: 7, controls: controls({ capturing: true, lastTake: 0 }), blocker: <p>Frames are being missed.</p> });
+    const hero = screen.getByTestId('take-dock-hero');
+    expect(hero).toContainElement(screen.getByTestId('hud-take'));
+    expect(hero).toContainElement(screen.getByTestId('hud-take-timer'));
+    expect(hero.className).toContain('lg:[@media(max-height:899px)]:flex-row');
+    expect(screen.getByTestId('hud-take-timer').className).toContain('lg:[@media(max-height:899px)]:text-[36px]');
+    expect(screen.getByTestId('session-hud').className).toContain('lg:[@media(max-height:899px)]:gap-2');
+
+    rerender(<TakeDock {...props} blocker={undefined} />);
+    expect(screen.getByTestId('take-dock-hero').className).not.toContain('flex-row');
+    expect(screen.getByTestId('hud-take-timer').className).not.toContain('text-[36px]');
+    expect(screen.getByTestId('session-hud').className).not.toContain('gap-2');
+  });
+});

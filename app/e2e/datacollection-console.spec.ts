@@ -643,9 +643,57 @@ test.describe('Record (TASK-428)', () => {
     return `${label} ${m.sh}/${m.ih}`;
   }
 
+  /**
+   * The takes list keeps its header and at least one whole row, so every
+   * row's trash button stays reachable (by scrolling the list): it opens the
+   * newest row's confirm and cancels it.
+   */
+  async function expectTakesReachable(page: Page, label: string): Promise<string> {
+    const m = await page.evaluate(() => {
+      const list = document.querySelector('[data-testid="episode-panel"]')!;
+      const l = list.getBoundingClientRect();
+      const row = list.querySelector('[data-testid^="episode-row-"]');
+      const r = row?.getBoundingClientRect();
+      return {
+        visibility: getComputedStyle(list).visibility, listH: Math.round(l.height), listTop: l.top, listBottom: l.bottom,
+        row: row?.getAttribute('data-testid') ?? null, rowTop: r?.top ?? 0, rowBottom: r?.bottom ?? 0, ih: window.innerHeight,
+      };
+    });
+    expect(m.visibility, `${label}: the takes list`).toBe('visible');
+    expect(m.row, `${label}: a take row`).not.toBeNull();
+    expect(m.rowTop, `${label}: ${m.row} top`).toBeGreaterThanOrEqual(m.listTop);
+    expect(m.rowBottom, `${label}: ${m.row} bottom`).toBeLessThanOrEqual(m.listBottom + 0.5);
+    expect(m.listBottom, `${label}: the takes list bottom`).toBeLessThanOrEqual(m.ih);
+    const take = m.row!.replace('episode-row-', '');
+    await page.getByTestId(m.row!).hover();
+    await page.getByTestId(`episode-discard-${take}`).click();
+    await expect(page.getByTestId('episode-discard-confirm')).toBeVisible();
+    await page.getByTestId('episode-discard-confirm-cancel').click();
+    await expect(page.getByTestId('episode-discard-confirm')).toBeHidden();
+    return `${label} list ${m.listH}px`;
+  }
+
+  /**
+   * The recovery slot leads with what to do, unscrolled: the mode buttons
+   * (Stand up) while the robot does not balance, the reset line while the
+   * E-stop is latched (the mode buttons wait behind it, disabled).
+   */
+  async function expectSlotLeadsWith(page: Page, label: string, testId: string): Promise<void> {
+    const m = await page.evaluate((id) => {
+      const slot = document.querySelector('[data-testid="take-dock-slot"]')!;
+      const s = slot.getBoundingClientRect();
+      const b = slot.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect();
+      return { top: s.top, bottom: s.bottom, bTop: b?.top ?? null, bBottom: b?.bottom ?? null, scrollTop: slot.scrollTop };
+    }, testId);
+    expect(m.bTop, `${label}: ${testId} in the slot`).not.toBeNull();
+    expect(m.scrollTop, `${label}: slot scrolled`).toBe(0);
+    expect(m.bTop!, `${label}: ${testId} top`).toBeGreaterThanOrEqual(m.top);
+    expect(m.bBottom!, `${label}: ${testId} bottom`).toBeLessThanOrEqual(m.bottom);
+  }
+
   for (const session of ['keyboard', 'vr'] as const) {
     for (const [w, h, min] of [[1280, 800, 48], [1512, 945, 64], [1920, 1080, 64]] as const) {
-      test(`Record fits and the E-STOP stands alone at ${w}×${h} (${session}) — capturing, between takes, blocker; Testing tools open too`, async ({ page }) => {
+      test(`Record fits and the E-STOP stands alone at ${w}×${h} (${session}) — capturing, between takes, blocker, recovery; Testing tools open too`, async ({ page }) => {
         await page.setViewportSize({ width: w, height: h });
         await openRecordOn(page, session);
         const sid = session === 'vr' ? 'demo-session-takes-vr' : 'demo-session-takes';
@@ -688,6 +736,21 @@ test.describe('Record (TASK-428)', () => {
         fits.push(await expectFits(page, 'blocker'));
         await clear('blocker');
         if (w === 1512) await page.screenshot({ ...shot(`TASK-428-record-fault-${session}-1512.png`) });
+        fits.push(await expectTakesReachable(page, 'blocker'));
+
+        // The recovery slot (VR): the robot not balancing, then the E-stop latched — the tallest slot.
+        if (session === 'vr') {
+          for (const fixture of ['mode_not_balance', 'estop_latched'] as const) {
+            await pin(page, fixture);
+            await expect(page.getByTestId('take-dock-slot')).toHaveAttribute('data-kind', 'recovery', { timeout: 10_000 });
+            if (fixture === 'estop_latched') await expect(page.getByTestId('take-dock-recovery-title')).toHaveText('E-stop is latched.');
+            fits.push(await expectFits(page, `recovery ${fixture}`));
+            await expectSlotLeadsWith(page, `recovery ${fixture}`, fixture === 'estop_latched' ? 'take-dock-estop-reset' : 'robot-mode-stand');
+            await clear(`recovery ${fixture}`);
+            fits.push(await expectTakesReachable(page, `recovery ${fixture}`));
+            if (w !== 1920) await page.screenshot({ ...shot(`TASK-428-record-recovery-${fixture}-${w}.png`) });
+          }
+        }
         test.info().annotations.push({ type: 'fit', description: `record ${session}@${w}: ${fits.join(' · ')}` });
         test.info().annotations.push({ type: 'clearance', description: `record ${session}@${w}: ${gaps.join(' · ')}` });
       });

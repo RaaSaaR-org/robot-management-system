@@ -10,8 +10,11 @@
  *              Motion meter. The slot shows one thing, by priority: recovery
  *              (the E-stop latched, or the robot not balancing) over a blocker
  *              (missed frames, a blocking readiness reason, jerky motion) over
- *              the quick check. The hotkeys, toasts and confirms are the old
- *              take panel's, through `useTakeHotkeys`. The root keeps
+ *              the quick check. From lg the dock may shrink to its column,
+ *              and only the slot gives way: it scrolls inside; on a screen
+ *              under 900 px tall the timer joins the header row while the slot
+ *              shows. The hotkeys, toasts and confirms are the old take
+ *              panel's, through `useTakeHotkeys`. The root keeps
  *              `session-hud`.
  * @feature datacollection
  */
@@ -97,6 +100,11 @@ const SLOT_TONE: Record<'fault' | 'warn', string> = {
   warn: 'border-signal-unknown/35 bg-signal-unknown/[0.06]',
 };
 
+/** A short screen (lg, under 900 px tall) with the slot showing: header and timer share one row. */
+const SHORT_ROW = 'lg:[@media(max-height:899px)]:flex-row lg:[@media(max-height:899px)]:items-center lg:[@media(max-height:899px)]:justify-between';
+const SHORT_TIMER = 'lg:[@media(max-height:899px)]:text-[36px]';
+const SHORT_GAP = 'lg:[@media(max-height:899px)]:gap-2';
+
 /** The 52 px primary's extra classes: Space pushed to the right edge. */
 const PRIMARY = 'h-[52px] justify-start gap-2.5 px-[18px] text-base [&>span.truncate]:flex-1 [&>span.truncate]:text-left';
 
@@ -108,10 +116,14 @@ export function TakeDock({
   const kind = dockSlotKind({ recovery, blocker, quickCheck: phase === 'between' ? quickCheck : null });
   const takeButtons = takeMode && (phase === 'capturing' || phase === 'between');
   const checkShows = kind === 'check';
+  const slotShows = kind === 'recovery' || kind === 'blocker';
 
-  const slot = (kind === 'recovery' || kind === 'blocker') && (
+  const slot = slotShows && (
     <div
-      className={cn('rounded-control border px-3.5 py-3 text-[13.5px]', SLOT_TONE[slotTone ?? (kind === 'recovery' ? 'fault' : 'warn')])}
+      // The one part of the dock that gives way: on a short screen it scrolls
+      // inside, so the dock never pushes the console (and the page) past one screen.
+      className={cn('min-h-0 overflow-y-auto overscroll-contain rounded-control border px-3.5 py-3 text-[13.5px] lg:min-h-[72px]', SLOT_TONE[slotTone ?? (kind === 'recovery' ? 'fault' : 'warn')])}
+      style={{ flexShrink: 1 }}
       data-testid="take-dock-slot"
       data-kind={kind}
       data-tone={slotTone ?? (kind === 'recovery' ? 'fault' : 'warn')}
@@ -123,17 +135,27 @@ export function TakeDock({
 
   return (
     <section
-      className={cn('flex flex-none flex-col gap-3.5 rounded-panel border border-line-subtle bg-panel p-4 pb-[18px] max-[1439px]:gap-3 max-sm:p-3.5', className)}
+      // From lg the dock may shrink to its column; every part keeps its height
+      // (`*:flex-none`) but the slot, which takes back flex-shrink inline.
+      className={cn('flex flex-none flex-col gap-3.5 lg:min-h-0 lg:flex-initial lg:*:flex-none rounded-panel border border-line-subtle bg-panel p-4 pb-[18px] max-[1439px]:gap-3 max-sm:p-3.5', slotShows && SHORT_GAP, className)}
       data-testid="session-hud"
       data-slot={kind ?? undefined}
       aria-label="Take"
     >
-      <HudHeader phase={phase} take={take} />
-
-      {/* The hero: the timer, the quick check, or a muted 00:00. */}
-      {checkShows ? quickCheck : (
+      {/* The hero: the timer, the quick check, or a muted 00:00. On a short
+          screen (lg, under 900 px tall) with the slot showing, the timer joins
+          the header's row at a smaller size, so the slot keeps its buttons. */}
+      {checkShows ? (
         <>
-          <HudTimer phase={phase} takeElapsedS={takeElapsedS} />
+          <HudHeader phase={phase} take={take} />
+          {quickCheck}
+        </>
+      ) : (
+        <>
+          <div className={cn('flex flex-col gap-3.5 max-[1439px]:gap-3', slotShows && SHORT_ROW)} data-testid="take-dock-hero">
+            <HudHeader phase={phase} take={take} />
+            <HudTimer phase={phase} takeElapsedS={takeElapsedS} className={slotShows ? SHORT_TIMER : undefined} />
+          </div>
           {phase === 'capturing' && autoStop && <HudAutoStop inS={autoStop.inS} totalS={autoStop.totalS} />}
         </>
       )}

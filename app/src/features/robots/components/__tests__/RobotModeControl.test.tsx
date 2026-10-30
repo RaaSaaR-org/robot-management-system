@@ -360,6 +360,21 @@ describe('RobotModeControl — asking the headset (TASK-417)', () => {
 });
 
 describe('RobotModeControl variant="step" (TASK-427)', () => {
+  it('dense (the take dock\'s recovery slot, TASK-428): buttons first and small, one measured line instead of the track', () => {
+    render(<RobotModeControl robotId="r1" variant="step" dense lit={false} lease={{ ...BOUND, state: 'observing' }} baseMode={fakeHook()} takeControlHint="Take control in the VR window." />);
+    const root = screen.getByTestId('robot-mode-control');
+    expect(root).toHaveAttribute('data-dense', 'true');
+    expect(screen.queryByTestId('robot-bringup')).toBeNull();
+    expect(screen.getByTestId('robot-mode-readout')).toHaveTextContent('Limp');
+    const stand = screen.getByTestId('robot-mode-stand');
+    expect(stand.className).toContain('h-8');
+    // The buttons come before the explanation, so a short slot shows them unscrolled.
+    const next = screen.getByTestId('robot-bringup-next');
+    expect(stand.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(stand.compareDocumentPosition(screen.getByTestId('robot-mode-readout')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId('robot-mode-reasons')).toHaveTextContent(/^Take control in the VR window\.$/);
+  });
+
   it('draws the bring-up as a track, lights the next button, and says one reason', () => {
     render(<RobotModeControl robotId="r1" variant="step" lease={{ ...BOUND, state: 'observing' }} baseMode={fakeHook()} takeControlHint="Take control in step 2 first." />);
     const track = screen.getByTestId('robot-bringup');

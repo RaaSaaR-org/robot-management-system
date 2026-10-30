@@ -204,6 +204,14 @@ export const READINESS_FIXTURES = {
       reason: { code: 'mode_not_balance', severity: 'block', text: 'The robot is standing. Switch it to Balance.' },
     }),
   }),
+  // TASK-428: the tallest recovery slot — the E-stop latched, the base dropped to Limp.
+  estop_latched: snapshot({
+    agentReadiness: agentReadiness({
+      base: { gate: 'fsm', mode: 'limp', fsmId: 1, ageS: 0.3, error: null, stale: false },
+      arms: { ...agentReadiness().arms, armed: false, armWeight: 0, armState: 'idle', estopLatched: true },
+      reason: { code: 'estop_latched', severity: 'block', text: 'E-stop is latched. Reset it, then switch to Balance.' },
+    }),
+  }),
   hand_fault: snapshot({
     agentReadiness: agentReadiness({
       hands: {
