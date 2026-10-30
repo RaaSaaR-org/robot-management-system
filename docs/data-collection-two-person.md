@@ -74,9 +74,14 @@ title, so the operator knows someone is watching.
    sidecar restarts in `arm_sdk`; nothing moves yet.
 3. **Stand the robot up.** In the session's **Robot mode** panel (or the VR window on the robot's
    Teleop tab), press **Stand up** and confirm, wait until the robot measures
-   Stand, then **Balance** and confirm. The robot must hang in the gantry while
-   it stands up. Stand up uses FSM id 4, which is not yet verified on the robot:
-   watch the robot, and keep the remote's L1+A / the E-STOP within reach.
+   Stand, then **Balance** and confirm. Before Stand up, lower the gantry until
+   both feet are flat on the floor with a hand's width of slack — the robot must
+   **not** hang in the gantry. Start from Limp: Stand up from zero torque (FSM 0)
+   is refused (`bad_transition`), so press **Limp** first if the mode reads
+   zero torque. Balance is FSM 501 on g1-edu-4 (3-DoF waist), set in its
+   profile; see [the balance id](g1-edu-lab-bringup.md#what-the-sidecar-does).
+   Stand up uses FSM id 4, which is not yet verified on the robot: watch the
+   robot, and keep the remote's L1+A / the E-STOP within reach.
 4. **Connect the Quest.** Plug the Quest into the robot PC over USB and press
    **Connect** (this runs `adb reverse` for the page port). **Connect** and
    **Open on headset** run `adb` on the robot PC, so they only work for a Quest plugged into that PC. For a Quest on another computer
@@ -139,7 +144,8 @@ While the robot stands or balances, the dialog offers **Limp first, then stop**
 (when it is disabled, press **Take control** next to it first): it switches the
 robot to Limp, waits until the robot measures Limp, and only then stops the robot
 side.
-Have the gantry carry the robot before you press it.
+Hoist the gantry until it carries the robot before you press it — gantry
+first, then Limp.
 
 ## Who presses what
 

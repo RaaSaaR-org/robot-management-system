@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import {
   RobotModeControl,
+  bringUpNext,
   modeDisabledReason,
   modeLabel,
   type ModeReasonContext,
@@ -91,6 +92,12 @@ describe('modeDisabledReason — the precedence table', () => {
     expect(modeDisabledReason('stand', ctx({ status: status({}, { mode: 'balance', fsmId: 500 }) })))
       .toBe('Stand up needs Limp.');
     expect(modeDisabledReason('stand', ctx())).toBeNull();
+  });
+
+  it('6b. from zero torque, Stand up says to press Limp first (TASK-423)', () => {
+    const zt = ctx({ status: status({}, { mode: 'zero_torque', fsmId: 0 }) });
+    expect(modeDisabledReason('stand', zt)).toBe('The robot is in zero torque — press Limp first, then Stand up.');
+    expect(modeDisabledReason('limp', zt)).toBeNull();
   });
 
   it('7. balance needs stand, then the settle time', () => {
@@ -214,12 +221,68 @@ describe('RobotModeControl', () => {
     expect(document.activeElement).toBe(screen.getByTestId('robot-mode-limp'));
   });
 
+  it('shows the sidecar hint under an unconfirmed balance (TASK-422)', () => {
+    const hint = 'the robot still reports FSM 4 — if this G1 has the 3-DoF waist, it balances in FSM 501, not 500: set G1_FSM_ID_BALANCE=501 in its profile';
+    const hook = fakeHook({
+      status: status({}, { mode: 'stand', fsmId: 4 }),
+      lastResult: {
+        ok: false, status: 504, code: 'unconfirmed', error: `not reported; ${hint}`, hint,
+        measured: { fsmId: 4, mode: 'stand', ageS: 0.1, error: null },
+      },
+    });
+    render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={hook} />);
+    expect(screen.getByTestId('robot-mode-error')).toHaveTextContent('Not confirmed — the robot reports Stand (locked).');
+    expect(screen.getByTestId('robot-mode-hint')).toHaveTextContent(hint);
+  });
+
+  it('shows no hint when the result carries none', () => {
+    const hook = fakeHook({
+      lastResult: {
+        ok: false, status: 504, code: 'unconfirmed', error: 'not reported',
+        measured: { fsmId: 4, mode: 'stand', ageS: 0.1, error: null },
+      },
+    });
+    render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={hook} />);
+    expect(screen.queryByTestId('robot-mode-hint')).toBeNull();
+  });
+
   it('shows any other refusal with its code', () => {
     const hook = fakeHook({
       lastResult: { ok: false, status: 409, code: 'bad_transition', error: 'balance is only allowed from stand' },
     });
     render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={hook} />);
     expect(screen.getByTestId('robot-mode-error')).toHaveTextContent('bad_transition: balance is only allowed from stand');
+  });
+});
+
+describe('bring-up sequence (TASK-423)', () => {
+  it('names the next button from each measured mode, and none when the mode is unknown', () => {
+    expect(bringUpNext('zero_torque')?.mode).toBe('limp');
+    expect(bringUpNext('other')?.mode).toBe('limp');
+    expect(bringUpNext('limp')?.mode).toBe('stand');
+    expect(bringUpNext('stand')?.mode).toBe('balance');
+    expect(bringUpNext('balance')).toEqual({ mode: null, text: expect.stringMatching(/Bring-up done/) });
+    expect(bringUpNext('unknown')).toBeNull();
+  });
+
+  it('shows the step the robot is in and the next one, and marks only that button — clicking still confirms', () => {
+    const hook = fakeHook({ status: status({}, { mode: 'zero_torque', fsmId: 0 }) });
+    render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={hook} />);
+    const strip = screen.getByTestId('robot-bringup');
+    expect(strip.querySelector('[data-current="true"]')).toHaveTextContent('Zero torque');
+    expect(screen.getByTestId('robot-bringup-next')).toHaveTextContent('Next: press Limp, then Stand up, then Balance.');
+    expect(screen.getByTestId('robot-mode-limp')).toHaveAttribute('data-next', 'true');
+    expect(screen.getByTestId('robot-mode-stand')).not.toHaveAttribute('data-next');
+    expect(screen.getByTestId('robot-mode-reasons')).toHaveTextContent('press Limp first, then Stand up');
+    fireEvent.click(screen.getByTestId('robot-mode-limp'));
+    expect(hook.request).not.toHaveBeenCalled();
+    expect(screen.getByText(/sags into the gantry/)).toBeInTheDocument();
+  });
+
+  it('is hidden while mode control is off', () => {
+    const off = status({ capability: { gate: 'off', moveEnabled: false, idsVerified: false, ids: null } });
+    render(<RobotModeControl robotId="r1" lease={BOUND} baseMode={fakeHook({ status: off })} />);
+    expect(screen.queryByTestId('robot-bringup')).toBeNull();
   });
 });
 

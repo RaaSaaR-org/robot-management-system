@@ -12,6 +12,12 @@
  *              the same confirmation, and the operator allows it with a hold in
  *              the headset, whose page sends it under its own lease. Limp is
  *              never asked for: it stays a direct, lease-gated action here.
+ *
+ *              TASK-423: a strip shows where the robot is in the bring-up
+ *              sequence (zero torque → limp → stand → balance) and the next
+ *              button to press; a robot in zero torque says "press Limp first"
+ *              instead of only disabling Stand up. Nothing is chained: every
+ *              step is still its own confirmed click.
  * @feature robots
  */
 
@@ -113,6 +119,9 @@ export function modeDisabledReason(mode: BaseModeCommand, ctx: ModeReasonContext
   if (mode !== 'limp' && (ctx.armsEngaged || status.armed)) {
     return 'Release the grip; arms are engaged.';
   }
+  if (mode === 'stand' && measured === 'zero_torque') {
+    return 'The robot is in zero torque — press Limp first, then Stand up.';
+  }
   if (mode === 'stand' && measured !== 'limp') return 'Stand up needs Limp.';
   if (mode === 'balance') {
     if (measured !== 'stand') return 'Balance needs Stand.';
@@ -123,6 +132,36 @@ export function modeDisabledReason(mode: BaseModeCommand, ctx: ModeReasonContext
   }
   if (mode !== 'limp' && (ctx.pending || status.inFlight)) return 'A change is in progress.';
   return null;
+}
+
+/** The bring-up sequence without the remote, in order (TASK-423). */
+export const BRING_UP_STEPS: ReadonlyArray<{ mode: BaseModeName; label: string }> = [
+  { mode: 'zero_torque', label: 'Zero torque' },
+  { mode: 'limp', label: 'Limp' },
+  { mode: 'stand', label: 'Stand' },
+  { mode: 'balance', label: 'Balance' },
+];
+
+/**
+ * The next bring-up step from the measured mode: the button to press and a
+ * line saying so, or null when the mode is unknown. It only names the step —
+ * the operator still presses (and confirms) it.
+ */
+export function bringUpNext(measured: BaseModeName): { mode: BaseModeCommand | null; text: string } | null {
+  switch (measured) {
+    case 'zero_torque':
+      return { mode: 'limp', text: 'The robot is in zero torque. Next: press Limp, then Stand up, then Balance.' };
+    case 'other':
+      return { mode: 'limp', text: 'The robot is in a mode outside the bring-up sequence. Next: press Limp.' };
+    case 'limp':
+      return { mode: 'stand', text: 'Next: press Stand up, then Balance.' };
+    case 'stand':
+      return { mode: 'balance', text: `Next: press Balance once the robot has stood for ${STAND_SETTLE_S} s.` };
+    case 'balance':
+      return { mode: null, text: 'Bring-up done — the balance controller holds the robot.' };
+    default:
+      return null;
+  }
 }
 
 /** What became of a request to the lease holder (TASK-417). */
@@ -231,6 +270,8 @@ export function RobotModeControl({
       : mode === 'limp' ? 'text-signal-unknown'
         : 'text-ink-primary';
   const pendingButton = BUTTONS.find((b) => b.mode === confirming) ?? null;
+  const gateOn = bm.status?.capability.gate === 'fsm' || bm.status?.capability.gate === 'full';
+  const next = gateOn && bm.status?.sidecarReachable !== false ? bringUpNext(mode) : null;
 
   // TASK-417: someone else (the headset) holds the lease and may be asked.
   const askMode = requestFromHolder !== undefined && lease.enabled && lease.state !== 'bound';
@@ -292,6 +333,8 @@ export function RobotModeControl({
               variant={b.mode === 'limp' ? 'secondary' : 'outline'}
               disabled={reasonFor(b.mode) !== null}
               data-testid={`robot-mode-${b.mode}`}
+              data-next={next?.mode === b.mode ? 'true' : undefined}
+              className={next?.mode === b.mode ? 'ring-1 ring-signal-measured' : undefined}
               onClick={() => setConfirming(b.mode)}
             >
               {bm.pending === b.mode
@@ -304,6 +347,23 @@ export function RobotModeControl({
         </div>
       </div>
 
+      {next && (
+        <div className="text-xs" data-testid="robot-bringup">
+          <ol className="flex flex-wrap items-center gap-x-1 text-ink-tertiary" aria-label="Bring-up sequence">
+            {BRING_UP_STEPS.map((s, i) => (
+              <li
+                key={s.mode}
+                data-current={s.mode === mode ? 'true' : undefined}
+                className={cn(s.mode === mode && 'font-semibold text-ink-primary')}
+              >
+                {i > 0 && <span aria-hidden="true">→ </span>}
+                {s.label}
+              </li>
+            ))}
+          </ol>
+          <p className="text-ink-secondary" data-testid="robot-bringup-next">{next.text}</p>
+        </div>
+      )}
       {mode === 'unknown' && base?.error && (
         <p className="text-xs text-signal-stopped">{base.error}</p>
       )}
@@ -346,6 +406,11 @@ export function RobotModeControl({
           {unconfirmed
             ? `Not confirmed — the robot reports ${modeLabel(result.measured?.mode ?? 'unknown', result.measured?.fsmId ?? null)}. Use Limp if in doubt.`
             : `${result.code}: ${result.error}`}
+        </p>
+      )}
+      {result && !result.ok && result.hint && (
+        <p className="text-xs text-ink-secondary" data-testid="robot-mode-hint">
+          {result.hint}
         </p>
       )}
 

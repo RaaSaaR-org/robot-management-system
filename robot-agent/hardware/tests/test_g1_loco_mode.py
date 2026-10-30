@@ -17,6 +17,7 @@ raw FSM id — and every change is measured before it is believed.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -240,6 +241,12 @@ def test_junk_gate_is_refused(raw):
     ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_STAND": "500"}, "not allowed"),
     ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_LIMP": "0"}, "fixed"),
     ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_BALANCE": "801"}, "only ever"),
+    ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_BALANCE": "4"}, "only ever"),
+    ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_BALANCE": "501"}, None),
+    ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_BALANCE": "501",
+      "G1_FSM_BALANCE_REPORTED": "501,801"}, None),
+    ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_BALANCE": "501",
+      "G1_FSM_BALANCE_REPORTED": "500"}, "must include the commanded"),
     ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_BALANCE_REPORTED": "500,801"}, None),
     ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_BALANCE_REPORTED": "500,4"}, "subset"),
 ])
@@ -283,6 +290,42 @@ def test_fsm_id_defaults_and_classification():
     assert [ids.classify(i) for i in (1, 4, 500, 801, 0, 706, None)] == [
         "limp", "stand", "balance", "other", "zero_torque", "other", "unknown"]
     assert lm.FSM_STAND_VERIFIED is False
+
+
+def test_balance_501_for_the_3dof_waist():
+    ids, err = lm.fsm_config({"G1_FSM_ID_BALANCE": "501"})
+    assert err is None
+    assert (ids.balance, ids.balance_reported) == (501, (501,))   # reported follows the command
+    assert [ids.classify(i) for i in (501, 500, 4)] == ["balance", "other", "stand"]
+
+
+def _profile_mode_env(name, mode):
+    """The `sidecar.modes.<mode>` env of a profile — a flat KEY: "value" map, read
+    without a YAML dependency (this suite needs only numpy + pytest)."""
+    path = os.path.join(HW, "profiles", name)
+    env, inside = {}, False
+    with open(path) as f:
+        for line in f:
+            stripped = line.strip()
+            if stripped == mode + ":":
+                inside = True
+                continue
+            if inside:
+                if not stripped or stripped.startswith("#"):
+                    continue
+                m = re.match(r"^\s{6}([A-Z0-9_]+):\s*\"?([^\"#]*?)\"?\s*(#.*)?$", line)
+                if not m:
+                    break
+                env[m.group(1)] = m.group(2)
+    return env
+
+
+def test_g1_edu_4_profile_balances_in_501():
+    env = _profile_mode_env("g1-edu-4.yaml", "arm_sdk")
+    assert env["G1_LOCO_ENABLED"] == "fsm"
+    assert g1_sidecar._loco_config_error(env) is None
+    ids, err = lm.fsm_config(env)
+    assert err is None and ids.balance == 501 and ids.balance_reported == (501,)
 
 
 def test_arm_requires_fsm_on_the_robot_or_with_the_gate():
@@ -380,6 +423,40 @@ def test_limp_to_stand_to_balance(make_rig):
     assert rig.loco.sets() == [4, 500]
 
 
+def test_limp_to_stand_to_balance_501_and_the_arm_gate_opens(make_rig, monkeypatch):
+    # FSM_IDS is resolved from the env at import, as on the robot (profile env).
+    monkeypatch.setattr(g1_sidecar, "FSM_IDS", lm.fsm_config({"G1_FSM_ID_BALANCE": "501"})[0])
+    rig = make_rig(with_arms=True)
+    stand_then_balance(rig)
+    assert rig.loco.sets() == [4, 501]
+    assert g1_sidecar.fsm_state()["mode"] == "balance"
+    status, body = call(rig.base, "POST", "/arm", {"lease_generation": 1})
+    assert status == 200, body
+
+
+def test_balance_500_ignored_in_stand_hints_at_501(make_rig):
+    """g1-edu-4, 2026-10-29: SetFsmId(500) accepted, the robot stays in 4."""
+    rig = make_rig()
+    assert rig.post_mode("stand")[0] == 200
+    rig.clock.advance(2.1)
+    rig.poll()
+    rig.loco.stuck = True
+    status, body = rig.post_mode("balance")
+    assert status == 504 and body["code"] == "unconfirmed"
+    assert body["measured"]["fsm_id"] == 4
+    assert "3-DoF waist" in body["hint"] and "G1_FSM_ID_BALANCE=501" in body["error"]
+    # Conditional: a 1-DoF-waist G1 can fail to balance for another reason too.
+    assert "if this G1 has the 3-DoF waist" in body["hint"]
+    assert rig.loco.sets() == [4, 500]
+
+
+def test_unconfirmed_stand_has_no_balance_hint(make_rig):
+    rig = make_rig()
+    rig.loco.stuck = True
+    status, body = rig.post_mode("stand")
+    assert status == 504 and "hint" not in body and "3-DoF" not in body["error"]
+
+
 def test_balance_from_limp_is_a_bad_transition(make_rig):
     rig = make_rig()
     status, body = rig.post_mode("balance")
@@ -394,6 +471,59 @@ def test_stand_only_from_limp(make_rig, fsm, mode):
     status, body = rig.post_mode("stand")
     assert status == 409 and body["code"] == "bad_transition" and body["from"] == mode
     assert rig.loco.sets() == []
+
+
+def test_stand_from_zero_torque_names_limp_as_the_next_step_and_sends_nothing(make_rig):
+    """TASK-423: on 2026-10-29 the G1 sat at FSM 0 and Stand was refused with
+    nothing but bad_transition. The refusal now names Limp as the next step —
+    and still sends no RPC: every step stays an operator action."""
+    rig = make_rig(fsm=0)
+    status, body = rig.post_mode("stand")
+    assert status == 409 and body["code"] == "bad_transition"
+    assert body["from"] == "zero_torque" and body["next"] == "limp"
+    assert "command limp first" in body["error"]
+    assert rig.loco.sets() == []
+    # the operator's two explicit steps then work
+    status, body = rig.post_mode("limp")
+    assert status == 200 and body["from"] == "zero_torque"
+    status, body = rig.post_mode("stand")
+    assert status == 200 and body["from"] == "limp"
+    assert rig.loco.sets() == [1, 4]
+
+
+def test_balance_from_limp_names_stand_as_the_next_step(make_rig):
+    rig = make_rig()
+    status, body = rig.post_mode("balance")
+    assert status == 409 and body["next"] == "stand"
+    assert "command stand first" in body["error"]
+
+
+def test_a_next_step_without_a_hint_still_refuses_cleanly(make_rig, monkeypatch):
+    """next_step can return "balance", which has no NEXT_STEP_HINTS entry; the
+    refusal must stay a 409 with `next` set, never a KeyError."""
+    monkeypatch.setattr(lm, "next_step", lambda measured, target: "balance")
+    rig = make_rig(fsm=0)
+    status, body = rig.post_mode("stand")
+    assert status == 409 and body["code"] == "bad_transition"
+    assert body["next"] == "balance"
+    assert body["error"].endswith("the robot is in zero_torque")
+    assert rig.loco.sets() == []
+
+
+@pytest.mark.parametrize("measured,target,want", [
+    ("zero_torque", "stand", "limp"),
+    ("zero_torque", "balance", "limp"),
+    ("other", "stand", "limp"),
+    ("limp", "stand", "stand"),
+    ("limp", "balance", "stand"),
+    ("stand", "balance", "balance"),
+    ("balance", "stand", "limp"),
+    ("balance", "balance", None),
+    ("unknown", "stand", None),
+    ("limp", "walk", None),
+])
+def test_next_step(measured, target, want):
+    assert lm.next_step(measured, target) == want
 
 
 def test_unknown_mode_is_400(make_rig):
