@@ -50,8 +50,12 @@ class FakeSocket {
   send(data: string) {
     this.sent.push(JSON.parse(data));
   }
+  /** Like a real socket, a close ends in `onclose`. That is what clears the
+   *  section's heartbeat; without it the interval outlives the test. */
   close() {
+    if (this.readyState === 3) return;
     this.readyState = 3;
+    this.onclose?.();
   }
   open() {
     this.readyState = 1;
@@ -364,5 +368,21 @@ describe('KeyboardTeleopSection with the control lease', () => {
     expect(estop).not.toBeDisabled();
     fireEvent.click(estop);
     expect(estopSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // TASK-436: a heartbeat that outlived its test fired after the jsdom
+  // teardown, where Node 20 has no `WebSocket`, and failed the CI App job.
+  it('stops its heartbeat when the section unmounts', async () => {
+    capability(false);
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    const { unmount } = render(<KeyboardTeleopSection robot={robot} />);
+    await waitFor(() => expect(api.getControlLease).toHaveBeenCalledWith('g1-1'));
+    await connect();
+    const call = setIntervalSpy.mock.calls.findIndex(([, ms]) => ms === 100);
+    expect(call).toBeGreaterThanOrEqual(0);
+    const heartbeat = setIntervalSpy.mock.results[call].value;
+    unmount();
+    expect(clearIntervalSpy).toHaveBeenCalledWith(heartbeat);
   });
 });
