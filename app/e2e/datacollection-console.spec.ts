@@ -233,11 +233,17 @@ for (const phase of ['setup', 'record', 'wrap'] as const) {
 }
 
 test('the stuck bar sits 32 px under the TopBar, every TopBar control ≥ 48 px from the E-STOP', async ({ page }) => {
-  await page.setViewportSize({ width: 1512, height: 945 });
+  // 1512 wide; short enough that Set up scrolls (since TASK-427 it fits 1512×945 whole).
+  await page.setViewportSize({ width: 1512, height: 600 });
   await openSetup(page);
   const atRest = await page.getByTestId('session-command-bar').boundingBox();
   expect(atRest!.y).toBeGreaterThan(100);
-  await page.evaluate(() => window.scrollTo(0, 400));
+  // Jump, not glide: the page scrolls smoothly, and a probe mid-glide measures a moving bar.
+  await page.evaluate(() => {
+    document.documentElement.style.scrollBehavior = 'auto';
+    window.scrollTo(0, 400);
+  });
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
   await page.waitForTimeout(100);
   const bar = await page.getByTestId('session-command-bar').boundingBox();
   expect(Math.round(bar!.y)).toBe(88);
@@ -411,3 +417,159 @@ for (const [w, h] of [[390, 844], [1280, 800]] as const) {
     await context.close();
   });
 }
+
+// ---------------------------------------------------------------------------
+// TASK-427 — Set up: the guided rail with one lit action, and the preview.
+// ---------------------------------------------------------------------------
+test.describe('Set up (TASK-427)', () => {
+  /** Enabled kit primaries on screen (the E-STOP is `bg-stop`, not counted). */
+  const litPrimaries = (page: Page) =>
+    page.evaluate(() =>
+      [...document.querySelectorAll<HTMLButtonElement>('button.bg-primary')]
+        .filter((b) => !b.disabled && b.getClientRects().length > 0 && getComputedStyle(b).visibility !== 'hidden')
+        .map((b) => b.dataset.testid ?? b.textContent?.trim() ?? ''),
+    );
+
+  /** The page-wide nearest interactive element to the E-STOP, at the current scroll. */
+  const pageClearance = (page: Page) =>
+    page.evaluate(() => {
+      const estop = document.querySelector('[data-testid="session-estop"]') as HTMLElement;
+      const E = estop.getBoundingClientRect();
+      const sel = 'a[href], button, [role="switch"], [role="menuitem"], input, select, textarea';
+      let best = { d: Infinity, el: '' };
+      for (const el of document.querySelectorAll(sel)) {
+        if (el === estop || !(el as HTMLElement).getClientRects().length) continue;
+        let shown = true;
+        for (let p: Element | null = el; p; p = p.parentElement) {
+          const s = getComputedStyle(p);
+          if (s.display === 'none' || s.visibility === 'hidden') { shown = false; break; }
+        }
+        if (!shown) continue;
+        const r = el.getBoundingClientRect();
+        const d = Math.hypot(Math.max(0, E.left - r.right, r.left - E.right), Math.max(0, E.top - r.bottom, r.top - E.bottom));
+        if (d < best.d) {
+          best = { d: Math.round(d * 10) / 10, el: (el.getAttribute('data-testid') || el.getAttribute('aria-label') || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40) };
+        }
+      }
+      return best;
+    });
+
+  test('the current step is open and holds the page\'s one lit action; Start session is secondary', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await openSetup(page);
+    const robot = page.getByTestId('setup-step-robot');
+    // The demo robot side starts stopped: step 1 is current, open, and its Start is the one lit action.
+    await expect(robot).toHaveAttribute('data-state', 'current');
+    await expect(robot).toHaveAttribute('data-expanded', 'true');
+    await expect(robot.getByTestId('readiness-start')).toBeVisible();
+    expect(await litPrimaries(page)).toEqual(['readiness-start']);
+    const start = page.getByRole('button', { name: 'Start session' });
+    await expect(start).toBeEnabled();
+    await expect(start).not.toHaveClass(/bg-primary/);
+    await expect(page.getByTestId('setup-start-text')).toContainText('steps open. You can start anyway');
+    await expect(page.getByTestId('setup-progress')).toContainText('of 5 done');
+    // The rest of the steps, in bring-up order.
+    await expect(page.locator('[data-testid^="setup-step-"][data-state]')).toHaveCount(5);
+    for (const id of ['arm_control', 'stance', 'quest', 'operator']) {
+      await expect(page.getByTestId(`setup-step-${id}`)).toHaveAttribute('data-expanded', 'false');
+    }
+    // Opening another step moves the lit action with it: never two.
+    await page.getByTestId('setup-step-quest-toggle').click();
+    await expect(robot).toHaveAttribute('data-expanded', 'false');
+    expect((await litPrimaries(page)).length).toBeLessThanOrEqual(1);
+    await page.getByTestId('setup-step-quest-toggle').click();
+    await expect(robot).toHaveAttribute('data-expanded', 'true');
+    await page.screenshot({ ...shot('TASK-427-setup-1512.png') });
+  });
+
+  test('no duplicates in Set up: the Quest controls, "Open on headset" and the reason sentence once', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await openSetup(page);
+    await page.getByTestId('readiness-start').click();
+    // The demo robot side walks to "up, read-only": the reason moves to step 2.
+    const reason = page.getByTestId('setup-step-reason');
+    await expect(page.getByTestId('setup-step-arm_control').getByTestId('setup-step-reason')).toHaveAttribute('data-code', 'read_only', { timeout: 15_000 });
+    await expect(reason).toHaveCount(1);
+    const text = (await reason.textContent())!.trim();
+    const count = await page.evaluate((t) => document.body.innerHTML.split(t).length - 1, text);
+    expect(count, `"${text}" in the DOM`).toBe(1);
+    for (const id of ['quest-connect', 'quest-open', 'quest-copy-viewer-link', 'quest-connect-help']) {
+      await expect(page.getByTestId(id), id).toHaveCount(1);
+    }
+    await expect(page.getByTestId('setup-step-quest').getByTestId('quest-connect-help')).toHaveAttribute('data-mode', 'live');
+    expect(await page.evaluate(() => document.body.innerText.split('Open on headset').length - 1)).toBeLessThanOrEqual(1);
+    // Nothing from the old blocks is left in Set up.
+    for (const id of ['preflight', 'session-readiness', 'robot-readiness-compact', 'operator-card', 'session-lease-holder', 'session-hud']) {
+      await expect(page.getByTestId(id), id).toHaveCount(0);
+    }
+  });
+
+  test('every Set up function is one click away', async ({ page }) => {
+    await page.setViewportSize({ width: 1512, height: 945 });
+    await openSetup(page);
+    const open = async (id: string) => {
+      const step = page.getByTestId(`setup-step-${id}`);
+      if ((await step.getAttribute('data-expanded')) !== 'true') await page.getByTestId(`setup-step-${id}-toggle`).click();
+      return step;
+    };
+    await expect((await open('robot')).getByTestId('readiness-start')).toBeVisible();
+    await page.getByTestId('readiness-start').click();
+    await expect(page.getByTestId('setup-step-arm_control')).toHaveAttribute('data-state', /open|current/, { timeout: 15_000 });
+    await expect((await open('robot')).getByTestId('readiness-logs')).toBeVisible();
+    const arm = await open('arm_control');
+    await expect(arm.getByTestId('readiness-arm-control')).toBeVisible({ timeout: 15_000 });
+    // The demo has no control lease: the step says so where Take control would be.
+    await expect(arm.getByTestId('readiness-take-control').or(arm.getByTestId('readiness-arm-blocked'))).toBeVisible();
+    const stance = await open('stance');
+    for (const m of ['limp', 'stand', 'balance']) await expect(stance.getByTestId(`robot-mode-${m}`)).toBeVisible();
+    await expect(stance.getByTestId('robot-bringup')).toBeVisible({ timeout: 10_000 });
+    const quest = await open('quest');
+    for (const id of ['quest-connect', 'quest-open', 'quest-copy-viewer-link']) await expect(quest.getByTestId(id)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start session' })).toBeVisible();
+    const preview = page.getByTestId('setup-preview');
+    await expect(preview.getByTestId('live-view-switch')).toBeVisible();
+    await expect(preview.getByTestId('live-view-expand')).toBeVisible();
+    await expect(preview.getByTestId('session-twin')).toBeVisible();
+  });
+
+  for (const [w, h, min] of [[1280, 800, 48], [1512, 945, 64], [1920, 1080, 64]] as const) {
+    test(`the E-STOP stands alone page-wide in Set up at ${w}×${h} — step 3 open, Testing tools closed and open`, async ({ page }) => {
+      await page.setViewportSize({ width: w, height: h });
+      await openSetup(page);
+      await page.getByTestId('readiness-start').click();
+      await expect(page.getByTestId('robot-bringup')).toHaveCount(1, { timeout: 15_000 });
+      const notes: string[] = [];
+      const measure = async (label: string) => {
+        await page.evaluate(() => window.scrollTo(0, 0));
+        const c = await pageClearance(page);
+        notes.push(`${label} ${c.d} (${c.el})`);
+        expect(c.d, `${label}: nearest ${c.el}`).toBeGreaterThanOrEqual(min);
+      };
+      await measure('default');
+      await page.getByTestId('setup-step-stance-toggle').click();
+      await expect(page.getByTestId('setup-step-stance')).toHaveAttribute('data-expanded', 'true');
+      await measure('step 3 open');
+      await openTools(page);
+      await measure('step 3 + tools');
+      await page.keyboard.press('Escape');
+      if (w === 1512) await page.screenshot({ ...shot('TASK-427-setup-step3-1512.png') });
+      test.info().annotations.push({ type: 'clearance', description: `setup@${w}: ${notes.join(' · ')}` });
+    });
+  }
+
+  test('on a phone Set up has no horizontal scroll and Start session stays in the page', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openSetup(page);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    const start = page.getByRole('button', { name: 'Start session' });
+    // In the start bar, not in the dock (the dock holds only the E-STOP).
+    await expect(page.getByTestId('setup-start').getByRole('button', { name: 'Start session' })).toHaveCount(1);
+    await expect(page.getByTestId('estop-zone').getByRole('button', { name: 'Start session' })).toHaveCount(0);
+    await start.scrollIntoViewIfNeeded();
+    await expect(start).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ ...shot('TASK-427-setup-390.png') });
+    await page.screenshot({ ...shot('TASK-427-setup-390-full.png'), fullPage: true });
+  });
+});

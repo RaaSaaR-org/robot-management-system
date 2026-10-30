@@ -5,6 +5,7 @@
  *              on hover or expand. A step held by a process the supervisor did
  *              not start ("foreign") shows that process with Adopt and Leave —
  *              never Kill (D4). A running step shows a spinner with its detail.
+ *              Values wrap instead of truncating (TASK-427).
  * @feature robots
  */
 
@@ -94,7 +95,8 @@ export function ReadinessRow({ row, highlighted = false, onAdopt, onLeave, busy 
           )}
         </span>
         <span className="w-28 shrink-0 text-[13px] font-medium text-ink-primary">{row.label}</span>
-        <span className="min-w-0 flex-1 truncate text-[13px] text-ink-secondary" title={detail ?? undefined}>
+        {/* TASK-427: values wrap rather than truncate; the title keeps the raw value. */}
+        <span className="min-w-0 flex-1 break-words text-[13px] text-ink-secondary" title={detail ?? row.value}>
           {pending && detail ? detail : row.value}
         </span>
         {action}
