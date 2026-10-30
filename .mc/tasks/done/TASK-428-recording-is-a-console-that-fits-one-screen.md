@@ -3,7 +3,7 @@ id: "TASK-428"
 aliases: []
 title: "Recording is a console that fits one screen"
 slug: "recording-is-a-console-that-fits-one-screen"
-status: "review"
+status: "done"
 priority: 2
 owner: "huhn511"
 projects: []
