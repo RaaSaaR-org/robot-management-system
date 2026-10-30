@@ -3,7 +3,7 @@ id: "TASK-438"
 aliases: []
 title: "Ending teleop never latches a read-only sidecar's E-stop"
 slug: "ending-teleop-never-latches-a-read-only-sidecar-s-e-stop"
-status: "in-progress"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
