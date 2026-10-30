@@ -3,7 +3,7 @@ id: "TASK-437"
 aliases: []
 title: "The arm-control confirm takes control again when the lease ran out"
 slug: "the-arm-control-confirm-takes-control-again-when-the-lease"
-status: "in-progress"
+status: "done"
 priority: 1
 owner: "huhn511"
 projects: []
