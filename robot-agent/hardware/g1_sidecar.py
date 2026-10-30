@@ -75,9 +75,10 @@ on every interface in read_only mode and on 127.0.0.1 only in arm_sdk mode
   GET  /loco/mode     → {"ok", "fsm_id", "mode", "age_s", "fsm_mode", "odom_mode",
                          "source", "error", "loco": {...}, "in_flight",
                          "estop_latched"} — the MEASURED mode (FSM monitor, 2 Hz)
-  POST /loco/mode     → {"mode": "limp"|"stand"|"balance"} → SetFsmId(1 | 4 | 500),
+  POST /loco/mode     → {"mode": "limp"|"stand"|"balance"} → SetFsmId(1 | 4 | 500/501),
                         confirmed by GetFsmId. Stand only from measured limp,
-                        balance only from stand held >= 2 s, neither while the
+                        balance only from stand held >= 2 s (501 on a
+                        3-DoF-waist G1: G1_FSM_ID_BALANCE), neither while the
                         arms are engaged or the E-stop is latched; limp always
                         (it disarms first). Refusals carry a machine "code".
                         See g1_loco_mode.py for the whole table.
@@ -2403,6 +2404,7 @@ LOCO_FSM_NAMES = {
     1: "damp",
     3: "sit",
     500: "start",
+    501: "regular_3dof_waist",
     702: "lie_to_stand",
     706: "squat_stand",
 }

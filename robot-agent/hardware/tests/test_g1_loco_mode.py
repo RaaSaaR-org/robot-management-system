@@ -17,6 +17,7 @@ raw FSM id — and every change is measured before it is believed.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -240,6 +241,12 @@ def test_junk_gate_is_refused(raw):
     ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_STAND": "500"}, "not allowed"),
     ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_LIMP": "0"}, "fixed"),
     ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_BALANCE": "801"}, "only ever"),
+    ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_BALANCE": "4"}, "only ever"),
+    ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_BALANCE": "501"}, None),
+    ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_BALANCE": "501",
+      "G1_FSM_BALANCE_REPORTED": "501,801"}, None),
+    ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_ID_BALANCE": "501",
+      "G1_FSM_BALANCE_REPORTED": "500"}, "must include the commanded"),
     ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_BALANCE_REPORTED": "500,801"}, None),
     ({"G1_LOCO_ENABLED": "fsm", "G1_DDS_DOMAIN": "0", "G1_FSM_BALANCE_REPORTED": "500,4"}, "subset"),
 ])
@@ -283,6 +290,42 @@ def test_fsm_id_defaults_and_classification():
     assert [ids.classify(i) for i in (1, 4, 500, 801, 0, 706, None)] == [
         "limp", "stand", "balance", "other", "zero_torque", "other", "unknown"]
     assert lm.FSM_STAND_VERIFIED is False
+
+
+def test_balance_501_for_the_3dof_waist():
+    ids, err = lm.fsm_config({"G1_FSM_ID_BALANCE": "501"})
+    assert err is None
+    assert (ids.balance, ids.balance_reported) == (501, (501,))   # reported follows the command
+    assert [ids.classify(i) for i in (501, 500, 4)] == ["balance", "other", "stand"]
+
+
+def _profile_mode_env(name, mode):
+    """The `sidecar.modes.<mode>` env of a profile — a flat KEY: "value" map, read
+    without a YAML dependency (this suite needs only numpy + pytest)."""
+    path = os.path.join(HW, "profiles", name)
+    env, inside = {}, False
+    with open(path) as f:
+        for line in f:
+            stripped = line.strip()
+            if stripped == mode + ":":
+                inside = True
+                continue
+            if inside:
+                if not stripped or stripped.startswith("#"):
+                    continue
+                m = re.match(r"^\s{6}([A-Z0-9_]+):\s*\"?([^\"#]*?)\"?\s*(#.*)?$", line)
+                if not m:
+                    break
+                env[m.group(1)] = m.group(2)
+    return env
+
+
+def test_g1_edu_4_profile_balances_in_501():
+    env = _profile_mode_env("g1-edu-4.yaml", "arm_sdk")
+    assert env["G1_LOCO_ENABLED"] == "fsm"
+    assert g1_sidecar._loco_config_error(env) is None
+    ids, err = lm.fsm_config(env)
+    assert err is None and ids.balance == 501 and ids.balance_reported == (501,)
 
 
 def test_arm_requires_fsm_on_the_robot_or_with_the_gate():
@@ -378,6 +421,40 @@ def test_limp_to_stand_to_balance(make_rig):
     status, body = rig.post_mode("balance")
     assert status == 200 and body["fsm_id"] == 500
     assert rig.loco.sets() == [4, 500]
+
+
+def test_limp_to_stand_to_balance_501_and_the_arm_gate_opens(make_rig, monkeypatch):
+    # FSM_IDS is resolved from the env at import, as on the robot (profile env).
+    monkeypatch.setattr(g1_sidecar, "FSM_IDS", lm.fsm_config({"G1_FSM_ID_BALANCE": "501"})[0])
+    rig = make_rig(with_arms=True)
+    stand_then_balance(rig)
+    assert rig.loco.sets() == [4, 501]
+    assert g1_sidecar.fsm_state()["mode"] == "balance"
+    status, body = call(rig.base, "POST", "/arm", {"lease_generation": 1})
+    assert status == 200, body
+
+
+def test_balance_500_ignored_in_stand_hints_at_501(make_rig):
+    """g1-edu-4, 2026-10-29: SetFsmId(500) accepted, the robot stays in 4."""
+    rig = make_rig()
+    assert rig.post_mode("stand")[0] == 200
+    rig.clock.advance(2.1)
+    rig.poll()
+    rig.loco.stuck = True
+    status, body = rig.post_mode("balance")
+    assert status == 504 and body["code"] == "unconfirmed"
+    assert body["measured"]["fsm_id"] == 4
+    assert "3-DoF waist" in body["hint"] and "G1_FSM_ID_BALANCE=501" in body["error"]
+    # Conditional: a 1-DoF-waist G1 can fail to balance for another reason too.
+    assert "if this G1 has the 3-DoF waist" in body["hint"]
+    assert rig.loco.sets() == [4, 500]
+
+
+def test_unconfirmed_stand_has_no_balance_hint(make_rig):
+    rig = make_rig()
+    rig.loco.stuck = True
+    status, body = rig.post_mode("stand")
+    assert status == 504 and "hint" not in body and "3-DoF" not in body["error"]
 
 
 def test_balance_from_limp_is_a_bad_transition(make_rig):
