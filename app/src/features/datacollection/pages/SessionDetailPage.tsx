@@ -103,6 +103,7 @@ import {
   useDataCollectionStore, selectKept, selectTakeElapsedS, selectOperatorFor, selectStreakFor, selectViewersFor,
 } from '../store/datacollectionStore';
 import { useRobotsStore } from '../../robots/store/robotsStore';
+import { isSimRobot } from '../../robots/utils/simRobot';
 import { useTelemetryStream } from '../../robots/hooks/useTelemetryStream';
 import { JointStateGrid } from '../../robots/components/visualization';
 import { KeyboardTeleopSection } from '../../robots/components/tabs/TeleopTab';
@@ -607,7 +608,7 @@ export function SessionDetailPage() {
   const isPaused = session.status === 'paused';
   const isLive = isRecording || isPaused || session.status === 'created';
   const isVrSession = session.type === 'vr_quest' || session.type === 'vr_vision_pro';
-  const isSim = !!robot && (robot.id.startsWith('sim-') || /sim/i.test(robot.model ?? ''));
+  const isSim = !!robot && isSimRobot(robot);
   const liveFrameCount = live && (isRecording || isPaused)
     ? live.totalFrames
     : isRecording && typeof recordingProgress?.frameCount === 'number' ? recordingProgress.frameCount : session.frameCount;
@@ -662,7 +663,7 @@ export function SessionDetailPage() {
             </Button>
           }
         >
-          {showKeyboardFallback ? <KeyboardTeleopSection robot={robot} /> : null}
+          {showKeyboardFallback ? <KeyboardTeleopSection robot={robot} estop={false} /> : null}
         </TestingToolsRow>
       ) : null}
       {isLive ? (

@@ -9,6 +9,8 @@
  *              TASK-426: it stands alone in the command bar's right zone, in
  *              the display face with its Escape-twice hint; below 640 px the
  *              zone is the bottom dock and the button grows to 52 px.
+ *              TASK-453: the Teleop tab's keyboard section reuses it, with its
+ *              own reason and source in the E-stop log.
  * @feature datacollection
  * @apiCalls safetyApi.triggerRobotEStop
  */
@@ -28,24 +30,38 @@ export interface SessionEStopButtonProps {
   robotName: string;
   /** Bind the Escape-twice hotkey (default true) */
   hotkey?: boolean;
+  /** Why the E-stop log says it fired (default: the session page) */
+  reason?: string;
+  /** Who the E-stop log says fired it (default `session-page`) */
+  triggeredBy?: string;
+  /** The button's `data-testid` (default `session-estop`) */
+  testId?: string;
   className?: string;
 }
 
-export function SessionEStopButton({ robotId, robotName, hotkey = true, className }: SessionEStopButtonProps) {
+export function SessionEStopButton({
+  robotId,
+  robotName,
+  hotkey = true,
+  reason = 'E-STOP pressed on the data collection session page',
+  triggeredBy = 'session-page',
+  testId = 'session-estop',
+  className,
+}: SessionEStopButtonProps) {
   const [firing, setFiring] = useState(false);
   const lastEscape = useRef(Number.NEGATIVE_INFINITY);
 
   const fire = useCallback(async () => {
     setFiring(true);
     try {
-      await triggerRobotEStop(robotId, { reason: 'E-STOP pressed on the data collection session page', triggeredBy: 'session-page' });
+      await triggerRobotEStop(robotId, { reason, triggeredBy });
       toast.success('Emergency stop sent', { description: robotName });
     } catch (err) {
       toast.error("Couldn't send emergency stop", { description: `${robotName}: ${errorMessage(err)}` });
     } finally {
       setFiring(false);
     }
-  }, [robotId, robotName]);
+  }, [robotId, robotName, reason, triggeredBy]);
 
   useEffect(() => {
     if (!hotkey) return;
@@ -70,7 +86,7 @@ export function SessionEStopButton({ robotId, robotName, hotkey = true, classNam
       onClick={() => void fire()}
       isLoading={firing}
       loadingText="Stopping…"
-      data-testid="session-estop"
+      data-testid={testId}
       title="Emergency stop the robot (Escape twice)"
       aria-label={`Emergency stop ${robotName}`}
       leftIcon={<OctagonX className="h-[18px] w-[18px]" strokeWidth={1.75} />}
