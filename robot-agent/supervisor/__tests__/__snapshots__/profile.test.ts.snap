@@ -1,0 +1,91 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`checked-in profiles > neither checked-in profile names wrist cameras: the sidecar env is unchanged (TASK-446) > g1-edu-4.yaml arm_sdk 1`] = `
+{
+  "CYCLONEDDS_HOME": "/home/op/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/cyclonedds/install",
+  "G1_ALLOW_LIDAR_SWITCH": "0",
+  "G1_ARM_SDK_MAX_JOINT_VEL": "1.0",
+  "G1_CAMERA_SOURCE": "pc2cam",
+  "G1_DDS_DOMAIN": "0",
+  "G1_DDS_IFACE": "enp131s0",
+  "G1_FSM_BALANCE_REPORTED": "501",
+  "G1_FSM_ID_BALANCE": "501",
+  "G1_LOCO_ENABLED": "fsm",
+  "G1_LOWSTATE_ENDPOINT": "tcp://127.0.0.1:6001",
+  "G1_NET_INTERFACE": "enp131s0",
+  "G1_PC2_CAMERA_HOST": "192.168.123.164",
+  "G1_PC2_CAMERA_PORT": "5600",
+  "G1_ROBOT_ID": "g1-edu-4",
+  "G1_ROBOT_IP": "192.168.123.164",
+  "G1_SIDECAR_PORT": "8767",
+  "G1_WRITE_MODE": "arm_sdk",
+  "PATH": "/home/op/anaconda3/envs/unitree_sim_env6/bin:/usr/local/bin:/usr/bin:/bin",
+  "PYTHONIOENCODING": "utf-8",
+  "PYTHONUNBUFFERED": "1",
+}
+`;
+
+exports[`checked-in profiles > neither checked-in profile names wrist cameras: the sidecar env is unchanged (TASK-446) > g1-edu-4.yaml read_only 1`] = `
+{
+  "CYCLONEDDS_HOME": "/home/op/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/cyclonedds/install",
+  "G1_ALLOW_LIDAR_SWITCH": "0",
+  "G1_CAMERA_SOURCE": "pc2cam",
+  "G1_DDS_DOMAIN": "0",
+  "G1_DDS_IFACE": "enp131s0",
+  "G1_LOCO_ENABLED": "0",
+  "G1_LOWSTATE_ENDPOINT": "tcp://127.0.0.1:6001",
+  "G1_NET_INTERFACE": "enp131s0",
+  "G1_PC2_CAMERA_HOST": "192.168.123.164",
+  "G1_PC2_CAMERA_PORT": "5600",
+  "G1_ROBOT_ID": "g1-edu-4",
+  "G1_ROBOT_IP": "192.168.123.164",
+  "G1_SIDECAR_PORT": "8767",
+  "PATH": "/home/op/anaconda3/envs/unitree_sim_env6/bin:/usr/local/bin:/usr/bin:/bin",
+  "PYTHONIOENCODING": "utf-8",
+  "PYTHONUNBUFFERED": "1",
+}
+`;
+
+exports[`checked-in profiles > neither checked-in profile names wrist cameras: the sidecar env is unchanged (TASK-446) > sim-g1-edu-dev.yaml arm_sdk 1`] = `
+{
+  "CYCLONEDDS_HOME": "/home/op/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/cyclonedds/install",
+  "G1_ALLOW_LIDAR_SWITCH": "0",
+  "G1_ARM_SDK_MAX_JOINT_VEL": "1.0",
+  "G1_CAMERA_SOURCE": "none",
+  "G1_DDS_DOMAIN": "42",
+  "G1_DDS_IFACE": "lo",
+  "G1_LOCO_ENABLED": "fsm",
+  "G1_LOWSTATE_ENDPOINT": "tcp://127.0.0.1:16001",
+  "G1_NET_INTERFACE": "lo",
+  "G1_ROBOT_ID": "sim-g1-edu-dev",
+  "G1_ROBOT_IP": "127.0.0.1",
+  "G1_SIDECAR_HOST": "127.0.0.1",
+  "G1_SIDECAR_PORT": "18777",
+  "G1_SIM_BACKEND": "1",
+  "G1_WRITE_MODE": "arm_sdk",
+  "PATH": "/home/op/anaconda3/envs/unitree_sim_env6/bin:/usr/local/bin:/usr/bin:/bin",
+  "PYTHONIOENCODING": "utf-8",
+  "PYTHONUNBUFFERED": "1",
+}
+`;
+
+exports[`checked-in profiles > neither checked-in profile names wrist cameras: the sidecar env is unchanged (TASK-446) > sim-g1-edu-dev.yaml read_only 1`] = `
+{
+  "CYCLONEDDS_HOME": "/home/op/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/cyclonedds/install",
+  "G1_ALLOW_LIDAR_SWITCH": "0",
+  "G1_CAMERA_SOURCE": "none",
+  "G1_DDS_DOMAIN": "42",
+  "G1_DDS_IFACE": "lo",
+  "G1_LOCO_ENABLED": "0",
+  "G1_LOWSTATE_ENDPOINT": "tcp://127.0.0.1:16001",
+  "G1_NET_INTERFACE": "lo",
+  "G1_ROBOT_ID": "sim-g1-edu-dev",
+  "G1_ROBOT_IP": "127.0.0.1",
+  "G1_SIDECAR_HOST": "127.0.0.1",
+  "G1_SIDECAR_PORT": "18777",
+  "G1_SIM_BACKEND": "1",
+  "PATH": "/home/op/anaconda3/envs/unitree_sim_env6/bin:/usr/local/bin:/usr/bin:/bin",
+  "PYTHONIOENCODING": "utf-8",
+  "PYTHONUNBUFFERED": "1",
+}
+`;

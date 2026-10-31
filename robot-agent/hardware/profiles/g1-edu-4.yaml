@@ -26,6 +26,10 @@ nmProfile: g1-robot-lan
 robotIp: 192.168.123.164          # PC2: answers ping, serves the head camera
 hostIp: 192.168.123.222/24        # this workstation on the robot LAN
 pc2Camera: 192.168.123.164:5600   # g1-head-cam.service on PC2 (a warning if absent)
+# Wrist cameras (optional; see the wrist camera notes in docs/g1-edu-lab-bringup.md).
+# wristCameras:
+#   left: 192.168.123.164:5601
+#   right: 192.168.123.164:5602
 ddsDomain: 0                      # 0 = THE REAL ROBOT — allowed only with robot: real
 
 python: ${HOME}/anaconda3/envs/unitree_sim_env6/bin/python
