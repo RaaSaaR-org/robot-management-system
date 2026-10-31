@@ -22,7 +22,7 @@ import { sessionName } from '../utils/sessionFormat';
 import type { TeleoperationSession, TeleoperationStatus } from '../types/datacollection.types';
 
 export const LIVE_SESSION_POLL_MS = 2_000;
-/** Statuses the page asks the server for; `created` is then age-filtered. */
+/** Statuses the page asks the server for; `created` is then age-filtered, the others idle-filtered. */
 export const LIVE_SESSION_STATUSES: TeleoperationStatus[] = ['created', 'recording', 'paused'];
 /** A READY session nobody started for this long is not the one the desktop means (D2). */
 export const LIVE_CREATED_MAX_AGE_MS = 4 * 60 * 60 * 1000;
@@ -108,7 +108,7 @@ const STATUS_WORD: Partial<Record<TeleoperationStatus, string>> = {
 export interface LiveSessionRedirectProps {
   pollMs?: number;
   api?: Pick<typeof datacollectionApi, 'listSessions'>;
-  /** Clock for the `created` age filter; tests pin it. */
+  /** Clock for the age and idle filters; tests pin it. */
   now?: () => number;
 }
 

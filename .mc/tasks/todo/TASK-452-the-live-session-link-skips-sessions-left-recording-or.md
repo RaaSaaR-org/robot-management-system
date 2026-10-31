@@ -58,15 +58,17 @@ must stop counting, the same way READY sessions already age out after 4 hours.
 
 - `app/src/features/datacollection/pages/LiveSessionRedirect.tsx`
 - `app/src/features/datacollection/pages/__tests__/LiveSessionRedirect.test.tsx`
+- `app/e2e/live/quest-live-link-and-takes.spec.ts` (precondition and "Ignoring" pattern)
+- `docs/data-collection-two-person.md` (the runbook's description of the live link)
 
 ## Acceptance Criteria
 
-- [ ] Only a 2-day-old `paused` session for the robot → no redirect; the page waits and names it
+- [x] Only a 2-day-old `paused` session for the robot → no redirect; the page waits and names it
       as ignored.
-- [ ] A fresh `recording` session plus a 2-day-old `paused` one → the page redirects to the fresh
+- [x] A fresh `recording` session plus a 2-day-old `paused` one → the page redirects to the fresh
       one, with no chooser.
-- [ ] A `paused` session last active 1 hour ago still counts.
-- [ ] `created` sessions still age out after 4 h, unchanged.
+- [x] A `paused` session last active 1 hour ago still counts.
+- [x] `created` sessions still age out after 4 h, unchanged.
 
 ## Test Strategy
 
