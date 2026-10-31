@@ -23,6 +23,7 @@ import { socialDemoHandlers } from './socialDemoHandlers';
 import { experimentsDemoHandlers } from './experimentsDemoHandlers';
 import { readinessDemoHandlers } from './readinessDemoHandlers';
 import { teleopTakesDemoHandlers } from './teleopTakesDemoHandlers';
+import { cameraDemoHandlers } from './cameraDemoHandlers';
 import { liveSessionDemoHandlers } from './liveSessionDemoHandlers';
 import type { AgentModeState } from '@/features/agentmode/types/agentmode.types';
 import type { FleetSafetyStatus, RobotSafetyStatus } from '@/features/safety/types/safety.types';
@@ -47,6 +48,8 @@ export const handlers = [
   ...liveSessionDemoHandlers,
   // Explicit takes on one demo recording session (TASK-410)
   ...teleopTakesDemoHandlers,
+  // A pinned camera list for one robot, for the Head + wrists session (TASK-441)
+  ...cameraDemoHandlers,
 
   // ========================================================================
   // Health
