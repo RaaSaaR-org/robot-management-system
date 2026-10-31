@@ -3,7 +3,7 @@ id: "TASK-452"
 aliases: []
 title: "The live session link skips sessions left recording or paused for more than 12 hours"
 slug: "the-live-session-link-skips-sessions-left-recording-or"
-status: "in-progress"
+status: "done"
 priority: 2
 owner: "claude"
 projects: []
