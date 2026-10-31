@@ -1,7 +1,11 @@
 /**
  * @file TeleopTab.tsx
- * @description Teleoperation tab — keyboard teleop and VR teleop (Meta Quest), one panel each
+ * @description Teleoperation tab — keyboard teleop and VR teleop (Meta Quest), one panel each.
+ *              The keyboard panel carries its own E-STOP, alone at the far right
+ *              of its header, and names the robot it drives, real or simulated
+ *              (TASK-453).
  * @feature robots
+ * @apiCalls safetyApi.triggerRobotEStop
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -14,6 +18,8 @@ import { ControlLeaseBar } from './ControlLeaseBar';
 import { useControlLease, type LeaseSocket } from '../../hooks/useControlLease';
 import { openTeleopSocket } from './vr/vrUrls';
 import { RobotReadinessPanel, type ReadinessLease } from '../readiness/RobotReadinessPanel';
+import { SessionEStopButton } from '../../../datacollection/components/session/SessionEStopButton';
+import { isSimRobot } from '../../utils/simRobot';
 
 // ============================================================================
 // TYPES & HELPERS
@@ -55,7 +61,8 @@ const KEY_DISPLAY: Array<{ keys: string[]; label: string }> = [
   { keys: ['↑', '↓'], label: 'Select joint' },
   { keys: ['←', '→'], label: 'Move joint' },
   { keys: ['H'], label: 'Home' },
-  { keys: ['Space'], label: 'Stop' },
+  // Space zeroes joint velocity only; a real robot's arms stay armed (TASK-453).
+  { keys: ['Space'], label: 'Stop joints (not an E-stop)' },
 ];
 
 /** Turn a URDF-style joint name into a sentence-case label (`left_elbow_joint` → `Left elbow`). */
@@ -92,10 +99,17 @@ const TAKE_BIND_MS = 8_000;
 export function KeyboardTeleopSection({
   robot,
   onLeaseChange,
+  estop = true,
 }: {
   robot: TeleopTabProps['robot'];
   /** This section's control lease, for the readiness panel's lease-gated steps (TASK-411). */
   onLeaseChange?: (lease: ReadinessLease) => void;
+  /**
+   * Show the section's own E-STOP (TASK-453). The session page embeds this
+   * section under its command bar's E-STOP and turns it off: one E-STOP per
+   * page, and one Escape-twice binding.
+   */
+  estop?: boolean;
 }) {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -387,6 +401,7 @@ export function KeyboardTeleopSection({
   useEffect(() => () => disconnect(), [disconnect]);
 
   const selectedJoint = joints[selected];
+  const isSim = isSimRobot(robot);
 
   return (
     <Panel>
@@ -394,8 +409,8 @@ export function KeyboardTeleopSection({
         title="Keyboard teleop"
         description={
           connected && robotType
-            ? `${robotType.toUpperCase()} · ${joints.length} joints · simulation`
-            : 'Drive single joints of the simulated robot from the keyboard.'
+            ? `${robot.name} · ${robotType.toUpperCase()} · ${joints.length} joints · ${isSim ? 'simulation' : 'real robot'}`
+            : `Drive single joints of the ${isSim ? 'simulated' : 'real'} robot ${robot.name} from the keyboard.`
         }
         actions={
           <>
@@ -417,13 +432,33 @@ export function KeyboardTeleopSection({
                 Connect
               </Button>
             )}
+            {estop && (
+              <>
+                {/* The clear gap: holds nothing, ever. 8 + 48 + 8 + 1 + 16 = 81 px to the E-STOP. */}
+                <div aria-hidden className="w-12 flex-none max-sm:hidden" />
+                {/* The E-STOP alone at the far right; below 640 px it takes its own row, 48 px under Connect. */}
+                <div
+                  role="group"
+                  aria-label="Emergency stop"
+                  data-testid="teleop-estop-zone"
+                  className="flex flex-none items-center border-l border-line pl-4 max-sm:basis-full max-sm:justify-end max-sm:border-l-0 max-sm:pl-0 max-sm:pt-10"
+                >
+                  <SessionEStopButton
+                    robotId={robot.id}
+                    robotName={robot.name}
+                    reason="E-STOP pressed on the robot's keyboard teleop tab"
+                    triggeredBy="teleop-tab"
+                    testId="teleop-estop"
+                  />
+                </div>
+              </>
+            )}
           </>
         }
       />
       <Panel.Body className="flex flex-col gap-4">
-        {lease.enabled && (
-          <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robot.name} connected={connected} />
-        )}
+        {/* The key legend comes first: it holds no control, so it keeps the lease
+            bar's buttons >= 64 px below the header's E-STOP (TASK-453). */}
         <Panel variant="inset" padding="sm">
           <ul className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4" aria-label="Keyboard controls">
             {KEY_DISPLAY.map(({ keys, label }) => (
@@ -436,6 +471,9 @@ export function KeyboardTeleopSection({
             ))}
           </ul>
         </Panel>
+        {lease.enabled && (
+          <ControlLeaseBar lease={lease} robotId={robot.id} robotName={robot.name} connected={connected} />
+        )}
 
         {!connected ? (
           <EmptyState
