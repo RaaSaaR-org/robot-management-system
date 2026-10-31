@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const { mockPrisma, mockDatasetRepository, mockRobotTypeRepository } = vi.hoisted(() => ({
   mockPrisma: {
     teleoperationSession: {
+      create: vi.fn(),
       findUnique: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
@@ -818,6 +819,84 @@ describe('TeleoperationService', () => {
       });
       // The sim recorder seeds itself from persisted frames; it must not have run.
       expect(mockPrisma.teleoperationFrame.aggregate).not.toHaveBeenCalled();
+    });
+
+    describe('the cameras a session records (TASK-441)', () => {
+      const HEAD_AND_WRISTS = ['head_camera', 'left_wrist_camera', 'right_wrist_camera'];
+
+      it('asks the robot for every camera the session named, head first', async () => {
+        mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+          ...CREATED,
+          cameras: JSON.stringify(HEAD_AND_WRISTS),
+        });
+        mockAgentRecording.start.mockResolvedValue(AGENT_STATUS);
+        await service.startSession('session-1');
+        expect(mockAgentRecording.start.mock.calls[0]![1].cameras).toEqual(HEAD_AND_WRISTS);
+      });
+
+      it.each([
+        ['null (no list chosen)', null],
+        ['absent (a row from before the column)', undefined],
+        ['an empty list', '[]'],
+        ['not a list of names', '{"head":true}'],
+      ])('sends no cameras field at all when the stored list is %s', async (_label, stored) => {
+        // The regression guard for head-only sessions: the request must be the
+        // one main sends, not `cameras: []` (joints only) and not `null`.
+        mockPrisma.teleoperationSession.findUnique.mockResolvedValue({ ...CREATED, cameras: stored });
+        mockAgentRecording.start.mockResolvedValue(AGENT_STATUS);
+        await service.startSession('session-1');
+        const dto = mockAgentRecording.start.mock.calls[0]![1];
+        expect('cameras' in dto).toBe(false);
+        expect(dto).toEqual({
+          sessionId: 'session-1',
+          fps: 30,
+          task: 'Pick up the cube',
+          inputMode: 'vr_quest',
+          startBetweenTakes: true,
+        });
+      });
+
+      it("says which camera is missing in the robot's words, and starts nothing", async () => {
+        mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+          ...CREATED,
+          cameras: JSON.stringify(HEAD_AND_WRISTS),
+        });
+        mockAgentRecording.start.mockRejectedValue(
+          new AgentRecordingRefused(
+            'left_wrist_camera is not being served — check the camera or start a Head only session',
+            409,
+            'CAMERA_NOT_SERVED',
+          ),
+        );
+        const start = service.startSession('session-1');
+        // An operational error, so the route answers with the sentence itself.
+        await expect(start).rejects.toMatchObject({ statusCode: 409, isOperational: true });
+        await expect(start).rejects.toThrow(
+          /^The robot cannot record this session: left_wrist_camera is not being served — .*Head only session\.$/,
+        );
+        expect(mockPrisma.teleoperationSession.update).not.toHaveBeenCalled();
+        expect(mockPrisma.teleoperationFrame.aggregate).not.toHaveBeenCalled();
+      });
+
+      it('stores the list as JSON on create and answers it parsed; no list is null', async () => {
+        mockPrisma.teleoperationSession.create.mockImplementation(
+          async (args: { data: Record<string, unknown> }) => ({ ...CREATED, ...args.data }),
+        );
+        const withCameras = await service.createSession({
+          operatorId: 'op-1',
+          robotId: 'robot-1',
+          type: 'vr_quest',
+          cameras: HEAD_AND_WRISTS,
+        });
+        expect(mockPrisma.teleoperationSession.create.mock.calls[0]![0].data.cameras).toBe(
+          JSON.stringify(HEAD_AND_WRISTS),
+        );
+        expect(withCameras.cameras).toEqual(HEAD_AND_WRISTS);
+
+        const headOnly = await service.createSession({ operatorId: 'op-1', robotId: 'robot-1', type: 'vr_quest' });
+        expect(mockPrisma.teleoperationSession.create.mock.calls[1]![0].data.cameras).toBeNull();
+        expect(headOnly.cameras).toBeNull();
+      });
     });
 
     it('writes down WHICH recorder ran, because endSession has to ask the same one to stop', async () => {

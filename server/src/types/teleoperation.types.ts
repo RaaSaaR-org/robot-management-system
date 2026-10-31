@@ -64,6 +64,12 @@ export interface TeleoperationSession {
   agentDatasetPath?: string | null;
   /** Per-take auto-stop in seconds (TASK-406); null = the operator ends each take. */
   episodeTimeS?: number | null;
+  /**
+   * The cameras every take records, as stored: a JSON array of camera names,
+   * head first (TASK-441). Null = the recorder's default, the head camera only.
+   * Responses carry it parsed — see `SessionResponse.cameras`.
+   */
+  cameras?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -146,6 +152,11 @@ export interface CreateSessionDto {
   episodeTimeS?: number;
   /** Hardware recording: HF-style repo_id for the dataset */
   datasetRepoId?: string;
+  /**
+   * Cameras every take records, head first (TASK-441): 1-4 unique names.
+   * Absent = the head camera only, decided by the recorder.
+   */
+  cameras?: string[];
 }
 
 /**
@@ -199,7 +210,9 @@ export interface ExportSessionDto {
 /**
  * Session response with computed fields
  */
-export interface SessionResponse extends TeleoperationSession {
+export interface SessionResponse extends Omit<TeleoperationSession, 'cameras'> {
+  /** The cameras every take records (TASK-441); null = the head camera only. */
+  cameras: string[] | null;
   operator?: {
     id: string;
     name: string;

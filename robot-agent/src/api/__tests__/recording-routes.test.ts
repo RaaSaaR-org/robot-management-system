@@ -230,6 +230,17 @@ describe('episode recording routes', () => {
     expect(await res.json()).toEqual({ code: 'RECORDING_REFUSED', message });
   });
 
+  it('answers a camera that is not served with 409 CAMERA_NOT_SERVED and the sentence naming it (TASK-441)', async () => {
+    const message = 'left_wrist_camera is not being served — check the camera or start a Head only session';
+    controller.start.mockRejectedValueOnce(new RecordingError(message, 'CAMERA_NOT_SERVED', 409));
+    const res = await post('/robots/robot-1/recording/start', {
+      sessionId: 'session-1',
+      cameras: ['head_camera', 'left_wrist_camera'],
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ code: 'CAMERA_NOT_SERVED', message });
+  });
+
   it('turns "not recording" from next-episode into a 409', async () => {
     controller.nextEpisode.mockImplementationOnce(() => {
       throw new RecordingError('not recording', 'RECORDING_REFUSED', 409);
