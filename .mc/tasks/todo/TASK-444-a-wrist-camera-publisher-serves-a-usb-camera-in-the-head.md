@@ -3,7 +3,7 @@ id: "TASK-444"
 aliases: []
 title: "A wrist camera publisher serves a USB camera in the head camera's wire format"
 slug: "a-wrist-camera-publisher-serves-a-usb-camera-in-the-head"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "claude"
 projects: []
