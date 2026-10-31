@@ -419,8 +419,8 @@ env G1_WRITE_MODE=arm_sdk \
 ```
 
 With wrist cameras, add
-`G1_WRIST_CAMERAS=left_wrist_camera@192.168.123.164:5601,right_wrist_camera@192.168.123.164:5602`
-(left first; the supervisor composes the same value from the profile's `wristCameras`).
+`G1_WRIST_CAMERAS=left_wrist_camera@<publisher host>:5601,right_wrist_camera@<publisher host>:5602`
+(left first, ports as in "Wrist cameras (TASK-444)"; the supervisor composes the same value from the profile's `wristCameras`).
 Leave it unset for a head-camera-only robot.
 
 `G1_ARM_SDK_MAX_JOINT_VEL=1.0` is a deliberately slow first session; the
