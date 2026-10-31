@@ -3,7 +3,7 @@ id: "TASK-440"
 aliases: []
 title: "The sim robot has a left and a right wrist camera"
 slug: "the-sim-robot-has-a-left-and-a-right-wrist-camera"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "claude"
 projects: []
