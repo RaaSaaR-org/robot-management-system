@@ -56,6 +56,7 @@ import { EventEmitter } from 'events';
 import type { RobotStateManager } from '../robot/state.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
 import { config } from '../config/config.js';
+import { sceneCameraForPolicyKey } from '../recording/camera-map.js';
 import type { RolloutStrategy } from './types.js';
 import {
   resolveActionContract,
@@ -1778,49 +1779,59 @@ export class SkillExecutor {
   }
 
   /**
-   * Hardware capture: fetch joint state + one snapshot per expected camera,
-   * map the sidecar's physical cameras onto the names vla-server expects.
+   * Hardware capture: fetch joint state + one snapshot per sidecar camera the
+   * policy needs, filled into the camera names vla-server expects.
    *
-   * vla-server's /config returns the camera names the model was trained
-   * on (e.g. ['up', 'side'] for SmolVLA). The sidecar exposes physical
-   * cameras by their local names (e.g. ['wrist', 'top']). We map by
-   * position: the k-th vla-server camera gets filled with the k-th
-   * sidecar camera's snapshot. Matches the sim path's behavior.
+   * vla-server's /config returns the camera names the model was trained on
+   * (`['cam_left_high', 'cam_right_high']` for g1_dex3_2cam, `['ego_view']`
+   * for the apple configs). The sidecar lists its physical cameras by their
+   * scene names (`head_camera`, `left_wrist_camera`, ...). Each policy name is
+   * filled BY NAME through the inverse of the recording camera map
+   * (`sceneCameraForPolicyKey`): `cam_right_high` <- `head_camera`,
+   * `cam_left_high` <- `ego_camera`, a wrist key <- only the matching wrist,
+   * and anything else, or a view the sidecar does not list, <- the head
+   * camera (the first listed camera when there is no head camera). Mapping by
+   * list position fed a wrist view into a head slot as soon as a sidecar
+   * listed wrist cameras (TASK-449).
+   *
+   * Only the distinct cameras the mapping picks are fetched. With no sidecar
+   * camera at all, every name gets the synthetic gray frame.
    */
   private async captureHardware(
     vlaConfig: VlaConfig,
   ): Promise<[Record<string, string>, number[]]> {
     const sidecarCameras = await hardwareClient.getCameras();
-    const physicalCount = sidecarCameras.length;
 
-    // Parallel fetch all snapshots + joint state.
-    const needed = vlaConfig.cameras.length;
-    const physicalToUse = sidecarCameras.slice(0, Math.max(needed, 1));
+    const source = new Map<string, string | undefined>();
+    for (const vlaName of vlaConfig.cameras) {
+      source.set(vlaName, sceneCameraForPolicyKey(null, vlaName, sidecarCameras));
+    }
+    const toFetch = [
+      ...new Set([...source.values()].filter((n): n is string => n !== undefined)),
+    ];
 
+    // Parallel fetch the snapshots + joint state.
     const [snapshots, state] = await Promise.all([
       Promise.all(
-        physicalToUse.map((name) =>
-          hardwareClient.snapshot(name).then((b64) => ({ name, b64 })),
+        toFetch.map((name) =>
+          hardwareClient.snapshot(name).then((b64) => [name, b64] as const),
         ),
       ),
       hardwareClient.getStateNow(),
     ]);
+    const frames = new Map<string, string>(snapshots);
 
-    // Map snapshots onto the vla-server camera names by position. If there
-    // are more expected cameras than physical cameras, reuse the last
-    // physical frame so the model still gets a valid JPEG for every name.
     const images: Record<string, string> = {};
-    for (let i = 0; i < vlaConfig.cameras.length; i++) {
-      const vlaName = vlaConfig.cameras[i];
-      const snap = snapshots[Math.min(i, snapshots.length - 1)];
-      images[vlaName] = snap ? snap.b64 : SYNTHETIC_GRAY_JPEG_B64;
+    for (const vlaName of vlaConfig.cameras) {
+      const physical = source.get(vlaName);
+      images[vlaName] =
+        (physical !== undefined ? frames.get(physical) : undefined) ?? SYNTHETIC_GRAY_JPEG_B64;
     }
 
     // Pad/truncate state to vla-server's expected dim.
     const padded = state.slice(0, vlaConfig.stateDim);
     while (padded.length < vlaConfig.stateDim) padded.push(0);
 
-    void physicalCount;
     return [images, padded];
   }
 

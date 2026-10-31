@@ -2115,3 +2115,138 @@ describe('SkillExecutor — what a 43-DOF humanoid is allowed to be commanded wi
     expect(byIndex).not.toHaveBeenCalled();
   });
 });
+
+// ─── Cameras by name (TASK-449) ─────────────────────────────────────────────
+
+describe('SkillExecutor — a policy gets its cameras by name, not by list position', () => {
+  const HEAD = 'head_camera';
+  const LEFT = 'left_wrist_camera';
+  const RIGHT = 'right_wrist_camera';
+  const EGO = 'ego_camera';
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * One `captureHardware` against a sidecar that lists `cameras`, whose
+   * snapshot answers with the camera's own name — so each image says which
+   * camera filled it. Returns the images and the cameras actually fetched.
+   */
+  async function capture(
+    policyCameras: string[],
+    cameras: string[],
+  ): Promise<{ images: Record<string, string>; fetched: string[] }> {
+    vi.spyOn(hardwareClient, 'getCameras').mockResolvedValue(cameras);
+    const snap = vi
+      .spyOn(hardwareClient, 'snapshot')
+      .mockImplementation(async (name: string) => `jpeg:${name}`);
+    vi.spyOn(hardwareClient, 'getStateNow').mockResolvedValue([0, 0, 0, 0, 0, 0]);
+    const exec = new SkillExecutor(makeStateManager(), makeFakeFetch(() => {
+      throw new Error('no vla-server call expected');
+    }));
+    const vlaConfig = { cameras: policyCameras, stateDim: 6, chunkSize: 4, actionDim: null };
+    const [images] = await (
+      exec as unknown as {
+        captureHardware(c: typeof vlaConfig): Promise<[Record<string, string>, number[]]>;
+      }
+    ).captureHardware(vlaConfig);
+    return { images, fetched: snap.mock.calls.map((c) => c[0] as string) };
+  }
+
+  const ORDERS = [
+    [HEAD, LEFT, RIGHT],
+    [LEFT, HEAD, RIGHT],
+    [RIGHT, LEFT, HEAD],
+    [LEFT, RIGHT, HEAD],
+  ];
+
+  it('g1_dex3_2cam gets the head frame in both high slots, whatever the list order', async () => {
+    for (const order of ORDERS) {
+      const { images, fetched } = await capture(['cam_left_high', 'cam_right_high'], order);
+      expect(images).toEqual({ cam_left_high: `jpeg:${HEAD}`, cam_right_high: `jpeg:${HEAD}` });
+      // One distinct camera picked, one snapshot — no wrist frame nobody uses.
+      expect(fetched).toEqual([HEAD]);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('a wrist config gets the matching wrist cameras, whatever the list order', async () => {
+    const policy = ['cam_left_high', 'cam_right_high', 'cam_left_wrist', 'cam_right_wrist'];
+    for (const order of ORDERS) {
+      const { images, fetched } = await capture(policy, order);
+      expect(images).toEqual({
+        cam_left_high: `jpeg:${HEAD}`,
+        cam_right_high: `jpeg:${HEAD}`,
+        cam_left_wrist: `jpeg:${LEFT}`,
+        cam_right_wrist: `jpeg:${RIGHT}`,
+      });
+      expect([...fetched].sort()).toEqual([HEAD, LEFT, RIGHT].sort());
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('cam_left_high gets ego_camera when the sidecar lists it, the head camera when not', async () => {
+    const withEgo = await capture(['cam_left_high', 'cam_right_high'], [EGO, HEAD]);
+    expect(withEgo.images).toEqual({ cam_left_high: `jpeg:${EGO}`, cam_right_high: `jpeg:${HEAD}` });
+    vi.restoreAllMocks();
+    const withoutEgo = await capture(['cam_left_high'], [HEAD, RIGHT]);
+    expect(withoutEgo.images).toEqual({ cam_left_high: `jpeg:${HEAD}` });
+  });
+
+  it('a missing wrist and an unknown name fall back to the head camera', async () => {
+    const { images, fetched } = await capture(
+      ['cam_left_wrist', 'cam_right_wrist', 'up', 'side'],
+      [RIGHT, HEAD],
+    );
+    expect(images).toEqual({
+      cam_left_wrist: `jpeg:${HEAD}`,
+      cam_right_wrist: `jpeg:${RIGHT}`,
+      up: `jpeg:${HEAD}`,
+      side: `jpeg:${HEAD}`,
+    });
+    expect([...fetched].sort()).toEqual([HEAD, RIGHT].sort());
+  });
+
+  it('no head camera listed gives the first listed camera; none listed gives the gray frame', async () => {
+    const noHead = await capture(['cam_right_high', 'up'], ['wrist', 'top']);
+    expect(noHead.images).toEqual({ cam_right_high: 'jpeg:wrist', up: 'jpeg:wrist' });
+    expect(noHead.fetched).toEqual(['wrist']);
+    vi.restoreAllMocks();
+
+    const none = await capture(['cam_left_high', 'cam_right_high'], []);
+    expect(none.fetched).toEqual([]);
+    expect(Object.keys(none.images)).toEqual(['cam_left_high', 'cam_right_high']);
+    expect(none.images.cam_left_high).toBe(none.images.cam_right_high);
+    expect(none.images.cam_left_high).not.toMatch(/^jpeg:/);
+    expect(none.images.cam_left_high.length).toBeGreaterThan(0);
+  });
+
+  // Regression: what positional mapping gave a one-camera config is the first
+  // listed camera. Every sidecar that runs one today lists the head camera
+  // first (the real robot's head-only list, the sorted teleimager list, the
+  // sims' MJCF order) or has no head camera at all (SO-101) — and for all of
+  // them the by-name lookup picks that same camera, with one snapshot.
+  it('one-camera configs and the head-only real robot get exactly the input they got before', async () => {
+    const sidecars = [
+      [HEAD], // real G1, pc2cam / RealSense: head only
+      [HEAD, LEFT, RIGHT], // teleimager (sorted) and the TASK-440 sims
+      [HEAD, EGO], // the apple scene's MJCF order
+      ['wrist', 'top'], // SO-101
+      ['front'],
+    ];
+    const oneCamConfigs = [['ego_view'], ['cam_right_high'], ['front'], ['up']];
+    for (const cameras of sidecars) {
+      for (const policy of oneCamConfigs) {
+        const { images, fetched } = await capture(policy, cameras);
+        expect(images).toEqual({ [policy[0]]: `jpeg:${cameras[0]}` });
+        expect(fetched).toEqual([cameras[0]]);
+        vi.restoreAllMocks();
+      }
+    }
+    // A head-only sidecar fills a two-camera config with the head frame, as before.
+    const twoCam = await capture(['cam_left_high', 'cam_right_high'], [HEAD]);
+    expect(twoCam.images).toEqual({ cam_left_high: `jpeg:${HEAD}`, cam_right_high: `jpeg:${HEAD}` });
+    expect(twoCam.fetched).toEqual([HEAD]);
+  });
+});
