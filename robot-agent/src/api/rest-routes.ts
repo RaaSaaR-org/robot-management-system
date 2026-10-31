@@ -1912,7 +1912,12 @@ export function createRestRoutes(
       if (res.headersSent) return;
       switch (list.kind) {
         case 'ok':
-          res.json({ cameras: list.cameras, source: list.source, ...(list.detail ? { detail: list.detail } : {}) });
+          res.json({
+            cameras: list.cameras,
+            source: list.source,
+            ...(list.detail ? { detail: list.detail } : {}),
+            ...(list.configured ? { configured: list.configured } : {}),
+          });
           return;
         case 'bad_status':
           res.status(502).json({ code: 'CAMERA_UNAVAILABLE', message: `sidecar answered ${list.status} for the camera list` });

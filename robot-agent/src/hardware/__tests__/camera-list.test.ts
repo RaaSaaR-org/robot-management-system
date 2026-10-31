@@ -36,6 +36,29 @@ describe('readCameraList', () => {
     expect(await readCameraList()).toEqual({ kind: 'ok', cameras: ['head_camera'], source: 'pc2', detail: 'ok' });
   });
 
+  it('passes configured through when it is a list of names (TASK-445)', async () => {
+    const { readCameraList } = await load();
+    reply = (res) => res.end(JSON.stringify({
+      cameras: ['head_camera'],
+      source: 'pc2cam',
+      configured: ['head_camera', 'left_wrist_camera'],
+    }));
+    expect(await readCameraList()).toEqual({
+      kind: 'ok',
+      cameras: ['head_camera'],
+      source: 'pc2cam',
+      configured: ['head_camera', 'left_wrist_camera'],
+    });
+  });
+
+  it('leaves configured out when the sidecar sends none, or sends something else', async () => {
+    const { readCameraList } = await load();
+    reply = (res) => res.end(JSON.stringify({ cameras: ['head_camera'], source: 'pc2cam' }));
+    expect(await readCameraList()).toEqual({ kind: 'ok', cameras: ['head_camera'], source: 'pc2cam' });
+    reply = (res) => res.end(JSON.stringify({ cameras: [], source: null, configured: ['head_camera', 3] }));
+    expect(await readCameraList()).toEqual({ kind: 'ok', cameras: [], source: null });
+  });
+
   it('reports a non-200 answer and a body that is not JSON', async () => {
     const { readCameraList } = await load();
     reply = (res) => { res.statusCode = 503; res.end('{}'); };

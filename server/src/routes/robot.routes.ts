@@ -458,10 +458,16 @@ robotRoutes.get('/:id/cameras', async (req: Request, res: Response) => {
         }
         try {
           const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          // `configured` (TASK-445): every camera the robot is set up for, up or
+          // not. Passed on only as a list of names; older agents never send it.
+          const configured: unknown = body?.configured;
           res.json({
             cameras: Array.isArray(body?.cameras) ? body.cameras : [],
             source: body?.source ?? null,
             ...(body?.detail ? { detail: String(body.detail) } : {}),
+            ...(Array.isArray(configured) && configured.every((c) => typeof c === 'string')
+              ? { configured }
+              : {}),
           });
         } catch {
           res.json({ cameras: [], source: null, detail: 'agent camera list was not JSON' });
