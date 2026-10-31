@@ -118,6 +118,7 @@ import { jointPositionUnit } from '../../robots/types/robots.types';
 import type { RobotType } from '../../robots/types/robots.types';
 import { TELEOPERATION_TYPE_LABELS, formatDuration, canStartSession, canPauseSession, canEndSession } from '../types/datacollection.types';
 import { sessionName } from '../utils/sessionFormat';
+import { sessionWristCameras } from '../utils/cameras';
 import { actorTag, describeEStopTake, takeLabel } from '../utils/takeFormat';
 import { cn } from '@/shared/utils/cn';
 
@@ -643,6 +644,7 @@ export function SessionDetailPage() {
       onVrOpenChange={setVrModalOpen}
       showReadiness={false}
       variant={variant}
+      wristCameras={sessionWristCameras(session)}
     />
   );
   const jointUnit = jointPositionUnit(telemetry?.robotType ?? (robot?.metadata as Record<string, unknown> | undefined)?.robotType);

@@ -3,7 +3,7 @@ id: "TASK-443"
 aliases: []
 title: "The headset shows the wrist views below the head screen"
 slug: "the-headset-shows-the-wrist-views-below-the-head-screen"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "claude"
 projects: []

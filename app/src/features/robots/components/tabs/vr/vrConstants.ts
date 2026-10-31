@@ -104,6 +104,29 @@ export const PANEL_ASPECT = 3 / 4;
  */
 export const PANEL_TEXTURE_HZ = 20;
 /**
+ * Height of the wearer's eyes in the robot's (centred) model frame: the G1's
+ * eyes sit at about +0.43 (`EYE_BELOW_CROWN_M` under the crown). The panels
+ * below eye level pitch up toward it.
+ */
+export const EYE_Y_M = 0.43;
+/**
+ * The wrist panels (TASK-443): two small screens centred below the head screen,
+ * left wrist at -Z (the model's left), right at +Z, at the head screen's own
+ * distance. 0.36 m wide, yawed and pitched to face the eye, which at 1.15 m
+ * keeps each outer corner inside a 20° bearing (19.5°; at 1.05 m it was 21°)
+ * and the pair clear of the head screen (bottom edge y 0.085 with its
+ * surround), of each other, of the side panels (40°) and of the grippers.
+ */
+export const WRIST_PANEL_WIDTH_M = 0.36;
+export const WRIST_PANEL_DISTANCE_M = 1.15;
+export const WRIST_PANEL_CENTRE_Y_M = -0.07;
+export const WRIST_PANEL_OFFSET_Z_M = 0.21;
+/**
+ * Half the head screen's rate. A wrist is a glance, not the picture the
+ * operator steers by, and two of them at 20 Hz would double the upload budget.
+ */
+export const WRIST_PANEL_TEXTURE_HZ = 10;
+/**
  * How often (seconds) base velocity is streamed. Slower than the arm stream:
  * this is one RPC to the locomotion controller per message, and the agent drops
  * a tick that arrives while the previous one is still in flight.

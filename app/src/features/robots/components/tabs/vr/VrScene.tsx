@@ -18,6 +18,7 @@ import { RobotModel } from '../../visualization/RobotModel';
 import type { JointState, RobotType } from '../../../types/robots.types';
 import type { VrJointMap } from './vrRetarget';
 import { HeadCameraPanel } from './HeadCameraPanel';
+import { WristCameraPanels } from './WristCameraPanels';
 import { VrWristHud } from './VrWristHud';
 import { VrOrigin } from './VrOrigin';
 import { VrTeleopRig, type VrRigTelemetry } from './VrTeleopRig';
@@ -69,6 +70,13 @@ export interface VrSceneProps {
    * wrist HUD's take line. One object read through a getter (D2).
    */
   vrSession?: VrSessionBridge;
+  /**
+   * The wrist cameras the session records (TASK-443), left first. Non-empty:
+   * a small screen per wrist below the head screen. Absent or empty — the
+   * robot detail page, a head-only session — mounts nothing, so no wrist
+   * ticket is fetched and no wrist stream opened.
+   */
+  wristCameras?: readonly string[];
 }
 
 /*
@@ -103,6 +111,7 @@ export function VrScene({
   modeRequest,
   onAllowModeRequest,
   vrSession,
+  wristCameras,
 }: VrSceneProps) {
   // Every take action is felt: `episodeMark` when it lands, two taps when refused.
   const session = useMemo(() => (vrSession ? withTakeHaptics(vrSession) : undefined), [vrSession]);
@@ -139,6 +148,12 @@ export function VrScene({
               picture. */}
           {modelType !== 'so101' && (
             <HeadCameraPanel robotId={robotId} vrSession={session} telemetryRef={telemetryRef} />
+          )}
+          {/* TASK-443: the wrist views, below the head screen. Same group and
+              the same reason to stay outside `modelRef`; mounted only for a
+              session that records wrist cameras. */}
+          {modelType !== 'so101' && wristCameras && wristCameras.length > 0 && (
+            <WristCameraPanels robotId={robotId} cameras={wristCameras} />
           )}
           {/* TASK-407: the robot panel and its buttons. In the yaw group, like
               the camera screen, so a recenter brings it round with the robot;

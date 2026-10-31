@@ -66,6 +66,11 @@ export interface VRTeleopSectionProps {
    */
   vrSession?: VrSessionBridge;
   /**
+   * The wrist cameras the session records (TASK-443): their screens below the
+   * head screen in the headset. Absent on the robot detail page.
+   */
+  wristCameras?: readonly string[];
+  /**
    * Set while another input drives the robot (the session page's simulated VR,
    * TASK-396): "Launch VR" is disabled and this line replaces the hint.
    */
@@ -90,7 +95,7 @@ export interface VRTeleopSectionProps {
 }
 
 export function VRTeleopSection({
-  robot, vrSession, launchDisabledReason, onOpenChange, showReadiness = true, renderLauncher,
+  robot, vrSession, wristCameras, launchDisabledReason, onOpenChange, showReadiness = true, renderLauncher,
 }: VRTeleopSectionProps) {
   const [open, setOpen] = useState(false);
   const onOpenChangeRef = useRef(onOpenChange);
@@ -152,6 +157,7 @@ export function VRTeleopSection({
         sessionSupported={sessionSupported}
         onClose={() => setOpen(false)}
         vrSession={vrSession}
+        wristCameras={wristCameras}
       />
     </Modal>
   );
