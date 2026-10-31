@@ -3,7 +3,7 @@ id: "TASK-445"
 aliases: []
 title: "The sidecar serves wrist cameras next to the head camera"
 slug: "the-sidecar-serves-wrist-cameras-next-to-the-head-camera"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "claude"
 projects: []
