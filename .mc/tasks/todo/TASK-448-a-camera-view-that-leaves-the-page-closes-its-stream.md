@@ -3,7 +3,7 @@ id: "TASK-448"
 aliases: []
 title: "A camera view that leaves the page closes its stream"
 slug: "a-camera-view-that-leaves-the-page-closes-its-stream"
-status: "in-progress"
+status: "review"
 priority: 1
 owner: "claude"
 projects: []
@@ -68,16 +68,16 @@ with no answer.
 
 ## Acceptance Criteria
 
-- [ ] Unmounting `CameraStreamView`, or its robot going offline, clears the stream `<img>`'s `src`.
+- [x] Unmounting `CameraStreamView`, or its robot going offline, clears the stream `<img>`'s `src`.
       A re-render with the same URL does not touch `src`. A ticket change on a mounted view
       leaves the new URL in place.
-- [ ] The emptied-`src` `error` event causes no retry, no failure count and no failed-URL mark.
-- [ ] In a real Chromium the following leave a constant number of open stream connections on
+- [x] The emptied-`src` `error` event causes no retry, no failure count and no failed-URL mark.
+- [x] In a real Chromium the following leave a constant number of open stream connections on
       the server. Before this change the count grows.
       - On a head-only session page: opening and closing the VR window five times on the same
         browser, and leaving and returning to the session page three times.
       - On a Head + wrists session page (with TASK-442): swapping wrist tiles.
-- [ ] App typecheck, vitest and the Playwright demo gate are green.
+- [x] App typecheck, vitest and the Playwright demo gate are green.
 
 ## Test Strategy
 
