@@ -75,6 +75,16 @@ describe('KeyboardTeleopSection E-STOP (TASK-453)', () => {
     await waitFor(() => expect(estop).toHaveBeenCalledWith('g1-edu-4', expect.anything()));
   });
 
+  it('does not count Escape pressed while typing', async () => {
+    await render(<KeyboardTeleopSection robot={realRobot} />);
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(estop).not.toHaveBeenCalled();
+    input.remove();
+  });
+
   it('shows none where the page has its own E-STOP', async () => {
     await render(<KeyboardTeleopSection robot={realRobot} estop={false} />);
     expect(screen.queryByTestId('teleop-estop')).toBeNull();
