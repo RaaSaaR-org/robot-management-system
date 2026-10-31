@@ -16,6 +16,8 @@
  *              damped and must stand up again; steps 4 and 5 wait for it. A
  *              sidecar that reports read-only is never "Arm control on", sim
  *              or not.
+ *              TASK-437: only the legacy MuJoCo facade skips step 3 for want of
+ *              a locomotion FSM; a supervisor sim mid-restart is not balancing.
  * @feature datacollection
  */
 
@@ -301,6 +303,19 @@ export function armControlOn(readiness: RobotReadiness | null): boolean | null {
   return null;
 }
 
+/**
+ * The legacy MuJoCo sim facade (`sim_node.py`): a sim sidecar with no write
+ * mode that no supervisor runs. It has no locomotion FSM, so step 3 has
+ * nothing to stand up. The supervisor sim runs the real `g1_sidecar.py`, whose
+ * FSM reads once it answers: while the arm-control switch restarts it, the
+ * missing reading is "not measured", never "balancing" — or the page handed
+ * its lease over to a limp robot the moment arm control came on (TASK-437).
+ */
+function noLocomotionFsm(readiness: RobotReadiness | null): boolean {
+  const sc = readiness?.agent.readiness?.sidecar ?? null;
+  return !!sc && sc.sim && sc.writeMode === null && !readiness?.bringup;
+}
+
 /** Step 3's facts: the measured mode, and done once it balances (or the sim has nothing to stand up). */
 function stanceFacts(
   readiness: RobotReadiness | null,
@@ -310,7 +325,7 @@ function stanceFacts(
   const measured = mode.measured ?? readinessMode(readiness);
   const modeRow = rowOf(rows, 'mode');
   // The MuJoCo sim has no locomotion FSM: nothing to stand up.
-  if (modeRow?.status === 'idle' && !mode.gateOn) {
+  if (modeRow?.status === 'idle' && !mode.gateOn && noLocomotionFsm(readiness)) {
     return { done: true, failed: false, summary: capital(modeRow.value), tone: 'ok' };
   }
   const done = measured === 'balance';

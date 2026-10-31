@@ -43,6 +43,9 @@
  *              Reset E-stop, the VR window's reset: lit in Record's recovery
  *              slot, and in Set up as the blocker of step 3. The robot's status
  *              is read again on open and after a reset.
+ *              TASK-437: control that step 2 took and that ended on its own (the
+ *              robot expired it) says so in the step that needs it; the arm
+ *              switch takes it again rather than going out without it.
  * @feature datacollection
  */
 
@@ -78,7 +81,7 @@ import { SetupRail, type SetupStepContent } from '../components/console/SetupRai
 import { LiveView } from '../components/console/LiveView';
 import { buildSetupModel, leaseWorkDone, modeWord, type SetupStep, type SystemsCellId, type SystemsCellStatus } from '../utils/setupSteps';
 import { useLeaseHandOver, useLeaseTake } from '../hooks/useLeaseTake';
-import { PageLeaseLine } from '../components/console/PageLeaseLine';
+import { PageLeaseLine, PageLeaseLostLine } from '../components/console/PageLeaseLine';
 import { useDeviceRole, detectDeviceRole, type DeviceRole } from '../hooks/useDeviceRole';
 import { commandBarTally, sessionPhase } from '../utils/sessionPhase';
 import { EMULATOR_ACTIVE } from '../../robots/components/tabs/vr/vrConstants';
@@ -730,6 +733,16 @@ export function SessionDetailPage() {
   const heldLine = (className?: string) => (pageHoldsLease ? (
     <PageLeaseLine text={`You have control of ${robotName}.`} onRelease={releaseLease} className={className} />
   ) : null);
+  // TASK-437: the control step 2 took ended on its own — the robot expired it
+  // (a tab that stopped running missed its renewals) or the socket closed. A
+  // VR session has no control bar to say so; the step that needs it does.
+  const leaseLost = sessionIsVr && !leaseInputs && leaseTake.wanted && lease.state !== 'bound' && lease.notice?.kind === 'lost'
+    ? lease.notice.message
+    : null;
+  const armControlDone = setupModel?.steps.find((s) => s.id === 'arm_control')?.state === 'done';
+  const lostLine = (inStep: 'arm_control' | 'stance', className?: string) => (
+    leaseLost && (inStep === 'stance') === armControlDone ? <PageLeaseLostLine message={leaseLost} className={className} /> : null
+  );
   const detailsFor = (step: SetupStep) => (robot && step.rows.length > 0 ? (
     <RobotReadinessPanel robotId={robot.id} variant="rows" rows={step.rows} readiness={readinessState} />
   ) : undefined);
@@ -788,7 +801,7 @@ export function SessionDetailPage() {
       case 'arm_control':
         return {
           lead: 'The arms follow the headset only in arm control. Take control, then switch. Nothing moves yet.',
-          children: leaseBar ?? heldLine(),
+          children: leaseBar ?? heldLine() ?? lostLine('arm_control'),
           actions: robotActions(['arm', 'read_only'], lit),
           note: (
             <>
@@ -817,6 +830,7 @@ export function SessionDetailPage() {
                   requestFromHolder={operatorViewer && operatorInVr && !vrModalOpen ? requestMode : undefined}
                 />
                 {heldLine('mt-3')}
+                {lostLine('stance', 'mt-3')}
               </div>
             </>
           ) : null,

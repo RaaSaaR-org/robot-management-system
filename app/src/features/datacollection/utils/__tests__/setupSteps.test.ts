@@ -504,4 +504,25 @@ describe('arm control on (TASK-431)', () => {
     const r = withSidecar({ sim: true, writeMode: 'read_only', readOnly: true });
     expect(leaseWorkDone(r, { measured: 'balance', gateOn: true })).toBe(false);
   });
+
+  /** The agent's snapshot of a robot without a base reading. */
+  const withoutBase = (r: RobotReadiness): RobotReadiness =>
+    ({ ...r, agent: { ...r.agent, readiness: { ...r.agent.readiness!, base: null } } });
+
+  it('the supervisor sim restarting into arm control is not balancing: the hand-over waits (TASK-437)', () => {
+    // Live, 2026-10-30: the switch's 202, then for ~1 s the sidecar is
+    // unreachable, the base unread and the mode gate off, while the supervisor
+    // already says arm_sdk. The page gave its lease back to a limp robot.
+    const restarting = withoutBase(withSidecar({ reachable: false, sim: true, writeMode: 'read_only', readOnly: true }));
+    const r: RobotReadiness = { ...restarting, bringup: { ...restarting.bringup!, sidecarMode: 'arm_sdk', overall: 'starting' } };
+    expect(armControlOn(r)).toBe(true);
+    expect(leaseWorkDone(r, { measured: null, gateOn: false })).toBe(false);
+    const stance = buildSetupModel(input({ readiness: r, mode: { measured: null, gateOn: false } })).steps.find((x) => x.id === 'stance')!;
+    expect(stance.state).not.toBe('done');
+  });
+
+  it('the legacy MuJoCo sim (sim, no write mode, no supervisor) still has nothing to stand up', () => {
+    const r: RobotReadiness = { ...withoutBase(withSidecar({ sim: true, writeMode: null, readOnly: false })), bringup: null };
+    expect(leaseWorkDone(r, { measured: null, gateOn: false })).toBe(true);
+  });
 });

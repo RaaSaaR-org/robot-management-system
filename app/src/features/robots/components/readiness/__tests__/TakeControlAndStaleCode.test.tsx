@@ -98,6 +98,55 @@ describe('Take control from the panel (D3)', () => {
     expect(screen.queryByTestId('readiness-take-control')).toBeNull();
   });
 
+  it('control lost while the confirm is open is taken again before the switch goes out (TASK-437)', async () => {
+    serve(readinessFor(ROBOT, 'read_only_ready'));
+    const bodies: unknown[] = [];
+    server.use(
+      http.post(`/api/robots/${ROBOT}/bringup/sidecar-mode`, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    let held: typeof GRANT | null = null;
+    const take = vi.fn(async () => {
+      held = take.mock.calls.length === 1 ? GRANT : { leaseId: 'lease-again', generation: 8 };
+      return true;
+    });
+    const lease = (): ReadinessLease => ({ enabled: true, state: held ? 'bound' : 'observing', grant: () => held, take });
+    const { rerender } = render(<RobotReadinessPanel robotId={ROBOT} lease={lease()} />);
+    fireEvent.click(await screen.findByTestId('readiness-take-control'));
+    await waitFor(() => expect(take).toHaveBeenCalledTimes(1));
+    rerender(<RobotReadinessPanel robotId={ROBOT} lease={lease()} />);
+    await screen.findByTestId('readiness-arm-confirm');
+    // The robot expired the lease while the confirm was open.
+    held = null;
+    rerender(<RobotReadinessPanel robotId={ROBOT} lease={lease()} />);
+    fireEvent.click(screen.getByTestId('readiness-arm-confirm-confirm'));
+    await waitFor(() => expect(bodies).toEqual([{ mode: 'arm_sdk', confirm: true, leaseId: 'lease-again', generation: 8 }]));
+    expect(take).toHaveBeenCalledTimes(2);
+  });
+
+  it('control lost while the confirm is open, and no way to take it here: nothing is sent (TASK-437)', async () => {
+    serve(readinessFor(ROBOT, 'read_only_ready'));
+    const bodies: unknown[] = [];
+    server.use(
+      http.post(`/api/robots/${ROBOT}/bringup/sidecar-mode`, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    let held: typeof GRANT | null = GRANT;
+    const lease = (): ReadinessLease => ({ enabled: true, state: held ? 'bound' : 'observing', grant: () => held });
+    const { rerender } = render(<RobotReadinessPanel robotId={ROBOT} lease={lease()} />);
+    fireEvent.click(await screen.findByTestId('readiness-arm-control'));
+    await screen.findByTestId('readiness-arm-confirm');
+    held = null;
+    rerender(<RobotReadinessPanel robotId={ROBOT} lease={lease()} />);
+    fireEvent.click(screen.getByTestId('readiness-arm-confirm-confirm'));
+    expect(await screen.findByTestId('readiness-error')).toHaveTextContent('arm control was not switched on');
+    expect(bodies).toEqual([]);
+  });
+
   it('a failed take says so and opens nothing', async () => {
     serve(readinessFor(ROBOT, 'read_only_ready'));
     const take = vi.fn(async () => false);
