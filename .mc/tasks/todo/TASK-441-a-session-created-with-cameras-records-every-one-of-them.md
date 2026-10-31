@@ -3,7 +3,7 @@ id: "TASK-441"
 aliases: []
 title: "A session created with cameras records every one of them"
 slug: "a-session-created-with-cameras-records-every-one-of-them"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "claude"
 projects: []
@@ -95,6 +95,20 @@ Also lands the app-side session type and a small camera helper the UI children r
       "Head + left wrist" …
     Unit-test it.
 
+### Demo fixtures (for the UI children's Playwright specs)
+
+12. The demo build (`VITE_DEMO_MODE=true`, MSW handlers in `app/src/mocks/`) must be able to
+    show a Head + wrists session without changing any existing demo session or robot:
+    - a demo session `demo-session-wrists` (copy the shape of `demo-session-takes`) with
+      `cameras: ['head_camera','left_wrist_camera','right_wrist_camera']` on a demo G1 whose
+      camera list includes both wrists (a new demo robot, or a demo-only override route that
+      pins a robot's camera list, mirroring the readiness fixture route
+      `/api/__demo/robots/:id/readiness` used by `app/e2e/datacollection-console.spec.ts`);
+    - the demo camera stream answers for the wrist names the way it answers for
+      `head_camera` today (a static frame is fine);
+    - existing demo sessions keep `cameras` absent (head only) and every existing e2e spec
+      passes unchanged.
+
 ## Acceptance Criteria
 
 - [ ] `POST` create with `cameras: ['head_camera','left_wrist_camera','right_wrist_camera']`
@@ -106,6 +120,8 @@ Also lands the app-side session type and a small camera helper the UI children r
       nothing half-recorded.
 - [ ] A session without `cameras`: the recorder request carries no `cameras` field and the
       dataset is identical in shape to `main` (one `cam_right_high` video).
+- [ ] The demo build serves `demo-session-wrists` with three cameras; existing demo
+      sessions and e2e specs are unchanged.
 - [ ] Server, robot-agent and app typecheck + vitest green; Prisma migration check green.
 
 ## Test Strategy
