@@ -63,6 +63,8 @@ export const liveSessionDemoHandlers = [
       errorMessage: null,
       createdAt: now,
       updatedAt: now,
+      // TASK-441: a session that named its cameras keeps them; one that did not stays without the field.
+      ...(Array.isArray(body.cameras) && body.cameras.length > 0 ? { cameras: body.cameras } : {}),
     } as TeleoperationSession;
     created.set(session.id, session);
     return HttpResponse.json({ session, message: 'Teleoperation session created successfully' }, { status: 201 });

@@ -91,6 +91,13 @@ the console, never the page.
   bottom-left: the operator's initials, the link latency (mint; amber when the
   link is stale, `Link lost` in red) and the grip bars L and R, each filling
   mint while that grip holds the arm.
+- **Wrist views.** A session that records the wrist cameras (Head + wrists)
+  shows them as two tiles under the head view, the left wrist on the left. A
+  click on a tile swaps that wrist into the big view and puts the head camera
+  in its tile; a second click swaps back. A wrist the robot does not serve
+  shows "Left wrist camera offline" in its tile. A Head only session has no
+  tiles. Set up's preview has none either; its view switch still reaches every
+  camera.
 - **The systems strip** under the view is the Set up checklist folded into
   cells: Robot side, Control, Arm control, Mode, Headset, Arms and Hands on a
   VR session (Robot side, Control and Input otherwise). Each cell is a dot and
@@ -98,7 +105,12 @@ the console, never the page.
   opens that step's controls from Set up in a popover (Start robot side, Take
   control, Switch to arm control, Limp / Stand up / Balance, the Quest
   buttons), so every control stays one click away. On a phone the strip is one
-  summary row ("All 7 systems ok", or the worst cell) that expands it.
+  summary row ("All 7 systems ok", or the worst cell) that expands it. A
+  session created with a camera choice adds a **Cameras** cell with its camera
+  set ("Head + 2 wrists"); it turns red when a chosen wrist camera is not being
+  served, and the dock's slot says which one. Start session in Set up stays
+  disabled for the same reason ("Left wrist camera is not being served."): the
+  recorder would refuse the take anyway.
 - **The take dock** on the right, under the E-STOP: the state (`● REC`,
   `READY` or `PAUSED`) and the take number, the big take timer (with
   "Auto-stop in N s" under it when an auto-stop is set), **Start take** /

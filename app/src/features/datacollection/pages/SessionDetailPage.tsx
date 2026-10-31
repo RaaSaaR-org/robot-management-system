@@ -78,7 +78,7 @@ import { SessionCommandBar, SessionCommandBarSkeleton, type RobotLink } from '..
 import { TestingToolsRow } from '../components/console/TestingTools';
 import { HeadsetHero, RobotSetupDisclosure } from '../components/console/HeadsetHero';
 import { SetupRail, type SetupStepContent } from '../components/console/SetupRail';
-import { LiveView } from '../components/console/LiveView';
+import { LiveView, cameraLabel } from '../components/console/LiveView';
 import { buildSetupModel, leaseWorkDone, modeWord, type SetupStep, type SystemsCellId, type SystemsCellStatus } from '../utils/setupSteps';
 import { useLeaseHandOver, useLeaseTake } from '../hooks/useLeaseTake';
 import { PageLeaseLine, PageLeaseLostLine } from '../components/console/PageLeaseLine';
@@ -86,6 +86,7 @@ import { useDeviceRole, detectDeviceRole, type DeviceRole } from '../hooks/useDe
 import { commandBarTally, sessionPhase } from '../utils/sessionPhase';
 import { EMULATOR_ACTIVE } from '../../robots/components/tabs/vr/vrConstants';
 import { ReadinessActions, RobotReadinessPanel, type ReadinessActionId } from '../../robots/components/readiness/RobotReadinessPanel';
+import { ReadinessRow } from '../../robots/components/readiness/ReadinessRow';
 import { QuestControls } from '../../robots/components/readiness/QuestControls';
 import { QuestConnectHelp } from '../../robots/components/tabs/vr/QuestConnectHelp';
 import { useRobotReadiness } from '../../robots/hooks/useRobotReadiness';
@@ -110,7 +111,8 @@ import { useGamepadJoints } from '../hooks/useGamepadJoints';
 import { useSessionControlLease } from '../hooks/useSessionControlLease';
 import { useInputPresence } from '../hooks/useInputPresence';
 import { useRobotCameras } from '../../robots/hooks/useRobotCameras';
-import { buildPreflight, summarizePreflight } from '../utils/preflight';
+import { buildPreflight, summarizePreflight, wristCamerasRow } from '../utils/preflight';
+import { cameraSetLabel, sessionViewCameras, sessionWristCameras } from '../utils/cameras';
 import { ControlLeaseBar } from '../../robots/components/tabs/ControlLeaseBar';
 import { RobotModeControl } from '../../robots/components/RobotModeControl';
 import { useRobotBaseMode } from '../../robots/hooks/useRobotBaseMode';
@@ -498,20 +500,26 @@ export function SessionDetailPage() {
   // TASK-392: what the page can check before recording, and the cameras the
   // robot really serves (a G1 has a head camera, not top/wrist).
   const cameras = useRobotCameras(sessionIsLive && robotOnline ? session!.robotId : null, 5000);
+  // TASK-442: the wrist cameras this session records; none for a head-only session.
+  const sessionCameras = session?.cameras ?? null;
+  const wristCameras = useMemo(() => sessionWristCameras({ cameras: sessionCameras }), [sessionCameras]);
+  // A wrist the session does not record shows nowhere: not in the switch, not as a tile, not in readiness (D2).
+  const viewCameras = useMemo(() => sessionViewCameras(cameras.cameras, wristCameras), [cameras.cameras, wristCameras]);
   const isCreated = session?.status === 'created';
   const presence = useInputPresence(isCreated && sessionIsVr, sessionIsLive && session?.type === 'gamepad');
   // TASK-428: Record folds the same checks into its systems cells.
   const preflightItems = useMemo(() => (session && sessionIsLive ? buildPreflight({
     robot: robot ? { name: robot.name, online: robotOnline } : null,
     agentConnected: isTelemetryConnected,
-    cameras: { loading: cameras.loading, names: cameras.cameras, source: cameras.source, detail: cameras.detail },
+    cameras: { loading: cameras.loading, names: viewCameras, source: cameras.source, detail: cameras.detail },
+    wristCameras,
     sessionType: session.type,
     secureContext: presence.secureContext,
     vrSupported: presence.vrSupported,
     gamepadConnected: presence.gamepadConnected,
     lease: leaseInputs ? { enabled: lease.enabled, bound: lease.state === 'bound' } : undefined,
-  }) : []), [session, sessionIsLive, robot, robotOnline, isTelemetryConnected, cameras.loading, cameras.cameras,
-    cameras.source, cameras.detail, presence.secureContext, presence.vrSupported, presence.gamepadConnected,
+  }) : []), [session, sessionIsLive, robot, robotOnline, isTelemetryConnected, cameras.loading, viewCameras,
+    cameras.source, cameras.detail, wristCameras, presence.secureContext, presence.vrSupported, presence.gamepadConnected,
     leaseInputs, lease.enabled, lease.state]);
   const preflight = summarizePreflight(preflightItems);
   // TASK-427: the Set up steps read the robot's readiness (the compact panel's
@@ -716,6 +724,7 @@ export function SessionDetailPage() {
     },
     operator: { present: operatorViewer !== null, name: operatorName, inVr: operatorInVr },
     stop,
+    sessionCameras,
   }) : null;
   // The page's own lease drives the robot-side buttons; Take control opens it on
   // a VR session (simulated input shows the lease bar instead).
@@ -743,6 +752,13 @@ export function SessionDetailPage() {
   const lostLine = (inStep: 'arm_control' | 'stance', className?: string) => (
     leaseLost && (inStep === 'stance') === armControlDone ? <PageLeaseLostLine message={leaseLost} className={className} /> : null
   );
+  // TASK-442: the session's wrist cameras, as a readiness row (only when it records any).
+  const wristItem = preflightItems.find((i) => i.id === 'wrist_cameras') ?? null;
+  const wristRow = wristItem ? (
+    <ul className="flex flex-col gap-1.5" aria-label="Wrist cameras" data-testid="session-wrist-cameras-row">
+      <ReadinessRow row={wristCamerasRow(wristItem)} />
+    </ul>
+  ) : null;
   const detailsFor = (step: SetupStep) => (robot && step.rows.length > 0 ? (
     <RobotReadinessPanel robotId={robot.id} variant="rows" rows={step.rows} readiness={readinessState} />
   ) : undefined);
@@ -777,7 +793,8 @@ export function SessionDetailPage() {
         // action; while the robot side runs, Stop waits under Details.
         const side = setupModel?.robotSide ?? { lead: null, stop: false };
         const restarting = readinessState.pending?.action === 'restart';
-        const rows = detailsFor(step);
+        const readinessRowsNode = detailsFor(step);
+        const rows = wristRow ? <>{readinessRowsNode}<div className={readinessRowsNode ? 'mt-1.5' : undefined}>{wristRow}</div></> : readinessRowsNode;
         return {
           lead: readinessState.readiness?.bringup
             ? `The bridge, the sidecar and the robot agent run on the robot PC.${
@@ -908,7 +925,7 @@ export function SessionDetailPage() {
           live={isTelemetryConnected}
           jointStates={telemetry?.jointStates}
           twinOverlay={twinOverlay}
-          cameras={{ names: cameras.cameras, loading: robotOnline && cameras.loading, detail: cameras.detail }}
+          cameras={{ names: viewCameras, loading: robotOnline && cameras.loading, detail: cameras.detail }}
           defaultMain="twin"
           expandAt="bottom"
           suspended={vrModalOpen}
@@ -1168,6 +1185,16 @@ export function SessionDetailPage() {
           </>
         );
       }
+      case 'cameras':
+        return (
+          <>
+            {cellReason(c)}
+            <p className="m-0 text-ink-secondary" data-testid="session-camera-set">
+              Every take records {cameraSetLabel(sessionCameras).toLowerCase()}: {(sessionCameras ?? []).map(cameraLabel).join(', ')}.
+            </p>
+            {wristRow}
+          </>
+        );
     }
   };
 
@@ -1191,14 +1218,16 @@ export function SessionDetailPage() {
     >
       <section className="flex min-h-0 flex-col rounded-panel border border-line-subtle bg-panel" aria-label="Live view">
         <LiveView
-          className="flex-1 rounded-t-[13px] max-lg:aspect-[4/3] max-lg:flex-none"
+          // Below lg the well keeps 4:3; with the wrist tiles under the main view it is square.
+          className={cn('flex-1 rounded-t-[13px] max-lg:flex-none', wristCameras.length > 0 ? 'max-lg:aspect-square' : 'max-lg:aspect-[4/3]')}
           robotId={session.robotId}
           robotType={robotType}
           online={robotOnline}
           live={isTelemetryConnected}
           jointStates={telemetry?.jointStates}
           twinOverlay={twinOverlay}
-          cameras={{ names: cameras.cameras, loading: robotOnline && cameras.loading, detail: cameras.detail }}
+          cameras={{ names: viewCameras, loading: robotOnline && cameras.loading, detail: cameras.detail }}
+          wristCameras={wristCameras}
           defaultMain="camera"
           isRecording={capturing || legacyRecording}
           suspended={vrModalOpen}
