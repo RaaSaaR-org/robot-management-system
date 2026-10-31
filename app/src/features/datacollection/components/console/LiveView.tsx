@@ -16,14 +16,21 @@
  *              TASK-430: a camera in the PiP draws its placeholder compact,
  *              below the PiP's bar, so its name shows once; the bar's label
  *              stays on one line (a narrow PiP drops its icon).
+ *              TASK-442: a session that records wrist cameras gets a row of
+ *              two 4:3 tiles under the main view, left wrist left; a tile
+ *              swaps its camera into the main view and shows the head camera
+ *              in its place, and a wrist the robot does not serve shows an
+ *              offline plate and opens no stream. Without wrist cameras the
+ *              view is exactly what it was.
  * @feature datacollection
  */
 
 import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeftRight, Box, Maximize2, Minimize2, TriangleAlert, Video } from 'lucide-react';
+import { ArrowLeftRight, Box, Maximize2, Minimize2, TriangleAlert, Video, VideoOff } from 'lucide-react';
 import { Button, EmptyState, Skeleton } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { CameraStreamView } from '../CameraStreamView';
+import { WRIST_CAMERAS, wristCameraLabel } from '../../utils/cameras';
 import type { JointState, RobotType } from '../../../robots/types/robots.types';
 
 const Robot3DViewer = lazy(() =>
@@ -44,6 +51,12 @@ export function leadCameraOf(names: string[]): string | null {
 }
 
 const TWIN = 'twin';
+const NO_WRISTS: string[] = [];
+
+/** `left_wrist_camera` → "Left wrist"; any other camera by `cameraLabel` (the switch stays short). */
+function wristLabel(name: string): string {
+  return wristCameraLabel(name) ?? cameraLabel(name);
+}
 
 export interface LiveViewProps {
   robotId: string;
@@ -59,6 +72,11 @@ export interface LiveViewProps {
   twinOverlay?: { link: string; node: ReactNode };
   /** The cameras the robot serves (`useRobotCameras`). */
   cameras: { names: string[]; loading: boolean; detail?: string | null };
+  /**
+   * The wrist cameras the session records (`sessionWristCameras`), left
+   * first: a tile each under the main view (TASK-442). Empty: no tile row.
+   */
+  wristCameras?: string[];
   /** Which view leads: the twin in Set up, the camera in Record. */
   defaultMain: 'twin' | 'camera';
   /** A take is being captured: the recording ring and the camera's wording. */
@@ -104,6 +122,7 @@ export function LiveView({
   jointStates,
   twinOverlay,
   cameras,
+  wristCameras = NO_WRISTS,
   defaultMain,
   isRecording = false,
   suspended = false,
@@ -140,6 +159,7 @@ export function LiveView({
   };
 
   const noCamera = online && !cameras.loading && cameras.names.length === 0;
+  const compactSwitch = wristCameras.length > 0;
 
   const expand = (
     <button
@@ -167,7 +187,7 @@ export function LiveView({
     </Suspense>
   );
 
-  const camera = (name: string, role: 'main' | 'pip') => (
+  const camera = (name: string, role: 'main' | 'pip' | 'tile') => (
     <CameraStreamView
       robotId={robotId}
       cameraName={name}
@@ -175,8 +195,8 @@ export function LiveView({
       isRecording={isRecording}
       offline={!online}
       fit
-      compact={role === 'pip'}
-      className={role === 'pip' ? 'text-[11px]' : undefined}
+      compact={role !== 'main'}
+      className={role !== 'main' ? 'text-[11px]' : undefined}
     />
   );
 
@@ -187,20 +207,14 @@ export function LiveView({
       ? 'absolute inset-0'
       : 'absolute bottom-4 right-4 z-10 aspect-[4/3] w-[min(31%,270px)] overflow-hidden rounded-control border border-line-strong bg-media';
 
-  const body = !online ? (
-    <div className="flex h-full items-center justify-center">
-      <EmptyState size="sm" title="Robot offline" description="Start the robot side in step 1 to see the twin and the cameras." />
-    </div>
-  ) : suspended ? (
-    <div className="flex h-full items-center justify-center px-6 text-center text-[13px] text-white/70">
-      The VR window is open on this browser.
-    </div>
-  ) : (
+  const frame = (
     <div
       className={cn(
         'absolute',
         // A camera is framed 4:3 inside the well; the twin fills it.
         mainIsCamera ? 'inset-0 m-auto h-[min(100cqh,75cqw)] w-[min(100cqw,133.333cqh)]' : 'inset-0',
+        // TASK-442: with wrist tiles the frame is smaller and the switch longer; it measures itself.
+        compactSwitch && '@container/frame',
       )}
       data-testid="live-view-frame"
       data-main={mainIsCamera ? 'camera' : 'twin'}
@@ -248,19 +262,23 @@ export function LiveView({
       <div className={cn(chip, 'absolute left-[26px] top-[26px] z-20 gap-0.5 p-0.5')} role="group" aria-label="Main view" data-testid="live-view-switch">
         {views.map((v) => {
           const on = v === main;
+          const label = v === TWIN ? 'Twin' : wristLabel(v);
           return (
             <button
               key={v}
               type="button"
               aria-pressed={on}
               onClick={() => setMainPick(v)}
+              // A narrow frame shows the views that do not lead as icons, a phone's every view; each keeps its name.
+              {...(compactSwitch ? { 'aria-label': label, title: label } : {})}
               className={cn(
                 'inline-flex h-7 items-center gap-1.5 rounded-[5px] px-2.5 text-[12.5px] transition-colors duration-150 ease-[var(--ease-instrument)]',
                 on ? 'bg-raised font-medium text-ink-primary' : 'text-ink-secondary hover:text-ink-primary',
+                compactSwitch && (on ? '@max-[379px]/frame:px-2' : '@max-[559px]/frame:px-2'),
               )}
             >
               {v === TWIN ? <Box className="h-3.5 w-3.5" strokeWidth={1.75} /> : <Video className="h-3.5 w-3.5" strokeWidth={1.75} />}
-              {v === TWIN ? 'Twin' : cameraLabel(v)}
+              {compactSwitch ? <span className={on ? '@max-[379px]/frame:hidden' : '@max-[559px]/frame:hidden'}>{label}</span> : label}
             </button>
           );
         })}
@@ -310,6 +328,86 @@ export function LiveView({
           </div>
         </div>
       )}
+    </div>
+  );
+
+  // TASK-442: a tile shows its wrist, or the head camera while its wrist leads.
+  // A camera already in the main view or the PiP opens no second stream here.
+  const wristTile = (wrist: string) => {
+    const side = wrist === WRIST_CAMERAS.left ? 'left' : 'right';
+    const served = cameras.names.includes(wrist);
+    const shows = wrist === main && lead !== null ? lead : wrist;
+    const shownAbove = shows === main || shows === pip;
+    const label = shows === wrist ? wristLabel(wrist) : cameraLabel(shows);
+    const tileTestId = `session-wrist-${side}`;
+    return (
+      <div
+        key={wrist}
+        className="relative aspect-[4/3] h-full overflow-hidden rounded-control border border-line-strong bg-media"
+        data-testid={tileTestId}
+        data-camera={shows}
+      >
+        {cameras.loading ? (
+          <Skeleton className="h-full w-full rounded-none" />
+        ) : !served ? (
+          <p className="absolute inset-0 m-0 flex items-center justify-center gap-1.5 px-2 text-center text-[11.5px] text-white/70" data-testid={`${tileTestId}-offline`}>
+            <VideoOff className="h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
+            {wristLabel(wrist)} camera offline
+          </p>
+        ) : (
+          <>
+            {/* The whole tile swaps; the picture lets clicks through, its own Retry stays clickable. */}
+            <button
+              type="button"
+              aria-label={`Swap: ${label} as the main view`}
+              title="Swap views"
+              onClick={() => setMainPick(shows)}
+              className="absolute inset-0 z-0 rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+              data-testid={`${tileTestId}-swap`}
+            />
+            {shownAbove ? (
+              <p className="pointer-events-none absolute inset-0 m-0 flex items-center justify-center px-2 text-center text-[11.5px] text-white/60">
+                In the main view
+              </p>
+            ) : (
+              <div
+                className="pointer-events-none absolute inset-0 z-[1] [&_button]:pointer-events-auto"
+                data-testid={shows === lead ? 'session-lead-camera' : `session-camera-${shows}`}
+                data-slot="tile"
+              >
+                {camera(shows, 'tile')}
+              </div>
+            )}
+          </>
+        )}
+        <span
+          className={cn(chip, 'pointer-events-none absolute left-1.5 top-1.5 z-10 h-6 gap-1.5 whitespace-nowrap px-2 text-[11.5px] text-ink-primary')}
+          data-testid={`${tileTestId}-label`}
+        >
+          <Video className="h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
+          {label}
+        </span>
+      </div>
+    );
+  };
+
+  const body = !online ? (
+    <div className="flex h-full items-center justify-center">
+      <EmptyState size="sm" title="Robot offline" description="Start the robot side in step 1 to see the twin and the cameras." />
+    </div>
+  ) : suspended ? (
+    <div className="flex h-full items-center justify-center px-6 text-center text-[13px] text-white/70">
+      The VR window is open on this browser.
+    </div>
+  ) : wristCameras.length === 0 ? (
+    frame
+  ) : (
+    // The tile row takes its height from the main view, so the well keeps its size.
+    <div className="absolute inset-0 flex flex-col" data-testid="live-view-wrist-layout">
+      <div className="relative min-h-0 flex-1 [container-type:size]">{frame}</div>
+      <div className="flex h-[min(24cqh,34cqw)] flex-none justify-center gap-2 px-3 pb-3" data-testid="live-view-wrists">
+        {wristCameras.map(wristTile)}
+      </div>
     </div>
   );
 

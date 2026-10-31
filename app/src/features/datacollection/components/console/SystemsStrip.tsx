@@ -14,6 +14,8 @@
  *              Quest controls keep their ids and state while closed. Seven columns from
  *              1440 px, 4 + 3 below; below 640 px one summary row ("All 7
  *              systems ok", or the worst cell) that expands the grid.
+ *              TASK-442: a session with a camera list adds a Cameras cell —
+ *              four in one row, or eight as 4 + 4, one row from 1440 px.
  * @feature datacollection
  */
 
@@ -137,7 +139,10 @@ export function SystemsStrip({ cells, renderBody, openId: openProp, onOpenChange
   }, [openId, open, setOpenId]);
 
   const worst = worstCell(cells);
-  const many = cells.length > 3;
+  // 3 or 4 cells: one row. 7: 4 + 3, 8: 4 + 4, either one row from 1440 px.
+  const many = cells.length > 4;
+  const seven = cells.length <= 7;
+  const wide = seven ? 7 : 8;
 
   return (
     <div ref={wrapRef} className={cn('relative flex-none', className)} data-testid="session-systems" aria-label="Robot systems" role="group">
@@ -164,7 +169,7 @@ export function SystemsStrip({ cells, renderBody, openId: openProp, onOpenChange
       <div
         className={cn(
           'grid overflow-hidden rounded-b-panel border-t border-line-subtle',
-          many ? 'grid-cols-4 min-[1440px]:grid-cols-7' : 'grid-cols-3',
+          many ? cn('grid-cols-4', seven ? 'min-[1440px]:grid-cols-7' : 'min-[1440px]:grid-cols-8') : cells.length === 4 ? 'grid-cols-4' : 'grid-cols-3',
           'max-sm:grid-cols-2',
           !expanded && 'max-sm:hidden',
         )}
@@ -173,7 +178,7 @@ export function SystemsStrip({ cells, renderBody, openId: openProp, onOpenChange
           const isOpen = cell.id === openId;
           // Hairlines: a left border except at a row start, a top border on later rows.
           const rowStart4 = i % 4 === 0;
-          const rowStart7 = i % 7 === 0;
+          const rowStartWide = i % wide === 0;
           return (
             <button
               key={cell.id}
@@ -195,7 +200,7 @@ export function SystemsStrip({ cells, renderBody, openId: openProp, onOpenChange
                   ? cn(
                     !rowStart4 && 'max-[1439px]:border-l',
                     i >= 4 && 'max-[1439px]:border-t',
-                    !rowStart7 && 'min-[1440px]:border-l',
+                    !rowStartWide && 'min-[1440px]:border-l',
                   )
                   : i > 0 && 'border-l',
                 'max-sm:border-l-0 max-sm:border-t max-sm:[&:nth-child(even)]:border-l',

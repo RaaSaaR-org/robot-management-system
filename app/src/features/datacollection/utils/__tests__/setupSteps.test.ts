@@ -526,3 +526,52 @@ describe('arm control on (TASK-431)', () => {
     expect(leaseWorkDone(r, { measured: null, gateOn: false })).toBe(true);
   });
 });
+
+describe('the Cameras cell (TASK-442)', () => {
+  const WRISTS = ['left_wrist_camera', 'right_wrist_camera'];
+  const withWrists = (names: string[]) => buildPreflight({
+    robot: { name: 'G1-EDU-4', online: true },
+    agentConnected: true,
+    cameras: { loading: false, names },
+    wristCameras: WRISTS,
+    sessionType: 'vr_quest',
+    secureContext: true,
+    vrSupported: false,
+    gamepadConnected: false,
+  });
+
+  it('is absent for a head-only session: the same seven cells as before', () => {
+    const plain = buildSetupModel(input());
+    expect(buildSetupModel(input({ sessionCameras: null })).cells).toEqual(plain.cells);
+    expect(buildSetupModel(input({ sessionCameras: [] })).cells).toEqual(plain.cells);
+    expect(plain.cells.some((c) => c.id === 'cameras')).toBe(false);
+  });
+
+  it('names the camera set last, ok while every wrist is live', () => {
+    const m = buildSetupModel(input({
+      sessionCameras: ['head_camera', ...WRISTS],
+      preflight: withWrists(['head_camera', ...WRISTS]),
+    }));
+    expect(m.cells.map((c) => c.id)).toEqual(['robot', 'control', 'arm_control', 'mode', 'headset', 'arms', 'hands', 'cameras']);
+    expect(m.cells[m.cells.length - 1]).toEqual({ id: 'cameras', label: 'Cameras', value: 'Head + 2 wrists', status: 'ok', reason: null });
+  });
+
+  it('turns red and owns a blocking reason when a chosen wrist is not served', () => {
+    const m = buildSetupModel(input({
+      sessionCameras: ['head_camera', ...WRISTS],
+      preflight: withWrists(['head_camera', 'left_wrist_camera']),
+    }));
+    expect(m.cells.find((c) => c.id === 'cameras')).toMatchObject({
+      value: 'Right wrist offline',
+      status: 'fail',
+      reason: { code: 'wrist_camera_offline', severity: 'block' },
+    });
+    expect(m.cells.find((c) => c.id === 'cameras')!.reason!.text).toMatch(/^Right wrist camera is not being served\./);
+  });
+
+  it('follows the camera check for a camera list without wrists', () => {
+    const m = buildSetupModel(input({ sessionType: 'gamepad', preflight: preflight(true, true, 'gamepad'), sessionCameras: ['head_camera'] }));
+    expect(m.cells.map((c) => c.id)).toEqual(['robot', 'control', 'input', 'cameras']);
+    expect(m.cells[m.cells.length - 1]).toMatchObject({ value: 'Head only', status: 'ok' });
+  });
+});

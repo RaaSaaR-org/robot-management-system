@@ -3,7 +3,7 @@ id: "TASK-442"
 aliases: []
 title: "The session page shows the wrist views beneath the head view"
 slug: "the-session-page-shows-the-wrist-views-beneath-the-head-view"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "claude"
 projects: []

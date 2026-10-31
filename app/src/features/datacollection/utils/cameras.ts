@@ -16,6 +16,13 @@ export const WRIST_CAMERAS = {
 
 const WRIST_ORDER: readonly string[] = [WRIST_CAMERAS.left, WRIST_CAMERAS.right];
 
+/** "Left wrist" / "Right wrist" for a wrist camera; null for any other camera (TASK-442). */
+export function wristCameraLabel(name: string): string | null {
+  if (name === WRIST_CAMERAS.left) return 'Left wrist';
+  if (name === WRIST_CAMERAS.right) return 'Right wrist';
+  return null;
+}
+
 /** The wrist names in `names`, left first, each once. */
 function wristsIn(names: readonly string[] | null | undefined): string[] {
   return WRIST_ORDER.filter((wrist) => names?.includes(wrist));
