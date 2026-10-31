@@ -55,6 +55,7 @@ import {
   type LiveBase,
 } from './teleoperation/liveState.js';
 import { TakeLedger } from './teleoperation/takeLedger.js';
+import { ConflictError } from '../utils/errors.js';
 import {
   SimFrameRecorder,
   type RecordedFrame,
@@ -541,10 +542,18 @@ export class TeleoperationService extends EventEmitter {
         // operator has to clear — most often a recording left running by a
         // session that ended badly — and quietly falling back to the joints-only
         // recorder would hide it behind a dataset with no video.
+        //
+        // A ConflictError, not a plain Error: the route answers a plain Error
+        // with "Failed to start session" and the robot's reason never reached
+        // the screen (TASK-450). A 5xx refusal is "not yet" — the robot is still
+        // writing the previous session — and stopping its recording then would
+        // lose that dataset, so it goes out as the robot's own sentence.
         if (err instanceof AgentRecordingRefused) {
-          throw new Error(
-            `The robot refused to record this session: ${err.message}. ` +
-              `Stop the recording on ${session.robotId} and start the session again.`
+          throw new ConflictError(
+            err.statusCode >= 500
+              ? err.message
+              : `The robot refused to record this session: ${err.message}. ` +
+                  `Stop the recording on ${session.robotId} and start the session again.`
           );
         }
         throw err;
@@ -1111,7 +1120,17 @@ export class TeleoperationService extends EventEmitter {
           stoppedTake = ended.quickCheck.take;
         }
       }
-      await backend.discard(take);
+      // The robot's answer counts, as in discardEpisode: a take marked
+      // discarded here that the robot kept would still land in the dataset.
+      if (!(await backend.discard(take))) {
+        const { live } = await this.readLive(session, stoppedTake);
+        if (stoppedTake !== null) this.emitLive(live);
+        throw new EpisodeActionError(
+          'recorder_unavailable',
+          live,
+          `The robot did not discard take ${take} — check that its agent is running`
+        );
+      }
       await this.markTakeDiscarded(sessionId, take);
       const { live } = await this.readLive(session, stoppedTake);
       this.emitEpisode('episode:discarded', sessionId, live, { take, by });

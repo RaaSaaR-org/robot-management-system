@@ -110,9 +110,44 @@ describe('start', () => {
     expect(await service.start('robot-1', { sessionId: 's1' })).toBeNull();
   });
 
-  it('answers null on a 5xx — the robot is up but broken, and the work did not happen', async () => {
+  it('answers null when the robot times out', async () => {
+    const post = vi.fn(async () => {
+      throw new HttpClientError('Request timeout: /x', undefined, '/x');
+    });
+    const { service } = build({ post });
+    expect(await service.start('robot-1', { sessionId: 's1' })).toBeNull();
+  });
+
+  it('REFUSES while the robot is still writing the previous session (TASK-450)', async () => {
+    // Falling back here recorded a real robot with joints only and no video,
+    // and nothing on screen said so.
+    const post = vi.fn(async () => {
+      throw refusal(503, 'RECORDING_UNAVAILABLE', 'the previous recording is still being written — try again in a moment');
+    });
+    const { service } = build({ post });
+    await expect(service.start('robot-1', { sessionId: 's1' })).rejects.toMatchObject({
+      name: 'AgentRecordingRefused',
+      statusCode: 503,
+      code: 'RECORDING_UNAVAILABLE',
+      message: 'The robot is still saving the previous session. Try Start again in a moment.',
+    });
+  });
+
+  it('refuses on any coded 5xx, in the robot’s own words: the agent knows the route', async () => {
     const post = vi.fn(async () => {
       throw refusal(500, 'RECORDING_FAILED', 'boom');
+    });
+    const { service } = build({ post });
+    await expect(service.start('robot-1', { sessionId: 's1' })).rejects.toMatchObject({
+      statusCode: 500,
+      code: 'RECORDING_FAILED',
+      message: 'boom',
+    });
+  });
+
+  it('answers null on a 5xx with no code — a proxy answered, not the agent', async () => {
+    const post = vi.fn(async () => {
+      throw new HttpClientError('HTTP 502', 502, '/x', undefined, '<html>Bad Gateway</html>');
     });
     const { service } = build({ post });
     expect(await service.start('robot-1', { sessionId: 's1' })).toBeNull();
@@ -178,6 +213,14 @@ describe('discardEpisode', () => {
   it('reports false rather than throwing when the robot is unreachable', async () => {
     const post = vi.fn(async () => {
       throw new HttpClientError('Connection refused', undefined, '/x');
+    });
+    const { service } = build({ post });
+    expect(await service.discardEpisode('robot-1', 0)).toBe(false);
+  });
+
+  it('still reports false on a coded 5xx — only start reads one as a refusal', async () => {
+    const post = vi.fn(async () => {
+      throw refusal(503, 'RECORDING_UNAVAILABLE', 'recording is not available');
     });
     const { service } = build({ post });
     expect(await service.discardEpisode('robot-1', 0)).toBe(false);

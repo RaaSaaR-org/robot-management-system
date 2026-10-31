@@ -65,6 +65,16 @@ describe('SessionCommandBar', () => {
     expect(screen.getByTestId('session-tools-toggle')).toBeInTheDocument();
   });
 
+  it('keeps End disabled and says the robot is saving while the End request is out (TASK-450)', () => {
+    const onEnd = vi.fn();
+    render({ onEnd, endPending: true });
+    const end = screen.getByTestId('session-end');
+    expect(end).toBeDisabled();
+    expect(end).toHaveTextContent('Saving takes on the robot…');
+    fireEvent.click(end);
+    expect(onEnd).not.toHaveBeenCalled();
+  });
+
   it('has no left group, no tools toggle and no robot link dot in Wrap up', () => {
     render({ phase: 'wrap', status: 'completed', tally: 'done' });
     expect(screen.queryByTestId('session-actions')).toBeNull();
