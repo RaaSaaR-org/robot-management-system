@@ -3,7 +3,7 @@ id: "TASK-449"
 aliases: []
 title: "A VLA policy gets its cameras by name, not by list position"
 slug: "a-vla-policy-gets-its-cameras-by-name-not-by-list-position"
-status: "in-progress"
+status: "review"
 priority: 3
 owner: "claude"
 projects: []
