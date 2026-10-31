@@ -1,14 +1,14 @@
 /**
  * @file LiveSessionRedirect.tsx
- * @description `/data-collection/live?robot=<id>` (TASK-412, TASK-416): the
- *              stable URL the Quest browser opens. A session is a candidate
- *              when it is `recording` or `paused` (any age), or `created` less
- *              than `LIVE_CREATED_MAX_AGE_MS` ago. Exactly one candidate → the
- *              page replaces itself with it. More than one → it lists them and
- *              lets the operator pick, never guessing (D1). None → it waits,
- *              looks again every 2 s and names any stale READY session it is
- *              ignoring, so the headset can be opened before the desktop
- *              creates the session.
+ * @description `/data-collection/live?robot=<id>` (TASK-412, TASK-416, TASK-452):
+ *              the stable URL the Quest browser opens. A session is a candidate
+ *              when it is `recording` or `paused` and was last active less than
+ *              `LIVE_ACTIVE_MAX_IDLE_MS` ago, or `created` less than
+ *              `LIVE_CREATED_MAX_AGE_MS` ago. Exactly one candidate → the page
+ *              replaces itself with it. More than one → it lists them and lets
+ *              the operator pick, never guessing (D1). None → it waits, looks
+ *              again every 2 s and names any stale session it is ignoring, so
+ *              the headset can be opened before the desktop creates the session.
  * @feature datacollection
  */
 
@@ -22,15 +22,17 @@ import { sessionName } from '../utils/sessionFormat';
 import type { TeleoperationSession, TeleoperationStatus } from '../types/datacollection.types';
 
 export const LIVE_SESSION_POLL_MS = 2_000;
-/** Statuses the page asks the server for; `created` is then age-filtered. */
+/** Statuses the page asks the server for; `created` is then age-filtered, the others idle-filtered. */
 export const LIVE_SESSION_STATUSES: TeleoperationStatus[] = ['created', 'recording', 'paused'];
 /** A READY session nobody started for this long is not the one the desktop means (D2). */
 export const LIVE_CREATED_MAX_AGE_MS = 4 * 60 * 60 * 1000;
+/** A recording or paused session idle this long was left behind, not the one in use (TASK-452). */
+export const LIVE_ACTIVE_MAX_IDLE_MS = 12 * 60 * 60 * 1000;
 
 export interface LiveCandidates {
   /** Sessions the headset may belong on, newest first. */
   candidates: TeleoperationSession[];
-  /** `created` sessions of this robot too old to count, newest first. */
+  /** Sessions of this robot too old (`created`) or too long idle to count, newest first. */
   ignored: TeleoperationSession[];
 }
 
@@ -39,14 +41,27 @@ function createdMs(s: TeleoperationSession): number {
   return Number.isFinite(t) ? t : 0;
 }
 
-/** Split a robot's sessions into live candidates and stale READY ones. Pure. */
+/**
+ * When the session last changed. `updatedAt` is the server's `@updatedAt`, bumped by
+ * every write to the row (start, pause, resume, each saved take's frame count), so it
+ * is the last activity; `startedAt` and `createdAt` only stand in when it is unreadable.
+ */
+function lastActiveAt(s: TeleoperationSession): string {
+  for (const at of [s.updatedAt, s.startedAt]) if (at && Number.isFinite(Date.parse(at))) return at;
+  return s.createdAt;
+}
+
+/** Split a robot's sessions into live candidates and stale or idle ones. Pure. */
 export function liveCandidates(sessions: TeleoperationSession[], robotId: string, nowMs: number): LiveCandidates {
   const candidates: TeleoperationSession[] = [];
   const ignored: TeleoperationSession[] = [];
   for (const s of sessions) {
     if (s.robotId !== robotId) continue;
-    if (s.status === 'recording' || s.status === 'paused') candidates.push(s);
-    else if (s.status === 'created') {
+    if (s.status === 'recording' || s.status === 'paused') {
+      const t = Date.parse(lastActiveAt(s));
+      if (nowMs - (Number.isFinite(t) ? t : 0) < LIVE_ACTIVE_MAX_IDLE_MS) candidates.push(s);
+      else ignored.push(s);
+    } else if (s.status === 'created') {
       if (nowMs - createdMs(s) < LIVE_CREATED_MAX_AGE_MS) candidates.push(s);
       else ignored.push(s);
     }
@@ -61,17 +76,27 @@ export function liveCandidates(sessions: TeleoperationSession[], robotId: string
  * "created 12 min ago" / "created 2 days ago", spelled out: this page is read
  * in the headset, where "2d" is one more thing to decode. A week or more is a date.
  */
-export function createdAgo(s: TeleoperationSession, nowMs: number = Date.now()): string {
-  const ms = Date.parse(s.createdAt);
-  if (!Number.isFinite(ms)) return 'created at an unknown time';
+function spelledAgo(verb: string, iso: string, nowMs: number): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return `${verb} at an unknown time`;
   const min = Math.floor(Math.max(0, nowMs - ms) / 60_000);
-  if (min < 1) return 'created just now';
-  if (min < 60) return `created ${min} min ago`;
+  if (min < 1) return `${verb} just now`;
+  if (min < 60) return `${verb} ${min} min ago`;
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `created ${hr} hour${hr === 1 ? '' : 's'} ago`;
+  if (hr < 24) return `${verb} ${hr} hour${hr === 1 ? '' : 's'} ago`;
   const day = Math.floor(hr / 24);
-  if (day < 7) return `created ${day} day${day === 1 ? '' : 's'} ago`;
-  return `created ${formatDateTime(s.createdAt, { year: 'numeric', month: 'short', day: 'numeric' })}`;
+  if (day < 7) return `${verb} ${day} day${day === 1 ? '' : 's'} ago`;
+  return `${verb} ${formatDateTime(iso, { year: 'numeric', month: 'short', day: 'numeric' })}`;
+}
+
+export function createdAgo(s: TeleoperationSession, nowMs: number = Date.now()): string {
+  return spelledAgo('created', s.createdAt, nowMs);
+}
+
+/** Why an ignored session does not count: "created 2 days ago, never started" / "paused, last active 2 days ago". */
+export function ignoredReason(s: TeleoperationSession, nowMs: number = Date.now()): string {
+  if (s.status === 'created') return `${createdAgo(s, nowMs)}, never started`;
+  return `${s.status}, ${spelledAgo('last active', lastActiveAt(s), nowMs)}`;
 }
 
 const STATUS_WORD: Partial<Record<TeleoperationStatus, string>> = {
@@ -83,7 +108,7 @@ const STATUS_WORD: Partial<Record<TeleoperationStatus, string>> = {
 export interface LiveSessionRedirectProps {
   pollMs?: number;
   api?: Pick<typeof datacollectionApi, 'listSessions'>;
-  /** Clock for the `created` age filter; tests pin it. */
+  /** Clock for the age and idle filters; tests pin it. */
   now?: () => number;
 }
 
@@ -186,7 +211,7 @@ export function LiveSessionRedirect({
             </p>
             {stale && (
               <p className="text-[13px] text-ink-secondary" data-testid="live-session-ignored">
-                Ignoring &lsquo;{sessionName(stale)}&rsquo; ({createdAgo(stale)}, never started).
+                Ignoring &lsquo;{sessionName(stale)}&rsquo; ({ignoredReason(stale)}).
                 {found.ignored.length > 1 ? ` ${found.ignored.length - 1} older one${found.ignored.length > 2 ? 's' : ''} too.` : ''}{' '}
                 End it on the desktop if it is not needed.
               </p>

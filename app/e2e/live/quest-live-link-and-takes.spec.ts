@@ -248,19 +248,21 @@ test('the Quest link waits past a stale READY session and never guesses between 
   const base = baseURL!;
   const made: string[] = [];
   try {
-    // Precondition: only READY sessions older than 4 h exist for the robot.
+    // Precondition: only READY sessions older than 4 h, or recording/paused ones idle for 12 h (TASK-452), exist for the robot.
     const listed = await request.get(`${base}/api/teleoperation/sessions?robotId=${ROBOT_ID}&status=created,recording,paused&limit=50`);
-    const live = ((await listed.json()) as { sessions: Array<{ id: string; status: string; createdAt: string }> }).sessions;
-    const fresh = live.filter((s) => s.status !== 'created' || Date.now() - Date.parse(s.createdAt) < 4 * 3600_000);
+    const live = ((await listed.json()) as { sessions: Array<{ id: string; status: string; createdAt: string; updatedAt: string }> }).sessions;
+    const isFresh = (s: { status: string; createdAt: string; updatedAt: string }) =>
+      s.status === 'created' ? Date.now() - Date.parse(s.createdAt) < 4 * 3600_000 : Date.now() - Date.parse(s.updatedAt) < 12 * 3600_000;
+    const fresh = live.filter(isFresh);
     expect(fresh, 'a fresh live session already exists for this robot').toEqual([]);
-    const stale = live.filter((s) => s.status === 'created');
+    const stale = live.filter((s) => !isFresh(s));
     test.info().annotations.push({ type: 'stale READY sessions', description: String(stale.length) });
 
     await page.goto(`/data-collection/live?robot=${ROBOT_ID}`);
     await expect(page.getByTestId('live-session-status')).toHaveText(`No live session for ${ROBOT_ID}. Waiting…`, { timeout: 10_000 });
     if (stale.length > 0) {
       const ignored = page.getByTestId('live-session-ignored');
-      await expect(ignored).toContainText(/^Ignoring ‘.+’ \(created [^)]+, never started\)/);
+      await expect(ignored).toContainText(/^Ignoring ‘.+’ \((created [^)]+, never started|(paused|recording), last active [^)]+)\)/);
       // Spelled out ("2 days ago"), never the table's "2d ago".
       await expect(ignored).not.toContainText(/\d[smhd] ago/);
     }
