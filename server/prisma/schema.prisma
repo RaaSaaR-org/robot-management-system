@@ -1796,6 +1796,9 @@ model TeleoperationSession {
   // Null for sessions recorded before the distinction existed.
   recorderKind       String?
   agentDatasetPath   String? // Path ON THE ROBOT where the agent wrote the dataset
+  // Cameras every take records (TASK-441): JSON array of camera names, head
+  // first. Null = the recorder's default, the head camera only.
+  cameras            String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 

@@ -62,11 +62,11 @@ function listValues(cell: unknown): number[] {
 }
 
 /** Real JPEGs, because ffmpeg is the thing under test on the video side. */
-async function makeFrames(dir: string, count: number): Promise<void> {
+async function makeFrames(dir: string, count: number, size = '64x48'): Promise<void> {
   await mkdir(dir, { recursive: true });
   const res = spawnSync('ffmpeg', [
     '-y', '-loglevel', 'error',
-    '-f', 'lavfi', '-i', `testsrc=size=64x48:rate=10`,
+    '-f', 'lavfi', '-i', `testsrc=size=${size}:rate=10`,
     '-frames:v', String(count),
     '-start_number', '0',
     join(dir, 'frame_%08d.jpg'),
@@ -448,6 +448,52 @@ describe.skipIf(!HAVE_FFMPEG)('discarded episodes leave no hole', () => {
       expect(info.splits).toEqual({ train: '0:2' });
       const rows = await readRows(join(root, 'data/chunk-000/file-000.parquet'));
       expect([...new Set(rows.map((r) => Number(r.episode_index)))]).toEqual([0, 1]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe.skipIf(!HAVE_FFMPEG)('cameras of different sizes (TASK-441)', () => {
+  it('declares and encodes each camera at its own size, in the order given', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lerobot-writer-sizes-'));
+    try {
+      const cams = [
+        { key: 'cam_right_high', size: '64x48', width: 64, height: 48 },
+        { key: 'cam_left_wrist', size: '32x24', width: 32, height: 24 },
+        { key: 'cam_right_wrist', size: '48x32', width: 48, height: 32 },
+      ];
+      for (const cam of cams) await makeFrames(join(dir, 'seq', cam.key), 4, cam.size);
+      const root = join(dir, 'dataset');
+      const written = await writeLeRobotV3({
+        root,
+        robotType: 'Unitree_G1_Dex3',
+        jointNames: JOINTS,
+        fps: 10,
+        episodes: [episode(0, 4)],
+        cameras: cams.map((c) => ({
+          key: c.key,
+          framesDir: join(dir, 'seq', c.key),
+          width: c.width,
+          height: c.height,
+        })),
+      });
+      expect(written.videoFeatures).toEqual(cams.map((c) => `observation.images.${c.key}`));
+      const info = JSON.parse(await readFile(join(root, 'meta/info.json'), 'utf-8'));
+      const imageKeys = Object.keys(info.features).filter((k) => k.startsWith('observation.images.'));
+      expect(imageKeys).toEqual(cams.map((c) => `observation.images.${c.key}`));
+      for (const cam of cams) {
+        const feature = info.features[`observation.images.${cam.key}`];
+        expect(feature.shape, cam.key).toEqual([cam.height, cam.width, 3]);
+        expect(feature.info['video.width'], cam.key).toBe(cam.width);
+        expect(feature.info['video.height'], cam.key).toBe(cam.height);
+        const mp4 = join(root, 'videos', `observation.images.${cam.key}`, 'chunk-000', 'file-000.mp4');
+        const probe = spawnSync('ffprobe', [
+          '-v', 'error', '-select_streams', 'v:0',
+          '-show_entries', 'stream=width,height', '-of', 'csv=p=0', mp4,
+        ]);
+        if (probe.status === 0) expect(probe.stdout.toString().trim(), cam.key).toBe(`${cam.width},${cam.height}`);
+      }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
