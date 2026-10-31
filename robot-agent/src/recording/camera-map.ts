@@ -148,3 +148,37 @@ export function sceneCameraForPolicyKey(
   }
   return byKey('cam_right_high') ?? cameras[0];
 }
+
+/**
+ * Which listed camera fills each of a policy's cameras, for a whole policy.
+ *
+ * A sidecar that lists a robot-mounted view (any camera that maps to a Unitree
+ * view key — `head_camera`, `ego_camera`, a wrist) is filled BY NAME through
+ * {@link sceneCameraForPolicyKey}. A sidecar that lists none — the SO-101 arm's
+ * `['wrist', 'top']` — has no names to match, so it keeps the positional fill
+ * it always had: the k-th policy camera gets the k-th listed camera, the last
+ * one reused when the policy wants more. Without that, a two-camera SmolVLA
+ * policy (`up`, `side`) on an SO-101 would get the wrist frame twice and never
+ * see the top camera.
+ *
+ * An empty list gives `undefined` for every policy camera.
+ */
+export function policyCameraSources(
+  scene: string | null | undefined,
+  policyKeys: readonly string[],
+  cameras: readonly string[],
+): Map<string, string | undefined> {
+  const listsRobotView = cameras.some((camera) =>
+    POLICY_VIEW_KEYS.has(datasetCameraKey(scene, camera)),
+  );
+  const sources = new Map<string, string | undefined>();
+  policyKeys.forEach((policyKey, i) => {
+    sources.set(
+      policyKey,
+      listsRobotView
+        ? sceneCameraForPolicyKey(scene, policyKey, cameras)
+        : cameras[Math.min(i, cameras.length - 1)],
+    );
+  });
+  return sources;
+}

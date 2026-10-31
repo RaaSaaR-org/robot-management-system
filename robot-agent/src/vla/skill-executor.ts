@@ -56,7 +56,7 @@ import { EventEmitter } from 'events';
 import type { RobotStateManager } from '../robot/state.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
 import { config } from '../config/config.js';
-import { sceneCameraForPolicyKey } from '../recording/camera-map.js';
+import { policyCameraSources } from '../recording/camera-map.js';
 import type { RolloutStrategy } from './types.js';
 import {
   resolveActionContract,
@@ -1787,12 +1787,16 @@ export class SkillExecutor {
    * for the apple configs). The sidecar lists its physical cameras by their
    * scene names (`head_camera`, `left_wrist_camera`, ...). Each policy name is
    * filled BY NAME through the inverse of the recording camera map
-   * (`sceneCameraForPolicyKey`): `cam_right_high` <- `head_camera`,
-   * `cam_left_high` <- `ego_camera`, a wrist key <- only the matching wrist,
-   * and anything else, or a view the sidecar does not list, <- the head
-   * camera (the first listed camera when there is no head camera). Mapping by
+   * (`policyCameraSources` -> `sceneCameraForPolicyKey`):
+   * `cam_right_high` <- `head_camera`, `cam_left_high` <- `ego_camera`, a
+   * wrist key <- only the matching wrist, and anything else, or a view the
+   * sidecar does not list, <- the head camera (the first listed camera when there is no head camera). Mapping by
    * list position fed a wrist view into a head slot as soon as a sidecar
    * listed wrist cameras (TASK-449).
+   *
+   * A sidecar that lists no robot-mounted view at all (the SO-101 arm's
+   * `['wrist', 'top']`) has no names to match and keeps the positional fill:
+   * SmolVLA's `up`/`side` still get `wrist`/`top` (`policyCameraSources`).
    *
    * Only the distinct cameras the mapping picks are fetched. With no sidecar
    * camera at all, every name gets the synthetic gray frame.
@@ -1802,10 +1806,7 @@ export class SkillExecutor {
   ): Promise<[Record<string, string>, number[]]> {
     const sidecarCameras = await hardwareClient.getCameras();
 
-    const source = new Map<string, string | undefined>();
-    for (const vlaName of vlaConfig.cameras) {
-      source.set(vlaName, sceneCameraForPolicyKey(null, vlaName, sidecarCameras));
-    }
+    const source = policyCameraSources(null, vlaConfig.cameras, sidecarCameras);
     const toFetch = [
       ...new Set([...source.values()].filter((n): n is string => n !== undefined)),
     ];

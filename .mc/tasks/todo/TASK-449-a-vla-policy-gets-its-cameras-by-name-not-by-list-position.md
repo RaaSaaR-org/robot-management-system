@@ -102,3 +102,8 @@ Replace the positional mapping with a name lookup per vla-server camera name:
 
 - Found by the TASK-439 integration check on 2026-10-31. Not a child of TASK-439; it only
   needs TASK-440's wrist cameras to be observable in the sim.
+- Decided during implementation (2026-10-31): a sidecar that lists no robot-mounted view at
+  all (no camera maps to a Unitree view key; the SO-101 arm's `['wrist', 'top']`) keeps the
+  positional fill, so a two-camera SmolVLA policy (`up`, `side`) still gets `wrist` and `top`.
+  The "first listed camera" fallback applies only to a sidecar that lists some robot view
+  but no head camera. `policyCameraSources` in `robot-agent/src/recording/camera-map.ts`.

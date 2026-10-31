@@ -2209,9 +2209,13 @@ describe('SkillExecutor — a policy gets its cameras by name, not by list posit
   });
 
   it('no head camera listed gives the first listed camera; none listed gives the gray frame', async () => {
-    const noHead = await capture(['cam_right_high', 'up'], ['wrist', 'top']);
-    expect(noHead.images).toEqual({ cam_right_high: 'jpeg:wrist', up: 'jpeg:wrist' });
-    expect(noHead.fetched).toEqual(['wrist']);
+    const noHead = await capture(['cam_right_high', 'up', 'cam_right_wrist'], [LEFT, RIGHT]);
+    expect(noHead.images).toEqual({
+      cam_right_high: `jpeg:${LEFT}`,
+      up: `jpeg:${LEFT}`,
+      cam_right_wrist: `jpeg:${RIGHT}`,
+    });
+    expect([...noHead.fetched].sort()).toEqual([LEFT, RIGHT].sort());
     vi.restoreAllMocks();
 
     const none = await capture(['cam_left_high', 'cam_right_high'], []);
@@ -2225,8 +2229,9 @@ describe('SkillExecutor — a policy gets its cameras by name, not by list posit
   // Regression: what positional mapping gave a one-camera config is the first
   // listed camera. Every sidecar that runs one today lists the head camera
   // first (the real robot's head-only list, the sorted teleimager list, the
-  // sims' MJCF order) or has no head camera at all (SO-101) — and for all of
-  // them the by-name lookup picks that same camera, with one snapshot.
+  // sims' MJCF order) or has no robot-mounted view at all (SO-101, which keeps
+  // the positional fill) — and for all of them that same camera is picked,
+  // with one snapshot.
   it('one-camera configs and the head-only real robot get exactly the input they got before', async () => {
     const sidecars = [
       [HEAD], // real G1, pc2cam / RealSense: head only
@@ -2248,5 +2253,19 @@ describe('SkillExecutor — a policy gets its cameras by name, not by list posit
     const twoCam = await capture(['cam_left_high', 'cam_right_high'], [HEAD]);
     expect(twoCam.images).toEqual({ cam_left_high: `jpeg:${HEAD}`, cam_right_high: `jpeg:${HEAD}` });
     expect(twoCam.fetched).toEqual([HEAD]);
+  });
+
+  // Regression: a sidecar with no robot-mounted view (SO-101: wrist + top)
+  // has no names to match and keeps the positional fill. A two-camera
+  // SmolVLA policy still gets wrist AND top, not the wrist frame twice.
+  it('an SO-101 sidecar keeps the positional fill for a multi-camera policy', async () => {
+    const twoCam = await capture(['up', 'side'], ['wrist', 'top']);
+    expect(twoCam.images).toEqual({ up: 'jpeg:wrist', side: 'jpeg:top' });
+    expect([...twoCam.fetched].sort()).toEqual(['top', 'wrist']);
+    vi.restoreAllMocks();
+
+    // More policy cameras than listed ones reuse the last, as before.
+    const threeCam = await capture(['a', 'b', 'c'], ['wrist', 'top']);
+    expect(threeCam.images).toEqual({ a: 'jpeg:wrist', b: 'jpeg:top', c: 'jpeg:top' });
   });
 });

@@ -9,6 +9,7 @@ import {
   datasetCameraKey,
   datasetImageFeature,
   mapCameras,
+  policyCameraSources,
   sceneCameraForPolicyKey,
 } from '../camera-map.js';
 
@@ -97,5 +98,33 @@ describe('sceneCameraForPolicyKey', () => {
   it('falls back to the first listed camera without a head camera, and to nothing without cameras', () => {
     expect(sceneCameraForPolicyKey(null, 'up', ['wrist', 'top'])).toBe('wrist');
     expect(sceneCameraForPolicyKey(null, 'cam_right_high', [])).toBeUndefined();
+  });
+});
+
+describe('policyCameraSources', () => {
+  it('fills by name when the sidecar lists a robot-mounted view', () => {
+    const sources = policyCameraSources(
+      null,
+      ['cam_left_high', 'cam_right_high', 'cam_left_wrist'],
+      ['left_wrist_camera', 'right_wrist_camera', 'head_camera'],
+    );
+    expect([...sources]).toEqual([
+      ['cam_left_high', 'head_camera'],
+      ['cam_right_high', 'head_camera'],
+      ['cam_left_wrist', 'left_wrist_camera'],
+    ]);
+  });
+
+  it('keeps the positional fill when no listed camera is a robot-mounted view', () => {
+    expect([...policyCameraSources(null, ['up', 'side'], ['wrist', 'top'])]).toEqual([
+      ['up', 'wrist'],
+      ['side', 'top'],
+    ]);
+    expect([...policyCameraSources(null, ['a', 'b', 'c'], ['wrist', 'top'])]).toEqual([
+      ['a', 'wrist'],
+      ['b', 'top'],
+      ['c', 'top'],
+    ]);
+    expect([...policyCameraSources(null, ['up'], [])]).toEqual([['up', undefined]]);
   });
 });
