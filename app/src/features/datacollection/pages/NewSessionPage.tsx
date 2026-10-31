@@ -13,6 +13,9 @@
  *              An offline robot with a robot supervisor gets the compact
  *              readiness panel under the robot field, with Start robot side,
  *              so the robot side comes up without leaving the page (TASK-419).
+ *              A robot with wrist cameras gets a Cameras choice — Head + wrists
+ *              (default) or Head only; any other robot sends no camera list,
+ *              exactly as before (TASK-447).
  * @feature datacollection
  */
 
@@ -20,7 +23,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Headset } from 'lucide-react';
 import {
-  Button, Disclosure, FormField, Input, InfoIcon, PageHeader, Panel, Select, ToggleChip,
+  Button, Disclosure, FormField, Input, InfoIcon, PageHeader, Panel, SegmentedControl, Select, ToggleChip,
   errorMessage, humanizeStatus, toast,
 } from '@/shared/components/ui';
 import { SessionTypeSelector } from '../components/SessionTypeSelector';
@@ -28,6 +31,8 @@ import { useDataCollectionStore } from '../store/datacollectionStore';
 import { useRobotsStore } from '../../robots/store/robotsStore';
 import { useRobotReadiness } from '../../robots/hooks/useRobotReadiness';
 import { RobotReadinessPanel } from '../../robots/components/readiness/RobotReadinessPanel';
+import { useRobotCameras } from '../../robots/hooks/useRobotCameras';
+import { WRIST_CAMERAS, robotWristCameras } from '../utils/cameras';
 import { useAuthStore } from '@/features/auth/store/authStore';
 import { TELEOPERATION_TYPE_LABELS } from '../types/datacollection.types';
 import type { TeleoperationType, CreateSessionRequest } from '../types/datacollection.types';
@@ -60,6 +65,19 @@ function intInRange(value: string, min: number, max: number, what: string): stri
 
 const isOnline = (status: string) => status !== 'offline';
 
+/** Which cameras a session on a robot with wrist cameras records (TASK-447). */
+type CameraChoice = 'head_wrists' | 'head_only';
+
+const CAMERA_CHOICES: { value: CameraChoice; label: string; hint: string }[] = [
+  { value: 'head_wrists', label: 'Head + wrists', hint: 'Head view plus left and right wrist views, all recorded.' },
+  { value: 'head_only', label: 'Head only', hint: 'Like a robot without wrist cameras.' },
+];
+
+const WRIST_LABELS: Record<string, string> = {
+  [WRIST_CAMERAS.left]: 'Left wrist camera',
+  [WRIST_CAMERAS.right]: 'Right wrist camera',
+};
+
 export function NewSessionPage() {
   const navigate = useNavigate();
   const createSession = useDataCollectionStore((s) => s.createSession);
@@ -85,6 +103,7 @@ export function NewSessionPage() {
   const [episodeTimeS, setEpisodeTimeS] = useState(String(prefs.episodeTimeS ?? NEW_SESSION_DEFAULTS.episodeTimeS ?? ''));
   const [fps, setFps] = useState(String(prefs.fps ?? NEW_SESSION_DEFAULTS.fps));
   const [datasetRepoId, setDatasetRepoId] = useState('');
+  const [cameraChoice, setCameraChoice] = useState<CameraChoice>('head_wrists');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [errors, setErrors] = useState<Errors>({});
   const [formError, setFormError] = useState<string>();
@@ -118,6 +137,14 @@ export function NewSessionPage() {
     const timer = setInterval(() => void fetchRobots(), ROBOT_REFRESH_MS);
     return () => clearInterval(timer);
   }, [agentUp, fetchRobots]);
+
+  // The wrist cameras the chosen robot is set up with. None, not loaded yet or
+  // unreadable: no Cameras choice, and the request names no cameras (TASK-447).
+  const robotCameras = useRobotCameras(robotId || null);
+  const wristCameras = robotCameras.loading ? [] : robotWristCameras(robotCameras);
+  const offlineWrists = wristCameras.filter((c) => !robotCameras.cameras.includes(c));
+  const sessionCameras =
+    wristCameras.length > 0 && cameraChoice === 'head_wrists' ? ['head_camera', ...wristCameras] : undefined;
 
   // Preselect once the list arrives: the remembered robot if it is online,
   // else the only online robot. Never overrides a choice the user made.
@@ -177,6 +204,7 @@ export function NewSessionPage() {
       languageInstr: task.trim(),
       ...(episodeTimeS.trim() ? { episodeTimeS: Number(episodeTimeS) } : {}),
       ...(datasetRepoId.trim() ? { datasetRepoId: datasetRepoId.trim() } : {}),
+      ...(sessionCameras ? { cameras: sessionCameras } : {}),
     };
     // The dataset name is not remembered: it names one dataset.
     saveNewSessionPrefs(userId, {
@@ -275,6 +303,27 @@ export function NewSessionPage() {
               )}
             </div>
           </div>
+
+          {wristCameras.length > 0 && (
+            <div className="flex flex-col gap-1.5" data-testid="camera-choice">
+              <span className="text-[13px] font-medium text-ink-secondary">Cameras</span>
+              <SegmentedControl
+                label="Cameras"
+                options={CAMERA_CHOICES.map((c) => ({ value: c.value, label: c.label, disabled: saving }))}
+                value={cameraChoice}
+                onChange={setCameraChoice}
+                className="self-start"
+              />
+              <p className="text-xs text-ink-tertiary">
+                {CAMERA_CHOICES.find((c) => c.value === cameraChoice)?.hint}
+              </p>
+              {cameraChoice === 'head_wrists' && offlineWrists.map((c) => (
+                <p key={c} className="text-xs text-signal-unknown" data-testid="wrist-offline-note">
+                  {WRIST_LABELS[c] ?? c} is offline right now.
+                </p>
+              ))}
+            </div>
+          )}
 
           {supervised && (
             <RobotReadinessPanel

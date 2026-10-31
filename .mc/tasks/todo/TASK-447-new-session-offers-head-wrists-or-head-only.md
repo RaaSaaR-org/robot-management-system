@@ -3,7 +3,7 @@ id: "TASK-447"
 aliases: []
 title: "New session offers Head + wrists or Head only"
 slug: "new-session-offers-head-wrists-or-head-only"
-status: "todo"
+status: "in-progress"
 priority: 2
 owner: "claude"
 projects: []
