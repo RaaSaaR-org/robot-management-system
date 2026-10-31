@@ -16,6 +16,7 @@ import {
   writeLeRobotV3,
   buildInfo,
   computeFeatureStats,
+  STATS_QUANTILES,
   LEROBOT_CODEBASE_VERSION,
   type WriterEpisode,
 } from '../lerobot-writer.js';
@@ -95,6 +96,38 @@ describe('computeFeatureStats', () => {
     const stats = computeFeatureStats([]);
     expect(stats.mean).toEqual([]);
     expect(stats.min).toEqual([]);
+    expect(stats.count).toEqual([0]);
+    expect(stats.q01).toEqual([]);
+  });
+
+  it('carries count and the quantiles lerobot writes, as numpy computes them', () => {
+    // Second column deliberately unsorted: the quantile must sort per column.
+    const stats = computeFeatureStats([
+      [0, 10],
+      [1, 40],
+      [2, 20],
+      [3, 30],
+      [4, 0],
+    ]);
+    expect(stats.count).toEqual([5]);
+    // np.quantile([0, 1, 2, 3, 4], q) and np.quantile([0, 10, 20, 30, 40], q).
+    const expected = {
+      q01: [0.04, 0.4],
+      q10: [0.4, 4],
+      q50: [2, 20],
+      q90: [3.6, 36],
+      q99: [3.96, 39.6],
+    };
+    expect(STATS_QUANTILES.map(([key]) => key)).toEqual(Object.keys(expected));
+    for (const [key, values] of Object.entries(expected)) {
+      const actual = stats[key as keyof typeof expected];
+      expect(actual, key).toHaveLength(2);
+      values.forEach((v, i) => expect(actual[i], `${key}[${i}]`).toBeCloseTo(v, 10));
+    }
+    // Unchanged by the additions.
+    expect(stats.mean).toEqual([2, 20]);
+    expect(stats.min).toEqual([0, 0]);
+    expect(stats.max).toEqual([4, 40]);
   });
 });
 
@@ -383,6 +416,46 @@ describe.skipIf(!HAVE_FFMPEG)('writeLeRobotV3 produces a v3.0 tree', () => {
     expect(stats['observation.state'].mean).toHaveLength(3);
     expect(stats['action'].mean).toHaveLength(3);
     expect(stats['action'].mean[0]).toBeGreaterThan(stats['observation.state'].mean[0]);
+  });
+
+  it('gives state and action the count and quantiles pi05 normalises with', async () => {
+    const stats = JSON.parse(await readFile(join(root, 'meta/stats.json'), 'utf-8'));
+    for (const key of ['observation.state', 'action']) {
+      expect(stats[key].count, key).toEqual([9]);
+      for (const [q] of STATS_QUANTILES) expect(stats[key][q], `${key}.${q}`).toHaveLength(JOINTS.length);
+    }
+    // Column 0 over both episodes: 0, .01, .02, .03, 10, 10.01 … 10.04 — the
+    // median is the fifth value.
+    expect(stats['observation.state'].q50[0]).toBeCloseTo(10, 6);
+  });
+
+  it('writes a stats entry for every camera lerobot will look one up for', async () => {
+    // lerobot's `meta.camera_keys` is every feature of dtype video/image, and
+    // `use_imagenet_stats` assigns into `stats[key]` for each — a missing key is
+    // a KeyError before step 1.
+    const info = JSON.parse(await readFile(join(root, 'meta/info.json'), 'utf-8'));
+    const stats = JSON.parse(await readFile(join(root, 'meta/stats.json'), 'utf-8'));
+    const cameraKeys = Object.entries(info.features as Record<string, { dtype: string }>)
+      .filter(([, f]) => f.dtype === 'video' || f.dtype === 'image')
+      .map(([k]) => k);
+    expect(cameraKeys).toEqual(['observation.images.cam_right_high']);
+    for (const key of cameraKeys) {
+      const entry = stats[key];
+      expect(entry, key).toBeDefined();
+      for (const s of ['mean', 'std', 'min', 'max']) {
+        const value = entry[s] as number[][][];
+        expect(value, `${key}.${s}`).toHaveLength(3);
+        for (const channel of value) {
+          expect(channel).toHaveLength(1);
+          expect(channel[0]).toHaveLength(1);
+        }
+      }
+      expect(entry.mean).toEqual([[[0.485]], [[0.456]], [[0.406]]]);
+      expect(entry.std).toEqual([[[0.229]], [[0.224]], [[0.225]]]);
+      expect(entry.min).toEqual([[[0]], [[0]], [[0]]]);
+      expect(entry.max).toEqual([[[1]], [[1]], [[1]]]);
+      expect(entry.count).toEqual([info.total_frames]);
+    }
   });
 
   it('produces an mp4 with as many frames as the parquet has rows', async () => {
