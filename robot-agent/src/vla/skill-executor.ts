@@ -1790,9 +1790,9 @@ export class SkillExecutor {
    * (`policyCameraSources` -> `sceneCameraForPolicyKey`):
    * `cam_right_high` <- `head_camera`, `cam_left_high` <- `ego_camera`, a
    * wrist key <- only the matching wrist, and anything else, or a view the
-   * sidecar does not list, <- the head camera (the first listed camera when there is no head camera). Mapping by
-   * list position fed a wrist view into a head slot as soon as a sidecar
-   * listed wrist cameras (TASK-449).
+   * sidecar does not list, <- the head camera (the first listed camera when
+   * there is no head camera). Mapping by list position fed a wrist view into
+   * a head slot as soon as a sidecar listed wrist cameras (TASK-449).
    *
    * A sidecar that lists no robot-mounted view at all (the SO-101 arm's
    * `['wrist', 'top']`) has no names to match and keeps the positional fill:
