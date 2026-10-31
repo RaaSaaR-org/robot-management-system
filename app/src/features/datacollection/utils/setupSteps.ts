@@ -18,6 +18,9 @@
  *              or not.
  *              TASK-437: only the legacy MuJoCo facade skips step 3 for want of
  *              a locomotion FSM; a supervisor sim mid-restart is not balancing.
+ *              TASK-442: a session with a camera list gets a Cameras cell, its
+ *              camera set as the value; a chosen wrist camera the robot does
+ *              not serve turns it red and owns a blocking reason.
  * @feature datacollection
  */
 
@@ -34,6 +37,7 @@ import {
 } from '../../robots/components/readiness/readinessRows';
 import type { TeleoperationType } from '../types/datacollection.types';
 import type { PreflightItem } from './preflight';
+import { cameraCountLabel, cameraSetLabel } from './cameras';
 import type { RobotStop } from './robotStop';
 
 export type SetupStepId = 'robot' | 'arm_control' | 'stance' | 'quest' | 'operator' | 'input' | 'control';
@@ -69,7 +73,7 @@ export interface SetupStep {
   waitsFor: number | null;
 }
 
-export type SystemsCellId = 'robot' | 'control' | 'arm_control' | 'mode' | 'headset' | 'arms' | 'hands' | 'input';
+export type SystemsCellId = 'robot' | 'control' | 'arm_control' | 'mode' | 'headset' | 'arms' | 'hands' | 'input' | 'cameras';
 export type SystemsCellStatus = 'ok' | 'warn' | 'fail' | 'idle';
 
 export interface SystemsCell {
@@ -79,6 +83,8 @@ export interface SystemsCell {
   status: SystemsCellStatus;
   /** The readiness reason this cell owns (the same one a step owns). */
   reason: SetupReason | null;
+  /** The full value, when `value` is a short form of it (the Cameras cell). */
+  title?: string;
 }
 
 export interface SetupModelInput {
@@ -98,6 +104,8 @@ export interface SetupModelInput {
   operator: { present: boolean; name: string | null; inVr: boolean };
   /** What holds the robot stopped (`robotStop()`), or null (TASK-431). */
   stop?: RobotStop | null;
+  /** The cameras the session records (`session.cameras`); null or absent is head only, no Cameras cell (TASK-442). */
+  sessionCameras?: string[] | null;
 }
 
 export interface SetupModel {
@@ -542,9 +550,12 @@ function buildCells(
     lease.bound || lease.holder ? 'ok' : lease.enabled ? 'warn' : 'idle',
   );
 
+  const cams = camerasCell(input);
+  const withCameras = (cells: SystemsCell[]): SystemsCell[] => (cams ? [...cells, cams] : cells);
+
   if (!vr) {
     const inp = facts.get('input')!;
-    return [robotCell, controlCell, cell('input', 'Input', inp.summary, inp.tone)];
+    return withCameras([robotCell, controlCell, cell('input', 'Input', inp.summary, inp.tone)]);
   }
 
   const arm = armControlOn(readiness);
@@ -577,7 +588,7 @@ function buildCells(
       ? cell('hands', 'Hands', 'Both ok', 'ok')
       : cell('hands', 'Hands', 'Not reported', 'idle');
 
-  return [
+  return withCameras([
     robotCell,
     controlCell,
     cell('arm_control', 'Arm control', arm ? 'On' : arm === false ? 'Read-only' : '—', arm ? 'ok' : arm === false ? 'warn' : 'idle'),
@@ -585,5 +596,31 @@ function buildCells(
     headset,
     arms,
     hands,
-  ];
+  ]);
+}
+
+const CAMERA_STATUS: Record<PreflightItem['level'], SystemsCellStatus> = {
+  ok: 'ok', warning: 'warn', blocking: 'fail', checking: 'idle', unknown: 'idle',
+};
+
+/**
+ * The session's camera set (TASK-442), only for a session with a camera list.
+ * Its dot follows the wrist cameras when the session records any, else the
+ * camera check; a wrist the robot does not serve owns a blocking reason.
+ */
+function camerasCell(input: SetupModelInput): SystemsCell | null {
+  const list = input.sessionCameras;
+  if (!list || list.length === 0) return null;
+  const wrists = input.preflight.find((p) => p.id === 'wrist_cameras') ?? null;
+  const check = wrists ?? input.preflight.find((p) => p.id === 'camera') ?? null;
+  const blocked = wrists?.level === 'blocking';
+  return {
+    id: 'cameras',
+    label: 'Cameras',
+    // Eight cells share one row from 1440 px: the cell says how many, its title which.
+    value: blocked ? wrists.detail : cameraCountLabel(list),
+    ...(blocked ? {} : { title: cameraSetLabel(list) }),
+    status: check ? CAMERA_STATUS[check.level] : 'idle',
+    reason: blocked ? { code: 'wrist_camera_offline', text: wrists.action ?? wrists.detail, severity: 'block' } : null,
+  };
 }

@@ -3,7 +3,10 @@
  * @description A created session shows the pre-flight checklist (TASK-392),
  *              since TASK-427 as the Set up steps and the preview: an offline
  *              robot disables Start session — with the reason as visible text —
- *              and its Space hotkey, a warning does not.
+ *              and its Space hotkey, a warning does not. TASK-442: a session
+ *              recording a wrist camera the robot does not serve is blocked
+ *              with a plain reason; a head-only session is not, and on a robot
+ *              with wrist cameras it shows no wrist anywhere.
  * @feature datacollection
  */
 
@@ -32,7 +35,7 @@ vi.mock('../../hooks/useSessionControlLease', () => ({
 }));
 vi.mock('../../hooks/useGamepadJoints', () => ({ useGamepadJoints: () => undefined }));
 vi.mock('../../../robots/hooks/useRobotCameras', () => ({
-  useRobotCameras: () => ({ cameras: ['head_camera'], source: 'pc2cam', loading: false, refresh: vi.fn() }),
+  useRobotCameras: () => ({ cameras: served.value, source: 'pc2cam', loading: false, refresh: vi.fn() }),
 }));
 vi.mock('../../components/CameraStreamView', () => ({
   CameraStreamView: ({ label }: { label: string }) => <div data-testid="camera">{label}</div>,
@@ -41,6 +44,7 @@ vi.mock('../../../robots/components/visualization/Robot3DViewer', () => ({ Robot
 vi.mock('../../../robots/components/tabs/TeleopTab', () => ({ KeyboardTeleopSection: () => null }));
 
 const telemetryConnected = vi.hoisted(() => ({ value: true }));
+const served = vi.hoisted(() => ({ value: ['head_camera'] as string[] }));
 
 const session: TeleoperationSession = {
   id: 'sess-1', operatorId: 'u', robotId: 'g1', type: 'keyboard_mouse', status: 'created',
@@ -60,6 +64,7 @@ function setRobot(status: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   telemetryConnected.value = true;
+  served.value = ['head_camera'];
   confirmMock.mockResolvedValue(false);
   useDataCollectionStore.setState({
     sessions: [session],
@@ -112,5 +117,42 @@ describe('SessionDetailPage pre-flight', () => {
     const preview = await screen.findByTestId('setup-preview');
     expect(within(preview).getByTestId('camera')).toHaveTextContent('Head camera');
     expect(screen.queryByText('Top camera')).not.toBeInTheDocument();
+  });
+
+  it('blocks Start session on a chosen wrist camera the robot does not serve (TASK-442)', async () => {
+    const withWrists = { ...session, cameras: ['head_camera', 'left_wrist_camera', 'right_wrist_camera'] };
+    useDataCollectionStore.setState({ sessions: [withWrists], selectedSession: withWrists });
+    served.value = ['head_camera', 'right_wrist_camera'];
+    setRobot('online');
+    render();
+    await screen.findByTestId('setup-step-robot');
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeDisabled();
+    expect(screen.getByTestId('setup-start-text')).toHaveTextContent(/^Left wrist camera is not being served\./);
+    // Set up's preview has no wrist strip; the wrists stay in its view switch.
+    expect(within(screen.getByTestId('setup-preview')).queryByTestId('live-view-wrists')).toBeNull();
+    fireEvent.keyDown(window, { code: 'Space' });
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it('starts a head-and-wrists session whose wrists are all served', async () => {
+    const withWrists = { ...session, cameras: ['head_camera', 'left_wrist_camera', 'right_wrist_camera'] };
+    useDataCollectionStore.setState({ sessions: [withWrists], selectedSession: withWrists });
+    served.value = ['head_camera', 'left_wrist_camera', 'right_wrist_camera'];
+    setRobot('online');
+    render();
+    await screen.findByTestId('setup-step-robot');
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled();
+  });
+
+  it('a head-only session on a robot with wrist cameras shows no wrist anywhere (TASK-442, D2)', async () => {
+    served.value = ['head_camera', 'left_wrist_camera', 'right_wrist_camera', 'top'];
+    setRobot('online');
+    render();
+    await screen.findByTestId('setup-step-robot');
+    const preview = screen.getByTestId('setup-preview');
+    const views = within(within(preview).getByTestId('live-view-switch')).getAllByRole('button').map((b) => b.textContent);
+    expect(views).toEqual(['Twin', 'Head camera', 'Top camera']);
+    expect(document.body.textContent).not.toMatch(/wrist/i);
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled();
   });
 });
