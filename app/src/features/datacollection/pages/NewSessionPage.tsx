@@ -312,6 +312,7 @@ export function NewSessionPage() {
                 options={CAMERA_CHOICES.map((c) => ({ value: c.value, label: c.label, disabled: saving }))}
                 value={cameraChoice}
                 onChange={setCameraChoice}
+                touchTarget
                 className="self-start"
               />
               <p className="text-xs text-ink-tertiary">
