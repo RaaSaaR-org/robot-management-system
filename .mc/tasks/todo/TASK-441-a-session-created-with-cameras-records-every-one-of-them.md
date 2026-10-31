@@ -3,7 +3,7 @@ id: "TASK-441"
 aliases: []
 title: "A session created with cameras records every one of them"
 slug: "a-session-created-with-cameras-records-every-one-of-them"
-status: "in-progress"
+status: "review"
 priority: 2
 owner: "claude"
 projects: []
