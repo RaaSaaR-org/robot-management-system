@@ -3,7 +3,7 @@ id: "TASK-448"
 aliases: []
 title: "A camera view that leaves the page closes its stream"
 slug: "a-camera-view-that-leaves-the-page-closes-its-stream"
-status: "review"
+status: "done"
 priority: 1
 owner: "claude"
 projects: []
