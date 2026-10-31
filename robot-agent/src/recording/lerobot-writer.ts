@@ -128,17 +128,38 @@ export const VIDEO_PATH_TEMPLATE = 'videos/{video_key}/chunk-{chunk_index:03d}/f
 // Stats
 // ---------------------------------------------------------------------------
 
-export interface FeatureStats {
+/**
+ * The quantiles lerobot v3 writes per feature: `DEFAULT_QUANTILES` in
+ * `lerobot/datasets/compute_stats.py`, keyed `f"q{int(q * 100):02d}"`. pi05
+ * normalises state and action with `q01`/`q99` and refuses to start without them.
+ */
+export const STATS_QUANTILES = [
+  ['q01', 0.01],
+  ['q10', 0.1],
+  ['q50', 0.5],
+  ['q90', 0.9],
+  ['q99', 0.99],
+] as const;
+
+export type QuantileKey = (typeof STATS_QUANTILES)[number][0];
+
+export interface FeatureStats extends Record<QuantileKey, number[]> {
   mean: number[];
   std: number[];
   min: number[];
   max: number[];
+  /** Frames the stats were taken over, shaped `[1]` as lerobot writes it. */
+  count: number[];
 }
 
 /**
- * Per-column mean/std/min/max. `+1e-8` on std matches
- * `server/curation/neural_traj/convert.py:197` — a column that never moves
- * would otherwise normalise to a division by zero downstream.
+ * Per-column mean/std/min/max, plus `count` and the quantiles lerobot v3 writes.
+ * `+1e-8` on std matches `server/curation/neural_traj/convert.py:197` — a column
+ * that never moves would otherwise normalise to a division by zero downstream.
+ *
+ * Quantiles are exact, from the sorted column with linear interpolation (numpy's
+ * default). lerobot approximates them from a histogram; exact is what that
+ * histogram approximates.
  */
 export function computeFeatureStats(rows: readonly number[][]): FeatureStats {
   const width = rows[0]?.length ?? 0;
@@ -165,11 +186,56 @@ export function computeFeatureStats(rows: readonly number[][]): FeatureStats {
   }
   for (let i = 0; i < width; i++) std[i] = Math.sqrt(std[i] / n) + 1e-8;
 
+  const quantiles = Object.fromEntries(
+    STATS_QUANTILES.map(([key]) => [key, new Array(width).fill(0)]),
+  ) as Record<QuantileKey, number[]>;
+  for (let i = 0; i < width; i++) {
+    const column = rows.map((row) => row[i] ?? 0).sort((a, b) => a - b);
+    for (const [key, q] of STATS_QUANTILES) quantiles[key][i] = quantile(column, q);
+  }
+
   return {
     mean,
     std,
     min: min.map((v) => (Number.isFinite(v) ? v : 0)),
     max: max.map((v) => (Number.isFinite(v) ? v : 0)),
+    count: [rows.length],
+    ...quantiles,
+  };
+}
+
+/** numpy's default (`linear`) quantile of an ascending, non-empty array. */
+function quantile(sorted: readonly number[], q: number): number {
+  const h = (sorted.length - 1) * q;
+  const lo = Math.floor(h);
+  const hi = Math.ceil(h);
+  return sorted[lo]! + (h - lo) * (sorted[hi]! - sorted[lo]!);
+}
+
+/** Channel-first `[3, 1, 1]`, the shape lerobot gives every image stat. */
+type ChannelStat = number[][][];
+
+export interface ImageStats {
+  mean: ChannelStat;
+  std: ChannelStat;
+  min: ChannelStat;
+  max: ChannelStat;
+  count: number[];
+}
+
+/**
+ * lerobot's `IMAGENET_STATS` (`utils/constants.py`), with the `min`/`max`/`count`
+ * its own image stats carry, in `[0, 1]`. Constants, not measured — see where
+ * stats.json is written.
+ */
+export function imageNetStats(totalFrames: number): ImageStats {
+  const perChannel = (values: readonly number[]): ChannelStat => values.map((v) => [[v]]);
+  return {
+    mean: perChannel([0.485, 0.456, 0.406]),
+    std: perChannel([0.229, 0.224, 0.225]),
+    min: perChannel([0, 0, 0]),
+    max: perChannel([1, 1, 1]),
+    count: [totalFrames],
   };
 }
 
@@ -581,23 +647,24 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
 
   const allStates = episodes.flatMap((e) => e.frames.map((f) => f.state));
   const allActions = episodes.flatMap((e) => e.frames.map((f) => f.action));
-  // State and action only, as both existing writers in this repo do.
+  // State and action are measured over every frame: mean/std/min/max, `count`,
+  // and the q01..q99 quantiles — pi05 normalises both with q01/q99 and raises
+  // before step 1 without them.
   //
-  // Image stats are ABSENT, not deferred: computing them means decoding every
-  // JPEG a second time, and lerobot does not fill them in on load. A recipe
-  // that normalises images from `stats.json` therefore has to supply its own —
-  // most normalise with fixed ImageNet constants and never look. Saying this
-  // plainly beats the comment that used to stand here, which claimed lerobot
-  // recomputed them.
-  await writeFile(
-    join(metaDir, 'stats.json'),
-    JSON.stringify(
-      { 'observation.state': computeFeatureStats(allStates), action: computeFeatureStats(allActions) },
-      null,
-      2,
-    ),
-    'utf-8',
-  );
+  // Each camera gets ImageNet constants, NOT measured stats: measuring means
+  // decoding every JPEG a second time. The entry has to exist anyway, because
+  // `lerobot-train` (`use_imagenet_stats`, on by default) assigns into
+  // `stats[camera_key]` for every camera and raises `KeyError` when the key is
+  // missing; with it on, lerobot overwrites mean/std with these same values. No
+  // image quantiles — there is nothing measured to take them from.
+  const stats: Record<string, FeatureStats | ImageStats> = {
+    'observation.state': computeFeatureStats(allStates),
+    action: computeFeatureStats(allActions),
+  };
+  for (const cam of options.cameras) {
+    stats[`observation.images.${cam.key}`] = imageNetStats(totalFrames);
+  }
+  await writeFile(join(metaDir, 'stats.json'), JSON.stringify(stats, null, 2), 'utf-8');
 
   const info = buildInfo({
     robotType: options.robotType,
