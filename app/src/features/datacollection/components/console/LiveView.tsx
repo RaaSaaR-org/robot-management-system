@@ -21,7 +21,8 @@
  *              swaps its camera into the main view and shows the head camera
  *              in its place, and a wrist the robot does not serve shows an
  *              offline plate and opens no stream. Without wrist cameras the
- *              view is exactly what it was.
+ *              view is exactly what it was. A tile's label keeps the PiP
+ *              bar's inset on both sides.
  * @feature datacollection
  */
 
@@ -380,13 +381,17 @@ export function LiveView({
             )}
           </>
         )}
-        <span
-          className={cn(chip, 'pointer-events-none absolute left-1.5 top-1.5 z-10 h-6 gap-1.5 whitespace-nowrap px-2 text-[11.5px] text-ink-primary')}
-          data-testid={`${tileTestId}-label`}
-        >
-          <Video className="h-3.5 w-3.5 flex-none" strokeWidth={1.75} aria-hidden />
-          {label}
-        </span>
+        {/* The PiP bar's inset on both sides: a narrow tile (a phone) drops the icon, then truncates. */}
+        <div className="@container pointer-events-none absolute inset-x-1.5 top-1.5 z-10 flex">
+          <span
+            className={cn(chip, 'h-6 min-w-0 gap-1.5 whitespace-nowrap px-1 text-[11px] text-ink-primary @min-[132px]:px-2 @min-[132px]:text-[11.5px]')}
+            title={label}
+            data-testid={`${tileTestId}-label`}
+          >
+            <Video className="hidden h-3.5 w-3.5 flex-none @min-[132px]:inline-block" strokeWidth={1.75} aria-hidden />
+            <span className="truncate">{label}</span>
+          </span>
+        </div>
       </div>
     );
   };

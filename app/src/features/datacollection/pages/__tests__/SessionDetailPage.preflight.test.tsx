@@ -5,7 +5,8 @@
  *              robot disables Start session — with the reason as visible text —
  *              and its Space hotkey, a warning does not. TASK-442: a session
  *              recording a wrist camera the robot does not serve is blocked
- *              with a plain reason; a head-only session is not.
+ *              with a plain reason; a head-only session is not, and on a robot
+ *              with wrist cameras it shows no wrist anywhere.
  * @feature datacollection
  */
 
@@ -140,6 +141,18 @@ describe('SessionDetailPage pre-flight', () => {
     setRobot('online');
     render();
     await screen.findByTestId('setup-step-robot');
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled();
+  });
+
+  it('a head-only session on a robot with wrist cameras shows no wrist anywhere (TASK-442, D2)', async () => {
+    served.value = ['head_camera', 'left_wrist_camera', 'right_wrist_camera', 'top'];
+    setRobot('online');
+    render();
+    await screen.findByTestId('setup-step-robot');
+    const preview = screen.getByTestId('setup-preview');
+    const views = within(within(preview).getByTestId('live-view-switch')).getAllByRole('button').map((b) => b.textContent);
+    expect(views).toEqual(['Twin', 'Head camera', 'Top camera']);
+    expect(document.body.textContent).not.toMatch(/wrist/i);
     expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled();
   });
 });

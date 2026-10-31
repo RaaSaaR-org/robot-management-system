@@ -31,8 +31,6 @@ export interface StripCell extends SystemsCell {
   valueTestId?: string;
   /** Data attributes on the value (the why line's severity and code). */
   valueData?: Record<string, string>;
-  /** The full value, when the cell truncates it. */
-  title?: string;
 }
 
 export interface SystemsStripProps {

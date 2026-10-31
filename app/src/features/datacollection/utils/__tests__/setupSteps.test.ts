@@ -553,7 +553,8 @@ describe('the Cameras cell (TASK-442)', () => {
       preflight: withWrists(['head_camera', ...WRISTS]),
     }));
     expect(m.cells.map((c) => c.id)).toEqual(['robot', 'control', 'arm_control', 'mode', 'headset', 'arms', 'hands', 'cameras']);
-    expect(m.cells[m.cells.length - 1]).toEqual({ id: 'cameras', label: 'Cameras', value: 'Head + 2 wrists', status: 'ok', reason: null });
+    // The cell counts (eight cells share one row at 1440 px); its title names the set.
+    expect(m.cells[m.cells.length - 1]).toEqual({ id: 'cameras', label: 'Cameras', value: '3 cameras', title: 'Head + 2 wrists', status: 'ok', reason: null });
   });
 
   it('turns red and owns a blocking reason when a chosen wrist is not served', () => {

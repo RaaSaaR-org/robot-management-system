@@ -4,14 +4,17 @@
  *   with MSW and the demo G1's pinned camera list (`cameraDemoHandlers.ts`):
  *   - Head + wrists (`demo-session-wrists`): the head view leads, the two wrist
  *     tiles sit beneath it (left on the left, not over the picture), a tile
- *     swaps into the main view and back, the Cameras cell names the set, and
- *     the console is as tall as a head-only session's — at 1512, 1280 and 390
- *     wide, with no horizontal scroll and the E-STOP's clearance unchanged;
+ *     swaps into the main view and back, the Cameras cell counts the set in
+ *     full (its title names it; one row of eight cells at 1512), the tile
+ *     labels keep their inset, and the console is as tall as a head-only
+ *     session's — at 1512, 1280 and 390 wide, with no horizontal scroll and
+ *     the E-STOP's clearance unchanged;
  *   - a wrist the robot does not serve: an offline plate in its tile, the
  *     Cameras cell red, and the take dock says which camera is missing (with
  *     the robot side up, so no readiness reason outranks it);
- *   - head only (`demo-session-takes-vr`) on the same robot: no tiles, no
- *     Cameras cell, seven systems cells as before.
+ *   - head only (`demo-session-takes-vr`) on the same robot: no wrist camera
+ *     anywhere — not in the view switch, not as tiles, not in readiness — no
+ *     Cameras cell, seven systems cells as before; another camera stays.
  *   Set SCREEN_DIR to also save screenshots there.
  * @feature datacollection
  */
@@ -89,6 +92,19 @@ for (const { width, height, minGap } of WIDTHS) {
     await expect(right.locator('img')).toBeVisible();
     await expect(page.getByTestId('session-wrist-left-label')).toHaveText('Left wrist');
     await expect(page.getByTestId('session-wrist-right-label')).toHaveText('Right wrist');
+    // Each label sits inside its tile with the PiP bar's 6 px inset, its name in full.
+    for (const side of ['left', 'right']) {
+      const fit = await page.getByTestId(`session-wrist-${side}`).evaluate((tile) => {
+        const t = tile.getBoundingClientRect();
+        const label = tile.querySelector('[data-testid$="-label"]') as HTMLElement;
+        const b = label.getBoundingClientRect();
+        const text = label.querySelector('.truncate') as HTMLElement;
+        return { left: b.left - t.left, right: t.right - b.right, full: text.scrollWidth <= text.clientWidth };
+      });
+      expect(fit.left).toBeGreaterThanOrEqual(5.5);
+      expect(fit.right).toBeGreaterThanOrEqual(5.5);
+      expect(fit.full).toBe(true);
+    }
 
     const f = (await frame.boundingBox())!;
     const l = (await left.boundingBox())!;
@@ -120,8 +136,18 @@ for (const { width, height, minGap } of WIDTHS) {
 
     // The camera set, in the systems strip.
     if (width >= 640) {
-      await expect(page.getByTestId('systems-cell-cameras')).toContainText('Head + 2 wrists');
-      await expect(page.getByTestId('systems-cell-cameras')).toHaveAttribute('data-status', 'ok');
+      const cell = page.getByTestId('systems-cell-cameras');
+      await expect(cell).toContainText('3 cameras');
+      await expect(cell.locator('[title]')).toHaveAttribute('title', 'Head + 2 wrists');
+      await expect(cell).toHaveAttribute('data-status', 'ok');
+      // The value reads in full, and from 1440 px the eight cells keep one row.
+      const value = cell.locator('.truncate');
+      expect(await value.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+      if (width >= 1440) {
+        const tops = await page.locator('[data-systems-cell]').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+        expect(tops).toHaveLength(8);
+        expect(new Set(tops).size).toBe(1);
+      }
     }
 
     // Swap the left wrist in, the head into its tile, and back.
@@ -153,7 +179,7 @@ test('a wrist the robot does not serve: an offline plate, a red Cameras cell, th
   await page.screenshot(shot('wrists-left-offline.png'));
 });
 
-test('head only on a robot with wrist cameras: no tiles, no Cameras cell, the same seven cells', async ({ page }) => {
+test('head only on a robot with wrist cameras: no wrist anywhere, no Cameras cell, the same seven cells', async ({ page }) => {
   await page.setViewportSize({ width: 1512, height: 900 });
   await openSession(page, 'demo-session-takes-vr', HEAD_AND_WRISTS);
   await expect(page.getByTestId('session-lead-camera')).toHaveAttribute('data-slot', 'main');
@@ -163,7 +189,16 @@ test('head only on a robot with wrist cameras: no tiles, no Cameras cell, the sa
   await expect(page.locator('[data-systems-cell]')).toHaveCount(7);
   // Twin in the PiP, the head in the main view: the wrists open no stream.
   await expect(page.getByTestId('live-view').locator('img')).toHaveCount(1);
-  // The view switch still lists every camera the robot serves.
-  await expect(page.getByTestId('live-view-switch').getByRole('button')).toHaveText(['Twin', 'Head camera', 'Left wrist', 'Right wrist']);
+  // Like a robot without wrist cameras (D2): the switch offers no wrist, and no
+  // readiness line or hidden popover names one.
+  await expect(page.getByTestId('live-view-switch').getByRole('button')).toHaveText(['Twin', 'Head camera']);
+  expect(await page.locator('#root').textContent()).not.toMatch(/wrist/i);
   await page.screenshot(shot('head-only.png'));
+});
+
+test('head only on a robot with wrist cameras and another camera: the other camera stays', async ({ page }) => {
+  await page.setViewportSize({ width: 1512, height: 900 });
+  await openSession(page, 'demo-session-takes-vr', [...HEAD_AND_WRISTS, 'top']);
+  await expect(page.getByTestId('live-view-switch').getByRole('button')).toHaveText(['Twin', 'Head camera', 'Top camera']);
+  await expect(page.getByTestId('live-view-wrists')).toHaveCount(0);
 });

@@ -37,7 +37,7 @@ import {
 } from '../../robots/components/readiness/readinessRows';
 import type { TeleoperationType } from '../types/datacollection.types';
 import type { PreflightItem } from './preflight';
-import { cameraSetLabel } from './cameras';
+import { cameraCountLabel, cameraSetLabel } from './cameras';
 import type { RobotStop } from './robotStop';
 
 export type SetupStepId = 'robot' | 'arm_control' | 'stance' | 'quest' | 'operator' | 'input' | 'control';
@@ -83,6 +83,8 @@ export interface SystemsCell {
   status: SystemsCellStatus;
   /** The readiness reason this cell owns (the same one a step owns). */
   reason: SetupReason | null;
+  /** The full value, when `value` is a short form of it (the Cameras cell). */
+  title?: string;
 }
 
 export interface SetupModelInput {
@@ -615,7 +617,9 @@ function camerasCell(input: SetupModelInput): SystemsCell | null {
   return {
     id: 'cameras',
     label: 'Cameras',
-    value: blocked ? wrists.detail : cameraSetLabel(list),
+    // Eight cells share one row from 1440 px: the cell says how many, its title which.
+    value: blocked ? wrists.detail : cameraCountLabel(list),
+    ...(blocked ? {} : { title: cameraSetLabel(list) }),
     status: check ? CAMERA_STATUS[check.level] : 'idle',
     reason: blocked ? { code: 'wrist_camera_offline', text: wrists.action ?? wrists.detail, severity: 'block' } : null,
   };

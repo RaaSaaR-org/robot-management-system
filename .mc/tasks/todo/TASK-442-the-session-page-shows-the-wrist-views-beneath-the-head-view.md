@@ -64,7 +64,9 @@ cameras looks and behaves exactly as today.
    the twin keeps its PiP. Take the tile row's height from the main view so the console
    height is unchanged; check 1512 and 1280 wide and phone width.
 3. Clicking a wrist tile swaps it into the main view and puts the head view in that tile;
-   clicking again (or the head tile) swaps back. The view switch keeps listing every camera.
+   clicking again (or the head tile) swaps back. The view switch lists every camera the page
+   shows: a wrist the session does not record shows nowhere — a head-only session on a wrist
+   robot looks like a robot without wrist cameras (D2); other cameras stay (2026-10-31).
 4. A wrist camera the session records but the robot does not serve right now → its tile
    shows a small "Left wrist camera offline" plate (no stream opened).
 5. Hidden tiles open no stream; tiles unmount while the VR modal is open (as the page does
@@ -73,8 +75,10 @@ cameras looks and behaves exactly as today.
    (e.g. "2 of 2 live" / "Left wrist offline"); a chosen wrist camera that is not served is a
    **blocker** for Record with the reason "Left wrist camera is not being served". Head-only
    sessions: rows, labels and verdicts unchanged (do not turn tomorrow's Set up amber).
-7. Show the session's camera set (`cameraSetLabel`) in the Record systems strip (a
-   `SystemsCell` "Cameras · Head + 2 wrists") — only when the session has a camera list.
+7. Show the session's camera set in the Record systems strip — only when the session has a
+   camera list. The cell counts it ("Cameras · 3 cameras", `cameraCountLabel`) so it reads in
+   full when all eight cells share one row at 1512; its title carries `cameraSetLabel`
+   ("Head + 2 wrists") (2026-10-31).
 8. Set up preview: no wrist strip there (too small); the wrists are reachable via the view
    switch.
 

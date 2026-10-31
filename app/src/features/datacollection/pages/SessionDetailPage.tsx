@@ -112,7 +112,7 @@ import { useSessionControlLease } from '../hooks/useSessionControlLease';
 import { useInputPresence } from '../hooks/useInputPresence';
 import { useRobotCameras } from '../../robots/hooks/useRobotCameras';
 import { buildPreflight, summarizePreflight, wristCamerasRow } from '../utils/preflight';
-import { cameraSetLabel, sessionWristCameras } from '../utils/cameras';
+import { cameraSetLabel, sessionViewCameras, sessionWristCameras } from '../utils/cameras';
 import { ControlLeaseBar } from '../../robots/components/tabs/ControlLeaseBar';
 import { RobotModeControl } from '../../robots/components/RobotModeControl';
 import { useRobotBaseMode } from '../../robots/hooks/useRobotBaseMode';
@@ -503,20 +503,22 @@ export function SessionDetailPage() {
   // TASK-442: the wrist cameras this session records; none for a head-only session.
   const sessionCameras = session?.cameras ?? null;
   const wristCameras = useMemo(() => sessionWristCameras({ cameras: sessionCameras }), [sessionCameras]);
+  // A wrist the session does not record shows nowhere: not in the switch, not as a tile, not in readiness (D2).
+  const viewCameras = useMemo(() => sessionViewCameras(cameras.cameras, wristCameras), [cameras.cameras, wristCameras]);
   const isCreated = session?.status === 'created';
   const presence = useInputPresence(isCreated && sessionIsVr, sessionIsLive && session?.type === 'gamepad');
   // TASK-428: Record folds the same checks into its systems cells.
   const preflightItems = useMemo(() => (session && sessionIsLive ? buildPreflight({
     robot: robot ? { name: robot.name, online: robotOnline } : null,
     agentConnected: isTelemetryConnected,
-    cameras: { loading: cameras.loading, names: cameras.cameras, source: cameras.source, detail: cameras.detail },
+    cameras: { loading: cameras.loading, names: viewCameras, source: cameras.source, detail: cameras.detail },
     wristCameras,
     sessionType: session.type,
     secureContext: presence.secureContext,
     vrSupported: presence.vrSupported,
     gamepadConnected: presence.gamepadConnected,
     lease: leaseInputs ? { enabled: lease.enabled, bound: lease.state === 'bound' } : undefined,
-  }) : []), [session, sessionIsLive, robot, robotOnline, isTelemetryConnected, cameras.loading, cameras.cameras,
+  }) : []), [session, sessionIsLive, robot, robotOnline, isTelemetryConnected, cameras.loading, viewCameras,
     cameras.source, cameras.detail, wristCameras, presence.secureContext, presence.vrSupported, presence.gamepadConnected,
     leaseInputs, lease.enabled, lease.state]);
   const preflight = summarizePreflight(preflightItems);
@@ -923,7 +925,7 @@ export function SessionDetailPage() {
           live={isTelemetryConnected}
           jointStates={telemetry?.jointStates}
           twinOverlay={twinOverlay}
-          cameras={{ names: cameras.cameras, loading: robotOnline && cameras.loading, detail: cameras.detail }}
+          cameras={{ names: viewCameras, loading: robotOnline && cameras.loading, detail: cameras.detail }}
           defaultMain="twin"
           expandAt="bottom"
           suspended={vrModalOpen}
@@ -1224,7 +1226,7 @@ export function SessionDetailPage() {
           live={isTelemetryConnected}
           jointStates={telemetry?.jointStates}
           twinOverlay={twinOverlay}
-          cameras={{ names: cameras.cameras, loading: robotOnline && cameras.loading, detail: cameras.detail }}
+          cameras={{ names: viewCameras, loading: robotOnline && cameras.loading, detail: cameras.detail }}
           wristCameras={wristCameras}
           defaultMain="camera"
           isRecording={capturing || legacyRecording}
