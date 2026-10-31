@@ -3,7 +3,9 @@
  * @description The control center's "View" panel: the posed 3D model, or the live
  *   camera feed when the robot serves one. The source switch lives in the panel
  *   header; a camera that will not produce a picture says why instead of showing
- *   a rendering of the robot. One corner StatusTag reports the link.
+ *   a rendering of the robot. One corner StatusTag reports the link. TASK-448:
+ *   the stream `<img>` empties its `src` when it leaves the page, closing the
+ *   connection.
  * @feature robots
  */
 
@@ -14,6 +16,7 @@ import { Button, Panel, SegmentedControl, Spinner, StatusTag } from '@/shared/co
 import { cn } from '@/shared/utils/cn';
 import { useCameraStreamUrl } from '../../hooks/useCameraStreamUrl';
 import { useRobotCameras } from '../../hooks/useRobotCameras';
+import { isReleasedStreamImage, useStreamImageRef } from '../../hooks/useStreamImageRef';
 import { Robot3DViewer } from '../visualization/Robot3DViewer';
 import { ViewerUnavailable } from '../common/ViewerUnavailable';
 import type { JointState, RobotType } from '../../types/robots.types';
@@ -75,6 +78,9 @@ export const CockpitViewport = memo(function CockpitViewport({
   // the nonce to re-ticket.
   const cameraName = source.kind === 'camera' ? source.name : null;
   const [ticketNonce, setTicketNonce] = useState(0);
+  // Closes the stream when the `<img>` goes: back to the model, a new ticket
+  // (the `key`), or leaving the page (TASK-448).
+  const streamImageRef = useStreamImageRef();
   const { url: streamUrl, denied: ticketDenied } = useCameraStreamUrl(
     robotId,
     cameraName,
@@ -154,12 +160,15 @@ export const CockpitViewport = memo(function CockpitViewport({
           {showCamera ? (
             <img
               key={streamUrl}
+              ref={streamImageRef}
               src={streamUrl ?? undefined}
               alt={`${cameraName ?? ''} camera feed`}
               className="h-full w-full object-contain"
-              onError={() =>
-                source.kind === 'camera' && setCameraErrored((m) => ({ ...m, [source.name]: true }))
-              }
+              onError={(e) => {
+                // The `error` an emptied `src` fires is the stream being closed, not failing.
+                if (isReleasedStreamImage(e.currentTarget)) return;
+                if (source.kind === 'camera') setCameraErrored((m) => ({ ...m, [source.name]: true }));
+              }}
             />
           ) : cameraPending ? (
             <div className="flex h-full w-full items-center justify-center gap-2 text-[13px] text-ink-tertiary">
