@@ -145,14 +145,24 @@ function WristCameraPanel({ robotId, camera, side }: WristCameraPanelProps) {
     sidePlate.draw([{ id: 'side', text: side === 'left' ? 'L' : 'R', color: HUD_COLORS.text, bold: true }]);
   }, [sidePlate, side]);
 
+  /** Whether the surround is drawn red, so it is recoloured only on a change. */
+  const surroundRed = useRef(false);
+
   useFrame((state) => {
-    const poll = screen.step(state.clock.elapsedTime);
+    screen.step(state.clock.elapsedTime);
     // A frozen wrist turns its own surround red and shows its badge — and
     // nothing else: no pulse. The controllers buzz for the picture the
     // operator steers by, and that is the head screen's.
-    if (!poll) return;
+    //
+    // Read off `staleNow` every frame rather than off a poll: a re-arm clears
+    // it, and a re-arm that ends on the offline plate polls no more — the
+    // surround would stay red around a plate that describes no picture.
+    const red = screen.staleNow.current;
     const surround = surroundRef.current;
-    if (surround) (surround.material as THREE.MeshBasicMaterial).color.set(poll.isStale ? HUD_COLORS.bad : SURROUND_COLOR);
+    if (surround && red !== surroundRed.current) {
+      surroundRed.current = red;
+      (surround.material as THREE.MeshBasicMaterial).color.set(red ? HUD_COLORS.bad : SURROUND_COLOR);
+    }
   });
 
   return (
