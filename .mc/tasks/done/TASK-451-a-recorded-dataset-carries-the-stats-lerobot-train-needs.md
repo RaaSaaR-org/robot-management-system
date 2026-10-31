@@ -3,7 +3,7 @@ id: "TASK-451"
 aliases: []
 title: "A recorded dataset carries the stats lerobot-train needs"
 slug: "a-recorded-dataset-carries-the-stats-lerobot-train-needs"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"         # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
