@@ -3,7 +3,7 @@ id: "TASK-453"
 aliases: []
 title: "The keyboard Teleop tab has its own E-STOP and says which robot it drives"
 slug: "the-keyboard-teleop-tab-has-its-own-e-stop-and-says-which"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"         # backlog | todo | in-progress | review | done | cancelled
 priority: 2                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
