@@ -234,6 +234,115 @@ token.) From then on the session runbook,
 [Two-person data collection](data-collection-two-person.md), works the same
 for `sim-g1-edu-dev` as for `g1-edu-4`.
 
+## Wrist cameras (TASK-444)
+
+*Added 2026-10-31. Written and tested against a fake camera; not yet run with a
+real wrist camera — the model on g1-edu-4 is not known yet (Unitree's are
+monocular UVC 640x480@30).*
+
+Each wrist camera is one USB (UVC) camera served by its own process,
+`robot-agent/hardware/camera_pub.py`, in exactly the head camera's wire format
+(`g1_cam_pub.py` on PC2, port 5600): per frame `uint32 be length | uint64 be ns
+timestamp | JPEG`. It encodes only while a client is connected, serves several
+clients from one encode, drops a client that cannot keep up, and on a read
+failure (USB re-enumeration) logs `read failed, reopening` once, drops its
+clients and reopens the camera every second until it is back. The sidecar reads
+it with the reader it already uses for the head camera.
+
+| Camera | Port | systemd unit |
+| --- | --- | --- |
+| `left_wrist_camera` | 5601 | `g1-wrist-cam-left` |
+| `right_wrist_camera` | 5602 | `g1-wrist-cam-right` |
+
+It runs wherever the camera's USB cable ends: on **PC2** (`192.168.123.164`,
+Ubuntu 20.04, Python 3.8) or on the **lab PC**. It needs Python 3.8+ and OpenCV
+(`sudo apt install python3-opencv` on PC2; without OpenCV it exits with that
+hint and status 2).
+
+> **Installing anything on PC2 needs the robot owner's go-ahead at the time.**
+> PC2 runs Unitree's own services; ask before copying a file there or adding a
+> unit. The lab PC needs no one's permission.
+
+### Find the device path
+
+Use a path that stays with the camera when it re-enumerates as another
+`/dev/videoN` — `by-id` names the camera, `by-path` names the USB port (take
+`by-path` when both wrist cameras are the same model and so share an id):
+
+```bash
+v4l2-ctl --list-devices          # which /dev/videoN belongs to which camera (v4l-utils)
+ls -l /dev/v4l/by-id/ /dev/v4l/by-path/
+# usb-<vendor>_<model>_<serial>-video-index0 -> ../../video6   ← index0 is the picture
+```
+
+A UVC camera usually shows two nodes; `video-index0` is the picture, `index1`
+is metadata. Plug in one camera at a time if it is unclear which is left and
+which is right. The path is resolved again on every reopen, so a `by-id` link
+follows the camera to its new node.
+
+### Run it by hand
+
+```bash
+python3 robot-agent/hardware/camera_pub.py \
+  --device /dev/v4l/by-id/usb-<vendor>_<model>_<serial>-video-index0 \
+  --port 5601 --name left_wrist_camera
+# [camera_pub left_wrist_camera] serving on 0.0.0.0:5601
+# [camera_pub left_wrist_camera] camera open (640x480@30 MJPG)
+```
+
+The second log line is the mode the camera actually agreed to. Other flags:
+`--bind` (default `0.0.0.0`), `--width 640 --height 480 --fps 30`,
+`--quality 85`. Ctrl-C or SIGTERM closes the sockets and the camera.
+
+Check it from the machine that will run the sidecar — one frame header, read
+with nothing but the standard library:
+
+```bash
+python3 -c "import socket, struct
+s = socket.create_connection(('<publisher host>', 5601), 5); s.settimeout(5)
+n, ts = struct.unpack('!IQ', s.recv(12, socket.MSG_WAITALL))
+print(n, 'bytes of JPEG, captured at', ts, 'ns')"
+```
+
+### systemd unit
+
+On PC2 a system unit like `g1-head-cam` (with the owner's go-ahead; here the
+file is copied to `/opt/neodem/camera_pub.py`):
+
+```ini
+# /etc/systemd/system/g1-wrist-cam-left.service
+[Unit]
+Description=G1 left wrist camera publisher (TCP 5601)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/neodem/camera_pub.py \
+  --device /dev/v4l/by-id/usb-<vendor>_<model>_<serial>-video-index0 \
+  --port 5601 --name left_wrist_camera
+Restart=on-failure
+RestartSec=2
+# Any non-root user that may open the camera.
+User=<user>
+SupplementaryGroups=video
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`g1-wrist-cam-right.service` is the same with the right camera's device,
+`--port 5602 --name right_wrist_camera`. Then
+`sudo systemctl daemon-reload && sudo systemctl enable --now g1-wrist-cam-left g1-wrist-cam-right`;
+`journalctl -u g1-wrist-cam-left -f` shows the outage lines. On the lab PC the
+same unit works as a user unit (`~/.config/systemd/user/`, without `User=` and
+`SupplementaryGroups=`, `WantedBy=default.target`, `systemctl --user ...`); the
+user must already be in the `video` group.
+
+The publisher listens even while its camera is unplugged and picks the camera
+up when it appears, so the unit need not wait for the USB device. The sidecar
+learns about the wrist publishers from
+`G1_WRIST_CAMERAS="left_wrist_camera@<host>:5601,right_wrist_camera@<host>:5602"`
+(TASK-445); a robot profile sets that from its `wristCameras` field (TASK-446).
+
 ---
 
 ## Was heute erreicht wurde

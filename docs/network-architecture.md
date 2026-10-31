@@ -140,6 +140,7 @@ Each row is one connection, listed from the side that opens it.
 | g1_sidecar → G1 | Unitree DDS | domain 0, `rt/api/sport/*`, `rt/utlidar/*` | loco RPC, odometry, LiDAR |
 | g1_sidecar → G1 | Unitree DDS | domain 0, `rt/arm_sdk`, `rt/dex3/*/cmd` (+ `rt/lowstate`, `rt/dex3/*/state` read) | arm + hand teleop, only with `G1_WRITE_MODE=arm_sdk` and only between `/arm` and disarm (TASK-391) |
 | g1_sidecar → G1 PC2 | ZMQ · TCP | `:60000` (teleimager) · `:5600` | head cameras |
+| g1_sidecar → wrist camera publishers | TCP | `:5601` (left) · `:5602` (right) | `camera_pub.py`, one per wrist camera, on PC2 or the lab PC; the head camera's wire format (`uint32 be length · uint64 be ns timestamp · JPEG`); read-only, no auth |
 | G1 → voice | UDP multicast | `239.168.123.161:5555` | microphone |
 | **Inference and egress** | | | |
 | agent → vla-server | HTTP JSON | `:8000 /predict /reset /config /load-adapter` | `VLA_SERVER_URL` |
