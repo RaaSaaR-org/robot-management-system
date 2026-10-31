@@ -3,7 +3,7 @@ id: "TASK-450"
 aliases: []
 title: "Ending a session waits for the robot to save it, and a busy robot refuses a new session"
 slug: "ending-a-session-waits-for-the-robot-to-save-it-and-a-busy"
-status: "in-progress"         # backlog | todo | in-progress | review | done | cancelled
+status: "done"                # backlog | todo | in-progress | review | done | cancelled
 priority: 1                   # 1=critical, 2=high, 3=medium, 4=low
 owner: "claude"
 projects: []
